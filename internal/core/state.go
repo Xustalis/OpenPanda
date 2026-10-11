@@ -115,6 +115,12 @@ const (
 	// TaskStore.Recover.
 	EvRecover = "recover"
 
+	// EvTrustPolicy records the trust-zone accept policy's verdict for an
+	// inbound delegate: the tier judged, the policy_llm setting, and the
+	// classifier's answer when one ran. Shadow mode exists so the operator can
+	// diff model verdicts against rule outcomes before enforcing them.
+	EvTrustPolicy = "trust_policy"
+
 	// EvContextDegraded records that a task's context (e.g. project memory pack,
 	// work tree artifact) failed to attach or land, running in a degraded state
 	// instead of failing silently.
@@ -301,7 +307,10 @@ func Terminal(s string) bool {
 func CanTransition(from, to string) bool {
 	switch from {
 	case StateSubmitted:
-		return to == StateQueued || to == StateCancelled
+		// → review is the trust-zone admission park: a delegate from a
+		// semi-trusted origin can be held for the operator before it ever
+		// claims a slot (network.trust.accept.*.mode = review).
+		return to == StateQueued || to == StateCancelled || to == StateReview
 	case StateQueued:
 		return to == StateDispatched || to == StateCancelled || to == StateExpired
 	case StateDispatched:

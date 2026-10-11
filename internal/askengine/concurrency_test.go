@@ -44,7 +44,7 @@ func TestSharedConfigConcurrentAccess(t *testing.T) {
 				c.Model.Model = fmt.Sprintf("model-%d", v)
 				c.Approval.Mode = config.ApprovalModeOnRequest
 				c.Storage.WorkPath = fmt.Sprintf("/tmp/w%d", v)
-				c.Network.Peers = []string{fmt.Sprintf("127.0.0.1:%d", v%65536)}
+				c.Network.Peers = []config.PeerEntry{{Addr: fmt.Sprintf("127.0.0.1:%d", v%65536)}}
 				c.UI.Locale = "en"
 			})
 		}

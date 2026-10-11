@@ -375,14 +375,19 @@ func (e *Engine) applyNetworkConfig() {
 	}
 	e.cfgMu.RLock()
 	n := e.cfg.Network
+	reputation := e.cfg.Routing.Reputation
 	e.cfgMu.RUnlock()
 	if e.meshNode {
 		sched.ApplyNetworkConfig(e.schedCtx, n)
+		sched.SetReputationEnabled(reputation)
 		return
 	}
 	sched.SetSharedSecret(n.SharedSecret)
 	sched.SetAllowCleartext(n.AllowCleartext)
 	sched.SetCleartextAllowlist(n.AllowCleartextFor)
+	sched.SetTrustConfig(n.Trust)
+	sched.SetPeerTrustHints(n.PeerTrustHints())
+	sched.SetReputationEnabled(reputation)
 }
 
 // ReadConfig runs fn under the read lock — the read half of MutateConfig, for
@@ -916,6 +921,9 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	sched.SetSharedSecret(e.cfg.Network.SharedSecret)
 	sched.SetAllowCleartext(e.cfg.Network.AllowCleartext)
 	sched.SetCleartextAllowlist(e.cfg.Network.AllowCleartextFor)
+	sched.SetTrustConfig(e.cfg.Network.Trust)
+	sched.SetPeerTrustHints(e.cfg.Network.PeerTrustHints())
+	sched.SetReputationEnabled(e.cfg.Routing.Reputation)
 	// OS sandbox (sandbox.*): the same contract the daemon installs — the
 	// environment filter always applies, and a configured mode wraps every
 	// subprocess this engine spawns in the platform's confinement with the
@@ -984,7 +992,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 				}
 			}()
 		}
-		sched.SyncPeers(ownCtx, e.cfg.Network.Peers)
+		sched.SyncPeers(ownCtx, e.cfg.Network.PeerAddrs())
 	}
 	e.setCardPath(cardPath)
 	// Re-arm the review hook on the new core's store: the notification that a
@@ -1040,8 +1048,9 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		// double-dial into the arbitration it exists to deduplicate.
 		return nil
 	}
+	peerAddrs := e.cfg.Network.PeerAddrs()
 	if e.asyncPeers {
-		for _, peer := range e.cfg.Network.Peers {
+		for _, peer := range peerAddrs {
 			go func(p string) {
 				if err := sched.DialPeer(schedCtx, p); err != nil {
 					e.logger.Debug("peer dial failed", "peer", p, "err", err)
@@ -1050,7 +1059,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		}
 	} else {
 		var wg sync.WaitGroup
-		for _, peer := range e.cfg.Network.Peers {
+		for _, peer := range peerAddrs {
 			wg.Add(1)
 			go func(p string) {
 				defer wg.Done()
@@ -1060,7 +1069,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 			}(peer)
 		}
 		wg.Wait()
-		if len(e.cfg.Network.Peers) > 0 {
+		if len(peerAddrs) > 0 {
 			waitForPeers(schedCtx, e.db, 2*time.Second)
 		}
 	}

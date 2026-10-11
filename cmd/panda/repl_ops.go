@@ -21,12 +21,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
+	"github.com/Xustalis/OpenPanda/internal/trust"
 )
 
 // splitArgs tokenizes a slash-command tail, honoring single and double
@@ -663,6 +666,108 @@ func (r *repl) cmdNodesVerify(arg string) {
 		return
 	}
 	r.outln(i18n.Tf(r.loc, "cli.nodes.none", "id", id))
+}
+
+// cmdNodesTrust implements `/nodes trust <id> [level]` — the REPL twin of
+// `panda nodes trust` (experimental trust zones). No level reports the row's
+// pinned tier; with one it pins it on the directory row — live, since the
+// engine reads the table on every admission/exposure decision — and keeps a
+// configured network.peers entry in step so a config reload cannot drop the
+// assertion.
+func (r *repl) cmdNodesTrust(arg string) {
+	fields := strings.Fields(arg)
+	if len(fields) < 1 || len(fields) > 2 {
+		r.outln("usage: /nodes trust <id> [mesh|guarded|open]")
+		return
+	}
+	id := fields[0]
+	level := ""
+	if len(fields) == 2 {
+		lv, err := trust.ParseLevel(fields[1])
+		if err != nil {
+			r.outln(err.Error())
+			return
+		}
+		level = string(lv)
+	}
+	// A "k:"-prefixed id is the stable Ed25519 identity: pin (or report the
+	// merged pin of) every sibling row holding that key.
+	if strings.HasPrefix(id, "k:") {
+		pub := strings.TrimPrefix(id, "k:")
+		if level == "" {
+			cur := ledger.PeerTrustByKey(r.db, pub)
+			if cur == "" {
+				cur = string(trust.Mesh)
+			}
+			r.outln(i18n.Tf(r.loc, "cli.nodes.trust.show", "id", id, "level", cur))
+			return
+		}
+		n, serr := ledger.SetPeerTrustByKey(r.db, pub, level)
+		if serr != nil {
+			r.storeErr(serr)
+			return
+		}
+		if n == 0 {
+			r.outln(i18n.Tf(r.loc, "cli.nodes.none", "id", id))
+			return
+		}
+		r.outln(i18n.Tf(r.loc, "cli.nodes.trust.done", "id", id, "level", level))
+		return
+	}
+	nodes, err := ledger.Query(r.db, "", "")
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	found := ""
+	for _, n := range nodes {
+		if n.ID == id || scheduler.NodeNamePart(n.ID) == id {
+			found = n.ID
+			break
+		}
+	}
+	if found == "" {
+		r.outln(i18n.Tf(r.loc, "cli.nodes.none", "id", id))
+		return
+	}
+	if level == "" {
+		cur, _ := ledger.PeerTrust(r.db, found)
+		if cur == "" {
+			cur = string(trust.Mesh)
+		}
+		r.outln(i18n.Tf(r.loc, "cli.nodes.trust.show", "id", found, "level", cur))
+		return
+	}
+	if err := ledger.SetPeerTrust(r.db, found, level); err != nil {
+		r.storeErr(err)
+		return
+	}
+	// Same config sync the CLI verb does: a bound peer_addrs address that
+	// appears in network.peers carries the tier into the file, so SIGHUP
+	// reload resurrects nothing stale.
+	if bindings, berr := ledger.PeerAddrBindings(r.db); berr == nil {
+		for addr, boundID := range bindings {
+			if boundID != found {
+				continue
+			}
+			_ = r.mutateConfigErr(func(c *config.Config) error {
+				changed := false
+				for i, e := range c.Network.Peers {
+					if core.NormalizeDialAddr(e.Addr) == addr && e.Trust != level {
+						c.Network.Peers[i].Trust = level
+						changed = true
+					}
+				}
+				if !changed {
+					return nil
+				}
+				return config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
+					Peers: c.Network.Peers,
+				})
+			})
+		}
+	}
+	r.outln(i18n.Tf(r.loc, "cli.nodes.trust.done", "id", found, "level", level))
 }
 
 // cmdNodesAdmit implements `/nodes admit <id>` — resolve a LAN-discovered

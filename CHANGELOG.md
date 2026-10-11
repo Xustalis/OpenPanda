@@ -44,6 +44,24 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
+## [Unreleased]
+
+### Added
+
+- **[Experimental] Trust zones** — `network.peers` entries may carry a `trust:` tier (`mesh` default = pre-feature behaviour, `guarded`, `open`), settable per entry in config or live via `panda nodes trust <id> <level>` (or the stable `k:<pubkey>` identity, which follows a node across instance-id changes); `nodes add`/`nodes admit` take `--trust`, the REPL mirrors all three verbs, and `panda nodes`/the web console show the tier once any row leaves mesh. `guarded` clamps what delegates toward it may carry (context capped at a pull-pointer, project packs / artifact inputs / consent grants stripped; tasks that would lose their pack or inputs re-route instead) and admits work it originates under `network.trust.accept.guarded` (`auto` | `review` | `refuse`, with an optional zero-tool `policy_llm` classifier that can never relax the deterministic gates). A task parked for review holds the delegator's lease with progress beats (bounded at 24h) so slow human decisions don't expire into a duplicate re-route, and the hold re-arms after a daemon restart. `open` peers sit in the directory; on every node that pins them they can neither receive nor originate push-mode work (trust is a local, subjective assertion — a node that has not pinned them treats them as mesh, so the offer/bid market they exist for is not built). A peer key change demotes a mesh pin back to guarded alongside the existing verification reset.
+- **[Experimental] Signed task acceptance** — executors sign `task_accept` with their Ed25519 node key over (task, attempt, signer, timestamp); delegators and relays verify the self-contained proof, dropping malformed, stale (>5 min skew) or key-mismatched frames. Unsigned frames from pre-feature peers are still accepted.
+- **[Experimental] Local reputation in routing** — `routing.reputation: true` folds each executor's smoothed success rate out of this node's own `delegation_metrics` into the DCPS score (weight 0.1, Laplace-smoothed; peers with no observations get no bonus). Off by default.
+
+### Fixed
+
+- A wire `task_resume` from the delegator could un-park a task held for trust admission review — the gate that exists to check that very delegator. Admission parks now carry their own `admission_review` disposition: local `panda approve` resumes them like any pre-execution park, but wire resumes against them are refused with the held verdict.
+- Reconnect re-pushes of review verdicts now carry the typed approval disposition. A `resume_execution` park reaching the delegator used to degrade to the conservative `accept_work` default, after which the executor's real result could never close the mirrored review — the copy stranded.
+- A `task_accept` signature check that pinned the signer to the immediate wire sender dropped valid acceptances relayed over a multi-hop chain; the proof is now verified for what it actually binds (task, attempt, signer key, timestamp).
+- The optional trust `policy_llm` classifier call is bounded (15s) and fails closed to `review` — a stalled endpoint can no longer freeze a peer's inbound message loop.
+- Admission trust now folds the least-trusting tier across the whole delegate chain, so an open peer can no longer launder work through a mesh relay by naming a mesh origin in `chain[0]`.
+- `context_fetch` now enforces a `summary` send ceiling on the pull side too — a peer declared unable to hold snapshots can no longer pull them on demand. (`pointer` remains pull-on-demand by design: it is an audited transport tier, not a secrecy bound.)
+- Trust resolution folds the configured addr hint even when a row pin exists (least-trusting wins both ways), and reputation aggregates by the peer's proven Ed25519 key instead of its instance id — a restarted node no longer cold-starts its track record.
+
 ## [0.0.11-alpha-2] - 2026-10-11
 
 The second Periapsis preview — a kernel hardening pass plus the console's live-execution narrative: the queue and task pages now show what a run is *doing* instead of asking you to decode raw event JSON.

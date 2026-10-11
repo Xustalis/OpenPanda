@@ -167,7 +167,10 @@ func (c *Core) recordPeerPubKey(ctx context.Context, nodeID, pubKeyHex string) {
 		`INSERT INTO employee_cache (id, pub_key, key_verified, status, last_seen) VALUES (?, ?, 0, 'offline', 0)
 		 ON CONFLICT(id) DO UPDATE SET pub_key = excluded.pub_key,
 		     key_verified = CASE WHEN employee_cache.pub_key != excluded.pub_key THEN 0
-		         ELSE employee_cache.key_verified END`,
+		         ELSE employee_cache.key_verified END,
+		     trust = CASE WHEN employee_cache.pub_key != excluded.pub_key
+		         AND employee_cache.trust = 'mesh' THEN 'guarded'
+		         ELSE employee_cache.trust END`,
 		nodeID, pubKeyHex); err != nil {
 		c.logger.Warn("record peer pubkey", "peer", nodeID, "err", err)
 		return

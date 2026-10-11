@@ -19,8 +19,9 @@ package main
 //	/card agent set <name> tier=2 capabilities=code,shell
 //	/card manual add <id> --notify <contact>
 //	/card manual remove <id>
-//	/nodes add <host:port>        append peer + generate secret + live dial
+//	/nodes add <host:port> [--trust <level>]  append peer + generate secret + live dial
 //	/nodes admit <id>             admit a LAN-discovered node (add + dial)
+//	/nodes trust <id> [level]     pin or show a peer's trust-zone tier
 //	/nodes verify <id>            mark a fingerprint as human-compared
 //	/nodes disconnect <addr>      remove a peer from the dial list
 //	/nodes invite                 print the join guide for the other machine
@@ -35,6 +36,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/trust"
 )
 
 // cmdCard views or edits this node's capability card from the REPL.
@@ -465,6 +467,35 @@ func parseCardFlags(tokens []string) ([]string, map[string]string, error) {
 // "写 config 之外，引擎在跑就直接拨号，免重启".
 func (r *repl) cmdNodesAdd(addr string) {
 	addr = strings.TrimSpace(addr)
+	// Optional `--trust <level>` (experimental trust zones): pin the tier on
+	// the peer entry being appended, same as `panda nodes add --trust`.
+	trustLevel := ""
+	if fields := strings.Fields(addr); len(fields) > 1 {
+		var rest []string
+		for i := 0; i < len(fields); i++ {
+			if fields[i] == "--trust" && i+1 < len(fields) {
+				lv, err := trust.ParseLevel(fields[i+1])
+				if err != nil {
+					r.outln(err.Error())
+					return
+				}
+				trustLevel = string(lv)
+				i++
+				continue
+			}
+			if v, ok := strings.CutPrefix(fields[i], "--trust="); ok {
+				lv, err := trust.ParseLevel(v)
+				if err != nil {
+					r.outln(err.Error())
+					return
+				}
+				trustLevel = string(lv)
+				continue
+			}
+			rest = append(rest, fields[i])
+		}
+		addr = strings.Join(rest, " ")
+	}
 	if addr == "" {
 		r.outln(i18n.T(r.loc, "repl.nodes.add.usage"))
 		return
@@ -493,10 +524,11 @@ func (r *repl) cmdNodesAdd(addr string) {
 	// UpdateNetworkSection rewrites the whole section.
 	var exists bool
 	err := r.mutateConfigErr(func(c *config.Config) error {
-		if exists = slices.Contains(c.Network.Peers, addr); exists {
+		if exists = slices.ContainsFunc(c.Network.Peers,
+			func(e config.PeerEntry) bool { return e.Addr == addr }); exists {
 			return nil
 		}
-		c.Network.Peers = append(c.Network.Peers, addr)
+		c.Network.Peers = append(c.Network.Peers, config.PeerEntry{Addr: addr, Trust: trustLevel})
 		// Only a secret minted here belongs on disk — an env-injected one
 		// (OPENPANDA_SHARED_SECRET) must stay out of config.yaml.
 		return config.UpdateNetworkSection(configWritePath(r.configPath), config.NetworkConfig{
@@ -554,12 +586,12 @@ func (r *repl) cmdNodesDisconnect(addr string) {
 		r.outln(i18n.T(r.loc, "repl.nodes.add.usage"))
 		return
 	}
-	var remaining []string
+	var remaining []config.PeerEntry
 	var found bool
 	err := r.mutateConfigErr(func(c *config.Config) error {
-		remaining = make([]string, 0, len(c.Network.Peers))
+		remaining = make([]config.PeerEntry, 0, len(c.Network.Peers))
 		for _, p := range c.Network.Peers {
-			if p != addr {
+			if p.Addr != addr {
 				remaining = append(remaining, p)
 			}
 		}

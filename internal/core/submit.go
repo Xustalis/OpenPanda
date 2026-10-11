@@ -170,6 +170,13 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 
 	chain := []string{c.nodeID}
 	employees := c.onlineEmployees(ctx)
+	// Trust zones (experimental): a peer whose send ceiling cannot hold this
+	// task's needs — an open node entirely, a guarded node for a task whose
+	// pack/inputs the ceiling strips — is not a route candidate. The filter
+	// is upstream of scoring so orbit traces see only eligible candidates;
+	// for the all-mesh fleet every policy's ExecutorOK is true and the slice
+	// passes through unchanged.
+	employees = c.eligibleForSend(ctx, needsForInput(in), employees)
 	localMatch := c.localMatch()
 	var decision scheduler.Decision
 	pinned := strings.TrimSpace(in.TargetNode) != ""
@@ -527,6 +534,18 @@ func (c *Core) runLocal(ctx context.Context, t Task, in TaskInput) (Task, bus.Ta
 // transitions: one concurrent approver wins, while every other caller gets a
 // conflict instead of starting the agent a second time.
 func (c *Core) ResumeApproved(ctx context.Context, taskID string, answers ...string) (Task, bus.TaskResultPayload, error) {
+	return c.resumeApproved(ctx, taskID, true, answers...)
+}
+
+// resumeApproved is ResumeApproved with the post-run upstream relay gated.
+// relayUpstream=true is for approvals with no live wire context (the CLI
+// approve, a queue-scheduler adoption): a remote-origin row that ran here
+// owes its verdict to the delegator, delivered over the recorded chain.
+// handleResume passes false — its env reply IS the delivery channel, and a
+// second send keyed on the stored chain would race it onto a stale parent
+// id (the delegator may have restarted under a new instance id between the
+// park and this resume).
+func (c *Core) resumeApproved(ctx context.Context, taskID string, relayUpstream bool, answers ...string) (Task, bus.TaskResultPayload, error) {
 	// A clarification answer (Q4) travels on the resume instead of the task
 	// row: the parked question's reply is authoritative input for exactly one
 	// re-run, so it is folded into the intent rather than persisted over it.
@@ -565,7 +584,7 @@ func (c *Core) ResumeApproved(ctx context.Context, taskID string, answers ...str
 	case ApprovalNeedsChangedInput:
 		return cur, bus.TaskResultPayload{TaskID: cur.TaskID, AttemptID: cur.AttemptID, State: cur.State},
 			fmt.Errorf("resume approved: %w", ErrApprovalNeedsChangedInput)
-	case ApprovalResumeExecution:
+	case ApprovalResumeExecution, ApprovalAdmissionReview:
 		// Continue below and claim the execution exactly once.
 	default:
 		return cur, bus.TaskResultPayload{}, fmt.Errorf("resume approved: unknown disposition %q", disposition)
@@ -610,7 +629,13 @@ func (c *Core) ResumeApproved(ctx context.Context, taskID string, answers ...str
 		}
 		return final, result, ctx.Err()
 	}
-	return c.retryLoop(ctx, taskID, cur.Intent, cur.Requires, result, err)
+	final, res, rerr := c.retryLoop(ctx, taskID, cur.Intent, cur.Requires, result, err)
+	if relayUpstream {
+		// A remote-origin row approved out of a trust-zone admission park
+		// ran here; its delegator is still waiting on the verdict upstream.
+		c.relayResultForRemote(ctx, final)
+	}
+	return final, res, rerr
 }
 
 // resumeRemote forwards an approval to the node that executed the task: it

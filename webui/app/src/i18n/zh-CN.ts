@@ -525,6 +525,7 @@ const zhCN: Messages = {
   'nodes.subtitle': '能力目录：本节点可以委派任务的所有设备。',
   'nodes.empty': '还没有已注册的节点。',
   'nodes.lastSeen': '最后在线',
+  'nodes.trust': '信任',
   'nodes.never': '从未',
 
   // Reminders view

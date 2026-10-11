@@ -163,6 +163,16 @@ type Core struct {
 	maxConns      int
 	maxConnsPerIP int
 
+	// Trust zones (experimental): trustCfg holds the operator's per-tier
+	// send/accept policy tables, peerTrustHints the configured addr→tier map
+	// applied once a hello binds an address to an identity, and reputationOn
+	// the routing.reputation flag. All hot-reloadable via ApplyNetworkConfig;
+	// read under trustMu, never mutated outside the setters.
+	trustMu        sync.RWMutex
+	trustCfg       config.TrustConfig
+	peerTrustHints map[string]string
+	reputationOn   atomic.Bool
+
 	mu    sync.RWMutex
 	peers map[string]*Peer
 	// greetedConns tracks the conns whose first hello we already replied
@@ -362,6 +372,11 @@ type Core struct {
 	// execution (see renewLease), so it bounds silence rather than runtime.
 	// Guarded by mu; SetTimeouts keeps it above the agent hard timeout.
 	leaseTimeout time.Duration
+	// reviewHolds tracks in-flight upstream keepalives for admission-parked
+	// tasks (keyed by task id) so holdReviewUpstream cannot stack a second
+	// beat loop on a row already held — e.g. a restart-resumed hold racing a
+	// re-delivered park. Entries are deleted when the hold loop exits.
+	reviewHolds sync.Map
 	// agentByKind maps plan kinds (e.g. "training", "qa") to their per-task
 	// agent timeout overrides (seconds). A kind not present falls back to the
 	// global agent timeout. Set by SetTimeouts from config.timeouts.agent_by_kind.
@@ -1115,8 +1130,15 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 	}
 }
 
-// Recover normalizes tasks left active by a previous process instance.
-func (c *Core) Recover(ctx context.Context) (int, error) { return c.store.Recover(ctx) }
+// Recover normalizes tasks left active by a previous process instance, then
+// re-arms the upstream hold on any remote-origin row still parked in review
+// — the keepalive is in-memory and does not survive the restart that left
+// those rows.
+func (c *Core) Recover(ctx context.Context) (int, error) {
+	n, err := c.store.Recover(ctx)
+	c.resumeReviewHolds(ctx)
+	return n, err
+}
 
 // blockedAgents enumerates this node's circuit-open agent names (breaker
 // keys minus the "agent:" prefix) for heartbeat publication, so peers' route

@@ -197,7 +197,7 @@ func TestPairInitiateEndToEnd(t *testing.T) {
 	if err != nil || back.Network.SharedSecret != "mesh-secret-xyz" {
 		t.Fatalf("persisted secret missing: %v\n%s", err, raw)
 	}
-	if len(back.Network.Peers) == 0 || back.Network.Peers[0] != respAddr {
+	if len(back.Network.Peers) == 0 || back.Network.Peers[0].Addr != respAddr {
 		t.Fatalf("persisted peers = %v", back.Network.Peers)
 	}
 }

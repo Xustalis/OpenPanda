@@ -108,6 +108,10 @@ type nodeRow struct {
 	Ver       string `json:"ver,omitempty"`
 	RTTMs     int64  `json:"rtt_ms,omitempty"`
 	Transport string `json:"transport,omitempty"`
+	// Trust is the operator-pinned trust-zone tier (experimental): empty or
+	// "mesh" is the pre-feature fleet default; guarded/open mark a zoned
+	// peer so the console can show the boundary it runs under.
+	Trust string `json:"trust,omitempty"`
 }
 
 type nodeAgentDetail struct {
@@ -205,6 +209,7 @@ func toNodeRow(n ledger.Node) nodeRow {
 		Abilities:     n.Abilities(),
 		Capacity:      n.Capacity,
 		Ver:           n.Ver,
+		Trust:         n.Trust,
 	}
 	if n.LastSeen != 0 {
 		row.LastSeen = ts(n.LastSeen)

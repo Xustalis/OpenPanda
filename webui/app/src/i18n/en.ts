@@ -535,6 +535,7 @@ const en: Messages = {
   'nodes.subtitle': 'The capability directory: every device this node can delegate to.',
   'nodes.empty': 'No nodes registered yet.',
   'nodes.lastSeen': 'Last seen',
+  'nodes.trust': 'trust',
   'nodes.never': 'never',
 
   // Reminders view

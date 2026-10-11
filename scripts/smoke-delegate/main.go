@@ -83,7 +83,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	for _, peer := range cfg.Network.Peers {
+	for _, peer := range cfg.Network.PeerAddrs() {
 		if err := sched.DialPeer(ctx, peer); err != nil {
 			fatal("dial peer "+peer, err)
 		}

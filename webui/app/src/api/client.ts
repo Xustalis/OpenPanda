@@ -468,6 +468,9 @@ export interface NodeInfo {
   ver?: string
   rtt_ms?: number
   transport?: string
+  /** Trust-zone tier pinned on the row (experimental): absent/"mesh" is the
+   *  default fleet-wide trust; guarded/open mark a zoned peer. */
+  trust?: string
 }
 
 /** GET /api/self — this machine's device profile (+ its ledger card),

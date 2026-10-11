@@ -24,7 +24,7 @@ import (
 // commands with real subverbs get an entry — single-word commands (ask,
 // queue, init) complete flags and files instead.
 var completionVerbs = map[string][]string{
-	"nodes":    {"add", "disconnect", "invite", "remove", "prune", "verify", "admit", "drain"},
+	"nodes":    {"add", "disconnect", "invite", "remove", "prune", "verify", "admit", "drain", "trust"},
 	"task":     {"add", "priority", "move", "approve", "reject", "cancel", "delete", "logs", "show"},
 	"plan":     {"run", "show", "example"},
 	"session":  {"list", "new", "show", "mv", "rm", "fork", "tree", "ask", "diff", "merge"},

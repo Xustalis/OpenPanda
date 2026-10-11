@@ -57,7 +57,7 @@ func TestMeshLineCountsConfiguredPeersOnly(t *testing.T) {
 		{Node: inbound, Local: false, Running: true},
 	}
 	cfg := &config.Config{}
-	cfg.Network.Peers = []string{"10.0.0.9:7836"}
+	cfg.Network.Peers = []config.PeerEntry{{Addr: "10.0.0.9:7836"}}
 	cfg.Network.ListenAddr = "127.0.0.1:1" // refused instantly; the listener state is not under test
 
 	line := func() string {

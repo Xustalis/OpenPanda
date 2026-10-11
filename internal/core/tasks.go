@@ -493,7 +493,7 @@ func (s *TaskStore) applyTransition(ctx context.Context, taskID, from, to, owner
 
 func validApprovalDisposition(disposition ApprovalDisposition) bool {
 	switch disposition {
-	case ApprovalAcceptWork, ApprovalResumeExecution, ApprovalNeedsChangedInput:
+	case ApprovalAcceptWork, ApprovalResumeExecution, ApprovalNeedsChangedInput, ApprovalAdmissionReview:
 		return true
 	default:
 		return false
@@ -625,9 +625,12 @@ func (s *TaskStore) DispatchTarget(ctx context.Context, taskID string) (string, 
 
 // DeclineRecord is one refusal on a task's audit trail: the declining
 // executor and the reason it stated ("capacity full", "node draining").
+// Code is the machine-readable refusal class (DeclineCodeTrust* and
+// friends) when the wire payload carried one — empty for legacy peers.
 type DeclineRecord struct {
 	By     string
 	Reason string
+	Code   string
 }
 
 // DeclineTrail returns every refusal this task collected, oldest first.
@@ -648,9 +651,10 @@ func (s *TaskStore) DeclineTrail(ctx context.Context, taskID string) ([]DeclineR
 		var d struct {
 			By     string `json:"by"`
 			Reason string `json:"reason"`
+			Code   string `json:"code"`
 		}
 		if err := json.Unmarshal([]byte(data), &d); err == nil && d.By != "" {
-			out = append(out, DeclineRecord{By: d.By, Reason: d.Reason})
+			out = append(out, DeclineRecord{By: d.By, Reason: d.Reason, Code: d.Code})
 		}
 	}
 	return out, rows.Err()
@@ -762,7 +766,7 @@ func (s *TaskStore) Accept(ctx context.Context, taskID, owner string) error {
 // by is the declining executor (the wire sender): while the task is
 // dispatched the stored owner is still the delegator, so the decliner must be
 // passed explicitly — the re-router (P1-5) excludes it from future candidacy.
-func (s *TaskStore) Decline(ctx context.Context, taskID, parent, reason, by string) error {
+func (s *TaskStore) Decline(ctx context.Context, taskID, parent, reason, code, by string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -772,7 +776,7 @@ func (s *TaskStore) Decline(ctx context.Context, taskID, parent, reason, by stri
 	}
 	// Guarded UPDATE because the lease changes hands (executor -> parent): the
 	// state/owner guard ensures a concurrent accept/decline cannot both win.
-	dataJSON, _ := json.Marshal(map[string]any{"reason": reason, "by": by})
+	dataJSON, _ := json.Marshal(map[string]any{"reason": reason, "by": by, "code": code})
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
 			UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=?
@@ -1051,11 +1055,24 @@ const (
 	ApprovalAcceptWork        ApprovalDisposition = "accept_work"
 	ApprovalResumeExecution   ApprovalDisposition = "resume_execution"
 	ApprovalNeedsChangedInput ApprovalDisposition = "needs_changed_input"
+	// ApprovalAdmissionReview marks a task parked before any work by THIS
+	// node's inbound admission gate (trust-zone accept review). It resumes
+	// on a local approve like resume_execution, but unlike it a wire
+	// task_resume may never un-park it: the gate belongs to this node's
+	// operator, and the delegator — who is also the suspect the gate exists
+	// for — must not talk the executor out of its own review.
+	ApprovalAdmissionReview ApprovalDisposition = "admission_review"
 )
+
+// resumesOnApprove reports whether approving a parked row should put it back
+// through the execute-exactly-once path rather than accepting stored work.
+func resumesOnApprove(d ApprovalDisposition) bool {
+	return d == ApprovalResumeExecution || d == ApprovalAdmissionReview
+}
 
 func parseApprovalDisposition(raw string) ApprovalDisposition {
 	switch ApprovalDisposition(raw) {
-	case ApprovalAcceptWork, ApprovalResumeExecution, ApprovalNeedsChangedInput:
+	case ApprovalAcceptWork, ApprovalResumeExecution, ApprovalNeedsChangedInput, ApprovalAdmissionReview:
 		return ApprovalDisposition(raw)
 	default:
 		return ""
@@ -1092,7 +1109,7 @@ func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
 	if disposition == ApprovalNeedsChangedInput {
 		return fmt.Errorf("%w: task %s", ErrApprovalNeedsChangedInput, taskID)
 	}
-	resume := disposition == ApprovalResumeExecution
+	resume := resumesOnApprove(disposition)
 	// Guarded UPDATE (P2-8): a concurrent reject/approve must not both win.
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		var res sql.Result
@@ -1139,7 +1156,7 @@ func (s *TaskStore) ClaimApproved(ctx context.Context, taskID, expectedOwner, ne
 	if disposition == ApprovalNeedsChangedInput {
 		return fmt.Errorf("%w: task %s", ErrApprovalNeedsChangedInput, taskID)
 	}
-	if disposition != ApprovalResumeExecution {
+	if !resumesOnApprove(disposition) {
 		return fmt.Errorf("%w: task %s disposition=%s", ErrConflict, taskID, disposition)
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
@@ -1147,8 +1164,9 @@ func (s *TaskStore) ClaimApproved(ctx context.Context, taskID, expectedOwner, ne
 			UPDATE tasks SET state=?, owner_node=?, authorized=1, scheduled=0,
 				state_version=state_version+2, updated_at=?
 			WHERE task_id=? AND state=? AND owner_node=?
-				AND (approval_disposition=? OR approval_disposition IS NULL OR approval_disposition='')`,
-			StateDispatched, newOwner, s.now(), taskID, StateReview, expectedOwner, string(ApprovalResumeExecution))
+				AND (approval_disposition IN (?, ?) OR approval_disposition IS NULL OR approval_disposition='')`,
+			StateDispatched, newOwner, s.now(), taskID, StateReview, expectedOwner,
+			string(ApprovalResumeExecution), string(ApprovalAdmissionReview))
 		if err != nil {
 			return fmt.Errorf("claim approved task: %w", err)
 		}

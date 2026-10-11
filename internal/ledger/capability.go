@@ -721,6 +721,82 @@ func (p PendingNode) Fingerprint() string {
 	return p.PubKey[:16]
 }
 
+// SetPeerTrust pins a trust-zone tier onto a directory row — the operator's
+// local assertion about that node. The value is validated by the caller
+// (trust.ParseLevel); "" clears back to mesh. The row must exist: asserting
+// trust on a node the directory has never seen would be a silent no-op a
+// later upsert could mask.
+func SetPeerTrust(db *sql.DB, nodeID, level string) error {
+	if db == nil || nodeID == "" {
+		return nil
+	}
+	res, err := db.Exec(`UPDATE employee_cache SET trust=? WHERE id=?`, level, nodeID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("set peer trust: no directory row for %q", nodeID)
+	}
+	return nil
+}
+
+// SetPeerTrustByKey pins a tier onto every row carrying the proven Ed25519
+// identity — the "k:"-stable handle for a node whose instance id may churn.
+// Trust follows the key through peerTrustOf's sibling merge anyway, so
+// stamping all sibling rows keeps a restarted node's new row zoned from the
+// start. Returns how many rows were stamped; zero means the directory holds
+// no row for that key.
+func SetPeerTrustByKey(db *sql.DB, pubKeyHex, level string) (int64, error) {
+	if db == nil || pubKeyHex == "" {
+		return 0, nil
+	}
+	res, err := db.Exec(`UPDATE employee_cache SET trust=? WHERE pub_key=?`, level, pubKeyHex)
+	if err != nil {
+		return 0, fmt.Errorf("set peer trust by key: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// PeerTrust returns the tier pinned on a node's row ("" when unset = mesh),
+// plus the key the row attests, so a caller can also check whether sibling
+// rows of the same identity carry a tier — trust is asserted on one row but
+// should follow the Ed25519 identity a restarted node keeps.
+func PeerTrust(db *sql.DB, nodeID string) (level, pubKey string) {
+	if db == nil || nodeID == "" {
+		return "", ""
+	}
+	_ = db.QueryRow(`SELECT COALESCE(trust,''), COALESCE(pub_key,'') FROM employee_cache WHERE id=?`,
+		nodeID).Scan(&level, &pubKey)
+	return level, pubKey
+}
+
+// PeerTrustByKey returns the strongest tier assertion made on ANY row holding
+// this identity — a node's trust survives its instance id changing across
+// restarts because the tier is read through the proven key, not the row id.
+// "Strongest" means the least-trusting non-empty value: an operator who ever
+// downgraded this identity sees the downgrade until they explicitly lift it.
+func PeerTrustByKey(db *sql.DB, pubKeyHex string) string {
+	if db == nil || pubKeyHex == "" {
+		return ""
+	}
+	rows, err := db.Query(`SELECT trust FROM employee_cache WHERE pub_key=? AND trust != ''`, pubKeyHex)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	best := ""
+	for rows.Next() {
+		var l string
+		if rows.Scan(&l) != nil {
+			continue
+		}
+		if best == "" || (l == "open" || (l == "guarded" && best != "open")) {
+			best = l
+		}
+	}
+	return best
+}
+
 // RecordPeerAddr persists the binding from a configured dial address to the
 // node id its hello bound. One row per address, overwritten on re-bind: the
 // address is the stable key an operator configured, and a node id behind it
@@ -935,6 +1011,15 @@ type Node struct {
 	// (panda nodes verify). Zero means TOFU-recorded but never compared — a
 	// state the fleet list shows rather than silently treats as trusted.
 	KeyVerified int64 `json:"key_verified,omitempty"`
+	// Trust is the operator-asserted trust-zone tier pinned on this row
+	// (mesh|guarded|open; "" = mesh). Locally asserted only — a level the
+	// peer claims for itself is never honored — and a key change under the
+	// row demotes mesh to guarded alongside the key_verified reset.
+	Trust string `json:"trust,omitempty"`
+	// Reputation is a runtime-only annotation, never stored or serialized:
+	// the local delegation_metrics success rate this node observed for the
+	// row's owner, stamped in by Core when routing.reputation is enabled.
+	Reputation *float64 `json:"-"`
 }
 
 // Fingerprint renders the comparable form of PubKey — enough hex digits that
@@ -1165,7 +1250,7 @@ func AbilityMatches(declared, required string) bool {
 
 // Query returns nodes matching filters. Empty status or name matches all.
 func Query(db *sql.DB, status, name string) ([]Node, error) {
-	q := `SELECT id, COALESCE(name,''), COALESCE(chip,''), COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), COALESCE(status,''), COALESCE(last_seen,0), COALESCE(scheduler_tier,0), native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, projects_json, COALESCE(pub_key,''), COALESCE(key_verified,0), COALESCE(ver,'')
+	q := `SELECT id, COALESCE(name,''), COALESCE(chip,''), COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), COALESCE(status,''), COALESCE(last_seen,0), COALESCE(scheduler_tier,0), native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, projects_json, COALESCE(pub_key,''), COALESCE(key_verified,0), COALESCE(ver,''), COALESCE(trust,'')
 	      FROM employee_cache WHERE 1=1`
 	var args []any
 	if status != "" {
@@ -1192,7 +1277,7 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 		var native, agents, manual, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, projectsJSON sql.NullString
 		if err := rows.Scan(&n.ID, &n.Name, &n.Chip, &n.NodeKind, &n.NodeIdentity, &n.Status, &n.LastSeen, &n.SchedulerTier,
 			&native, &agents, &manual, &capJSON, &resJSON, &neighborsJSON, &linksJSON, &contactsJSON, &projectsJSON,
-			&n.PubKey, &n.KeyVerified, &n.Ver); err != nil {
+			&n.PubKey, &n.KeyVerified, &n.Ver, &n.Trust); err != nil {
 			return nil, err
 		}
 		if native.Valid && native.String != "" {

@@ -1345,9 +1345,9 @@ func TestDeclineTrail(t *testing.T) {
 	}
 	must(s.Queue(ctx, tk.TaskID, "root"))
 	must(s.Dispatch(ctx, tk.TaskID, "root", "peer-a"))
-	must(s.Decline(ctx, tk.TaskID, "root", "capacity full", "peer-a"))
+	must(s.Decline(ctx, tk.TaskID, "root", "capacity full", "", "peer-a"))
 	must(s.Dispatch(ctx, tk.TaskID, "root", "peer-b"))
-	must(s.Decline(ctx, tk.TaskID, "root", "node draining", "peer-b"))
+	must(s.Decline(ctx, tk.TaskID, "root", "node draining", "drain", "peer-b"))
 
 	trail, err := s.DeclineTrail(ctx, tk.TaskID)
 	if err != nil {
@@ -1357,7 +1357,7 @@ func TestDeclineTrail(t *testing.T) {
 		t.Fatalf("trail len = %d, want 2", len(trail))
 	}
 	if trail[0] != (DeclineRecord{By: "peer-a", Reason: "capacity full"}) ||
-		trail[1] != (DeclineRecord{By: "peer-b", Reason: "node draining"}) {
+		trail[1] != (DeclineRecord{By: "peer-b", Reason: "node draining", Code: "drain"}) {
 		t.Fatalf("trail = %+v", trail)
 	}
 	ids, err := s.DeclinedBy(ctx, tk.TaskID)

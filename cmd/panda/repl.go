@@ -2294,6 +2294,9 @@ func (r *repl) cmdNodes(arg string) {
 		case "verify":
 			r.cmdNodesVerify(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
 			return
+		case "trust":
+			r.cmdNodesTrust(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
+			return
 		case "admit":
 			r.cmdNodesAdmit(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg), fields[0])))
 			return

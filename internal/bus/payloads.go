@@ -424,15 +424,48 @@ func (p *TaskDelegatePayload) TitleOrDefault() string {
 	return p.Intent
 }
 
-// TaskAcceptPayload confirms acceptance.
+// TaskAcceptPayload confirms acceptance. The Sig/Pub/Ts fields carry the
+// executor's Ed25519 signature over (task, attempt, acceptor, ts) — the
+// bilateral half of the contract the consent grant opens (trust zones): the
+// origin's grant says WHAT may run, the executor's accept says WHO agreed to
+// run it, and a relay forwarding either cannot mint the other's side. Empty
+// fields mark a pre-signature peer; a peer that sends a signature that fails
+// verification has its accept dropped, not degraded.
 type TaskAcceptPayload struct {
-	TaskID string `json:"task_id"`
+	TaskID    string `json:"task_id"`
+	AttemptID string `json:"attempt_id,omitempty"`
+	Sig       string `json:"sig,omitempty"`
+	Pub       string `json:"pub,omitempty"`
+	Ts        int64  `json:"ts,omitempty"`
 }
+
+// Decline reason codes (TaskDeclinePayload.ReasonCode) — machine-stable
+// vocabulary layered over the human-readable Reason. The trust-zone codes let
+// a delegator distinguish "this node cannot" from "this node's policy chose
+// not to" — the first triggers re-routing as before, the second may surface a
+// different fix (raise the peer's tier, or accept that open-tier strangers
+// get no pushes until the offer/bid market exists).
+const (
+	// DeclineCodeTrustOpen — the origin's tier may not originate push-mode
+	// work: open peers exist only in the directory until the market lands.
+	DeclineCodeTrustOpen = "trust_open_origin"
+	// DeclineCodeTrustRefused — the receiver's accept policy declined the
+	// delegate (mode refuse, or an enforcing policy classifier's verdict).
+	DeclineCodeTrustRefused = "trust_policy_refused"
+	// DeclineCodeTrustCeiling — the sender's next-hop ceiling stripped a
+	// need the task cannot run without (pack or inputs); re-routing is the
+	// correct response, not retry.
+	DeclineCodeTrustCeiling = "trust_send_ceiling"
+)
 
 // TaskDeclinePayload rejects with a reason.
 type TaskDeclinePayload struct {
 	TaskID string `json:"task_id"`
 	Reason string `json:"reason"`
+	// ReasonCode is the optional machine-stable refusal vocabulary above —
+	// empty for every refusal that predates the trust zones (drain, capacity,
+	// chain loop), which is itself meaningful: reroute handles them alike.
+	ReasonCode string `json:"reason_code,omitempty"`
 }
 
 // TaskResultPayload is the completion result.

@@ -98,6 +98,40 @@ network:
     #                            # punching through the mesh; needs no
     #                            # reachable listen_addr on either side
 
+  # ── Trust zones (experimental) ─────────────────────────────────────────
+  # Every peer defaults to "mesh" — the pre-feature full-trust behaviour.
+  # A peer entry may carry a tier instead of the bare scalar:
+  #   peers:
+  #     - addr: "vps.example.com:7836"
+  #       trust: "guarded"         # mesh | guarded | open
+  # guarded clamps what delegates toward it may carry (context capped at a
+  # pull-pointer, project packs / artifact inputs / consent grants stripped)
+  # and admits work it originates under the accept policy below; open never
+  # receives a delegate and its pushes are refused until the offer/bid
+  # market exists. `panda nodes trust <id> <level>` pins a tier on a known
+  # node; a peer key change demotes an asserted mesh back to guarded.
+  # trust:
+  #   send:
+  #     guarded:                 # outbound ceiling toward guarded peers
+  #       context_level: "pointer"   # full | pointer | summary
+  #                                # pointer = executor pulls the snapshot via
+  #                                # context_fetch — authenticated, authorized,
+  #                                # logged, but the FULL bytes still move on
+  #                                # request. It is an audit point, not a
+  #                                # secrecy bound; for that use "summary",
+  #                                # which strips the reference so no pull is
+  #                                # possible (fetch is refused under a
+  #                                # summary ceiling even if a hash leaks).
+  #       project_pack: false        # ship project memory inline
+  #       inputs: false              # ship artifact/worktree references
+  #       consent: false             # let tier-2 grants ride the delegate
+  #   accept:
+  #     guarded:                 # inbound admission for guarded-origin work
+  #       mode: "auto"             # auto | review | refuse
+  #       policy_llm: "off"        # off | shadow | enforce — optional
+  #                                # zero-tool classifier; safety stays
+  #                                # deterministic whatever it says
+
   # ── DTN contact plan: scheduled transmission windows ─────────────────────
   # For links that are predictably up only at times — a nightly batch host, a
   # radio pass, a laptop that wakes on a schedule. Each window is advertised
@@ -250,6 +284,10 @@ injection:
 # at execution time, the next-best matching agent is tried (fallback chain).
 # routing:
 #   preferred_agents: []       # e.g. ["codex", "opencode"]
+#   reputation: false          # experimental (trust zones): fold each
+#                              # executor's locally observed delegation
+#                              # success rate into routing scores. Local
+#                              # metrics only — never peer-reported.
 
 # Memory system tunables. Character caps for each memory file class; files
 # over the cap are refused on write.

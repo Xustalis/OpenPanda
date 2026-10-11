@@ -526,6 +526,7 @@ const de: Messages = {
   'nodes.subtitle': 'Das Fähigkeitenverzeichnis: alle Geräte, an die dieser Knoten delegieren kann.',
   'nodes.empty': 'Noch keine Knoten registriert.',
   'nodes.lastSeen': 'Zuletzt gesehen',
+  'nodes.trust': 'Vertrauen',
   'nodes.never': 'nie',
 
   // Reminders view

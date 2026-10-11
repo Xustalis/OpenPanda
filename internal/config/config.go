@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/trust"
 	"github.com/Xustalis/OpenPanda/internal/util"
 	"gopkg.in/yaml.v3"
 )
@@ -145,6 +146,11 @@ type RoutingConfig struct {
 	// policy already opted into a wider tool face — and an explicit false
 	// keeps extended tools while closing the self-management path.
 	PandaTools *bool `yaml:"panda_tools"`
+	// Reputation opts node scoring into a local track-record term
+	// (trust_zones §9): each executor's smoothed success rate out of this
+	// node's own delegation_metrics joins the DCPS weighted sum. Default
+	// off — it is a routing-behaviour change, and an opt-in one.
+	Reputation bool `yaml:"reputation"`
 }
 
 // Agent tool policies (routing.tools_policy).
@@ -232,17 +238,185 @@ type NodeConfig struct {
 	CardPath      string `yaml:"card_path,omitempty"` // path to capabilities.yaml
 }
 
+// PeerEntry is one network.peers item. The scalar form ("host:port") is the
+// pre-trust-zones syntax and unmarshals to {Addr, ""}; the mapping form adds
+// a trust tier (trust_zone feature, docs/plans/design-trust-zones-*.md §3):
+// "mesh" keeps today's full delegation, "guarded" narrows what delegates may
+// carry toward the peer, "open" admits the node to the directory but bars it
+// from task delegation entirely until the offer/bid market exists. Empty
+// trust means mesh — a fleet that never names a tier is byte-for-byte the
+// old behaviour.
+type PeerEntry struct {
+	Addr  string `yaml:"addr"`
+	Trust string `yaml:"trust,omitempty"`
+}
+
+// UnmarshalYAML accepts the legacy scalar (a bare address) alongside the
+// structured {addr, trust} mapping, so existing configs parse unchanged.
+func (e *PeerEntry) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		e.Addr = value.Value
+		e.Trust = ""
+		return nil
+	}
+	type plain PeerEntry
+	return value.Decode((*plain)(e))
+}
+
+// MarshalYAML writes the scalar form when no trust tier is set, so files
+// that never opted into zones keep their original shape on rewrite.
+func (e PeerEntry) MarshalYAML() (any, error) {
+	if e.Trust == "" {
+		return e.Addr, nil
+	}
+	return struct {
+		Addr  string `yaml:"addr"`
+		Trust string `yaml:"trust"`
+	}{Addr: e.Addr, Trust: e.Trust}, nil
+}
+
+// TrustSendPolicy is the operator-tunable half of the guarded outbound
+// exposure ceiling (network.trust.send.guarded). Unset fields fall back to
+// the tier's defaults (internal/trust.DefaultSend). Mesh has no table —
+// full trust is the ceiling already — and open has none because open peers
+// never receive a delegate at all in this phase.
+type TrustSendPolicy struct {
+	ContextLevel string `yaml:"context_level"` // ceiling: full|pointer|summary
+	ProjectPack  *bool  `yaml:"project_pack"`  // ship project memory inline
+	Inputs       *bool  `yaml:"inputs"`        // ship artifact/worktree references
+	Consent      *bool  `yaml:"consent"`       // let the tier-2 grant ride the delegate
+}
+
+// TrustAcceptPolicy is the inbound admission rule for delegates whose origin
+// is guarded (network.trust.accept.guarded). mode: auto|review|refuse;
+// policy_llm: off|shadow|enforce — the optional zero-tool classifier that
+// judges the task's desirability before the mode runs.
+type TrustAcceptPolicy struct {
+	Mode      string `yaml:"mode"`
+	PolicyLLM string `yaml:"policy_llm"`
+}
+
+// TrustConfig carries the per-tier trust-zone tables. Only guarded is
+// operator-tunable in this phase; mesh is fixed allow-all and open is fixed
+// deny, so the only thing the file can express is how wide the guarded
+// middle tier sits.
+type TrustConfig struct {
+	Send   TrustSendConfig   `yaml:"send"`
+	Accept TrustAcceptConfig `yaml:"accept"`
+}
+
+// TrustSendConfig groups the outbound ceilings by tier.
+type TrustSendConfig struct {
+	Guarded TrustSendPolicy `yaml:"guarded"`
+}
+
+// TrustAcceptConfig groups the inbound admission rules by tier.
+type TrustAcceptConfig struct {
+	Guarded TrustAcceptPolicy `yaml:"guarded"`
+}
+
+// Validate checks the trust tables' enumerations. Peer levels themselves are
+// validated next to their addresses in Config.Validate.
+func (t TrustConfig) Validate() error {
+	switch t.Send.Guarded.ContextLevel {
+	case "", "full", "pointer", "summary":
+	default:
+		return fmt.Errorf("config: network.trust.send.guarded.context_level %q is invalid (want full, pointer, or summary)", t.Send.Guarded.ContextLevel)
+	}
+	switch t.Accept.Guarded.Mode {
+	case "", "auto", "review", "refuse":
+	default:
+		return fmt.Errorf("config: network.trust.accept.guarded.mode %q is invalid (want auto, review, or refuse)", t.Accept.Guarded.Mode)
+	}
+	switch t.Accept.Guarded.PolicyLLM {
+	case "", "off", "shadow", "enforce":
+	default:
+		return fmt.Errorf("config: network.trust.accept.guarded.policy_llm %q is invalid (want off, shadow, or enforce)", t.Accept.Guarded.PolicyLLM)
+	}
+	return nil
+}
+
+// SendPolicyFor resolves the outbound ceiling for a tier: defaults plus any
+// operator overrides. Only guarded is tunable; mesh and open always return
+// the built-ins.
+func (t TrustConfig) SendPolicyFor(l trust.Level) trust.SendPolicy {
+	p := trust.DefaultSend(l)
+	if l != trust.Guarded {
+		return p
+	}
+	g := t.Send.Guarded
+	if g.ContextLevel != "" {
+		p.MaxContext = g.ContextLevel
+	}
+	if g.ProjectPack != nil {
+		p.ProjectPack = *g.ProjectPack
+	}
+	if g.Inputs != nil {
+		p.Inputs = *g.Inputs
+	}
+	if g.Consent != nil {
+		p.Consent = *g.Consent
+	}
+	return p
+}
+
+// AcceptPolicyFor resolves the inbound admission rule for a tier the same
+// way: defaults plus guarded overrides.
+func (t TrustConfig) AcceptPolicyFor(l trust.Level) trust.AcceptPolicy {
+	p := trust.DefaultAccept(l)
+	if l != trust.Guarded {
+		return p
+	}
+	g := t.Accept.Guarded
+	if g.Mode != "" {
+		p.Mode = g.Mode
+	}
+	if g.PolicyLLM != "" {
+		p.PolicyLLM = g.PolicyLLM
+	}
+	return p
+}
+
+// PeerAddrs flattens the configured peer list to the dial addresses every
+// pre-zones consumer wants.
+func (n NetworkConfig) PeerAddrs() []string {
+	out := make([]string, 0, len(n.Peers))
+	for _, p := range n.Peers {
+		if a := strings.TrimSpace(p.Addr); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// PeerTrustHints returns the configured addr→level map the runtime applies
+// to a peer row once its hello resolves an identity. Entries without a tier
+// (or an invalid one — validation runs first) are absent.
+func (n NetworkConfig) PeerTrustHints() map[string]string {
+	var out map[string]string
+	for _, p := range n.Peers {
+		if p.Trust != "" {
+			if out == nil {
+				out = make(map[string]string)
+			}
+			out[strings.TrimSpace(p.Addr)] = p.Trust
+		}
+	}
+	return out
+}
+
 // NetworkConfig controls the WebSocket listener and manual peers. PanelAddr and
 // PanelToken are read only by the optional webui sidecar (webui/cmd/panel), not
 // by the kernel daemon.
 type NetworkConfig struct {
-	ListenAddr          string   `yaml:"listen_addr"`            // e.g. ":7836"
-	PanelAddr           string   `yaml:"panel_addr"`             // webui sidecar HTTP listener; loopback by default (P1-24)
-	PanelToken          string   `yaml:"panel_token"`            // Bearer token guarding /api/* in the webui sidecar
-	SharedSecret        string   `yaml:"shared_secret"`          // HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it
-	Peers               []string `yaml:"peers"`                  // e.g. "worker-1.your-tailnet.ts.net:7836", or "punch:<node-id>" for a NAT-bound peer reachable only via hole punching
-	MaxConnections      int      `yaml:"max_connections"`        // global concurrent WS connection limit (0 = unlimited)
-	MaxConnectionsPerIP int      `yaml:"max_connections_per_ip"` // per-remote-IP concurrent WS connection limit (0 = unlimited)
+	ListenAddr          string      `yaml:"listen_addr"`            // e.g. ":7836"
+	PanelAddr           string      `yaml:"panel_addr"`             // webui sidecar HTTP listener; loopback by default (P1-24)
+	PanelToken          string      `yaml:"panel_token"`            // Bearer token guarding /api/* in the webui sidecar
+	SharedSecret        string      `yaml:"shared_secret"`          // HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it
+	Peers               []PeerEntry `yaml:"peers"`                  // scalar "worker-1:7836" / "punch:<id>", or {addr, trust} for a zoned peer
+	Trust               TrustConfig `yaml:"trust"`                  // trust-zone policy tables; empty means every peer is mesh (pre-feature behaviour)
+	MaxConnections      int         `yaml:"max_connections"`        // global concurrent WS connection limit (0 = unlimited)
+	MaxConnectionsPerIP int         `yaml:"max_connections_per_ip"` // per-remote-IP concurrent WS connection limit (0 = unlimited)
 	// AllowCleartext opts the node back into dialing plaintext ws:// peers
 	// beyond the safe set. Hello proves membership, but every frame after it
 	// travels unsigned and unencrypted — a network MITM on a plaintext link
@@ -849,9 +1023,15 @@ func (c *Config) Validate() error {
 		}
 	}
 	for i, peer := range c.Network.Peers {
-		if err := ValidatePeerAddr(peer); err != nil {
-			return fmt.Errorf("config: network.peers[%d] %q: %w", i, peer, err)
+		if err := ValidatePeerAddr(peer.Addr); err != nil {
+			return fmt.Errorf("config: network.peers[%d] %q: %w", i, peer.Addr, err)
 		}
+		if _, err := trust.ParseLevel(peer.Trust); err != nil {
+			return fmt.Errorf("config: network.peers[%d] %q: %w", i, peer.Addr, err)
+		}
+	}
+	if err := c.Network.Trust.Validate(); err != nil {
+		return err
 	}
 	for i, entry := range c.Network.AllowCleartextFor {
 		if err := validateCleartextScope(entry); err != nil {
@@ -1730,7 +1910,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 		setMapField(network, "shared_secret", nc.SharedSecret)
 	}
 	if nc.Peers != nil {
-		setMapFieldSeq(network, "peers", nc.Peers)
+		setPeerSeq(network, "peers", nc.Peers)
 	}
 	if nc.AllowCleartextFor != nil {
 		setMapFieldSeq(network, "allow_cleartext_for", nc.AllowCleartextFor)
@@ -1791,6 +1971,42 @@ func stringSeqNode(values []string) *yaml.Node {
 		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v})
 	}
 	return seq
+}
+
+// setPeerSeq is setMapFieldSeq for the structured peers list: each entry
+// writes as a bare scalar when it carries no trust tier (the legacy shape),
+// or as an {addr, trust} mapping when it does.
+func setPeerSeq(m *yaml.Node, key string, entries []PeerEntry) {
+	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for _, e := range entries {
+		if e.Trust == "" {
+			seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: e.Addr})
+			continue
+		}
+		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "addr"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: e.Addr},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "trust"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: e.Trust},
+		}})
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			if len(entries) == 0 {
+				m.Content = append(m.Content[:i], m.Content[i+2:]...)
+				return
+			}
+			m.Content[i+1] = seq
+			return
+		}
+	}
+	if len(entries) == 0 {
+		return
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		seq,
+	)
 }
 
 // mappingValue returns the value node paired with key in a mapping node, or

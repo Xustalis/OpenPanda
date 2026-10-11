@@ -520,6 +520,7 @@ const ja: Messages = {
   'nodes.subtitle': 'ケイパビリティディレクトリ：このノードが委任できるすべてのデバイス。',
   'nodes.empty': '登録済みのノードはまだありません。',
   'nodes.lastSeen': '最終オンライン',
+  'nodes.trust': '信頼',
   'nodes.never': '未接続',
 
   // Reminders view

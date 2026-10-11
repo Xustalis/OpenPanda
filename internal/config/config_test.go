@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/trust"
 )
 
 func writeTemp(t *testing.T, content string) string {
@@ -113,6 +115,83 @@ storage:
 	}
 	if cfg.Storage.DBPath != db {
 		t.Fatalf("db = %q", cfg.Storage.DBPath)
+	}
+}
+
+// TestPeerEntryLegacyAndStructured: network.peers accepts both the legacy
+// scalar ("host:port") and the trust-zone mapping ({addr, trust}); an
+// all-scalar file unmarshals and rewrites unchanged.
+func TestPeerEntryLegacyAndStructured(t *testing.T) {
+	p := writeTemp(t, `
+node:
+  name: "n"
+network:
+  peers:
+    - "legacy:7836"
+    - addr: "zoned:7836"
+      trust: "guarded"
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Network.Peers) != 2 {
+		t.Fatalf("peers = %+v", cfg.Network.Peers)
+	}
+	if cfg.Network.Peers[0].Addr != "legacy:7836" || cfg.Network.Peers[0].Trust != "" {
+		t.Fatalf("scalar peer = %+v, want {addr, no trust}", cfg.Network.Peers[0])
+	}
+	if cfg.Network.Peers[1].Addr != "zoned:7836" || cfg.Network.Peers[1].Trust != "guarded" {
+		t.Fatalf("mapped peer = %+v", cfg.Network.Peers[1])
+	}
+	addrs := cfg.Network.PeerAddrs()
+	if len(addrs) != 2 || addrs[0] != "legacy:7836" || addrs[1] != "zoned:7836" {
+		t.Fatalf("PeerAddrs = %v", addrs)
+	}
+}
+
+// TestPeerEntryBadTrustRejected: an unknown tier fails validation loudly —
+// a typo must not silently resolve to a tier the operator never meant.
+func TestPeerEntryBadTrustRejected(t *testing.T) {
+	p := writeTemp(t, `
+node:
+  name: "n"
+network:
+  peers:
+    - addr: "zoned:7836"
+      trust: "friendly"
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("unknown trust tier must fail validation")
+	}
+}
+
+// TestTrustConfigOverrides: network.trust.* overrides only the guarded tier;
+// mesh and open keep their built-in tables whatever the file says.
+func TestTrustConfigOverrides(t *testing.T) {
+	yes, no := true, false
+	tc := TrustConfig{
+		Send: TrustSendConfig{Guarded: TrustSendPolicy{
+			ContextLevel: "summary", Consent: &yes, ProjectPack: &no,
+		}},
+		Accept: TrustAcceptConfig{Guarded: TrustAcceptPolicy{Mode: "review", PolicyLLM: "shadow"}},
+	}
+	g := tc.SendPolicyFor(trust.Guarded)
+	if g.MaxContext != "summary" || !g.Consent || g.ProjectPack {
+		t.Fatalf("guarded override = %+v", g)
+	}
+	a := tc.AcceptPolicyFor(trust.Guarded)
+	if a.Mode != "review" || a.PolicyLLM != "shadow" {
+		t.Fatalf("guarded accept override = %+v", a)
+	}
+	if m := tc.SendPolicyFor(trust.Mesh); !m.ProjectPack || !m.Consent || m.MaxContext != "full" {
+		t.Fatalf("mesh is not tunable, got %+v", m)
+	}
+	if o := tc.SendPolicyFor(trust.Open); o.Delegate {
+		t.Fatal("open must never delegate")
+	}
+	if err := (TrustConfig{Send: TrustSendConfig{Guarded: TrustSendPolicy{ContextLevel: "sideways"}}}).Validate(); err == nil {
+		t.Fatal("invalid context_level must fail validation")
 	}
 }
 

@@ -419,10 +419,10 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 			generated = true
 		}
 		peers := slices.Clone(c.Network.Peers)
-		if slices.Contains(peers, req.Addr) {
+		if slices.ContainsFunc(peers, func(e config.PeerEntry) bool { return e.Addr == req.Addr }) {
 			added = false
 		} else {
-			peers = append(peers, req.Addr)
+			peers = append(peers, config.PeerEntry{Addr: req.Addr})
 		}
 		if h.configPath != "" {
 			// Only a secret this call generated belongs on disk — one

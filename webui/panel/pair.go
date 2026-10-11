@@ -254,8 +254,8 @@ func (h *handler) finishPair(pc *core.PairClient, addr string) {
 	// of the file; this one has nowhere else to live).
 	err = h.mutateCfgErr(func(c *config.Config) error {
 		peers := slices.Clone(c.Network.Peers)
-		if !slices.Contains(peers, addr) {
-			peers = append(peers, addr)
+		if !slices.ContainsFunc(peers, func(e config.PeerEntry) bool { return e.Addr == addr }) {
+			peers = append(peers, config.PeerEntry{Addr: addr})
 		}
 		if h.configPath != "" {
 			if err := config.UpdateNetworkSection(h.configPath, config.NetworkConfig{

@@ -174,6 +174,18 @@ func (c *Core) handleContextFetch(ctx context.Context, env bus.Envelope) {
 		})
 		return
 	}
+	// Trust ceiling on the pull channel (experimental): a "summary" send
+	// ceiling declared the peer may not hold snapshots — letting it fetch
+	// the same bytes would make the ceiling an audit note, not a bound.
+	// mesh resolves full → this branch never fires on a pre-feature fleet.
+	if pol := c.sendPolicyFor(c.peerTrustOf(ctx, env.From)); !pol.MayHoldContext() {
+		c.logger.Warn("context_fetch refused by trust ceiling", "task", p.TaskID,
+			"from", env.From)
+		_ = c.reply(ctx, env, bus.MsgContextAck, bus.ContextAckPayload{
+			TaskID: p.TaskID, Hash: p.Hash, OK: false,
+		})
+		return
+	}
 	e, ok, err := c.ctx.Get(ctx, p.Hash)
 	if err != nil || !ok {
 		c.logger.Debug("context miss on fetch", "hash", p.Hash, "err", err)

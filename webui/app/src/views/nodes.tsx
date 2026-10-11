@@ -322,6 +322,11 @@ function NodeCard({
         <span class="badge">{node.node_kind}</span>
         <span class={`badge ${node.running ? 'green' : 'red'}`}>{node.running ? 'running' : 'stopped'}</span>
         {isSelf && <span class="badge green">{t('nodes.self')}</span>}
+        {!isSelf && node.trust && node.trust !== 'mesh' && (
+          <span class={`badge ${node.trust === 'open' ? 'red' : ''}`}>
+            {t('nodes.trust')}: {node.trust}
+          </span>
+        )}
       </div>
       {node.chip && <p class="dim">{node.chip}</p>}
       <p class="dim">

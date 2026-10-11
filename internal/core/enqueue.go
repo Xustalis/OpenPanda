@@ -266,12 +266,38 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 		return
 	}
 	c.logger.Info("queue: task finished", "task", taskID, "state", final.State)
+	// A delegated row that ran here — e.g. released from a trust-zone
+	// admission park by `panda approve` — owes its verdict to the delegator,
+	// whose copy still sits in dispatched waiting on this node. Relay it up
+	// the chain exactly as proceedLocalDelegate's reply would have; a local
+	// task (chain=[self]) is a no-op.
+	c.relayResultForRemote(ctx, final)
 	// A finished stage may have released its successors. The plan node is the one
 	// that decides, and for a locally-executed stage that is this node.
 	c.advanceStagePlan(ctx, final)
 	// Unblock any synchronous waiter (delegation-style waits on enqueued
 	// tasks); a no-op when nobody is waiting.
 	c.signalResult(taskID, result)
+}
+
+// relayResultForRemote sends a locally-finished task's result to its
+// delegator when the row is a remote-origin copy (chain longer than self).
+// The normal delegated path replies on the wire env directly, but a task
+// that arrived at execution through the review → approve → queue route has
+// no live env left; relaying by chain is the same delivery the delegator
+// always expects. relayToParent already parks the result in the outbox when
+// the parent link is down.
+func (c *Core) relayResultForRemote(ctx context.Context, final Task) {
+	if len(final.Chain) <= 1 {
+		return
+	}
+	res := bus.TaskResultPayload{TaskID: final.TaskID, AttemptID: final.AttemptID, State: final.State}
+	if final.ResultJSON != "" {
+		if err := json.Unmarshal([]byte(final.ResultJSON), &res); err == nil {
+			res.TaskID, res.AttemptID, res.State = final.TaskID, final.AttemptID, final.State
+		}
+	}
+	c.relayToParent(ctx, bus.MsgTaskResult, final.Chain, res)
 }
 
 // forwardScheduled routes a claimed queue task to the node that should run it.
@@ -341,7 +367,9 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 			return true
 		}
 	} else {
-		decision = scheduler.RouteP(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
+		decision = scheduler.RouteP(c.nodeID, seenChain,
+			c.eligibleForSend(ctx, needsForTask(t), c.onlineEmployees(ctx)),
+			c.localMatch(), t.Requires,
 			resourceRequirement(t.ResourceJSON), preferredNodeOf(t), t.Project)
 	}
 	if decision.Action != scheduler.ActionForward {
@@ -451,6 +479,13 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 // authenticates the peer's result/decline) and stamps a lease so a dead
 // executor is detected (D3).
 func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload) error {
+	// Trust-zone send ceiling (experimental): the queue forward is a second
+	// wire path beside dispatchDelegated, so the same clamp applies here —
+	// refuse a target whose tier strips a need rather than ship the lobotomized
+	// payload. A no-op policy keeps the all-mesh fleet byte-identical.
+	if !c.clampForPeer(target, &p) {
+		return fmt.Errorf("peer %s trust ceiling refuses the task's needs (%s)", target, bus.DeclineCodeTrustCeiling)
+	}
 	// §6.1: a queue forward spends the same budget a synchronous dispatch does
 	// — the paths are interchangeable, so the bound must be too.
 	remaining, err := c.delegationBudget(ctx, taskID, derefBudget(p.DelegationBudget))

@@ -129,3 +129,46 @@ func TestArtifactGrantRoundTrip(t *testing.T) {
 		t.Fatal("forged grant verified under orchestrator key")
 	}
 }
+
+func TestAcceptanceRoundTrip(t *testing.T) {
+	pub, priv, err := GenerateNodeKey()
+	if err != nil {
+		t.Fatalf("GenerateNodeKey: %v", err)
+	}
+	const taskID, attemptID = "task-1", "att-1"
+	nodeID := "k:" + hex.EncodeToString(pub)
+	ts := time.Now().Unix()
+
+	sig := SignAcceptance(priv, taskID, attemptID, nodeID, ts)
+	if !VerifyAcceptance(pub, taskID, attemptID, nodeID, ts, sig) {
+		t.Fatal("valid acceptance rejected")
+	}
+	// Every bound field is load-bearing: a signature transplanted to another
+	// task, attempt, signer id or timestamp must not verify.
+	for _, tc := range []struct {
+		task, attempt, node string
+		ts                  int64
+	}{
+		{"task-2", attemptID, nodeID, ts},
+		{taskID, "att-2", nodeID, ts},
+		{taskID, attemptID, "k:other", ts},
+		{taskID, attemptID, nodeID, ts + 1},
+	} {
+		if VerifyAcceptance(pub, tc.task, tc.attempt, tc.node, tc.ts, sig) {
+			t.Fatalf("acceptance verified under transplanted tuple %+v", tc)
+		}
+	}
+	// A different signer cannot mint for the executor.
+	_, priv2, _ := GenerateNodeKey()
+	forged := SignAcceptance(priv2, taskID, attemptID, nodeID, ts)
+	if VerifyAcceptance(pub, taskID, attemptID, nodeID, ts, forged) {
+		t.Fatal("forged acceptance verified under executor key")
+	}
+	// Malformed signature encodings fail closed, not into legacy acceptance.
+	if VerifyAcceptance(pub, taskID, attemptID, nodeID, ts, "zz") {
+		t.Fatal("non-hex signature verified")
+	}
+	if VerifyAcceptance(pub, taskID, attemptID, nodeID, ts, sig[:len(sig)/2]) {
+		t.Fatal("truncated signature verified")
+	}
+}

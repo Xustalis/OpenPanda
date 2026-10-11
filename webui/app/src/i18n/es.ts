@@ -526,6 +526,7 @@ const es: Messages = {
   'nodes.subtitle': 'El directorio de capacidades: cada dispositivo al que este nodo puede delegar.',
   'nodes.empty': 'Todavía no hay nodos registrados.',
   'nodes.lastSeen': 'Visto por última vez',
+  'nodes.trust': 'confianza',
   'nodes.never': 'nunca',
 
   // Reminders view

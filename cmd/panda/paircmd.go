@@ -42,6 +42,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
+	"github.com/Xustalis/OpenPanda/internal/trust"
 )
 
 // generateSharedSecret mints the HMAC material node hellos sign with. Random
@@ -63,6 +64,7 @@ func generateSharedSecret() (string, error) {
 func runNodesAdd(args []string) {
 	fs := flag.NewFlagSet("nodes add", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	trustLevel := fs.String("trust", "", "trust level for the new peer (mesh|guarded|open)")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	rest := fs.Args()
 	if len(rest) != 1 {
@@ -75,20 +77,24 @@ func runNodesAdd(args []string) {
 	if err := config.ValidatePeerAddr(addr); err != nil {
 		fatal("bad address", fmt.Errorf("%s", i18n.Tf(i18n.Detect(), "cli.nodes.badaddr", "addr", addr)))
 	}
+	if _, err := trust.ParseLevel(*trustLevel); err != nil {
+		fatal("bad trust level", err)
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
 	}
-	admitPeerAddr(*configPath, cfg, addr)
+	admitPeerAddr(*configPath, cfg, addr, *trustLevel)
 }
 
 // admitPeerAddr is the shared half of `nodes add` and `nodes admit`: ensure a
 // shared secret exists, append addr to the peer list, persist, report. A
 // running daemon is SIGHUPed into applying the fresh peer list, and the
 // self-check dials the peer through the real handshake so the report says
-// "linked" or "unreachable" — not "restart and hope".
-func admitPeerAddr(configPath string, cfg *config.Config, addr string) {
+// "linked" or "unreachable" — not "restart and hope". trustLevel is the
+// optional trust-zone tier to pin on the new peer entry ("" = mesh).
+func admitPeerAddr(configPath string, cfg *config.Config, addr, trustLevel string) {
 	secret := cfg.Network.SharedSecret
 	generated := false
 	if secret == "" {
@@ -101,12 +107,12 @@ func admitPeerAddr(configPath string, cfg *config.Config, addr string) {
 	}
 
 	peers := slices.Clone(cfg.Network.Peers)
-	if slices.Contains(peers, addr) {
+	if slices.ContainsFunc(peers, func(p config.PeerEntry) bool { return p.Addr == addr }) {
 		fmt.Println(i18n.Tf(i18n.Detect(), "cli.nodes.add.exists", "addr", addr))
 		printJoinGuide(i18n.Detect(), cfg)
 		return
 	}
-	peers = append(peers, addr)
+	peers = append(peers, config.PeerEntry{Addr: addr, Trust: trustLevel})
 	// Persist the secret only when we just generated it. A secret that
 	// Load() injected from OPENPANDA_SHARED_SECRET must stay env-provided —
 	// materializing it into config.yaml leaks what the operator chose to
@@ -236,6 +242,7 @@ func peerDialHost(addr string) string {
 func runNodesAdmit(args []string) {
 	fs := flag.NewFlagSet("nodes admit", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	trustLevel := fs.String("trust", "", "trust level for the admitted peer (mesh|guarded|open)")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	rest := fs.Args()
 	if len(rest) > 1 {
@@ -275,7 +282,7 @@ func runNodesAdmit(args []string) {
 		if p.ID != id {
 			continue
 		}
-		admitPeerAddr(*configPath, cfg, p.Addr)
+		admitPeerAddr(*configPath, cfg, p.Addr, *trustLevel)
 		_ = ledger.ForgetPending(db, id)
 		fmt.Println(i18n.Tf(loc, "cli.nodes.admit.done", "id", id))
 		if !p.Verified {
@@ -304,9 +311,9 @@ func runNodesDisconnect(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
-	remaining := make([]string, 0, len(cfg.Network.Peers))
+	remaining := make([]config.PeerEntry, 0, len(cfg.Network.Peers))
 	for _, p := range cfg.Network.Peers {
-		if p != addr {
+		if p.Addr != addr {
 			remaining = append(remaining, p)
 		}
 	}
@@ -412,8 +419,8 @@ func runPairLegacy(configPath, secret, peer, listen string) {
 		fatal("load config", err)
 	}
 	peers := slices.Clone(cfg.Network.Peers)
-	if !slices.Contains(peers, peer) {
-		peers = append(peers, peer)
+	if !slices.ContainsFunc(peers, func(p config.PeerEntry) bool { return p.Addr == peer }) {
+		peers = append(peers, config.PeerEntry{Addr: peer})
 	}
 	if err := config.UpdateNetworkSection(configWritePath(configPath), config.NetworkConfig{
 		ListenAddr:   listen,
@@ -477,6 +484,128 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// runNodesTrust implements `panda nodes trust <id> [level]` — the operator's
+// hand on the trust-zone dial (experimental). With no level it reports the
+// row's pinned tier (empty = mesh). With one it pins it: the store write is
+// live — peerTrustOf reads the row on every admission/exposure decision —
+// and the matching network.peers entry is updated too when the id resolves
+// to a configured address, so a config reload cannot silently drop the
+// assertion. Trust is asserted on the AUTHENTICATED row: a self-claimed
+// level on the wire is never honored, and a later key change under the row
+// demotes mesh → guarded (recordPeerPubKey) as a fresh-TOFU signal.
+func runNodesTrust(args []string) {
+	fs := flag.NewFlagSet("nodes trust", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	rest := fs.Args()
+	if len(rest) < 1 || len(rest) > 2 {
+		fatal("usage", fmt.Errorf("panda nodes trust <id> [mesh|guarded|open]"))
+	}
+	id := rest[0]
+
+	var level string
+	if len(rest) == 2 {
+		lv, err := trust.ParseLevel(rest[1])
+		if err != nil {
+			fatal("bad trust level", err)
+		}
+		level = string(lv)
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+	loc := i18n.Detect()
+
+	// A "k:"-prefixed argument is the stable Ed25519 identity: pin (or report
+	// the merged pin of) every sibling row carrying that key, so trust follows
+	// a node whose instance id churns across restarts.
+	if strings.HasPrefix(id, "k:") {
+		pub := strings.TrimPrefix(id, "k:")
+		if len(rest) == 1 {
+			cur := ledger.PeerTrustByKey(db, pub)
+			if cur == "" {
+				cur = string(trust.Mesh)
+			}
+			fmt.Println(i18n.Tf(loc, "cli.nodes.trust.show", "id", id, "level", cur))
+			return
+		}
+		n, serr := ledger.SetPeerTrustByKey(db, pub, level)
+		if serr != nil {
+			fatal("set trust", serr)
+		}
+		if n == 0 {
+			fatal("trust node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.none", "id", id)))
+		}
+		fmt.Println(i18n.Tf(loc, "cli.nodes.trust.done", "id", id, "level", level))
+		notifyDaemonMeshTo(os.Stdout)
+		return
+	}
+
+	// Resolve against the directory exactly as `nodes verify` does — a bare
+	// name lands on a real row, and an unknown id fails loudly instead of
+	// asserting trust into the void.
+	node, err := ledger.Query(db, "", "")
+	if err != nil {
+		fatal("query employees", err)
+	}
+	found := ""
+	for _, n := range node {
+		if n.ID == id || scheduler.NodeNamePart(n.ID) == id {
+			found = n.ID
+			break
+		}
+	}
+	if found == "" {
+		fatal("trust node", fmt.Errorf("%s", i18n.Tf(loc, "cli.nodes.none", "id", id)))
+	}
+	if len(rest) == 1 {
+		cur, _ := ledger.PeerTrust(db, found)
+		if cur == "" {
+			cur = string(trust.Mesh)
+		}
+		fmt.Println(i18n.Tf(loc, "cli.nodes.trust.show", "id", found, "level", cur))
+		return
+	}
+	if err := ledger.SetPeerTrust(db, found, level); err != nil {
+		fatal("set trust", err)
+	}
+	// Keep the configured peer entry in step when the id maps to a dial
+	// address the config already knows: the addr hint and the row pin are
+	// two writes of the same assertion, and a stale hint would resurrect a
+	// cleared tier on the next ApplyNetworkConfig.
+	if bindings, berr := ledger.PeerAddrBindings(db); berr == nil {
+		for addr, boundID := range bindings {
+			if boundID != found {
+				continue
+			}
+			changed := false
+			peers := slices.Clone(cfg.Network.Peers)
+			for i, e := range peers {
+				if core.NormalizeDialAddr(e.Addr) == addr && e.Trust != level {
+					peers[i].Trust = level
+					changed = true
+				}
+			}
+			if changed {
+				if uerr := config.UpdateNetworkSection(configWritePath(*configPath), config.NetworkConfig{
+					Peers: peers,
+				}); uerr != nil {
+					fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.nodes.trust.cfgfail", "err", uerr.Error()))
+				}
+			}
+		}
+	}
+	fmt.Println(i18n.Tf(loc, "cli.nodes.trust.done", "id", found, "level", level))
+	notifyDaemonMeshTo(os.Stdout)
 }
 
 // runNodesDrain implements `panda nodes drain [id] [--off]` — maintenance
@@ -664,8 +793,8 @@ func pairInitiate(w io.Writer, configPath, target string) {
 // self-check the manual path does.
 func adoptPairedSecret(w io.Writer, loc i18n.Locale, configPath string, cfg *config.Config, secret, peerAddr string) {
 	peers := slices.Clone(cfg.Network.Peers)
-	if !slices.Contains(peers, peerAddr) {
-		peers = append(peers, peerAddr)
+	if !slices.ContainsFunc(peers, func(e config.PeerEntry) bool { return e.Addr == peerAddr }) {
+		peers = append(peers, config.PeerEntry{Addr: peerAddr})
 	}
 	if err := config.UpdateNetworkSection(configWritePath(configPath), config.NetworkConfig{
 		SharedSecret: secret,

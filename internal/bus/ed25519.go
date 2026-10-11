@@ -109,6 +109,29 @@ func VerifyBeaconSig(pubKey ed25519.PublicKey, id, addr, ver, pub string, ts int
 	return ed25519.Verify(pubKey, BeaconMsgBytes(id, addr, ver, pub, ts), sig)
 }
 
+// AcceptMsgBytes constructs the canonical byte slice a task's executor signs
+// in its task_accept: the acceptance binds the task, the attempt it claimed
+// and its own node id, so a relay echoing the frame cannot transplant the
+// acceptance onto a different attempt or signer.
+func AcceptMsgBytes(taskID, attemptID, nodeID string, ts int64) []byte {
+	return []byte("panda-accept:" + taskID + ":" + attemptID + ":" + nodeID + ":" + strconv.FormatInt(ts, 10))
+}
+
+// SignAcceptance mints the executor's Ed25519 signature for a task_accept.
+func SignAcceptance(privKey ed25519.PrivateKey, taskID, attemptID, nodeID string, ts int64) string {
+	return hex.EncodeToString(ed25519.Sign(privKey, AcceptMsgBytes(taskID, attemptID, nodeID, ts)))
+}
+
+// VerifyAcceptance checks a task_accept signature against the accepting
+// node's recorded public key.
+func VerifyAcceptance(pubKey ed25519.PublicKey, taskID, attemptID, nodeID string, ts int64, sigHex string) bool {
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return false
+	}
+	return ed25519.Verify(pubKey, AcceptMsgBytes(taskID, attemptID, nodeID, ts), sig)
+}
+
 // ArtifactGrantMsg constructs the canonical byte slice the plan orchestrator
 // signs to let a stage's executor pull an input artifact straight from the
 // node that produced it (direct stage handoff). Binding the plan, the

@@ -139,19 +139,22 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 		}
 	case "nodes":
 		if len(args) == 1 {
-			return []string{"add", "admit", "disconnect", "invite", "remove", "verify"}
+			return []string{"add", "admit", "disconnect", "invite", "remove", "verify", "trust"}
 		}
 		if len(args) == 2 {
 			switch args[0] {
-			case "remove", "rm", "verify":
+			case "remove", "rm", "verify", "trust":
 				return r.nodeIDs()
 			case "admit":
 				return r.pendingNodeIDs()
 			case "disconnect", "dc":
 				var peers []string
-				r.readConfig(func(c *config.Config) { peers = append([]string{}, c.Network.Peers...) })
+				r.readConfig(func(c *config.Config) { peers = c.Network.PeerAddrs() })
 				return peers
 			}
+		}
+		if len(args) == 3 && args[0] == "trust" {
+			return []string{"mesh", "guarded", "open"}
 		}
 	case "card":
 		if len(args) == 1 {

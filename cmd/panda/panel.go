@@ -135,17 +135,41 @@ func runStatus(args []string) {
 		chipW = max(chipW, cliui.DisplayWidth(v.Chip))
 	}
 	nameW, kindW, chipW = min(nameW, 30), min(kindW, 10), min(chipW, 22)
-	const whereW, stateW = 6, 8
+	const whereW, stateW, trustW = 6, 8, 7
 
-	fmt.Println(listHeader(
+	// The trust-zone tier column appears only when the fleet actually opted
+	// in: an all-mesh table with a constant "mesh" column is noise, so the
+	// header and every row grow the cell together only once some row carries
+	// a non-mesh assertion.
+	showTrust := false
+	for _, v := range views {
+		if !v.Local && v.Trust != "" && v.Trust != "mesh" {
+			showTrust = true
+			break
+		}
+	}
+	trustCell := func(v nodeStatusView) string {
+		if v.Local {
+			return cell("—", trustW)
+		}
+		tier := v.Trust
+		if tier == "" {
+			tier = "mesh"
+		}
+		return cell(tier, trustW)
+	}
+	header := []string{
 		cell(i18n.T(loc, "cli.col.node"), nameW),
 		cell(i18n.T(loc, "cli.col.kind"), kindW),
 		cell(i18n.T(loc, "cli.col.where"), whereW),
 		cell(i18n.T(loc, "cli.col.state"), stateW),
 		cell(i18n.T(loc, "cli.col.chip"), chipW),
-		cell(i18n.T(loc, "cli.col.fp"), 17),
-		i18n.T(loc, "cli.col.seen"),
-	))
+	}
+	if showTrust {
+		header = append(header, cell(i18n.T(loc, "cli.col.trust"), trustW))
+	}
+	header = append(header, cell(i18n.T(loc, "cli.col.fp"), 17), i18n.T(loc, "cli.col.seen"))
+	fmt.Println(listHeader(header...))
 	online := 0
 	for _, view := range views {
 		n := view.Node
@@ -156,15 +180,18 @@ func runStatus(args []string) {
 		if view.Local {
 			where = "local"
 		}
-		fmt.Println(row(
+		cells := []string{
 			cell(n.ID, nameW),
 			cell(n.NodeKind, kindW),
 			cell(where, whereW),
 			styledCell(nodeStateWord(view), stateW, nodeStateTint(view)),
 			cell(n.Chip, chipW),
-			nodeFP(n),
-			humanAge(loc, n.LastSeen),
-		))
+		}
+		if showTrust {
+			cells = append(cells, trustCell(view))
+		}
+		cells = append(cells, nodeFP(n), humanAge(loc, n.LastSeen))
+		fmt.Println(row(cells...))
 		if abilities := n.Abilities(); len(abilities) > 0 {
 			// Clipped, not padded: the ability list is a detail row under its
 			// node, and padding it would trail invisible whitespace into every
@@ -231,7 +258,7 @@ func printMeshLineTo(w io.Writer, loc i18n.Locale, cfg *config.Config, db *sql.D
 		}
 		if localRunning {
 			if bindings, err := ledger.PeerAddrBindings(db); err == nil {
-				for _, addr := range cfg.Network.Peers {
+				for _, addr := range cfg.Network.PeerAddrs() {
 					if id := bindings[core.NormalizeDialAddr(addr)]; id != "" && live[id] {
 						peersOnline++
 					}

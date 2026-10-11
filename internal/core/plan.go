@@ -918,8 +918,10 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 			in.TargetNode = c.stablePeerID(ctx, decision.Target)
 		}
 	} else {
-		decision = scheduler.RouteP(c.nodeID, child.Chain, c.onlineEmployees(ctx), c.localMatch(),
-			in.Requires, resourceRequirement(in.ResourceJSON), in.PreferredNode, in.Project)
+		decision = scheduler.RouteP(c.nodeID, child.Chain,
+			c.eligibleForSend(ctx, needsForInput(in), c.onlineEmployees(ctx)),
+			c.localMatch(), in.Requires, resourceRequirement(in.ResourceJSON),
+			in.PreferredNode, in.Project)
 	}
 	if decision.Action == scheduler.ActionForward {
 		payload := bus.TaskDelegatePayload{

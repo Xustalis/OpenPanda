@@ -51,7 +51,7 @@ ui:
 	if def.Network.SharedSecret != "s3cret" || def.Network.ListenAddr != "127.0.0.1:9999" {
 		t.Errorf("network section should be preserved, got %+v", def.Network)
 	}
-	if len(def.Network.Peers) != 1 || def.Network.Peers[0] != "ws://peer:7836" {
+	if len(def.Network.Peers) != 1 || def.Network.Peers[0].Addr != "ws://peer:7836" {
 		t.Errorf("peers should be preserved, got %v", def.Network.Peers)
 	}
 	if def.UI.Locale != "zh-CN" {

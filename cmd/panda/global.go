@@ -303,7 +303,7 @@ func reorderFlags(args []string, valueFlags map[string]bool) []string {
 // --config/--card never reach a FlagSet — extractGlobalFlags lifts them —
 // but listing them here keeps the tables truthful for direct call sites.
 var commonValueFlags = map[string]bool{
-	"config": true, "card": true,
+	"config": true, "card": true, "trust": true,
 }
 
 // taskAddValueFlags lets `task add --title X do the thing` keep its flags

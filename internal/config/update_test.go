@@ -123,7 +123,7 @@ func TestUpdateNetworkEmptySecretKeepsFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := UpdateNetworkSection(path, NetworkConfig{Peers: []string{"10.0.0.1:7836", "10.0.0.2:7836"}}); err != nil {
+	if err := UpdateNetworkSection(path, NetworkConfig{Peers: []PeerEntry{{Addr: "10.0.0.1:7836"}, {Addr: "10.0.0.2:7836"}}}); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)

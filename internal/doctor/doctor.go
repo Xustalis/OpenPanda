@@ -159,7 +159,7 @@ func Run(configPath string) []Check {
 				pub, priv, _ = core.LoadNodeKey(kdb)
 				kdb.Close()
 			}
-			for _, peer := range cfg.Network.Peers {
+			for _, peer := range cfg.Network.PeerAddrs() {
 				if strings.HasPrefix(peer, "punch:") {
 					add(pass("doctor.mesh.peer.punch", "peer", peer))
 					continue

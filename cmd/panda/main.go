@@ -131,6 +131,9 @@ func main() {
 				case "verify":
 					runNodesVerify(args[1:])
 					return
+				case "trust":
+					runNodesTrust(args[1:])
+					return
 				case "admit":
 					runNodesAdmit(args[1:])
 					return
@@ -549,6 +552,9 @@ func runDaemon(args []string) {
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 	coreNode.SetAllowCleartext(cfg.Network.AllowCleartext)
 	coreNode.SetCleartextAllowlist(cfg.Network.AllowCleartextFor)
+	coreNode.SetTrustConfig(cfg.Network.Trust)
+	coreNode.SetPeerTrustHints(cfg.Network.PeerTrustHints())
+	coreNode.SetReputationEnabled(cfg.Routing.Reputation)
 	// The artifact pool is the data plane: a stage's packed output, named by its
 	// hash, that a later stage on another node pulls over the bus. Without it a
 	// delegated task can only carry a path, which means nothing on the node that
@@ -775,8 +781,8 @@ func runDaemon(args []string) {
 			return err
 		}
 		peers := fresh.Network.Peers
-		if !slices.Contains(peers, peerAddr) {
-			peers = append(peers, peerAddr)
+		if !slices.ContainsFunc(peers, func(p config.PeerEntry) bool { return p.Addr == peerAddr }) {
+			peers = append(peers, config.PeerEntry{Addr: peerAddr})
 		}
 		// Secret deliberately omitted: when it arrives via
 		// OPENPANDA_SHARED_SECRET, Load() injects it into the struct — and
@@ -793,11 +799,12 @@ func runDaemon(args []string) {
 			Peers:             peers,
 			AllowCleartext:    fresh.Network.AllowCleartext,
 			AllowCleartextFor: fresh.Network.AllowCleartextFor,
+			Trust:             fresh.Network.Trust,
 		})
 		return nil
 	})
 
-	coreNode.SyncPeers(ctx, cfg.Network.Peers)
+	coreNode.SyncPeers(ctx, cfg.Network.PeerAddrs())
 
 	logger.Info("panda core started",
 		"version", version,

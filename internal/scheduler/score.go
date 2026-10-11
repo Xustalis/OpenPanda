@@ -38,6 +38,12 @@ const (
 	// sample yet is neutral 0.5, the same absence-of-evidence convention
 	// resourceEfficiency uses.
 	wLinkLatency = 0.15
+	// wReputation is the trust-zone track-record term (routing.reputation):
+	// the candidate's locally observed delegation success rate. It is a
+	// term, not a gate — a peer with a weak record still wins when it is
+	// meaningfully freer — and absent annotation (nil) contributes nothing,
+	// which is what keeps the default-off fleet scoring exactly as before.
+	wReputation = 0.1
 )
 
 // freshnessHalfLife is the λ of the TMB delayed-discount attention mapping
@@ -180,13 +186,26 @@ func linkQuality(n ledger.Node, selfID string, selfLinks map[string]int64) float
 // scoring runs, so the term mostly shows up in the breakdown the orbit renders
 // — but it is part of the §6.3 sum, so it belongs in the score. project is the
 // task's project name: a node resident for it earns the context-cost term.
+// reputationSignal is the trust-zone track-record term: the candidate's
+// locally observed delegation success rate, annotated onto its row by the
+// caller. Unset (nil) is absence of evidence and contributes zero rather
+// than a neutral bump — a never-executed peer should not outscore anyone on
+// reputation it has not earned.
+func reputationSignal(n ledger.Node) float64 {
+	if n.Reputation == nil {
+		return 0
+	}
+	return *n.Reputation
+}
+
 func score(n ledger.Node, now int64, preferred, project, selfID string, selfLinks map[string]int64) float64 {
 	raw := wResourceEfficiency*resourceEfficiency(n) +
 		wUserPriority*userPriority(n, preferred) +
 		wSchedulerTier*tierSignal(n) +
 		wWaitTime*waitSignal(n) +
 		wProjectResidence*projectResidence(n, project) +
-		wLinkLatency*linkQuality(n, selfID, selfLinks)
+		wLinkLatency*linkQuality(n, selfID, selfLinks) +
+		wReputation*reputationSignal(n)
 	return raw * Freshness(n.LastSeen, now)
 }
 
@@ -239,8 +258,12 @@ type ScoreBreakdown struct {
 	// kept for internal callers that want the weight (e.g. route decisions).
 	HeartbeatAge       float64 `json:"heartbeat_age"`
 	HeartbeatFreshness float64 `json:"heartbeat_freshness,omitempty"`
-	LocalBonus         float64 `json:"local_bonus,omitempty"`
-	Total              float64 `json:"total"`
+	// Reputation is the locally observed delegation success rate in [0,1]
+	// when routing.reputation annotated the row — omitempty because absent
+	// evidence and a zero score read identically on the wire.
+	Reputation float64 `json:"reputation,omitempty"`
+	LocalBonus float64 `json:"local_bonus,omitempty"`
+	Total      float64 `json:"total"`
 }
 
 // ScoredCandidate is one routing candidate with its identity and score detail.
@@ -265,12 +288,13 @@ func scoreBreakdown(n ledger.Node, now int64, preferred, project, selfID string,
 	wt := waitSignal(n)
 	pr := projectResidence(n, project)
 	ll := linkQuality(n, selfID, selfLinks)
+	rp := reputationSignal(n)
 	var ageSec float64
 	if n.LastSeen > 0 && now > n.LastSeen {
 		ageSec = float64(now - n.LastSeen)
 	}
 	fresh := Freshness(n.LastSeen, now)
-	raw := wResourceEfficiency*re + wUserPriority*up + wSchedulerTier*ti + wWaitTime*wt + wProjectResidence*pr + wLinkLatency*ll
+	raw := wResourceEfficiency*re + wUserPriority*up + wSchedulerTier*ti + wWaitTime*wt + wProjectResidence*pr + wLinkLatency*ll + wReputation*rp
 	return ScoreBreakdown{
 		ResourceEfficiency: re,
 		UserPriority:       up,
@@ -278,6 +302,7 @@ func scoreBreakdown(n ledger.Node, now int64, preferred, project, selfID string,
 		WaitTime:           wt,
 		ProjectResidence:   pr,
 		LinkLatency:        ll,
+		Reputation:         rp,
 		HeartbeatAge:       ageSec, // design doc §3.1.1 wire contract
 		HeartbeatFreshness: fresh,  // internal weight, still useful
 		Total:              raw * fresh,

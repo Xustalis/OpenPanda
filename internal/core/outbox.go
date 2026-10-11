@@ -23,6 +23,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/trust"
 )
 
 // Batch-6 restart continuity (confirmed-issues §14): outbox rows used to key
@@ -369,6 +370,34 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 				c.logger.Info("outbox: local task is terminal, dropping parked delivery",
 					"task", e.taskID, "peer", e.peer, "state", lt.State)
 				c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
+				continue
+			}
+			// Trust zones (experimental): the parked payload was clamped at
+			// dispatch time, but the tier may have been DOWNGRADED while the
+			// task sat parked — shipping it now would route around the newer,
+			// stricter assertion. Re-check eligibility against the current
+			// level: a peer that can no longer hold the task's needs gets the
+			// row dropped and the task re-routed, exactly as a decline would.
+			var parked bus.TaskDelegatePayload
+			if json.Unmarshal([]byte(e.raw), &parked) == nil &&
+				!c.sendPolicyFor(c.peerTrustOf(flushCtx, peer)).ExecutorOK(trust.NeedsOf(parked)) {
+				c.logger.Info("outbox: peer trust no longer admits task, rerouting",
+					"task", e.taskID, "peer", peer)
+				c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
+				// Requeue through the ordinary decline path: the refusal lands
+				// in DeclinedBy so re-routing cannot pick this peer again.
+				if derr := c.store.Decline(flushCtx, e.taskID, c.nodeID,
+					"peer trust tier no longer admits the task",
+					bus.DeclineCodeTrustCeiling, peer); derr != nil {
+					// The row already moved on (a raced accept/expire, or the
+					// park predated the dispatched stamp) — still record the
+					// refusal so re-routing excludes this peer.
+					if rerr := c.store.RecordEvent(flushCtx, e.taskID, EvDecline,
+						map[string]any{"by": peer, "reason": "peer trust tier no longer admits the task", "code": bus.DeclineCodeTrustCeiling}); rerr != nil {
+						c.logger.Debug("outbox: trust decline record failed", "task", e.taskID, "err", rerr)
+					}
+				}
+				go c.rerouteDeclined(context.WithoutCancel(ctx), e.taskID)
 				continue
 			}
 			// §8.2 TTL: a bundle parked past its deadline is dead — delivering

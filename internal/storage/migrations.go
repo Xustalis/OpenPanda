@@ -67,6 +67,20 @@ var migrations = []Migration{
 	{Version: 40, Name: "add_pair_sessions", Apply: migrateV40},
 	{Version: 41, Name: "add_peer_addrs", Apply: migrateV41},
 	{Version: 42, Name: "add_tasks_exec_work_dir", Apply: migrateV42},
+	{Version: 43, Name: "add_employee_trust", Apply: migrateV43},
+}
+
+// migrateV43 adds employee_cache.trust: the operator-asserted trust-zone tier
+// (mesh|guarded|open; "" = mesh) pinned to a directory row. It lives next to
+// key_verified deliberately: both are human judgments about an identity, and
+// both are revoked the same way — a key change under the row clears the
+// stamp in recordPeerPubKey, which also demotes mesh trust to guarded.
+func migrateV43(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "trust", "TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateV42 adds tasks.exec_work_dir: the workspace a task actually executed

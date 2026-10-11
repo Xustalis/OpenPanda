@@ -93,6 +93,50 @@ func TestPreferredStillAuthoritative(t *testing.T) {
 	}
 }
 
+// TestReputationSignal covers the opt-in trust-zone track-record term: an
+// annotated row earns the wReputation bump, and an unannotated (nil) row —
+// the state every fleet is in until routing.reputation is on and metrics
+// exist — contributes exactly zero rather than a neutral bump.
+func TestReputationSignal(t *testing.T) {
+	bare := ledger.Node{}
+	if got := reputationSignal(bare); got != 0 {
+		t.Fatalf("no annotation must score 0, got %v", got)
+	}
+	half := 0.5
+	ann := ledger.Node{Reputation: &half}
+	if got := reputationSignal(ann); got != 0.5 {
+		t.Fatalf("annotation must pass through, got %v", got)
+	}
+}
+
+// TestReputationTipsScore: two identical candidates split on reputation
+// alone, and the breakdown reports the term so the orbit can say why.
+func TestReputationTipsScore(t *testing.T) {
+	now := time.Now().Unix()
+	mk := func(id string, rep *float64) ledger.Node {
+		return ledger.Node{ID: id, Name: id, Status: "online", LastSeen: now,
+			SchedulerTier: 5, Native: []ledger.NativeAbility{{ID: "build"}},
+			Capacity: ledger.Capacity{MaxConcurrent: 4}, Reputation: rep}
+	}
+	good, bad := 0.95, 0.2
+	d := RouteAt("self", []string{"self"}, []ledger.Node{
+		mk("flaky", &bad),
+		mk("solid", &good),
+	}, func([]string) bool { return false }, []string{"build"}, ledger.ResourceProfile{}, "", now)
+	if d.Action != ActionForward || d.Target != "solid" {
+		t.Fatalf("reputation ranking: %+v, want forward to solid", d)
+	}
+	// Equal rows with NO annotation must tie-break on id — reputation absent
+	// is indistinguishable from the pre-feature scoring path.
+	d = RouteAt("self", []string{"self"}, []ledger.Node{
+		mk("b", nil),
+		mk("a", nil),
+	}, func([]string) bool { return false }, []string{"build"}, ledger.ResourceProfile{}, "", now)
+	if d.Target != "a" {
+		t.Fatalf("no evidence must behave like pre-feature scoring, got %s", d.Target)
+	}
+}
+
 func TestWaitSignalClampsNegative(t *testing.T) {
 	nodeZero := ledger.Node{Capacity: ledger.Capacity{CurrentTasks: 0}}
 	nodeNeg := ledger.Node{Capacity: ledger.Capacity{CurrentTasks: -5}}

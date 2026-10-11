@@ -5,6 +5,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/trust"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
@@ -286,8 +288,13 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		// preference.
 		decision = c.routePinned(ctx, p.TargetNode, chain, required, resourceRequirement(p.ResourceJSON))
 	} else {
-		decision = scheduler.RouteP(c.nodeID, chain, c.onlineEmployees(ctx), c.localMatch(), required,
-			resourceRequirement(p.ResourceJSON), p.PreferredNode, p.Project)
+		// Trust zones (experimental): a next hop whose send ceiling cannot
+		// hold what this delegate carries is not a candidate — the task
+		// routes around it instead of arriving stripped of a need.
+		decision = scheduler.RouteP(c.nodeID, chain,
+			c.eligibleForSend(ctx, trust.NeedsOf(p), c.onlineEmployees(ctx)),
+			c.localMatch(), required, resourceRequirement(p.ResourceJSON),
+			p.PreferredNode, p.Project)
 	}
 
 	switch decision.Action {
@@ -355,6 +362,24 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 		c.terminalizeDeclined(ctx, taskID, "node draining")
 		return
 	}
+	// Trust-zone admission (experimental): the origin's tier decides whether
+	// push-mode work is even admissible, and the tier's accept policy may
+	// refuse it or park it for this node's operator before a slot is ever
+	// reserved. mesh resolves to admit — an all-mesh fleet takes this branch
+	// unconditionally, exactly as before.
+	if adm := c.admitDelegate(ctx, taskID, p, chain, env.From); !adm.admit {
+		if adm.review {
+			c.parkDelegateReview(ctx, env, taskID, adm.reason)
+			return
+		}
+		c.logger.Info("declining delegated task: trust admission", "task", taskID,
+			"reason", adm.reason, "code", adm.code, "from", env.From)
+		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
+			TaskID: taskID, Reason: adm.reason, ReasonCode: adm.code,
+		})
+		c.terminalizeDeclined(ctx, taskID, adm.reason)
+		return
+	}
 	release, ok := c.reserveCapacity(ctx)
 	if !ok {
 		c.logger.Info("declining delegated task: capacity full", "task", taskID)
@@ -363,6 +388,99 @@ func (c *Core) handleLocalDelegate(ctx context.Context, env bus.Envelope, taskID
 		return
 	}
 	c.proceedLocalDelegate(ctx, env, taskID, p, required, chain, release)
+}
+
+// parkDelegateReview holds a just-arrived delegate for this node's operator
+// under the tier's accept mode "review". The row was saved by handleDelegate
+// before the gate ran, so the admission park reuses the ordinary review →
+// approve lifecycle: `panda approve` queues it, the queue scheduler runs it
+// here, and the finished result rides back along chain. The delegator sees a
+// held task — holdReviewUpstream renews its lease with progress beats and
+// marks the first beat "held for operator admission review", so its copy
+// waits rather than expiring into a misdiagnosed re-route.
+func (c *Core) parkDelegateReview(ctx context.Context, env bus.Envelope, taskID string, reason string) {
+	err := c.store.transitionToReview(ctx, taskID, StateSubmitted, StateReview,
+		c.nodeID, EvReview, map[string]any{"reason": reason}, ApprovalAdmissionReview)
+	if err == nil {
+		c.logger.Info("delegated task parked for admission review", "task", taskID)
+		c.holdReviewUpstream(taskID)
+		return
+	}
+	// A park that failed to persist must not silently drop the delegate:
+	// fall back to declining so the delegator can re-route honestly.
+	c.logger.Warn("delegate admission park failed; declining instead",
+		"task", taskID, "err", err)
+	c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
+		TaskID: taskID, Reason: "admission review park failed", ReasonCode: bus.DeclineCodeTrustRefused,
+	})
+	c.terminalizeDeclined(ctx, taskID, "admission review park failed")
+}
+
+// holdReviewUpstream keeps the delegator's copy of an admission-parked task
+// alive while it waits on this node's operator. Nothing executes for a parked
+// row, so nothing renews its lease — left alone the delegator's lease monitor
+// would expire the task mid-review and re-route the same work to a second
+// node, racing a later approval. A progress beat each lease tick marks the
+// custody "held, deciding" up the chain — the first beat carries a note so
+// `task logs` on the delegator shows why the task is quiet; later beats are
+// noteless so a long hold does not spam its audit trail. The loop exits when
+// the row leaves review — approval hands it to the queue (whose run renews
+// its own lease), a reject or cancel ends it.
+func (c *Core) holdReviewUpstream(taskID string) {
+	t, err := c.store.Get(context.Background(), taskID)
+	if err != nil || t.State != StateReview || len(t.Chain) <= 1 {
+		return
+	}
+	if _, dup := c.reviewHolds.LoadOrStore(taskID, struct{}{}); dup {
+		return // a hold is already beating for this row — don't stack loops
+	}
+	interval := c.lease() / leaseRenewDivisor
+	if interval < minLeaseRenewInterval {
+		interval = minLeaseRenewInterval
+	}
+	beat := func(attemptID, note string) {
+		c.relayToParent(context.Background(), bus.MsgTaskProgress, t.Chain,
+			bus.TaskProgressPayload{TaskID: taskID, AttemptID: attemptID, Note: note})
+	}
+	beat(t.AttemptID, "held for operator admission review (trust zone)")
+	go func() {
+		defer c.reviewHolds.Delete(taskID)
+		tk := time.NewTicker(interval)
+		defer tk.Stop()
+		// The hold is bounded: a review parked past a full day has become a
+		// stall, and the delegator's lease expiring then is the honest answer
+		// — not a custody claim that silently outlives the work's relevance.
+		deadline := time.Now().Add(defaultDTNTTL)
+		for range tk.C {
+			if time.Now().After(deadline) {
+				return
+			}
+			cur, gerr := c.store.Get(context.Background(), taskID)
+			if gerr != nil || cur.State != StateReview {
+				return
+			}
+			beat(cur.AttemptID, "")
+		}
+	}()
+}
+
+// resumeReviewHolds restarts the upstream hold for every remote-origin task
+// still parked in review after a restart — the keepalive lives in memory, so
+// a daemon bounce would otherwise silently drop the beats and let the
+// delegator's lease expire mid-review exactly as if the hold never existed.
+// Covers any remote review row (trust admission park and the older defense
+// park share the expiry hazard); holdReviewUpstream itself skips local rows.
+func (c *Core) resumeReviewHolds(ctx context.Context) {
+	rows, err := c.store.ListByState(ctx, StateReview)
+	if err != nil {
+		c.logger.Debug("resume review holds: list failed", "err", err)
+		return
+	}
+	for _, t := range rows {
+		if len(t.Chain) > 1 {
+			c.holdReviewUpstream(t.TaskID)
+		}
+	}
 }
 
 // proceedLocalDelegate is the post-admission body of handleLocalDelegate,
@@ -598,7 +716,9 @@ func (c *Core) onlineEmployees(ctx context.Context) []ledger.Node {
 			break
 		}
 	}
-	return c.applyPeerBlockers(nodes)
+	nodes = c.applyPeerBlockers(nodes)
+	c.annotateReputation(ctx, nodes)
+	return nodes
 }
 
 // applyPeerBlockers strips agents a peer's heartbeats report as circuit-open
@@ -714,6 +834,15 @@ func (c *Core) tokenBudgetWire(ctx context.Context, taskID string, wireBudget in
 // e.g. a declined task being re-routed (P1-5), where Decline already moved it
 // dispatched -> queued and a second queue transition would conflict.
 func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload, chain []string) error {
+	// Trust-zone send ceiling (experimental): clamp the payload to what this
+	// next hop's tier may receive, BEFORE any budget is spent or the dispatch
+	// is recorded. A target whose ceiling strips a need the task cannot run
+	// without is refused outright — the caller re-routes or fails honestly
+	// rather than shipping a lobotomized delegate. mesh resolves to a no-op
+	// policy, so a fleet that never opted in runs this as a pure pass-through.
+	if !c.clampForPeer(target, &p) {
+		return fmt.Errorf("peer %s trust ceiling refuses the task's needs (%s)", target, bus.DeclineCodeTrustCeiling)
+	}
 	// §6.1 mesh budget: every forward hop spends one delegation, on the wire
 	// and in the row, so the mesh-wide bound survives restarts and relays.
 	remaining, err := c.delegationBudget(ctx, taskID, derefBudget(p.DelegationBudget))
@@ -1013,7 +1142,24 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	// Notify the delegator that this node has accepted the task so its copy
 	// transitions dispatched -> running and can time the execution (D3). A local
 	// task (chain = [self]) has no predecessor and relayToParent is a no-op.
-	c.relayToParent(ctx, bus.MsgTaskAccept, task.Chain, bus.TaskAcceptPayload{TaskID: taskID})
+	//
+	// Trust zones sign the acceptance bilaterally (experimental): the frame
+	// binds task + attempt + this node id + a timestamp to our identity key,
+	// so a relay further up the chain can verify who actually took the work
+	// instead of trusting whoever happens to forward the frame. Peers that
+	// predate the fields send an unsigned accept, which verifyTaskAccept
+	// accepts for backward compatibility.
+	accept := bus.TaskAcceptPayload{TaskID: taskID, AttemptID: task.AttemptID}
+	if pub, priv, ok := c.nodeKeyPair(); ok && priv != nil {
+		accept.Ts = time.Now().Unix()
+		accept.Pub = hex.EncodeToString(pub)
+		// The signed identity is the stable key id, not the instance id:
+		// every hop can derive "k:"+pub from the frame itself and verify
+		// without knowing which instance id the executor runs under today.
+		accept.Sig = bus.SignAcceptance(priv, taskID, task.AttemptID,
+			stableIDPrefix+accept.Pub, accept.Ts)
+	}
+	c.relayToParent(ctx, bus.MsgTaskAccept, task.Chain, accept)
 
 	// Capture the current attempt id so the result carries it; the delegator
 	// uses it to reject stale results after a transfer/retry.
@@ -2943,6 +3089,15 @@ func (c *Core) handleAccept(ctx context.Context, env bus.Envelope) {
 			"from", env.From, "owner", t.OwnerNode)
 		return
 	}
+	// Trust zones: a signed accept is the executor's bilateral commitment —
+	// verify it before letting it move our copy or ride further up the
+	// chain. An unsigned frame is a legacy peer and passes as before; a
+	// malformed or non-verifying signed frame is dropped.
+	if err := c.verifyTaskAccept(ctx, env.From, t, p); err != nil {
+		c.logger.Warn("task_accept signature rejected", "task", p.TaskID,
+			"from", env.From, "err", err)
+		return
+	}
 	// The executor claims the lease; the parent records the new state and
 	// owner so a later cancel/transfer routes correctly.
 	if err := c.store.Accept(ctx, p.TaskID, env.From); err != nil {
@@ -3078,8 +3233,11 @@ func (c *Core) handleDecline(ctx context.Context, env bus.Envelope) {
 		})
 		return
 	}
-	// Parent returns the task to queued for re-routing elsewhere.
-	if err := c.store.Decline(ctx, p.TaskID, c.nodeID, p.Reason, env.From); err != nil {
+	// Parent returns the task to queued for re-routing elsewhere. The wire's
+	// machine reason code (DeclineCodeTrust* etc.) rides into the audit trail
+	// alongside the text so policy refusals stay distinguishable from
+	// capacity ones.
+	if err := c.store.Decline(ctx, p.TaskID, c.nodeID, p.Reason, p.ReasonCode, env.From); err != nil {
 		c.logger.Debug("decline apply failed", "task", p.TaskID, "err", err)
 	}
 	// P1-5: before giving up, try to re-route to the next-best node. A
@@ -3140,7 +3298,9 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 	// past decliner. Suffixing the chain keeps the persisted/wire chain clean.
 	seenChain := append(slices.Clone(t.Chain), excluded...)
 
-	decision := scheduler.RouteP(c.nodeID, seenChain, c.onlineEmployees(ctx), c.localMatch(), t.Requires,
+	decision := scheduler.RouteP(c.nodeID, seenChain,
+		c.eligibleForSend(ctx, needsForTask(t), c.onlineEmployees(ctx)),
+		c.localMatch(), t.Requires,
 		resourceRequirement(t.ResourceJSON), "", t.Project)
 	if decision.Action != scheduler.ActionForward {
 		c.logger.Info("reroute: no alternate node", "task", taskID, "action", decision.Action,
@@ -3681,6 +3841,16 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		c.replyResult(ctx, env, c.resumeOutcomeFor(ctx, t))
 		return
 	}
+	if t.ApprovalDisposition == ApprovalAdmissionReview {
+		// An admission park gates on THIS node's operator — the delegator is
+		// exactly the party the gate exists to check, so a wire task_resume
+		// from it can never release the hold (a `panda approve` here can).
+		// Echo the row's real state so the delegator's copy stays truthfully
+		// parked instead of timing a refusal out.
+		c.logger.Warn("resume on admission-parked task refused", "task", p.TaskID, "from", env.From)
+		c.replyResult(ctx, env, c.resumeOutcomeFor(ctx, t))
+		return
+	}
 	// Re-run asynchronously so the message loop stays responsive to
 	// task_cancel while the (potentially long) agent run proceeds. The
 	// outcome travels back over the normal task_result path. The re-run ctx is
@@ -3690,7 +3860,10 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 	// link drops. Explicit cancels still land via the running map's CancelFunc.
 	runCtx := context.WithoutCancel(ctx)
 	go func() {
-		final, result, rerr := c.ResumeApproved(runCtx, p.TaskID, p.Answer)
+		// relayUpstream=false: this goroutine answers the resumer on env —
+		// relaying over the stored chain too would double-deliver (and to a
+		// possibly-stale instance id if the delegator restarted mid-park).
+		final, result, rerr := c.resumeApproved(runCtx, p.TaskID, false, p.Answer)
 		if rerr != nil {
 			result = bus.TaskResultPayload{
 				TaskID: p.TaskID, AttemptID: t.AttemptID, State: StateFailed, OK: false, ExitCode: 1,
@@ -3736,6 +3909,14 @@ func (c *Core) resumeOutcomeFor(ctx context.Context, t Task) bus.TaskResultPaylo
 		}
 		result.TaskID, result.AttemptID, result.State, result.Chain =
 			t.TaskID, t.AttemptID, t.State, t.Chain
+	}
+	if t.State == StateReview && t.ApprovalDisposition != "" {
+		// Without the typed disposition the receiver classifies the park as
+		// accept_work (the conservative legacy default) and then protects it
+		// from the eventual result — a resume_execution park (trust admission
+		// hold, consent re-ask) would strand the upstream copy in review
+		// forever after a mid-review reconnect re-push.
+		result.ApprovalDisposition = string(t.ApprovalDisposition)
 	}
 	if result.Stderr == "" && (t.State == StateFailed || t.State == StateExpired) {
 		// A locally-failed row keeps its reason on the audit trail (Fail
