@@ -497,6 +497,15 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// displayLevel renders a stored tier for humans: "" is the absence of a
+// zone (mesh), which would otherwise print as a blank level in confirmations.
+func displayLevel(level string) string {
+	if level == "" {
+		return string(trust.Mesh)
+	}
+	return level
+}
+
 // peerKeyRowIDs returns the directory row ids carrying a proven Ed25519 key —
 // the sibling set a "k:" trust pin applies to.
 func peerKeyRowIDs(db *sql.DB, pubKeyHex string) map[string]bool {
@@ -617,7 +626,7 @@ func runNodesTrust(args []string) {
 		if uerr := syncPeerTrustConfig(db, cfg, configWritePath(*configPath), peerKeyRowIDs(db, pub), level); uerr != nil {
 			fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.nodes.trust.cfgfail", "err", uerr.Error()))
 		}
-		fmt.Println(i18n.Tf(loc, "cli.nodes.trust.done", "id", id, "level", level))
+		fmt.Println(i18n.Tf(loc, "cli.nodes.trust.done", "id", id, "level", displayLevel(level)))
 		notifyDaemonMeshTo(os.Stdout)
 		return
 	}
@@ -657,7 +666,7 @@ func runNodesTrust(args []string) {
 	if uerr := syncPeerTrustConfig(db, cfg, configWritePath(*configPath), map[string]bool{found: true}, level); uerr != nil {
 		fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.nodes.trust.cfgfail", "err", uerr.Error()))
 	}
-	fmt.Println(i18n.Tf(loc, "cli.nodes.trust.done", "id", found, "level", level))
+	fmt.Println(i18n.Tf(loc, "cli.nodes.trust.done", "id", found, "level", displayLevel(level)))
 	notifyDaemonMeshTo(os.Stdout)
 }
 

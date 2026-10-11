@@ -718,7 +718,7 @@ func (r *repl) cmdNodesTrust(arg string) {
 		_ = r.mutateConfigErr(func(c *config.Config) error {
 			return syncPeerTrustConfig(r.db, c, configWritePath(r.configPath), peerKeyRowIDs(r.db, pub), level)
 		})
-		r.outln(i18n.Tf(r.loc, "cli.nodes.trust.done", "id", id, "level", level))
+		r.outln(i18n.Tf(r.loc, "cli.nodes.trust.done", "id", id, "level", displayLevel(level)))
 		return
 	}
 	nodes, err := ledger.Query(r.db, "", "")
@@ -755,7 +755,7 @@ func (r *repl) cmdNodesTrust(arg string) {
 	_ = r.mutateConfigErr(func(c *config.Config) error {
 		return syncPeerTrustConfig(r.db, c, configWritePath(r.configPath), map[string]bool{found: true}, level)
 	})
-	r.outln(i18n.Tf(r.loc, "cli.nodes.trust.done", "id", found, "level", level))
+	r.outln(i18n.Tf(r.loc, "cli.nodes.trust.done", "id", found, "level", displayLevel(level)))
 }
 
 // cmdNodesAdmit implements `/nodes admit <id>` — resolve a LAN-discovered
