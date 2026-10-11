@@ -180,6 +180,11 @@ input[type='checkbox'].check,
 .card.interactive:hover {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+.card.interactive:active {
+  transform: none;
+  box-shadow: none;
 }
 
 .page-title {
@@ -469,32 +474,9 @@ input[type='checkbox'].check,
 }
 .toast-close:hover { color: var(--text); }
 
-/* ---- Banners ---------------------------------------------------------------------- */
-
-.banner {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: 10px var(--sp-4);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--bg-raised);
-  font-size: var(--text-md);
-  margin-bottom: var(--sp-4);
-}
-.banner-ico { font-size: 15px; }
-.banner-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.banner-sub { color: var(--text-secondary); font-size: var(--text-sm); }
-.banner-link { color: var(--accent); font-weight: 500; white-space: nowrap; }
-.banner-close {
-  color: var(--text-tertiary);
-  font-size: 18px;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-}
-.banner-close:hover { background: var(--bg-hover); color: var(--text); }
-.banner-warn { border-color: var(--semantic-warn-border); background: var(--semantic-warn-soft); }
-.banner-info { border-color: var(--semantic-info-border); background: var(--semantic-info-soft); }
+/* ---- Banners ----------------------------------------------------------------------
+   The .banner family lives in views.css (§4.2) — the rules that used to sit
+   here were the pre-redesign set and were fully shadowed by that layer. */
 
 /* ---- Shared error / empty state ------------------------------------------------------ */
 

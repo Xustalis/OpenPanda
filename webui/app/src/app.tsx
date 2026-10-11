@@ -159,7 +159,11 @@ export function App() {
           />
         )}
         {route.view === 'detail' && (
-          <DetailView id={route.id} onBack={() => navigate({ view: 'queue' })} />
+          <DetailView
+            id={route.id}
+            onBack={() => navigate({ view: 'queue' })}
+            onOpenSession={(sid) => navigate({ view: 'sessions', id: sid })}
+          />
         )}
         {route.view === 'plans' && <PlansView />}
         {route.view === 'fleet' && <NodesView />}
@@ -286,8 +290,10 @@ function modKeyLabel(): string {
   // Prefer the modern UA-CH hint; `navigator.platform` is deprecated but
   // remains the fallback on browsers without userAgentData.
   const ua = navigator as Navigator & { userAgentData?: { platform?: string } }
-  const p = ua.userAgentData?.platform ?? navigator.platform ?? ''
-  return /Mac|iPhone|iPad/.test(p) ? '⌘' : 'Ctrl '
+  const p = (ua.userAgentData?.platform ?? navigator.platform ?? '').toLowerCase()
+  // UA-CH reports "macOS"/"iOS", navigator.platform the legacy "MacIntel"/
+  // "iPhone" spellings — normalize case and match both generations.
+  return /mac|iphone|ipad|ipod|ios/.test(p) ? '⌘' : 'Ctrl '
 }
 
 /** First-run screen: ask for the panel token, validate it against /api/tasks. */

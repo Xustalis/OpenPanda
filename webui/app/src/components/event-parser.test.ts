@@ -3,6 +3,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { blockDepth, extractThought, formatTaskEvent, toolArgSummary, type AgentBlock } from './event-parser.ts'
+import { buildRows } from './event-rows.ts'
 import { setLocale } from '../i18n/index.ts'
 
 describe('event-parser', () => {
@@ -101,3 +102,139 @@ describe('event-parser', () => {
   })
 })
 
+
+describe('lifecycle & result event formatting', () => {
+  it('marks dispatch plumbing events for pipeline grouping', () => {
+    setLocale('en')
+    const submit = formatTaskEvent('submit', JSON.stringify({ owner: 'mac-1', parent: '' }))
+    assert.equal(submit.lifecycle?.step, 'submitted')
+    assert.equal(submit.lifecycle?.node, 'mac-1')
+
+    const accept = formatTaskEvent('accept', JSON.stringify({ owner: 'gpu-box' }))
+    assert.equal(accept.lifecycle?.step, 'accepted')
+    assert.equal(accept.lifecycle?.node, 'gpu-box')
+
+    const decline = formatTaskEvent('decline', JSON.stringify({ reason: 'busy' }))
+    assert.equal(decline.lifecycle?.failed, true)
+  })
+
+  it('renders a result event as a result card, not tags', () => {
+    setLocale('en')
+    const r = formatTaskEvent('result', JSON.stringify({
+      ok: true, exit_code: 0, stdout: 'wrote hello.py\n\nAll done.',
+      files_changed: ['hello.py'],
+    }))
+    assert.equal(r.label, 'Result')
+    assert.equal(r.badgeClass, 'accent')
+    assert.equal(r.result?.ok, true)
+    assert.equal(r.result?.stdout, 'wrote hello.py\n\nAll done.')
+    assert.equal(r.summary, 'wrote hello.py')
+    // never leaks the payload as tags
+    assert.equal(r.tags.length, 0)
+  })
+
+  it('reads the wrapped result payload used by reconciliation', () => {
+    setLocale('en')
+    const r = formatTaskEvent('result', JSON.stringify({
+      reconciled: 'running→done',
+      result: { ok: true, exit_code: 0, stdout: 'done text' },
+    }))
+    assert.equal(r.result?.ok, true)
+    assert.equal(r.result?.stdout, 'done text')
+  })
+
+  it('demotes session_summary to a quiet line', () => {
+    setLocale('en')
+    const f = formatTaskEvent('session_summary', JSON.stringify({ session_id: 'abc', state: 'done' }))
+    assert.equal(f.quiet, true)
+    assert.equal(f.tags.length, 0)
+  })
+
+  it('maps supervise verdicts with their reason as the summary', () => {
+    setLocale('en')
+    const f = formatTaskEvent('supervise', JSON.stringify({
+      round: 2, status: 'done', reason: 'all acceptance criteria met', followup: '',
+    }))
+    assert.equal(f.label, 'Supervision Verdict')
+    assert.equal(f.badgeClass, 'accent')
+    assert.equal(f.summary, 'all acceptance criteria met')
+    assert.deepEqual(f.tags, [
+      { key: 'Round', value: '2' },
+      { key: 'Status', value: 'done' },
+    ])
+  })
+
+  it('caps unknown-event tags at three short hints', () => {
+    setLocale('en')
+    const f = formatTaskEvent('custom_unknown', JSON.stringify({
+      a: '1', b: '2', c: '3', d: '4', e: '5',
+    }))
+    assert.equal(f.tags.length, 3)
+  })
+})
+
+describe('buildRows pipeline grouping', () => {
+  it('folds consecutive lifecycle events into one pipeline row', () => {
+    const events = [
+      { ts: 1, type: 'submit', data: '{"owner":"mac"}' },
+      { ts: 2, type: 'queue', data: 'null' },
+      { ts: 3, type: 'delegate', data: '{"target":"gpu"}' },
+      { ts: 4, type: 'accept', data: '{"owner":"gpu"}' },
+      { ts: 5, type: 'exec_agent_start', data: '{"agent":"codex"}' },
+      { ts: 6, type: 'session_summary', data: '{"session_id":"s1"}' },
+    ]
+    const rows = buildRows(events as never)
+    assert.equal(rows.length, 3)
+    const pipe = rows[0]
+    assert.equal(pipe?.kind, 'pipeline')
+    if (pipe?.kind === 'pipeline') {
+      assert.equal(pipe.steps.length, 4)
+      assert.equal(pipe.steps[0]?.node, 'mac')
+      assert.equal(pipe.steps[2]?.node, 'gpu')
+    }
+    const ev = rows[1]
+    assert.equal(ev?.kind, 'event')
+    if (ev?.kind === 'event') assert.equal(ev.event.type, 'exec_agent_start')
+  })
+
+  it('splits a pipeline around a non-lifecycle event', () => {
+    const events = [
+      { ts: 1, type: 'submit', data: '{}' },
+      { ts: 2, type: 'exec_agent_start', data: '{}' },
+      { ts: 3, type: 'delegate', data: '{}' },
+    ]
+    const rows = buildRows(events as never)
+    assert.deepEqual(rows.map((r) => r.kind), ['pipeline', 'event', 'pipeline'])
+  })
+
+  it('folds a run of silence heartbeats into one counted quiet row', () => {
+    const events = [
+      { ts: 1, type: 'agent_event', data: '{"ev":"tool_use","name":"dsh"}' },
+      { ts: 2, type: 'progress', data: '{"note":"no output for 56s — agent still running"}' },
+      { ts: 3, type: 'progress', data: '{"note":"no output for 1m41s — agent still running"}' },
+      { ts: 4, type: 'progress', data: '{"note":"no output for 2m26s — agent still running"}' },
+      { ts: 5, type: 'agent_event', data: '{"ev":"text","text":"awake"}' },
+    ]
+    const rows = buildRows(events as never)
+    assert.equal(rows.length, 3)
+    const quiet = rows[1]
+    assert.equal(quiet?.kind, 'event')
+    if (quiet?.kind === 'event') {
+      assert.equal(quiet.count, 3)
+      // The folded row shows the NEWEST silence note, not the first.
+      assert.match(quiet.formatted.label, /2m26s/)
+      assert.equal(quiet.formatted.quiet, true)
+    }
+  })
+
+  it('keeps non-silence progress notes as normal rows', () => {
+    const events = [
+      { ts: 1, type: 'progress', data: '{"note":"bash: Inspect working directory"}' },
+      { ts: 2, type: 'progress', data: '{"note":"write: plans/snake.py"}' },
+    ]
+    const rows = buildRows(events as never)
+    assert.equal(rows.length, 2)
+    const r = rows[0]
+    if (r?.kind === 'event') assert.ok(!r.formatted.quiet)
+  })
+})

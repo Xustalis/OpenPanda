@@ -272,6 +272,12 @@ func (s SelectionList) renderBoxed(th theme, width, height int) string {
 			if item.Badge != "" {
 				badge = " " + th.accent.Render(item.Badge)
 			}
+			// The cursor row is bolded like the plain list's cursor row — the
+			// accent "> " alone was too quiet inside a tinted frame.
+			if isCursor {
+				title = lipgloss.NewStyle().Bold(true).Render(title + badge)
+				badge = ""
+			}
 			line := prefix + title + badge
 			if item.Snippet != "" {
 				used := cliui.DisplayWidth(item.Title) + cliui.DisplayWidth(item.Badge)
@@ -302,31 +308,50 @@ func (s SelectionList) renderBoxed(th theme, width, height int) string {
 	innerLines = append(innerLines, "")
 
 	content := strings.Join(innerLines, "\n")
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("35")).
-		Padding(0, 1).
-		Width(boxWidth)
+	boxStyle := th.listBox.Width(boxWidth)
 
-	// Add custom title to border
 	renderedBox := boxStyle.Render(content)
 	if s.Title != "" {
-		lines := strings.Split(renderedBox, "\n")
-		if len(lines) > 0 {
-			titleText := " " + s.Title + " "
-			topBorder := lines[0]
-			if len(topBorder) > len(titleText)+4 {
-				runes := []rune(topBorder)
-				titleRunes := []rune(titleText)
-				copy(runes[2:], titleRunes)
-				lines[0] = string(runes)
-				renderedBox = strings.Join(lines, "\n")
-			}
+		// Rebuild the top edge with the title inside it rather than splicing
+		// runes into the rendered row: that row opens with the border's own
+		// ANSI colour prefix, so a rune-level copy lands the title inside the
+		// escape sequence and corrupts the frame on colour terminals.
+		if top := titledBoxEdge(th, s.Title, boxWidth); top != "" {
+			lines := strings.Split(renderedBox, "\n")
+			lines[0] = top
+			renderedBox = strings.Join(lines, "\n")
 		}
 	}
 
 	// Center horizontally and vertically
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderedBox)
+}
+
+// titledBoxEdge builds the top border row "╭─ Title ────╮" to replace the one
+// lipgloss drew. The border glyphs take the box's border tint; the title uses
+// the heading style so it reads as a caption for the framed content. innerW is
+// the box's content width — the count of edge glyphs between the corners.
+// A long title is clipped to fit rather than dropped; "" is returned only
+// when even a minimal label cannot fit (the caller keeps the plain edge).
+func titledBoxEdge(th theme, title string, innerW int) string {
+	b := lipgloss.RoundedBorder()
+	if !th.unicode {
+		b = asciiBorder()
+	}
+	// At least one edge glyph must remain on both sides of the label for the
+	// row to read as a border rather than a divider.
+	if innerW < 8 {
+		return ""
+	}
+	label := " " + cliui.Truncate(title, innerW-4, th.unicode) + " "
+	tw := cliui.DisplayWidth(label)
+	right := innerW - tw - 1
+	edge := lipgloss.NewStyle()
+	if th.color {
+		edge = edge.Foreground(brandGreen)
+	}
+	return edge.Render(b.TopLeft+b.Top) + th.heading.Render(label) +
+		edge.Render(strings.Repeat(b.Top, right)+b.TopRight)
 }
 
 // formatItemLine formats a single item for plain list rendering.

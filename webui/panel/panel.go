@@ -506,6 +506,10 @@ type taskJSON struct {
 	// parked or executed irreversible operation summary (K5 visibility).
 	Supervision *supervisionJSON `json:"supervision,omitempty"`
 	Tier2Ops    []tier2OpJSON    `json:"tier2_ops,omitempty"`
+	// LastEvent is the task's newest task_events row (list endpoint only,
+	// clipped): the kanban card's live line reads it so a mid-flight task
+	// shows real activity on first paint instead of a generic "running".
+	LastEvent *traceEventJSON `json:"last_event,omitempty"`
 }
 
 type eventJSON struct {
@@ -707,7 +711,53 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 	for _, t := range filtered {
 		out = append(out, toTaskJSON(t))
 	}
+	h.attachLastEvents(r.Context(), out)
 	writeJSON(w, out)
+}
+
+// attachLastEvents stamps every listed task with its newest task_events row
+// (clipped) so the board's live line can say what a mid-flight task is doing
+// on first paint — before the SSE trace stream's first frame lands. One
+// batched query covers the whole board; any failure degrades to no stamp
+// rather than failing the list.
+func (h *handler) attachLastEvents(ctx context.Context, tasks []taskJSON) {
+	if h.db == nil || len(tasks) == 0 {
+		return
+	}
+	rows, err := h.db.QueryContext(ctx,
+		`SELECT task_id, id, ts, type, COALESCE(data_json, '{}')
+		   FROM task_events
+		  WHERE id IN (SELECT MAX(id) FROM task_events GROUP BY task_id)`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	last := make(map[string]traceEventJSON, len(tasks))
+	for rows.Next() {
+		var (
+			taskID  string
+			dataRaw string
+			te      traceEventJSON
+		)
+		if err := rows.Scan(&taskID, &te.ID, &te.TS, &te.Type, &dataRaw); err != nil {
+			return
+		}
+		if dataRaw != "" && dataRaw != "{}" {
+			var decoded any
+			if err := json.Unmarshal([]byte(dataRaw), &decoded); err == nil {
+				te.Data = clipTraceData(decoded)
+			} else {
+				te.DataRaw = dataRaw
+			}
+		}
+		last[taskID] = te
+	}
+	for i := range tasks {
+		if te, ok := last[tasks[i].ID]; ok {
+			te := te
+			tasks[i].LastEvent = &te
+		}
+	}
 }
 
 // visibleTraceTypes is the 8-track set the decision-orbit component paints.
@@ -874,6 +924,22 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+		}
+		// The detail view's orbit live-pill reads last_event so a mid-flight
+		// task says what it is doing on first paint — same stamp listTasks
+		// attaches for the board.
+		if n := len(events); n > 0 {
+			e := events[n-1]
+			te := traceEventJSON{ID: e.ID, TS: e.TS, Type: e.Type}
+			if e.DataJSON != "" && e.DataJSON != "{}" {
+				var decoded any
+				if err := json.Unmarshal([]byte(e.DataJSON), &decoded); err == nil {
+					te.Data = clipTraceData(decoded)
+				} else {
+					te.DataRaw = e.DataJSON
+				}
+			}
+			out.LastEvent = &te
 		}
 		if len(hops) > 0 {
 			out.DelegationChain = hops

@@ -38,6 +38,32 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Dieses Changelog ist kuratiert: einige interne Refaktorierungen und Adapter sind hier nicht gelistet.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
+## [0.0.11-alpha-2] - 2026-10-11
+
+Die zweite Periapsis-Vorschau — ein Kernel-Härtungsdurchgang plus der Live-Ausführungserzählung der Konsole: Queue und Task-Seiten zeigen jetzt, was ein Lauf *gerade tut*, statt dich rohes Event-JSON entschlüsseln zu lassen.
+
+### Hinzugefügt
+
+- **Live-Ausführungserzählung in der Konsole** — der SSE-Trace-Stream trägt nun das Agent-Aktivitätsset (Tool-Aufrufe, Denken, Fortschrittsnotizen, Nutzung, Fallback, Judge, Supervision, Ergebnis) mit gekappten Oversize-Payloads, und jede gelistete Aufgabe trägt einen `last_event`-Stempel, damit eine laufende Aufgabe beim ersten Rendern echte Arbeit erzählt statt eines nackten „running". Die Kanban-Live-Zeile, die Orbit-Pille und die Detail-Timeline lesen alle daraus.
+- **Auftrags-Karte** — die Detailansicht rendert die Task-Spec (Ziel, Constraints, Umfang, Erfolgsdefinition) als lesbaren Brief statt sie in `spec_json` zu verstecken.
+- **Stream-Reconciliation in der CLI** — vom Streaming-Delta-Guard unterdrückter Antworttext wird beim Flush restauriert, sodass ein mittendrin verschluckter Envelope-Frame keine sichtbare Ausgabe mehr verwirft; Fallback-Notizen werden auch dann gedruckt, wenn der Stream nichts lieferte.
+- **Event-Zeilen-Faltung** — eine Folge von „no output"-Stille-Heartbeats kollabiert zu einer gezählten Zeile, und Tool-Aufrufe bekommen lesbare Argumentzusammenfassungen (ein opakes `{argc:3}` wird als „3 Argumente" gezeigt).
+
+### Behoben
+
+- **Migrationen unter Connection-Pooling** — Migrations-Transaktionen pinnen jetzt eine dedizierte `*sql.Conn`; beim verbreiterten Pool konnte ein nacktes `BEGIN IMMEDIATE` DDL und COMMIT über Verbindungen verstreuen (SQLITE_BUSY / „no transaction").
+- **Stille Content-Verlustpfade** — eine Antwort mit leerer Antwort aber nicht-leerer Notiz verwirft die Notiz nicht mehr; der Streaming-Delta-Guard spiegelt nun exakt die Erste-`{`-Entscheidung von `ParseOutput` (Lead-in-Limit, Illustrative-Marker, Fence-Behandlung).
+- **Web-Formatter-Feldmismatch** — `agent_usage` las `tokens`/`cost`, während der Draht `input/output/cache_*_tokens` trägt; Token-Tags summieren jetzt die echten Felder.
+- **Windows-Adapter-Encoding** — Adapter pinnen UTF-8-Stdio und dekodieren CLI-Ausgabe über die Konsolen-Codepage mit MBCS-Fallback, sodass CJK-Ausgabe entfernter Windows-Executoren intakt ankommt.
+- **TUI-Frame-Korruption** — betitelte Box-Kanten spleißten Border-Runen in ANSI-Escape-Sequenzen; Titel werden jetzt über einer escape-bewussten Kante gerendert.
+
+### Verbessert
+
+- **SQLite-Schreibkonkurrenz** — dateibasierte Stores fahren einen 4-Verbindungs-WAL-Pool mit `_txlock=immediate` (In-Memory-Stores behalten eine Verbindung); Artefakt-Transfer-Wire-Handler cachen positive Peer-Autorisierungen eine Minute statt pro Chunk neu abzufragen, und die Push-Wasserlinie persistiert einmal pro Sekunde pro Transfer statt pro Frame.
+- **Dedup-Kosten** — der Eingangsframe-Dedup-Key ist ein Struct (keine String-Allokation pro Frame) unter eigenem Mutex, abseits des Peer-Registry-Locks.
+- **SSE-Trace-Stream startet am aktuellen Wasserstand** — ein Connect spielt nicht mehr die komplette Event-Historie ab; Hydration kommt von `last_event` und dem Task-Payload.
+- **Konsolen-Designpass** — Kanban-Karten heben beim Hover mit Eintrittsanimation ab, Views faden ein, stille Buchhaltungszeilen rendern als dünne Linien, Changed-File-Chips filtern VCS-/Dependency-Rauschen und klappen ab zwölf ein, und Composer, Scroll-Button und Nachrichtenbubbles sind neu ausbalanciert.
+
 ## [0.0.11-alpha] - 2026-10-10
 
 Die v0.0.11-Alpha-Vorschau — Codename **Periapsis**, der nahe Punkt der Umlaufbahn: Nachdem Apoapsis bis ins LAN hinausreichte, zieht diese Linie das Mesh selbst enger. Peer-Verbindungen handeln pro Verbindung AEAD-Verschlüsselung im signierten Hello aus; Geräte treten dem Knotennetz bei wie beim Bluetooth-Koppeln — Gerät wählen, Code vergleichen, auf beiden Seiten bestätigen — statt Geheimnisse von Hand zu kopieren; und jede Phase im Leben einer Aufgabe meldet, wo sie tatsächlich steht. Hart gepinnte Arbeit läuft auf dem gepinnten Knoten oder scheitert ehrlich, niemals still umgeleitet; ein Urteil, das während eines Leitungsausfalls entstand, konvergiert, sobald die Verbindung zurückkehrt (ein neu verbundener Daemon holt sich seine Kante von einem streunenden Prozess gleicher Identität zurück, und Endresultate werden bei jedem Hello erneut zugestellt); das Genehmigen einer Plan-Stufe tritt wieder in die Plan-Überwachung ein, statt den Turn beim Beleg einer einzelnen Aufgabe zu beenden. Darunter bekam die Verwahrung Zähne: Ergebnisse, Abbrüche und Genehmigungen parken während Leitungsausfällen in dauerhaften Outboxes; der Stille-Watchdog tötet einen wirklich hängenden Agenten nach 240 s, statt das volle Timeout zu verbrennen; und entferntes stdout wird von der Konsolencodepage des Ausführers transkodiert, damit CJK-Text unversehrt zurückkehrt.

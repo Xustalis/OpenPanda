@@ -33,6 +33,13 @@ type TaskStore struct {
 	db     *sql.DB
 	logger *slog.Logger
 	now    func() int64
+	// preTxHook, when set, fires inside withTx before BeginTx — the test seam
+	// for "a concurrent commit lands between the caller's last unlocked read
+	// and the guarded write". Under storage.Open's _txlock=immediate that is
+	// the only window such a commit can still hit: once BEGIN IMMEDIATE runs
+	// the txn holds the write lock, so a hook staged mid-transaction (like
+	// the now-hook used to do) would deadlock against the lock it races.
+	preTxHook func()
 	// onReview, when set, is called whenever a task enters review (needs human
 	// analysis). It must not block: the daemon wires it to a fire-and-forget
 	// notification path.
@@ -84,10 +91,11 @@ func NewSigningTaskStore(db *sql.DB, logger *slog.Logger) *TaskStore {
 }
 
 // SetEventSigner installs the node identity used to sign recorded events
-// (P2-9). The key must be resolved BEFORE any transaction opens — the store
-// is a single connection, so a lazy settings read from inside recordEventTx
-// would deadlock against its own open tx. Signing is pure-CPU once the key
-// is in memory.
+// (P2-9). The key must be resolved BEFORE any transaction opens — a lazy
+// settings read from inside recordEventTx would run on a different pooled
+// connection (or deadlock outright on a single-conn :memory: store), seeing
+// committed state rather than the tx's own view. Signing is pure-CPU once
+// the key is in memory.
 func (s *TaskStore) SetEventSigner(pub ed25519.PublicKey, priv ed25519.PrivateKey) {
 	s.eventKeyM.Lock()
 	defer s.eventKeyM.Unlock()
@@ -333,6 +341,9 @@ func (s *TaskStore) notifyReview(t Task) {
 // event and break the audit trail (and DispatchTarget/DeclinedBy, which read
 // authorization facts from task_events).
 func (s *TaskStore) withTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	if s.preTxHook != nil {
+		s.preTxHook()
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -2395,11 +2406,11 @@ func (s *TaskStore) listTasks(ctx context.Context, state, project, order string,
 // states, which a sweep must not touch regardless of age.
 var settledStates = []string{StateDone, StateFailed, StateCancelled, StateExpired}
 
-// retentionSweepBatch bounds one delete transaction. The store runs on a
-// single connection, so a monolithic first sweep of a long-lived daemon —
-// tens of thousands of settled rows — would hold the write lock while every
-// other query queues behind it. Deleting in batches keeps each transaction
-// short; the sweep's hourly cadence re-runs until the backlog is gone.
+// retentionSweepBatch bounds one delete transaction. A monolithic first
+// sweep of a long-lived daemon — tens of thousands of settled rows — would
+// hold the write lock while every other writer queues behind it for the
+// full scan. Deleting in batches keeps each transaction short; the sweep's
+// hourly cadence re-runs until the backlog is gone.
 const retentionSweepBatch = 2000
 
 // taskSatellites are the per-task tables deleted alongside a tasks row: the

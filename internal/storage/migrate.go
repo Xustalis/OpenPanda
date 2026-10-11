@@ -3,6 +3,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 )
@@ -60,36 +61,48 @@ func LatestVersion() int {
 	return migrations[len(migrations)-1].Version
 }
 
-// migrationTx adapts a raw *sql.DB to the MigrationExec surface. Safe only
-// because Open pins the pool to one connection, so every statement the Apply
-// body runs lands on the same connection the BEGIN ran on.
-type migrationTx struct{ db *sql.DB }
+// migrationTx adapts a pinned *sql.Conn to the MigrationExec surface. The
+// migration's BEGIN, its body statements and its COMMIT must all land on the
+// same connection — on a pooled *sql.DB each Exec can pick a different conn,
+// which would run body statements outside the tx (autocommit) or block on the
+// write lock the BEGIN's conn already holds.
+type migrationTx struct{ conn *sql.Conn }
 
 func (t migrationTx) Exec(query string, args ...any) (sql.Result, error) {
-	return t.db.Exec(query, args...)
+	return t.conn.ExecContext(context.Background(), query, args...)
 }
 
 func (t migrationTx) Query(query string, args ...any) (*sql.Rows, error) {
-	return t.db.Query(query, args...)
+	return t.conn.QueryContext(context.Background(), query, args...)
 }
 
 func (t migrationTx) QueryRow(query string, args ...any) *sql.Row {
-	return t.db.QueryRow(query, args...)
+	return t.conn.QueryRowContext(context.Background(), query, args...)
 }
 
 func runMigration(db *sql.DB, m Migration) error {
+	ctx := context.Background()
+	// Pin one connection for the whole transaction: the BEGIN, every Apply
+	// statement and the COMMIT are bound to it by contract, whatever size the
+	// pool is configured to.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire conn: %w", err)
+	}
+	defer conn.Close()
+
 	// BEGIN IMMEDIATE acquires the reserved write lock before the first
 	// statement runs, so concurrent handles migrating the same file queue up
 	// here (bounded by the busy_timeout pragma) instead of discovering each
 	// other at commit — where a deferred transaction's lock upgrade fails
 	// instantly under WAL and cannot be retried.
-	if _, err := db.Exec(`BEGIN IMMEDIATE`); err != nil {
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = db.Exec(`ROLLBACK`)
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
 		}
 	}()
 
@@ -97,29 +110,29 @@ func runMigration(db *sql.DB, m Migration) error {
 	// this point, another handle may have applied this migration (or a later
 	// one). Running it again would fail loudly at best, corrupt at worst.
 	var current int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&current); err != nil {
+	if err := conn.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&current); err != nil {
 		return fmt.Errorf("read user_version: %w", err)
 	}
 	if current >= m.Version {
-		if _, err := db.Exec(`COMMIT`); err != nil {
+		if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 			return fmt.Errorf("commit empty tx: %w", err)
 		}
 		committed = true
 		return nil
 	}
 
-	if err := m.Apply(migrationTx{db}); err != nil {
+	if err := m.Apply(migrationTx{conn}); err != nil {
 		return err
 	}
 
 	// user_version is an int from the compiled-in migration table — no
 	// placeholder syntax exists for PRAGMA assignments, and there is no
 	// request-controlled input to inject here.
-	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, m.Version)); err != nil {
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, m.Version)); err != nil {
 		return fmt.Errorf("set user_version %d: %w", m.Version, err)
 	}
 
-	if _, err := db.Exec(`COMMIT`); err != nil {
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true

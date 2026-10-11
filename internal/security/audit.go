@@ -58,9 +58,10 @@ func (a *Audit) SetSigner(pub ed25519.PublicKey, priv ed25519.PrivateKey) {
 // Record writes one entry, linking it to the global audit hash chain (A3).
 // The read of the chain head and the insert must live in one transaction:
 // two concurrent Records that each read the same head would both link to it,
-// forking the chain and failing VerifyChain on one of them (M2). The store's
-// single connection serializes the tx bodies, so the second writer always sees
-// the first writer's row as the head.
+// forking the chain and failing VerifyChain on one of them (M2). The store
+// opens with _txlock=immediate, so BeginTx takes the write lock at once and
+// serializes the tx bodies — the second writer's head read always sees the
+// first writer's row.
 func (a *Audit) Record(ctx context.Context, e Entry) error {
 	ts := time.Now().Unix()
 	tx, err := a.db.BeginTx(ctx, nil)

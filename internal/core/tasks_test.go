@@ -377,12 +377,12 @@ func TestCancelCascadeSkipsTerminalRoot(t *testing.T) {
 // returned ErrConflict here, the wire handler dropped the cancel, and the
 // executor ran to completion under a node that believed the task cancelled.
 //
-// The race is staged through the store's now hook: it fires while Cancel
-// evaluates its UPDATE arguments (before the statement executes, while the
-// deferred transaction holds no locks) and commits the concurrent accept
-// through a second connection. A second connection is required because the
-// store's pool is capped at one connection, and a :memory: database is not
-// shared between pools — hence the temp file.
+// The race is staged through the store's preTxHook: it fires after Cancel's
+// unlocked pre-check read but before BEGIN IMMEDIATE takes the write lock —
+// the only window a concurrent commit can still hit now that transactions
+// lock at BEGIN (a mid-transaction hook would deadlock on the lock the txn
+// already holds). The staged accept commits through a second connection; a
+// :memory: database is not shared between pools — hence the temp file.
 func TestCancelRetriesAfterConcurrentAccept(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "cancel.db")
@@ -416,18 +416,18 @@ func TestCancelRetriesAfterConcurrentAccept(t *testing.T) {
 	must(canceller.Queue(ctx, tk.TaskID, "root"))
 	must(canceller.Dispatch(ctx, tk.TaskID, "root", "leaf"))
 
-	// Arm a one-shot hook: the next now() call (Cancel's UPDATE timestamp)
-	// first commits the executor's accept on the second connection.
+	// Arm a one-shot hook: the first write transaction Cancel opens first
+	// commits the executor's accept on the second connection, so the guarded
+	// UPDATE lands on a row that moved since the pre-check read.
 	armed := true
-	canceller.now = func() int64 {
+	canceller.preTxHook = func() {
 		if !armed {
-			return storage.Now()
+			return
 		}
 		armed = false
 		if err := executor.Accept(ctx, tk.TaskID, "leaf"); err != nil {
 			t.Errorf("staged concurrent accept: %v", err)
 		}
-		return storage.Now()
 	}
 
 	if err := canceller.Cancel(ctx, tk.TaskID); err != nil {
@@ -482,19 +482,18 @@ func TestCancelIdempotentWhenConcurrentlyClosed(t *testing.T) {
 	must(canceller.Dispatch(ctx, tk.TaskID, "root", "leaf"))
 
 	armed := true
-	canceller.now = func() int64 {
+	canceller.preTxHook = func() {
 		if !armed {
-			return storage.Now()
+			return
 		}
 		armed = false
 		if err := executor.Accept(ctx, tk.TaskID, "leaf"); err != nil {
 			t.Errorf("staged accept: %v", err)
-			return storage.Now()
+			return
 		}
 		if err := executor.Complete(ctx, tk.TaskID, "leaf", map[string]any{"ok": true}); err != nil {
 			t.Errorf("staged complete: %v", err)
 		}
-		return storage.Now()
 	}
 
 	if err := canceller.Cancel(ctx, tk.TaskID); err != nil {

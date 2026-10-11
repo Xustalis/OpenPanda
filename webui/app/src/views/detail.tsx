@@ -10,9 +10,19 @@ import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 import DecisionOrbit from '../components/orbit'
 import { EventTimeline } from '../components/event-timeline'
+import { Markdown } from '../md/render'
+import { Icon } from '../components/icons'
 import { prettifyJson } from '../format/json'
 
-export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
+export function DetailView({
+  id,
+  onBack,
+  onOpenSession,
+}: {
+  id: string
+  onBack(): void
+  onOpenSession?(id: string): void
+}) {
   useLocaleRerender()
   const change = useChangeSignal()
   const [tick, setTick] = useState(0)
@@ -83,6 +93,15 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
           <StateBadge state={task.state} />
         </div>
         <div class="detail-actions">
+          {task.session_id && onOpenSession && (
+            <button
+              type="button"
+              class="btn primary"
+              onClick={() => onOpenSession(task.session_id!)}
+            >
+              <Icon name="message" size={13} /> {t('detail.openSession')}
+            </button>
+          )}
           {task.state === 'review' && task.approval_disposition && (
             <span class="dim review-kind">{t(`detail.reviewKind.${task.approval_disposition}`)}</span>
           )}
@@ -158,6 +177,11 @@ export function DetailView({ id, onBack }: { id: string; onBack(): void }) {
           of waiting for the next poll of the task row. */}
       <DecisionOrbit task={task} defaultOpen />
 
+      {/* What the run was asked to produce — target, guardrails, scope and
+          the bar the supervisor judges against. Without this card the spec
+          only existed as a JSON blob users had to decode. */}
+      <SpecCard spec={task.spec} />
+
       {/* Structured delegation chain from the ledger: each hop is one leg of
           the task's trip across nodes (originator → executor → …). Unacked
           hops render hollow — the outbound leg fired but no node confirmed. */}
@@ -219,17 +243,76 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   )
 }
 
+/** The task spec (spec_json) as a readable brief: target as prose,
+ *  constraints as a checklist, scope as file chips, success as the bar the
+ *  supervisor evaluates. Absent or unparseable specs render nothing —
+ *  older tasks simply have no brief. */
+function SpecCard({ spec }: { spec?: string }) {
+  const s = spec ? parseResult(spec) : null
+  if (!s) return null
+  const target = text(s.target)
+  const success = text(s.success_definition)
+  const scope = text(s.scope)
+  const constraints = Array.isArray(s.constraints)
+    ? s.constraints.filter((c): c is string => typeof c === 'string' && c !== '')
+    : []
+  if (!target && !success && !scope && constraints.length === 0) return null
+  const scopeFiles = scope
+    .split(/[,;\n]/)
+    .map((f) => f.trim())
+    .filter(Boolean)
+  return (
+    <div class="detail-block spec-card">
+      <h2>{t('detail.spec.title')}</h2>
+      {target && <p class="spec-target">{target}</p>}
+      {constraints.length > 0 && (
+        <ul class="spec-constraints">
+          {constraints.map((c, i) => (
+            <li key={i}>
+              <Icon name="check" size={12} class="spec-constraint-ico" />
+              <span>{c}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {(scopeFiles.length > 0 || success) && (
+        <div class="spec-foot">
+          {scopeFiles.length > 0 && (
+            <div class="spec-scope">
+              <span class="dim spec-foot-label">{t('detail.spec.scope')}</span>
+              <div class="spec-scope-files">
+                {scopeFiles.map((f, i) => (
+                  <code key={i} class="result-file-chip" title={f}>
+                    {f}
+                  </code>
+                ))}
+              </div>
+            </div>
+          )}
+          {success && (
+            <div class="spec-success">
+              <span class="dim spec-foot-label">{t('detail.spec.success')}</span>
+              <span class="spec-success-text">{success}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** A task result is a JSON blob with a handful of well-known keys — ok,
  *  exit_code, stdout, stderr, agent, plus whatever the supervisor added.
  *  Rendering the blob itself is what made this page read as a wall of JSON:
- *  the useful parts were in there, buried in escaping. This lifts them out and
- *  keeps the original one click away rather than one keypress of devtools.
+ *  the useful parts were in there, buried in escaping. This lifts them out,
+ *  renders the agent's markdown the way it was written, and keeps the
+ *  original one click away rather than one keypress of devtools.
  *
  *  Anything that is not an object we recognise falls back to the raw text —
  *  a half-understood result shown verbatim beats a blank panel. */
 function ResultView({ raw }: { raw: string }) {
   const r = parseResult(raw)
-  if (!r) return <pre class="detail-raw">{prettifyJson(raw)}</pre>
+  if (!r) return <pre class="detail-raw detail-raw-capped">{raw}</pre>
 
   const ok = r.ok !== false
   const exit = typeof r.exit_code === 'number' ? r.exit_code : null
@@ -241,6 +324,13 @@ function ResultView({ raw }: { raw: string }) {
   const stderr = text(r.stderr)
   const verdict = text(r.verdict)
   const reason = text(r.verdict_reason)
+  const tokens = typeof r.tokens === 'number' && r.tokens > 0 ? r.tokens : null
+  const cost = typeof r.cost === 'number' && r.cost > 0 ? r.cost : null
+  const files = Array.isArray(r.files_changed)
+    ? r.files_changed
+        .filter((f): f is string => typeof f === 'string' && f !== '')
+        .filter((f) => !FILE_NOISE.test(f))
+    : []
 
   return (
     <div class="result-view">
@@ -253,28 +343,96 @@ function ResultView({ raw }: { raw: string }) {
         {model && <span class="dim">{t('detail.result.model', { model })}</span>}
         {injected && <span class="dim">{t('detail.result.injected')}</span>}
         {executor && <span class="dim">{t('detail.result.node', { node: executor })}</span>}
+        {tokens !== null && (
+          <span class="dim">{t('detail.result.tokens', { n: String(tokens) })}</span>
+        )}
+        {cost !== null && (
+          <span class="dim">{t('detail.result.cost', { n: cost.toFixed(4) })}</span>
+        )}
       </div>
 
       {verdict && <p class="dim">{t('detail.result.verdict', { verdict })}</p>}
       {reason && <p class="dim result-reason">{reason}</p>}
 
-      {stdout && (
-        <div class="result-block">
-          <span class="dim">{t('detail.result.stdout')}</span>
-          <pre>{stdout}</pre>
+      {files.length > 0 && (
+        <div class="result-files">
+          <span class="dim result-files-label">
+            {t('detail.result.files', { n: String(files.length) })}
+          </span>
+          <FileChips files={files} />
         </div>
       )}
+
+      {stdout && <CollapsibleOutput text={stdout} label={t('detail.result.stdout')} />}
       {stderr && (
-        <div class="result-block">
-          <span class="dim">{t('detail.result.stderr')}</span>
-          <pre class="result-err">{stderr}</pre>
-        </div>
+        <CollapsibleOutput text={stderr} label={t('detail.result.stderr')} error />
       )}
 
       <details class="raw-toggle">
         <summary class="dim">{t('detail.result.raw')}</summary>
         <pre class="detail-raw">{prettifyJson(raw)}</pre>
       </details>
+    </div>
+  )
+}
+
+/** VCS internals, dependency trees and build output a task's file list
+ *  picks up along the way — real on disk, noise on the card. */
+const FILE_NOISE = /(?:^|\/|\\)(?:\.git|\.svn|\.hg|node_modules|dist|build|__pycache__|\.next|\.cache)(?:\/|\\|$)|\.DS_Store$/
+
+const FILE_CHIP_CAP = 12
+
+/** Changed-file chips: capped so a large change set reads as a summary
+ *  instead of a wall, with the rest one click away. */
+function FileChips({ files }: { files: string[] }) {
+  const [open, setOpen] = useState(false)
+  const shown = open ? files : files.slice(0, FILE_CHIP_CAP)
+  const hidden = files.length - shown.length
+  return (
+    <div class="result-file-list">
+      {shown.map((f, i) => (
+        <code key={i} class="result-file-chip" title={f}>
+          {f}
+        </code>
+      ))}
+      {hidden > 0 && (
+        <button type="button" class="result-file-more" onClick={() => setOpen(true)}>
+          {t('detail.result.filesMore', { n: String(hidden) })}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** Agent output reads as markdown (the adapters report it that way); long
+ *  dumps start collapsed so a wall of text never buries the page. */
+function CollapsibleOutput({
+  text,
+  label,
+  error = false,
+}: {
+  text: string
+  label: string
+  error?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const long = text.length > 600
+  const shown = open || !long ? text : text.slice(0, 600) + '…'
+  return (
+    <div class="result-block">
+      <span class="dim">{label}</span>
+      {error ? (
+        <pre class="result-err">{shown}</pre>
+      ) : (
+        <div class="result-out">
+          <Markdown text={shown} />
+        </div>
+      )}
+      {long && (
+        <button type="button" class="btn small" onClick={() => setOpen((v) => !v)}>
+          {open ? t('detail.result.collapse') : t('detail.result.expand')}
+        </button>
+      )}
     </div>
   )
 }

@@ -511,10 +511,7 @@ func (c *Core) handleArtifactFetch(ctx context.Context, env bus.Envelope) {
 	// id resolves to nothing here (this node produced a sibling stage and never
 	// saw the consumer's row), but the orchestrator's signed grant attests the
 	// pull was issued for this plan, this consumer, this hash.
-	authorized := c.artifactPeerAuthorized(ctx, p.TaskID, p.Hash, env.From)
-	if !authorized && p.OfTask != "" && p.Grant != "" && p.Issuer != "" {
-		authorized = c.artifactGrantAuthorized(ctx, p)
-	}
+	authorized := c.artifactTransferAuthorized(ctx, p.TaskID, p.Hash, env.From, &p)
 	if !authorized {
 		c.logger.Warn("artifact_fetch from non-participant", "task", p.TaskID, "from", env.From)
 		deny("not a participant in this task")
@@ -581,6 +578,50 @@ func (c *Core) handleArtifactChunk(ctx context.Context, env bus.Envelope) {
 		// The receiver is not waiting on this offset; it will re-request.
 		c.logger.Debug("artifact chunk dropped", "task", p.TaskID, "offset", p.Offset)
 	}
+}
+
+// artAuthTTL is how long a positive transfer-authorization verdict may be
+// reused. Long enough that a whole transfer's chunk stream rides one DB
+// cluster; short enough that a revoked participant's window stays a routing
+// detail, not a policy hole (see artAuthCache).
+const artAuthTTL = time.Minute
+
+// artifactTransferAuthorized answers the question every artifact frame asks:
+// may `from` move `hash` under `taskID` on this node? It is the cached form
+// of the peer-participant check plus — for fetches carrying a signed
+// orchestrator grant (grant != nil) — the grant fallback, because both ran
+// per-chunk on the conn read loop and their inputs are immutable over the
+// TTL window. Push callers pass grant == nil: pushes carry no grant fields.
+func (c *Core) artifactTransferAuthorized(ctx context.Context, taskID, hash, from string, grant *bus.ArtifactFetchPayload) bool {
+	key := taskID + "|" + hash + "|" + from
+	if v, ok := c.artAuthCache.Load(key); ok {
+		if until, ok := v.(time.Time); ok && time.Now().Before(until) {
+			return true
+		}
+		c.artAuthCache.Delete(key)
+	}
+	ok := c.artifactPeerAuthorized(ctx, taskID, hash, from)
+	if !ok && grant != nil && grant.OfTask != "" && grant.Grant != "" && grant.Issuer != "" {
+		ok = c.artifactGrantAuthorized(ctx, *grant)
+	}
+	if ok {
+		c.artAuthCache.Store(key, time.Now().Add(artAuthTTL))
+	}
+	return ok
+}
+
+// sweepArtAuth drops expired verdicts so the cache is bounded by live
+// transfer volume rather than every transfer the node has ever seen — the
+// expired-on-read check inside artifactTransferAuthorized only ever retires
+// keys that get asked about again.
+func (c *Core) sweepArtAuth() {
+	now := time.Now()
+	c.artAuthCache.Range(func(k, v any) bool {
+		if until, ok := v.(time.Time); ok && now.After(until) {
+			c.artAuthCache.Delete(k)
+		}
+		return true
+	})
 }
 
 // artifactPeerAuthorized reports whether from may pull the artifact named by

@@ -976,13 +976,16 @@ func (r *repl) askMode(text, mode string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lr := newStreamLineRenderer()
+	var askText strings.Builder
 	cb := askengine.StreamCallbacks{}
 	if stdoutIsTTY() {
 		cb.OnDelta = func(chunk string) {
 			// A chunk without a newline only fills the renderer's buffer — no
 			// output, so no need to disturb the status line for it. The buffered
 			// tail is previewed on that line instead, so a long paragraph reads
-			// as "being written" rather than "hung".
+			// as "being written" rather than "hung". The raw stream accumulates
+			// too, for the end-of-turn reconcile against the parsed answer.
+			askText.WriteString(chunk)
 			if strings.ContainsRune(chunk, '\n') {
 				st.Suspend(func() { lr.delta(chunk) })
 				st.Preview(lr.pending())
@@ -1090,13 +1093,18 @@ func (r *repl) askMode(text, mode string) {
 
 	switch out.Kind {
 	case "answer":
-		if delivered() {
-			break
+		// Reconcile against the parsed Answer: whatever the stream withheld
+		// still lands — nothing the model wrote may silently truncate behind
+		// the "already delivered" flag. The routing note rides the same gate:
+		// it only repeats when nothing reached the screen at all.
+		if tail := answerTail(askText.String(), out.Answer); tail != "" || !delivered() {
+			if out.Note != "" && !delivered() {
+				r.outln(r.renderMd(out.Note))
+			}
+			if tail != "" {
+				r.outln(r.renderMd(tail))
+			}
 		}
-		if out.Note != "" {
-			r.outln(r.renderMd(out.Note))
-		}
-		r.outln(r.renderMd(out.Answer))
 	case "task":
 		// Sub-agent round: the converged report is the reply. It streamed
 		// live like an answer's text, so print it only when nothing was
@@ -1105,8 +1113,8 @@ func (r *repl) askMode(text, mode string) {
 		// under a wall of log. Without a report (queue-parked, budget-cut,
 		// report degraded) the raw output stays the primary display.
 		if strings.TrimSpace(out.Answer) != "" {
-			if !delivered() {
-				r.outln(r.renderMd(out.Answer))
+			if tail := answerTail(askText.String(), out.Answer); tail != "" {
+				r.outln(r.renderMd(tail))
 			}
 			reportNote := i18n.Tf(r.loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
 			if out.Agent != "" || out.Executor != "" {

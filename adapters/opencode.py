@@ -64,8 +64,8 @@ def _cli_flags():
     text = ""
     try:
         argv = harness.resolve_argv(["opencode", "run", "--help"])
-        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-        text = (proc.stdout or "") + (proc.stderr or "")
+        proc = subprocess.run(argv, capture_output=True, timeout=15)
+        text = harness.decode_cli((proc.stdout or b"") + (proc.stderr or b""))
     except Exception:
         text = ""
     auto = ""

@@ -39,13 +39,28 @@ func Open(path string) (*sql.DB, error) {
 	// - foreign_keys=ON: 启用外键约束
 	// - cache_size=-64000: 使用 64MB 缓存 (负数表示 KB)
 	// - temp_store=MEMORY: 临时表存于内存
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(1000)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=cache_size(-64000)&_pragma=temp_store(MEMORY)", escapeDBPath(path))
+	// - _txlock=immediate: 写事务在 BEGIN 即取得写锁。连接池放大后这是必需
+	//   的——deferred 事务的"先读后写"升级在多连接下会撞上
+	//   SQLITE_BUSY_SNAPSHOT（快照冲突，busy_timeout 不覆盖），而
+	//   BEGIN IMMEDIATE 把写者间竞争变成 busy_timeout 可重试的锁等待。
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(1000)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=cache_size(-64000)&_pragma=temp_store(MEMORY)&_txlock=immediate", escapeDBPath(path))
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
-	db.SetMaxOpenConns(1) // single writer avoids SQLITE_BUSY under WAL
-	db.SetMaxIdleConns(1)
+	if path == ":memory:" {
+		// 纯 ":memory:" 每条连接是独立数据库，连接池会让不同连接看到
+		// 不同的库——内存库必须保持单连接（测试路径）。
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+	} else {
+		// WAL 的单写多读模型：单连接把守护进程、panel、CLI 的所有读写
+		// 串行化（大查询会阻塞写入）。4 条连接让读不被写阻塞，写者间
+		// 由 BEGIN IMMEDIATE + busy_timeout 串行——与单连接相同的
+		// 单写语义，但消除了读-写互相排队。
+		db.SetMaxOpenConns(4)
+		db.SetMaxIdleConns(4) // 常驻连接，避免每条连接重复跑 _pragma 初始化
+	}
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping sqlite %s: %w", path, err)

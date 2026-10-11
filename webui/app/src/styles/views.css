@@ -293,7 +293,7 @@
 }
 
 .thought-label {
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
 
 .thought-summary-preview {
@@ -306,7 +306,7 @@
 }
 
 .thought-meta {
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
 
@@ -316,21 +316,21 @@
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  padding: 2px 5px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  padding: 2px 6px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all var(--dur-fast) ease;
 }
 
 .thought-copy-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .thought-chevron {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
   transition: transform var(--dur-fast) ease;
 }
@@ -471,7 +471,7 @@
 
 .md-code-lang {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-dim);
@@ -483,7 +483,7 @@
   color: var(--text-dim);
   border-radius: var(--radius-sm);
   padding: 2px 8px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
   /* Held at low contrast until the block is hovered or the button focused:
      a copy affordance per code block would otherwise dominate the reply. */
@@ -513,7 +513,7 @@
 
 .md-code code {
   white-space: pre;
-  font-size: 12.8px;
+  font-size: var(--text-sm);
   line-height: 1.55;
 }
 
@@ -528,7 +528,7 @@
 .md-table {
   border-collapse: collapse;
   width: 100%;
-  font-size: 13.5px;
+  font-size: var(--text-md);
   white-space: normal;
 }
 
@@ -588,7 +588,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  font-size: 13.5px;
+  font-size: var(--text-md);
 }
 
 .task-out {
@@ -777,7 +777,7 @@
 
 .hint {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   color: var(--text-dim);
 }
 
@@ -817,7 +817,7 @@
 
 .test-result {
   margin: 0;
-  font-size: 13.5px;
+  font-size: var(--text-md);
   border-radius: var(--radius-sm);
   padding: 9px 12px;
 }
@@ -863,7 +863,7 @@
   gap: 8px;
   width: 100%;
   font-family: inherit;
-  font-size: 15px;
+  font-size: var(--text-lg);
   color: var(--text);
   text-align: left;
 }
@@ -1066,9 +1066,9 @@
 }
 
 .skill-tag {
-  font-size: 11px;
+  font-size: var(--text-xs);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-soft, rgba(128, 128, 128, 0.15));
   color: var(--text-secondary);
 }
@@ -1250,7 +1250,7 @@
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  font-size: 13.5px;
+  font-size: var(--text-md);
 }
 
 .diff-drawer-head span {
@@ -1352,7 +1352,7 @@
 
 .node-name {
   font-weight: 650;
-  font-size: 15px;
+  font-size: var(--text-lg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1538,9 +1538,10 @@
 }
 
 .memory-entry {
+  position: relative;
   padding: 9px 12px;
   border-left: 3px solid var(--border-soft);
-  font-size: 13.5px;
+  font-size: var(--text-md);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1706,12 +1707,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: var(--fs-small);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
   margin: 0;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.95;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
   padding-bottom: var(--sp-2);
   border-bottom: 1px solid var(--hairline-xs);
 }
@@ -1771,6 +1772,11 @@
   box-shadow: var(--shadow-xs);
   position: relative;
   overflow: hidden;
+  animation: card-in var(--dur-med) var(--ease-enter);
+}
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
 
 .kanban-card::before {
@@ -1787,7 +1793,13 @@
 
 .kanban-card:hover {
   border-color: var(--accent-2-border);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.kanban-card:active {
+  transform: none;
+  box-shadow: var(--shadow-xs);
 }
 
 .kanban-card:hover::before {
@@ -1993,7 +2005,7 @@
 }
 
 .kanban-card.finished .kanban-meta {
-  font-size: 11px;
+  font-size: var(--text-xs);
   gap: 2px 8px;
 }
 
@@ -2025,15 +2037,15 @@
 /* ---- Queue board additions (queue redesign) ---- */
 
 .queue-new {
-  margin: 0 0 12px;
+  margin: 0 0 var(--sp-3);
 }
 
 .queue-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin: 0 0 16px;
-  padding: 16px;
+  gap: var(--sp-3);
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-4);
 }
 
 .prio-badge {
@@ -2042,10 +2054,10 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   background: var(--bg-inset);
-  color: var(--muted, inherit);
+  color: var(--text-tertiary);
   padding: 0 8px;
   cursor: pointer;
 }
@@ -2077,12 +2089,12 @@
 }
 
 .kanban-dropzone {
-  margin-top: 6px;
-  padding: 8px;
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
   border: 1px dashed var(--accent);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: center;
   cursor: pointer;
 }
@@ -2096,14 +2108,9 @@
   align-self: flex-start;
 }
 
-.chain {
-  margin: 6px 0;
-  font-size: 12px;
-}
-
 .chain-empty {
   margin: 6px 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 /* Agent CLI list on the settings page. */
@@ -2154,7 +2161,7 @@
 }
 
 .agent-path {
-  font-size: 11px;
+  font-size: var(--text-xs);
   width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2190,14 +2197,15 @@
   text-align: left;
   padding: 8px 12px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   background: transparent;
   color: var(--text-dim);
   font: inherit;
-  font-size: 13.5px;
+  font-size: var(--text-md);
   cursor: pointer;
   text-decoration: none;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--dur-fast) var(--ease-standard),
+              color var(--dur-fast) var(--ease-standard);
 }
 
 .settings-nav-icon {
@@ -2262,7 +2270,7 @@
 .node-remove-error {
   margin: 6px 0 0;
   color: var(--danger);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
 
 .node-detail {
@@ -2272,7 +2280,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
 
 .node-detail-row {
@@ -2310,6 +2318,8 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
+  margin: 6px 0;
+  font-size: var(--text-sm);
 }
 
 .chain-node {
@@ -2317,7 +2327,7 @@
   border-radius: 999px;
   background: var(--bg-inset);
   border: 1px solid var(--border-soft);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
 
 .chain-node.root {
@@ -2375,7 +2385,7 @@
 
 .card-entry p {
   margin: 4px 0 0;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
 
 .card-entry-head {
@@ -2424,7 +2434,7 @@
 }
 
 .card-raw-editor textarea {
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   line-height: 1.55;
   resize: vertical;
   min-height: 200px;
@@ -2455,7 +2465,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   color: var(--text-dim);
 }
 
@@ -2532,10 +2542,6 @@
   border-color: transparent;
 }
 
-.memory-entry {
-  position: relative;
-}
-
 .memory-entry-actions {
   display: inline-flex;
   gap: 4px;
@@ -2554,17 +2560,18 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-3);
   flex-wrap: wrap;
-  margin-bottom: 18px;
-  padding: 12px 16px;
-  border: 1px solid var(--warn);
-  border-radius: var(--radius);
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--semantic-warn-border);
+  border-radius: var(--radius-md);
   background: var(--warn-soft);
+  box-shadow: var(--shadow-xs);
 }
 
 .onboarding-banner-text {
-  font-size: 13.5px;
+  font-size: var(--text-md);
 }
 
 /* With the banner riding above a view, the main pane becomes a column so
@@ -2873,7 +2880,7 @@
   color: var(--accent-2);
 }
 .orbit-brand-ico {
-  font-size: 15px;
+  font-size: var(--text-lg);
   color: var(--accent-2);
 }
 .orbit-brand-title {
@@ -2974,7 +2981,7 @@
   color: var(--accent-ink);
   background: var(--accent-2);
   font-weight: var(--fw-bold);
-  font-size: 11px;
+  font-size: var(--text-xs);
   box-shadow: var(--shadow-xs);
 }
 .orbit-step-title {
@@ -3202,7 +3209,7 @@
   font-weight: var(--fw-medium);
 }
 .badge-stage .sym {
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: var(--fw-bold);
 }
 .badge-stage.done {
@@ -3336,6 +3343,7 @@
   gap: var(--sp-1);
   padding: var(--sp-2) var(--sp-4) !important;
   margin-top: var(--sp-1);
+  font-size: var(--fs-small);
   font-weight: var(--fw-semibold) !important;
   background: var(--accent) !important;
   color: var(--accent-ink) !important;
@@ -3351,10 +3359,6 @@
 .orbit-cta:active {
   box-shadow: none !important;
 }
-.orbit-single .line1 { color: var(--text-primary); font-weight: 500; }
-.orbit-single .line2 { font-size: var(--fs-caption); }
-.orbit-cta { padding: 0; font-size: var(--fs-small); }
-
 /* — §4.2 Top-level soft banners (update status / onboarding).
      .banner + .banner-warn/info/error/good is the shared chip style.
      update-banner is painted by <UpdateBanner/> when the updater has
@@ -3388,6 +3392,8 @@
   padding: var(--sp-1) var(--sp-2);
   border-radius: var(--radius-sm);
   font-size: var(--fs-caption);
+  font-weight: 500;
+  white-space: nowrap;
   text-decoration: none;
   background: var(--accent-2-soft);
 }
@@ -3509,6 +3515,10 @@
   flex-direction: column;
   gap: var(--sp-3);
   text-align: left;
+  /* Centre the single-node pitch inside the card's leftover space — without
+     this the head pins top and the copy pins bottom with dead air between. */
+  flex: 1;
+  justify-content: center;
 }
 .fleet-single h2 {
   margin: 0;
@@ -3548,12 +3558,8 @@
   font-size: var(--fs-small);
 }
 
-/* Empty-state split-screen (D5). 50/50 by default on ≥960px; collapses to
-   column on narrow viewports so fleet always stacks above the chat CTA. */
-
-@media (min-width: 960px) {
-  .chat-empty { grid-template-columns: 1fr 1fr; }
-}
+/* Empty-state split-screen (D5): the 960px two-column rule lives in chat.css
+   next to .chat-empty — this sheet loads earlier and would lose the tie. */
 
 
 
@@ -3607,11 +3613,6 @@ body {
   content: none;
 }
 
-.page-sub {
-  color: var(--text-secondary);
-  margin-top: var(--sp-1);
-}
-
 .modal-title,
 .detail-title,
 .chat-empty-cta h1,
@@ -3621,68 +3622,22 @@ body {
   letter-spacing: -0.01em;
 }
 
-
-
-.wordmark-text {
-  font-family: var(--font-display);
-  font-size: 17px;
-  letter-spacing: 0.01em;
-}
-.wordmark-text b {
-  font-weight: 700;
-}
-
-/* ---- 外壳与侧边栏 ---- */
-
-.sidebar {
-  padding: 20px 12px 14px;
-  gap: 2px;
-}
-
 .sidebar .wordmark {
   padding: 4px 10px 18px;
 }
 
-.nav-item {
-  border-radius: 10px;
-  padding: 8px 12px;
-  color: var(--text-secondary);
-  transition: background var(--dur-fast) var(--ease-standard),
-              color var(--dur-fast) var(--ease-standard);
-}
-.nav-item:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-.nav-item.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.nav-group-head {
-  color: var(--text-tertiary);
-  letter-spacing: 0.1em;
-}
-
+/* The trigger reads as a raised field: whisper shadow, deeper on hover.
+   (Geometry/chrome live in shell.css — only the shadow survives here.) */
 .palette-trigger {
-  border-radius: 10px;
-  border: 1px solid var(--border-soft);
-  background: var(--bg-raised);
   box-shadow: var(--shadow-xs);
   transition: border-color var(--dur-fast) var(--ease-standard),
               box-shadow var(--dur-fast) var(--ease-standard);
 }
 .palette-trigger:hover {
-  border-color: var(--border-strong);
   box-shadow: var(--shadow-sm);
 }
 
 /* ---- 按钮：去掉高光覆层，扁平 + 微浮起 ---- */
-
-.btn::before {
-  content: none;
-}
 
 .btn {
   border-radius: 10px;
@@ -3724,10 +3679,6 @@ select.input {
 
 /* ---- 卡片与徽章 ---- */
 
-.card {
-  border-radius: var(--radius-md);
-}
-
 .badge {
   font-weight: 600;
   letter-spacing: 0.01em;
@@ -3745,86 +3696,18 @@ select.input {
   background: var(--accent-2-soft);
 }
 
-/* ---- 会话页：Claude 式对话区 ---- */
-
-
-
-
-
-
-
-
-
-
-/* 气泡：去掉引用式左边条。Panda 纯文本阅读（编辑感），
-   用户消息用暖色圆角块托起（Claude 的用户气泡语言）。 */
-
-
+/* Panda 纯文本阅读（编辑感），用户消息用暖色圆角块托起。 */
 .bubble.role-panda {
   padding: 2px 0;
 }
 
-/* 输入区：大圆角浮起容器，聚焦时竹绿柔光环 */
-
-
-
-
-/* 空状态：虚线框 → 纸质卡片 + 暖光晕 */
-
-
 /* ---- 浮层：命令面板 / 弹窗 / 通知 ---- */
 
-.palette,
 .modal {
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-xl);
 }
-.modal-backdrop,
-.palette-backdrop {
+.modal-backdrop {
   backdrop-filter: blur(3px);
-}
-
-.toast {
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-}
-
-.banner {
-  border-radius: var(--radius-md);
-}
-
-/* ---- 看板与列表 ---- */
-
-.kanban-card {
-  border-radius: var(--radius-md);
-}
-
-/* ---- 设置页左轨 ---- */
-
-.settings-nav-item {
-  border-radius: 10px;
-  transition: background var(--dur-fast) var(--ease-standard),
-              color var(--dur-fast) var(--ease-standard);
-}
-
-/* ---- Orbit 决策链：统一大圆角外壳 ---- */
-
-.orbit {
-  border-radius: var(--radius-lg);
-}
-
-/* ---- 登录门：纸张卡 + 暖光背景 ---- */
-
-.gate {
-  background:
-    radial-gradient(760px 380px at 50% -18%, var(--accent-soft), transparent),
-    radial-gradient(600px 300px at 85% 110%, var(--accent-2-tint-xs), transparent),
-    var(--bg);
-}
-.gate-card {
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
-  padding: 32px;
 }
 
 /* ---- 代码与输出块 ---- */
@@ -3887,7 +3770,7 @@ pre,
   cursor: pointer;
   padding: 2px 6px;
   font-size: 0.8rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .dir-picker-clear:hover {
@@ -3900,7 +3783,7 @@ pre,
   font-size: 0.8rem;
   padding: 4px 10px;
   height: 28px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .dir-browser-modal {
@@ -4240,7 +4123,7 @@ pre,
   gap: 4px;
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px 6px;
   font-size: 0.75rem;
 }
@@ -4305,23 +4188,8 @@ pre,
   max-width: 360px;
 }
 
-.thought-copy-btn {
-  padding: 2px 6px;
-  font-size: 0.8rem;
-  border-radius: 4px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.thought-copy-btn:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
 .thought-card-toggle {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
 
@@ -4356,7 +4224,7 @@ pre,
 .raw-json-block {
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 8px;
   font-size: 0.72rem;
   max-height: 160px;
@@ -4466,7 +4334,7 @@ pre,
   cursor: pointer;
   padding: 1px 4px;
   font-size: 0.78rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-tertiary);
   transition: all var(--dur-fast);
 }
@@ -5008,4 +4876,312 @@ pre,
 .wizard-approval-desc {
   font-size: var(--text-xs);
   color: var(--text-secondary);
+}
+
+/* ==========================================================================
+   Queue live strip, dispatch pipeline, result cards (execution-UX pass)
+   ========================================================================== */
+
+/* Active kanban cards carry a state-colored edge so the board reads at a
+   glance — todo/info, doing/accent, review/warn — plus a live activity line
+   that replaces the "static badge" feel with the TUI's rolling status. */
+.kanban-card[data-state='submitted'],
+.kanban-card[data-state='queued'],
+.kanban-card[data-state='dispatched'],
+.kanban-card[data-state='waiting_context'] {
+  box-shadow: var(--shadow-xs), inset 3px 0 0 var(--semantic-info);
+}
+.kanban-card[data-state='running'] {
+  box-shadow: var(--shadow-xs), inset 3px 0 0 var(--accent-2);
+  border-color: var(--accent-2-border);
+}
+.kanban-card[data-state='review'] {
+  box-shadow: var(--shadow-xs), inset 3px 0 0 var(--semantic-warn);
+}
+
+.kanban-live {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  min-width: 0;
+}
+.kanban-live-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The beating pulse dot shared by kanban cards and the orbit summary pill —
+   "this is moving right now". */
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--semantic-info);
+  flex-shrink: 0;
+}
+.live-dot.beating {
+  background: var(--accent-2);
+  animation: live-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes live-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-dot.beating { animation: none; }
+}
+
+.pill-live {
+  color: var(--accent-2);
+  border-color: var(--accent-2-border);
+  background: var(--accent-2-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Orbit steps that never ran (direct dispatch): a quiet "skipped" instead of
+   a declined/awaiting message that reads like something failed. */
+.orbit-skipped {
+  font-size: var(--fs-caption);
+  font-style: italic;
+}
+
+/* Dispatch pipeline: submit → queue → delegate → accept collapsed into one
+   readable strip of chips instead of one card per bookkeeping write. */
+.timeline-step-item.type-pipeline .step-marker {
+  border-color: var(--semantic-info);
+}
+.pipeline {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.pipeline-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pipeline-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--semantic-info-soft);
+  border: 1px solid var(--semantic-info-border);
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+.pipeline-step.failed .pipeline-chip {
+  background: var(--semantic-danger-soft);
+  border-color: var(--semantic-danger-border);
+  color: var(--semantic-danger);
+}
+.pipeline-arrow {
+  color: var(--text-tertiary);
+  font-size: 0.7rem;
+}
+.pipeline-node {
+  font-size: 0.9em;
+}
+
+/* Bookkeeping events demoted to a single thin line — they exist for audit,
+   not for reading. */
+.timeline-step-item.type-quiet {
+  padding-bottom: var(--sp-2);
+}
+.timeline-step-item.type-quiet .step-marker {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-color: var(--border);
+}
+.step-quiet {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-caption);
+}
+
+/* The terminal result event, rendered like a result instead of a JSON row. */
+.result-card .result-card-out {
+  font-size: var(--fs-body);
+  line-height: 1.55;
+  padding: var(--sp-1) 0;
+}
+
+/* Detail-view result polish: file chips + markdown output + capped raw. */
+.result-files {
+  margin: var(--sp-2) 0;
+}
+.result-files-label {
+  display: block;
+  font-size: var(--fs-caption);
+  margin-bottom: 4px;
+}
+.result-file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.result-file-chip {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-caption);
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  color: var(--text-secondary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-out {
+  margin-top: 2px;
+  font-size: var(--fs-body);
+  line-height: 1.55;
+}
+.detail-raw-capped {
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* Task output inside a chat bubble is markdown now, not a mono <pre>. */
+.task-out-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-out-wrap .task-out {
+  max-height: none;
+  font-size: var(--fs-body);
+  line-height: 1.55;
+}
+
+/* The prompt behind a card title — one line, quietly, so the card still reads
+   as a task title first and a request second. */
+.kanban-intent {
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ————————————————————————————————————————————————————————————————
+   Task brief + live-narrative polish
+   ———————————————————————————————————————————————————————————————— */
+
+/* Task brief: spec_json rendered as a readable definition card — the "what
+   this run was asked to produce" the page used to hide inside a JSON blob. */
+.spec-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--hairline-sm);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-4) var(--sp-5);
+  box-shadow: var(--shadow-xs);
+}
+.spec-card h2 {
+  /* .detail-block h2 already supplies the section-title voice + accent tick. */
+  margin-bottom: var(--sp-2);
+}
+.spec-target {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+.spec-constraints {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-3);
+  background: var(--bg-inset);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-xs);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.spec-constraints li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-sub);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.spec-constraint-ico {
+  color: var(--accent-1);
+  flex-shrink: 0;
+  align-self: center;
+}
+.spec-foot {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--hairline-xs);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.spec-foot-label {
+  display: block;
+  font-size: var(--fs-caption);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+.spec-scope-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.spec-success-text {
+  font-size: var(--fs-sub);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Repeat marker on a folded run of quiet rows — "the silence note repeated
+   ×5", so a four-minute stall is one thin line with a count, not five. */
+.quiet-count {
+  font-size: 0.85em;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-sm);
+  border: 1px solid var(--hairline-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* The "+N more" tail on the changed-file chip list — same footprint as a
+   chip, dashed so it reads as affordance, not data. */
+.result-file-more {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-caption);
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.result-file-more:hover {
+  color: var(--text-secondary);
+  border-color: var(--hairline-sm);
+}
+.result-file-more:focus-visible {
+  box-shadow: var(--ring);
 }

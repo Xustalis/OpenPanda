@@ -11,6 +11,7 @@ import {
 import { orbitPhaseFromTraces, useTraceForTask } from '../hooks'
 import { navigate } from '../nav'
 import { Icon } from './icons'
+import { latestActivity } from './task-activity'
 
 // —---------------------------------------------------------------------------
 // DecisionOrbit (§4.1.1 参考基准强约束实现)
@@ -54,7 +55,18 @@ export default function DecisionOrbit(props: DecisionOrbitProps) {
     onOpenTrail,
   } = props
 
-  const liveTraces = useTraceForTask(task?.id, task?.traces ?? [])
+  // Seed the trace list with the task's last_event stamp as well as the
+  // orbit tracks: the stamp may be an agent-activity row (tool call in
+  // flight), which only feeds the live pill — orbit slots still read their
+  // own types. Dedup by id keeps a stamp that already sits in traces out.
+  const seedTraces = useMemo(() => {
+    const arr = [...(task?.traces ?? [])]
+    if (task?.last_event && !arr.some((e) => e.id === task.last_event!.id)) {
+      arr.push(task.last_event)
+    }
+    return arr
+  }, [task?.traces, task?.last_event])
+  const liveTraces = useTraceForTask(task?.id, seedTraces)
   const traces = tracesProp ?? liveTraces
 
   const phase = orbitPhaseFromTraces(traces, task?.state)
@@ -139,6 +151,14 @@ export default function DecisionOrbit(props: DecisionOrbitProps) {
   })
   const hasReview = tier2?.parked_in_review || task?.state === 'review'
 
+  // The collapsed bar's live pill — the TUI's rolling status line. Only for
+  // work still moving; finished tasks keep the quiet summary pills.
+  const liveLine = useMemo(() => {
+    const s = task?.state
+    if (s !== 'running' && s !== 'dispatched' && s !== 'waiting_context') return ''
+    return latestActivity(traces, task ?? {})
+  }, [traces, task])
+
   // --- Expanded Step data ---------------------------------------------------
   // Step-2 路由行：当这是一个 plan stage 任务，逐阶段组 rows；否则单任务一行。
   const routeRows = useMemo<RouteRow[]>(() => buildRouteRows({
@@ -195,6 +215,12 @@ export default function DecisionOrbit(props: DecisionOrbitProps) {
           </span>
 
           <span class="orbit-summaries">
+            {liveLine && (
+              <span class="orbit-sum-pill pill-live" role="status">
+                <span class="live-dot beating" aria-hidden="true" />
+                {liveLine}
+              </span>
+            )}
             {classifyLine && <span class="orbit-sum-pill">{classifyLine}</span>}
             {routeSummary && <span class="orbit-sum-pill">{routeSummary}</span>}
             {progress > 0 && (
@@ -223,7 +249,7 @@ export default function DecisionOrbit(props: DecisionOrbitProps) {
             title={t('orbit.step.classify')}
             flashTs={flashTypes.classify_result}
           >
-            <ClassifyLine classify={classify} />
+            <ClassifyLine classify={classify} skipped={Boolean(execStart) && !classify} />
           </OrbitStep>
 
           <OrbitStep
@@ -250,6 +276,7 @@ export default function DecisionOrbit(props: DecisionOrbitProps) {
                 rows={routeRows}
                 selfNodeId={selfNodeId}
                 chosen={route?.target ?? route?.chosen}
+                skipped={Boolean(execStart) && !route}
               />
             )}
           </OrbitStep>
@@ -313,9 +340,10 @@ function OrbitStep(props: {
   )
 }
 
-function ClassifyLine({ classify }: { classify: ClassifySlot | null }) {
+function ClassifyLine({ classify, skipped }: { classify: ClassifySlot | null; skipped?: boolean }) {
   if (!classify) {
-    return <div class="muted">{t('orbit.declined.classify')}</div>
+    // Direct dispatch never classified — say "skipped", not "awaiting".
+    return <div class="orbit-skipped muted">{skipped ? t('orbit.stepSkipped') : t('orbit.declined.classify')}</div>
   }
   const kind = classify.kind ?? classify.class
   switch (kind) {
@@ -382,10 +410,15 @@ function RouteBlock(props: {
   rows: RouteRow[]
   selfNodeId?: string
   chosen?: string
+  skipped?: boolean
 }) {
-  const { rows, selfNodeId, chosen } = props
+  const { rows, selfNodeId, chosen, skipped } = props
   if (!rows.length) {
-    return <div class="muted">{t('orbit.route.declined')}</div>
+    return (
+      <div class="orbit-skipped muted">
+        {skipped ? t('orbit.stepSkipped') : t('orbit.route.declined')}
+      </div>
+    )
   }
   return (
     <ul class="orbit-route-list" role="list">

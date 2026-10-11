@@ -3,6 +3,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -210,6 +211,52 @@ func TestMigrateConcurrentHandles(t *testing.T) {
 		if counts[m.Version] != 1 {
 			t.Errorf("migration v%d (%s) applied %d times, want exactly 1", m.Version, m.Name, counts[m.Version])
 		}
+	}
+}
+
+// TestMigrateUnderPoolPressure pins the conn-pinning contract: Open gives
+// file-backed handles a multi-connection pool, so statements issued through
+// the raw *sql.DB between a migration's BEGIN and COMMIT would land on
+// other connections — running outside the tx or blocking on its write lock.
+// Hammering the pool while Migrate runs must not disturb it.
+func TestMigrateUnderPoolPressure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pooled.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					var n int
+					_ = db.QueryRow(`SELECT 1`).Scan(&n)
+				}
+			}
+		}()
+	}
+	migErr := Migrate(db)
+	close(stop)
+	wg.Wait()
+	if migErr != nil {
+		t.Fatalf("migrate under pool pressure: %v", migErr)
+	}
+
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if want := migrations[len(migrations)-1].Version; version != want {
+		t.Fatalf("user_version = %d, want %d", version, want)
 	}
 }
 
@@ -450,9 +497,17 @@ func TestMigrateV36RekeysOutboxes(t *testing.T) {
 		}
 	}
 
-	if err := migrateV36(migrationTx{db}); err != nil {
+	// The migration body runs on a pinned conn; on a single-conn :memory:
+	// pool it must be released before the verification queries take one.
+	mconn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("conn: %v", err)
+	}
+	if err := migrateV36(migrationTx{mconn}); err != nil {
+		mconn.Close()
 		t.Fatalf("migrateV36: %v", err)
 	}
+	mconn.Close()
 
 	// Two instance rows for the same task collapse to one stable row.
 	var n int
@@ -475,9 +530,15 @@ func TestMigrateV36RekeysOutboxes(t *testing.T) {
 		}
 	}
 	// Idempotent: a second application changes nothing.
-	if err := migrateV36(migrationTx{db}); err != nil {
+	mconn, err = db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("conn: %v", err)
+	}
+	if err := migrateV36(migrationTx{mconn}); err != nil {
+		mconn.Close()
 		t.Fatalf("migrateV36 rerun: %v", err)
 	}
+	mconn.Close()
 }
 
 func columnExists(t *testing.T, db *sql.DB, table, col string) bool {

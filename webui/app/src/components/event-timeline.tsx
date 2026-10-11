@@ -4,6 +4,7 @@ import { useState } from 'preact/hooks'
 import type { TaskEvent } from '../api/client'
 import { Markdown } from '../md/render'
 import { blockDepth, formatTaskEvent, toolArgSummary, type AgentBlock } from './event-parser'
+import { buildRows } from './event-rows'
 import { Icon } from './icons'
 import { t } from '../i18n'
 
@@ -23,13 +24,58 @@ export function EventTimeline({
   }
 
   const depths = new Map<string, number>()
+  // Pre-format once: lifecycle plumbing events are grouped into a single
+  // pipeline row, so the render loop works on groups, not raw events.
+  const rows = buildRows(events)
   return (
     <div class={`event-timeline-container ${className}`}>
       <ol class="timeline-steps">
-        {events.map((ev, i) => {
-          const formatted = formatTaskEvent(ev.type, ev.data)
+        {rows.map((row, i) => {
+          if (row.kind === 'pipeline') {
+            return (
+              <li key={i} class="timeline-step-item type-pipeline">
+                <div class="step-marker" aria-hidden="true" />
+                <div class="step-content">
+                  <div class="step-header">
+                    <span class="step-time dim">
+                      {new Date(row.ts * 1000).toLocaleTimeString()}
+                    </span>
+                    <div class="pipeline" role="list">
+                      {row.steps.map((s, j) => (
+                        <span key={j} class={`pipeline-step${s.failed ? ' failed' : ''}`} role="listitem">
+                          {j > 0 && <span class="pipeline-arrow" aria-hidden="true">→</span>}
+                          <span class="pipeline-chip">
+                            {s.step}
+                            {s.node && <span class="pipeline-node dim"> {s.node}</span>}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </li>
+            )
+          }
+          const ev = row.event
+          const formatted = row.formatted
           const block = formatted.agent
           const depth = block ? blockDepth(block, depths) : 0
+          if (formatted.quiet) {
+            return (
+              <li key={i} class="timeline-step-item type-quiet">
+                <div class="step-marker" aria-hidden="true" />
+                <div class="step-content step-quiet dim">
+                  <span class="step-time">{new Date(ev.ts * 1000).toLocaleTimeString()}</span>
+                  <span>{formatted.label}</span>
+                  {(row.count ?? 0) > 1 && (
+                    <span class="quiet-count" title={t('events.quietRepeatHint')}>
+                      ×{row.count}
+                    </span>
+                  )}
+                </div>
+              </li>
+            )
+          }
           return (
             <li
               key={i}
@@ -50,16 +96,23 @@ export function EventTimeline({
                       {t('events.subagent')}
                     </span>
                   )}
-                  <code class="step-raw-type dim">{ev.type}</code>
+                  {/* The raw type only surfaces for events the formatter does
+                      not know — for mapped types the human label already says
+                      what happened and the token reads as debug noise. */}
+                  {formatted.label === ev.type && (
+                    <code class="step-raw-type dim">{ev.type}</code>
+                  )}
                 </div>
 
                 {formatted.thought ? (
                   <ThoughtCard
                     text={formatted.thought}
-                    defaultOpen={defaultOpenThought || i === events.length - 1}
+                    defaultOpen={defaultOpenThought || i === rows.length - 1}
                   />
                 ) : block ? (
                   <AgentBlockBody block={block} rawJson={formatted.rawJson} />
+                ) : formatted.result ? (
+                  <ResultCard result={formatted.result} rawJson={formatted.rawJson} />
                 ) : (
                   <div class="step-body">
                     {formatted.summary && (
@@ -226,6 +279,38 @@ function RawJsonToggle({ raw }: { raw: string }) {
           <code>{raw}</code>
         </pre>
       )}
+    </div>
+  )
+}
+
+/** The terminal result event as a readable card: status line, then the
+ *  result text as markdown. Long outputs collapse behind the raw toggle —
+ *  the full JSON blob is never the default view. */
+function ResultCard({
+  result,
+  rawJson,
+}: {
+  result: NonNullable<ReturnType<typeof formatTaskEvent>['result']>
+  rawJson?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const out = result.stdout ?? ''
+  const long = out.length > 480
+  const shown = open || !long ? out : out.slice(0, 480) + '…'
+  return (
+    <div class="step-body result-card">
+      {result.stdout && (
+        <div class="result-card-out">
+          <Markdown text={shown} />
+        </div>
+      )}
+      {result.stderr && <pre class="agent-result is-error">{result.stderr}</pre>}
+      {long && (
+        <button type="button" class="btn small" onClick={() => setOpen((v) => !v)}>
+          {open ? t('events.collapse') : t('events.expand')}
+        </button>
+      )}
+      {rawJson && <RawJsonToggle raw={rawJson} />}
     </div>
   )
 }

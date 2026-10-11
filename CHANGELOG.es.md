@@ -38,6 +38,32 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Este changelog es curado: algunas refactorizaciones internas y adaptadores no se listan aquí.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
+## [0.0.11-alpha-2] - 2026-10-11
+
+La segunda preentrega Periapsis — una pasada de endurecimiento del núcleo más la narrativa de ejecución en vivo de la consola: la cola y las páginas de tarea ahora muestran qué *está haciendo* una ejecución en lugar de pedirte descifrar JSON de eventos en crudo.
+
+### Añadido
+
+- **Narrativa de ejecución en vivo en la consola** — el flujo SSE de trazas ahora transporta el conjunto de actividad del agente (llamadas de herramienta, razonamiento, notas de progreso, uso, fallback, juez, supervisión, resultado) con cargas sobredimensionadas recortadas, y cada tarea listada lleva un sello `last_event` para que una tarea en vuelo narre trabajo real en el primer pintado en vez de un simple "running". La línea en vivo del kanban, la píldora del orbit y la línea de tiempo del detalle leen de ahí.
+- **Tarjeta de encargo de tarea** — la vista de detalle renderiza la spec de la tarea (objetivo, restricciones, alcance, definición de éxito) como un brief legible en vez de esconderla dentro de `spec_json`.
+- **Reconciliación de flujo en la CLI** — el texto de respuesta suprimido por la guardia delta de streaming se restaura al vaciar, así un frame de envoltura tragado a mitad de flujo ya no descarta salida visible; las notas de fallback se imprimen aun cuando el flujo no entregó nada.
+- **Plegado de filas de eventos** — una racha de latidos de silencio "sin salida" colapsa en una línea contada, y las llamadas de herramienta obtienen resúmenes de argumentos legibles (un `{argc:3}` opaco se muestra como "3 argumentos").
+
+### Corregido
+
+- **Migraciones bajo pooling de conexiones** — las transacciones de migración ahora fijan una `*sql.Conn` dedicada; con el pool ampliado, un `BEGIN IMMEDIATE` desnudo podía esparcir DDL y COMMIT entre conexiones (SQLITE_BUSY / "no transaction").
+- **Rutas de pérdida silenciosa de contenido** — una respuesta con respuesta vacía pero nota no vacía ya no descarta la nota; la guardia delta de streaming ahora refleja exactamente la decisión del primer `{` de `ParseOutput` (tope de lead-in, marcadores ilustrativos, manejo de cercas).
+- **Desajustes de campos en formateadores web** — `agent_usage` leía `tokens`/`cost` mientras el cable transporta `input/output/cache_*_tokens`; las etiquetas de tokens ahora suman los campos reales.
+- **Codificación de adaptadores en Windows** — los adaptadores fijan stdio UTF-8 y decodifican la salida del CLI a través de la página de códigos de consola con fallback MBCS, de modo que la salida CJK de ejecutores Windows remotos viaja intacta.
+- **Corrupción de marcos en la TUI** — los bordes de cajas tituladas insertaban runas de borde dentro de secuencias de escape ANSI; los títulos ahora se dibujan sobre un borde consciente de escapes.
+
+### Mejorado
+
+- **Concurrencia de escritura en SQLite** — los stores en archivo corren un pool WAL de 4 conexiones con `_txlock=immediate` (los stores en memoria conservan una conexión); los manejadores wire de transferencia de artefactos cachean autorizaciones positivas por un minuto en vez de re-consultar por chunk, y la línea de flotación de push persiste una vez por segundo por transferencia en vez de por frame.
+- **Costo de deduplicación** — la clave de dedup de frames entrantes es un struct (sin asignación de string por frame) bajo su propio mutex, fuera del lock del registro de pares.
+- **El flujo SSE de trazas arranca en la marca de agua actual** — conectar ya no reproduce todo el historial de eventos; la hidratación viene de `last_event` y de la carga de la tarea.
+- **Pasada de diseño de la consola** — las tarjetas kanban se elevan al hover con animación de entrada, las vistas hacen fade-in, las filas de contabilidad silenciosas se renderizan como líneas finas, los chips de archivos cambiados filtran ruido VCS/dependencias y colapsan pasados doce, y el composer, el botón de scroll y las burbujas de mensaje quedan rebalanceados.
+
 ## [0.0.11-alpha] - 2026-10-10
 
 La vista previa alfa v0.0.11 — nombre en clave **Periapsis**, el punto cercano de la órbita: tras alcanzar Apoapsis la LAN, esta línea aprieta la malla misma. Los enlaces entre pares negocian cifrado AEAD por conexión dentro del hello firmado; los dispositivos se unen a la red de nodos como se empareja un Bluetooth — elegir el dispositivo, comparar el código, confirmar en ambos lados — sin copiar secretos a mano; y cada etapa de la vida de una tarea informa dónde está realmente. El trabajo fijado a un nodo se ejecuta en ese nodo o falla con honestidad, nunca se redirige en silencio; un veredicto producido con el enlace caído converge cuando el enlace vuelve (el daemon que se reconecta recupera su arista de un proceso intruso con la misma identidad, y los resultados terminales se reenvían en cada hello); aprobar una etapa de un plan vuelve a entrar en la vigilancia del plan en lugar de terminar el turno en el recibo de una tarea. Por debajo, la custodia ganó dientes: resultados, cancelaciones y aprobaciones se estacionan en outboxes duraderos durante los cortes; el vigilante de silencio mata a un agente realmente atascado a los 240 s en lugar de consumir todo el presupuesto de timeout; y el stdout remoto se transcodifica desde la página de códigos de consola del ejecutor para que el texto CJK viaje intacto.

@@ -930,26 +930,25 @@ func TestDeltaGuardSuppressesJSONAfterProseLeadIn(t *testing.T) {
 	}
 }
 
-// TestDeltaGuardFlushesHeldBackTail verifies prose ending in bytes that were
-// withheld as a possible structured prefix (but never became one) reaches
-// the user at end-of-stream.
-func TestDeltaGuardFlushesHeldBackTail(t *testing.T) {
+// TestDeltaGuardFlushesUnclosedSuspect verifies a '{' candidate whose object
+// never closes is released as prose at end-of-stream — the parser takes the
+// whole text as an answer then, so the withheld bytes must not vanish.
+func TestDeltaGuardFlushesUnclosedSuspect(t *testing.T) {
 	var got []string
 	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
-	g.on("答案是 42")
-	g.on("\n") // trailing newline held back pending a possible directive
-	if strings.Join(got, "") != "答案是 42" {
-		t.Fatalf("premature forward %q", got)
+	g.on("结果是 {未闭合")
+	if strings.Join(got, "") != "结果是 " {
+		t.Fatalf("premature forward %q, want the '{' still withheld", got)
 	}
 	g.flush()
-	if strings.Join(got, "") != "答案是 42\n" {
-		t.Fatalf("flush forwarded %q, want the held-back tail", got)
+	if strings.Join(got, "") != "结果是 {未闭合" {
+		t.Fatalf("flush forwarded %q, want the unclosed '{' released as prose", got)
 	}
 }
 
-// TestDeltaGuardInlineBracesStillStream pins the counter-case: a '{' on the
-// same line as prose (inline code/braces in a normal answer) must keep
-// streaming — only a line-initial brace starts suppression.
+// TestDeltaGuardInlineBracesStillStream pins the counter-case: an inline
+// '{...}' that fails the envelope check is withheld only until its balanced
+// close — then it streams verbatim, and nothing after it is suppressed.
 func TestDeltaGuardInlineBracesStillStream(t *testing.T) {
 	var got []string
 	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
@@ -958,6 +957,127 @@ func TestDeltaGuardInlineBracesStillStream(t *testing.T) {
 	g.flush()
 	if strings.Join(got, "") != "格式是 {host} 占位符，注意 ``code`` 标记。" {
 		t.Fatalf("inline braces must stream verbatim, got %q", got)
+	}
+}
+
+// TestDeltaGuardStreamsFencedCodeBlock is the reported regression: a normal
+// answer quoting a spec inside a ``` fence must stream in full. A fence is
+// not a directive — before the fix everything from the first fence on was
+// swallowed as "structured JSON", so the user saw only the lead-in.
+func TestDeltaGuardStreamsFencedCodeBlock(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
+	g.on("原样抄给你：\n\n")
+	g.on("```\n在 Windows 机器上构建网站\n```\n\n")
+	g.on("就这样。")
+	g.flush()
+	want := "原样抄给你：\n\n```\n在 Windows 机器上构建网站\n```\n\n就这样。"
+	if strings.Join(got, "") != want {
+		t.Fatalf("fenced answer truncated: %q, want %q", got, want)
+	}
+}
+
+// TestDeltaGuardStreamsFenceOpenedAnswer covers a response that OPENs on a
+// code fence — the fence is answer prose, not a wrapped directive, and must
+// stream once the inner content proves not to be a '{' object.
+func TestDeltaGuardStreamsFenceOpenedAnswer(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
+	g.on("```python\n")
+	g.on("print('hi')\n")
+	g.on("```")
+	g.flush()
+	want := "```python\nprint('hi')\n```"
+	if strings.Join(got, "") != want {
+		t.Fatalf("fence-opened answer lost: %q, want %q", got, want)
+	}
+}
+
+// TestDeltaGuardSuppressesFencedTaskDirective pins the mid-prose directive
+// case: prose, then a ```json fence whose content IS a valid task envelope.
+// The prose streams and the JSON stays hidden — mirroring ParseOutput, whose
+// extractJSONObject ignores the fence and takes the object.
+func TestDeltaGuardSuppressesFencedTaskDirective(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
+	g.on("马上办：\n")
+	g.on("```json\n")
+	g.on(`{"kind":"task","task":{"title":"跑测试","context_type":"command","requires":{"abilities":["lint"]}}}`)
+	g.on("\n```")
+	g.flush()
+	want := "马上办：\n```json\n"
+	if strings.Join(got, "") != want {
+		t.Fatalf("forwarded %q, want prose + the fence line only", got)
+	}
+	if !g.structured {
+		t.Fatal("a fenced task envelope must still count as structured")
+	}
+}
+
+// TestDeltaGuardReleasesQuotedJSON covers a model showing JSON as part of an
+// explanation: a balanced object that is NOT an envelope is released as
+// prose, and the parser's first-'{'-wins rule means a later real directive
+// shape in the same text stays prose too — ParseOutput takes the whole text
+// as an answer in exactly this case.
+func TestDeltaGuardReleasesQuotedJSON(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
+	g.on("响应形如 ")
+	g.on(`{"a":1}`)
+	g.on("，后面跟 ")
+	g.on(`{"kind":"task","task":{}}`)
+	g.flush()
+	want := `响应形如 {"a":1}，后面跟 {"kind":"task","task":{}}`
+	if strings.Join(got, "") != want {
+		t.Fatalf("quoted JSON truncated: %q, want %q", got, want)
+	}
+	if g.structured {
+		t.Fatal("a non-envelope '{' must not latch structured")
+	}
+}
+
+// TestDeltaGuardReleasesIllustrativeDirective mirrors the parser's
+// illustrative-marker check: '{'…'}' introduced as an example ("示例") is
+// prose showing a directive, not committing to one — it must stream.
+func TestDeltaGuardReleasesIllustrativeDirective(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
+	g.on("任务格式示例：")
+	g.on(`{"kind":"task","task":{"title":"跑测试","context_type":"command","requires":{"abilities":["lint"]}}}`)
+	g.flush()
+	want := `任务格式示例：{"kind":"task","task":{"title":"跑测试","context_type":"command","requires":{"abilities":["lint"]}}}`
+	if strings.Join(got, "") != want {
+		t.Fatalf("illustrative JSON swallowed: %q, want %q", got, want)
+	}
+}
+
+// TestDeltaGuardReleasesLongLeadInDirective mirrors the parser's lead-in
+// budget: more than jsonLeadInMax bytes of prose before the '{' means the
+// object cannot be a directive, so it streams like any other answer text.
+func TestDeltaGuardReleasesLongLeadInDirective(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
+	lead := strings.Repeat("铺垫。", 800) // 2400 bytes > jsonLeadInMax
+	g.on(lead)
+	g.on(`{"kind":"task","task":{"title":"跑测试","context_type":"command","requires":{"abilities":["lint"]}}}`)
+	g.flush()
+	want := lead + `{"kind":"task","task":{"title":"跑测试","context_type":"command","requires":{"abilities":["lint"]}}}`
+	if strings.Join(got, "") != want {
+		t.Fatalf("long lead-in JSON swallowed: %q, want %q", got, want)
+	}
+}
+
+// TestDeltaGuardUnwrapsMidStreamAnswerEnvelope covers {"kind":"answer"}: the
+// parser unwraps the envelope to its inner answer, so the guard streams that
+// text in place of the raw JSON — the model's words must reach the user.
+func TestDeltaGuardUnwrapsMidStreamAnswerEnvelope(t *testing.T) {
+	var got []string
+	g := newDeltaGuard(func(s string) { got = append(got, s) }, nil)
+	g.on("结果如下：")
+	g.on(`{"kind":"answer","answer":"里面的话"}`)
+	g.flush()
+	if strings.Join(got, "") != "结果如下：里面的话" {
+		t.Fatalf("answer envelope not unwrapped: %q", got)
 	}
 }
 
@@ -1075,6 +1195,33 @@ func TestStreamSuppressesTaskJSONEndToEnd(t *testing.T) {
 	}
 	if resp.Text != taskJSON {
 		t.Fatalf("text = %q, want the full JSON in the response", resp.Text)
+	}
+}
+
+// TestStreamFencedAnswerEndToEnd runs the reported regression through the real
+// SSE path: an answer that quotes a block inside a ``` fence must reach
+// onDelta in full. Before the fix the guard latched "structured" at the first
+// fence and dropped every later delta — and because the prefix had been
+// delivered, the caller never re-rendered the complete answer either.
+func TestStreamFencedAnswerEndToEnd(t *testing.T) {
+	chunks := []string{
+		"原样抄给你：\n\n",
+		"```\n在 Windows 机器上构建网站\n",
+		"```\n\n",
+		"其余说明。",
+	}
+	full := strings.Join(chunks, "")
+	c := startStreamServer(t, chunks)
+	var got []string
+	resp, err := c.StreamTurnsWithTools(context.Background(), "", []Turn{{Role: "user", Content: "hi"}}, nil, func(s string) { got = append(got, s) }, nil)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if strings.Join(got, "") != full {
+		t.Fatalf("onDelta got %q, want the full fenced answer", got)
+	}
+	if resp.Text != full {
+		t.Fatalf("resp.Text = %q, want %q", resp.Text, full)
 	}
 }
 

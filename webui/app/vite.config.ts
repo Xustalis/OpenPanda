@@ -19,7 +19,7 @@ export default defineConfig({
   server: {
     port: 5273,
     proxy: {
-      '/api': 'http://127.0.0.1:7840',
+      '/api': process.env.PANDA_PANEL || 'http://127.0.0.1:7840',
     },
   },
 })

@@ -387,12 +387,7 @@ func (m tuiModel) onboardingTermsView(w, h int) string {
 	lines = append(lines, m.th.muted.Render("  "+tt.hints))
 
 	cardContent := strings.Join(lines, "\n")
-	boxed := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("35")).
-		Padding(0, 1).
-		Width(boxWidth).
-		Render(cardContent)
+	boxed := m.th.listBox.Width(boxWidth).Render(cardContent)
 
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, boxed)
 }
@@ -1126,7 +1121,9 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 			sb.WriteString(th.accent.Render(line))
 		}
 		sb.WriteString("\n\n")
-		sb.WriteString(th.heading.Render("  " + i18n.T(loc, "repl.banner.title") + " " + versionpkg.Display()))
+		// The figlet row above already spells the wordmark — repeat only the
+		// version/codename, not the name a second time.
+		sb.WriteString(th.heading.Render("  " + versionpkg.Display()))
 	} else {
 		sb.WriteString(th.heading.Render(cliui.Truncate(
 			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" "+versionpkg.Display(), width, uni)))

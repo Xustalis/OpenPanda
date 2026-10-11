@@ -271,10 +271,21 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 		}
 		return block{kind: blockInfo, body: planSummaryLine(out)}
 	default: // answer
-		body := strings.TrimSpace(liveAnswer)
-		if body == "" {
-			body = strings.TrimSpace(out.Answer)
+		// Whatever the live stream withheld still lands: the parsed Answer
+		// is the model's full reply, so the committed block reconciles the
+		// accumulated deltas against it instead of trusting that "something
+		// streamed" means "everything streamed".
+		body := liveAnswer
+		switch tail := answerTail(liveAnswer, out.Answer); {
+		case tail == "":
+		case body == "":
+			body = tail
+		case tail == out.Answer:
+			body += "\n" + tail // divergent replay: keep both, visually separated
+		default:
+			body += tail // strict suffix: seamless continuation of the stream
 		}
+		body = strings.TrimSpace(body)
 		if note := strings.TrimSpace(out.Note); note != "" {
 			body = note + "\n" + body
 		}

@@ -139,6 +139,15 @@ export type TraceKind =
   | 'tier2_triggered'
   | 'plan_stage_changed'
   | 'artifact_transfer'
+  // Live-narrative set streamed alongside the orbit tracks (panel events.go):
+  // agent-level activity — the work happening *inside* a phase.
+  | 'agent_event'
+  | 'progress'
+  | 'agent_usage'
+  | 'agent_fallback'
+  | 'judge_start'
+  | 'supervise'
+  | 'result'
 
 export interface ScoreBreakdown {
   resource_efficiency: number
@@ -166,7 +175,10 @@ export interface ScoredCandidate {
 export interface TraceEvent {
   id: number
   ts: number
-  type: TraceKind
+  /** TraceKind for stream frames; last_event stamps may carry ANY event
+   *  type (submit/queue/session_summary…) — the `(string & {})` union arm
+   *  keeps the kind autocomplete while admitting arbitrary rows. */
+  type: TraceKind | (string & {})
   task_id?: string
   data?: any
   data_raw?: string
@@ -271,6 +283,10 @@ export interface Task {
   updated_at: string
   events?: TaskEvent[]
 
+  /** The task's newest event row, clipped — stamped by listTasks/getTask so
+   *  the live line says what a mid-flight task is doing on first paint,
+   *  before the SSE trace stream's first frame lands. */
+  last_event?: TraceEvent
   // Decision-orbit visibility (P0 redesign, §5.2). All optional.
   traces?: TraceEvent[]
   // §3.3 extended visibility: structured delegation hops with per-hop

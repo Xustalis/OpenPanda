@@ -221,6 +221,28 @@ type Core struct {
 	// the receiver already holds rather than resending them on every flap.
 	pushAck sync.Map // string -> *atomic.Int64
 
+	// pushAckWriteAt maps peer|hash -> the last time the receiver's
+	// waterline was persisted to artifact_push_outbox.acked_through — the
+	// pacing table for pushAckPersistDue. Cleared in pushRowDrop alongside
+	// the live waterline.
+	pushAckWriteAt sync.Map // string -> time.Time
+
+	// artAuthCache maps task_id|hash|from -> the moment a positive
+	// artifact-transfer authorization verdict expires. Both data-plane
+	// handlers (artifact_push, artifact_fetch) re-run the participant +
+	// binding queries per chunk — a 500 MiB transfer was ~1500 extra
+	// SELECTs on the conn's read loop, where chunk handling must stay
+	// cheap. The verdict's inputs (task row, dispatch target, plan stages,
+	// artifact index) move far slower than chunk rate, so a short TTL turns
+	// the per-MiB DB cluster into one map read. Only positives are cached:
+	// a refused verdict re-checks every frame, so a peer whose participant
+	// row just landed is never refused on a stale "no", and a revoked
+	// participant's stale "yes" expires within artAuthTTL (staged bytes are
+	// hash-verified no matter who delivered them, which bounds the damage
+	// a window-old yes can do). A stranger cannot mint entries — storing
+	// requires a real positive verdict.
+	artAuthCache sync.Map // string -> time.Time (verdict expiry)
+
 	// running maps task_id -> the CancelFunc of the context its execution runs
 	// under, so a lease expiry, a cancel message or a shutdown can actually stop
 	// the work instead of only rewriting the database row. Without it a task
@@ -301,16 +323,20 @@ type Core struct {
 	// age out with the window they close.
 	helloSeen map[string]time.Time
 
-	// msgSeen maps from|msg_id -> arrival time of the last message seen under
-	// that id, the receive-side dedup the envelope's MsgID exists for (design
-	// §10.3: "used for dedup at the receiving end"). A WS frame delivered twice
-	// — a peer's retry after a timeout, a capture replayed inside the conn —
-	// must not run its handler a second time: task_delegate would adopt the
-	// task twice, artifact_fetch would restart a transfer. Keyed by sender so
-	// two peers minting the same id cannot block each other. Guarded by mu;
-	// entries age out of a bounded window and the map is hard-capped so a peer
-	// minting ids forever cannot grow memory without bound.
-	msgSeen map[string]time.Time
+	// msgSeen maps (from, msg_id) -> arrival time of the last message seen
+	// under that id, the receive-side dedup the envelope's MsgID exists for
+	// (design §10.3: "used for dedup at the receiving end"). A WS frame
+	// delivered twice — a peer's retry after a timeout, a capture replayed
+	// inside the conn — must not run its handler a second time: task_delegate
+	// would adopt the task twice, artifact_fetch would restart a transfer.
+	// Keyed by sender so two peers minting the same id cannot block each
+	// other. Guarded by msgSeenMu — NOT mu: this is the one check every
+	// inbound frame on every conn runs, and parking it behind the peer-
+	// registry lock would serialize the whole read plane against conn churn.
+	// Entries age out of a bounded window and the map is hard-capped so a
+	// peer minting ids forever cannot grow memory without bound.
+	msgSeenMu sync.Mutex
+	msgSeen   map[msgSeenKey]time.Time
 	// lastHelloReject is the most recent hello_reject reason a peer sent us,
 	// mirrored off the conn so one-shot probes without a conn handle (the
 	// ProbePeer loop) can still report "online but refusing our credential"
@@ -469,7 +495,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		orphanSeen:    make(map[string]time.Time),
 		peerBlocked:   make(map[string][]string),
 		helloSeen:     make(map[string]time.Time),
-		msgSeen:       make(map[string]time.Time),
+		msgSeen:       make(map[msgSeenKey]time.Time),
 		breaker:       defense.NewCircuitBreaker(0, 0),
 		loop:          defense.NewLoopDetector(2),
 		auditLog:      security.NewAudit(db),
@@ -1191,6 +1217,7 @@ func (c *Core) taskSweeps(ctx context.Context) {
 	// and a staging dir whose sender died needs periodic reclamation.
 	c.wakeSatisfiedArtifactWaiters(ctx)
 	c.pruneStagedArtifacts(ctx)
+	c.sweepArtAuth()
 	c.expireLeases(ctx)
 	c.sweepRetention(ctx)
 	// A row can go terminal — or park in review — out of band: cancelled
@@ -1789,6 +1816,14 @@ const msgSeenMax = 8192
 // interval no matter how hot the frame rate is.
 const msgSeenSweepInterval = 30 * time.Second
 
+// msgSeenKey is the dedup map key: sender + envelope id, as a struct so one
+// claim costs zero allocations — a "from|id" string concat allocated once
+// per inbound frame on the dispatch path.
+type msgSeenKey struct {
+	from string
+	id   string
+}
+
 // dispatch routes an envelope to its handler. conn is the connection the
 // message arrived on, needed so the hello handler can bind the authenticated
 // peer identity to it.
@@ -1881,9 +1916,9 @@ func (c *Core) claimMsgID(env bus.Envelope) bool {
 		return true
 	}
 	now := time.Now()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	key := env.From + "|" + env.MsgID
+	c.msgSeenMu.Lock()
+	defer c.msgSeenMu.Unlock()
+	key := msgSeenKey{from: env.From, id: env.MsgID}
 	if _, dup := c.msgSeen[key]; dup {
 		return false
 	}
@@ -1902,7 +1937,7 @@ func (c *Core) claimMsgID(env bus.Envelope) bool {
 		// anyway. Evicting in arbitrary map order could drop a fresh id and
 		// re-admit its replay while stale ids survived.
 		type seenEntry struct {
-			k string
+			k msgSeenKey
 			t time.Time
 		}
 		oldest := make([]seenEntry, 0, len(c.msgSeen))

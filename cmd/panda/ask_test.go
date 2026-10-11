@@ -4,8 +4,48 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
+
+// TestAnswerTail pins the end-of-turn reconcile: whatever slice of the parsed
+// answer the live stream never delivered must come back — a strict tail, a
+// full non-streamed answer, or a divergent replay — while an honest stream
+// returns "" so nothing prints twice.
+func TestAnswerTail(t *testing.T) {
+	cases := []struct {
+		name     string
+		streamed string
+		answer   string
+		want     string
+	}{
+		{"nothing streamed", "", "完整回答", "完整回答"},
+		{"fully streamed", "完整回答", "完整回答", ""},
+		{"truncated stream", "前一半", "前一半后一半", "后一半"},
+		{"truncation notice", "正文", "正文\n\n[回答因长度上限被截断]", "\n\n[回答因长度上限被截断]"},
+		{"suffix is only whitespace", "正文", "正文\n\n", ""},
+		{"streamed contains answer (unwrapped envelope)", "前导：里面的话", "里面的话", ""},
+		{"divergent replay", "别的文本", "完整回答", "完整回答"},
+		{"empty answer", "任何", "", ""},
+		{"whitespace answer", "任何", "   ", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := answerTail(tc.streamed, tc.answer); got != tc.want {
+				t.Fatalf("answerTail(%q, %q) = %q, want %q", tc.streamed, tc.answer, got, tc.want)
+			}
+		})
+	}
+	// Whatever the shape, streamed+tail must always render the answer whole —
+	// unless the stream already contained it (the unwrap case), where the
+	// parsed form is a substring, not the display text.
+	for _, tc := range cases {
+		got := tc.streamed + answerTail(tc.streamed, tc.answer)
+		if want := strings.TrimSpace(tc.answer); want != "" && !strings.Contains(got, want) {
+			t.Fatalf("%s: stream+tail %q lost the answer %q", tc.name, got, tc.answer)
+		}
+	}
+}
 
 func TestParseSubcommand(t *testing.T) {
 	cases := []struct {

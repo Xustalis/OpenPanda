@@ -4,10 +4,12 @@ package panel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -290,5 +292,133 @@ func TestCachedReminderFingerprintWithoutStore(t *testing.T) {
 	h := &handler{store: newTestStore(t)}
 	if got := h.cachedReminderFingerprint(); got != "" {
 		t.Fatalf("reminderFingerprint without store = %q, want empty", got)
+	}
+}
+
+// clipTraceData bounds pushed trace payloads: over-long strings truncate in
+// place while the shape — names, ids, flags, short args — survives intact so
+// the client can still switch on ev/name.
+func TestClipTraceData(t *testing.T) {
+	long := strings.Repeat("x", traceDataClip*2)
+	got := clipTraceData(map[string]any{
+		"ev":      "tool_result",
+		"name":    "bash",
+		"content": long,
+		"input":   map[string]any{"command": long, "argc": 3},
+		"list":    []any{long, "short"},
+	})
+	m, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("map not preserved: %T", got)
+	}
+	if m["ev"] != "tool_result" || m["name"] != "bash" {
+		t.Fatalf("small fields altered: %v", m)
+	}
+	if s := m["content"].(string); len(s) > traceDataClip+3 {
+		t.Fatalf("content not clipped: %d", len(s))
+	}
+	inner := m["input"].(map[string]any)
+	if s := inner["command"].(string); len(s) > traceDataClip+3 {
+		t.Fatalf("nested command not clipped: %d", len(s))
+	}
+	if inner["argc"] != 3 {
+		t.Fatalf("numeric field altered: %v", inner)
+	}
+	list := m["list"].([]any)
+	if s := list[0].(string); len(s) > traceDataClip+3 {
+		t.Fatalf("array element not clipped: %d", len(s))
+	}
+	if list[1] != "short" {
+		t.Fatalf("short element altered: %v", list)
+	}
+}
+
+// The live-narrative set must include the agent-activity stream — without it
+// the queue's live line falls back to a bare "executing" for minutes at a
+// time even though task_events is full of real work.
+func TestTraceEventTypesCoverAgentActivity(t *testing.T) {
+	for _, typ := range []string{
+		"classify_result", "route_decision", "delegation_hop",
+		"exec_agent_start", "supervision_round", "tier2_triggered",
+		"plan_stage_changed", "artifact_transfer",
+		"agent_event", "progress", "agent_usage", "agent_fallback",
+		"judge_start", "supervise", "result",
+	} {
+		if !traceEventTypes[typ] {
+			t.Fatalf("traceEventTypes missing %q", typ)
+		}
+	}
+}
+
+// listTasks stamps each task's newest event so the board can narrate a
+// mid-flight task on first paint — before the SSE trace stream's first frame.
+func TestListTasksStampsLastEvent(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
+
+	ctx := context.Background()
+	task, err := store.Create(ctx, "", "proj", "live task", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// An older orbit event followed by a fresh agent-activity row — the stamp
+	// must be the newest row, whatever its type.
+	if err := store.RecordEvent(ctx, task.TaskID, "exec_agent_start",
+		map[string]any{"agent": "opencode", "adapter": "opencode.py"}); err != nil {
+		t.Fatalf("record start: %v", err)
+	}
+	big := strings.Repeat("y", traceDataClip*3)
+	if err := store.RecordEvent(ctx, task.TaskID, "agent_event",
+		map[string]any{"ev": "tool_use", "name": "bash", "input": map[string]any{"command": big}}); err != nil {
+		t.Fatalf("record tool_use: %v", err)
+	}
+
+	req := authedReq(http.MethodGet, "/api/tasks", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var tasks []struct {
+		ID        string `json:"id"`
+		LastEvent *struct {
+			ID   int64          `json:"id"`
+			Type string         `json:"type"`
+			Data map[string]any `json:"data"`
+		} `json:"last_event"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &tasks); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var got *struct {
+		ID        string `json:"id"`
+		LastEvent *struct {
+			ID   int64          `json:"id"`
+			Type string         `json:"type"`
+			Data map[string]any `json:"data"`
+		} `json:"last_event"`
+	}
+	for i := range tasks {
+		if tasks[i].ID == task.TaskID {
+			got = &tasks[i]
+		}
+	}
+	if got == nil || got.LastEvent == nil {
+		t.Fatalf("task %s missing last_event stamp", task.TaskID)
+	}
+	if got.LastEvent.Type != "agent_event" {
+		t.Fatalf("last_event type = %q, want agent_event", got.LastEvent.Type)
+	}
+	input, _ := got.LastEvent.Data["input"].(map[string]any)
+	if s, _ := input["command"].(string); len(s) > traceDataClip+3 {
+		t.Fatalf("last_event payload not clipped: %d", len(s))
 	}
 }

@@ -9,6 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -93,6 +97,97 @@ func TestSelectionListBoxed(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "Enter 切换") {
 		t.Fatalf("expected footer hints in boxed render: %s", rendered)
+	}
+}
+
+// TestBoxedListTitleBorderKeepsANSI pins the colour-terminal fix in renderBoxed:
+// the title used to be rune-spliced into the rendered top border row, whose
+// leading bytes are the border's own ANSI colour prefix — the copy landed the
+// title inside the escape sequence and broke the frame. The row is now rebuilt
+// from border runes so the title sits between styled segments.
+func TestBoxedListTitleBorderKeepsANSI(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	th := newTheme("en")
+	th.color = true
+	th.unicode = true
+	th.listBox = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).BorderForeground(brandGreen)
+	th.heading = lipgloss.NewStyle().Foreground(brandGreen).Bold(true)
+
+	sl := NewSelectionList("Pick one", []SelectionItem{{Title: "alpha"}, {Title: "beta"}})
+	sl.Boxed = true
+	out := sl.renderBoxed(th, 80, 24)
+
+	var top string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "╭") {
+			top = l
+			break
+		}
+	}
+	if top == "" {
+		t.Fatalf("no top border row in boxed render:\n%s", out)
+	}
+	if !strings.Contains(top, "Pick one") {
+		t.Fatalf("title missing from top border: %q", top)
+	}
+	// A spliced title mangles the escape prefix: the stripped row either loses
+	// the frame entirely or grows past the box. The rebuilt row must measure
+	// exactly boxWidth+corners and keep its edge glyphs around the title.
+	plain := strings.TrimSpace(ansi.Strip(top))
+	if got := ansi.StringWidth(plain); got != 66 { // boxWidth 64 + 2 corners
+		t.Fatalf("top border width %d, want 66: %q", got, plain)
+	}
+	if !strings.HasPrefix(plain, "╭─") || !strings.HasSuffix(plain, "╮") {
+		t.Fatalf("top border lost its corner/edge glyphs: %q", plain)
+	}
+	if !strings.Contains(plain, "─ Pick one ─") {
+		t.Fatalf("title not embedded between edge glyphs: %q", plain)
+	}
+}
+
+// TestTitledBoxEdge covers the caption row itself across the degradation
+// matrix: ASCII border on a unicode-less terminal, no colour without a palette
+// opt-in, and the too-narrow case that keeps the plain edge.
+func TestTitledBoxEdge(t *testing.T) {
+	th := newTheme("en")
+	th.unicode = false // deterministic: do not inherit the test env's font guess
+
+	ascii := titledBoxEdge(th, "List", 40)
+	if !strings.HasPrefix(ascii, "+-") || !strings.HasSuffix(ascii, "+") {
+		t.Fatalf("ascii edge lost its corners: %q", ascii)
+	}
+	if w := ansi.StringWidth(ascii); w != 42 {
+		t.Fatalf("ascii edge width %d, want 42: %q", w, ascii)
+	}
+	if strings.ContainsRune(ascii, '\x1b') {
+		t.Fatalf("no-colour theme must not emit escapes: %q", ascii)
+	}
+
+	th.unicode = true
+	uni := titledBoxEdge(th, "List", 40)
+	if !strings.Contains(uni, "─ List ─") {
+		t.Fatalf("unicode edge missing title embed: %q", uni)
+	}
+	if w := ansi.StringWidth(uni); w != 42 {
+		t.Fatalf("unicode edge width %d, want 42: %q", w, uni)
+	}
+
+	// A CJK title is double-width: the 10-cell label must still leave edges.
+	cjk := titledBoxEdge(th, "选择模型", 40)
+	if w := ansi.StringWidth(ansi.Strip(cjk)); w != 42 {
+		t.Fatalf("cjk edge width %d, want 42: %q", w, cjk)
+	}
+
+	// An oversize title is clipped to fit — a frame without its caption reads
+	// as a bare box, so dropping the title entirely is worse than ellipsizing.
+	clipped := titledBoxEdge(th, "a title far too long for this frame", 20)
+	if !strings.Contains(clipped, "…") || ansi.StringWidth(clipped) != 22 {
+		t.Fatalf("oversize title should clip into the edge, got %q", clipped)
+	}
+	if got := titledBoxEdge(th, "any", 7); got != "" {
+		t.Fatalf("a frame too narrow for any label must keep the plain edge, got %q", got)
 	}
 }
 

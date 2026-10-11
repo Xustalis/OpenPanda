@@ -43,13 +43,22 @@ func TestAppendReasoning(t *testing.T) {
 	}
 }
 
-// TestResultBlockAnswer verifies an answer block prefers the streamed text
-// (what the user actually saw) and falls back to Result.Answer, and that an
-// incidental Note is kept above the answer.
+// TestResultBlockAnswer verifies the committed answer block reconciles the
+// live stream against the parsed reply: an honest stream is not duplicated,
+// a withheld tail still lands, and a genuinely divergent parse keeps both
+// texts rather than losing either. An incidental Note leads the body.
 func TestResultBlockAnswer(t *testing.T) {
-	b := resultBlock(&askengine.Result{Kind: "answer", Answer: "fallback"}, "streamed", loc)
-	if b.kind != blockAnswer || b.body != "streamed" {
-		t.Fatalf("streamed preferred: kind=%v body=%q", b.kind, b.body)
+	b := resultBlock(&askengine.Result{Kind: "answer", Answer: "streamed answer"}, "streamed answer", loc)
+	if b.kind != blockAnswer || b.body != "streamed answer" {
+		t.Fatalf("honest stream must not duplicate: kind=%v body=%q", b.kind, b.body)
+	}
+	b = resultBlock(&askengine.Result{Kind: "answer", Answer: "streamed answer plus tail"}, "streamed answer", loc)
+	if b.body != "streamed answer plus tail" {
+		t.Fatalf("withheld tail must land: body=%q", b.body)
+	}
+	b = resultBlock(&askengine.Result{Kind: "answer", Answer: "parsed reply"}, "streamed", loc)
+	if b.body != "streamed\nparsed reply" {
+		t.Fatalf("divergent replay keeps both: body=%q", b.body)
 	}
 	b = resultBlock(&askengine.Result{Kind: "answer", Answer: "fallback"}, "   ", loc)
 	if b.body != "fallback" {

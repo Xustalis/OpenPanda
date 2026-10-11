@@ -10,10 +10,10 @@ package version
 // Version is the semantic version of this build, and the default for a build
 // that does not go through release packaging.
 //
-// It tracks the newest tag on main — currently the v0.0.11-alpha preview —
+// It tracks the newest tag on main — currently the v0.0.11-alpha-2 preview —
 // so ad-hoc builds identify themselves with the branch's latest published
 // lineage.
-var Version = "0.0.11-alpha"
+var Version = "0.0.11-alpha-2"
 
 // Codename is the release line's thematic name — v0.0.11 is "Periapsis", the
 // near point of the orbit: after Apoapsis reached outward to the LAN, this

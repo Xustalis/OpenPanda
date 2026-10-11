@@ -44,6 +44,32 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
+## [0.0.11-alpha-2] - 2026-10-11
+
+The second Periapsis preview — a kernel hardening pass plus the console's live-execution narrative: the queue and task pages now show what a run is *doing* instead of asking you to decode raw event JSON.
+
+### Added
+
+- **Live execution narrative in the console** — the SSE trace stream now carries the agent-activity set (tool calls, thinking, progress notes, usage, fallback, judge, supervision, result) with oversized payloads clipped, and every listed task ships a `last_event` stamp so a mid-flight task narrates real work on first paint instead of a bare "running". The kanban live line, the orbit pill, and the detail timeline all read from it.
+- **Task brief card** — the detail view renders the task spec (target, constraints, scope, success definition) as a readable brief instead of hiding it inside `spec_json`.
+- **Stream reconciliation in the CLI** — answer text suppressed by the streaming delta guard is restored at flush time, so an envelope frame swallowed mid-stream no longer drops visible output; fallback notes print even when the stream delivered nothing.
+- **Event-row folding** — a run of "no output" silence heartbeats collapses into one counted line, and tool calls get readable argument summaries (an opaque `{argc:3}` renders as "3 args").
+
+### Fixed
+
+- **Migrations under connection pooling** — migration transactions now pin a dedicated `*sql.Conn`; under the widened pool a bare `BEGIN IMMEDIATE` could scatter DDL and COMMIT across connections (SQLITE_BUSY / "no transaction").
+- **Silent content loss paths** — a reply with an empty answer but a non-empty note no longer discards the note; the streaming delta guard now mirrors `ParseOutput`'s first-`{` decision exactly (lead-in cap, illustrative markers, fence handling) instead of a looser approximation.
+- **Web formatter field mismatches** — `agent_usage` read `tokens`/`cost` while the wire carries `input/output/cache_*_tokens`; token tags now sum the real fields.
+- **Windows adapter encoding** — adapters pin UTF-8 stdio and decode CLI output through the console code page with an MBCS fallback, so CJK output from remote Windows executors round-trips intact.
+- **TUI frame corruption** — titled box edges spliced border runes into ANSI escape sequences; titles now render over an escape-aware edge.
+
+### Changed
+
+- **SQLite write concurrency** — file-backed stores run a 4-connection WAL pool with `_txlock=immediate` (in-memory stores keep one connection); artifact-transfer wire handlers cache positive peer authorizations for a minute instead of re-querying per chunk, and the push waterline persists once a second per transfer instead of per frame.
+- **Deduplication cost** — the inbound-frame dedup key is a struct (no string allocation per frame) under its own mutex, off the peer-registry lock.
+- **SSE trace stream starts at the current watermark** — connecting no longer replays the full event history; hydration comes from `last_event` and the task payload.
+- **Console design pass** — kanban cards lift on hover with an entrance animation, views fade in, quiet bookkeeping rows render as thin lines, changed-file chips filter VCS/dependency noise and collapse past twelve, and the composer, scroll button, and message bubbles are re-balanced.
+
 ## [0.0.11-alpha] - 2026-10-10
 
 The v0.0.11 alpha preview — codename **Periapsis**, the near point of the orbit: after Apoapsis reached outward to the LAN, this line tightens the mesh itself. Peer links negotiate per-connection AEAD encryption inside the signed hello; devices join a node network the way Bluetooth pairs — pick a device, compare the code, confirm on both sides — instead of copying secrets by hand; and every stage of a task's life reports where it actually stands. Hard-pinned work runs on the pinned node or fails honestly, never silently rerouted; a verdict produced while the link was down converges when the link returns (a reconnecting daemon reclaims its edge from a stray same-identity process, and terminal results re-push on every hello); approving a plan stage re-enters the plan watch instead of ending the turn at one task's receipt. Underneath, custody grew teeth: results, cancels and approvals park in durable outboxes through link flaps, the silence watchdog kills a genuinely stuck agent at 240 seconds instead of burning the full timeout, and remote stdout is transcoded from the executor's console code page so CJK text round-trips intact.

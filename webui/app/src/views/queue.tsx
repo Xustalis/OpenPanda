@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'preact/hooks'
 import { api, ApiError, isTaskStalled, type ApprovalScope, type NodeInfo, type Task } from '../api/client'
-import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
+import { useAsync, useChangeSignal, useLocaleRerender, useTraceForTask, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
 import { ScopeSelect } from '../components/scope-select'
 import { StateBadge } from '../components/state-badge'
@@ -10,6 +10,7 @@ import { ErrorState } from '../components/page'
 import { Icon } from '../components/icons'
 import { confirmDialog } from '../components/confirm'
 import { toast, toastError } from '../components/toast'
+import { fmtElapsed, isActiveState, latestActivity } from '../components/task-activity'
 
 // The queue is a kanban board (design §11.2): the user never navigates a task
 // tree — they see what is waiting, what is running, what needs their approval,
@@ -520,10 +521,12 @@ function KanbanCard({
   const finished = ['done', 'failed', 'cancelled', 'expired'].includes(task.state)
   const deletable = DELETABLE_STATES.has(task.state)
   const open = () => (task.session_id ? onOpenSession(task.session_id) : onOpen(task.id))
+  const elapsed = fmtElapsed(task.updated_at)
 
   return (
     <div
       class={`kanban-card${finished ? ' finished' : ''}${dropBefore ? ' drop-before' : ''}`}
+      data-state={task.state}
       role="button"
       tabIndex={0}
       draggable={!finished}
@@ -572,6 +575,12 @@ function KanbanCard({
         )}
         <StateBadge state={task.state} />
       </div>
+      {/* The prompt behind the title — the TUI shows `intent:` as its own
+          line, so a card whose title is a terse label still says what it
+          actually does. Suppressed when it would repeat the title. */}
+      {task.intent && task.intent !== task.title && (
+        <div class="kanban-intent dim">{task.intent}</div>
+      )}
       <div class="kanban-meta dim">
         <button
           class={`prio-badge prio-${task.priority ?? 'normal'}${finished ? ' fixed' : ''}`}
@@ -584,8 +593,8 @@ function KanbanCard({
         >
           {t(`queue.priority.${task.priority ?? 'normal'}`)}
         </button>
-        {task.project ? <span class="kanban-project">{task.project}</span> : <span>—</span>}
-        {task.owner && <span class="kanban-owner">{task.owner}</span>}
+        {task.project && <span class="kanban-project">{task.project}</span>}
+        {task.owner && <span class="kanban-owner">@{task.owner}</span>}
         {(task.delegation_chain?.length ?? 0) > 0 && (
           <span
             class="kanban-owner"
@@ -599,7 +608,7 @@ function KanbanCard({
             <Icon name="message" size={12} />
           </span>
         )}
-        <span>{task.updated_at ? new Date(task.updated_at).toLocaleString() : ''}</span>
+        {elapsed && <span>{t('time.ago', { d: elapsed })}</span>}
         {isTaskStalled(task) && (
           // The card is stuck: no consumer, a dead executor, or no monitor.
           // Saying so on the board is the "no silent stall" rule for the web.
@@ -608,6 +617,7 @@ function KanbanCard({
           </span>
         )}
       </div>
+      {isActiveState(task.state) && <LiveLine task={task} />}
       {isReview && (
         // Approval is the whole point of the review column (design §11.2):
         // act on the card itself, no detour into the detail page. The
@@ -636,6 +646,23 @@ function KanbanCard({
         </div>
       )}
       {error && <p class="gate-error kanban-error">{error}</p>}
+    </div>
+  )
+}
+
+/** One-line "what is it doing right now" strip under an active card — the
+ *  TUI's rolling log, compressed. The card seeds from the task's last_event
+ *  stamp (attached by listTasks) so a mid-flight task reads real activity on
+ *  first paint; SSE frames then keep it moving. Nothing fetches: the shared
+ *  trace bus is already open. */
+function LiveLine({ task }: { task: Task }) {
+  const traces = useTraceForTask(task.id, task.last_event ? [task.last_event] : [])
+  const line = latestActivity(traces, task)
+  if (!line) return null
+  return (
+    <div class="kanban-live" role="status">
+      <span class={`live-dot${task.state === 'running' ? ' beating' : ''}`} aria-hidden="true" />
+      <span class="kanban-live-text">{line}</span>
     </div>
   )
 }

@@ -177,7 +177,7 @@ func runAsk(args []string) {
 		return
 	}
 
-	out, streamed, st, err := askStreaming(engine, history, prompt, cwd, *authorize, loc)
+	out, streamedText, st, err := askStreaming(engine, history, prompt, cwd, *authorize, loc)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 		os.Exit(1)
@@ -202,8 +202,11 @@ func runAsk(args []string) {
 
 	switch out.Kind {
 	case "answer":
-		if !streamed {
-			fmt.Println(renderCliMd(out.Answer))
+		// The parsed Answer is the model's full reply; whatever the stream
+		// withheld still lands here — nothing the model wrote may silently
+		// truncate behind the "already streamed" flag.
+		if tail := answerTail(streamedText, out.Answer); tail != "" {
+			fmt.Println(renderCliMd(tail))
 		}
 	case "task":
 		reportNote := i18n.Tf(loc, "cli.ask.task", "id", out.TaskID, "state", out.TaskState)
@@ -248,12 +251,16 @@ func runAsk(args []string) {
 		}
 		stdoutText := strings.TrimSpace(out.Stdout)
 
-		if answerText != "" {
-			fmt.Println(renderCliMd(answerText))
+		// The report already streamed live on a TTY — re-print only the
+		// slice that never reached the screen, exactly like the answer
+		// branch. (A fully streamed report must not render a second copy.)
+		reportTail := answerTail(streamedText, answerText)
+		if reportTail != "" {
+			fmt.Println(renderCliMd(reportTail))
 		}
 		if out.OK {
 			if stdoutText != "" && !strings.Contains(answerText, stdoutText) {
-				if answerText != "" {
+				if reportTail != "" {
 					fmt.Println()
 				}
 				fmt.Print(renderCliMd(out.Stdout))
@@ -371,6 +378,30 @@ func (l *streamLineRenderer) flush() {
 // long paragraph does not look like a stall.
 func (l *streamLineRenderer) pending() string { return l.buf.String() }
 
+// answerTail returns the slice of the parsed answer the stream never
+// delivered — "" when everything already reached the user. The delta guard
+// only withholds real directives, but reconciling against the parsed Answer
+// makes the display guarantee absolute: a max-token notice, an unwrapped
+// envelope, or any future suppression that resolves to prose still lands on
+// screen instead of vanishing behind the "already streamed" flag.
+func answerTail(streamed, answer string) string {
+	if strings.TrimSpace(answer) == "" {
+		return ""
+	}
+	switch {
+	case strings.HasPrefix(answer, streamed):
+		if tail := answer[len(streamed):]; strings.TrimSpace(tail) != "" {
+			return tail
+		}
+	case !strings.Contains(streamed, answer):
+		// The stream and the parsed answer genuinely diverged (not a prefix,
+		// not an unwrap the stream already contains): show the parsed form
+		// whole rather than silently keep whatever was withheld.
+		return answer
+	}
+	return ""
+}
+
 // runAskStreamJSON is the headless streaming mode: one NDJSON event per line
 // (status / delta / result / error), consumable by scripts and other tools.
 func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, authorize bool, record func(*askengine.Result)) {
@@ -412,13 +443,14 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, wo
 // attached, nothing is animated, and the full answer prints once at the end.
 // The streamed marker tells the caller to skip the duplicate final print; the
 // returned status line carries the run's numbers for a closing cost line.
-func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, authorize bool, loc i18n.Locale) (*askengine.Result, bool, *cliui.Status, error) {
+func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, authorize bool, loc i18n.Locale) (*askengine.Result, string, *cliui.Status, error) {
 	st := newStatusLine(loc)
 	if !stdoutIsTTY() {
 		out, err := engine.AskTurns(context.Background(), history, prompt, workDir, authorize, askengine.StreamCallbacks{})
-		return out, false, st, err
+		return out, "", st, err
 	}
 	lr := newStreamLineRenderer()
+	var streamedText strings.Builder
 	var thinking thoughtPreview
 	cb := askengine.StreamCallbacks{
 		OnDelta: func(chunk string) {
@@ -426,7 +458,9 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 			// fills the renderer's buffer, so the status line stays put — but
 			// the buffered tail is previewed there, because a paragraph that
 			// takes twenty seconds to reach its newline should still look like
-			// it is being written.
+			// it is being written. The raw stream is accumulated too, for the
+			// end-of-turn reconcile against the parsed answer.
+			streamedText.WriteString(chunk)
 			if strings.ContainsRune(chunk, '\n') {
 				st.Suspend(func() { lr.delta(chunk) })
 				st.Preview(lr.pending())
@@ -484,7 +518,7 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 	}
 	st.Stop()
 	lr.flush()
-	return out, lr.printed, st, err
+	return out, streamedText.String(), st, err
 }
 
 // confirmApprovalCLI renders the tier-2 approval card for a task the engine

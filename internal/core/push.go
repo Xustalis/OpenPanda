@@ -297,6 +297,7 @@ func (c *Core) pushRowDrop(ctx context.Context, keys []string, inst, hash string
 		c.logger.Warn("push: drop row", "peer", inst, "hash", hash, "err", err)
 	}
 	c.pushAck.Delete(inst + "|" + hash)
+	c.pushAckWriteAt.Delete(inst + "|" + hash)
 }
 
 // handleArtifactPush lands one pushed chunk on the receiver's staging area.
@@ -334,7 +335,7 @@ func (c *Core) handleArtifactPush(ctx context.Context, env bus.Envelope) {
 	// belong to this task and the sender must be a participant. A push from a
 	// stranger is refused with a status — replying keeps a later legitimate
 	// retry alive while telling a confused sender the receiver holds nothing.
-	if !c.artifactPeerAuthorized(ctx, p.TaskID, p.Hash, env.From) {
+	if !c.artifactTransferAuthorized(ctx, p.TaskID, p.Hash, env.From, nil) {
 		c.logger.Warn("artifact_push from non-participant", "task", p.TaskID, "hash", p.Hash, "from", env.From)
 		// Report 0, not the real waterline: a stranger must not learn that a
 		// transfer for this hash is staged here or how far along it is.
@@ -412,6 +413,16 @@ func (c *Core) handleArtifactPushStatus(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	c.bumpPushWaterline(env.From, p.Hash, p.ReceivedThrough)
+	// acked_through only governs where a RESTARTED stream resumes from —
+	// mid-stream the live pushAck waterline is the cursor. One status reply
+	// lands per chunk, so persisting every beat is an UPDATE per MiB on the
+	// read loop; coalesced to once per (peer, hash) per interval it costs
+	// at most one interval of re-pushed tail after a crash, and the
+	// receiver's offset staging dedups those bytes anyway.
+	key := env.From + "|" + p.Hash
+	if !c.pushAckPersistDue(key) {
+		return
+	}
 	// The custody row may sit under any key of the sender's identity claim
 	// set (stable key, or an instance id it was parked under before the key
 	// was known) — update whichever form it takes.
@@ -428,6 +439,24 @@ func (c *Core) handleArtifactPushStatus(ctx context.Context, env bus.Envelope) {
 		args...); err != nil {
 		c.logger.Warn("push: persist ack", "peer", env.From, "hash", p.Hash, "err", err)
 	}
+}
+
+// pushAckPersistMin bounds how often handleArtifactPushStatus flushes the
+// receiver's waterline to the custody row (see the call site above).
+const pushAckPersistMin = time.Second
+
+// pushAckPersistDue reports whether the (peer, hash) waterline is due for
+// another persisted write — first beat always is, then at most one per
+// pushAckPersistMin.
+func (c *Core) pushAckPersistDue(key string) bool {
+	now := time.Now()
+	if v, ok := c.pushAckWriteAt.Load(key); ok {
+		if t, ok := v.(time.Time); ok && now.Sub(t) < pushAckPersistMin {
+			return false
+		}
+	}
+	c.pushAckWriteAt.Store(key, now)
+	return true
 }
 
 // handleArtifactPushDone ends a push: the receiver verified the archive into

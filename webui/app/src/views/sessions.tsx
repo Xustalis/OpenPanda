@@ -646,7 +646,22 @@ export function SessionsView({
               inflightOperation.current = operationID
             }
           },
-          onResult: (r) => patch((m) => ({ ...m, result: r, status: undefined })),
+          onResult: (r) => patch((m) => {
+            // Reconcile the accumulated deltas against the parsed reply:
+            // whatever the stream withheld still lands — "something
+            // streamed" is not "everything did".
+            let text = m.text
+            const answer = r.answer
+            if (answer) {
+              if (answer.startsWith(text)) {
+                const tail = answer.slice(text.length)
+                if (tail.trim()) text += tail
+              } else if (!text.includes(answer)) {
+                text = text ? text + '\n' + answer : answer
+              }
+            }
+            return { ...m, result: r, status: undefined, text }
+          }),
           onError: (message) => patch((m) => ({ ...m, status: undefined, kind: 'error', text: m.text || message })),
         },
         ctrl.signal,
@@ -1588,7 +1603,7 @@ function ChatBubble(props: {
                 </span>
               )}
               {msg.result?.report && <Markdown text={msg.result.report} class="task-report" />}
-              {msg.result?.stdout && <pre class="task-out">{msg.result.stdout}</pre>}
+              {msg.result?.stdout && <TaskOutput text={msg.result.stdout} />}
               <button class="btn small chain-toggle" onClick={() => setChainOpen((v) => !v)}>
                 {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
               </button>
@@ -1724,6 +1739,24 @@ function TaskOrbit(props: {
       selfNodeId={props.selfNodeId}
       defaultOpen={false}
     />
+  )
+}
+
+/** Agent result text under a task bubble — markdown like the reply lane,
+ *  collapsed past a few lines so a long dump never pushes the chat down. */
+function TaskOutput({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  const long = text.length > 600
+  const shown = open || !long ? text : text.slice(0, 600) + '…'
+  return (
+    <div class="task-out-wrap">
+      <Markdown text={shown} class="task-out" />
+      {long && (
+        <button type="button" class="btn small" onClick={() => setOpen((v) => !v)}>
+          {open ? t('sessions.outputCollapse') : t('sessions.outputExpand')}
+        </button>
+      )}
+    </div>
   )
 }
 

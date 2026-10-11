@@ -14,7 +14,7 @@ import (
 // path, including the steady-state eviction once the table sits at its cap
 // (the worst case a long-lived, busy node actually runs in).
 func BenchmarkClaimMsgID(b *testing.B) {
-	c := &Core{msgSeen: make(map[string]time.Time, msgSeenMax)}
+	c := &Core{msgSeen: make(map[msgSeenKey]time.Time, msgSeenMax)}
 	env := bus.Envelope{From: "peer-a"}
 	b.ReportAllocs()
 	b.ResetTimer()

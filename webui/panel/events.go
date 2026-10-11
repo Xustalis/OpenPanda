@@ -21,9 +21,12 @@ import (
 // the store.
 const eventsPollInterval = time.Second
 
-// traceEventTypes is the 8-track decision-orbit visibility set (core/trace.go).
-// Any event row with one of these types is pushed out as event: trace when
-// the caller opts in with ?trace=1.
+// traceEventTypes is the live-narrative visibility set pushed over SSE as
+// event: trace when the caller opts in with ?trace=1. The first eight are the
+// decision-orbit tracks (core/trace.go); the rest are the agent-activity
+// stream — tool calls, thinking, progress, usage — so the queue's live line
+// and the orbit pill can say what the task is *doing*, not only which stage
+// it reached. Consumers that only read orbit types ignore the rest.
 var traceEventTypes = map[string]bool{
 	"classify_result":    true,
 	"route_decision":     true,
@@ -33,6 +36,46 @@ var traceEventTypes = map[string]bool{
 	"tier2_triggered":    true,
 	"plan_stage_changed": true,
 	"artifact_transfer":  true,
+	"agent_event":        true,
+	"progress":           true,
+	"agent_usage":        true,
+	"agent_fallback":     true,
+	"judge_start":        true,
+	"supervise":          true,
+	"result":             true,
+}
+
+// traceDataClip bounds any string inside a pushed trace's data object. Tool
+// outputs and thinking blocks can run to tens of KB; the live stream only
+// needs enough to name the step — the full row stays fetchable via the
+// task's events list.
+const traceDataClip = 700
+
+// clipTraceData returns v with over-long strings truncated. Structure is
+// preserved — small fields (names, ids, flags, short args) arrive intact so
+// consumers can still switch on them.
+func clipTraceData(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			out[k] = clipTraceData(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, val := range x {
+			out[i] = clipTraceData(val)
+		}
+		return out
+	case string:
+		if len(x) > traceDataClip {
+			return x[:traceDataClip] + "…"
+		}
+		return x
+	default:
+		return v
+	}
 }
 
 // events serves GET /api/events — a Server-Sent Events stream. Whenever the
@@ -69,11 +112,17 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 
 	var lastTask, lastNode, lastRem, lastSess string
 	// trace watermark: the highest task_events.id we have already delivered.
-	// 0 means "deliver everything from the start of the connection's lifetime"
-	// — a newly arrived user typically sees tasks already in flight, and the
-	// orbit component hydrates from GET /api/tasks/{id}.events on load; so
-	// post-connect live events are the delta.
+	// The stream is a post-connect delta by design — the orbit hydrates from
+	// GET /api/tasks/{id} and the board reads each task's last_event stamp,
+	// so starting at the current max keeps a connect from replaying (and now
+	// with the agent-activity stream in the set, flooding) the whole history.
+	// An event landing between this read and the first tick still ships:
+	// pushNewTraces takes everything past the watermark.
 	var lastTraceID int64
+	if wantTraces && h.db != nil {
+		_ = h.db.QueryRowContext(r.Context(),
+			`SELECT COALESCE(MAX(id), 0) FROM task_events`).Scan(&lastTraceID)
+	}
 	first := true
 	ticker := time.NewTicker(eventsPollInterval)
 	defer ticker.Stop()
@@ -173,7 +222,7 @@ func (h *handler) pushNewTraces(ctx context.Context, w http.ResponseWriter, flus
 		// reads {data:{...}}, not {data:"{...}"}.
 		var raw any
 		if err := json.Unmarshal([]byte(dataJSON), &raw); err == nil {
-			body["data"] = raw
+			body["data"] = clipTraceData(raw)
 		} else {
 			body["data"] = dataJSON
 		}

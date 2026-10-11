@@ -90,6 +90,18 @@ type deltaGuard struct {
 	delivered   bool
 	pending     strings.Builder // prose mode: bytes withheld pending a possible structured start
 	think       thinkStripper   // removes inlined  reasoning before anything else
+	// Suspect tracking mirrors ParseOutput's embedded-directive rule: the
+	// FIRST '{' in the text is buffered until its balanced close and only
+	// suppressed when it decodes as a real envelope under a short,
+	// non-illustrative lead-in. A fence, a quoted JSON snippet, or a brace
+	// that fails the envelope check is answer prose and is released, never
+	// swallowed — the first-'{'-wins rule means nothing after a failed
+	// candidate can become a directive either.
+	suspect        bool
+	noMoreSuspects bool
+	leadLen        int
+	leadMarker     bool
+	leadTail       string
 }
 
 func newDeltaGuard(onDelta func(string), onReasoning func(string)) *deltaGuard {
@@ -138,11 +150,38 @@ func (g *deltaGuard) deliver(text string) {
 		if dsmlMarkerPrefix(trimmed) {
 			return // a DSML marker split across deltas is still undecidable
 		}
-		g.decided = true
-		g.structured = trimmed[0] == '{' || trimmed[0] == '`'
-		if g.structured {
+		switch {
+		case trimmed[0] == '{':
+			// A response opening on a bare object is the dominant directive
+			// shape; if it is not a valid envelope the parsed Output still
+			// renders in full at the end, so withholding here is safe.
+			g.decided = true
+			g.structured = true
 			g.buffered = nil
 			return
+		case trimmed == "`" || trimmed == "``":
+			return // an in-flight ``` fence is still undecidable
+		case strings.HasPrefix(trimmed, "```"):
+			// A response opening on a fence is a directive only when the
+			// fenced content itself leads with '{' — a code or quoted block
+			// is ordinary answer prose and must stream like any other.
+			inner := trimmed[3:]
+			nl := strings.IndexByte(inner, '\n')
+			if nl < 0 {
+				return // the fence's own line has not finished arriving
+			}
+			inner = strings.TrimLeft(inner[nl+1:], " \t\r\n")
+			if inner == "" {
+				return // the first fenced line is still in flight
+			}
+			g.decided = true
+			if inner[0] == '{' {
+				g.structured = true
+				g.buffered = nil
+				return
+			}
+		default:
+			g.decided = true
 		}
 		text = strings.Join(g.buffered, "")
 		g.buffered = nil
@@ -150,39 +189,75 @@ func (g *deltaGuard) deliver(text string) {
 		return
 	}
 	// Prose mode. The parser accepts a lead-in followed by a JSON directive,
-	// so a structured block may still appear mid-stream (e.g. a reasoning
-	// preamble before the task JSON). Watch for a line-initial '{' or a
-	// ``` fence — including one split across deltas — and suppress from
-	// there; the parsed Output renders the directive at the end. DSML tool-call
-	// markup gets the same treatment, anywhere in the text: it is a protocol
+	// and the embedded case is decided by the FIRST '{' object in the text —
+	// so that is the only thing worth withholding, and only until its
+	// balanced close reveals whether decodeEnvelope would take it. Anything
+	// else (fenced code, quoted JSON, examples) is answer text and streams.
+	// DSML markup gets the suppression treatment instead: it is a protocol
 	// artifact, never answer prose.
 	g.pending.WriteString(text)
-	s := g.pending.String()
-	di, ji := dsmlStartIndex(s), structuredStartIndex(s)
-	switch {
-	case di >= 0 && (ji < 0 || di < ji):
-		g.forward(s[:di])
-		g.structured = true
-		g.pending.Reset()
-		return
-	case ji >= 0:
-		// Keep the directive's own leading newline with the prose so the
-		// lead-in ends on its blank line; everything from '{' on is dropped.
-		g.forward(s[:ji+1])
-		g.structured = true
-		g.pending.Reset()
-		return
-	}
-	hold := holdbackLen(s)
-	if d := dsmlHoldbackLen(s); d > hold {
-		hold = d
-	}
-	safe := len(s) - hold
-	if safe > 0 {
-		g.forward(s[:safe])
-		rest := s[safe:]
-		g.pending.Reset()
-		g.pending.WriteString(rest)
+	for {
+		s := g.pending.String()
+		if g.suspect {
+			obj := extractJSONObject(s)
+			if obj == "" {
+				// No balanced close yet. A runaway '{' past the cap is no
+				// sane directive — release it as prose rather than swallow
+				// the rest of the answer the parser would keep.
+				if len(s) > suspectHoldCap {
+					g.forwardProse(s)
+					g.pending.Reset()
+					g.suspect = false
+					g.noMoreSuspects = true
+					continue
+				}
+				return
+			}
+			if g.leadOK() {
+				if suppress, answer := judgeObject(obj); suppress {
+					// A wrapped {"kind":"answer"} unwraps to its inner text —
+					// stream that in place of the envelope, exactly as the
+					// parser renders it, so nothing the model said is lost.
+					if answer != "" {
+						g.forwardProse(answer)
+					}
+					g.structured = true
+					g.pending.Reset()
+					return
+				}
+			}
+			// First '{' judged prose: release it and stop scanning — per the
+			// parser's first-'{'-wins rule nothing later can be a directive.
+			g.forwardProse(s[:len(obj)])
+			g.pending.Reset()
+			g.pending.WriteString(s[len(obj):])
+			g.suspect = false
+			g.noMoreSuspects = true
+			continue
+		}
+		di, ji := dsmlStartIndex(s), -1
+		if !g.noMoreSuspects {
+			ji = strings.IndexByte(s, '{')
+		}
+		switch {
+		case di >= 0 && (ji < 0 || di < ji):
+			g.forwardProse(s[:di])
+			g.structured = true
+			g.pending.Reset()
+			return
+		case ji >= 0:
+			g.forwardProse(s[:ji])
+			g.pending.Reset()
+			g.pending.WriteString(s[ji:])
+			g.suspect = true
+		default:
+			if hold := dsmlHoldbackLen(s); len(s) > hold {
+				g.forwardProse(s[:len(s)-hold])
+				g.pending.Reset()
+				g.pending.WriteString(s[len(s)-hold:])
+			}
+			return
+		}
 	}
 }
 
@@ -217,54 +292,65 @@ func (g *deltaGuard) forward(s string) {
 	}
 }
 
-// structuredStartIndex reports the offset of the first line-initial '{' or
-// ``` fence in s (the shapes the parser's extractJSONObject/stripFences act
-// on), or -1. A '{' on the SAME line as prior prose is left alone — inline
-// braces in normal answers must keep streaming.
-func structuredStartIndex(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] != '\n' {
-			continue
-		}
-		t := strings.TrimLeft(s[i+1:], " \t")
-		if strings.HasPrefix(t, "{") || strings.HasPrefix(t, "```") {
-			return i
-		}
+// suspectHoldCap bounds the bytes one embedded '{' candidate can withhold
+// while its balanced close is still in flight. Task envelopes run a few
+// kilobytes at most; a runaway '{' past this is prose wearing a brace, and
+// releasing it beats swallowing the rest of an answer the parser would keep.
+const suspectHoldCap = 64 * 1024
+
+// forwardProse delivers s to the user and folds it into the lead-in the
+// suspect gate measures — every byte shown before a candidate '{' counts.
+func (g *deltaGuard) forwardProse(s string) {
+	if s == "" {
+		return
 	}
-	return -1
+	g.noteProse(s)
+	g.forward(s)
 }
 
-// holdbackLen returns how many trailing bytes of s must wait for the next
-// delta: trailing newline(s) (the directive may start next), or a last-line
-// tail that is a strict prefix of "{" / "```json" (mid-fence split).
-func holdbackLen(s string) int {
-	j := len(s)
-	for j > 0 && (s[j-1] == '\n' || s[j-1] == '\r') {
-		j--
+// noteProse folds one displayed prose chunk into the embedded-directive
+// lead-in: ParseOutput accepts a mid-text directive only under ≤jsonLeadInMax
+// bytes of lead-in that does not read as showing an example. Markers are
+// matched against a short tail join so one split across deltas is still seen.
+func (g *deltaGuard) noteProse(s string) {
+	g.leadLen += len(s)
+	if g.leadMarker {
+		return
 	}
-	if j < len(s) {
-		return len(s) - j
+	probe := g.leadTail + s
+	if looksIllustrative(probe) {
+		g.leadMarker = true
 	}
-	i := strings.LastIndexByte(s, '\n')
-	tail := s[i+1:]
-	if tail != "" && (tail[0] == '{' || tail[0] == '`') && structPrefixChars(tail) {
-		return len(tail)
+	if len(probe) > 16 {
+		g.leadTail = probe[len(probe)-16:]
+	} else {
+		g.leadTail = probe
 	}
-	return 0
 }
 
-// structPrefixChars reports whether every byte of t could belong to the
-// prologue of a structured block ('{', '`', or fence language letters).
-func structPrefixChars(t string) bool {
-	for _, c := range t {
-		switch {
-		case c == '{', c == '`':
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
-		default:
-			return false
-		}
+// leadOK reports whether the prose before a candidate '{' stays inside the
+// parser's embedded-directive lead-in budget.
+func (g *deltaGuard) leadOK() bool {
+	return g.leadLen <= jsonLeadInMax && !g.leadMarker
+}
+
+// judgeObject applies ParseOutput's embedded-object verdict to a balanced
+// '{' candidate: a real directive — or JSON whose envelope mismatch surfaces
+// a validation error — stays suppressed; a wrapped {"kind":"answer"} unwraps
+// to its inner answer text, which streams in place of the raw envelope.
+// Only a clean non-envelope releases the bytes as ordinary prose.
+func judgeObject(obj string) (suppress bool, answer string) {
+	out, ok, err := decodeEnvelope(obj)
+	switch {
+	case err != nil:
+		return true, ""
+	case !ok:
+		return false, ""
+	case out.Kind == KindAnswer:
+		return true, out.Answer
+	default:
+		return true, ""
 	}
-	return true
 }
 
 // ---- Anthropic Messages SSE streaming ----

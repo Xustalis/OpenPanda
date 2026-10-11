@@ -709,8 +709,7 @@ func runSessionAsk(args []string) {
 		engine.SetProject(sess.Project, workDir)
 	}
 
-	streamed := stdoutIsTTY()
-	out, err := askSessionTurns(engine, history, prompt, workDir, sess.ID, *authorize)
+	out, streamedText, err := askSessionTurns(engine, history, prompt, workDir, sess.ID, *authorize)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
 		_, _ = store.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "⚠ " + err.Error(), Kind: "error"})
@@ -759,14 +758,21 @@ func runSessionAsk(args []string) {
 
 	switch out.Kind {
 	case "answer":
-		// A TTY already streamed these lines live; a pipe saw nothing, and
-		// without this branch `panda session ask <id> q | …` exits 0 with
-		// empty stdout while the answer sits in the store.
-		if !streamed {
-			fmt.Println(renderCliMd(out.Answer))
+		// A TTY already streamed most of these lines live; a pipe saw none.
+		// Either way the parsed Answer is the model's full reply — print
+		// whatever slice of it never reached the screen.
+		if tail := answerTail(streamedText, out.Answer); tail != "" {
+			fmt.Println(renderCliMd(tail))
 		}
 	case "task":
 		fmt.Println(i18n.Tf(loc, "cli.session.task", "id", out.TaskID, "state", out.TaskState))
+		// The converged report streamed live; print whatever slice of it
+		// never reached the screen rather than trusting "something did".
+		if report := strings.TrimSpace(out.Answer); report != "" {
+			if tail := answerTail(streamedText, report); tail != "" {
+				fmt.Println(renderCliMd(tail))
+			}
+		}
 		if out.OK {
 			fmt.Print(renderCliMd(out.Stdout))
 			if s := strings.TrimRight(out.Stdout, "\n"); s != "" && !strings.HasSuffix(out.Stdout, "\n") {
@@ -788,14 +794,21 @@ func runSessionAsk(args []string) {
 
 // askSessionTurns runs one full-history ask with live streaming on an
 // interactive terminal (same UX as askStreaming, but session-aware). sessionID
-// scopes any remembered approval this turn produces to this session.
-func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, workDir, sessionID string, authorize bool) (*askengine.Result, error) {
+// scopes any remembered approval this turn produces to this session. The
+// returned string is the raw text the stream delivered, for the caller's
+// end-of-turn reconcile against the parsed answer.
+func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, workDir, sessionID string, authorize bool) (*askengine.Result, string, error) {
+	var streamedText strings.Builder
 	if !stdoutIsTTY() {
-		return engine.AskTurnsSession(context.Background(), history, prompt, workDir, "", sessionID, authorize, askengine.StreamCallbacks{})
+		out, err := engine.AskTurnsSession(context.Background(), history, prompt, workDir, "", sessionID, authorize, askengine.StreamCallbacks{})
+		return out, "", err
 	}
 	lr := newStreamLineRenderer()
 	cb := askengine.StreamCallbacks{
-		OnDelta: func(chunk string) { lr.delta(chunk) },
+		OnDelta: func(chunk string) {
+			streamedText.WriteString(chunk)
+			lr.delta(chunk)
+		},
 		OnProgress: func(p askengine.Progress) {
 			if !lr.printed {
 				fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(i18n.Detect(), p))
@@ -804,7 +817,7 @@ func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, wor
 	}
 	out, err := engine.AskTurnsSession(context.Background(), history, prompt, workDir, "", sessionID, authorize, cb)
 	lr.flush()
-	return out, err
+	return out, streamedText.String(), err
 }
 
 func runSessionDiff(args []string) {

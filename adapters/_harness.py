@@ -50,6 +50,42 @@ import threading
 
 DEFAULT_TIMEOUT = 600
 
+
+def _force_utf8_stdio():
+    """Pin the adapter's own stdio to UTF-8, in both directions.
+
+    The wire contract is UTF-8 JSON: the Go harness marshals the request as
+    UTF-8 and decodes stdout/stderr the same way. Python on Windows defaults
+    redirected stdio to the ANSI codepage instead (cp936 on zh-CN — UTF-8
+    mode is not the default until 3.15), so without this the request prompt
+    decodes as mojibake before main() ever sees it, and every result/event
+    line written back is re-encoded as GBK — which the Go JSON decoder
+    replaces with U+FFFD runs. errors="replace" keeps a stray undecodable
+    input byte from crashing the read path instead of being reported.
+    """
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+_force_utf8_stdio()
+
+
+def decode_cli(raw):
+    """Decode agent-CLI output bytes: UTF-8 passes through untouched, and on
+    Windows anything else falls back to the system ANSI codepage — the same
+    GBK-to-redirected-pipe case executil.normalizeWithCodePage covers on the
+    Go side for native captures. Other platforms keep the UTF-8 contract
+    with U+FFFD markers rather than guessing an encoding."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        if sys.platform == "win32":
+            return raw.decode("mbcs", errors="replace")
+        return raw.decode("utf-8", errors="replace")
+
 # An adapter's whole result travels as one JSON line on stdout, and the Go side
 # retains a bounded amount of it (executil.Capture, 8 MiB): a chatty CLI that
 # overruns that cap does not get a truncated result, it gets none at all,
@@ -510,14 +546,15 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
     """
     proc = subprocess.Popen(
         resolve_argv(cmd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=os.environ.copy(), cwd=cwd,
+        stderr=subprocess.PIPE, env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
     err_chunks = []
     drain_exc = []
 
     def drain():
-        for chunk in iter(proc.stderr.readline, ""):
+        for raw in iter(proc.stderr.readline, b""):
+            chunk = decode_cli(raw)
             err_chunks.append(chunk)
             if on_stderr is not None:
                 try:
@@ -544,11 +581,11 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
 
     timed_out = False
     try:
-        for line in proc.stdout:
+        for raw_line in proc.stdout:
             if drain_exc:
                 raise drain_exc[0]
             if on_line is not None:
-                on_line(line)
+                on_line(decode_cli(raw_line))
         if drain_exc:
             raise drain_exc[0]
         proc.wait(timeout=timeout)
@@ -587,16 +624,18 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None):
         resolve_argv(cmd),
         stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=os.environ.copy(), cwd=cwd,
+        stderr=subprocess.PIPE, env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
     try:
-        out, err = proc.communicate(input=input, timeout=timeout)
+        out, err = proc.communicate(
+            input=input.encode("utf-8") if isinstance(input, str) else input,
+            timeout=timeout)
     except subprocess.TimeoutExpired:
         kill_tree(proc)
         proc.communicate()  # reap + drain: the closed pipes return immediately
         raise
-    return proc.returncode, out, err
+    return proc.returncode, decode_cli(out or b""), decode_cli(err or b"")
 
 
 def run_simple(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, label=None, input=None):
