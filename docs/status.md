@@ -64,7 +64,7 @@ P0 安全发现（路径穿越、结果送达、TUI 退出）已关闭，P1 安�
 | **澄清回路**（v0.0.10） | 🟡 Experimental | agent 以 `PANDA_QUESTION:` 行挂起 → `panda approve <id> -m "答案"` 带答案恢复 |
 | **会话树 / 自动压缩 / RPC / 订阅 OAuth**（v0.0.10） | 🟡 Experimental | `panda session fork`/`tree`/`/fork`、溢出历史折叠为 running digest、`panda rpc` NDJSON-stdio、`panda auth login anthropic` |
 | **会话 AEAD + 蓝牙式配对**（v0.0.11-alpha） | 🟡 Experimental | hello `caps` 协商 `sessaead` 逐连接 AES-256-GCM（HKDF 绑两端 nonce/身份）；`panda pair` X25519 + 短验证码确认 + 密封下发共享密钥 |
-| **信任分区**（未发布实验） | 🟡 Experimental | `network.peers[].trust`：mesh/guarded/open 三档（`panda nodes trust`）；guarded 钳制委派暴露面 + 准入策略（`network.trust.accept.guarded`，可选 policy_llm）；签名 `task_accept`；`routing.reputation` 本地信誉 |
+| **信任分区**（v0.0.11-beta 实验预览） | 🟡 Experimental | `network.peers[].trust`：mesh/guarded/open 三档（`panda nodes trust`）；guarded 钳制委派暴露面 + 准入策略（`network.trust.accept.guarded`，可选 policy_llm）；签名 `task_accept`；`routing.reputation` 本地信誉 |
 | 引脚驱动舵机（香橙派） | 🟡 通路已落地，真机未验 | v0.0.10 actuator 派发：卡片声明 `actuators` + argv 模板，`spec.action_spec` 跨委派传递，执行端替换占位符跑驱动；`drivers/` 随发行包附带 servo/mic/camera/notify/mcu 五个参考实现 |
 | 最短路径多跳中继 | ✅ 图路由已落地 | 邻居广告构建链路状态图，边权取 `LinkMetrics` 的 RTT 采样（无测量走 `unknownLinkCost`），`graphFirstHop` 跑 Dijkstra 取全局最便宜路径的第一跳（`internal/scheduler/route.go`） |
 
@@ -178,8 +178,8 @@ NAT）打不通时需要 TURN 式中继兜底；contact-plan 预约窗口投递�
    审批停泊），项目跨设备旅行（记忆内联 + 工作树 artifact + 产出收回）。
 4. 信任面收尾：P2-8 per-node 密钥分发/准入（收口「未知来源同意」路径）；
    P2-9 审计链头外部存证。
-5. 信任分区收尾（未合入实验项）：guarded/open 两档的行为、签名
-   `task_accept` 与信誉路由需在真实多机上过一轮再谈转正；会话树/自动
-   压缩/`panda rpc`/订阅 OAuth 已随 v0.0.10 合入（Experimental），真实
-   模型与真实订阅的验证仍欠一轮。
+5. 信任分区收尾（已随 v0.0.11-beta 合入，Experimental）：guarded/open
+   两档的行为、签名 `task_accept` 与信誉路由需在真实多机上过一轮再谈
+   转正；会话树/自动压缩/`panda rpc`/订阅 OAuth 已随 v0.0.10 合入
+   （Experimental），真实模型与真实订阅的验证仍欠一轮。
 6. i18n 收尾、链路度量带宽/丢包维度、对称 NAT 的 TURN 式中继兜底，按需排期。
