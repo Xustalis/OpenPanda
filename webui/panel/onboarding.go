@@ -9,13 +9,19 @@ package panel
 // same configured state.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/security"
+	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
 // onboardingState is what the wizard needs to decide whether to open and
@@ -25,9 +31,12 @@ type onboardingState struct {
 	TermsAccepted bool   `json:"terms_accepted"`
 	// TermsVersion lets the wizard re-show the license step after a terms
 	// change — MIT-era installs hold terms_accepted without a version.
-	TermsVersion int    `json:"terms_version"`
-	Onboarded    bool   `json:"onboarded"`
-	ApprovalMode string `json:"approval_mode"`
+	TermsVersion int `json:"terms_version"`
+	// TermsAcceptedAt is the UTC RFC3339 timestamp of the current consent,
+	// mirrored into the signed audit chain as tamper-evident evidence.
+	TermsAcceptedAt string `json:"terms_accepted_at"`
+	Onboarded       bool   `json:"onboarded"`
+	ApprovalMode    string `json:"approval_mode"`
 	// ModelConfigured tells the wizard whether the model step can be
 	// skipped without leaving chat unusable.
 	ModelConfigured bool `json:"model_configured"`
@@ -51,6 +60,7 @@ func (h *handler) onboardingState() onboardingState {
 		st.Locale = c.UI.Locale
 		st.TermsAccepted = c.UI.TermsAccepted
 		st.TermsVersion = c.UI.TermsVersion
+		st.TermsAcceptedAt = c.UI.TermsAcceptedAt
 		st.Onboarded = c.UI.Onboarded
 		st.ApprovalMode = c.Approval.NormalizedMode()
 	})
@@ -96,6 +106,8 @@ func (h *handler) postOnboarding(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.TermsAccepted != nil {
+		var accepted bool
+		var ts, who string
 		if err := h.mutateCfgErr(func(c *config.Config) error {
 			if h.configPath != "" {
 				if err := config.UpdateSectionFieldBool(h.configPath, []string{"ui"}, "terms_accepted", *req.TermsAccepted); err != nil {
@@ -107,16 +119,33 @@ func (h *handler) postOnboarding(w http.ResponseWriter, r *http.Request) {
 					if err := config.UpdateSectionFieldInt(h.configPath, []string{"ui"}, "terms_version", config.TermsVersionCurrent); err != nil {
 						return err
 					}
+					ts = time.Now().UTC().Format(time.RFC3339)
+					if err := config.UpdateSectionField(h.configPath, []string{"ui"}, "terms_accepted_at", ts); err != nil {
+						return err
+					}
 				}
 			}
 			c.UI.TermsAccepted = *req.TermsAccepted
 			if *req.TermsAccepted {
 				c.UI.TermsVersion = config.TermsVersionCurrent
+				if ts == "" {
+					// In-memory config path (no configPath): still stamp.
+					ts = time.Now().UTC().Format(time.RFC3339)
+				}
+				c.UI.TermsAcceptedAt = ts
+				accepted = true
+				who = "local"
+				if strings.TrimSpace(c.Node.Name) != "" {
+					who = c.Node.Name
+				}
 			}
 			return nil
 		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
+		}
+		if accepted {
+			h.recordTermsAudit(who)
 		}
 	}
 	if req.ApprovalMode != nil {
@@ -155,4 +184,21 @@ func (h *handler) postOnboarding(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, h.onboardingState())
+}
+
+// recordTermsAudit appends the consent to the signed audit chain so the
+// acceptance is provable later (`panda audit verify`, GET /api/audit) even
+// if config.yaml is edited afterwards. Best effort: without an open store
+// the config timestamp remains the only record.
+func (h *handler) recordTermsAudit(who string) {
+	if h.db == nil {
+		return
+	}
+	_ = core.NewSignedAudit(h.db).Record(context.Background(), security.Entry{
+		Who:    who,
+		What:   "terms:accept",
+		Target: fmt.Sprintf("terms_version:%d", config.TermsVersionCurrent),
+		Result: "ok",
+		Detail: "via=web build=" + version.Version,
+	})
 }

@@ -86,7 +86,8 @@ feat(web): 完整控制台 — 队列/详情/提问/项目/节点 + go:embed 单
 ## 许可与 CLA
 
 OpenPanda 采用 [AGPL-3.0-or-later](LICENSE) 与商业授权双许可证（见
-[COMMERCIAL.md](COMMERCIAL.md)）。提交贡献即表示你同意
-[贡献者许可协议](CLA.md)，授权项目方以双轨条款分发你的代码。
+[COMMERCIAL.zh-CN.md](COMMERCIAL.zh-CN.md)）。提交贡献即表示你同意
+[贡献者许可协议](CLA.zh-CN.md)（英文权威版 [CLA.md](CLA.md)），授权项目方
+以双轨条款分发你的代码。
 PR 合并前必须完成 CLA 签署——琐碎改动（typo、文档、约 15 行以内）
 及 `adapters/` 目录下的贡献除外，这些直接按 AGPL 接收（见 CLA.md §2）。

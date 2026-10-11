@@ -198,3 +198,5 @@ OpenPanda se distribuye bajo doble licencia:
 - **Comercial** — licencia propietaria para integración en código cerrado u oferta alojada; consulta [COMMERCIAL.md](COMMERCIAL.md)
 
 Las versiones publicadas antes del cambio siguen disponibles bajo la licencia MIT.
+
+El uso de OpenPanda está sujeto a los [Términos de uso y exención de responsabilidad](TERMS.md) ([en chino](TERMS.zh-CN.md)).

@@ -70,8 +70,9 @@ type SkillsConfig struct {
 // TermsVersionCurrent is the revision of the terms card a user must accept.
 // Bump it when the terms materially change: v1 predates the AGPL relicensing,
 // so every acceptance recorded by an MIT-era build carries version 0/1 and is
-// re-prompted once.
-const TermsVersionCurrent = 2
+// re-prompted once. v2 was the AGPL card; v3 adds TERMS.md (full terms of use
+// and disclaimer), which existing users must re-acknowledge once.
+const TermsVersionCurrent = 3
 
 type UIConfig struct {
 	Locale        string `yaml:"locale"`
@@ -80,8 +81,13 @@ type UIConfig struct {
 	// TermsVersion records which terms revision was accepted — a bare
 	// terms_accepted bool can't tell a stale MIT-era consent from a current
 	// one, and upgrades must re-show the card.
-	TermsVersion int  `yaml:"terms_version,omitempty"`
-	Onboarded    bool `yaml:"onboarded,omitempty"`
+	TermsVersion int `yaml:"terms_version,omitempty"`
+	// TermsAcceptedAt records when (UTC, RFC3339) the current terms were
+	// accepted — first-order consent evidence. The signed audit chain carries
+	// the same event with the node key's attestation whenever a store was
+	// open at acceptance time (see core.NewSignedAudit, `panda audit verify`).
+	TermsAcceptedAt string `yaml:"terms_accepted_at,omitempty"`
+	Onboarded       bool   `yaml:"onboarded,omitempty"`
 }
 
 // TermsCurrent reports whether the stored consent covers the current terms

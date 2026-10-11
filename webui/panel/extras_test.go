@@ -3,6 +3,7 @@
 package panel
 
 import (
+	"database/sql"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,12 +11,14 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 	"gopkg.in/yaml.v3"
 )
 
 // newFsPanel builds a handler with a real config whose storage roots live in
-// a temp dir — the fs endpoints key everything off those roots.
-func newFsPanel(t *testing.T) (http.Handler, string) {
+// a temp dir — the fs endpoints key everything off those roots. The returned
+// DB is the handler's own store handle (audit_log lives there).
+func newFsPanel(t *testing.T) (http.Handler, string, *sql.DB) {
 	t.Helper()
 	tmp := t.TempDir()
 	cfg := config.Default()
@@ -30,18 +33,27 @@ func newFsPanel(t *testing.T) (http.Handler, string) {
 	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
 	h := New(Deps{
 		Store:      newTestStore(t),
+		DB:         db,
 		Cfg:        cfg,
 		ConfigPath: configPath,
 		StaticDir:  t.TempDir(),
 		Token:      testToken,
 	})
-	return h, tmp
+	return h, tmp, db
 }
 
 func TestOnboardingRoundTrip(t *testing.T) {
-	h, _ := newFsPanel(t)
+	h, _, db := newFsPanel(t)
 
 	code, out := doJSON(t, h, authedReq(http.MethodGet, "/api/onboarding", nil))
 	if code != http.StatusOK {
@@ -63,9 +75,17 @@ func TestOnboardingRoundTrip(t *testing.T) {
 		t.Fatalf("post did not persist: %v", out)
 	}
 	// Accepting terms stamps the current revision so a license change can
-	// re-prompt stale consents.
+	// re-prompt stale consents, and leaves consent evidence: a UTC timestamp
+	// plus a row on the signed audit chain.
 	if out["terms_version"] != float64(config.TermsVersionCurrent) {
 		t.Fatalf("terms_version not stamped: %v", out["terms_version"])
+	}
+	if out["terms_accepted_at"] == "" {
+		t.Fatalf("terms_accepted_at not stamped: %v", out["terms_accepted_at"])
+	}
+	var auditWhat string
+	if err := db.QueryRow(`SELECT what FROM audit_log WHERE what = 'terms:accept'`).Scan(&auditWhat); err != nil {
+		t.Fatalf("terms consent not audited: %v", err)
 	}
 
 	code, _ = doJSON(t, h, jsonReq(http.MethodPost, "/api/onboarding", `{"approval_mode":"yolo"}`))
@@ -79,7 +99,7 @@ func TestOnboardingRoundTrip(t *testing.T) {
 }
 
 func TestFsReadConfinedToRoots(t *testing.T) {
-	h, tmp := newFsPanel(t)
+	h, tmp, _ := newFsPanel(t)
 
 	inside := filepath.Join(tmp, "hello.txt")
 	if err := os.WriteFile(inside, []byte("hi panda"), 0o644); err != nil {
@@ -122,7 +142,7 @@ func TestFsReadConfinedToRoots(t *testing.T) {
 }
 
 func TestFsReadTruncates(t *testing.T) {
-	h, tmp := newFsPanel(t)
+	h, tmp, _ := newFsPanel(t)
 	big := filepath.Join(tmp, "big.txt")
 	if err := os.WriteFile(big, []byte(strings.Repeat("x", maxReadBytes+512)), 0o644); err != nil {
 		t.Fatal(err)
@@ -140,7 +160,7 @@ func TestFsReadTruncates(t *testing.T) {
 }
 
 func TestFsFilesConfined(t *testing.T) {
-	h, tmp := newFsPanel(t)
+	h, tmp, _ := newFsPanel(t)
 	if err := os.WriteFile(filepath.Join(tmp, "a.go"), []byte("package a"), 0o644); err != nil {
 		t.Fatal(err)
 	}

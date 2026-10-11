@@ -210,3 +210,5 @@ OpenPanda is dual-licensed:
 - **Commercial** — proprietary terms for closed-source embedding or hosted use; see [COMMERCIAL.md](COMMERCIAL.md)
 
 Releases published before the license change remain available under the MIT License.
+
+Use of OpenPanda is subject to the [Terms of Use & Disclaimer](TERMS.md) ([中文译本](TERMS.zh-CN.md)).

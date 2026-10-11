@@ -198,3 +198,5 @@ OpenPanda wird unter dualem Lizenzmodell bereitgestellt:
 - **Kommerziell** — proprietäre Lizenz für Closed-Source-Einbettung oder gehostete Angebote; siehe [COMMERCIAL.md](COMMERCIAL.md)
 
 Vor der Lizenzänderung veröffentlichte Versionen bleiben unter der MIT-Lizenz verfügbar.
+
+Die Nutzung von OpenPanda unterliegt den [Nutzungsbedingungen und dem Haftungsausschluss](TERMS.md) ([中文译本](TERMS.zh-CN.md)).

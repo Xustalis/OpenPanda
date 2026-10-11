@@ -232,3 +232,5 @@ OpenPanda 采用双许可证模式：
 - **商业版** —— 面向闭源集成或托管服务的专有授权，详见 [COMMERCIAL.md](COMMERCIAL.md)
 
 许可证变更前发布的历史版本仍按 MIT 许可证提供。
+
+使用 OpenPanda 须遵守[使用条款与免责声明](TERMS.zh-CN.md)（[English](TERMS.md)）。

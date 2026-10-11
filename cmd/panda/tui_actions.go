@@ -11,12 +11,16 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/providers"
+	"github.com/Xustalis/OpenPanda/internal/security"
+	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -892,10 +896,16 @@ func (m tuiModel) startTermsReconsent() (tuiModel, tea.Cmd) {
 // advanceFromTerms moves to the approval mode step after accepting terms —
 // or, on the re-consent path, persists the new version and ends the wizard.
 func (m tuiModel) advanceFromTerms() (tuiModel, tea.Cmd) {
+	ts := time.Now().UTC().Format(time.RFC3339)
+	who := "local"
 	if m.r != nil && m.r.cfg != nil {
 		m.r.mutateConfig(func(c *config.Config) {
 			c.UI.TermsAccepted = true
 			c.UI.TermsVersion = config.TermsVersionCurrent
+			c.UI.TermsAcceptedAt = ts
+			if strings.TrimSpace(c.Node.Name) != "" {
+				who = c.Node.Name
+			}
 		})
 	}
 	if m.termsReconsent {
@@ -904,6 +914,8 @@ func (m tuiModel) advanceFromTerms() (tuiModel, tea.Cmd) {
 		cfgPath := configWritePath(m.r.configPath)
 		_ = config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "terms_accepted", true)
 		_ = config.UpdateSectionFieldInt(cfgPath, []string{"ui"}, "terms_version", config.TermsVersionCurrent)
+		_ = config.UpdateSectionField(cfgPath, []string{"ui"}, "terms_accepted_at", ts)
+		m.recordTermsAudit(who)
 		var configured bool
 		m.r.readConfig(func(c *config.Config) { configured = modelConfigured(c) })
 		if !configured {
@@ -924,6 +936,8 @@ func (m tuiModel) advanceFromTerms() (tuiModel, tea.Cmd) {
 func (m tuiModel) finalizeOnboarding() (tuiModel, tea.Cmd) {
 	if m.r != nil && m.r.cfg != nil {
 		loc := m.loc
+		ts := time.Now().UTC().Format(time.RFC3339)
+		who := "local"
 
 		cfgPath := configWritePath(m.r.configPath)
 		// One critical section for the whole onboarding commit: each
@@ -942,16 +956,22 @@ func (m tuiModel) finalizeOnboarding() (tuiModel, tea.Cmd) {
 			persist(config.UpdateSectionField(cfgPath, []string{"ui"}, "locale", string(loc)))
 			persist(config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "terms_accepted", true))
 			persist(config.UpdateSectionFieldInt(cfgPath, []string{"ui"}, "terms_version", config.TermsVersionCurrent))
+			persist(config.UpdateSectionField(cfgPath, []string{"ui"}, "terms_accepted_at", ts))
 			persist(config.UpdateSectionFieldBool(cfgPath, []string{"ui"}, "onboarded", true))
 			c.UI.TermsAccepted = true
 			c.UI.TermsVersion = config.TermsVersionCurrent
+			c.UI.TermsAcceptedAt = ts
 			c.UI.Onboarded = true
 			c.UI.Locale = string(loc)
+			if strings.TrimSpace(c.Node.Name) != "" {
+				who = c.Node.Name
+			}
 			if c.Approval.Mode != "" {
 				persist(config.UpdateSectionField(cfgPath, []string{"approval"}, "mode", c.Approval.Mode))
 			}
 			return firstErr
 		})
+		m.recordTermsAudit(who)
 
 		// Ensure capability card exists
 		cardPath := m.r.cardPathNow()
@@ -973,6 +993,23 @@ func (m tuiModel) finalizeOnboarding() (tuiModel, tea.Cmd) {
 		body: i18n.T(m.loc, "tui.onboard.done"),
 	}
 	return m, m.printBlock(note)
+}
+
+// recordTermsAudit leaves tamper-evident consent evidence: one row on the
+// signed audit chain carrying the terms revision, the accepting node, the
+// channel (TUI), and the build — verifiable later via `panda audit verify`.
+// Best effort: with no open store there is nothing to sign into.
+func (m tuiModel) recordTermsAudit(who string) {
+	if m.r == nil || m.r.db == nil {
+		return
+	}
+	_ = core.NewSignedAudit(m.r.db).Record(context.Background(), security.Entry{
+		Who:    who,
+		What:   "terms:accept",
+		Target: fmt.Sprintf("terms_version:%d", config.TermsVersionCurrent),
+		Result: "ok",
+		Detail: "via=tui build=" + versionpkg.Version,
+	})
 }
 
 // handleOnboardingKey routes key messages across onboarding steps.

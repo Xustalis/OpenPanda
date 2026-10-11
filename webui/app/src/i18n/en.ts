@@ -333,7 +333,7 @@ const en: Messages = {
   'onboarding.termsTitle': 'Terms of Service & License',
   'onboarding.terms1h': '1. Open-Source License (AGPL-3.0)',
   'onboarding.terms1b':
-    'OpenPanda is free and open-source software released under the GNU Affero General Public License v3.0 or later. You may run, study, modify and redistribute it — including commercially — provided derivative works remain under the AGPL, and any modified version offered to users over a network also offers them its source code. A commercial license is available for closed-source use; see COMMERCIAL.md. The complete license ships in the LICENSE file and prevails over this summary.',
+    'OpenPanda is free and open-source software released under the GNU Affero General Public License v3.0 or later. You may run, study, modify and redistribute it — including commercially — provided derivative works remain under the AGPL, and any modified version offered to users over a network also offers them its source code. A commercial license is available for closed-source use; see COMMERCIAL.md. The complete license and terms ship in the LICENSE and TERMS.md files and prevail over this summary.',
   'onboarding.terms2h': '2. Self-Hosted Software, Not a Managed Service',
   'onboarding.terms2b':
     'OpenPanda is software you install, configure and operate on your own hardware. The authors provide no hosting, service levels, uptime commitments, support obligations or data stewardship. You alone are responsible for the installation, operation, maintenance, access control, monitoring and security posture of your deployment.',

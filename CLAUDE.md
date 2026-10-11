@@ -19,7 +19,10 @@ from `modernc.org/sqlite`, so cross-compilation is just `GOOS/GOARCH`.
 Dual-licensed: **AGPL-3.0-or-later** (see `LICENSE`) for open-source use,
 plus a commercial license for proprietary embedding/hosting. All external
 contributions are governed by `CLA.md` — new PRs require CLA assent
-before merge. Keep new files consistent with the existing
+before merge. Use of the software is additionally governed by
+`TERMS.md`/`TERMS.zh-CN.md` (warranty disclaimer, liability cap,
+indemnity — wired in via AGPL §7 additional terms). Keep new files
+consistent with the existing
 `// SPDX-License-Identifier: AGPL-3.0-or-later` headers.
 
 ## Build, test, ship

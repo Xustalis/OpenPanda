@@ -974,7 +974,7 @@ func TestTUITermsReconsentFlow(t *testing.T) {
 	if !m.termsReconsent {
 		t.Fatal("expected termsReconsent flag")
 	}
-	if v := m.View(); !strings.Contains(v, "License updated to AGPL-3.0") {
+	if v := m.View(); !strings.Contains(v, i18n.T(i18n.English, "tui.onboard.termsUpdated")) {
 		t.Fatalf("re-consent view missing update banner:\n%s", v)
 	}
 
@@ -992,8 +992,11 @@ func TestTUITermsReconsentFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "terms_version: 2") {
+	if !strings.Contains(string(data), fmt.Sprintf("terms_version: %d", config.TermsVersionCurrent)) {
 		t.Fatalf("terms_version not persisted:\n%s", data)
+	}
+	if !strings.Contains(string(data), "terms_accepted_at:") {
+		t.Fatalf("terms_accepted_at not persisted:\n%s", data)
 	}
 
 	// A current-version config takes the normal path (no re-prompt).

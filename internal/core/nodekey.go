@@ -14,6 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // Node identity (design §16, P2-8 follow-up). The shared-secret HMAC proves a
@@ -89,6 +90,18 @@ func loadNodeKey(stored string) (ed25519.PublicKey, ed25519.PrivateKey) {
 // that only verify — `panda audit verify`, the CLI task store — get !ok on a
 // node that has never run a daemon rather than silently minting a key the
 // mesh never advertised.
+// NewSignedAudit returns an audit recorder bound to this node's Ed25519
+// signing key when one already exists in settings — entries then land on the
+// hash chain with the node's attestation and cannot be rewritten without
+// breaking `panda audit verify`. Keyless installs record unsigned rows.
+func NewSignedAudit(db *sql.DB) *security.Audit {
+	a := security.NewAudit(db)
+	if pub, priv, ok := LoadNodeKey(db); ok {
+		a.SetSigner(pub, priv)
+	}
+	return a
+}
+
 func LoadNodeKey(db *sql.DB) (ed25519.PublicKey, ed25519.PrivateKey, bool) {
 	var stored string
 	if err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, nodeKeySetting).Scan(&stored); err != nil {

@@ -1,5 +1,7 @@
 # OpenPanda Licensing: Community & Commercial
 
+English · [简体中文](COMMERCIAL.zh-CN.md)
+
 OpenPanda is dual-licensed. The same codebase is offered under the
 GNU Affero General Public License v3 or later (AGPL-3.0-or-later) for
 open-source use, and under a separate commercial license for cases the
@@ -38,6 +40,15 @@ For situations where AGPL compliance does not fit, e.g.:
 
 Commercial terms are negotiated per deployment; they do not affect the
 community edition, which remains fully AGPL.
+
+## Warranty & liability
+
+The community edition is provided strictly as-is, with no warranty and
+no acceptance of liability — see `TERMS.md` (中文译本
+`TERMS.zh-CN.md`), which applies to every copy of the Software on
+either track. A signed commercial agreement may carry its own warranty,
+indemnity, and SLA commitments; where such an agreement is silent,
+`TERMS.md` applies as the baseline.
 
 ## Why this model
 
