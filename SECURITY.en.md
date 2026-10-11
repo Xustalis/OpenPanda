@@ -28,18 +28,25 @@ network.**
   "irreversible operations require my approval" only holds on **a single
   machine or a fully trusted LAN**; it stops holding the moment the network
   contains a node you do not fully trust.
-- **Transport-encryption boundary.** WebSocket bus frames are not themselves
-  encrypted: `hello` only authenticates the peer. Defense is layered:
-  outbound cleartext gating refuses `ws://` dials outside loopback /
-  Tailscale (100.64.0.0/10, `fd7a:115e:a214::/48`, `*.ts.net`) — all other
-  destinations must be `wss://` (TLS terminated at a reverse proxy),
-  `punch:` peers (the UDP plane), or explicitly listed in
-  `network.allow_cleartext`; the UDP datagram plane is wrapped end-to-end in
-  AES-256-GCM (keys domain-separated from the shared secret); DTN bundle v2+
-  payloads are likewise AES-256-GCM encrypted and signed, and tampered
-  bundles are never delivered. **Cleartext links are only permitted on paths
-  already encrypted underneath (loopback / WireGuard / Tailscale / TLS
-  proxy).**
+- **Transport-encryption boundary.** Since v0.0.11, when both peers advertise
+  the `sessaead` capability in `hello` and a shared secret exists, the
+  connection arms a per-connection AES-256-GCM right after the handshake —
+  the key is HKDF-derived from the shared secret and both hello nonces, bound
+  to both identities and fresh per dial; every application frame from then on
+  travels sealed, so an on-path observer can neither read the task plane nor
+  inject frames. Only links that fail to negotiate session encryption face
+  the cleartext gate (evaluated post-handshake, `cleartextOK`): `ws://` dials
+  are permitted only to loopback / Tailscale (100.64.0.0/10,
+  `fd7a:115e:a214::/48`, `*.ts.net`) or to ranges/hosts listed in
+  `network.allow_cleartext_for` — all other destinations must be `wss://`
+  (TLS terminated at a reverse proxy), `punch:` peers (the UDP plane), or
+  explicitly covered by `network.allow_cleartext`; inbound cleartext is
+  judged on the source IP the same way. The UDP datagram plane is wrapped
+  end-to-end in AES-256-GCM (keys domain-separated from the shared secret);
+  DTN bundle v2+ payloads are likewise AES-256-GCM encrypted and signed, and
+  tampered bundles are never delivered. **Cleartext links are only permitted
+  on paths already encrypted underneath (loopback / WireGuard / Tailscale /
+  TLS proxy), or ones that armed `sessaead` themselves after the handshake.**
 - **The audit chain is signed, but anchored inside the database.**
   `task_events` and `audit_log` carry per-row Ed25519 signatures over the
   hash chain (P2-9); verification binds to the local node's public key
@@ -63,9 +70,16 @@ network.**
   springboard. A private hub configured via `skills.hub_url` is exempt — that
   is the administrator's own deployment choice.
 
-Consequence: **every node is equally and fully trusted; one compromised node
-compromises the entire mesh.** Do not extend the mesh to machines you do not
-fully control.
+Consequence: **equal, full trust by default — every node counts as `mesh`
+tier, and one compromised node compromises the entire mesh.** Do not extend
+the mesh to machines you do not fully control. Since v0.0.11 you can pin a
+per-peer trust tier on a peer's identity (`network.peers[].trust` /
+`panda nodes trust`, experimental): `guarded` clamps what delegates toward
+that peer may carry and admits work it originates under
+`network.trust.accept.guarded`, while `open` peers sit in the directory only
+and exchange no push-mode delegations. A trust tier is a local, one-sided
+assertion — it narrows your exposure toward a peer but does not change the
+underlying fact that holding the shared secret means membership.
 
 ## Integrity verification
 
@@ -83,8 +97,12 @@ trust model, not a patch), the following are mandatory:
 1. **Interconnect only over encrypted overlays.** Connect nodes via
    Tailscale / WireGuard or similar; bind `listen_addr` to the overlay
    interface; **never expose the bus port on the public internet or an
-   untrusted LAN**. If a link must cross the public internet, terminate TLS
-   at a reverse proxy and write the peer as `wss://host:port`.
+   untrusted LAN**. The `sessaead` session cipher gives links on a trusted
+   LAN a confidentiality floor, but it authenticates only the shared secret —
+   it does not stop active attacks by a secret holder, so the exposure
+   surface stays minimal either way. If a link must cross the public
+   internet, terminate TLS at a reverse proxy and write the peer as
+   `wss://host:port`.
 2. **Secrets via environment variables only.** Provide `shared_secret` only
    through `OPENPANDA_SHARED_SECRET`; never write it into `config.yaml` or
    commit it to any repository. Generation example: `openssl rand -hex 32`.

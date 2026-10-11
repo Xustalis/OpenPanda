@@ -75,11 +75,11 @@ OpenPanda 将终端 AI 编程助手（Claude Code、OpenAI Codex、Grok Build、
 
 ### 多设备协同
 
-- **LAN 自动发现 + TOFU 钉住** —— 节点在局域网内自动互见，凭指纹确认准入；`panda nodes verify` 钉住每个对端的 Ed25519 密钥。
+- **LAN 自动发现 + 蓝牙式配对** —— 节点在局域网内自动互见，凭指纹确认准入；`panda pair` 通过两端核对同一短码完成入网，`panda nodes verify` 钉住每个对端的 Ed25519 密钥。
 
 - **能力卡宣告** —— 每台设备自动生成硬件与工具画像（CPU、内存、系统、可用 Agent）。
 
-- **P2P 直连** —— 节点间通过认证加密的 WebSocket 与加密 UDP 数据面通信（支持 NAT 穿透），数据不离开私有网络。
+- **P2P 直连** —— 节点间通过认证 WebSocket 通信（握手内协商逐连接 AEAD 加密）加加密 UDP 数据面（支持 NAT 穿透），数据不离开私有网络。
 
 - **按需路由** —— 调度器按实测容量评分将任务派往最匹配的节点；`panda nodes drain` 可将节点下线维护。
 
@@ -93,9 +93,9 @@ OpenPanda 将终端 AI 编程助手（Claude Code、OpenAI Codex、Grok Build、
 
 - **自动压缩** —— 溢出的历史折叠为模型撰写的滚动摘要而非丢弃，存储的线程保持完整。
 
-- **`panda rpc`** —— NDJSON-over-stdio 嵌入面（`status`、流式 `ask`、`session.*`），其他工具可驱动 OpenPanda；`scripts/panda_rpc.py` 为纯 stdlib 参考客户端。
+- **`panda rpc`**（实验性）—— NDJSON-over-stdio 嵌入面（`status`、流式 `ask`、`session.*`），其他工具可驱动 OpenPanda；`scripts/panda_rpc.py` 为纯 stdlib 参考客户端。
 
-- **订阅 OAuth** —— `panda auth login anthropic` 通过 PKCE 登录 Claude Pro/Max 订阅，token 自动刷新。
+- **订阅 OAuth**（实验性）—— `panda auth login anthropic` 通过 PKCE 登录 Claude Pro/Max 订阅，token 自动刷新。
 
 ### 接口与运行时
 
@@ -148,7 +148,7 @@ panda web                              # 网页控制台，自动调起浏览器
 panda ask "查看系统状态并总结待办任务"  # 直接发一条指令
 ```
 
-连接第二台设备：在设备 A 上运行 `panda pair` 获取配对码，在设备 B 上运行 `panda nodes add <设备A地址>` —— 或让 LAN 发现把它列到 `panda nodes` 里，按指纹确认准入。
+连接第二台设备：在设备 A 上运行 `panda pair <设备B地址>` 发起配对并显示短码，在设备 B 上用 `panda pair confirm` 核对同一码确认 —— 或让 LAN 发现把它列到 `panda nodes` 里，用 `panda nodes admit` 按指纹准入。
 
 ***
 
@@ -160,7 +160,7 @@ panda ask "查看系统状态并总结待办任务"  # 直接发一条指令
 | `panda ask "<指令>"`   | 单次执行：直接回答、调用工具或委派任务              |
 | `panda web`          | 启动网页控制台并自动打开浏览器                  |
 | `panda nodes`        | 查看 P2P 网络中的在线设备及其能力              |
-| `panda pair`         | 生成设备配对码                          |
+| `panda pair`         | LAN 配对一台新设备（两端核对同一短码）              |
 | `panda queue`        | 查看排队中、执行中或待审批的任务（`--watch` 实时刷新） |
 | `panda approve <id>` | 审批放行二级高危操作                       |
 | `panda project list` | 管理工作空间项目与工程记忆                    |
@@ -201,7 +201,8 @@ panda ask "查看系统状态并总结待办任务"  # 直接发一条指令
 | ---------------- | ----------------------------------------- |
 | **v0.0.8**（稳定基线） | 单机多 Agent 协同完整可用：意图分类、任务派发、监督循环、故障转移、分级审批、多语言提示词策略 |
 | **v0.0.9**（稳定版）— "Periapsis" | 混合传输/DTN 架构完成：延迟加权 mesh 路由、DTN bundle 上线、令牌预算、影子副本、执行器通路、UDP 数据报平面与经 mesh 协调的 NAT 打洞、DTN 载荷加密、接触计划、Ed25519 节点身份、lite 构建——以及可记忆的审批、执行归属标注、Web 侧栏节点徽标与日常 CLI 打磨 |
-| **v0.0.10**（当前）— "Apoapsis" | 伸向局域网与边缘硬件：指纹确认准入的 LAN 自动发现与 TOFU 密钥钉住、工作树随委派文件任务同行、澄清回路、带五个参考驱动（含串口 MCU）的 actuator 派发、Pi adapter 与免 Python 的内建 generic 执行器——以及可分叉的会话树、自动压缩、`panda rpc` 嵌入面、订阅 OAuth、签名事件/审计链、OS 级沙箱与一轮稳态性能优化。许可证迁移至 AGPL-3.0-or-later 并引入商业双授权 |
+| **v0.0.10**（当前稳定版）— "Apoapsis" | 伸向局域网与边缘硬件：指纹确认准入的 LAN 自动发现与 TOFU 密钥钉住、工作树随委派文件任务同行、澄清回路、带五个参考驱动（含串口 MCU）的 actuator 派发、Pi adapter 与免 Python 的内建 generic 执行器——以及可分叉的会话树、自动压缩、`panda rpc` 嵌入面、订阅 OAuth、签名事件/审计链、OS 级沙箱与一轮稳态性能优化。许可证迁移至 AGPL-3.0-or-later 并引入商业双授权 |
+| **v0.0.11**（预览版）— "Periapsis" | 收紧 mesh 本身：签名 hello 内协商的逐连接 AEAD 加密、蓝牙式 `panda pair`、签名发现 beacon 与稳定的 `k:<pub>` 身份、硬节点钉住、跨断链重投裁决的 outbox 托管、daemon 权威仲裁、240 秒静默看门狗、协商二进制数据帧 |
 | **v0.0.x（后续）**   | 稳定性、性能与边缘场景调优                             |
 | **v0.1.0**       | 桌面端（Desktop）能力与更强的操控管理能力，达到可商用化标准         |
 

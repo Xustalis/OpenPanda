@@ -166,7 +166,7 @@ panda uninstall --backup-only
 
 - **不支持的系统/架构**：脚本会明确报错；目前发布 `darwin/linux/windows` 的 `amd64` 与 `arm64`，另有 lite 构建的 `linux-amd64/arm64/armv7`（32 位 ARM 仅 lite）。
 
-- **daemon 起不来**：先 `panda doctor` 与 `panda init`；回环监听会自动生成临时 token，但对外监听且未配置 `shared_secret` 会拒绝启动（安全约束）。
+- **daemon 起不来**：先 `panda doctor` 与 `panda init`；`network.shared_secret` 为空时 daemon 会自动铸造并写回配置（`panda init` 也会预先生成）——只有铸造本身失败才不起 WS 监听，节点退为单机运行（fail-closed，不接受未认证对端）。若节点此前已入过 mesh 而 secret 丢失，daemon 会高声告警而不是静默换密钥。
 
 - **跨公网/NAT 的对端连不上**：双方都拨不通对方时，在 `network.peers` 里配置 `punch:<node-id>`（对端节点名）——打洞协调经 mesh 内已连通的节点中继，双方 UDP 端口需能出站（无需入站映射）；对称 NAT 等极端场景打不通时会持续重试，日志里有 `punch offer failed`/`udp:` 前缀可查。`network.udp_listen: "off"` 可整体关闭数据报平面。
 

@@ -1,4 +1,8 @@
 # OpenPanda 顶级系统架构优化与 CLI 交互重构方案报告
+
+> **归档说明**：本文是 2026-09-03 的时间点快照（分析/方案报告），其中多项
+> 建议已在此后的版本中落地或演化；当前项目状态见 [`../status.md`](../status.md)。
+
 > **对标业界顶流**：深度融合 Claude Code、Aider、OpenCode、Codex CLI、Hermes Agent 与 OpenHands 的设计精髓  
 > **报告版本**：v2.0.0 (Cutting-Edge Enterprise Edition)  
 > **技术基准**：Go 1.26+、Bubble Tea、Lipgloss、Pure-Go SQLite  

@@ -55,12 +55,12 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 ## 🌟 Was kann OpenPanda?
 
 ### 1. 🌐 Heterogene P2P-Gerätezusammenarbeit
-- **LAN-Discovery + TOFU-Pinning**: Knoten finden sich im LAN mit fingerprint-bestätigter Aufnahme; `panda nodes verify` pinnt den Ed25519-Schlüssel jedes Peers.
+- **LAN-Discovery + Bluetooth-artige Kopplung**: Knoten finden sich im LAN mit fingerprint-bestätigter Aufnahme; `panda pair` fügt ein Gerät über einen auf beiden Seiten bestätigten Kurzcode hinzu, und `panda nodes verify` pinnt den Ed25519-Schlüssel jedes Peers.
 - **Dynamische Fähigkeitskarten**: Jeder Knoten erfasst automatisch sein Hardwareprofil (CPU, RAM, OS) und verfügbare Agenten.
 - **Intelligente Aufgabenverteilung**: Routet nach gemessener Kapazität — schwere Kompiliervorgänge an leistungsstarke Server, Sensoraufgaben an Edge-Knoten; `panda nodes drain` entfernt einen Knoten für Wartung.
 - **Worktree-reisende Delegation**: Eine an einen anderen Knoten delegierte Datei-Aufgabe trägt ihren Checkout hin und bringt das Ergebnis zurück.
 - **Aktor-Dispatch**: Aufgaben betätigen physische Aktuatoren (Servo, Mikrofon, Kamera, Benachrichtigung, serieller MCU) auf dem Knoten mit der Hardware.
-- **Privates P2P-Netzwerk**: Direkte Kommunikation über authentifizierte WebSockets und eine verschlüsselte UDP-Datenebene mit NAT-Traversal. Dein Code und Kontext verlassen niemals deine Geräte.
+- **Privates P2P-Netzwerk**: Direkte Kommunikation über authentifizierte WebSockets (pro Verbindung ausgehandelte AEAD-Verschlüsselung im signierten Hello) und eine verschlüsselte UDP-Datenebene mit NAT-Traversal. Dein Code und Kontext verlassen niemals deine Geräte.
 
 ### 2. 🤖 Universelle Agenten-Orchestrierung & Ausfallsicherung
 - **Vorkonfigurierte Adapter**: Funktioniert direkt mit Claude Code, OpenAI Codex, Grok Build, DeepSeek Harness, OpenCode und Shell-Befehlen.
@@ -84,8 +84,8 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 - **Skriptfähige CLI**: Schnelle Befehle wie `panda ask` zur nahtlosen Einbindung in eigene Skripte.
 - **Sitzungsbäume & Forking**: `panda session fork <id> --at N` gabelt die Konversation an beliebigem Turn; in einem Repo wird der Kind-Worktree vom Eltern-Branch abgezweigt und erbt erzeugten Code. `panda session tree` zeigt die Familie, `/fork` tut dasselbe in REPL/TUI.
 - **Auto-Kompaktierung**: Überlaufende Historie wird zu einem modellgeschriebenen Rollsummary gefaltet statt verworfen — der gespeicherte Verlauf bleibt vollständig.
-- **`panda rpc`**: NDJSON-over-stdio-Einbettungsoberfläche (`status`, Streaming-`ask`, `session.*`); `scripts/panda_rpc.py` ist ein stdlib-Referenzclient.
-- **Abo-OAuth**: `panda auth login anthropic` meldet Claude Pro/Max per PKCE an und erneuert Token transparent.
+- **`panda rpc`** (experimentell): NDJSON-over-stdio-Einbettungsoberfläche (`status`, Streaming-`ask`, `session.*`); `scripts/panda_rpc.py` ist ein stdlib-Referenzclient.
+- **Abo-OAuth** (experimentell): `panda auth login anthropic` meldet Claude Pro/Max per PKCE an und erneuert Token transparent.
 
 ### 6. 🪶 Extrem leichtgewichtig (~20MB Speicher)
 - Einzelne statische Go-Binärdatei ohne externe Laufzeitabhängigkeiten (reines Go SQLite im WAL-Modus).
@@ -137,8 +137,8 @@ panda init
 
 ### Zweites Gerät in 30 Sekunden verbinden
 
-1. Auf Gerät A: `panda pair` ausführen, um den Kopplungscode zu erhalten.
-2. Auf Gerät B: `panda nodes add <Adresse-von-Gerät-A>` ausführen.
+1. Auf Gerät A: `panda pair <Adresse-von-Gerät-B>` ausführen (Kopplungscode wird angezeigt).
+2. Auf Gerät B: `panda pair confirm` ausführen, um denselben Code zu bestätigen und beizutreten.
 *Beide Geräte sind jetzt in deinem privaten Agenten-Mesh verbunden!*
 
 ---
@@ -151,7 +151,7 @@ panda init
 | `panda ask "<anfrage>"` | Direkt ausführen: antworten, Werkzeug nutzen oder delegieren |
 | `panda web` | Eingebettete Web-Konsole starten und Browser öffnen |
 | `panda nodes` | Verbundene Geräte im P2P-Netzwerk anzeigen |
-| `panda pair` | Kopplungscode für neue Knoten erzeugen |
+| `panda pair` | Neues Gerät per LAN koppeln (Kurzcode auf beiden Seiten bestätigt) |
 | `panda queue` | Wartende, laufende und zu genehmigende Aufgaben anzeigen |
 | `panda approve <id>` | Ausstehende irreversible Stufe-2-Aktion freigeben |
 | `panda project list` | Workspace-Projekte und Kontext verwalten |
@@ -170,7 +170,8 @@ panda init
 |---|---|
 | **v0.0.8** (stabile Basis) | Multi-Agenten-Orchestrierung auf einer Maschine, voll nutzbar: Absichtsklassifikation, Dispatch, Überwachungsschleife, Failover, gestufte Freigabe, Richtlinien für Prompt-Sprachen |
 | **v0.0.9** (stabil) — "Periapsis" | Hybrid-Transport/DTN-Architektur vollendet: latenzgewichtetes Mesh-Routing, DTN-Bundles auf der Leitung, Token-Budgets, Schattenkopien, Aktuator-Pfad, UDP-Datagramm-Ebene mit mesh-koordiniertem NAT-Hole-Punching, verschlüsselte Payloads, Kontaktpläne, Ed25519-Knotenidentität, Lite-Build — plus gemerkte Genehmigungen, Execution-Attribution, ein Web-Sidebar-Node-Chip und Alltags-CLI-Politur |
-| **v0.0.10** (aktuell) — "Apoapsis" | Hinaus ins LAN und an den Edge: Discovery mit fingerprint-bestätigter Aufnahme und TOFU-Key-Pinning, Worktree-reisende delegierte Datei-Tasks, die Klärungs-Schleife, Aktor-Dispatch mit fünf Referenztreibern (inkl. seriellem MCU), der Pi-Adapter und ein Python-freier Generic-Executor — plus forkbare Sitzungsbäume, Auto-Kompaktierung, die `panda rpc`-Einbettungsoberfläche, Abo-OAuth, signierte Event-/Audit-Ketten, OS-level Sandbox und eine Steady-State-Perf-Runde. Relizenziert zu AGPL-3.0-or-later mit kommerzieller Doppellizenz |
+| **v0.0.10** (aktuell stabil) — "Apoapsis" | Hinaus ins LAN und an den Edge: Discovery mit fingerprint-bestätigter Aufnahme und TOFU-Key-Pinning, Worktree-reisende delegierte Datei-Tasks, die Klärungs-Schleife, Aktor-Dispatch mit fünf Referenztreibern (inkl. seriellem MCU), der Pi-Adapter und ein Python-freier Generic-Executor — plus forkbare Sitzungsbäume, Auto-Kompaktierung, die `panda rpc`-Einbettungsoberfläche, Abo-OAuth, signierte Event-/Audit-Ketten, OS-level Sandbox und eine Steady-State-Perf-Runde. Relizenziert zu AGPL-3.0-or-later mit kommerzieller Doppellizenz |
+| **v0.0.11** (Vorschau) — "Periapsis" | Das Mesh selbst enger ziehen: pro Verbindung ausgehandelte AEAD-Verschlüsselung im signierten Hello, Bluetooth-artiges `panda pair`, signierte Discovery-Beacons und stabile `k:<pub>`-Identitäten, harte Node-Pins, Outbox-Verwahrung, die Urteile über Linkabbrüche hinweg erneut zustellt, Daemon-Autoritätsarbitrage, 240-s-Silence-Watchdog und ausgehandelte Binär-Datenframes |
 | **v0.0.x (darüber hinaus)** | Stabilität, Performance und Feinschliff für Randfälle |
 | **v0.1.0** | Desktop-Fähigkeiten und stärkere Steuerung und Verwaltung — kommerzielle Qualität |
 

@@ -1,5 +1,9 @@
 # Roadmap — v0.0.10 multi-device collaboration
 
+> **Shipped**: v0.0.10 "Apoapsis" released 2026-10-07 (see `CHANGELOG.md`);
+> unchecked items below rolled forward to the next cycle. This file is kept
+> as the per-item delivery record.
+
 Theme: **多机协作** — delegated work must produce results at least as good as
 running the tool natively, the fleet must be easy to assemble and observe,
 and scheduling must cover actuators (servos, microphones, compute), not just

@@ -14,10 +14,11 @@ package main
 //     the prompt, and trimming is pair-aligned — a user turn is never
 //     replayed without its assistant answer (or vice versa), because a
 //     dangling half-exchange misleads the model more than a missing one.
-//   - The conversation is mirrored to cliStateDir()/conversation.json
-//     after every exchange. People reopen terminals, not conversations:
-//     a new REPL resumes where the last one ended, and the one-shot
-//     `panda ask --continue` can pick the same thread up from scripts.
+//   - The conversation is mirrored to cliStateDir()/conversations/
+//     <project>.json (default.json outside a project) after every
+//     exchange. People reopen terminals, not conversations: a new REPL
+//     resumes where the last one ended, and the one-shot `panda ask
+//     --continue` can pick the same thread up from scripts.
 
 import (
 	"context"

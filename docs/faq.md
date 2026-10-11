@@ -56,7 +56,7 @@ OpenPanda 自己不执行长程任务，而是委派给设备上安装的 agent 
 
 **凭证（API key）如何给 agent？**
 
-默认 `injection.model: auto`——agent 自带登录态/key 就直接用；没有自有凭证的 agent（目前只有 Claude Code 支持注入）会复用 panda 配置的模型（`model.api_key`，DeepSeek Anthropic 端点）。策略用 `panda config set injection auto|always|never` 切换。
+默认 `injection.model: auto`——agent 自带登录态/key 就直接用；没有自有凭证的 agent 会复用 panda 配置的模型。注入面由适配器注册表驱动：凡声明了 model-env 映射的 adapter 都可注入（Claude Code、Codex、OpenCode、Grok Build、DeepSeek Harness、OpenClaw、ZCode、Hermes、Pi；Claude Code 限定 DeepSeek Anthropic 端点），`panda agents` 会标出各 agent 的注入支持。策略用 `panda config set injection auto|always|never` 切换。
 
 ## 任务与调度
 
@@ -84,13 +84,13 @@ OpenPanda 自己不执行长程任务，而是委派给设备上安装的 agent 
 
 **能不能用说话的方式发任务？**
 
-`panda voice` 是免手入口（桌宠 / 移动场景）：唤醒词 → 转写 → 走和 `panda ask` 完全相同的路径 → 打印并朗读回答，与 REPL / `ask --continue` 共用同一条持久会话（在一台设备上说，回终端接着问）。需要本地语音依赖：`pip install openwakeword faster-whisper pyaudio numpy`（默认后端不需要密钥）；缺依赖时会直接打印原因并退出。`--once` 只处理一句，`--mute` 只打印不朗读。语音入口没有 `--authorize`，不可逆命令一律进 `review`。
+`panda voice` 是免手入口（桌宠 / 移动场景）：唤醒词 → 转写 → 走和 `panda ask` 完全相同的路径 → 打印并朗读回答，与 REPL / `ask --continue` 共用同一条持久会话（在一台设备上说，回终端接着问）。需要本地语音依赖：`pip install openwakeword faster-whisper SpeechRecognition pyaudio numpy`（默认后端不需要密钥）；缺依赖时会直接打印原因并退出。`--once` 只处理一句，`--mute` 只打印不朗读。语音入口没有 `--authorize`，不可逆命令一律进 `review`。
 
 ## 多设备
 
 **多台设备怎么组网？**
 
-每台设备安装后 `panda init`，在 `network` 段配置对端地址（`peers`）与共享密钥（`shared_secret`），然后各自跑 `panda daemon`。`panda nodes` 查看节点目录与在线状态。
+每台设备安装后 `panda init`，然后两条组网路径任选：**蓝牙式配对**——一台上 `panda pair <对端地址>` 发起并显示短配对码，另一台 `panda pair confirm` 核对同一码确认，共享密钥经加密通道自动下发，不用手抄；**LAN 发现 + 指纹准入**——同一局域网内 `panda nodes` 会列出发现的待准入设备，`panda nodes admit <id>` 按指纹确认入伙，`nodes verify` 可把 Ed25519 指纹人工钉死。手工方式仍然可用：在 `network` 段配置对端地址（`peers`）与共享密钥（`shared_secret`，只经 `OPENPANDA_SHARED_SECRET` 注入更安全），各自跑 `panda daemon` 即可。`panda nodes` 查看节点目录、在线状态与信任档。
 
 **为什么对外监听启动被拒绝？**
 
@@ -120,4 +120,4 @@ OpenPanda 自己不执行长程任务，而是委派给设备上安装的 agent 
 
 **REPL 里会话上下文能存多久？**
 
-持久化在 `~/.local/state/openpanda/conversation.json`，24k 字符预算自动裁剪最旧内容；`/new` 清空，`/history` 查看，`panda ask --continue` 接续。
+按项目分片持久化在 `~/.local/state/openpanda/conversations/<项目>.json`（项目外为 `default.json`，旧的 `conversation.json` 首次访问自动迁移）；24k 字符预算超出时优先把溢出的历史折叠成模型写的 running digest（自动压缩），模型不可达才退化为直接裁剪最旧内容。`/new` 清空，`/history` 查看，`panda ask --continue` 接续；长线程还可用 `panda session fork` 在任意轮次分叉。

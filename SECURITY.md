@@ -19,13 +19,19 @@ OpenPanda 是一个运行在你自己设备上的 P2P 任务编排内核。本�
   伪造同意（多跳中继 + TOFU 的固有边界，该路径会打印警告），未钉住的身份按
   首次见到即信任处理。因此「不可逆操作必须我审批」这条约束只在**单机与可信
   内网**成立；网络里一旦出现你不完全信任的节点就不再成立。
-- **传输加密边界。** WebSocket 总线的帧本身不加密：hello 只认证对端。防护分三层：
-  出站明文门禁默认拒绝 loopback / Tailscale（100.64.0.0/10、`fd7a:115e:a214::/48`、
-  `*.ts.net`）之外的 `ws://` 拨号——其余目标必须 `wss://`（反向代理终结 TLS）、
-  `punch:` 对端（UDP 平面）或显式 `network.allow_cleartext`；UDP 数据报平面
-  全程 AES-256-GCM 封装（密钥由共享密钥域分离派生）；DTN bundle v2+ 载荷同样
-  AES-256-GCM 加密并签名，篡改的 bundle 不会被投递。**明文链路只允许出现在已由
-  底层（本机 / WireGuard / Tailscale / TLS 代理）加密的路径上。**
+- **传输加密边界。** v0.0.11 起，双方在 hello 里宣告 `sessaead` 能力且存在
+  共享密钥时，连接在握手后武装逐连接 AES-256-GCM——密钥由共享密钥与两端
+  hello nonce 经 HKDF 派生，绑定两端身份，逐拨号更新；此后每个应用帧密封
+  传输，链路上的观察者读不到任务面也伪造不了帧。协商不出会话加密的链路
+  才过明文门禁（握手后判定，`cleartextOK`）：`ws://` 只允许拨向 loopback /
+  Tailscale（100.64.0.0/10、`fd7a:115e:a214::/48`、`*.ts.net`）或
+  `network.allow_cleartext_for` 列出的网段/主机，其余目标必须 `wss://`
+  （反向代理终结 TLS）、`punch:` 对端（UDP 平面）或显式
+  `network.allow_cleartext`；入站明文同理按来源 IP 裁决。UDP 数据报平面
+  全程 AES-256-GCM 封装（密钥由共享密钥域分离派生）；DTN bundle v2+ 载荷
+  同样 AES-256-GCM 加密并签名，篡改的 bundle 不会被投递。**明文链路只允许
+  出现在已由底层（本机 / WireGuard / Tailscale / TLS 代理）加密的路径上，
+  或由 `sessaead` 在握手后自行武装。**
 - **审计链已签名，锚点在库内。** `task_events` 与 `audit_log` 的哈希链逐行携带
   Ed25519 签名（P2-9）；验证时绑定本节点公钥（换钥重签会被拒绝），且已签名链
   不允许再出现未签名行（防尾部剥离）。但签名锚点在数据库本身：**从未签过名的
@@ -41,8 +47,13 @@ OpenPanda 是一个运行在你自己设备上的 P2P 任务编排内核。本�
   保留地址，防止把节点变成内网探测跳板。经 `skills.hub_url` 配置的私有 hub
   不受此限——那是管理员自己的部署选择。
 
-由此推论：**每个节点视为同等完全信任，任一节点失陷即全网失陷。**
-不要把 mesh 扩展到不完全受控的机器。
+由此推论：**默认同等完全信任——缺省下每个节点视为 mesh 档，任一节点失陷
+即全网失陷。** 不要把 mesh 扩展到不完全受控的机器。v0.0.11 起可按对端
+身份钉信任档（`network.peers[].trust` / `panda nodes trust`，experimental）：
+`guarded` 档钳制发向它的委派暴露面并按 `network.trust.accept.guarded` 审议
+它起源的工作，`open` 档只存在于目录、不收发推送态委派——信任档是本机的
+单方面断言，能收窄你对某个对端的暴露，但不改变「持有共享密钥即为成员」
+这一底层事实。
 
 ## 完整性校验
 
@@ -57,7 +68,9 @@ Ed25519 签名；`panda audit verify --task <id>` 校验单个任务的事件链
 
 1. **只走加密 overlay 互联。** 节点间通过 Tailscale / WireGuard 等加密网络相连，
    `listen_addr` 绑定 overlay 网卡；**绝不把总线端口直接暴露到公网或不可信局域网**。
-   若某段链路确要跨公网，用反向代理终结 TLS，并把 peer 写成 `wss://host:port`。
+   `sessaead` 会话加密让可信内网的链路保密性有了底线，但它只认共享密钥、不阻止
+   持有密钥者的主动攻击——暴露面仍要最小化。若某段链路确要跨公网，用反向代理
+   终结 TLS，并把 peer 写成 `wss://host:port`。
 2. **密钥只经环境变量注入。** `shared_secret` 只用 `OPENPANDA_SHARED_SECRET`
    提供，不写进 `config.yaml`，不进任何公共仓库。生成示例：`openssl rand -hex 32`。
 3. **不给未知远端声明 Tier-2 能力。** `capabilities.yaml` 中的不可逆（tier-2）

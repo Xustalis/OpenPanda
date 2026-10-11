@@ -23,16 +23,17 @@ is steering toward, written down so contributions can align with it.
 
 ## Stage 2 — distribution hardening (next)
 
-- [ ] **Release channel discipline** — `make release` artifacts exist; add
-      signed checksums (SHA256SUMS + minisign), a GitHub Release pipeline,
-      and a changelog-per-tag policy.
+- [~] **Release channel discipline** — GitHub Release pipeline (`release.yml`)
+      + `checksums.txt` SHA-256 + changelog-per-tag policy landed and are
+      enforced by the release gate; still open: detached signing of the sums
+      (minisign — the updater already verifies `checksums.txt.sig` when
+      `OPENPANDA_UPDATE_PUBKEY` is set).
 - [x] **Homebrew tap** (`brew tap Xustalis/openpanda && brew install openpanda`) — formula
       built from release artifacts (`deploy/homebrew/openpanda.rb`, pushed to the tap by
       release.yml); keep `go install github.com/Xustalis/OpenPanda@…`
       working for Go users.
-- [ ] **First-run experience** — `panda init` (interactive config + capability
-      card generation, today hand-edited) so a new node reaches the network
-      without reading two YAML files.
+- [x] **First-run experience** — `panda init` interactive config + capability
+      card generation shipped; the full-screen TUI adds a first-run wizard.
 - [ ] **Packaging** — `.deb`/`.rpm` for the SBC use case (Orange Pi et al.),
       systemd unit templates in `contrib/`, LaunchAgent plist for macOS.
 - [x] **CLI self-update** — `panda web` / `/web` check the release channel in

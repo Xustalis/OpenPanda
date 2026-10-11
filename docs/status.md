@@ -1,6 +1,6 @@
 # 项目现状
 
-> 记录时间：2026-08-30（`main`，v0.0.7 发布）；2026-08-31 更新（审查问题全面修复一轮，已并入 v0.0.7）；2026-09-02 更新（v0.0.8-preview：项目一等公民、审批门重写、plan 看板端点，及当日审查的 P1/P2 修复）；2026-09-05 更新（v0.0.8-preview：正式开源项目收尾发布，管理工具族、TUI 运行中转向、模型主动故障转移与注入、多模型注册中心全面落地）；2026-09-06 更新（技能中心与自主发现安装、TUI 全屏化与首次运行向导、Web 技能面板与会话取消）；2026-09-19 更新（随 `v0.0.8-preview` 预发布完成多轮验证）；2026-09-20 更新（`v0.0.8` 正式发布：全链路提示词多语言策略、Provider 地理归属分类、敏感凭据自动脱敏、SQLite WAL 并发优化与发版门禁打通）；2026-09-23 更新（`v0.0.9-beta`：混合传输/DTN 架构完成——延迟加权 mesh 路由、DTN bundle 上线、令牌预算、影子副本、执行器通路、agent 自管理面 `panda mcp`、分块可续传 artifact 推送、DTN 多跳中继与会话检查点；模型配置面完整落地，模型管理 TUI 重设计为全宽注册表 + 单屏表单）；2026-09-25 更新（`v0.0.9` "Periapsis" 正式发布：UDP 数据报平面与 mesh 协调的 NAT 打洞、DTN bundle 载荷加密 v2、接触计划路由、Ed25519 节点身份与签名授权、受限设备 lite 构建、审批记忆与项目级审批策略、执行归属标注、Web 侧栏节点状态徽标、任务管线与 TUI 可靠性一轮修复——批量工具调用、DSML 兼容、审批处置语义、队列管理工具族；安全面收紧：skill URL 导入防 SSRF、`/api/*` 移除 query token 认证、STUN 按源限流；破坏性变更：移除内置模型厂商默认值，`panda init`/`panda model add` 为配置入口；发布前追加：`panda web --lan` 默认支持的局域网分享（自动临时令牌 + 可分享链接）、`panda task add --agents a,b --mode parallel|serial` 单任务多 harness 编排（复用 plan/DAG）、跨进程队列认领轮询 2s→400ms）；2026-10-06 更新（安全加固一轮：`task_events`/`audit_log` 签名验证绑定本节点密钥并拒绝签名尾部剥离，`audit_log` 逐行 Ed25519 签名（迁移 v37）；更新器支持 `OPENPANDA_UPDATE_PUBKEY` 带外 Ed25519 验签与 `OPENPANDA_UPDATE_REPO` 自托管通道；消息去重表改为按最旧淘汰；`SECURITY.md`/配置示例与代码现状对齐）；2026-10-06 性能一轮（能力匹配改为零分配 on-the-fly 分词——2709ns/40allocs → 1619ns/0allocs；artifact 数据面 1 MiB 读缓冲池化并移除每块一次的无用 DB 写；面板会话总结 sweep 从「全表任务行 + 逐任务事件时间线」改为单条 NOT EXISTS 查询；新增 `make bench` 基准：路由匹配/决策、控制与 1 MiB 数据帧编解码、消息去重；实测接收侧编解码 ~86 MB/s、发送侧 ~184 MB/s，结构性提升需二进制数据道，已记录待设计）；2026-10-06 更新（`v0.0.10-preview` "Apoapsis" 预览发布：LAN 自动发现与指纹确认准入、节点 TOFU 密钥钉住、工作树随委派文件任务同行、澄清回路、actuator 派发与五个参考驱动（含串口 MCU）、Pi adapter 与免 Python 内建 generic 执行器、启动目录即项目空间——连同当日的安全加固与性能一轮；破坏性变更：非加密底层上的明文 `ws://` 拨号被拒绝）；2026-10-07 更新（许可证切换为 AGPL-3.0-or-later + 商业双许可，存量 MIT 时代同意经 `terms_version` 重弹一次条款；`feat/session-tree-rpc-auth` 分支未发布工作：会话树 `panda session fork`/`tree` + `/fork` + `POST /api/sessions/{id}/fork`、溢出历史自动压缩成 running digest、`panda rpc` NDJSON-over-stdio 嵌入面、`panda auth login anthropic` 订阅 OAuth——均标 Experimental；修复两个 PTY 契约测试夹具缺少 `terms_version` 被重授权门拦截的问题，`make gate-all` 全绿）；2026-10-07 更新（`v0.0.10` "Apoapsis" 正式发布：会话树/自动压缩/`panda rpc`/订阅 OAuth 随 stable 合入 main，发布流水线全绿、11 个产物上架、Homebrew tap 同步；发布期修复——`session fork` 的 `--at` 值 flag 解析、Windows auth 0600 断言、三处 CI 定时 flake 放宽；五语 README 与脚本/文档中的 preview 语义清理）。
+> 记录时间：2026-08-30（`main`，v0.0.7 发布）；2026-08-31 更新（审查问题全面修复一轮，已并入 v0.0.7）；2026-09-02 更新（v0.0.8-preview：项目一等公民、审批门重写、plan 看板端点，及当日审查的 P1/P2 修复）；2026-09-05 更新（v0.0.8-preview：正式开源项目收尾发布，管理工具族、TUI 运行中转向、模型主动故障转移与注入、多模型注册中心全面落地）；2026-09-06 更新（技能中心与自主发现安装、TUI 全屏化与首次运行向导、Web 技能面板与会话取消）；2026-09-19 更新（随 `v0.0.8-preview` 预发布完成多轮验证）；2026-09-20 更新（`v0.0.8` 正式发布：全链路提示词多语言策略、Provider 地理归属分类、敏感凭据自动脱敏、SQLite WAL 并发优化与发版门禁打通）；2026-09-23 更新（`v0.0.9-beta`：混合传输/DTN 架构完成——延迟加权 mesh 路由、DTN bundle 上线、令牌预算、影子副本、执行器通路、agent 自管理面 `panda mcp`、分块可续传 artifact 推送、DTN 多跳中继与会话检查点；模型配置面完整落地，模型管理 TUI 重设计为全宽注册表 + 单屏表单）；2026-09-25 更新（`v0.0.9` "Periapsis" 正式发布：UDP 数据报平面与 mesh 协调的 NAT 打洞、DTN bundle 载荷加密 v2、接触计划路由、Ed25519 节点身份与签名授权、受限设备 lite 构建、审批记忆与项目级审批策略、执行归属标注、Web 侧栏节点状态徽标、任务管线与 TUI 可靠性一轮修复——批量工具调用、DSML 兼容、审批处置语义、队列管理工具族；安全面收紧：skill URL 导入防 SSRF、`/api/*` 移除 query token 认证、STUN 按源限流；破坏性变更：移除内置模型厂商默认值，`panda init`/`panda model add` 为配置入口；发布前追加：`panda web --lan` 默认支持的局域网分享（自动临时令牌 + 可分享链接）、`panda task add --agents a,b --mode parallel|serial` 单任务多 harness 编排（复用 plan/DAG）、跨进程队列认领轮询 2s→400ms）；2026-10-06 更新（安全加固一轮：`task_events`/`audit_log` 签名验证绑定本节点密钥并拒绝签名尾部剥离，`audit_log` 逐行 Ed25519 签名（迁移 v37）；更新器支持 `OPENPANDA_UPDATE_PUBKEY` 带外 Ed25519 验签与 `OPENPANDA_UPDATE_REPO` 自托管通道；消息去重表改为按最旧淘汰；`SECURITY.md`/配置示例与代码现状对齐）；2026-10-06 性能一轮（能力匹配改为零分配 on-the-fly 分词——2709ns/40allocs → 1619ns/0allocs；artifact 数据面 1 MiB 读缓冲池化并移除每块一次的无用 DB 写；面板会话总结 sweep 从「全表任务行 + 逐任务事件时间线」改为单条 NOT EXISTS 查询；新增 `make bench` 基准：路由匹配/决策、控制与 1 MiB 数据帧编解码、消息去重；实测接收侧编解码 ~86 MB/s、发送侧 ~184 MB/s，结构性提升需二进制数据道，已记录待设计）；2026-10-06 更新（`v0.0.10-preview` "Apoapsis" 预览发布：LAN 自动发现与指纹确认准入、节点 TOFU 密钥钉住、工作树随委派文件任务同行、澄清回路、actuator 派发与五个参考驱动（含串口 MCU）、Pi adapter 与免 Python 内建 generic 执行器、启动目录即项目空间——连同当日的安全加固与性能一轮；破坏性变更：非加密底层上的明文 `ws://` 拨号被拒绝）；2026-10-07 更新（许可证切换为 AGPL-3.0-or-later + 商业双许可，存量 MIT 时代同意经 `terms_version` 重弹一次条款；`feat/session-tree-rpc-auth` 分支未发布工作：会话树 `panda session fork`/`tree` + `/fork` + `POST /api/sessions/{id}/fork`、溢出历史自动压缩成 running digest、`panda rpc` NDJSON-over-stdio 嵌入面、`panda auth login anthropic` 订阅 OAuth——均标 Experimental；修复两个 PTY 契约测试夹具缺少 `terms_version` 被重授权门拦截的问题，`make gate-all` 全绿）；2026-10-07 更新（`v0.0.10` "Apoapsis" 正式发布：会话树/自动压缩/`panda rpc`/订阅 OAuth 随 stable 合入 main，发布流水线全绿、11 个产物上架、Homebrew tap 同步；发布期修复——`session fork` 的 `--at` 值 flag 解析、Windows auth 0600 断言、三处 CI 定时 flake 放宽；五语 README 与脚本/文档中的 preview 语义清理）；2026-10-10 更新（`v0.0.11-alpha` "Periapsis" 预览：hello 内协商的逐连接会话 AEAD 加密、蓝牙式 `panda pair` 配对、签名发现 beacon 与 `k:<pub>` 稳定身份、硬钉住路由、断链终局结论 outbox 托管重投、daemon 权威位仲裁、静默看门狗默认 240s 杀停滞 agent、二进制数据帧协商；`timeouts.silence_s` 语义变更——0/unset=默认 240s 杀而非禁用）；2026-10-11 更新（`v0.0.11-alpha-2`：控制台实况执行叙事、任务简报卡、CLI 流式对账、迁移连接池固定、Windows 适配器编码修复；未合入实验项：信任分区 mesh/guarded/open 三档与发送侧钳制、签名 `task_accept`、`routing.reputation` 本地信誉进路由分）。
 > 这份文档回答一个问题：**现在做到哪一步了，哪些能用、哪些还不能。**
 
 ## 一句话结论
@@ -45,8 +45,8 @@ P0 安全发现（路径穿越、结果送达、TUI 退出）已关闭，P1 安�
 |---|---|---|
 | 语音发布任务（桌宠入口） | 🟡 已接通，真机未验 | `cmd/panda/voice.go`（`panda voice`）+ `extensions/voice/*.py` |
 | 简单问题本地答、复杂问题外派 | ✅ | `internal/entry` 四分类：`answer` / `tool_call` / `task` / `plan` |
-| 一次多任务负载均衡到多台并行 | ✅ | `internal/scheduler/score.go`（空闲率 0.4 + 优先级 0.3 + 节点等级 0.2 + 排队深度 0.1，再乘心跳新鲜度衰减，半衰期 30 分钟） |
-| 多适配器各自独立调度 | ✅ | `internal/agents/registry.go` 注册 7 个 adapter；`requires: ["agent:codex"]` 是硬过滤条件 |
+| 一次多任务负载均衡到多台并行 | ✅ | `internal/scheduler/score.go`（资源效率 0.4 + 用户优先级 0.3 + 节点等级 0.2 + 等待时间 0.1，另有项目驻留 0.2、链路延迟 0.15、opt-in 信誉 0.1 三个附加项，再乘心跳新鲜度衰减，半衰期 30 分钟） |
+| 多适配器各自独立调度 | ✅ | `internal/agents/registry.go` 注册 10 个 adapter（另有 generic.py 通用桥）；`requires: ["agent:codex"]` 是硬过滤条件 |
 | 按硬件路由（显存任务不落到派上） | ✅ | `resource_profile` → `ledger.Fits`；未声明硬件的旧卡片按「沉默 ≠ 0」放行（`Declared()`） |
 | 跨机器多阶段流水线 | ✅ | `internal/plan` + `internal/core/plan.go`；阶段产物经 `internal/artifact` 分块搬运 |
 | 完成后上报、队列告知完成 | ✅ | `panda queue` / `panda task <id>` / `panda plan show <id>` |
@@ -63,6 +63,8 @@ P0 安全发现（路径穿越、结果送达、TUI 退出）已关闭，P1 安�
 | **工作树随委派同行**（v0.0.10） | 🟡 Experimental | `context_type=file` 仓库任务打包 `__worktree__` artifact（≤256 MiB），执行端私有目录跑完收回 |
 | **澄清回路**（v0.0.10） | 🟡 Experimental | agent 以 `PANDA_QUESTION:` 行挂起 → `panda approve <id> -m "答案"` 带答案恢复 |
 | **会话树 / 自动压缩 / RPC / 订阅 OAuth**（v0.0.10） | 🟡 Experimental | `panda session fork`/`tree`/`/fork`、溢出历史折叠为 running digest、`panda rpc` NDJSON-stdio、`panda auth login anthropic` |
+| **会话 AEAD + 蓝牙式配对**（v0.0.11-alpha） | 🟡 Experimental | hello `caps` 协商 `sessaead` 逐连接 AES-256-GCM（HKDF 绑两端 nonce/身份）；`panda pair` X25519 + 短验证码确认 + 密封下发共享密钥 |
+| **信任分区**（未发布实验） | 🟡 Experimental | `network.peers[].trust`：mesh/guarded/open 三档（`panda nodes trust`）；guarded 钳制委派暴露面 + 准入策略（`network.trust.accept.guarded`，可选 policy_llm）；签名 `task_accept`；`routing.reputation` 本地信誉 |
 | 引脚驱动舵机（香橙派） | 🟡 通路已落地，真机未验 | v0.0.10 actuator 派发：卡片声明 `actuators` + argv 模板，`spec.action_spec` 跨委派传递，执行端替换占位符跑驱动；`drivers/` 随发行包附带 servo/mic/camera/notify/mcu 五个参考实现 |
 | 最短路径多跳中继 | ✅ 图路由已落地 | 邻居广告构建链路状态图，边权取 `LinkMetrics` 的 RTT 采样（无测量走 `unknownLinkCost`），`graphFirstHop` 跑 Dijkstra 取全局最便宜路径的第一跳（`internal/scheduler/route.go`） |
 
@@ -96,7 +98,7 @@ panda voice                              # 同一条路径，改成说出来
 
 | 检查 | 结果 |
 |---|---|
-| `make gate`（fmt-check + build + vet + test + race） | exit 0 |
+| `make gate`（fmt-check + vet + build + adapter-test + test + race-focused） | exit 0 |
 | `make gate-all`（+ web-gate + 两个 TUI PTY 契约） | exit 0（2026-10-07 复验；修复了两个 PTY 夹具缺 `terms_version` 被条款重授权门拦截的问题） |
 | Web typecheck + 单测 + vite build | exit 0（79 tests，2026-10-07） |
 | P0 安全发现（路径穿越、结果送达、TUI 退出） | ✅ 已关闭 |
@@ -107,7 +109,7 @@ panda voice                              # 同一条路径，改成说出来
 | 语音链路真机跑通（唤醒 → 转写 → 派任务 → 朗读） | ❌ 只验了降级路径（缺 driver 时正确报错并退出） |
 
 语音 sidecar 默认后端不需要密钥，但需要本地依赖：
-`pip install openwakeword faster-whisper pyaudio numpy`。缺依赖时
+`pip install openwakeword faster-whisper SpeechRecognition pyaudio numpy`。缺依赖时
 `panda voice` 会打印 sidecar 自己的原因并退出 1，不会静默重启 python。
 
 ## 已知限制
@@ -175,7 +177,8 @@ NAT）打不通时需要 TURN 式中继兜底；contact-plan 预约窗口投递�
    审批停泊），项目跨设备旅行（记忆内联 + 工作树 artifact + 产出收回）。
 4. 信任面收尾：P2-8 per-node 密钥分发/准入（收口「未知来源同意」路径）；
    P2-9 审计链头外部存证。
-5. 未发布分支（`feat/session-tree-rpc-auth`）：会话树 fork、自动压缩、
-   `panda rpc`、订阅 OAuth 合入前需真实模型与真实订阅各跑一轮；
-   `terms_version` 重授权路径已在 PTY 契约中复验。
+5. 信任分区收尾（未合入实验项）：guarded/open 两档的行为、签名
+   `task_accept` 与信誉路由需在真实多机上过一轮再谈转正；会话树/自动
+   压缩/`panda rpc`/订阅 OAuth 已随 v0.0.10 合入（Experimental），真实
+   模型与真实订阅的验证仍欠一轮。
 6. i18n 收尾、链路度量带宽/丢包维度、对称 NAT 的 TURN 式中继兜底，按需排期。

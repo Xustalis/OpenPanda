@@ -2,17 +2,21 @@
 
 > 本文从 `internal/bus` 包提炼，描述节点间任务委派的传输与线协议。
 > 以代码为准（`msg.go` / `payloads.go` / `ws.go` / `udp.go` / `auth.go` / `ed25519.go` /
-> `bundle.go`）；与代码冲突时以代码为准。
+> `sessenc.go` / `bundle.go`）；与代码冲突时以代码为准。
 
 ## 传输层
 
 有两条数据面，跑的是**同一套信封**（见下）：
 
-- **WebSocket**（`gorilla/websocket`），端点路径 `/ws`。`ws://` 本身不加密，
-  但出站有明文门禁（`cleartextOK`）：`ws://` 只允许拨向 loopback /
-  Tailscale 形态的目标（`100.64.0.0/10`、`fd7a:115e:a214::/48`、`*.ts.net`，
-  即链路已被下层加密或出不了本机），其余目标必须 `wss://` 或走 `punch:`
-  UDP 端点；`network.allow_cleartext` 是运维侧的显式退出开关。
+- **WebSocket**（`gorilla/websocket`），端点路径 `/ws`。TCP 层的 `ws://`
+  本身不加密，但 hello 交换完成后会按需武装**会话加密**（见下「会话
+  AEAD」）；协商不出加密的链路才过明文门禁（`cleartextOK`，握手后判
+  定）：`ws://` 只允许拨向 loopback / Tailscale 形态的目标
+  （`100.64.0.0/10`、`fd7a:115e:a214::/48`、`*.ts.net`，即链路已被下层
+  加密或出不了本机）或 `network.allow_cleartext_for` 列出的网段/主机，
+  其余目标必须 `wss://` 或走 `punch:` UDP 端点；`network.allow_cleartext`
+  是运维侧的显式退出开关。入站同理：验完 hello 的对端若武装不了
+  sessaead，来源 IP 不在安全/放行集合内也会被断开。
 - **UDP 数据报平面**（`udp.go`，NAT 场景）。TCP/WebSocket 会话建立不了的
   链路靠它打通和兜底。每个数据报是四种帧之一（4 字节头区分）：
   - `kind 1 punch` / `kind 2 punch_ack`：JSON `PunchFrame`，HMAC 签名
@@ -28,7 +32,28 @@
 - 连接限额：全局并发连接数 `max_connections` 与单 IP 并发连接数 `max_connections_per_ip`
   （0 = 不限），超限返回 `503`——慢连接 / 握手型 DoS 的第一道闸。
 - 入站连接有一个**有界的握手窗口** `defaultHelloTimeout = 10s`：
-  第一条消息必须是合法 `hello`，否则断开。
+  第一条消息必须是合法 `hello`，否则断开。未认证连接上除 `hello` 外唯一
+  受理的帧是 `pair_hello`（LAN 配对入口，见下）。
+
+## 会话 AEAD（sessaead）
+
+`ws://` 之上的帧级加密，v0.0.11 起按能力协商（hello `caps` 宣告
+`sessaead`，不解析版本号）：双方 hello 都带 nonce 且存在共享密钥时，
+`SessionAEAD` 以 `HKDF-SHA256(secret, info=domain‖dialerID‖listenerID‖
+dialerNonce‖listenerNonce)` 派生每连接 AES-256-GCM。此后每个应用帧密封为
+`nonce(12) ‖ AEAD(tag ‖ payload)`，一律走 BinaryMessage；`tag` 区分密封内
+的 JSON 文本帧（0x01）与数据帧（0x02）。nonce 逐拨号随机、密钥绑定两端
+身份——抓包重放 hello 得不出会话密钥，拆 `caps` 降级明文只会撞回上面的
+明文门禁（fail closed）。对端不支持 `sessaead` 时链路保持明文并交由明文
+门禁裁决，旧版本互通不受影响。
+
+## 二进制数据帧（binart）
+
+hello `caps` 宣告 `binart` 的对端之间，承载批量字节的信封
+（`artifact_chunk` / `artifact_push`）可以走 WS 二进制帧：2 字节头部长度
++ JSON 头 + 原始字节，省掉 base64 的 4/3 膨胀。发送侧先查 `caps` 再选编
+码，混合版本链路退回 JSON 形态；二进制帧只在直连上使用（中继/出停靠
+JSON 重打包）。
 
 ## 帧与尺寸
 
@@ -100,18 +125,19 @@
 
 | `type` | 负载结构 | 说明 |
 |---|---|---|
-| `hello` | `HelloPayload` | 连接时声明身份：`card` 摘要 + HMAC `sig`（绑 `ts`/`nonce`）+ Ed25519 `pub_key`/`ed_sig` + `udp_port` |
+| `hello` | `HelloPayload` | 连接时声明身份：`card` 摘要 + HMAC `sig`（绑 `ts`/`nonce`）+ Ed25519 `pub_key`/`ed_sig` + `udp_port` + `caps` + `authoritative` |
+| `hello_reject` | `HelloRejectPayload` | 握手失败时服务端在断连前给出的唯一回执：`reason` ∈ `auth`/`identity`/`replay` |
 | `join` | — | 加入（常量定义在 `bus`，处理在核心层） |
 | `heartbeat` | `HeartbeatPayload` | 状态 + 容量；可顺带最新能力卡 `card` |
 | `task_delegate` | `TaskDelegatePayload` | 任务移交（核心帧，见下） |
-| `task_accept` | `TaskAcceptPayload` | 接受任务 |
-| `task_decline` | `TaskDeclinePayload` | 拒绝任务，附 `reason` |
+| `task_accept` | `TaskAcceptPayload` | 接受任务；新节点附 Ed25519 签名 `sig`/`pub`/`ts` |
+| `task_decline` | `TaskDeclinePayload` | 拒绝任务，附 `reason`；可选机器可读 `reason_code` |
 | `task_progress` | `TaskProgressPayload` | 执行方心跳，按续租节拍上行 |
 | `task_result` | `TaskResultPayload` | 完成结果（见下） |
 | `task_retry` | — | 重试（常量在 `bus`） |
 | `task_transfer` | — | 任务转移（常量在 `bus`） |
 | `task_cancel` | `TaskCancelPayload` | 取消，附 `reason` |
-| `task_resume` | `TaskResumePayload` | 对「停在审批」的重新放行（可带澄清答案 `answer`） |
+| `task_resume` | `TaskResumePayload` | 对「停在审批」的重新放行（可带澄清答案 `answer`；`accept` 置位时是把已接受处置镜像到对侧停驻副本，review→done，不携带任何再执行同意） |
 | `context_fetch` | `ContextFetchPayload` | 向源节点要完整上下文快照 |
 | `context_ack` | `ContextAckPayload` | `context_fetch` 的应答 |
 | `artifact_fetch` | `ArtifactFetchPayload` | 按 offset 拉一段工件 |
@@ -125,16 +151,27 @@
 | `dtn_bundle` | `DTNBundlePayload` | 一个 CBOR 编码的 DTN bundle 原样透传（见下） |
 | `punch_offer` | `PunchOfferPayload` | NAT 打洞协调：会话 nonce + 候选端点 + TTL |
 | `punch_ready` | `PunchOfferPayload` | 应答 offer：回显 nonce，附己方候选端点 |
+| `pair_hello` | `PairHelloPayload` | LAN 配对发起（未认证连接上除 hello 外唯一受理的帧）：会话 id + 临时 X25519 公钥 + Ed25519 身份 + nonce |
+| `pair_ready` | `PairReadyPayload` | 配对应答：对端的 X25519/nonce/身份，两侧由此推出同一短验证码 |
+| `pair_secret` | `PairSecretPayload` | 配对确认后投递共享密钥：AES-256-GCM 密封（HKDF(dh, nonces)），仅 responder→initiator |
+| `pair_reject` | `PairRejectPayload` | 配对终止：`rejected`/`expired`/`busy` |
 
 ## 关键帧细节
 
 ### `hello`
 `node_id`、`ver`（版本）、`card`（能力摘要的紧凑 JSON，原始负载）、`ts`、`nonce`、
 `sig`、`pub_key`、`ed_sig`（Ed25519 身份对，见认证节）、`udp_port`（数据报平面
-监听端口，0 = 无 UDP 面）。能力摘要刻意以原始 JSON 透传，让传输层与持有
-`CapabilitySummary` 类型的 ledger 包解耦。hello **应答**额外带 `you`——对端
-观察到本连接来源 IP，是白送的反射地址发现（不签名：篡改它只换来错误的候选
-列表，打洞握手本身会识破）。
+监听端口，0 = 无 UDP 面）、`caps`（可选线能力清单：`sessaead` 会话加密、
+`binart` 二进制数据帧——不认识某项能力的对端只是不启用它）、
+`authoritative`（声明发送进程持有节点身份锁，同 id 仲裁让真正的 daemon 从
+借用引擎的兄弟进程手里收回对端边）。能力摘要刻意以原始 JSON 透传，让传输层
+与持有 `CapabilitySummary` 类型的 ledger 包解耦。hello **应答**额外带
+`you`——对端观察到本连接来源 IP，是白送的反射地址发现（不签名：篡改它只
+换来错误的候选列表，打洞握手本身会识破）。
+
+hello 校验失败时服务端回 `hello_reject`（`reason`：`auth` 签名/密钥不符、
+`identity` id 冲突或已钉住身份换钥、`replay` 签名被消费）再断开——这是
+未认证通道上唯一的回执帧，不带任何从密钥派生的内容。
 
 ### `heartbeat`
 `status`（`online`/`busy`/`offline`/`draining`——维护排空态，入站委派被谢绝）、
@@ -154,9 +191,11 @@
   （fleet 面板的版本错位告警即拿它与自身构建对比）。
 
 ### `task_delegate`
-任务移交（§10.3 示例）。除 `task_id` / `intent` / `spec_json` / `requires` /
-`preferred_node` / `chain`（防环链） / `timeout_ms` / `max_retries` / `complexity` /
-`risk` / `attempt_id` 外，还有三类要点：
+任务移交（§10.3 示例）。除 `task_id` / `parent_id` / `project` / `title` /
+`context_type` / `intent` / `spec_json` / `requires` / `preferred_node`（软提示）/
+`target_node`（硬钉住：能解析则执行或向其转发，解析不到则如实 decline）/
+`chain`（防环链） / `timeout_ms` / `max_retries` / `complexity` / `risk` /
+`attempt_id` / `resume_session_id` / `user_locale` 外，还有几类要点：
 
 - **上下文传递**（§12.4）由 `context_level` 决定执行方如何拿到完整上下文：
   - `pointer`：`context_hash` 指向一份执行方可能已有的快照；缺失时向源节点拉取。
@@ -179,12 +218,44 @@
 - **计划面**（v0.0.6）：`plan_id` / `stage_id` 标识该阶段供编排者审计，
   `inputs`（`ArtifactRef` 列表）声明每个前置阶段打包产物及其所在节点，
   执行方据此拉取起始树。独立任务为空。
+- **传输与预算**：`transport`（`live` | `dtn`）选定实时链路还是 store-and-
+  forward；`deadline_unix` 是 DTN 任务的绝对期限（过期即失效而非租约杀）；
+  `depth`/`delegation_budget`/`token_budget` 是因果深度与逐跳递减的网状
+  配额——归零的任务只能执行或 decline，不再路由。`bundled_artifacts`
+  是主动推送形态自带的输入工件（§8.3 fat-bundle）。
+- **信任钳制**（信任分区，experimental）：发向 `guarded` 档对端的委派按
+  `network.trust.send.guarded` 裁剪暴露面——`context_level` 最高
+  `pointer`（快照只在审计拉的 `context_fetch` 里出网）、`project_pack`/
+  `inputs`/同意签名一律剥离；会因钳制失去必备输入的任务改走重路由而非
+  降级送达。`open` 档对端不发也不收推送态委派（offer/bid 市场未建）。
+
+### `task_accept` / `task_decline`
+
+`task_accept` 是接受回执；新节点附 `sig`/`pub`/`ts`——执行方 Ed25519 对
+(task, attempt, signer, ts) 的签名，委派方与中继各自验签（>5min 偏移、
+钥不符、畸形一律丢弃）。同意说「什么可以跑」，签名接受说「谁同意跑」
+——转发任意一侧都无法伪造另一侧；无签名的旧节点帧仍兼容。
+
+`task_decline` 在人读 `reason` 之外可带机器稳定 `reason_code`：
+`trust_open_origin`（源档为 open，推送态起源被拒）、`trust_policy_refused`
+（接收方准入策略拒绝）、`trust_send_ceiling`（发送侧钳制剥掉了任务跑不了
+的依赖——正确响应是重路由而非重试）。空 code 是信任分区前的普通拒绝
+（drain、容量、防环），重路由处理不变。
 
 ### `task_result`
-`task_id` / `attempt_id` / `state`（执行方持久化的状态，旧节点可省略；
+`task_id` / `attempt_id` / `chain`（执行方的真实委派链，供丢失本地行的
+接收端重建上游路径）/ `state`（执行方持久化的状态，旧节点可省略；
 缺失时由 `ok` 推导 done/failed，新节点须保留 `review` 以免被父节点误升为 done）/
-`ok` / `exit_code` / `stdout` / `stderr` / `artifacts` / `tokens` / `cost` /
-`output_artifact`（该阶段打包产物的哈希，编排者记下来交给后继阶段作输入）。
+`approval_disposition`（这个 review 审批意味着什么：恢复执行、接受已完成
+工作、或信任准入复核——缺省按保守规则归类）/ `deferred`（结果报告的是托管
+收执而非执行：审批已停车进 outbox，等链路恢复再送——界面应显示「排队待送」
+而非失败退出码）/ `ok` / `exit_code` / `stdout` / `stderr` / `artifacts` /
+`tokens` / `cost` / `output_artifact`（该阶段打包产物的哈希，编排者记下来
+交给后继阶段作输入）/ `files_changed`（工作树相对路径清单，上限 200，
+让委派方看到任务实际动了什么而非只信 agent 叙述）/ `question`（agent 挂起
+的澄清问题，随 review 态带给源端，`task_resume.answer` 回答）/ `executor` /
+`agent` / `model` / `work_dir` / `duration_ms` / `session_id` /
+`agent_session_id`（归属标注：谁在哪跑的、跑了多久）。
 
 `stdout`/`stderr` 受 `maxWireText`（512 KiB）裁剪：子进程单流最多能产 8 MiB，
 而帧上限 4 MiB，若不裁剪结果就永远落不了地。裁剪保留**头尾**（开头是意图、
@@ -221,3 +292,18 @@
 结果，统一在 UDP 监听端口——打洞永远从共享 socket 喷出，NAT 开的洞就是监听
 口）。`punch_ready` 回显 nonce 并附己方候选，双方同时开喷。`network.peers` 里
 `punch:<node-id>` 形态的条目触发这条路径；打通的端点成为 `sendTo` 的回退路由。
+
+## LAN 发现 beacon 与配对
+
+发现面不在信封体系内，是独立的 UDP 广播（`internal/core/discovery.go`，
+`network.discovery_addr`，默认 `:7837`，`"off"` 关闭）：每 15s 一个
+`panda-beacon/1` 数据报（≤1 KiB），携带 id/addr/ver/pubkey/ts 与 Ed25519
+签名。beacon 只是**提示**、不是成员证明——签名钉住的是「这个地址宣称这个
+指纹」，防止局域网陌生人冒用他人 node id+公钥收割签名 hello；验签过的行进
+`pending_nodes`（60s TTL、64 行上限，已验签行优先挤掉未验签行），准入仍要
+`panda nodes admit`/`nodes add` 后的正常 hello 握手。自己的 beacon 与已入伙
+id 忽略不录；回环监听与无共享密钥的节点不广播。
+
+配对（`panda pair`）走上面 `pair_*` 四帧：X25519 临时交换 + 双侧短验证码
+人工确认 + AES-256-GCM 密封下发共享密钥——共享密钥永不明文过网，配对码
+比对挡住 MITM 中继（两端 DH 不同则验证码不同）。
