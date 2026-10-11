@@ -341,6 +341,12 @@ injection:
 #   # set -1 to disable the kill (the "no output for Xs" heartbeat notes still
 #   # post, the stall just is not aborted).
 #   silence_s: 240
+#   # Wall-clock budget for one native-ability command (card native exec).
+#   # Native work is not always short — a build, a benchmark, a data reduction
+#   # can legitimately run past the built-in 5-minute default, and until this
+#   # knob existed such a task was killed at 5m with "command timed out" and
+#   # no way to extend it. Unset keeps the 5-minute default.
+#   native_s: 1800
 #   # Cap on the execute → judge → re-dispatch loop per task. Default 5.
 #   supervise_rounds: 5
 

@@ -467,7 +467,15 @@ func printTaskResult(raw string) {
 	p := pal()
 	outcome := p.Success(p.MarkOK() + " ok")
 	if !res.OK {
-		outcome = p.Danger(fmt.Sprintf("%s exit %d", p.MarkFail(), res.ExitCode))
+		// A {"failed": reason} row never ran — a decline, a restart
+		// interruption, a parked pin that timed out. Rendering its zero
+		// exit code as "exit 0" reads like a success beside the ✗; the
+		// reason it never ran is printed in the body below.
+		if res.Failed != "" && res.ExitCode == 0 {
+			outcome = p.Danger(p.MarkFail() + " failed")
+		} else {
+			outcome = p.Danger(fmt.Sprintf("%s exit %d", p.MarkFail(), res.ExitCode))
+		}
 	}
 	fmt.Println(p.Heading("result:") + " " + outcome)
 	if res.Question != "" {

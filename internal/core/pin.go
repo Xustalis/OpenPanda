@@ -50,6 +50,12 @@ type pinResolution struct {
 	// and this fallback is what keeps the pin deliverable there. Callers
 	// report it so the fallback is visible, never silent.
 	viaLink bool
+	// viaGraph marks a resolution that came from the gossiped topology: no
+	// local row exists for the destination, but an online peer's Neighbors
+	// advertisement names it — the node is real, just more than one hop away.
+	// The forward goes to the path's first hop, and every hop re-resolves the
+	// pin until it lands on a node that does hold the row.
+	viaGraph bool
 }
 
 // resolvePin maps ref to a node in this node's directory view. Resolution
@@ -139,7 +145,10 @@ func (c *Core) resolvePin(ctx context.Context, ref string) pinResolution {
 	case staleCount > 0:
 		return pinResolution{targetID: staleHit.ID, node: staleHit, found: true}
 	default:
-		return c.resolvePinViaLink(ctx, ref)
+		if res := c.resolvePinViaLink(ctx, ref); res.found {
+			return res
+		}
+		return resolvePinViaGraph(ref, nodes, c.nodeID)
 	}
 }
 
@@ -207,6 +216,89 @@ func (c *Core) resolvePinViaLink(ctx context.Context, ref string) pinResolution 
 	return pinResolution{targetID: hit, found: true, viaLink: true, online: live[hit]}
 }
 
+// resolvePinViaGraph is the last-resort resolution for a pin naming a node
+// this directory never gossiped a row for: a node visible only as a
+// neighbour of a node we DO know. Mac↔Pi through Windows is the canonical
+// case — Mac's directory holds the Windows row, whose Neighbors advertise
+// "opi3b", and that edge is the only place the Pi exists at all. Without
+// this, a `--preferred` or stage pin to a multi-hop node declines "not in
+// the directory" while the unscored route reaches it fine.
+//
+// The match is against advertised neighbour ids (and their configured-name
+// segments), the same forms a live-conn fallback accepts. Two or more
+// DISTINCT advertised ids answering to one ref stay ambiguous — the same
+// misrouting guard the row scan applies. A stable-identity ref (k:<pubkey>)
+// cannot graph-resolve: no row means no pubkey is on file here, and the
+// next hop needs a routable id to re-resolve against its own directory.
+//
+// Trust posture: the edge comes from an authenticated peer's own link-state
+// advertisement — the same data unpinned graph routing already routes on —
+// so believing it is no new trust. The pin's honesty contract is preserved
+// downstream: the hop that does hold the destination's row runs the real
+// capability fit, and the destination's own pin gate is the final check.
+func resolvePinViaGraph(ref string, nodes []ledger.Node, self string) pinResolution {
+	if strings.HasPrefix(ref, stableIDPrefix) {
+		return pinResolution{}
+	}
+	var dest string
+	var sawOnline bool
+	ambiguous := false
+	for _, n := range nodes {
+		for _, nb := range n.Neighbors {
+			if !strings.EqualFold(nb, ref) && !strings.EqualFold(scheduler.NodeNamePart(nb), ref) {
+				continue
+			}
+			if dest == "" {
+				dest = nb
+			} else if !strings.EqualFold(dest, nb) {
+				ambiguous = true
+			}
+			if n.Status == "online" || scheduler.IsSelfRow(n.ID, self) {
+				sawOnline = true
+			}
+		}
+	}
+	switch {
+	case dest == "":
+		return pinResolution{}
+	case ambiguous:
+		return pinResolution{found: true, online: sawOnline, viaGraph: true, ambiguous: true}
+	default:
+		return pinResolution{targetID: dest, found: true, online: sawOnline, viaGraph: true}
+	}
+}
+
+// pinGraphDirectory loads the directory rows RouteToFirstHop walks, plus this
+// node's own row (the graph's source vertex). A query failure or a node with
+// no self row yet yields a zero self — the path search then finds nothing,
+// which reads identically to "no live path" and parks the pin honestly.
+func (c *Core) pinGraphDirectory() (ledger.Node, []ledger.Node) {
+	var self ledger.Node
+	nodes, err := ledger.Query(c.db, "", "")
+	if err != nil {
+		c.logger.Warn("route pin: directory query failed", "err", err)
+		return self, nil
+	}
+	for _, n := range nodes {
+		if scheduler.IsSelfRow(n.ID, c.nodeID) {
+			self = n
+			break
+		}
+	}
+	return self, nodes
+}
+
+// pinWireDest names the identity the task's pin should carry on the wire:
+// the ultimate destination when the pin resolved through topology (the
+// decision's Target is then only the first hop), the forward target itself
+// otherwise.
+func pinWireDest(d scheduler.Decision) string {
+	if d.PinDest != "" {
+		return d.PinDest
+	}
+	return d.Target
+}
+
 // routePinned produces the routing decision for a task carrying a hard node
 // pin. Unlike scheduler.RouteP it never scores alternatives: the pin resolves
 // to self (run locally — when this node can actually serve the task), to a
@@ -241,8 +333,12 @@ func (c *Core) routePinned(ctx context.Context, ref string, chain []string,
 		}
 		return scheduler.Decision{Action: scheduler.ActionLocal, Reason: "pinned to this node"}
 	case res.ambiguous:
+		what := "online rows"
+		if res.viaGraph {
+			what = "advertised neighbours"
+		}
 		return scheduler.Decision{Action: scheduler.ActionDecline,
-			Reason: fmt.Sprintf("pinned node %q matches multiple online rows; use the node id", ref)}
+			Reason: fmt.Sprintf("pinned node %q matches multiple %s; use the node id", ref, what)}
 	case !res.found:
 		return scheduler.Decision{Action: scheduler.ActionDecline,
 			Reason: fmt.Sprintf("pinned node %q is not in the directory", ref)}
@@ -258,6 +354,28 @@ func (c *Core) routePinned(ctx context.Context, ref string, chain []string,
 		// parks for it when the link is down.
 		return scheduler.Decision{Action: scheduler.ActionForward, Target: res.targetID,
 			Reason: fmt.Sprintf("pinned to %s (configured peer — not in the local directory)", res.targetID)}
+	case res.viaGraph:
+		// Resolved through the gossiped topology only: the destination is
+		// real (a peer advertises the edge) but its row — and therefore any
+		// capability check — lives at least one hop out. The forward goes to
+		// the cheapest path's first hop, which re-runs this resolver against
+		// its fuller directory; the destination's own admission gate stays
+		// the final check. No live path means the pin parks for one, exactly
+		// the offline-row contract: the outbox holds custody until a link
+		// advertises a way through.
+		seen := make(map[string]bool, len(chain)+1)
+		for _, n := range chain {
+			seen[n] = true
+		}
+		self, nodes := c.pinGraphDirectory()
+		if hop := scheduler.RouteToFirstHop(self, nodes, res.targetID, seen); hop != "" {
+			return scheduler.Decision{Action: scheduler.ActionForward, Target: hop,
+				PinDest: res.targetID,
+				Reason:  fmt.Sprintf("pinned to %s — forwarded via %s (topology advertisement)", res.targetID, hop)}
+		}
+		return scheduler.Decision{Action: scheduler.ActionForward, Target: res.targetID,
+			PinDest: res.targetID,
+			Reason:  fmt.Sprintf("pinned to %s — no live path in the advertised topology; parking until reachable", res.targetID)}
 	case len(requires) > 0 && !res.node.Matches(requires):
 		return scheduler.Decision{Action: scheduler.ActionDecline,
 			Reason: fmt.Sprintf("pinned node %q cannot satisfy requires %v", ref, requires)}

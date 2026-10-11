@@ -232,6 +232,41 @@ func TestCardListAndShow(t *testing.T) {
 	}
 }
 
+// TestCardToolsSeeTransitNodes pins the partial-mesh visibility fix: a node
+// two hops away holds no local row, and the tools answered a bare "not
+// found" — which is how the orchestrating model concluded a live device was
+// offline and refused work the mesh could route. The peer's neighbor
+// advertisement is the evidence; both tools must surface it.
+func TestCardToolsSeeTransitNodes(t *testing.T) {
+	e, reg := newMgmtTestEngine(t)
+
+	relayCard := ledger.Card{Device: "relay-node", NodeKind: "physical",
+		Native: []ledger.NativeAbility{{ID: "sys:ping", Command: "true"}}}
+	if err := ledger.Register(e.db, relayCard, "relay-node", 1); err != nil {
+		t.Fatalf("register relay: %v", err)
+	}
+	// The relay advertises an edge to a node this directory never saw a row
+	// for — the Mac's view of the Orange Pi through Windows.
+	if err := ledger.UpdateAdjacency(e.db, "relay-node", `["far-pi"]`, "", "", ""); err != nil {
+		t.Fatalf("adjacency: %v", err)
+	}
+
+	list := runMgmtTool(t, reg, "card_list", nil)
+	if !strings.Contains(list, "经中继可达") || !strings.Contains(list, "far-pi（经 relay-node 中继）") {
+		t.Fatalf("card_list hides the transit node;\ngot:\n%s", list)
+	}
+
+	show := runMgmtTool(t, reg, "card_show", map[string]any{"name": "far-pi"})
+	if !strings.Contains(show, "relay-node") || !strings.Contains(show, "经") {
+		t.Fatalf("card_show(far-pi) does not name the relay;\ngot:\n%s", show)
+	}
+	// Name-part matching: the operator types the configured name.
+	show = runMgmtTool(t, reg, "card_show", map[string]any{"name": "far-pi@inst-9"})
+	if !strings.Contains(show, "relay-node") {
+		t.Fatalf("card_show by full transit id does not name the relay;\ngot:\n%s", show)
+	}
+}
+
 func TestTaskqListFilters(t *testing.T) {
 	_, reg := newMgmtTestEngine(t)
 

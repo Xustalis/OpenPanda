@@ -1952,9 +1952,22 @@ func (s *TaskStore) recoverBatchTx(ctx context.Context, tx *sql.Tx, from []strin
 		if _, err := tx.ExecContext(ctx, set, to, now, r.id); err != nil {
 			return 0, err
 		}
-		if err := s.recordEventTx(ctx, tx, r.id, EvRecover, map[string]any{
-			"from": r.state, "to": to, "disposition": disposition,
-		}); err != nil {
+		// The failure's cause rides the recover event itself: the re-push
+		// and fold readers build their payload from the result trail, and
+		// without a reason they synthesized "task is failed" — the
+		// delegator saw a generic failure while the executor's own log said
+		// "interrupted" (observed live: killing the Pi mid-bench surfaced
+		// as "task is failed" on the Mac). The row's result_json is
+		// deliberately left untouched (the evidence of what ran), and a
+		// separate EvResult would steal the "recover is the last event"
+		// invariant the audit chain keeps — so the reason is a `failed`
+		// field on the recover event, the same key every other failure
+		// writer uses.
+		ev := map[string]any{"from": r.state, "to": to, "disposition": disposition}
+		if to == StateFailed {
+			ev["failed"] = disposition
+		}
+		if err := s.recordEventTx(ctx, tx, r.id, EvRecover, ev); err != nil {
 			return 0, err
 		}
 	}

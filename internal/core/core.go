@@ -199,6 +199,21 @@ type Core struct {
 	// arrives.
 	pendingCtx sync.Map // string -> *pendingContext
 
+	// pendingCtxServe maps task_id|hash -> a context_fetch this node could
+	// not answer and relayed to its chain predecessor instead. It is the
+	// mid-chain half of the same fetch: the executor asks the node that
+	// handed it the task (reachable by construction), that node either
+	// serves from its own snapshot cache or relays one hop further toward
+	// the origin, and the answer fans back out to every waiter.
+	pendingCtxServe sync.Map // string -> *ctxServeEntry
+
+	// pendingArtServe maps task_id|hash -> a relayed artifact pull this node
+	// is forwarding up-chain for downstream consumers: fetches from the
+	// registered requesters go to source, chunks from source fan back out.
+	// The same partial-mesh gap as pendingCtxServe — a two-hop executor
+	// cannot reach the producing node directly.
+	pendingArtServe sync.Map // string -> *artServeEntry
+
 	// execSlots reserves execution slots between the capacity check and the
 	// moment the task's row actually claims one (running/waiting_context). A
 	// bare count-then-spawn over-counts: N concurrent delegates that all read
@@ -1240,6 +1255,7 @@ func (c *Core) taskSweeps(ctx context.Context) {
 	c.wakeSatisfiedArtifactWaiters(ctx)
 	c.pruneStagedArtifacts(ctx)
 	c.sweepArtAuth()
+	c.sweepArtServe()
 	c.expireLeases(ctx)
 	c.sweepRetention(ctx)
 	// A row can go terminal — or park in review — out of band: cancelled

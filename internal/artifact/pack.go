@@ -92,6 +92,13 @@ type Manifest struct {
 	// held back — a protected path disappearing silently would read as the
 	// executor never producing it.
 	SkippedPaths []string `json:"skipped_paths,omitempty"`
+	// PackSkipped names entries the PACKER walked past but could not include
+	// — unreadable directories, files that vanished mid-pack — on packs that
+	// run lenient (PackSourceDir*). The paths are absent from the stream the
+	// hash covers, so the receiver sees an intact-but-smaller tree; the field
+	// is what keeps that smaller tree honest instead of silently partial.
+	// Strict packs leave it empty: they fail on the first unreadable entry.
+	PackSkipped []string `json:"pack_skipped,omitempty"`
 }
 
 // epoch is the fixed modification time stamped on every entry. Real mtimes are
@@ -111,24 +118,29 @@ var epoch = time.Unix(0, 0).UTC()
 // pinned. Change any of them and previously stored artifacts stop matching
 // their hashes.
 func Pack(root string, w io.Writer) (Manifest, error) {
-	return pack(root, w, 0)
+	return pack(root, w, 0, nil)
 }
 
 // pack is Pack with an explicit byte limit: 0 leaves the archive bounded only
 // by the filesystem that holds it, a positive limit rejects trees (and
-// streams) larger than limit.
-func pack(root string, w io.Writer, limit int64) (Manifest, error) {
-	entries, err := walk(root, limit)
+// streams) larger than limit. skipped non-nil selects the lenient walk: an
+// unreadable entry is recorded there and left out instead of failing the
+// whole pack (see PackSkipped).
+func pack(root string, w io.Writer, limit int64, skipped *[]string) (Manifest, error) {
+	entries, err := walkExcept(root, limit, nil, nil, nil, nil, skipped)
 	if err != nil {
 		return Manifest{}, err
 	}
-	return packEntries(entries, root, w, limit)
+	return packEntries(entries, root, w, limit, skipped)
 }
 
 // packEntries packs a pre-walked entry list — PackDir walks once so its
 // volume placement can budget against the same total the archive is built
-// from, instead of walking the tree twice.
-func packEntries(entries []entry, root string, w io.Writer, limit int64) (Manifest, error) {
+// from, instead of walking the tree twice. Lenient packs (skipped non-nil)
+// pass over a file that fails to open — the walk read it moments ago, so a
+// refusal now is a permissions boundary or a race, either of which records
+// the entry rather than abandoning the whole artifact.
+func packEntries(entries []entry, root string, w io.Writer, limit int64, skipped *[]string) (Manifest, error) {
 	// Hash what we write, as we write it: one pass, and the hash covers exactly
 	// the bytes the receiver will verify.
 	h := sha256.New()
@@ -142,7 +154,20 @@ func packEntries(entries []entry, root string, w io.Writer, limit int64) (Manife
 
 	meta := make([]EntryMeta, 0, len(entries))
 	for _, e := range entries {
-		if err := writeEntry(tw, root, e); err != nil {
+		var f *os.File
+		if !e.dir {
+			f, err = os.Open(e.abs)
+			if err != nil {
+				if skipped == nil {
+					return Manifest{}, fmt.Errorf("artifact: open %s: %w", e.rel, err)
+				}
+				if len(*skipped) < maxSkippedPaths {
+					*skipped = append(*skipped, e.rel)
+				}
+				continue
+			}
+		}
+		if err := writeEntry(tw, e, f); err != nil {
 			return Manifest{}, err
 		}
 		if !e.dir {
@@ -180,17 +205,26 @@ type entry struct {
 // the artifact travels to. limit bounds the total regular-file bytes; 0
 // accepts whatever the source tree holds.
 func walk(root string, limit int64) ([]entry, error) {
-	return walkExcept(root, limit, nil, nil, nil)
+	return walkExcept(root, limit, nil, nil, nil, nil, nil)
 }
 
 // walkExcept is walk with a directory-name skip set: a directory whose name is
-// in skip is pruned wholesale (contents never counted, never packed). Callers
-// use it to keep derived trees — dependency checkouts, VCS internals, caches —
-// out of an artifact that only needs the source. ignores additionally applies
-// the pack root's parsed .gitignore rules — only for packs that ship SOURCE,
-// never for executor-output packs where a gitignored build artifact (dist/,
-// *.out) is precisely the content that must come back.
-func walkExcept(root string, limit int64, skip map[string]bool, absSkip map[string]bool, ignores []ignoreRule) ([]entry, error) {
+// in dirSkip is pruned wholesale (contents never counted, never packed), and a
+// file whose base name satisfies fileSkip is left out individually — the hook
+// the source-pack privacy filter plugs into. Callers use dirSkip to keep
+// derived trees — dependency checkouts, VCS internals, caches — out of an
+// artifact that only needs the source. ignores additionally applies the pack
+// root's parsed .gitignore rules — only for packs that ship SOURCE, never for
+// executor-output packs where a gitignored build artifact (dist/, *.out) is
+// precisely the content that must come back.
+//
+// skipped selects the failure contract. Nil is strict: the first walk error
+// (an unreadable directory, a file that vanished mid-scan) aborts the whole
+// pack. Non-nil is lenient: the offending path is recorded (bounded by
+// maxSkippedPaths) and the walk continues — a partially readable tree packs
+// its readable half rather than shipping nothing at all, and PackSkipped is
+// what tells the receiver the tree is partial.
+func walkExcept(root string, limit int64, dirSkip map[string]bool, absSkip map[string]bool, ignores []ignoreRule, fileSkip func(string) bool, skipped *[]string) ([]entry, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, fmt.Errorf("artifact: stat root: %w", err)
@@ -211,6 +245,16 @@ func walkExcept(root string, limit int64, skip map[string]bool, absSkip map[stri
 	var total int64
 	err = filepath.Walk(root, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
+			if skipped != nil {
+				rel := path
+				if r, rerr := filepath.Rel(root, path); rerr == nil {
+					rel = filepath.ToSlash(r)
+				}
+				if len(*skipped) < maxSkippedPaths {
+					*skipped = append(*skipped, rel)
+				}
+				return nil
+			}
 			return err
 		}
 		rel, err := filepath.Rel(root, path)
@@ -241,11 +285,14 @@ func walkExcept(root string, limit int64, skip map[string]bool, absSkip map[stri
 		}
 		switch {
 		case fi.IsDir():
-			if skip[fi.Name()] {
+			if dirSkip[fi.Name()] {
 				return filepath.SkipDir
 			}
 			out = append(out, entry{rel: rel, abs: path, mode: fi.Mode().Perm(), dir: true})
 		case fi.Mode().IsRegular():
+			if fileSkip != nil && fileSkip(fi.Name()) {
+				return nil
+			}
 			total += fi.Size()
 			if limit > 0 && total > limit {
 				return fmt.Errorf("%w: %s exceeds %d bytes of content", ErrTooLarge, root, limit)
@@ -267,8 +314,10 @@ func walkExcept(root string, limit int64, skip map[string]bool, absSkip map[stri
 }
 
 // writeEntry emits one tar entry with every non-content field normalized, so
-// the archive depends on the tree's content and layout and nothing else.
-func writeEntry(tw *tar.Writer, root string, e entry) error {
+// the archive depends on the tree's content and layout and nothing else. f is
+// the already-open regular file to stream (nil for a directory entry); it is
+// closed here before return.
+func writeEntry(tw *tar.Writer, e entry, f *os.File) error {
 	hdr := &tar.Header{
 		Name:     e.rel,
 		Mode:     int64(e.mode.Perm()),
@@ -293,10 +342,6 @@ func writeEntry(tw *tar.Writer, root string, e entry) error {
 	}
 	if e.dir {
 		return nil
-	}
-	f, err := os.Open(e.abs)
-	if err != nil {
-		return fmt.Errorf("artifact: open %s: %w", e.rel, err)
 	}
 	defer f.Close()
 	// Copy exactly the size declared in the header: a file that grew between

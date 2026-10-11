@@ -529,7 +529,34 @@ func (c *Core) handleArtifactFetch(ctx context.Context, env bus.Envelope) {
 	}
 	size, ok := c.artifacts.Has(p.Hash)
 	if !ok {
+		// Mid-chain relay: the executor cannot reach the producing node
+		// directly on a partial mesh, but it can reach us — the node that
+		// handed it the task. If we are mid-chain we can reach OUR
+		// predecessor the same way, so forward the pull and route the
+		// chunks back instead of denying a fetch whose bytes exist one hop
+		// up. An upstream that never answers costs the requester exactly
+		// what a denial would: its per-offset retries and transfer budget
+		// are the bound.
+		if c.relayArtifactFetch(ctx, env, p) {
+			return
+		}
 		deny("artifact not held")
+		return
+	}
+	// The fetch window opens speculative requests before Total is known, so
+	// an offset past the end is a legitimate probe — the client's contract
+	// says it is answered with an empty EOF marker and discarded. ReadAt
+	// errors on such offsets, which turned every small-artifact fetch into a
+	// stream of WARN "read artifact chunk" lines on the serving node; answer
+	// the marker the protocol promises instead.
+	if p.Offset > size {
+		cp := bus.ArtifactChunkPayload{
+			TaskID: p.TaskID, Hash: p.Hash, Offset: p.Offset,
+			Total: size, EOF: true, OK: true,
+		}
+		if err := c.sendDataFrame(env.From, bus.MsgArtifactChunk, cp, cp, nil); err != nil {
+			c.logger.Warn("send artifact chunk", "hash", p.Hash, "offset", p.Offset, "err", err)
+		}
 		return
 	}
 	buf, release := getChunkBuf()
@@ -566,6 +593,11 @@ func (c *Core) handleArtifactChunk(ctx context.Context, env bus.Envelope) {
 	}
 	v, ok := c.pendingArt.Load(artifactKey(p.TaskID, p.Hash))
 	if !ok {
+		// Not our own transfer — but this chunk may belong to a relayed
+		// pull we forwarded upstream for a downstream consumer.
+		if c.relayArtifactChunk(env, p) {
+			return
+		}
 		c.logger.Debug("artifact_chunk for no transfer", "task", p.TaskID, "hash", p.Hash)
 		return
 	}
@@ -588,6 +620,156 @@ func (c *Core) handleArtifactChunk(ctx context.Context, env bus.Envelope) {
 		// The receiver is not waiting on this offset; it will re-request.
 		c.logger.Debug("artifact chunk dropped", "task", p.TaskID, "offset", p.Offset)
 	}
+}
+
+// artServeEntry is one relayed artifact pull: a downstream consumer asked
+// this node for bytes it does not hold, and the node forwarded the fetch to
+// its own chain predecessor (source) — the peer it received the task from,
+// reachable by construction. Every fetch from a registered requester is
+// forwarded to source, and every chunk from source fans back out to the
+// requesters. source is the only peer whose chunks may be relayed onward —
+// the same non-source rule the transfer itself enforces (P1-11), applied at
+// the relay hop.
+type artServeEntry struct {
+	mu         sync.Mutex
+	source     string
+	requesters map[string]bool
+	// waiters maps an offset to the requesters that asked for it — a chunk
+	// answers only its askers, not every consumer of the artifact. Two
+	// downstream executors pulling the same stage output share one upstream
+	// fetch per offset instead of doubling it, and neither eats the other's
+	// answers.
+	waiters map[int64]map[string]bool
+	// inflight marks an offset whose fetch is already on the wire to source.
+	// A second ask for it inside one chunk-timeout is registered but not
+	// re-forwarded — the pending chunk answers both requesters.
+	inflight map[int64]time.Time
+	lastSeen time.Time
+}
+
+// relayArtifactFetch forwards one fetch from a downstream consumer to this
+// node's chain predecessor. Returns false when there is no relay to attempt
+// (this node IS the origin, no row, no requester), leaving the honest denial
+// to the caller.
+func (c *Core) relayArtifactFetch(ctx context.Context, env bus.Envelope, p bus.ArtifactFetchPayload) bool {
+	pred := c.chainPredecessor(ctx, p.TaskID)
+	if pred == "" || pred == c.nodeID || env.From == "" || env.From == pred {
+		return false
+	}
+	key := artifactKey(p.TaskID, p.Hash)
+	v, _ := c.pendingArtServe.LoadOrStore(key, &artServeEntry{
+		source:     pred,
+		requesters: map[string]bool{},
+		waiters:    map[int64]map[string]bool{},
+		inflight:   map[int64]time.Time{},
+	})
+	sv := v.(*artServeEntry)
+	sv.mu.Lock()
+	sv.requesters[env.From] = true
+	if sv.waiters[p.Offset] == nil {
+		sv.waiters[p.Offset] = map[string]bool{}
+	}
+	sv.waiters[p.Offset][env.From] = true
+	forward := true
+	if t, ok := sv.inflight[p.Offset]; ok && time.Since(t) < artifactChunkTimeout {
+		forward = false // same offset already on the wire; its answer reaches us
+	} else {
+		sv.inflight[p.Offset] = time.Now()
+	}
+	sv.lastSeen = time.Now()
+	sv.mu.Unlock()
+	if !forward {
+		return true
+	}
+	if err := c.emitArtifactFetch(pred, p); err != nil {
+		sv.mu.Lock()
+		delete(sv.inflight, p.Offset)
+		sv.mu.Unlock()
+		c.logger.Warn("relay artifact fetch", "task", p.TaskID, "source", pred, "err", err)
+		// Answer the requester rather than leaving it to its retry timer:
+		// the relay is as dead as the direct pull would have been, and the
+		// denial lets the fetch fail over to its next candidate.
+		deny := bus.ArtifactChunkPayload{TaskID: p.TaskID, Hash: p.Hash, Offset: p.Offset,
+			OK: false, Reason: "relay source unreachable: " + err.Error()}
+		_ = c.sendDataFrame(env.From, bus.MsgArtifactChunk, deny, deny, nil)
+	}
+	return true
+}
+
+// emitArtifactFetch is one artifact_fetch envelope to source, error returned
+// rather than folded into a denial the caller may not want.
+func (c *Core) emitArtifactFetch(source string, p bus.ArtifactFetchPayload) error {
+	msgID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	env, err := bus.NewEnvelope(bus.MsgArtifactFetch, c.nodeID, msgID, p)
+	if err != nil {
+		return err
+	}
+	env.To = source
+	return c.sendTo(source, env)
+}
+
+// relayArtifactChunk fans one upstream chunk out to every requester
+// registered on a relayed pull. Returns false when no relay entry matches —
+// the caller then treats the chunk as unsolicited.
+func (c *Core) relayArtifactChunk(env bus.Envelope, p bus.ArtifactChunkPayload) bool {
+	v, ok := c.pendingArtServe.Load(artifactKey(p.TaskID, p.Hash))
+	if !ok {
+		return false
+	}
+	sv := v.(*artServeEntry)
+	if env.From != sv.source {
+		c.logger.Warn("relayed artifact_chunk from non-source ignored", "task", p.TaskID,
+			"from", env.From, "source", sv.source)
+		return true
+	}
+	sv.mu.Lock()
+	var waiters []string
+	if p.OK {
+		// A chunk answers only the requesters that asked for its offset —
+		// consumers pulling different windows never see each other's bytes.
+		for r := range sv.waiters[p.Offset] {
+			waiters = append(waiters, r)
+		}
+		delete(sv.waiters, p.Offset)
+		delete(sv.inflight, p.Offset)
+	} else {
+		// A denial applies to the pull, not to one offset ("not held",
+		// "unauthorized"): every consumer of this artifact needs it.
+		for r := range sv.requesters {
+			waiters = append(waiters, r)
+		}
+	}
+	sv.lastSeen = time.Now()
+	sv.mu.Unlock()
+	head := p
+	head.Data = nil
+	for _, r := range waiters {
+		if err := c.sendDataFrame(r, bus.MsgArtifactChunk, head, p, p.Data); err != nil {
+			c.logger.Warn("relay artifact chunk", "task", p.TaskID, "to", r, "err", err)
+		}
+	}
+	return true
+}
+
+// sweepArtServe drops relay entries nobody has touched recently: a finished
+// transfer, a dead requester, or a give-up upstream all leave the entry
+// behind, and the requesters set must not accumulate forever.
+func (c *Core) sweepArtServe() {
+	cutoff := time.Now().Add(-10 * time.Minute)
+	c.pendingArtServe.Range(func(k, v any) bool {
+		if sv, ok := v.(*artServeEntry); ok {
+			sv.mu.Lock()
+			stale := sv.lastSeen.Before(cutoff)
+			sv.mu.Unlock()
+			if stale {
+				c.pendingArtServe.Delete(k)
+			}
+		}
+		return true
+	})
 }
 
 // artAuthTTL is how long a positive transfer-authorization verdict may be

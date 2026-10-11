@@ -83,6 +83,48 @@ func TestAttachProjectCarriesMemoryAndTree(t *testing.T) {
 	}
 }
 
+// TestPackProjectTreeRefusesHomeDir pins the ambient-capture guard: a
+// project registered at the user's home directory (or a filesystem root)
+// must not be packed — the pack would scan all of ~ only to trip the size
+// limit and emit context_degraded on every delegated task. The refusal is
+// quiet (a warning, no event) and the task still runs; a normal tree packs
+// exactly as before.
+func TestPackProjectTreeRefusesHomeDir(t *testing.T) {
+	ctx := context.Background()
+	c, _, _ := projectCore(t)
+
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no resolvable home directory")
+	}
+	ref, err := c.packProjectTree(ctx, "t-home", home)
+	if err != nil {
+		t.Fatalf("home refusal returned an error: %v", err)
+	}
+	if ref.Hash != "" {
+		t.Fatalf("home directory was packed: %+v", ref)
+	}
+	if notHomeOrRoot("/") {
+		t.Fatal("filesystem root must not be packable")
+	}
+	if notHomeOrRoot(home) {
+		t.Fatal("home directory must not be packable")
+	}
+	if !notHomeOrRoot(t.TempDir()) {
+		t.Fatal("an ordinary tree must stay packable")
+	}
+
+	// Control: an ordinary project tree still travels.
+	tree := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tree, "main.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	ref, err = c.packProjectTree(ctx, "t-ok", tree)
+	if err != nil || ref.Hash == "" {
+		t.Fatalf("ordinary tree did not pack: %+v, %v", ref, err)
+	}
+}
+
 // TestAttachProjectWithoutAProjectIsANoop keeps the common path free: a task that
 // belongs to no project must not grow a payload.
 func TestAttachProjectWithoutAProjectIsANoop(t *testing.T) {

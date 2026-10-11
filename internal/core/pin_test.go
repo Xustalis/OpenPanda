@@ -981,4 +981,214 @@ func TestOrphanSweepSparesParkedPin(t *testing.T) {
 	}
 }
 
+// — multi-hop pin resolution through the gossiped topology ————————————————
+
+// TestResolvePinViaGraph covers the rowless-destination fallback: the pin
+// names a node that exists only in a peer's Neighbors advertisement — the
+// Mac-pinning-the-Pi-through-Windows case, where the local directory holds
+// the relay but never gossiped the destination itself.
+func TestResolvePinViaGraph(t *testing.T) {
+	nodes := []ledger.Node{
+		{ID: "self", Status: "online", Neighbors: []string{"hop"}},
+		{ID: "hop", Status: "online", Neighbors: []string{"self", "far@inst-1"}},
+	}
+	// Bare instance id.
+	res := resolvePinViaGraph("far@inst-1", nodes, "self")
+	if !res.found || !res.viaGraph || res.targetID != "far@inst-1" {
+		t.Fatalf("by id = %+v, want viaGraph far@inst-1", res)
+	}
+	// Configured-name segment — the string an operator reads off `panda nodes`.
+	res = resolvePinViaGraph("far", nodes, "self")
+	if !res.found || !res.viaGraph || res.targetID != "far@inst-1" || !res.online {
+		t.Fatalf("by name = %+v, want online viaGraph far@inst-1", res)
+	}
+	// An edge only an OFFLINE advertiser reports still resolves — online
+	// reads false, so the pin parks for a path rather than claiming reach.
+	nodes[1].Status = "offline"
+	res = resolvePinViaGraph("far@inst-1", nodes, "self")
+	if !res.found || !res.viaGraph || res.online {
+		t.Fatalf("offline-advertiser resolution = %+v, want found-but-offline", res)
+	}
+	// Two DISTINCT advertised ids answering to one name stay ambiguous —
+	// picking either is the silent misrouting this resolver exists to kill.
+	nodes = append(nodes,
+		ledger.Node{ID: "hop2", Status: "online", Neighbors: []string{"far@inst-2"}})
+	res = resolvePinViaGraph("far", nodes, "self")
+	if !res.ambiguous || !res.viaGraph {
+		t.Fatalf("two-hop name collision = %+v, want ambiguous", res)
+	}
+	// A k:<pubkey> ref can never resolve through topology — no row means no
+	// pubkey on file, and the next hop needs a routable id regardless.
+	if res := resolvePinViaGraph("k:"+strings.Repeat("ab", 32), nodes, "self"); res.found {
+		t.Fatalf("stable-key ref graph-resolved to %+v — impossible, must not", res)
+	}
+}
+
+// TestRoutePinnedViaGraphDecision: routePinned on a topology-only resolution
+// forwards to the PATH's first hop while PinDest keeps the final
+// destination — the identity that must ride the wire so every hop re-resolves.
+// A chain that already contains the only first hop yields the parking
+// decision: forward-at-destination, let custody wait for a path.
+func TestRoutePinnedViaGraphDecision(t *testing.T) {
+	ctx := context.Background()
+	c := pinCore(t, "root-x", "x")
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	hopCard := ledger.Card{Device: "hop", ResourceClass: "Standard",
+		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 2}}
+	if err := ledger.Register(c.db, hopCard, "hop", 5); err != nil {
+		t.Fatalf("register hop: %v", err)
+	}
+	// Steady-state advertisements: self edges to hop, hop edges onward to the
+	// rowless destination.
+	if err := ledger.UpdateAdjacency(c.db, "root-x", `["hop"]`, "", "", ""); err != nil {
+		t.Fatalf("self adjacency: %v", err)
+	}
+	if err := ledger.UpdateAdjacency(c.db, "hop", `["root-x","far-pi"]`, "", "", ""); err != nil {
+		t.Fatalf("hop adjacency: %v", err)
+	}
+
+	d := c.routePinned(ctx, "far-pi", []string{"root-x"}, nil, ledger.ResourceProfile{})
+	if d.Action != scheduler.ActionForward || d.Target != "hop" || d.PinDest != "far-pi" {
+		t.Fatalf("routePinned = %+v, want forward hop=hop dest=far-pi", d)
+	}
+	if pinWireDest(d) != "far-pi" {
+		t.Fatalf("wire dest = %q, want the final destination on the wire", pinWireDest(d))
+	}
+	if !strings.Contains(d.Reason, "topology") {
+		t.Fatalf("reason = %q, want the topology resolution named", d.Reason)
+	}
+
+	// The only path runs through a node already on the chain: forward at the
+	// destination and park — never echo through the chain, never reroute.
+	d = c.routePinned(ctx, "far-pi", []string{"root-x", "hop"}, nil, ledger.ResourceProfile{})
+	if d.Action != scheduler.ActionForward || d.Target != "far-pi" || d.PinDest != "far-pi" {
+		t.Fatalf("chain-blocked routePinned = %+v, want park-at-destination", d)
+	}
+	if !strings.Contains(d.Reason, "no live path") {
+		t.Fatalf("reason = %q, want the parking contract stated", d.Reason)
+	}
+	// Chain containment of the DESTINATION still declines outright — a pin
+	// re-entering its own chain is the loop the chain exists to prevent.
+	d = c.routePinned(ctx, "far-pi", []string{"root-x", "far-pi"}, nil, ledger.ResourceProfile{})
+	if d.Action != scheduler.ActionDecline {
+		t.Fatalf("dest-in-chain = %+v, want decline", d)
+	}
+}
+
+// TestPinMultiHopE2E is the live bug replayed over real sockets: the pin
+// names a node two hops away — pin-dest is connected to pin-relay only, and
+// root's directory holds NO row for it. The task must still execute on
+// pin-dest: root forwards the delegate to the path's first hop carrying the
+// final destination identity, the relay's own pin re-evaluation forwards
+// again, and only pin-dest accepts it as self.
+//
+// It also exercises the transitive context fetch: pinCore sets a work dir, so
+// the origin packs a pointer snapshot and pin-dest must pull it — from the
+// relay, which does not hold it either and relays one hop further to root.
+// Before that relay existed the task died on the executor with "context
+// source unreachable: peer not connected: pin-root", which is exactly the
+// partial-mesh failure this test pins down.
+func TestPinMultiHopE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	root := pinCore(t, "pin-root", "ran-on-root")
+	relay := pinCore(t, "pin-relay", "ran-on-relay")
+	dest := pinCore(t, "pin-dest", "ran-on-dest")
+
+	for _, c := range []*Core{root, relay, dest} {
+		if err := c.Register(ctx); err != nil {
+			t.Fatalf("register %s: %v", c.nodeID, err)
+		}
+	}
+	go func() { _ = root.Listen(ctx, "127.0.0.1:18351") }()
+	go func() { _ = relay.Listen(ctx, "127.0.0.1:18352") }()
+	go func() { _ = dest.Listen(ctx, "127.0.0.1:18353") }()
+	time.Sleep(150 * time.Millisecond)
+	// Partial mesh: root talks to relay, relay talks to dest, root and dest
+	// never meet.
+	if err := root.DialPeer(ctx, "127.0.0.1:18352"); err != nil {
+		t.Fatalf("root dial: %v", err)
+	}
+	if err := relay.DialPeer(ctx, "127.0.0.1:18353"); err != nil {
+		t.Fatalf("relay dial: %v", err)
+	}
+	waitPeer(t, root, "pin-relay")
+	waitPeer(t, relay, "pin-root")
+	waitPeer(t, relay, "pin-dest")
+	waitPeer(t, dest, "pin-relay")
+
+	// Precondition for the whole test: pin-dest has NO row in root's
+	// directory — it exists only as an edge in the relay's advertised
+	// neighbors, which is what the live 5s refresh publishes. Write the
+	// steady-state advertisements directly rather than sleeping through
+	// refresh ticks.
+	var destRow int
+	if err := root.db.QueryRow(`SELECT COUNT(*) FROM employee_cache WHERE id='pin-dest'`).Scan(&destRow); err != nil {
+		t.Fatalf("count dest rows: %v", err)
+	}
+	if destRow != 0 {
+		t.Fatalf("pin-dest leaked into root's directory — the multi-hop case is gone")
+	}
+	if err := ledger.UpdateAdjacency(root.db, "pin-root", `["pin-relay"]`, "", "", ""); err != nil {
+		t.Fatalf("root adjacency: %v", err)
+	}
+	if err := ledger.UpdateAdjacency(root.db, "pin-relay", `["pin-root","pin-dest"]`, "", "", ""); err != nil {
+		t.Fatalf("relay adjacency: %v", err)
+	}
+
+	task, result, err := root.Submit(ctx, TaskInput{
+		Title: "two-hop pin", Intent: "run the marker",
+		Requires: []string{"pin:probe"}, TargetNode: "pin-dest",
+	})
+	if err != nil {
+		dctx := context.WithoutCancel(ctx)
+		for name, cc := range map[string]*Core{"root": root, "relay": relay, "dest": dest} {
+			tk, gerr := cc.store.Get(dctx, task.TaskID)
+			t.Logf("%s row: state=%s owner=%s executor-chain=%v err=%v", name, tk.State, tk.OwnerNode, tk.Chain, gerr)
+			evs, _ := cc.store.Events(dctx, task.TaskID)
+			for _, ev := range evs {
+				t.Logf("%s ev %s %s", name, ev.Type, ev.DataJSON)
+			}
+		}
+		t.Fatalf("submit: %v", err)
+	}
+	if !result.OK || !strings.Contains(result.Stdout, "ran-on-dest") {
+		t.Fatalf("result = ok:%v out:%q, want ran-on-dest", result.OK, result.Stdout)
+	}
+	// The executor's own row proves where it ran; relay and root must not
+	// have executed substitutes.
+	if lt, err := dest.store.Get(ctx, task.TaskID); err != nil || lt.State != StateDone {
+		t.Fatalf("dest copy = %+v (err %v), want done", lt, err)
+	}
+	if strings.Contains(result.Stdout, "ran-on-relay") || strings.Contains(result.Stdout, "ran-on-root") {
+		t.Fatalf("pin substituted an intermediate hop: %q", result.Stdout)
+	}
+	// The executor's chain records the whole relay path, so the multi-hop
+	// walk is auditable from the row that actually ran the work. (The
+	// origin's own row keeps the outbound chain it sent — one node — by
+	// design; the executor's is the authoritative traversal.)
+	dt := mustGetTask(t, dest, ctx, task.TaskID)
+	chain := strings.Join(dt.Chain, " -> ")
+	if !strings.Contains(chain, "pin-relay") || !strings.HasSuffix(chain, "pin-dest") {
+		t.Fatalf("executor chain = %q, want pin-root -> pin-relay -> pin-dest", chain)
+	}
+	// The origin's timeline shows the hop it actually took.
+	evs, err := root.store.Events(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	hop := false
+	for _, ev := range evs {
+		if ev.Type == EvDelegationHop && strings.Contains(ev.DataJSON, "pin-relay") {
+			hop = true
+		}
+	}
+	if !hop {
+		t.Fatalf("no delegation hop to pin-relay recorded on the origin")
+	}
+}
+
 var _ = fmt.Sprintf // silence unused-import if helpers evolve

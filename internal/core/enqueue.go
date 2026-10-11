@@ -26,6 +26,13 @@ type QueueSpec struct {
 	SessionID    string
 	WorkDir      string
 	ResourceKeys []string
+	// Authorized carries the submitter's tier-2 consent into the created
+	// task. Enqueue callers resolve it through the approval policy (the
+	// askengine's verdict gate); plan stages reuse it so a plan submitted
+	// under approval.mode "never" grants the same consent an equivalent
+	// `task add` would — without it, every remote stage ran restricted and
+	// agents without a read-only face refused outright.
+	Authorized bool
 }
 
 // DefaultQueueSpec returns a spec with normal priority and no session/
@@ -291,12 +298,12 @@ func (c *Core) relayResultForRemote(ctx context.Context, final Task) {
 	if len(final.Chain) <= 1 {
 		return
 	}
-	res := bus.TaskResultPayload{TaskID: final.TaskID, AttemptID: final.AttemptID, State: final.State}
-	if final.ResultJSON != "" {
-		if err := json.Unmarshal([]byte(final.ResultJSON), &res); err == nil {
-			res.TaskID, res.AttemptID, res.State = final.TaskID, final.AttemptID, final.State
-		}
-	}
+	// resumeOutcomeFor, not a hand-rolled rebuild: ForceFail rows store the
+	// reason as {"failed": reason} — a key the wire payload has no field for —
+	// and only resumeOutcomeFor maps it onto Stderr (plus the recover-event
+	// reason and the review disposition). Rebuilding here sent a bare failed
+	// state upstream and the delegator saw the generic "task is failed".
+	res := c.resumeOutcomeFor(ctx, final)
 	c.relayToParent(ctx, bus.MsgTaskResult, final.Chain, res)
 }
 
@@ -373,6 +380,27 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 			resourceRequirement(t.ResourceJSON), preferredNodeOf(t), t.Project)
 	}
 	if decision.Action != scheduler.ActionForward {
+		// ActionDecline means neither this node nor any known peer can serve
+		// the task, so falling through to a local run can only fail — and it
+		// would fail with the bare capability miss, hiding the refusal trail
+		// ("declined by opi3b (capacity full)") that is the actionable truth.
+		// Fail here with the enriched reason instead: the operator learns a
+		// busy node refused, not that nobody has the ability.
+		if decision.Action == scheduler.ActionDecline {
+			reason := c.enrichDeclineReason(ctx, t.TaskID, decision.Reason)
+			c.failLocal(ctx, t.TaskID, fmt.Errorf("%s", reason))
+			c.signalResult(t.TaskID, bus.TaskResultPayload{
+				TaskID: t.TaskID, AttemptID: t.AttemptID,
+				State: StateFailed, Stderr: reason,
+			})
+			// A remote-origin row (e.g. one released from an admission park)
+			// still owes its delegator a verdict: relay the failure up the
+			// chain exactly as a locally-run failure would.
+			if final, gerr := c.store.Get(ctx, t.TaskID); gerr == nil {
+				c.relayResultForRemote(ctx, final)
+			}
+			return true
+		}
 		c.logger.Info("queue: no peer for task", "task", t.TaskID,
 			"action", string(decision.Action),
 			"reason", c.enrichDeclineReason(ctx, t.TaskID, decision.Reason))
@@ -411,7 +439,9 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		// Stable identity on the wire: the executor's own pin re-check (and
 		// any sub-scheduler hop in between) resolves by identity, immune to
 		// name collisions and to the target's instance-id churn on restart.
-		p.TargetNode = c.stablePeerID(ctx, decision.Target)
+		// pinWireDest keeps the ultimate destination on the wire when the
+		// pin resolved through topology — Target is then only the next hop.
+		p.TargetNode = c.stablePeerID(ctx, pinWireDest(decision))
 	}
 	// Session resume hint (§5.2): the handle only means something to the node
 	// that minted it, so it is offered only when the route leads back there.

@@ -267,6 +267,11 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			// pinned route re-checks it — the queue scheduler, the claim, and
 			// the receiving node all see the same destination.
 			TargetNode: st.Node,
+			// Consent resolved by the caller's approval policy (the
+			// askengine's verdict gate): a stage must carry the same
+			// tier-2 authorization an equivalent `task add` would, or its
+			// remote run is clamped to the restricted read-only face.
+			Authorized: q.Authorized,
 		})
 		if err != nil {
 			abandon()
@@ -703,13 +708,33 @@ func (c *Core) fetchStageInputs(ctx context.Context, t Task, workDir string) err
 				// ourselves over the bus would only time out.
 				return fmt.Errorf("artifact %s of stage %s is not in the local pool", in.Hash, in.Stage)
 			}
-			if _, err := c.FetchArtifactRef(ctx, in.Source, t.TaskID, in); err != nil {
+			err := func() error {
+				_, err := c.FetchArtifactRef(ctx, in.Source, t.TaskID, in)
+				return err
+			}()
+			if err != nil {
+				// Relay hop: on a partial mesh the producer may be
+				// unreachable directly (it ran a sibling stage elsewhere),
+				// while the node that handed us this stage is reachable by
+				// construction and forwards the pull up the chain toward
+				// whoever holds the bytes — ending at the plan node, which
+				// keeps a replica of every stage output.
+				if pred := c.chainPredecessor(ctx, t.TaskID); pred != "" && pred != c.nodeID && pred != in.Source {
+					if _, perr := c.FetchArtifactRef(ctx, pred, t.TaskID, in); perr == nil {
+						err = nil
+					}
+				}
+			}
+			if err != nil {
 				// Hub fallback: the plan node keeps a replica pull in flight
 				// (adoptStageOutput), so when the producer is unreachable the
 				// orchestrator is the second best holder to ask.
 				fallback := ""
 				if len(t.Chain) > 0 {
 					fallback = t.Chain[0]
+				}
+				if pred := c.chainPredecessor(ctx, t.TaskID); pred == fallback {
+					fallback = "" // the relay hop above already asked this one
 				}
 				if fallback == "" || fallback == c.nodeID || fallback == in.Source {
 					return fmt.Errorf("fetch input %s from %s: %w", in.Hash, in.Source, err)
@@ -735,7 +760,13 @@ func (c *Core) fetchStageInputs(ctx context.Context, t Task, workDir string) err
 // a large artifact off the wire when the next stage lands on this node anyway.
 func (c *Core) packStageOutput(ctx context.Context, t Task, workDir string) (string, error) {
 	if c.artifacts == nil {
-		return "", nil // no data plane on this node: nothing to hand on
+		// A pool-less node cannot hand anything on. This used to return
+		// ("", nil) — a stage then reported done with no output artifact,
+		// the successor was released with no inputs, and the pipeline broke
+		// silently two hops later (the executor of the next stage ran
+		// against an empty directory). Failing here names the real fault
+		// at the node that has it.
+		return "", fmt.Errorf("no artifact pool on this node: stage %s output cannot be handed to successors", t.StageID)
 	}
 	m, err := c.artifacts.PackDirExceptPaths(workDir, nil, c.hostStatePrune(workDir), 0)
 	if err != nil {
@@ -915,7 +946,7 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 		// "delegate this to the GPU box" must land there or fail honestly.
 		decision = c.routePinned(ctx, in.TargetNode, child.Chain, in.Requires, resourceRequirement(in.ResourceJSON))
 		if decision.Action == scheduler.ActionForward {
-			in.TargetNode = c.stablePeerID(ctx, decision.Target)
+			in.TargetNode = c.stablePeerID(ctx, pinWireDest(decision))
 		}
 	} else {
 		decision = scheduler.RouteP(c.nodeID, child.Chain,
@@ -1505,13 +1536,27 @@ func (c *Core) awaitPendingChildren(ctx context.Context, parent Task, pending []
 		// Keep holding only while some child is demonstrably alive: a fresh
 		// lease or a not-yet-claimed queue row. All-leaseless means parked
 		// for a link, parked for a human, or orphaned — annotate, don't wait.
+		//
+		// One queued case is NOT alive: a child whose resource keys collide
+		// with the parent's own. The parent holds those keys for the whole
+		// run, so such a child can never start while the parent waits — the
+		// pair would deadlock (parent holds project:x and folds for the
+		// child; child needs project:x and queues behind the parent). It is
+		// annotated as outstanding instead, exactly like a parked child.
 		alive := false
 		for _, pc := range pending {
 			row, err := c.store.Get(ctx, pc.id)
 			if err != nil {
 				continue
 			}
-			if row.LeaseExpires > now.Unix() || row.State == StateQueued || row.State == StateSubmitted {
+			if row.State == StateQueued || row.State == StateSubmitted {
+				if childBlockedByParent(parent, row) {
+					continue
+				}
+				alive = true
+				break
+			}
+			if row.LeaseExpires > now.Unix() {
 				alive = true
 				break
 			}
@@ -1534,6 +1579,46 @@ func (c *Core) awaitPendingChildren(ctx context.Context, parent Task, pending []
 		notes = append(notes, fmt.Sprintf("child task %s is still outstanding at completion time; its result will reconcile asynchronously.", pc.id))
 	}
 	return notes
+}
+
+// childBlockedByParent reports whether a not-yet-started child is serialized
+// behind the parent's own queue resource keys. The queue admits one holder
+// per key, and the parent holds its keys for its entire run — so a child
+// sharing any of them can only start after the parent ends, and a fold that
+// waits on it waits on itself.
+func childBlockedByParent(parent, child Task) bool {
+	if len(parent.ResourceKeys) == 0 || len(child.ResourceKeys) == 0 {
+		return false
+	}
+	for _, ck := range child.ResourceKeys {
+		for _, pk := range parent.ResourceKeys {
+			if ck == pk {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mergeLiveChildren folds this task's non-terminal children from the rows
+// into pending — the set the run holds for at its final fold. The opening
+// snapshot misses children the agent itself spawned mid-run (a CLI
+// `task add --parent-id $PANDA_TASK_ID`); without this merge the parent
+// reported done over a still-running child's head and the child's result
+// was never folded into the parent at all.
+func (c *Core) mergeLiveChildren(ctx context.Context, parentID string, pending *[]pendingChild) {
+	for _, pc := range c.liveChildren(ctx, parentID) {
+		seen := false
+		for _, known := range *pending {
+			if known.id == pc.id {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			*pending = append(*pending, pc)
+		}
+	}
 }
 
 // liveChildren lists this task's non-terminal delegate children. A resumed

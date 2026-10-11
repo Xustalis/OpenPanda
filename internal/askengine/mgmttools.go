@@ -617,6 +617,46 @@ func (e *Engine) systemStatus(ctx context.Context) (string, error) {
 	return b.String(), nil
 }
 
+// transitVia lists nodes this directory knows only through an online peer's
+// link-state advertisement — the partial-mesh case where a device is two hops
+// away and holds no local row. Returns advertised-id → relaying-peer-id.
+//
+// They are genuinely reachable (a hard pin routes through the relay), but
+// their capability cards live in the peer's directory, not this one. Without
+// this the model concluded a live device was "not in the device network" and
+// refused work the mesh could route — the tools must not answer "offline"
+// for a node that is merely two hops out.
+func transitVia(nodes []ledger.Node, selfID string) map[string]string {
+	local := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		local[n.ID] = true
+	}
+	via := map[string]string{}
+	for _, n := range nodes {
+		if n.Status != "online" {
+			continue
+		}
+		for _, nb := range n.Neighbors {
+			if nb == "" || nb == selfID || local[nb] {
+				continue
+			}
+			if _, seen := via[nb]; !seen {
+				via[nb] = n.ID
+			}
+		}
+	}
+	return via
+}
+
+// namePart is the configured-name half of an instance id ("opi3b@host-abc" →
+// "opi3b") — the string an operator reads off the node list.
+func namePart(id string) string {
+	if i := strings.Index(id, "@"); i > 0 {
+		return id[:i]
+	}
+	return id
+}
+
 // cardList renders the fleet's capability cards — every ledger row with its
 // ability summary, the device list the model routes against.
 func (e *Engine) cardList(ctx context.Context) (string, error) {
@@ -638,6 +678,17 @@ func (e *Engine) cardList(ctx context.Context) (string, error) {
 		fmt.Fprintf(&b, "\n- %s（%s）[%s]%s", n.Name, n.NodeKind, n.Status, mark)
 		if abs := n.Abilities(); len(abs) > 0 {
 			fmt.Fprintf(&b, "\n  能力：%s", strings.Join(abs, "、"))
+		}
+	}
+	if via := transitVia(nodes, selfID); len(via) > 0 {
+		ids := make([]string, 0, len(via))
+		for id := range via {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		b.WriteString("\n\n经中继可达（两跳外，本机未直连——能力卡详情在对方目录，硬钉任务可派到它们）：")
+		for _, id := range ids {
+			fmt.Fprintf(&b, "\n- %s（经 %s 中继）", id, via[id])
 		}
 	}
 	return b.String(), nil
@@ -684,6 +735,17 @@ func (e *Engine) cardShow(ctx context.Context, name string) (string, error) {
 			}
 		}
 		if target.ID == "" {
+			// Two hops out: no local row, but an online peer advertises the
+			// edge. Answering a bare "not found" here is how the
+			// orchestrating model concluded a live device was offline and
+			// refused work the mesh could route.
+			for id, relay := range transitVia(nodes, e.selfNodeID()) {
+				if id == name || strings.EqualFold(namePart(id), namePart(name)) {
+					return fmt.Sprintf("设备 %q 不在本机目录（两跳外，本机未直连），但 %s 的邻居广告里有它——经 %s 中继可达。"+
+						"\n能力卡详情存在 %s 的目录里，本机看不到；可以派硬钉任务（task_submit 的 node 或 --preferred %s）由它执行，路由会经 %s 转发。",
+						id, relay, relay, relay, id, relay), nil
+				}
+			}
 			names := make([]string, 0, len(nodes))
 			for _, n := range nodes {
 				names = append(names, n.Name)

@@ -38,6 +38,54 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 本 changelog 为策展式记录：部分内部重构与 adapter 未在此列出。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
+## [0.0.11-beta] - 2026-10-12
+
+Periapsis 测试版 —— 一轮**实机验证过**的多跳 mesh 加固：硬钉选、context 与 artifact 数据面、重启诚实语义与审批语义，全部在真实三设备舰队（macOS ↔ Windows ↔ Linux SBC）上端到端跑过，包括执行中杀节点、断线重连与消息重放。
+
+### 新增
+
+- **多跳硬钉选** —— `--preferred` 与计划阶段的 `node:` 钉选现在会沿 gossip 拓扑解析：两跳之外的节点（仅存在于在线对端的邻居广告里、本机无目录行）沿最便宜广告路径转发，线上始终携带最终目的地身份，每一跳都用自己的目录重新解析。无可用路径时钉选停车托管而非拒绝；已在委派链上的节点照旧拒绝成环；钉选永不静默替换成其他可用节点。
+- **部分网状数据面** —— pointer 型上下文快照与阶段产物沿委派链中继：只能触达交付方节点的执行者，经该跳逐段上溯拉取快照与输入；每一级中继在转发前校验内容哈希与来源身份（artifact chunk 只回给对应 offset 的请求者并按偏移去重），闲置中继条目自动清扫。两跳流水线与钉选不再死于"差一跳够不到字节"的 context source unreachable / artifact not held。
+- **`timeouts.native_s`** —— 单条原生能力命令的墙钟预算，仅替换执行器沿用内建五分钟默认值的情形；显式设置的逐命令超时永不被全局旋钮拉长。
+- **管理工具的中继节点可见性** —— `card_list`/`card_show` 会报告仅能经中继触达的设备（"经 <peer> 中继可达，两跳外"），编排模型不再把活着的两跳设备误判为"不在设备网络"而拒绝派发。
+
+### 修复
+
+- **计划阶段绕过审批门** —— `StartPlan` 此前不跑裁决门禁，阶段带着 `authorized=false` 出门，受限模式下的执行端（没有只读面的 agent）直接拒绝——即便配置是 `approval.mode: never`。现在计划按调用方审批策略解析一次同意并带入每个阶段。
+- **产物链静默断裂** —— ask 引擎的调度 core 此前没挂 artifact 池，阶段产物打包返回空：阶段报 done 却没有 `output_artifact`，后继阶段在空目录里跑。池在引擎初始化时挂载，无池打包在责任阶段当场响亮失败，而不是两跳之后才暴露。
+- **原生命令硬编码五分钟超时** —— 长原生任务在 300 秒处被杀且无法延长。现由 `timeouts.native_s` 配置（见新增）。
+- **父子任务资源键死锁** —— 持有 `project:` 队列键的父任务在折叠等待排同键子任务时永久死锁（实机观察：7 分钟以上无进展）；此类子任务现在标注为未决而非等待。agent 运行中自行孵化的子任务（CLI `task add --parent-id $PANDA_TASK_ID`）此前也不入待决快照、结果永不折叠——待决集改为每轮及终局前从任务行重读合并。
+- **队列转发的拒绝原因丢失** —— 被钉选/可用节点拒绝的任务此前只报一句"no capability matches"，丢掉可执行的拒绝线索（"declined by X (capacity full)"）。队列期拒绝现在携带完整拒绝轨迹失败；远端来源的行也会把真实裁决沿链回传——此前上行 payload 构造把 `{"failed": reason}` 整体丢弃。
+- **重启中断原因丢失** —— 执行端重启把运行中任务恢复为 failed，但委派方只看到泛化的 "task is failed"，而执行端日志明明写着 interrupted（实机杀 SBC 基准任务时观察到）。原因现在随 recover 事件的 `failed` 字段传播（同时保住"recover 是最后一条事件"的审计不变式），委派方收到 `interrupted`。
+- **产物预取探测被记为错误** —— 拉取窗口越界读此前在服务端按拒绝处理并刷 WARN；现按客户端契约回空 `EOF` 标记，小产物拉取恢复安静。
+- **home 目录误打包** —— 项目根落在 `$HOME` 时，每个任务都先遍历整个家目录（`.Trash` 权限错误、分钟级扫描）然后才撞上限失败。此类打包现在直接前置拒绝；source 打包同时新增任意深度的凭证目录（`.ssh`/`.aws`/`.gnupg`/`.kube` 等）与凭证文件（`.env*`、`.netrc`、`id_*` 私钥）剪枝——`.config`/`.local`/`AppData`/`Library` 这类 home 形态目录只在打包根就是 `$HOME` 时才剪——不可读条目记入 manifest 的 `pack_skipped` 而不是拖垮整个打包。
+- **agent 静默替换** —— `agent:X` 需求回退到其他 harness 此前无任何可见提示；现在结果中显式标注请求 agent 与实际执行 agent。
+- **未执行任务的 `✗ exit 0`** —— 被拒绝或重启中断的任务此前在失败标记旁显示退出码 0，读起来像成功；现在显示 `✗ failed` 并在下方给出原因。
+- **审批门下载检测补全** —— 落盘下载补齐 `-o` 标志扫描看不到的写法：重定向（`curl url > file`）、管道落盘（`| tee file`、PowerShell `| Out-File`）、进程替换（`bash <(curl …)`）以及 `iwr`/`Invoke-WebRequest`——一律与 `curl -o` 同判 Tier 2；`make > build.log`、`2>&1` 复制、`grep curl notes.txt` 与非 shell 的 `=>`/`->` 保持 Tier 1。
+
+### 优化改进
+
+- **Source 打包隐私基线** —— 见"home 目录误打包"：隐私过滤仅作用于 source 打包；执行器产物打包仍逐字节回传整棵树（运行产出的 `dist/` 或 `.env` 是结果本身，不是泄漏）。
+
+### 新增 —— trust zones 预览（仍为实验特性）
+
+- **[Experimental] 信任分区（Trust zones）** —— `network.peers` 条目可携带 `trust:` 层级（`mesh` 默认 = 特性前行为，`guarded`，`open`），可在配置中逐条设置，或运行中经 `panda nodes trust <id> <level>` 修改（支持跨实例稳定 `k:<pubkey>` 身份）；`nodes add`/`nodes admit` 接受 `--trust`，`panda pair --trust` 在配对时钉层级，REPL 与 Web 控制台节点卡同样可调。`guarded` 收紧朝它去的委派载荷（上下文封顶 pull-pointer、项目包/产物输入/同意授权剥离）并按 `network.trust.accept.guarded`（`auto`|`review`|`refuse`，可选零工具 `policy_llm` 分类器——不得放松确定性门禁）处置其发起的任务；为审批停车的任务替委派方持租约并打进度心跳（上限 24h），重启后保持。`open` 节点进入目录；钉了它的节点上它既不能接也不能发推送任务。
+- **[Experimental] 签名任务接收（Signed task acceptance）** —— 执行端用 Ed25519 节点密钥对 `task_accept` 签名（任务、attempt、签名者、时间戳）；委派方与中继校验自包含凭证，丢弃畸形、过期（>5 分钟偏移）或密钥不符的帧；旧版本无签名帧仍接受。
+- **[Experimental] 路由本地信誉** —— `routing.reputation: true` 把各执行端经本机 `delegation_metrics` 平滑出的成功率折入 DCPS 评分（权重 0.1，Laplace 平滑；无观测的对端无加成）。默认关闭。
+
+### 修复（trust zones 相关）
+
+- 委派方的线上 `task_resume` 此前可解除为信任准入审批而停车的任务——即绕过为它设的门禁。准入停车现带独立 `admission_review` 处置：本地 `panda approve` 照常恢复，线上 resume 一律拒绝。
+- 重连后重推的 review 裁决现在携带类型化的审批处置；`resume_execution` 停车到达委派方后此前退化为保守的 `accept_work` 默认，执行端的真实结果永远无法合拢镜像 review。
+- `task_accept` 签名校验此前把签名者钉死在线上发送者，丢掉了经多跳链中继的有效接收帧；现校验签名实际绑定的内容（任务、attempt、签名密钥、时间戳）。
+- 可选的 `policy_llm` 分类调用限时 15s 且失败收敛到 `review`——端点卡死不再冻结该对端的入站消息循环。
+- 准入信任沿整条委派链取最不信任的层级折叠，`open` 节点不能再借 mesh 中继、以 mesh 身份声明 `chain[0]` 来洗白任务。
+- `context_fetch` 在拉取侧同样执行 `summary` 发送上限——声明不能持有快照的对端不再能按需拉取。
+- `artifact_fetch` 的 `inputs` 上限在拉取侧按方向执行：处于本节点链下游的请求者即便带外获知哈希也被拒绝；链上游委派方拉自身任务产物不受影响。
+- 非 mesh 来源的 `authorized=true` 授权此前可在执行端换到不受限工具面——来源用户的"同意"冒充了本机所有者。`network.trust.accept.<tier>.foreign_consent`（默认 `strip`，同主不受信网段可 `honor`）决定外来授权是否存活；被剥离的任务按受限运行并把不可逆操作停入本机审批队列。
+- `trust.NeedsOf` 现在把 `ContextType: "file"` 计入需要 inputs，与 store/submit 侧推导一致。
+- 信任解析在已有行钉选时同样折叠配置 addr 提示（两侧取最不信任），信誉按对端已证 Ed25519 密钥而非实例 id 聚合——重启的节点不再冷启动其履历。
+
 ## [0.0.11-alpha-2] - 2026-10-11
 
 Periapsis 第二个预览版 —— 一轮内核加固，加上控制台的实时执行叙事：队列与任务页现在展示一次运行**正在做什么**，而不是让你去解读原始事件 JSON。

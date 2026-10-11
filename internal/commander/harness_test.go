@@ -240,7 +240,12 @@ func TestTransientPatterns(t *testing.T) {
 // claude_code.py keeps stdin open after the request line and answers one
 // result envelope per turn line. Two Execute calls on the same execution
 // context must ride ONE adapter process — the second turn is a stdin line,
-// not a spawn — and CloseAll must reap the process.
+// not a spawn — and CloseAll must reap the process. The stub also echoes
+// PANDA_TASK_ID, which pins the session-mode half of the agent-subprocess
+// contract: the session path returns before the one-shot injection site, so
+// its own spawn (startAgentSession) is what must carry the task id — an
+// agent that shells out to `panda task add --parent-id $PANDA_TASK_ID` reads
+// it from the process env on every turn.
 func TestAgentSessionPoolReusesProcess(t *testing.T) {
 	dir := t.TempDir()
 	old := adapterDir
@@ -253,14 +258,15 @@ def mark(m):
     with open(marks, "a") as f:
         f.write(m + "\n")
 mark("spawn:" + str(os.getpid()))
+tid = os.environ.get("PANDA_TASK_ID", "MISSING")
 req = json.loads(sys.stdin.readline())
 assert req.get("session") is True, req
-print(json.dumps({"ok": True, "result": "turn0:" + req["prompt"], "exit_code": 0, "session_id": "sess-T"}))
+print(json.dumps({"ok": True, "result": "turn0:" + req["prompt"] + ":" + tid, "exit_code": 0, "session_id": "sess-T"}))
 sys.stdout.flush()
 for line in sys.stdin:
     msg = json.loads(line)
     mark("turn:" + msg["text"])
-    print(json.dumps({"ok": True, "result": "turnN:" + msg["text"], "exit_code": 0, "session_id": "sess-T"}))
+    print(json.dumps({"ok": True, "result": "turnN:" + msg["text"] + ":" + tid, "exit_code": 0, "session_id": "sess-T"}))
     sys.stdout.flush()
 `
 	if err := os.WriteFile(filepath.Join(dir, "claude_code.py"), []byte(stub), 0o755); err != nil {
@@ -274,12 +280,13 @@ for line in sys.stdin:
 	workDir := t.TempDir()
 	ctx, pool := WithSessionPool(context.Background())
 	ctx = WithSessionMode(ctx)
+	ctx = WithTaskID(ctx, "t-session-1")
 	res1 := r.Execute(ctx, plan, "first", workDir, true)
-	if !res1.OK || res1.Stdout != "turn0:first" {
-		t.Fatalf("turn0 = %+v", res1)
+	if !res1.OK || res1.Stdout != "turn0:first:t-session-1" {
+		t.Fatalf("turn0 = %+v (want the task id in the process env)", res1)
 	}
 	res2 := r.Execute(ctx, plan, "second", workDir, true)
-	if !res2.OK || res2.Stdout != "turnN:second" {
+	if !res2.OK || res2.Stdout != "turnN:second:t-session-1" {
 		t.Fatalf("turnN = %+v", res2)
 	}
 	pool.CloseAll()
@@ -315,9 +322,9 @@ func TestAgentSessionFallsBackOnSpawnFailure(t *testing.T) {
 	// full-document read would block on EOF forever.) The follow-up Execute
 	// then finds the session dead and falls back to a plain spawn, which
 	// the same stub serves again.
-	stub := `import json, sys
+	stub := `import json, os, sys
 req = json.loads(sys.stdin.readline())
-print(json.dumps({"ok": True, "result": "oneshot:" + req["prompt"], "exit_code": 0}))
+print(json.dumps({"ok": True, "result": "oneshot:" + req["prompt"] + ":" + os.environ.get("PANDA_TASK_ID", "MISSING"), "exit_code": 0}))
 `
 	if err := os.WriteFile(filepath.Join(dir, "claude_code.py"), []byte(stub), 0o755); err != nil {
 		t.Fatalf("stub: %v", err)
@@ -330,12 +337,15 @@ print(json.dumps({"ok": True, "result": "oneshot:" + req["prompt"], "exit_code":
 	ctx, pool := WithSessionPool(context.Background())
 	defer pool.CloseAll()
 	ctx = WithSessionMode(ctx)
+	ctx = WithTaskID(ctx, "t-oneshot-9")
+	// The one-shot fallback is the other half of the env contract: whatever
+	// path actually spawns, the process env names the task.
 	res := r.Execute(ctx, plan, "first", t.TempDir(), true)
-	if !res.OK || res.Stdout != "oneshot:first" {
+	if !res.OK || res.Stdout != "oneshot:first:t-oneshot-9" {
 		t.Fatalf("oneshot via session = %+v", res)
 	}
 	res = r.Execute(ctx, plan, "second", t.TempDir(), true)
-	if !res.OK || res.Stdout != "oneshot:second" {
+	if !res.OK || res.Stdout != "oneshot:second:t-oneshot-9" {
 		t.Fatalf("fallback oneshot = %+v", res)
 	}
 }

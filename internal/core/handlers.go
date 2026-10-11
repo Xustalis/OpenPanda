@@ -573,8 +573,19 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 			if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
 				c.logger.Warn("lease waiting-context task", "task", taskID, "err", err)
 			}
-			c.pendingCtx.Store(taskID, &pendingContext{intent: p.Intent, required: required, ctxType: p.ContextType, source: chain[0], release: release})
-			c.sendContextFetch(ctx, chain[0], taskID, hash, p.ContextType)
+			// The fetch goes to the peer that handed us the task, not the
+			// origin: chain[0] is unreachable by construction on a partial
+			// mesh (the very delegation topology that made the task
+			// multi-hop), while env.From just sent us a frame. A
+			// predecessor that does not hold the snapshot relays the fetch
+			// up its own chain (relayContextFetch), so the origin's answer
+			// still arrives — one hop at a time.
+			src := env.From
+			if src == "" {
+				src = chain[0]
+			}
+			c.pendingCtx.Store(taskID, &pendingContext{intent: p.Intent, required: required, ctxType: p.ContextType, source: src, release: release})
+			c.sendContextFetch(ctx, src, taskID, hash, p.ContextType)
 			return
 		}
 	}
@@ -1866,6 +1877,11 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				currentIntent += "\n\n[delegated child result arrived]\n" + note
 			}
 		}
+		// The agent can spawn children itself (a CLI `task add
+		// --parent-id $PANDA_TASK_ID`), which the episode's opening snapshot
+		// never saw: re-read the rows so a mid-run child enters the pending
+		// set and later rounds fold its result like any other delegate's.
+		c.mergeLiveChildren(execCtx, taskID, &pendingChildren)
 		// §6.1 token budget: a task whose quota is already spent — by an
 		// earlier round's judge charge, or before it ever reached this
 		// executor — must not run another metered round. The check reads the
@@ -2564,13 +2580,36 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	// delegated are still outstanding — that is the "declared done while a
 	// sub-task is still running" lie from the orchestrator's side. Hold until
 	// they land (folded into the reported output), park (annotated), or the
-	// task's own deadline arrives.
+	// task's own deadline arrives. One last row re-read first: a child
+	// spawned during the final round is not in the loop's snapshot.
+	c.mergeLiveChildren(execCtx, taskID, &pendingChildren)
 	if len(pendingChildren) > 0 {
 		if notes := c.awaitPendingChildren(execCtx, task, pendingChildren); len(notes) > 0 {
 			res.Stdout += "\n\n[delegated child results]\n" + strings.Join(notes, "\n")
 		}
 	}
 	return roundOutcome{res: res, lastChanged: lastChanged, verdict: verdict, sessionID: sessionID}, nil
+}
+
+// annotateAgentSubstitution prefixes the result with a note whenever the
+// harness that actually ran differs from the one the plan chose. An agent
+// pin ("agent:<name>") picks the plan's primary harness; when that harness
+// turns out unusable on the executor, the fallback chain runs the next
+// available one. The fallback is deliberate — refusing the whole task serves
+// nobody — but a substitution nobody sees reads as a silent bait-and-switch,
+// so the result names both agents.
+func annotateAgentSubstitution(plan commander.Plan, res commander.Result) commander.Result {
+	if plan.Kind != "agent" || res.Agent == "" || plan.Agent == "" || res.Agent == plan.Agent {
+		return res
+	}
+	note := fmt.Sprintf("[panda] agent substitution: %q was unavailable on the executor; %q ran this task. / 代理替换：%q 不可用，实际由 %q 执行。",
+		plan.Agent, res.Agent, plan.Agent, res.Agent)
+	if strings.TrimSpace(res.Stdout) == "" {
+		res.Stdout = note
+	} else {
+		res.Stdout = note + "\n\n" + res.Stdout
+	}
+	return res
 }
 
 // finalizeRun is run()'s terminal routing: pack the workdir into its
@@ -2592,6 +2631,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	if len(filesChanged) > maxFilesChangedReport {
 		filesChanged = filesChanged[:maxFilesChangedReport]
 	}
+	res = annotateAgentSubstitution(plan, res)
 	var outputArtifact string
 	if task.PlanID != "" {
 		var perr error
@@ -3944,17 +3984,25 @@ func (c *Core) resumeOutcomeFor(ctx context.Context, t Task) bus.TaskResultPaylo
 	if result.Stderr == "" && (t.State == StateFailed || t.State == StateExpired) {
 		// A locally-failed row keeps its reason on the audit trail (Fail
 		// writes the EvResult event, not the result column); carry it so
-		// the delegator converges on the real cause.
+		// the delegator converges on the real cause. A restart-recovery
+		// failure records its cause on the EvRecover event instead — the
+		// row's result_json is deliberately preserved there — and only a
+		// recover that FAILED the task may answer; its requeue siblings
+		// (to=queued) say nothing about a later failure.
 		if evs, err := c.store.Events(ctx, t.TaskID); err == nil {
 			for i := len(evs) - 1; i >= 0; i-- {
-				if evs[i].Type != EvResult {
+				if evs[i].Type != EvResult && evs[i].Type != EvRecover {
 					continue
 				}
 				var d struct {
 					Failed string `json:"failed"`
 					Stderr string `json:"stderr"`
+					To     string `json:"to"`
 				}
 				if json.Unmarshal([]byte(evs[i].DataJSON), &d) != nil {
+					continue
+				}
+				if evs[i].Type == EvRecover && d.To != StateFailed {
 					continue
 				}
 				if d.Failed != "" {

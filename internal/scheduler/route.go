@@ -29,6 +29,12 @@ type Decision struct {
 	Action Action
 	Target string // ActionForward: the peer node id to forward to
 	Reason string // ActionDecline: why no route exists
+	// PinDest names the ultimate destination a hard pin resolved to when the
+	// forward target is only the first hop toward it (a node known solely
+	// through the gossiped topology). The wire pin must carry this identity,
+	// not Target — every hop re-resolves it. Empty for unpinned decisions and
+	// for pins whose Target IS the destination.
+	PinDest string
 }
 
 // Route decides where a task with the given required abilities should run.
@@ -371,6 +377,75 @@ func graphFirstHop(self ledger.Node, employees []ledger.Node, seen map[string]bo
 			}
 			if _, ok := online[nb]; !ok {
 				continue
+			}
+			nd := curDist + linkCost(curNode, nb)
+			if old, ok := dist[nb]; !ok || nd < old {
+				dist[nb] = nd
+				if cur == self.ID {
+					first[nb] = nb
+				} else {
+					first[nb] = first[cur]
+				}
+			}
+		}
+	}
+}
+
+// RouteToFirstHop is the destination-aware sibling of graphFirstHop for hard
+// pins: the cheapest advertised path to a SPECIFIC node, returning the first
+// hop of that path. It differs from DTNNextHop in the exclusion rule — seen
+// (the delegation chain) is honoured at every level, not just the first hop,
+// because a forwarded pin must never echo through a node that already carried
+// the task. Like the DTN variant, dest itself is exempt from the online rule
+// and needs no local directory row: a pinned node this directory never
+// gossiped is still reachable through a neighbour's advertisement, which is
+// the only place a two-hop-away node is visible at all. Every intermediate
+// must be an online row — a stale advertisement names a dead link, and the
+// parked-pin contract (park on the last hop, flush on hello) relies on the
+// relay being able to hold custody.
+func RouteToFirstHop(self ledger.Node, employees []ledger.Node, dest string, seen map[string]bool) string {
+	if dest == "" || dest == self.ID {
+		return ""
+	}
+	byID := make(map[string]ledger.Node, len(employees))
+	for _, n := range employees {
+		byID[n.ID] = n
+	}
+	dist := map[string]int64{self.ID: 0}
+	first := make(map[string]string)
+	visited := map[string]bool{}
+	for {
+		var cur string
+		curDist := int64(math.MaxInt64)
+		for id, d := range dist {
+			if !visited[id] && d < curDist {
+				cur, curDist = id, d
+			}
+		}
+		if cur == "" {
+			return ""
+		}
+		visited[cur] = true
+		if cur == dest {
+			return first[dest]
+		}
+		curNode := self
+		if cur != self.ID {
+			n, ok := byID[cur]
+			if !ok || n.Status != "online" {
+				continue
+			}
+			curNode = n
+		}
+		for _, nb := range curNode.Neighbors {
+			if seen[nb] || visited[nb] {
+				continue
+			}
+			if nb != dest {
+				n, ok := byID[nb]
+				if !ok || n.Status != "online" {
+					continue
+				}
 			}
 			nd := curDist + linkCost(curNode, nb)
 			if old, ok := dist[nb]; !ok || nd < old {

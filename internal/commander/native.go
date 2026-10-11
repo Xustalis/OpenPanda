@@ -30,23 +30,57 @@ type Executor struct {
 	env     []string // extra env, appended to os.Environ()
 }
 
+// DefaultNativeTimeout is the built-in per-command budget NewExecutor ships
+// with. The operator's timeouts.native_s knob replaces THIS value only — an
+// explicit WithTimeout is a deliberate bound the global default must not
+// stretch (a 30s probe command would otherwise inherit a 30m ceiling).
+const DefaultNativeTimeout = 5 * time.Minute
+
 // NewExecutor creates a native executor. Default timeout 5m, no working dir.
 func NewExecutor() *Executor {
-	return &Executor{timeout: 5 * time.Minute}
+	return &Executor{timeout: DefaultNativeTimeout}
 }
 
 // WithTimeout sets the command timeout.
 func (e *Executor) WithTimeout(d time.Duration) *Executor { e.timeout = d; return e }
 
+// nativeTimeout overrides every executor's own timeout when positive. It is
+// the operator's timeouts.native_s knob, process-global like the agent budget
+// (SetAgentTimeout): routers and executors are built before the config is
+// applied, so the ceiling has to be readable at Run time, not frozen at
+// construction. Zero means "unset" — each executor keeps its own default.
+var nativeTimeout time.Duration
+
+// SetNativeTimeout applies the configured native-command budget. Zero or
+// negative leaves executors on their built-in default (5m), so an
+// unconfigured fleet behaves exactly as before.
+func SetNativeTimeout(d time.Duration) {
+	if d <= 0 {
+		nativeTimeout = 0
+		return
+	}
+	nativeTimeout = d
+}
+
+// NativeTimeout reports the effective process-global native budget; zero when
+// unset (callers fall back to the executor's own timeout).
+func NativeTimeout() time.Duration { return nativeTimeout }
+
 // WithDir sets the working directory for commands.
 func (e *Executor) WithDir(dir string) *Executor { e.dir = dir; return e }
 
 // Run executes a command and returns its result. ctx may carry a shorter
-// deadline than e.timeout.
+// deadline than the effective timeout; the operator's native_s knob (when
+// set) replaces the executor's built-in default, never an explicit
+// WithTimeout bound.
 func (e *Executor) Run(ctx context.Context, command string, args ...string) NativeResult {
-	if e.timeout > 0 {
+	timeout := e.timeout
+	if timeout == DefaultNativeTimeout && nativeTimeout > 0 {
+		timeout = nativeTimeout
+	}
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, e.timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 

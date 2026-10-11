@@ -34,6 +34,9 @@ const minLeaseRenewInterval = 200 * time.Millisecond
 func (c *Core) SetTimeouts(t config.TimeoutsConfig) {
 	commander.SetAgentTimeout(t.AgentTimeout())
 	commander.SetSilenceTimeout(t.SilenceTimeout())
+	// Native-command budget (timeouts.native_s). Zero keeps the executor's
+	// own default, so a config that never names the key is unchanged.
+	commander.SetNativeTimeout(t.NativeTimeout())
 	lease := t.TaskLease()
 	if floor := commander.AgentHardTimeout() * 2; lease < floor {
 		// Info, not Warn: every CLI invocation builds a Core-shaped object and

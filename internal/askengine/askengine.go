@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/artifact"
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/commander"
@@ -924,6 +925,16 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	sched.SetTrustConfig(e.cfg.Network.Trust)
 	sched.SetPeerTrustHints(e.cfg.Network.PeerTrustHints())
 	sched.SetReputationEnabled(e.cfg.Routing.Reputation)
+	// The artifact pool is the data plane: a stage's packed output, named by
+	// its hash, that a successor on another node pulls over the bus. The
+	// daemon attaches one at startup; without the same attachment here, an
+	// engine instance executing a plan stage packed nothing — silently,
+	// because the pool was nil — and every successor ran against an empty
+	// directory with its predecessor's files nowhere in the mesh.
+	artifactStore := artifact.NewStore(e.cfg.Storage.ArtifactPath, e.cfg.Storage.ArtifactExtraPaths...)
+	artifactStore.SetMaxBytes(e.cfg.Storage.ArtifactMaxBytes)
+	artifactStore.SetMinFreeBytes(e.cfg.Storage.ArtifactMinFreeBytes)
+	sched.SetArtifactStore(artifactStore)
 	// OS sandbox (sandbox.*): the same contract the daemon installs — the
 	// environment filter always applies, and a configured mode wraps every
 	// subprocess this engine spawns in the platform's confinement with the
@@ -1861,6 +1872,19 @@ func (e *Engine) StartPlan(ctx context.Context, p plan.Plan, q core.QueueSpec) (
 	if sched == nil {
 		return "", fmt.Errorf("starting a plan requires a capability card (scheduler initialization failed)")
 	}
+	// The same tier-2 verdict the enqueue path resolves applies to every
+	// stage: a plan submitted under approval.mode "never" (or with a
+	// remembered project approval) must carry the consent its stages'
+	// remote runs need. Without this, stages kept authorized=false and a
+	// delegated stage on a node whose agents have no restricted face (e.g.
+	// opencode) refused with a tier-2 authorization error — even though
+	// the operator had configured the fleet never to ask.
+	verdict := e.approvalFor("", "")
+	authorized, denied := verdict.gate(false)
+	if denied {
+		return "", fmt.Errorf("%w (scope: %s)", ErrApprovalDenied, verdict.decisionScope)
+	}
+	q.Authorized = authorized
 	return sched.StartPlan(ctx, p, q)
 }
 

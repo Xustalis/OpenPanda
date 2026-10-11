@@ -707,6 +707,12 @@ type TimeoutsConfig struct {
 	// a negative value disables the kill (heartbeat notes still post — the
 	// stall stays visible, it just is not aborted).
 	SilenceS int `yaml:"silence_s"`
+	// NativeS is the wall-clock budget for one native-ability command. 0 keeps
+	// the executor's built-in default (5 minutes). Native work is not always
+	// short — a build, a benchmark, a data reduction can legitimately run past
+	// five minutes, and before this knob existed such a task was killed at the
+	// default with "command timed out" and no way to extend it.
+	NativeS int `yaml:"native_s"`
 }
 
 // SilenceTimeout returns the configured progress silence limit: DefaultSilenceS
@@ -737,6 +743,16 @@ func (t TimeoutsConfig) AgentTimeout() time.Duration {
 		return time.Duration(t.AgentS) * time.Second
 	}
 	return DefaultAgentTimeoutS * time.Second
+}
+
+// NativeTimeout returns the configured native-command budget. Zero means
+// "unset" — the commander's executor keeps its own 5-minute default — so an
+// unconfigured fleet behaves exactly as before.
+func (t TimeoutsConfig) NativeTimeout() time.Duration {
+	if t.NativeS > 0 {
+		return time.Duration(t.NativeS) * time.Second
+	}
+	return 0
 }
 
 // Rounds returns the configured supervision round budget, or the default.

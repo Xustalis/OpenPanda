@@ -205,22 +205,343 @@ func downloadWritesFile(args []string) bool {
 	return false
 }
 
-// codeDownloads reports whether shell code contains a curl/wget invocation in
-// a form that saves its bytes to a path — the code-scan counterpart of
-// downloadWritesFile, so `bash -c "curl -o x …; bash x"` grades Tier 2 the
-// same way the top-level `curl -o x …` does. Token granularity matches the
-// rest of codeEscalates: quotes and "=" have already been split out, which is
-// why the separated and attached --output spellings converge.
+// codeDownloads reports whether shell code contains a downloader invocation
+// (curl/wget, PowerShell's iwr/Invoke-WebRequest) in a form that saves its
+// bytes to a path — the code-scan counterpart of downloadWritesFile, so
+// `bash -c "curl -o x …; bash x"` grades Tier 2 the same way the top-level
+// `curl -o x …` does. Token granularity matches the rest of codeEscalates:
+// quotes and "=" have already been split out, which is why the separated and
+// attached --output spellings converge.
 func codeDownloads(lower string) bool {
 	toks := codeTokens(lower)
 	for i, tok := range toks {
-		if tok == "curl" || tok == "wget" {
+		if isFetchVerb(tok) {
 			if downloadWritesFile(toks[i+1:]) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// fetchVerbs names the downloaders a shell reaches for. Both the flag-shaped
+// scanner (codeDownloads) and the write-sink checks key on this set; the
+// PowerShell spellings are included so a Windows node is gated like a POSIX
+// one (iwr is the alias Invoke-WebRequest ships with).
+var fetchVerbs = map[string]bool{
+	"curl": true, "wget": true, "iwr": true, "invoke-webrequest": true,
+}
+
+// isFetchVerb reports whether a token names a downloader. Path-qualified and
+// ".exe"-suffixed spellings resolve to the same verb (/usr/bin/curl,
+// curl.exe), matching normalizeCommand's treatment of executables.
+func isFetchVerb(word string) bool {
+	if i := strings.LastIndexAny(word, `/\`); i >= 0 {
+		word = word[i+1:]
+	}
+	return fetchVerbs[strings.TrimSuffix(word, ".exe")]
+}
+
+// commandPrefixWords are words that keep the next word in command position
+// without being the command themselves: privilege/runner wrappers and the
+// shell keywords that open a statement body. The pass-through table is
+// consulted too (env, nohup, timeout, xargs, …).
+var commandPrefixWords = map[string]bool{
+	"sudo": true, "doas": true, "runas": true, "exec": true,
+	"then": true, "do": true, "else": true, "elif": true,
+}
+
+// isShellWordChar reports whether c can sit inside a word the way a shell or
+// a path spells it. Quotes, `$` and `=` are deliberately excluded: they are
+// separators or variable syntax, never part of a verb.
+func isShellWordChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	case c == '_', c == '-', c == '.', c == '/', c == '\\':
+		return true
+	}
+	return false
+}
+
+// hasFetchCommand reports whether code invokes a downloader where a shell
+// would run a command — at the start of the line, behind a pipe/semicolon/&&,
+// behind a subshell opener or a quote (the spelling interpreter code uses to
+// hand a command line to exec/system), or behind a wrapper word. A downloader
+// name appearing as data (`grep curl notes.txt`) is not an invocation, and
+// gating it would make ordinary search-and-report work ask for approval.
+func hasFetchCommand(lower string) bool {
+	for i := 0; i < len(lower); {
+		if !isShellWordChar(lower[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(lower) && isShellWordChar(lower[i]) {
+			i++
+		}
+		if isFetchVerb(lower[start:i]) && atCommandPosition(lower, start) {
+			return true
+		}
+	}
+	return false
+}
+
+// atCommandPosition reports whether the word starting at i sits where a shell
+// would expect a command. Everything between the word and the nearest
+// statement boundary (`;`, `|`, `&&`, a subshell opener, a quote, a newline)
+// must be a word that runs the next one — a wrapper (sudo, env, timeout…), a
+// flag, a bare duration, or a VAR=value assignment. Anything else (`grep`,
+// `echo`) makes the word an argument, not an invocation.
+func atCommandPosition(s string, i int) bool {
+	prefix := s[statementStart(s, i):i]
+	for _, field := range strings.FieldsFunc(prefix, func(r rune) bool {
+		return !(isShellWordChar(byte(r)) || r == '=')
+	}) {
+		if p := strings.LastIndexAny(field, `/\`); p >= 0 {
+			field = field[p+1:]
+		}
+		switch {
+		case passThroughVerbs[field], commandPrefixWords[field]:
+		case strings.HasPrefix(field, "-"):
+		case field[0] >= '0' && field[0] <= '9':
+		case strings.Contains(field, "="):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// statementStart returns the offset just past the last statement boundary
+// before i, or 0 when there is none. Quotes are boundaries because that is
+// how interpreter code hands a command line to exec/system; a downloader
+// inside the string is still the command that will run.
+func statementStart(s string, i int) int {
+	for k := i - 1; k >= 0; k-- {
+		switch s[k] {
+		case ';', '|', '&', '(', '`', '{', '\n', '\r', '"', '\'':
+			return k + 1
+		}
+	}
+	return 0
+}
+
+// codeFileWrites reports whether shell code contains a redirection that lands
+// bytes in a file rather than on a discard target — the redirect counterpart
+// of downloadWritesFile, so `curl url > path` writes the same opaque bytes
+// `curl -o path` does even though the flag-shaped scanner never sees a `-o`.
+//
+// The scan is deliberately narrow. Only `>` spellings count, and only in
+// combination with a fetch (see codeEscalates), so `make > build.log` stays
+// ordinary build noise. Non-shell spellings (`->` type hints, `=>` arrow
+// functions, `>=` comparisons) are skipped so interpreter code does not read
+// as a redirect; `>&2`/`2>&1` are file-descriptor dups, not writes; `2>file`
+// is stderr — diagnostics, not the fetched bytes — and stays Tier 1.
+func codeFileWrites(lower string) bool {
+	for i := 0; i < len(lower); i++ {
+		if lower[i] != '>' {
+			continue
+		}
+		if i > 0 {
+			switch lower[i-1] {
+			case '-', '=', '<', '>':
+				continue
+			}
+			if lower[i-1] == '2' && (i < 2 || strings.ContainsRune(" \t;|&(`", rune(lower[i-2]))) {
+				continue
+			}
+		}
+		j := i + 1
+		for j < len(lower) && (lower[j] == '>' || lower[j] == '|') {
+			j++
+		}
+		for j < len(lower) && (lower[j] == ' ' || lower[j] == '\t') {
+			j++
+		}
+		if j < len(lower) && lower[j] == '&' {
+			k := j + 1
+			if k >= len(lower) || lower[k] == '-' || (lower[k] >= '0' && lower[k] <= '9') {
+				continue // ">&2" / ">&-" dup or close a descriptor
+			}
+			j++ // ">& file" writes both streams into the file
+			for j < len(lower) && (lower[j] == ' ' || lower[j] == '\t') {
+				j++
+			}
+		}
+		if j >= len(lower) {
+			continue
+		}
+		switch lower[j] {
+		case '=', '&':
+			continue // a comparison, or a dup spelled with spaces
+		case '"', '\'':
+			q := lower[j]
+			j++
+			start := j
+			for j < len(lower) && lower[j] != q {
+				j++
+			}
+			if target := lower[start:j]; target != "" && !isCodeDiscardPath(target) {
+				return true
+			}
+			continue
+		}
+		start := j
+		for j < len(lower) && !strings.ContainsRune(" \t\n\r;|&<>()\"'`", rune(lower[j])) {
+			j++
+		}
+		if target := lower[start:j]; target != "" && !isCodeDiscardPath(target) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCodeDiscardPath extends isDiscardPath with the spellings a redirect can
+// name instead of a file: the Windows null device, the controlling terminal,
+// and PowerShell's $null.
+func isCodeDiscardPath(target string) bool {
+	if isDiscardPath(target) {
+		return true
+	}
+	switch target {
+	case "/dev/tty", "/dev/stdout", "/dev/stderr", "/dev/console", "nul", "nul:", "$null":
+		return true
+	}
+	return strings.HasPrefix(target, "/dev/fd/")
+}
+
+// processSubstitutionFetch reports whether code runs fetched bytes through
+// process substitution — `bash <(curl …)`, `source <(wget -qO- …)` — the
+// spelling that executes a remote program without ever naming a path the
+// classifier could gate. Only the substitution itself is checked (a diff of
+// two local `ls` outputs stays Tier 1), and only when its first word is a
+// downloader.
+func processSubstitutionFetch(lower string) bool {
+	for i := 0; i+1 < len(lower); i++ {
+		if lower[i] != '<' && lower[i] != '>' {
+			continue
+		}
+		if lower[i+1] != '(' {
+			continue
+		}
+		j := i + 2
+		for j < len(lower) && (lower[j] == ' ' || lower[j] == '\t') {
+			j++
+		}
+		k := j
+		for k < len(lower) && isShellWordChar(lower[k]) {
+			k++
+		}
+		if k > j && isFetchVerb(lower[j:k]) {
+			return true
+		}
+	}
+	return false
+}
+
+// pipelineSinks are commands that copy their stdin into a file: tee, and the
+// PowerShell cmdlets with the same shape.
+var pipelineSinks = map[string]bool{
+	"tee": true, "out-file": true, "set-content": true, "add-content": true,
+}
+
+// pipelineSinkWrites reports whether code pipes output into a file-writing
+// sink — `curl url | tee path` lands the same opaque bytes `curl -o path`
+// does. The sink must sit directly behind a pipe and be followed by a real
+// file operand: a bare `| tee` writes only to the console and stays Tier 1.
+func pipelineSinkWrites(lower string) bool {
+	for i := 0; i < len(lower); {
+		if !isShellWordChar(lower[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(lower) && isShellWordChar(lower[i]) {
+			i++
+		}
+		if !pipelineSinks[lower[start:i]] {
+			continue
+		}
+		k := start - 1
+		for k >= 0 && (lower[k] == ' ' || lower[k] == '\t') {
+			k--
+		}
+		if k >= 0 && lower[k] == '|' && sinkWritesFile(lower[i:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// sinkWritesFile reads a sink command's operand list up to the next shell
+// separator and reports whether a file operand is present: flags are skipped
+// (`tee -a path`), a bare sink is not a write, and the discard targets are
+// not files.
+func sinkWritesFile(rest string) bool {
+	for i := 0; i < len(rest); {
+		for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t') {
+			i++
+		}
+		if i >= len(rest) || isShellSeparator(rest[i]) {
+			return false
+		}
+		start := i
+		for i < len(rest) && rest[i] != ' ' && rest[i] != '\t' && !isShellSeparator(rest[i]) {
+			i++
+		}
+		if tok := rest[start:i]; !strings.HasPrefix(tok, "-") {
+			return !isCodeDiscardPath(tok)
+		}
+	}
+	return false
+}
+
+// isShellSeparator reports whether c ends a command's operand list.
+func isShellSeparator(c byte) bool {
+	switch c {
+	case ';', '|', '&', '<', '>', '`', '\n', '\r':
+		return true
+	}
+	return false
+}
+
+// fetchWriteCombo reports whether one statement contains both a downloader
+// invocation and a file write sink. Pairing them per statement keeps
+// `curl -s http://x; make > build.log` — two unrelated statements — Tier 1,
+// while `curl http://x > /tmp/x` and `curl http://x | tee /tmp/x` still gate:
+// the fetched bytes land on disk, where nothing downstream re-checks them.
+func fetchWriteCombo(lower string) bool {
+	for _, seg := range codeSegments(lower) {
+		if hasFetchCommand(seg) && (codeFileWrites(seg) || pipelineSinkWrites(seg)) {
+			return true
+		}
+	}
+	return false
+}
+
+// codeSegments splits code at statement boundaries — `;`, `&&`, `||`, and
+// newlines. Pipelines stay whole because a sink behind `|` belongs to the
+// statement the fetch is in; a bare `&` (backgrounding) is rare enough in
+// delegated commands that leaving it unsplit only errs toward gating.
+func codeSegments(lower string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(lower); i++ {
+		switch lower[i] {
+		case ';', '\n', '\r':
+			out = append(out, lower[start:i])
+			start = i + 1
+		case '&', '|':
+			if i+1 < len(lower) && lower[i+1] == lower[i] {
+				out = append(out, lower[start:i])
+				i++
+				start = i + 1
+			}
+		}
+	}
+	return append(out, lower[start:])
 }
 
 // hasEncodedCodeFlag reports whether an interpreter was handed a base64-encoded
@@ -1249,7 +1570,16 @@ func codeEscalates(code string) bool {
 	// A download saved to a path inside the code is the two-step form of
 	// `curl … | sh`: the fetch is Tier 1 on its own, so the write is what the
 	// classifier has to see.
-	return codeDownloads(lower)
+	if codeDownloads(lower) {
+		return true
+	}
+	// The same two-step form in the spellings the flag-shaped scan above
+	// cannot see: a redirect or a pipeline sink writes the fetched bytes to a
+	// path, and process substitution runs them without ever naming one.
+	if processSubstitutionFetch(lower) {
+		return true
+	}
+	return fetchWriteCombo(lower)
 }
 
 // codeTokens splits code into command-position candidates. It breaks on shell

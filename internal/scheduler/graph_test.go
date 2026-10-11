@@ -100,3 +100,67 @@ func TestGraphFirstHopNeverTraversesOffline(t *testing.T) {
 		t.Fatalf("routed through offline relay: %q", hop)
 	}
 }
+
+// RouteToFirstHop is the hard-pin twin of graphFirstHop: the destination is
+// the whole point of the walk, not one of many ability matches. a--b--d with
+// d pinned must return b as the forwarding hop.
+func TestRouteToFirstHopBasic(t *testing.T) {
+	self := ledger.Node{ID: "a", Status: "online", Neighbors: []string{"b"}}
+	b := ledger.Node{ID: "b", Status: "online", Neighbors: []string{"a", "d"}}
+	d := ledger.Node{ID: "d", Status: "online", Neighbors: []string{"b"}}
+	hop := RouteToFirstHop(self, []ledger.Node{self, b, d}, "d", nil)
+	if hop != "b" {
+		t.Fatalf("first hop = %q, want b", hop)
+	}
+}
+
+// The motivating case from live testing: the pinned node is two hops away
+// and has no directory row here — it exists only as a name in the relay's
+// neighbor list. The walk must still find the path: a destination's own row
+// is not required to route TOWARD it (an offline destination has no fresh
+// row either, and store-and-forward is precisely what pins to it want).
+func TestRouteToFirstHopRowlessDest(t *testing.T) {
+	self := ledger.Node{ID: "a", Status: "online", Neighbors: []string{"b"}}
+	b := ledger.Node{ID: "b", Status: "online", Neighbors: []string{"a", "d"}}
+	// No row for d at all — d is only "b's neighbor d".
+	hop := RouteToFirstHop(self, []ledger.Node{self, b}, "d", nil)
+	if hop != "b" {
+		t.Fatalf("first hop to rowless dest = %q, want b", hop)
+	}
+}
+
+// The pin walker excludes the delegation chain at EVERY level — unlike
+// DTNNextHop's first-hop-only guard. A chain node appearing deeper in a
+// candidate path would still hand the task to a node already on the chain,
+// which the chain cap forbids; there is no echo exception here because a
+// pin's forward direction is the destination, not "anyone but via".
+func TestRouteToFirstHopExcludesChainEverywhere(t *testing.T) {
+	self := ledger.Node{ID: "a", Status: "online", Neighbors: []string{"b", "s"}}
+	s := ledger.Node{ID: "s", Status: "online", Neighbors: []string{"a", "b"}}
+	b := ledger.Node{ID: "b", Status: "online", Neighbors: []string{"a", "s", "d"}}
+	d := ledger.Node{ID: "d", Status: "online", Neighbors: []string{"b", "s"}}
+	// Chain is a->s; the only remaining route runs a->b->d and may NOT
+	// traverse s even though it sits on a shorter alternative.
+	hop := RouteToFirstHop(self, []ledger.Node{self, s, b, d}, "d", map[string]bool{"s": true})
+	if hop != "b" {
+		t.Fatalf("first hop = %q, want b", hop)
+	}
+	// When the only route to d crosses s, exclusion leaves no route at all.
+	b2 := ledger.Node{ID: "b", Status: "online", Neighbors: []string{"a", "s"}}
+	d2 := ledger.Node{ID: "d", Status: "online", Neighbors: []string{"s"}}
+	self2 := ledger.Node{ID: "a", Status: "online", Neighbors: []string{"b", "s"}}
+	if hop := RouteToFirstHop(self2, []ledger.Node{self2, s, b2, d2}, "d", map[string]bool{"s": true}); hop != "" {
+		t.Fatalf("route through a chain node = %q, want none", hop)
+	}
+}
+
+// An islanded destination resolves to a name but no path — the caller parks
+// the pin on its destination rather than forwarding blindly.
+func TestRouteToFirstHopNoPath(t *testing.T) {
+	self := ledger.Node{ID: "a", Status: "online", Neighbors: []string{"b"}}
+	b := ledger.Node{ID: "b", Status: "online", Neighbors: []string{"a"}}
+	island := ledger.Node{ID: "z", Status: "online", Neighbors: []string{}}
+	if hop := RouteToFirstHop(self, []ledger.Node{self, b, island}, "z", nil); hop != "" {
+		t.Fatalf("unreachable destination routed: %q", hop)
+	}
+}

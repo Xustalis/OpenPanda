@@ -173,13 +173,93 @@ func (s *Store) PackDirExcept(tree string, skip map[string]bool, limit int64) (M
 }
 
 // PackSourceDirExceptPaths is PackDirExceptPaths for packs that ship SOURCE
-// to a peer: the tree's root .gitignore is honored on top of the skip and
-// prune sets, so git-ignored runtime state, build output, and ignored config
-// (which routinely carries secrets — config.yaml, .env) never leave the box.
+// to a peer. Three protections stack on top of the caller's skip and prune
+// sets, none of which an output pack may take:
+//
+//   - the tree's root .gitignore is honored, so git-ignored runtime state,
+//     build output, and ignored config (which routinely carries secrets —
+//     config.yaml, .env) never leave the box;
+//   - the privacy baseline (sourcePrivateDirs/sourcePrivateFile) prunes
+//     credential material a tree with no .gitignore would otherwise ship —
+//     a project whose work dir is the user's HOME is the case that hurts:
+//     without the baseline the pack walks ~/.ssh and hands the keys over;
+//   - the walk is lenient: an unreadable entry (a locked system dir, a file
+//     that vanished mid-scan) is recorded in Manifest.PackSkipped and left
+//     out instead of failing the whole pack, which is what turned a single
+//     permission-denied ~/.Trash into a context_degraded event on every
+//     task the project carried.
+//
 // Do NOT use it for executor-output packs: there a gitignored file (dist/,
-// *.out) is exactly what must come back.
+// *.out) is exactly what must come back, and a partial result must fail
+// loudly rather than hand the successor a silently truncated tree.
 func (s *Store) PackSourceDirExceptPaths(tree string, skip map[string]bool, absSkip []string, limit int64) (Manifest, error) {
-	return s.packDir(tree, skip, absSkip, loadIgnoreRules(tree), limit)
+	dirSkip := make(map[string]bool, len(skip)+len(sourcePrivateDirs)+len(sourcePrivateHomeDirs))
+	for k := range skip {
+		dirSkip[k] = true
+	}
+	for k := range sourcePrivateDirs {
+		dirSkip[k] = true
+	}
+	if isUserHomeDir(tree) {
+		for k := range sourcePrivateHomeDirs {
+			dirSkip[k] = true
+		}
+	}
+	return s.packDir(tree, dirSkip, sourcePrivateFile, absSkip, loadIgnoreRules(tree), limit, true)
+}
+
+// sourcePrivateDirs are directory base names a source pack always prunes —
+// credential stores that must never ride to a peer at ANY depth. The match
+// is by name, the same rule the caller's skip set uses: a node whose project
+// root IS the home directory would otherwise hand ~/.ssh and ~/.aws to
+// whoever runs the task, and a nested credentials dir inside a project tree
+// is exactly as sensitive.
+var sourcePrivateDirs = map[string]bool{
+	".ssh": true, ".gnupg": true, ".aws": true, ".azure": true,
+	".kube": true, ".minikube": true, ".docker": true,
+	".password-store": true, ".secrets": true, ".Trash": true,
+}
+
+// sourcePrivateHomeDirs are pruned only when the pack root is the user's
+// home directory. Their names are far too common in ordinary source trees —
+// a project's own .config/, a macOS Library/, a test fixture's AppData/ — to
+// prune by name at any depth; but when the root IS $HOME these directories
+// are the credential-bearing ones (~/.config/gh, ~/Library/Keychains,
+// ~/AppData), and the home pack must drop them even though the ambient-tree
+// guard upstream (core.notHomeOrRoot) already refuses such packs — this is
+// the belt to that guard's suspenders.
+var sourcePrivateHomeDirs = map[string]bool{
+	".config": true, ".local": true,
+	"AppData": true, "Library": true,
+}
+
+// isUserHomeDir reports whether dir resolves to the current user's home —
+// the boundary that separates "a project that happens to contain a .config
+// directory" from "the directory where .config IS the credential store".
+func isUserHomeDir(dir string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	return abs == home
+}
+
+// sourcePrivateFile reports whether a file's base name is credential-shaped
+// and must never leave the node inside a source pack — identity keys,
+// netrc-style login files, dotenv material. .env.* covers the usual
+// per-environment variants (.env.local, .env.production, …).
+func sourcePrivateFile(name string) bool {
+	switch name {
+	case ".env", ".envrc", ".netrc", ".npmrc", ".pypirc", ".git-credentials",
+		".htpasswd", ".pgpass", ".my.cnf", ".netlifyrc",
+		"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519":
+		return true
+	}
+	return strings.HasPrefix(name, ".env.")
 }
 
 // PackDirExceptPaths is PackDirExcept plus an absolute-path prune set: any
@@ -190,10 +270,13 @@ func (s *Store) PackSourceDirExceptPaths(tree string, skip map[string]bool, absS
 // WAL/SHM sidecars, pid and lock files. Entries are normalized to cleaned
 // absolute paths; anything outside the tree simply never matches.
 func (s *Store) PackDirExceptPaths(tree string, skip map[string]bool, absSkip []string, limit int64) (Manifest, error) {
-	return s.packDir(tree, skip, absSkip, nil, limit)
+	return s.packDir(tree, skip, nil, absSkip, nil, limit, false)
 }
 
-func (s *Store) packDir(tree string, skip map[string]bool, absSkip []string, ignores []ignoreRule, limit int64) (Manifest, error) {
+// packDir is the shared pack body. fileSkip prunes individual file names on
+// top of dirSkip (nil = none); lenient switches the walk and the per-file
+// open to record-and-continue instead of fail-fast (see PackSkipped).
+func (s *Store) packDir(tree string, skip map[string]bool, fileSkip func(string) bool, absSkip []string, ignores []ignoreRule, limit int64, lenient bool) (Manifest, error) {
 	var prune map[string]bool
 	for _, p := range absSkip {
 		if p == "" {
@@ -213,7 +296,12 @@ func (s *Store) packDir(tree string, skip map[string]bool, absSkip []string, ign
 	// Placement is chosen before packing starts: the walked content size is
 	// the conservative bound for the archive, and a volume that cannot hold
 	// it is skipped rather than filled mid-pack.
-	ents, err := walkExcept(tree, max, skip, prune, ignores)
+	var skipped []string
+	var skipOut *[]string
+	if lenient {
+		skipOut = &skipped
+	}
+	ents, err := walkExcept(tree, max, skip, prune, ignores, fileSkip, skipOut)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -235,7 +323,7 @@ func (s *Store) packDir(tree string, skip map[string]bool, absSkip []string, ign
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after a successful rename
 
-	m, err := packEntries(ents, tree, tmp, max)
+	m, err := packEntries(ents, tree, tmp, max, skipOut)
 	if err != nil {
 		tmp.Close()
 		return Manifest{}, err
@@ -245,6 +333,9 @@ func (s *Store) packDir(tree string, skip map[string]bool, absSkip []string, ign
 	}
 	if err := os.Rename(tmpName, filepath.Join(root, m.Hash+".tar.gz")); err != nil {
 		return Manifest{}, fmt.Errorf("artifact: store %s: %w", m.Hash, err)
+	}
+	if len(skipped) > 0 {
+		m.PackSkipped = skipped
 	}
 	return m, nil
 }

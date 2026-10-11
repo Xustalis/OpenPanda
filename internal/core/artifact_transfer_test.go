@@ -291,6 +291,175 @@ func TestArtifactFetchFromUnreachableSourceFails(t *testing.T) {
 	}
 }
 
+// TestArtifactFetchPastEndAnswersEOF: the fetch window opens speculative
+// requests past the archive's end before Total is known — on a small
+// artifact that means offsets like 2 MiB for a 1 KiB pack. The serving side
+// must answer those with the empty EOF marker the protocol promises
+// (OK:true, EOF:true, no data), not the WARN-plus-refusal it logged before,
+// which flooded operator logs on every small-artifact pull.
+func TestArtifactFetchPastEndAnswersEOF(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	consumer := newCoreWithNative(t, "cons", "127.0.0.1:17970", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	producer := newCoreWithNative(t, "prod", "127.0.0.1:17971", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	withArtifactPool(t, consumer)
+	producerPool := withArtifactPool(t, producer)
+	startPair(t, ctx, consumer, producer, "127.0.0.1:17970", "127.0.0.1:17971")
+
+	const taskID = "t-past-end"
+	participantTask(t, consumer, taskID, consumer.nodeID, []string{consumer.nodeID})
+	participantTask(t, producer, taskID, consumer.nodeID, []string{consumer.nodeID, producer.nodeID})
+
+	m, err := producerPool.PackDir(artifactTree(t, 1024))
+	if err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+	if m.Size > bus.ArtifactChunkBytes {
+		t.Fatalf("test artifact is %d bytes — the past-end case needs it under one chunk", m.Size)
+	}
+	if err := producer.store.RecordArtifact(ctx, m.Hash, m.Size, taskID, ""); err != nil {
+		t.Fatalf("index artifact: %v", err)
+	}
+
+	// The transfer the reply must find: source is the producer, exactly what
+	// a real FetchArtifact registers before its first request.
+	tr := &artifactTransfer{source: producer.nodeID, chunks: make(chan bus.ArtifactChunkPayload, 4)}
+	consumer.pendingArt.Store(artifactKey(taskID, m.Hash), tr)
+
+	env, err := bus.NewEnvelope(bus.MsgArtifactFetch, consumer.nodeID, "m-past-end",
+		bus.ArtifactFetchPayload{TaskID: taskID, Hash: m.Hash, Offset: m.Size + bus.ArtifactChunkBytes})
+	if err != nil {
+		t.Fatalf("envelope: %v", err)
+	}
+	if err := consumer.sendTo(producer.nodeID, env); err != nil {
+		t.Fatalf("send fetch: %v", err)
+	}
+	select {
+	case cp := <-tr.chunks:
+		if !cp.OK || !cp.EOF || len(cp.Data) != 0 || cp.Total != m.Size || cp.Offset != m.Size+bus.ArtifactChunkBytes {
+			t.Fatalf("past-end reply = %+v, want OK EOF empty-data total=%d", cp, m.Size)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no chunk answered the past-end probe")
+	}
+
+	// A denied probe is the control: an offset that wraps negative or a hash
+	// the producer does not hold still gets OK:false — the EOF marker is for
+	// legitimate over-read, not a blanket accept.
+	env2, err := bus.NewEnvelope(bus.MsgArtifactFetch, consumer.nodeID, "m-missing",
+		bus.ArtifactFetchPayload{TaskID: taskID, Hash: strings.Repeat("ff", 32), Offset: 0})
+	if err != nil {
+		t.Fatalf("envelope2: %v", err)
+	}
+	tr2 := &artifactTransfer{source: producer.nodeID, chunks: make(chan bus.ArtifactChunkPayload, 4)}
+	consumer.pendingArt.Store(artifactKey(taskID, strings.Repeat("ff", 32)), tr2)
+	if err := consumer.sendTo(producer.nodeID, env2); err != nil {
+		t.Fatalf("send fetch2: %v", err)
+	}
+	select {
+	case cp := <-tr2.chunks:
+		if cp.OK {
+			t.Fatalf("unheld artifact answered OK: %+v", cp)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no denial answered the unheld-hash fetch")
+	}
+}
+
+// TestArtifactFetchRelaysAcrossHops is the partial-mesh data plane: the
+// consumer (pin-dest) is two hops from the producer (pin-root) and can only
+// reach the relay. The direct pull fails — as it must — and the pull through
+// the chain predecessor succeeds: the relay forwards the fetch upstream and
+// fans the chunks back, with each hop's authorization checked against its own
+// task row (the chain is the participant list at every level).
+func TestArtifactFetchRelaysAcrossHops(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	root := newCoreWithNative(t, "pin-root", "127.0.0.1:17980", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	relay := newCoreWithNative(t, "pin-relay", "127.0.0.1:17981", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	dest := newCoreWithNative(t, "pin-dest", "127.0.0.1:17982", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	rootPool := withArtifactPool(t, root)
+	destPool := withArtifactPool(t, dest)
+	withArtifactPool(t, relay)
+
+	for _, c := range []*Core{root, relay, dest} {
+		if err := c.Register(ctx); err != nil {
+			t.Fatalf("register %s: %v", c.nodeID, err)
+		}
+	}
+	go func() { _ = root.Listen(ctx, "127.0.0.1:17980") }()
+	go func() { _ = relay.Listen(ctx, "127.0.0.1:17981") }()
+	go func() { _ = dest.Listen(ctx, "127.0.0.1:17982") }()
+	time.Sleep(150 * time.Millisecond)
+	if err := root.DialPeer(ctx, "127.0.0.1:17981"); err != nil {
+		t.Fatalf("root dial: %v", err)
+	}
+	if err := relay.DialPeer(ctx, "127.0.0.1:17982"); err != nil {
+		t.Fatalf("relay dial: %v", err)
+	}
+	waitPeer(t, root, "pin-relay")
+	waitPeer(t, relay, "pin-root")
+	waitPeer(t, relay, "pin-dest")
+	waitPeer(t, dest, "pin-relay")
+
+	// The producer holds the artifact under its own row; every hop's row
+	// carries the same task id and chain, as a real delegation leaves them.
+	const taskID = "t-relay-pull"
+	m, err := rootPool.PackDir(artifactTree(t, 4096))
+	if err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+	participantTask(t, root, taskID, "pin-root", []string{"pin-root"})
+	// The origin's own row names its dispatch target — the first hop — which
+	// is how the relay is a participant on the producer's row (its own chain
+	// is just itself, as a real origin's is).
+	if err := root.store.Queue(ctx, taskID, "pin-root"); err != nil {
+		t.Fatalf("queue on root: %v", err)
+	}
+	if err := root.store.Dispatch(ctx, taskID, "pin-root", "pin-relay"); err != nil {
+		t.Fatalf("dispatch on root: %v", err)
+	}
+	participantTask(t, relay, taskID, "pin-root", []string{"pin-root", "pin-relay", "pin-dest"})
+	participantTask(t, dest, taskID, "pin-root", []string{"pin-root", "pin-relay", "pin-dest"})
+	if err := root.store.RecordArtifact(ctx, m.Hash, m.Size, taskID, ""); err != nil {
+		t.Fatalf("index artifact: %v", err)
+	}
+	if err := root.store.SetOutputArtifact(ctx, taskID, m.Hash); err != nil {
+		t.Fatalf("set output artifact: %v", err)
+	}
+	// The relay's row must bind the hash too: authorization is per-hop and
+	// reads each node's own row, so the input ref travels as the stage's
+	// declared input exactly as a real delegation persists it.
+	if err := relay.store.SetStageInputs(ctx, taskID,
+		[]bus.ArtifactRef{{Hash: m.Hash, Source: "pin-root"}}); err != nil {
+		t.Fatalf("set relay inputs: %v", err)
+	}
+
+	// The direct pull is impossible on this topology — that is the premise.
+	if _, err := dest.FetchArtifact(ctx, "pin-root", taskID, m.Hash); err == nil {
+		t.Fatal("dest pulled from a node it has no link to")
+	}
+	// Through the relay hop it works: fetch from the predecessor, which
+	// forwards upstream and fans the chunks back.
+	got, err := dest.FetchArtifact(ctx, "pin-relay", taskID, m.Hash)
+	if err != nil {
+		t.Fatalf("relayed fetch: %v", err)
+	}
+	if got.Hash != m.Hash || got.Size != m.Size {
+		t.Fatalf("relayed fetch got %s (%d), want %s (%d)", got.Hash, got.Size, m.Hash, m.Size)
+	}
+	if size, ok := destPool.Has(m.Hash); !ok || size != m.Size {
+		t.Fatalf("consumer pool has %d, %v after the relayed transfer", size, ok)
+	}
+	// The relay cached nothing of its own — it moved bytes, it did not
+	// accumulate them (the requester's pool is the destination).
+	if _, ok := relay.Artifacts().Has(m.Hash); ok {
+		t.Fatal("relay kept a copy — relaying must not double-store")
+	}
+}
+
 func TestImportFatBundleArtifacts(t *testing.T) {
 	ctx := context.Background()
 	tree := artifactTree(t, 2048)

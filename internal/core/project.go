@@ -266,12 +266,45 @@ func (c *Core) packProjectMemory(project string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// notHomeOrRoot reports whether dir is a plausible tree to pack: not the
+// user's home directory and not a filesystem root. An accidental capture of
+// either is the same hazard looksLikeRepo guards on the worktree path — a
+// machine's whole home tree is not a project — and the practical outcome is
+// identical to the size limit catching it, minus the multi-minute scan of ~
+// that runs before the limit can. A relative "." resolves against the
+// daemon's working directory, which is exactly the ambient-capture case.
+func notHomeOrRoot(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return true
+	}
+	if filepath.Dir(abs) == abs {
+		return false // filesystem root
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if h, herr := filepath.Abs(home); herr == nil && h == abs {
+			return false
+		}
+	}
+	return true
+}
+
 // packProjectTree packs the project's work tree into the local pool and returns
 // the reference the executor pulls it with. The bytes stay here: the reference
 // names this node as the holder, and a peer that already has the hash skips the
 // transfer entirely.
 func (c *Core) packProjectTree(ctx context.Context, taskID, dir string) (bus.ArtifactRef, error) {
 	if c.artifacts == nil {
+		return bus.ArtifactRef{}, nil
+	}
+	if !notHomeOrRoot(dir) {
+		// A project registered at $HOME (or /) is an ambient-capture
+		// misconfiguration, not a tree anyone wants on the wire: the pack
+		// would scan the whole home directory only to trip the size limit
+		// and fail the same way — loudly, after minutes, on every task.
+		// Refuse up front, without an error: the task still runs, and this
+		// is a policy refusal rather than a degraded context.
+		c.logger.Warn("refusing to pack home directory as a project tree", "project_dir", dir)
 		return bus.ArtifactRef{}, nil
 	}
 	if st, err := os.Stat(dir); err != nil {
@@ -283,6 +316,7 @@ func (c *Core) packProjectTree(ctx context.Context, taskID, dir string) (bus.Art
 	if err != nil {
 		return bus.ArtifactRef{}, err
 	}
+	c.notePackSkipped(ctx, taskID, "pack_tree", dir, m)
 	if manifestJSON, jerr := json.Marshal(m); jerr == nil {
 		if rerr := c.store.RecordArtifact(ctx, m.Hash, m.Size, taskID, string(manifestJSON)); rerr != nil {
 			c.logger.Warn("index project artifact", "task", taskID, "hash", m.Hash, "err", rerr)
@@ -399,12 +433,32 @@ func (c *Core) packWorktree(ctx context.Context, taskID, dir string) (bus.Artifa
 	if err != nil {
 		return bus.ArtifactRef{}, err
 	}
+	c.notePackSkipped(ctx, taskID, "pack_worktree", dir, m)
 	if manifestJSON, jerr := json.Marshal(m); jerr == nil {
 		if rerr := c.store.RecordArtifact(ctx, m.Hash, m.Size, taskID, string(manifestJSON)); rerr != nil {
 			c.logger.Warn("index worktree artifact", "task", taskID, "hash", m.Hash, "err", rerr)
 		}
 	}
 	return bus.ArtifactRef{Stage: worktreeArtifactStage, Hash: m.Hash, Source: c.nodeID}, nil
+}
+
+// notePackSkipped surfaces a lenient pack's partial-tree entries on the audit
+// trail: the artifact that shipped is intact, but it is not the whole tree,
+// and "some paths never made it" belongs in the same context_degraded frame
+// a total pack failure would get.
+func (c *Core) notePackSkipped(ctx context.Context, taskID, stage, dir string, m artifact.Manifest) {
+	if len(m.PackSkipped) == 0 {
+		return
+	}
+	c.logger.Warn("tree packed with unreadable entries skipped", "dir", dir,
+		"skipped", m.PackSkipped)
+	if taskID != "" && c.store != nil {
+		if err := c.store.RecordEvent(ctx, taskID, EvContextDegraded, map[string]any{
+			"stage": stage + "_partial", "dir": dir, "skipped": m.PackSkipped,
+		}); err != nil {
+			c.logger.Debug("record partial pack event", "task", taskID, "err", err)
+		}
+	}
 }
 
 // landProjectPack extracts a delegated project's memory into this node's own

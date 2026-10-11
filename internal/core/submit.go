@@ -191,7 +191,9 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			// executor's own pin check match by identity — immune to both the
 			// name collisions that make display-name routing unreliable and
 			// the instance-id churn of a target that restarted mid-flight.
-			in.TargetNode = c.stablePeerID(ctx, decision.Target)
+			// pinWireDest: a topology-resolved pin forwards to the path's
+			// first hop but must keep naming the ultimate destination.
+			in.TargetNode = c.stablePeerID(ctx, pinWireDest(decision))
 		}
 	} else {
 		decision = scheduler.RouteP(c.nodeID, chain, employees, localMatch, in.Requires,
