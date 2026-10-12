@@ -3,9 +3,11 @@
 package defense
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -200,5 +202,85 @@ func TestGitShadowConflictKeepsBranch(t *testing.T) {
 	if out, err := exec.Command("git", "-C", repo, "show", branch+":README.md").Output(); err != nil ||
 		!strings.Contains(string(out), "shadow version") {
 		t.Fatalf("kept branch lost the shadow version: %v %s", err, out)
+	}
+}
+
+// TestGitBaselineRollback is the undo-point contract: a task that modifies,
+// deletes and creates files is rolled back wholesale — tracked content
+// returns to its baseline bytes, deletions come back, and post-baseline
+// output is gone.
+func TestGitBaselineRollback(t *testing.T) {
+	repo := initTestGitRepo(t)
+	taskID := "task-rollback"
+
+	// Pre-baseline state: tracked README plus an untracked file the user had
+	// lying around — the baseline must capture both.
+	keep := filepath.Join(repo, "untracked-keep.txt")
+	if err := os.WriteFile(keep, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatalf("write keep: %v", err)
+	}
+	branch, err := SaveGitBaseline(repo, taskID)
+	if err != nil {
+		t.Fatalf("SaveGitBaseline: %v", err)
+	}
+	if branch != "panda-base-"+taskID {
+		t.Fatalf("unexpected baseline branch: %s", branch)
+	}
+
+	// The "task": modify tracked, delete tracked, create new.
+	readme := filepath.Join(repo, "README.md")
+	if err := os.WriteFile(readme, []byte("agent broke this\n"), 0o644); err != nil {
+		t.Fatalf("modify readme: %v", err)
+	}
+	if err := os.WriteFile(keep, []byte("agent overwrote the untracked keep\n"), 0o644); err != nil {
+		t.Fatalf("modify keep: %v", err)
+	}
+	agentOut := filepath.Join(repo, "agent-output.log")
+	if err := os.WriteFile(agentOut, []byte("noise\n"), 0o644); err != nil {
+		t.Fatalf("write agent output: %v", err)
+	}
+
+	restored, removed, err := RollbackGitBaseline(repo, taskID)
+	if err != nil {
+		t.Fatalf("RollbackGitBaseline: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != "agent-output.log" {
+		t.Fatalf("expected agent-output.log removed, got %v", removed)
+	}
+	if !slices.Contains(restored, "README.md") || !slices.Contains(restored, "untracked-keep.txt") {
+		t.Fatalf("restored = %v, want README.md and untracked-keep.txt", restored)
+	}
+	if got, _ := os.ReadFile(readme); !strings.Contains(string(got), "initial repo content") {
+		t.Fatalf("README not rolled back: %s", got)
+	}
+	if got, _ := os.ReadFile(keep); !strings.Contains(string(got), "keep me") {
+		t.Fatalf("untracked keep not rolled back: %s", got)
+	}
+	if _, err := os.Stat(agentOut); !os.IsNotExist(err) {
+		t.Fatal("agent output survived rollback")
+	}
+
+	// The ref is consumed: a second revert reports ErrNoGitBaseline, not
+	// another silent pass.
+	if _, _, err := RollbackGitBaseline(repo, taskID); !errors.Is(err, ErrNoGitBaseline) {
+		t.Fatalf("second rollback err = %v, want ErrNoGitBaseline", err)
+	}
+}
+
+// TestCleanupGitRefs drops both ref families a task can leave behind.
+func TestCleanupGitRefs(t *testing.T) {
+	repo := initTestGitRepo(t)
+	taskID := "task-clean"
+	if _, err := SaveGitBaseline(repo, taskID); err != nil {
+		t.Fatalf("SaveGitBaseline: %v", err)
+	}
+	if _, err := SaveGitShadow(repo, taskID, nil); err != nil {
+		t.Fatalf("SaveGitShadow: %v", err)
+	}
+	CleanupGitRefs(repo, taskID)
+	for _, b := range []string{GitShadowBranchName(taskID), GitBaselineBranchName(taskID)} {
+		if err := exec.Command("git", "-C", repo, "rev-parse", "--verify", "refs/heads/"+b).Run(); err == nil {
+			t.Fatalf("ref %s survived cleanup", b)
+		}
 	}
 }

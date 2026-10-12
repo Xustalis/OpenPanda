@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
@@ -181,9 +183,18 @@ func (w *Worktrees) Diff(ctx context.Context, id string) (string, error) {
 
 // Merge lands the session's work on the repository's current branch: any
 // uncommitted changes in the worktree are committed on the session branch,
-// then the branch is merged into HEAD. On conflict the merge is aborted and
-// ErrMergeConflict returned — the checkout is left exactly as it was. The
-// return value is the merge commit's subject ("" for an up-to-date no-op).
+// then the branch is merged into HEAD. The merge is always a real merge
+// commit (--no-ff): a fast-forward would smear the session's commits into the
+// mainline with no boundary to undo, and Revert relies on that boundary. On
+// conflict the merge is aborted and ErrMergeConflict returned — the checkout
+// is left exactly as it was. The return value is the merge commit's subject
+// ("" for an up-to-date no-op).
+//
+// Every merge that moves HEAD records two refs for Revert:
+// refs/openpanda/merged/<id> (the merge commit) and
+// refs/openpanda/premerge/<id> (the pre-merge HEAD). A no-op merge touches
+// neither — overwriting premerge with the previous merge commit would erase
+// the only copy of the rollback target.
 func (w *Worktrees) Merge(ctx context.Context, id string, message string) (string, error) {
 	if err := w.ensureExists(id); err != nil {
 		return "", err
@@ -208,7 +219,8 @@ func (w *Worktrees) Merge(ctx context.Context, id string, message string) (strin
 			return "", fmt.Errorf("sessions: git commit: %s", wrapErr(err, out))
 		}
 	}
-	merge := executil.CommandContext(ctx, "git", "-C", w.repo, "merge", "--no-edit", Branch(id))
+	preSHA := w.revParse(ctx, "HEAD")
+	merge := executil.CommandContext(ctx, "git", "-C", w.repo, "-c", "user.name=OpenPanda", "-c", "user.email=openpanda@localhost", "merge", "--no-ff", "--no-edit", Branch(id))
 	if out, err := merge.CombinedOutput(); err != nil {
 		abort := executil.CommandContext(ctx, "git", "-C", w.repo, "merge", "--abort")
 		_, _ = abort.CombinedOutput()
@@ -218,11 +230,225 @@ func (w *Worktrees) Merge(ctx context.Context, id string, message string) (strin
 		}
 		return "", fmt.Errorf("sessions: git merge: %s", wrapErr(err, out))
 	}
+	if mergedSHA := w.revParse(ctx, "HEAD"); mergedSHA != "" && mergedSHA != preSHA {
+		w.writeRef(ctx, mergedRef(id), mergedSHA)
+		if preSHA != "" {
+			w.writeRef(ctx, premergeRef(id), preSHA)
+		}
+	}
 	subject, err := executil.CommandContext(ctx, "git", "-C", w.repo, "log", "-1", "--format=%s").Output()
 	if err != nil {
 		return "", nil // merge succeeded; subject is cosmetic
 	}
 	return strings.TrimSpace(string(subject)), nil
+}
+
+// mergedRef / premergeRef are the rollback bookkeeping refs a successful
+// Merge writes — see Merge's doc. They live under refs/openpanda/ so `git
+// branch -a` stays clean while gc still treats them as reachable roots.
+func mergedRef(id string) string   { return "refs/openpanda/merged/" + safeRefPart(id) }
+func premergeRef(id string) string { return "refs/openpanda/premerge/" + safeRefPart(id) }
+
+var unsafeRefChars = regexp.MustCompile(`[^a-zA-Z0-9_\-]`)
+
+func safeRefPart(id string) string { return unsafeRefChars.ReplaceAllString(id, "-") }
+
+// ErrNothingToRevert is Revert's answer when no recorded merge exists for the
+// session — never merged, already reverted, or merged before the bookkeeping
+// refs existed.
+var ErrNothingToRevert = errors.New("sessions: no recorded merge to revert")
+
+// ErrRevertDirty is Revert's refusal when the checkout has uncommitted work:
+// both rollback paths (reset --hard, git revert) would entangle it.
+var ErrRevertDirty = errors.New("sessions: checkout has uncommitted changes — commit or stash them first")
+
+// Revert undoes a previously recorded session Merge. When HEAD is still the
+// merge commit the rollback is a clean `git reset --hard <pre-merge>`; when
+// later commits sit on top it becomes a `git revert -m 1` of the merge commit
+// instead, so intervening work survives. Returns the resulting HEAD subject.
+func (w *Worktrees) Revert(ctx context.Context, id string) (string, error) {
+	if !ValidID(id) {
+		return "", ErrNotFound
+	}
+	merged := w.revParse(ctx, mergedRef(id))
+	if merged == "" {
+		return "", ErrNothingToRevert
+	}
+	dirty, err := executil.CommandContext(ctx, "git", "-C", w.repo, "status", "--porcelain").Output()
+	if err == nil && strings.TrimSpace(string(dirty)) != "" {
+		return "", ErrRevertDirty
+	}
+	head := w.revParse(ctx, "HEAD")
+	pre := w.revParse(ctx, premergeRef(id))
+	if pre == "" {
+		// Bookkeeping from an older build: the merge commit's first parent IS
+		// the pre-merge state by definition.
+		pre = w.revParse(ctx, merged+"^1")
+	}
+	switch {
+	case head == merged && pre != "":
+		// Nothing landed on top of the merge — erasing it is exact.
+		if out, err := executil.CommandContext(ctx, "git", "-C", w.repo, "reset", "--hard", pre).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("sessions: git reset: %s", wrapErr(err, out))
+		}
+	case w.isAncestor(ctx, merged, "HEAD"):
+		// Later work sits on top: revert the merge commit so history and the
+		// follow-up commits stay intact. A non-merge commit (a fast-forward
+		// recorded before --no-ff) reverts plainly.
+		argv := []string{"-C", w.repo, "-c", "user.name=OpenPanda", "-c", "user.email=openpanda@localhost", "revert", "--no-edit"}
+		if len(w.parents(ctx, merged)) > 1 {
+			argv = append(argv, "-m", "1")
+		}
+		argv = append(argv, merged)
+		if out, err := executil.CommandContext(ctx, "git", argv...).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("sessions: git revert: %s", wrapErr(err, out))
+		}
+	default:
+		return "", errors.New("sessions: merge commit is no longer on this branch — history was rewritten; revert by hand")
+	}
+	_ = executil.CommandContext(ctx, "git", "-C", w.repo, "update-ref", "-d", mergedRef(id)).Run()
+	_ = executil.CommandContext(ctx, "git", "-C", w.repo, "update-ref", "-d", premergeRef(id)).Run()
+	subject := ""
+	if out, err := executil.CommandContext(ctx, "git", "-C", w.repo, "log", "-1", "--format=%s").Output(); err == nil {
+		subject = strings.TrimSpace(string(out))
+	}
+	return subject, nil
+}
+
+func (w *Worktrees) revParse(ctx context.Context, rev string) string {
+	out, err := executil.CommandContext(ctx, "git", "-C", w.repo, "rev-parse", "--verify", rev).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func (w *Worktrees) writeRef(ctx context.Context, ref, sha string) {
+	_ = executil.CommandContext(ctx, "git", "-C", w.repo, "update-ref", ref, sha).Run()
+}
+
+func (w *Worktrees) isAncestor(ctx context.Context, anc, desc string) bool {
+	return executil.CommandContext(ctx, "git", "-C", w.repo, "merge-base", "--is-ancestor", anc, desc).Run() == nil
+}
+
+func (w *Worktrees) parents(ctx context.Context, rev string) []string {
+	out, err := executil.CommandContext(ctx, "git", "-C", w.repo, "rev-list", "--parents", "-n", "1", rev).Output()
+	if err != nil {
+		return nil
+	}
+	if f := strings.Fields(string(out)); len(f) > 1 {
+		return f[1:]
+	}
+	return nil
+}
+
+// DiffStat summarizes what a session's worktree would land on merge: the
+// numstat roll-up plus the risk signals a reviewer wants BEFORE merging —
+// sensitive paths (.env, keys), binary files line counts can't describe, and
+// deletions, which are the changes that hurt most when wrong.
+type DiffStat struct {
+	FilesChanged int      `json:"files_changed"`
+	Insertions   int      `json:"insertions"`
+	Deletions    int      `json:"deletions"`
+	Untracked    int      `json:"untracked"`
+	Binary       []string `json:"binary,omitempty"`
+	Sensitive    []string `json:"sensitive,omitempty"`
+}
+
+// sensitiveFileNames flags exact basenames whose merge should never be silent:
+// credential material and environment files that agents love to "helpfully"
+// touch.
+var sensitiveFileNames = map[string]bool{
+	".env": true, ".env.local": true, ".envrc": true,
+	"id_rsa": true, "id_dsa": true, "id_ecdsa": true, "id_ed25519": true,
+	".netrc": true, ".kubeconfig": true, ".htpasswd": true,
+	"credentials": true, "secrets": true, "shadow": true,
+}
+
+// sensitiveFileExts flags extension-based credential material.
+var sensitiveFileExts = map[string]bool{
+	".pem": true, ".key": true, ".p12": true, ".pfx": true,
+	".jks": true, ".keystore": true, ".kdbx": true,
+}
+
+// isSensitivePath reports whether path names a file a merge should flag:
+// an exact sensitive basename, a credential extension, or an ".env" variant
+// (.env.production, prod.env).
+func isSensitivePath(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	if sensitiveFileNames[base] || sensitiveFileExts[filepath.Ext(base)] {
+		return true
+	}
+	return strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env")
+}
+
+// Stat computes the merge-preview summary for the session worktree: changed
+// tracked files with +/- counts, untracked file count, and the flagged paths.
+// It reads exactly what Merge would commit — `git add -A` semantics — so the
+// preview is honest about untracked files, which plain `git diff` hides.
+func (w *Worktrees) Stat(ctx context.Context, id string) (DiffStat, error) {
+	var st DiffStat
+	if err := w.ensureExists(id); err != nil {
+		return st, err
+	}
+	wt := w.Path(id)
+	out, err := executil.CommandContext(ctx, "git", "-C", wt, "diff", "HEAD", "--numstat", "-z").Output()
+	if err != nil {
+		return st, fmt.Errorf("sessions: git numstat: %w", err)
+	}
+	seen := map[string]bool{}
+	fields := strings.Split(string(out), "\x00")
+	for i := 0; i < len(fields); i++ {
+		rec := fields[i]
+		if rec == "" {
+			continue
+		}
+		f := strings.SplitN(rec, "\t", 3)
+		if len(f) != 3 {
+			continue
+		}
+		path := f[2]
+		if path == "" {
+			// -z rename record: "<add>\t<del>\t\0<new>\0<old>" — the pathname
+			// pair follows as the next two fields.
+			if i+1 < len(fields) {
+				path = fields[i+1]
+			}
+			i += 2
+		}
+		if path == "" {
+			continue
+		}
+		st.FilesChanged++
+		seen[path] = true
+		if f[0] == "-" { // binary files report -/-
+			st.Binary = append(st.Binary, path)
+		} else {
+			if n, _ := strconv.Atoi(f[0]); n > 0 {
+				st.Insertions += n
+			}
+			if n, _ := strconv.Atoi(f[1]); n > 0 {
+				st.Deletions += n
+			}
+		}
+		if isSensitivePath(path) {
+			st.Sensitive = append(st.Sensitive, path)
+		}
+	}
+	untracked, err := executil.CommandContext(ctx, "git", "-C", wt, "ls-files", "-z", "--others", "--exclude-standard").Output()
+	if err != nil {
+		return st, fmt.Errorf("sessions: git ls-files: %w", err)
+	}
+	for _, p := range strings.Split(string(untracked), "\x00") {
+		if p == "" || seen[p] {
+			continue
+		}
+		st.Untracked++
+		if isSensitivePath(p) {
+			st.Sensitive = append(st.Sensitive, p)
+		}
+	}
+	return st, nil
 }
 
 // ensureExists verifies the session worktree is present (created by Ensure
@@ -255,6 +481,9 @@ func (w *Worktrees) Remove(ctx context.Context, id string) error {
 	}
 	del := executil.CommandContext(ctx, "git", "-C", w.repo, "branch", "-D", Branch(id))
 	_, _ = del.CombinedOutput()
+	// Rollback bookkeeping must not outlive the session it describes.
+	_ = executil.CommandContext(ctx, "git", "-C", w.repo, "update-ref", "-d", mergedRef(id)).Run()
+	_ = executil.CommandContext(ctx, "git", "-C", w.repo, "update-ref", "-d", premergeRef(id)).Run()
 	return nil
 }
 

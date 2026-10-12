@@ -22,6 +22,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/plan"
@@ -54,6 +55,9 @@ func runTask(args []string) {
 		case "delete", "del", "rm":
 			runTaskDelete(args[1:])
 			return
+		case "revert":
+			runTaskRevert(args[1:])
+			return
 		case "logs":
 			runLogs(args[1:])
 			return
@@ -78,6 +82,7 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, "  move <id> <seq>                         reorder the drag-sort queue")
 	fmt.Fprintln(os.Stderr, "  <id> --trace                            hop-by-hop delegation trace (hops, timings, transport)")
 	fmt.Fprintln(os.Stderr, "  delete <id>                             remove a task and its subtree (queued/finished)")
+	fmt.Fprintln(os.Stderr, "  revert <id>                             roll the run's git checkout back to its pre-task baseline")
 	fmt.Fprintln(os.Stderr, "  approve|reject|cancel|logs <id>         same as the bare commands")
 }
 
@@ -452,13 +457,14 @@ func printTaskSpec(raw string) {
 // opens `panda task` to read, in the one encoding they cannot read it in.
 func printTaskResult(raw string) {
 	var res struct {
-		ExitCode     int      `json:"exit_code"`
-		OK           bool     `json:"ok"`
-		Stdout       string   `json:"stdout"`
-		Stderr       string   `json:"stderr"`
-		Failed       string   `json:"failed"`
-		FilesChanged []string `json:"files_changed"`
-		Question     string   `json:"question"`
+		ExitCode       int      `json:"exit_code"`
+		OK             bool     `json:"ok"`
+		Stdout         string   `json:"stdout"`
+		Stderr         string   `json:"stderr"`
+		Failed         string   `json:"failed"`
+		FilesChanged   []string `json:"files_changed"`
+		FilesTruncated bool     `json:"files_truncated"`
+		Question       string   `json:"question"`
 	}
 	if err := json.Unmarshal([]byte(raw), &res); err != nil {
 		fmt.Printf("result:   %s\n", raw)
@@ -482,7 +488,7 @@ func printTaskResult(raw string) {
 		fmt.Println(p.Heading("question:") + " " + res.Question)
 		fmt.Println("  " + p.Muted("answer with: panda approve <task-id> -m \"<answer>\""))
 	}
-	if len(res.FilesChanged) > 0 {
+	if len(res.FilesChanged) > 0 || res.FilesTruncated {
 		const shown = 15
 		list := res.FilesChanged
 		more := ""
@@ -490,7 +496,14 @@ func printTaskResult(raw string) {
 			more = fmt.Sprintf(" … +%d", len(list)-shown)
 			list = list[:shown]
 		}
-		fmt.Println(p.Heading("files:") + "  " + p.Muted(strings.Join(list, ", ")+more))
+		line := strings.Join(list, ", ") + more
+		if res.FilesTruncated {
+			if line != "" {
+				line += " "
+			}
+			line += "(partial — workdir too large to diff fully)"
+		}
+		fmt.Println(p.Heading("files:") + "  " + p.Muted(line))
 	}
 	for _, body := range []string{res.Failed, strings.TrimRight(res.Stdout, "\n"), strings.TrimRight(res.Stderr, "\n")} {
 		if strings.TrimSpace(body) == "" {
@@ -1105,6 +1118,9 @@ func runTaskDelete(args []string) {
 	defer db.Close()
 
 	id = resolveTaskRef(store, id)
+	// Fetch the row before it goes: its exec/work dirs name the checkouts that
+	// may still carry this task's baseline or shadow refs.
+	t, _ := store.Get(context.Background(), id)
 	n, err := store.Delete(context.Background(), id)
 	if err != nil {
 		if errors.Is(err, core.ErrTaskActive) {
@@ -1119,11 +1135,90 @@ func runTaskDelete(args []string) {
 		}
 		taskStoreFatal(err, id)
 	}
+	if n > 0 {
+		// A deleted task can never be reverted — drop the refs it left so a
+		// shared checkout does not accumulate dead panda-base branches.
+		for _, dir := range taskGitDirs(t, cfg) {
+			defense.CleanupGitRefs(dir, id)
+		}
+	}
 	if jsonOutput {
 		emitJSON(map[string]any{"id": id, "deleted": n})
 		return
 	}
 	fmt.Println(i18n.Tf(loc, "cli.task.delete.done", "n", strconv.Itoa(n)))
+}
+
+// taskGitDirs returns the deduped candidate checkouts a task's git refs could
+// live in: the recorded exec dir first, then the pinned/originating work dir,
+// and finally the node's default work path as the last-resort guess.
+func taskGitDirs(t core.Task, cfg *config.Config) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range []string{t.ExecWorkDir, t.WorkDir, cfg.Storage.WorkPath} {
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out
+}
+
+// runTaskRevert implements `panda task revert <id>`: roll a task's git
+// checkout back to the whole-tree baseline the executor saved before the run
+// began (refs/heads/panda-base-<id>). Tracked and untracked changes alike are
+// undone — that is the point of a rollback — so the printed summary names
+// what was written back and what was deleted.
+func runTaskRevert(args []string) {
+	fs := flag.NewFlagSet("task revert", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	loc := i18n.Detect()
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "usage: panda task revert <task-id>")
+		os.Exit(2)
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+
+	id = resolveTaskRef(store, id)
+	t, err := store.Get(context.Background(), id)
+	if err != nil {
+		taskStoreFatal(err, id)
+	}
+
+	var restored, removed []string
+	reverted := false
+	for _, dir := range taskGitDirs(t, cfg) {
+		r, rm, rerr := defense.RollbackGitBaseline(dir, id)
+		if errors.Is(rerr, defense.ErrNoGitBaseline) {
+			continue
+		}
+		if rerr != nil {
+			fatal("task revert", rerr)
+		}
+		restored, removed, reverted = r, rm, true
+		break
+	}
+	if !reverted {
+		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.task.revert.none", "id", id))
+		os.Exit(1)
+	}
+	if jsonOutput {
+		emitJSON(map[string]any{"id": id, "reverted": true, "restored": restored, "removed": removed})
+		return
+	}
+	fmt.Println(i18n.Tf(loc, "cli.task.revert.done",
+		"id", id, "restored", strconv.Itoa(len(restored)), "removed", strconv.Itoa(len(removed))))
 }
 
 // parseAgentList normalizes the --agents value: comma-separated harness names,

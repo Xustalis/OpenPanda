@@ -61,6 +61,8 @@ func runSession(args []string) {
 		runSessionDiff(rest)
 	case "merge":
 		runSessionMerge(rest)
+	case "revert":
+		runSessionRevert(rest)
 	case "help", "-h", "--help":
 		sessionUsage()
 	default:
@@ -81,8 +83,9 @@ func sessionUsage() {
 	fmt.Fprintln(os.Stderr, "  fork <id> [--at N]            fork the session at turn N into a new thread")
 	fmt.Fprintln(os.Stderr, "  tree [id]                     show the conversation tree (or one session's family)")
 	fmt.Fprintln(os.Stderr, "  ask <id> <prompt> [--authorize] [--card PATH]   continue a session")
-	fmt.Fprintln(os.Stderr, "  diff <id>                     show the session's worktree changes")
+	fmt.Fprintln(os.Stderr, "  diff <id> [--stat]            show the session's worktree changes (--stat: summary + risk flags)")
 	fmt.Fprintln(os.Stderr, "  merge <id> [--message M]      merge the session branch into HEAD")
+	fmt.Fprintln(os.Stderr, "  revert <id>                   undo a previous session merge")
 }
 
 func runSessionList(args []string) {
@@ -823,10 +826,11 @@ func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, wor
 func runSessionDiff(args []string) {
 	fs := flag.NewFlagSet("session diff", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	statOnly := fs.Bool("stat", false, "summary only: counts and risk flags, no patch")
 	fs.Parse(reorderFlags(args, commonValueFlags))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
-		fmt.Fprintln(os.Stderr, "usage: panda session diff <id>")
+		fmt.Fprintln(os.Stderr, "usage: panda session diff [--stat] <id>")
 		os.Exit(2)
 	}
 	cfg, err := config.Load(*configPath)
@@ -837,24 +841,35 @@ func runSessionDiff(args []string) {
 	if wt == nil {
 		fatal("session diff", errors.New("work path is not a git repository"))
 	}
-	changes, err := wt.Status(context.Background(), id)
+	ctx := context.Background()
+	st, err := wt.Stat(ctx, id)
 	if err != nil {
-		fatal("session status", err)
-	}
-	patch, err := wt.Diff(context.Background(), id)
-	if err != nil {
-		fatal("session diff", err)
+		fatal("session stat", err)
 	}
 	if jsonOutput {
-		emitJSON(map[string]any{
-			"id":      id,
-			"branch":  sessions.Branch(id),
-			"changes": changes,
-			"patch":   patch,
-		})
+		out := map[string]any{"id": id, "branch": sessions.Branch(id), "stat": st}
+		if !*statOnly {
+			changes, _ := wt.Status(ctx, id)
+			patch, _ := wt.Diff(ctx, id)
+			out["changes"] = changes
+			out["patch"] = patch
+		}
+		emitJSON(out)
 		return
 	}
 	fmt.Printf("branch: %s\n", sessions.Branch(id))
+	printDiffStat(i18n.Detect(), st)
+	if *statOnly {
+		return
+	}
+	changes, err := wt.Status(ctx, id)
+	if err != nil {
+		fatal("session status", err)
+	}
+	patch, err := wt.Diff(ctx, id)
+	if err != nil {
+		fatal("session diff", err)
+	}
 	if len(changes) == 0 {
 		fmt.Println(i18n.T(i18n.Detect(), "cli.session.diff.clean"))
 		return
@@ -865,6 +880,22 @@ func runSessionDiff(args []string) {
 	if patch != "" {
 		fmt.Println()
 		fmt.Print(patch)
+	}
+}
+
+// printDiffStat renders the merge-preview roll-up: one counts line plus the
+// flagged paths a reviewer must see before the merge lands.
+func printDiffStat(loc i18n.Locale, st sessions.DiffStat) {
+	fmt.Println(i18n.Tf(loc, "cli.session.diffstat.summary",
+		"files", strconv.Itoa(st.FilesChanged),
+		"ins", strconv.Itoa(st.Insertions),
+		"del", strconv.Itoa(st.Deletions),
+		"new", strconv.Itoa(st.Untracked)))
+	if len(st.Sensitive) > 0 {
+		fmt.Println("  " + i18n.Tf(loc, "cli.session.diffstat.sensitive", "paths", strings.Join(st.Sensitive, ", ")))
+	}
+	if len(st.Binary) > 0 {
+		fmt.Println("  " + i18n.Tf(loc, "cli.session.diffstat.binary", "paths", strings.Join(st.Binary, ", ")))
 	}
 }
 
@@ -886,7 +917,13 @@ func runSessionMerge(args []string) {
 	if wt == nil {
 		fatal("session merge", errors.New("work path is not a git repository"))
 	}
-	subject, err := wt.Merge(context.Background(), id, *message)
+	ctx := context.Background()
+	// Merge is the point of no return (until revert): show the roll-up — what
+	// lands, and whether any of it is credential-shaped — before it lands.
+	if st, serr := wt.Stat(ctx, id); serr == nil && !jsonOutput {
+		printDiffStat(i18n.Detect(), st)
+	}
+	subject, err := wt.Merge(ctx, id, *message)
 	if err != nil {
 		if errors.Is(err, sessions.ErrMergeConflict) {
 			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
@@ -895,4 +932,45 @@ func runSessionMerge(args []string) {
 		fatal("session merge", err)
 	}
 	fmt.Printf("merged %s: %s\n", sessions.Branch(id), subject)
+}
+
+// runSessionRevert implements `panda session revert <id>`: undo a merge that
+// recorded its rollback refs. Head-on-the-merge resets cleanly; commits on
+// top get a revert commit instead, so intervening work survives.
+func runSessionRevert(args []string) {
+	fs := flag.NewFlagSet("session revert", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	id := strings.TrimSpace(fs.Arg(0))
+	loc := i18n.Detect()
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "usage: panda session revert <id>")
+		os.Exit(2)
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	wt := openWorktreesBestEffort(cfg.Storage.WorkPath)
+	if wt == nil {
+		fatal("session revert", errors.New("work path is not a git repository"))
+	}
+	subject, err := wt.Revert(context.Background(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, sessions.ErrNothingToRevert):
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.session.revert.none", "id", id))
+			os.Exit(1)
+		case errors.Is(err, sessions.ErrRevertDirty):
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.T(loc, "cli.session.revert.dirty"))
+			os.Exit(1)
+		default:
+			fatal("session revert", err)
+		}
+	}
+	if jsonOutput {
+		emitJSON(map[string]any{"id": id, "reverted": true, "head": subject})
+		return
+	}
+	fmt.Println(i18n.Tf(loc, "cli.session.revert.done", "id", sessions.Branch(id), "subject", subject))
 }
