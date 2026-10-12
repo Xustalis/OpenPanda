@@ -1506,34 +1506,39 @@ func (s *TaskStore) CountActive(ctx context.Context, owner string) (int, error) 
 	return n, nil
 }
 
-// CountScheduledActive counts execution slots occupied by locally-scheduled
-// tasks, regardless of owner: the queue scheduler may adopt queued tasks left
-// behind by another process instance (e.g. a restarted panel sidecar), so its
-// concurrency budget must count what is actually running, not just rows that
-// already carry its own node id.
+// CountScheduledActive counts execution slots this node is actually spending:
+// every row running or waiting_context under this node's ownership (scheduled
+// or not — a delegated task accepted here burns the same CPU a queued one
+// does, and a queue scheduler blind to it would over-admit past the card's
+// MaxConcurrent), plus queued claims still in the dispatched window below.
+// Rows may be owned by any submitter and adopted across process instances
+// (e.g. a restarted panel sidecar), which is why owner_node, not scheduled,
+// is the "executing here" test.
+//
+// A row running with owner_node=<peer> is the DELEGATOR'S copy of work the
+// peer executes (handleAccept stamps the executor as owner): it must not
+// count — the peer's own budget covers the execution, and counting it here
+// would park this node's queue for the whole remote run.
 //
 // A dispatched row occupies a LOCAL slot only while its dispatch target is
 // this node: forwardScheduled re-targets the claim to a peer (RetargetDelegation
 // records the new EvDelegate target) and the peer then runs it, so the row sits
 // 'dispatched' while the work happens elsewhere. Counting it anyway double-books
 // capacity — the executor charges the slot on its own CountActive, and this node
-// would refuse fresh claims on a budget the peer is spending. running and
-// waiting_context are unambiguous (only the executor ever reaches them), so the
-// exclusion applies to 'dispatched' alone. The latest delegate event is the
-// authority: a corrective retarget back to self after a failed send restores
-// the row to locally-claimed, which is exactly what it is.
+// would refuse fresh claims on a budget the peer is spending. The latest
+// delegate event is the authority: a corrective retarget back to self after a
+// failed send restores the row to locally-claimed, which is exactly what it is.
 func (s *TaskStore) CountScheduledActive(ctx context.Context, self string) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM tasks t
-		WHERE t.scheduled=1
-		  AND (t.state IN ('running','waiting_context')
-		       OR (t.state = 'dispatched' AND COALESCE(
+		WHERE (t.state IN ('running','waiting_context') AND t.owner_node = ?)
+		  OR (t.scheduled=1 AND t.state = 'dispatched' AND COALESCE(
 		           (SELECT json_extract(e.data_json, '$.target')
 		            FROM task_events e
 		            WHERE e.task_id = t.task_id AND e.type = ?
-		            ORDER BY e.id DESC LIMIT 1), ?) = ?))`,
-		EvDelegate, self, self).Scan(&n)
+		            ORDER BY e.id DESC LIMIT 1), ?) = ?)`,
+		self, EvDelegate, self, self).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("count scheduled active: %w", err)
 	}

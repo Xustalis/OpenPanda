@@ -1224,6 +1224,52 @@ func TestCountScheduledActiveLocalOnly(t *testing.T) {
 	}
 }
 
+// CountScheduledActive must reflect where execution actually happens, not
+// which row carries scheduled=1: a queue task accepted by a peer runs THERE
+// (owner_node=<peer>) and frees this node's slot, while a delegated task
+// running here (scheduled=0, owner=self) burns one the queue must see.
+func TestCountScheduledActiveTracksOwner(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Forwarded to a peer and accepted there: running with owner=worker —
+	// occupies the peer's budget, not root's.
+	fwd := createTask(t, s, "", "forwarded to peer", "root")
+	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET scheduled=1 WHERE task_id=?`, fwd.TaskID); err != nil {
+		t.Fatalf("set scheduled: %v", err)
+	}
+	if err := s.Queue(ctx, fwd.TaskID, "root"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := s.Dispatch(ctx, fwd.TaskID, "root", "worker"); err != nil {
+		t.Fatalf("dispatch to worker: %v", err)
+	}
+	if err := s.Accept(ctx, fwd.TaskID, "worker"); err != nil {
+		t.Fatalf("peer accept: %v", err)
+	}
+
+	// Delegated in and accepted locally: running with owner=root but no
+	// scheduled flag — the queue scheduler still has to count the slot.
+	del := createTask(t, s, "", "delegated in", "root")
+	if err := s.Queue(ctx, del.TaskID, "root"); err != nil {
+		t.Fatalf("queue delegated: %v", err)
+	}
+	if err := s.Dispatch(ctx, del.TaskID, "root", "root"); err != nil {
+		t.Fatalf("dispatch to root: %v", err)
+	}
+	if err := s.Accept(ctx, del.TaskID, "root"); err != nil {
+		t.Fatalf("local accept: %v", err)
+	}
+
+	cnt, err := s.CountScheduledActive(ctx, "root")
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if cnt != 1 {
+		t.Fatalf("count = %d, want 1 (only the locally-executing delegated row)", cnt)
+	}
+}
+
 func TestRecoverPreservesUnreleasedPlanStages(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

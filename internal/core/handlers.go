@@ -1419,6 +1419,12 @@ func (c *Core) claimForRun(ctx context.Context, taskID, intent string, plan *com
 			unlock()
 			return Task{}, nil, fmt.Errorf("accept: %w", err)
 		}
+		// Accept succeeded: the row is running and countable, so the admission
+		// reservation is freed now — holding it through execution would
+		// double-count the slot, the same judgement the waiting_context resume
+		// below makes. The deferred releaseSlot() above still fires at return;
+		// reserveCapacity's once makes that second call a no-op.
+		releaseSlot()
 	case StateWaitingCtx:
 		if err := c.store.Resume(ctx, taskID, c.nodeID); err != nil {
 			unlock()
@@ -2199,10 +2205,13 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// — Trace: supervision_round, part 1. Judged rounds trace after the
 		// judge pass below, where their verdict becomes known; only rounds that
 		// never reach a judge trace here, so the detail view's "2/5" badge and
-		// verdict pill always reflect a decided round.
+		// verdict pill always reflect a decided round. The judge runs on ANY
+		// successful agent round under a supervisor — the final round included —
+		// so the predicate is the same one that gates the Supervise call below,
+		// minus the token gate (an exhausted round parks on "review" instead).
 		// Gated: an authorization refusal parks before agent execution; emitting
 		// a failed supervision round would falsely mark that a judge round took place.
-		judgeWillRun := plan.Kind == "agent" && c.supervisor != nil && round < maxRounds-1 && res.OK
+		judgeWillRun := plan.Kind == "agent" && c.supervisor != nil && res.OK && !tokenExhausted
 		if !judgeWillRun && !commander.IsAuthorizationRefusal(res.Stderr) {
 			status := string(verdict.Status)
 			if !res.OK {
@@ -2212,6 +2221,11 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				// "done" over a failed attempt. The execution outcome is the only
 				// truthful status here.
 				status = "failed"
+			} else if tokenExhausted {
+				// The verdict-review assignment below parks this round before a
+				// judge call the quota can no longer afford; report the status it
+				// lands on, not the stale verdict left over from the prior round.
+				status = string(entry.VerdictReview)
 			}
 			emitRound(status)
 		}
@@ -4184,10 +4198,9 @@ func isOutputStagnant(currOut, prevOut, currErr, prevErr string) bool {
 	if cOut == pOut && cErr == pErr {
 		return true
 	}
+	// Identical non-empty stdout is stagnation even when the error tail
+	// differs: the report the agent produces is what progress looks like.
 	if cOut != "" && cOut == pOut {
-		return true
-	}
-	if cErr != "" && cErr == pErr && cOut == pOut {
 		return true
 	}
 	return false
