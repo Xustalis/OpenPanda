@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -322,6 +323,33 @@ func TestAttachWorktreePinsAdoptDir(t *testing.T) {
 	}
 }
 
+// TestAnonymousTaskRunsInPrivateDir pins the workspace isolation: a task
+// with no plan, project, pinned dir or attached inputs executes in a
+// per-task directory — never in the node work dir, where the live database
+// sits and where concurrent anonymous tasks would share a filesystem.
+func TestAnonymousTaskRunsInPrivateDir(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreWithAgent(t, "fc-private")
+	c.SetWorkDir(t.TempDir())
+
+	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
+		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
+	})
+
+	task, result, err := c.SubmitLocal(ctx, TaskInput{
+		Title:    "anonymous write",
+		Intent:   "write a file",
+		Requires: []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	want := filepath.ToSlash(filepath.Join("tasks", task.TaskID))
+	if !strings.HasSuffix(filepath.ToSlash(result.WorkDir), want) {
+		t.Fatalf("anonymous task ran in %q, want .../%s", result.WorkDir, want)
+	}
+}
+
 // TestFilesChangedReportedLocally verifies the result contract on the local
 // path: an agent that edits its workdir reports exactly the paths it touched,
 // and the row's result JSON carries the same list for `panda task` to render.
@@ -330,13 +358,10 @@ func TestFilesChangedReportedLocally(t *testing.T) {
 	c := newCoreWithAgent(t, "fc-node")
 	work := t.TempDir()
 	c.SetWorkDir(work)
-	if err := os.WriteFile(filepath.Join(work, "a.txt"), []byte("old"), 0o644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
 
 	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
-		_ = os.WriteFile(filepath.Join(work, "a.txt"), []byte("new"), 0o644)
-		_ = os.WriteFile(filepath.Join(work, "b.txt"), []byte("new file"), 0o644)
+		_ = os.WriteFile(filepath.Join(cwd, "a.txt"), []byte("new"), 0o644)
+		_ = os.WriteFile(filepath.Join(cwd, "b.txt"), []byte("new file"), 0o644)
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
 	})
 
@@ -373,5 +398,39 @@ func TestFilesChangedReportedLocally(t *testing.T) {
 	}
 	if len(res.FilesChanged) == 0 {
 		t.Fatalf("row result_json has no files_changed: %s", row.ResultJSON)
+	}
+}
+
+// TestSweepTaskDirsReapsOrphans pins the workdir GC rule: a tasks/<id> tree
+// whose row left the store (retention sweep, task delete, reset) is removed;
+// a dir whose row still exists is never touched — it may hold the user's
+// only copy of the deliverable.
+func TestSweepTaskDirsReapsOrphans(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "sweep-node", "127.0.0.1:17990")
+	work := t.TempDir()
+	c.SetWorkDir(work)
+
+	if _, err := c.store.CreateWithID(ctx, "live-task", "", "", "t", c.nodeID, nil, false); err != nil {
+		t.Fatalf("create row: %v", err)
+	}
+	live := filepath.Join(work, "tasks", "live-task")
+	orphan := filepath.Join(work, "tasks", "ghost-task")
+	for _, d := range []string{live, orphan} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "out.txt"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed file: %v", err)
+		}
+	}
+
+	c.sweepTaskDirs(ctx)
+
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan dir survived sweep (stat err = %v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(live, "out.txt")); err != nil {
+		t.Fatalf("live task dir reaped: %v", err)
 	}
 }

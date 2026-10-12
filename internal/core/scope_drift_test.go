@@ -74,7 +74,7 @@ func TestScopeDriftPausesAgent(t *testing.T) {
 	c.SetWorkDir(work)
 
 	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
-		_ = os.WriteFile(filepath.Join(work, "out-of-scope.txt"), []byte("x"), 0o644)
+		_ = os.WriteFile(filepath.Join(cwd, "out-of-scope.txt"), []byte("x"), 0o644)
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
 	})
 
@@ -113,8 +113,8 @@ func TestScopeDriftParentAnchoredScopeCompletes(t *testing.T) {
 	c.SetWorkDir(work)
 
 	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
-		_ = os.MkdirAll(filepath.Join(work, "sub"), 0o755)
-		_ = os.WriteFile(filepath.Join(work, "sub", "page.html"), []byte("x"), 0o644)
+		_ = os.MkdirAll(filepath.Join(cwd, "sub"), 0o755)
+		_ = os.WriteFile(filepath.Join(cwd, "sub", "page.html"), []byte("x"), 0o644)
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
 	})
 
@@ -146,7 +146,7 @@ func TestScopeDriftParkedIsApprovable(t *testing.T) {
 	c.SetWorkDir(work)
 
 	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
-		_ = os.WriteFile(filepath.Join(work, "out-of-scope.txt"), []byte("x"), 0o644)
+		_ = os.WriteFile(filepath.Join(cwd, "out-of-scope.txt"), []byte("x"), 0o644)
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
 	})
 
@@ -188,16 +188,19 @@ func TestScopeDriftIgnoresHostState(t *testing.T) {
 	c := newCoreWithAgent(t, "drift-node-host")
 	work := t.TempDir()
 	c.SetWorkDir(work)
+	// Host state lives inside the derived run dir — a project task runs in
+	// the project work dir, so the bookkeeping paths it ignores sit there.
+	runDir := filepath.Join(work, "projects", "proj")
 	c.SetHostStatePaths([]string{
-		filepath.Join(work, "data"),
-		filepath.Join(work, ".claude"),
+		filepath.Join(runDir, "data"),
+		filepath.Join(runDir, ".claude"),
 	})
 
 	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
-		_ = os.MkdirAll(filepath.Join(work, "data"), 0o755)
-		_ = os.WriteFile(filepath.Join(work, "data", "openpanda.db-wal"), []byte("x"), 0o644)
-		_ = os.MkdirAll(filepath.Join(work, ".claude"), 0o755)
-		_ = os.WriteFile(filepath.Join(work, ".claude", "settings.local.json"), []byte("x"), 0o644)
+		_ = os.MkdirAll(filepath.Join(cwd, "data"), 0o755)
+		_ = os.WriteFile(filepath.Join(cwd, "data", "openpanda.db-wal"), []byte("x"), 0o644)
+		_ = os.MkdirAll(filepath.Join(cwd, ".claude"), 0o755)
+		_ = os.WriteFile(filepath.Join(cwd, ".claude", "settings.local.json"), []byte("x"), 0o644)
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
 	})
 
@@ -231,8 +234,8 @@ func TestAgentWithinScopeCompletes(t *testing.T) {
 	c.SetWorkDir(work)
 
 	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
-		_ = os.MkdirAll(filepath.Join(work, "allowed"), 0o755)
-		_ = os.WriteFile(filepath.Join(work, "allowed", "Navbar.vue"), []byte("x"), 0o644)
+		_ = os.MkdirAll(filepath.Join(cwd, "allowed"), 0o755)
+		_ = os.WriteFile(filepath.Join(cwd, "allowed", "Navbar.vue"), []byte("x"), 0o644)
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
 	})
 
@@ -254,5 +257,91 @@ func TestAgentWithinScopeCompletes(t *testing.T) {
 	}
 	if !result.OK {
 		t.Fatalf("result not ok: %+v", result)
+	}
+}
+
+// TestFilterHostDriftKeepsAgentChangesUnderDataRoot pins the installed-layout
+// fix: the default config puts the database in the work root, so the data
+// directory and the snapshot root are the same path. A blind prefix match on
+// the host list then hid every change the agent made — files_changed came
+// back empty, scope drift could not fire, and correct work retried into
+// review. A host path equal to or containing the workDir must not filter;
+// precise entries inside it still must.
+func TestFilterHostDriftKeepsAgentChangesUnderDataRoot(t *testing.T) {
+	work := t.TempDir()
+	c := NewCore(openTestDB(t), "drift-node-layout", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetHostStatePaths([]string{
+		work, // data dir == work root: the default install layout
+		filepath.Join(work, "openpanda.db"),
+		filepath.Join(work, "openpanda.db-wal"),
+		filepath.Join(work, "openpanda.db-shm"),
+		filepath.Join(work, "sessions"),
+		filepath.Join(work, "locks"),
+		filepath.Join(work, "memory"),
+		"", // an unset optional path must not resolve to the process cwd
+	})
+
+	drift := []string{
+		"openpanda.db-wal",      // live sidecar: host write, filtered
+		"sessions/abc.json",     // session snapshot: filtered
+		"locks/vm-x.lock",       // flock: filtered
+		"memory/daily/today.md", // memory engine write: filtered
+		"plans/p1/s1/out.txt",   // stage output: agent work
+		"tasks/t1/main.go",      // attached worktree: agent work
+		"answer.txt",            // root-level write: agent work
+		"projects/p/main.go",    // project worktree file: agent work
+		"projects/p/MEMORY.md",  // project memory inside the worktree: task-visible
+	}
+	got := c.filterHostDrift(work, drift)
+	want := map[string]bool{
+		"plans/p1/s1/out.txt":  true,
+		"tasks/t1/main.go":     true,
+		"answer.txt":           true,
+		"projects/p/main.go":   true,
+		"projects/p/MEMORY.md": true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("filtered drift = %v, want %v", got, want)
+	}
+	for _, p := range got {
+		if !want[p] {
+			t.Fatalf("unexpected survivor %q in %v", p, got)
+		}
+	}
+}
+
+// TestFilterHostDriftProjectWorkDir pins the same bug from the other side:
+// the snapshot root is a project work dir, whose ancestor entries (the data
+// dir, the projects root) must not mask the agent's files — projects/<name>
+// doubles as projectWorkDir on the default layout.
+func TestFilterHostDriftProjectWorkDir(t *testing.T) {
+	root := t.TempDir()
+	work := filepath.Join(root, "projects", "p")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	c := NewCore(openTestDB(t), "drift-node-proj", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetHostStatePaths([]string{
+		root,
+		filepath.Join(root, "openpanda.db-wal"),
+		filepath.Join(root, "projects"),
+	})
+	got := c.filterHostDrift(work, []string{"main.go", "sub/x.go", "MEMORY.md"})
+	if len(got) != 3 {
+		t.Fatalf("project workdir drift = %v, want all three paths visible", got)
+	}
+}
+
+// TestFilterHostDriftNestedDataDir keeps the other layout honest: a data dir
+// strictly inside the work root still filters everything under it — the
+// ancestor guard protects containers, not subtrees.
+func TestFilterHostDriftNestedDataDir(t *testing.T) {
+	work := t.TempDir()
+	data := filepath.Join(work, "data")
+	c := NewCore(openTestDB(t), "drift-node-nested", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetHostStatePaths([]string{data})
+	got := c.filterHostDrift(work, []string{"data/openpanda.db-wal", "src/app.go"})
+	if len(got) != 1 || got[0] != "src/app.go" {
+		t.Fatalf("nested data dir drift = %v, want just src/app.go", got)
 	}
 }

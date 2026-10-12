@@ -770,7 +770,7 @@ func (c *Core) deliverCancel(ctx context.Context, peer, taskID, reason string) b
 	}
 	env.To = peer
 	if err := c.sendTo(peer, env); err != nil {
-		c.logger.Warn("outbox: send cancel", "task", taskID, "peer", peer, "err", err)
+		c.logger.Debug("outbox: send cancel", "task", taskID, "peer", peer, "err", err)
 		return false
 	}
 	return true

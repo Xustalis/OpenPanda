@@ -682,3 +682,68 @@ func TestPeerEntryMarshalYAML(t *testing.T) {
 		t.Errorf("structured marshal = %s", text)
 	}
 }
+
+// TestHostStatePathsCoversRuntimeFiles pins the shared derivation both the
+// daemon and the embedded engine feed to SetHostStatePaths: the live DB and
+// the paths the node itself rewrites while a task runs must all appear, and
+// unset optional paths must not — an empty entry would resolve to the
+// process cwd inside SetHostStatePaths and mark the whole world host-owned.
+func TestHostStatePathsCoversRuntimeFiles(t *testing.T) {
+	var c Config
+	c.Storage.DBPath = "/data/openpanda.db"
+	c.Storage.MemoryPath = "/data/memory"
+	c.Storage.ProjectsPath = "/data/projects"
+	c.Storage.SkillsPath = "/data/skills"
+	c.Storage.ContextPath = "/data/context"
+	c.Storage.ArtifactPath = "/data/artifacts"
+	c.Storage.WorkPath = "/data"
+	// ContextPath/ArtifactPath/VAPIDKeyPath deliberately left populated for
+	// half of them and empty for the rest, to exercise both sides.
+	c.Push.VAPIDKeyPath = ""
+
+	got := c.HostStatePaths()
+	for _, p := range got {
+		if p == "" {
+			t.Fatalf("host state list contains an empty path: %v", got)
+		}
+	}
+	// Compare in slash form. The expectations below are POSIX while
+	// HostStatePaths derives several entries with filepath.Join, which yields
+	// backslashes on Windows; normalizing the actual values keeps the
+	// assertion about *which* paths appear, not which separator they carry.
+	gotSlash := make([]string, 0, len(got))
+	for _, p := range got {
+		gotSlash = append(gotSlash, filepath.ToSlash(p))
+	}
+	for _, want := range []string{
+		"/data/openpanda.db",
+		"/data/openpanda.db-wal",
+		"/data/openpanda.db-shm",
+		"/data/daemon.pid",
+		"/data/sessions",
+		"/data/locks",
+		"/data/context",
+		"/data/artifacts",
+		"/data/memory",
+		"/data/skills",
+		"/data/.claude",
+	} {
+		found := false
+		for _, p := range gotSlash {
+			if p == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("host state paths missing %q: %v", want, got)
+		}
+	}
+	// projects/ is agent work space (Core.projectWorkDir), not host state —
+	// the per-project MEMORY.md inside it is a task-visible change.
+	for _, p := range gotSlash {
+		if p == "/data/projects" {
+			t.Fatalf("projects root must not be host state: %v", got)
+		}
+	}
+}

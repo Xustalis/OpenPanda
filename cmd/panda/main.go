@@ -492,14 +492,14 @@ func runDaemon(args []string) {
 	} else {
 		coreNode.SetWorkDir(cfg.Storage.WorkPath)
 	}
-	coreNode.SetHostStatePaths(hostStatePaths(cfg))
+	coreNode.SetHostStatePaths(cfg.HostStatePaths())
 	// OS sandbox (sandbox.*): the environment filter always applies; when a
 	// mode is configured, every spawned native command and adapter runs under
 	// the platform's deny-default confinement on top. The node's own
 	// bookkeeping — database dir, memory stores, artifact pool, the config
 	// and card files — is write-protected at the sandbox layer too, so a
 	// confused task cannot corrupt the very state the drift detector and
-	// audit chain verify. hostStatePaths is NOT reused verbatim: it also
+	// audit chain verify. cfg.HostStatePaths is NOT reused verbatim: it also
 	// lists workPath/.claude, the agent's own project config, and denying
 	// that would break the CLI's settings writes mid-run. The deny list is
 	// shared with the embedded engine via commander.ProtectedPaths.
@@ -889,26 +889,6 @@ func schedulerTier(resourceClass string) int {
 		return 5
 	default:
 		return 1
-	}
-}
-
-// hostStatePaths returns the node's own bookkeeping paths — its SQLite file
-// and sidecars, memory trees, pid file, and the agent CLI's own config dir —
-// so scope-drift detection ignores the host's side-effect writes rather than
-// flagging them as agent drift, and so artifact pack/extract never ships or
-// overwrites live node state (see Core.hostStatePrune/extractSkipSet).
-func hostStatePaths(cfg *config.Config) []string {
-	dbDir := filepath.Dir(cfg.Storage.DBPath)
-	return []string{
-		dbDir,                       // data/: openpanda.db + -wal/-shm + context/
-		cfg.Storage.DBPath,          // the live SQLite file, for pack/extract pruning
-		cfg.Storage.DBPath + "-wal", // and its sidecars, whose loss splits the db
-		cfg.Storage.DBPath + "-shm",
-		filepath.Join(dbDir, "daemon.pid"),
-		cfg.Storage.MemoryPath,
-		cfg.Storage.ProjectsPath,
-		cfg.Storage.SkillsPath,
-		filepath.Join(cfg.Storage.WorkPath, ".claude"), // the agent CLI's own project config
 	}
 }
 

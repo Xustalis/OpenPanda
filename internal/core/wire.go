@@ -742,8 +742,17 @@ func (c *Core) forwardCancelDownstream(ctx context.Context, taskID, reason strin
 	// The executor is unreachable at the moment of the cancel. Park it for
 	// redelivery on the next hello (S2-7) instead of relying on the lease
 	// alone: the lease bounds liveness, but a live executor keeps renewing
-	// it and would burn tokens on abandoned work until it finishes.
-	c.logger.Warn("cancel: forward downstream", "task", taskID, "to", target)
+	// it and would burn tokens on abandoned work until it finishes. On a
+	// borrowed engine (a `panda cancel` CLI sharing the node id) the failed
+	// send is structural — the owning daemon holds the edge — so the park
+	// is the designed path, not a warning.
+	if c.ownsNodeRow {
+		c.logger.Warn("cancel: executor unreachable, parked for delivery on reconnect",
+			"task", taskID, "to", target)
+	} else {
+		c.logger.Info("cancel parked for delivery via the owning engine",
+			"task", taskID, "to", target)
+	}
 	c.outboxCancelPersist(ctx, target, taskID, reason)
 }
 

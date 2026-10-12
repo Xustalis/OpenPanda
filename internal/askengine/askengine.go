@@ -919,7 +919,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	}
 	sched.SetProjectStores(projectstore.NewStore(e.db), e.cfg.Storage.ProjectsPath)
 	sched.SetWorkDir(e.cfg.Storage.WorkPath)
-	sched.SetHostStatePaths(hostStatePaths(e.cfg))
+	sched.SetHostStatePaths(e.cfg.HostStatePaths())
 	sched.SetSharedSecret(e.cfg.Network.SharedSecret)
 	sched.SetAllowCleartext(e.cfg.Network.AllowCleartext)
 	sched.SetCleartextAllowlist(e.cfg.Network.AllowCleartextFor)

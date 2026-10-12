@@ -6,12 +6,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
 
-	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -28,19 +26,6 @@ func schedulerTier(resourceClass string) int {
 		return 5
 	default:
 		return 1
-	}
-}
-
-// hostStatePaths returns the node's own bookkeeping paths — its SQLite/memory
-// trees and the agent CLI's own config dir — so scope-drift detection ignores
-// the host's side-effect writes rather than flagging them as agent drift.
-func hostStatePaths(cfg *config.Config) []string {
-	return []string{
-		filepath.Dir(cfg.Storage.DBPath), // data/: openpanda.db + -wal/-shm + context/
-		cfg.Storage.MemoryPath,
-		cfg.Storage.ProjectsPath,
-		cfg.Storage.SkillsPath,
-		filepath.Join(cfg.Storage.WorkPath, ".claude"), // the agent CLI's own project config
 	}
 }
 

@@ -320,8 +320,9 @@ func (c *Core) negoInterruptLocal(ctx context.Context, holder, scopeFile string)
 }
 
 // taskWorkDir mirrors the workDir derivation in run(): the stage's own dir,
-// the project tree for an input-carrying project task, the task's pinned
-// dir, else the node-wide execution directory.
+// the project tree for a project task (a pinned dir wins when the task
+// carries nothing to pull), the attached tree's private dir, the task's
+// pinned dir, else the per-task dir a plain anonymous task runs in.
 func (c *Core) taskWorkDir(t Task) string {
 	if t.PlanID != "" {
 		if wd, err := c.stageWorkDir(t.PlanID, t.StageID); err == nil {
@@ -340,6 +341,14 @@ func (c *Core) taskWorkDir(t Task) string {
 	}
 	if t.WorkDir != "" {
 		return t.WorkDir
+	}
+	if t.Project != "" {
+		if wd, err := c.projectWorkDir(t.Project); err == nil {
+			return wd
+		}
+	}
+	if wd, err := c.attachedWorkDir(t.TaskID); err == nil {
+		return wd
 	}
 	return c.workDir
 }

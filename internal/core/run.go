@@ -264,7 +264,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		return outcome.payload, nil
 	}
 	return c.finalizeRun(ctx, taskID, task, work.plan, required, attemptID, prep.workDir,
-		outcome.res, outcome.lastChanged, outcome.verdict, outcome.sessionID)
+		outcome.res, outcome.lastChanged, outcome.filesTruncated, outcome.verdict, outcome.sessionID)
 }
 
 // resolveRunPlan turns a task's requires into an executable plan: route
@@ -535,6 +535,36 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 		if err := c.fetchStageInputs(execCtx, task, workDir); err != nil {
 			return runPrep{}, fmt.Errorf("worktree inputs: %w", err)
 		}
+	} else if task.Project != "" && task.WorkDir == "" {
+		// A project task with nothing to pull still belongs to its project:
+		// run it in the project's own work dir so project-anchored scopes and
+		// the worktree that --project names mean what the user meant. A
+		// submitter-pinned worktree still wins — the pin is explicit.
+		wd, err := c.projectWorkDir(task.Project)
+		if err != nil {
+			return runPrep{}, err
+		}
+		workDir = wd
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			return runPrep{}, fmt.Errorf("create project work dir: %w", err)
+		}
+	} else if task.WorkDir == "" {
+		// A plain anonymous task: no stage, no project, no attached inputs,
+		// no submitter pin. Running it in the node work dir mixes task
+		// output with the node's own live state — on the default layout
+		// that dir is the data dir, so agent files landed next to the open
+		// database — and makes every drift snapshot walk the node's whole
+		// state tree. Give it the same private per-task dir an attached
+		// worktree gets: concurrent anonymous tasks never share files, and
+		// files_changed diffs only the task's own footprint.
+		wd, err := c.attachedWorkDir(task.TaskID)
+		if err != nil {
+			return runPrep{}, err
+		}
+		workDir = wd
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			return runPrep{}, fmt.Errorf("create task work dir: %w", err)
+		}
 	}
 
 	// §5.2 shadow resume: a task preempted mid-edit parked its scoped files
@@ -570,8 +600,8 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 
 	// §6.2 monotonic-progress bookkeeping: the oscillation window is keyed by
 	// the project or plan whose tree this task works on — the unit a mesh of
-	// agents "revisits". Anonymous tasks share the node-wide workDir, so
-	// keying them by directory would conflate unrelated work; they are exempt.
+	// agents "revisits". Anonymous tasks get a private per-task dir, so no
+	// shared tree exists to track oscillation across; they are exempt.
 	oscKey := task.Project
 	if oscKey == "" {
 		oscKey = task.PlanID
@@ -603,6 +633,22 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 			c.logger.Warn("snapshot workdir before agent", "task", taskID, "err", err)
 		} else {
 			beforeOK = true
+			if before.Truncated() || before.Skipped() > 0 {
+				c.logger.Info("workdir snapshot partial", "task", taskID,
+					"truncated", before.Truncated(), "skipped", before.Skipped())
+			}
+		}
+		// Git baseline: on a real checkout (a project workspace, a submitter
+		// pin) the run gets an undo point — refs/heads/panda-base-<id> —
+		// before the agent touches anything, so `panda task revert` can put
+		// the tree back wholesale. It runs after the shadow merges above, so
+		// a resumed task's baseline contains its restored mid-flight work.
+		// Cost is one scratch-index write-tree — cheap next to the run, and
+		// skipped entirely when workDir is not a repository.
+		if defense.IsGitRepo(workDir) {
+			if _, berr := defense.SaveGitBaseline(workDir, taskID); berr != nil {
+				c.logger.Warn("git baseline", "task", taskID, "err", berr)
+			}
 		}
 	}
 	return runPrep{
@@ -759,12 +805,13 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 // whole result envelope, so wrapping — rather than re-deriving — keeps them
 // byte-identical.
 type roundOutcome struct {
-	payload     bus.TaskResultPayload
-	done        bool
-	res         commander.Result
-	lastChanged []string
-	verdict     entry.SuperviseVerdict
-	sessionID   string
+	payload        bus.TaskResultPayload
+	done           bool
+	res            commander.Result
+	lastChanged    []string
+	filesTruncated bool
+	verdict        entry.SuperviseVerdict
+	sessionID      string
 }
 
 // runWork bundles the mutable state run()'s phases share, so each phase stays
@@ -857,8 +904,11 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	// lastChanged carries the last completed round's workdir footprint out of
 	// the loop: the judge sees it as evidence (an agent claiming done while
 	// touching nothing is the classic failure), and the result contract below
-	// reports it as files_changed.
+	// reports it as files_changed. filesTruncated marks a workdir too large
+	// to snapshot fully: the diff covers only the lexical prefix, which the
+	// result flags so consumers don't read partial evidence as "no work".
 	var lastChanged []string
+	var filesTruncated bool
 	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
 	// delegations bounds how many PANDA_DELEGATE promotions one task may make
 	// (§4.2). Each re-runs the round with the child's result folded into the
@@ -1128,6 +1178,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				res.Stdout = cleaned
 				if beforeOK {
 					if after, serr := defense.SnapshotDir(workDir); serr == nil {
+						filesTruncated = after.Truncated()
 						lastChanged = c.filterHostDrift(workDir, before.Changed(after))
 					}
 				}
@@ -1160,8 +1211,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					ApprovalDisposition: string(ApprovalResumeExecution),
 					Question:            q,
 					OK:                  true, ExitCode: 0, Stdout: res.Stdout,
-					FilesChanged: fc,
-					Tokens:       res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+					FilesChanged: fc, FilesTruncated: filesTruncated,
+					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}}, nil
 			}
 		}
@@ -1334,6 +1385,11 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if err != nil {
 				c.logger.Warn("snapshot workdir after agent", "task", taskID, "err", err)
 			} else {
+				filesTruncated = after.Truncated()
+				if after.Truncated() || after.Skipped() > 0 {
+					c.logger.Info("workdir snapshot partial", "task", taskID,
+						"truncated", after.Truncated(), "skipped", after.Skipped())
+				}
 				lastChanged = c.filterHostDrift(workDir, before.Changed(after))
 			}
 		}
@@ -1345,7 +1401,14 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// The roots are re-anchored to workDir first: a spec written from the
 		// project root ("proj/sub" while workDir is ".../proj") names the same
 		// tree, and comparing it verbatim drifted every in-scope change.
-		if plan.Kind == "agent" && !scope.Empty() && res.OK {
+		// A truncated diff is partial evidence: churn in the unrecorded tail
+		// cannot convict, and parking on prefix noise is a false positive —
+		// the intercept only runs on a complete diff.
+		if plan.Kind == "agent" && !scope.Empty() && res.OK && filesTruncated {
+			c.logger.Info("scope drift check skipped: workdir snapshot truncated",
+				"task", taskID, "dir", workDir)
+		}
+		if plan.Kind == "agent" && !scope.Empty() && res.OK && !filesTruncated {
 			if drift := scope.DriftUnder(workDir, lastChanged); len(drift) > 0 {
 				msg := "scope drift: agent changed files outside declared scope: " + strings.Join(drift, ", ")
 				c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
@@ -1607,7 +1670,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			res.Stdout += "\n\n[delegated child results]\n" + strings.Join(notes, "\n")
 		}
 	}
-	return roundOutcome{res: res, lastChanged: lastChanged, verdict: verdict, sessionID: sessionID}, nil
+	return roundOutcome{res: res, lastChanged: lastChanged, filesTruncated: filesTruncated,
+		verdict: verdict, sessionID: sessionID}, nil
 }
 
 // annotateAgentSubstitution prefixes the result with a note whenever the
@@ -1636,7 +1700,7 @@ func annotateAgentSubstitution(plan commander.Plan, res commander.Result) comman
 // Tier-2) or done. Every return is already the wire payload run reports.
 func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan commander.Plan,
 	required []string, attemptID, workDir string, res commander.Result,
-	lastChanged []string, verdict entry.SuperviseVerdict, sessionID string) (bus.TaskResultPayload, error) {
+	lastChanged []string, filesTruncated bool, verdict entry.SuperviseVerdict, sessionID string) (bus.TaskResultPayload, error) {
 	// A stage hands its work-dir to its successors as a content-addressed
 	// artifact. It is packed before the terminal branches below, not inside one of
 	// them, because a stage that parks in review still produced a tree and the
@@ -1698,7 +1762,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 			TaskID: taskID, AttemptID: attemptID, State: StateReview,
 			ApprovalDisposition: string(ApprovalAcceptWork),
 			OK:                  true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, FilesChanged: filesChanged, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			AgentSessionID: sessionID,
 		}, nil
 	}
@@ -1740,7 +1804,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 				TaskID: taskID, AttemptID: attemptID, State: StateReview,
 				ApprovalDisposition: string(ApprovalAcceptWork),
 				OK:                  true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, FilesChanged: filesChanged, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				AgentSessionID: sessionID,
 			}, nil
 		}
@@ -1767,7 +1831,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
-		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, FilesChanged: filesChanged, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 		// Reported even though the local row cleared it: the delegator keeps
 		// the handle so a re-dispatch back here can offer ResumeSessionID.
 		AgentSessionID: sessionID,

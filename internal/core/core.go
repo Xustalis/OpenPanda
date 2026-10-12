@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -456,6 +457,9 @@ type Core struct {
 	// (config reload), and the sweep check runs on every tick.
 	retentionDays    atomic.Int64
 	retentionSweepAt atomic.Int64
+	// taskDirSweepAt paces the orphan workdir GC the same way — reaped
+	// only when the owning task row is gone, never while it lives.
+	taskDirSweepAt atomic.Int64
 
 	// Farsky datagram plane (§9.2). udp is the shared socket; udpPort its
 	// bound port (advertised in hello). udpRoutes maps peer id -> confirmed
@@ -837,6 +841,9 @@ func (c *Core) SetWorkDir(dir string) {
 func (c *Core) SetHostStatePaths(paths []string) {
 	c.hostStatePaths = make([]string, 0, len(paths))
 	for _, p := range paths {
+		if p == "" {
+			continue // Abs("") is the process cwd — never host state
+		}
 		if abs, err := filepath.Abs(p); err == nil {
 			c.hostStatePaths = append(c.hostStatePaths, filepath.Clean(abs))
 		}
@@ -849,16 +856,27 @@ func (c *Core) SetHostStatePaths(paths []string) {
 // pause a task for scope drift. The drift paths are relative to the run's
 // workDir — a stage dir or an attached task's private dir, not always the
 // node root — so the caller passes the root they were snapshotted under.
+//
+// A host path that IS the workDir or contains it is skipped rather than
+// applied: host state masks only what it covers inside the snapshot tree,
+// and a container match would swallow every change the agent made. The
+// default layout puts the database in the work root, so the data dir is
+// such a container there — the precise file/subdir entries still cover the
+// host's own writes under it.
 func (c *Core) filterHostDrift(workDir string, drift []string) []string {
 	if len(c.hostStatePaths) == 0 {
 		return drift
 	}
 	wd, _ := filepath.Abs(workDir)
+	wd = filepath.Clean(wd)
 	out := make([]string, 0, len(drift))
 	for _, p := range drift {
 		ap := filepath.Join(wd, p)
 		keep := true
 		for _, h := range c.hostStatePaths {
+			if h == wd || strings.HasPrefix(wd, h+string(filepath.Separator)) {
+				continue
+			}
 			if ap == h || strings.HasPrefix(ap, h+string(filepath.Separator)) {
 				keep = false
 				break
@@ -1269,6 +1287,7 @@ func (c *Core) taskSweeps(ctx context.Context) {
 	c.sweepArtServe()
 	c.expireLeases(ctx)
 	c.sweepRetention(ctx)
+	c.sweepTaskDirs(ctx)
 	// A row can go terminal — or park in review — out of band: cancelled
 	// from the CLI, rejected from the console, failed by another process's
 	// monitor. ExpireTasks only cleans the rows it fails itself, so without
@@ -1321,6 +1340,57 @@ func (c *Core) sweepRetention(ctx context.Context) {
 		c.logger.Info("task retention sweep", "days", days, "deleted", deleted)
 		c.audit(ctx, "", "store:retention", "tasks", "swept",
 			fmt.Sprintf("deleted %d settled task(s) older than %d days", deleted, days))
+	}
+}
+
+// sweepTaskDirs reaps per-task workdirs (workDir/tasks/<id>) whose owning row
+// is gone — swept by retention, removed by `task delete`, or orphaned by a
+// store reset. A directory whose row still exists is never touched even if
+// the task settled long ago: the tree may be the user's only copy of the
+// deliverable, so row absence is the only safe reap signal. It runs even with
+// retention disabled because rows also leave the table through explicit
+// deletes. Paced on the same hourly interval as the row sweep.
+func (c *Core) sweepTaskDirs(ctx context.Context) {
+	now := time.Now()
+	last := c.taskDirSweepAt.Load()
+	if last > 0 && now.Sub(time.Unix(last, 0)) < retentionSweepInterval {
+		return
+	}
+	if !c.taskDirSweepAt.CompareAndSwap(last, now.Unix()) {
+		return
+	}
+	root := filepath.Join(c.workDir, "tasks")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			c.taskDirSweepAt.Store(last)
+			c.logger.Warn("task workdir sweep", "err", err)
+		}
+		return
+	}
+	removed := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		_, err := c.store.Get(ctx, e.Name())
+		switch {
+		case err == nil:
+			continue // row lives: the dir stays, whatever state the task is in
+		case errors.Is(err, sql.ErrNoRows):
+			if rerr := os.RemoveAll(filepath.Join(root, e.Name())); rerr != nil {
+				c.logger.Warn("task workdir sweep remove", "dir", e.Name(), "err", rerr)
+				continue
+			}
+			removed++
+		default:
+			c.taskDirSweepAt.Store(last)
+			c.logger.Warn("task workdir sweep lookup", "dir", e.Name(), "err", err)
+			return
+		}
+	}
+	if removed > 0 {
+		c.logger.Info("task workdir sweep", "removed", removed)
 	}
 }
 

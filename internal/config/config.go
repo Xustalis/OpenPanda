@@ -1508,6 +1508,48 @@ func (c *Config) EffectiveCardPath() string {
 	return c.CardPath
 }
 
+// HostStatePaths returns the node's own bookkeeping paths — its SQLite file
+// and sidecars, pid/session/lock files, the context and artifact stores,
+// memory and skill trees, the push private key, and the agent CLI's own
+// project config — so scope-drift detection ignores the host's side-effect
+// writes and artifact pack/extract never ships or overwrites live node
+// state. The database's parent directory stays on the list for installs
+// that keep a dedicated data dir: Core.filterHostDrift ignores any entry
+// equal to or containing the snapshot root, so the default layout (where
+// work_path IS the data dir) cannot mask the agent's own changes the way a
+// blind prefix match once did — it emptied files_changed on every run.
+// Empty entries are dropped: an unset optional path would otherwise resolve
+// to the process working directory and swallow the world again.
+// ProjectsPath is deliberately absent: projects/<name> doubles as the
+// project work dir (Core.projectWorkDir), so masking the whole root hides
+// the agent's output there — and the per-project MEMORY.md inside it is a
+// task-visible change anyway (memory consolidation is a task side effect).
+func (c *Config) HostStatePaths() []string {
+	dbDir := filepath.Dir(c.Storage.DBPath)
+	paths := []string{
+		dbDir,
+		c.Storage.DBPath,
+		c.Storage.DBPath + "-wal", // the sidecars, whose loss splits the db
+		c.Storage.DBPath + "-shm",
+		filepath.Join(dbDir, "daemon.pid"),
+		filepath.Join(dbDir, "sessions"), // session snapshots, rewritten per task
+		filepath.Join(dbDir, "locks"),    // flock files, held while tasks run
+		c.Storage.ContextPath,
+		c.Storage.ArtifactPath, // packed trees written at stage completion
+		c.Push.VAPIDKeyPath,    // web-push private key — never task output
+		c.Storage.MemoryPath,
+		c.Storage.SkillsPath,
+		filepath.Join(c.Storage.WorkPath, ".claude"), // the agent CLI's own project config
+	}
+	out := paths[:0]
+	for _, p := range paths {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // DefaultCardTarget returns the canonical path where capabilities.yaml belongs.
 // It prioritizes next to the resolved config file, then user config dir,
 // then system config dir.
