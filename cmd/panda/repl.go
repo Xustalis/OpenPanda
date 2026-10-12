@@ -43,6 +43,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -402,7 +403,7 @@ func runRepl(args []string) {
 	if r.interactive {
 		watchCtx, watchCancel := context.WithCancel(context.Background())
 		defer watchCancel()
-		go r.watchTasks(watchCtx)
+		guard.Go(nil, "repl: task watcher", nil, func() { r.watchTasks(watchCtx) })
 	}
 
 	// Resume the persisted bare-mode conversation (people reopen
@@ -1040,13 +1041,17 @@ func (r *repl) askMode(text, mode string) {
 		err error
 	}
 	ch := make(chan outcome, 1)
-	go func() {
+	guard.Go(nil, "repl: ask worker", func() {
+		// A panicking worker must still deliver an outcome or the ask hangs
+		// on <-got forever; ch is buffered so this send never blocks.
+		ch <- outcome{err: errors.New("ask worker panicked (see log)")}
+	}, func() {
 		out, err := r.engine.Load().AskTurnsSession(ctx, history, text, workDir, mode, r.sessID(), r.authorized(), cb)
 		ch <- outcome{out, err}
-	}()
+	})
 	got := make(chan struct{})
 	var res outcome
-	go func() { res = <-ch; close(got); cancel() }()
+	guard.Go(nil, "repl: ask collector", nil, func() { res = <-ch; close(got); cancel() })
 	if r.interactive && r.term != nil {
 		r.term.watchInterrupt(ctx, cancel, i18n.T(r.loc, "repl.interrupted"))
 	}
@@ -2608,7 +2613,7 @@ func (r *repl) cmdWeb(arg string) {
 	if bound != addr {
 		r.outln(i18n.Tf(r.loc, "web.portfallback", "orig", addr, "actual", bound))
 	}
-	go func() { _ = srv.Serve(ln) }()
+	guard.Go(nil, "repl: web serve", nil, func() { _ = srv.Serve(ln) })
 	webURL = panelURL(ln.Addr().String())
 	r.webMu.Lock()
 	r.webSrv = srv

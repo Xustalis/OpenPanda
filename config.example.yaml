@@ -146,6 +146,16 @@ network:
   #                                # queue — their yes is not our yes.
   #                                # honor for the same-owner case (your
   #                                # own VPS on an untrusted segment).
+  #       model_creds: "withhold"  # withhold | provide — whether a task
+  #                                # admitted from a non-mesh path may
+  #                                # receive THIS node's model credentials
+  #                                # in the agent subprocess env. withhold
+  #                                # (default) also blocks the credential
+  #                                # passthrough and auth-failure fallback
+  #                                # paths, so a guarded peer's `env` read
+  #                                # finds nothing. provide for the
+  #                                # same-owner case only — a guarded peer
+  #                                # you nevertheless trust with keys.
 
   # ── DTN contact plan: scheduled transmission windows ─────────────────────
   # For links that are predictably up only at times — a nightly batch host, a

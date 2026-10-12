@@ -260,13 +260,13 @@ func (c *Core) fetchArtifact(ctx context.Context, source, taskID string, ref bus
 		err error
 	}
 	done := make(chan putResult, 1)
-	go func() {
+	c.goGuarded("artifact put "+hash, func() {
 		m, err := c.artifacts.Put(hash, pr)
 		// Unblock the writer if Put returned before the stream ended (a bad
 		// hash, a full disk): otherwise the fetch loop would block on Write.
 		pr.CloseWithError(err)
 		done <- putResult{m: m, err: err}
-	}()
+	})
 	abort := func(err error) (artifact.Manifest, error) {
 		pw.CloseWithError(err)
 		<-done

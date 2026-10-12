@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 )
 
 const (
@@ -233,7 +234,7 @@ func (c *Core) handlePairHello(ctx context.Context, conn *bus.Conn, env bus.Enve
 	// ping/pong machinery refreshes it from here on.
 	_ = conn.ResetReadDeadline()
 	c.sendPairReady(conn, sess)
-	go c.waitPairConfirm(ctx, sess, dh)
+	c.goGuarded("pair confirm "+sess.id, func() { c.waitPairConfirm(ctx, sess, dh) })
 }
 
 // handlePairCancel handles a pair_reject arriving on the responder conn —
@@ -664,13 +665,13 @@ func DialPair(ctx context.Context, dialAddr, selfID, name, listenAddr string, pu
 func (c *PairClient) WaitSecret(ctx context.Context) (string, error) {
 	done := make(chan struct{})
 	defer close(done)
-	go func() {
+	guard.Go(nil, "pair: wait secret watcher", nil, func() {
 		select {
 		case <-ctx.Done():
 			c.conn.Close()
 		case <-done:
 		}
-	}()
+	})
 	for {
 		var env bus.Envelope
 		if err := c.conn.ReadJSON(&env); err != nil {

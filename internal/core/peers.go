@@ -74,9 +74,9 @@ func (c *Core) SyncPeers(ctx context.Context, addrs []string) {
 		pctx, cancel := context.WithCancel(ctx)
 		c.peerLoops[addr] = cancel
 		if strings.HasPrefix(addr, "punch:") {
-			go c.punchPeerLoop(pctx, strings.TrimPrefix(addr, "punch:"))
+			c.goGuarded("punch peer "+addr, func() { c.punchPeerLoop(pctx, strings.TrimPrefix(addr, "punch:")) })
 		} else {
-			go c.maintainPeerLoop(pctx, addr)
+			c.goGuarded("maintain peer "+addr, func() { c.maintainPeerLoop(pctx, addr) })
 		}
 		c.logger.Info("peer keepalive started", "peer", addr)
 	}

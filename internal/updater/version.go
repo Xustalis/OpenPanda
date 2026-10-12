@@ -70,6 +70,14 @@ type Options struct {
 	// signature can only be produced by the holder of the private key.
 	// Empty keeps the historical behavior (channel TLS + checksums).
 	ReleaseKey string
+	// AllowUnsigned permits downloads to proceed when ReleaseKey is empty.
+	// Without it a key-less build refuses the release outright: checksums
+	// and the archive travel the same channel, so a compromised channel
+	// would satisfy the hash check with a poisoned pair — the signature is
+	// the only part a channel attacker cannot produce. This exists so an
+	// operator running a deliberately unsigned channel can opt in, not as
+	// a default.
+	AllowUnsigned bool
 	// Current is the running version (internal/version.Version).
 	Current string
 	// CurrentCodename is the running build's release codename

@@ -35,6 +35,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
@@ -210,7 +211,7 @@ func (h *handler) initiatePair(w http.ResponseWriter, r *http.Request) {
 	}
 	h.pair.mu.Unlock()
 
-	go h.finishPair(pc, addr)
+	guard.Go(nil, "panel: pair finish", nil, func() { h.finishPair(pc, addr) })
 	writeJSON(w, map[string]string{
 		"session": pc.Session,
 		"code":    pc.Code,

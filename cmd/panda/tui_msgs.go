@@ -15,11 +15,13 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 )
 
 // TUI event messages. Each is a tea.Msg the root model folds into its state.
@@ -153,7 +155,12 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, s
 		// (the engine parks the task and returns it) and prompt on the model loop,
 		// then ResumeApproved — the same split the classic REPL uses.
 	}
-	go func() {
+	guard.Go(nil, "tui: ask worker", func() {
+		// A panicking worker must still land a doneMsg: without it the pump
+		// parks on events forever and the turn hangs on the spinner. The
+		// deferred cancel already ran, so send needs an uncancelled ctx.
+		s.send(context.Background(), doneMsg{stream: s, err: errors.New("ask worker panicked (see log)")})
+	}, func() {
 		defer cancel()
 		// Ambient fallback keeps parity with the classic AskTurns path — a
 		// session-less ask may still bind the daemon's working dir.
@@ -166,7 +173,7 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, s
 		// screen the send blocks until it is delivered, and once the turn is
 		// released it unblocks instead of leaking a goroutine.
 		s.send(ctx, doneMsg{stream: s, out: out, err: err})
-	}()
+	})
 	return s, waitForActivity(s)
 }
 
@@ -208,7 +215,9 @@ func startResume(engine *askengine.Engine, taskID, planID, workDir string) (*ask
 			s.send(ctx, progressMsg{stream: s, progress: p})
 		},
 	}
-	go func() {
+	guard.Go(nil, "tui: resume worker", func() {
+		s.send(context.Background(), doneMsg{stream: s, err: errors.New("resume worker panicked (see log)")})
+	}, func() {
 		defer cancel()
 		out := engine.ResumeApproved(ctx, taskID, workDir, cb)
 		if planID != "" {
@@ -217,6 +226,6 @@ func startResume(engine *askengine.Engine, taskID, planID, workDir string) (*ask
 			}
 		}
 		s.send(ctx, resumedMsg{stream: s, out: out})
-	}()
+	})
 	return s, waitForActivity(s)
 }

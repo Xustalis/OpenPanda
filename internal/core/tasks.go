@@ -17,6 +17,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/util"
@@ -324,7 +325,9 @@ func (s *TaskStore) transitionToReview(ctx context.Context, taskID, from, to, ow
 
 // notifyReview fires the review hook without blocking the transition. A task
 // snapshot (not a pointer) is passed so the callback owns its copy and the
-// goroutine is free to outlive the transition.
+// goroutine is free to outlive the transition. The hook is registered code,
+// so it runs under panic recovery: a panicking callback logs and dies with
+// the goroutine instead of taking the daemon down with it.
 func (s *TaskStore) notifyReview(t Task) {
 	s.onReviewMu.RLock()
 	fn := s.onReview
@@ -332,7 +335,7 @@ func (s *TaskStore) notifyReview(t Task) {
 	if fn == nil {
 		return
 	}
-	go fn(t)
+	guard.Go(s.logger, "store: review hook "+t.TaskID, nil, func() { fn(t) })
 }
 
 // withTx runs fn inside a single SQLite transaction, committing on success and

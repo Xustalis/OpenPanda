@@ -15,6 +15,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -493,7 +494,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	heartbeatDone := make(chan struct{})
 	defer close(heartbeatDone)
 
-	go func() {
+	guard.Go(nil, "panel: sse keepalive", nil, func() {
 		for {
 			select {
 			case <-heartbeat.C:
@@ -506,7 +507,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	}()
+	})
 
 	// History is the thread as it stands, auto-compacted when it overflows
 	// the replay budget (the compacted prefix survives as sess.Summary and

@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/trust"
+	"gopkg.in/yaml.v3"
 )
 
 func writeTemp(t *testing.T, content string) string {
@@ -174,7 +176,7 @@ func TestTrustConfigOverrides(t *testing.T) {
 		Send: TrustSendConfig{Guarded: TrustSendPolicy{
 			ContextLevel: "summary", Consent: &yes, ProjectPack: &no,
 		}},
-		Accept: TrustAcceptConfig{Guarded: TrustAcceptPolicy{Mode: "review", PolicyLLM: "shadow", ForeignConsent: "honor"}},
+		Accept: TrustAcceptConfig{Guarded: TrustAcceptPolicy{Mode: "review", PolicyLLM: "shadow", ForeignConsent: "honor", ModelCreds: "provide"}},
 	}
 	g := tc.SendPolicyFor(trust.Guarded)
 	if g.MaxContext != "summary" || !g.Consent || g.ProjectPack {
@@ -189,6 +191,14 @@ func TestTrustConfigOverrides(t *testing.T) {
 	if d := (TrustConfig{}).AcceptPolicyFor(trust.Guarded).ForeignConsent; d != trust.ConsentStrip {
 		t.Fatalf("default foreign_consent = %q, want %q", d, trust.ConsentStrip)
 	}
+	// Unset model_creds keeps the built-in default — withhold, so a
+	// semi-trusted task never sees this node's API keys in env.
+	if d := (TrustConfig{}).AcceptPolicyFor(trust.Guarded).ModelCreds; d != trust.CredsWithhold {
+		t.Fatalf("default model_creds = %q, want %q", d, trust.CredsWithhold)
+	}
+	if d := tc.AcceptPolicyFor(trust.Guarded).ModelCreds; d != "provide" {
+		t.Fatalf("model_creds override = %q, want provide", d)
+	}
 	if m := tc.SendPolicyFor(trust.Mesh); !m.ProjectPack || !m.Consent || m.MaxContext != "full" {
 		t.Fatalf("mesh is not tunable, got %+v", m)
 	}
@@ -200,6 +210,9 @@ func TestTrustConfigOverrides(t *testing.T) {
 	}
 	if err := (TrustConfig{Accept: TrustAcceptConfig{Guarded: TrustAcceptPolicy{ForeignConsent: "maybe"}}}).Validate(); err == nil {
 		t.Fatal("invalid foreign_consent must fail validation")
+	}
+	if err := (TrustConfig{Accept: TrustAcceptConfig{Guarded: TrustAcceptPolicy{ModelCreds: "sometimes"}}}).Validate(); err == nil {
+		t.Fatal("invalid model_creds must fail validation")
 	}
 }
 
@@ -537,5 +550,135 @@ func TestSilenceTimeoutDefaultsToStallLimit(t *testing.T) {
 	}
 	if got := (TimeoutsConfig{SilenceS: 90}).SilenceTimeout(); got != 90*time.Second {
 		t.Fatalf("silence_s: 90 = %v, want 90s", got)
+	}
+}
+
+// TestPureAccessors covers the zero-input normalization helpers that guard
+// every consumer's defaults: a wrong constant or a flipped fallback here
+// silently changes fleet behavior with no error to catch it.
+func TestPureAccessors(t *testing.T) {
+	if (UIConfig{}).TermsCurrent() {
+		t.Error("empty UIConfig reports current terms")
+	}
+	if !(UIConfig{TermsAccepted: true, TermsVersion: TermsVersionCurrent}).TermsCurrent() {
+		t.Error("accepted current terms not reported")
+	}
+	if (UIConfig{TermsAccepted: true, TermsVersion: TermsVersionCurrent - 1}).TermsCurrent() {
+		t.Error("stale terms version reported current")
+	}
+	if !(UIConfig{TermsAccepted: true, TermsVersion: TermsVersionCurrent + 1}).TermsCurrent() {
+		t.Error("newer terms version should still satisfy")
+	}
+
+	if got := (RoutingConfig{}).NormalizedToolsPolicy(); got != ToolsPolicyMinimal {
+		t.Errorf("default tools policy = %q, want minimal", got)
+	}
+	if got := (RoutingConfig{ToolsPolicy: ToolsPolicyExtended}).NormalizedToolsPolicy(); got != ToolsPolicyExtended {
+		t.Errorf("extended tools policy = %q", got)
+	}
+	if got := (RoutingConfig{ToolsPolicy: "bogus"}).NormalizedToolsPolicy(); got != ToolsPolicyMinimal {
+		t.Errorf("unknown tools policy = %q, want minimal", got)
+	}
+	if !(RoutingConfig{}).NormalizedPandaTools() {
+		t.Error("panda_tools should default to enabled")
+	}
+	off := false
+	if (RoutingConfig{PandaTools: &off}).NormalizedPandaTools() {
+		t.Error("panda_tools=false not honored")
+	}
+
+	if got := (NetworkConfig{}).DiscoveryAddrOrDefault(); got != defaultDiscoveryAddr {
+		t.Errorf("empty discovery addr = %q, want %q", got, defaultDiscoveryAddr)
+	}
+	if got := (NetworkConfig{DiscoveryAddr: ":9999"}).DiscoveryAddrOrDefault(); got != ":9999" {
+		t.Errorf("explicit discovery addr = %q", got)
+	}
+
+	if got := (StorageConfig{}).EffectiveTaskRetentionDays(); got != DefaultTaskRetentionDays {
+		t.Errorf("default retention = %d, want %d", got, DefaultTaskRetentionDays)
+	}
+	zero := 0
+	if got := (StorageConfig{TaskRetentionDays: &zero}).EffectiveTaskRetentionDays(); got != 0 {
+		t.Errorf("explicit zero retention = %d, want 0 (keep forever)", got)
+	}
+	thirty := 30
+	if got := (StorageConfig{TaskRetentionDays: &thirty}).EffectiveTaskRetentionDays(); got != 30 {
+		t.Errorf("retention 30 = %d", got)
+	}
+
+	if got := (SandboxConfig{}).NormalizedMode(); got != "off" {
+		t.Errorf("default sandbox mode = %q, want off", got)
+	}
+	if got := (SandboxConfig{Mode: " Standard "}).NormalizedMode(); got != "standard" {
+		t.Errorf("sandbox mode ' Standard ' = %q", got)
+	}
+	if got := (SandboxConfig{Mode: "STRICT"}).NormalizedMode(); got != "strict" {
+		t.Errorf("sandbox mode STRICT = %q", got)
+	}
+	if got := (SandboxConfig{Mode: "bogus"}).NormalizedMode(); got != "off" {
+		t.Errorf("unknown sandbox mode = %q, want off", got)
+	}
+
+	if got := (TimeoutsConfig{}).TaskLease(); got != DefaultTaskLeaseS*time.Second {
+		t.Errorf("default task lease = %v, want %vs", got, DefaultTaskLeaseS)
+	}
+	if got := (TimeoutsConfig{TaskLeaseS: 42}).TaskLease(); got != 42*time.Second {
+		t.Errorf("task lease 42s = %v", got)
+	}
+	if got := (TimeoutsConfig{}).AgentTimeout(); got != DefaultAgentTimeoutS*time.Second {
+		t.Errorf("default agent timeout = %v", got)
+	}
+	if got := (TimeoutsConfig{}).NativeTimeout(); got != 0 {
+		t.Errorf("default native timeout = %v, want 0 (executor default)", got)
+	}
+	if got := (TimeoutsConfig{NativeS: 5}).NativeTimeout(); got != 5*time.Second {
+		t.Errorf("native timeout 5s = %v", got)
+	}
+}
+
+// TestPeerTrustHints covers the addr→tier map the runtime applies post-hello:
+// only structured entries with a tier appear, whitespace is trimmed, and an
+// all-scalar peer list yields nil (not an empty map the caller could confuse
+// with "configured, all mesh").
+func TestPeerTrustHints(t *testing.T) {
+	if got := (NetworkConfig{}).PeerTrustHints(); got != nil {
+		t.Errorf("no peers → %v, want nil", got)
+	}
+	n := NetworkConfig{Peers: []PeerEntry{
+		{Addr: "a:1"},
+		{Addr: " b:2 ", Trust: "guarded"},
+		{Addr: "c:3", Trust: "mesh"},
+	}}
+	got := n.PeerTrustHints()
+	if len(got) != 2 || got["b:2"] != "guarded" || got["c:3"] != "mesh" {
+		t.Errorf("PeerTrustHints = %v", got)
+	}
+	if _, ok := got["a:1"]; ok {
+		t.Error("trust-less peer leaked into hints")
+	}
+}
+
+// TestPeerEntryMarshalYAML pins the wire shape: trust-less entries stay
+// scalar so configs that never opted into zones rewrite byte-identical,
+// while a tier forces the {addr, trust} mapping form.
+func TestPeerEntryMarshalYAML(t *testing.T) {
+	v, err := (PeerEntry{Addr: "h:1"}).MarshalYAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := v.(string); !ok || s != "h:1" {
+		t.Errorf("scalar marshal = %#v", v)
+	}
+	v, err = (PeerEntry{Addr: "h:2", Trust: "guarded"}).MarshalYAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := yaml.Marshal(map[string]any{"peers": []any{v}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	if !strings.Contains(text, "addr: h:2") || !strings.Contains(text, "trust: guarded") {
+		t.Errorf("structured marshal = %s", text)
 	}
 }

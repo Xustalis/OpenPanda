@@ -28,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/guard"
 )
 
 const (
@@ -119,7 +121,11 @@ func (s *Status) Start(verb string) {
 	}
 	s.paintLocked()
 	s.stop, s.done = make(chan struct{}), make(chan struct{})
-	go s.animate(s.stop, s.done)
+	// Bind the channels now, not in the closure: Stop replaces s.stop/s.done
+	// on the next Start, so reading the fields lazily inside the goroutine
+	// could pair the loop with channels nobody will ever signal.
+	stop, done := s.stop, s.done
+	guard.Go(nil, "cliui: spinner", nil, func() { s.animate(stop, done) })
 }
 
 // animate advances the spinner until stop closes. It holds the same mutex as

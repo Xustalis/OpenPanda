@@ -21,6 +21,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -62,13 +63,13 @@ func watchQueueTo(
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		defer signal.Stop(sig)
-		go func() {
+		guard.Go(nil, "queue watch: signal trap", nil, func() {
 			select {
 			case <-sig:
 				cancel()
 			case <-ctx.Done():
 			}
-		}()
+		})
 	}
 
 	first := true

@@ -546,7 +546,9 @@ func (c *Core) parkForArtifactPush(ctx context.Context, env bus.Envelope, taskID
 	// mixed-version case (a peer that does not know the push protocol still
 	// serves ordinary fetches) all complete through the same pool — the wake
 	// path only checks Has(), it does not care how the bytes got there.
-	go c.pullForeignPushInputs(runCtx, env.From, taskID, p.Inputs)
+	c.goGuarded("push input pull "+taskID, func() {
+		c.pullForeignPushInputs(runCtx, env.From, taskID, p.Inputs)
+	})
 }
 
 // resumePushedTask re-drives a parked task once every pushed input is in the
@@ -556,7 +558,7 @@ func (c *Core) parkForArtifactPush(ctx context.Context, env bus.Envelope, taskID
 // the accounting.
 func (c *Core) resumePushedTask(ctx context.Context, taskID string, p bus.TaskDelegatePayload, required []string) {
 	c.logger.Info("resuming task after pushed inputs", "task", taskID)
-	go func() {
+	c.goGuarded("push-resumed run "+taskID, func() {
 		result, err := c.run(ctx, taskID, p.Intent, required, nil)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {
@@ -575,7 +577,7 @@ func (c *Core) resumePushedTask(ctx context.Context, taskID string, p bus.TaskDe
 		if t, gerr := c.store.Get(ctx, taskID); gerr == nil {
 			c.relayToParent(ctx, bus.MsgTaskResult, t.Chain, result)
 		}
-	}()
+	})
 }
 
 // wakeArtifactWaiters resumes parked tasks whose entire missing set is now
@@ -720,7 +722,7 @@ func (c *Core) cascadePushToDispatchTarget(ctx context.Context, hash string) {
 			ttl = time.Now().Add(defaultDTNTTL).Unix()
 		}
 		c.artifactPushEnqueue(ctx, target, r.taskID, hash, ttl)
-		go c.outboxFlush(context.WithoutCancel(ctx), target)
+		c.goGuarded("outbox flush "+target, func() { c.outboxFlush(context.WithoutCancel(ctx), target) })
 	}
 }
 

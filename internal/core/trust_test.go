@@ -323,6 +323,54 @@ func TestAdmissionTierSkipsSelf(t *testing.T) {
 	}
 }
 
+// TestModelCredsWithheld: the executor-side mirror of the send clamp — the
+// stored chain's folded tier decides whether this node's model credentials
+// may reach the adapter env. A local task keeps the pre-feature provide; a
+// sub-mesh hop anywhere in the path withholds; the operator's
+// model_creds: provide override restores it for the same-owner case.
+func TestModelCredsWithheld(t *testing.T) {
+	ctx := context.Background()
+	c := pinCore(t, "self", "marker")
+	mkPeer := func(id, lvl string) {
+		t.Helper()
+		if _, err := c.db.Exec(`INSERT INTO employee_cache (id, trust) VALUES (?, ?)`, id, lvl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mkPeer("buddy", "guarded")
+	mkPeer("pal", "")
+	mkPeer("stranger", "open")
+
+	// Local task: chain ends at self only → provide (pre-feature behaviour).
+	if c.modelCredsWithheld(ctx, Task{TaskID: "l", Chain: []string{"self"}}) {
+		t.Fatal("local task must not have creds withheld")
+	}
+	// Mesh origin through a mesh relay: still provide.
+	if c.modelCredsWithheld(ctx, Task{TaskID: "m", Chain: []string{"pal", "self"}}) {
+		t.Fatal("all-mesh chain must not withhold creds")
+	}
+	// Guarded origin — or a guarded relay anywhere on the path — withholds.
+	if !c.modelCredsWithheld(ctx, Task{TaskID: "g", Chain: []string{"buddy", "self"}}) {
+		t.Fatal("guarded origin must withhold model creds")
+	}
+	if !c.modelCredsWithheld(ctx, Task{TaskID: "gr", Chain: []string{"pal", "buddy", "self"}}) {
+		t.Fatal("guarded relay in path must withhold model creds")
+	}
+	// Open folding also withholds (open origins are declined upstream, but
+	// the verdict must still be safe for any stored row that carries one).
+	if !c.modelCredsWithheld(ctx, Task{TaskID: "o", Chain: []string{"stranger", "self"}}) {
+		t.Fatal("open chain must withhold model creds")
+	}
+	// Operator override: model_creds: provide restores the pre-feature path
+	// for the same-owner case (an own VPS pinned guarded on a rough segment).
+	c.SetTrustConfig(config.TrustConfig{Accept: config.TrustAcceptConfig{
+		Guarded: config.TrustAcceptPolicy{ModelCreds: "provide"},
+	}})
+	if c.modelCredsWithheld(ctx, Task{TaskID: "g2", Chain: []string{"buddy", "self"}}) {
+		t.Fatal("model_creds: provide override must restore injection")
+	}
+}
+
 // TestArtifactPullTrustGate: the inputs ceiling binds the pull channel by
 // direction. A guarded puller downstream of this node may not fetch input
 // material even with a hash learned out of band; an upstream peer reading

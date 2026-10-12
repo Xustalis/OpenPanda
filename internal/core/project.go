@@ -609,7 +609,7 @@ func (c *Core) adoptProjectOutput(ctx context.Context, t Task, from, hash string
 	// The pull is a multi-chunk round trip, so it must not block the message
 	// handler, and it must outlive the envelope's context.
 	ctx = context.WithoutCancel(ctx)
-	go func() {
+	c.goGuarded("adopt project artifact "+hash, func() {
 		if from != "" && from != c.nodeID {
 			if _, held := c.artifacts.Has(hash); !held {
 				if _, err := c.FetchArtifact(ctx, from, t.TaskID, hash); err != nil {
@@ -645,7 +645,7 @@ func (c *Core) adoptProjectOutput(ctx context.Context, t Task, from, hash string
 		})
 		c.logger.Info("project tree adopted", "task", t.TaskID, "project", t.Project,
 			"dir", dir, "files", len(m.Entries))
-	}()
+	})
 }
 
 // adoptWorktreeOutput is the ad-hoc sibling of adoptProjectOutput: a file task
@@ -668,7 +668,7 @@ func (c *Core) adoptWorktreeOutput(ctx context.Context, t Task, from, hash strin
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
-	go func() {
+	c.goGuarded("adopt worktree artifact "+hash, func() {
 		if from != "" && from != c.nodeID {
 			if _, held := c.artifacts.Has(hash); !held {
 				if _, err := c.FetchArtifact(ctx, from, t.TaskID, hash); err != nil {
@@ -696,5 +696,5 @@ func (c *Core) adoptWorktreeOutput(ctx context.Context, t Task, from, hash strin
 				"dir", dir, "withheld", m.SkippedPaths)
 		}
 		c.logger.Info("worktree adopted", "task", t.TaskID, "dir", dir, "files", len(m.Entries))
-	}()
+	})
 }

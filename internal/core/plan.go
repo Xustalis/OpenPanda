@@ -623,7 +623,7 @@ func (c *Core) adoptStageOutput(ctx context.Context, t Task, from, hash string) 
 	if _, held := c.artifacts.Has(hash); held {
 		return
 	}
-	go func() {
+	c.goGuarded("plan artifact replica "+hash, func() {
 		// Replica pull for resilience: the producer remains the successor's
 		// primary source, this node's copy is the fallback named by the same
 		// input ref once it lands.
@@ -631,7 +631,7 @@ func (c *Core) adoptStageOutput(ctx context.Context, t Task, from, hash string) 
 			c.logger.Warn("plan: adopt stage artifact replica", "task", t.TaskID,
 				"stage", t.StageID, "hash", hash, "from", from, "err", err)
 		}
-	}()
+	})
 }
 
 // stageWorkDir is where a stage executes on *this* node. It is derived locally
@@ -1255,7 +1255,7 @@ func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegate
 	var wg sync.WaitGroup
 	for i, dr := range drs {
 		wg.Add(1)
-		go func(i int, dr delegateRequest) {
+		c.goGuarded("plan delegate child "+dr.Title, func() {
 			defer wg.Done()
 			note, pendingID, derr := c.delegateChild(ctx, parent, dr)
 			if derr != nil {
@@ -1267,7 +1267,7 @@ func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegate
 				mu.Unlock()
 			}
 			notes[i] = note
-		}(i, dr)
+		})
 	}
 	wg.Wait()
 	return notes

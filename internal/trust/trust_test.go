@@ -92,6 +92,20 @@ func TestDefaultAccept(t *testing.T) {
 	}
 }
 
+// TestDefaultAcceptModelCreds: credential withholding is the sub-mesh
+// default — a semi-trusted task's text must never read this node's API keys
+// out of the subprocess env, while mesh keeps the pre-feature provide.
+func TestDefaultAcceptModelCreds(t *testing.T) {
+	if a := DefaultAccept(Mesh); a.ModelCreds != CredsProvide {
+		t.Fatalf("mesh must provide creds (pre-feature behaviour), got %+v", a)
+	}
+	for _, l := range []Level{Guarded, Open} {
+		if a := DefaultAccept(l); a.ModelCreds != CredsWithhold {
+			t.Fatalf("%s must withhold model creds by default, got %+v", l, a)
+		}
+	}
+}
+
 func TestNeedsOf(t *testing.T) {
 	p := bus.TaskDelegatePayload{
 		Project:          "demo",

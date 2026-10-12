@@ -29,6 +29,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ctxstore"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/projects"
@@ -744,12 +745,22 @@ func (c *Core) broadcastCard(ctx context.Context) {
 	for id, conn := range conns {
 		e := env
 		e.To = id
-		go func() {
+		c.goGuarded("card heartbeat send "+id, func() {
 			if err := conn.Send(e); err != nil {
 				c.logger.Debug("card heartbeat send", "peer", id, "err", err)
 			}
-		}()
+		})
 	}
+}
+
+// goGuarded starts fn in a goroutine protected by panic recovery — the same
+// contract the daemon entrypoints get from guard.Go. Every long-lived
+// goroutine inside Core (conn read loops, announce/flush/discovery loops,
+// one-shot fan-out sends) must take this path: a bare `go` inside a daemon
+// means one panic kills the whole node, silently for a panic that would
+// have been a log line.
+func (c *Core) goGuarded(name string, fn func()) {
+	guard.Go(c.logger, "core: "+name, nil, fn)
 }
 
 // SetSupervisor attaches the entry model client that judges agent task
@@ -980,11 +991,11 @@ func (c *Core) broadcastHeartbeat(ctx context.Context) {
 	for id, conn := range conns {
 		e := env
 		e.To = id
-		go func() {
+		c.goGuarded("heartbeat send "+id, func() {
 			if err := conn.Send(e); err != nil {
 				c.logger.Debug("heartbeat send", "peer", id, "err", err)
 			}
-		}()
+		})
 	}
 }
 
@@ -1446,7 +1457,12 @@ func (c *Core) Shutdown(ctx context.Context) {
 // ctx is done.
 func (c *Core) Listen(ctx context.Context, addr string) error {
 	srv := bus.NewServer(addr, c.logger, func(conn *bus.Conn) {
-		c.handleInbound(ctx, conn)
+		// guard.Call, not a goroutine: the server accounts connection limits
+		// from this blocking callback, so wrapping must not change that —
+		// it only keeps one peer's panic from taking the daemon down.
+		guard.Call(c.logger, "core: inbound "+conn.RemoteAddr(), nil, func() {
+			c.handleInbound(ctx, conn)
+		})
 	})
 	srv.SetLimits(c.maxConns, c.maxConnsPerIP)
 	return srv.Listen(ctx)
@@ -1462,7 +1478,7 @@ func (c *Core) handleInbound(ctx context.Context, conn *bus.Conn) {
 		c.removePeerForConn(conn)
 		conn.Close()
 	}()
-	go conn.StartPingLoop(ctx, 30*time.Second)
+	c.goGuarded("conn ping loop "+conn.PeerID(), func() { conn.StartPingLoop(ctx, 30*time.Second) })
 	for {
 		// A cancelled ctx (shutdown, conn teardown ordered elsewhere) ends the
 		// loop even when ReadJSON is still blocked: the peer's ping/close will
@@ -1559,7 +1575,7 @@ func (c *Core) DialPeer(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
-	go c.handleInbound(ctx, conn)
+	c.goGuarded("inbound read "+conn.PeerID(), func() { c.handleInbound(ctx, conn) })
 	return nil
 }
 
@@ -2546,14 +2562,14 @@ func (c *Core) summary() ledger.CapabilitySummary {
 		var mu sync.Mutex
 		for name, ag := range card.Agents {
 			wg.Add(1)
-			go func(name string, ag ledger.Agent) {
+			c.goGuarded("agent usable probe "+name, func() {
 				defer wg.Done()
 				ok, reason := router.AgentUsableReason(name, ag)
 				mu.Lock()
 				usable[name] = ok
 				reasons[name] = reason
 				mu.Unlock()
-			}(name, ag)
+			})
 		}
 		wg.Wait()
 		for name, ag := range card.Agents {

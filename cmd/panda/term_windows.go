@@ -36,6 +36,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/Xustalis/OpenPanda/internal/cliui"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -136,7 +137,7 @@ func (t *termSession) setRaw() error {
 	t.raw = true
 	if !t.readerStarted {
 		t.readerStarted = true
-		go t.readKeys()
+		guard.Go(nil, "tui: key reader", nil, t.readKeys)
 	}
 	return nil
 }

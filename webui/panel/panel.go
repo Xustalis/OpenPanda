@@ -24,6 +24,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
@@ -1057,7 +1058,9 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errors.New("persist approval operation failed"))
 		return
 	}
-	go h.runApprovalOperation(execCtx, eng, op)
+	guard.Go(nil, "panel: approval operation "+op.TaskID, nil, func() {
+		h.runApprovalOperation(execCtx, eng, op)
+	})
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, op)
 }

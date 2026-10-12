@@ -135,6 +135,19 @@ type AcceptPolicy struct {
 	// yes — while "honor" exists for the same-owner case (an own VPS on an
 	// untrusted segment, where the consent is the same human's anyway).
 	ForeignConsent string
+	// ModelCreds decides whether THIS node's model credentials may serve the
+	// origin's work: "withhold" keeps the node's model API key (and the
+	// adapter's forwarded credential env) out of the agent subprocess, so a
+	// semi-trusted peer's task text can never read them out of the
+	// environment it is handed. "provide" restores the pre-feature behaviour
+	// — the same-owner case, where the credentials' owner and the task's
+	// author are the same human. Withholding is the default for non-mesh
+	// tiers: a key in env is one `printenv` away from the wire, and an
+	// irreversible-gate approval policy does not gate read-only exfil.
+	// Residual: the agent CLI's OWN on-disk credentials still apply — a
+	// node that runs an agent harness for semi-trusted work must assume
+	// those are exposed too (sandbox.mode is the hard bound).
+	ModelCreds string
 }
 
 // Accept modes, the policy-LLM settings, and the foreign-consent handling.
@@ -149,6 +162,9 @@ const (
 
 	ConsentHonor = "honor"
 	ConsentStrip = "strip"
+
+	CredsProvide  = "provide"
+	CredsWithhold = "withhold"
 )
 
 // contextRank orders the exposure levels of context_level.
@@ -195,11 +211,11 @@ func DefaultSend(l Level) SendPolicy {
 func DefaultAccept(l Level) AcceptPolicy {
 	switch l {
 	case Guarded:
-		return AcceptPolicy{DelegateOrigin: true, Mode: AcceptAuto, PolicyLLM: LLMOff, ForeignConsent: ConsentStrip}
+		return AcceptPolicy{DelegateOrigin: true, Mode: AcceptAuto, PolicyLLM: LLMOff, ForeignConsent: ConsentStrip, ModelCreds: CredsWithhold}
 	case Open:
-		return AcceptPolicy{DelegateOrigin: false, Mode: AcceptRefuse, PolicyLLM: LLMOff, ForeignConsent: ConsentStrip}
+		return AcceptPolicy{DelegateOrigin: false, Mode: AcceptRefuse, PolicyLLM: LLMOff, ForeignConsent: ConsentStrip, ModelCreds: CredsWithhold}
 	default:
-		return AcceptPolicy{DelegateOrigin: true, Mode: AcceptAuto, PolicyLLM: LLMOff, ForeignConsent: ConsentHonor}
+		return AcceptPolicy{DelegateOrigin: true, Mode: AcceptAuto, PolicyLLM: LLMOff, ForeignConsent: ConsentHonor, ModelCreds: CredsProvide}
 	}
 }
 

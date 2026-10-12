@@ -21,6 +21,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/pyexec"
 	"github.com/Xustalis/OpenPanda/internal/security"
 )
@@ -105,6 +106,33 @@ func WithRemoteTask(ctx context.Context) context.Context {
 // task (set by the orchestration layer before Execute).
 func RemoteTask(ctx context.Context) bool {
 	v, _ := ctx.Value(remoteTaskKey{}).(bool)
+	return v
+}
+
+// modelCredsKey marks an execution context whose task arrived over a trust
+// zone that withholds this node's model credentials. Remote intent is
+// untrusted text, and a remote task's instructions run inside an agent
+// subprocess whose env this node populates — an injected API key (or a
+// forwarded adapter credential) would be one `printenv` away from leaving
+// the node, and nothing in the irreversible-approval model gates a
+// read-only exfil command. Set by the orchestration layer before Execute,
+// consulted everywhere adapter env is built — the injection decision, the
+// forwarded credential vars, and the auth-failure injection retry all honor
+// it, because suppressing the first path while leaving the retry intact
+// would hand the key out on the second try instead.
+type modelCredsKey struct{}
+
+// WithModelCredsWithheld marks the execution context as carrying a task
+// whose trust-zone admission tier withholds this node's model credentials
+// (trust.AcceptPolicy.ModelCreds == withhold).
+func WithModelCredsWithheld(ctx context.Context) context.Context {
+	return context.WithValue(ctx, modelCredsKey{}, true)
+}
+
+// ModelCredsWithheld reports whether the execution context withholds this
+// node's model credentials from the adapter subprocess env.
+func ModelCredsWithheld(ctx context.Context) bool {
+	v, _ := ctx.Value(modelCredsKey{}).(bool)
 	return v
 }
 
@@ -1041,7 +1069,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		heartbeat := silenceHeartbeat
 		stopWatchdog := make(chan struct{})
 		defer close(stopWatchdog)
-		go func() {
+		guard.Go(nil, "commander: silence watchdog", nil, func() {
 			tick := heartbeat / 4
 			if silenceLimit > 0 && silenceLimit/4 < tick {
 				tick = silenceLimit / 4
@@ -1075,7 +1103,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 					}
 				}
 			}
-		}()
+		})
 	}
 
 	cmd, ok := pyexec.Command(ctx, path)
@@ -1434,17 +1462,19 @@ func startAgentSession(spawnCtx, turnCtx context.Context, name string, req Adapt
 	}
 	// Process exit → dead: the adapter exits when the CLI dies or stdin
 	// closes, and a dead session never serves another turn.
-	go func() {
+	guard.Go(nil, "commander: session exit watcher", nil, func() {
 		_ = cmd.Wait()
 		s.dead.Store(true)
-	}()
+	})
 	// Silence watchdog: a session produces event/progress traffic while it
 	// works; a wedge (CLI alive, nothing flowing) is indistinguishable from
 	// a long quiet think without it. The goroutine runs even with no kill
 	// limit configured so the heartbeat notes keep a silent session visible.
 	// The tuning vars are read here, synchronously — inside the goroutine
 	// they would race the test knobs that retune them.
-	go s.watchSilence(sessCtx, silenceTimeout, silenceHeartbeat)
+	guard.Go(nil, "commander: session silence watch", nil, func() {
+		s.watchSilence(sessCtx, silenceTimeout, silenceHeartbeat)
+	})
 	return s, nil
 }
 
@@ -1501,13 +1531,13 @@ func (s *agentSession) send(text string) error {
 func (s *agentSession) await(ctx context.Context) AgentResult {
 	done := make(chan struct{})
 	defer close(done)
-	go func() {
+	guard.Go(nil, "commander: await cancel watcher", nil, func() {
 		select {
 		case <-ctx.Done():
 			s.kill()
 		case <-done:
 		}
-	}()
+	})
 	var res AgentResult
 	if err := s.dec.Decode(&res); err != nil {
 		s.dead.Store(true)

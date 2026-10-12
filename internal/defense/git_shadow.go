@@ -110,7 +110,7 @@ func SaveGitShadow(workDir, taskID string, roots []string) (string, error) {
 
 	// Create commit object
 	commitMsg := fmt.Sprintf("panda shadow snapshot for task %s", taskID)
-	commitArgs := append([]string{"-C", workDir, "commit-tree", treeSHA}, parentArgs...)
+	commitArgs := append([]string{"-C", workDir, "-c", "user.name=OpenPanda", "-c", "user.email=openpanda@localhost", "commit-tree", treeSHA}, parentArgs...)
 	commitArgs = append(commitArgs, "-m", commitMsg)
 	commitCmd := exec.Command(gitExe, commitArgs...)
 	commitOut, err := commitCmd.CombinedOutput()

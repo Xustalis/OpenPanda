@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
@@ -205,10 +206,10 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 		err  error
 	}
 	respCh := make(chan result, 1)
-	go func() {
+	guard.Go(nil, "mcp: response reader", nil, func() {
 		r, e := c.readResponse()
 		respCh <- result{resp: r, err: e}
-	}()
+	})
 
 	select {
 	case <-callCtx.Done():

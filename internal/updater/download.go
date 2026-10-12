@@ -58,8 +58,14 @@ var httpClient = &http.Client{Transport: func() *http.Transport {
 // checksums.txt.sig — a detached Ed25519 signature over the raw checksums.txt
 // bytes (see verifyChecksumsSig). That is the out-of-band trust anchor: the
 // checksums and the archive come from the same channel, so without it a
-// compromised channel defeats the hash check by shipping both.
-func downloadRelease(ctx context.Context, repo, version, destDir, releaseKey string) (string, error) {
+// compromised channel defeats the hash check by shipping both. An empty
+// releaseKey therefore fails closed unless allowUnsigned explicitly accepts
+// the checksum-only posture — the refusal happens before any fetch so no
+// network path can route around it.
+func downloadRelease(ctx context.Context, repo, version, destDir, releaseKey string, allowUnsigned bool) (string, error) {
+	if releaseKey == "" && !allowUnsigned {
+		return "", errors.New("no update release key configured: refusing an unverifiable release (set OPENPANDA_UPDATE_PUBKEY to verify signatures, or OPENPANDA_UPDATE_UNSIGNED=1 to accept checksum-only verification)")
+	}
 	base := githubDownloadBase + "/" + repo + "/releases/download/v" + version
 	name := AssetName(version)
 

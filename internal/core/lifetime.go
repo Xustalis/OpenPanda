@@ -131,7 +131,7 @@ func (c *Core) renewLease(ctx context.Context, taskID string, chain []string, at
 
 	done := make(chan struct{})
 	var once sync.Once
-	go func() {
+	c.goGuarded("lease renew "+taskID, func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -146,7 +146,7 @@ func (c *Core) renewLease(ctx context.Context, taskID string, chain []string, at
 					bus.TaskProgressPayload{TaskID: taskID, AttemptID: attemptID})
 			}
 		}
-	}()
+	})
 	return func() { once.Do(func() { close(done) }) }
 }
 

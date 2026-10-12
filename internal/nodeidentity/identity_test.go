@@ -59,3 +59,42 @@ func TestReleaseAllowsReacquire(t *testing.T) {
 	}
 	_ = b.Release()
 }
+
+// TestHeld mirrors the Acquire contract through the probe API: a live lock
+// reports held, a released (or never-taken) identity reports free, and the
+// probe itself must not leave a lock behind.
+func TestHeld(t *testing.T) {
+	isolateLocks(t)
+	held, err := Held(KindPhysical, "host-held")
+	if err != nil {
+		t.Fatalf("Held on free identity: %v", err)
+	}
+	if held {
+		t.Fatal("untaken identity reported held")
+	}
+	l, err := Acquire(KindPhysical, "host-held")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err = Held(KindPhysical, "host-held")
+	if err != nil {
+		t.Fatalf("Held on live lock: %v", err)
+	}
+	if !held {
+		t.Fatal("live lock not reported held")
+	}
+	// The probe must be non-destructive: a second direct Acquire still fails.
+	if _, err := Acquire(KindPhysical, "host-held"); !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("post-Held acquire = %v, want ErrAlreadyRunning", err)
+	}
+	if err := l.Release(); err != nil {
+		t.Fatal(err)
+	}
+	held, err = Held(KindPhysical, "host-held")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held {
+		t.Fatal("released lock still reported held")
+	}
+}

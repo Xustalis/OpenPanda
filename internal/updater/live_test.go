@@ -18,7 +18,11 @@ func TestLiveReleaseDownload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	m := New(Options{Current: "0.0.0"})
+	m := New(Options{
+		Current:       "0.0.0",
+		ReleaseKey:    os.Getenv("OPENPANDA_UPDATE_PUBKEY"),
+		AllowUnsigned: os.Getenv("OPENPANDA_UPDATE_UNSIGNED") != "",
+	})
 	if err := m.Check(ctx); err != nil {
 		t.Fatal(err)
 	}

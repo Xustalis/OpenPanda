@@ -25,6 +25,10 @@ import (
 //     a release must carry checksums.txt.sig (a detached signature over
 //     checksums.txt) or the update is refused, so a compromised release
 //     channel cannot ship a binary this node would install.
+//   - OPENPANDA_UPDATE_UNSIGNED: any non-empty value opts a key-less build
+//     into checksum-only updates. Without it (or a key) a download refuses:
+//     checksums and the archive cross the same channel, so an unsigned
+//     build has no anchor a channel attacker could not forge.
 //
 // Precedence is explicit Options > environment > the key release packaging
 // baked into the binary (version.ReleasePubKey). A build shipped through
@@ -40,6 +44,9 @@ func updateEnvOptions(opts updater.Options) updater.Options {
 	}
 	if opts.ReleaseKey == "" {
 		opts.ReleaseKey = versionpkg.ReleasePubKey
+	}
+	if os.Getenv("OPENPANDA_UPDATE_UNSIGNED") != "" {
+		opts.AllowUnsigned = true
 	}
 	return opts
 }

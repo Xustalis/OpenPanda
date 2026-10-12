@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/guard"
 )
 
 // Manager drives the check → download → apply pipeline and is safe for
@@ -173,7 +175,7 @@ func (m *Manager) DownloadForce(ctx context.Context, force bool) error {
 		m.fail(err)
 		return err
 	}
-	archive, err := downloadRelease(ctx, m.opts.Repo, version, dir, m.opts.ReleaseKey)
+	archive, err := downloadRelease(ctx, m.opts.Repo, version, dir, m.opts.ReleaseKey, m.opts.AllowUnsigned)
 	if err != nil {
 		os.RemoveAll(dir)
 		m.fail(err)
@@ -264,7 +266,7 @@ func (m *Manager) StartAutoCheck(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = 6 * time.Hour
 	}
-	go func() {
+	guard.Go(m.opts.Logger, "updater: autocheck", nil, func() {
 		timer := time.NewTimer(10 * time.Second) // gentle startup delay
 		defer timer.Stop()
 		for {
@@ -282,5 +284,5 @@ func (m *Manager) StartAutoCheck(ctx context.Context, interval time.Duration) {
 				timer.Reset(interval)
 			}
 		}
-	}()
+	})
 }

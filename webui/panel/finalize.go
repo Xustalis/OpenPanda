@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
@@ -35,7 +36,7 @@ func (h *handler) startSessionFinalizer(ctx context.Context) {
 	if h.sessions == nil {
 		return
 	}
-	go func() {
+	guard.Go(nil, "panel: session finalizer", nil, func() {
 		tick := time.NewTicker(sessionFinalizeInterval)
 		defer tick.Stop()
 		for {
@@ -46,7 +47,7 @@ func (h *handler) startSessionFinalizer(ctx context.Context) {
 				h.finalizeSessionSweep(ctx)
 			}
 		}
-	}()
+	})
 }
 
 // finalizeSessionSweep appends the summary turn for every terminal task

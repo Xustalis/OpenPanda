@@ -214,6 +214,18 @@ func (c *Core) admissionTier(ctx context.Context, chain []string, sender string)
 	return tier
 }
 
+// modelCredsWithheld decides at execution time whether the task's admission
+// tier keeps THIS node's model credentials out of the agent subprocess env.
+// The stored chain already contains every hop incl. the last sender (the
+// wire contract ends it at env.From and the receiver appends itself), so
+// folding it — minus this node — reproduces the intake admissionTier
+// verdict without needing the original envelope. A local task (chain =
+// [self]) resolves mesh and keeps the pre-feature provide.
+func (c *Core) modelCredsWithheld(ctx context.Context, t Task) bool {
+	tier := c.admissionTier(ctx, t.Chain, "")
+	return c.acceptPolicyFor(tier).ModelCreds == trust.CredsWithhold
+}
+
 // delegateAdmission is the inbound gate's verdict: admit outright, park for
 // this node's operator to review, or decline with a wire reason code.
 type delegateAdmission struct {

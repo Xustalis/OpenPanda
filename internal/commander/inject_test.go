@@ -554,3 +554,97 @@ func TestDynamicModelInjectionFallbackOnAuthError(t *testing.T) {
 		t.Fatalf("expected dynamic injection retry to succeed in 2 attempts: ok=%v attempts=%d res=%+v", res.OK, attempts, res)
 	}
 }
+
+// TestModelCredsWithheldSuppressesInjection: a trust-zone withheld context
+// must not put this node's model key into the adapter env — the whole point
+// is that a sub-mesh task's text runs inside a subprocess it can read.
+func TestModelCredsWithheldSuppressesInjection(t *testing.T) {
+	cleanCredentialEnv(t)
+	r := injectionRouter(flashModel, config.InjectionModelAuto)
+	// Sanity: without the marker the same setup WOULD inject.
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); !d.Inject {
+		t.Fatalf("fixture broken: auto mode should inject here: %+v", d)
+	}
+	var gotEnv []string
+	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
+		gotEnv = env
+		return AgentResult{OK: true, Result: "done", ExitCode: 0}
+	})
+	ctx := WithModelCredsWithheld(context.Background())
+	res := r.runAdapterDefault(ctx, "claude_code.py", "test prompt", "")
+	if !res.OK {
+		t.Fatalf("run failed: %+v", res)
+	}
+	if res.Injected {
+		t.Fatalf("withheld run must not report an injection: %+v", res)
+	}
+	for _, kv := range gotEnv {
+		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") || strings.Contains(kv, "sk-flash-test") {
+			t.Fatalf("withheld env carried the model key: %q (all=%v)", kv, gotEnv)
+		}
+	}
+}
+
+// TestModelCredsWithheldSuppressesCredentialForward: the adapter credential
+// bridge forwards this daemon's own provider env vars into the subprocess —
+// under withholding none of them may cross either.
+func TestModelCredsWithheldSuppressesCredentialForward(t *testing.T) {
+	cleanCredentialEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "agent-own-key")
+	r := injectionRouter(config.ModelConfig{}, config.InjectionModelAuto)
+	var gotEnv []string
+	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
+		gotEnv = env
+		return AgentResult{OK: true, Result: "done", ExitCode: 0}
+	})
+	// Control: without the marker the credential is forwarded.
+	res := r.runAdapterDefault(context.Background(), "claude_code.py", "p", "")
+	if !res.OK {
+		t.Fatalf("control run failed: %+v", res)
+	}
+	fwd := false
+	for _, kv := range gotEnv {
+		if kv == "ANTHROPIC_API_KEY=agent-own-key" {
+			fwd = true
+		}
+	}
+	if !fwd {
+		t.Fatalf("fixture broken: credential env should forward by default (all=%v)", gotEnv)
+	}
+	// Withheld: nothing.
+	gotEnv = nil
+	res = r.runAdapterDefault(WithModelCredsWithheld(context.Background()), "claude_code.py", "p", "")
+	if !res.OK {
+		t.Fatalf("withheld run failed: %+v", res)
+	}
+	for _, kv := range gotEnv {
+		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") {
+			t.Fatalf("withheld env forwarded the credential: %q (all=%v)", kv, gotEnv)
+		}
+	}
+}
+
+// TestModelCredsWithheldBlocksAuthFallback: the dynamic injection fallback
+// fires precisely on auth failures — under withholding it is the SECOND
+// leak channel and must stay closed (attempts stays 1, no retry).
+func TestModelCredsWithheldBlocksAuthFallback(t *testing.T) {
+	cleanCredentialEnv(t)
+	r := injectionRouter(flashModel, config.InjectionModelAuto)
+	attempts := 0
+	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
+		attempts++
+		for _, kv := range env {
+			if strings.Contains(kv, "sk-flash-test") {
+				t.Fatalf("withheld retry env carried the model key: %q", kv)
+			}
+		}
+		return AgentResult{OK: false, Result: "401 invalid api key", ExitCode: 1}
+	})
+	res := r.runAdapterDefault(WithModelCredsWithheld(context.Background()), "claude_code.py", "p", "")
+	if res.OK {
+		t.Fatalf("auth-failed run should stay failed: %+v", res)
+	}
+	if attempts != 1 {
+		t.Fatalf("withholding must not trigger the injection retry, attempts=%d", attempts)
+	}
+}

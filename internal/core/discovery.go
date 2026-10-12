@@ -238,10 +238,10 @@ func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string,
 	defer conn.Close()
 	// ReadFromUDP blocks; closing the socket on shutdown is what releases
 	// the read loop below — without this the goroutine outlives ctx forever.
-	go func() {
+	c.goGuarded("discovery close-on-ctx", func() {
 		<-ctx.Done()
 		conn.Close()
-	}()
+	})
 	c.logger.Info("discovery: listening for LAN beacons", "addr", conn.LocalAddr())
 
 	// The announcer is suppressed, not the listener, when announcing is
@@ -255,7 +255,7 @@ func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string,
 		c.logger.Info("discovery: listen_addr is loopback — listening only (nothing could reach the advertised address)")
 	}
 	if announce {
-		go c.discoveryAnnounceLoop(ctx, conn, port, advertiseAddr)
+		c.goGuarded("discovery announce", func() { c.discoveryAnnounceLoop(ctx, conn, port, advertiseAddr) })
 	}
 
 	// Auto-dial needs the same secret the hello will be checked against:
@@ -263,7 +263,7 @@ func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string,
 	// pure churn. The pending list still fills either way.
 	if autoDial && c.sharedSecret != "" {
 		c.autoDialOn.Store(true)
-		go c.autoDialLoop(ctx)
+		c.goGuarded("discovery auto-dial", func() { c.autoDialLoop(ctx) })
 	} else if autoDial {
 		c.logger.Info("discovery: auto-dial idle — no shared_secret to satisfy the hello")
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -128,6 +129,111 @@ func TestAuthorizeURLCarriesPKCE(t *testing.T) {
 		"code_challenge_method=S256", "state=st", "response_type=code"} {
 		if !strings.Contains(u, want) {
 			t.Errorf("authorize url missing %q: %s", want, u)
+		}
+	}
+}
+
+// TestStoreSnapshots covers the diagnostic surface: Path, Tokens, corrupt-file
+// degradation, and the load() contract that a malformed auth.json degrades to
+// empty rather than locking the user out of every provider.
+func TestStoreSnapshots(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenStore(dir)
+
+	if got := s.Path(); got != filepath.Join(dir, "auth.json") {
+		t.Errorf("Path = %q", got)
+	}
+	if toks, err := s.Tokens(); err != nil || len(toks) != 0 {
+		t.Errorf("Tokens empty-store = %v, %v", toks, err)
+	}
+
+	s.Put("anthropic", Token{AccessToken: "a"})
+	s.Put("google", Token{AccessToken: "g"})
+	toks, err := s.Tokens()
+	if err != nil || len(toks) != 2 || toks["anthropic"].AccessToken != "a" || toks["google"].AccessToken != "g" {
+		t.Errorf("Tokens = %v, %v", toks, err)
+	}
+	// Snapshot must not alias store internals — mutating it must not leak
+	// into subsequent loads.
+	toks["evil"] = Token{AccessToken: "x"}
+	if toks2, _ := s.Tokens(); len(toks2) != 2 {
+		t.Errorf("mutated snapshot leaked: %v", toks2)
+	}
+
+	// Corrupt file degrades to empty (documented behavior), not an error.
+	if err := os.WriteFile(s.path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if toks, err := s.Tokens(); err != nil || len(toks) != 0 {
+		t.Errorf("Tokens corrupt-file = %v, %v", toks, err)
+	}
+	if _, ok := s.Get("anthropic"); ok {
+		t.Error("Get on corrupt file found a token")
+	}
+}
+
+// TestProviderIDsRegistry pins the catalog contract: non-empty, each id
+// resolves through Lookup() with a complete descriptor, and Anthropic's
+// public CLI client stays registered (its id is contractual with the docs).
+func TestLookupRegistry(t *testing.T) {
+	ids := ProviderIDs()
+	if len(ids) == 0 {
+		t.Fatal("ProviderIDs empty")
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			t.Errorf("duplicate provider id %q", id)
+		}
+		seen[id] = true
+		p, err := Lookup(id)
+		if err != nil {
+			t.Errorf("Lookup(%q) from ProviderIDs: %v", id, err)
+			continue
+		}
+		if p.AuthorizeURL == "" || p.TokenURL == "" || p.ClientID == "" {
+			t.Errorf("provider %q descriptor incomplete: %+v", id, p)
+		}
+	}
+	if !seen["anthropic"] {
+		t.Error("anthropic missing from registry")
+	}
+	if _, err := Lookup(" nope "); err == nil {
+		t.Error("Lookup(unknown) should error")
+	}
+	// Whitespace tolerance is contractual — config values arrive padded.
+	if _, err := Lookup(" anthropic "); err != nil {
+		t.Errorf("Provider with padded id: %v", err)
+	}
+}
+
+// TestHeadTruncates pins the audit-log helper: long values get a visible
+// ellipsis so logs can't silently look complete while truncated.
+func TestHeadTruncates(t *testing.T) {
+	if got := head("short", 10); got != "short" {
+		t.Errorf("head(short) = %q", got)
+	}
+	if got := head("12345678901234567890", 8); got != "12345678…" {
+		t.Errorf("head(long) = %q, want 8 chars + ellipsis", got)
+	}
+	if got := head("", 4); got != "" {
+		t.Errorf("head(empty) = %q", got)
+	}
+}
+
+// TestDefaultStateDir pins the XDG convention the CLI and entry client must
+// agree on: XDG_STATE_HOME wins, else ~/.local/state/openpanda.
+func TestDefaultStateDir(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "xdg"))
+	got := DefaultStateDir()
+	if !strings.HasSuffix(got, filepath.Join("xdg", "openpanda")) {
+		t.Errorf("DefaultStateDir with XDG = %q", got)
+	}
+	t.Setenv("XDG_STATE_HOME", "")
+	if runtime.GOOS != "windows" {
+		got = DefaultStateDir()
+		if !strings.HasSuffix(got, filepath.Join(".local", "state", "openpanda")) {
+			t.Errorf("DefaultStateDir fallback = %q", got)
 		}
 	}
 }

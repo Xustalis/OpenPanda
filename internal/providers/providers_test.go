@@ -135,3 +135,103 @@ func TestDetectRegion(t *testing.T) {
 		}
 	}
 }
+
+// TestPricingCost covers the unit-cost arithmetic: free pricing yields zero,
+// priced tokens scale per million, and input/output sides add independently.
+func TestPricingCost(t *testing.T) {
+	free := Pricing{}
+	if got := free.Cost(1_000_000, 1_000_000); got != 0 {
+		t.Fatalf("free pricing cost = %v, want 0", got)
+	}
+	p := Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00}
+	if got := p.Cost(1_000_000, 0); got != 3.00 {
+		t.Fatalf("input-only cost = %v, want 3.00", got)
+	}
+	if got := p.Cost(0, 500_000); got != 7.50 {
+		t.Fatalf("output-only cost = %v, want 7.50", got)
+	}
+	if got := p.Cost(2_000_000, 1_000_000); got != 21.00 {
+		t.Fatalf("combined cost = %v, want 21.00", got)
+	}
+}
+
+// TestLookupPricing pins the catalogue lookup and the name-substring fallbacks
+// used when the provider id is absent from the catalogue (custom endpoints).
+func TestLookupPricing(t *testing.T) {
+	// The name-substring fallback only fires for provider ids absent from
+	// the catalogue ("custom" is itself a builtin and would take the
+	// catalogue branch), so probe it with a genuinely unknown id.
+	catalog := map[string]struct{ in, out float64 }{
+		"deepseek":      {0.14, 0.28},
+		"claude-haiku":  {0.80, 4.00},
+		"claude-sonnet": {3.00, 15.00},
+		"gpt-4o-mini":   {0.15, 0.60},
+		"gpt-4o":        {2.50, 10.00},
+		"qwen-max":      {0.11, 0.28},
+	}
+	for model, want := range catalog {
+		got := LookupPricing("unlisted-provider", model)
+		if got.InputPerMillion != want.in || got.OutputPerMillion != want.out {
+			t.Errorf("LookupPricing(unlisted, %q) = %+v, want %+v", model, got, want)
+		}
+	}
+	if got := LookupPricing("unlisted-provider", "something-unknown"); got != (Pricing{}) {
+		t.Errorf("unknown model = %+v, want zero Pricing", got)
+	}
+	// A catalogued provider returns its own table, not the name fallback.
+	if p, ok := Lookup("openai"); ok && p.Pricing != (Pricing{}) {
+		got := LookupPricing("openai", "anything")
+		if got != p.Pricing {
+			t.Errorf("catalogued provider pricing = %+v, want %+v", got, p.Pricing)
+		}
+	}
+}
+
+// TestThinkingStyleFor pins the wire-shape selection: an anthropic endpoint
+// always takes the anthropic object, a provider's declared style wins for
+// other dialects, and a bare custom openai endpoint falls back to "object".
+func TestThinkingStyleFor(t *testing.T) {
+	if got := ThinkingStyleFor(config.ModelConfig{APIType: config.APITypeAnthropic}); got != "anthropic" {
+		t.Fatalf("anthropic dialect style = %q", got)
+	}
+	for _, p := range All() {
+		if p.ThinkingStyle == "" {
+			continue
+		}
+		if got := ThinkingStyleFor(config.ModelConfig{Provider: p.ID, APIType: config.APITypeOpenAI}); got != p.ThinkingStyle {
+			t.Errorf("provider %s declared style = %q, resolved %q", p.ID, p.ThinkingStyle, got)
+		}
+	}
+	if got := ThinkingStyleFor(config.ModelConfig{Provider: "custom", APIType: config.APITypeOpenAI}); got != "object" {
+		t.Fatalf("custom openai fallback = %q, want object", got)
+	}
+}
+
+// TestDetect covers provider inference: exact and containing base-URL hits,
+// model-prefix hits, and a clean miss.
+func TestDetect(t *testing.T) {
+	for _, p := range All() {
+		if p.ID == "custom" || p.BaseURL == "" {
+			continue
+		}
+		got, ok := Detect(p.BaseURL, "")
+		if !ok || got.ID != p.ID {
+			t.Errorf("Detect(%q) = %v, %v; want %s", p.BaseURL, got.ID, ok, p.ID)
+		}
+	}
+	if _, ok := Detect("https://example.invalid", "no-such-model"); ok {
+		t.Error("Detect matched a nonsense endpoint/model")
+	}
+}
+
+// TestAllReturnsCopy ensures callers cannot mutate the shared catalogue.
+func TestAllReturnsCopy(t *testing.T) {
+	a := All()
+	if len(a) == 0 {
+		t.Fatal("catalogue is empty")
+	}
+	a[0].ID = "mutated"
+	if All()[0].ID == "mutated" {
+		t.Fatal("All() exposes the shared backing array")
+	}
+}

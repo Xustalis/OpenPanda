@@ -17,6 +17,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/install"
 )
 
@@ -69,7 +70,7 @@ func applyRelease(ctx context.Context, m *Manager, s *stagedRelease) error {
 	// the process image is replaced. If NoRestart is requested (CLI one-shot),
 	// skip restarting.
 	if !m.opts.NoRestart {
-		go delayedRestart(m)
+		guard.Go(m.opts.Logger, "updater: delayed restart", nil, func() { delayedRestart(m) })
 	}
 	return nil
 }

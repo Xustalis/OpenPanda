@@ -293,11 +293,16 @@ type TrustSendPolicy struct {
 // judges the task's desirability before the mode runs; foreign_consent:
 // strip|honor — whether the origin's own tier-2 consent may substitute for
 // this node's approval (strip = restricted tool face + local irreversible
-// review; honor for the same-owner guarded case like an own VPS).
+// review; honor for the same-owner guarded case like an own VPS);
+// model_creds: withhold|provide — whether this node's model credentials may
+// reach the agent subprocess that origin's work runs in (withhold is the
+// default: a semi-trusted peer's task text must not read this node's API
+// keys out of env; provide for the same-owner case).
 type TrustAcceptPolicy struct {
 	Mode           string `yaml:"mode"`
 	PolicyLLM      string `yaml:"policy_llm"`
 	ForeignConsent string `yaml:"foreign_consent"`
+	ModelCreds     string `yaml:"model_creds"`
 }
 
 // TrustConfig carries the per-tier trust-zone tables. Only guarded is
@@ -342,6 +347,11 @@ func (t TrustConfig) Validate() error {
 	default:
 		return fmt.Errorf("config: network.trust.accept.guarded.foreign_consent %q is invalid (want strip or honor)", t.Accept.Guarded.ForeignConsent)
 	}
+	switch t.Accept.Guarded.ModelCreds {
+	case "", "withhold", "provide":
+	default:
+		return fmt.Errorf("config: network.trust.accept.guarded.model_creds %q is invalid (want withhold or provide)", t.Accept.Guarded.ModelCreds)
+	}
 	return nil
 }
 
@@ -385,6 +395,9 @@ func (t TrustConfig) AcceptPolicyFor(l trust.Level) trust.AcceptPolicy {
 	}
 	if g.ForeignConsent != "" {
 		p.ForeignConsent = g.ForeignConsent
+	}
+	if g.ModelCreds != "" {
+		p.ModelCreds = g.ModelCreds
 	}
 	return p
 }

@@ -90,8 +90,8 @@ func (c *Core) ListenUDP(ctx context.Context, addr string, stunServers []string)
 	u.OnEnvelope = func(env bus.Envelope, src *net.UDPAddr) { c.handleUDPEnvelope(ctx, env, src) }
 	u.OnPunch = func(f bus.PunchFrame, src *net.UDPAddr, isAck bool) { c.handlePunchFrame(f, src, isAck) }
 	u.OnKeepalive = func(src *net.UDPAddr) { c.noteUDPAlive(src) }
-	go u.ReadLoop(ctx)
-	go c.udpKeepaliveLoop(ctx)
+	c.goGuarded("udp read loop", func() { u.ReadLoop(ctx) })
+	c.goGuarded("udp keepalive", func() { c.udpKeepaliveLoop(ctx) })
 	c.logger.Info("udp: datagram plane listening", "addr", u.LocalAddr())
 
 	// Reflexive discovery is best-effort and asynchronous: an external STUN
@@ -99,7 +99,7 @@ func (c *Core) ListenUDP(ctx context.Context, addr string, stunServers []string)
 	// punch candidates should carry. Failure changes nothing; the observed-IP
 	// hint from hello replies usually covers it.
 	if len(stunServers) > 0 {
-		go c.stunDiscover(ctx, stunServers)
+		c.goGuarded("stun discover", func() { c.stunDiscover(ctx, stunServers) })
 	}
 	return nil
 }
@@ -452,7 +452,7 @@ func (c *Core) startPunchSession(nonce, peer string, addrs []*net.UDPAddr) {
 	}
 	c.punching[nonce] = sess
 	c.punchMu.Unlock()
-	go c.punchSpray(nonce, sess)
+	c.goGuarded("punch spray "+nonce, func() { c.punchSpray(nonce, sess) })
 }
 
 // punchSpray emits a signed punch to each candidate until the session ends

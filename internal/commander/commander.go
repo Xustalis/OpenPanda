@@ -750,6 +750,17 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// credential manifest or model-env mapping.
 	name := AgentName(ctx)
 	dec := r.InjectionDecision(name, adapter)
+	if ModelCredsWithheld(ctx) && dec.Inject {
+		// Trust-zone cred withholding: the task's admission tier is
+		// sub-mesh, and this node's model credentials do not serve its
+		// work. The decision is overridden here — at the env-build point,
+		// not inside InjectionDecision — so non-task callers (probes,
+		// the run-level notice) keep their own policy answer.
+		dec = InjectionDecision{
+			Inject: false,
+			Reason: "trust zone: model credentials withheld from sub-mesh origin",
+		}
+	}
 	var env []string
 	if dec.Inject {
 		// The model endpoint must be HTTPS so the API key never travels
@@ -763,8 +774,15 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 		env = modelEnvForAdapter(r.model, name, adapter)
 	}
 	// Native Agent credentials must survive the minimal sandbox even when PANDA
-	// does not inject its own model. Only adapter-specific keys are forwarded.
-	env = mergeAdapterEnv(adapterCredentialEnv(name, adapter), env)
+	// does not inject its own model. Only adapter-specific keys are forwarded —
+	// and a withheld context forwards none at all: a credential env var read
+	// out of this daemon's environment is exactly what the withhold exists to
+	// keep out of a semi-trusted task's reach.
+	var credEnv []string
+	if !ModelCredsWithheld(ctx) {
+		credEnv = adapterCredentialEnv(name, adapter)
+	}
+	env = mergeAdapterEnv(credEnv, env)
 	res := r.runProcess(ctx, adapter, prompt, cwd, env)
 	if dec.Inject {
 		res.Injected = true
@@ -778,7 +796,7 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// different failure under injection is not more informative than the
 	// original failure — swapping it in would mask the real reason the task
 	// failed (e.g. report exit-code noise instead of "quota exhausted").
-	if !res.OK && !dec.Inject && modelConfigured(r.model) && supportsModelInjection(name, adapter, r.model) && r.model.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
+	if !res.OK && !dec.Inject && !ModelCredsWithheld(ctx) && modelConfigured(r.model) && supportsModelInjection(name, adapter, r.model) && r.model.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
 		if r.model.BaseURL == "" || security.NewNetworkGuard(security.EndpointHost(r.model.BaseURL)).CheckURL(r.model.BaseURL) == nil {
 			injectedEnv := modelEnvForAdapter(r.model, name, adapter)
 			if len(injectedEnv) > 0 {

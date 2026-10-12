@@ -31,6 +31,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/mcp"
@@ -974,7 +975,9 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	if ownsRow {
 		var ownCancel context.CancelFunc
 		ownCtx, ownCancel = context.WithCancel(schedCtx)
-		go e.watchNodeRow(ownCtx, sched, ownCancel, card)
+		guard.Go(e.logger, "askengine: node row watch", nil, func() {
+			e.watchNodeRow(ownCtx, sched, ownCancel, card)
+		})
 	}
 
 	// The embedded core owns the LAN-discovery listener in a process that
@@ -990,18 +993,23 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		// long-lived owner behaves like the daemon. An interactive seat is
 		// short-lived, so edges it opens would flap for peers on every exit —
 		// the seat listens for pending hints only.
-		go sched.RunDiscovery(ownCtx, e.cfg.Network.DiscoveryAddrOrDefault(), e.cfg.Network.ListenAddr, e.meshNode)
+		guard.Go(e.logger, "askengine: discovery", nil, func() {
+			sched.RunDiscovery(ownCtx, e.cfg.Network.DiscoveryAddrOrDefault(), e.cfg.Network.ListenAddr, e.meshNode)
+		})
 	}
 	// A mesh-owning engine also serves inbound peers and holds the outbound
 	// keepalives — the transport ownership a web-only node was missing when
 	// it could consume queued work but never be reached or redialed.
 	if ownsRow && e.meshNode {
 		if e.cfg.Network.SharedSecret != "" {
-			go func() {
-				if err := sched.Listen(ownCtx, e.cfg.Network.ListenAddr); err != nil {
-					e.logger.Warn("websocket listener failed", "addr", e.cfg.Network.ListenAddr, "err", err)
+			// Bind the address eagerly: a config reload swaps e.cfg, and a
+			// closure that reads it lazily would listen on the new address.
+			listenAddr := e.cfg.Network.ListenAddr
+			guard.Go(e.logger, "askengine: ws listen", nil, func() {
+				if err := sched.Listen(ownCtx, listenAddr); err != nil {
+					e.logger.Warn("websocket listener failed", "addr", listenAddr, "err", err)
 				}
-			}()
+			})
 		}
 		sched.SyncPeers(ownCtx, e.cfg.Network.PeerAddrs())
 	}
@@ -1036,12 +1044,12 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		// the task-lifecycle sweeps: without them a waiting_context park never
 		// times out, an orphaned forward is never rescued, and an expired
 		// lease is never enforced — the task would stall with nobody told.
-		go sched.RunTaskMonitor(ownCtx)
+		guard.Go(e.logger, "askengine: task monitor", nil, func() { sched.RunTaskMonitor(ownCtx) })
 	}
 	// Every engine reconciles its own executions against the store: a task
 	// cancelled or failed by another process must stop here too, not run on
 	// as a zombie the user believes is still working.
-	go sched.RunReconcile(schedCtx)
+	guard.Go(e.logger, "askengine: reconcile", nil, func() { sched.RunReconcile(schedCtx) })
 
 	if !ownsRow {
 		// The daemon owns the peer edges for this identity — its keepalive
@@ -1062,22 +1070,22 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	peerAddrs := e.cfg.Network.PeerAddrs()
 	if e.asyncPeers {
 		for _, peer := range peerAddrs {
-			go func(p string) {
-				if err := sched.DialPeer(schedCtx, p); err != nil {
-					e.logger.Debug("peer dial failed", "peer", p, "err", err)
+			guard.Go(e.logger, "askengine: peer dial "+peer, nil, func() {
+				if err := sched.DialPeer(schedCtx, peer); err != nil {
+					e.logger.Debug("peer dial failed", "peer", peer, "err", err)
 				}
-			}(peer)
+			})
 		}
 	} else {
 		var wg sync.WaitGroup
 		for _, peer := range peerAddrs {
 			wg.Add(1)
-			go func(p string) {
+			guard.Go(e.logger, "askengine: peer dial "+peer, nil, func() {
 				defer wg.Done()
-				if err := sched.DialPeer(schedCtx, p); err != nil {
-					e.logger.Debug("peer dial failed", "peer", p, "err", err)
+				if err := sched.DialPeer(schedCtx, peer); err != nil {
+					e.logger.Debug("peer dial failed", "peer", peer, "err", err)
 				}
-			}(peer)
+			})
 		}
 		wg.Wait()
 		if len(peerAddrs) > 0 {

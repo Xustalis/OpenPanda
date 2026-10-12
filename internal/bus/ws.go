@@ -312,7 +312,7 @@ func newConn(ws *websocket.Conn, logger *slog.Logger) *Conn {
 	for i := range c.lanes {
 		c.lanes[i] = make(chan queuedWrite, qosLaneCap)
 	}
-	go c.writeLoop()
+	guard.Go(c.logger, "bus: write loop", func() { _ = c.Close() }, c.writeLoop)
 	return c
 }
 
@@ -651,12 +651,12 @@ func (s *Server) Listen(ctx context.Context) error {
 	}
 
 	errCh := make(chan error, 1)
-	go func() {
+	guard.Go(s.logger, "bus: accept loop", nil, func() {
 		s.logger.Info("websocket listening", "addr", s.addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
-	}()
+	})
 
 	select {
 	case <-ctx.Done():

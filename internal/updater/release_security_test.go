@@ -211,3 +211,64 @@ func TestInstallAdaptersPrunesStale(t *testing.T) {
 		t.Errorf("manifest = %q, want %q", got, "a.py\nb.py\n")
 	}
 }
+
+// TestExtractReleaseWrapper covers the wrapper itself — not the untar/unzip
+// plumbing the other tests pin. The contract: the tree lands under
+// <dest>/openpanda/, the consumed archive is deleted on success but kept on
+// failure, and .zip vs .tar.gz dispatch follows the file extension.
+func TestExtractReleaseWrapper(t *testing.T) {
+	t.Run("targz deletes archive and returns root", func(t *testing.T) {
+		dir := t.TempDir()
+		archive := filepath.Join(dir, "rel.tar.gz")
+		writeTarGz(t, archive, []*tar.Header{
+			{Name: "openpanda/", Typeflag: tar.TypeDir, Mode: 0o755},
+			{Name: "openpanda/bin/", Typeflag: tar.TypeDir, Mode: 0o755},
+			{Name: "openpanda/bin/panda", Typeflag: tar.TypeReg, Mode: 0o755, Size: 2},
+		})
+		root, err := extractRelease(archive, dir)
+		if err != nil {
+			t.Fatalf("extractRelease: %v", err)
+		}
+		if root != filepath.Join(dir, "openpanda") {
+			t.Errorf("root = %q", root)
+		}
+		if _, err := os.Stat(filepath.Join(root, "bin", "panda")); err != nil {
+			t.Errorf("payload missing: %v", err)
+		}
+		if _, err := os.Stat(archive); !os.IsNotExist(err) {
+			t.Error("archive left behind after successful extract")
+		}
+	})
+
+	t.Run("zip dispatch", func(t *testing.T) {
+		dir := t.TempDir()
+		archive := filepath.Join(dir, "rel.zip")
+		writeZip(t, archive, map[string][]byte{
+			"openpanda/bin/panda.exe": []byte("MZ"),
+		}, nil)
+		root, err := extractRelease(archive, dir)
+		if err != nil {
+			t.Fatalf("extractRelease zip: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(root, "bin", "panda.exe")); err != nil {
+			t.Errorf("zip payload missing: %v", err)
+		}
+		if _, err := os.Stat(archive); !os.IsNotExist(err) {
+			t.Error("zip archive left behind")
+		}
+	})
+
+	t.Run("failed extract keeps archive for diagnosis", func(t *testing.T) {
+		dir := t.TempDir()
+		archive := filepath.Join(dir, "rel.tar.gz")
+		writeTarGz(t, archive, []*tar.Header{
+			{Name: "openpanda/../../escape", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
+		})
+		if _, err := extractRelease(archive, dir); err == nil {
+			t.Fatal("extractRelease accepted a traversal archive")
+		}
+		if _, err := os.Stat(archive); err != nil {
+			t.Error("archive deleted on failure — evidence gone: " + err.Error())
+		}
+	})
+}

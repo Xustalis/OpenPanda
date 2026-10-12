@@ -469,7 +469,7 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 	// no caller asked for. WithoutCancel keeps the run alive; explicit cancels
 	// still reach it via the running map's CancelFunc.
 	runCtx := context.WithoutCancel(ctx)
-	go func() {
+	c.goGuarded("context-resumed run "+p.TaskID, func() {
 		result, err := c.run(runCtx, p.TaskID, pc.intent, pc.required, nil)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {
@@ -490,5 +490,5 @@ func (c *Core) handleContextAck(ctx context.Context, env bus.Envelope) {
 		if t, gerr := c.store.Get(runCtx, p.TaskID); gerr == nil {
 			c.relayToParent(runCtx, bus.MsgTaskResult, t.Chain, result)
 		}
-	}()
+	})
 }

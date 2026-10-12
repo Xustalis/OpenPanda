@@ -22,6 +22,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
@@ -167,7 +168,7 @@ func main() {
 			}
 		}
 	}, logger)
-	go reminderScan.Run(ctx)
+	guard.Go(logger, "panel: reminder scan", nil, func() { reminderScan.Run(ctx) })
 
 	srv := &http.Server{
 		Addr:              cfg.Network.PanelAddr,
@@ -192,7 +193,7 @@ func main() {
 		}),
 	}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	guard.Go(logger, "panel: http serve", nil, func() { errCh <- srv.ListenAndServe() })
 
 	logger.Info("openpanda webui sidecar listening", "addr", cfg.Network.PanelAddr, "static", *staticDir)
 	// The ready URL carries the token so the console logs in without a

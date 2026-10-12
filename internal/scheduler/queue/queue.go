@@ -23,6 +23,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/guard"
 )
 
 // ReadyTask is the scheduler's view of one queued task — just the fields the
@@ -336,11 +338,11 @@ func (s *Scheduler) tick(ctx context.Context) int {
 		}
 		active++
 		s.logger.Info("queue: starting task", "task", t.ID, "resources", keys)
-		go func(id string) {
-			defer s.registry.Release(id)
+		guard.Go(s.logger, "queue: runner "+t.ID, nil, func() {
+			defer s.registry.Release(t.ID)
 			defer s.Wake()
-			s.runner.Run(ctx, id)
-		}(t.ID)
+			s.runner.Run(ctx, t.ID)
+		})
 	}
 	return len(ready)
 }

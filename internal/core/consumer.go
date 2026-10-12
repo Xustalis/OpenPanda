@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 )
 
@@ -57,13 +58,13 @@ func PanelReachable(addr string) bool {
 	const span = 6
 	hits := make(chan bool, span)
 	for i := 0; i < span; i++ {
-		go func(port int) {
-			conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 200*time.Millisecond)
+		guard.Go(nil, "core: port probe", nil, func() {
+			conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(base+i)), 200*time.Millisecond)
 			if conn != nil {
 				_ = conn.Close()
 			}
 			hits <- err == nil
-		}(base + i)
+		})
 	}
 	for i := 0; i < span; i++ {
 		if <-hits {

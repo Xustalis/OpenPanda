@@ -188,7 +188,7 @@ func (c *Core) StartQueueScheduler(ctx context.Context) *queue.Scheduler {
 	c.mu.Lock()
 	c.queueSched = s
 	c.mu.Unlock()
-	go s.Run(ctx)
+	c.goGuarded("queue scheduler", func() { s.Run(ctx) })
 	// A previous process instance may have left claimed/queued tasks behind;
 	// nudge once so adoption happens without waiting for the next event.
 	s.Wake()
@@ -645,7 +645,7 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 		// Drain deferred push custody into the contact window that just
 		// carried the delegate — or, for a parked bundle, prime the flush so
 		// the next peer hello has nothing left to prepare.
-		go c.outboxFlush(context.WithoutCancel(ctx), target)
+		c.goGuarded("outbox flush "+target, func() { c.outboxFlush(context.WithoutCancel(ctx), target) })
 	}
 	// — Trace: queue re-route hop (from=here, to=target), same shape as
 	// dispatchDelegated's so the orbit treats both alike.

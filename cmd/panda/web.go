@@ -305,7 +305,7 @@ func runWeb(args []string) {
 	if bound != addr {
 		fmt.Println(i18n.Tf(loc, "web.portfallback", "orig", addr, "actual", bound))
 	}
-	go func() { _ = srv.Serve(ln) }()
+	guard.Go(nil, "web: panel serve", nil, func() { _ = srv.Serve(ln) })
 
 	url := panelURL(ln.Addr().String())
 	if *noBrowser {
