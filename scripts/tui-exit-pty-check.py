@@ -44,10 +44,34 @@ ROWS, COLS = 24, 100
 ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][A-Z0-9]")
 
 
+def terms_version_current():
+    """Read config.TermsVersionCurrent out of the Go source.
+
+    The fixture has to stamp a terms_version at least as new as
+    internal/config.TermsVersionCurrent, or the reconsent card opens on the
+    first launch and swallows the turn this check submits. That has happened
+    twice (the AGPL card, then TERMS.md bumping the revision to 3), so the
+    number is parsed from the constant rather than copied: a hand-written
+    literal cannot drift from the declaration it tracks.
+    """
+    src = os.path.join(ROOT, "internal", "config", "config.go")
+    try:
+        with open(src, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    m = re.search(r"TermsVersionCurrent\s*=\s*(\d+)", text)
+    return int(m.group(1)) if m else None
+
+
 def make_workspace():
     """A private config + XDG state dir; everything the run writes dies here."""
     tmp = tempfile.mkdtemp(prefix="panda-tui-exit-")
     atexit.register(shutil.rmtree, tmp, True)
+    version = terms_version_current()
+    if version is None:
+        print("tui-exit-pty-check: cannot read config.TermsVersionCurrent")
+        return None, None
     cfg = os.path.join(tmp, "config.yaml")
     with open(cfg, "w", encoding="utf-8") as fh:
         fh.write(
@@ -70,13 +94,12 @@ def make_workspace():
             "ui:\n"
             "  onboarded: true\n"
             "  terms_accepted: true\n"
-            # Without a version the fixture looks like a MIT-era install and
-            # the reconsent card swallows the keys below. Keep in step with
-            # internal/config.TermsVersionCurrent.
-            "  terms_version: 2\n"
+            # A stale version here looks like an install that never accepted the
+            # current card, so the reconsent card opens over the run.
+            "  terms_version: %s\n"
             "  locale: en\n"
-            % tuple(os.path.join(tmp, n) for n in
-                    ("panda.db", "artifacts", "context", "memory"))
+            % tuple([os.path.join(tmp, n) for n in
+                     ("panda.db", "artifacts", "context", "memory")] + [version])
         )
     return tmp, cfg
 
@@ -164,6 +187,8 @@ def main():
         print("tui-exit-pty-check: %s is not executable (run `make build`)" % BIN)
         return 2
     tmp, cfg = make_workspace()
+    if not cfg:
+        return 2
     failures = []
 
     blob, rc = run(cfg, tmp)

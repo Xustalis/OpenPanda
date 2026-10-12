@@ -54,6 +54,28 @@ SETTLE = 0.5
 CFG = None
 
 
+def terms_version_current():
+    """Read config.TermsVersionCurrent out of the Go source.
+
+    Both PTY fixtures have to stamp a terms_version at least as new as
+    internal/config.TermsVersionCurrent, or the reconsent card opens on the
+    first launch and swallows every key the assertions below send — which
+    reads as a mouse regression while nothing about the mouse changed. That
+    has now happened twice (once when the AGPL card landed, once when TERMS.md
+    bumped the revision to 3), so the number is parsed from the constant
+    instead of being repeated here: a hand-copied literal cannot drift from
+    the declaration it is supposed to track.
+    """
+    src = os.path.join(ROOT, "internal", "config", "config.go")
+    try:
+        with open(src, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    m = re.search(r"TermsVersionCurrent\s*=\s*(\d+)", text)
+    return int(m.group(1)) if m else None
+
+
 def make_config():
     """Write a minimal config that lands the TUI in idle chat.
 
@@ -66,6 +88,10 @@ def make_config():
     """
     tmp = tempfile.mkdtemp(prefix="panda-tui-mouse-")
     atexit.register(shutil.rmtree, tmp, True)
+    version = terms_version_current()
+    if version is None:
+        print("tui-mouse-pty-check: cannot read config.TermsVersionCurrent")
+        return None
     path = os.path.join(tmp, "config.yaml")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(
@@ -85,13 +111,12 @@ def make_config():
             "ui:\n"
             "  onboarded: true\n"
             "  terms_accepted: true\n"
-            # Without a version the fixture looks like a MIT-era install and
-            # the reconsent card swallows the keys below. Keep in step with
-            # internal/config.TermsVersionCurrent.
-            "  terms_version: 2\n"
+            # A stale version here looks like an install that never accepted the
+            # current card, so the reconsent card eats the keys below.
+            "  terms_version: %s\n"
             "  locale: en\n"
-            % tuple(os.path.join(tmp, n) for n in
-                    ("panda.db", "artifacts", "context", "memory"))
+            % tuple([os.path.join(tmp, n) for n in
+                     ("panda.db", "artifacts", "context", "memory")] + [version])
         )
     return path
 
@@ -210,6 +235,8 @@ def main():
         print("tui-mouse-pty-check: %s is not executable (run `make build`)" % BIN)
         return 2
     CFG = os.environ.get("PANDA_CONFIG") or make_config()
+    if not CFG:
+        return 2
     failures = []
     enter = (b"\r", 2.0)  # leave the splash screen
 
