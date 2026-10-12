@@ -367,9 +367,21 @@ func (r *Router) MatchManual(required []string) (ledger.ManualAbility, bool) {
 }
 
 // Route picks the best way to execute required capabilities on this node.
-// Priority: native > agent > manual (design doc §6.4).
+// Priority: native > agent > manual (design doc §6.4) — except an explicit
+// `agent:<name>` pin: a bare native or actuator command can never satisfy a
+// demand for an agent run, so letting MatchNative win on a sibling
+// capability token silently drops the pin. requires ["agent:x","git"] used
+// to run `git status` and report the task done without the agent ever
+// starting.
 func (r *Router) Route(required []string) (Plan, error) {
-	if ab, ok := r.MatchNative(required); ok {
+	agentPinned := false
+	for _, req := range required {
+		if strings.HasPrefix(req, "agent:") {
+			agentPinned = true
+			break
+		}
+	}
+	if ab, ok := r.MatchNative(required); ok && !agentPinned {
 		// A card's declared tier may only tighten the command's own
 		// classification, never loosen it. Taking the declaration outright
 		// meant a card reading `tier: 1` made `rm -rf` reversible — and since
@@ -387,8 +399,8 @@ func (r *Router) Route(required []string) (Plan, error) {
 	// the same native path — its args are ActionSpec templates the run path
 	// substitutes before exec. One without a command stays a routing
 	// advertisement only and falls through to the agent tier, which scripts
-	// the hardware itself.
-	if act, ok := r.MatchActuator(required); ok && act.Command != "" {
+	// the hardware itself. The agent-pin guard above applies here too.
+	if act, ok := r.MatchActuator(required); ok && act.Command != "" && !agentPinned {
 		tier := defense.TierFromCommand(act.Command, act.Args...)
 		if act.Tier > tier {
 			tier = act.Tier

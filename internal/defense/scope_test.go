@@ -144,6 +144,41 @@ func TestScopeDriftUnderDeletedTree(t *testing.T) {
 	}
 }
 
+// A task asked to commit necessarily writes .git/objects, refs, index and
+// HEAD — VCS bookkeeping, not user files. Exempting it keeps legitimate
+// commit tasks out of the drift intercept while .git/hooks and .git/config
+// (executable hooks, remotes, credentials) still flag.
+func TestScopeDriftSkipsVCSBookkeeping(t *testing.T) {
+	s := NewScope("app.py")
+	changed := []string{
+		"app.py",
+		".git/index",
+		".git/HEAD",
+		".git/COMMIT_EDITMSG",
+		".git/objects/1f/36abff05aa9e803621b694c9328f9a63a37406",
+		".git/refs/heads/main",
+		".git/logs/HEAD",
+	}
+	if got := s.DriftUnder(t.TempDir(), changed); len(got) != 0 {
+		t.Fatalf("DriftUnder() = %v, want no drift for commit bookkeeping", got)
+	}
+}
+
+func TestScopeDriftKeepsGitHooksAndConfig(t *testing.T) {
+	s := NewScope("app.py")
+	changed := []string{
+		"app.py",
+		".git/hooks/pre-push",
+		".git/config",
+		".git/modules/sub/config",
+	}
+	got := s.DriftUnder(t.TempDir(), changed)
+	want := []string{".git/hooks/pre-push", ".git/config", ".git/modules/sub/config"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DriftUnder() = %v, want %v", got, want)
+	}
+}
+
 func TestScopeCleanup(t *testing.T) {
 	// Roots are cleaned to slash form and trailing slashes dropped, so a
 	// directory scope like "src/components/" matches its children.

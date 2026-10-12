@@ -104,6 +104,21 @@ func TestRouteManual(t *testing.T) {
 	}
 }
 
+// An agent: pin plus a sibling capability token (the shape ask-engine file
+// tasks emit, e.g. ["agent:opencode","git"]) must keep the agent: the native
+// match on "git" used to short-circuit the route into a bare `git status`
+// exec that reported the task done while the pinned agent never ran.
+func TestRouteAgentPinBeatsSiblingNative(t *testing.T) {
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	plan, err := r.Route([]string{"agent:opencode", "sys:info"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if plan.Kind != "agent" || plan.Agent != "opencode" {
+		t.Fatalf("plan = %+v, want agent opencode", plan)
+	}
+}
+
 func TestRouteNoMatch(t *testing.T) {
 	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	if _, err := r.Route([]string{"gpu:train"}); err == nil {

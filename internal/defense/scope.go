@@ -132,11 +132,38 @@ func (s *Scope) Drift(relPaths []string) []string {
 	}
 	var out []string
 	for _, p := range relPaths {
+		if vcsBookkeeping(filepath.ToSlash(filepath.Clean(p))) {
+			continue
+		}
 		if !s.Contains(p) {
 			out = append(out, p)
 		}
 	}
 	return out
+}
+
+// vcsBookkeeping reports whether relPath is version-control bookkeeping under
+// a .git/ directory. A task that asks for a commit necessarily writes
+// objects, refs, the index and HEAD — those are the VCS's own records, not
+// "files the task changed", and counting them as drift parked every
+// commit-asking task for a false-positive review. Two holes stay
+// drift-visible on purpose: hooks are executable on the next git command,
+// and config carries remotes/credentials — both are inside .git but are
+// exactly what the drift intercept exists to catch.
+func vcsBookkeeping(rel string) bool {
+	rest, ok := strings.CutPrefix(rel, ".git/")
+	if !ok || rest == "" {
+		return false
+	}
+	for _, seg := range strings.Split(rest, "/") {
+		if seg == "hooks" {
+			return false
+		}
+	}
+	if rest == "config" || strings.HasSuffix(rest, "/config") {
+		return false
+	}
+	return true
 }
 
 // DriftUnder is Drift with the roots re-anchored to workDir first. The entry
@@ -159,6 +186,9 @@ func (s *Scope) DriftUnder(workDir string, relPaths []string) []string {
 	var out []string
 	for _, p := range relPaths {
 		rel := filepath.ToSlash(filepath.Clean(p))
+		if vcsBookkeeping(rel) {
+			continue
+		}
 		matched := false
 		for _, r := range roots {
 			if rel == r || strings.HasPrefix(rel, r+"/") {
