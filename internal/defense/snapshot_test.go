@@ -173,3 +173,84 @@ func TestSnapshotIgnoresSQLiteJournal(t *testing.T) {
 		t.Errorf("real change = %v, want [real/work.txt]", got)
 	}
 }
+
+// TestSnapshotDirSkipsUnreadable verifies that one permission-denied subtree
+// does not discard the whole snapshot — the failure mode a project adopted
+// over a home directory hits on .Trash. The denied subtree is a counted blind
+// spot; every readable sibling still diffs.
+func TestSnapshotDirSkipsUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"locked/secret.txt": "hidden",
+		"open/work.txt":     "todo",
+	})
+	locked := filepath.Join(dir, "locked")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Skipf("chmod unsupported: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if _, err := os.ReadDir(locked); err == nil {
+		t.Skip("filesystem does not enforce mode bits (running as root?)")
+	}
+
+	before, err := SnapshotDir(dir)
+	if err != nil {
+		t.Fatalf("snapshot must tolerate an unreadable subtree: %v", err)
+	}
+	if before.Skipped() == 0 {
+		t.Fatal("unreadable subtree not counted as skipped")
+	}
+	if _, ok := before.files["locked/secret.txt"]; ok {
+		t.Fatal("unreadable file must not be recorded")
+	}
+	if _, ok := before.files["open/work.txt"]; !ok {
+		t.Fatal("readable sibling lost alongside the unreadable subtree")
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "open/work.txt"), []byte("done"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := SnapshotDir(dir)
+	if err != nil {
+		t.Fatalf("after snapshot: %v", err)
+	}
+	if got := before.Changed(after); !reflect.DeepEqual(got, []string{"open/work.txt"}) {
+		t.Errorf("changed = %v, want [open/work.txt]", got)
+	}
+}
+
+// TestSnapshotDirTruncatesAtCap verifies the file bound: past the cap the walk
+// stops, the snapshot is marked truncated, and — because WalkDir visits
+// lexically — two snapshots truncate at the same prefix so the recorded set
+// still diffs cleanly.
+func TestSnapshotDirTruncatesAtCap(t *testing.T) {
+	old := snapshotMaxFiles
+	snapshotMaxFiles = 3
+	t.Cleanup(func() { snapshotMaxFiles = old })
+
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"a.txt": "1", "b.txt": "2", "c.txt": "3", "d.txt": "4", "e.txt": "5",
+	})
+	before, err := SnapshotDir(dir)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if !before.Truncated() {
+		t.Fatal("cap exceeded but Truncated() is false")
+	}
+	if len(before.files) != 3 {
+		t.Fatalf("recorded %d files, want cap 3", len(before.files))
+	}
+	if _, ok := before.files["d.txt"]; ok {
+		t.Fatal("file past the lexical boundary recorded")
+	}
+	// Same truncation on the after snapshot: no spurious diff from the cap.
+	after, err := SnapshotDir(dir)
+	if err != nil {
+		t.Fatalf("after snapshot: %v", err)
+	}
+	if got := before.Changed(after); len(got) != 0 {
+		t.Errorf("truncated snapshots diffed = %v, want none", got)
+	}
+}

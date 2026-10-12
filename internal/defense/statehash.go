@@ -49,7 +49,12 @@ func HashDir(root string, maxFiles int) (hash string, nfiles int, err error) {
 	}
 	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			// Same skip rule as SnapshotDir: one unreadable subtree must not
+			// kill the whole fingerprint on a permission-mixed tree.
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() {
 			if snapshotPruneDirs[d.Name()] {

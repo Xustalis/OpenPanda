@@ -16,7 +16,28 @@ import (
 // changed.
 type Snapshot struct {
 	files map[string]fileStamp
+	// skipped counts entries the walk could not read (permission errors,
+	// files deleted mid-walk). They are omitted from the diff, so a skipped
+	// path is a blind spot, not a failure.
+	skipped int
+	// truncated reports that recording stopped at snapshotMaxFiles. WalkDir
+	// visits entries in lexical order, so before/after snapshots truncate at
+	// the same boundary and the recorded prefix still diffs honestly.
+	truncated bool
 }
+
+// snapshotMaxFiles bounds how many files one snapshot records. Past the cap
+// the walk stops entirely: supervision diffs the deterministic lexical prefix
+// both snapshots share while the cost of watching a pathological workdir (an
+// adopted project rooted at a whole home directory, say) stays finite. A var
+// rather than a const so tests can shrink it without staging 100k files.
+var snapshotMaxFiles = 100_000
+
+// Skipped reports how many entries the walk could not stat.
+func (s Snapshot) Skipped() int { return s.skipped }
+
+// Truncated reports whether the walk stopped at the file cap.
+func (s Snapshot) Truncated() bool { return s.truncated }
 
 // fileStamp fingerprints one file. Size + mtime is a cheap deterministic
 // heuristic; it can miss a rewrite that preserves both, which is acceptable
@@ -67,7 +88,15 @@ func SnapshotDir(root string) (Snapshot, error) {
 	}
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			// An unreadable subtree or an entry deleted mid-walk must not
+			// blind the whole check — on a permission-mixed tree (a project
+			// adopted over a home directory hits .Trash immediately) the
+			// first error otherwise discards every readable sibling.
+			s.skipped++
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() {
 			if snapshotPruneDirs[d.Name()] {
@@ -84,13 +113,18 @@ func SnapshotDir(root string) (Snapshot, error) {
 		}
 		fi, err := d.Info()
 		if err != nil {
-			return err
+			s.skipped++
+			return nil
 		}
 		rel, err := filepath.Rel(root, p)
 		if err != nil {
 			return err
 		}
 		s.files[filepath.ToSlash(rel)] = fileStamp{size: fi.Size(), modNano: fi.ModTime().UnixNano()}
+		if len(s.files) >= snapshotMaxFiles {
+			s.truncated = true
+			return fs.SkipAll
+		}
 		return nil
 	})
 	if err != nil {

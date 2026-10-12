@@ -512,6 +512,12 @@ type TaskResultPayload struct {
 	// wire (maxFilesChangedReport); absent/empty for non-agent plans and
 	// executors from before the field.
 	FilesChanged []string `json:"files_changed,omitempty"`
+	// FilesTruncated marks a footprint diffed over a workdir too large to
+	// snapshot fully (the walk stopped at the file cap, so the list covers
+	// only the deterministic lexical prefix). Consumers should read it as
+	// "partial evidence", not "nothing changed" — the work itself may sit
+	// past the boundary.
+	FilesTruncated bool `json:"files_truncated,omitempty"`
 	// Question carries the clarification an agent parked on (PANDA_QUESTION):
 	// the review state travels with it so the origin's task display can show
 	// what the executor is asking, and a task_resume.answer replies to it.
