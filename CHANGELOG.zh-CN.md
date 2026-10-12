@@ -38,6 +38,8 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 本 changelog 为策展式记录：部分内部重构与 adapter 未在此列出。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
+## [Unreleased]
+
 ## [0.0.11-beta] - 2026-10-12
 
 Periapsis 测试版 —— 一轮**实机验证过**的多跳 mesh 加固：硬钉选、context 与 artifact 数据面、重启诚实语义与审批语义，全部在真实三设备舰队（macOS ↔ Windows ↔ Linux SBC）上端到端跑过，包括执行中杀节点、断线重连与消息重放。
