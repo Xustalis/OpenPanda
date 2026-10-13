@@ -2596,6 +2596,47 @@ func (s *TaskStore) TaskStamps(ctx context.Context) ([]TaskStamp, error) {
 	return out, rows.Err()
 }
 
+// ExistingTaskIDs reports which of the given ids still have a row — one
+// batched IN query instead of a Get per id. The dir-reaping sweep uses it to
+// tell orphaned workdirs from live ones without paying a SELECT per dir, and
+// the PK index keeps each batch cheap however large the table grows.
+// Batches of 500 stay well inside SQLite's bound-variable limit.
+func (s *TaskStore) ExistingTaskIDs(ctx context.Context, ids []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(ids))
+	const batch = 500
+	for i := 0; i < len(ids); i += batch {
+		j := i + batch
+		if j > len(ids) {
+			j = len(ids)
+		}
+		chunk := ids[i:j]
+		marks := strings.Repeat("?,", len(chunk))
+		args := make([]any, len(chunk))
+		for k, id := range chunk {
+			args[k] = id
+		}
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT task_id FROM tasks WHERE task_id IN (`+marks[:len(marks)-1]+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
 // Events returns the event timeline for a task, oldest first.
 func (s *TaskStore) Events(ctx context.Context, taskID string) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,

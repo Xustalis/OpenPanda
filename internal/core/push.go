@@ -733,8 +733,17 @@ func (c *Core) pruneStagedArtifacts(ctx context.Context) {
 	if c.artifacts == nil {
 		return
 	}
-	pruned, err := c.artifacts.PruneStaged(stagedPushMaxAge, time.Now())
+	now := time.Now()
+	last := c.stagedPruneAt.Load()
+	if last > 0 && now.Sub(time.Unix(last, 0)) < retentionSweepInterval {
+		return
+	}
+	if !c.stagedPruneAt.CompareAndSwap(last, now.Unix()) {
+		return
+	}
+	pruned, err := c.artifacts.PruneStaged(stagedPushMaxAge, now)
 	if err != nil {
+		c.stagedPruneAt.Store(last) // let the next tick retry
 		c.logger.Warn("prune staged artifacts", "err", err)
 		return
 	}

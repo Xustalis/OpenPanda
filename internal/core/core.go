@@ -460,6 +460,10 @@ type Core struct {
 	// taskDirSweepAt paces the orphan workdir GC the same way — reaped
 	// only when the owning task row is gone, never while it lives.
 	taskDirSweepAt atomic.Int64
+	// stagedPruneAt paces the staging-dir prune inside taskSweeps: the
+	// reclaim bound is a 24h sidecar age, so a per-tick ReadDir only pays
+	// filesystem syscalls for precision nothing needs.
+	stagedPruneAt atomic.Int64
 
 	// Farsky datagram plane (§9.2). udp is the shared socket; udpPort its
 	// bound port (advertised in hello). udpRoutes maps peer id -> confirmed
@@ -1368,26 +1372,35 @@ func (c *Core) sweepTaskDirs(ctx context.Context) {
 		}
 		return
 	}
-	removed := 0
+	var names []string
 	for _, e := range entries {
-		if !e.IsDir() {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	// One batched existence query for the whole dir set: the per-dir Get
+	// this replaced cost a SELECT per workdir on every hourly pass, and a
+	// tasks table that has seen retention sweep is exactly where the row
+	// lookups pile up.
+	live, err := c.store.ExistingTaskIDs(ctx, names)
+	if err != nil {
+		c.taskDirSweepAt.Store(last)
+		c.logger.Warn("task workdir sweep lookup", "err", err)
+		return
+	}
+	removed := 0
+	for _, name := range names {
+		if live[name] {
+			continue // row lives: the dir stays, whatever state the task is in
+		}
+		if rerr := os.RemoveAll(filepath.Join(root, name)); rerr != nil {
+			c.logger.Warn("task workdir sweep remove", "dir", name, "err", rerr)
 			continue
 		}
-		_, err := c.store.Get(ctx, e.Name())
-		switch {
-		case err == nil:
-			continue // row lives: the dir stays, whatever state the task is in
-		case errors.Is(err, sql.ErrNoRows):
-			if rerr := os.RemoveAll(filepath.Join(root, e.Name())); rerr != nil {
-				c.logger.Warn("task workdir sweep remove", "dir", e.Name(), "err", rerr)
-				continue
-			}
-			removed++
-		default:
-			c.taskDirSweepAt.Store(last)
-			c.logger.Warn("task workdir sweep lookup", "dir", e.Name(), "err", err)
-			return
-		}
+		removed++
 	}
 	if removed > 0 {
 		c.logger.Info("task workdir sweep", "removed", removed)
