@@ -253,7 +253,12 @@ func MergeGitShadow(workDir, taskID string) (restored, conflicts []string, err e
 // untracked ("??") alike. -z keeps filenames verbatim (no C-style quoting) so
 // paths with spaces or non-ASCII bytes survive the round trip.
 func porcelainEntries(gitExe, workDir string) (map[string]string, error) {
-	out, err := exec.Command(gitExe, "-C", workDir, "status", "--porcelain", "-z").Output()
+	// -uall expands untracked directories to their files. The default
+	// collapse-to-dir mode is wrong for both callers: a `?? out/` entry
+	// hides every contested file inside it (MergeGitShadow would clobber
+	// them), and os.Remove on the dir entry itself fails on a non-empty
+	// tree, silently leaking a task's whole output directory on rollback.
+	out, err := exec.Command(gitExe, "-C", workDir, "status", "--porcelain", "-z", "-uall").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -337,6 +342,15 @@ func RollbackGitBaseline(workDir, taskID string) (restored, removed []string, er
 		abs := filepath.Join(workDir, filepath.FromSlash(p))
 		if rmErr := os.Remove(abs); rmErr == nil {
 			removed = append(removed, p)
+			// The file's death may empty the directory chain the task made
+			// for it — a leftover `out/` shell reads like the rollback
+			// missed it. os.Remove on a non-empty dir errors and stops the
+			// climb, so restored baseline content up the chain is safe.
+			for dir := filepath.Dir(abs); dir != workDir && strings.HasPrefix(dir, workDir); dir = filepath.Dir(dir) {
+				if err := os.Remove(dir); err != nil {
+					break
+				}
+			}
 		}
 	}
 	sort.Strings(restored)

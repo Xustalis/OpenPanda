@@ -267,6 +267,67 @@ func TestGitBaselineRollback(t *testing.T) {
 	}
 }
 
+// TestGitBaselineRollbackDirectories pins the -uall fix: a task-created
+// directory tree collapses to one `?? out/` entry under the default porcelain
+// mode, whose os.Remove fails on the non-empty dir — the whole output tree
+// silently survived rollback. It must die file-by-file now, while a
+// pre-existing untracked file inside the same directory (captured by the
+// baseline) is written back, not deleted with the task's debris.
+func TestGitBaselineRollbackDirectories(t *testing.T) {
+	repo := initTestGitRepo(t)
+	taskID := "task-dirs"
+
+	// A pre-baseline untracked file inside a directory: the baseline's
+	// add -A records it, so rollback must restore it rather than sweep
+	// the directory away with the task's files.
+	keep := filepath.Join(repo, "out", "keep.txt")
+	if err := os.MkdirAll(filepath.Dir(keep), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keep, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SaveGitBaseline(repo, taskID); err != nil {
+		t.Fatalf("SaveGitBaseline: %v", err)
+	}
+
+	// The "task": new files beside the keep, plus a nested tree.
+	for _, p := range []string{
+		filepath.Join(repo, "out", "new.txt"),
+		filepath.Join(repo, "gen", "deep", "artifact.bin"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("task made this\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	restored, removed, err := RollbackGitBaseline(repo, taskID)
+	if err != nil {
+		t.Fatalf("RollbackGitBaseline: %v", err)
+	}
+	if !slices.Contains(restored, "out/keep.txt") {
+		t.Fatalf("restored = %v, want out/keep.txt written back", restored)
+	}
+	for _, want := range []string{"out/new.txt", "gen/deep/artifact.bin"} {
+		if !slices.Contains(removed, want) {
+			t.Fatalf("removed = %v, want %s", removed, want)
+		}
+	}
+	if got, _ := os.ReadFile(keep); !strings.Contains(string(got), "keep me") {
+		t.Fatalf("pre-existing untracked file lost: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "out", "new.txt")); !os.IsNotExist(err) {
+		t.Fatal("task file survived rollback")
+	}
+	// The task-made directory chain must not linger as an empty shell.
+	if _, err := os.Stat(filepath.Join(repo, "gen")); !os.IsNotExist(err) {
+		t.Fatal("empty task directory tree survived rollback")
+	}
+}
+
 // TestCleanupGitRefs drops both ref families a task can leave behind.
 func TestCleanupGitRefs(t *testing.T) {
 	repo := initTestGitRepo(t)
