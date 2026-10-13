@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "XIN-CODE-STAR",
+      "id": 129913065,
+      "comment_id": 6144384279,
+      "created_at": "2026-10-13T11:19:44Z",
+      "repoId": 1338473107,
+      "pullRequestNo": 45
+    }
+  ]
 }
