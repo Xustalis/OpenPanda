@@ -1549,6 +1549,12 @@ func (r *repl) cmdTask(arg string) {
 	case "delete", "del", "rm":
 		r.cmdDelete(strings.Join(fields[1:], " "))
 		return
+	case "revert":
+		r.cmdTaskRevert(strings.Join(fields[1:], " "))
+		return
+	case "followup":
+		r.cmdTaskFollowup(strings.Join(fields[1:], " "))
+		return
 	}
 	id, ok := r.resolveRef(arg)
 	if !ok {

@@ -127,5 +127,10 @@ func (m tuiModel) onWatch(msg watchMsg) (tea.Model, tea.Cmd) {
 		m.approvalSel = 1 // arrows + Enter start on deny, the [y/N] safe default
 		raised = true
 	}
+	// An open queue picker holds live state badges — events mean the rows
+	// under the cursor just moved, so rebuild it rather than letting it lie.
+	if m.mode == modeList && m.listKind == listTasks && len(msg.events) > 0 {
+		m.refreshTasksList()
+	}
 	return m, tea.Batch(cmds...)
 }

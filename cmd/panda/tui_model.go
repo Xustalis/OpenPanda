@@ -53,6 +53,7 @@ const (
 	listSessions
 	listProjects
 	listResume
+	listTasks
 )
 
 type wizardStep int
@@ -139,6 +140,9 @@ type tuiModel struct {
 	// Navigation lists and panels
 	listKind      listKind
 	selectionList SelectionList
+	// taskListState is the state filter the open task picker was built with
+	// ("" = all), so a watch event can rebuild the list in place.
+	taskListState string
 
 	// Onboarding state
 	onboardingStep onboardingStep

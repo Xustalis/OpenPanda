@@ -58,6 +58,9 @@ func runTask(args []string) {
 		case "revert":
 			runTaskRevert(args[1:])
 			return
+		case "followup":
+			runTaskFollowup(args[1:])
+			return
 		case "logs":
 			runLogs(args[1:])
 			return
@@ -83,6 +86,7 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, "  <id> --trace                            hop-by-hop delegation trace (hops, timings, transport)")
 	fmt.Fprintln(os.Stderr, "  delete <id>                             remove a task and its subtree (queued/finished)")
 	fmt.Fprintln(os.Stderr, "  revert <id>                             roll the run's git checkout back to its pre-task baseline")
+	fmt.Fprintln(os.Stderr, "  followup <id>                           hand the task's recorded result to the model and continue")
 	fmt.Fprintln(os.Stderr, "  approve|reject|cancel|logs <id>         same as the bare commands")
 }
 
@@ -1219,6 +1223,37 @@ func runTaskRevert(args []string) {
 	}
 	fmt.Println(i18n.Tf(loc, "cli.task.revert.done",
 		"id", id, "restored", strconv.Itoa(len(restored)), "removed", strconv.Itoa(len(removed))))
+}
+
+// runTaskFollowup implements `panda task followup <id>` — the CLI twin of
+// /task followup: resolve the task, fold its recorded result into the same
+// follow-up prompt, and send it through the one-shot ask path (engine build,
+// project binding and output formats all stay in runAsk).
+func runTaskFollowup(args []string) {
+	fs := flag.NewFlagSet("task followup", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	ref := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	loc := i18n.Detect()
+	if ref == "" {
+		fmt.Fprintln(os.Stderr, "usage: panda task followup <task-id>")
+		os.Exit(2)
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+	id := resolveTaskRef(store, ref)
+	t, err := store.Get(context.Background(), id)
+	if err != nil {
+		taskStoreFatal(err, id)
+	}
+	runAsk([]string{"--config", *configPath, taskFollowupText(loc, t)})
 }
 
 // parseAgentList normalizes the --agents value: comma-separated harness names,

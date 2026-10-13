@@ -270,7 +270,10 @@ func (r *repl) completionNote(t core.Task, allIDs []string) string {
 	if t.State != core.StateDone {
 		mark, tint = p.MarkFail(), p.Danger
 	}
-	return tint(fmt.Sprintf("%s %s (%s) — /task %s", mark, title, t.State, shortestUniquePrefix(t.TaskID, allIDs)))
+	// Point at followup, not the bare row: the whole point of the notice is
+	// "the task finished — continue with the model", and the detail view is
+	// one verb back (/task <id>) for whoever wanted the raw record.
+	return tint(fmt.Sprintf("%s %s (%s) — /task followup %s", mark, title, t.State, shortestUniquePrefix(t.TaskID, allIDs)))
 }
 
 // reviewReason digs the executor's refusal/park reason out of a review task's

@@ -103,11 +103,11 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 	switch cmd {
 	case "task":
 		if len(args) == 1 {
-			return append(r.taskIDs(""), "add", "priority", "move", "delete")
+			return append(r.taskIDs(""), "add", "priority", "move", "delete", "revert", "followup")
 		}
 		if len(args) == 2 {
 			switch args[0] {
-			case "priority", "prio", "move", "delete", "del", "rm":
+			case "priority", "prio", "move", "delete", "del", "rm", "revert", "followup":
 				return r.taskIDs("")
 			}
 		}
@@ -184,13 +184,16 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 		}
 	case "session", "sessions":
 		if len(args) == 1 {
-			return append(r.sessionIDs(), "list", "new", "show", "mv", "rm", "diff", "merge")
+			return append(r.sessionIDs(), "list", "new", "show", "mv", "rm", "diff", "merge", "revert")
 		}
 		if len(args) == 2 {
 			switch args[0] {
-			case "show", "mv", "rm", "diff", "merge":
+			case "show", "mv", "rm", "diff", "merge", "revert":
 				return r.sessionIDs()
 			}
+		}
+		if len(args) == 3 && args[0] == "diff" {
+			return []string{"--stat"}
 		}
 	case "audit":
 		if len(args) == 1 {

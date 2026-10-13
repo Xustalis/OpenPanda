@@ -6,9 +6,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -217,6 +219,172 @@ func (m tuiModel) openResumeList() (tuiModel, tea.Cmd) {
 	return m, nil
 }
 
+// taskListCapTUI bounds the interactive queue view — the picker's job is the
+// working set, not the archive, same cap the `/tasks` table prints.
+const taskListCapTUI = 200
+
+// taskSettled reports whether a task state is final — the rows where Enter
+// hands the recorded result to the model instead of opening the row detail.
+func taskSettled(state string) bool {
+	switch state {
+	case core.StateDone, core.StateFailed, core.StateCancelled, core.StateExpired:
+		return true
+	}
+	return false
+}
+
+// buildTaskItems renders the interactive queue. The ordering mirrors what the
+// local scheduler will actually do — running work first, queued rows in
+// execution order (drag seq → priority → FIFO), parked rows, then the recent
+// terminal tail — so "the model works through them in order" is visible in
+// the list, not just documented. A state argument narrows the view like the
+// `/tasks <state>` table does.
+func (m tuiModel) buildTaskItems(state string) []SelectionItem {
+	if m.r == nil || m.r.store == nil {
+		return nil
+	}
+	tasks, err := m.r.store.ListByStateLimit(m.r.commandContext(), state, taskListCapTUI)
+	if err != nil || len(tasks) == 0 {
+		return nil
+	}
+	var inflight, queued, parked, terminal []core.Task
+	for _, t := range tasks {
+		switch t.State {
+		case core.StateRunning, core.StateDispatched:
+			inflight = append(inflight, t)
+		case core.StateQueued, core.StateSubmitted:
+			queued = append(queued, t)
+		case core.StateDone, core.StateFailed, core.StateCancelled, core.StateExpired:
+			terminal = append(terminal, t)
+		default:
+			parked = append(parked, t) // review, waiting_context — human-gated
+		}
+	}
+	// Same comparator the queue scheduler's sortReady applies: dragged rows
+	// (seq>0) first, then priority, then FIFO.
+	sort.SliceStable(queued, func(i, j int) bool {
+		a, b := queued[i], queued[j]
+		if (a.Seq > 0) != (b.Seq > 0) {
+			return a.Seq > 0
+		}
+		if a.Seq != b.Seq {
+			return a.Seq < b.Seq
+		}
+		if a.Priority != b.Priority {
+			return a.Priority < b.Priority
+		}
+		return a.CreatedAt < b.CreatedAt
+	})
+	ordered := append(append(append(inflight, queued...), parked...), terminal...)
+
+	items := make([]SelectionItem, 0, len(ordered))
+	for i, t := range ordered {
+		title := t.Title
+		if title == "" {
+			title = t.TaskID
+		}
+		snippet := t.Project
+		if t.OwnerNode != "" && t.OwnerNode != "local" {
+			if snippet != "" {
+				snippet += " · "
+			}
+			snippet += t.OwnerNode
+		}
+		items = append(items, SelectionItem{
+			Index:   i + 1,
+			ID:      t.TaskID,
+			Title:   title,
+			Time:    time.Unix(t.UpdatedAt, 0).Format("01-02 15:04"),
+			Badge:   t.State,
+			Snippet: snippet,
+			Value:   t,
+		})
+	}
+	return items
+}
+
+// openTasksList switches to the interactive queue view (TUI twin of `/tasks`):
+// browse what is queued, running and recently finished. Enter on a settled
+// task feeds its recorded result back to the model for a follow-up; Enter on
+// live work opens the task detail instead.
+func (m tuiModel) openTasksList(state string) (tuiModel, tea.Cmd) {
+	items := m.buildTaskItems(state)
+	title := i18n.T(m.loc, "tui.list.tasksTitle")
+	if state != "" {
+		title += " · " + state
+	}
+	sl := NewSelectionList(title, items)
+	sl.EmptyText = i18n.T(m.loc, "tui.list.tasksEmpty")
+	sl.FooterHints = i18n.T(m.loc, "tui.list.tasksFooter")
+
+	m.mode = modeList
+	m.listKind = listTasks
+	m.taskListState = state
+	m.selectionList = sl
+	return m, nil
+}
+
+// refreshTasksList rebuilds the open queue picker after a watch event — the
+// states under the cursor just moved, and a static snapshot is exactly the
+// staleness this list exists to expose. The cursor stays on the same task
+// when it is still listed.
+func (m *tuiModel) refreshTasksList() {
+	prevID := ""
+	if it, ok := m.selectionList.Selected(); ok {
+		prevID = it.ID
+	}
+	items := m.buildTaskItems(m.taskListState)
+	m.selectionList.SetItems(items)
+	for i, it := range items {
+		if it.ID == prevID {
+			m.selectionList.Cursor = i
+			break
+		}
+	}
+	// Keep the cursor inside the rendered window after the rebuild.
+	if rows := m.selectionPageRows(); m.selectionList.Cursor < m.selectionList.Top {
+		m.selectionList.Top = m.selectionList.Cursor
+	} else if m.selectionList.Cursor >= m.selectionList.Top+rows {
+		m.selectionList.Top = m.selectionList.Cursor - rows + 1
+	}
+}
+
+// followUpTask hands a settled task's recorded result back to the model as
+// the next ask — the "press Enter on a finished task to prompt the model"
+// gesture. The task's own row is echoed first so the transcript shows which
+// result the answer refers to.
+func (m tuiModel) followUpTask(t core.Task) (tea.Model, tea.Cmd) {
+	return m.askTurn(taskFollowupText(m.loc, t), "")
+}
+
+// followUpTaskRef is the typed-command path (/task followup <id>): resolve
+// the id then take the same turn the list's Enter produces. Failures land as
+// transcript notes, not exec output — this runs on the Update goroutine.
+func (m tuiModel) followUpTaskRef(ref string) (tea.Model, tea.Cmd) {
+	note := func(s string) (tea.Model, tea.Cmd) {
+		return m, m.printBlock(block{kind: blockNote, body: s})
+	}
+	if m.r == nil || m.r.store == nil {
+		return note(i18n.T(m.loc, "repl.tasks.none"))
+	}
+	if strings.TrimSpace(ref) == "" {
+		return note("usage: /task followup <id>")
+	}
+	id, err := m.r.store.ResolveTaskID(m.r.commandContext(), ref)
+	if err != nil {
+		var amb *core.AmbiguousTaskIDError
+		if errors.As(err, &amb) {
+			return note(ambiguousTaskMsg(m.loc, amb))
+		}
+		return note(i18n.Tf(m.loc, "repl.task.none", "id", ref))
+	}
+	t, err := m.r.store.Get(m.r.commandContext(), id)
+	if err != nil {
+		return note(i18n.Tf(m.loc, "repl.task.none", "id", ref))
+	}
+	return m.followUpTask(t)
+}
+
 // openModelPanel opens the model register or, with nothing configured, the
 // setup guide that puts the first entry in.
 func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
@@ -347,6 +515,16 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		case listProjects:
 			return m.enterProject(item.ID)
+
+		case listTasks:
+			t, ok := item.Value.(core.Task)
+			if !ok {
+				return m, nil
+			}
+			if taskSettled(t.State) {
+				return m.followUpTask(t)
+			}
+			return m.startExec("/task " + t.TaskID)
 		}
 	}
 	return m, nil

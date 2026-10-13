@@ -95,7 +95,7 @@ func TestReplArgCandidatesEnums(t *testing.T) {
 	r := &repl{}
 	// The store-backed slots are nil-safe: a REPL without a store completes
 	// the static verbs and nothing else, rather than panicking.
-	if got := r.argCandidates("task", []string{""}); !slices.Equal(got, []string{"add", "priority", "move", "delete"}) {
+	if got := r.argCandidates("task", []string{""}); !slices.Equal(got, []string{"add", "priority", "move", "delete", "revert", "followup"}) {
 		t.Errorf("task verbs without a store = %v, want the verb list", got)
 	}
 	if got := r.argCandidates("logs", []string{""}); got != nil {

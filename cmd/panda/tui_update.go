@@ -1068,6 +1068,13 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 		if arg != "" {
 			return m.setLang(arg)
 		}
+	case "task":
+		// "followup" feeds a task's result into a real ask turn — running it
+		// on the exec pump would render the streamed answer as raw exec
+		// output instead of a live turn, exactly what /ask avoids too.
+		if fields := strings.Fields(arg); len(fields) > 0 && fields[0] == "followup" {
+			return m.followUpTaskRef(strings.Join(fields[1:], " "))
+		}
 	case "tasks":
 		// "watch" streams the live board through exec; "clear" is destructive
 		// and needs a y/N the exec goroutine cannot read — it gets the shared
@@ -1097,6 +1104,9 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 		if watch {
 			return m.startExec("/tasks " + strings.Join(append([]string{"watch"}, rest...), " "))
 		}
+		// The plain board opens as a picker: Enter on a finished task feeds
+		// its result back to the model; a state word just narrows the list.
+		return m.openTasksList(strings.Join(rest, " "))
 	}
 	return m.startExec(text)
 }

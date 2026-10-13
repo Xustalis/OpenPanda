@@ -248,10 +248,11 @@ func TestTUIInvalidCommandAfterClear(t *testing.T) {
 // process down or wedge the pump: it surfaces as an error block in idle.
 func TestTUIExecPanicSurfacesAsError(t *testing.T) {
 	m := newIsolatedTUI(t)
-	// /tasks with no store dereferences nil inside cmdTasks — the panic path
-	// every exec'd command shares.
+	// /task <id> with no store dereferences nil inside resolveRef — the panic
+	// path every exec'd command shares. (/tasks is now the picker, which is
+	// nil-safe by design and no longer exercises exec.)
 	m.r.store = nil
-	m = submitAndPump(t, m, "/tasks")
+	m = submitAndPump(t, m, "/task x")
 	if m.mode != modeIdle {
 		t.Fatalf("panicked exec must land back in idle, got %v", m.mode)
 	}

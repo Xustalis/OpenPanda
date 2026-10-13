@@ -23,6 +23,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
@@ -338,12 +339,12 @@ func (r *repl) cmdReminderAdd(ctx context.Context, st *reminders.Store, fields [
 }
 
 // cmdSession implements /session <verb> — the worktree-side session verbs
-// `panda session` exposes: new | show | mv | rm | diff | merge. `/sessions`
-// stays the list view; `/resume` stays the attach/detach verb.
+// `panda session` exposes: new | show | mv | rm | diff | merge | revert.
+// `/sessions` stays the list view; `/resume` stays the attach/detach verb.
 func (r *repl) cmdSession(arg string) {
 	fields := splitArgs(arg)
 	if len(fields) == 0 {
-		r.outln("usage: /session <new|show|mv|rm|diff|merge> …")
+		r.outln("usage: /session <new|show|mv|rm|diff|merge|revert> …")
 		return
 	}
 	if r.sessionsSt == nil {
@@ -365,8 +366,10 @@ func (r *repl) cmdSession(arg string) {
 		r.cmdSessionDiff(ctx, rest)
 	case "merge":
 		r.cmdSessionMerge(ctx, rest)
+	case "revert":
+		r.cmdSessionRevert(ctx, rest)
 	default:
-		r.outln("usage: /session <new|show|mv|rm|diff|merge> …")
+		r.outln("usage: /session <new|show|mv|rm|diff|merge|revert> …")
 	}
 }
 
@@ -529,16 +532,42 @@ func (r *repl) cmdSessionRm(ctx context.Context, rest []string) {
 }
 
 // cmdSessionDiff shows a session's worktree changes (CLI `session diff`).
+// `--stat` prints only the merge-preview roll-up, matching the CLI flag.
 func (r *repl) cmdSessionDiff(ctx context.Context, rest []string) {
 	if len(rest) == 0 {
-		r.outln("usage: /session diff <id>")
+		r.outln("usage: /session diff <id> [--stat]")
 		return
 	}
 	if r.worktrees == nil {
 		r.outln(i18n.T(r.loc, "repl.session.notRepo"))
 		return
 	}
-	id := rest[0]
+	// The CLI's reorderFlags lets --stat sit anywhere; the REPL parser keeps
+	// the same freedom rather than demanding flag-after-id order.
+	var id string
+	statOnly := false
+	for _, f := range rest {
+		if f == "--stat" {
+			statOnly = true
+			continue
+		}
+		if id == "" {
+			id = f
+		}
+	}
+	if id == "" {
+		r.outln("usage: /session diff <id> [--stat]")
+		return
+	}
+	if st, err := r.worktrees.Stat(ctx, id); err == nil {
+		r.printDiffStat(st)
+	} else {
+		r.storeErr(err)
+		return
+	}
+	if statOnly {
+		return
+	}
 	changes, err := r.worktrees.Status(ctx, id)
 	if err != nil {
 		r.storeErr(err)
@@ -563,6 +592,22 @@ func (r *repl) cmdSessionDiff(ctx context.Context, rest []string) {
 	}
 }
 
+// printDiffStat renders the merge-preview roll-up into the REPL's transcript
+// — the same numbers the CLI's printDiffStat writes to stdout.
+func (r *repl) printDiffStat(st sessions.DiffStat) {
+	r.outln(i18n.Tf(r.loc, "cli.session.diffstat.summary",
+		"files", strconv.Itoa(st.FilesChanged),
+		"ins", strconv.Itoa(st.Insertions),
+		"del", strconv.Itoa(st.Deletions),
+		"new", strconv.Itoa(st.Untracked)))
+	if len(st.Sensitive) > 0 {
+		r.outln("  " + i18n.Tf(r.loc, "cli.session.diffstat.sensitive", "paths", strings.Join(st.Sensitive, ", ")))
+	}
+	if len(st.Binary) > 0 {
+		r.outln("  " + i18n.Tf(r.loc, "cli.session.diffstat.binary", "paths", strings.Join(st.Binary, ", ")))
+	}
+}
+
 // cmdSessionMerge merges a session branch into HEAD (CLI `session merge`).
 func (r *repl) cmdSessionMerge(ctx context.Context, rest []string) {
 	if len(rest) == 0 {
@@ -581,6 +626,11 @@ func (r *repl) cmdSessionMerge(ctx context.Context, rest []string) {
 			i++
 		}
 	}
+	// Same preview the CLI prints: what lands, and whether any of it is
+	// credential-shaped, before it lands.
+	if st, serr := r.worktrees.Stat(ctx, id); serr == nil {
+		r.printDiffStat(st)
+	}
 	subject, err := r.worktrees.Merge(ctx, id, message)
 	if err != nil {
 		if errors.Is(err, sessions.ErrMergeConflict) {
@@ -591,6 +641,169 @@ func (r *repl) cmdSessionMerge(ctx context.Context, rest []string) {
 		return
 	}
 	r.outf("merged %s: %s\n", sessions.Branch(id), subject)
+}
+
+// cmdSessionRevert undoes a recorded session merge (CLI `session revert`):
+// head-on-the-merge resets cleanly, later work gets a revert commit.
+func (r *repl) cmdSessionRevert(ctx context.Context, rest []string) {
+	if len(rest) == 0 {
+		r.outln("usage: /session revert <id>")
+		return
+	}
+	if r.worktrees == nil {
+		r.outln(i18n.T(r.loc, "repl.session.notRepo"))
+		return
+	}
+	id := rest[0]
+	subject, err := r.worktrees.Revert(ctx, id)
+	if err != nil {
+		switch {
+		case errors.Is(err, sessions.ErrNothingToRevert):
+			r.outln(i18n.Tf(r.loc, "cli.session.revert.none", "id", id))
+		case errors.Is(err, sessions.ErrRevertDirty):
+			r.outln(i18n.T(r.loc, "cli.session.revert.dirty"))
+		default:
+			r.storeErr(err)
+		}
+		return
+	}
+	r.outln(i18n.Tf(r.loc, "cli.session.revert.done", "id", sessions.Branch(id), "subject", subject))
+}
+
+// cmdTaskRevert implements `/task revert <id>` — the REPL twin of
+// `panda task revert`: roll the run's git checkout back to the baseline the
+// executor saved before the run began, and report what that touched.
+func (r *repl) cmdTaskRevert(arg string) {
+	id := strings.TrimSpace(arg)
+	if id == "" {
+		r.outln("usage: /task revert <id>")
+		return
+	}
+	id, ok := r.resolveRef(id)
+	if !ok {
+		return
+	}
+	t, err := r.store.Get(r.commandContext(), id)
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	var workPath string
+	r.readConfig(func(c *config.Config) { workPath = c.Storage.WorkPath })
+	seen := map[string]bool{}
+	for _, dir := range []string{t.ExecWorkDir, t.WorkDir, workPath} {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		restored, removed, rerr := defense.RollbackGitBaseline(dir, id)
+		if errors.Is(rerr, defense.ErrNoGitBaseline) {
+			continue
+		}
+		if rerr != nil {
+			r.storeErr(rerr)
+			return
+		}
+		r.outln(i18n.Tf(r.loc, "cli.task.revert.done",
+			"id", id, "restored", strconv.Itoa(len(restored)), "removed", strconv.Itoa(len(removed))))
+		return
+	}
+	r.outln(i18n.Tf(r.loc, "cli.task.revert.none", "id", id))
+}
+
+// cmdTaskFollowup implements `/task followup <id>` — feeds a task's recorded
+// result back to the model as the next ask, so "here is what the task did,
+// let's continue" is one keystroke instead of copy-pasting `/task <id>`
+// output into a prompt. It works on any state: a still-running task carries
+// its state and whatever partial result exists.
+func (r *repl) cmdTaskFollowup(arg string) {
+	ref := strings.TrimSpace(arg)
+	if ref == "" {
+		r.outln("usage: /task followup <id>")
+		return
+	}
+	id, ok := r.resolveRef(ref)
+	if !ok {
+		return
+	}
+	t, err := r.store.Get(r.commandContext(), id)
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	r.askMode(taskFollowupText(r.loc, t), "")
+}
+
+// taskResultDigestLimit bounds how much of a task's result travels inside a
+// follow-up prompt: enough for the model to see the outcome and the output
+// tail, small enough not to crowd the context.
+const taskResultDigestLimit = 1200
+
+// taskResultDigest compresses a task's result_json into the few-line digest a
+// follow-up prompt carries: the outcome word, the relevant output tail and
+// the changed-files roll-up. Empty when no result was recorded. A payload
+// that does not decode still returns its raw prefix — the model can work
+// with odd output, and silently dropping it would lose the signal entirely.
+func taskResultDigest(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	var res struct {
+		ExitCode     int      `json:"exit_code"`
+		OK           bool     `json:"ok"`
+		Stdout       string   `json:"stdout"`
+		Stderr       string   `json:"stderr"`
+		Failed       string   `json:"failed"`
+		FilesChanged []string `json:"files_changed"`
+		Question     string   `json:"question"`
+	}
+	if err := json.Unmarshal([]byte(raw), &res); err != nil {
+		return truncate(raw, taskResultDigestLimit)
+	}
+	var b strings.Builder
+	switch {
+	case res.Failed != "":
+		b.WriteString("failed: " + res.Failed)
+	case res.OK:
+		b.WriteString("ok")
+	default:
+		fmt.Fprintf(&b, "exit %d", res.ExitCode)
+	}
+	if res.Question != "" {
+		b.WriteString("\nquestion: " + res.Question)
+	}
+	out := strings.TrimSpace(res.Stdout)
+	if out == "" {
+		out = strings.TrimSpace(res.Stderr)
+	}
+	if out != "" {
+		b.WriteString("\n" + out)
+	}
+	if n := len(res.FilesChanged); n > 0 {
+		b.WriteString(fmt.Sprintf("\n%d file(s) changed", n))
+		if n <= 8 {
+			b.WriteString(": " + strings.Join(res.FilesChanged, ", "))
+		}
+	}
+	return truncate(b.String(), taskResultDigestLimit)
+}
+
+// taskFollowupText builds the model-facing prompt for "continue from this
+// task": identity, state and a compact result digest, then the ask itself.
+// The instruction stays outcome-neutral — summarize and flag anything worth
+// attention — so it reads sensibly whether the task succeeded, failed or was
+// cancelled mid-flight.
+func taskFollowupText(loc i18n.Locale, t core.Task) string {
+	result := taskResultDigest(t.ResultJSON)
+	if result == "" {
+		result = i18n.T(loc, "cli.task.followup.noResult")
+	}
+	title := t.Title
+	if title == "" {
+		title = t.TaskID
+	}
+	return i18n.Tf(loc, "cli.task.followup.prompt",
+		"id", t.TaskID, "title", title, "state", t.State, "result", result)
 }
 
 // cmdNodesRemove implements `/nodes remove <id>` — drops a stale row from the
