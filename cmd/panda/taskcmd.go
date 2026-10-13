@@ -61,6 +61,9 @@ func runTask(args []string) {
 		case "followup":
 			runTaskFollowup(args[1:])
 			return
+		case "board":
+			runTaskBoard(args[1:])
+			return
 		case "logs":
 			runLogs(args[1:])
 			return
@@ -87,6 +90,7 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, "  delete <id>                             remove a task and its subtree (queued/finished)")
 	fmt.Fprintln(os.Stderr, "  revert <id>                             roll the run's git checkout back to its pre-task baseline")
 	fmt.Fprintln(os.Stderr, "  followup <id>                           hand the task's recorded result to the model and continue")
+	fmt.Fprintln(os.Stderr, "  board <id>                              show the sibling-message boards a task reads")
 	fmt.Fprintln(os.Stderr, "  approve|reject|cancel|logs <id>         same as the bare commands")
 }
 
@@ -1254,6 +1258,69 @@ func runTaskFollowup(args []string) {
 		taskStoreFatal(err, id)
 	}
 	runAsk([]string{"--config", *configPath, taskFollowupText(loc, t)})
+}
+
+// runTaskBoard prints every live slot on the boards a task reads — its plan
+// or parent board plus the board of its own child set. Debug/verify surface
+// for the sibling-message layer; slots are rendered newest-seq per sender.
+func runTaskBoard(args []string) {
+	fs := flag.NewFlagSet("task board", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(args, commonValueFlags))
+	ref := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if ref == "" {
+		fmt.Fprintln(os.Stderr, "usage: panda task board <task-id>")
+		os.Exit(2)
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+	id := resolveTaskRef(store, ref)
+	t, err := store.Get(context.Background(), id)
+	if err != nil {
+		taskStoreFatal(err, id)
+	}
+	ctx := context.Background()
+	scopes := core.BoardScopes(t)
+	if jsonOutput {
+		boards := map[string][]core.TaskMessage{}
+		for _, sc := range scopes {
+			if msgs, err := store.TaskMessages(ctx, sc); err == nil {
+				boards[sc] = msgs
+			}
+		}
+		emitJSON(boards)
+		return
+	}
+	for _, sc := range scopes {
+		msgs, err := store.TaskMessages(ctx, sc)
+		if err != nil {
+			fatal("read board "+sc, err)
+		}
+		fmt.Printf("== %s (%d slot%s)\n", sc, len(msgs), pluralS(len(msgs)))
+		for _, m := range msgs {
+			to := m.Rcpt
+			if to == "" {
+				to = "*"
+			}
+			age := time.Since(time.Unix(m.SentAt, 0)).Round(time.Second)
+			fmt.Printf("  %s -> %s  #%d  %-12s %s ago\n    %s\n",
+				m.Sender, to, m.SenderSeq, m.Grade, age, m.Body)
+		}
+	}
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // parseAgentList normalizes the --agents value: comma-separated harness names,
