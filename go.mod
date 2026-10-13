@@ -1,6 +1,6 @@
 module github.com/Xustalis/OpenPanda
 
-go 1.26.8
+go 1.26.9
 
 require (
 	github.com/charmbracelet/glamour v1.0.0
@@ -9,7 +9,7 @@ require (
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f
 	github.com/gorilla/websocket v1.5.3
 	github.com/muesli/termenv v0.16.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
 	golang.org/x/text v0.42.0
