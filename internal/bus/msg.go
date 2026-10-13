@@ -35,7 +35,13 @@ const (
 	// With Payload.Accept set it is the mirror of that decision: the parked
 	// copy closes as done instead of re-running (work that already ran was
 	// accepted on the other side).
-	MsgTaskResume   = "task_resume"
+	MsgTaskResume = "task_resume"
+	// MsgTaskMessage carries a sibling-board post between tasks of one scope
+	// (plan stages, or a parent's delegate children). It is best-effort
+	// signal traffic: member → scope owner → addressed fan-out copies, the
+	// per-sender slot making a lost frame silently correctable by the next
+	// post — which is why it carries no outbox of its own.
+	MsgTaskMessage  = "task_message"
 	MsgContextFetch = "context_fetch"
 	MsgContextAck   = "context_ack"
 	// Artifact transfer is a pull in fixed-size chunks: the node that needs a

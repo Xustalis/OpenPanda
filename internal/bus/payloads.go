@@ -649,6 +649,25 @@ type TaskResumePayload struct {
 	Accept bool `json:"accept,omitempty"`
 }
 
+// TaskMessagePayload is one sibling-board post on the wire. The member→owner
+// leg carries To (the unresolved address the sender wrote — "stage:build",
+// "parent", "siblings", or a member task id); the owner's fan-out copies
+// carry Rcpt (the resolved member task id) and Fanout=true instead, so a
+// replica can tell "store this slot" from "resolve and forward".
+type TaskMessagePayload struct {
+	Scope       string `json:"scope"`
+	Sender      string `json:"sender"`                 // sender task_id
+	To          string `json:"to,omitempty"`           // unresolved address (member → owner leg)
+	Rcpt        string `json:"rcpt,omitempty"`         // resolved recipient task id ("" = broadcast)
+	Member      string `json:"member,omitempty"`       // member this fan-out copy is for (receiver-side check)
+	SenderLabel string `json:"sender_label,omitempty"` // stage id or title, owner-resolved
+	Grade       string `json:"grade"`                  // status | report | artifact_ref
+	Body        string `json:"body"`
+	Seq         int64  `json:"seq"` // sender's monotone slot seq
+	SentAt      int64  `json:"sent_at"`
+	Fanout      bool   `json:"fanout,omitempty"` // owner → member copy marker
+}
+
 // ContextFetchPayload asks the source node for a full context snapshot.
 type ContextFetchPayload struct {
 	TaskID      string `json:"task_id"`

@@ -70,7 +70,7 @@ func qosForType(typ string) int {
 		MsgAgentGrant, MsgAgentYield, MsgArtifactPushStatus, MsgArtifactPushDone:
 		return QoSControl
 	case MsgTaskDelegate, MsgTaskAccept, MsgTaskResult, MsgTaskProgress,
-		MsgTaskRetry, MsgTaskTransfer, MsgTaskResume,
+		MsgTaskRetry, MsgTaskTransfer, MsgTaskResume, MsgTaskMessage,
 		MsgContextFetch, MsgContextAck, MsgAgentNegotiate, MsgJoin,
 		MsgDTNBundle:
 		return QoSSignal

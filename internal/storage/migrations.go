@@ -68,6 +68,38 @@ var migrations = []Migration{
 	{Version: 41, Name: "add_peer_addrs", Apply: migrateV41},
 	{Version: 42, Name: "add_tasks_exec_work_dir", Apply: migrateV42},
 	{Version: 43, Name: "add_employee_trust", Apply: migrateV43},
+	{Version: 44, Name: "add_task_messages", Apply: migrateV44},
+}
+
+// migrateV44 adds task_messages: the per-scope message board sibling tasks
+// share (design: inter-task message layer). Slots are keyed (scope, sender,
+// rcpt) — a sender's newest message to a recipient overwrites its previous
+// slot, so a board stays bounded at one row per member no matter how chatty
+// a single task gets, and a reader always sees every sender's latest word
+// rather than whatever a FIFO happened to evict. sender_seq is the sender's
+// own monotone counter, which lets a consumer diff "what changed since I last
+// looked" without a cursor table. sender_label is the owner's resolved display
+// name for the sender (its stage id, or title) carried along the fan-out, so
+// a replica that never held the sender's row can still render and address it.
+func migrateV44(tx MigrationExec) error {
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS task_messages (
+		scope        TEXT NOT NULL,
+		sender       TEXT NOT NULL,
+		rcpt         TEXT NOT NULL DEFAULT '',
+		sender_seq   INTEGER NOT NULL,
+		sender_label TEXT NOT NULL DEFAULT '',
+		grade        TEXT NOT NULL,
+		body         TEXT NOT NULL,
+		sent_at      INTEGER NOT NULL,
+		recv_at      INTEGER NOT NULL,
+		expires_at   INTEGER NOT NULL,
+		PRIMARY KEY (scope, sender, rcpt)
+	)`)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_task_messages_scope ON task_messages(scope)`)
+	return err
 }
 
 // migrateV43 adds employee_cache.trust: the operator-asserted trust-zone tier
