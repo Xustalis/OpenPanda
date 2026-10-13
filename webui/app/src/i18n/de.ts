@@ -263,6 +263,9 @@ const de: Messages = {
   'sessions.merging': 'Merge läuft…',
   'sessions.revert': 'Merge rückgängig',
   'sessions.reverting': 'Rückgängig…',
+  'sessions.revertConfirmTitle': 'Diesen Merge rückgängig machen?',
+  'sessions.revertConfirmMsg':
+    'Der Merge-Commit wird zurückgerollt — harter Reset wenn er an HEAD liegt, Revert-Commit wenn neuere Arbeit darüber liegt.',
   'sessions.diffStat': '{files} Datei(en) geändert, +{ins} −{del}',
   'sessions.diffUntracked': '{n} unversioniert',
   'sessions.sensitiveFiles': '⚠ Diese Änderung enthält sensible Pfade',

@@ -617,11 +617,12 @@ const liveRenderMinInterval = 90 * time.Millisecond
 // keystrokes, mouse motion between deltas) reuse out with a string compare
 // instead of a full render.
 type liveRenderCache struct {
-	src   string
-	out   string
-	width int
-	color bool
-	at    time.Time
+	src     string
+	out     string
+	width   int
+	color   bool
+	unicode bool
+	at      time.Time
 }
 
 // streamAnswerText is answerText throttled for the live region: identical
@@ -634,15 +635,15 @@ func (m tuiModel) streamAnswerText(ans string) string {
 	if c == nil {
 		return answerText(m.th, ans, w)
 	}
-	if c.src == ans && c.width == w && c.color == m.th.color {
+	if c.src == ans && c.width == w && c.color == m.th.color && c.unicode == m.th.unicode {
 		return c.out
 	}
-	if c.out != "" && c.width == w && c.color == m.th.color &&
+	if c.out != "" && c.width == w && c.color == m.th.color && c.unicode == m.th.unicode &&
 		time.Since(c.at) < liveRenderMinInterval {
 		return c.out
 	}
 	out := answerText(m.th, ans, w)
-	c.src, c.out, c.width, c.color, c.at = ans, out, w, m.th.color, time.Now()
+	c.src, c.out, c.width, c.color, c.unicode, c.at = ans, out, w, m.th.color, m.th.unicode, time.Now()
 	return out
 }
 

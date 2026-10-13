@@ -503,6 +503,13 @@ func (m tuiModel) liveAnswerText() string {
 func (m *tuiModel) resetLive() {
 	m.liveAnswerChunks = nil
 	m.liveAnswerBytes = 0
+	if m.liveRC != nil {
+		// A committed turn must not leak into the next one's live region:
+		// inside the 90ms throttle window the cache would otherwise serve
+		// the OLD answer's render for a frame on the new stream's first
+		// delta. Dropping the memo costs one fresh render per turn.
+		*m.liveRC = liveRenderCache{}
+	}
 	m.thought = nil
 	m.thoughtDone = false
 	m.note = ""

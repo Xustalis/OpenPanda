@@ -261,6 +261,9 @@ const ja: Messages = {
   'sessions.merging': 'マージ中…',
   'sessions.revert': 'マージを取り消す',
   'sessions.reverting': 'ロールバック中…',
+  'sessions.revertConfirmTitle': 'このマージを取り消しますか？',
+  'sessions.revertConfirmMsg':
+    'マージコミットをロールバックします — HEAD にある場合はハードリセット、その上に新しい作業がある場合は revert コミットを作成します。',
   'sessions.diffStat': '{files} 件のファイルを変更、+{ins} −{del}',
   'sessions.diffUntracked': '未追跡 {n} 件',
   'sessions.sensitiveFiles': '⚠ この変更には機密パスが含まれています',

@@ -473,6 +473,14 @@ export function SessionsView({
 
   async function revertMerge() {
     if (!activeId || reverting) return
+    // Destructive — a merge at HEAD resets the checkout; ask first, like
+    // the task revert on the detail page already does.
+    const ok = await confirmDialog({
+      title: t('sessions.revertConfirmTitle'),
+      message: t('sessions.revertConfirmMsg'),
+      confirmLabel: t('sessions.revert'),
+    })
+    if (!ok) return
     setReverting(true)
     setDiffError('')
     try {

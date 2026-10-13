@@ -265,6 +265,9 @@ const en: Messages = {
   'sessions.merging': 'Merging…',
   'sessions.revert': 'Undo merge',
   'sessions.reverting': 'Reverting…',
+  'sessions.revertConfirmTitle': 'Undo this merge?',
+  'sessions.revertConfirmMsg':
+    'The merge commit will be rolled back — a hard reset when it sits at HEAD, a revert commit when newer work landed on top.',
   'sessions.diffStat': '{files} file(s) changed, +{ins} −{del}',
   'sessions.diffUntracked': '{n} untracked',
   'sessions.sensitiveFiles': '⚠ Sensitive paths in this change',

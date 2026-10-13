@@ -261,13 +261,14 @@ func (m tuiModel) buildTaskItems(state string) []SelectionItem {
 		}
 	}
 	// Same comparator the queue scheduler's sortReady applies: dragged rows
-	// (seq>0) first, then priority, then FIFO.
+	// (seq>0) first, then priority, then FIFO. A seq that is not positive
+	// means "not dragged" — it is never compared as a number.
 	sort.SliceStable(queued, func(i, j int) bool {
 		a, b := queued[i], queued[j]
 		if (a.Seq > 0) != (b.Seq > 0) {
 			return a.Seq > 0
 		}
-		if a.Seq != b.Seq {
+		if a.Seq > 0 && b.Seq > 0 && a.Seq != b.Seq {
 			return a.Seq < b.Seq
 		}
 		if a.Priority != b.Priority {
@@ -341,8 +342,14 @@ func (m *tuiModel) refreshTasksList() {
 			break
 		}
 	}
-	// Keep the cursor inside the rendered window after the rebuild.
-	if rows := m.selectionPageRows(); m.selectionList.Cursor < m.selectionList.Top {
+	// Keep the cursor inside the rendered window after the rebuild — and the
+	// window full: a shrunken list can otherwise leave Top past the last full
+	// page, showing one row where a whole screen could render.
+	rows := m.selectionPageRows()
+	if m.selectionList.Top > max(0, len(items)-rows) {
+		m.selectionList.Top = max(0, len(items)-rows)
+	}
+	if m.selectionList.Cursor < m.selectionList.Top {
 		m.selectionList.Top = m.selectionList.Cursor
 	} else if m.selectionList.Cursor >= m.selectionList.Top+rows {
 		m.selectionList.Top = m.selectionList.Cursor - rows + 1

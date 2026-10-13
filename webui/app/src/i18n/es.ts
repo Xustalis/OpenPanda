@@ -263,6 +263,9 @@ const es: Messages = {
   'sessions.merging': 'Fusionando…',
   'sessions.revert': 'Deshacer fusión',
   'sessions.reverting': 'Revirtiendo…',
+  'sessions.revertConfirmTitle': '¿Deshacer esta fusión?',
+  'sessions.revertConfirmMsg':
+    'El commit de fusión se revertirá — reset duro si está en HEAD, commit de reversión si hay trabajo nuevo encima.',
   'sessions.diffStat': '{files} archivo(s) cambiados, +{ins} −{del}',
   'sessions.diffUntracked': '{n} sin seguimiento',
   'sessions.sensitiveFiles': '⚠ Este cambio incluye rutas sensibles',

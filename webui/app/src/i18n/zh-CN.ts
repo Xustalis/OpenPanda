@@ -258,6 +258,8 @@ const zhCN: Messages = {
   'sessions.merging': '合并中…',
   'sessions.revert': '撤销合并',
   'sessions.reverting': '回滚中…',
+  'sessions.revertConfirmTitle': '撤销这次合并？',
+  'sessions.revertConfirmMsg': '将回滚该 merge 提交——若它位于 HEAD 则硬重置，若其上已有新提交则生成 revert 提交。',
   'sessions.diffStat': '{files} 个文件变更，+{ins} −{del}',
   'sessions.diffUntracked': '{n} 个未跟踪文件',
   'sessions.sensitiveFiles': '⚠ 变更中包含敏感路径',
