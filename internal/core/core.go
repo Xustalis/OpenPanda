@@ -110,6 +110,10 @@ type Core struct {
 	// agent task is allowed before it is parked in review for human help. A
 	// value <= 0 falls back to defaultSuperviseRounds.
 	superviseRounds int
+	// msgBudgetCap caps how many sibling-board posts one task episode may
+	// send (the metering half of the message layer — a spent budget reports
+	// back to the agent rather than hard-failing). <= 0 → defaultMsgBudget.
+	msgBudgetCap int
 	// loop pauses a task that keeps failing instead of retrying it forever
 	// (design §14.2 signal C, P2-18).
 	loop *defense.LoopDetector
@@ -784,6 +788,23 @@ func (c *Core) SetSuperviseRounds(n int) {
 		n = defaultSuperviseRounds
 	}
 	c.superviseRounds = n
+}
+
+// SetMessageBudget bounds sibling-board posts per task episode (§inter-task
+// messages). A value <= 0 resets to defaultMsgBudget.
+func (c *Core) SetMessageBudget(n int) {
+	if n < 1 {
+		n = defaultMsgBudget
+	}
+	c.msgBudgetCap = n
+}
+
+// msgBudget returns the per-episode message cap, honoring an unset field.
+func (c *Core) msgBudget() int {
+	if c.msgBudgetCap < 1 {
+		return defaultMsgBudget
+	}
+	return c.msgBudgetCap
 }
 
 // AttachSupervisor builds a supervisor client from the model config and
@@ -1999,6 +2020,8 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleCancel(ctx, env)
 	case bus.MsgTaskResume:
 		c.handleResume(ctx, env)
+	case bus.MsgTaskMessage:
+		c.handleTaskMessage(ctx, env)
 	case bus.MsgContextFetch:
 		c.handleContextFetch(ctx, env)
 	case bus.MsgContextAck:
