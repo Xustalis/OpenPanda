@@ -42,6 +42,7 @@ type Config struct {
 	Memory    MemoryConfig    `yaml:"memory"`
 	Approval  ApprovalConfig  `yaml:"approval"`
 	Timeouts  TimeoutsConfig  `yaml:"timeouts"`
+	Messages  MessagesConfig  `yaml:"messages"`
 	UI        UIConfig        `yaml:"ui"`
 	Skills    SkillsConfig    `yaml:"skills"`
 	Sandbox   SandboxConfig   `yaml:"sandbox"`
@@ -695,6 +696,15 @@ const (
 	// agent budget on a corpse.
 	DefaultSilenceS = 240
 )
+
+// MessagesConfig bounds the inter-task sibling board (the message layer
+// between same-scope tasks — plan stages, or a parent's delegate children).
+type MessagesConfig struct {
+	// Budget caps how many posts one task episode may send. The cap meters
+	// rather than forbids: a spent budget is reported back to the agent in
+	// the next round's prompt. 0 uses the built-in default.
+	Budget int `yaml:"budget"`
+}
 
 // TimeoutsConfig bounds long-running task execution. All durations are seconds;
 // zero means "use the built-in default". Operators need these knobs because a

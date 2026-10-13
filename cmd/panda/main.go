@@ -585,6 +585,7 @@ func runDaemon(args []string) {
 	// deep-learning stage runs far longer than a code edit, so both are operator
 	// knobs; SetTimeouts also keeps the lease above the agent's hard limit.
 	coreNode.SetTimeouts(cfg.Timeouts)
+	coreNode.SetMessageBudget(cfg.Messages.Budget)
 
 	// Attach the memory layer (design §17/§8): daily logging that feeds the
 	// Dreaming engine, and skill progressive loading. Project memory is no

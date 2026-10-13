@@ -360,6 +360,13 @@ injection:
 #   # Cap on the execute → judge → re-dispatch loop per task. Default 5.
 #   supervise_rounds: 5
 
+# Sibling-message board (inter-task notes within one plan or one parent's
+# child set). The board meters rather than forbids: a sender past its budget
+# is told so and carries on with local work.
+# messages:
+#   # How many sibling messages one task episode may send. Default 8.
+#   budget: 8
+
 # Self-update channel. Defaults to the official GitHub releases; both knobs
 # are env-only (never written to this file):
 #   OPENPANDA_UPDATE_REPO    "owner/repo" of a self-hosted release channel.
