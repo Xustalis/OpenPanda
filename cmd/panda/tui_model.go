@@ -222,6 +222,14 @@ type tuiModel struct {
 	expandThought    bool
 	note             string
 
+	// liveRC memoizes the live answer's markdown render across frames — a
+	// pointer every value-copy of the model shares, like scrollLimit and
+	// activity. The update loop is single-goroutine, so no lock is needed.
+	liveRC *liveRenderCache
+
+	// welcomeC memoizes the welcome banner the same way.
+	welcomeC *welcomeCache
+
 	// liveTask is the delegated-task card for this turn.
 	liveTask *taskProgress
 
@@ -258,6 +266,40 @@ var pulseStar = spinner.Spinner{
 // chatHistory holds committed transcript blocks in memory for AltScreen rendering.
 type chatHistory struct {
 	blocks []block
+
+	// renders memoizes each block's rendered lines, aligned 1:1 with blocks.
+	// Committed blocks are immutable, so an entry stays valid until a render
+	// parameter (width, thought-fold, theme scalars) changes; any change drops
+	// the whole memo rather than tracking keys per block. This is what keeps a
+	// long transcript cheap: without it every frame re-renders — and
+	// re-parses the markdown of — every block that ever committed.
+	renders       [][]string
+	renderW       int
+	renderFold    bool
+	renderColor   bool
+	renderUnicode bool
+	renderLoc     i18n.Locale
+	renderOK      bool
+}
+
+// renderedAt returns the cached rendered lines of blocks[i], filling entries
+// lazily. The update loop is single-goroutine, so no lock is needed.
+func (h *chatHistory) renderedAt(i int, t theme, width int, fold bool) []string {
+	if !h.renderOK || h.renderW != width || h.renderFold != fold ||
+		h.renderColor != t.color || h.renderUnicode != t.unicode || h.renderLoc != t.loc {
+		h.renders = h.renders[:0]
+		h.renderW, h.renderFold = width, fold
+		h.renderColor, h.renderUnicode, h.renderLoc = t.color, t.unicode, t.loc
+		h.renderOK = true
+	}
+	if len(h.renders) > len(h.blocks) {
+		h.renders = h.renders[:len(h.blocks)]
+	}
+	for len(h.renders) <= i {
+		rendered := h.blocks[len(h.renders)].render(t, width, fold)
+		h.renders = append(h.renders, strings.Split(rendered, "\n"))
+	}
+	return h.renders[i]
 }
 
 // newTUIModel builds the model from a constructed repl (its engine, locale and
@@ -326,6 +368,8 @@ func newTUIModel(r *repl) tuiModel {
 		chatHistory: cHist,
 		scrollLimit: newScrollLimit(),
 		activity:    &activityCache{},
+		liveRC:      &liveRenderCache{},
+		welcomeC:    &welcomeCache{},
 	}
 }
 

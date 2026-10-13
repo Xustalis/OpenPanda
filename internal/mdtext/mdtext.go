@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/glamour"
@@ -247,6 +248,49 @@ func defaultStyle() ansi.StyleConfig {
 	return cfg
 }
 
+// rendererKey identifies a cached TermRenderer: output depends only on the
+// word-wrap width and the detected dark/light style, so renderers are shared
+// across calls. Building one parses the JSON style and constructs the goldmark
+// pipeline — far too expensive to repeat per TUI frame while answers stream.
+type rendererKey struct {
+	width int
+	dark  bool
+}
+
+var (
+	renderersMu sync.Mutex
+	renderers   = make(map[rendererKey]*glamour.TermRenderer)
+)
+
+// termRenderer returns the shared renderer for (width, background). Callers
+// must hold renderersMu: glamour's TermRenderer keeps buffers on the struct
+// (RenderBytes is itself buffer-local, but Write/Close are not), so renders
+// are serialized rather than racing on a shared renderer.
+func termRenderer(width int) (*glamour.TermRenderer, error) {
+	if width < 0 {
+		width = 0
+	}
+	key := rendererKey{width: width, dark: isDarkBackground()}
+	if r, ok := renderers[key]; ok {
+		return r, nil
+	}
+	opts := []glamour.TermRendererOption{glamour.WithStyles(defaultStyle())}
+	if width > 0 {
+		opts = append(opts, glamour.WithWordWrap(width))
+	}
+	r, err := glamour.NewTermRenderer(opts...)
+	if err != nil {
+		return nil, err
+	}
+	// A terminal resize just changes the width; more than a handful of live
+	// keys means pathological flapping — reset rather than growing unbounded.
+	if len(renderers) >= 8 {
+		renderers = make(map[rendererKey]*glamour.TermRenderer)
+	}
+	renderers[key] = r
+	return r, nil
+}
+
 // Render formats s into rich terminal Markdown using Glamour with automatic
 // dark/light styling and word wrap to width columns. If width <= 0, word wrap
 // is disabled. If Glamour fails or cannot format, it gracefully falls back to ANSI(s).
@@ -254,12 +298,9 @@ func Render(s string, width int) (string, error) {
 	if strings.TrimSpace(s) == "" {
 		return "", nil
 	}
-	var opts []glamour.TermRendererOption
-	opts = append(opts, glamour.WithStyles(defaultStyle()))
-	if width > 0 {
-		opts = append(opts, glamour.WithWordWrap(width))
-	}
-	r, err := glamour.NewTermRenderer(opts...)
+	renderersMu.Lock()
+	defer renderersMu.Unlock()
+	r, err := termRenderer(width)
 	if err != nil {
 		return ANSI(s), err
 	}

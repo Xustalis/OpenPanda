@@ -134,10 +134,9 @@ func (m tuiModel) mainChatView(live string) string {
 
 	// 2. Committed conversation turns
 	if m.chatHistory != nil && len(m.chatHistory.blocks) > 0 {
-		for _, b := range m.chatHistory.blocks {
-			rendered := b.render(m.th, m.textWidth(), m.expandThought)
+		for i := range m.chatHistory.blocks {
 			contentLines = append(contentLines, "")
-			contentLines = append(contentLines, strings.Split(rendered, "\n")...)
+			contentLines = append(contentLines, m.chatHistory.renderedAt(i, m.th, m.textWidth(), m.expandThought)...)
 		}
 	}
 
@@ -582,7 +581,7 @@ func termsCardText(loc i18n.Locale) termsText {
 func (m tuiModel) liveRegion() string {
 	var parts []string
 	if ans := m.liveAnswerText(); strings.TrimSpace(ans) != "" {
-		text := answerText(m.th, ans, m.textWidth())
+		text := m.streamAnswerText(ans)
 		if m.height > 10 {
 			lines := strings.Split(text, "\n")
 			maxLines := max(4, m.height-10)
@@ -603,6 +602,48 @@ func (m tuiModel) liveRegion() string {
 		parts = append(parts, m.liveTask.renderLive(m.th, m.loc, m.sp.View(), time.Now()))
 	}
 	return strings.Join(parts, "\n")
+}
+
+// liveRenderMinInterval caps how often the streaming answer's markdown is
+// re-laid-out. Each delta changes the source, so without a cap every token
+// triggers a full glamour pass over the accumulated text — O(answer²) over a
+// stream. Between renders the previous frame is served; the spinner already
+// repaints at ~10fps, so the lag is imperceptible, and the final commit always
+// renders the complete text exactly.
+const liveRenderMinInterval = 90 * time.Millisecond
+
+// liveRenderCache memoizes the live answer's markdown render. src tracks the
+// source text out was built from, so identical frames (spinner ticks,
+// keystrokes, mouse motion between deltas) reuse out with a string compare
+// instead of a full render.
+type liveRenderCache struct {
+	src   string
+	out   string
+	width int
+	color bool
+	at    time.Time
+}
+
+// streamAnswerText is answerText throttled for the live region: identical
+// sources return the memoized render, and new deltas re-render at most once
+// per liveRenderMinInterval. A nil cache (a zero-value model in a test)
+// renders straight through.
+func (m tuiModel) streamAnswerText(ans string) string {
+	c := m.liveRC
+	w := m.textWidth()
+	if c == nil {
+		return answerText(m.th, ans, w)
+	}
+	if c.src == ans && c.width == w && c.color == m.th.color {
+		return c.out
+	}
+	if c.out != "" && c.width == w && c.color == m.th.color &&
+		time.Since(c.at) < liveRenderMinInterval {
+		return c.out
+	}
+	out := answerText(m.th, ans, w)
+	c.src, c.out, c.width, c.color, c.at = ans, out, w, m.th.color, time.Now()
+	return out
 }
 
 // thoughtView is the live reasoning preview: a dim moving one-liner while folded,
@@ -1165,6 +1206,15 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 	return sb.String()
 }
 
+// welcomeCache memoizes the rendered banner. The banner is static between
+// config edits, activity refreshes (30s TTL) and terminal resizes, so the
+// figlet + year-heatmap + daemon-lock probe it used to build every frame —
+// including a nodeidentity.Held file-lock syscall — now costs a key compare.
+type welcomeCache struct {
+	key string
+	out string
+}
+
 // welcome is the startup banner pushed into scrollback: the wordmark, version,
 // working directory and orientation tips.
 func (m tuiModel) welcome() string {
@@ -1172,16 +1222,33 @@ func (m tuiModel) welcome() string {
 	if w <= 0 {
 		w = 80
 	}
-	var activity map[string]int
-	var banner string
-	if m.r != nil {
-		activity = m.activity.get(m.r)
-		// Render inside the config read lock: the banner reads mutable cfg
-		// fields (work path, model) that /project and /model rewrite.
-		m.r.readConfig(func(c *config.Config) { banner = renderWelcomeBanner(c, m.loc, w, m.th, activity) })
-		return banner
+	if m.r == nil {
+		return renderWelcomeBanner(nil, m.loc, w, m.th, nil)
 	}
-	return renderWelcomeBanner(nil, m.loc, w, m.th, nil)
+	activity := m.activity.get(m.r)
+	day := time.Now().Format("2006-01-02") // the heatmap anchors to today
+	var cfgKey string
+	// Fingerprint only the cfg fields the banner reads — work path, shared
+	// secret presence, node identity — so a /project or /model edit invalidates
+	// while an unrelated toggle keeps the memo.
+	m.r.readConfig(func(c *config.Config) {
+		cfgKey = c.Storage.WorkPath + "|" + c.Node.Kind + "|" +
+			c.Node.EffectiveIdentity() + "|" + strconv.FormatBool(c.Network.SharedSecret != "")
+	})
+	var fetched int64
+	if m.activity != nil {
+		fetched = m.activity.fetched.Unix()
+	}
+	key := fmt.Sprintf("%d|%s|%s|%s|%d|%t", w, m.loc, cfgKey, day, fetched, m.th.unicode)
+	if m.welcomeC != nil && m.welcomeC.key == key {
+		return m.welcomeC.out
+	}
+	var banner string
+	m.r.readConfig(func(c *config.Config) { banner = renderWelcomeBanner(c, m.loc, w, m.th, activity) })
+	if m.welcomeC != nil {
+		m.welcomeC.key, m.welcomeC.out = key, banner
+	}
+	return banner
 }
 
 // textWidth is the terminal-bounded width available to top-level TUI rows. A
