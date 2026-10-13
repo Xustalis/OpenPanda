@@ -259,18 +259,6 @@ func firstThoughtLine(lines []string) string {
 	return ""
 }
 
-// truncate clips s to n runes, appending an ellipsis when it had to cut.
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	if n <= 1 {
-		return string(r[:n])
-	}
-	return string(r[:n-1]) + "…"
-}
-
 // indentLines prefixes the first line with first and the rest with cont, so a
 // multi-line block reads as one nested subtree.
 func indentLines(s, first, cont string) string {

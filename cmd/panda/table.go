@@ -104,3 +104,20 @@ func humanAge(loc i18n.Locale, unix int64) string {
 		return i18n.Tf(loc, "cli.age.days", "n", strconv.Itoa(int(d.Hours())/24))
 	}
 }
+
+// truncate clips s to n runes, appending an ellipsis when it had to cut.
+//
+// It lives here rather than beside the TUI's other text helpers because those
+// files carry //go:build !lite: the REPL's task-result digest (repl_ops.go) is
+// built in every variant, so a lite build that cannot see this symbol fails to
+// compile — which is exactly what `make package`'s lite-linux targets did.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return string(r[:n])
+	}
+	return string(r[:n-1]) + "…"
+}

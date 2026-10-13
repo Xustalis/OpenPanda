@@ -64,6 +64,14 @@ jobs:
         run: go mod tidy -diff
       - name: go vet
         run: make vet
+      # The lite variant (-tags lite: no embedded console, no TUI) is built by
+      # package.sh for the lite-linux release targets, and those run only on a
+      # push to main. A symbol that lives in a //go:build !lite file but is
+      # referenced from a shared one therefore compiles everywhere except the
+      # lite build — which is how `undefined: truncate` reached main and broke
+      # packaging. Compile every variant here instead.
+      - name: lite build
+        run: go build -tags lite ./...
       # Doc-drift guard: the retired deepseek-chat alias must not linger in
       # READMEs/example configs, and install.md version examples must track
       # the latest release tag.
