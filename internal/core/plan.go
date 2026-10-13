@@ -1083,6 +1083,57 @@ func parseDelegateRequests(stdout string) ([]delegateRequest, string) {
 	return drs, strings.Join(kept, "\n")
 }
 
+// msgMarker is the line-level sibling-board protocol (§inter-task messages):
+// the marker twin of the structured schema's `messages` field, so adapters
+// without a structured channel can post the same notes.
+const msgMarker = "PANDA_MSG"
+
+// parseMessages extracts every well-formed PANDA_MSG line from agent output
+// and returns the output with the consumed markers removed. Same rules as
+// parseDelegateRequests: payload on the line or pretty-printed below it,
+// word-boundary marker, unparsed lines kept verbatim.
+func parseMessages(stdout string) ([]msgRequest, string) {
+	var reqs []msgRequest
+	var kept []string
+	lines := strings.Split(stdout, "\n")
+	for i := 0; i < len(lines); i++ {
+		trim := strings.TrimSpace(lines[i])
+		rest, isMarker := strings.CutPrefix(trim, msgMarker)
+		if !isMarker || (rest != "" && rest[0] != ' ' && rest[0] != '\t' && rest[0] != '{' && rest[0] != ':') {
+			kept = append(kept, lines[i])
+			continue
+		}
+		candidate := strings.TrimSpace(strings.TrimPrefix(rest, ":"))
+		var req msgRequest
+		parsed := false
+		consumed := 0
+		for {
+			var try msgRequest
+			if err := json.Unmarshal([]byte(candidate), &try); err == nil && strings.TrimSpace(try.Body) != "" {
+				req, parsed = try, true
+				break
+			}
+			if consumed >= maxDelegatePayloadLines || i+consumed+1 >= len(lines) {
+				break
+			}
+			consumed++
+			candidate += "\n" + lines[i+consumed]
+		}
+		if !parsed {
+			kept = append(kept, lines[i])
+			continue
+		}
+		reqs = append(reqs, req)
+		i += consumed
+		if i+1 < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i+1]), "```") &&
+			len(kept) > 0 && strings.HasPrefix(strings.TrimSpace(kept[len(kept)-1]), "```") {
+			kept = kept[:len(kept)-1]
+			i++
+		}
+	}
+	return reqs, strings.Join(kept, "\n")
+}
+
 // agentResultSchema is the JSON Schema handed to schema-capable adapters
 // (claude --json-schema). The model's final reply validates against it, so
 // the protocol fields arrive parsed — status/question/delegate_requests —
@@ -1120,6 +1171,21 @@ const agentResultSchema = `{
           "node": {"type": "string", "description": "Optional specific node name"}
         },
         "required": ["intent"]
+      }
+    },
+    "messages": {
+      "type": "array",
+      "maxItems": 4,
+      "description": "Optional short posts to sibling tasks sharing this task's scope (stages of one plan, or a parent's children). to: a sibling stage id, \"parent\", or \"siblings\" (broadcast). grade: status = one line, report = structured summary, artifact_ref = pointer to produced files.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "to":    {"type": "string", "description": "Sibling stage id, \"parent\", \"siblings\", or a member task id"},
+          "grade": {"type": "string", "enum": ["status", "report", "artifact_ref"]},
+          "body":  {"type": "string", "description": "The note itself; status keeps to one line"}
+        },
+        "required": ["to", "body"]
       }
     }
   },
@@ -1189,6 +1255,7 @@ type structuredAgentResult struct {
 	Status    string            `json:"status"`
 	Question  string            `json:"question"`
 	Delegates []delegateRequest `json:"delegate_requests"`
+	Messages  []msgRequest      `json:"messages"`
 }
 
 // parseStructuredResult decodes the adapter's structured output. nil when

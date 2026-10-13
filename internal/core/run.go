@@ -18,6 +18,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
@@ -928,6 +929,11 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			c.waiters.Delete(pc.id)
 		}
 	}()
+	// boardSeen tracks which board slots have already been folded into the
+	// intent, so each round injects only what changed; msgsSent meters this
+	// episode's posts against the per-task budget.
+	boardSeen := msgSeen{}
+	msgsSent := 0
 	for round := 0; round < maxRounds; round++ {
 		// Fold delegate children that resolved since the last round before
 		// the agent runs again: a result that arrived after its wait window
@@ -937,6 +943,12 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			for _, note := range c.foldLateChildren(execCtx, &pendingChildren) {
 				currentIntent += "\n\n[delegated child result arrived]\n" + note
 			}
+		}
+		// Sibling board: posts from same-scope tasks (plan stages, a parent's
+		// children) land between rounds the same way late child results do —
+		// the agent reads them next round rather than blocking on them.
+		if lines := c.drainTaskMessages(execCtx, task, boardSeen); len(lines) > 0 {
+			currentIntent += "\n\n[sibling board]\n" + strings.Join(lines, "\n")
 		}
 		// The agent can spawn children itself (a CLI `task add
 		// --parent-id $PANDA_TASK_ID`), which the episode's opening snapshot
@@ -1033,6 +1045,12 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 
 		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title, workDir, promptLang, outputLang)
 		usedSkills = skillsUsed
+		// The sibling-board protocol hint rides only when the task actually
+		// shares a scope — a standalone task has nobody to post to, so the
+		// hint would be prompt noise.
+		if messageScope(task) != "" {
+			prompt += i18n.T(promptLang, "prompt.msgboard.hint")
+		}
 
 		// — Trace: exec_agent_start (orbit Step-3 "starting this stage on N").
 		// We report before Execute so the orbit paints the stage bar as
@@ -1123,6 +1141,21 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// folded into the intent. The delegation never reaches a judge: the
 		// round is re-driven, not verified.
 		if plan.Kind == "agent" {
+			// Sibling-board posts (§inter-task messages) parse FIRST: the
+			// delegation branch below may re-run the round (round--), and
+			// any PANDA_MSG that shared the same output would be lost with
+			// the discarded stdout if it waited its turn. A post never
+			// re-drives the round; its send receipt folds into next round.
+			mreqs, stdoutAfterMsgs := parseMessages(res.Stdout)
+			if structured != nil && len(structured.Messages) > 0 {
+				mreqs = structured.Messages
+			}
+			if len(mreqs) > 0 {
+				res.Stdout = stdoutAfterMsgs
+				for _, note := range c.sendAgentMessages(execCtx, task, mreqs, &msgsSent, c.msgBudget()) {
+					currentIntent += "\n\n[message board] " + note
+				}
+			}
 			drs, cleaned := parseDelegateRequests(res.Stdout)
 			// The structured contract wins when it carries requests: an
 			// agent that filled delegate_requests went through the schema,
