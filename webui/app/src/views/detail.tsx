@@ -60,6 +60,25 @@ export function DetailView({
     await act(() => api.cancel(task!.id), t('detail.cancelledToast'))
   }
 
+  async function revertTask() {
+    const ok = await confirmDialog({
+      title: t('detail.revertConfirmTitle'),
+      message: t('detail.revertConfirmMsg'),
+      confirmLabel: t('detail.revert'),
+    })
+    if (!ok) return
+    await act(async () => {
+      const r = await api.taskRevert(task!.id)
+      toast(
+        t('detail.revertedToast', {
+          restored: String(r.restored?.length ?? 0),
+          removed: String(r.removed?.length ?? 0),
+        }),
+        'success',
+      )
+    })
+  }
+
   if (error)
     return (
       <section>
@@ -157,6 +176,11 @@ export function DetailView({
           {cancellable && (
             <button class="btn" disabled={busy} onClick={cancelTask}>
               {t('detail.cancelTask')}
+            </button>
+          )}
+          {!cancellable && task.state !== 'expired' && (
+            <button class="btn danger" disabled={busy} onClick={revertTask}>
+              {t('detail.revert')}
             </button>
           )}
         </div>

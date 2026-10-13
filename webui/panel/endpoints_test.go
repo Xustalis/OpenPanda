@@ -18,6 +18,7 @@ import (
 	agentreg "github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
@@ -365,6 +366,115 @@ func TestSessionWorktreeDiffAndMerge(t *testing.T) {
 	}
 	if changes, _ = out["changes"].([]any); len(changes) != 0 {
 		t.Fatalf("worktree dirty after merge: %v", out["changes"])
+	}
+}
+
+// TestSessionWorktreeRevert exercises POST /api/sessions/{id}/revert end to
+// end: a merged session rolls the checkout back, and a second revert answers
+// 400 rather than pretending it undid something.
+func TestSessionWorktreeRevert(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newPanelGitRepo(t)
+	wt, err := sessions.OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(Deps{
+		Store:     newTestStore(t),
+		Sessions:  sessions.NewStore(t.TempDir()),
+		Worktrees: wt,
+		StaticDir: t.TempDir(),
+		Token:     testToken,
+	})
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions", `{"title":"repo work"}`))
+	if code != http.StatusOK {
+		t.Fatalf("create status = %d, body %v", code, out)
+	}
+	id, _ := out["id"].(string)
+	worktree, _ := out["worktree"].(string)
+	if err := os.WriteFile(filepath.Join(worktree, "rolled.txt"), []byte("ship me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The diff response carries the merge-preview stat next to the patch.
+	code, out = doJSON(t, h, authedReq(http.MethodGet, "/api/sessions/"+id+"/diff", nil))
+	if code != http.StatusOK {
+		t.Fatalf("diff status = %d", code)
+	}
+	stat, _ := out["stat"].(map[string]any)
+	if stat == nil || stat["untracked"].(float64) != 1 {
+		t.Fatalf("stat missing the untracked file: %v", out["stat"])
+	}
+
+	code, out = doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/"+id+"/merge", `{}`))
+	if code != http.StatusOK || out["merged"] != true {
+		t.Fatalf("merge status = %d, out = %v", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "rolled.txt")); err != nil {
+		t.Fatalf("merged file missing: %v", err)
+	}
+
+	code, out = doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/"+id+"/revert", `{}`))
+	if code != http.StatusOK || out["reverted"] != true {
+		t.Fatalf("revert status = %d, out = %v", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "rolled.txt")); !os.IsNotExist(err) {
+		t.Fatalf("revert left the merged file behind (err=%v)", err)
+	}
+	// A second revert has nothing recorded left.
+	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/"+id+"/revert", `{}`)); code != http.StatusBadRequest {
+		t.Fatalf("re-revert status = %d, want 400", code)
+	}
+}
+
+// TestTaskRevertEndpoint exercises POST /api/tasks/{id}/revert: the run's git
+// baseline rolls back tracked edits and post-baseline files, and a second
+// revert answers 404 once the baseline ref is consumed.
+func TestTaskRevertEndpoint(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newPanelGitRepo(t)
+	store := newTestStore(t)
+	h := New(Deps{Store: store, Cfg: config.Default(), StaticDir: t.TempDir(), Token: testToken})
+	ctx := context.Background()
+	task, err := store.Create(ctx, "", "", "t", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.SetExecWorkDir(ctx, task.TaskID, repo); err != nil {
+		t.Fatalf("exec work dir: %v", err)
+	}
+	base := filepath.Join(repo, "base.txt")
+	if err := os.WriteFile(base, []byte("v0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := defense.SaveGitBaseline(repo, task.TaskID); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	if err := os.WriteFile(base, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extra := filepath.Join(repo, "extra.txt")
+	if err := os.WriteFile(extra, []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/revert", `{}`))
+	if code != http.StatusOK || out["reverted"] != true {
+		t.Fatalf("revert status = %d, out = %v", code, out)
+	}
+	data, _ := os.ReadFile(base)
+	if strings.TrimSpace(string(data)) != "v0" {
+		t.Fatalf("base.txt = %q, want v0", data)
+	}
+	if _, err := os.Stat(extra); !os.IsNotExist(err) {
+		t.Fatalf("revert left extra.txt behind (err=%v)", err)
+	}
+	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/tasks/"+task.TaskID+"/revert", `{}`)); code != http.StatusNotFound {
+		t.Fatalf("re-revert status = %d, want 404", code)
 	}
 }
 

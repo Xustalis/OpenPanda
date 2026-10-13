@@ -1258,6 +1258,12 @@
   gap: 6px;
 }
 
+.diff-stat {
+  margin: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .diff-files {
   list-style: none;
   margin: 0;

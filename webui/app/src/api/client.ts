@@ -1017,6 +1017,16 @@ export const api = {
     return request('POST', `/api/sessions/${encodeURIComponent(id)}/merge`, message ? { message } : {})
   },
 
+  /** Undo a recorded session merge — the console's `panda session revert`. */
+  sessionRevert(id: string): Promise<{ reverted: boolean; subject: string }> {
+    return request('POST', `/api/sessions/${encodeURIComponent(id)}/revert`, {})
+  },
+
+  /** Roll a task's git checkout back to its pre-run baseline. */
+  taskRevert(id: string): Promise<{ reverted: boolean; restored: string[]; removed: string[]; dir: string }> {
+    return request('POST', `/api/tasks/${encodeURIComponent(id)}/revert`, {})
+  },
+
   patchSession(id: string, body: { title?: string; project?: string; pinned?: boolean }): Promise<Session> {
     return request('PATCH', `/api/sessions/${encodeURIComponent(id)}`, body)
   },
@@ -1417,11 +1427,22 @@ export interface FsReadResult {
   truncated: boolean
 }
 
+export interface SessionDiffStat {
+  files_changed: number
+  insertions: number
+  deletions: number
+  untracked: number
+  binary?: string[]
+  sensitive?: string[]
+}
+
 export interface SessionDiff {
   id: string
   branch: string
   changes: { status: string; path: string }[]
   patch: string
+  /** Merge-preview roll-up; absent when the stat could not be computed. */
+  stat?: SessionDiffStat
 }
 
 export interface DelegationMetric {

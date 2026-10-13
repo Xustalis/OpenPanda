@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
@@ -161,6 +163,46 @@ func (h *handler) deleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"id": id, "deleted": n})
+}
+
+// revertTask serves POST /api/tasks/{id}/revert — the web equivalent of
+// `panda task revert`: rolls the run's git checkout back to the whole-tree
+// baseline the executor saved before the run began (refs/heads/panda-base-<id>).
+// The baseline lives on whichever checkout executed the task, so the handler
+// probes the task's recorded work dirs before the shared work path — exactly
+// like the CLI. 404 when no baseline exists (remote run, already consumed, or
+// non-repo work dir).
+func (h *handler) revertTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	t, err := h.store.Get(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such task"))
+		return
+	}
+	var workPath string
+	h.readCfg(func(c *config.Config) { workPath = c.Storage.WorkPath })
+	seen := map[string]bool{}
+	for _, dir := range []string{t.ExecWorkDir, t.WorkDir, workPath} {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		restored, removed, rerr := defense.RollbackGitBaseline(dir, id)
+		if errors.Is(rerr, defense.ErrNoGitBaseline) {
+			continue
+		}
+		if rerr != nil {
+			writeErr(w, http.StatusInternalServerError, rerr)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"id": id, "reverted": true,
+			"restored": restored, "removed": removed, "dir": dir,
+		})
+		return
+	}
+	writeErr(w, http.StatusNotFound,
+		errors.New("no git baseline for this task — it ran remotely, in a non-repo dir, or its baseline was already consumed"))
 }
 
 // clearTasks serves DELETE /api/tasks — the board's one-click wipe: cancel

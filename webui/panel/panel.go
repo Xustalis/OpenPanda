@@ -127,6 +127,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/approve", h.approveTask)
 	mux.HandleFunc("POST /api/tasks/{id}/reject", h.rejectTask)
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", h.cancelTask)
+	mux.HandleFunc("POST /api/tasks/{id}/revert", h.revertTask)
 	mux.HandleFunc("GET /api/tasks/{id}/operations/{operation}", h.getApprovalOperation)
 	mux.HandleFunc("GET /api/tasks/{id}/logs", h.taskLogs)
 	// The plan plane: read-only views over the tasks that already carry a
@@ -245,6 +246,7 @@ func New(d Deps) http.Handler {
 		if d.Worktrees != nil {
 			mux.HandleFunc("GET /api/sessions/{id}/diff", h.sessionDiff)
 			mux.HandleFunc("POST /api/sessions/{id}/merge", h.sessionMerge)
+			mux.HandleFunc("POST /api/sessions/{id}/revert", h.sessionRevert)
 		}
 	}
 	if d.Push != nil {

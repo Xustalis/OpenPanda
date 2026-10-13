@@ -238,8 +238,9 @@ func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
 // ---- Worktree diff & merge ----
 
 // sessionDiff serves GET /api/sessions/{id}/diff — the session's worktree
-// changes (porcelain status per file) plus a capped unified patch, so the web
-// can show "what did this session do" before deciding to merge.
+// changes (porcelain status per file) plus a capped unified patch and the
+// merge-preview stat roll-up (files/+/-, untracked, sensitive & binary flags),
+// so the web can show "what did this session do" before deciding to merge.
 func (h *handler) sessionDiff(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	changes, err := h.worktrees.Status(r.Context(), id)
@@ -255,12 +256,39 @@ func (h *handler) sessionDiff(w http.ResponseWriter, r *http.Request) {
 	if changes == nil {
 		changes = []sessions.Change{}
 	}
+	// Stat is best-effort alongside the patch it summarizes — a stat failure
+	// should not blind the whole diff view.
+	stat, _ := h.worktrees.Stat(r.Context(), id)
 	writeJSON(w, map[string]any{
 		"id":      id,
 		"branch":  sessions.Branch(id),
 		"changes": changes,
 		"patch":   patch,
+		"stat":    stat,
 	})
+}
+
+// sessionRevert serves POST /api/sessions/{id}/revert — undoes a recorded
+// session merge, the web equivalent of `panda session revert`. A dirty
+// checkout answers 409 (the rollback would entangle uncommitted work); a
+// session with no recorded merge answers 400.
+func (h *handler) sessionRevert(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	subject, err := h.worktrees.Revert(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, sessions.ErrRevertDirty):
+			writeErr(w, http.StatusConflict, err)
+		case errors.Is(err, sessions.ErrNotFound):
+			writeErr(w, http.StatusNotFound, err)
+		case errors.Is(err, sessions.ErrNothingToRevert):
+			writeErr(w, http.StatusBadRequest, err)
+		default:
+			writeErr(w, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	writeJSON(w, map[string]any{"id": id, "reverted": true, "subject": subject})
 }
 
 // sessionMergeRequest is the body of POST /api/sessions/{id}/merge.

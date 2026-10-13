@@ -138,6 +138,7 @@ export function SessionsView({
   const [diffOpen, setDiffOpen] = useState(false)
   const [diffError, setDiffError] = useState('')
   const [merging, setMerging] = useState(false)
+  const [reverting, setReverting] = useState(false)
   // Below 920px the thread rail is an off-canvas drawer (it has nowhere to
   // sit next to the transcript); above it, this state is inert because the
   // rail is always laid out.
@@ -467,6 +468,20 @@ export function SessionsView({
       setDiffError(e instanceof Error ? e.message : String(e))
     } finally {
       setMerging(false)
+    }
+  }
+
+  async function revertMerge() {
+    if (!activeId || reverting) return
+    setReverting(true)
+    setDiffError('')
+    try {
+      await api.sessionRevert(activeId)
+      await refreshDiff(activeId)
+    } catch (e) {
+      setDiffError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setReverting(false)
     }
   }
 
@@ -1180,7 +1195,10 @@ export function SessionsView({
                 {t('sessions.worktreeChanges')} — {diff.branch}
               </strong>
               <span>
-                <button class="btn primary" disabled={merging} onClick={mergeChanges}>
+                <button class="btn danger" disabled={reverting || merging} onClick={revertMerge}>
+                  {reverting ? t('sessions.reverting') : t('sessions.revert')}
+                </button>
+                <button class="btn primary" disabled={merging || reverting} onClick={mergeChanges}>
                   {merging ? t('sessions.merging') : t('sessions.merge')}
                 </button>
                 <button class="btn" onClick={() => setDiffOpen(false)}>
@@ -1188,6 +1206,27 @@ export function SessionsView({
                 </button>
               </span>
             </div>
+            {diff.stat && (diff.stat.files_changed > 0 || diff.stat.untracked > 0) && (
+              <p class="dim diff-stat">
+                {t('sessions.diffStat', {
+                  files: String(diff.stat.files_changed),
+                  ins: String(diff.stat.insertions),
+                  del: String(diff.stat.deletions),
+                })}
+                {diff.stat.untracked > 0 &&
+                  ` · ${t('sessions.diffUntracked', { n: String(diff.stat.untracked) })}`}
+              </p>
+            )}
+            {diff.stat && diff.stat.sensitive && diff.stat.sensitive.length > 0 && (
+              <p class="gate-error">
+                {t('sessions.sensitiveFiles')}: <span class="mono">{diff.stat.sensitive.join(', ')}</span>
+              </p>
+            )}
+            {diff.stat && diff.stat.binary && diff.stat.binary.length > 0 && (
+              <p class="dim">
+                {t('sessions.binaryFiles')}: <span class="mono">{diff.stat.binary.join(', ')}</span>
+              </p>
+            )}
             {diffError && <p class="gate-error">{diffError}</p>}
             <ul class="diff-files">
               {diff.changes.map((c) => (
