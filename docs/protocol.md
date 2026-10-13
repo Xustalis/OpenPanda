@@ -138,6 +138,7 @@ JSON 重打包）。
 | `task_transfer` | — | 任务转移（常量在 `bus`） |
 | `task_cancel` | `TaskCancelPayload` | 取消，附 `reason` |
 | `task_resume` | `TaskResumePayload` | 对「停在审批」的重新放行（可带澄清答案 `answer`；`accept` 置位时是把已接受处置镜像到对侧停驻副本，review→done，不携带任何再执行同意） |
+| `task_message` | `TaskMessagePayload` | 任务间消息板的一条短消息（同 plan 的兄弟阶段、或同一父任务的子任务集，见下） |
 | `context_fetch` | `ContextFetchPayload` | 向源节点要完整上下文快照 |
 | `context_ack` | `ContextAckPayload` | `context_fetch` 的应答 |
 | `artifact_fetch` | `ArtifactFetchPayload` | 按 offset 拉一段工件 |
@@ -261,6 +262,26 @@ hello 校验失败时服务端回 `hello_reject`（`reason`：`auth` 签名/密�
 而帧上限 4 MiB，若不裁剪结果就永远落不了地。裁剪保留**头尾**（开头是意图、
 结尾是结论），在 rune 边界切分以维持合法 UTF-8，并插一行
 「中间已截断，完整输出留在执行节点」。完整输出留在执行节点，按需以工件方式带走。
+
+### 任务间消息板：`task_message`
+兄弟任务间的有界短消息通道（设计：`plans/design-task-message-board.md`），
+走 QoSSignal 车道。scope 只有两种：`plan:<plan-id>`（同一 plan 的 stage）
+与 `task:<parent-id>`（父任务与它的子任务集，父本身是成员）。
+
+- **member → owner 腿**：`scope` / `sender`（发送任务 id）/ `to`（未解析的
+  地址：`stage:<id>`、`parent`、`siblings`、`children`、或成员 task id）/
+  `grade`（`status` ≤400B / `report` ≤4096B / `artifact_ref`）/ `body` /
+  `seq`（发送方单调计数，接收端据此拒绝迟到的旧拷贝）/ `sent_at` /
+  `sender_label`（发送方的显示名，stage id 或标题）。
+- **owner → member 扇出腿**：`fanout=true`，`rcpt` 为 owner 解析出的收件
+  task id（`""` = 广播），`member` 指明这条副本落在哪个成员名下——接收端
+  用它校验「本节点确实持有该 scope 的成员行」，校验不过即丢弃（伪造/误投）。
+- **owner 是谁**：plan 板是计划原点（`chain[0]`，它持有全部 stage 行）；
+  children 板是父任务的执行节点（本地 spawn 的行即本节点，wire 到达的行
+  取 `Predecessor`，与结果回传同规则）。
+- **投递语义**：尽力而为、无独立 outbox——槽位模型（每发送者每收件人一格、
+  新覆盖旧）让丢帧由下一次发送自愈；读取发生在监督轮边界，不阻塞运行中的
+  agent。TTL 24h，每 episode 发送预算 `messages.budget`（默认 8）。
 
 ### 工件帧：`artifact_fetch` / `artifact_chunk`
 固定大小分块的**拉取**：需要产物的一方按 offset 一段段要，

@@ -57,6 +57,7 @@ The project evolves along two tracks:
 - **Transparent execution** — every Bash command, file edit, and tool call, along with the responsible agent and underlying model, streams live to your terminal and console.
 - **Tiered approval** — reversible operations run autonomously; irreversible actions (`git push`, production database changes) suspend for explicit human confirmation.
 - **Circuit breakers** — loop detection and retry breakers stop runaway agents from burning tokens.
+- **Sibling message board** (experimental) — tasks sharing a plan or a parent exchange short notes (a status line, a finding, a pointer to produced files) through a bounded slot board; each agent reads what its peers posted at its next round instead of blocking on their results, and a per-episode budget keeps the channel from becoming chatter.
 
 ### Memory & Skills
 
@@ -143,6 +144,7 @@ To connect a second device: run `panda pair <device-B-address>` on device A and 
 | `panda queue` | Inspect pending, running, and review tasks (`--watch` for live updates) |
 | `panda approve <id>` | Approve a pending Tier-2 task |
 | `panda project list` | Manage workspace projects and context |
+| `panda task board <id>` | Show the sibling-message boards a task reads (plan/parent scope + its children) |
 | `panda session` | List, fork, and resume conversation sessions (`session tree` shows the family) |
 | `panda skill` | Browse, import, and install workflow skills (Hub, URL, or file) |
 | `panda auth login` | Sign in a model subscription (e.g. `anthropic`) via OAuth |

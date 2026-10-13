@@ -83,7 +83,9 @@ The web console needs node/npm only when rebuilding it (`make web`,
 ### `internal/` by concern
 
 - **Node & task lifecycle**: `core` (the `Core` daemon — wires store,
-  transport, execution loop, delegation/retry/judge, metrics), `entry`
+  transport, execution loop, delegation/retry/judge, metrics, and the
+  inter-task message board in `messages.go`: slot-based sibling notes
+  under `plan:<id>` / `task:<parent>` scopes), `entry`
   (classifies input into answer/tool_call/task/plan, builds prompts,
   streams output), `scheduler` (queue, node scoring `score.go`, routing
   `route.go`, multi-hop `chain.go`), `commander` (three execution tiers:

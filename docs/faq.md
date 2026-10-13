@@ -82,6 +82,10 @@ OpenPanda 自己不执行长程任务，而是委派给设备上安装的 agent 
 
 注意：计划的任何阶段都不携带 tier-2 同意，所以流水线里的不可逆动作一定停在 `review` 等你批，不会因为你授权过整句话就直接执行。
 
+**并行阶段之间能互相通气吗？**
+
+能。同一 plan 的兄弟阶段、或同一父任务的子任务之间有一个有界的「消息板」：agent 可以留一条短消息（一行状态、一个避免重复挖掘的发现、一个产出文件的指针），对方在**下一次监督轮次**读到，不阻塞任何运行中的 agent。消息分三档粒度（`status` / `report` / `artifact_ref`），每任务每 episode 默认最多 8 条（`messages.budget` 可调），24 小时后过期。`panda task board <id>` 查看某个任务能读到的板。两点边界：它是同一协作域内的信道而非私聊——定向消息在发送方所在节点对同域成员可见；投递尽力而为，丢帧靠下一次发送自愈。设计细节见 `docs/plans/design-task-message-board.md`。
+
 **能不能用说话的方式发任务？**
 
 `panda voice` 是免手入口（桌宠 / 移动场景）：唤醒词 → 转写 → 走和 `panda ask` 完全相同的路径 → 打印并朗读回答，与 REPL / `ask --continue` 共用同一条持久会话（在一台设备上说，回终端接着问）。需要本地语音依赖：`pip install openwakeword faster-whisper SpeechRecognition pyaudio numpy`（默认后端不需要密钥）；缺依赖时会直接打印原因并退出。`--once` 只处理一句，`--mute` 只打印不朗读。语音入口没有 `--authorize`，不可逆命令一律进 `review`。

@@ -16,6 +16,7 @@ OpenPanda project docs that are intentionally part of the public source tree.
 - [`plans/roadmap-desktop-and-packaging.md`](plans/roadmap-desktop-and-packaging.md) — high-level roadmap for the desktop client & packaging pipeline.
 - [`plans/roadmap-v0.0.10-multi-device.md`](plans/roadmap-v0.0.10-multi-device.md) — the v0.0.10 multi-device collaboration roadmap: delegation-parity, joining & identity, actuator scheduling, fleet observability, trust tail, and the validation gates; per-item status tracked inline.
 - [`plans/design-trust-zones-agent-economy.md`](plans/design-trust-zones-agent-economy.md) — design draft for per-peer trust tiers (mesh/guarded/open), agent dialogue, and the decentralized work market; partially implemented as an experimental feature. (中文)
+- [`plans/design-task-message-board.md`](plans/design-task-message-board.md) — the inter-task message board: sibling tasks under one plan or parent exchange bounded slot-based notes (TMB/ALC/DCPS engineered, no learning component), the cross-node owner fan-out path, and what is deliberately not implemented. (中文)
 
 ## Historical reports
 

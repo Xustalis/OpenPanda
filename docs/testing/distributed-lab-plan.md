@@ -22,8 +22,11 @@ routing behavior only. Do not report it as three-device mutual recognition.
 - 启动三个 `panda daemon`，等待三方 hello/heartbeat
 - 用 `scripts/smoke-delegate` 验证 entry -> tools 的 native 委派
 - 用长程任务入口验证 entry -> agent 的 Agent 委派和 supervisor 两轮闭环
+- 两个兄弟阶段互发 `PANDA_MSG`（一个广播 + 一个定向），在对方下一轮读到；
+  用 `panda task board <id>` 对照两个节点的槽位
 - 用 `scripts/task-timeline` 汇总三个 SQLite 数据库
-- 验收：状态、attempt、委派链和监督事件完整可解释。
+- 验收：状态、attempt、委派链和监督事件完整可解释；消息板槽位在 owner
+  与成员副本上一致，定向消息不落到未寻址成员。
 
 ## T2：故障注入测试
 
@@ -31,6 +34,8 @@ routing behavior only. Do not report it as three-device mutual recognition.
 - agent running 中杀掉 adapter/daemon
 - result 回传前断开连接并重连
 - 重放旧 attempt、重复 result、伪造 sender
+- 消息板：owner 离线时发消息（应折回发送失败提示），恢复后下一次发送
+  自愈；伪造 fan-out 副本（`member` 指向非同域任务）应被接收端丢弃
 - 重启 entry 或 agent 后执行 `Recover`
 - 验收：继续、重路由、review 或 failed，不能假成功、重复副作用或永久卡死。
 
@@ -40,6 +45,7 @@ routing behavior only. Do not report it as three-device mutual recognition.
 - SBC 使用 `testdata/live/pi-*` 的能力卡和配置模板
 - shared secret 只通过环境变量或受限配置注入
 - 先验证 `sys:smoke`，再验证长程 Agent 任务
+- 跨设备消息板：一个 plan 的兄弟阶段分处两台设备，定向与广播各验证一次
 - 记录网络延迟、断线恢复时间、任务完成率和节点资源占用
 
 ## T4：连续运行和发布门禁
