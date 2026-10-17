@@ -39,6 +39,7 @@ envelope per turn on stdout instead of exiting after the first.
 
 This module never prints secrets.
 """
+import atexit
 import json
 import os
 import re
@@ -49,6 +50,46 @@ import sys
 import threading
 
 DEFAULT_TIMEOUT = 600
+
+
+# Live child procs, tracked so a cancellation that reaches the adapter as
+# SIGTERM can take the CLI tree down with it: the daemon kills the adapter's
+# process GROUP, but GROUP_KW puts every CLI in its own session — outside
+# that group's reach. Without this a cancelled task left the agent burning
+# tokens as an orphan (observed live: opencode ran 50s+ past the cancel).
+# Dead members stay in the set (an adapter process is one request, a handful
+# of spawns at most); the sweep poll()s each so a pid reused as another
+# group's leader is never signalled.
+_LIVE_PROCS = set()
+
+
+def _popen(*args, **kw):
+    proc = subprocess.Popen(*args, **kw)
+    _LIVE_PROCS.add(proc)
+    return proc
+
+
+def _reap_children():
+    for proc in list(_LIVE_PROCS):
+        try:
+            if proc.poll() is None:
+                kill_tree(proc)
+        except Exception:
+            pass
+
+
+def _terminate_children(signum, _frame):
+    _reap_children()
+    os._exit(128 + (signum or 15))
+
+
+atexit.register(_reap_children)
+if sys.platform != "win32":
+    signal.signal(signal.SIGTERM, _terminate_children)
+    # A stray Ctrl-C group signal reaches the whole foreground group —
+    # the default KeyboardInterrupt unwind would exit leaving the CLI
+    # running, the same orphan shape as an uncaught SIGTERM.
+    signal.signal(signal.SIGINT, _terminate_children)
 
 
 def _force_utf8_stdio():
@@ -553,7 +594,7 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
     when the CLI binary is missing; a timeout is reported via timed_out=True
     (the tree is already dead), not via an exception.
     """
-    proc = subprocess.Popen(
+    proc = _popen(
         resolve_argv(cmd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
@@ -629,7 +670,7 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None):
     adapters had around subprocess.run, so existing except branches keep
     working.
     """
-    proc = subprocess.Popen(
+    proc = _popen(
         resolve_argv(cmd),
         stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -708,7 +749,7 @@ def spawn(cmd, cwd=None):
     appends to (join it for diagnostics). Raises FileNotFoundError when the
     binary is missing.
     """
-    proc = subprocess.Popen(
+    proc = _popen(
         resolve_argv(cmd), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
