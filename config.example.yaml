@@ -184,6 +184,11 @@ storage:
   projects_path: "./projects"    # per-project memory root (Phase 3)
   skills_path: "./skills"        # procedural-memory root (Phase 3)
   work_path: "."                 # agents execute here; scope drift measured here
+                                 # Runtime scratch (task/plan dirs, landed remote
+                                 # project copies) lives in .openpanda under this
+                                 # root — one hidden dir, never three visible
+                                 # ones. Only the default node data dir keeps
+                                 # them at top level, beside the database.
   # Packed task-artifact pool: artifacts shipped across nodes are stored here,
   # named by hash. Not ctxstore (the Micro-node LRU keeps only 5 entries and
   # would silently evict them), not SQLite (artifacts are gigabyte-scale).

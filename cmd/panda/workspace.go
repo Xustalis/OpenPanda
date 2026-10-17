@@ -18,6 +18,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -143,6 +144,46 @@ func adoptWorkspaceProject(store *projects.Store, cwd string) string {
 		}
 	}
 	return ""
+}
+
+// pandaScratchDir is the node's own directory inside an adopted workspace:
+// per-task dirs, plan stages, landed remote project copies, and session
+// worktrees all live under it. One hidden dir is what "在哪里启动哪里就是
+// 项目空间" can offer without scattering runtime state through the tree.
+const pandaScratchDir = ".openpanda"
+
+// excludePandaDir keeps the node's .openpanda scratch dir out of the adopted
+// repo's `git status` by adding it to .git/info/exclude — the same mechanism
+// session worktrees use (sessions/worktree.go), so the daemon never dirties
+// the user's checkout nor edits their .gitignore. Best-effort: not a git
+// repo, a missing git binary, or a read-only .git all just skip quietly —
+// scratch still works, it simply shows up as untracked.
+func excludePandaDir(dir string) {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		return
+	}
+	gitDir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(dir, gitDir)
+	}
+	excludePath := filepath.Join(gitDir, "info", "exclude")
+	if existing, err := os.ReadFile(excludePath); err == nil {
+		for _, line := range strings.Split(string(existing), "\n") {
+			if strings.TrimSpace(line) == pandaScratchDir+"/" {
+				return
+			}
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString("\n# openpanda runtime scratch\n" + pandaScratchDir + "/\n")
 }
 
 // ambientProject resolves the launch directory's project for entry points

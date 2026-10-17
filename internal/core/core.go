@@ -151,6 +151,16 @@ type Core struct {
 	// measured against (design §14.2 signal A). Default "." (the daemon's
 	// working directory); a deploy can pin it to a project root.
 	workDir string
+	// scratchDir is where panda's own runtime directories live — per-task
+	// dirs, plan stage trees, and landed copies of remote projects. Empty
+	// means "under workDir directly" (the node data-dir layout, where they
+	// sit beside the database). A workDir that is a user-visible workspace
+	// instead gets workDir/.openpanda wired in from main: panda's scratch
+	// then sits in one hidden directory inside the project — the same
+	// convention session worktrees already use — rather than tasks/, plans/
+	// and projects/ appearing as three visible directories in the user's
+	// tree. See SetScratchRoot.
+	scratchDir string
 	// hostStatePaths are the node's own bookkeeping paths (SQLite/memory trees,
 	// the agent CLI's own config dir). Scope drift ignores changes under them,
 	// since the node and its tools write them as a side effect of running a task
@@ -917,6 +927,52 @@ func (c *Core) SetWorkDir(dir string) {
 	c.workDir = dir
 }
 
+// SetScratchRoot pins where the node's runtime scratch lives — workDir/tasks,
+// workDir/plans and workDir/projects all derive from it. The empty-string
+// default keeps scratch directly under workDir, which is right when workDir
+// IS the node's data dir (the default layout, where these dirs sit beside
+// openpanda.db). A workDir that is a user-facing workspace — an adopted
+// launch directory or an explicit storage.work_path pointing at a checkout —
+// should pass workDir/.openpanda so panda-owned scratch hides in one
+// git-ignorable directory instead of three visible ones.
+//
+// The root is host state — scratch churn (a stage unpacking inputs, a peer's
+// project tree landing) is the node's own bookkeeping, not agent scope
+// drift, and must never ride out inside an artifact pack. hostState()
+// unions it in at read time so wiring order can never drop it.
+func (c *Core) SetScratchRoot(root string) {
+	if root == "" {
+		return
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = filepath.Clean(abs)
+	}
+	c.scratchDir = root
+}
+
+// scratchRoot returns the directory runtime scratch derives from (see
+// scratchDir); unset it falls back to the work dir.
+func (c *Core) scratchRoot() string {
+	if c.scratchDir != "" {
+		return c.scratchDir
+	}
+	return c.workDir
+}
+
+// hostState is the effective host-state path list: the configured paths
+// plus the scratch root when it differs from the work dir (the workspace
+// layout — under the data-dir layout scratch already rides the WorkPath
+// entry, so an equal root adds nothing). Read-time union keeps the
+// membership independent of setter call order.
+func (c *Core) hostState() []string {
+	if c.scratchDir == "" || c.scratchDir == c.workDir {
+		return c.hostStatePaths
+	}
+	out := make([]string, 0, len(c.hostStatePaths)+1)
+	out = append(out, c.hostStatePaths...)
+	return append(out, c.scratchDir)
+}
+
 // SetHostStatePaths records the node's own bookkeeping paths — its SQLite/memory
 // trees and the agent CLI's own config dir — so scope-drift detection never
 // flags the host's side-effect writes as agent drift. Paths may be relative to
@@ -964,7 +1020,8 @@ func (c *Core) SetPackProtectedPaths(paths []string) {
 // such a container there — the precise file/subdir entries still cover the
 // host's own writes under it.
 func (c *Core) filterHostDrift(workDir string, drift []string) []string {
-	if len(c.hostStatePaths) == 0 {
+	host := c.hostState()
+	if len(host) == 0 {
 		return drift
 	}
 	wd, _ := filepath.Abs(workDir)
@@ -973,7 +1030,7 @@ func (c *Core) filterHostDrift(workDir string, drift []string) []string {
 	for _, p := range drift {
 		ap := filepath.Join(wd, p)
 		keep := true
-		for _, h := range c.hostStatePaths {
+		for _, h := range host {
 			if h == wd || strings.HasPrefix(wd, h+string(filepath.Separator)) {
 				continue
 			}
@@ -1490,7 +1547,7 @@ func (c *Core) sweepTaskDirs(ctx context.Context) {
 	if !c.taskDirSweepAt.CompareAndSwap(last, now.Unix()) {
 		return
 	}
-	root := filepath.Join(c.workDir, "tasks")
+	root := filepath.Join(c.scratchRoot(), "tasks")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if !os.IsNotExist(err) {

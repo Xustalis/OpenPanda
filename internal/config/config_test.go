@@ -758,3 +758,33 @@ func TestHostStatePathsCoversRuntimeFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestScratchRootHidesOnlyOutsideDataDir(t *testing.T) {
+	data, err := UserDataDir()
+	if err != nil {
+		t.Skipf("no user data dir on this host: %v", err)
+	}
+	var c Config
+
+	// The default layout: work_path IS the node data dir — scratch stays at
+	// top level beside openpanda.db, no .openpanda layer.
+	c.Storage.WorkPath = data
+	if got := c.ScratchRoot(); got != "" {
+		t.Fatalf("data-dir work root got scratch dir %q, want \"\"", got)
+	}
+
+	// A user-visible workspace (adopted launch dir, explicit work_path):
+	// scratch hides under .openpanda.
+	ws := t.TempDir()
+	c.Storage.WorkPath = ws
+	want := filepath.Join(ws, ".openpanda")
+	if got := c.ScratchRoot(); got != want {
+		t.Fatalf("workspace scratch root = %q, want %q", got, want)
+	}
+
+	// Empty work path resolves to nothing rather than scattering.
+	c.Storage.WorkPath = ""
+	if got := c.ScratchRoot(); got != "" {
+		t.Fatalf("empty work path got scratch dir %q, want \"\"", got)
+	}
+}

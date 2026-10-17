@@ -294,6 +294,21 @@ func runDaemon(args []string) {
 	// and make python's subprocess.run fail instantly.
 	if absWork, err := filepath.Abs(cfg.Storage.WorkPath); err == nil {
 		coreNode.SetWorkDir(absWork)
+		// A work root that is not the node's own data dir is a user-visible
+		// workspace (an adopted launch dir, or an explicit work_path): keep
+		// panda's runtime scratch — per-task dirs, plan stages, landed remote
+		// project copies — inside one hidden .openpanda directory there, the
+		// same convention session worktrees already use, rather than tasks/,
+		// plans/ and projects/ appearing in the user's tree. Under the
+		// default data dir they stay at the top level beside the database.
+		if sr := cfg.ScratchRoot(); sr != "" {
+			coreNode.SetScratchRoot(sr)
+			// The workspace will host .openpanda scratch — keep it out of
+			// `git status` via .git/info/exclude so the daemon never dirties
+			// the user's checkout nor edits their .gitignore. A non-repo
+			// work_path skips silently.
+			excludePandaDir(absWork)
+		}
 	} else {
 		coreNode.SetWorkDir(cfg.Storage.WorkPath)
 	}

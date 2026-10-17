@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
@@ -69,7 +70,11 @@ var worktreeSkipDirs = map[string]bool{
 	".ruff_cache":   true,
 	".gocache":      true,
 	".panda-shadow": true,
-	"target":        true,
+	// .openpanda is panda's own in-workspace scratch (task/plan dirs, landed
+	// remote projects, session worktrees): host bookkeeping, never content
+	// a peer's tree should carry.
+	".openpanda": true,
+	"target":     true,
 }
 
 // extractProtectedDirs is the return-leg counterpart of worktreeSkipDirs.
@@ -97,8 +102,12 @@ var worktreeSkipDirs = map[string]bool{
 // intact. Makefile stays writable too: it is core work product, and a
 // poisoned target is visible in the same diff the user already reviews.
 var extractProtectedDirs = map[string]bool{
-	".git":                    true,
-	".panda-shadow":           true,
+	".git":          true,
+	".panda-shadow": true,
+	// .openpanda is the node's own in-workspace scratch root (task/plan dirs,
+	// landed project copies, session worktrees): a peer's tree must never
+	// unpack over it, and a peer's own stale scratch must not land either.
+	".openpanda":              true,
 	".vscode/tasks.json":      true,
 	".vscode/launch.json":     true,
 	".claude":                 true,
@@ -124,7 +133,7 @@ var extractProtectedDirs = map[string]bool{
 // and the pid file. A host path equal to root is dropped: pruning it would
 // empty the artifact, and the file-level entries still cover the live files.
 func (c *Core) hostStatePrune(root string) []string {
-	if len(c.hostStatePaths) == 0 && len(c.packProtectedPaths) == 0 {
+	if len(c.hostState()) == 0 && len(c.packProtectedPaths) == 0 {
 		return nil
 	}
 	abs, err := filepath.Abs(root)
@@ -133,7 +142,7 @@ func (c *Core) hostStatePrune(root string) []string {
 	}
 	abs = filepath.Clean(abs)
 	var out []string
-	for _, h := range append(c.hostStatePaths, c.packProtectedPaths...) {
+	for _, h := range slices.Concat(c.hostState(), c.packProtectedPaths) {
 		if h == abs {
 			continue
 		}
@@ -153,7 +162,7 @@ func (c *Core) hostStatePrune(root string) []string {
 // readers see the imported snapshot — the node silently splits from its own
 // state until restart.
 func (c *Core) extractSkipSet(dst string) map[string]bool {
-	if len(c.hostStatePaths) == 0 && len(c.packProtectedPaths) == 0 {
+	if len(c.hostState()) == 0 && len(c.packProtectedPaths) == 0 {
 		return extractProtectedDirs
 	}
 	abs, err := filepath.Abs(dst)
@@ -161,11 +170,11 @@ func (c *Core) extractSkipSet(dst string) map[string]bool {
 		return extractProtectedDirs
 	}
 	abs = filepath.Clean(abs)
-	skip := make(map[string]bool, len(extractProtectedDirs)+len(c.hostStatePaths)+len(c.packProtectedPaths))
+	skip := make(map[string]bool, len(extractProtectedDirs)+len(c.hostStatePaths)+len(c.packProtectedPaths)+1)
 	for k := range extractProtectedDirs {
 		skip[k] = true
 	}
-	for _, h := range append(c.hostStatePaths, c.packProtectedPaths...) {
+	for _, h := range slices.Concat(c.hostState(), c.packProtectedPaths) {
 		if h == abs {
 			continue // a state path equal to dst cannot prune the whole tree
 		}
@@ -503,7 +512,7 @@ func (c *Core) projectWorkDir(project string) (string, error) {
 	if dir := c.projectDir(project); dir != "" {
 		return dir, nil
 	}
-	root := c.workDir
+	root := c.scratchRoot()
 	if root == "" {
 		root = os.TempDir()
 	}

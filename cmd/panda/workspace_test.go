@@ -4,7 +4,9 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/projects"
@@ -140,5 +142,52 @@ func TestAdoptWorkspaceProjectAncestor(t *testing.T) {
 	list, _ := s.List()
 	if len(list) != 1 {
 		t.Fatalf("subdir adoption created a duplicate: %d projects", len(list))
+	}
+}
+
+func TestExcludePandaDir(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/git"); err != nil {
+		if _, err2 := exec.LookPath("git"); err2 != nil {
+			t.Skip("no git binary")
+		}
+	}
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v / %s", err, out)
+	}
+
+	excludePandaDir(repo)
+
+	data, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatalf("exclude not written: %v", err)
+	}
+	found := false
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == ".openpanda/" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf(".openpanda/ missing from info/exclude: %q", data)
+	}
+
+	// Idempotent: a second call must not duplicate the entry.
+	excludePandaDir(repo)
+	data2, _ := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+	if strings.Count(string(data2), ".openpanda/") != 1 {
+		t.Fatalf("entry duplicated: %q", data2)
+	}
+
+	// `git status` must not list the scratch dir.
+	if err := os.MkdirAll(filepath.Join(repo, ".openpanda", "tasks", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("git", "-C", repo, "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if strings.Contains(string(out), ".openpanda") {
+		t.Fatalf("scratch dir still shows in git status: %q", out)
 	}
 }

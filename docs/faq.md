@@ -112,7 +112,9 @@ OpenPanda 自己不执行长程任务，而是委派给设备上安装的 agent 
 
 **数据存在哪里？**
 
-用户级目录，与安装位置无关：macOS `~/Library/Application Support/openpanda`，Linux `~/.local/share/openpanda`，Windows `%LOCALAPPDATA%\openpanda-data`（刻意与安装目录 `%LOCALAPPDATA%\OpenPanda` 区分，避免大小写不敏感的 NTFS 把两者折叠成同一目录）。`memory/`、`projects/`、`skills/` 是用户资产，卸载默认保留。
+用户级目录，与安装位置无关：macOS `~/Library/Application Support/openpanda`，Linux `~/.local/share/openpanda`，Windows `%LOCALAPPDATA%\openpanda-data`（刻意与安装目录 `%LOCALAPPDATA%\OpenPanda` 区分，避免大小写不敏感的 NTFS 把两者折叠成同一目录）。`memory/`、`projects/`、`skills/` 是用户资产，卸载默认保留。CLI 自身状态（REPL 历史、会话镜像、Web 日志）走平台状态目录：Linux `${XDG_STATE_HOME:-~/.local/state}/openpanda`，macOS `~/Library/Application Support/openpanda/state`，Windows `%LOCALAPPDATA%\openpanda-data\state`。
+
+当 `storage.work_path` 指向一个用户工作区（含 daemon 在代码目录启动时自动采纳的情形）时，运行时暂存——每任务目录、计划阶段、落地的远程项目副本——集中放在该工作区的 `.openpanda/` 下，而不是在项目里摊出 `tasks/`、`plans/`、`projects/` 三个可见目录；git 仓库还会自动写入 `.git/info/exclude` 保持 `git status` 干净（不碰用户的 `.gitignore`）。默认布局下（work_path 即数据目录）暂存仍留在数据目录顶层，与 `openpanda.db` 并列。
 
 **如何升级？**
 

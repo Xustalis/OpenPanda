@@ -1587,10 +1587,12 @@ func (c *Config) HostStatePaths() []string {
 		c.Storage.MemoryPath,
 		c.Storage.SkillsPath,
 		// The runtime work root itself: task dirs, plan staging, and landed
-		// copies of REMOTE project trees all live under it — a project pack
-		// that shipped them would carry a peer's files back out, and worse,
-		// re-pack them into the next delegation forever (observed: nested
-		// work/projects/<peer>/… recursion in real artifacts).
+		// copies of REMOTE project trees live either under it (the default
+		// data-dir layout) or under its .openpanda subdir (a workspace work
+		// root — SetScratchRoot registers that one itself at read time). A
+		// project pack that shipped them would carry a peer's files back out,
+		// and worse, re-pack them into the next delegation forever (observed:
+		// nested work/projects/<peer>/… recursion in real artifacts).
 		c.Storage.WorkPath,
 		filepath.Join(c.Storage.WorkPath, ".claude"), // the agent CLI's own project config
 	}
@@ -1601,6 +1603,32 @@ func (c *Config) HostStatePaths() []string {
 		}
 	}
 	return out
+}
+
+// ScratchRoot returns where the node's runtime scratch (per-task dirs, plan
+// stages, landed remote project copies) belongs: "<work_path>/.openpanda"
+// when the work path is a user-visible workspace — an adopted launch dir or
+// an explicit path pointing at a checkout — so panda's bookkeeping hides in
+// one hidden, git-ignorable directory instead of tasks/, plans/ and
+// projects/ appearing in the user's tree. "" when the work path IS the node
+// data dir, where scratch staying at the top level beside openpanda.db is
+// the right shape. Both daemon wiring (main.go) and embedded engines
+// (askengine) feed this to Core.SetScratchRoot so the rule lives in one
+// place. An unresolvable UserDataDir still returns the .openpanda path —
+// hiding scratch is always the safer default outside the data dir.
+func (c *Config) ScratchRoot() string {
+	work := c.Storage.WorkPath
+	if work == "" {
+		return ""
+	}
+	absWork, err := filepath.Abs(work)
+	if err != nil {
+		return ""
+	}
+	if ud, err := UserDataDir(); err == nil && filepath.Clean(absWork) == filepath.Clean(ud) {
+		return ""
+	}
+	return filepath.Join(absWork, ".openpanda")
 }
 
 // DefaultCardTarget returns the canonical path where capabilities.yaml belongs.
