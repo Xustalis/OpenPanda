@@ -2998,8 +2998,8 @@
   animation: orbit-pulse-warn 2.5s ease-in-out infinite;
 }
 @keyframes orbit-pulse-warn {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(240, 201, 123, 0); }
-  50% { box-shadow: 0 0 0 3px rgba(240, 201, 123, 0.08); }
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 3px var(--semantic-warn-soft); }
 }
 .orbit-toggle-ico {
   color: var(--text-tertiary);
