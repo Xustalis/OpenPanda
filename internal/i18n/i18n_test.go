@@ -3,6 +3,7 @@
 package i18n
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -186,4 +187,105 @@ func TestKeyParity(t *testing.T) {
 			t.Errorf("locale %s is missing %d keys, e.g. %v", loc, len(missing), missing[:min(10, len(missing))])
 		}
 	}
+}
+
+// TestKeyParityReverse covers the direction TestKeyParity cannot: keys that
+// exist ONLY in a translation. An extra key is almost always a renamed-or-
+// misspelled English key — the translator's string sits unread because the
+// CLI asks for the English spelling and falls back to it. Catching the drift
+// here is cheaper than auditing why a screen is half-translated.
+func TestKeyParityReverse(t *testing.T) {
+	en := messages[English]
+	for _, loc := range Locales {
+		if loc == English {
+			continue
+		}
+		var extra []string
+		for k := range messages[loc] {
+			if _, ok := en[k]; !ok {
+				extra = append(extra, k)
+			}
+		}
+		if len(extra) > 0 {
+			t.Errorf("locale %s has %d keys missing from English, e.g. %v", loc, len(extra), extra[:min(10, len(extra))])
+		}
+	}
+}
+
+// TestNoEmptyTranslations flags entries that exist but carry no text: T()
+// treats an empty value as a hit, so the UI renders a blank line instead of
+// falling back to English.
+func TestNoEmptyTranslations(t *testing.T) {
+	for _, loc := range Locales {
+		for k, v := range messages[loc] {
+			if strings.TrimSpace(v) == "" {
+				t.Errorf("locale %s key %s has an empty translation", loc, k)
+			}
+		}
+	}
+}
+
+// TestPlaceholderParity requires every {name} placeholder in the English
+// source to appear in each translation — Tf interpolates by name, so a
+// translation that drops or renames a placeholder renders the literal
+// "{err}" (or silently drops the data) instead of the runtime value.
+func TestPlaceholderParity(t *testing.T) {
+	en := messages[English]
+	for _, loc := range Locales {
+		if loc == English {
+			continue
+		}
+		for k, enText := range en {
+			tr, ok := messages[loc][k]
+			if !ok {
+				continue // missing keys are TestKeyParity's beat
+			}
+			want, got := placeholders(enText), placeholders(tr)
+			if want != got {
+				t.Errorf("locale %s key %s placeholders = {%s}, want {%s}", loc, k, got, want)
+			}
+		}
+	}
+}
+
+func placeholders(s string) string {
+	set := map[string]bool{}
+	for {
+		i := strings.IndexByte(s, '{')
+		if i < 0 {
+			break
+		}
+		s = s[i+1:]
+		j := strings.IndexByte(s, '}')
+		if j < 0 {
+			break
+		}
+		name := s[:j]
+		// Only bare identifiers count: prompt templates carry literal JSON
+		// examples like {"to":"<stage id>"} whose braces a translator is
+		// EXPECTED to localize — treating those spans as placeholders flags
+		// correct work. A Tf placeholder is always {word}, nothing else.
+		if isPlaceholderName(name) {
+			set[name] = true
+		}
+		s = s[j+1:]
+	}
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	return strings.Join(names, ",")
+}
+
+func isPlaceholderName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !(r == '_' || '0' <= r && r <= '9' || 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z') {
+			return false
+		}
+	}
+	return true
 }
