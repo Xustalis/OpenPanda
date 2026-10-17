@@ -32,6 +32,13 @@ const minLeaseRenewInterval = 200 * time.Millisecond
 // repository at once. The lease bounds *silence* from an executor, not total
 // runtime: renewLease heartbeats it while execution is live.
 func (c *Core) SetTimeouts(t config.TimeoutsConfig) {
+	if t.AgentS > 0 && t.AgentS < 60 {
+		// commander.SetAgentTimeout silently drops sub-minute budgets as
+		// misconfiguration — say so, or the operator tunes a 45s agent cap,
+		// sees it never fire, and files it as a scheduler bug.
+		c.logger.Warn("agent_s under one minute ignored",
+			"configured", t.AgentTimeout(), "floor", time.Minute)
+	}
 	commander.SetAgentTimeout(t.AgentTimeout())
 	commander.SetSilenceTimeout(t.SilenceTimeout())
 	// Native-command budget (timeouts.native_s). Zero keeps the executor's
