@@ -246,7 +246,7 @@ func runCardRescan(args []string) {
 	}
 	if !jsonOutput {
 		fmt.Printf("%s updated (%d change(s))\n", path, len(diffs))
-		notifyDaemonReload()
+		notifyDaemonReload(cliConfigPath)
 	}
 }
 
@@ -322,7 +322,7 @@ func runCardEdit(args []string) {
 		fatal("write card", err)
 	}
 	fmt.Printf("%s saved\n", path)
-	notifyDaemonReload()
+	notifyDaemonReload(cliConfigPath)
 }
 
 // openEditor runs the user's editor on path, wired to the real terminal.
@@ -384,7 +384,7 @@ func runCardSet(args []string) {
 		return
 	}
 	fmt.Printf("%s updated\n", path)
-	notifyDaemonReload()
+	notifyDaemonReload(cliConfigPath)
 }
 
 // setCardField applies one <field>=<value> assignment. Only the scalar fields a

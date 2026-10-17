@@ -21,10 +21,18 @@ import (
 )
 
 // daemonPIDFile returns where the daemon records its PID, next to the
-// database the config resolves to. Empty when the config cannot be resolved
-// silently (the caller then just prints the restart hint).
-func daemonPIDFile() string {
-	cfg, err := loadConfigQuietly("")
+// database the given config resolves to. Empty when the config cannot be
+// resolved silently (the caller then just prints the restart hint).
+//
+// configPath must be the path the caller just wrote (or, for card edits that
+// touch no config, the CLI's resolved config — pass cliConfigPath so the
+// global --config flag is honored). Resolving the default chain here instead
+// would signal a daemon governed by a different config: `nodes add --config
+// node-b.yaml` must SIGHUP node-b's daemon, never the default node's —
+// multi-node hosts run one daemon per config and only the edited one's peer
+// list is stale.
+func daemonPIDFile(configPath string) string {
+	cfg, err := loadConfigQuietly(configPath)
 	if err != nil || cfg.Storage.DBPath == "" {
 		return ""
 	}
@@ -35,16 +43,16 @@ func daemonPIDFile() string {
 // spelling. REPL/TUI callers use notifyDaemonReloadTo with their scoped
 // writer instead, so the lines land in the transcript rather than on the
 // frame Bubble Tea is repainting.
-func notifyDaemonReload() {
-	notifyDaemonReloadTo(os.Stdout)
+func notifyDaemonReload(configPath string) {
+	notifyDaemonReloadTo(os.Stdout, configPath)
 }
 
 // sighupDaemon delivers SIGHUP to the daemon PID recorded next to the
-// database. Signal 0 probes liveness first: a stale PID file from a crashed
-// daemon must not turn into a signal to an unrelated process that happened
-// to reuse the number.
-func sighupDaemon() (int, bool) {
-	pidFile := daemonPIDFile()
+// database configPath's config points at. Signal 0 probes liveness first: a
+// stale PID file from a crashed daemon must not turn into a signal to an
+// unrelated process that happened to reuse the number.
+func sighupDaemon(configPath string) (int, bool) {
+	pidFile := daemonPIDFile(configPath)
 	if pidFile == "" {
 		return 0, false
 	}
@@ -71,8 +79,8 @@ func sighupDaemon() (int, bool) {
 // daemon), a missing one (daemon never started), or a config that cannot be
 // resolved all degrade to the restart hint — the card on disk is already the
 // new one either way.
-func notifyDaemonReloadTo(out io.Writer) {
-	pid, ok := sighupDaemon()
+func notifyDaemonReloadTo(out io.Writer, configPath string) {
+	pid, ok := sighupDaemon(configPath)
 	if !ok {
 		fmt.Fprintln(out, "daemon not running — the new card is picked up at its next start")
 		return
@@ -85,8 +93,8 @@ func notifyDaemonReloadTo(out io.Writer) {
 // daemon's SIGHUP handler applies the fresh peers/secret/cleartext policy
 // through Core.ApplyNetworkConfig — the link forms (or drops) without a
 // restart.
-func notifyDaemonMeshTo(out io.Writer) {
-	pid, ok := sighupDaemon()
+func notifyDaemonMeshTo(out io.Writer, configPath string) {
+	pid, ok := sighupDaemon(configPath)
 	if !ok {
 		fmt.Fprintln(out, "daemon not running — the new peer list takes effect at its next start")
 		return

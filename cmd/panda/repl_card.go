@@ -417,7 +417,7 @@ func (r *repl) cardManual(rest []string) {
 func (r *repl) reloadCardLive() {
 	if r.engine.Load() == nil {
 		r.outln(i18n.T(r.loc, "repl.card.noEngine"))
-		notifyDaemonReloadTo(r.commandOutput())
+		notifyDaemonReloadTo(r.commandOutput(), cliConfigPath)
 		return
 	}
 	cardPath, _ := r.cardInfo()

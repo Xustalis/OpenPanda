@@ -21,16 +21,16 @@ import (
 // call sites stay identical and the difference cannot leak elsewhere. The
 // To variant takes the caller's writer so REPL/TUI output stays in the
 // transcript.
-func notifyDaemonReload() {
-	notifyDaemonReloadTo(os.Stdout)
+func notifyDaemonReload(configPath string) {
+	notifyDaemonReloadTo(os.Stdout, configPath)
 }
 
-func notifyDaemonReloadTo(out io.Writer) {
+func notifyDaemonReloadTo(out io.Writer, _ string) {
 	fmt.Fprintln(out, "restart the daemon for the new card to be advertised to peers")
 }
 
 // notifyDaemonMeshTo mirrors the unix peer-list notification: Windows cannot
 // SIGHUP the daemon, so the honest outcome is the restart hint.
-func notifyDaemonMeshTo(out io.Writer) {
+func notifyDaemonMeshTo(out io.Writer, _ string) {
 	fmt.Fprintln(out, "restart the daemon for the new peer list to take effect")
 }
