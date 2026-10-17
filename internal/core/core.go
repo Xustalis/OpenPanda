@@ -156,6 +156,13 @@ type Core struct {
 	// since the node and its tools write them as a side effect of running a task
 	// — not as the agent's work product.
 	hostStatePaths []string
+	// packProtectedPaths are host files that must never leave the node inside
+	// an artifact — the config file (which carries the mesh secret and any
+	// API keys) and the capability card. They are pruned at pack time and
+	// write-protected at extract, the same as hostStatePaths, but they are
+	// NOT masked from scope drift: an agent that edits the live config is
+	// exactly the drift the detector exists to park for review.
+	packProtectedPaths []string
 
 	// netMu guards the hot-reloadable network policy below — the shared
 	// secret and the cleartext gate. The setters run on a settings save
@@ -922,6 +929,23 @@ func (c *Core) SetHostStatePaths(paths []string) {
 		}
 		if abs, err := filepath.Abs(p); err == nil {
 			c.hostStatePaths = append(c.hostStatePaths, filepath.Clean(abs))
+		}
+	}
+}
+
+// SetPackProtectedPaths records the node's own never-ship files — the config
+// (mesh secret, API keys) and the capability card — so artifact packs prune
+// them wherever a tree happens to contain them, and extracts refuse to let an
+// incoming tree overwrite them. Kept separate from hostStatePaths because the
+// drift detector must still flag a task that rewrites the live config.
+func (c *Core) SetPackProtectedPaths(paths []string) {
+	c.packProtectedPaths = make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(p); err == nil {
+			c.packProtectedPaths = append(c.packProtectedPaths, filepath.Clean(abs))
 		}
 	}
 }

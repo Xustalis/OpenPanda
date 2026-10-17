@@ -124,7 +124,7 @@ var extractProtectedDirs = map[string]bool{
 // and the pid file. A host path equal to root is dropped: pruning it would
 // empty the artifact, and the file-level entries still cover the live files.
 func (c *Core) hostStatePrune(root string) []string {
-	if len(c.hostStatePaths) == 0 {
+	if len(c.hostStatePaths) == 0 && len(c.packProtectedPaths) == 0 {
 		return nil
 	}
 	abs, err := filepath.Abs(root)
@@ -133,7 +133,7 @@ func (c *Core) hostStatePrune(root string) []string {
 	}
 	abs = filepath.Clean(abs)
 	var out []string
-	for _, h := range c.hostStatePaths {
+	for _, h := range append(c.hostStatePaths, c.packProtectedPaths...) {
 		if h == abs {
 			continue
 		}
@@ -153,7 +153,7 @@ func (c *Core) hostStatePrune(root string) []string {
 // readers see the imported snapshot — the node silently splits from its own
 // state until restart.
 func (c *Core) extractSkipSet(dst string) map[string]bool {
-	if len(c.hostStatePaths) == 0 {
+	if len(c.hostStatePaths) == 0 && len(c.packProtectedPaths) == 0 {
 		return extractProtectedDirs
 	}
 	abs, err := filepath.Abs(dst)
@@ -161,11 +161,11 @@ func (c *Core) extractSkipSet(dst string) map[string]bool {
 		return extractProtectedDirs
 	}
 	abs = filepath.Clean(abs)
-	skip := make(map[string]bool, len(extractProtectedDirs)+len(c.hostStatePaths))
+	skip := make(map[string]bool, len(extractProtectedDirs)+len(c.hostStatePaths)+len(c.packProtectedPaths))
 	for k := range extractProtectedDirs {
 		skip[k] = true
 	}
-	for _, h := range c.hostStatePaths {
+	for _, h := range append(c.hostStatePaths, c.packProtectedPaths...) {
 		if h == abs {
 			continue // a state path equal to dst cannot prune the whole tree
 		}

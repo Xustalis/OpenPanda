@@ -1586,6 +1586,12 @@ func (c *Config) HostStatePaths() []string {
 		c.Push.VAPIDKeyPath,    // web-push private key — never task output
 		c.Storage.MemoryPath,
 		c.Storage.SkillsPath,
+		// The runtime work root itself: task dirs, plan staging, and landed
+		// copies of REMOTE project trees all live under it — a project pack
+		// that shipped them would carry a peer's files back out, and worse,
+		// re-pack them into the next delegation forever (observed: nested
+		// work/projects/<peer>/… recursion in real artifacts).
+		c.Storage.WorkPath,
 		filepath.Join(c.Storage.WorkPath, ".claude"), // the agent CLI's own project config
 	}
 	out := paths[:0]

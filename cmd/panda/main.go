@@ -298,6 +298,11 @@ func runDaemon(args []string) {
 		coreNode.SetWorkDir(cfg.Storage.WorkPath)
 	}
 	coreNode.SetHostStatePaths(cfg.HostStatePaths())
+	// The node's own config and card are never artifact content: a tree that
+	// happens to contain them (a project rooted at the daemon dir, a dev node
+	// running work_path="." in its checkout) must not ship the mesh secret
+	// or the card to whoever asked for the pack.
+	coreNode.SetPackProtectedPaths([]string{*configPath, *cardPath})
 	// OS sandbox (sandbox.*): the environment filter always applies; when a
 	// mode is configured, every spawned native command and adapter runs under
 	// the platform's deny-default confinement on top. The node's own
