@@ -123,6 +123,7 @@ func newCoreWithAgentListen(t *testing.T, id, addr string) *Core {
 	}
 	c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
 	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 	return c
 }

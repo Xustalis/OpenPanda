@@ -26,6 +26,7 @@ func TestManualTaskParksForReview(t *testing.T) {
 		Capacity:      ledger.Capacity{CPUCores: 4, RAMGB: 2, MaxConcurrent: 2},
 	}
 	c := NewCore(db, "pi", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 
 	tk, payload, err := c.SubmitLocal(ctx, TaskInput{
 		Title:    "wire up the servo",

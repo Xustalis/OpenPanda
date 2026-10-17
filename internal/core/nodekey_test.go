@@ -21,6 +21,7 @@ import (
 func TestNodeKeyPairGeneratedAndPersisted(t *testing.T) {
 	db := openTestDB(t)
 	c := NewCore(db, "node-a", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 
 	pub1, priv1, ok := c.nodeKeyPair()
 	if !ok || len(priv1) == 0 {
@@ -32,6 +33,7 @@ func TestNodeKeyPairGeneratedAndPersisted(t *testing.T) {
 	}
 
 	other := NewCore(db, "node-a", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	other.SetWorkDir(t.TempDir())
 	pub3, _, ok := other.nodeKeyPair()
 	if !ok || !pub1.Equal(pub3) {
 		t.Fatal("a fresh Core did not recover the persisted node key")

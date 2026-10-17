@@ -21,6 +21,7 @@ func TestReconcileStopsOutOfBandTerminal(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	c := NewCore(db, "worker", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 
 	// A task this process is "executing": registered like a real run.
 	tk, err := c.store.Create(ctx, "", "", "orphaned exec", "worker", []string{"worker"})
@@ -67,6 +68,7 @@ func TestReconcileLeavesLiveExecutions(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	c := NewCore(db, "worker", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 
 	tk, err := c.store.Create(ctx, "", "", "live exec", "worker", []string{"worker"})
 	if err != nil {

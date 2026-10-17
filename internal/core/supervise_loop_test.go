@@ -35,6 +35,7 @@ func newSuperviseCore(t *testing.T, id string, tier int) *Core {
 	}
 	c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
 	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 	return c
 }
@@ -450,6 +451,7 @@ func TestResumeApprovedAfterEphemeralRestart(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 	second := NewCore(first.db, "entry-22222222", first.card, 5, testLogger(), config.ModelConfig{})
+	second.SetWorkDir(t.TempDir())
 	second.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
 	second.router.SetAdapterRunner(agentRunner(&calls))
 	second.SetSharedSecret(testSharedSecret)
@@ -788,6 +790,7 @@ func TestSuperviseStagnationFailoverToAlternate(t *testing.T) {
 		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
 	c := NewCore(db, "node-1", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
 	c.SetSharedSecret(testSharedSecret)
 

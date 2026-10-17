@@ -26,6 +26,7 @@ func TestBorrowedEngineShutdownLeavesRowOnline(t *testing.T) {
 	}
 
 	c := NewCore(db, "node-x", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.SetOwnsNodeRow(false)
 	c.Shutdown(ctx)
 
@@ -40,6 +41,7 @@ func TestBorrowedEngineShutdownLeavesRowOnline(t *testing.T) {
 	// The owning daemon still retires its row — the flag must not leak the
 	// other direction and strand a dead node online forever.
 	owner := NewCore(db, "node-x", card, 5, testLogger(), config.ModelConfig{})
+	owner.SetWorkDir(t.TempDir())
 	owner.Shutdown(ctx)
 	nodes, err = ledger.Query(db, "online", "")
 	if err != nil {
@@ -57,6 +59,7 @@ func TestBorrowedEngineShutdownLeavesRowOnline(t *testing.T) {
 func TestExtractSkipSetProtectsLiveState(t *testing.T) {
 	dst := t.TempDir()
 	c := NewCore(openTestDB(t), "node-y", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.SetHostStatePaths([]string{
 		filepath.Join(dst, "data"),            // sqlite dir inside the destination
 		filepath.Join(dst, "data", "node.db"), // file-level entry
@@ -77,6 +80,7 @@ func TestExtractSkipSetProtectsLiveState(t *testing.T) {
 
 	// No state configured → the bare static set, untouched.
 	bare := NewCore(openTestDB(t), "node-z", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	bare.SetWorkDir(t.TempDir())
 	if got := bare.extractSkipSet(dst); len(got) != len(extractProtectedDirs) {
 		t.Fatalf("no host state should return the static set, got %v", got)
 	}
@@ -88,6 +92,7 @@ func TestExtractSkipSetProtectsLiveState(t *testing.T) {
 func TestHostStatePruneInsideRootOnly(t *testing.T) {
 	root := t.TempDir()
 	c := NewCore(openTestDB(t), "node-p", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	inside := filepath.Join(root, "data", "node.db")
 	c.SetHostStatePaths([]string{inside, "/elsewhere/x.db", root})
 	got := c.hostStatePrune(root)

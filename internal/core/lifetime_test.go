@@ -34,6 +34,7 @@ func TestLeaseRenewalOutlivesShortLease(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	c := NewCore(db, "worker", sleepCard("2"), 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	// A lease far shorter than the task: renewal must carry it anyway.
 	c.leaseTimeout = 600 * time.Millisecond
 
@@ -63,6 +64,7 @@ func TestLeaseStopsRenewingAfterExecution(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	c := NewCore(db, "worker", sleepCard("0"), 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.leaseTimeout = 400 * time.Millisecond
 
 	tk := createTask(t, c.store, "", "abandoned", "worker")
@@ -132,6 +134,7 @@ func TestCancelAbortsRunningSubprocess(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	c := NewCore(db, "worker", sleepCard("60"), 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.leaseTimeout = 10 * time.Minute // long: only the explicit cancel ends this
 
 	done := make(chan string, 1)
@@ -189,6 +192,7 @@ func TestMonitorExpiryAbortsRunningExecution(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	c := NewCore(db, "worker", sleepCard("0"), 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 
 	tk := createTask(t, c.store, "", "expiring", "worker")
 	if err := c.store.Queue(ctx, tk.TaskID, "worker"); err != nil {
@@ -240,6 +244,7 @@ func TestProgressBeatRefreshesDelegatorLease(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	c := NewCore(db, "root", ledger.Card{}, 10, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.leaseTimeout = 30 * time.Minute
 
 	tk := createTask(t, c.store, "", "delegated", "root")
@@ -316,6 +321,7 @@ func TestProgressBeatRefreshesDelegatorLease(t *testing.T) {
 func TestSetTimeoutsKeepsLeaseAboveAgentLimit(t *testing.T) {
 	db := openTestDB(t)
 	c := NewCore(db, "worker", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	t.Cleanup(func() { commander.SetAgentTimeout(config.DefaultAgentTimeoutS * time.Second) })
 
 	// The historical numbers: a 600s agent budget against a 600s lease.
@@ -336,6 +342,7 @@ func TestSetTimeoutsKeepsLeaseAboveAgentLimit(t *testing.T) {
 func TestAgentTimeoutByKind(t *testing.T) {
 	db := openTestDB(t)
 	c := NewCore(db, "worker", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	t.Cleanup(func() { commander.SetAgentTimeout(config.DefaultAgentTimeoutS * time.Second) })
 
 	c.SetTimeouts(config.TimeoutsConfig{

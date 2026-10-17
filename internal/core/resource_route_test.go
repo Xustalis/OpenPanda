@@ -26,6 +26,7 @@ func newCoreWithResources(t *testing.T, id string, native ledger.NativeAbility,
 		ResourceProfile: res,
 	}
 	c := NewCore(openTestDB(t), id, card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 	return c
 }

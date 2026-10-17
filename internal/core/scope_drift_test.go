@@ -60,6 +60,9 @@ func newCoreWithAgentModel(t *testing.T, id string, model config.ModelConfig) *C
 	// Tests in this suite fake the adapter runner, so pair it with an
 	// always-available prober: no real agent CLI needs to be installed.
 	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	// A temp work dir keeps per-task dirs out of internal/core/tasks/ for
+	// callers that don't pin their own; callers that do override after this.
+	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 	return c
 }
@@ -270,6 +273,7 @@ func TestAgentWithinScopeCompletes(t *testing.T) {
 func TestFilterHostDriftKeepsAgentChangesUnderDataRoot(t *testing.T) {
 	work := t.TempDir()
 	c := NewCore(openTestDB(t), "drift-node-layout", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.SetHostStatePaths([]string{
 		work, // data dir == work root: the default install layout
 		filepath.Join(work, "openpanda.db"),
@@ -321,6 +325,7 @@ func TestFilterHostDriftProjectWorkDir(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	c := NewCore(openTestDB(t), "drift-node-proj", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.SetHostStatePaths([]string{
 		root,
 		filepath.Join(root, "openpanda.db-wal"),
@@ -339,6 +344,7 @@ func TestFilterHostDriftNestedDataDir(t *testing.T) {
 	work := t.TempDir()
 	data := filepath.Join(work, "data")
 	c := NewCore(openTestDB(t), "drift-node-nested", ledger.Card{}, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.SetHostStatePaths([]string{data})
 	got := c.filterHostDrift(work, []string{"data/openpanda.db-wal", "src/app.go"})
 	if len(got) != 1 || got[0] != "src/app.go" {
