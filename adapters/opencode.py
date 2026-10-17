@@ -40,6 +40,11 @@ refused with the roster in the diagnosis, because a stale id makes every run
 die in seconds with an opaque resolution error. tools_policy is noted but not
 enforced: opencode gates tools through its own permission config, not a CLI
 whitelist, so both policies run with the agent's configured tool face.
+restricted (unconsented remote task) narrows to the built-in read-only agent:
+`--agent plan` denies file mutations and write-class bash commands while
+read tools keep working, and --auto cannot lift it (it only auto-approves
+permissions that are not explicitly denied). A build without --agent refuses
+the run rather than degrading to a full-power face.
 
 The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the opencode difference:
@@ -92,7 +97,8 @@ def _cli_flags():
         auto = "--auto"
     elif re.search(r"--dangerously-skip-permissions\b", text):
         auto = "--dangerously-skip-permissions"
-    _FLAG_PROBE = {"format": bool(re.search(r"--format\b", text)), "auto": auto}
+    _FLAG_PROBE = {"format": bool(re.search(r"--format\b", text)), "auto": auto,
+                   "agent": bool(re.search(r"--agent\b", text))}
     return _FLAG_PROBE
 
 
@@ -450,10 +456,31 @@ def main():
                     pick, len(available), "; simple task prefers free" if prefer_free else ""))
             model = pick
 
+    # A restricted request (unconsented remote task) narrows the run to the
+    # built-in read-only agent: opencode's "plan" mode denies file mutations
+    # and write-class bash commands while read tools keep working — verified
+    # against v2 builds where ls passes and touch/redirects are refused.
+    # --auto cannot lift it: it only auto-approves permissions NOT explicitly
+    # denied, and the plan agent's denials are explicit. A build without
+    # --agent cannot express the narrow face at all, so the run refuses —
+    # degrading to the default agent would silently run full-power, the exact
+    # hole restricted exists to close.
+    agent_face = ""
+    if req.restricted:
+        if not flags["agent"]:
+            harness.emit(False,
+                         "restricted run refused: this opencode build has no "
+                         "--agent flag to narrow the tool face", 1)
+            return
+        agent_face = "plan"
+        harness.progress("restricted mode: --agent plan (read-only tool face)")
+
     def run_cmd(m):
         c = list(base)
         if m:
             c += ["--model", m]
+        if agent_face:
+            c += ["--agent", agent_face]
         # A follow-up round resumes the agent's own session: its reasoning
         # trail survives instead of cold-starting on the bare instruction.
         # `resumed` (not req.resume) is read here so an in-adapter retry —
@@ -468,7 +495,7 @@ def main():
         # A build too old for --format json goes straight to the plain text
         # mode — the stream attempt could only fail with a usage line.
         return _run_plain(prompt, cwd, timeout, req.resume, model, auto,
-                          prefer_free)
+                          prefer_free, agent_face=agent_face)
 
     tried = set()
     resumed = req.resume
@@ -499,7 +526,7 @@ def main():
             # could match a filtered token) and carries the build's own
             # permission flag and a resolvable model.
             return _run_plain(prompt, cwd, timeout, resumed, model, auto,
-                              prefer_free, tried)
+                              prefer_free, tried, agent_face=agent_face)
         except subprocess.TimeoutExpired:
             harness.emit(False, "opencode timed out", 124)
             return
@@ -522,7 +549,7 @@ def main():
 
 
 def _run_plain(prompt, cwd, timeout, resume, model, auto,
-               prefer_free=False, tried=None):
+               prefer_free=False, tried=None, agent_face=""):
     """One-shot plain text mode for builds without --format json."""
     if not model:
         # The built-in default rots as the free roster drifts; re-anchor it
@@ -540,6 +567,8 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
         if note:
             harness.progress(note)
     plain = ["opencode", "run", "--print-logs=false"] + auto + ["--model", model]
+    if agent_face:
+        plain += ["--agent", agent_face]
     if resume:
         plain += ["--session", resume]
     plain.append(prompt)
@@ -562,7 +591,7 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
                 harness.progress("model %s rejected; re-probed roster, "
                                  "retrying on %s" % (model, pick))
                 return _run_plain(prompt, cwd, timeout, resume, pick, auto,
-                                  prefer_free, tried)
+                                  prefer_free, tried, agent_face=agent_face)
     harness.emit(returncode == 0, text.strip() or err.strip(), returncode)
 
 
