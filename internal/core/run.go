@@ -1125,9 +1125,20 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			prompt += i18n.T(promptLang, "prompt.msgboard.hint")
 		}
 
+		// A task stamped remote at intake carries off-node intent: commander
+		// holds its agent run to the restricted tool face unless the origin's
+		// consent grant authorized it. The persisted flag is authoritative —
+		// the chain fallback only catches rows written before the flag
+		// existed; a peer can claim chain[0]=us but cannot unset remote.
+		remoteOrigin := task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID)
+		restricted := remoteOrigin && !task.Authorized
+
 		// — Trace: exec_agent_start (orbit Step-3 "starting this stage on N").
 		// We report before Execute so the orbit paints the stage bar as
-		// running immediately. Best-effort only.
+		// running immediately. Best-effort only. The restricted flag lands
+		// here — not in the throttled progress stream — so the tool face a
+		// remote task ran under is auditable even when the adapter's own
+		// "restricted mode" note loses the progress-rate race.
 		c.EvTrace(execCtx, taskID, EvExecAgentStart, map[string]any{
 			"round":      round + 1,
 			"budget":     maxRounds,
@@ -1136,6 +1147,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			"adapter":    plan.Adapter,
 			"model":      activeModel,
 			"authorized": task.Authorized,
+			"restricted": restricted,
 			"tier":       plan.Tier,
 			"workdir":    workDir,
 		})
@@ -1152,13 +1164,6 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				"session": sessionID, "minted_by": sessionAdapter, "plan_adapter": plan.Adapter,
 			})
 		}
-		// A task stamped remote at intake carries off-node intent: commander
-		// holds its agent run to the restricted tool face unless the origin's
-		// consent grant authorized it. The persisted flag is authoritative —
-		// the chain fallback only catches rows written before the flag
-		// existed; a peer can claim chain[0]=us but cannot unset remote.
-		remoteOrigin := task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID)
-		restricted := remoteOrigin && !task.Authorized
 		if remoteOrigin {
 			runCtx = commander.WithRemoteTask(runCtx)
 		}
