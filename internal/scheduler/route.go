@@ -173,11 +173,13 @@ func RouteAt(self string, chain []string, employees []ledger.Node, localMatch fu
 // estimate of the task's output.
 const diskStarvedFloorGB = 0.5
 
-// diskStarved reports whether a node's OWN live sample shows a nearly full
+// DiskStarved reports whether a node's OWN live sample shows a nearly full
 // work disk. Only a measured value counts: the -1 sentinel and a nil live
 // block both mean "no data", and absence of data must not exclude a node
 // (pre-live-metrics peers and probe-less minimal installs would all vanish).
-func diskStarved(n ledger.Node) bool {
+// Exported so callers that rebuild Route's candidate set (the orbit trace in
+// core.Submit) apply the identical exclusion instead of a stale copy.
+func DiskStarved(n ledger.Node) bool {
 	return n.Capacity.Live != nil &&
 		n.Capacity.Live.DiskFreeGB >= 0 &&
 		n.Capacity.Live.DiskFreeGB < diskStarvedFloorGB
@@ -217,7 +219,7 @@ func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch f
 			// choosing among the same directory this node already sees.
 			continue
 		}
-		if diskStarved(n) {
+		if DiskStarved(n) {
 			// The node's own live sample says its work disk is nearly full:
 			// it cannot write results or adopt a worktree, so forwarding
 			// would only fail there. Measured data only — an unprobed peer
@@ -244,7 +246,7 @@ func RouteAtP(self string, chain []string, employees []ledger.Node, localMatch f
 	// "nobody can do this" would send such a stage to a sub-scheduler or decline
 	// it, when in fact every node can run it and only the hardware filter has an
 	// opinion.
-	canLocal := (len(required) == 0 || localMatch(required)) && (!haveSelf || (selfNode.Fits(req) && !diskStarved(selfNode)))
+	canLocal := (len(required) == 0 || localMatch(required)) && (!haveSelf || (selfNode.Fits(req) && !DiskStarved(selfNode)))
 
 	// A named node is authoritative when it can take the task; otherwise fall
 	// through to scored ranking so the task still runs somewhere capable. Match
@@ -348,11 +350,13 @@ func graphFirstHop(self ledger.Node, employees []ledger.Node, seen map[string]bo
 	for {
 		// Extract the unvisited node with the smallest tentative cost. The
 		// mesh's directory is a handful of rows, so a linear scan beats the
-		// heap bookkeeping.
+		// heap bookkeeping. Equal costs take the lowest node id: map order is
+		// random, and a hop that flaps between equal-cost relays makes both
+		// traces and outbox custody harder to reason about.
 		var cur string
 		curDist := int64(math.MaxInt64)
 		for id, d := range dist {
-			if !visited[id] && d < curDist {
+			if !visited[id] && (d < curDist || (d == curDist && id < cur)) {
 				cur, curDist = id, d
 			}
 		}
@@ -418,7 +422,7 @@ func RouteToFirstHop(self ledger.Node, employees []ledger.Node, dest string, see
 		var cur string
 		curDist := int64(math.MaxInt64)
 		for id, d := range dist {
-			if !visited[id] && d < curDist {
+			if !visited[id] && (d < curDist || (d == curDist && id < cur)) {
 				cur, curDist = id, d
 			}
 		}
@@ -486,7 +490,7 @@ func DTNNextHop(self ledger.Node, employees []ledger.Node, dest string, exclude 
 		var cur string
 		curDist := int64(math.MaxInt64)
 		for id, d := range dist {
-			if !visited[id] && d < curDist {
+			if !visited[id] && (d < curDist || (d == curDist && id < cur)) {
 				cur, curDist = id, d
 			}
 		}
