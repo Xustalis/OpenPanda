@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // steerTestTask enqueues one task without a scheduler running, so it sits
@@ -94,6 +95,22 @@ func TestUserMessageModes(t *testing.T) {
 		t.Fatalf("live inject: status=%q fired=%v err=%v", status, fired, err)
 	}
 	c.clearInterrupt(tk.TaskID)
+
+	// Every posted note carries a real timestamp — a zero SentAt rendered
+	// "~57 years ago" on `panda task board` and broke ordering by time.
+	// Re-fetch first: the live inject above posted the third note, and the
+	// freshness check (not just > 0) is what catches a wrong unit — a
+	// millisecond stamp is positive too.
+	msgs, err = c.store.TaskMessages(ctx, "task:"+tk.TaskID)
+	if err != nil || len(msgs) != 3 {
+		t.Fatalf("board after three sends: %v msgs=%d want 3", err, len(msgs))
+	}
+	now := time.Now().Unix()
+	for _, m := range msgs {
+		if age := now - m.SentAt; age < 0 || age > 60 {
+			t.Fatalf("user message %q has SentAt=%d (age %ds), want a fresh unix ts", m.Body, m.SentAt, age)
+		}
+	}
 
 	// A terminal task refuses both modes.
 	if _, err := c.store.db.ExecContext(ctx,

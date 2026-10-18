@@ -429,6 +429,9 @@ func TestDelegateStampsRemoteProvenance(t *testing.T) {
 	if !tk.Remote {
 		t.Fatalf("wire-intake task not stamped remote")
 	}
+	// The admitted task is already executing asynchronously — let it settle
+	// before returning so its workdir writes are done when TempDir cleans up.
+	waitLocalTasksSettled(t, c)
 
 	// Contrast: the local submit path stays local.
 	lt, err := c.store.Create(ctx, "", "", "local task", c.nodeID, []string{c.nodeID})

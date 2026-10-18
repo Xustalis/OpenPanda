@@ -55,11 +55,29 @@ func waitLocalTasksSettled(t *testing.T, c *Core) {
 			t.Fatalf("count tasks: %v", err)
 		}
 		if n == 0 {
+			waitArtifactWrites(t, c)
 			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("node %s still has %d non-terminal tasks", c.nodeID, n)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// waitArtifactWrites drains the detached artifact work a result handler
+// launches past the task's terminal state — adoptStageOutput's replica pull,
+// adoptWorktreeOutput's extract-into-checkout. waitLocalTasksSettled only
+// sees row states: the row is already done while the pull is still writing
+// into this node's t.TempDir() pool, which is exactly the "TempDir RemoveAll
+// cleanup: directory not empty" flake the race suite kept reporting.
+func waitArtifactWrites(t *testing.T, c *Core) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { c.WaitArtifacts(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("node %s still has artifact writes in flight", c.nodeID)
 	}
 }

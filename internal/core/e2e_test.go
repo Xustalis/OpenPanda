@@ -810,14 +810,60 @@ func startPair(t *testing.T, ctx context.Context, entry, worker *Core, entryAddr
 	go func() { ed <- entry.Listen(ctx, entryAddr) }()
 	go func() { wd <- worker.Listen(ctx, workerAddr) }()
 
+	// The test's own defer cancel() stops the listeners, but ctx→Shutdown is
+	// not synchronous — the socket can still be accepting (and answering
+	// hellos under the shared test secret with a DIFFERENT node id) while the
+	// next test starts reusing the same port. Wait, bounded, for both Listen
+	// calls to return so a following test never dials a draining listener.
+	t.Cleanup(func() {
+		drain := func(ch chan error) {
+			select {
+			case <-ch:
+			case <-time.After(5 * time.Second):
+			}
+		}
+		drain(ed)
+		drain(wd)
+	})
+
 	// Listeners bind inside Listen; retry the dial until both are up instead
-	// of sleeping a fixed 200ms — loaded CI runners can exceed that.
+	// of sleeping a fixed 200ms — loaded CI runners can exceed that. A Listen
+	// that already returned (a bind failure on a contended port) is dropped
+	// into ed/wd — surface it immediately instead of waiting out the dial
+	// deadline against a listener that will never come up.
+	//
+	// The ports are shared across tests, and a finished test's listener can
+	// still be accepting during its ctx-cancel shutdown window: a dial that
+	// lands on it gets a hello reply signed by the WRONG node id. A transport-
+	// level "success" is therefore not enough — keep redialing until the conn
+	// actually registers the expected id.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if err := entry.DialPeer(ctx, workerAddr); err == nil {
-			break
-		} else if time.Now().After(deadline) {
+		select {
+		case err := <-ed:
 			must(err)
+		case err := <-wd:
+			must(err)
+		default:
+		}
+		if err := entry.DialPeer(ctx, workerAddr); err != nil {
+			if time.Now().After(deadline) {
+				must(err)
+			}
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		// Dial "succeeded" — but which node answered? Poll briefly for the
+		// expected id; a stale listener's wrong-id conn expires and we redial.
+		regDeadline := time.Now().Add(2 * time.Second)
+		for entry.connFor(worker.node.id) == nil && time.Now().Before(regDeadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if entry.connFor(worker.node.id) != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("peer %s never connected", worker.node.id)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

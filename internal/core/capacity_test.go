@@ -79,6 +79,9 @@ func TestCapacityFullDeclinesDelegation(t *testing.T) {
 	if got2.State == StateCancelled {
 		t.Fatalf("task with free capacity was declined")
 	}
+	// The accepted task executes asynchronously in a workdir under t.TempDir;
+	// returning while it runs leaves the RemoveAll cleanup racing its writes.
+	waitLocalTasksSettled(t, c)
 }
 
 // TestWireHeartbeatRefreshesPeer verifies the TMB data link: a broadcast
