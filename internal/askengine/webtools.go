@@ -84,7 +84,7 @@ func registerWebTools(reg *entry.Registry, cfg *config.Config) {
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			q, _ := args["query"].(string)
 			if strings.TrimSpace(q) == "" {
-				return "", fmt.Errorf("query 不能为空")
+				return "", fmt.Errorf("query must not be empty / query 不能为空")
 			}
 			return runWebSearch(ctx, sc, strings.TrimSpace(q))
 		},
@@ -181,7 +181,7 @@ func searchMaxResults(sc config.SearchConfig) int {
 func runWebSearch(ctx context.Context, sc config.SearchConfig, query string) (string, error) {
 	provider := resolveSearchProvider(sc)
 	if provider == "" {
-		return "联网搜索未配置，无法执行。请在 config.yaml 的 search 段启用：provider 可选 searxng（自建实例，配 base_url）、brave / tavily / bocha（配 api_key，或用环境变量 OPENPANDA_SEARCH_API_KEY / 各家 *_API_KEY）。配置后模型即可自主搜索。",
+		return "web search is not configured — enable the search section in config.yaml: provider is one of searxng (self-hosted, set base_url), brave / tavily / bocha (set api_key, or env OPENPANDA_SEARCH_API_KEY / each provider's *_API_KEY). Once configured the model can search on its own. / 联网搜索未配置，无法执行。请在 config.yaml 的 search 段启用：provider 可选 searxng（自建实例，配 base_url）、brave / tavily / bocha（配 api_key，或用环境变量 OPENPANDA_SEARCH_API_KEY / 各家 *_API_KEY）。配置后模型即可自主搜索。",
 			nil
 	}
 	maxR := searchMaxResults(sc)
@@ -199,17 +199,17 @@ func runWebSearch(ctx context.Context, sc config.SearchConfig, query string) (st
 	case "bocha":
 		results, err = searchBocha(ctx, searchAPIKey(sc, "bocha"), query, maxR)
 	default:
-		return "", fmt.Errorf("search.provider %q 不支持（可选：auto、searxng、brave、tavily、bocha、off）", provider)
+		return "", fmt.Errorf("search.provider %q is unsupported (choose: auto, searxng, brave, tavily, bocha, off) / search.provider %q 不支持（可选：auto、searxng、brave、tavily、bocha、off）", provider, provider)
 	}
 	if err != nil {
 		return "", err
 	}
 	if len(results) == 0 {
-		return fmt.Sprintf("搜索「%s」没有找到结果，可换个关键词重试。", query), nil
+		return fmt.Sprintf("no results for %q — retry with different keywords. / 搜索「%s」没有找到结果，可换个关键词重试。", query, query), nil
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "搜索「%s」得到 %d 条结果：", query, len(results))
+	fmt.Fprintf(&b, "%d result(s) for %q / 搜索「%s」得到 %d 条结果：", len(results), query, query, len(results))
 	for i, r := range results {
 		fmt.Fprintf(&b, "\n%d. %s\n   %s", i+1, strings.TrimSpace(r.Title), strings.TrimSpace(r.URL))
 		meta := strings.TrimSpace(r.Site)
@@ -226,7 +226,7 @@ func runWebSearch(ctx context.Context, sc config.SearchConfig, query string) (st
 			fmt.Fprintf(&b, "\n   %s", truncateRunes(s, snippetMaxChars))
 		}
 	}
-	fmt.Fprintf(&b, "\n\n如需某条结果的全文，用 web_fetch 打开其链接。")
+	fmt.Fprintf(&b, "\n\nuse web_fetch on a result link for its full text. / 如需某条结果的全文，用 web_fetch 打开其链接。")
 	return b.String(), nil
 }
 
@@ -245,7 +245,7 @@ type searxngResponse struct {
 func searchSearXNG(ctx context.Context, base, query string, maxR int) ([]webResult, error) {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	if base == "" {
-		return nil, fmt.Errorf("search.provider=searxng 需要 search.base_url（自建实例地址）")
+		return nil, fmt.Errorf("search.provider=searxng needs search.base_url (the self-hosted instance address) / search.provider=searxng 需要 search.base_url（自建实例地址）")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		base+"/search?q="+url.QueryEscape(query)+"&format=json", nil)
@@ -254,18 +254,18 @@ func searchSearXNG(ctx context.Context, base, query string, maxR int) ([]webResu
 	}
 	resp, err := webSearchHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("searxng 不可达：%w", err)
+		return nil, fmt.Errorf("searxng unreachable / searxng 不可达：%w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("searxng 返回 403：实例需在 settings.yml 的 search.formats 中启用 json")
+		return nil, fmt.Errorf("searxng returned 403 — the instance must enable json under search.formats in settings.yml / searxng 返回 403：实例需在 settings.yml 的 search.formats 中启用 json")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("searxng 返回 %s", resp.Status)
+		return nil, fmt.Errorf("searxng returned %s / searxng 返回 %s", resp.Status, resp.Status)
 	}
 	var out searxngResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, searchReadLimit)).Decode(&out); err != nil {
-		return nil, fmt.Errorf("解析 searxng 结果失败：%w", err)
+		return nil, fmt.Errorf("failed to parse searxng results / 解析 searxng 结果失败：%w", err)
 	}
 	results := make([]webResult, 0, len(out.Results))
 	for _, r := range out.Results {
@@ -292,7 +292,7 @@ type braveResponse struct {
 
 func searchBrave(ctx context.Context, key, query string, maxR int) ([]webResult, error) {
 	if key == "" {
-		return nil, fmt.Errorf("search.provider=brave 需要 api_key（search.api_key / OPENPANDA_SEARCH_API_KEY / BRAVE_SEARCH_API_KEY）")
+		return nil, fmt.Errorf("search.provider=brave needs api_key (search.api_key / OPENPANDA_SEARCH_API_KEY / BRAVE_SEARCH_API_KEY) / search.provider=brave 需要 api_key（search.api_key / OPENPANDA_SEARCH_API_KEY / BRAVE_SEARCH_API_KEY）")
 	}
 	u := braveSearchURL + "?q=" + url.QueryEscape(query) + "&count=" + fmt.Sprint(maxR)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -303,15 +303,15 @@ func searchBrave(ctx context.Context, key, query string, maxR int) ([]webResult,
 	req.Header.Set("X-Subscription-Token", key)
 	resp, err := webSearchHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("brave 搜索不可达：%w", err)
+		return nil, fmt.Errorf("brave search unreachable / brave 搜索不可达：%w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("brave 搜索返回 %s（检查 api_key 是否有效）", resp.Status)
+		return nil, fmt.Errorf("brave search returned %s (check the api_key) / brave 搜索返回 %s（检查 api_key 是否有效）", resp.Status, resp.Status)
 	}
 	var out braveResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, searchReadLimit)).Decode(&out); err != nil {
-		return nil, fmt.Errorf("解析 brave 结果失败：%w", err)
+		return nil, fmt.Errorf("failed to parse brave results / 解析 brave 结果失败：%w", err)
 	}
 	results := make([]webResult, 0, len(out.Web.Results))
 	for _, r := range out.Web.Results {
@@ -333,7 +333,7 @@ type tavilyResponse struct {
 
 func searchTavily(ctx context.Context, key, query string, maxR int) ([]webResult, error) {
 	if key == "" {
-		return nil, fmt.Errorf("search.provider=tavily 需要 api_key（search.api_key / OPENPANDA_SEARCH_API_KEY / TAVILY_API_KEY）")
+		return nil, fmt.Errorf("search.provider=tavily needs api_key (search.api_key / OPENPANDA_SEARCH_API_KEY / TAVILY_API_KEY) / search.provider=tavily 需要 api_key（search.api_key / OPENPANDA_SEARCH_API_KEY / TAVILY_API_KEY）")
 	}
 	body, _ := json.Marshal(map[string]any{
 		"api_key":     key,
@@ -347,15 +347,15 @@ func searchTavily(ctx context.Context, key, query string, maxR int) ([]webResult
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := webSearchHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("tavily 搜索不可达：%w", err)
+		return nil, fmt.Errorf("tavily search unreachable / tavily 搜索不可达：%w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tavily 搜索返回 %s（检查 api_key 是否有效）", resp.Status)
+		return nil, fmt.Errorf("tavily search returned %s (check the api_key) / tavily 搜索返回 %s（检查 api_key 是否有效）", resp.Status, resp.Status)
 	}
 	var out tavilyResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, searchReadLimit)).Decode(&out); err != nil {
-		return nil, fmt.Errorf("解析 tavily 结果失败：%w", err)
+		return nil, fmt.Errorf("failed to parse tavily results / 解析 tavily 结果失败：%w", err)
 	}
 	results := make([]webResult, 0, len(out.Results))
 	for _, r := range out.Results {
@@ -390,7 +390,7 @@ type bochaResponse struct {
 
 func searchBocha(ctx context.Context, key, query string, maxR int) ([]webResult, error) {
 	if key == "" {
-		return nil, fmt.Errorf("search.provider=bocha 需要 api_key（search.api_key / OPENPANDA_SEARCH_API_KEY / BOCHA_API_KEY）")
+		return nil, fmt.Errorf("search.provider=bocha needs api_key (search.api_key / OPENPANDA_SEARCH_API_KEY / BOCHA_API_KEY) / search.provider=bocha 需要 api_key（search.api_key / OPENPANDA_SEARCH_API_KEY / BOCHA_API_KEY）")
 	}
 	body, _ := json.Marshal(map[string]any{
 		"query":     query,
@@ -406,15 +406,15 @@ func searchBocha(ctx context.Context, key, query string, maxR int) ([]webResult,
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := webSearchHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("bocha 搜索不可达：%w", err)
+		return nil, fmt.Errorf("bocha search unreachable / bocha 搜索不可达：%w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bocha 搜索返回 %s（检查 api_key 是否有效）", resp.Status)
+		return nil, fmt.Errorf("bocha search returned %s (check the api_key) / bocha 搜索返回 %s（检查 api_key 是否有效）", resp.Status, resp.Status)
 	}
 	var out bochaResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, searchReadLimit)).Decode(&out); err != nil {
-		return nil, fmt.Errorf("解析 bocha 结果失败：%w", err)
+		return nil, fmt.Errorf("failed to parse bocha results / 解析 bocha 结果失败：%w", err)
 	}
 	values := out.Data.WebPages.Value
 	if len(values) == 0 {
@@ -440,7 +440,7 @@ func searchBocha(ctx context.Context, key, query string, maxR int) ([]webResult,
 func runWebFetch(ctx context.Context, rawURL string, maxChars int) (string, error) {
 	u, err := skills.CheckPublicFetchURL(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("该 URL 不允许抓取（仅限公网 https 地址）：%w", err)
+		return "", fmt.Errorf("this URL may not be fetched (public https addresses only) / 该 URL 不允许抓取（仅限公网 https 地址）：%w", err)
 	}
 	return fetchWebPage(ctx, u.String(), rawURL, maxChars)
 }
@@ -456,16 +456,16 @@ func fetchWebPage(ctx context.Context, target, display string, maxChars int) (st
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5")
 	resp, err := webFetchHTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("抓取失败：%w", err)
+		return "", fmt.Errorf("fetch failed / 抓取失败：%w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("抓取 %s 返回 %s", display, resp.Status)
+		return "", fmt.Errorf("fetching %s returned %s / 抓取 %s 返回 %s", display, resp.Status, display, resp.Status)
 	}
 	ctype := strings.ToLower(resp.Header.Get("Content-Type"))
 	body, err := io.ReadAll(io.LimitReader(resp.Body, fetchReadLimit))
 	if err != nil {
-		return "", fmt.Errorf("读取页面失败：%w", err)
+		return "", fmt.Errorf("failed to read the page / 读取页面失败：%w", err)
 	}
 
 	var text string
@@ -476,20 +476,20 @@ func fetchWebPage(ctx context.Context, target, display string, maxChars int) (st
 		strings.Contains(ctype, "xml"), ctype == "":
 		text = string(body)
 	default:
-		return "", fmt.Errorf("不支持的内容类型 %q（仅支持网页/文本）", ctype)
+		return "", fmt.Errorf("unsupported content type %q (web pages/text only) / 不支持的内容类型 %q（仅支持网页/文本）", ctype, ctype)
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return fmt.Sprintf("页面 %s 没有可提取的文本内容。", display), nil
+		return fmt.Sprintf("page %s has no extractable text content. / 页面 %s 没有可提取的文本内容。", display, display), nil
 	}
 	truncated := len([]rune(text)) > maxChars
 	if truncated {
 		text = string([]rune(text)[:maxChars])
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s 正文：\n%s", display, text)
+	fmt.Fprintf(&b, "content of %s / %s 正文：\n%s", display, display, text)
 	if truncated {
-		fmt.Fprintf(&b, "\n\n…（正文超过 %d 字符已截断；可结合页面内链接或更精确的 URL 分段读取）", maxChars)
+		fmt.Fprintf(&b, "\n\n…(body truncated at %d chars; read more via in-page links or a more precise URL / …（正文超过 %d 字符已截断；可结合页面内链接或更精确的 URL 分段读取）", maxChars, maxChars)
 	}
 	return b.String(), nil
 }

@@ -42,6 +42,16 @@ ok()    { printf '%b' "${C_GREEN}✓${C_RESET} $1\n"; }
 warn()  { printf '%b' "${C_YELLOW}⚠${C_RESET} $1\n"; }
 die()   { printf '%b' "${C_RED}✗${C_RESET} $1\n" >&2; exit 1; }
 
+# ── Language ────────────────────────────────────────────────────────────────
+# The installer is the first contact for users of every README locale, so its
+# messages are bilingual: English is the fallback, a zh locale (LANG/LC_*)
+# selects the Chinese text. Call sites pass both: T "中文" "English".
+LANG_IS_ZH=0
+case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
+    zh*|ZH*) LANG_IS_ZH=1 ;;
+esac
+T() { if [ "$LANG_IS_ZH" = 1 ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
+
 usage() {
     sed -n 's/^# \{0,1\}//p' "$0" | sed -n '/^Usage:/,/^$/p' | sed 's/^/  /'
     exit 0
@@ -59,22 +69,22 @@ FORCE="${OPENPANDA_FORCE:-0}"
 # latest version (network problem?)", which sends them debugging the wrong
 # thing.
 if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-    die "需要 curl 或 wget 才能下载安装包"
+    die "$(T "需要 curl 或 wget 才能下载安装包" "curl or wget is required to download the package")"
 fi
 if ! command -v tar >/dev/null 2>&1; then
-    die "需要 tar 才能解包"
+    die "$(T "需要 tar 才能解包" "tar is required to unpack the archive")"
 fi
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --version|-v) [ $# -gt 1 ] || die "--version 需要一个值"; VERSION="$2"; shift 2 ;;
-        --prefix|-p)  [ $# -gt 1 ] || die "--prefix 需要一个值"; PREFIX="$2"; shift 2 ;;
+        --version|-v) [ $# -gt 1 ] || die "$(T "--version 需要一个值" "--version needs a value")"; VERSION="$2"; shift 2 ;;
+        --prefix|-p)  [ $# -gt 1 ] || die "$(T "--prefix 需要一个值" "--prefix needs a value")"; PREFIX="$2"; shift 2 ;;
         --lite)       LITE=1; shift ;;
         --yes|-y)     SERVICE_MODE="yes"; shift ;;
         --no-service) SERVICE_MODE="no"; shift  ;;
         --force|-f)   FORCE=1; shift ;;
         --help|-h)    usage ;;
-        *) die "未知参数: $1（用 --help 查看）" ;;
+        *) die "$(T "未知参数: $1（用 --help 查看）" "unknown argument: $1 (see --help)")" ;;
     esac
 done
 
@@ -99,7 +109,7 @@ download() { # <url> <dest> — retried, resumable asset download
     elif command -v wget >/dev/null 2>&1; then
         wget -c -q -O "$2" "$1"
     else
-        die "需要 curl 或 wget 才能下载安装包"
+        die "$(T "需要 curl 或 wget 才能下载安装包" "curl or wget is required to download the package")"
     fi
 }
 
@@ -138,7 +148,7 @@ sha256() { # <file> → lowercase hex
     elif command -v openssl >/dev/null 2>&1; then
         openssl dgst -sha256 "$1" | awk '{print $NF}'
     else
-        die "未找到 SHA-256 校验工具（sha256sum / shasum / openssl）"
+        die "$(T "未找到 SHA-256 校验工具（sha256sum / shasum / openssl）" "no SHA-256 tool found (sha256sum / shasum / openssl)")"
     fi
 }
 
@@ -148,20 +158,20 @@ ARCH="$(uname -m)"
 case "$OS" in
     Darwin) OS=darwin ;;
     Linux)  OS=linux ;;
-    *) die "不支持的系统: $OS（仅支持 macOS 与 Linux；Windows 请用 scripts/install.ps1）" ;;
+    *) die "$(T "不支持的系统: $OS（仅支持 macOS 与 Linux；Windows 请用 scripts/install.ps1）" "unsupported OS: $OS (macOS and Linux only; on Windows use scripts/install.ps1)")" ;;
 esac
 case "$ARCH" in
     x86_64|amd64) ARCH=amd64 ;;
     aarch64|arm64) ARCH=arm64 ;;
     armv7l|armv6l|armhf)
         # 32-bit ARM is served by the lite build only (Pi OS on older Pi).
-        [ -n "$LITE" ] || die "检测到 32 位 ARM：请加 --lite（lite 构建提供 linux-armv7 目标）"
+        [ -n "$LITE" ] || die "$(T "检测到 32 位 ARM：请加 --lite（lite 构建提供 linux-armv7 目标）" "32-bit ARM detected: pass --lite (the lite build ships the linux-armv7 target)")"
         ARCH=armv7 ;;
-    *) die "不支持的架构: $ARCH（仅提供 amd64、arm64，32 位 ARM 请用 --lite）" ;;
+    *) die "$(T "不支持的架构: $ARCH（仅提供 amd64、arm64，32 位 ARM 请用 --lite）" "unsupported architecture: $ARCH (amd64 and arm64 only; 32-bit ARM needs --lite)")" ;;
 esac
 
 if [ -n "$LITE" ] && [ "$OS" != "linux" ]; then
-    die "lite 构建目前只发布 Linux 目标（amd64/arm64/armv7）"
+    die "$(T "lite 构建目前只发布 Linux 目标（amd64/arm64/armv7）" "the lite build currently ships Linux targets only (amd64/arm64/armv7)")"
 fi
 
 REPO="${OPENPANDA_REPO_URL:-https://github.com/Xustalis/OpenPanda}"
@@ -174,19 +184,19 @@ API="${OPENPANDA_RELEASE_API:-https://api.github.com/repos/${REPO_SLUG}/releases
 
 # ── Resolve version ─────────────────────────────────────────────────────────
 if [ "$VERSION" = "latest" ]; then
-    info "查询最新发行版…"
+    info "$(T "查询最新发行版…" "resolving the latest release…")"
     tag="$(fetch_stdout "$API" \
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
     if [ -z "$tag" ]; then
-        # api.github.com 限流（60 req/h/IP）时，改走 releases/latest 的 302
-        # 重定向解析版本号 —— 该端点不受同一限流约束。
+        # api.github.com rate-limits (60 req/h/IP); the releases/latest 302
+        # redirect resolves the tag under a different limit.
         tag="$(fetch_stdout_headers "$REPO/releases/latest" \
             | sed -n 's/^[Ll]ocation:.*\/tag\/\([^\/[:space:]]*\).*/\1/p' | head -n1)"
-        [ -n "$tag" ] && info "（API 限流，已通过重定向解析）"
+        [ -n "$tag" ] && info "$(T "（API 限流，已通过重定向解析）" "(API rate-limited; resolved via redirect)")"
     fi
-    [ -n "$tag" ] || die "无法解析最新版本号（网络/API 问题？也可用 --version 直接指定）"
+    [ -n "$tag" ] || die "$(T "无法解析最新版本号（网络/API 问题？也可用 --version 直接指定）" "cannot resolve the latest version (network/API problem? you can also pin one with --version)")"
     VERSION="${tag#v}"
-    info "最新版本: v$VERSION"
+    info "$(T "最新版本: v$VERSION" "latest version: v$VERSION")"
 else
     VERSION="${VERSION#v}"
 fi
@@ -204,23 +214,23 @@ if [ -z "$PREFIX" ]; then
 fi
 BINDIR="$PREFIX/bin"
 
-info "安装 $ARCHIVE 到 $PREFIX …"
+info "$(T "安装 $ARCHIVE 到 $PREFIX …" "installing $ARCHIVE into $PREFIX …")"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-download "$BASE/$ARCHIVE" "$WORK/$ARCHIVE" || die "下载失败: $BASE/$ARCHIVE"
+download "$BASE/$ARCHIVE" "$WORK/$ARCHIVE" || die "$(T "下载失败: $BASE/$ARCHIVE" "download failed: $BASE/$ARCHIVE")"
 download "$BASE/checksums.txt" "$WORK/checksums.txt" 2>/dev/null \
-    || die "下载 checksums.txt 失败，拒绝在无法校验的情况下安装"
+    || die "$(T "下载 checksums.txt 失败，拒绝在无法校验的情况下安装" "checksums.txt download failed — refusing to install unverified")"
 
 if [ -f "$WORK/checksums.txt" ]; then
     want="$(awk -v f="$ARCHIVE" '$2==f {print $1; exit}' "$WORK/checksums.txt")"
-    [ -n "$want" ] || die "checksums.txt 缺少 $ARCHIVE 条目"
+    [ -n "$want" ] || die "$(T "checksums.txt 缺少 $ARCHIVE 条目" "checksums.txt has no entry for $ARCHIVE")"
     got="$(sha256 "$WORK/$ARCHIVE")"
     if [ "$got" != "$want" ]; then
-        die "SHA-256 校验失败（期望 $want，得到 $got）"
+        die "$(T "SHA-256 校验失败（期望 $want，得到 $got）" "SHA-256 mismatch (expected $want, got $got)")"
     fi
-    ok "SHA-256 校验通过"
+    ok "$(T "SHA-256 校验通过" "SHA-256 verified")"
 fi
 
 # Unpack into the work dir first so the new binary can be probed before the
@@ -229,7 +239,7 @@ fi
 mkdir -p "$WORK/pkg"
 tar -xzf "$WORK/$ARCHIVE" -C "$WORK/pkg" --strip-components=1
 NEWBIN="$WORK/pkg/bin/panda"
-[ -x "$NEWBIN" ] || die "安装包缺少可执行的 bin/panda"
+[ -x "$NEWBIN" ] || die "$(T "安装包缺少可执行的 bin/panda" "the archive lacks an executable bin/panda")"
 
 # ── Schema-compatibility guard ──────────────────────────────────────────────
 # A binary whose migration ceiling is below the database's user_version dies
@@ -260,21 +270,21 @@ floor="${floor:-0}"
 case "$floor" in (*[!0-9]*) floor=0 ;; esac
 if [ "$FORCE" != "1" ] && [ "$floor" -gt 0 ]; then
     if [ -z "$new_schema" ]; then
-        die "拒绝安装：该 release 过旧，无法上报 schema 上限，而数据目录已在 schema v$floor —— 装完会因版本过旧无法启动。用 --force 强制安装。"
+        die "$(T "拒绝安装：该 release 过旧，无法上报 schema 上限，而数据目录已在 schema v$floor —— 装完会因版本过旧无法启动。用 --force 强制安装。" "refusing to install: this release is too old to report its schema ceiling while the data directory is already at schema v$floor — it would fail to start. Use --force to install anyway.")"
     elif [ "$new_schema" -lt "$floor" ]; then
-        die "拒绝安装：该 release 最高支持 schema v$new_schema，但数据目录已在 v$floor —— 装完会因版本过旧无法启动。用 --force 强制安装。"
+        die "$(T "拒绝安装：该 release 最高支持 schema v$new_schema，但数据目录已在 v$floor —— 装完会因版本过旧无法启动。用 --force 强制安装。" "refusing to install: this release supports at most schema v$new_schema but the data directory is already at v$floor — it would fail to start. Use --force to install anyway.")"
     fi
 fi
 
 mkdir -p "$PREFIX"
 tar -xzf "$WORK/$ARCHIVE" -C "$PREFIX" --strip-components=1
-[ -x "$BINDIR/panda" ] || die "安装包缺少可执行的 $BINDIR/panda"
+[ -x "$BINDIR/panda" ] || die "$(T "安装包缺少可执行的 $BINDIR/panda" "the archive lacks an executable $BINDIR/panda")"
 
 # ── Symlink onto PATH ───────────────────────────────────────────────────────
 LINK_DIR="$HOME/.local/bin"
 mkdir -p "$LINK_DIR"
 ln -sf "$BINDIR/panda" "$LINK_DIR/panda"
-ok "已链接 $LINK_DIR/panda → $BINDIR/panda"
+ok "$(T "已链接 $LINK_DIR/panda → $BINDIR/panda" "linked $LINK_DIR/panda → $BINDIR/panda")"
 
 # PATH persistence: write the same marked block `panda install` writes
 # (internal/install/path_unix.go) so the symlink survives new shells — and
@@ -301,31 +311,31 @@ persist_path() { # <dir>
         fi
     done
     if [ -n "$wrote" ]; then
-        ok "已写入 PATH（新开终端生效）: $wrote"
+        ok "$(T "已写入 PATH（新开终端生效）: $wrote" "PATH written (takes effect in new terminals): $wrote")"
     elif [ "$already" = 1 ]; then
-        ok "PATH 已注册在 shell 配置中（$PATH_MARKER_BEGIN 标记块）"
+        ok "$(T "PATH 已注册在 shell 配置中（$PATH_MARKER_BEGIN 标记块）" "PATH already registered in the shell config ($PATH_MARKER_BEGIN block)")"
     elif printf '\n%s\n' "$block" >> "$HOME/.profile" 2>/dev/null; then
-        ok "未发现 shell 配置文件；已创建 $HOME/.profile 并写入 PATH"
+        ok "$(T "未发现 shell 配置文件；已创建 $HOME/.profile 并写入 PATH" "no shell config found; created $HOME/.profile with the PATH entry")"
     else
-        warn "无法写入 shell 配置；请手动加入:\n     export PATH=\"$dir:\$PATH\""
+        warn "$(T "无法写入 shell 配置；请手动加入:\n     export PATH=\"$dir:\$PATH\"" "could not write the shell config; add it manually:\n     export PATH=\"$dir:\$PATH\"")"
     fi
 }
 
 case ":$PATH:" in
-    *":$LINK_DIR:"*) ok "$LINK_DIR 已在 PATH 中" ;;
+    *":$LINK_DIR:"*) ok "$(T "$LINK_DIR 已在 PATH 中" "$LINK_DIR is already on PATH")" ;;
     *) persist_path "$LINK_DIR" ;;
 esac
 
 # ── Self-verify ─────────────────────────────────────────────────────────────
 if "$LINK_DIR/panda" version >/dev/null 2>&1; then
-    ok "自检通过: $("$LINK_DIR/panda" version)"
+    ok "$(T "自检通过: $("$LINK_DIR/panda" version)" "self-check passed: $("$LINK_DIR/panda" version)")"
 else
-    die "自检失败：请运行 '$LINK_DIR/panda version' 查看原因"
+    die "$(T "自检失败：请运行 '$LINK_DIR/panda version' 查看原因" "self-check failed — run '$LINK_DIR/panda version' for the reason")"
 fi
 
 # ── Shell completion (best effort, never fatal) ──────────────────────────────
-# The binary prints static scripts (`panda completion bash|zsh|fish`); we drop
-# the one matching the login shell into that shell's conventional directory.
+# The binary prints static scripts (`panda completion bash|zsh|fish|powershell`);
+# we drop the one matching the login shell into its conventional directory.
 install_completion() {
     sh_name="$(basename "${SHELL:-}")"
     case "$sh_name" in
@@ -333,27 +343,27 @@ install_completion() {
             dir="${ZDOTDIR:-$HOME}/.zsh/completions"
             mkdir -p "$dir" 2>/dev/null || return 0
             if "$LINK_DIR/panda" completion zsh > "$dir/_panda" 2>/dev/null; then
-                ok "zsh 补全 → $dir/_panda"
-                info "若未生效：在 ~/.zshrc 加 'fpath=($dir \$fpath)' 后重开终端"
+                ok "$(T "zsh 补全 → $dir/_panda" "zsh completion → $dir/_panda")"
+                info "$(T "若未生效：在 ~/.zshrc 加 'fpath=($dir \$fpath)' 后重开终端" "if it does not load: add 'fpath=($dir \$fpath)' to ~/.zshrc and reopen the terminal")"
             fi
             ;;
         bash)
             dir="$HOME/.local/share/bash-completion/completions"
             mkdir -p "$dir" 2>/dev/null || return 0
             if "$LINK_DIR/panda" completion bash > "$dir/panda" 2>/dev/null; then
-                ok "bash 补全 → $dir/panda"
-                info "若未生效：source ~/.bashrc 里的 bash-completion，或手动 'source $dir/panda'"
+                ok "$(T "bash 补全 → $dir/panda" "bash completion → $dir/panda")"
+                info "$(T "若未生效：source ~/.bashrc 里的 bash-completion，或手动 'source $dir/panda'" "if it does not load: source bash-completion from ~/.bashrc, or 'source $dir/panda' manually")"
             fi
             ;;
         fish)
             dir="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
             mkdir -p "$dir" 2>/dev/null || return 0
             if "$LINK_DIR/panda" completion fish > "$dir/panda.fish" 2>/dev/null; then
-                ok "fish 补全 → $dir/panda.fish（新开终端生效）"
+                ok "$(T "fish 补全 → $dir/panda.fish（新开终端生效）" "fish completion → $dir/panda.fish (takes effect in new terminals)")"
             fi
             ;;
         *)
-            info "未识别的 shell（${SHELL:-?}）：跳过补全安装，可手动 'panda completion bash|zsh|fish'"
+            info "$(T "未识别的 shell（${SHELL:-?}）：跳过补全安装，可手动 'panda completion bash|zsh|fish|powershell'" "unrecognized shell (${SHELL:-?}) — skipping completion install; run 'panda completion bash|zsh|fish|powershell' manually")"
             ;;
     esac
 }
@@ -419,9 +429,9 @@ EOF
         # binary, symlink and PATH block were already in place.
         launchctl unload "$launch_agent" 2>/dev/null || true
         if launchctl load "$launch_agent" 2>/dev/null; then
-            ok "已注册登录自启（LaunchAgent）。手动控制：\n     launchctl unload ~/Library/LaunchAgents/com.openpanda.node.plist   # 停用\n     launchctl load   ~/Library/LaunchAgents/com.openpanda.node.plist   # 启用"
+            ok "$(T "已注册登录自启（LaunchAgent）。手动控制：\n     launchctl unload ~/Library/LaunchAgents/com.openpanda.node.plist   # 停用\n     launchctl load   ~/Library/LaunchAgents/com.openpanda.node.plist   # 启用" "login auto-start registered (LaunchAgent). Manual control:\n     launchctl unload ~/Library/LaunchAgents/com.openpanda.node.plist   # stop\n     launchctl load   ~/Library/LaunchAgents/com.openpanda.node.plist   # start")"
         else
-            warn "已写入 $launch_agent，但 launchctl 未能加载它（无图形会话或权限不足）。\n     手动启用： launchctl load ~/Library/LaunchAgents/com.openpanda.node.plist"
+            warn "$(T "已写入 $launch_agent，但 launchctl 未能加载它（无图形会话或权限不足）。\n     手动启用： launchctl load ~/Library/LaunchAgents/com.openpanda.node.plist" "wrote $launch_agent, but launchctl could not load it (no GUI session or permission).\n     To enable manually: launchctl load ~/Library/LaunchAgents/com.openpanda.node.plist")"
         fi
     else
         unit_dir="$HOME/.config/systemd/user"
@@ -450,10 +460,10 @@ EOF
         # ends in a non-zero exit and no "安装完成", right after a successful
         # install.
         if ! command -v systemctl >/dev/null 2>&1; then
-            warn "未找到 systemctl，已写入 $unit_dir/openpanda.service（请手动启用）"
+            warn "$(T "未找到 systemctl，已写入 $unit_dir/openpanda.service（请手动启用）" "systemctl not found — wrote $unit_dir/openpanda.service (enable it manually)")"
         elif systemctl --user daemon-reload 2>/dev/null \
             && systemctl --user enable --now openpanda.service 2>/dev/null; then
-            ok "已注册登录自启（systemd --user）。手动控制：\n     systemctl --user disable --now openpanda.service   # 停用\n     systemctl --user enable  --now openpanda.service   # 启用"
+            ok "$(T "已注册登录自启（systemd --user）。手动控制：\n     systemctl --user disable --now openpanda.service   # 停用\n     systemctl --user enable  --now openpanda.service   # 启用" "login auto-start registered (systemd --user). Manual control:\n     systemctl --user disable --now openpanda.service   # stop\n     systemctl --user enable  --now openpanda.service   # start")"
         else
             # $USER is not guaranteed to exist: a container, a CI runner and a
             # systemd unit can all run without it, and this script sets -u, so
@@ -467,38 +477,38 @@ EOF
             if [ -z "$linger_user" ]; then
                 linger_user="<your-user>"
             fi
-            warn "已写入 $unit_dir/openpanda.service，但 systemctl --user 无法启用它\n     （当前会话没有用户 D-Bus；无桌面/纯 SSH 服务器上属正常）。\n     手动启用： systemctl --user enable --now openpanda.service\n     免登录常驻： loginctl enable-linger $linger_user"
+            warn "$(T "已写入 $unit_dir/openpanda.service，但 systemctl --user 无法启用它\n     （当前会话没有用户 D-Bus；无桌面/纯 SSH 服务器上属正常）。\n     手动启用： systemctl --user enable --now openpanda.service\n     免登录常驻： loginctl enable-linger $linger_user" "wrote $unit_dir/openpanda.service, but systemctl --user could not enable it\n     (no user D-Bus in this session — normal on headless/SSH-only servers).\n     To enable manually: systemctl --user enable --now openpanda.service\n     To survive logout: loginctl enable-linger $linger_user")"
         fi
     fi
     if [ "$HAVE_CONFIG" = 0 ]; then
-        warn "尚未发现用户级配置：请先运行 '$LINK_DIR/panda init' 生成 config.yaml 与能力卡，\n     否则自启 daemon 会以默认配置运行（且无能力卡，无法执行任务）。"
+        warn "$(T "尚未发现用户级配置：请先运行 '$LINK_DIR/panda init' 生成 config.yaml 与能力卡，\n     否则自启 daemon 会以默认配置运行（且无能力卡，无法执行任务）。" "no user config found — run '$LINK_DIR/panda init' first to generate config.yaml and the capability card,\n     otherwise the auto-start daemon runs on defaults (and with no card it cannot execute tasks).")"
     fi
 }
 
 ask_service() {
-    printf '%b' "${C_DIM}[openpanda]${C_RESET} 是否注册开机自启服务（后台运行 panda daemon）？[y/N] "
+    printf '%b' "${C_DIM}[openpanda]${C_RESET} $(T "是否注册开机自启服务（后台运行 panda daemon）？[y/N] " "Register a login auto-start service (runs panda daemon in the background)? [y/N] ")"
     read -r ans
     case "$ans" in
         [yY][eE][sS]|[yY]) register_service ;;
-        *) info "跳过开机自启（可稍后手动注册，见 docs/install.md）" ;;
+        *) info "$(T "跳过开机自启（可稍后手动注册，见 docs/install.md）" "skipping auto-start (you can register it later — see docs/install.md)")" ;;
     esac
 }
 
 case "$SERVICE_MODE" in
     yes) register_service ;;
     ask)
-        if [ -t 0 ]; then ask_service; else info "非交互终端：跳过开机自启（可用 --yes 显式启用）"; fi
+        if [ -t 0 ]; then ask_service; else info "$(T "非交互终端：跳过开机自启（可用 --yes 显式启用）" "non-interactive terminal: skipping auto-start (pass --yes to enable it)")"; fi
         ;;
     no) : ;;
 esac
 
 echo
-ok "安装完成"
-printf '%b' "${C_DIM}快速开始:${C_RESET}\n"
-printf '%b' "      panda init      # 交互式生成配置与能力卡\n"
-printf '%b' "      panda repl      # 进入交互命令行\n"
-printf '%b' "      panda web       # 打开内嵌 Web 控制台（自动登录）\n"
-printf '%b' "自检：panda doctor\n"
-printf '%b' "补全：panda completion bash|zsh|fish（打印到 stdout，source 或放入对应目录）\n"
-printf '%b' "卸载：panda uninstall（白名单清理 + 自动备份；--purge 连用户数据一起删，--backup-only 仅备份）\n"
-printf '%b' "     开机自启的停用命令见上文；详见 docs/install.md\n"
+ok "$(T "安装完成" "install complete")"
+printf '%b' "${C_DIM}$(T "快速开始:" "quick start:")${C_RESET}\n"
+printf '%b' "$(T "      panda init      # 交互式生成配置与能力卡\n" "      panda init      # interactively generate the config and capability card\n")"
+printf '%b' "$(T "      panda repl      # 进入交互命令行\n" "      panda repl      # enter the interactive command line\n")"
+printf '%b' "$(T "      panda web       # 打开内嵌 Web 控制台（自动登录）\n" "      panda web       # open the embedded web console (auto-login)\n")"
+printf '%b' "$(T "自检：panda doctor\n" "self-check: panda doctor\n")"
+printf '%b' "$(T "补全：panda completion bash|zsh|fish|powershell（打印到 stdout，source 或放入对应目录）\n" "completion: panda completion bash|zsh|fish|powershell (prints to stdout; source it or drop it into the matching dir)\n")"
+printf '%b' "$(T "卸载：panda uninstall（白名单清理 + 自动备份；--purge 连用户数据一起删，--backup-only 仅备份）\n" "uninstall: panda uninstall (allowlist cleanup + automatic backup; --purge also removes user data, --backup-only only backs up)\n")"
+printf '%b' "$(T "     开机自启的停用命令见上文；详见 docs/install.md\n" "     the auto-start stop commands are above; see docs/install.md for details\n")"
