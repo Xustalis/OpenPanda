@@ -189,8 +189,8 @@ func runDaemon(args []string) {
 	// in cmd/panda/hotreload_unix.go). Written best-effort — without it the
 	// CLI falls back to the restart hint, which is the pre-existing behavior.
 	pidPath := filepath.Join(filepath.Dir(cfg.Storage.DBPath), "daemon.pid")
-	if err := os.MkdirAll(filepath.Dir(pidPath), 0o755); err == nil {
-		if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err == nil {
+	if err := os.MkdirAll(filepath.Dir(pidPath), 0o700); err == nil {
+		if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600); err == nil {
 			defer os.Remove(pidPath)
 		}
 	}

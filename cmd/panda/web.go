@@ -167,9 +167,11 @@ func runWeb(args []string) {
 	}
 	defer db.Close()
 
-	// Redirect logger to file to prevent console spam
+	// Redirect logger to file to prevent console spam — owner-only like the
+	// daemon path above: this log catches everything slog emits.
 	var logWriter io.Writer = io.Discard
-	if lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+	if lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		_ = os.Chmod(lf.Name(), 0o600)
 		defer lf.Close()
 		logWriter = lf
 	}

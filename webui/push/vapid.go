@@ -61,7 +61,7 @@ func LoadOrCreateVAPIDKeys(path, subject string) (*VAPIDKeys, error) {
 		return nil, err
 	}
 	if path != "" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, fmt.Errorf("vapid key dir: %w", err)
 		}
 		der, err := x509.MarshalECPrivateKey(keys.priv)
