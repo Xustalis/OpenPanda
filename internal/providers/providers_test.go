@@ -9,7 +9,7 @@ import (
 )
 
 func TestBuiltinsCoverRequestedVendors(t *testing.T) {
-	want := []string{"deepseek", "claude", "openai", "kimi", "volcengine"}
+	want := []string{"deepseek", "claude", "openai", "kimi", "minimax", "volcengine"}
 	for _, id := range want {
 		p, ok := Lookup(id)
 		if !ok {
@@ -38,14 +38,14 @@ func TestModelConfigBuilds(t *testing.T) {
 	if mc.Provider != "deepseek" || mc.APIKey != "sk-test" {
 		t.Fatalf("bad build: %+v", mc)
 	}
-	if mc.Model != "deepseek-v4-flash" {
+	if mc.Model != "deepseek-flash" {
 		t.Fatalf("expected default model, got %q", mc.Model)
 	}
 	if mc.BaseURL != "https://api.deepseek.com/anthropic" {
 		t.Fatalf("unexpected base_url %q", mc.BaseURL)
 	}
-	if mc.ContextWindow != 128000 {
-		t.Fatalf("expected context_window 128000, got %d", mc.ContextWindow)
+	if mc.ContextWindow != 1048576 {
+		t.Fatalf("expected context_window 1048576, got %d", mc.ContextWindow)
 	}
 
 	// Explicit model overrides the default.
@@ -70,6 +70,7 @@ func TestGeographicOrigin(t *testing.T) {
 	}{
 		{"deepseek", RegionChina, true, false},
 		{"kimi", RegionChina, true, false},
+		{"minimax", RegionChina, true, false},
 		{"volcengine", RegionChina, true, false},
 		{"zhipu", RegionChina, true, false},
 		{"qwen", RegionChina, true, false},
@@ -117,7 +118,7 @@ func TestDetectRegion(t *testing.T) {
 		{"glm-4-plus", RegionChina},
 		{"siliconflow", RegionChina},
 		{"claude", RegionGlobal},
-		{"claude-sonnet-4-5", RegionGlobal},
+		{"claude-sonnet-5-5", RegionGlobal},
 		{"agent:claude_code", RegionGlobal},
 		{"openai", RegionGlobal},
 		{"gpt-4o", RegionGlobal},
@@ -133,6 +134,53 @@ func TestDetectRegion(t *testing.T) {
 		if got := DetectRegion(tt.input); got != tt.wantGeo {
 			t.Errorf("DetectRegion(%q) = %v, want %v", tt.input, got, tt.wantGeo)
 		}
+	}
+}
+
+// TestModelSpecResolution pins the per-model catalogue layer: prefix match
+// onto a family row, longest-match-first, spec fields overriding the
+// provider row, and the ctx/8 auto-load clamped by the vendor ceiling.
+func TestModelSpecResolution(t *testing.T) {
+	mini, _ := Lookup("minimax")
+
+	// Exact family prefix covers the whole M2.x line — a 204800-token
+	// window but a 196608 completion ceiling (probed live).
+	s, ok := mini.SpecFor("MiniMax-M2.7")
+	if !ok || s.ContextWindow != 204800 || s.MaxTokensCap != 196608 {
+		t.Fatalf("M2.7 spec = %+v (ok=%v), want 204800/196608 row", s, ok)
+	}
+	// A versioned id lands on the longer matching prefix.
+	s, ok = mini.SpecFor("MiniMax-M3.1-Flash-Preview")
+	if !ok || s.ContextWindow != 1000000 || s.MaxTokensCap != 524288 {
+		t.Fatalf("M3.1 spec = %+v (ok=%v), want the 1M/512K row", s, ok)
+	}
+	if _, ok = mini.SpecFor("MiniMax-M99"); ok {
+		t.Fatal("unknown minimax model should not resolve a spec")
+	}
+
+	// ContextFor falls back to the provider row for unlisted models.
+	ds, _ := Lookup("deepseek")
+	if got := ds.ContextFor("deepseek-v9-future"); got != 1048576 {
+		t.Fatalf("provider-row fallback ctx = %d, want 1048576", got)
+	}
+	if got := mini.ContextFor("MiniMax-M2.5"); got != 204800 {
+		t.Fatalf("spec ctx = %d, want 204800", got)
+	}
+
+	// AutoMaxTokens: catalogue floor lifted to ctx/8, clamped to the cap.
+	if got := ds.AutoMaxTokens("deepseek-flash"); got != 131072 {
+		t.Fatalf("deepseek auto = %d, want 131072 (1M/8)", got)
+	}
+	if got := mini.AutoMaxTokens("MiniMax-M3"); got != 131072 {
+		t.Fatalf("minimax auto = %d, want vendor default 131072", got)
+	}
+	if got := mini.AutoMaxTokens("MiniMax-M2.7"); got != 65536 {
+		t.Fatalf("M2.7 auto = %d, want spec default 65536 (ctx/8 = 25600 loses)", got)
+	}
+	// Unlisted provider with no numbers → nothing to say.
+	custom, _ := Lookup("custom")
+	if got := custom.AutoMaxTokens("x"); got != 0 {
+		t.Fatalf("custom auto = %d, want 0", got)
 	}
 }
 
@@ -164,7 +212,8 @@ func TestLookupPricing(t *testing.T) {
 	catalog := map[string]struct{ in, out float64 }{
 		"deepseek":      {0.14, 0.28},
 		"claude-haiku":  {0.80, 4.00},
-		"claude-sonnet": {3.00, 15.00},
+		"claude-sonnet": {2.00, 10.00},
+		"gpt-5.4-mini":  {0.75, 4.50},
 		"gpt-4o-mini":   {0.15, 0.60},
 		"gpt-4o":        {2.50, 10.00},
 		"qwen-max":      {0.11, 0.28},
@@ -221,6 +270,29 @@ func TestDetect(t *testing.T) {
 	}
 	if _, ok := Detect("https://example.invalid", "no-such-model"); ok {
 		t.Error("Detect matched a nonsense endpoint/model")
+	}
+	// Model-name aliases resolve the vendor even when the endpoint is an
+	// unknown relay — the id-prefix pass alone misses gpt-*/glm-*/doubao-*.
+	aliasCases := []struct {
+		model string
+		want  string
+	}{
+		{"gpt-6.1-sol", "openai"},
+		{"gpt-4o-mini", "openai"},
+		{"o3-mini", "openai"},
+		{"glm-5.3", "zhipu"},
+		{"doubao-seed-2-1-pro-260915", "volcengine"},
+		{"moonshot-v1-8k", "kimi"},
+		{"kimi-k3", "kimi"},
+		{"qwen3.7-plus", "qwen"},
+		{"MiniMax-M2.7", "minimax"},
+		{"claude-sonnet-5-5", "claude"},
+	}
+	for _, tc := range aliasCases {
+		got, ok := Detect("https://relay.example.com/v1", tc.model)
+		if !ok || got.ID != tc.want {
+			t.Errorf("Detect(relay, %q) = %v, %v; want %s", tc.model, got.ID, ok, tc.want)
+		}
 	}
 }
 

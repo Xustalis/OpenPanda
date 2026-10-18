@@ -258,11 +258,11 @@ func adoptEnvModel(def *config.Config) bool {
 			if def.Model.Model == "" {
 				def.Model.Model = sel.DefaultModel
 			}
-			if sel.ContextWindow > 0 {
-				def.Model.ContextWindow = sel.ContextWindow
+			if ctx := sel.ContextFor(def.Model.Model); ctx > 0 {
+				def.Model.ContextWindow = ctx
 			}
-			if sel.DefaultMaxTokens > 0 {
-				def.Model.MaxTokens = sel.DefaultMaxTokens
+			if mt := sel.AutoMaxTokens(def.Model.Model); mt > 0 {
+				def.Model.MaxTokens = mt
 			}
 		}
 	}
@@ -435,11 +435,11 @@ func interactiveModelSetup(in *bufio.Reader, def *config.Config, loc i18n.Locale
 	def.Model.Model = modelName
 	def.Model.APIKey = apiKey
 	def.Model.NoAuth = sel.NoAuth
-	if sel.ContextWindow > 0 {
-		def.Model.ContextWindow = sel.ContextWindow
+	if ctx := sel.ContextFor(modelName); ctx > 0 {
+		def.Model.ContextWindow = ctx
 	}
-	if sel.DefaultMaxTokens > 0 {
-		def.Model.MaxTokens = sel.DefaultMaxTokens
+	if mt := sel.AutoMaxTokens(modelName); mt > 0 {
+		def.Model.MaxTokens = mt
 	}
 	return true
 }

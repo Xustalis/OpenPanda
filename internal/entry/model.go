@@ -33,7 +33,7 @@ var ErrNoModel = errors.New("model not configured: set model.provider or model.b
 // defaultModel is the model id used when the config names an endpoint but no
 // model — a bare token the provider is free to reinterpret; without an
 // endpoint there is no default at all (see ErrNoModel).
-const defaultModel = "deepseek-v4-flash"
+const defaultModel = "deepseek-flash"
 
 // defaultMaxTokens is the completion cap when the config does not specify one.
 // It is high enough that a normal answer is not silently truncated (the previous
@@ -61,7 +61,11 @@ type Client struct {
 	oauth     bool
 	model     string
 	maxTokens int
-	hc        *http.Client
+	// maxTokensCap is the provider's hard ceiling on max_tokens (0 when
+	// unknown); the thinking-budget lift may push the request past it, so
+	// the send paths re-clamp per request.
+	maxTokensCap int
+	hc           *http.Client
 	// hcStream serves streaming requests. It deliberately has no
 	// http.Client.Timeout — that clock covers the whole response body, so any
 	// value large enough for a long generation is useless as a liveness check,
@@ -165,17 +169,50 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 			name = defaultModel
 		}
 	}
-	maxTokens := model.MaxTokens
-	if maxTokens <= 0 {
-		if hasProvider && p.DefaultMaxTokens > 0 {
-			maxTokens = p.DefaultMaxTokens
-		} else {
-			maxTokens = defaultMaxTokens
+	// tuning carries the catalogue row of the vendor actually behind the
+	// endpoint: a "custom" entry (or no provider at all) holds none, so the
+	// resolved endpoint/model pair gets one Detect pass — a hand-written
+	// custom row points at a known vendor as often as a named provider.
+	tuning, hasTuning := p, hasProvider
+	if !hasTuning || tuning.ID == "custom" {
+		if d, ok := providers.Detect(base, name); ok && d.ID != "custom" {
+			tuning, hasTuning = d, true
 		}
 	}
+	// Per-model specs beat the provider row (a vendor's models may carry
+	// different windows and ceilings); zeros fall back down the chain.
 	contextWindow := model.ContextWindow
-	if contextWindow <= 0 && hasProvider {
-		contextWindow = p.ContextWindow
+	if contextWindow <= 0 && hasTuning {
+		contextWindow = tuning.ContextFor(name)
+	}
+	maxTokensCap := 0
+	maxTokens := model.MaxTokens
+	{
+		if hasTuning {
+			_, maxTokensCap = tuning.TokenPolicy(name)
+		}
+		if maxTokens <= 0 {
+			// No configured cap → load the model's capacity instead of a
+			// flat floor: the catalogue default lifted to an eighth of the
+			// context window (a 1M window lands on 128K, MiniMax's own
+			// recommended value), never below the flat fallback. A
+			// config-declared window widens it the same way for endpoints
+			// the catalogue does not know.
+			maxTokens = defaultMaxTokens
+			if hasTuning {
+				if d := tuning.AutoMaxTokens(name); d > 0 {
+					maxTokens = d
+				}
+			}
+			if contextWindow > 0 && contextWindow/8 > maxTokens {
+				maxTokens = contextWindow / 8
+			}
+		}
+		// A cap past the provider's hard ceiling can never succeed — the
+		// API rejects it verbatim — so it is clamped, not failed.
+		if maxTokensCap > 0 && maxTokens > maxTokensCap {
+			maxTokens = maxTokensCap
+		}
 	}
 	apiType := strings.ToLower(strings.TrimSpace(model.APIType))
 	if apiType == "" && hasProvider {
@@ -190,6 +227,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		apiKey:         model.APIKey,
 		model:          name,
 		maxTokens:      maxTokens,
+		maxTokensCap:   maxTokensCap,
 		contextWindow:  contextWindow,
 		hc:             &http.Client{Timeout: 30 * time.Second},
 		hcStream:       &http.Client{Transport: streamTransport()},
@@ -1019,6 +1057,9 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 			// The Messages API requires max_tokens > budget_tokens; the
 			// configured cap wins when it already clears the budget.
 			req.MaxTokens = budget + 4096
+		}
+		if c.maxTokensCap > 0 && req.MaxTokens > c.maxTokensCap {
+			req.MaxTokens = c.maxTokensCap
 		}
 	} else {
 		req.Thinking = nil

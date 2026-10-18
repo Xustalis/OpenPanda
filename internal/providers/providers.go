@@ -51,8 +51,22 @@ type Provider struct {
 	// DefaultMaxTokens is the completion cap applied when the config names
 	// none. 0 falls back to the entry package default.
 	DefaultMaxTokens int
+	// MaxTokensCap is the provider's hard ceiling on the completion cap —
+	// a configured max_tokens above it can never succeed (MiniMax answers
+	// 400 past 524288), so the entry client clamps down to it instead of
+	// failing the turn. 0 = no known ceiling.
+	MaxTokensCap int
 	// ContextWindow is the advertised context length in tokens; 0 = unknown.
 	ContextWindow int
+	// Models carries per-model limit rows for the catalogue entry — a
+	// vendor's models may advertise different windows and ceilings
+	// (MiniMax-M3 does 1M/512K, the M2.x line 200K/200K), so a matching
+	// spec wins over the provider-level values. See SpecFor.
+	Models []ModelSpec
+	// ModelAliases are extra model-name prefixes Detect should resolve to
+	// this provider — the provider id alone misses families like gpt-*
+	// (openai), glm-* (zhipu) or doubao-* (volcengine).
+	ModelAliases []string
 	// ThinkingPassback marks providers whose multi-turn assistant history must
 	// echo a thinking/reasoning placeholder. DeepSeek in thinking mode and
 	// Anthropic's extended thinking reject the history otherwise. This is the
@@ -92,6 +106,18 @@ func (p Provider) IsGlobalModel() bool {
 	return p.GeographicOrigin == RegionGlobal
 }
 
+// ModelSpec is one model's limits inside a Provider row. Zero fields fall
+// through to the provider-level value, so a spec only needs the numbers
+// that differ.
+type ModelSpec struct {
+	// ID is the model id (or family prefix — e.g. "MiniMax-M2" covers the
+	// M2.7/M2.5/M2.1/-highspeed line). SpecFor matches longest-prefix-first.
+	ID               string
+	ContextWindow    int
+	MaxTokensCap     int
+	DefaultMaxTokens int
+}
+
 // Pricing defines token prices in USD per 1M (1,000,000) tokens.
 type Pricing struct {
 	InputPerMillion  float64 `json:"input_per_million" yaml:"input_per_million"`
@@ -117,10 +143,14 @@ var builtins = []Provider{
 		// DeepSeek's list-models endpoint lives on its OpenAI-compatible
 		// surface (Bearer auth), not the Anthropic endpoint, so it is given as
 		// an absolute override.
-		ModelsPath:       "https://api.deepseek.com/models",
-		DefaultModel:     "deepseek-v4-flash",
+		ModelsPath: "https://api.deepseek.com/models",
+		// V4.1-Flash/V4-Pro ship a 1M window and cap one completion at
+		// 384K per the /models metadata; the retired deepseek-v4-flash id
+		// still resolves, but the listed canonical id is deepseek-flash.
+		DefaultModel:     "deepseek-flash",
 		DefaultMaxTokens: 4096,
-		ContextWindow:    128000,
+		MaxTokensCap:     393216,
+		ContextWindow:    1048576,
 		ThinkingPassback: true,
 		ThinkingStyle:    "object",
 		PromptCache:      true,
@@ -133,12 +163,28 @@ var builtins = []Provider{
 		APIType:          config.APITypeAnthropic,
 		BaseURL:          "https://api.anthropic.com",
 		ModelsPath:       "/v1/models",
-		DefaultModel:     "claude-sonnet-4-5",
+		DefaultModel:     "claude-sonnet-5-5",
 		DefaultMaxTokens: 8192,
-		ContextWindow:    200000,
+		// The 5.x/Fable/Mythos generation (and Sonnet/Opus ≥4.6) advertises
+		// a 1M window and a 128K synchronous output ceiling.
+		MaxTokensCap:  131072,
+		ContextWindow: 1000000,
+		Models: []ModelSpec{
+			// The late-4.x ids jumped to the 1M/128K tier ahead of the 5s.
+			{ID: "claude-sonnet-4-6", ContextWindow: 1000000, MaxTokensCap: 131072},
+			{ID: "claude-opus-4-6", ContextWindow: 1000000, MaxTokensCap: 131072},
+			{ID: "claude-opus-4-7", ContextWindow: 1000000, MaxTokensCap: 131072},
+			{ID: "claude-opus-4-8", ContextWindow: 1000000, MaxTokensCap: 131072},
+			// The rest of the 4.x/older generation is the exception: 200K
+			// window, 64K output ceiling — a configured cap past it is
+			// clamped, not 400'd. (Sonnet-4-6+ longest-prefixes out first.)
+			{ID: "claude-sonnet-4", ContextWindow: 200000, MaxTokensCap: 64000},
+			{ID: "claude-opus-4", ContextWindow: 200000, MaxTokensCap: 64000},
+			{ID: "claude-haiku-4", ContextWindow: 200000, MaxTokensCap: 64000},
+		},
 		ThinkingPassback: true,
 		PromptCache:      true,
-		Pricing:          Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00},
+		Pricing:          Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00},
 		GeographicOrigin: RegionGlobal,
 	},
 	{
@@ -147,13 +193,26 @@ var builtins = []Provider{
 		APIType:          config.APITypeOpenAI,
 		BaseURL:          "https://api.openai.com/v1",
 		ModelsPath:       "/models",
-		DefaultModel:     "gpt-4o-mini",
+		DefaultModel:     "gpt-6.1-sol",
 		DefaultMaxTokens: 4096,
-		ContextWindow:    128000,
+		// The GPT-6 family (astra / 6.1-sol / sol / luna) shares a 1.05M
+		// window and a 128K completion ceiling, all on Chat Completions.
+		ContextWindow: 1050000,
+		MaxTokensCap:  128000,
+		Models: []ModelSpec{
+			{ID: "gpt-6", ContextWindow: 1050000, MaxTokensCap: 128000},
+			// The gpt-5.4 flagship also runs 1.05M; its mini tier is 400K.
+			{ID: "gpt-5.4-mini", ContextWindow: 400000, MaxTokensCap: 128000},
+			{ID: "gpt-5.4", ContextWindow: 1050000, MaxTokensCap: 128000},
+			// The gpt-4o family (incl. -mini and dated variants) caps a
+			// completion at 16384 tokens.
+			{ID: "gpt-4o", ContextWindow: 128000, MaxTokensCap: 16384},
+		},
 		ThinkingStyle:    "effort",
 		PromptCache:      true,
-		Pricing:          Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60},
+		Pricing:          Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00},
 		GeographicOrigin: RegionGlobal,
+		ModelAliases:     []string{"gpt-", "o1-", "o3-", "o4-"},
 	},
 	{
 		ID:               "kimi",
@@ -161,11 +220,42 @@ var builtins = []Provider{
 		APIType:          config.APITypeOpenAI,
 		BaseURL:          "https://api.moonshot.cn/v1",
 		ModelsPath:       "/models",
-		DefaultModel:     "kimi-latest",
+		DefaultModel:     "kimi-k3",
 		DefaultMaxTokens: 4096,
-		ContextWindow:    128000,
+		// kimi-k3 carries a 1M window; the k2.6/k2.7-code line is 256K.
+		// kimi-latest, kimi-k2.5 and the moonshot-v1 ids were retired
+		// upstream Aug 2026.
+		ContextWindow: 1048576,
+		Models: []ModelSpec{
+			{ID: "kimi-k2", ContextWindow: 262144},
+		},
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 1.40, OutputPerMillion: 1.40},
+		GeographicOrigin: RegionChina,
+		ModelAliases:     []string{"moonshot-"},
+	},
+	{
+		ID:           "minimax",
+		Label:        "MiniMax",
+		APIType:      config.APITypeAnthropic,
+		BaseURL:      "https://api.minimax.cn/anthropic",
+		ModelsPath:   "/v1/models",
+		DefaultModel: "MiniMax-M3",
+		// M3/M3.1 advertise a 1M window but hard-cap one completion at
+		// 512K (vendor-recommended 128K) — the cap is an API limit, not
+		// a hint, which is why it lives on MaxTokensCap.
+		DefaultMaxTokens: 131072,
+		MaxTokensCap:     524288,
+		ContextWindow:    1000000,
+		Models: []ModelSpec{
+			// The M3 line (incl. M3.1-Flash-Preview) carries the 1M window
+			// and 512K completion ceiling; the M2.x family is 200K/192K.
+			{ID: "MiniMax-M3", ContextWindow: 1000000, MaxTokensCap: 524288, DefaultMaxTokens: 131072},
+			// M2.x family verified live: the API rejects max_tokens past
+			// 196608 even though the advertised window is 204800.
+			{ID: "MiniMax-M2", ContextWindow: 204800, MaxTokensCap: 196608, DefaultMaxTokens: 65536},
+		},
+		PromptCache:      true,
 		GeographicOrigin: RegionChina,
 	},
 	{
@@ -174,13 +264,22 @@ var builtins = []Provider{
 		APIType:          config.APITypeOpenAI,
 		BaseURL:          "https://ark.cn-beijing.volces.com/api/v3",
 		ModelsPath:       "/models",
-		DefaultModel:     "doubao-1-5-pro-32k-250115",
+		DefaultModel:     "doubao-seed-evolving",
 		DefaultMaxTokens: 4096,
-		ContextWindow:    32000,
+		// Seed-2.1 pro/lite and the evolving alias run a 1M window with a
+		// 256K answer ceiling; turbo and the 2.0 line are 256K windows.
+		ContextWindow: 1048576,
+		MaxTokensCap:  262144,
+		Models: []ModelSpec{
+			{ID: "doubao-seed-2-1-turbo", ContextWindow: 262144, MaxTokensCap: 262144},
+			{ID: "doubao-seed-2-0", ContextWindow: 262144, MaxTokensCap: 131072},
+			{ID: "doubao-1-5", ContextWindow: 32768, MaxTokensCap: 4096},
+		},
 		ThinkingStyle:    "object",
 		PromptCache:      true,
-		Pricing:          Pricing{InputPerMillion: 0.11, OutputPerMillion: 0.28},
+		Pricing:          Pricing{InputPerMillion: 0.85, OutputPerMillion: 4.20},
 		GeographicOrigin: RegionChina,
+		ModelAliases:     []string{"doubao-"},
 	},
 	{
 		ID:               "zhipu",
@@ -188,13 +287,27 @@ var builtins = []Provider{
 		APIType:          config.APITypeOpenAI,
 		BaseURL:          "https://open.bigmodel.cn/api/paas/v4",
 		ModelsPath:       "/models",
-		DefaultModel:     "glm-4-plus",
+		DefaultModel:     "glm-5.3",
 		DefaultMaxTokens: 4096,
-		ContextWindow:    128000,
+		// GLM-5.2/5.3 (incl. -Flash/-FlashX) run a 1M window with a 128K
+		// completion ceiling; the 5/5.1 and 4.6/4.7 lines are 200K/128K.
+		ContextWindow: 1000000,
+		MaxTokensCap:  131072,
+		Models: []ModelSpec{
+			{ID: "glm-5.3", ContextWindow: 1000000, MaxTokensCap: 131072},
+			{ID: "glm-5.2", ContextWindow: 1000000, MaxTokensCap: 131072},
+			{ID: "glm-5", ContextWindow: 200000, MaxTokensCap: 131072},
+			{ID: "glm-4.6", ContextWindow: 200000, MaxTokensCap: 131072},
+			{ID: "glm-4.7", ContextWindow: 200000, MaxTokensCap: 131072},
+			{ID: "glm-4.5", ContextWindow: 128000, MaxTokensCap: 98304},
+			{ID: "glm-4-long", ContextWindow: 1000000, MaxTokensCap: 4096},
+			{ID: "glm-4", ContextWindow: 128000, MaxTokensCap: 16384},
+		},
 		ThinkingStyle:    "object",
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 1.40, OutputPerMillion: 1.40},
 		GeographicOrigin: RegionChina,
+		ModelAliases:     []string{"glm-"},
 	},
 	{
 		ID:               "qwen",
@@ -202,9 +315,17 @@ var builtins = []Provider{
 		APIType:          config.APITypeOpenAI,
 		BaseURL:          "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		ModelsPath:       "/models",
-		DefaultModel:     "qwen-plus",
+		DefaultModel:     "qwen3.7-plus",
 		DefaultMaxTokens: 4096,
-		ContextWindow:    128000,
+		// The qwen3.7/3.8 generation carries a 1M window; qwen3.8-max
+		// publishes a 128K completion ceiling (131072).
+		ContextWindow: 1000000,
+		Models: []ModelSpec{
+			{ID: "qwen3.8", ContextWindow: 1000000, MaxTokensCap: 131072},
+			// Retired-generation ids keep their old envelopes.
+			{ID: "qwen3-max", ContextWindow: 262144, MaxTokensCap: 65536},
+			{ID: "qwen-plus", ContextWindow: 128000},
+		},
 		ThinkingStyle:    "flag",
 		PromptCache:      true,
 		Pricing:          Pricing{InputPerMillion: 0.11, OutputPerMillion: 0.28},
@@ -216,11 +337,12 @@ var builtins = []Provider{
 		APIType:          config.APITypeOpenAI,
 		BaseURL:          "https://api.siliconflow.cn/v1",
 		ModelsPath:       "/models",
-		DefaultModel:     "deepseek-ai/DeepSeek-V3",
+		DefaultModel:     "deepseek-ai/DeepSeek-V4.1-Flash",
 		DefaultMaxTokens: 4096,
-		ContextWindow:    64000,
+		ContextWindow:    1048576,
+		MaxTokensCap:     393216,
 		PromptCache:      true,
-		Pricing:          Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28},
+		Pricing:          Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60},
 		GeographicOrigin: RegionChina,
 	},
 	{
@@ -229,12 +351,13 @@ var builtins = []Provider{
 		APIType:          config.APITypeOpenAI,
 		BaseURL:          "https://openrouter.ai/api/v1",
 		ModelsPath:       "/models",
-		DefaultModel:     "anthropic/claude-3.5-sonnet",
+		DefaultModel:     "anthropic/claude-sonnet-5.5",
 		DefaultMaxTokens: 4096,
-		ContextWindow:    200000,
+		ContextWindow:    1000000,
+		MaxTokensCap:     131072,
 		ThinkingStyle:    "effort",
 		PromptCache:      true,
-		Pricing:          Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00},
+		Pricing:          Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00},
 		GeographicOrigin: RegionGlobal,
 	},
 	{
@@ -278,6 +401,12 @@ func ThinkingStyleFor(mc config.ModelConfig) string {
 	if p, ok := Lookup(mc.Provider); ok && p.ThinkingStyle != "" {
 		return p.ThinkingStyle
 	}
+	// A custom endpoint behind a known vendor speaks that vendor's dialect —
+	// the relay's URL or the served model name resolves it the same way the
+	// client's tuning does.
+	if p, ok := Detect(mc.BaseURL, mc.Model); ok && p.ThinkingStyle != "" {
+		return p.ThinkingStyle
+	}
 	return "object"
 }
 
@@ -289,10 +418,18 @@ func LookupPricing(providerID, model string) Pricing {
 		switch {
 		case strings.Contains(lower, "deepseek"):
 			return Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28}
+		case strings.Contains(lower, "minimax"):
+			return Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20}
 		case strings.Contains(lower, "claude") && strings.Contains(lower, "haiku"):
 			return Pricing{InputPerMillion: 0.80, OutputPerMillion: 4.00}
 		case strings.Contains(lower, "claude"):
-			return Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00}
+			return Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00}
+		case strings.Contains(lower, "gpt-6"):
+			return Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00}
+		case strings.Contains(lower, "gpt-5.4-mini"):
+			return Pricing{InputPerMillion: 0.75, OutputPerMillion: 4.50}
+		case strings.Contains(lower, "gpt-5.4"):
+			return Pricing{InputPerMillion: 2.50, OutputPerMillion: 15.00}
 		case strings.Contains(lower, "gpt-4o-mini"):
 			return Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}
 		case strings.Contains(lower, "gpt-4o"):
@@ -310,6 +447,65 @@ func LookupPricing(providerID, model string) Pricing {
 		return Pricing{InputPerMillion: 0.80, OutputPerMillion: 4.00}
 	}
 	return p.Pricing
+}
+
+// SpecFor resolves the model spec matching a model id: an exact id wins,
+// else the longest matching prefix (a versioned id like
+// "MiniMax-M3.1-Flash-Preview" lands on its family row). Reports false when
+// the catalogue knows no per-model row for it.
+func (p Provider) SpecFor(model string) (ModelSpec, bool) {
+	var best ModelSpec
+	for _, s := range p.Models {
+		if model == s.ID {
+			return s, true
+		}
+		if strings.HasPrefix(model, s.ID) && len(s.ID) > len(best.ID) {
+			best = s
+		}
+	}
+	return best, best.ID != ""
+}
+
+// ContextFor resolves the advertised context window for a model id: the
+// matching spec's window when one exists, else the provider-level value.
+func (p Provider) ContextFor(model string) int {
+	if s, ok := p.SpecFor(model); ok && s.ContextWindow > 0 {
+		return s.ContextWindow
+	}
+	return p.ContextWindow
+}
+
+// TokenPolicy resolves the catalogue-side completion-cap policy for a
+// model: the vendor's hard ceiling and the curated default — spec values
+// win over the provider row. Callers lift the default toward the resolved
+// context window and clamp it to the ceiling.
+func (p Provider) TokenPolicy(model string) (autoDefault, cap int) {
+	autoDefault, cap = p.DefaultMaxTokens, p.MaxTokensCap
+	if s, ok := p.SpecFor(model); ok {
+		if s.MaxTokensCap > 0 {
+			cap = s.MaxTokensCap
+		}
+		if s.DefaultMaxTokens > 0 {
+			autoDefault = s.DefaultMaxTokens
+		}
+	}
+	return autoDefault, cap
+}
+
+// AutoMaxTokens resolves the completion cap this provider would auto-load
+// for a model: the TokenPolicy default lifted to an eighth of the resolved
+// context window (a 1M window lands on 128K, MiniMax's own recommended
+// value), clamped by the vendor ceiling. 0 when the catalogue has nothing
+// to say.
+func (p Provider) AutoMaxTokens(model string) int {
+	mt, cap := p.TokenPolicy(model)
+	if ctx := p.ContextFor(model); ctx > 0 && ctx/8 > mt {
+		mt = ctx / 8
+	}
+	if cap > 0 && mt > cap {
+		mt = cap
+	}
+	return mt
 }
 
 // All returns the catalogue in display order.
@@ -341,8 +537,16 @@ func Detect(baseURL, model string) (Provider, bool) {
 		if p.ID == "custom" {
 			continue
 		}
-		if m != "" && strings.HasPrefix(m, p.ID) {
+		if m == "" {
+			continue
+		}
+		if strings.HasPrefix(m, p.ID) {
 			return p, true
+		}
+		for _, a := range p.ModelAliases {
+			if strings.HasPrefix(m, a) {
+				return p, true
+			}
 		}
 	}
 	return Provider{}, false
@@ -360,21 +564,23 @@ func ModelConfig(id, model, key string) (config.ModelConfig, bool) {
 	if m == "" {
 		m = p.DefaultModel
 	}
+	// Bake the resolved token policy into the written config — the same
+	// value the entry client would auto-load for this model.
 	mc := config.ModelConfig{
 		Provider:      p.ID,
 		APIType:       p.APIType,
 		BaseURL:       p.BaseURL,
 		APIKey:        key,
 		Model:         m,
-		MaxTokens:     p.DefaultMaxTokens,
-		ContextWindow: p.ContextWindow,
+		MaxTokens:     p.AutoMaxTokens(m),
+		ContextWindow: p.ContextFor(m),
 	}
 	return mc, true
 }
 
 // DetectRegion determines the geographic region (RegionChina or RegionGlobal)
 // from a provider ID, model name, or agent descriptor string (e.g., "deepseek-chat",
-// "claude-sonnet-4-5", "qwen-max", "doubao-pro", "agent:claude_code", etc.).
+// "claude-sonnet-5-5", "qwen-max", "doubao-pro", "agent:claude_code", etc.).
 func DetectRegion(modelOrProvider string) GeoRegion {
 	s := strings.ToLower(strings.TrimSpace(modelOrProvider))
 	if s == "" {

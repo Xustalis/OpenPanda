@@ -164,18 +164,47 @@ func effectiveProvider(m config.ModelConfig) string {
 }
 
 // effectiveContextWindow returns the advertised context size in tokens,
-// falling back to the provider default when not explicitly configured.
+// falling back to the model's catalogue spec (then provider row) when not
+// explicitly configured.
 func effectiveContextWindow(m config.ModelConfig) int {
 	if m.ContextWindow > 0 {
 		return m.ContextWindow
 	}
-	if p, ok := providers.Lookup(m.Provider); ok && p.ContextWindow > 0 {
-		return p.ContextWindow
+	if p, ok := providers.Lookup(m.Provider); ok {
+		if ctx := p.ContextFor(m.Model); ctx > 0 {
+			return ctx
+		}
 	}
-	if p, ok := providers.Detect(m.BaseURL, m.Model); ok && p.ContextWindow > 0 {
-		return p.ContextWindow
+	if p, ok := providers.Detect(m.BaseURL, m.Model); ok {
+		if ctx := p.ContextFor(m.Model); ctx > 0 {
+			return ctx
+		}
 	}
 	return 0
+}
+
+// effectiveMaxTokens mirrors what NewClient will actually send: the
+// configured cap, the catalogue's auto-loaded budget when unset, clamped to
+// the resolved vendor ceiling. 0 for fully unknown endpoints.
+func effectiveMaxTokens(m config.ModelConfig) int {
+	p, ok := providers.Lookup(m.Provider)
+	if !ok {
+		if d, dok := providers.Detect(m.BaseURL, m.Model); dok {
+			p, ok = d, true
+		}
+	}
+	if !ok {
+		return m.MaxTokens
+	}
+	mt := m.MaxTokens
+	_, ceil := p.TokenPolicy(m.Model)
+	if mt <= 0 {
+		mt = p.AutoMaxTokens(m.Model)
+	}
+	if ceil > 0 && mt > ceil {
+		mt = ceil
+	}
+	return mt
 }
 
 // modelStatus prints the active model and registered models with width-aware
@@ -205,9 +234,21 @@ func (r *repl) modelStatus() {
 		provW = max(provW, cliui.DisplayWidth(effectiveProvider(m)))
 	}
 
-	ctxStr := "-"
-	if cw := effectiveContextWindow(active); cw > 0 {
-		ctxStr = fmt.Sprintf("%dk", cw/1000)
+	capStr := func(m config.ModelConfig) string {
+		cw, mt := effectiveContextWindow(m), effectiveMaxTokens(m)
+		switch {
+		case cw > 0 && mt > 0:
+			return fmt.Sprintf("%dk/%dk", cw/1000, mt/1000)
+		case cw > 0:
+			return fmt.Sprintf("%dk", cw/1000)
+		case mt > 0:
+			return fmt.Sprintf("-/%dk", mt/1000)
+		}
+		return "-"
+	}
+	ctxW = max(ctxW, cliui.DisplayWidth(capStr(active))+2)
+	for _, m := range models {
+		ctxW = max(ctxW, cliui.DisplayWidth(capStr(m))+2)
 	}
 	mark := p.Success(p.MarkOK())
 	activeBadge := p.Success("[active]")
@@ -216,7 +257,7 @@ func (r *repl) modelStatus() {
 		p.Accent(cell(active.Alias(), aliasW)),
 		cell(effectiveModel(active), modelW),
 		p.Muted(cell(effectiveProvider(active), provW)),
-		p.Muted(cell(ctxStr, ctxW)),
+		p.Muted(cell(capStr(active), ctxW)),
 		activeBadge,
 		p.Muted(effectiveBaseURL(active)),
 	)
@@ -225,15 +266,11 @@ func (r *repl) modelStatus() {
 		if m.Alias() == active.Alias() && effectiveModel(m) == effectiveModel(active) && effectiveProvider(m) == effectiveProvider(active) {
 			continue // already displayed as active
 		}
-		mCtx := "-"
-		if cw := effectiveContextWindow(m); cw > 0 {
-			mCtx = fmt.Sprintf("%dk", cw/1000)
-		}
 		r.outf("    %s  %s  %s  %s  %s  %s\n",
 			cell(m.Alias(), aliasW),
 			cell(effectiveModel(m), modelW),
 			p.Muted(cell(effectiveProvider(m), provW)),
-			p.Muted(cell(mCtx, ctxW)),
+			p.Muted(cell(capStr(m), ctxW)),
 			cell("", cliui.DisplayWidth("[active]")),
 			p.Muted(effectiveBaseURL(m)),
 		)
@@ -331,6 +368,7 @@ type modelAddArgs struct {
 	apiType    string // --type openai|anthropic
 	baseURL    string // --url
 	ctxWindow  int    // --ctx
+	maxTokens  int    // --max-tokens
 	thinking   string // --thinking on|off|auto
 	budget     int    // --budget
 	retries    int    // --retry N
@@ -373,6 +411,8 @@ func parseModelAddArgs(args []string) modelAddArgs {
 			a.baseURL = take()
 		case "ctx", "context", "context-window", "context_window":
 			a.ctxWindow, _ = strconv.Atoi(take())
+		case "max-tokens", "maxtokens", "max_tokens", "maxtok":
+			a.maxTokens, _ = strconv.Atoi(take())
 		case "thinking":
 			a.thinking = take()
 		case "budget", "thinking-budget":
@@ -495,6 +535,23 @@ func (r *repl) modelAdd(args []string) {
 	}
 	if pa.ctxWindow > 0 {
 		mc.ContextWindow = pa.ctxWindow
+	}
+	// A custom (or rebased) endpoint behind a known vendor inherits its
+	// catalogue tuning when the row doesn't already carry resolved values —
+	// explicit --ctx wins, and a builtin provider's ModelConfig filled both
+	// fields already.
+	if mc.ContextWindow == 0 || mc.MaxTokens == 0 {
+		if p, ok := providers.Detect(mc.BaseURL, mc.Model); ok {
+			if mc.ContextWindow == 0 {
+				mc.ContextWindow = p.ContextFor(mc.Model)
+			}
+			if mc.MaxTokens == 0 {
+				mc.MaxTokens = p.AutoMaxTokens(mc.Model)
+			}
+		}
+	}
+	if pa.maxTokens > 0 {
+		mc.MaxTokens = pa.maxTokens
 	}
 	if pa.thinking != "" {
 		switch strings.ToLower(pa.thinking) {
