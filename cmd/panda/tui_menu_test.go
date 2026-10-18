@@ -211,7 +211,7 @@ func TestMenuRowsFitTheWindow(t *testing.T) {
 	cases := []struct{ height, want int }{
 		{0, 8},  // size not reported yet
 		{40, 8}, // roomy: the scannability cap wins
-		{12, 6}, // 12 - (blank + 3 box rows + footer + 1)
+		{12, 4}, // 12 - (blank + 3 box rows + 2 popup borders + footer + 1)
 		{6, 3},  // tiny window: the floor keeps the list useful
 	}
 	for _, c := range cases {

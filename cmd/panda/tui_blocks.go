@@ -82,7 +82,10 @@ func (b block) render(t theme, width int, expandThought bool) string {
 	case blockError:
 		return t.danger.Render(t.glyph("✗", "x") + " " + b.body)
 	case blockInfo:
-		return b.body
+		// Captured command output wears a muted left bar on every line: the
+		// transcript then reads "user asked · the terminal answered" — a quote
+		// block, not prose the model wrote.
+		return indentLines(b.body, t.muted.Render(t.glyph("│", "|"))+" ", t.muted.Render(t.glyph("│", "|"))+" ")
 	}
 	return b.body
 }

@@ -50,6 +50,8 @@ type theme struct {
 	welcome         lipgloss.Style // the startup welcome frame
 	approval        lipgloss.Style // the tier-2 approval card frame
 	listBox         lipgloss.Style // the boxed selection-list frame (border only; set Width per use)
+	menuBox         lipgloss.Style // the slash-menu popup frame — quieter than the input's green
+	menuSel         lipgloss.Style // the highlighted menu row's background band
 }
 
 // newTheme resolves the TUI styles from the shared palette. It reads pal() (the
@@ -106,6 +108,8 @@ func newTheme(loc i18n.Locale) theme {
 	t.welcome = frame
 	t.approval = frame
 	t.listBox = frame
+	t.menuBox = frame
+	t.menuSel = lipgloss.NewStyle()
 	if t.color {
 		t.inputBox = t.inputBox.BorderForeground(brandGreen)
 		t.listBox = t.listBox.BorderForeground(brandGreen)
@@ -113,6 +117,12 @@ func newTheme(loc i18n.Locale) theme {
 		t.welcome = t.welcome.BorderForeground(brandGreen)
 		t.approval = t.approval.BorderForeground(lipgloss.Color("3"))
 		t.border = lipgloss.Color("238")
+		// Grey, not green: a second brand-coloured box stacked under the input
+		// would read as one merged card; the dropdown should sit quieter.
+		t.menuBox = t.menuBox.BorderForeground(t.border)
+		// The same dark slate the user block rides: one "highlight" colour for
+		// every row the UI wants to lift off the page.
+		t.menuSel = t.menuSel.Background(lipgloss.Color("236"))
 	} else {
 		t.border = lipgloss.NoColor{}
 	}

@@ -868,9 +868,10 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.mode == modeIdle {
 		// If slash menu is active, clicking on menu rows selects that command or argument
 		if m.menu.active && len(m.menu.items) > 0 && m.height > 0 {
-			menuOutput := m.menu.render(m.th, m.textWidth(), m.menuRows())
+			menuOutput := m.menu.render(m.th, max(1, m.textWidth()-4), m.menuRows())
 			if menuOutput != "" {
-				menuLines := strings.Split(menuOutput, "\n")
+				boxed := m.th.menuBox.Width(max(1, m.textWidth()-2)).Render(menuOutput)
+				menuLines := strings.Split(boxed, "\n")
 				menuCount := len(menuLines)
 				// The popup renders directly above statusRow (which is at m.height - 1).
 				startRow := m.height - 1 - menuCount
@@ -881,8 +882,13 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					if m.menu.sel >= rows {
 						start = m.menu.sel - rows + 1
 					}
-					itemIdx := start + lineIdx
-					if itemIdx >= 0 && itemIdx < len(m.menu.items) {
+					// Line 0 is the card's top border; items fill 1..shown and
+					// the overflow hint plus bottom border answer nothing. Only
+					// a click on a shown row may pick — landing the index on an
+					// item the window is not showing would select invisibly.
+					shown := min(rows, len(m.menu.items)-start)
+					itemIdx := start + lineIdx - 1
+					if lineIdx >= 1 && lineIdx <= shown && itemIdx >= 0 && itemIdx < len(m.menu.items) {
 						m.menu.sel = itemIdx
 						if m.menu.argMode {
 							return m.submit(m.menu.fill())
