@@ -153,23 +153,29 @@ func TestTaskNextStepHint(t *testing.T) {
 	loc := i18n.Locale("en")
 
 	review := core.Task{TaskID: "abc", State: core.StateReview}
-	if hint := taskNextStepHint(loc, nil, review); !strings.Contains(hint, "approve") {
+	if hint := taskNextStepHint(loc, nil, review, "abc"); !strings.Contains(hint, "approve") {
 		t.Fatalf("review hint = %q", hint)
+	}
+	// The hint prints the ref the board shows — the short prefix the user
+	// types, not the full UUID the row stores.
+	long := core.Task{TaskID: "01a14f34-9c2d-4e5f-b6a7-85e3110da43c", State: core.StateReview}
+	if hint := taskNextStepHint(loc, nil, long, "01a14f34"); !strings.Contains(hint, "approve 01a14f34") || strings.Contains(hint, "9c2d") {
+		t.Fatalf("review hint should carry only the short ref, got %q", hint)
 	}
 
 	waiting := core.Task{TaskID: "abc", State: core.StateWaitingCtx}
-	if hint := taskNextStepHint(loc, nil, waiting); hint == "" {
+	if hint := taskNextStepHint(loc, nil, waiting, "abc"); hint == "" {
 		t.Fatalf("waiting_context hint empty")
 	}
 
 	done := core.Task{TaskID: "abc", State: core.StateDone}
-	if hint := taskNextStepHint(loc, nil, done); hint != "" {
+	if hint := taskNextStepHint(loc, nil, done, "abc"); hint != "" {
 		t.Fatalf("done hint = %q", hint)
 	}
 
 	// queued with nil config: no consumer probe possible, no scare text.
 	queued := core.Task{TaskID: "abc", State: core.StateQueued}
-	if hint := taskNextStepHint(loc, nil, queued); hint != "" {
+	if hint := taskNextStepHint(loc, nil, queued, "abc"); hint != "" {
 		t.Fatalf("queued hint with nil cfg = %q", hint)
 	}
 }

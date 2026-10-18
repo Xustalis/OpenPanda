@@ -250,7 +250,11 @@ func runTaskShow(args []string) {
 		fmt.Println(pal().Heading("events:"))
 		printEventTimeline(events, "  ")
 	}
-	if hint := taskNextStepHint(i18n.Detect(), cfg, t); hint != "" {
+	// The hint prints the command the user must type next, so it spells the
+	// task by the same short ref the board shows — a full UUID invites a
+	// copy-failure when the prefix would have resolved anyway.
+	ref := refOr(taskRefsFor(context.Background(), store, []core.Task{t}), t.TaskID)
+	if hint := taskNextStepHint(i18n.Detect(), cfg, t, ref); hint != "" {
 		fmt.Println(pal().Muted(hint))
 	}
 }
@@ -263,13 +267,14 @@ func runTaskShow(args []string) {
 // waiting_context is an agent's clarification question — the same park, the
 // same resume verb; the stored question itself was already printed under
 // result:. A queued row with no live consumer is the silent-stall shape the
-// queue listing already warns about; show it here too.
-func taskNextStepHint(loc i18n.Locale, cfg *config.Config, t core.Task) string {
+// queue listing already warns about; show it here too. ref is the typeable
+// task reference (the board's short prefix), not the full UUID.
+func taskNextStepHint(loc i18n.Locale, cfg *config.Config, t core.Task, ref string) string {
 	switch t.State {
 	case core.StateReview:
-		return i18n.Tf(loc, "cli.task.wait.review", "id", t.TaskID)
+		return i18n.Tf(loc, "cli.task.wait.review", "id", ref)
 	case core.StateWaitingCtx:
-		return i18n.Tf(loc, "cli.ask.question.hint", "id", t.TaskID)
+		return i18n.Tf(loc, "cli.ask.question.hint", "id", ref)
 	case core.StateQueued, core.StateSubmitted:
 		if cfg != nil && !queueConsumerAlive(cfg) {
 			return i18n.T(loc, "cli.queue.noConsumer")
@@ -672,8 +677,9 @@ func taskStoreFatal(err error, id string) {
 }
 
 // runTaskAdd enqueues a user task through the ask engine's scheduler core —
-// the kernel-form of the board's "new task" (needs a capability card, exactly
-// like POST /api/tasks). A linked session is created so the task's progress
+// the kernel-form of the board's "new task" (the capability card is
+// auto-discovered and only consulted at dispatch; a missing card does not
+// block enqueueing). A linked session is created so the task's progress
 // streams into `panda session show`.
 func runTaskAdd(args []string) {
 	fs := flag.NewFlagSet("task add", flag.ExitOnError)
