@@ -64,6 +64,11 @@ jobs:
         run: go mod tidy -diff
       - name: go vet
         run: make vet
+      # staticcheck covers what vet deliberately skips (SA*/S1*/QF* classes).
+      # Pinned in the Makefile so a linter release cannot surprise-fail an
+      # unchanged tree — same reason gotestsum is pinned below.
+      - name: staticcheck
+        run: make staticcheck
       # The lite variant (-tags lite: no embedded console, no TUI) is built by
       # package.sh for the lite-linux release targets, and those run only on a
       # push to main. A symbol that lives in a //go:build !lite file but is

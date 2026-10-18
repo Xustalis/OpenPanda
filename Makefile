@@ -41,7 +41,7 @@ NPM_INSTALL ?= npm ci --no-fund --no-audit
 
 .PHONY: all build web web-test web-gate build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test adapter-test vet fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local install-local
+        dev test adapter-test vet staticcheck fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local install-local
 
 all: build
 
@@ -190,6 +190,16 @@ test: adapter-test
 vet:
 	$(GO) vet ./...
 
+# staticcheck adds the checks go vet deliberately leaves out (SA*/S1*/QF* —
+# dead writes, redundant branches, deprecated-API drift). Pinned like
+# gotestsum in gate.yml so a linter release cannot surprise-fail an unchanged
+# tree; 2026.2.x is the first line that understands Go 1.26 export data and
+# syntax. `go run` resolves it through the module cache, so after the first
+# download the leg works offline. Not a build prerequisite: it needs the
+# network once, and `make build` must stay hermetic.
+staticcheck:
+	$(GO) run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
+
 # Formatting is part of the gate, not a reviewer's job: gofmt disagreements are
 # the one class of diff noise that is entirely mechanical to prevent.
 fmt:
@@ -246,7 +256,7 @@ race-focused:
 #   - 版本号从 internal/version/version.go 提取，禁止在 Makefile 中
 #     写死 VERSION 默认值，避免版本漂移。
 # ============================================================================
-gate: fmt-check vet build adapter-test test race-focused
+gate: fmt-check vet staticcheck build adapter-test test race-focused
 
 # gate-all is gate + the web pipeline (one install, then typecheck + ui build +
 # web tests) + the TUI pty check. CI runs these as separate jobs (see
