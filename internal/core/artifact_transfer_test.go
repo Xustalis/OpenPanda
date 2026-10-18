@@ -384,25 +384,11 @@ func TestArtifactFetchRelaysAcrossHops(t *testing.T) {
 	destPool := withArtifactPool(t, dest)
 	withArtifactPool(t, relay)
 
-	for _, c := range []*Core{root, relay, dest} {
-		if err := c.Register(ctx); err != nil {
-			t.Fatalf("register %s: %v", c.nodeID, err)
-		}
-	}
-	go func() { _ = root.Listen(ctx, "127.0.0.1:17980") }()
-	go func() { _ = relay.Listen(ctx, "127.0.0.1:17981") }()
-	go func() { _ = dest.Listen(ctx, "127.0.0.1:17982") }()
-	time.Sleep(150 * time.Millisecond)
-	if err := root.DialPeer(ctx, "127.0.0.1:17981"); err != nil {
-		t.Fatalf("root dial: %v", err)
-	}
-	if err := relay.DialPeer(ctx, "127.0.0.1:17982"); err != nil {
-		t.Fatalf("relay dial: %v", err)
-	}
-	waitPeer(t, root, "pin-relay")
-	waitPeer(t, relay, "pin-root")
-	waitPeer(t, relay, "pin-dest")
-	waitPeer(t, dest, "pin-relay")
+	rootDone := registerAndListen(t, ctx, root, "127.0.0.1:17980")
+	relayDone := registerAndListen(t, ctx, relay, "127.0.0.1:17981")
+	destDone := registerAndListen(t, ctx, dest, "127.0.0.1:17982")
+	linkPair(t, ctx, root, relay, "127.0.0.1:17981", rootDone, relayDone)
+	linkPair(t, ctx, relay, dest, "127.0.0.1:17982", destDone)
 
 	// The producer holds the artifact under its own row; every hop's row
 	// carries the same task id and chain, as a real delegation leaves them.

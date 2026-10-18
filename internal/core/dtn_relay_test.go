@@ -69,7 +69,10 @@ func TestDTNRelayMultiHopMovesCustody(t *testing.T) {
 	r1 := newCoreWithNative(t, "dtn-r1", "127.0.0.1:17981", ledger.NativeAbility{ID: "x", Command: "true"})
 	r2 := newCoreWithNative(t, "dtn-r2", "127.0.0.1:17982", ledger.NativeAbility{ID: "x", Command: "true"})
 	startPair(t, ctx, s, r1, "127.0.0.1:17980", "127.0.0.1:17981")
-	startPair(t, ctx, r1, r2, "127.0.0.1:17981", "127.0.0.1:17982")
+	// r1 already listens from the pair above; only r2 needs a bind — a second
+	// startPair would rebind r1's port, which Linux refuses with EADDRINUSE.
+	rd := registerAndListen(t, ctx, r2, "127.0.0.1:17982")
+	linkPair(t, ctx, r1, r2, "127.0.0.1:17982", rd)
 
 	// R1's view: s and r2 live; d exists offline behind r2.
 	seedNeighbor(t, r1, s.nodeID, []string{r1.nodeID}, true)
