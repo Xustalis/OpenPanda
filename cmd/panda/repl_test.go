@@ -191,3 +191,36 @@ func TestParseApprovalAnswer(t *testing.T) {
 		})
 	}
 }
+
+// TestFigletWordmarkAligns pins the banner's hand-drawn font: every glyph cell
+// is a fixed 8-column 5-row tile, and the "OpenPanda" render matches the
+// golden wordmark — a single short or misplaced cell (the 'd' ascender once
+// floated a column right of its stem) skews the whole row it lands in.
+func TestFigletWordmarkAligns(t *testing.T) {
+	for r, glyph := range figletFont {
+		if len(glyph) != 5 {
+			t.Fatalf("figletFont[%q] has %d rows, want 5", r, len(glyph))
+		}
+		for i, row := range glyph {
+			if len(row) != 8 {
+				t.Errorf("figletFont[%q][%d] is %d cols, want 8: %q", r, i, len(row), row)
+			}
+		}
+	}
+	want := []string{
+		`  ___    _ __                    ____                        _          `,
+		` / _ \  | '_ \    ___    _ __   |  _ \    __ _   _ __     __| |   __ _  `,
+		`| | | | | |_) |  / _ \  | '_ \  | |_) |  / _` + "`" + ` | | '_ \   / _` + "`" + ` |  / _` + "`" + ` | `,
+		`| |_| | | .__/  |  __/  | | | | | __/   | (_| | | | | | | (_| | | (_| | `,
+		` \___/  |_|      \___|  |_| |_| |_|      \__,_| |_| |_|  \__,_|  \__,_| `,
+	}
+	got := figlet("OpenPanda")
+	if len(got) != len(want) {
+		t.Fatalf("figlet returned %d rows, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("wordmark row %d mismatch:\n got %q\nwant %q", i, got[i], want[i])
+		}
+	}
+}
