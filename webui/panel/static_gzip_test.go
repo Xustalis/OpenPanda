@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -49,8 +50,10 @@ func TestGzipAssetsServesCompressedAndPlain(t *testing.T) {
 	if string(body) != js {
 		t.Fatalf("decompressed body mismatch: %d bytes", len(body))
 	}
-	if resp.Header.Get("Content-Type") != "text/javascript; charset=utf-8" {
-		t.Fatalf("content-type = %q", resp.Header.Get("Content-Type"))
+	// The exact JS mime depends on the OS registry — Windows resolves
+	// .js to application/javascript, Linux/macOS to text/javascript.
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/javascript") && !strings.HasPrefix(ct, "application/javascript") {
+		t.Fatalf("content-type = %q", ct)
 	}
 	if resp.Header.Get("Vary") != "Accept-Encoding" {
 		t.Fatalf("Vary missing: %v", resp.Header)
