@@ -546,7 +546,10 @@ func (c *Core) parkForArtifactPush(ctx context.Context, env bus.Envelope, taskID
 	// mixed-version case (a peer that does not know the push protocol still
 	// serves ordinary fetches) all complete through the same pool — the wake
 	// path only checks Has(), it does not care how the bytes got there.
-	c.goGuarded("push input pull "+taskID, func() {
+	// Tracked with the other detached transfers so the shutdown drain and
+	// WaitArtifacts see it — a pull that outlived the envelope would
+	// otherwise be invisible to both.
+	c.goArtifact("push input pull "+taskID, func() {
 		c.pullForeignPushInputs(runCtx, env.From, taskID, p.Inputs)
 	})
 }

@@ -281,6 +281,13 @@ type Core struct {
 	// and reject one from any other node.
 	pendingArt sync.Map // string -> *artifactTransfer
 
+	// artWG tracks the detached adoption and replica pulls result handlers
+	// launch under context.WithoutCancel — work the task row already reports
+	// terminal for while its bytes are still landing in the pool or a
+	// worktree. WaitArtifacts drains it, so a shutdown — and a test's
+	// TempDir cleanup — never races a write still in flight.
+	artWG sync.WaitGroup
+
 	// pushAck maps peer|hash -> the receiver's latest reported contiguous
 	// waterline for an outbound push (§8.3). It lives beside the persisted
 	// artifact_push_outbox.acked_through because status replies can outpace
@@ -841,6 +848,26 @@ func (c *Core) broadcastCard(ctx context.Context) {
 // have been a log line.
 func (c *Core) goGuarded(name string, fn func()) {
 	guard.Go(c.logger, "core: "+name, nil, fn)
+}
+
+// goArtifact is goGuarded for the detached artifact work — replica pulls and
+// tree adoptions — that result handlers launch past their envelope's
+// lifetime. It is additionally tracked in artWG so WaitArtifacts can drain
+// the writes before the process exits or a test unlinks the pool directory.
+func (c *Core) goArtifact(name string, fn func()) {
+	c.artWG.Add(1)
+	c.goGuarded(name, func() {
+		defer c.artWG.Done()
+		fn()
+	})
+}
+
+// WaitArtifacts blocks until every detached artifact adoption has finished
+// writing. Transfers carry their own budget (artifactTransferBudget), so the
+// wait is bounded: a wedged fetch fails its own deadline and drops out of the
+// group rather than pinning the caller.
+func (c *Core) WaitArtifacts() {
+	c.artWG.Wait()
 }
 
 // SetSupervisor attaches the entry model client that judges agent task
@@ -1717,6 +1744,22 @@ func (c *Core) Shutdown(ctx context.Context) {
 	// heartbeat, or every CLI exit flips a running node offline.
 	if c.ownsNodeRow {
 		c.node.Shutdown(ctx)
+	}
+	// Detached adoptions outlive the result envelope by design; a daemon
+	// exiting mid-extract would leave a worktree half-applied. Transfers
+	// carry their own budget, so this drain is bounded — and the caller's
+	// shutdown deadline binds it too: a wedged transfer must not stretch a
+	// stop past the point the caller committed to, or the supervisor would
+	// SIGKILL at its own timeout with nothing logged.
+	done := make(chan struct{})
+	go func() {
+		c.artWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		c.logger.Warn("artifact transfers still in flight at shutdown deadline", "err", ctx.Err())
 	}
 }
 

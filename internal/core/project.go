@@ -618,7 +618,7 @@ func (c *Core) adoptProjectOutput(ctx context.Context, t Task, from, hash string
 	// The pull is a multi-chunk round trip, so it must not block the message
 	// handler, and it must outlive the envelope's context.
 	ctx = context.WithoutCancel(ctx)
-	c.goGuarded("adopt project artifact "+hash, func() {
+	c.goArtifact("adopt project artifact "+hash, func() {
 		if from != "" && from != c.nodeID {
 			if _, held := c.artifacts.Has(hash); !held {
 				if _, err := c.FetchArtifact(ctx, from, t.TaskID, hash); err != nil {
@@ -678,7 +678,7 @@ func (c *Core) adoptWorktreeOutput(ctx context.Context, t Task, from, hash strin
 		}
 		if from != "" && from != c.nodeID {
 			ctx = context.WithoutCancel(ctx)
-			c.goGuarded("pull task artifact "+hash, func() {
+			c.goArtifact("pull task artifact "+hash, func() {
 				if _, held := c.artifacts.Has(hash); held {
 					return
 				}
@@ -700,7 +700,7 @@ func (c *Core) adoptWorktreeOutput(ctx context.Context, t Task, from, hash strin
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
-	c.goGuarded("adopt worktree artifact "+hash, func() {
+	c.goArtifact("adopt worktree artifact "+hash, func() {
 		if from != "" && from != c.nodeID {
 			if _, held := c.artifacts.Has(hash); !held {
 				if _, err := c.FetchArtifact(ctx, from, t.TaskID, hash); err != nil {
