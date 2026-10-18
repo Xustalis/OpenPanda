@@ -44,7 +44,8 @@ func runUninstall(args []string) {
 	dryRun := fs.Bool("dry-run", false, "print the plan and exit without deleting anything")
 	purge := fs.Bool("purge", false, "also delete user data (memory/projects/skills/work); requires a second confirmation (or --yes)")
 	backupOnly := fs.Bool("backup-only", false, "write the backup zip but delete nothing")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda uninstall [--yes] [--dry-run] [--purge | --backup-only | --no-backup]")
 
 	loc := i18n.Detect()
 

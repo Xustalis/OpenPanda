@@ -32,7 +32,8 @@ func runInstall(args []string) {
 	dirFlag := fs.String("dir", "", "install directory (default: ~/.local/bin on unix, %LOCALAPPDATA%\\OpenPanda\\bin on Windows)")
 	noPath := fs.Bool("no-path", false, "copy the binary but do not register it on PATH")
 	forceFlag := fs.Bool("force", false, "install even when this binary's schema is older than the data directory's")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda install [--dir DIR] [--no-path] [--force]")
 
 	loc := i18n.Detect()
 	dir := *dirFlag
@@ -157,7 +158,8 @@ func runInstall(args []string) {
 func runDoctor(args []string) {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda doctor")
 
 	loc := i18n.Detect()
 	if problems := doctorReport(loc, *configPath, os.Stdout); problems > 0 {

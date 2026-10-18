@@ -935,6 +935,7 @@ var messages = map[Locale]map[string]string{
 		"repl.help.bangbang":      "!! — ask the previous question again",
 
 		"cli.unknownSub":             "unknown subcommand",
+		"cli.unexpectedArgs":         "unexpected argument(s): {args}",
 		"cli.unknownSub.askHint":     "if that was a question or a task, ask it: `panda ask \"…\"`",
 		"repl.didyoumean":            "did you mean {cmd}?",
 		"cmd.clear":                  "— clear the screen (the conversation stays)",
@@ -1984,6 +1985,7 @@ var messages = map[Locale]map[string]string{
 		"repl.help.bangbang":      "!! — 重新提问上一个问题",
 
 		"cli.unknownSub":             "未知子命令",
+		"cli.unexpectedArgs":         "多余参数：{args}",
 		"cli.unknownSub.askHint":     "如果那是提问或任务，直接问：`panda ask \"…\"`",
 		"repl.didyoumean":            "你是想输入 {cmd} 吗？",
 		"cmd.clear":                  "— 清屏（对话内容保留）",
@@ -3086,6 +3088,7 @@ var messages = map[Locale]map[string]string{
 		"repl.help.bangbang":      "!! — 直前の質問をもう一度",
 
 		"cli.unknownSub":             "不明なサブコマンド",
+		"cli.unexpectedArgs":         "予期しない引数: {args}",
 		"cli.unknownSub.askHint":     "質問やタスクなら: `panda ask \"…\"`",
 		"repl.didyoumean":            "{cmd} のことでしょうか？",
 		"cmd.clear":                  "— 画面をクリア（会話は保持）",
@@ -4120,6 +4123,7 @@ var messages = map[Locale]map[string]string{
 		"repl.help.bangbang":      "!! — repite la pregunta anterior",
 
 		"cli.unknownSub":             "subcomando desconocido",
+		"cli.unexpectedArgs":         "argumento(s) inesperado(s): {args}",
 		"cli.unknownSub.askHint":     "si era una pregunta o una tarea: `panda ask \"…\"`",
 		"repl.didyoumean":            "¿querías decir {cmd}?",
 		"cmd.clear":                  "— limpia la pantalla (la conversación se mantiene)",
@@ -5154,6 +5158,7 @@ var messages = map[Locale]map[string]string{
 		"repl.help.bangbang":      "!! — stellt die letzte Frage erneut",
 
 		"cli.unknownSub":             "unbekannter Unterbefehl",
+		"cli.unexpectedArgs":         "unerwartete(s) Argument(e): {args}",
 		"cli.unknownSub.askHint":     "falls das eine Frage oder Aufgabe war: `panda ask \"…\"`",
 		"repl.didyoumean":            "meintest du {cmd}?",
 		"cmd.clear":                  "— löscht den Bildschirm (die Unterhaltung bleibt)",

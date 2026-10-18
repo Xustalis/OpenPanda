@@ -28,7 +28,7 @@ func runTaskArtifact(args []string) {
 	outDir := fs.String("out", "", "extract here (default ./<id>-artifact)")
 	list := fs.Bool("list", false, "list archive entries without extracting")
 	file := fs.String("file", "", "print one archive entry to stdout (e.g. screenshot.png)")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda task artifact <task-id> [--out DIR | --list | --file PATH]")

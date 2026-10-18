@@ -31,7 +31,8 @@ import (
 func runDetect(args []string) {
 	fs := flag.NewFlagSet("detect", flag.ExitOnError)
 	out := fs.String("o", "", "write the draft to this file instead of stdout")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda detect [-o capabilities.yaml]")
 
 	card := detectCard()
 	data, err := yaml.Marshal(card)

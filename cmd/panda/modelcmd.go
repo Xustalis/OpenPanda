@@ -871,7 +871,7 @@ func (r *repl) resolveModel(args []string, verb string) (config.ModelConfig, str
 func runModel(args []string) {
 	fs := flag.NewFlagSet("model", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 
 	loc := i18n.Detect()

@@ -72,7 +72,8 @@ func runStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	runningOnly := fs.Bool("running", false, "show only currently running nodes")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda status [--running]")
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -444,7 +445,7 @@ func nodeFP(n ledger.Node) string {
 func runNodeRemove(args []string) {
 	fs := flag.NewFlagSet("nodes remove", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 	if len(rest) != 1 {
 		fatal("usage", fmt.Errorf("panda nodes remove <id>"))
@@ -495,7 +496,7 @@ func runNodePrune(args []string) {
 	fs := flag.NewFlagSet("nodes prune", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	offlineDays := fs.Int("offline-days", 0, "also delete rows offline longer than this many days")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -545,7 +546,7 @@ func runNodePrune(args []string) {
 func runNodesVerify(args []string) {
 	fs := flag.NewFlagSet("nodes verify", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 	if len(rest) != 1 {
 		fatal("usage", fmt.Errorf("panda nodes verify <id>"))
@@ -605,7 +606,7 @@ func runQueue(args []string) {
 	project := fs.String("project", "", "filter by project (empty = all)")
 	watch := fs.Bool("watch", false, "live view: redraw in place until Ctrl-C")
 	yes := fs.Bool("yes", false, "with `clear`: skip the confirmation prompt")
-	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "state": true, "project": true}))
+	fs.Parse(reorderFlags(fs, args))
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -951,7 +952,7 @@ func shortNode(id string) string {
 func runCancel(args []string) {
 	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda cancel [--config PATH] <task-id>")
@@ -997,7 +998,7 @@ func runApprove(args []string) {
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	answer := fs.String("m", "", "answer to a parked clarification question")
 	fs.StringVar(answer, "answer", "", "answer to a parked clarification question")
-	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "m": true, "answer": true}))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda approve [--config PATH] [-m ANSWER] <task-id>")
@@ -1134,7 +1135,7 @@ func runReject(args []string) {
 	fs := flag.NewFlagSet("reject", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	reason := fs.String("reason", "", "rejection reason")
-	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "reason": true}))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda reject [--config PATH] [--reason s] <task-id>")
@@ -1169,7 +1170,7 @@ func runReject(args []string) {
 func runLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda logs [--config PATH] <task-id>")
@@ -1245,7 +1246,8 @@ func runAudit(args []string) {
 	fs := flag.NewFlagSet("audit", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	taskID := fs.String("task", "", "scope the operation to one task (entries: its events; verify: its event chain)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda audit [verify|entries] [--task ID]")
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -1351,7 +1353,8 @@ func runMetrics(args []string) {
 	// the daemon (a separate process); for the daemon's numbers run it via
 	// the daemon host's own shell or check the panel's /api/self.
 	runtimeStats := fs.Bool("runtime", false, "print this process's runtime stats (goroutines, heap, GC)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda metrics [--csv] [--runtime]")
 
 	if *runtimeStats {
 		if jsonOutput {

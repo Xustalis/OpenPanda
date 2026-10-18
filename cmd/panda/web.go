@@ -56,7 +56,8 @@ func runWeb(args []string) {
 	daemon := fs.Bool("daemon", false, "run web console quietly in the background")
 	fs.BoolVar(daemon, "d", false, "alias for -daemon")
 	lan := fs.Bool("lan", false, "bind all interfaces so the console is reachable from the LAN (auto-generates a token when none is configured)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda web [--daemon] [--lan] [--no-browser]")
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {

@@ -24,7 +24,7 @@ func runRead(args []string) {
 	fs := flag.NewFlagSet("read", flag.ExitOnError)
 	raw := fs.Bool("raw", false, "output raw unrendered text")
 	width := fs.Int("width", 0, "override terminal render width (columns)")
-	fs.Parse(reorderFlags(args, map[string]bool{"width": true}))
+	fs.Parse(reorderFlags(fs, args))
 
 	target := fs.Arg(0)
 	var (

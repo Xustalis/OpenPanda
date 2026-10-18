@@ -84,7 +84,7 @@ func probeAgentStatuses() []agentStatus {
 func runAgents(args []string) {
 	fs := flag.NewFlagSet("agents", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, nil))
+	fs.Parse(reorderFlags(fs, args))
 	loc := i18n.Detect()
 	sub := fs.Arg(0)
 

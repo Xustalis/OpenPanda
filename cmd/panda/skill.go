@@ -230,7 +230,12 @@ func approveSkill(store *skills.Store, name string, approve bool) {
 
 // separateFlags partitions args into flags and positional arguments so that
 // flags like --force or --pending are recognized regardless of whether they appear
-// before or after positional subcommands/arguments.
+// before or after positional subcommands/arguments. It survives only where the
+// caller has no FlagSet yet — skillFind's query words, and skillInstall's
+// forward of the user's args into skillImport/skillHub, where the value-flag
+// pairing must be decided before a FlagSet exists to ask. Commands with a
+// FlagSet call reorderFlags(fs, args) instead, which reads the pairing off the
+// definitions themselves and cannot drift from them.
 func separateFlags(args []string) (flags []string, pos []string) {
 	valFlags := map[string]bool{
 		"scope": true, "project": true, "device": true, "name": true, "hub": true,
@@ -264,10 +269,10 @@ func skillImport(store *skills.Store, args []string) {
 	pending := fs.Bool("pending", false, "import with pending status awaiting approval")
 	force := fs.Bool("force", false, "overwrite existing skill")
 
-	flagArgs, posArgs := separateFlags(args)
-	if err := fs.Parse(flagArgs); err != nil {
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		os.Exit(2)
 	}
+	posArgs := fs.Args()
 
 	if len(posArgs) == 0 {
 		fatalf("%s", i18n.T(i18n.Detect(), "cli.skill.needSource"))
@@ -319,10 +324,10 @@ func skillHub(cfg *config.Config, store *skills.Store, args []string) {
 	force := fs.Bool("force", false, "overwrite existing skill")
 	pending := fs.Bool("pending", false, "install with pending status awaiting approval")
 
-	flagArgs, posArgs := separateFlags(args)
-	if err := fs.Parse(flagArgs); err != nil {
+	if err := fs.Parse(reorderFlags(fs, args)); err != nil {
 		os.Exit(2)
 	}
+	posArgs := fs.Args()
 
 	action := "list"
 	var target string

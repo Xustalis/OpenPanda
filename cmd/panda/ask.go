@@ -20,9 +20,12 @@ import (
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 )
 
-// askValueFlags enumerates `panda ask`'s value-carrying flags for
-// reorderFlags (see global.go): hoisted ahead of the positional prompt so
-// `panda ask "question" --config x` parses the way users type it.
+// askValueFlags enumerates `panda ask`'s value-carrying flags for the
+// bare-input heuristic (main.go): `panda fix --project x` is a one-word line,
+// not a phrase, so the value of a known value-flag must not read as a second
+// word. Parsing itself does not consult this table — runAsk reorders against
+// its own FlagSet, which cannot drift; keep the two in agreement when adding
+// a flag, or the heuristic misjudges an unquoted one-liner.
 var askValueFlags = map[string]bool{
 	"config": true, "card": true, "mcp": true, "output-format": true,
 	"project": true,
@@ -96,7 +99,7 @@ func runAsk(args []string) {
 	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated), e.g. \"npx -y @modelcontextprotocol/server-filesystem /tmp\"")
 	outputFormat := fs.String("output-format", "", "headless output: json (one object) or stream-json (NDJSON events)")
 	project := fs.String("project", "", "run this ask inside a project (default: the one you entered)")
-	fs.Parse(reorderFlags(args, askValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if prompt == "" {

@@ -240,7 +240,8 @@ func runRepl(args []string) {
 	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
 	yesFlag := fs.Bool("yes", false, "accept workspace confirmation without prompting")
 	fs.BoolVar(yesFlag, "y", false, "accept workspace confirmation without prompting (shorthand)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda repl [--card F] [--mcp CMD] [-y]")
 
 	cfg, err := loadConfigQuietly(*configPath)
 	if err != nil {

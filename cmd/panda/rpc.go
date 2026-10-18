@@ -62,7 +62,8 @@ func runRPC(args []string) {
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	cardPath := fs.String("card", cardFlagDefault(), "path to capabilities.yaml")
 	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda rpc [--card F] [--mcp CMD]")
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)

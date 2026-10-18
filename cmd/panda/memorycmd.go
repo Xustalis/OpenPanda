@@ -153,7 +153,8 @@ func memoryUsage() {
 func runMemoryList(args []string) {
 	fs := flag.NewFlagSet("memory list", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda memory list")
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -244,7 +245,7 @@ func runMemoryGet(args []string) {
 	fs := flag.NewFlagSet("memory get", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	raw := fs.Bool("raw", false, "output raw unrendered text")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	if fs.Arg(0) == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda memory get [--raw] <name>")
 		os.Exit(2)
@@ -283,7 +284,7 @@ func runMemorySet(args []string) {
 	fs := flag.NewFlagSet("memory set", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	filePath := fs.String("file", "", "read the new content from this file (default: stdin)")
-	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "file": true}))
+	fs.Parse(reorderFlags(fs, args))
 	if fs.Arg(0) == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda memory set <name> [--file F]  (content from stdin otherwise)")
 		os.Exit(2)
@@ -328,7 +329,7 @@ func runMemorySet(args []string) {
 func runMemoryRm(args []string) {
 	fs := flag.NewFlagSet("memory rm", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	if fs.Arg(0) == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda memory rm topic:<name>")
 		os.Exit(2)

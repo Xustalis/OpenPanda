@@ -58,7 +58,7 @@ func runUpdate(args []string) {
 	preFlag := fs.Bool("pre", false, "include pre-release versions (alpha, beta, rc, preview)")
 	forceFlag := fs.Bool("force", false, "force download/apply even if version is equal or older")
 	checkOnlyFlag := fs.Bool("check", false, "check for updates only without applying")
-	fs.Parse(reorderFlags(args, nil))
+	fs.Parse(reorderFlags(fs, args))
 
 	subArgs := fs.Args()
 	action := "check"
@@ -95,7 +95,8 @@ func runUpgrade(args []string) {
 	fs := flag.NewFlagSet("upgrade", flag.ExitOnError)
 	preFlag := fs.Bool("pre", false, "include pre-release versions (alpha, beta, rc, preview)")
 	forceFlag := fs.Bool("force", false, "force download/apply even if version is equal or older")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda upgrade [--pre] [--force]")
 
 	executeApply(*preFlag, *forceFlag)
 }

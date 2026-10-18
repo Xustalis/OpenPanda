@@ -164,7 +164,8 @@ func runDaemon(args []string) {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, fmt.Sprintf("path to config.yaml (default %s)", config.SystemConfigPath()))
 	cardPath := fs.String("card", cardFlagDefault(), fmt.Sprintf("path to capabilities.yaml (default: discovered — ./capabilities.yaml, next to the resolved config, or %s)", systemCardPath()))
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda daemon [--config F] [--card F]")
 
 	// Before anything looks for an agent CLI: a launchd/systemd/task-scheduler
 	// launch inherits a minimal PATH, and the CLIs live in user dirs it never

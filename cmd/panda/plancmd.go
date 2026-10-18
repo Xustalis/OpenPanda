@@ -67,7 +67,7 @@ func runPlanStart(args []string) {
 	cardPath := fs.String("card", cardFlagDefault(), "path to capabilities.yaml (default: discovered)")
 	priority := fs.String("priority", "normal", "priority for every stage: "+cliPriorities)
 	dryRun := fs.Bool("dry-run", false, "validate and print the stage order without creating anything")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 
 	path := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if path == "" {
@@ -160,7 +160,7 @@ func runPlanStart(args []string) {
 func runPlanShow(args []string) {
 	fs := flag.NewFlagSet("plan show", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		planUsage()

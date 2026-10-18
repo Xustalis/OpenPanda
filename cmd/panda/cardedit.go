@@ -36,10 +36,12 @@ import (
 
 // cardMutValueFlags lists every value-carrying flag the structured edits
 // accept — including the global config/card — keyed by bare name so -flag
-// and --flag spellings both match during the verb scan and in reorderFlags
-// (same convention as cardSubcommand's cardValueFlags).
+// and --flag spellings both match during the verb scan. It is a SCAN table
+// only, for the pre-FlagSet split in cardVerb/cardSubcommand; parsing itself
+// derives the value flags from the live FlagSet (reorderFlags), so drift here
+// can misplace the verb but never scramble a flag's value.
 var cardMutValueFlags = map[string]bool{
-	"config": true, "card": true,
+	"config": true, "card": true, "intent": true,
 	"command": true, "args": true, "tier": true, "description": true,
 	"notify": true, "adapter": true, "install-check": true, "install_check": true,
 	"capabilities": true, "best-at": true, "best_at": true,
@@ -47,8 +49,8 @@ var cardMutValueFlags = map[string]bool{
 }
 
 // cardVerb splits `card native add id --command x` into the level-2 verb
-// ("add") and the rest of argv with flags hoisted ahead of positionals — the
-// same contract cardSubcommand provides one level up.
+// ("add") and the rest of argv; the callers' fs.Parse reorders against its own
+// FlagSet at the parse site.
 //
 // The scan must know which flags carry a value: a naive "first word that does
 // not start with -" rule would pick the *path* in `card native add --command
@@ -72,7 +74,7 @@ func cardVerb(args []string) (string, []string) {
 	if verbIdx >= 0 {
 		rest = append(append([]string{}, args[:verbIdx]...), args[verbIdx+1:]...)
 	}
-	return verb, reorderFlags(rest, cardMutValueFlags)
+	return verb, rest
 }
 
 // runCardNative implements `panda card native …`.
@@ -84,7 +86,7 @@ func runCardNative(args []string) {
 	argList := fs.String("args", "", "comma-separated arguments passed to the command")
 	tier := fs.Int("tier", 1, "1=reversible (default) | 2=irreversible, needs approval")
 	description := fs.String("description", "", "one-line description of what the command does")
-	fs.Parse(rest)
+	fs.Parse(reorderFlags(fs, rest))
 	positional := fs.Args()
 	path := cardTargetPath(*cardFlag)
 
@@ -142,7 +144,7 @@ func runCardAgent(args []string) {
 	// (agents.TierAutoApproved) and what commander.Route does for an undeclared
 	// tier. The gate is opt-in: pass --tier 2 for an agent that must ask first.
 	tier := fs.Int("tier", agents.TierAutoApproved, "1=reversible (default) | 2=irreversible, needs approval")
-	fs.Parse(rest)
+	fs.Parse(reorderFlags(fs, rest))
 	positional := fs.Args()
 	path := cardTargetPath(*cardFlag)
 
@@ -208,7 +210,7 @@ func runCardManual(args []string) {
 	fs := flag.NewFlagSet("card manual "+verb, flag.ExitOnError)
 	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	notify := fs.String("notify", "", "how to reach the human (required for add)")
-	fs.Parse(rest)
+	fs.Parse(reorderFlags(fs, rest))
 	positional := fs.Args()
 	path := cardTargetPath(*cardFlag)
 
