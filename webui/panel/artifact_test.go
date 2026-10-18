@@ -82,7 +82,7 @@ func TestTaskArtifactListAndPreview(t *testing.T) {
 	if ct := rr.Header().Get("Content-Type"); ct != "image/png" {
 		t.Fatalf("content-type = %q, want image/png", ct)
 	}
-	if !strings.HasPrefix(string(rr.Body.Bytes()), "\x89PNG") {
+	if !strings.HasPrefix(rr.Body.String(), "\x89PNG") {
 		t.Fatal("preview body is not the stored PNG bytes")
 	}
 

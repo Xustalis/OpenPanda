@@ -147,7 +147,9 @@ func TestPackHashDeterministic(t *testing.T) {
 	if ha == hc {
 		t.Fatalf("distinct snapshots must hash differently")
 	}
-	if Hash([]byte("x")) != Hash([]byte("x")) {
+	hx1 := Hash([]byte("x"))
+	hx2 := Hash([]byte("x"))
+	if hx1 != hx2 {
 		t.Fatalf("Hash must be deterministic")
 	}
 }

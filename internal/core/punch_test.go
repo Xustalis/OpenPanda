@@ -187,9 +187,7 @@ func TestPunchSpoofedFromDropped(t *testing.T) {
 	if err := mallory.SendPunch(f, a.udp.LocalAddr(), false); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-time.After(300 * time.Millisecond):
-	}
+	time.Sleep(300 * time.Millisecond)
 	if a.UDPRoute("pn-victim") != nil {
 		t.Fatal("unverifiable From bound a route")
 	}
@@ -219,9 +217,7 @@ func TestPunchBadSignature(t *testing.T) {
 	if err := forger.SendPunch(f, aAddr, false); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-time.After(300 * time.Millisecond):
-	}
+	time.Sleep(300 * time.Millisecond)
 	if a.UDPRoute("mallory") != nil {
 		t.Fatal("forged punch bound a route")
 	}

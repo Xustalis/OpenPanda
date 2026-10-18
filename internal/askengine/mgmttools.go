@@ -1471,13 +1471,13 @@ func (e *Engine) cardAgentAdd(ctx context.Context, name string, ag ledger.Agent)
 		return "", err
 	}
 	if name == "" {
-		return "", fmt.Errorf("Agent 名称不能为空")
+		return "", fmt.Errorf("agent 名称不能为空")
 	}
 	if err := resolveAgentFromRegistry(&name, &ag); err != nil {
 		return "", err
 	}
 	if len(ag.Capabilities) == 0 {
-		return "", fmt.Errorf("Agent capabilities 不能为空")
+		return "", fmt.Errorf("agent capabilities 不能为空")
 	}
 	if err := checkAdapterExists(ag.Adapter); err != nil {
 		return "", err
@@ -1527,7 +1527,7 @@ func (e *Engine) cardAgentAdd(ctx context.Context, name string, ag ledger.Agent)
 // registry key so routing and `panda agents` agree on one name.
 func resolveAgentFromRegistry(name *string, ag *ledger.Agent) error {
 	if *name == "" {
-		return fmt.Errorf("Agent 名称不能为空")
+		return fmt.Errorf("agent 名称不能为空")
 	}
 	known, ok := lookupKnownAgent(*name)
 	if !ok {
@@ -1623,13 +1623,13 @@ func adapterFileExists(adapter string) bool {
 func checkAdapterExists(adapter string) error {
 	adapter = strings.TrimSpace(adapter)
 	if adapter == "" {
-		return fmt.Errorf("Agent adapter 不能为空：请给出适配器文件名，或使用注册表里已有的名字（%s）", knownAgentList())
+		return fmt.Errorf("agent adapter 不能为空：请给出适配器文件名，或使用注册表里已有的名字（%s）", knownAgentList())
 	}
 	// The spawn side (commander.adapterPath) refuses any name with a path
 	// separator or colon, so a path-like name written here could never
 	// launch — reject it now instead of leaving a dead card entry.
 	if strings.ContainsAny(adapter, `/\:`) {
-		return fmt.Errorf("Agent adapter %q 含路径分隔符或冒号，不是合法适配器文件名", adapter)
+		return fmt.Errorf("agent adapter %q 含路径分隔符或冒号，不是合法适配器文件名", adapter)
 	}
 	if adapterFileExists(adapter) {
 		return nil
@@ -1708,7 +1708,7 @@ func (e *Engine) cardAgentSet(ctx context.Context, name string, upd cardmut.Agen
 		return "", err
 	}
 	if name == "" {
-		return "", fmt.Errorf("Agent 名称不能为空")
+		return "", fmt.Errorf("agent 名称不能为空")
 	}
 	// Same invariant as the add path: an entry must never point at a script that
 	// is not on disk, whether it got there by add or by set.
@@ -1729,7 +1729,7 @@ func (e *Engine) cardAgentRemove(ctx context.Context, name string) (string, erro
 		return "", err
 	}
 	if name == "" {
-		return "", fmt.Errorf("Agent 名称不能为空")
+		return "", fmt.Errorf("agent 名称不能为空")
 	}
 	if err := cardmut.AgentRemove(path, name); err != nil {
 		return "", fmt.Errorf("删除 Agent：%w", err)

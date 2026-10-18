@@ -77,7 +77,7 @@ func TestMemoryGraphEmptyMemory(t *testing.T) {
 // Promotion tags and literal name mentions must become edges — the two
 // honest edge kinds the view promises.
 func TestMemoryGraphEdges(t *testing.T) {
-	h, cfg := newMemoryPanel(t)
+	_, cfg := newMemoryPanel(t)
 	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memory.Limits{})
 
 	// MEMORY.md carries dreamer-promoted entries; one names a topic twice and
@@ -111,7 +111,7 @@ func TestMemoryGraphEdges(t *testing.T) {
 	if err := skillStore.Save(&skills.Skill{Name: "work-report", Description: "summarize the work log", Status: skills.StatusActive, Body: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	h = New(Deps{
+	h := New(Deps{
 		Store:      newTestStore(t),
 		Projects:   memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memory.Limits{}),
 		Cfg:        cfg,

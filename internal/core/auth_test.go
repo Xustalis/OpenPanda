@@ -103,9 +103,10 @@ func TestRejectBadHelloSig(t *testing.T) {
 	startListener(t, worker, "127.0.0.1:17970")
 
 	ws := rawDial(t, "127.0.0.1:17970")
+	ts := time.Now().Unix()
 	env, _ := bus.NewEnvelope(bus.MsgHello, "attacker", "h-1", bus.HelloPayload{
-		NodeID: "attacker", Ver: "t", Ts: time.Now().Unix(),
-		Sig: bus.HelloSig("wrong-secret", "attacker", time.Now().Unix()),
+		NodeID: "attacker", Ver: "t", Ts: ts, Nonce: "n-wrong",
+		Sig: bus.HelloSigN("wrong-secret", "attacker", ts, "n-wrong"),
 	})
 	if err := ws.WriteJSON(env); err != nil {
 		t.Fatalf("write hello: %v", err)
@@ -199,8 +200,8 @@ func TestRejectHelloClaimingSelfID(t *testing.T) {
 	ws := rawDial(t, "127.0.0.1:17975")
 	ts := time.Now().Unix()
 	env, _ := bus.NewEnvelope(bus.MsgHello, "worker-self", "h-1", bus.HelloPayload{
-		NodeID: "worker-self", Ver: "t", Ts: ts,
-		Sig: bus.HelloSig(testSharedSecret, "worker-self", ts),
+		NodeID: "worker-self", Ver: "t", Ts: ts, Nonce: "n-self",
+		Sig: bus.HelloSigN(testSharedSecret, "worker-self", ts, "n-self"),
 	})
 	if err := ws.WriteJSON(env); err != nil {
 		t.Fatalf("write self-claiming hello: %v", err)
@@ -219,7 +220,7 @@ func TestRejectHelloClaimingSelfID(t *testing.T) {
 // one with a still-valid signature inside MaxHelloAge — must not authenticate a
 // second connection. Two replay shapes are exercised: the verbatim frame, and
 // the same signed payload under a fresh msg_id. The second is the important
-// one: msg_id is not covered by HelloSig's HMAC, so a dedup key that included
+// one: msg_id is not covered by the hello HMAC, so a dedup key that included
 // it would let a replay dodge detection by rewriting an unsigned field.
 func TestRejectReplayedHello(t *testing.T) {
 	worker := newCoreWithNative(t, "worker", "127.0.0.1:17972", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
@@ -231,7 +232,8 @@ func TestRejectReplayedHello(t *testing.T) {
 	mkHello := func(msgID string) bus.Envelope {
 		ts := replayHelloTS
 		env, err := bus.NewEnvelope(bus.MsgHello, "attacker", msgID, bus.HelloPayload{
-			NodeID: "attacker", Ver: "t", Ts: ts, Sig: bus.HelloSig(testSharedSecret, "attacker", ts),
+			NodeID: "attacker", Ver: "t", Ts: ts, Nonce: "n-replay",
+			Sig: bus.HelloSigN(testSharedSecret, "attacker", ts, "n-replay"),
 		})
 		if err != nil {
 			t.Fatalf("build hello: %v", err)
@@ -294,7 +296,8 @@ func TestRejectSpoofedSender(t *testing.T) {
 	// Valid hello as "attacker".
 	ts := time.Now().Unix()
 	hello, _ := bus.NewEnvelope(bus.MsgHello, "attacker", "h-1", bus.HelloPayload{
-		NodeID: "attacker", Ver: "t", Ts: ts, Sig: bus.HelloSig(testSharedSecret, "attacker", ts),
+		NodeID: "attacker", Ver: "t", Ts: ts, Nonce: "n-valid",
+		Sig: bus.HelloSigN(testSharedSecret, "attacker", ts, "n-valid"),
 	})
 	if err := ws.WriteJSON(hello); err != nil {
 		t.Fatalf("write hello: %v", err)

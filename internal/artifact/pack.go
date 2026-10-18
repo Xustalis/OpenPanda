@@ -201,19 +201,16 @@ type entry struct {
 	dir  bool
 }
 
-// walk collects root's regular files and directories in sorted path order.
-// Irregular entries (symlinks, sockets, devices) are skipped: an artifact is
-// content, and a link is a reference to content that may not exist on the node
-// the artifact travels to. limit bounds the total regular-file bytes; 0
-// accepts whatever the source tree holds.
-func walk(root string, limit int64) ([]entry, error) {
-	return walkExcept(root, limit, nil, nil, nil, nil, nil)
-}
-
-// walkExcept is walk with a directory-name skip set: a directory whose name is
-// in dirSkip is pruned wholesale (contents never counted, never packed), and a
-// file whose base name satisfies fileSkip is left out individually — the hook
-// the source-pack privacy filter plugs into. Callers use dirSkip to keep
+// walkExcept collects root's regular files and directories in sorted path
+// order. Irregular entries (symlinks, sockets, devices) are skipped: an
+// artifact is content, and a link is a reference to content that may not
+// exist on the node the artifact travels to. limit bounds the total
+// regular-file bytes; 0 accepts whatever the source tree holds.
+//
+// dirSkip is a directory-name skip set: a directory whose name is in it is
+// pruned wholesale (contents never counted, never packed), and a file whose
+// base name satisfies fileSkip is left out individually — the hook the
+// source-pack privacy filter plugs into. Callers use dirSkip to keep
 // derived trees — dependency checkouts, VCS internals, caches — out of an
 // artifact that only needs the source. ignores additionally applies the pack
 // root's parsed .gitignore rules — only for packs that ship SOURCE, never for

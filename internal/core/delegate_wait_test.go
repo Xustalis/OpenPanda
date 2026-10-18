@@ -175,7 +175,7 @@ func TestFoldLateChildrenReadsRows(t *testing.T) {
 	_ = c.store.CompleteFromRemote(ctx, child.TaskID, c.nodeID,
 		bus.TaskResultPayload{TaskID: child.TaskID, State: StateDone, Stdout: "shipped"})
 	notes := c.foldLateChildren(ctx, &pending)
-	if len(notes) != 1 || pending != nil && len(pending) != 0 {
+	if len(notes) != 1 || len(pending) != 0 {
 		t.Fatalf("resolved child should fold one note and leave pending empty: notes=%v pending=%v", notes, pending)
 	}
 }

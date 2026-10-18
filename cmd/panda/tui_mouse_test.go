@@ -271,7 +271,7 @@ func TestArrowDoesNotScrollWhenTheAppOwnsTheMouse(t *testing.T) {
 
 	// ...and the wheel still works there, so the two modes really are equivalent
 	// in what they can scroll.
-	next, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelUp})
+	next, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
 	m = next.(tuiModel)
 	if m.scrollOffset != transcriptScrollStep {
 		t.Fatalf("wheel up should still scroll in scroll mode, offset = %d", m.scrollOffset)
@@ -366,13 +366,13 @@ func TestWheelScrollsWhileExecRuns(t *testing.T) {
 	m.mouse = mouseScroll
 	m.mode = modeExec
 
-	next, _ := m.Update(tea.MouseMsg{Type: tea.MouseWheelUp})
+	next, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
 	m = next.(tuiModel)
 	if m.scrollOffset != transcriptScrollStep {
 		t.Fatalf("wheel up should read back during exec, offset = %d", m.scrollOffset)
 	}
 
-	next, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
+	next, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
 	m = next.(tuiModel)
 	if m.scrollOffset != 0 {
 		t.Fatalf("wheel down should return to the live bottom, offset = %d", m.scrollOffset)

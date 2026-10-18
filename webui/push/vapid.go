@@ -33,6 +33,7 @@ const vapidLifetime = 12 * 3600
 type VAPIDKeys struct {
 	priv *ecdsa.PrivateKey
 	sub  string // VAPID subject: a mailto: or https: URI identifying the sender
+	pub  []byte // uncompressed P-256 point (0x04‖X‖Y), resolved once at load
 }
 
 // GenerateVAPIDKeys creates a fresh P-256 identity for subject.
@@ -41,7 +42,19 @@ func GenerateVAPIDKeys(subject string) (*VAPIDKeys, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate vapid key: %w", err)
 	}
-	return &VAPIDKeys{priv: priv, sub: subject}, nil
+	return newVAPIDKeys(priv, subject)
+}
+
+// newVAPIDKeys resolves the public point once, at construction: ecdh's Bytes()
+// is the same uncompressed encoding elliptic.Marshal produced, and the
+// conversion validates the point — which raw coordinate access stopped doing
+// in Go 1.26.
+func newVAPIDKeys(priv *ecdsa.PrivateKey, subject string) (*VAPIDKeys, error) {
+	ep, err := priv.PublicKey.ECDH()
+	if err != nil {
+		return nil, fmt.Errorf("vapid public key: %w", err)
+	}
+	return &VAPIDKeys{priv: priv, sub: subject, pub: ep.Bytes()}, nil
 }
 
 // LoadOrCreateVAPIDKeys reads the PEM-encoded key at path (the subject is not
@@ -85,14 +98,13 @@ func parseVAPIDKeys(data []byte, subject string) (*VAPIDKeys, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse vapid key: %w", err)
 	}
-	return &VAPIDKeys{priv: priv, sub: subject}, nil
+	return newVAPIDKeys(priv, subject)
 }
 
 // PublicKey returns the uncompressed P-256 point, base64url-encoded, for use as
 // the browser's applicationServerKey.
 func (k *VAPIDKeys) PublicKey() string {
-	pub := elliptic.Marshal(k.priv.PublicKey.Curve, k.priv.PublicKey.X, k.priv.PublicKey.Y)
-	return base64.RawURLEncoding.EncodeToString(pub)
+	return base64.RawURLEncoding.EncodeToString(k.pub)
 }
 
 // authorization returns the Authorization header value for a push to aud (the

@@ -783,12 +783,12 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// with Up/Down once the input box is frozen, and PageUp/PageDown work
 	// everywhere. Only *clicks* are gated — during exec there is no button on
 	// screen to answer, and a stray click must not cancel a running task.
-	switch msg.Type {
-	case tea.MouseWheelUp, tea.MouseWheelDown:
+	switch msg.Button {
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 		// delta is the direction of travel: wheel up reads back, so the chat
 		// scroll offset grows and the list highlight moves toward the top.
 		delta := transcriptScrollStep
-		if msg.Type == tea.MouseWheelUp {
+		if msg.Button == tea.MouseButtonWheelUp {
 			delta = -transcriptScrollStep
 		}
 		switch m.mode {

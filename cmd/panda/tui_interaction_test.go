@@ -1280,14 +1280,14 @@ func TestTUIChatHistoryScrolling(t *testing.T) {
 
 	// Mouse wheel up scrolls further up
 	prevOffset := m.scrollOffset
-	next, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelUp})
+	next, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
 	m = next.(tuiModel)
 	if m.scrollOffset != prevOffset+3 {
 		t.Fatalf("expected scrollOffset to increase by 3, got %d (was %d)", m.scrollOffset, prevOffset)
 	}
 
 	// Mouse wheel down scrolls back down
-	next, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
+	next, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
 	m = next.(tuiModel)
 	if m.scrollOffset != prevOffset {
 		t.Fatalf("expected scrollOffset to decrease by 3, got %d", m.scrollOffset)
@@ -1316,7 +1316,7 @@ func TestTUIListModeWheelScrolling(t *testing.T) {
 	}
 	m.selectionList = NewSelectionList("sessions", items)
 
-	next, _ := m.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
+	next, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
 	m = next.(tuiModel)
 	if m.selectionList.Cursor != 3 {
 		t.Fatalf("wheel down should advance the highlight 3 rows, cursor=%d", m.selectionList.Cursor)
@@ -1325,7 +1325,7 @@ func TestTUIListModeWheelScrolling(t *testing.T) {
 		t.Fatalf("list modes must not touch the transcript scrollOffset, got %d", m.scrollOffset)
 	}
 
-	next, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelUp})
+	next, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
 	m = next.(tuiModel)
 	if m.selectionList.Cursor != 0 {
 		t.Fatalf("wheel up should retreat the highlight 3 rows, cursor=%d", m.selectionList.Cursor)

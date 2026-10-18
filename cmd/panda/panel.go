@@ -819,10 +819,6 @@ type taskTableCols struct {
 	refs                             map[string]string
 }
 
-func planTaskTable(loc i18n.Locale, tasks []core.Task, width int) taskTableCols {
-	return planTaskTableRefs(loc, tasks, width, nil)
-}
-
 func planTaskTableRefs(loc i18n.Locale, tasks []core.Task, width int, refs map[string]string) taskTableCols {
 	c := taskTableCols{id: 10, state: 10, prio: 8, refs: refs}
 	c.node = cliui.DisplayWidth(i18n.T(loc, "cli.col.node"))
@@ -891,11 +887,6 @@ func taskTableHeader(loc i18n.Locale, c taskTableCols) string {
 		cell(i18n.T(loc, "cli.col.workspace"), c.ws),
 		i18n.T(loc, "cli.col.title"),
 	)
-}
-
-// taskTableRow is one task as a row of sized cells.
-func taskTableRow(t core.Task, c taskTableCols) string {
-	return taskTableRowState(t, c, t.State)
 }
 
 // taskTableRowState renders the row with a display state in place of the

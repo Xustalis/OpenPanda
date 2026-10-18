@@ -183,25 +183,18 @@ func selfCheckPeer(w io.Writer, loc i18n.Locale, configPath string, cfg *config.
 	}
 }
 
-// warnIfCleartextRefused warns when addr would trip the dial-time cleartext
-// gate (cleartextOK): the add/pair paths persist the peer before the daemon
-// ever dials, so a refused ws:// LAN address would otherwise only surface as
-// a `peer dial failed` line inside keepalive logs — the "admit succeeded but
-// it never connects" trap the LAN-discovery flow runs straight into.
-func warnIfCleartextRefused(w io.Writer, loc i18n.Locale, cfg *config.Config, addr string) {
-	if core.CleartextDialError(addr, cfg.Network.AllowCleartext, cfg.Network.AllowCleartextFor) != nil {
-		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", addr))
-	}
-}
-
-// ensureCleartextAllowed upgrades warnIfCleartextRefused for the explicit
-// admit/add/pair paths: when the cleartext gate would refuse the very address
-// the operator just asked to connect, the refusal is itself the bug — the
-// operator's command IS consent to talk to that host. So the gate opens for
-// exactly that host (never a subnet, never global) and the change is said out
-// loud. A punch: peer rides the AEAD plane and needs nothing; a wss:// or
-// safe host never reaches here. On a persistence failure the old warning
-// still prints — the peer row is already written either way.
+// ensureCleartextAllowed handles the explicit admit/add/pair paths: the peer
+// row is persisted before the daemon ever dials, so a ws:// LAN address the
+// dial-time cleartext gate refuses would otherwise only surface as a `peer
+// dial failed` line inside keepalive logs — the "admit succeeded but it never
+// connects" trap the LAN-discovery flow runs straight into. When the gate
+// would refuse the very address the operator just asked to connect, the
+// refusal is itself the bug — the operator's command IS consent to talk to
+// that host. So the gate opens for exactly that host (never a subnet, never
+// global) and the change is said out loud. A punch: peer rides the AEAD plane
+// and needs nothing; a wss:// or safe host never reaches here. When the host
+// cannot be resolved from the address, or the config write fails, the plain
+// hint still prints — the peer row is already written either way.
 func ensureCleartextAllowed(w io.Writer, loc i18n.Locale, configPath string, cfg *config.Config, addr string) {
 	if core.CleartextDialError(addr, cfg.Network.AllowCleartext, cfg.Network.AllowCleartextFor) == nil {
 		return

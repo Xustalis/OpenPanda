@@ -353,7 +353,7 @@ func TestCompactHistoryFoldsIntoSummary(t *testing.T) {
 		_, _ = store.AppendTurn(sess.ID, Turn{Role: "user", Text: "p" + body})
 		_, _ = store.AppendTurn(sess.ID, Turn{Role: "assistant", Text: "r" + body})
 	}
-	updated, err = store.CompactHistory(context.Background(), sess.ID, 500, summarize)
+	_, err = store.CompactHistory(context.Background(), sess.ID, 500, summarize)
 	if err != nil {
 		t.Fatalf("CompactHistory 2: %v", err)
 	}
