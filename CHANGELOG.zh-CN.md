@@ -57,6 +57,9 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **亚分钟级 `agent_s` 预算会给出警告，而不是被悄悄丢弃** —— 租约下限把这类预算当作误配置直接丢弃，运维把上限调到 45 秒后只会看到一行不说明原因的下限提示（f6bac6e）。
 
 - **`ExpireTasks` 会暴露扫描中途的错误，而不是截断过期列表** —— 截止时间扫描漏掉了相邻租约扫描已有的 `drows.Err()` 检查，迭代中途出错会悄悄缩短过期任务列表（2b81e2c）。
+- **按模型的 token 策略 + 厂商上限钳制** —— 目录现在携带 `ModelSpec` 行（每个模型族自己的上下文窗口、补全上限与默认值），按最长前缀优先解析，MiniMax-M3 的 1M/512K 与 MiniMax-M2.x 的 200K/192K 可以并存，而不是整个 provider 共用一个猜测值。配置的 `max_tokens` 超过解析出的上限永远无法成功（MiniMax 会以 400 拒绝：`does not support max tokens > 524288`），entry 客户端现在将其钳制到上限；`max_tokens` 未设置时也不再使用固定的 4096，而是自动加载充足预算（目录默认值抬升至上下文窗口的八分之一，且不超过上限）。指向已知 base_url 的 "custom" 条目同样走这套解析，`panda init` 与 `/model add` 写入同样的值，thinking-budget 抬升在两条请求路径上都会重新钳制。MiniMax 进入 provider 目录（`api.minimax.cn/anthropic` 的 Anthropic 方言），`/model add minimax` 和 Web 选择器一步即可填好端点与调优参数（其 `/v1/models` 目录同时为选择器的实时列表供能）。厂商检测现在还识别模型名别名——`gpt-*`、`o1`/`o3`/`o4`、`glm-*`、`doubao-*`、`moonshot-*`——URL 看不出厂商的中转端点也能拿到正确调优；通过 `model add`、TUI 向导或 Web 面板保存的 custom 条目，会像内置 provider 一样持久化解析出的上下文窗口与自动预算。
+- **DeepSeek 目录行跟上官方改名** —— `deepseek-v4-flash` 已退役，列表中的正名为 `deepseek-flash`（DeepSeek-V4.1-Flash）：目录默认模型、注入 agent 的模型名（两种方言——OpenAI 面已退役的 `deepseek-chat` 也一并换成它）、示例配置与文档全部改用新 id，并按 `/models` 元数据补上 1M 上下文窗口与 384K 补全上限。旧 id 在上游仍可解析。
+- **provider 目录默认模型整体跟进当前代际** —— 所有过时默认值替换为厂商现行阵容：Claude `claude-sonnet-5-5`（sonnet-4-5 已弃用；5.x/Fable/Mythos 家族与 4.6+ id 均为 1M 窗口 / 128K 补全上限，其余 4.x 经模型 spec 保持 200K/64K）、OpenAI `gpt-6.1-sol`（GPT-6 全系共享 1.05M/128K;gpt-5.4 与保留的 gpt-4o spec 各守其值）、Kimi `kimi-k3`（1M——`kimi-latest`、k2.5 与 moonshot-v1 上游已退役）、智谱 `glm-5.3`（1M/128K,spec 行覆盖至 glm-4)、通义 `qwen3.7-plus`（1M;qwen3.8-max 公布 128K 上限）、火山 `doubao-seed-evolving`（1M/256K——始终指向最新的别名）、硅基流动 `deepseek-ai/DeepSeek-V4.1-Flash`（1M/393K)、OpenRouter `anthropic/claude-sonnet-5.5`。价目提示在厂商公布处同步更新。请求构建器的推理模型判定也跟上了新世代——`gpt-5*`/`gpt-6*` 现在发送 `max_completion_tokens`，OpenAI 在这些模型上拒绝旧的 `max_tokens` 字段。
 
 ### 变更
 
