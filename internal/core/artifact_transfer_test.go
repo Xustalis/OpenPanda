@@ -460,6 +460,35 @@ func TestArtifactFetchRelaysAcrossHops(t *testing.T) {
 	}
 }
 
+// TestRelayFetchOffsetCap bounds the per-offset maps an authorized requester
+// could otherwise grow without limit: distinct offsets past artServeMaxOffsets
+// are denied, and the entry's tables never hold more than the cap.
+func TestRelayFetchOffsetCap(t *testing.T) {
+	ctx := context.Background()
+	relay := newCore(t, "relay-cap", "127.0.0.1:17798")
+	const taskID = "t-relay-cap"
+	participantTask(t, relay, taskID, "pin-root", []string{"pin-root", "relay-cap", "pin-dest"})
+
+	env := bus.Envelope{Type: bus.MsgArtifactFetch, From: "pin-dest"}
+	for off := int64(0); off < artServeMaxOffsets+10; off++ {
+		p := bus.ArtifactFetchPayload{TaskID: taskID, Hash: "h", Offset: off * (1 << 20)}
+		if !relay.relayArtifactFetch(ctx, env, p) {
+			t.Fatalf("relay at offset %d refused entirely — the deny path must still count as handled", off)
+		}
+	}
+	v, ok := relay.pendingArtServe.Load(artifactKey(taskID, "h"))
+	if !ok {
+		t.Fatal("relay entry missing")
+	}
+	sv := v.(*artServeEntry)
+	sv.mu.Lock()
+	got := len(sv.waiters)
+	sv.mu.Unlock()
+	if got > artServeMaxOffsets {
+		t.Fatalf("waiters grew to %d past the %d cap — minted offsets were tracked", got, artServeMaxOffsets)
+	}
+}
+
 func TestImportFatBundleArtifacts(t *testing.T) {
 	ctx := context.Background()
 	tree := artifactTree(t, 2048)
