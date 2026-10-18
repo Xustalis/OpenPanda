@@ -7,9 +7,39 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// TestSessionFilesAreOwnerOnly pins the on-disk permission contract: a
+// transcript is verbatim user text and routinely carries pasted secrets, so
+// both the store root and every session file must stay owner-only — matching
+// what config does for api keys.
+func TestSessionFilesAreOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix permission bits are advisory on Windows")
+	}
+	dir := filepath.Join(t.TempDir(), "sessions")
+	store := NewStore(dir)
+
+	sess, err := store.Create("private chat")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fi, err := os.Stat(filepath.Join(dir, sess.ID+".json"))
+	if err != nil {
+		t.Fatalf("stat session file: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("session file mode = %o, want 600", got)
+	}
+	if di, err := os.Stat(dir); err != nil {
+		t.Fatalf("stat session dir: %v", err)
+	} else if got := di.Mode().Perm(); got != 0o700 {
+		t.Errorf("session dir mode = %o, want 700", got)
+	}
+}
 
 func TestSessionProjectAssociation(t *testing.T) {
 	dir := t.TempDir()

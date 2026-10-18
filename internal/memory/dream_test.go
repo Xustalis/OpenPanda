@@ -5,6 +5,7 @@ package memory
 import (
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -193,6 +194,45 @@ func TestDreamDiaryAppend(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "entry one") || !strings.Contains(string(b), "扫描候选：3 条") {
 		t.Errorf("diary content wrong: %s", b)
+	}
+}
+
+// TestDreamDiaryTightensExistingLooseMode mirrors the daily-log contract: a
+// pre-0600 DREAMS.md and its directory are tightened on the next append.
+func TestDreamDiaryTightensExistingLooseMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are best-effort on Windows")
+	}
+	dir := t.TempDir()
+	path := dir + "/DREAMS.md"
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod file: %v", err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod dir: %v", err)
+	}
+
+	diary := NewDreamDiary(path)
+	if err := diary.Append(Report{}, time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("DREAMS.md mode = %o, want 0600", fi.Mode().Perm())
+	}
+	di, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if di.Mode().Perm() != 0o700 {
+		t.Errorf("dream dir mode = %o, want 0700", di.Mode().Perm())
 	}
 }
 

@@ -36,14 +36,19 @@ func (d *DreamDiary) Append(report Report, now time.Time) error {
 		b.WriteString("- Promoted to long-term memory / 提升到长期记忆：无 none\n")
 	}
 
-	if err := os.MkdirAll(dirOf(d.path), 0o755); err != nil {
+	dir := dirOf(d.path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("memory: create dream diary dir: %w", err)
 	}
-	f, err := os.OpenFile(d.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	// As in the daily log: MkdirAll and O_CREATE only set modes on fresh
+	// nodes, so tighten a pre-existing dir/file on every append.
+	_ = os.Chmod(dir, 0o700)
+	f, err := os.OpenFile(d.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("memory: open DREAMS.md: %w", err)
 	}
 	defer f.Close()
+	_ = os.Chmod(d.path, 0o600)
 	if _, err := f.WriteString(b.String()); err != nil {
 		return fmt.Errorf("memory: append DREAMS.md: %w", err)
 	}

@@ -5,6 +5,7 @@ package memory
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,50 @@ func TestDailyAppend(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(data), "- 19:30:00 ") {
 		t.Errorf("log missing timestamp: %q", data)
+	}
+}
+
+// TestDailyAppendTightensExistingLooseMode pins the older-file path: a log
+// created before the 0600/0700 pass (or under a looser umask) must be
+// tightened on the next append — O_CREATE's mode only applies at creation.
+func TestDailyAppendTightensExistingLooseMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are best-effort on Windows")
+	}
+	dir := filepath.Join(t.TempDir(), "daily")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	now := time.Date(2026, 8, 13, 19, 30, 0, 0, time.UTC)
+	path := filepath.Join(dir, now.Format("2006-01-02")+".md")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod file: %v", err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod dir: %v", err)
+	}
+
+	d := NewDaily(dir)
+	if err := d.Append(now, "compiled the daemon"); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("daily log mode = %o, want 0600", fi.Mode().Perm())
+	}
+	di, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if di.Mode().Perm() != 0o700 {
+		t.Errorf("daily dir mode = %o, want 0700", di.Mode().Perm())
 	}
 }
 

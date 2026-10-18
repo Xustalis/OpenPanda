@@ -128,9 +128,12 @@ func ValidID(id string) bool {
 func (s *Store) Create(title string, project ...string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(s.root, 0o755); err != nil {
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return nil, fmt.Errorf("sessions: mkdir: %w", err)
 	}
+	// Transcripts hold verbatim user text — including pasted secrets — so a
+	// session root created by an older build keeps its looser mode no longer.
+	_ = os.Chmod(s.root, 0o700)
 	now := time.Now()
 	id, err := util.UUIDv7()
 	if err != nil {
@@ -170,9 +173,10 @@ func (s *Store) Fork(id string, atTurn int) (*Session, error) {
 	if atTurn <= 0 || atTurn > len(parent.Turns) {
 		atTurn = len(parent.Turns)
 	}
-	if err := os.MkdirAll(s.root, 0o755); err != nil {
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return nil, fmt.Errorf("sessions: mkdir: %w", err)
 	}
+	_ = os.Chmod(s.root, 0o700)
 	now := time.Now()
 	uid, err := util.UUIDv7()
 	if err != nil {
@@ -622,8 +626,9 @@ func (s *Store) save(sess *Session) error {
 	}
 	// Atomic: a crash mid-write would leave a truncated file that fails to
 	// parse — invisible in List and unreadable in Get, i.e. a silently lost
-	// conversation.
-	return util.WriteFileAtomic(s.path(sess.ID), data, 0o644)
+	// conversation. 0o600, not 0o644: a transcript is verbatim user text and
+	// routinely carries pasted secrets the config store already guards.
+	return util.WriteFileAtomic(s.path(sess.ID), data, 0o600)
 }
 
 func truncateTitle(s string) string {

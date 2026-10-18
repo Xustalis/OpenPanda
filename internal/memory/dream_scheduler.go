@@ -149,10 +149,10 @@ func (s *Scheduler) readState(name string) (time.Time, error) {
 
 // writeState records now under the named timestamp file.
 func (s *Scheduler) writeState(name string, now time.Time) error {
-	if err := os.MkdirAll(s.dreamer.hermes.ColdDir(), 0o755); err != nil {
+	if err := os.MkdirAll(s.dreamer.hermes.ColdDir(), 0o700); err != nil {
 		return fmt.Errorf("memory: create .dreams dir: %w", err)
 	}
-	if err := util.WriteFileAtomic(s.statePath(name), []byte(strconv.FormatInt(now.Unix(), 10)), 0o644); err != nil {
+	if err := util.WriteFileAtomic(s.statePath(name), []byte(strconv.FormatInt(now.Unix(), 10)), 0o600); err != nil {
 		return fmt.Errorf("memory: write %s: %w", name, err)
 	}
 	return nil
