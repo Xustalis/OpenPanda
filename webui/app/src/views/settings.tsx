@@ -23,8 +23,8 @@ import { ModelsSection } from './models'
 type ApiType = 'anthropic' | 'openai'
 
 const EXAMPLES: Record<ApiType, { base: string; model: string }> = {
-  anthropic: { base: 'https://api.anthropic.com', model: 'claude-sonnet-5' },
-  openai: { base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  anthropic: { base: 'https://api.anthropic.com', model: 'claude-sonnet-5-5' },
+  openai: { base: 'https://api.openai.com/v1', model: 'gpt-6.1-sol' },
 }
 
 export type Section =
@@ -246,7 +246,11 @@ function ModelSection() {
       base_url: form!.base_url.trim(),
       model: form!.model.trim(),
       max_tokens: Number(form!.max_tokens) || 0,
+      context_window: Number(form!.context_window) || 0,
+      thinking: form!.thinking || 'auto',
+      thinking_budget: Number(form!.thinking_budget) || 0,
       max_retries: Number(form!.max_retries) || 0,
+      no_auth: !!form!.no_auth,
       api_key: apiKey.trim() || undefined,
     }
   }
@@ -371,6 +375,64 @@ function ModelSection() {
             onInput={(e) => patch({ max_retries: Number((e.target as HTMLInputElement).value) || 0 })}
           />
           <p class="hint">{t('settings.maxRetriesHelp')}</p>
+        </div>
+        <div class="field-group">
+          <label for="context-window">{t('settings.contextWindow')}</label>
+          <input
+            id="context-window"
+            class="input"
+            type="number"
+            min={0}
+            step={1024}
+            value={form.context_window || 0}
+            onInput={(e) => patch({ context_window: Number((e.target as HTMLInputElement).value) || 0 })}
+          />
+          <p class="hint">{t('settings.contextWindowHelp')}</p>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field-group">
+          <label>{t('settings.thinking')}</label>
+          <div class="segmented" role="radiogroup">
+            {(['auto', 'on', 'off'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="radio"
+                aria-checked={(form.thinking || 'auto') === v}
+                class={`seg${(form.thinking || 'auto') === v ? ' on' : ''}`}
+                onClick={() => patch({ thinking: v === 'auto' ? '' : v })}
+              >
+                {t(`settings.thinking.${v}`)}
+              </button>
+            ))}
+          </div>
+          <p class="hint">{t('settings.thinkingHelp')}</p>
+        </div>
+        <div class="field-group">
+          <label for="thinking-budget">{t('settings.thinkingBudget')}</label>
+          <input
+            id="thinking-budget"
+            class="input"
+            type="number"
+            min={0}
+            step={1024}
+            value={form.thinking_budget || 0}
+            onInput={(e) => patch({ thinking_budget: Number((e.target as HTMLInputElement).value) || 0 })}
+          />
+          <p class="hint">{t('settings.thinkingBudgetHelp')}</p>
+        </div>
+        <div class="field-group">
+          <label class="checkbox-label">
+            <input
+              type="checkbox"
+              checked={!!form.no_auth}
+              onChange={(e) => patch({ no_auth: (e.target as HTMLInputElement).checked })}
+            />{' '}
+            {t('settings.noAuth')}
+          </label>
+          <p class="hint">{t('settings.noAuthHelp')}</p>
         </div>
       </div>
 
