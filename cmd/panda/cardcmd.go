@@ -67,7 +67,7 @@ func runCard(args []string) {
 	case "invoke":
 		runCardInvoke(rest)
 	case "path":
-		fmt.Println(orDash(cardTargetPath("")))
+		runCardPath(rest)
 	default:
 		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamed", "kind", "card subcommand", "name", sub))
 		fmt.Fprintln(os.Stderr, "usage: panda card [show|rescan|edit|set|native|agent|manual|invoke|path]")
@@ -127,10 +127,21 @@ func cardTargetPath(explicit string) string {
 // path matters as much as the content: every other subcommand and the daemon
 // discover the card the same way, and "which file am I actually editing" is the
 // first question a multi-node setup raises.
+// runCardPath prints the path every card verb resolves to — a `--card` flag is
+// honoured so scripts can ask "where would this edit land" for a specific file.
+func runCardPath(args []string) {
+	fs := flag.NewFlagSet("card path", flag.ExitOnError)
+	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda card path [--card F]")
+	fmt.Println(orDash(cardTargetPath(*cardFlag)))
+}
+
 func runCardShow(args []string) {
 	fs := flag.NewFlagSet("card show", flag.ExitOnError)
 	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda card show [--card F]")
 
 	path := cardTargetPath(*cardFlag)
 	card, err := ledger.LoadCard(path)
@@ -191,6 +202,7 @@ func runCardRescan(args []string) {
 	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	write := fs.Bool("write", false, "apply the merge (a .bak of the old card is kept)")
 	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda card rescan [--card F] [--write]")
 
 	path := cardTargetPath(*cardFlag)
 	old, err := ledger.LoadCard(path)
@@ -265,6 +277,7 @@ func runCardEdit(args []string) {
 	fs := flag.NewFlagSet("card edit", flag.ExitOnError)
 	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda card edit [--card F]")
 
 	path := cardTargetPath(*cardFlag)
 	original, err := os.ReadFile(path)
