@@ -1009,7 +1009,7 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 		// Blocks vanish from the next frame; ClearScreen forces a repaint so
 		// no stale cell lingers on the alternate screen.
 		if m.chatHistory != nil {
-			m.chatHistory.blocks = nil
+			m.chatHistory.clear()
 		}
 		return m, tea.ClearScreen
 	case "new":
@@ -1137,7 +1137,7 @@ func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
 	}
 	clearConvo()
 	if m.chatHistory != nil {
-		m.chatHistory.blocks = nil
+		m.chatHistory.clear()
 	}
 	note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.new.cleared", "n", fmt.Sprint(n/2))}
 	return m, tea.Batch(tea.ClearScreen, m.printBlock(note))
@@ -1223,7 +1223,7 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 	}
 	m.mode = modeIdle
 	if m.chatHistory != nil {
-		m.chatHistory.blocks = nil
+		m.chatHistory.clear()
 		for _, t := range sess.Turns {
 			switch t.Role {
 			case "user":

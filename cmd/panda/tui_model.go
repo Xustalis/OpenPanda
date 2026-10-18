@@ -303,6 +303,15 @@ type chatHistory struct {
 	renderOK      bool
 }
 
+// clear empties the transcript. renders must go with blocks: the memo is
+// index-aligned, so a bare blocks=nil would let the next appended block
+// inherit the stale render of whichever entry held that slot before the wipe —
+// the first turn after /clear would repaint as the previous session's first.
+func (h *chatHistory) clear() {
+	h.blocks = nil
+	h.renders = nil
+}
+
 // renderedAt returns the cached rendered lines of blocks[i], filling entries
 // lazily. The update loop is single-goroutine, so no lock is needed.
 func (h *chatHistory) renderedAt(i int, t theme, width int, fold bool) []string {
