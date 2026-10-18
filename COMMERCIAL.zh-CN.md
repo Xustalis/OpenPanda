@@ -1,6 +1,6 @@
 # OpenPanda 许可：社区版与商业版
 
-[English](COMMERCIAL.md)（英文版为准）· 简体中文
+[English](COMMERCIAL.md)（英文版为准）· 简体中文 · [日本語](COMMERCIAL.ja.md) · [Español](COMMERCIAL.es.md) · [Deutsch](COMMERCIAL.de.md)
 
 OpenPanda 采用双许可证。同一份代码同时提供：面向开源使用的 GNU Affero
 通用公共许可证第 3 版或更高版本（AGPL-3.0-or-later），以及覆盖 AGPL 未

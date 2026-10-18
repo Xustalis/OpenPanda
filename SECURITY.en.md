@@ -1,6 +1,6 @@
 # Security
 
-English translation of [SECURITY.md](SECURITY.md)（中文版为准）· English
+English translation of [SECURITY.md](SECURITY.md)（中文版为准）· English · [日本語](SECURITY.ja.md) · [Español](SECURITY.es.md) · [Deutsch](SECURITY.de.md)
 
 OpenPanda is a P2P task-orchestration kernel that runs on your own devices.
 This document explains its trust model, deployment red lines, and the

@@ -261,7 +261,7 @@ OpenPanda 的架构为大规模异构集群而设计：无人机集群控制、�
 
 1. 查阅 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) 了解代码规范与开发流。
 2. 查阅 [SECURITY.md](SECURITY.md) 了解安全边界。
-3. 遵循 [CODE\_OF\_CONDUCT.md](CODE_OF_CONDUCT.md) 社区行为守则。
+3. 遵循 [CODE\_OF\_CONDUCT.zh-CN.md](CODE_OF_CONDUCT.zh-CN.md) 社区行为守则。
 4. 提交 PR 前在本地运行 `make gate` 确保全部校验通过。
 5. 非琐碎贡献需签署 CLA——见 [CLA.zh-CN.md](CLA.zh-CN.md)；typo/文档类修改与 `adapters/` 下的改动豁免。
 
@@ -272,7 +272,7 @@ OpenPanda 的架构为大规模异构集群而设计：无人机集群控制、�
 OpenPanda 采用双许可证模式：
 
 - **社区版** —— [GNU Affero 通用公共许可证 3.0 或更高版本](LICENSE)（AGPL-3.0-or-later）
-- **商业版** —— 面向闭源集成或托管服务的专有授权，详见 [COMMERCIAL.md](COMMERCIAL.md)
+- **商业版** —— 面向闭源集成或托管服务的专有授权，详见 [COMMERCIAL.zh-CN.md](COMMERCIAL.zh-CN.md)
 
 许可证变更前发布的历史版本仍按 MIT 许可证提供。
 

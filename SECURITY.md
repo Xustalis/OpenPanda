@@ -1,6 +1,6 @@
 # Security
 
-简体中文（为准）· [English](SECURITY.en.md)
+简体中文（为准）· [English](SECURITY.en.md) · [日本語](SECURITY.ja.md) · [Español](SECURITY.es.md) · [Deutsch](SECURITY.de.md)
 
 OpenPanda 是一个运行在你自己设备上的 P2P 任务编排内核。本文说明它的信任模型、
 部署红线与漏洞上报渠道。**先读这里，再把任何节点接入网络。**

@@ -1,7 +1,8 @@
 # OpenPanda Terms of Use and Disclaimer
 
-**中文译本见 [TERMS.zh-CN.md](TERMS.zh-CN.md)。中英文版本如有歧义，以英文版为准。**
-**(A Chinese translation is provided for convenience only; the English text governs.)**
+**Translations (provided for convenience only; the English text governs):**
+**[简体中文](TERMS.zh-CN.md) · [日本語](TERMS.ja.md) · [Español](TERMS.es.md) · [Deutsch](TERMS.de.md)**
+**（各语言译本仅供参考；中英文及其他版本如有歧义，以英文版为准。）**
 
 *Effective for all OpenPanda releases distributed on or after 2026-10-11.*
 
@@ -291,6 +292,6 @@ Goods does not apply.
   is conveyed, these Terms are the entire agreement between you and the
   Licensor concerning use of the Software, superseding prior
   understandings on that subject.
-- **Language.** These Terms are published in English and Chinese; the
-  English version governs.
+- **Language.** These Terms are published in English, Chinese, Japanese,
+  Spanish, and German; the English version governs.
 - **Contact.** Xustalis — fing2024@outlook.com.

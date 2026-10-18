@@ -216,7 +216,7 @@ Die Dokumentation liegt unter [`docs/`](docs/README.md): [Projektstatus](docs/st
 
 ## 🤝 Mitwirken
 
-Wir freuen uns über Beiträge aus der Community! Bitte beachte [CONTRIBUTING.de.md](CONTRIBUTING.de.md), [SECURITY.en.md](SECURITY.en.md) (maßgeblich ist die chinesische [SECURITY.md](SECURITY.md)) und [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), und führe `make gate` lokal aus. Nichttriviale Beiträge setzen die Zustimmung zum [CLA](CLA.md) voraus; Tippfehler-/Doku-Fixes und Änderungen unter `adapters/` sind ausgenommen.
+Wir freuen uns über Beiträge aus der Community! Bitte beachte [CONTRIBUTING.de.md](CONTRIBUTING.de.md), [SECURITY.de.md](SECURITY.de.md) (maßgeblich ist die chinesische [SECURITY.md](SECURITY.md)) und [CODE_OF_CONDUCT.de.md](CODE_OF_CONDUCT.de.md), und führe `make gate` lokal aus. Nichttriviale Beiträge setzen die Zustimmung zum [CLA](CLA.de.md) voraus; Tippfehler-/Doku-Fixes und Änderungen unter `adapters/` sind ausgenommen.
 
 ---
 
@@ -225,8 +225,8 @@ Wir freuen uns über Beiträge aus der Community! Bitte beachte [CONTRIBUTING.de
 OpenPanda wird unter dualem Lizenzmodell bereitgestellt:
 
 - **Community** — [GNU Affero General Public License v3.0 oder später](LICENSE) (AGPL-3.0-or-later)
-- **Kommerziell** — proprietäre Lizenz für Closed-Source-Einbettung oder gehostete Angebote; siehe [COMMERCIAL.md](COMMERCIAL.md)
+- **Kommerziell** — proprietäre Lizenz für Closed-Source-Einbettung oder gehostete Angebote; siehe [COMMERCIAL.de.md](COMMERCIAL.de.md)
 
 Vor der Lizenzänderung veröffentlichte Versionen bleiben unter der MIT-Lizenz verfügbar.
 
-Die Nutzung von OpenPanda unterliegt den [Nutzungsbedingungen und dem Haftungsausschluss](TERMS.md) ([中文译本](TERMS.zh-CN.md)).
+Die Nutzung von OpenPanda unterliegt den [Nutzungsbedingungen und dem Haftungsausschluss](TERMS.de.md) ([English](TERMS.md)).

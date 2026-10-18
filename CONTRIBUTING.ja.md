@@ -86,10 +86,10 @@ feat(web): フルコンソール — キュー/詳細/質問/プロジェクト/
 ## ライセンスと CLA
 
 OpenPanda は [AGPL-3.0-or-later](LICENSE) と商用ライセンスのデュアル
-ライセンスです（[COMMERCIAL.md](COMMERCIAL.md) 参照）。貢献を提出
-することで、[Contributor License Agreement](CLA.md) に同意し、
+ライセンスです（[COMMERCIAL.ja.md](COMMERCIAL.ja.md) 参照）。貢献を提出
+することで、[Contributor License Agreement](CLA.ja.md) に同意し、
 プロジェクトがあなたの成果を両方のトラックで配布することを許諾
 したことになります。プルリクエストのマージには CLA への同意が
 必要です——ただし軽微な修正（typo、ドキュメント、おおよそ 15 行
 以内）および `adapters/` 配下への貢献は除き、これらはそのまま
-AGPL で受け入れられます（CLA.md §2 参照）。
+AGPL で受け入れられます（CLA.ja.md §2 参照）。

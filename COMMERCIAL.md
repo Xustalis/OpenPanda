@@ -1,6 +1,6 @@
 # OpenPanda Licensing: Community & Commercial
 
-English · [简体中文](COMMERCIAL.zh-CN.md)
+English (authoritative) · [简体中文](COMMERCIAL.zh-CN.md) · [日本語](COMMERCIAL.ja.md) · [Español](COMMERCIAL.es.md) · [Deutsch](COMMERCIAL.de.md)
 
 OpenPanda is dual-licensed. The same codebase is offered under the
 GNU Affero General Public License v3 or later (AGPL-3.0-or-later) for

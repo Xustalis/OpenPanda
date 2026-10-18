@@ -1,6 +1,6 @@
 # OpenPanda Contributor License Agreement (Individual)
 
-English (authoritative) · [简体中文参考译本](CLA.zh-CN.md)
+English (authoritative) · [简体中文](CLA.zh-CN.md) · [日本語](CLA.ja.md) · [Español](CLA.es.md) · [Deutsch](CLA.de.md)
 
 Thank you for your interest in contributing to OpenPanda (the "Project"),
 maintained by Xustalis (the "Maintainer"). This Contributor License

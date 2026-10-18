@@ -1,6 +1,6 @@
 # OpenPanda 贡献者许可协议（个人版）
 
-[English](CLA.md)（英文版为准）· 简体中文参考译本
+[English](CLA.md)（英文版为准）· 简体中文参考译本 · [日本語](CLA.ja.md) · [Español](CLA.es.md) · [Deutsch](CLA.de.md)
 
 感谢您对贡献 OpenPanda（"本项目"）的兴趣。本项目由 Xustalis（"维护方"）
 维护。本贡献者许可协议（"本协议"）记录了您就所提交贡献授予维护方的权利。

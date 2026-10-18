@@ -132,10 +132,10 @@ frente a manipulaciones.
 ## Licencia y CLA
 
 OpenPanda se distribuye bajo [AGPL-3.0-or-later](LICENSE) y una
-licencia comercial (ver [COMMERCIAL.md](COMMERCIAL.md)). Al contribuir
-aceptas el [Acuerdo de Licencia de Colaborador](CLA.md), que otorga al
+licencia comercial (ver [COMMERCIAL.es.md](COMMERCIAL.es.md)). Al contribuir
+aceptas el [Acuerdo de Licencia de Colaborador](CLA.es.md), que otorga al
 proyecto el derecho de distribuir tu trabajo bajo ambas vías. La
 aceptación del CLA es obligatoria antes de fusionar un pull request,
 salvo cambios triviales (erratas, documentación, parches de ~15 líneas
 o menos) y contribuciones en `adapters/`, que se aceptan directamente
-bajo la AGPL (ver CLA.md §2).
+bajo la AGPL (ver CLA.es.md §2).

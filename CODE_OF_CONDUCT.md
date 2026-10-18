@@ -1,6 +1,6 @@
 # Contributor Covenant Code of Conduct
 
-English (authoritative) · [简体中文参考译本](CODE_OF_CONDUCT.zh-CN.md)
+English (authoritative) · [简体中文](CODE_OF_CONDUCT.zh-CN.md) · [日本語](CODE_OF_CONDUCT.ja.md) · [Español](CODE_OF_CONDUCT.es.md) · [Deutsch](CODE_OF_CONDUCT.de.md)
 
 ## Our Pledge
 

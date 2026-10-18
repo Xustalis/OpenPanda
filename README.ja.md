@@ -220,10 +220,10 @@ OpenPanda のアーキテクチャは、大規模な異種クラスタのため�
 コミュニティからの貢献を歓迎します！新しい AI CLI アダプターの追加、スケジューラーの改善、TUI コンポーネントの機能向上など：
 
 1. [CONTRIBUTING.ja.md](CONTRIBUTING.ja.md) で開発規約をご確認ください。
-2. [SECURITY.en.md](SECURITY.en.md) でセキュリティ基準をご確認ください（正本は中国語の [SECURITY.md](SECURITY.md)）。
-3. [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) 行動規範を遵守してください。
+2. [SECURITY.ja.md](SECURITY.ja.md) でセキュリティ基準をご確認ください（正本は中国語の [SECURITY.md](SECURITY.md)）。
+3. [CODE_OF_CONDUCT.ja.md](CODE_OF_CONDUCT.ja.md) 行動規範を遵守してください。
 4. PR 提出前に `make gate` を実行してください。
-5. 些細でない貢献には CLA への同意が必要です——[CLA.md](CLA.md) を参照。タイポやドキュメントの修正、`adapters/` 配下の変更は対象外です。
+5. 些細でない貢献には CLA への同意が必要です——[CLA.ja.md](CLA.ja.md) を参照。タイポやドキュメントの修正、`adapters/` 配下の変更は対象外です。
 
 ---
 
@@ -232,8 +232,8 @@ OpenPanda のアーキテクチャは、大規模な異種クラスタのため�
 OpenPanda はデュアルライセンスで提供されています：
 
 - **コミュニティ版** — [GNU Affero General Public License v3.0 or later](LICENSE)（AGPL-3.0-or-later）
-- **商用ライセンス** — クローズドソースへの組み込みやホステッド提供向け。詳細は [COMMERCIAL.md](COMMERCIAL.md)
+- **商用ライセンス** — クローズドソースへの組み込みやホステッド提供向け。詳細は [COMMERCIAL.ja.md](COMMERCIAL.ja.md)
 
 ライセンス変更前に公開されたリリースは、引き続き MIT ライセンスで利用できます。
 
-OpenPanda の利用には[利用規約および免責事項](TERMS.md)が適用されます（[中国語版](TERMS.zh-CN.md)）。
+OpenPanda の利用には[利用規約および免責事項](TERMS.ja.md)が適用されます（[英語版](TERMS.md)）。
