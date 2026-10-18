@@ -85,6 +85,17 @@ func ResumeID(ctx context.Context) string {
 	return ""
 }
 
+// ResumeAdapter reads the adapter that minted the attached handle — "" when
+// none, or when the producer is unknown (a legacy row). Tests use it to pin
+// that the handle travels with its mint tag, which is what lets
+// buildAdapterRequest decide per attempt instead of per round.
+func ResumeAdapter(ctx context.Context) string {
+	if v, ok := ctx.Value(resumeKey{}).(resumeRef); ok {
+		return v.Adapter
+	}
+	return ""
+}
+
 // toolsPolicyKey carries the router's agent tools policy (minimal |
 // extended) down to the adapter request without widening the runAdapter
 // test seam's signature.
