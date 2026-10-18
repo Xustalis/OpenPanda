@@ -56,10 +56,15 @@ func (m tuiModel) View() string {
 		if len(lines) > budget {
 			lines = lines[len(lines)-budget:]
 		}
-		output = strings.Join(lines, "\n")
-		if strings.TrimSpace(output) != "" {
+		if strings.TrimSpace(strings.Join(lines, "\n")) != "" {
+			// The same muted bar the committed blockInfo wears, so a finishing
+			// exec does not visibly shift its output when it lands in scrollback.
+			bar := m.th.muted.Render(m.th.glyph("│", "|")) + " "
+			for i, l := range lines {
+				lines[i] = bar + l
+			}
 			live.WriteString("\n")
-			live.WriteString(output)
+			live.WriteString(strings.Join(lines, "\n"))
 		}
 		live.WriteString("\n")
 		live.WriteString(m.th.muted.Render(i18n.T(m.loc, "tui.exec.cancel")))
@@ -328,7 +333,9 @@ func (m tuiModel) splashView() string {
 	centerContent := strings.Join(blockLines, "\n")
 	bottomPrompt := m.th.muted.Render(i18n.T(m.loc, "tui.splash.prompt"))
 
-	centerRendered := lipgloss.PlaceHorizontal(w, lipgloss.Center, centerContent)
+	// The same welcome card the chat banner wears — the splash is the first
+	// thing a run shows, so it gets the product's signature rounded frame.
+	centerRendered := lipgloss.PlaceHorizontal(w, lipgloss.Center, m.th.welcome.Render(centerContent))
 	centerLines := strings.Split(centerRendered, "\n")
 
 	padTop := max(0, (h-len(centerLines)-3)/2)
@@ -765,22 +772,25 @@ func (m tuiModel) inputView() string {
 	// The list is capped to what the window can spare: an inline renderer repaints
 	// by counting rows back up from the cursor, so a frame taller than the terminal
 	// scrolls its own top away and every later repaint lands in the wrong place.
-	if menu := m.menu.render(m.th, m.textWidth(), m.menuRows()); menu != "" {
-		rows = append(rows, menu)
+	// It wears the menuBox card — the same rounded frame as every other panel,
+	// in the quieter grey — with the rows sized for the four columns its border
+	// and padding take.
+	if menu := m.menu.render(m.th, max(1, m.textWidth()-4), m.menuRows()); menu != "" {
+		rows = append(rows, m.th.menuBox.Width(max(1, m.textWidth()-2)).Render(menu))
 	}
 	return strings.Join(append(rows, m.statusRow()), "\n")
 }
 
 // menuRows is how many command rows the popup may draw: whatever the terminal has
-// left under the blank line, the three-row box and the footer, held to a handful
-// so the list stays scannable on a tall screen. The floor keeps a very short
-// window showing something rather than nothing.
+// left under the blank line, the three-row box, the popup card's two border rows
+// and the footer, held to a handful so the list stays scannable on a tall screen.
+// The floor keeps a very short window showing something rather than nothing.
 func (m tuiModel) menuRows() int {
 	const maxRows = 8
 	if m.height <= 0 {
 		return maxRows // size not reported yet (see Init)
 	}
-	return max(3, min(maxRows, m.height-6))
+	return max(3, min(maxRows, m.height-8))
 }
 
 // statusRow is the dim footer under the box: the key legend on the left, the
@@ -1211,7 +1221,10 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 		workPath = cfg.Storage.WorkPath
 	}
 
-	contentWidth := max(20, width-2)
+	// The card renders width-2 wide overall; its border (2) + padding (2)
+	// leaves width-6 of inner text room — truncate there or lipgloss wraps
+	// the overlong line and the banner grows a row per wrap.
+	contentWidth := max(20, width-6)
 	var sb strings.Builder
 
 	if width >= 76 {
@@ -1227,15 +1240,17 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 		sb.WriteString(th.heading.Render("  " + versionpkg.Display()))
 	} else {
 		sb.WriteString(th.heading.Render(cliui.Truncate(
-			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" "+versionpkg.Display(), width, uni)))
+			"  "+th.glyph("✻", "*")+" "+i18n.T(loc, "repl.banner.title")+" "+versionpkg.Display(), contentWidth, uni)))
 	}
 
+	// Every text line carries its own two-column indent inside the truncation
+	// budget — the indent is part of the line, not free columns on top of it.
 	sb.WriteString("\n")
-	sb.WriteString(th.muted.Render("  " + cliui.TruncateTail(
-		i18n.Tf(loc, "repl.banner.dir", "dir", workPath), contentWidth, uni)))
+	sb.WriteString(th.muted.Render(cliui.TruncateTail(
+		"  "+i18n.Tf(loc, "repl.banner.dir", "dir", workPath), contentWidth, uni)))
 	sb.WriteString("\n\n")
-	sb.WriteString(th.muted.Render("  " + cliui.Truncate(
-		i18n.T(loc, "tui.welcome.tips"), contentWidth, uni)))
+	sb.WriteString(th.muted.Render(cliui.Truncate(
+		"  "+i18n.T(loc, "tui.welcome.tips"), contentWidth, uni)))
 
 	// The REPL does not listen: a configured-to-mesh node (a shared secret
 	// exists) whose identity lock is free has no daemon running, so peers can
@@ -1245,13 +1260,14 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 	// single-machine setup and stays quiet.
 	if cfg != nil && cfg.Network.SharedSecret != "" {
 		if held, err := nodeidentity.Held(cfg.Node.Kind, cfg.Node.EffectiveIdentity()); err == nil && !held {
-			sb.WriteString("\n" + th.warn.Render("  "+i18n.T(loc, "repl.banner.noDaemon")))
+			sb.WriteString("\n" + th.warn.Render(cliui.Truncate("  "+i18n.T(loc, "repl.banner.noDaemon"), contentWidth, uni)))
 		}
 	}
 
 	if activity != nil {
 		var hb strings.Builder
-		renderTaskHeatmap(&hb, loc, activity, time.Now(), heatmapMaxWeek, contentWidth, pal())
+		// The grid is inset by the same two columns every text line carries.
+		renderTaskHeatmap(&hb, loc, activity, time.Now(), heatmapMaxWeek, max(10, contentWidth-2), pal())
 		sb.WriteString("\n")
 		for _, line := range strings.Split(strings.TrimRight(hb.String(), "\n"), "\n") {
 			sb.WriteString("\n  " + line)
@@ -1259,10 +1275,17 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 	}
 
 	if isLinuxConsole() {
-		sb.WriteString("\n" + th.warn.Render("  ! bare console font has no CJK glyphs; answers are forced to English."))
-		sb.WriteString("\n" + th.warn.Render("    for Chinese on this screen: sudo apt install fbterm fonts-wqy-zenhei && fbterm"))
+		sb.WriteString("\n" + th.warn.Render(cliui.Truncate("  ! bare console font has no CJK glyphs; answers are forced to English.", contentWidth, uni)))
+		sb.WriteString("\n" + th.warn.Render(cliui.Truncate("    for Chinese on this screen: sudo apt install fbterm fonts-wqy-zenhei && fbterm", contentWidth, uni)))
 	}
 
+	// Wrap in the welcome card — the same rounded frame the input box, the
+	// pickers and the approval card use — so the entry screen reads as one
+	// designed surface rather than loose text. A sliver of a terminal has no
+	// room for a card; bare text degrades better than a two-cell box.
+	if width >= 8 {
+		return th.welcome.Width(width - 2).Render(strings.TrimRight(sb.String(), "\n"))
+	}
 	return sb.String()
 }
 

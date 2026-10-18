@@ -22,7 +22,7 @@ panda web       # 或者打开 Web 控制台（自动登录）
 
 **支持哪些模型服务？**
 
-任何 OpenAI 兼容或 Anthropic 兼容端点。`api_type` 填 `anthropic`（Messages 协议）或 `openai`（Chat Completions 协议）。推荐 DeepSeek（默认 `deepseek-v4-flash`，走 `https://api.deepseek.com/anthropic`）。
+任何 OpenAI 兼容或 Anthropic 兼容端点。`api_type` 填 `anthropic`（Messages 协议）或 `openai`（Chat Completions 协议）。推荐 DeepSeek（默认 `deepseek-flash`，走 `https://api.deepseek.com/anthropic`）。
 
 **报错「未配置模型 API key」？**
 

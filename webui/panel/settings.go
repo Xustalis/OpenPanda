@@ -19,33 +19,92 @@ import (
 // is write-only: GET reports only whether one is set, PUT treats an empty key
 // as "keep the existing one".
 type modelSettingsJSON struct {
-	Provider   string `json:"provider,omitempty"`
-	Name       string `json:"name,omitempty"`
-	APIType    string `json:"api_type"` // "anthropic" | "openai"
-	BaseURL    string `json:"base_url"`
-	Model      string `json:"model"`
-	MaxTokens  int    `json:"max_tokens"`
-	MaxRetries int    `json:"max_retries"`       // transport retry budget; 0 = built-in default
-	APIKey     string `json:"api_key,omitempty"` // write-only on PUT/POST; never returned
-	APIKeySet  bool   `json:"api_key_set"`
-	APIKeyHint string `json:"api_key_hint,omitempty"` // masked tail, e.g. "…f3ab"
+	Provider       string `json:"provider,omitempty"`
+	Name           string `json:"name,omitempty"`
+	APIType        string `json:"api_type"` // "anthropic" | "openai"
+	BaseURL        string `json:"base_url"`
+	Model          string `json:"model"`
+	MaxTokens      int    `json:"max_tokens"`
+	ContextWindow  int    `json:"context_window,omitempty"`
+	Thinking       string `json:"thinking,omitempty"` // "on" | "off" | "auto" | ""
+	ThinkingBudget int    `json:"thinking_budget,omitempty"`
+	MaxRetries     int    `json:"max_retries"`       // transport retry budget; 0 = built-in default
+	NoAuth         *bool  `json:"no_auth,omitempty"` // pointer: absent means "keep current"
+	APIKey         string `json:"api_key,omitempty"` // write-only on PUT/POST; never returned
+	APIKeySet      bool   `json:"api_key_set"`
+	APIKeyHint     string `json:"api_key_hint,omitempty"` // masked tail, e.g. "…f3ab"
+}
+
+// modelSettingsToConfig folds a request payload over the current config.
+// Empty/zero fields keep the stored value; secrets and the map/escape-hatch
+// fields (params, headers, auth) are always preserved from cur — they are
+// write-only or advanced surfaces the form does not edit, so a save must
+// not wipe them.
+func modelSettingsToConfig(req modelSettingsJSON, cur config.ModelConfig) config.ModelConfig {
+	mc := config.ModelConfig{
+		Provider:      firstNonEmpty(strings.TrimSpace(req.Provider), cur.Provider),
+		Name:          firstNonEmpty(strings.TrimSpace(req.Name), cur.Name),
+		ContextWindow: firstPositive(req.ContextWindow, cur.ContextWindow),
+		APIType:       normalizeAPIType(firstNonEmpty(strings.TrimSpace(req.APIType), cur.APIType)),
+		BaseURL:       firstNonEmpty(strings.TrimSpace(req.BaseURL), cur.BaseURL),
+		APIKey:        cur.APIKey, // empty request key keeps the stored secret
+		Model:         firstNonEmpty(strings.TrimSpace(req.Model), cur.Model),
+		MaxTokens:     firstPositive(req.MaxTokens, cur.MaxTokens),
+		MaxRetries:    firstPositive(req.MaxRetries, cur.MaxRetries),
+		Auth:          cur.Auth,
+		Params:        cur.Params,
+		Headers:       cur.Headers,
+	}
+	switch strings.ToLower(strings.TrimSpace(req.Thinking)) {
+	case "on", "off":
+		mc.Thinking = strings.ToLower(strings.TrimSpace(req.Thinking))
+	case "auto", "":
+		if req.Thinking != "" {
+			mc.Thinking = "" // explicit "auto" = provider default
+		} else {
+			mc.Thinking = cur.Thinking
+		}
+	default:
+		mc.Thinking = cur.Thinking
+	}
+	if req.ThinkingBudget != 0 {
+		mc.ThinkingBudget = req.ThinkingBudget
+	} else {
+		mc.ThinkingBudget = cur.ThinkingBudget
+	}
+	mc.NoAuth = cur.NoAuth
+	if req.NoAuth != nil {
+		mc.NoAuth = *req.NoAuth
+	}
+	if key := strings.TrimSpace(req.APIKey); key != "" {
+		mc.APIKey = key
+	}
+	return mc
+}
+
+func modelSettingsFromConfig(mc config.ModelConfig) modelSettingsJSON {
+	noAuth := mc.NoAuth
+	return modelSettingsJSON{
+		Provider:       mc.Provider,
+		Name:           mc.Name,
+		APIType:        mc.NormalizedAPIType(),
+		BaseURL:        mc.BaseURL,
+		Model:          mc.Model,
+		MaxTokens:      mc.MaxTokens,
+		ContextWindow:  mc.ContextWindow,
+		Thinking:       mc.Thinking,
+		ThinkingBudget: mc.ThinkingBudget,
+		MaxRetries:     mc.MaxRetries,
+		NoAuth:         &noAuth,
+		APIKeySet:      mc.APIKey != "",
+		APIKeyHint:     maskKey(mc.APIKey),
+	}
 }
 
 // getModelSettings serves GET /api/settings/model — the current model
 // configuration minus the secret itself.
 func (h *handler) getModelSettings(w http.ResponseWriter, r *http.Request) {
-	mc := h.engineModel()
-	writeJSON(w, modelSettingsJSON{
-		Provider:   mc.Provider,
-		Name:       mc.Name,
-		APIType:    mc.NormalizedAPIType(),
-		BaseURL:    mc.BaseURL,
-		Model:      mc.Model,
-		MaxTokens:  mc.MaxTokens,
-		MaxRetries: mc.MaxRetries,
-		APIKeySet:  mc.APIKey != "",
-		APIKeyHint: maskKey(mc.APIKey),
-	})
+	writeJSON(w, modelSettingsFromConfig(h.engineModel()))
 }
 
 // putModelSettings serves PUT /api/settings/model — validate, persist to the
@@ -62,20 +121,7 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cur := h.engineModel()
-	mc := config.ModelConfig{
-		Provider:      firstNonEmpty(strings.TrimSpace(req.Provider), cur.Provider),
-		Name:          firstNonEmpty(strings.TrimSpace(req.Name), cur.Name),
-		ContextWindow: cur.ContextWindow,
-		APIType:       normalizeAPIType(req.APIType),
-		BaseURL:       firstNonEmpty(strings.TrimSpace(req.BaseURL), cur.BaseURL),
-		APIKey:        cur.APIKey, // empty request key keeps the stored secret
-		Model:         firstNonEmpty(strings.TrimSpace(req.Model), cur.Model),
-		MaxTokens:     firstPositive(req.MaxTokens, cur.MaxTokens),
-		MaxRetries:    firstPositive(req.MaxRetries, cur.MaxRetries),
-	}
-	if key := strings.TrimSpace(req.APIKey); key != "" {
-		mc.APIKey = key
-	}
+	mc := modelSettingsToConfig(req, cur)
 	if mc.BaseURL == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("base_url must not be empty"))
 		return
@@ -119,17 +165,7 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, modelSettingsJSON{
-		Provider:   mc.Provider,
-		Name:       mc.Name,
-		APIType:    mc.NormalizedAPIType(),
-		BaseURL:    mc.BaseURL,
-		Model:      mc.Model,
-		MaxTokens:  mc.MaxTokens,
-		MaxRetries: mc.MaxRetries,
-		APIKeySet:  mc.APIKey != "",
-		APIKeyHint: maskKey(mc.APIKey),
-	})
+	writeJSON(w, modelSettingsFromConfig(mc))
 }
 
 // testModelSettings serves POST /api/settings/model/test — runs a one-word
@@ -144,20 +180,7 @@ func (h *handler) testModelSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cur := h.engineModel()
-	mc := config.ModelConfig{
-		Provider:      firstNonEmpty(strings.TrimSpace(req.Provider), cur.Provider),
-		Name:          firstNonEmpty(strings.TrimSpace(req.Name), cur.Name),
-		ContextWindow: cur.ContextWindow,
-		APIType:       normalizeAPIType(req.APIType),
-		BaseURL:       firstNonEmpty(strings.TrimSpace(req.BaseURL), cur.BaseURL),
-		APIKey:        cur.APIKey,
-		Model:         firstNonEmpty(strings.TrimSpace(req.Model), cur.Model),
-		MaxTokens:     firstPositive(req.MaxTokens, cur.MaxTokens),
-		MaxRetries:    firstPositive(req.MaxRetries, cur.MaxRetries),
-	}
-	if key := strings.TrimSpace(req.APIKey); key != "" {
-		mc.APIKey = key
-	}
+	mc := modelSettingsToConfig(req, cur)
 
 	client, err := entry.NewClient(mc)
 	if err != nil {

@@ -682,20 +682,20 @@ func TestTUIModelFormFetchPicker(t *testing.T) {
 	}
 
 	// The fetch command runs async; inject its result.
-	m = step(m, modelListMsg{models: []string{"gpt-4o", "gpt-4o-mini", "o3-mini"}})
+	m = step(m, modelListMsg{models: []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"}})
 	if !m.formPicking || len(m.selectionList.Items) != 3 {
 		t.Fatalf("picker not open with fetched models: picking=%v items=%d", m.formPicking, len(m.selectionList.Items))
 	}
 	// The current model value is pre-highlighted.
 	if m.selectionList.Cursor != 1 {
-		t.Fatalf("expected cursor on gpt-4o-mini (index 1), got %d", m.selectionList.Cursor)
+		t.Fatalf("expected cursor on gpt-6.1-sol (index 1), got %d", m.selectionList.Cursor)
 	}
-	m = step(m, tea.KeyMsg{Type: tea.KeyDown}) // -> o3-mini
+	m = step(m, tea.KeyMsg{Type: tea.KeyDown}) // -> gpt-6-luna
 	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.formPicking {
 		t.Fatal("Enter should close the picker")
 	}
-	if m.wizardModel != "o3-mini" {
+	if m.wizardModel != "gpt-6-luna" {
 		t.Fatalf("picked model not written into the form, got %q", m.wizardModel)
 	}
 

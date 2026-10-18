@@ -175,6 +175,12 @@ type tuiModel struct {
 	wizardAPIType   string // "openai" | "anthropic" (custom/relay)
 	wizardThinking  string // "auto" | "on" | "off"
 	wizardContext   string // context window, raw text
+	wizardCtxManual bool   // user typed/cleared the context field — model changes stop re-suggesting it
+	wizardMaxTok    string // completion cap, raw text — blank = catalogue auto-load
+	wizardBudget    string // thinking budget, raw text
+	wizardRetries   string // transport retries, raw text
+	wizardParams    string // extra request params as a JSON object, raw text
+	wizardHeaders   string // extra request headers as a JSON object, raw text
 	wizardAlias     string // display name in the register
 	wizardEditAlias string // alias being edited ("" = adding a new entry)
 
@@ -295,6 +301,15 @@ type chatHistory struct {
 	renderUnicode bool
 	renderLoc     i18n.Locale
 	renderOK      bool
+}
+
+// clear empties the transcript. renders must go with blocks: the memo is
+// index-aligned, so a bare blocks=nil would let the next appended block
+// inherit the stale render of whichever entry held that slot before the wipe —
+// the first turn after /clear would repaint as the previous session's first.
+func (h *chatHistory) clear() {
+	h.blocks = nil
+	h.renders = nil
 }
 
 // renderedAt returns the cached rendered lines of blocks[i], filling entries

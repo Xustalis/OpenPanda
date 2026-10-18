@@ -1153,16 +1153,17 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		})
 
 		runCtx := execCtx
-		// Attach the resume hint only when this round's planned adapter is the
-		// one that minted the handle (or the mint is unknown — a legacy row).
-		// buildAdapterRequest re-checks against the adapter that ACTUALLY
-		// executes, so a router-internal fallback is covered either way.
-		if sessionID != "" && (sessionAdapter == "" || sessionAdapter == plan.Adapter) {
+		// Attach the resume hint whenever this task carries one. Which
+		// attempt may actually use it is decided one level down, per
+		// attempt, by buildAdapterRequest's adapter affinity: the minting
+		// adapter gets the handle, a foreign one ignores it. The gate must
+		// not run here on plan.Adapter — when the plan's CLI is unavailable
+		// and the fallback chain lands on the adapter that minted the
+		// session, that attempt IS the conversation's owner, and a
+		// round-level drop cold-starts the very checkpoint a timeout retry
+		// exists to resume.
+		if sessionID != "" {
 			runCtx = commander.WithResume(execCtx, sessionID, sessionAdapter)
-		} else if sessionID != "" {
-			c.EvTrace(execCtx, taskID, "adapter_session_skip", map[string]any{
-				"session": sessionID, "minted_by": sessionAdapter, "plan_adapter": plan.Adapter,
-			})
 		}
 		if remoteOrigin {
 			runCtx = commander.WithRemoteTask(runCtx)

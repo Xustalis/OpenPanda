@@ -42,14 +42,14 @@ func TestModelCmdEffectiveHelpers(t *testing.T) {
 	mc2 := config.ModelConfig{
 		Provider: "claude",
 	}
-	if effectiveModel(mc2) != "claude-sonnet-4-5" {
+	if effectiveModel(mc2) != "claude-sonnet-5-5" {
 		t.Fatalf("expected claude default model, got %s", effectiveModel(mc2))
 	}
 	if effectiveBaseURL(mc2) != "https://api.anthropic.com" {
 		t.Fatalf("expected claude default baseURL, got %s", effectiveBaseURL(mc2))
 	}
-	if effectiveContextWindow(mc2) != 200000 {
-		t.Fatalf("expected 200000, got %d", effectiveContextWindow(mc2))
+	if effectiveContextWindow(mc2) != 1000000 {
+		t.Fatalf("expected 1000000, got %d", effectiveContextWindow(mc2))
 	}
 
 	// 3. Provider omitted, but BaseURL and Model present (auto-detect)
@@ -60,8 +60,8 @@ func TestModelCmdEffectiveHelpers(t *testing.T) {
 	if effectiveProvider(mc3) != "deepseek" {
 		t.Fatalf("expected detected deepseek, got %s", effectiveProvider(mc3))
 	}
-	if effectiveContextWindow(mc3) != 128000 {
-		t.Fatalf("expected inferred 128000, got %d", effectiveContextWindow(mc3))
+	if effectiveContextWindow(mc3) != 1048576 {
+		t.Fatalf("expected inferred 1048576, got %d", effectiveContextWindow(mc3))
 	}
 }
 
@@ -152,12 +152,34 @@ func TestModelAddKeyAndAlias(t *testing.T) {
 	if m.APIKey != "sk-test-00000000000000000000000000" {
 		t.Errorf("m.APIKey = %q, want sk-...", m.APIKey)
 	}
-	if m.Model != "deepseek-v4-flash" {
-		t.Errorf("m.Model = %q, want provider default deepseek-v4-flash", m.Model)
+	if m.Model != "deepseek-flash" {
+		t.Errorf("m.Model = %q, want provider default deepseek-flash", m.Model)
 	}
 	// Because no active model was configured, it should have been auto-applied as active
 	if r.cfg.Model.Alias() != "my-alias" {
 		t.Errorf("active model alias = %q, want my-alias", r.cfg.Model.Alias())
+	}
+}
+
+func TestModelAddMaxTokensFlag(t *testing.T) {
+	dir := t.TempDir()
+	r := &repl{cfg: &config.Config{Node: config.NodeConfig{Name: "test"}}, configPath: filepath.Join(dir, "config.yaml")}
+
+	r.modelAdd([]string{"minimax", "sk-test-00000000000000000000000000", "--max-tokens", "65536", "--force"})
+	if len(r.cfg.Models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(r.cfg.Models))
+	}
+	if m := r.cfg.Models[0]; m.MaxTokens != 65536 {
+		t.Fatalf("--max-tokens = %d, want 65536", m.MaxTokens)
+	}
+
+	// Without the flag the catalogue policy resolves the automatic budget.
+	r.modelAdd([]string{"minimax", "sk-test-00000000000000000000000000", "auto-mm", "--force"})
+	if len(r.cfg.Models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(r.cfg.Models))
+	}
+	if m := r.cfg.Models[1]; m.MaxTokens != 131072 {
+		t.Fatalf("auto max_tokens = %d, want 131072", m.MaxTokens)
 	}
 }
 

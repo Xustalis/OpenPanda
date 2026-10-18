@@ -1389,6 +1389,9 @@ export interface ModelEntry {
   model: string
   max_tokens?: number
   context_window?: number
+  thinking?: string // "on" | "off"; unset = provider default
+  thinking_budget?: number
+  max_retries?: number
   no_auth?: boolean
   active: boolean
   key_set: boolean
@@ -1421,6 +1424,13 @@ export interface AddModelRequest {
   api_type?: string
   base_url?: string
   max_tokens?: number
+  context_window?: number
+  thinking?: string // "on" | "off" | "auto"
+  thinking_budget?: number
+  max_retries?: number
+  no_auth?: boolean
+  params?: Record<string, unknown>
+  headers?: Record<string, string>
 }
 
 export interface ModelRefRequest {
@@ -1639,11 +1649,17 @@ export interface ImportSkillRequest {
 }
 
 export interface ModelSettings {
+  provider?: string
+  name?: string
   api_type: 'anthropic' | 'openai'
   base_url: string
   model: string
   max_tokens: number
+  context_window?: number
+  thinking?: string // "on" | "off" | "auto" | ""; "auto" resets to provider default
+  thinking_budget?: number
   max_retries?: number // transport retry budget; 0/omitted = keep current (default 5)
+  no_auth?: boolean // omitted = keep current
   api_key?: string // write-only: empty = keep the stored key
   api_key_set?: boolean
   api_key_hint?: string

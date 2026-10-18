@@ -264,7 +264,7 @@ func TestDeepSeekProModelNeverInjected(t *testing.T) {
 		t.Fatalf("pro model leaked into the decision: %q", d.Model)
 	}
 	env := modelEnvForAdapter(pro, "claude_code", "claude_code.py")
-	assertEnv(t, env, map[string]string{"ANTHROPIC_MODEL": "deepseek-v4-flash"})
+	assertEnv(t, env, map[string]string{"ANTHROPIC_MODEL": "deepseek-flash"})
 	for _, kv := range env {
 		if strings.Contains(kv, "deepseek-v4-pro") {
 			t.Fatalf("pro model leaked into the injected env: %q", kv)

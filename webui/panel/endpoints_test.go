@@ -561,6 +561,118 @@ func TestModelSettingsTestEndpoint(t *testing.T) {
 	}
 }
 
+func TestModelSettingsToConfigMerge(t *testing.T) {
+	cur := config.ModelConfig{
+		Provider:       "minimax",
+		Name:           "mm",
+		APIType:        "anthropic",
+		BaseURL:        "https://api.minimax.cn/anthropic",
+		APIKey:         "sk-secret",
+		Model:          "MiniMax-M3",
+		MaxTokens:      131072,
+		ContextWindow:  1000000,
+		Thinking:       "on",
+		ThinkingBudget: 8192,
+		MaxRetries:     3,
+		NoAuth:         true,
+		Auth:           "bearer",
+		Params:         map[string]any{"temperature": 0.5},
+		Headers:        map[string]string{"X-Tenant": "blue"},
+	}
+
+	// A sparse request (form save) must keep every field the form does not
+	// carry — secrets, auth override, params, headers, thinking state.
+	got := modelSettingsToConfig(modelSettingsJSON{BaseURL: cur.BaseURL, Model: cur.Model, APIType: "openai"}, cur)
+	if got.APIKey != "sk-secret" || got.Auth != "bearer" || got.Headers["X-Tenant"] != "blue" || got.Params["temperature"] != 0.5 {
+		t.Fatalf("sparse save wiped escape-hatch fields: %+v", got)
+	}
+	if got.Thinking != "on" || got.ThinkingBudget != 8192 || got.ContextWindow != 1000000 || got.MaxRetries != 3 || !got.NoAuth {
+		t.Fatalf("sparse save wiped tuning fields: %+v", got)
+	}
+	if got.APIType != "openai" {
+		t.Fatalf("api_type not applied: %+v", got)
+	}
+
+	// Explicit values win; "auto" resets thinking to the provider default;
+	// a null-vs-absent no_auth keeps the stored flag.
+	noAuth := false
+	got = modelSettingsToConfig(modelSettingsJSON{
+		BaseURL:        cur.BaseURL,
+		Model:          "MiniMax-M2.7",
+		ContextWindow:  204800,
+		Thinking:       "auto",
+		ThinkingBudget: 4096,
+		NoAuth:         &noAuth,
+		MaxRetries:     9,
+	}, cur)
+	if got.Thinking != "" || got.ThinkingBudget != 4096 || got.ContextWindow != 204800 || got.NoAuth || got.MaxRetries != 9 {
+		t.Fatalf("explicit overrides not applied: %+v", got)
+	}
+	got = modelSettingsToConfig(modelSettingsJSON{BaseURL: cur.BaseURL, Model: cur.Model, Thinking: "off"}, cur)
+	if got.Thinking != "off" {
+		t.Fatalf("thinking off not applied: %+v", got)
+	}
+}
+
+func TestModelSettingsPutAdvancedRoundTrip(t *testing.T) {
+	h, _, _ := newEnginePanel(t)
+
+	body := `{"api_type":"anthropic","base_url":"https://api.minimax.cn/anthropic","model":"MiniMax-M3","max_tokens":131072,"context_window":1000000,"thinking":"on","thinking_budget":8192,"max_retries":3,"no_auth":false}`
+	code, out := doJSON(t, h, jsonReq(http.MethodPut, "/api/settings/model", body))
+	if code != http.StatusOK {
+		t.Fatalf("put status = %d, out = %v", code, out)
+	}
+	for k, want := range map[string]any{"context_window": 1000000.0, "thinking": "on", "thinking_budget": 8192.0, "no_auth": false} {
+		if out[k] != want {
+			t.Fatalf("put echo %s = %v, want %v (out=%v)", k, out[k], want, out)
+		}
+	}
+	code, out = doJSON(t, h, authedReq(http.MethodGet, "/api/settings/model", nil))
+	if code != http.StatusOK || out["thinking"] != "on" || out["context_window"] != 1000000.0 || out["thinking_budget"] != 8192.0 {
+		t.Fatalf("get after put = %v", out)
+	}
+}
+
+func TestAddModelAdvancedFields(t *testing.T) {
+	h, _, _ := newEnginePanel(t)
+
+	// Custom endpoint on a known vendor URL inherits catalogue tuning and
+	// keeps every explicit field the caller supplied.
+	body := `{"provider":"custom","base_url":"https://api.minimax.cn/anthropic","model":"MiniMax-M3","api_key":"sk-x","alias":"mmx","thinking":"on","thinking_budget":8192,"max_retries":3,"params":{"temperature":0.5},"headers":{"X-Tenant":"blue"}}`
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/models", body))
+	if code != http.StatusOK {
+		t.Fatalf("add status = %d, out = %v", code, out)
+	}
+	if out["context_window"] != 1000000.0 || out["max_tokens"] != 131072.0 {
+		t.Fatalf("custom detect did not resolve catalogue tuning: %v", out)
+	}
+	if out["thinking"] != "on" || out["thinking_budget"] != 8192.0 || out["max_retries"] != 3.0 {
+		t.Fatalf("explicit tuning not persisted: %v", out)
+	}
+
+	// Keyless custom endpoint defaults to no-auth (same rule as the CLI).
+	code, out = doJSON(t, h, jsonReq(http.MethodPost, "/api/models", `{"provider":"custom","api_type":"openai","base_url":"http://127.0.0.1:9/v1","model":"local-m","alias":"loc"}`))
+	if code != http.StatusOK || out["no_auth"] != true {
+		t.Fatalf("keyless custom should be no_auth: %d %v", code, out)
+	}
+
+	// GET /api/models lists the new rows with the resolved fields.
+	code, out = doJSON(t, h, authedReq(http.MethodGet, "/api/models", nil))
+	if code != http.StatusOK {
+		t.Fatalf("list status = %d", code)
+	}
+	rows, _ := out["models"].([]any)
+	var mmx map[string]any
+	for _, r := range rows {
+		if m, _ := r.(map[string]any); m["alias"] == "mmx" {
+			mmx = m
+		}
+	}
+	if mmx == nil || mmx["thinking"] != "on" || mmx["context_window"] != 1000000.0 {
+		t.Fatalf("listed row missing advanced fields: %v", mmx)
+	}
+}
+
 func TestMCPSettings(t *testing.T) {
 	h, _, _ := newEnginePanel(t)
 

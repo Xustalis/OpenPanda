@@ -396,10 +396,11 @@ func TestTUIWelcomeWaitsForTheTerminalSize(t *testing.T) {
 }
 
 // TestTUIWelcomeFitsItsTerminal tests that the welcome banner adapts to the
-// terminal size: narrow terminals (<76 columns) receive the compact header (4
-// rows) while standard/wide terminals (>=76 columns) receive the full ASCII
-// wordmark (10 rows), and no line ever exceeds the terminal width. The banner
-// carries no node/model line — only version, work dir and tips.
+// terminal size: narrow terminals (<76 columns) receive the compact header
+// while standard/wide terminals (>=76 columns) receive the full ASCII
+// wordmark, both inside the rounded welcome card, and no line ever exceeds
+// the terminal width. The banner carries no node/model line — only version,
+// work dir and tips.
 func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 	for _, width := range []int{40, 52, 80, 200} {
 		m := newTestTUI(t)
@@ -408,9 +409,9 @@ func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 		m.r.cfg.Model.Model = "deepseek-v4-flash"
 		m = step(m, tea.WindowSizeMsg{Width: width, Height: 30})
 		lines := strings.Split(m.welcome(), "\n")
-		wantRows := 10
+		wantRows := 12 // 10 content rows + the welcome card's top/bottom border
 		if width < 76 {
-			wantRows = 4
+			wantRows = 6
 		}
 		if len(lines) != wantRows {
 			t.Errorf("width %d: banner is %d rows, want %d", width, len(lines), wantRows)
@@ -772,8 +773,10 @@ func TestTUIMouseClickActions(t *testing.T) {
 		if !m.menu.active || len(m.menu.items) == 0 {
 			t.Fatal("menu should be active for /he")
 		}
-		menuLines := strings.Split(m.menu.render(m.th, m.textWidth(), m.menuRows()), "\n")
-		targetY := 40 - 1 - len(menuLines)
+		menuLines := strings.Split(m.th.menuBox.Width(max(1, m.textWidth()-2)).Render(
+			m.menu.render(m.th, max(1, m.textWidth()-4), m.menuRows())), "\n")
+		// Land on the first item row — one line below the card's top border.
+		targetY := 40 - 1 - len(menuLines) + 1
 		clickMsg := tea.MouseMsg{
 			X:      5,
 			Y:      targetY,

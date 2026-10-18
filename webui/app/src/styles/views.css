@@ -4552,6 +4552,30 @@ pre,
   max-height: 46vh;
   overflow-y: auto;
 }
+/* Collapsible tuning section in the add-model wizard. */
+.wizard-advanced {
+  margin-top: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+.wizard-advanced > summary {
+  padding: var(--sp-2) 0;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+  user-select: none;
+}
+.wizard-advanced[open] > summary {
+  margin-bottom: var(--sp-2);
+}
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
 
 /* ---- Plans board ---- */
 

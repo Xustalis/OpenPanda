@@ -732,6 +732,107 @@ func TestNewClientMaxRetries(t *testing.T) {
 	}
 }
 
+// TestNewClientMaxTokensCap verifies a configured max_tokens above the
+// provider's hard ceiling is clamped to it instead of being sent verbatim
+// (MiniMax 400s past 524288), and that a "custom" endpoint pointing at a
+// known vendor still picks up the cap via Detect.
+func TestNewClientMaxTokensCap(t *testing.T) {
+	// Named provider: over-cap is clamped, under/at-cap passes through, and
+	// an unset max_tokens falls to the vendor default.
+	c, err := NewClient(config.ModelConfig{Provider: "minimax", APIKey: "sk", MaxTokens: 1_000_000})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if c.maxTokens != 524288 || c.maxTokensCap != 524288 {
+		t.Fatalf("over-cap maxTokens = %d (cap %d), want 524288", c.maxTokens, c.maxTokensCap)
+	}
+	if c.model != "MiniMax-M3" || c.contextWindow != 1_000_000 {
+		t.Fatalf("catalogue defaults not applied: model=%q ctx=%d", c.model, c.contextWindow)
+	}
+	c, err = NewClient(config.ModelConfig{Provider: "minimax", APIKey: "sk", MaxTokens: 8192})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if c.maxTokens != 8192 {
+		t.Fatalf("under-cap maxTokens = %d, want 8192", c.maxTokens)
+	}
+	c, err = NewClient(config.ModelConfig{Provider: "minimax", APIKey: "sk"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if c.maxTokens != 131072 {
+		t.Fatalf("unset maxTokens = %d, want vendor default 131072", c.maxTokens)
+	}
+	// Unset on a 1M-window vendor auto-loads an eighth of the context —
+	// deepseek's catalogue floor (4096) loses to 131072.
+	c, err = NewClient(config.ModelConfig{Provider: "deepseek", APIKey: "sk"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if c.maxTokens != 131072 {
+		t.Fatalf("deepseek auto maxTokens = %d, want 131072", c.maxTokens)
+	}
+	// A per-model spec narrows it again: MiniMax-M2.x is a 204800-window
+	// model with a 196608-token completion ceiling.
+	c, err = NewClient(config.ModelConfig{Provider: "minimax", APIKey: "sk", Model: "MiniMax-M2.7"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if c.maxTokens != 65536 || c.contextWindow != 204800 || c.maxTokensCap != 196608 {
+		t.Fatalf("M2.7: maxTokens=%d ctx=%d cap=%d, want 65536/204800/196608", c.maxTokens, c.contextWindow, c.maxTokensCap)
+	}
+
+	// A "custom" row pointing at MiniMax resolves the vendor by Detect, so
+	// the same clamp applies without a named provider.
+	c, err = NewClient(config.ModelConfig{
+		Provider: "custom", APIType: "anthropic",
+		BaseURL: "https://api.minimax.cn/anthropic", APIKey: "sk",
+		Model: "MiniMax-M3", MaxTokens: 1_000_000,
+	})
+	if err != nil {
+		t.Fatalf("new client (custom→minimax): %v", err)
+	}
+	if c.maxTokens != 524288 || c.contextWindow != 1_000_000 {
+		t.Fatalf("detected tuning not applied: maxTokens=%d ctx=%d", c.maxTokens, c.contextWindow)
+	}
+
+	// DeepSeek caps one completion at 384K per its /models metadata — a
+	// second capped vendor through the same path.
+	c, err = NewClient(config.ModelConfig{Provider: "deepseek", APIKey: "sk", MaxTokens: 1_000_000})
+	if err != nil {
+		t.Fatalf("new client (deepseek): %v", err)
+	}
+	if c.maxTokens != 393216 || c.maxTokensCap != 393216 {
+		t.Fatalf("deepseek maxTokens = %d (cap %d), want 393216", c.maxTokens, c.maxTokensCap)
+	}
+
+	// A provider with no known ceiling leaves an over-sized value
+	// untouched (kimi publishes none), while the openai default
+	// (gpt-6.1-sol → GPT-6 family spec) clamps to its 128K ceiling — and
+	// a gpt-4o model still clamps to 16384 through its own spec.
+	c, err = NewClient(config.ModelConfig{Provider: "kimi", APIKey: "sk", MaxTokens: 1_000_000})
+	if err != nil {
+		t.Fatalf("new client (kimi): %v", err)
+	}
+	if c.maxTokens != 1_000_000 || c.maxTokensCap != 0 {
+		t.Fatalf("uncapped provider: maxTokens=%d cap=%d, want verbatim + no cap", c.maxTokens, c.maxTokensCap)
+	}
+	c, err = NewClient(config.ModelConfig{Provider: "openai", APIKey: "sk", MaxTokens: 1_000_000})
+	if err != nil {
+		t.Fatalf("new client (openai): %v", err)
+	}
+	if c.maxTokens != 128000 || c.contextWindow != 1050000 {
+		t.Fatalf("gpt-6.1-sol maxTokens=%d ctx=%d, want 128000/1050000", c.maxTokens, c.contextWindow)
+	}
+	c, err = NewClient(config.ModelConfig{Provider: "openai", APIKey: "sk", Model: "gpt-4o", MaxTokens: 1_000_000})
+	if err != nil {
+		t.Fatalf("new client (gpt-4o): %v", err)
+	}
+	if c.maxTokens != 16384 {
+		t.Fatalf("gpt-4o maxTokens = %d, want spec cap 16384", c.maxTokens)
+	}
+}
+
 // TestRetryDelayCap verifies the backoff grows exponentially and then caps at
 // maxRetryDelay, so a deep configured budget (e.g. max_retries: 50) keeps
 // waiting longer instead of wrapping the duration into a busy-loop.
@@ -1326,6 +1427,14 @@ func TestBuildOAIRequestReasoningModels(t *testing.T) {
 	reqGPT4 := buildOAIRequest("gpt-4o", 1024, true, nil, nil, "")
 	if reqGPT4.MaxTokens != 1024 || reqGPT4.MaxCompletionTokens != 0 {
 		t.Fatalf("gpt-4o should use MaxTokens: %+v", reqGPT4)
+	}
+
+	// GPT-5/6 are reasoning models — OpenAI rejects legacy max_tokens on them.
+	for _, m := range []string{"gpt-6.1-sol", "gpt-6-astra", "gpt-5.4-mini"} {
+		req := buildOAIRequest(m, 2048, true, nil, nil, "")
+		if req.MaxCompletionTokens != 2048 || req.MaxTokens != 0 {
+			t.Fatalf("%s should use MaxCompletionTokens: %+v", m, req)
+		}
 	}
 }
 

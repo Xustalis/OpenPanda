@@ -628,6 +628,9 @@ func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []
 		if req.MaxTokens <= budget {
 			req.MaxTokens = budget + 4096
 		}
+		if c.maxTokensCap > 0 && req.MaxTokens > c.maxTokensCap {
+			req.MaxTokens = c.maxTokensCap
+		}
 	}
 	payload, err := c.marshalWithParams(req)
 	if err != nil {

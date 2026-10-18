@@ -10,6 +10,8 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
 // TestAgentSessionCheckpointResumesAcrossRounds exercises §5.2 breakpoint
@@ -177,12 +179,14 @@ func TestDelegateAdoptsResumeHint(t *testing.T) {
 	}
 }
 
-// TestAgentSessionAdapterAffinity: the §5.2 handle is adapter-affine. A row
-// whose session was minted by opencode.py must NOT be offered to a round
-// landing on claude_code.py — the foreign id is poison (opencode answers a
-// non-"ses" handle with HTTP 400, so a bounded retry used to re-burn a whole
-// cold-start run per round). The fix records the minting adapter and only
-// resumes on a match; an unknown producer (legacy row) still gets the offer.
+// TestAgentSessionAdapterAffinity: the §5.2 handle is adapter-affine, and the
+// affinity gate is per ATTEMPT (buildAdapterRequest), not per round. A round
+// whose plan adapter differs may still fail over onto the adapter that minted
+// the session — that attempt has to receive the handle — so the core always
+// attaches the handle together with its mint tag. The foreign id still never
+// reaches a foreign adapter: the builder drops it there
+// (TestResumeAdapterAffinity). A round-level drop here cannot make that call:
+// it would also starve the fallback (TestAgentSessionResumesOnFallback).
 func TestAgentSessionAdapterAffinity(t *testing.T) {
 	ctx := context.Background()
 	c := newSuperviseCore(t, "sess-affinity", 1)
@@ -191,13 +195,15 @@ func TestAgentSessionAdapterAffinity(t *testing.T) {
 		return `{"status":"done","reason":"完成","followup":""}`
 	}))
 
-	var gotResume string
+	var gotResume, gotMint string
 	c.router.SetAdapterRunner(func(runCtx context.Context, adapter, prompt, cwd string) commander.AgentResult {
-		gotResume = commander.ResumeID(runCtx)
+		gotResume, gotMint = commander.ResumeID(runCtx), commander.ResumeAdapter(runCtx)
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0, SessionID: "sess-final"}
 	})
 
-	// Foreign-adapter session: must not reach the claude_code.py round.
+	// Foreign-mint session: the round plans claude_code.py, but the handle
+	// and its opencode.py tag still ride the context — only the request
+	// builder may refuse it, and only for the adapter it would poison.
 	tk := createTask(t, c.store, "", "affinity-drop", c.nodeID)
 	if err := c.store.SetAgentSession(ctx, tk.TaskID, "bc47c3fd-29e9-4cbf-91b0-e4c84918f54b", c.nodeID, "opencode.py"); err != nil {
 		t.Fatalf("seed session: %v", err)
@@ -211,12 +217,14 @@ func TestAgentSessionAdapterAffinity(t *testing.T) {
 	if _, err := c.run(ctx, tk.TaskID, "intent", []string{"code:modify"}, nil); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if gotResume != "" {
-		t.Fatalf("runner saw foreign resume %q, want none", gotResume)
+	if gotResume != "bc47c3fd-29e9-4cbf-91b0-e4c84918f54b" || gotMint != "opencode.py" {
+		t.Fatalf("round offer = %q minted by %q, want the tagged handle",
+			gotResume, gotMint)
 	}
 
 	// Same-adapter session: offered normally. The first run's fresh mint is
 	// recorded against claude_code.py, so the row's adapter column moves on.
+	gotResume, gotMint = "", ""
 	tk2 := createTask(t, c.store, "", "affinity-match", c.nodeID)
 	if err := c.store.SetAgentSession(ctx, tk2.TaskID, "sess-mine", c.nodeID, "claude_code.py"); err != nil {
 		t.Fatalf("seed session: %v", err)
@@ -230,8 +238,9 @@ func TestAgentSessionAdapterAffinity(t *testing.T) {
 	if _, err := c.run(ctx, tk2.TaskID, "intent", []string{"code:modify"}, nil); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if gotResume != "sess-mine" {
-		t.Fatalf("runner saw resume %q, want sess-mine", gotResume)
+	if gotResume != "sess-mine" || gotMint != "claude_code.py" {
+		t.Fatalf("runner saw resume %q minted by %q, want sess-mine@claude_code.py",
+			gotResume, gotMint)
 	}
 	row, err := c.store.Get(ctx, tk2.TaskID)
 	if err != nil {
@@ -242,6 +251,66 @@ func TestAgentSessionAdapterAffinity(t *testing.T) {
 	if row.AgentSessionID != "" || row.AgentSessionAdapter != "" {
 		t.Fatalf("finished task kept session %q adapter %q, want cleared",
 			row.AgentSessionID, row.AgentSessionAdapter)
+	}
+}
+
+// TestAgentSessionResumesOnFallback: a checkpoint retry can fail over
+// mid-round — the plan's adapter is unavailable, the chain runs the next
+// candidate, and that candidate may be the adapter that minted the persisted
+// session. Attaching the resume hint per round (gated on plan.Adapter) used
+// to drop it before the fallback could see it, so every timeout slice of a
+// long task re-ran from zero; the handle must reach the attempt that owns it.
+func TestAgentSessionResumesOnFallback(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	card := ledger.Card{
+		Device:        "sess-fallback",
+		ResourceClass: "Standard",
+		Agents: map[string]ledger.Agent{
+			"claude_code": {Adapter: "claude_code.py", Capabilities: []string{"code:modify"}, Tier: 1},
+			"opencode":    {Adapter: "opencode.py", Capabilities: []string{"code:modify"}, Tier: 1},
+		},
+		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
+	}
+	c := NewCore(db, "sess-fallback", card, 5, testLogger(), config.ModelConfig{})
+	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	c.SetWorkDir(t.TempDir())
+	c.SetSharedSecret(testSharedSecret)
+	c.SetSupervisor(newFakeSupervisor(t, func(call int) string {
+		return `{"status":"done","reason":"完成","followup":""}`
+	}))
+
+	var adapters, resumes []string
+	c.router.SetAdapterRunner(func(runCtx context.Context, adapter, prompt, cwd string) commander.AgentResult {
+		adapters = append(adapters, adapter)
+		if adapter != "opencode.py" {
+			// The planned adapter's CLI is dead in this environment: fail
+			// fast so the chain falls over to the next candidate.
+			return commander.AgentResult{OK: false, ExitCode: 1, Result: "boom: cli exploded"}
+		}
+		resumes = append(resumes, commander.ResumeID(runCtx))
+		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0, SessionID: "sess-next"}
+	})
+
+	tk := createTask(t, c.store, "", "fallback-resume", c.nodeID)
+	if err := c.store.SetAgentSession(ctx, tk.TaskID, "sess-mine", c.nodeID, "opencode.py"); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if err := c.store.Queue(ctx, tk.TaskID, c.nodeID); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if err := c.store.Dispatch(ctx, tk.TaskID, c.nodeID, c.nodeID); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if _, err := c.run(ctx, tk.TaskID, "intent", []string{"code:modify"}, nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if len(adapters) != 2 || adapters[0] != "claude_code.py" || adapters[1] != "opencode.py" {
+		t.Fatalf("attempt adapters = %v, want claude_code.py then opencode.py", adapters)
+	}
+	if len(resumes) != 1 || resumes[0] != "sess-mine" {
+		t.Fatalf("fallback attempt saw resume %v, want [sess-mine]", resumes)
 	}
 }
 

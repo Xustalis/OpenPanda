@@ -133,7 +133,7 @@ func isDeepSeekEndpoint(baseURL string) bool {
 // on any path — when the node configures it, the flash model is substituted.
 const (
 	deepseekProModel   = "deepseek-v4-pro"
-	deepseekFlashModel = "deepseek-v4-flash"
+	deepseekFlashModel = "deepseek-flash"
 )
 
 // effectiveBaseURLFor returns the target-appropriate endpoint URL for an agent.
@@ -175,7 +175,7 @@ func effectiveModelNameFor(name, adapter string, model config.ModelConfig) strin
 		}
 	}
 	if isDeepSeekEndpoint(model.BaseURL) && targetAPIType == config.APITypeOpenAI {
-		return "deepseek-chat"
+		return "deepseek-flash"
 	}
 	return effectiveModelName(model)
 }
@@ -199,9 +199,9 @@ func effectiveModelName(model config.ModelConfig) string {
 			return p.DefaultModel
 		}
 		if model.NormalizedAPIType() == config.APITypeOpenAI {
-			return "gpt-4o"
+			return "gpt-6.1-sol"
 		}
-		return "deepseek-v4-flash"
+		return deepseekFlashModel
 	}
 	if name == deepseekProModel {
 		return deepseekFlashModel

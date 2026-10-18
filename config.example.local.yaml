@@ -59,7 +59,7 @@ storage:
 model:
   api_type: ""       # anthropic | openai（缺省 anthropic）
   base_url: ""       # 如 provider 需要自定义 endpoint
-  model: ""          # 如 claude-opus-4, gpt-4o-mini, deepseek-v4-flash ...
+  model: ""          # 如 claude-sonnet-5-5, gpt-6.1-sol, deepseek-flash ...
   api_key: ""        # 留空；优先经 OPENPANDA_MODEL_API_KEY 注入
   # auth: ""         # 订阅 OAuth provider（experimental）：先 `panda auth login
                      # anthropic`，再设 auth: anthropic 即改用订阅 Bearer token

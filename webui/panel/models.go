@@ -28,18 +28,21 @@ import (
 // modelEntryJSON is the wire form of one registered (or active) model. The
 // API key is never returned — only whether one is stored and a masked tail.
 type modelEntryJSON struct {
-	Alias         string `json:"alias"`
-	Provider      string `json:"provider,omitempty"`
-	ProviderLabel string `json:"provider_label,omitempty"`
-	APIType       string `json:"api_type"`
-	BaseURL       string `json:"base_url"`
-	Model         string `json:"model"`
-	MaxTokens     int    `json:"max_tokens,omitempty"`
-	ContextWindow int    `json:"context_window,omitempty"`
-	NoAuth        bool   `json:"no_auth,omitempty"`
-	Active        bool   `json:"active"`
-	KeySet        bool   `json:"key_set"`
-	KeyHint       string `json:"key_hint,omitempty"`
+	Alias          string `json:"alias"`
+	Provider       string `json:"provider,omitempty"`
+	ProviderLabel  string `json:"provider_label,omitempty"`
+	APIType        string `json:"api_type"`
+	BaseURL        string `json:"base_url"`
+	Model          string `json:"model"`
+	MaxTokens      int    `json:"max_tokens,omitempty"`
+	ContextWindow  int    `json:"context_window,omitempty"`
+	Thinking       string `json:"thinking,omitempty"` // "on" | "off"; unset = provider default
+	ThinkingBudget int    `json:"thinking_budget,omitempty"`
+	MaxRetries     int    `json:"max_retries,omitempty"`
+	NoAuth         bool   `json:"no_auth,omitempty"`
+	Active         bool   `json:"active"`
+	KeySet         bool   `json:"key_set"`
+	KeyHint        string `json:"key_hint,omitempty"`
 }
 
 // providerJSON is the wire form of one catalogue entry — what the "add
@@ -67,16 +70,19 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 		}
 	}
 	e := modelEntryJSON{
-		Alias:         mc.Alias(),
-		Provider:      mc.Provider,
-		APIType:       mc.NormalizedAPIType(),
-		BaseURL:       mc.BaseURL,
-		Model:         mc.Model,
-		MaxTokens:     mc.MaxTokens,
-		ContextWindow: mc.ContextWindow,
-		NoAuth:        mc.NoAuth || (known && p.NoAuth),
-		KeySet:        mc.APIKey != "",
-		KeyHint:       maskKey(mc.APIKey),
+		Alias:          mc.Alias(),
+		Provider:       mc.Provider,
+		APIType:        mc.NormalizedAPIType(),
+		BaseURL:        mc.BaseURL,
+		Model:          mc.Model,
+		MaxTokens:      mc.MaxTokens,
+		ContextWindow:  mc.ContextWindow,
+		Thinking:       mc.Thinking,
+		ThinkingBudget: mc.ThinkingBudget,
+		MaxRetries:     mc.MaxRetries,
+		NoAuth:         mc.NoAuth || (known && p.NoAuth),
+		KeySet:         mc.APIKey != "",
+		KeyHint:        maskKey(mc.APIKey),
 	}
 	if known {
 		e.ProviderLabel = p.Label
@@ -87,7 +93,12 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 			e.Model = p.DefaultModel
 		}
 		if e.ContextWindow == 0 {
-			e.ContextWindow = p.ContextWindow
+			e.ContextWindow = p.ContextFor(e.Model)
+		}
+		if e.MaxTokens == 0 {
+			e.MaxTokens = p.AutoMaxTokens(e.Model)
+		} else if _, ceil := p.TokenPolicy(e.Model); ceil > 0 && e.MaxTokens > ceil {
+			e.MaxTokens = ceil
 		}
 	}
 	e.Active = mc.Alias() == active.Alias() &&
@@ -143,6 +154,15 @@ type addModelRequest struct {
 	APIType   string `json:"api_type,omitempty"`
 	BaseURL   string `json:"base_url,omitempty"`
 	MaxTokens int    `json:"max_tokens,omitempty"`
+	// Optional tuning — applies to any provider; zeros keep the catalogue/
+	// resolved values the backend fills in.
+	ContextWindow  int               `json:"context_window,omitempty"`
+	Thinking       string            `json:"thinking,omitempty"` // "on" | "off" | "auto"
+	ThinkingBudget int               `json:"thinking_budget,omitempty"`
+	MaxRetries     int               `json:"max_retries,omitempty"`
+	NoAuth         *bool             `json:"no_auth,omitempty"`
+	Params         map[string]any    `json:"params,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
 }
 
 // addModel serves POST /api/models — registers a model into `models:`,
@@ -169,6 +189,9 @@ func (h *handler) addModel(w http.ResponseWriter, r *http.Request) {
 			Model:     strings.TrimSpace(req.Model),
 			MaxTokens: req.MaxTokens,
 			APIKey:    strings.TrimSpace(req.APIKey),
+			// A keyless relay is a local-style endpoint — the CLI's
+			// `model add custom` marks it no-auth for the same reason.
+			NoAuth: req.APIKey == "",
 		}
 	} else {
 		p, ok := providers.Lookup(strings.TrimSpace(req.Provider))
@@ -185,6 +208,44 @@ func (h *handler) addModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		mc, _ = providers.ModelConfig(p.ID, strings.TrimSpace(req.Model), key)
+	}
+	// A custom endpoint behind a known vendor inherits its catalogue tuning
+	// when the request left the fields unset — matching what the CLI's
+	// model add and TUI wizard persist for the same endpoint.
+	if mc.ContextWindow == 0 || mc.MaxTokens == 0 {
+		if p, ok := providers.Detect(mc.BaseURL, mc.Model); ok {
+			if mc.ContextWindow == 0 {
+				mc.ContextWindow = p.ContextFor(mc.Model)
+			}
+			if mc.MaxTokens == 0 {
+				mc.MaxTokens = p.AutoMaxTokens(mc.Model)
+			}
+		}
+	}
+	// Explicit request fields override whatever the catalogue resolved.
+	if req.ContextWindow > 0 {
+		mc.ContextWindow = req.ContextWindow
+	}
+	switch strings.ToLower(strings.TrimSpace(req.Thinking)) {
+	case "on", "off":
+		mc.Thinking = strings.ToLower(strings.TrimSpace(req.Thinking))
+	case "auto":
+		mc.Thinking = ""
+	}
+	if req.ThinkingBudget > 0 {
+		mc.ThinkingBudget = req.ThinkingBudget
+	}
+	if req.MaxRetries != 0 {
+		mc.MaxRetries = req.MaxRetries
+	}
+	if req.NoAuth != nil {
+		mc.NoAuth = *req.NoAuth
+	}
+	if req.Params != nil {
+		mc.Params = req.Params
+	}
+	if req.Headers != nil {
+		mc.Headers = req.Headers
 	}
 	alias := strings.TrimSpace(req.Alias)
 	if alias == "" {

@@ -292,8 +292,8 @@ function ApprovalStep(props: {
 type ApiType = 'anthropic' | 'openai'
 
 const EXAMPLES: Record<ApiType, { base: string; model: string }> = {
-  anthropic: { base: 'https://api.anthropic.com', model: 'claude-sonnet-5' },
-  openai: { base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  anthropic: { base: 'https://api.anthropic.com', model: 'claude-sonnet-5-5' },
+  openai: { base: 'https://api.openai.com/v1', model: 'gpt-6.1-sol' },
 }
 
 /** The model step mirrors the models page's add wizard: a catalogue card

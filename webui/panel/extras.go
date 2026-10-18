@@ -366,7 +366,7 @@ type costExecutorJSON struct {
 
 // getCost serves GET /api/cost — aggregated token spend over the
 // delegation_metrics table: totals, success rate, and a per-executor
-// breakdown so the console can show "entry:kimi-latest" beside "claude_code".
+// breakdown so the console can show "entry:kimi-k3" beside "claude_code".
 func (h *handler) getCost(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("store not configured"))

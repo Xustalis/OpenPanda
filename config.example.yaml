@@ -208,47 +208,47 @@ log:
 # Examples:
 #   1. DeepSeek (Anthropic endpoint, recommended default):
 #      base_url: "https://api.deepseek.com/anthropic"
-#      model: "deepseek-v4-flash"
+#      model: "deepseek-flash"
 #      api_type: "anthropic"
 #
 #   2. Official OpenAI:
 #      base_url: "https://api.openai.com/v1"
-#      model: "gpt-4o"  # or "o3-mini", "o1", "gpt-4o-mini"
+#      model: "gpt-6.1-sol"  # or "gpt-6-astra", "gpt-6-luna", "gpt-5.4"
 #      api_type: "openai"
 #
 #   3. DeepSeek (OpenAI-compatible endpoint):
 #      base_url: "https://api.deepseek.com"
-#      model: "deepseek-v4-flash"  # or "deepseek-v4-pro" (costlier; never a default)
+#      model: "deepseek-flash"  # or "deepseek-v4-pro" (costlier; never a default)
 #      api_type: "openai"
 #
 #   4. Alibaba Cloud DashScope / Tongyi Qwen (通义千问):
 #      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-#      model: "qwen-plus"  # or "qwen-max", "qwq-32b", "qwen2.5-coder-32b-instruct"
+#      model: "qwen3.7-plus"  # or "qwen3.8-max", "qwen3.8-flash", "qwen3-coder-plus"
 #      api_type: "openai"
 #
 #   5. SiliconFlow (硅基流动):
 #      base_url: "https://api.siliconflow.cn/v1"
-#      model: "deepseek-ai/DeepSeek-V3"  # or "deepseek-ai/DeepSeek-R1"
+#      model: "deepseek-ai/DeepSeek-V4.1-Flash"  # or "deepseek-ai/DeepSeek-V4-Pro"
 #      api_type: "openai"
 #
 #   6. Moonshot Kimi (月之暗面):
 #      base_url: "https://api.moonshot.cn/v1"
-#      model: "moonshot-v1-auto"  # or "kimi-k1.5-preview"
+#      model: "kimi-k3"  # or "kimi-k2.7-code"
 #      api_type: "openai"
 #
 #   7. Zhipu AI GLM (智谱清言):
 #      base_url: "https://open.bigmodel.cn/api/paas/v4"
-#      model: "glm-4-plus"  # or "glm-4-flash"
+#      model: "glm-5.3"  # or "glm-5.3-flash", "glm-4.7"
 #      api_type: "openai"
 #
 #   8. Ollama Local:
 #      base_url: "http://localhost:11434/v1"
-#      model: "deepseek-r1:14b"  # or "qwen2.5-coder:14b", "llama3.3"
+#      model: "qwen3:8b"  # or "deepseek-r1:14b", "gpt-oss:20b"
 #      api_type: "openai"
 #
 #   9. OpenRouter:
 #      base_url: "https://openrouter.ai/api/v1"
-#      model: "anthropic/claude-3.5-sonnet"
+#      model: "anthropic/claude-sonnet-5.5"
 #      api_type: "openai"
 #
 # The model section is commented out on purpose: there is no built-in default
@@ -260,10 +260,12 @@ log:
 #   provider: "deepseek"        # built-in provider id — its endpoint, dialect
 #                               # and per-vendor tuning are merged in, so
 #                               # base_url/api_type may be omitted
-#   model: "deepseek-v4-flash"
+#   model: "deepseek-flash"
 #   api_key: ""                 # secret; prefer env OPENPANDA_MODEL_API_KEY
 #   api_type: "anthropic"       # anthropic | openai (default anthropic)
-#   max_tokens: 4096            # completion cap; default 4096
+#   max_tokens: 4096            # completion cap (output, not context size);
+#                               # default 4096. A value above the provider's
+#                               # hard ceiling is clamped to it, not failed.
 
 # Multi-model registry: named models the REPL switches between with /model.
 # Each entry is a full model config; name is the alias `/model <name>` uses.
@@ -271,26 +273,27 @@ log:
 # dialect and tuning from the built-in catalogue, so you only supply the key.
 #
 # Built-in providers (internal/providers): deepseek, claude (Anthropic),
-# openai (ChatGPT), kimi (月之暗面), volcengine (火山引擎/豆包), zhipu (智谱),
-# qwen (通义千问), siliconflow (硅基流动), openrouter, ollama (本地), custom.
+# openai (ChatGPT), kimi (月之暗面), minimax, volcengine (火山引擎/豆包),
+# zhipu (智谱), qwen (通义千问), siliconflow (硅基流动), openrouter,
+# ollama (本地), custom.
 #
 # models:
 #   - name: deepseek
 #     provider: deepseek
 #     base_url: "https://api.deepseek.com/anthropic"
-#     model: "deepseek-v4-flash"
+#     model: "deepseek-flash"
 #     api_type: "anthropic"
 #     api_key: ""               # your key here
 #   - name: claude
 #     provider: claude
 #     base_url: "https://api.anthropic.com"
-#     model: "claude-sonnet-4-5"
+#     model: "claude-sonnet-5-5"
 #     api_type: "anthropic"
 #     api_key: ""
 #   - name: kimi
 #     provider: kimi
 #     base_url: "https://api.moonshot.cn/v1"
-#     model: "kimi-latest"
+#     model: "kimi-k3"
 #     api_type: "openai"
 #     api_key: ""
 

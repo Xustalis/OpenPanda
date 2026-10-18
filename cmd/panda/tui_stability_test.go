@@ -108,6 +108,31 @@ func TestTUIClearIsVisualOnly(t *testing.T) {
 	}
 }
 
+// TestTUIClearDropsRenderMemo is the reported ghost: with the render memo
+// warm, /clear left it index-aligned to blocks that no longer existed, so the
+// first block committed afterwards repainted as the previous session's first
+// turn. The wipe must drop the memo with the blocks.
+func TestTUIClearDropsRenderMemo(t *testing.T) {
+	m := newIsolatedTUI(t)
+	m.chatHistory.blocks = append(m.chatHistory.blocks,
+		block{kind: blockUser, body: "previous session first input"},
+		block{kind: blockAnswer, body: "previous answer"},
+	)
+	// Warm the memo the way a rendered frame does.
+	for i := range m.chatHistory.blocks {
+		m.chatHistory.renderedAt(i, m.th, m.textWidth(), m.expandThought)
+	}
+
+	next, _ := m.submit("/clear")
+	m = next.(tuiModel)
+	m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: "fresh prompt"})
+
+	got := strings.Join(m.chatHistory.renderedAt(0, m.th, m.textWidth(), m.expandThought), "\n")
+	if !strings.Contains(got, "fresh prompt") || strings.Contains(got, "previous session first input") {
+		t.Fatalf("post-clear render served the stale memo: %q", got)
+	}
+}
+
 // TestTUINewWipesConvoAndFile covers /new: convo, the persisted file, and the
 // transcript all reset — and the count note reports what was dropped.
 func TestTUINewWipesConvoAndFile(t *testing.T) {

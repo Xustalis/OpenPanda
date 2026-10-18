@@ -93,6 +93,8 @@ export function ModelsSection(props: { onOpenAdvanced?: () => void }) {
               {active.provider_label || active.provider || '—'} · {active.alias} ·{' '}
               <span class="mono">{active.base_url || '—'}</span>
               {active.context_window ? ` · ${fmtTokens(active.context_window)} ctx` : ''}
+              {active.max_tokens ? ` · ${fmtTokens(active.max_tokens)} ${t('models.out')}` : ''}
+              {active.thinking ? ` · ${t(`models.thinking.${active.thinking}`)}` : ''}
             </div>
           </div>
           <div class="model-active-actions">
@@ -192,6 +194,9 @@ function ModelRow(props: {
           {m.provider_label || m.provider || m.api_type}
           {' · '}
           <span class="mono model-url">{m.base_url || '—'}</span>
+          {m.context_window ? ` · ${fmtTokens(m.context_window)} ctx` : ''}
+          {m.max_tokens ? ` · ${fmtTokens(m.max_tokens)} ${t('models.out')}` : ''}
+          {m.thinking ? ` · ${t(`models.thinking.${m.thinking}`)}` : ''}
         </div>
         {props.result && <ModelResult line={props.result} />}
       </div>
@@ -247,6 +252,13 @@ function AddModelWizard(props: {
   const [baseURL, setBaseURL] = useState('')
   const [apiType, setAPIType] = useState<'anthropic' | 'openai'>('openai')
   const [maxTokens, setMaxTokens] = useState(0)
+  const [ctxWindow, setCtxWindow] = useState(0)
+  const [thinking, setThinking] = useState<'auto' | 'on' | 'off'>('auto')
+  const [thinkBudget, setThinkBudget] = useState(0)
+  const [maxRetries, setMaxRetries] = useState(0)
+  const [noAuth, setNoAuth] = useState(false)
+  const [paramsJSON, setParamsJSON] = useState('')
+  const [headersJSON, setHeadersJSON] = useState('')
   const [remoteModels, setRemoteModels] = useState<string[] | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -287,20 +299,42 @@ function AddModelWizard(props: {
     }
   }
 
+  function parseJSONField(v: string): Record<string, unknown> | undefined {
+    if (!v.trim()) return undefined
+    const o = JSON.parse(v)
+    if (typeof o !== 'object' || o === null || Array.isArray(o)) throw new Error('not an object')
+    return o as Record<string, unknown>
+  }
+
   async function submit(e: Event) {
     e.preventDefault()
     if (!provider || busy) return
-    setBusy('add')
     setError('')
+    let params: Record<string, unknown> | undefined
+    let headers: Record<string, string> | undefined
+    try {
+      params = parseJSONField(paramsJSON)
+      headers = parseJSONField(headersJSON) as Record<string, string> | undefined
+    } catch {
+      setError(t('models.badJSON'))
+      return
+    }
+    setBusy('add')
     try {
       await api.addModel({
         provider: provider.id,
         model: model.trim() || undefined,
         api_key: apiKey.trim() || undefined,
         alias: alias.trim() || undefined,
-        ...(provider.id === 'custom'
-          ? { api_type: apiType, base_url: baseURL.trim(), max_tokens: maxTokens || undefined }
-          : {}),
+        max_tokens: maxTokens || undefined,
+        context_window: ctxWindow || undefined,
+        thinking: thinking !== 'auto' ? thinking : undefined,
+        thinking_budget: thinkBudget || undefined,
+        max_retries: maxRetries || undefined,
+        no_auth: noAuth || undefined,
+        params,
+        headers,
+        ...(provider.id === 'custom' ? { api_type: apiType, base_url: baseURL.trim() } : {}),
       })
       props.onAdded()
     } catch (err) {
@@ -447,7 +481,11 @@ function AddModelWizard(props: {
                   placeholder={provider.id}
                 />
               </div>
-              {provider.id === 'custom' && (
+            </div>
+
+            <details class="wizard-advanced">
+              <summary>{t('models.advanced')}</summary>
+              <div class="field-row">
                 <div class="field-group">
                   <label>{t('settings.maxTokens')}</label>
                   <input
@@ -457,9 +495,93 @@ function AddModelWizard(props: {
                     value={maxTokens}
                     onInput={(e) => setMaxTokens(Number((e.target as HTMLInputElement).value) || 0)}
                   />
+                  <p class="hint">{t('models.autoHint')}</p>
                 </div>
-              )}
-            </div>
+                <div class="field-group">
+                  <label>{t('settings.contextWindow')}</label>
+                  <input
+                    class="input"
+                    type="number"
+                    min={0}
+                    value={ctxWindow}
+                    onInput={(e) => setCtxWindow(Number((e.target as HTMLInputElement).value) || 0)}
+                  />
+                  <p class="hint">{t('models.autoHint')}</p>
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field-group">
+                  <label>{t('models.thinking')}</label>
+                  <div class="segmented">
+                    {(['auto', 'on', 'off'] as const).map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        class={`seg${thinking === v ? ' on' : ''}`}
+                        onClick={() => setThinking(v)}
+                      >
+                        {t(`models.thinking.${v}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div class="field-group">
+                  <label>{t('models.thinkingBudget')}</label>
+                  <input
+                    class="input"
+                    type="number"
+                    min={0}
+                    value={thinkBudget}
+                    onInput={(e) => setThinkBudget(Number((e.target as HTMLInputElement).value) || 0)}
+                  />
+                  <p class="hint">{t('models.autoHint')}</p>
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field-group">
+                  <label>{t('settings.maxRetries')}</label>
+                  <input
+                    class="input"
+                    type="number"
+                    min={-1}
+                    value={maxRetries}
+                    onInput={(e) => setMaxRetries(Number((e.target as HTMLInputElement).value) || 0)}
+                  />
+                  <p class="hint">{t('settings.maxRetriesHelp')}</p>
+                </div>
+                <div class="field-group">
+                  <label class="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={noAuth}
+                      onChange={(e) => setNoAuth((e.target as HTMLInputElement).checked)}
+                    />{' '}
+                    {t('models.noAuth')}
+                  </label>
+                  <p class="hint">{t('models.noAuthHelp')}</p>
+                </div>
+              </div>
+              <div class="field-group">
+                <label>{t('models.params')}</label>
+                <input
+                  class="input mono"
+                  value={paramsJSON}
+                  onInput={(e) => setParamsJSON((e.target as HTMLInputElement).value)}
+                  placeholder='{"temperature":0.7}'
+                />
+                <p class="hint">{t('models.paramsHelp')}</p>
+              </div>
+              <div class="field-group">
+                <label>{t('models.headers')}</label>
+                <input
+                  class="input mono"
+                  value={headersJSON}
+                  onInput={(e) => setHeadersJSON((e.target as HTMLInputElement).value)}
+                  placeholder='{"X-Tenant":"blue"}'
+                />
+                <p class="hint">{t('models.headersHelp')}</p>
+              </div>
+            </details>
 
             {error && <p class="gate-error">{error}</p>}
             <div class="modal-actions">

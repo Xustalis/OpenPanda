@@ -855,7 +855,7 @@ type ModelConfig struct {
 	// of api_key, refreshing it transparently. Experimental — see
 	// `panda auth login`.
 	Auth          string `yaml:"auth,omitempty"`
-	Model         string `yaml:"model"`                    // e.g. deepseek-chat | gpt-4o-mini — fully user-defined
+	Model         string `yaml:"model"`                    // e.g. deepseek-flash | gpt-6.1-sol — fully user-defined
 	MaxTokens     int    `yaml:"max_tokens"`               // completion cap; 0 = provider/entry default
 	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
 	NoAuth        bool   `yaml:"no_auth,omitempty"`        // true for local models that need no API key

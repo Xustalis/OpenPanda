@@ -64,10 +64,14 @@ func buildOAIRequest(model string, maxTokens int, stream bool, msgs []oaiMessage
 	return req
 }
 
-// isOpenAIReasoningModel reports whether model requires max_completion_tokens (o1/o3/o4/gpt-4.5 series).
+// isOpenAIReasoningModel reports whether model requires max_completion_tokens
+// (o1/o3/o4, gpt-4.5 and the whole GPT-5/GPT-6 generation — OpenAI rejects the
+// legacy max_tokens field on them).
 func isOpenAIReasoningModel(model string) bool {
 	lower := strings.ToLower(model)
-	return strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") || strings.Contains(lower, "gpt-4.5")
+	return strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") ||
+		strings.HasPrefix(lower, "o4") || strings.Contains(lower, "gpt-4.5") ||
+		strings.HasPrefix(lower, "gpt-5") || strings.HasPrefix(lower, "gpt-6")
 }
 
 // applyThinking attaches the configured thinking mode to req in the dialect
