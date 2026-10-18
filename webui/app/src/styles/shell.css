@@ -9,7 +9,11 @@
   background: var(--bg);
 }
 
-/* ---- Sidebar ------------------------------------------------------------ */
+/* ---- Sidebar ------------------------------------------------------------
+   The rail's type runs one step up the scale from the rest of the chrome
+   (rows at --text-lg, their meta at --text-sm): it is a column of short
+   labels read at a glance and off to the side, and 13.5px made it the
+   smallest type in the product while being the most-scanned surface in it. */
 
 .sidebar {
   display: flex;
@@ -20,24 +24,13 @@
   border-right: 1px solid var(--border-soft);
   min-height: 0;
 }
-.wordmark-link {
-  display: flex;
-  align-items: center;
-  padding: 4px 10px;
-  margin-bottom: var(--sp-2);
-  border-radius: var(--radius-sm);
-}
-.wordmark-link:hover {
-  background: var(--bg-hover);
-  text-decoration: none;
-}
 .wordmark {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
 .wordmark-text {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 650;
   letter-spacing: -0.01em;
   color: var(--text);
@@ -53,36 +46,66 @@
   place-items: center;
 }
 
-.palette-trigger {
+/* ---- Sidebar head -------------------------------------------------------
+   The rail opens on one line: the name, and the two ambient actions that work
+   from any view (reminders, the ⌘K palette). Everything here is quiet — no
+   field, no border, no filled button — because the head is a label for the
+   column, and the column's job is to be scanned rather than read. */
+.sidebar-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 10px;
-  margin-bottom: var(--sp-2);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-soft);
-  background: var(--bg-inset);
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  gap: var(--sp-2);
+  /* The name's ink starts where the nav rows' labels start (the sidebar's own
+     12px padding + the rows' 10px), so the head sits on the rail's left edge
+     instead of floating inside a box of its own. */
+  padding-left: 10px;
 }
-.palette-trigger:hover {
-  border-color: var(--border-strong);
+.sidebar-workspace {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 0;
   color: var(--text-secondary);
+  /* 19px is 1.27× the rail's 15px rows: the name is the one label in the
+     column that is not a destination, and at 17px its capitals came out
+     visibly shorter than the CJK row labels right under it. */
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  /* The default 1.4 line box would make the head 37px tall and push 新对话
+     down with it; 1.2 keeps the pair at the 41px the reference spacing wants. */
+  line-height: 1.2;
+  transition: color var(--dur-fast) var(--ease);
 }
-.palette-trigger > span {
-  flex: 1;
-  text-align: left;
+.sidebar-workspace-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.palette-trigger svg {
-  width: 14px;
-  height: 14px;
-  flex: none;
+.sidebar-workspace b {
+  color: var(--accent);
+  font-weight: 600;
 }
-.palette-trigger kbd {
-  font-size: 10px;
-  padding: 0 5px;
+.sidebar-workspace:hover {
+  color: var(--text);
+}
+.sidebar-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* Pulled out by its own button padding so the last glyph lands on the
+     sidebar's 12px edge rather than 6px inside it. */
+  margin-left: auto;
+  margin-right: -6px;
+}
+/* Tertiary, not secondary: at 28px these two read as decoration next to the
+   17px name, and the hover is what tells you they are buttons at all. */
+.sidebar-head .icon-btn {
+  color: var(--text-tertiary);
+}
+.sidebar-head .icon-btn:hover:not(:disabled) {
+  color: var(--text);
 }
 
 .primary-nav {
@@ -92,16 +115,25 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* The rail scrolls with the wheel; the scrollbar itself is chrome on chrome
+     and reads as a crack down the sidebar. */
+  scrollbar-width: none;
+}
+.primary-nav::-webkit-scrollbar {
+  display: none;
 }
 .nav-item {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 7px 10px;
+  /* 6px, not 7: the rail's type runs a step larger than the rest of the chrome
+     (see the Sidebar note above), and this is what buys that back — the rows
+     land at the same 35px they had at the smaller size. */
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: var(--text-md);
+  font-size: var(--text-lg);
   font-weight: 450;
   text-align: left;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
@@ -136,13 +168,24 @@
   border-radius: var(--radius-pill);
   background: var(--semantic-warn-soft);
   color: var(--semantic-warn);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 650;
   text-align: center;
 }
 
+/* 新对话: the rail's one action that starts something rather than going
+   somewhere. It wears the nav row's clothes on purpose — same 15px label, same
+   6px padding, same hover wash — and is told apart by its glyph, not by a
+   border. A tinted, outlined block here was the loudest thing in a column of
+   quiet rows, and it fought the head above it for the eye. */
+.nav-new-chat {
+  /* The head and this row are one block; the nav below starts a section, so it
+     gets the extra 4px. */
+  margin-bottom: var(--sp-1);
+}
+
 .nav-group {
-  margin-top: var(--sp-3);
+  margin-top: var(--sp-2);
 }
 .nav-group-head {
   display: flex;
@@ -150,7 +193,7 @@
   gap: 6px;
   width: 100%;
   padding: 4px 10px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -182,7 +225,7 @@
   padding: 6px 10px;
   margin-bottom: 4px;
   border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   color: var(--text-secondary);
 }
 .sidebar-node .dot {
@@ -198,7 +241,7 @@
   box-shadow: none;
 }
 .sidebar-node .mono {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -268,6 +311,12 @@ a.sidebar-node:hover {
   .nav-group {
     display: contents;
   }
+  /* The head keeps its own row inside the strip: name on the left, the two
+     ambient buttons after it. `flex: none` because a shrinking item would
+     ellipsize the name to make room for the nav rows. */
+  .sidebar-head {
+    flex: none;
+  }
   .nav-group-head {
     display: none;
   }
@@ -275,7 +324,12 @@ a.sidebar-node:hover {
     width: auto;
     white-space: nowrap;
   }
-  .palette-trigger,
+  /* The top bar is a row of destinations; 新对话 rides along as one more
+     pill rather than a full-width block. */
+  .nav-new-chat {
+    width: auto;
+    margin-bottom: 0;
+  }
   .sidebar-node {
     display: none;
   }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useState } from 'preact/hooks'
-import { PandaAscii, PandaWordmark } from './brand/panda'
+import { PandaAscii } from './brand/panda'
 import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, subscribeEvents, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
 import { useAsync } from './hooks'
@@ -9,6 +9,7 @@ import { navigate, parseHash, primaryNavGroups, type Route } from './nav'
 import { QueueView } from './views/queue'
 import { DetailView } from './views/detail'
 import { SessionsView } from './views/sessions'
+import { SidebarHistory } from './views/sidebar-history'
 import { ProjectsView } from './views/projects'
 import { PlansView } from './views/plans'
 import { NodesView } from './views/nodes'
@@ -73,27 +74,59 @@ export function App() {
       <ConfirmHost />
       <PaletteHost onLogout={logout} />
       <aside class="sidebar">
-        <a href="#/chat" class="wordmark-link">
-          <PandaWordmark />
-        </a>
-        <button class="palette-trigger" onClick={openPalette}>
-          <span>{t('palette.trigger')}</span>
-          <kbd>{modKeyLabel()}K</kbd>
+        {/* One line of chrome at the head of the rail: the name (which is also
+            the way into the workspace list) and the one ambient action that
+            works from any view. No chevron after the name — the head is the
+            quietest thing in the column and the glyph only promised a menu
+            the name already opens; no bell either, since reminders live in
+            Settings and in ⌘K. The search field that used to live here is now
+            a magnifier: a bordered input plus a "Ctrl K" chip made the head
+            the heaviest thing in a column whose whole job is to be quiet
+            enough to scan. */}
+        <div class="sidebar-head">
+          <button
+            type="button"
+            class="sidebar-workspace"
+            title={t('nav.projects')}
+            onClick={() => navigate({ view: 'projects' })}
+          >
+            <span class="sidebar-workspace-name">
+              Open<b>Panda</b>
+            </span>
+          </button>
+          <div class="sidebar-head-actions">
+            <button
+              type="button"
+              class="icon-btn"
+              title={`${t('palette.trigger')} ${modKeyLabel()}K`}
+              aria-label={t('palette.trigger')}
+              onClick={openPalette}
+            >
+              <Icon name="search" />
+            </button>
+          </div>
+        </div>
+        {/* 新对话: an action, not a destination — but it reads as a nav row
+            (same 15px label, same hover wash) instead of a filled button, so
+            the head above it stays the only chrome in the column. Navigates
+            without minting a thread: the thread comes into being when the first
+            message leaves the composer, titled after it, so clicking twice
+            cannot litter the history with empty untitled sessions. */}
+        <button
+          type="button"
+          class="nav-item nav-new-chat"
+          onClick={() => navigate({ view: 'sessions', id: null })}
+        >
+          <Icon name="square-pen" />
+          {t('sessions.new')}
         </button>
 
         <nav class="primary-nav" aria-label={t('nav.aria')}>
           {primaryNavGroups.map((g) => (
-            <div class="nav-group" key={g.key}>
-              {/* A one-item group whose label duplicates its item ("节点网络 >
-                节点网络") reads as a stutter, not a section — paint the label
-                only when the group actually groups. */}
-              {g.items.length > 1 && <div class="nav-group-head">{t(g.key)}</div>}
+            <div class="nav-group" key={g.id}>
+              {g.head && <div class="nav-group-head">{t(g.head)}</div>}
               {g.items.map(([v, key]) => (
-                <a
-                  key={v}
-                  href={`#/${v === 'sessions' ? 'chat' : v}`}
-                  class={`nav-item${active === v ? ' active' : ''}`}
-                >
+                <a key={v} href={`#/${v}`} class={`nav-item${active === v ? ' active' : ''}`}>
                   {t(key)}
                   {v === 'queue' && reviewCount > 0 && (
                     <span
@@ -125,6 +158,15 @@ export function App() {
               ))}
             </div>
           ))}
+          {/* The rail's tail, not a row inside it. The history is what the rail
+              is for, and 对话 above it only named the list again — so the row
+              is gone and the list is always visible instead of folded. It
+              scrolls with the nav, so a long history never pushes the
+              destinations out of reach. */}
+          <SidebarHistory
+            activeId={route.view === 'sessions' ? route.id : null}
+            onOpenSession={(id) => navigate({ view: 'sessions', id: id || null })}
+          />
         </nav>
 
         <div class="sidebar-footer">
@@ -150,7 +192,6 @@ export function App() {
               navigate({ view: 'sessions', id: null, project: null })
             }}
             onOpenTask={(id) => navigate({ view: 'detail', id })}
-            onOpenNodes={() => navigate({ view: 'fleet' })}
             onLogout={logout}
           />
         )}

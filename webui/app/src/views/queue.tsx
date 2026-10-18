@@ -638,12 +638,26 @@ function KanbanCard({
         // a bare "awaiting approval" that used to cover all three.
         <div class="kanban-actions" onClick={(e) => e.stopPropagation()}>
           {task.approval_disposition && (
-            <span class="dim review-kind">{t(`detail.reviewKind.${task.approval_disposition}`)}</span>
+            <span
+              class="dim review-kind"
+              title={
+                task.approval_disposition === 'needs_changed_input'
+                  ? t('detail.needsChangedInputHint')
+                  : undefined
+              }
+            >
+              {t(`detail.reviewKind.${task.approval_disposition}`)}
+            </span>
           )}
           <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
           <button
             class="btn primary small"
             disabled={busy || task.approval_disposition === 'needs_changed_input'}
+            title={
+              task.approval_disposition === 'needs_changed_input'
+                ? t('detail.needsChangedInputHint')
+                : undefined
+            }
             onClick={() => act(() => api.approve(task.id, scope))}
           >
             {t('detail.approve')}

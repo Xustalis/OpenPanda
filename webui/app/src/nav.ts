@@ -17,26 +17,42 @@ export type Route =
   | { view: 'settings'; tab?: string | null }
   | { view: 'detail'; id: string }
 
+/** One section of the sidebar rail: an optional heading, then its rows. */
+export type NavGroup = {
+  /** Stable identity — the rail's React key. */
+  id: string
+  /** Heading rendered above the rows as a small uppercase label. Omitted for
+   *  the work group, which sits at the top of the rail where a "Work" label
+   *  would only label the first thing on screen. */
+  head?: string
+  items: Array<[view: string, key: string]>
+}
+
 /** The primary workspace views on the main sidebar rail, grouped the way the
- *  product reads: work first (threads → tasks → pipelines → workspaces),
- *  then the network that runs it (fleet), then what the agent knows
- *  (memory → skills). */
-export const primaryNavGroups: Array<{ key: string; items: Array<[view: string, key: string]> }> = [
+ *  product reads: work first (tasks → pipelines → workspaces), then the
+ *  network that runs it (fleet), then what the agent knows (memory → skills).
+ *
+ *  Two views are deliberately not rows here. 新对话 is an action, so it lives
+ *  with the search box above the nav. 对话 is not a row either: the thread
+ *  history is the tail of the rail (app.tsx), and a row whose only job was to
+ *  unfold a list that is now always visible just named the list again. */
+export const primaryNavGroups: NavGroup[] = [
   {
-    key: 'nav.group.work',
+    id: 'work',
     items: [
-      ['sessions', 'nav.sessions'],
       ['queue', 'nav.queue'],
       ['plans', 'nav.plans'],
       ['projects', 'nav.projects'],
     ],
   },
   {
-    key: 'nav.group.fleet',
+    id: 'fleet',
+    head: 'nav.group.fleet',
     items: [['fleet', 'nav.fleet']],
   },
   {
-    key: 'nav.group.knowledge',
+    id: 'knowledge',
+    head: 'nav.group.knowledge',
     items: [
       ['memory', 'nav.memory'],
       ['skills', 'nav.skills'],
@@ -49,8 +65,13 @@ export const primaryNav: Array<[view: string, key: string]> = primaryNavGroups.f
   (g) => g.items,
 )
 
-/** Palette views: includes primary workspaces plus direct jumps to settings sections. */
+/** Palette views: includes primary workspaces plus direct jumps to settings
+ *  sections. 对话 is listed here even though the rail has no row for it — the
+ *  palette is a jump list, and chat is still a destination (the rail reaches
+ *  it through the history and 新对话). Dropping it here too would leave ⌘K
+ *  with no way to reach the chat surface. */
 export const navViews: Array<[view: string, key: string]> = [
+  ['sessions', 'nav.sessions'],
   ...primaryNav,
   ['settings', 'nav.settings'],
 ]

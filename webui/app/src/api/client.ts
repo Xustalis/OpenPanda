@@ -70,6 +70,39 @@ if (typeof location !== 'undefined') {
 
 const unauthorizedListeners = new Set<() => void>()
 
+/** Multipart variant of request(): the browser sets the boundary, so no
+ *  Content-Type is set by hand. No retry — a streamed body cannot be re-read. */
+async function upload<T>(method: string, path: string, body: FormData): Promise<T> {
+  const headers: Record<string, string> = {}
+  const token = currentToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const res = await fetch(path, { method, headers, body })
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearToken()
+      unauthorizedListeners.forEach((fn) => fn())
+    }
+    const text = await res.text().catch(() => '')
+    throw new ApiError(res.status, text || res.statusText)
+  }
+  return (await res.json()) as T
+}
+
+export interface SessionUploadedFile {
+  name: string
+  /** Absolute — what /api/fs/read accepts. */
+  path: string
+  /** What the composer inserts: a work-path relative (or absolute) path the
+   *  fs endpoints resolve, computed by the server. */
+  mention: string
+  size: number
+}
+
+export interface SessionUploadResult {
+  files: SessionUploadedFile[]
+}
+
 export function onUnauthorized(fn: () => void): () => void {
   unauthorizedListeners.add(fn)
   return () => unauthorizedListeners.delete(fn)
@@ -1328,6 +1361,21 @@ export const api = {
     const q = path ? `?path=${encodeURIComponent(path)}` : ''
     return request('GET', `/api/fs/files${q}`)
   },
+
+  /** Ask the node to open `path` in the desktop's file manager. The panel
+   *  only accepts directories inside its owned roots — the same boundary
+   *  /api/fs/read enforces — so this cannot be used to browse the machine. */
+  revealPath(path: string): Promise<{ opened: string }> {
+    return request('POST', '/api/fs/reveal', { path })
+  },
+
+  /** Multipart upload into a session's uploads dir. Returns mention-ready
+   *  paths, so the composer inserts whatever the server computed. */
+  uploadSessionFiles(id: string, files: File[]): Promise<SessionUploadResult> {
+    const body = new FormData()
+    for (const f of files) body.append('file', f, f.name)
+    return upload('POST', `/api/sessions/${encodeURIComponent(id)}/upload`, body)
+  },
 }
 
 // ---- Multi-model registry wire types ----
@@ -1661,6 +1709,10 @@ export interface SessionTurn {
   /** Machine reason on an error-kind turn (e.g. "model_config") — the panel
    *  stamps it so a replayed transcript keeps the matching fix-it CTA. */
   code?: string
+  /** How long the turn took, stamped by the panel when it files the reply.
+   *  Absent on user turns and on transcripts written before the field
+   *  existed; the console then has no duration to show. */
+  duration_ms?: number
 }
 
 export interface SessionOperation {

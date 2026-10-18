@@ -6,13 +6,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
@@ -130,6 +135,7 @@ func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	if h.worktrees != nil {
 		_ = h.worktrees.Remove(r.Context(), id)
 	}
+	h.removeSessionUploads(id)
 	if err := h.sessions.Delete(id); err != nil {
 		writeErr(w, http.StatusNotFound, errors.New("no such session"))
 		return
@@ -223,6 +229,7 @@ func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
 		if h.worktrees != nil {
 			_ = h.worktrees.Remove(r.Context(), id)
 		}
+		h.removeSessionUploads(id)
 		if err := h.sessions.Delete(id); err != nil {
 			failed = append(failed, failure{ID: id, Error: err.Error()})
 			continue
@@ -614,12 +621,17 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The clock starts here rather than at the top of the handler: setup above
+	// (history replay, compaction) is not the turn, and a duration that
+	// included it would overstate a fast reply.
+	askStarted := time.Now()
 	out, err := eng.AskTurnsScoped(execCtx, history, req.Prompt, askengine.AskScope{
 		Project:   sess.Project,
 		WorkDir:   workDir,
 		SessionID: sess.ID,
 		Node:      req.Node,
 	}, req.Authorize, cb)
+	askDuration := time.Since(askStarted).Milliseconds()
 	if err != nil {
 		msg := err.Error()
 		status := core.StateFailed
@@ -639,7 +651,12 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			ID: op.operationID, Status: status, Error: msg,
 		})
 		send("error", map[string]string{"message": msg, "code": code})
-		_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "⚠ " + msg, Kind: "error", Code: code})
+		// The failed turn carries its duration too: "it died after 40 seconds"
+		// is the first thing you want to know about a timeout.
+		_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{
+			Role: "assistant", Text: "⚠ " + msg, Kind: "error", Code: code,
+			DurationMS: askDuration,
+		})
 		return
 	}
 
@@ -660,7 +677,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		_ = h.store.SetSessionID(context.WithoutCancel(r.Context()), out.TaskID, sess.ID)
 	}
 
-	turn := sessions.Turn{Role: "assistant", Kind: out.Kind}
+	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, DurationMS: askDuration}
 	switch out.Kind {
 	case "task":
 		// Queue mode: the turn records the dispatch (the finalizer folds the
@@ -693,5 +710,221 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// The reply already streamed; a failed bookkeeping write is not worth
 		// killing the stream over.
 		_ = err
+	}
+}
+
+// ---- Session uploads ----
+
+// Upload caps. One file is capped per part, and a session's uploads directory
+// is capped in total — the oldest files are dropped to make room, so a
+// thread's attachments cannot grow without bound.
+const (
+	maxUploadFileBytes  = 25 << 20  // 25 MiB per file
+	maxUploadTotalBytes = 128 << 20 // 128 MiB per session
+)
+
+// sessionUploadDir returns the directory a session's uploads live in,
+// creating it on demand. With a worktree it is <worktree>/.openpanda/uploads
+// — inside the worktree, so it rides the session's own lifecycle: deleting a
+// thread deletes its uploads with it, which is the per-session cleanup.
+// Without a worktree (a work path that is not a repository) it falls back to
+// a per-session directory under the work path, which the panel deletes with
+// the thread instead.
+func (h *handler) sessionUploadDir(sess *sessions.Session) (string, error) {
+	if sess.Worktree != "" {
+		dir := filepath.Join(sess.Worktree, ".openpanda", "uploads")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", err
+		}
+		return dir, nil
+	}
+	var workPath string
+	h.readCfg(func(c *config.Config) { workPath = c.Storage.WorkPath })
+	if workPath == "" {
+		return "", errors.New("session has no worktree and no work path")
+	}
+	dir := filepath.Join(workPath, ".openpanda", "uploads", sess.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// removeSessionUploads deletes a session's fallback uploads directory — the
+// non-repo case, where uploads would otherwise outlive the thread. The
+// worktree case is handled by removing the worktree itself.
+func (h *handler) removeSessionUploads(id string) {
+	var workPath string
+	h.readCfg(func(c *config.Config) { workPath = c.Storage.WorkPath })
+	if workPath == "" {
+		return
+	}
+	_ = os.RemoveAll(filepath.Join(workPath, ".openpanda", "uploads", id))
+}
+
+// uploadedFile is the wire form of one uploaded file in the response to
+// POST /api/sessions/{id}/upload.
+type uploadedFile struct {
+	Name string `json:"name"`
+	Path string `json:"path"` // absolute — what /api/fs/read accepts
+	// Mention is what the composer inserts: a path the fs endpoints resolve —
+	// work-path relative when the file sits inside it (the same shape the
+	// @file completion types), absolute otherwise.
+	Size    int64  `json:"size"`
+	Mention string `json:"mention"`
+}
+
+// uploadSessionFile serves POST /api/sessions/{id}/upload — multipart bodies
+// ("file" parts) saved into the session's uploads directory, then referenced
+// from the composer as @path the same way browsed files are.
+func (h *handler) uploadSessionFile(w http.ResponseWriter, r *http.Request) {
+	sess, err := h.sessions.Get(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	dir, err := h.sessionUploadDir(sess)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+
+	mr, err := r.MultipartReader()
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("multipart body required"))
+		return
+	}
+
+	var workPath string
+	h.readCfg(func(c *config.Config) { workPath = c.Storage.WorkPath })
+
+	out := []uploadedFile{}
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, errors.New("bad multipart body"))
+			return
+		}
+		if part.FormName() != "file" {
+			part.Close()
+			continue
+		}
+		name := filepath.Base(part.FileName())
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			part.Close()
+			continue
+		}
+		// A mention is one whitespace-delimited token, so the on-disk name
+		// must be too — and a leading dot would hide it from the fs listing.
+		name = strings.Map(func(r rune) rune {
+			if r == ' ' || r == '\t' {
+				return '_'
+			}
+			return r
+		}, name)
+		name = strings.TrimPrefix(name, ".")
+		if name == "" {
+			part.Close()
+			continue
+		}
+		// Timestamp prefix: two uploads of the same name must not overwrite
+		// each other mid-conversation.
+		stamped := fmt.Sprintf("%d-%s", time.Now().UnixMilli(), name)
+
+		dst, err := os.OpenFile(filepath.Join(dir, stamped), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("save failed"))
+			return
+		}
+		n, copyErr := io.Copy(dst, io.LimitReader(part, maxUploadFileBytes+1))
+		closeErr := dst.Close()
+		if copyErr != nil || closeErr != nil || n > maxUploadFileBytes {
+			_ = os.Remove(filepath.Join(dir, stamped))
+			if n > maxUploadFileBytes {
+				writeErr(w, http.StatusRequestEntityTooLarge,
+					fmt.Errorf("file exceeds %d MiB", maxUploadFileBytes>>20))
+			} else {
+				writeErr(w, http.StatusInternalServerError, errors.New("save failed"))
+			}
+			return
+		}
+		abs := filepath.Join(dir, stamped)
+		out = append(out, uploadedFile{
+			Name:    stamped,
+			Path:    abs,
+			Mention: h.uploadMention(workPath, abs),
+			Size:    n,
+		})
+	}
+	if len(out) == 0 {
+		writeErr(w, http.StatusBadRequest, errors.New("no file parts"))
+		return
+	}
+	h.trimSessionUploads(dir)
+	writeJSON(w, map[string]any{"files": out})
+}
+
+// uploadMention renders the path the composer inserts for an uploaded file:
+// work-path relative when the file sits inside it, absolute otherwise. Both
+// resolve through /api/fs/read, and a relative mention stays short.
+func (h *handler) uploadMention(workPath, abs string) string {
+	if workPath == "" {
+		return abs
+	}
+	rabs, err := filepath.Abs(workPath)
+	if err != nil {
+		return abs
+	}
+	if real, err := filepath.EvalSymlinks(rabs); err == nil {
+		rabs = real
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	}
+	rel, err := filepath.Rel(rabs, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return abs
+	}
+	return filepath.ToSlash(rel)
+}
+
+// trimSessionUploads keeps a session's uploads under its total budget by
+// dropping the oldest files first. Best-effort: a failed trim is not a failed
+// upload.
+func (h *handler) trimSessionUploads(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	type up struct {
+		name string
+		size int64
+		mod  time.Time
+	}
+	var files []up
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			files = append(files, up{e.Name(), info.Size(), info.ModTime()})
+			total += info.Size()
+		}
+	}
+	if total <= maxUploadTotalBytes {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
+	for _, f := range files {
+		if total <= maxUploadTotalBytes {
+			return
+		}
+		if os.Remove(filepath.Join(dir, f.name)) == nil {
+			total -= f.size
+		}
 	}
 }

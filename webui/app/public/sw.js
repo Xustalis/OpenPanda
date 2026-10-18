@@ -6,7 +6,7 @@
 // are never served), network-only for /api/* (live data behind auth).
 // Bumping CACHE retires old caches on activate via the whitelist sweep.
 
-const CACHE = 'openpanda-v2'
+const CACHE = 'openpanda-v3'
 const SHELL = ['/', '/favicon.svg', '/manifest.webmanifest']
 
 self.addEventListener('install', (e) => {

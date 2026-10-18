@@ -31,6 +31,31 @@
   flex-wrap: wrap;
 }
 
+/* A review parked as needs_changed_input disables Approve on purpose — the
+   same input cannot succeed — so this card carries the reason and the way
+   out. Without it the greyed-out button reads as a broken control. */
+.review-blocked {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-5);
+  background: var(--semantic-warn-soft);
+  border-color: var(--semantic-warn-border);
+}
+
+.review-blocked-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  font-size: var(--fs-sub);
+  line-height: var(--lh-default);
+}
+
+.review-blocked .detail-raw {
+  margin-top: 0;
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -733,23 +758,6 @@
 
 
 
-
-
-/* The mark is its own tile — a second background and border around it would
-   just be a box drawn on a box. */
-.msg.panda .msg-avatar {
-  background: none;
-  border: none;
-}
-
-
-
-.msg.user .msg-body {
-  background: var(--bg-raised);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius);
-  padding: 10px 14px;
-}
 
 
 /* ---- Settings ---- */
@@ -1712,8 +1720,16 @@
   overflow-x: hidden;
   padding-right: var(--sp-1);
   margin-right: calc(-1 * var(--sp-1));
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-soft) transparent;
+}
+
+/* Same split as the global rule in tokens.css: declaring the standard pair on
+   the element would disable the 6px webkit styling below in Chromium, so it is
+   kept for the engines that have no ::-webkit-scrollbar to style. */
+@supports not selector(::-webkit-scrollbar) {
+  .kanban-list {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-soft) transparent;
+  }
 }
 
 .kanban-list::-webkit-scrollbar {
@@ -1812,6 +1828,11 @@
   box-shadow: var(--shadow-xs);
   position: relative;
   overflow: hidden;
+  /* The list is a bounded flex column with overflow-y:auto. Without this the
+     cards are flex items with the default flex-shrink:1, so a full column
+     squeezes every card to ~72px instead of scrolling — and overflow:hidden
+     then eats the approval row, leaving an unusable card. */
+  flex: 0 0 auto;
   animation: card-in var(--dur-med) var(--ease-enter);
 }
 @keyframes card-in {
@@ -1964,6 +1985,18 @@
   gap: var(--sp-2);
   margin-top: var(--sp-1);
   align-items: center;
+  /* Wrapping is what keeps this row one line tall in a ~230px card: without
+     it the three controls fight for width, the disposition label is squeezed
+     to a few pixels and wraps into a 170px vertical ribbon of single CJK
+     glyphs — taller than the card, so the buttons get clipped away. */
+  flex-wrap: wrap;
+}
+
+/* The disposition line explains the whole row, so it takes its own line above
+   the controls instead of being squeezed between them. */
+.kanban-actions .review-kind {
+  flex: 1 1 100%;
+  line-height: var(--lh-default);
 }
 
 .review-kind {
@@ -2692,22 +2725,6 @@
   user-select: none;
 }
 
-/* — D8: chat-bubble 3px left-border lane. Bubbles no longer rely on
-   background alone to tell system/assistant/user apart:
-     user    → 3px var(--accent-1)
-     assistant → 3px var(--accent-2)
-     system  → 3px var(--text-tertiary) (grey meta-band)
-   The border-radius is asymmetric so the left side reads as a continuous
-   lane when bubbles stack. */
-
-
-.bubble.role-assistant,
-.bubble.role-panda {
-  border-left-color: var(--accent-2);
-  background: var(--accent-2-tint-xs);
-}
-
-
 /* Bubble content-slot rows. The three-row layout (D6):
      slot-title-row     phase chip + route meta (right-aligned score)
      slot-chat-row      primary copy / markdown payload
@@ -3027,12 +3044,12 @@
 }
 @keyframes orbit-flash {
   0% {
-    background: var(--accent-2-strong-soft);
+    background: var(--bg-active);
     transform: translateX(-2px);
-    box-shadow: inset 3px 0 0 var(--accent-2);
+    box-shadow: inset 3px 0 0 var(--border-strong);
   }
   60% {
-    background: var(--accent-2-tint-xs);
+    background: var(--bg-hover);
   }
   100% {
     background: transparent;
@@ -3051,8 +3068,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
+  /* The label is the bare digit now, so this is the 22px circle it was first
+     sized for. It stays a min-width rather than a width, and keeps nowrap and
+     flex:none: the head row would otherwise squeeze a one-glyph box, and a
+     locale that ever puts a word back in front of the number has to wrap into
+     this pill instead of spilling out of it (which is what the old "步骤 1"
+     label did to a fixed 22px circle). */
+  min-width: 22px;
   height: 22px;
+  padding: 0;
+  flex: none;
+  white-space: nowrap;
   border-radius: var(--radius-pill);
   font-family: var(--ff-mono, ui-monospace, monospace);
   color: var(--accent-ink);
@@ -3067,7 +3093,7 @@
   font-size: var(--fs-sub);
 }
 .orbit-step-skel {
-  color: var(--accent-2);
+  color: var(--text-tertiary);
   animation: orbit-skel-blink 600ms ease-in-out infinite;
 }
 @keyframes orbit-skel-blink {
@@ -3076,7 +3102,7 @@
 }
 .orbit-step-body {
   padding: var(--sp-3) var(--sp-4);
-  border-left: 2px solid var(--accent-2-border);
+  border-left: 2px solid var(--border);
   margin-left: 9px;
   font-size: var(--fs-small);
   color: var(--text-secondary);
@@ -3084,18 +3110,10 @@
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
   position: relative;
 }
-.orbit-step-body::before {
-  content: '';
-  position: absolute;
-  left: -7px;
-  top: var(--sp-3);
-  width: 12px;
-  height: 12px;
-  border-radius: var(--radius-pill);
-  background: var(--bg-raised);
-  border: 2px solid var(--accent-2);
-  box-shadow: 0 0 0 3px var(--accent-2-soft);
-}
+/* The node marker that used to sit on this border is gone: a 12px ring in
+   --accent-2 with a soft glow, which was the last saturated blue left in the
+   strip after the neutral pass. The step head already numbers and names the
+   step, so the ring only repeated it in a louder colour. */
 
 .orbit-classify-row {
   display: inline-flex;
@@ -3633,8 +3651,9 @@
   font-size: var(--fs-small);
 }
 
-/* Empty-state split-screen (D5): the 960px two-column rule lives in chat.css
-   next to .chat-empty — this sheet loads earlier and would lose the tie. */
+/* (The empty-state split-screen that used to be described here is gone:
+   chat.css now owns .chat-empty outright — one column, hero centred, with the
+   device network reduced to a single strip.) */
 
 
 
@@ -3658,16 +3677,6 @@ body {
 
 ::selection {
   background: rgba(var(--accent-1-rgb), 0.28);
-}
-
-:root {
-  scrollbar-color: var(--border-strong) transparent;
-}
-*::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-}
-*::-webkit-scrollbar-thumb:hover {
-  background: var(--text-tertiary);
 }
 
 /* ---- 排版：衬线标题层（去 AI 感：无渐变字、无装饰条） ---- */
@@ -3695,21 +3704,6 @@ body {
 .error-state-title {
   font-family: var(--font-display);
   letter-spacing: -0.01em;
-}
-
-.sidebar .wordmark {
-  padding: 4px 10px 18px;
-}
-
-/* The trigger reads as a raised field: whisper shadow, deeper on hover.
-   (Geometry/chrome live in shell.css — only the shadow survives here.) */
-.palette-trigger {
-  box-shadow: var(--shadow-xs);
-  transition: border-color var(--dur-fast) var(--ease-standard),
-              box-shadow var(--dur-fast) var(--ease-standard);
-}
-.palette-trigger:hover {
-  box-shadow: var(--shadow-sm);
 }
 
 /* ---- 按钮：去掉高光覆层，扁平 + 微浮起 ---- */
@@ -3769,11 +3763,6 @@ select.input {
 }
 .badge.blue {
   background: var(--accent-2-soft);
-}
-
-/* Panda 纯文本阅读（编辑感），用户消息用暖色圆角块托起。 */
-.bubble.role-panda {
-  padding: 2px 0;
 }
 
 /* ---- 浮层：命令面板 / 弹窗 / 通知 ---- */
@@ -4359,12 +4348,9 @@ pre,
 
 
 
-.project-scope-clear:hover {
-  color: var(--danger);
-}
-
-
-
+/* (The project-scope filter used to live here — picker, scope banner and its
+   clear button. The rail now groups history by working directory instead of
+   asking you to pick a filter, so the chrome that served it is gone.) */
 
 
 
@@ -4816,17 +4802,8 @@ pre,
   margin-bottom: var(--sp-5);
 }
 
-/* ---- Chat extras: cost chip + attachments ---- */
+/* ---- Chat extras: attachments ---- */
 
-.cost-chip {
-  text-decoration: none;
-  flex: none;
-}
-.cost-chip:hover {
-  border-color: var(--accent-border);
-  color: var(--accent);
-  text-decoration: none;
-}
 .msg-files {
   gap: 6px;
   flex-wrap: wrap;
@@ -5346,4 +5323,106 @@ pre,
   font-size: var(--fs-caption);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ============================================================================
+   Orchestration strip — neutral palette (2026-10-17 brief: 换掉蓝/绿/紫，
+   不要深色、不要鲜艳色). Scoped to .orbit so the queue board, the plans view
+   and the state badges everywhere else keep their hues. Everything here
+   resolves to the page's own grey ramp: --text-secondary for ink,
+   --bg-active for fills, --border for edges, --border-strong for the one
+   element that needs to read as "filled" (the progress bar).
+   The 待审批 pill keeps --warn: it is the one state that must pull the eye,
+   and it was not on the list.
+   ========================================================================== */
+.orbit svg { color: var(--text-secondary); }
+
+.orbit .orbit-step-no {
+  background: var(--bg-active);
+  color: var(--text-secondary);
+}
+.orbit .orbit-progress-fill { background: var(--border-strong); }
+.orbit .orbit-classify-kind { color: var(--text-secondary); }
+.orbit .orbit-route-line .bullet,
+.orbit .orbit-route-line .score { color: var(--text-secondary); }
+.orbit .orbit-route-line .score {
+  background: var(--bg-active);
+  border-color: var(--border);
+}
+.orbit .orbit-route-line.chosen {
+  border-color: var(--border-strong);
+  background: var(--bg-active);
+}
+.orbit .orbit-route-line.chosen::before { color: var(--text-secondary); }
+.orbit .orbit-exec-meta span::before { background: var(--text-tertiary); }
+.orbit .pill-plan,
+.orbit .pill-task,
+.orbit .pill-tool {
+  color: var(--text-secondary);
+  border-color: var(--border);
+  background: var(--bg-active);
+  box-shadow: var(--shadow-xs);
+}
+.orbit .badge-stage.done {
+  color: var(--text-secondary);
+  border-color: var(--border);
+  background: var(--bg-active);
+}
+.orbit .badge-stage .sym { color: inherit; }
+.orbit .orbit-action-btn,
+.orbit .orbit-action-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--border);
+  background: var(--bg-active);
+}
+.orbit .orbit-action-btn::before { content: none; }
+/* The running / queued state badge was the purple one (--semantic-info). */
+.orbit .badge.blue,
+.orbit .badge.state-running,
+.orbit .badge.state-queued {
+  color: var(--text-secondary);
+  border-color: var(--border);
+  background: var(--bg-active);
+}
+/* 追踪时间线（详情页下半部分）里剩下的蓝/紫：.field .mono 的路径 chip、
+   .pill-live 的运行中标记、type-pipeline 的节点圆点与 pipeline-chip。 */
+.orbit ~ * .field .mono,
+main .field .mono,
+main .pill-live {
+  color: var(--text-secondary);
+  background: var(--bg-active);
+  border-color: var(--border);
+}
+main .timeline-step-item.type-pipeline .step-marker { border-color: var(--border-strong); }
+main .pipeline-chip {
+  color: var(--text-secondary);
+  background: var(--bg-active);
+  border-color: var(--border);
+}
+.orbit .orbit-step-body { border-left-color: var(--border); }
+
+/* ----------------------------------------------------------------------------
+   Chat reply — neutral palette (2026-10-17 brief: 对话回复页面的紫色和蓝色也换掉).
+   The task card inside a reply carried the strip's old hues: a 3px --info bar
+   down its left edge, a state badge in --semantic-info over an --accent-2
+   wash, and the 查看任务 link picking up the global --accent-2 anchor colour.
+   Same brief, same ramp as the orbit above. The 待审批 strip keeps --warn: it
+   is the one state that must pull the eye, and amber is not on the list.
+   Scoped to .chat so the queue board, the kanban columns and the plans view
+   keep their hues.
+   -------------------------------------------------------------------------- */
+.chat .task-card { border-left-color: var(--border-strong); }
+.chat .badge.blue,
+.chat .badge.state-running,
+.chat .badge.state-queued {
+  color: var(--text-secondary);
+  border-color: var(--border);
+  background: var(--bg-active);
+}
+.chat .task-card > a {
+  color: var(--text-secondary);
+}
+.chat .task-card > a:hover {
+  color: var(--text);
+  text-decoration: underline;
 }

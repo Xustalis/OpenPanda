@@ -28,11 +28,12 @@ export function PandaMark({ size = 28 }: { size?: number }) {
       aria-hidden="true"
       class="panda-mark"
     >
-      {/* The field. `--accent` in both themes; the glyph rides on --accent-ink,
-          which is dark-on-light in dark mode and light-on-dark in light mode,
-          so contrast holds without a second set of tokens. */}
-      <rect width="64" height="64" rx="16" fill="var(--accent)" />
-      <g fill="var(--accent-ink)">
+      {/* The field. `--brand` in both themes — this mark and the wordmark are
+          the only places colour is still allowed. The glyph rides on
+          --brand-ink, which is dark-on-light in light mode and light-on-dark
+          in dark mode, so contrast holds without a second set of tokens. */}
+      <rect width="64" height="64" rx="16" fill="var(--brand)" />
+      <g fill="var(--brand-ink)">
         {/* ears, then a stadium head that swallows their lower halves */}
         <circle cx="21" cy="23" r="7.5" />
         <circle cx="43" cy="23" r="7.5" />
@@ -40,7 +41,7 @@ export function PandaMark({ size = 28 }: { size?: number }) {
       </g>
       {/* Eyes cut back out in the field colour — negative space instead of a
           third tone keeps the mark readable when it is 22 pixels wide. */}
-      <g fill="var(--accent)">
+      <g fill="var(--brand)">
         <circle cx="25" cy="38" r="3.4" />
         <circle cx="39" cy="38" r="3.4" />
       </g>

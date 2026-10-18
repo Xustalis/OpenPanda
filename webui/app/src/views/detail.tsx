@@ -123,6 +123,13 @@ export function DetailView({
   // spends a fresh round budget on finishing it, in the same agent session.
   const needsFollowup =
     task.state === 'review' && parseResult(task.result ?? '')?.needs_followup === true
+  // A needs_changed_input park carries its failure in the review event, not in
+  // result (no work was produced, so there is nothing to show there). Lift it
+  // out of the timeline: a disabled Approve with no visible cause reads as a
+  // broken button — the user clicks it, nothing happens, and the reason sits
+  // hundreds of pixels below the fold.
+  const blocked = task.state === 'review' && task.approval_disposition === 'needs_changed_input'
+  const parkReason = blocked ? reviewReason(task.events ?? []) : ''
 
   return (
     <section>
@@ -169,6 +176,7 @@ export function DetailView({
               <button
                 class="btn primary"
                 disabled={busy || task.approval_disposition === 'needs_changed_input'}
+                title={blocked ? t('detail.needsChangedInputHint') : undefined}
                 onClick={() => act(() => api.approve(task.id, scope), t('detail.approvedToast'))}
               >
                 {t('detail.approve')}
@@ -224,6 +232,20 @@ export function DetailView({
           )}
         </div>
       </div>
+
+      {blocked && (
+        // Why Approve cannot be clicked, and what to do instead. The button
+        // stays disabled on purpose (consent cannot fix a deterministic
+        // failure) — so the page owes the reader the failure itself, not just
+        // a greyed-out control.
+        <div class="card review-blocked">
+          <div class="review-blocked-head">
+            <span class="badge yellow">{t('detail.reviewKind.needs_changed_input')}</span>
+            <span class="dim">{t('detail.needsChangedInputHint')}</span>
+          </div>
+          {parkReason && <pre class="detail-raw detail-raw-capped">{parkReason}</pre>}
+        </div>
+      )}
 
       {cancellable && (
         // Send into the task while it runs: queue leaves the round alone
@@ -542,6 +564,19 @@ function parseResult(raw: string): Record<string, unknown> | null {
 
 function text(v: unknown): string {
   return typeof v === 'string' ? v : ''
+}
+
+/** The failure that parked a task in review: the newest review event carrying
+ *  a `reason`. Rejections log `rejected` instead and are skipped, so a task
+ *  that was rejected once and parked again still shows the live reason. */
+function reviewReason(events: { type: string; data?: string }[]): string {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i]
+    if (!ev || ev.type !== 'review') continue
+    const r = text(parseResult(ev.data ?? '')?.reason)
+    if (r) return r
+  }
+  return ''
 }
 
 function fmt(iso: string): string {

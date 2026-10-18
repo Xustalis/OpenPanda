@@ -1,45 +1,54 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 
 /* Design tokens — one source of truth for colour, space, radius, elevation.
-   Light-first: warm paper neutrals (Kimi restraint × Claude paper × Apple
-   hairline separation). `[data-theme='dark']` (or auto + dark OS) keeps the
-   warm-ink scheme as the alternative. Nothing below this file may re-declare
-   a bare `:root` colour block — theme forks live here and only here. */
+   Light-first: neutral paper (bright white content on grey-white chrome,
+   Apple hairline separation). `[data-theme='dark']` (or auto + dark OS) keeps
+   the alternative. Nothing below this file may
+   re-declare a bare `:root` colour block — theme forks live here and only
+   here. */
 
 :root {
   color-scheme: light;
 
-  /* — Surfaces. Warm paper under bone chrome; cards float on hairline +
-     whisper shadow. Page < chrome < raised < overlay < inset wells. */
-  --bg: #f5f3ec;             /* warm paper */
-  --bg-chrome: #ede9dd;      /* side rails, headers */
-  --bg-raised: #fcfbf7;      /* cards */
+  /* — Surfaces. Two neutral tiers: bright white where words are read, grey
+     white for the chrome around them. The warm paper cast is gone. Page <
+     chrome < raised < overlay < inset wells. */
+  --bg: #ffffff;             /* bright white: the reading surface */
+  --bg-chrome: #f5f5f6;      /* grey-white: side rails, headers */
+  --bg-raised: #ffffff;      /* cards float on a hairline */
   --bg-overlay: #ffffff;     /* menus, sheets */
-  --bg-inset: #eae6d9;       /* wells, code surfaces, sunken fields */
-  --bg-hover: #e7e2d4;
-  --bg-active: rgba(74, 63, 42, 0.1);
+  --bg-inset: #eeeeef;       /* wells, code surfaces, sunken fields */
+  --bg-hover: #eaeaec;
+  --bg-active: rgba(28, 28, 32, 0.08);
 
-  /* — Hairlines: warm-tinted so edges read soft, not sterile. */
-  --border: #ddd6c4;
-  --border-soft: #e6e0d0;
-  --border-strong: #c9c1ac;
+  /* — Hairlines: neutral, so edges read engineered rather than warm. */
+  --border: #d8d8dd;
+  --border-soft: #eaeaee;
+  --border-strong: #c2c2c8;
 
-  /* — Text tiers: warm ink ramp. */
-  --text: #262219;
+  /* — Text tiers: neutral ink ramp. */
+  --text: #1b1b1e;
   --text-primary: var(--text);
-  --text-secondary: #6e6757;
-  --text-tertiary: #9b937f;
-  --text-disabled: #c4bda9;
+  --text-secondary: #5c5c63;
+  --text-tertiary: #8e8e95;
+  --text-disabled: #c3c3c9;
   --text-dim: var(--text-secondary);
 
-  /* — Accent: bamboo green, deepened so it survives on paper. -ink is text
-     on a filled accent. */
-  --accent: #0c7a55;
-  --accent-strong: #0a6849;
+  /* — Brand: the only hue left. Green is reserved for the panda mark, the
+     "Panda" in the wordmark, and the gate-screen letters — nothing else. */
+  --brand: #0c7a55;
+  --brand-ink: #ffffff;
+
+  /* — Accent: ink, not a hue. A primary button is a dark block, a focused
+     field is a deeper border, an active row is ink — the page reads as paper
+     with writing on it rather than paper with stickers on it. -ink is text on
+     a filled accent. */
+  --accent: #2f2b22;
+  --accent-strong: #191610;
   --accent-ink: #ffffff;
-  --accent-soft: rgba(12, 122, 85, 0.1);
-  --accent-border: rgba(12, 122, 85, 0.32);
-  --accent-1: #0c7a55;
+  --accent-soft: rgba(47, 43, 34, 0.07);
+  --accent-border: rgba(47, 43, 34, 0.24);
+  --accent-1: #2f2b22;
   --accent-2: #2f6ca0;
   --accent-2-soft: rgba(47, 108, 160, 0.09);
   --accent-2-border: rgba(47, 108, 160, 0.32);
@@ -76,13 +85,13 @@
   --radius-pill: 999px;
   --radius: var(--radius-md);
 
-  /* — Elevation: warm-brown shadows fall onto paper instead of floating. */
-  --shadow-xs: 0 1px 2px rgba(74, 63, 42, 0.06);
-  --shadow-sm: 0 1px 2px rgba(74, 63, 42, 0.05), 0 4px 12px rgba(74, 63, 42, 0.07);
-  --shadow-md: 0 2px 4px rgba(74, 63, 42, 0.05), 0 10px 28px rgba(74, 63, 42, 0.09);
-  --shadow-lg: 0 4px 8px rgba(74, 63, 42, 0.06), 0 18px 44px rgba(74, 63, 42, 0.12);
-  --shadow-xl: 0 8px 16px rgba(74, 63, 42, 0.08), 0 28px 64px rgba(74, 63, 42, 0.16);
-  --shadow-accent: 0 1px 2px rgba(12, 122, 85, 0.14), 0 4px 16px rgba(12, 122, 85, 0.18);
+  /* — Elevation: neutral shadows sit on white instead of floating. */
+  --shadow-xs: 0 1px 2px rgba(28, 28, 32, 0.06);
+  --shadow-sm: 0 1px 2px rgba(28, 28, 32, 0.05), 0 4px 12px rgba(28, 28, 32, 0.07);
+  --shadow-md: 0 2px 4px rgba(28, 28, 32, 0.05), 0 10px 28px rgba(28, 28, 32, 0.09);
+  --shadow-lg: 0 4px 8px rgba(28, 28, 32, 0.06), 0 18px 44px rgba(28, 28, 32, 0.12);
+  --shadow-xl: 0 8px 16px rgba(28, 28, 32, 0.08), 0 28px 64px rgba(28, 28, 32, 0.16);
+  --shadow-accent: 0 1px 2px rgba(47, 43, 34, 0.14), 0 4px 16px rgba(47, 43, 34, 0.18);
   /* Glows are intentionally inert: ambient colour bloom is the one effect
      that reads as decoration rather than structure, so the tokens resolve
      to a zero-blur transparent shadow at every call site that still names
@@ -92,15 +101,15 @@
   --shadow: var(--shadow-md);
 
   /* — Scrims + alpha surfaces for overlays. */
-  --backdrop: rgba(52, 44, 30, 0.32);
-  --backdrop-darker: rgba(52, 44, 30, 0.46);
-  --surface-alpha-xs: rgba(74, 63, 42, 0.02);
-  --surface-alpha-sm: rgba(74, 63, 42, 0.035);
-  --surface-alpha-md: rgba(74, 63, 42, 0.06);
-  --surface-alpha-lg: rgba(74, 63, 42, 0.1);
+  --backdrop: rgba(24, 24, 28, 0.32);
+  --backdrop-darker: rgba(24, 24, 28, 0.46);
+  --surface-alpha-xs: rgba(28, 28, 32, 0.02);
+  --surface-alpha-sm: rgba(28, 28, 32, 0.035);
+  --surface-alpha-md: rgba(28, 28, 32, 0.06);
+  --surface-alpha-lg: rgba(28, 28, 32, 0.1);
 
   /* — Focus ring. */
-  --ring: 0 0 0 2px var(--bg-raised), 0 0 0 4px rgba(12, 122, 85, 0.35);
+  --ring: 0 0 0 2px var(--bg-raised), 0 0 0 4px rgba(28, 28, 32, 0.28);
 
   /* — 8px-base spacing grid. */
   --sp-1: 4px;
@@ -137,8 +146,17 @@
   --ease: cubic-bezier(0.25, 0.6, 0.3, 1);
 
   /* — Shell metrics. Session rail + inspector flank a max-readable column. */
-  --sidebar-w: 268px;
-  --rail-w: 288px;
+  /* App chrome rail. 280px, not 224: the history rows now put the title and
+     its timestamp on one line, so the rail has to carry both. The longest
+     title worth reading unclipped (9 CJK glyphs, ~120px) plus "56分钟前"
+     needs ~269px once the row's own padding and the pin/delete slots are
+     counted — which is exactly what the old two-line rows bought with 56
+     fewer pixels. Still well under a quarter of a 1440px transcript. */
+  --sidebar-w: 280px;
+  /* Chat's session rail. Kept narrow on purpose: every pixel it costs is a
+     pixel the transcript and the hero do not get, and the rail's rows are two
+     lines — they read fine at this width. */
+  --rail-w: 244px;
   --inspector-w: 340px;
   --content-max: 860px;
 }
@@ -167,6 +185,8 @@
   --text-tertiary: #7a7a7a;
   --text-disabled: #4d4d4d;
 
+  --brand: #5fd0a0;
+  --brand-ink: #06231a;
   --accent: #ededed;
   --accent-strong: #ffffff;
   --accent-ink: #0d0d0d;
@@ -216,6 +236,7 @@
   --surface-alpha-lg: rgba(255, 255, 255, 0.12);
 
   --ring: 0 0 0 2px var(--bg), 0 0 0 4px rgba(255, 255, 255, 0.4);
+
 }
 
 /* Auto = follow the OS; only dark needs an override now (light is :root). */
@@ -237,6 +258,8 @@
     --text-secondary: #a3a3a3;
     --text-tertiary: #7a7a7a;
     --text-disabled: #4d4d4d;
+    --brand: #5fd0a0;
+    --brand-ink: #06231a;
     --accent: #ededed;
     --accent-strong: #ffffff;
     --accent-ink: #0d0d0d;
@@ -281,6 +304,7 @@
     --surface-alpha-md: rgba(255, 255, 255, 0.08);
     --surface-alpha-lg: rgba(255, 255, 255, 0.12);
     --ring: 0 0 0 2px var(--bg), 0 0 0 4px rgba(255, 255, 255, 0.4);
+
   }
 }
 
@@ -300,7 +324,7 @@
   --bg-soft: var(--bg-chrome);
   --bg-surface: var(--bg-raised);
 
-  --accent-1-rgb: 12, 122, 85;
+  --accent-1-rgb: 47, 43, 34;
   --accent-1-tint-xs: rgba(var(--accent-1-rgb), 0.06);
   --accent-2-tint-xs: rgba(47, 108, 160, 0.05);
   --accent-2-tint-md: rgba(47, 108, 160, 0.1);
@@ -352,6 +376,8 @@
   --accent-2-glow: rgba(124, 184, 245, 0.08);
   --semantic-warn-strong-soft: rgba(227, 179, 65, 0.14);
   --semantic-danger-strong-border: rgba(255, 123, 114, 0.55);
+  /* Carried-view hairlines: tints of the page's white ink, so a rule reads
+     as a lighter surface rather than a drawn line. */
   --hairline-xs: rgba(255, 255, 255, 0.04);
   --hairline-sm: rgba(255, 255, 255, 0.06);
   --hairline-md: rgba(255, 255, 255, 0.09);
@@ -371,6 +397,8 @@
     --accent-2-glow: rgba(124, 184, 245, 0.08);
     --semantic-warn-strong-soft: rgba(227, 179, 65, 0.14);
     --semantic-danger-strong-border: rgba(255, 123, 114, 0.55);
+    /* Carried-view hairlines: tints of the page's white ink, so a rule reads
+       as a lighter surface rather than a drawn line. */
     --hairline-xs: rgba(255, 255, 255, 0.04);
     --hairline-sm: rgba(255, 255, 255, 0.06);
     --hairline-md: rgba(255, 255, 255, 0.09);
@@ -382,10 +410,18 @@
   }
 }
 
-/* Thin scrollbars everywhere. */
-:root {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+/* Thin scrollbars everywhere. Firefox's only lever is the standard pair, but
+   in Chromium declaring either of them *disables* ::-webkit-scrollbar — and
+   the webkit path is the one that can draw a 4px rounded thumb on a
+   transparent track. Setting both everywhere therefore bought the worst of
+   both: a 15px native scrollbar, arrow buttons and all, painted in
+   --border-strong down the side of the transcript. Each engine gets its own
+   lever instead: the standard pair only where ::-webkit-scrollbar is unknown. */
+@supports not selector(::-webkit-scrollbar) {
+  :root {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
 }
 ::-webkit-scrollbar {
   width: 8px;

@@ -8,6 +8,9 @@ import {
   expandFileRefs,
   exportMarkdown,
   exportFilename,
+  isBinaryRef,
+  isImageFile,
+  withAttachments,
 } from './attach.ts'
 import { setLocale } from '../i18n/index.ts'
 
@@ -66,6 +69,60 @@ test('expandFileRefs marks truncated reads', async () => {
   const r = async () => ({ content: 'body', truncated: true })
   const { prompt } = await expandFileRefs('@big.txt', r)
   assert.match(prompt, /body\n… \(truncated\)\n```/)
+})
+
+test('isImageFile trusts the declared type, then the extension', () => {
+  assert.equal(isImageFile({ type: 'image/png', name: 'shot' }), true)
+  assert.equal(isImageFile({ type: 'IMAGE/PNG', name: 'shot' }), true)
+  assert.equal(isImageFile({ type: '', name: 'shot.PNG' }), true)
+  assert.equal(isImageFile({ name: 'diagram.jpeg' }), true)
+  assert.equal(isImageFile({ type: 'text/plain', name: 'shot.png' }), false)
+  assert.equal(isImageFile({ type: '', name: 'main.go' }), false)
+  assert.equal(isImageFile({}), false)
+})
+
+test('isBinaryRef covers images, archives and media, not source', () => {
+  assert.equal(isBinaryRef('.openpanda/uploads/1-shot.png'), true)
+  assert.equal(isBinaryRef('dist/app.zip'), true)
+  assert.equal(isBinaryRef('clip.mov'), true)
+  assert.equal(isBinaryRef('fonts/ui.woff2'), true)
+  assert.equal(isBinaryRef('src/main.go'), false)
+  assert.equal(isBinaryRef('notes.md'), false)
+  assert.equal(isBinaryRef('noext'), false)
+  // SVG previews as an image in the tray but is markup underneath, so it is
+  // inlined like any other text file — the source is more use than a path.
+  assert.equal(isBinaryRef('assets/logo.SVG'), false)
+})
+
+test('expandFileRefs leaves a binary ref as a path instead of inlining bytes', async () => {
+  // /api/fs/read hands back raw bytes as a string, so a fenced block around a
+  // PNG would paste mojibake into the model's context. It still counts as an
+  // attachment, so the bubble can show it.
+  const r = async () => ({ content: '\u0089PNG\r\n\u001a\n' })
+  const { prompt, attached } = await expandFileRefs('look at @shot.png', r)
+  assert.deepEqual(attached, ['shot.png'])
+  assert.equal(prompt, 'look at @shot.png')
+})
+
+test('withAttachments appends a readable block and dedupes', () => {
+  assert.equal(withAttachments('hi', []), 'hi')
+  assert.equal(withAttachments('hi', ['', '']), 'hi')
+  const out = withAttachments('hi', ['a.png', 'a.png', 'b.go'])
+  assert.match(out, /^hi\n\nAttached files \(read them from the workspace\):\n- @a\.png\n- @b\.go$/)
+  // Tray-only send: no words typed, so the block is the whole prompt.
+  assert.match(withAttachments('  ', ['a.png']), /^Attached files/)
+})
+
+test('withAttachments output is recognised by expandFileRefs', async () => {
+  // The two must agree, or an attached file silently never reaches the model.
+  const prompt = withAttachments('summarise this', ['up/1-notes.md'])
+  const seen: string[] = []
+  const { attached } = await expandFileRefs(prompt, async (p) => {
+    seen.push(p)
+    return { content: 'x' }
+  })
+  assert.deepEqual(seen, ['up/1-notes.md'])
+  assert.deepEqual(attached, ['up/1-notes.md'])
 })
 
 test('exportMarkdown renders roles and thought details', () => {
