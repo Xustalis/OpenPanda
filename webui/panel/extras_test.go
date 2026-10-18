@@ -4,6 +4,7 @@ package panel
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -185,5 +186,78 @@ func TestFsFilesConfined(t *testing.T) {
 	code, _ = doJSON(t, h, authedReq(http.MethodGet, "/api/fs/files?path="+t.TempDir(), nil))
 	if code != http.StatusForbidden {
 		t.Fatalf("outside list status = %d", code)
+	}
+}
+
+func TestFsRevealOpensAllowedDir(t *testing.T) {
+	h, tmp, _ := newFsPanel(t)
+
+	var got string
+	orig := openInFileManager
+	openInFileManager = func(dir string) error {
+		got = dir
+		return nil
+	}
+	t.Cleanup(func() { openInFileManager = orig })
+
+	inside := filepath.Join(tmp, "work")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]string{"path": inside})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/fs/reveal", string(body)))
+	if code != http.StatusOK {
+		t.Fatalf("reveal status = %d", code)
+	}
+	// The handler reports the resolved path; TempDir may itself be a symlink
+	// on some platforms, so compare against the resolved form.
+	want, err := filepath.EvalSymlinks(inside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("opened %q, want %q", got, want)
+	}
+	if out["opened"] != got {
+		t.Fatalf("response opened = %v, want %q", out["opened"], got)
+	}
+
+	// Outside the owned roots the desktop shell is never invoked.
+	got = ""
+	body, err = json.Marshal(map[string]string{"path": t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _ = doJSON(t, h, jsonReq(http.MethodPost, "/api/fs/reveal", string(body)))
+	if code != http.StatusForbidden {
+		t.Fatalf("outside reveal status = %d", code)
+	}
+	if got != "" {
+		t.Fatalf("outside reveal opened %q", got)
+	}
+
+	// A path that is not a directory, and an empty one, are refused before
+	// the shell is touched.
+	file := filepath.Join(tmp, "note.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body, err = json.Marshal(map[string]string{"path": file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _ = doJSON(t, h, jsonReq(http.MethodPost, "/api/fs/reveal", string(body)))
+	if code != http.StatusNotFound {
+		t.Fatalf("file reveal status = %d", code)
+	}
+	code, _ = doJSON(t, h, jsonReq(http.MethodPost, "/api/fs/reveal", `{"path":"  "}`))
+	if code != http.StatusBadRequest {
+		t.Fatalf("empty reveal status = %d", code)
+	}
+	if got != "" {
+		t.Fatalf("refused reveal still opened %q", got)
 	}
 }

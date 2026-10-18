@@ -39,11 +39,47 @@ export interface FsReadResult {
   truncated?: boolean
 }
 
+/** Which tray tile a file gets: images preview their own pixels, everything
+ *  else gets an icon and its name. The declared type is what a paste and a
+ *  drop give us; the extension is the fallback, because a drag out of a file
+ *  manager can arrive with an empty type. */
+export function isImageFile(file: { type?: string; name?: string }): boolean {
+  const type = (file.type ?? '').toLowerCase()
+  if (type) return type.startsWith('image/')
+  return /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/.test((file.name ?? '').toLowerCase())
+}
+
+/** Extensions whose bytes must never be inlined into a prompt. A ref to one of
+ *  these stays a bare path for the agent to open itself: `/api/fs/read` hands
+ *  back raw bytes as a string, so a fenced block around a PNG would paste the
+ *  image's own binary into the model's context as mojibake.
+ *
+ *  SVG is deliberately absent: it previews as an image in the tray, but it is
+ *  markup underneath, and the source is more use to the agent than a path. */
+const BINARY_EXT =
+  /\.(png|jpe?g|gif|webp|bmp|avif|ico|icns|tiff?|pdf|zip|gz|tgz|bz2|xz|7z|rar|tar|mp[34]|m4a|wav|ogg|flac|mov|avi|mkv|webm|woff2?|ttf|otf|eot|exe|dll|so|dylib|bin|class|jar|wasm|db|sqlite3?|parquet|onnx|pt|safetensors)$/i
+
+/** True for a path whose content is bytes, not text. */
+export function isBinaryRef(path: string): boolean {
+  return BINARY_EXT.test(path)
+}
+
+/** Fold the composer tray's uploads into the prompt. Each one rides as an
+ *  `@path` token so `expandFileRefs` sees it — text files then arrive as
+ *  fenced blocks, and binary ones stay paths for the agent to open. */
+export function withAttachments(text: string, mentions: string[]): string {
+  const uniq = [...new Set(mentions.filter(Boolean))]
+  if (uniq.length === 0) return text
+  const block = ['', '', 'Attached files (read them from the workspace):', ...uniq.map((m) => `- @${m}`)].join('\n')
+  const body = text.trim()
+  return body ? body + block : block.trimStart()
+}
+
 /** Expand every `@path` token via `read` into fenced blocks appended after
  *  the prompt — the same transformation the REPL applies before the prompt
  *  leaves the CLI. Unresolvable tokens (emails, decorators) pass through
  *  untouched, matching TUI behavior, and a path mentioned twice expands
- *  once. */
+ *  once. Binary refs are listed as attachments but not inlined. */
 export async function expandFileRefs(
   text: string,
   read: (path: string) => Promise<FsReadResult>,
@@ -59,6 +95,7 @@ export async function expandFileRefs(
       const f = await read(raw)
       seen.add(raw)
       attached.push(raw)
+      if (isBinaryRef(raw)) continue
       const body = (f.content ?? '').replace(/\n+$/, '') + (f.truncated ? '\n… (truncated)' : '')
       blocks.push(`\`${raw}\`:\n\`\`\`${fenceLang(raw)}\n${body}\n\`\`\``)
     } catch {

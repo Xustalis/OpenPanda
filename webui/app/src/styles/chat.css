@@ -5,74 +5,12 @@
 
 .chat {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   height: 100%;
 }
 
-/* ---- Thread rail --------------------------------------------------------- */
-
-.thread-rail {
-  display: flex;
-  flex-direction: column;
-  width: var(--rail-w);
-  border-right: 1px solid var(--border-soft);
-  background: var(--bg-chrome);
-  min-height: 0;
-  padding: var(--sp-3);
-  gap: var(--sp-2);
-}
-.thread-rail-project-picker {
-  margin-bottom: var(--sp-1);
-}
-.thread-project-select {
-  font-size: var(--text-sm);
-  padding: 6px 28px 6px 10px;
-  width: 100%;
-  background: var(--bg-inset);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-}
-.project-scope-banner {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  margin-bottom: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-border);
-  font-size: var(--text-sm);
-  justify-content: space-between;
-}
-.project-scope-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--accent);
-  font-weight: 500;
-}
-.project-scope-clear {
-  width: 22px;
-  height: 22px;
-  background: none;
-  border: none;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  padding: 0 4px;
-  font-size: var(--text-xs);
-}
-.thread-new {
-  width: 100%;
-  justify-content: flex-start;
-  border-radius: 10px;
-  background: var(--bg-raised);
-  box-shadow: var(--shadow-xs);
-}
 .thread-list {
   flex: 1;
   min-height: 0;
@@ -85,20 +23,299 @@
 }
 .thread-empty {
   color: var(--text-tertiary);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   text-align: center;
   padding: var(--sp-6) var(--sp-2);
+}
+/* History grouped by working directory: the directory is a label, not a
+   filter, so grouping reads at a glance where a picker made you remember
+   what you were looking for. Group order follows the newest thread inside. */
+.thread-group + .thread-group {
+  margin-top: var(--sp-3);
+}
+.thread-group-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  /* A <button>, so the fold is reachable by keyboard and announced as a
+     toggle (aria-expanded at the call site) with no key handling here. It
+     carries no caret on purpose — the header is the control, and the label
+     is the only thing worth showing in a 280px rail. */
+  width: 100%;
+  padding: 7px var(--sp-2) 3px;
+  /* --text-md, not --text-sm: at 12.5px the directory name sat in the meta
+     tier alongside the timestamps under it, which is the wrong hierarchy for
+     the one label that says what the rows below belong to. One step up, and
+     still short of the 15px the nav items use so the header does not read as
+     a nav row. */
+  font-size: var(--text-md);
+  /* 600 in the primary ink, not 500 in the tertiary grey. The directory a
+     thread belongs to is a heading over its sessions, not a caption under
+     them; at the tertiary tone the folder glyph and the name read as
+     decoration, and the rail lost the only structural landmark it has. The
+     icon is currentColor, so this one declaration carries both. */
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-align: left;
+  color: var(--text);
+  /* Rounds the hover wash below into the same pill the thread rows use. */
+  border-radius: var(--radius-sm);
+}
+/* A wash, not a colour shift. The ink is the primary tone now, so there is
+   nothing darker to move to on hover — and the thread rows directly beneath
+   already answer a pointer with --bg-hover, so this matches them. */
+.thread-group-head:hover {
+  background: var(--bg-hover);
+}
+/* The directory name ellipsises: a deep path must not push the header wider
+   than the rail. */
+.thread-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The conversation history, living inside the sidebar under 对话. It reuses
+   the rail's row classes; what changes is the wrapper: full sidebar width, no
+   border, and the list grows the nav (which scrolls) instead of owning a pane
+   — so unfolding it pushes the nav items below it down and out of view until
+   it is folded again. */
+/* The history is the rail's tail: it sits under the last nav group, not
+   inside one. The top margin is what stops it reading as a member of the
+   group above it (the nav only puts 2px between siblings). */
+.sidebar-history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  padding: 2px 0 var(--sp-2);
+}
+.sidebar-history .thread-list {
+  flex: none;
+  overflow: visible;
+  margin: 0;
+  padding: 0;
+}
+/* Tighter than the generic header and not sticky: these headers sit inside
+   the list they fold, rather than above a pane that scrolls under them. */
+.sidebar-history .thread-group-head {
+  padding: 6px 2px 3px;
+}
+/* ---- Directory header: fold control + "…" --------------------------------
+   The header used to be the whole row. It now shares the row with a menu
+   trigger, so it gives up its 100% width and lets the label ellipsise into
+   whatever is left — the trigger keeps a fixed 22px slot instead of drifting
+   left or right depending on how deep the directory name runs. */
+.thread-group-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.thread-group-row .thread-group-head {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+.thread-group-menu {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  /* Hover-only: the header's one line belongs to the directory name, and a
+     permanent "…" on every group turns a list of names into a list of
+     controls. It still answers the keyboard (focus-visible) and stays up
+     while its own menu is open, so nothing becomes unreachable. */
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+/* Touch has no hover to reveal it, so there it is always on. */
+@media (hover: none) {
+  .thread-group-menu {
+    opacity: 0.55;
+  }
+}
+.thread-group-row:hover .thread-group-menu,
+.thread-group-menu:focus-visible,
+.thread-group-menu.open {
+  opacity: 1;
+}
+.thread-group-menu:hover,
+.thread-group-menu.open {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* The popover is fixed-positioned by the call site: the nav column scrolls
+   and clips, so anything painted inside the row would be cut off. */
+.thread-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 176px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: thread-menu-in var(--dur-fast) var(--ease-enter);
+}
+@keyframes thread-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.thread-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  text-align: left;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.thread-menu-item svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.thread-menu-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.thread-menu-item:hover:not(:disabled) svg {
+  color: var(--text);
+}
+.thread-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.thread-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ---- Batch select --------------------------------------------------------
+   The mode has no bar of its own. Its switch is the header trigger it was
+   opened from — "…" becomes a cross while that directory is being edited, and
+   the cross is the way out. Select-all and delete belong to the directory they
+   act on, so they render under its header — see .thread-group-actions. */
+/* Always visible: a mode whose exit only appears on hover is a mode you can
+   get stuck in. */
+.thread-group-menu.thread-group-exit {
+  opacity: 1;
+  color: var(--text-secondary);
+}
+/* Under a directory header: "全选" on the left, the count-carrying delete on
+   the right. Indented to the row's checkbox column so the whole block reads as
+   one column of controls. */
+.thread-group-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 1px 2px 4px 20px;
+}
+.thread-group-actions .thread-select-all {
+  flex: 1;
+  min-width: 0;
+}
+.thread-group-delete {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.thread-group-delete:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+.thread-group-delete:disabled {
+  color: var(--text-tertiary);
+  cursor: default;
+}
+.thread-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.thread-select-all span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-select-all input,
+.thread-check {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+/* The checkbox is the row's leading cell in batch mode; the title column
+   keeps the flex:1 it already had. */
+.thread-check {
+  margin-right: 8px;
+}
+/* The edited directory has no pin/delete to print on hover, so its rows keep
+   the timestamp — the buttons it steps aside for are not there. Other
+   directories keep the normal hover. */
+.thread-group.editing .thread-item:hover .thread-meta {
+  opacity: 1;
+}
+.thread-item.selected {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.thread-item.selected .thread-title {
+  color: var(--text);
 }
 .thread-item {
   display: flex;
   align-items: center;
-  gap: 4px;
+  /* The row's only in-flow child is the text column: 置顶/删除 are lifted out
+     of the flow so the timestamp can hug the row's right edge instead of
+     stopping 52px short of it to leave them a slot they are invisible in
+     almost all of the time. */
+  position: relative;
   width: 100%;
-  padding: 7px 10px;
+  /* 6px on the right is the timestamp's own margin — it is what "hugs the
+     edge" means here; the 20px on the left is the mark column plus the 5px
+     gap to the title, so a title starts where the directory name starts (see
+     .thread-mark). */
+  padding: 6px 6px 6px 20px;
   border-radius: var(--radius-sm);
   text-align: left;
   color: var(--text-secondary);
-  font-size: var(--text-md);
+  font-size: var(--text-lg);
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .thread-item:hover {
@@ -108,44 +325,70 @@
 .thread-item.active {
   background: var(--bg-active);
   color: var(--text);
-  /* Same leading accent edge as the app nav — one "selected" language. */
-  box-shadow: inset 2.5px 0 0 var(--accent);
+  /* A simple rounded bar is the whole selection — no leading accent edge, no
+     second mark in a column that is all text. */
+  border-radius: var(--radius-md);
 }
 .thread-item-main {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  /* Title and timestamp share one line on a shared baseline: the timestamp is
+     the row's right-hand column, so a thread reads in a glance instead of
+     two stacked lines of chrome. */
+  align-items: baseline;
+  gap: 8px;
 }
 .thread-title {
+  /* The only cell that gives way — the timestamp keeps its intrinsic width. */
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.thread-project-pill {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: var(--accent-soft);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  align-self: flex-start;
-  max-width: 100%;
-}
-.thread-del {
+.thread-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.thread-time {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+/* The buttons sit in the timestamp's slot, so the timestamp steps aside while
+   they show — otherwise the glyphs print straight over the text. */
+.thread-item:hover .thread-meta,
+.thread-item:has(.thread-pin:focus-visible) .thread-meta,
+.thread-item:has(.thread-del:focus-visible) .thread-meta {
+  opacity: 0;
+}
+.thread-del,
+.thread-pin {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
   width: 22px;
   height: 22px;
   display: grid;
   place-items: center;
   border-radius: var(--radius-sm);
   color: var(--text-tertiary);
-  font-size: 14px;
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+/* Delete takes the timestamp's own 6px inset; pin sits one button + gap to its
+   left, so the pair reads as one cluster on the row's right edge. */
+.thread-del {
+  right: 6px;
+  font-size: 14px;
+}
+.thread-pin {
+  right: 32px;
 }
 .thread-item:hover .thread-del,
 .thread-del:focus-visible {
@@ -155,22 +398,12 @@
   background: var(--danger-soft);
   color: var(--semantic-danger);
 }
-.thread-pin {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  color: var(--text-tertiary);
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
-}
 .thread-item:hover .thread-pin,
-.thread-pin:focus-visible,
-.thread-pin.on {
+.thread-pin:focus-visible {
   opacity: 1;
 }
+/* No always-on state for a pinned row's button: it would sit on top of the
+   timestamp, and the title already carries a pin mark (thread-pinned-mark). */
 .thread-pin.on {
   color: var(--accent);
 }
@@ -184,106 +417,38 @@
   color: var(--accent);
   vertical-align: -1px;
 }
-
-/* Rail batch-select chrome */
-.thread-tools {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 6px 0 2px;
-  min-height: 24px;
+/* The row's leading column carries what its last run did: a red alert when it
+   failed, a green dot when it finished clean. The column is the same 13px the
+   directory's folder glyph occupies above — hence the 20px left padding on the
+   row, which lines every title up with the directory name instead of with the
+   folder icon. The mark is absolutely placed inside that padding so it never
+   shifts a title, and unlike the timestamp it stays put on hover: the left
+   column is nobody else's, and an outcome that hides when you point at the row
+   is an outcome you cannot check. */
+.thread-mark {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 13px;
+  height: 13px;
+  display: grid;
+  place-items: center;
 }
-.thread-manage {
-  margin-left: auto;
-  border: none;
-  background: none;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
-  cursor: pointer;
+.thread-mark.failed {
+  color: var(--danger);
 }
-.thread-manage:hover {
-  background: var(--bg-hover);
-  color: var(--text);
+.thread-done-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
 }
-.thread-select-all {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  cursor: pointer;
-  user-select: none;
-}
-.thread-check {
-  flex: none;
-  accent-color: var(--accent);
-  width: 14px;
-  height: 14px;
-}
-.thread-select-all input {
-  accent-color: var(--accent);
-  width: 14px;
-  height: 14px;
-}
-.thread-item.selected {
-  background: var(--accent-soft);
-  color: var(--text);
-}
-.thread-item.selected .thread-title {
-  color: var(--text);
-}
-.thread-bulk-bar {
-  display: flex;
-  padding-top: 8px;
-  margin-top: 2px;
-  border-top: 1px solid var(--border-soft);
-}
-.thread-bulk-delete {
-  width: 100%;
-  justify-content: center;
-  gap: 6px;
-}
-
-.rail-toggle {
+/* The edited directory prints a checkbox in the same leading column; a status
+   mark there would sit under it. Picking rows to delete is not the moment for
+   an outcome report anyway. */
+.thread-group.editing .thread-mark {
   display: none;
-}
-.rail-scrim {
-  display: none;
-}
-
-@media (max-width: 900px) {
-  .chat {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .thread-rail {
-    position: fixed;
-    z-index: 60;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    transform: translateX(-100%);
-    transition: transform var(--dur-med) var(--ease);
-    box-shadow: var(--shadow-xl);
-  }
-  .chat.rail-open .thread-rail {
-    transform: none;
-  }
-  .rail-scrim {
-    display: none;
-    position: fixed;
-    inset: 0;
-    z-index: 55;
-    background: var(--backdrop);
-  }
-  .chat.rail-open .rail-scrim {
-    display: block;
-  }
-  .rail-toggle {
-    display: inline-flex;
-  }
 }
 
 /* ---- Pane + head ---------------------------------------------------------- */
@@ -294,15 +459,37 @@
   min-width: 0;
   min-height: 0;
   position: relative;
+  /* The lane the node card takes on the right when it is open: 0 closed, 300px
+     of card + 20px of header padding when open. The log, the composer and the
+     jump arrow all read this one number, so opening the card slides the whole
+     reading block left together instead of letting the card cover the ends of
+     the last reply's lines. */
+  --panel-lane: 0px;
+}
+.chat-pane.node-open {
+  --panel-lane: 320px;
 }
 .chat-head {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
   padding: 10px var(--sp-5);
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-chrome);
+  /* Raised white, no hairline. The header is the top edge of the page rather
+     than a bar laid over it, and the log scrolls in its own box below, so
+     nothing ever slides under this that would need a line to stop it. */
+  background: var(--bg-raised);
   flex: none;
+  /* The node card hangs out of this bar and over the transcript. Owning a
+     stacking context here is what lets it paint above the log (and above the
+     prompt rail's z-index) without the log knowing the card exists. */
+  position: relative;
+  z-index: 8;
+}
+/* The thread's directory mark, level with the title in the primary ink so the
+   header reads as one line rather than a title floating in a bar. */
+.chat-head-icon {
+  flex: none;
+  color: var(--text);
 }
 .chat-title-group {
   display: flex;
@@ -390,45 +577,267 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--sp-6) var(--sp-6) var(--sp-4);
+  /* 52px on the right is the prompt rail's lane (see `.chat-rail`). It is
+     reserved whether or not the rail is drawn so the column never shifts when
+     a thread grows its second question. The composer carries the same number:
+     the two must agree or the column and the box under it stop lining up.
+     `--panel-lane` adds the node card's lane on top of it while the card is
+     open — the transition is what makes the column slide rather than jump. */
+  padding: var(--sp-6) calc(52px + var(--panel-lane)) var(--sp-4) var(--sp-6);
+  transition: padding-right var(--dur-med) var(--ease-standard);
   scroll-behavior: smooth;
 }
 .chat-log > * {
-  max-width: 780px;
+  max-width: 900px;
   margin-left: auto;
   margin-right: auto;
 }
+/* The reading column: 900px, centred.
+   It was 800, and on a wide pane that put the reply's first glyph a long way
+   right of the header's folder mark with an equal gutter on the right — the
+   answer read as floating in the middle of an empty page. 900 pulls both edges
+   in by 50 without giving up the symmetry, so the reply and the question stay
+   one block: the question hugs the column's right edge, the reply its left.
+   (Anchoring the block to the page's left edge was tried and rejected — the
+   question then drifted into the middle of the pane with a third of the width
+   empty beside it, which reads worse than the centring did.)
+   900 is also this body's reading limit: ~60 CJK glyphs or ~110 Latin
+   characters per line at 15px.
+   The composer takes the same width and the same centring (see
+   `.composer > *`) — the box under the column has to line up with the text
+   above it or the page reads as two different layouts. */
+/* Jump to the newest message: one arrow, floating.
+   The slot is a zero-height flex row at the seam between the log and the
+   composer, so the control costs the transcript nothing — as a row of its own
+   it shortened the log by its height and clipped the line under it. The arrow
+   itself is the Lucide one the rest of the console draws (a `↓` glyph has a
+   different weight on every platform); it sits on a raised disc with a shadow
+   so it reads as floating over the text rather than as a bar across it. */
+.scroll-bottom-slot {
+  position: relative;
+  flex: none;
+  height: 0;
+  z-index: 5;
+  /* Same lanes as `.chat-log`, so the arrow keeps the middle of the text
+     column when the node card pushes that column left. The padding cannot sit
+     on the button's own containing block (`left: 50%` measures the padding
+     box), hence the inner column below. */
+  padding: 0 calc(52px + var(--panel-lane)) 0 var(--sp-6);
+  transition: padding-right var(--dur-med) var(--ease-standard);
+}
+.scroll-bottom-inner {
+  position: relative;
+  height: 0;
+  max-width: 900px;
+  margin: 0 auto;
+}
 .scroll-bottom-btn {
-  position: sticky;
-  bottom: var(--sp-3);
-  margin-left: auto;
-  margin-right: auto;
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-pill);
-  background: var(--bg-overlay);
-  border: 1px solid var(--border-strong);
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 50%;
+  background: var(--bg-raised);
   color: var(--text-secondary);
   box-shadow: var(--shadow-md);
-  z-index: 5;
-  gap: 6px;
-  padding: 6px 14px;
-  font-size: var(--text-sm);
-  font-weight: 500;
   cursor: pointer;
-  transition: all var(--dur-fast) var(--ease-standard);
+  transition: color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard),
+    box-shadow var(--dur-fast) var(--ease-standard);
   animation: fade-in var(--dur-fast) var(--ease);
 }
 .scroll-bottom-btn:hover {
   color: var(--text);
-  border-color: var(--accent-border);
+  border-color: var(--border);
   background: var(--bg-hover);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-lg);
 }
-.scroll-bottom-icon {
-  font-size: 14px;
-  font-weight: bold;
+
+/* Prompt rail: one tick per question you asked, down the right edge of the
+   pane. A long thread scrolls past dozens of replies, and the only way back to
+   a particular question was to scroll and read. The ticks are that map — a
+   tick is a question, the filled one is where you are.
+   Only the ticks are painted; the rail itself is a transparent hit area so it
+   never draws a border beside the text. Ticks grow leftwards on hover (the
+   column is right-aligned) so the right edge stays flush. */
+/* The wrapper owns the geometry the ticks used to carry, and holds the hover
+   for the rail *and* its list: pointing at the rail opens the list, and moving
+   into it must not close it — so the two are siblings inside one hit area. */
+.chat-rail-wrap {
+  position: absolute;
+  /* Clear of the log's scrollbar: the ticks sit beside the transcript, not on
+     top of the control that also moves it. */
+  right: 18px;
+  /* Spans the log only. `top: 50%` would centre the ticks on the whole pane,
+     which counts the header and the composer and therefore lands the rail
+     under the last reply instead of in the middle of the transcript. 56 is the
+     header's height with the 36px tool buttons in it. */
+  top: 56px;
+  bottom: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  z-index: 4;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+/* The node card owns this corner while it is open: the ticks would sit under
+   its shadow, half-lit and unclickable. They come back with the card. */
+.chat-pane.node-open .chat-rail-wrap {
+  opacity: 0;
+  pointer-events: none;
+}
+.chat-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 2px;
+  max-height: 100%;
+  overflow-y: auto;
+  /* No scrollbar: the ticks are the scrollbar. */
+  scrollbar-width: none;
+}
+.chat-rail::-webkit-scrollbar {
+  display: none;
+}
+/* The map, opened: every question as a row, the one you are reading in bold,
+   each carrying the tick the rail draws. A 13px bar names nothing and a
+   one-line tooltip cannot hold a paragraph, so the list is the tooltip.
+   Absolute and flush to the rail's edge: it opens *over* the ticks, so the
+   column of ticks and the column of rows never read as two of the same thing.
+   Hover survives because the panel is a descendant of the wrapper that owns
+   it — moving the pointer into it is not leaving the rail. */
+.chat-rail-preview {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  /* Centre it without a transform, so the entrance animation can use one. */
+  height: fit-content;
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  width: 420px;
+  max-height: 100%;
+  padding: 12px 16px;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: rail-list-in var(--dur-med) var(--ease-enter);
+}
+@keyframes rail-list-in {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.chat-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  /* The size the questions are read at in the transcript: this is the same
+     text, one question per row, not chrome about it. */
+  font-size: var(--text-lg);
+  line-height: 1.4;
+  /* Right-aligned like the rail it mirrors: the text runs into its tick, not
+     away from it. */
+  text-align: right;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.chat-rail-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-rail-item-tick {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--text-tertiary);
+  transition: width var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.chat-rail-item:hover {
+  color: var(--text);
+  background: var(--bg-inset);
+}
+.chat-rail-item:hover .chat-rail-item-tick {
+  width: 16px;
+  background: var(--text-secondary);
+}
+/* Declared after the hover rule so the row you are reading keeps its weight
+   while the pointer crosses it. */
+.chat-rail-item.on {
+  color: var(--text);
+  font-weight: 600;
+}
+.chat-rail-item.on .chat-rail-item-tick {
+  width: 30px;
+  background: var(--text);
+}
+.chat-rail-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.chat-rail-tick {
+  width: 13px;
+  height: 3px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  /* Text ink, not border ink: --border-strong is #3d3d3d on the dark theme,
+     which is a hairline against a #0d0d0d page and vanishes at 3px tall. The
+     three steps of the text ramp are the only colours that stay legible on
+     both themes. */
+  background: var(--text-tertiary);
+  cursor: pointer;
+  /* Room to click: the bar stays 3px, the hit area does not. */
+  box-shadow: 0 0 0 3px transparent;
+  transition: background var(--dur-fast) var(--ease), width var(--dur-fast) var(--ease);
+}
+.chat-rail-tick:hover {
+  width: 16px;
+  background: var(--text-secondary);
+}
+.chat-rail-tick.on {
+  width: 18px;
+  background: var(--text);
+}
+.chat-rail-tick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* The rail lives in the log's reserved 52px lane, so it never lands on text at
+   any desktop width. Below that there is no lane to speak of — on a phone the
+   transcript is the whole screen and the scrollbar is the only navigator. */
+@media (max-width: 760px) {
+  .chat-rail-wrap {
+    display: none;
+  }
 }
 
 /* ---- Messages -------------------------------------------------------------- */
@@ -443,26 +852,6 @@
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: none; }
 }
-.msg-avatar {
-  flex: none;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-md);
-  display: grid;
-  place-items: center;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  background: var(--accent-soft);
-  color: var(--accent);
-  border: 1px solid var(--accent-border);
-  margin-top: 2px;
-}
-.msg-avatar.you {
-  background: var(--accent-2-soft);
-  color: var(--accent-2);
-  border-color: var(--accent-2-border);
-}
 .msg-body {
   flex: 1;
   min-width: 0;
@@ -470,25 +859,41 @@
   flex-direction: column;
   gap: 8px;
 }
+/* Your own words sit on the right of the column and the reply on the left:
+   that is the whole of the discrimination between them. Both are plain text on
+   the page's own background — the tinted block and the raised card turned
+   every message into a box to read inside. */
+/* A question's copy sits *under* its bubble, not beside it: the bubble hugs the
+   right edge, so the row turns into a column and the icon takes the same place
+   a reply's copy does on the other side. */
+.msg.user {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+}
+.msg.user .msg-body {
+  flex: 0 1 auto;
+  align-items: flex-end;
+  text-align: right;
+}
+.msg.user .bubble-slot-row {
+  justify-content: flex-end;
+}
 .bubble {
   position: relative;
-  border-left: none;
-  border-top-left-radius: var(--radius-sm);
-  border-bottom-left-radius: var(--radius-sm);
   padding: 0;
   background: transparent;
   border-radius: 0;
 }
 .bubble.role-user {
-  background: var(--accent-2-soft);
-  border: 1px solid var(--accent-2-border);
+  /* Your question gets a chip; the reply does not. The answer is the product
+     and reads as the page itself, while what you asked is one thing you said
+     once — a bubble says where it starts and stops, and hugs its own text
+     instead of claiming the column. */
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   padding: 8px 14px;
-}
-.bubble.role-panda,
-.bubble.role-assistant {
-  padding-left: var(--sp-3);
-  border-left: 2px solid var(--accent-border);
 }
 .bubble.role-system {
   padding: 8px 12px;
@@ -518,6 +923,39 @@
   font-size: var(--text-xs);
   flex-wrap: wrap;
 }
+/* The turn's duration, at the head of the reply rather than its foot: it is a
+   caption for the answer below it, and a finished turn reads top-down. A
+   hairline the width of the reading column closes the caption off. The caret
+   is decorative — there is one number to disclose and nothing behind it — so
+   it is aria-hidden rather than a button that would open nothing. */
+.bubble-slot-row.slot-elapsed {
+  align-items: center;
+  justify-content: flex-start;
+  margin: 0 0 var(--sp-3);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border-soft);
+}
+.elapsed-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+.elapsed-caret {
+  font-size: 1.15em;
+  line-height: 1;
+}
+/* Live status at the foot of the bubble, left-aligned: it annotates the
+   message that is still working rather than titling the empty box. */
+.bubble-slot-row.slot-status {
+  justify-content: flex-start;
+  margin-top: 2px;
+}
+/* Usage sits at the far right of the header — the last thing the eye lands on
+   after the title on the left. */
+/* The node pick's old slot in the composer row is now the "+" that adds
+   context. Send keeps the far edge. */
 .msg-text {
   line-height: var(--leading-normal);
   white-space: pre-wrap;
@@ -526,20 +964,70 @@
   font-size: var(--text-lg);
 }
 
-/* Streaming cursor + live status. */
-.cursor {
-  display: inline-block;
-  width: 7px;
-  height: 14px;
-  margin-left: 2px;
-  border-radius: 2px;
-  background: var(--accent);
-  vertical-align: text-bottom;
-  animation: cursor-blink 1s steps(2) infinite;
+/* ---- Message actions -------------------------------------------------------- */
+/* Copy belongs to the message it copies and only shows while the pointer is on
+   that message: an icon per bubble that is always visible turns the transcript
+   into a toolbar, and the transcript is the product. The box stays in the flow
+   when hidden, so revealing it moves nothing.
+   The fade rides the button itself, not its row: `:focus-visible` on the button
+   can then be the whole keyboard story. On `:focus-within` a mouse click would
+   leave the icon hanging on the message until something else took focus. */
+/* A question's copy is a row under its bubble, pulled up so it reads as the
+   bubble's own foot rather than a separate line. */
+.msg-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-top: 2px;
 }
-@keyframes cursor-blink {
-  50% { opacity: 0; }
+/* A reply's copy is a row under the prose, on the same left edge. The negative
+   margin swallows the column's own gap, so the affordance costs the reply 22px
+   of height instead of 30 — the icon still sits clear of the last line. */
+.bubble-slot-row.slot-actions {
+  justify-content: flex-start;
+  margin-top: calc(-1 * var(--sp-2));
 }
+.msg-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) ease, color var(--dur-fast) ease,
+    background var(--dur-fast) ease;
+}
+/* The hover state rides the message (0-3-0), so no same-specificity rule later
+   in the cascade can cancel it. */
+.msg:hover .msg-copy,
+.msg-copy:focus-visible {
+  opacity: 1;
+}
+/* No hover to reveal it with on a touch screen, so it is simply shown. */
+@media (hover: none) {
+  .msg-copy {
+    opacity: 1;
+  }
+}
+.msg-copy:hover {
+  color: var(--text);
+  background: var(--bg-inset);
+}
+.msg-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Live status. There used to be a blinking block cursor riding the last
+   character of a streaming reply; it read as a stray bar in the middle of the
+   prose (and, once the palette went ink, as a heavy one). The reply growing is
+   its own progress cue, and the status line below says the rest. */
 .status-line {
   display: flex;
   align-items: center;
@@ -574,144 +1062,257 @@
 
 .chat-empty {
   flex: 1;
-  /* Grid, not flex: the 960px split-screen in views.css sizes columns via
-     grid-template-columns, which a flex row silently ignores — the fleet card
-     ended up shrinking to its content instead of holding its half. */
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: center;
-  padding: var(--sp-8);
-  background: var(--grad-hero);
-  gap: var(--sp-5);
-  height: 100%;
-}
-/* Same file as .chat-empty on purpose: a media query in views.css would lose
-   to this rule — views.css loads before chat.css, and same-specificity ties
-   go to the later sheet. */
-@media (min-width: 960px) {
-  .chat-empty { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-}
-.chat-empty-cta {
-  text-align: center;
-  justify-self: center;
-  width: 100%;
-  max-width: 520px;
+  /* One column, one line: the greeting is the whole page. The fleet strip,
+     the hint and the starter prompts were removed, so the hero centres in all
+     of the free space and the composer below is the only affordance. */
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--sp-3);
-  justify-content: center;
-  padding: var(--sp-8);
-  border-radius: var(--radius-xl);
-  background: var(--bg-raised);
-  border: 1px solid var(--border-soft);
-  background-image: var(--grad-hero);
-  box-shadow: var(--shadow-xs);
+  padding: var(--sp-5) var(--sp-8) var(--sp-8);
+  background: var(--grad-hero);
+  gap: var(--sp-4);
+  height: 100%;
+  min-height: 0;
+}
+.chat-empty-cta {
+  /* `margin: auto 0` centres the hero in the free space. */
+  margin: auto 0;
+  text-align: center;
+  width: 100%;
+  max-width: 620px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-4);
 }
 .chat-empty-cta h1 {
-  font-size: var(--text-2xl);
+  font-size: 30px;
   font-weight: 650;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   margin: 0;
   line-height: 1.15;
   color: var(--text-primary);
 }
-.chat-empty-cta p {
-  color: var(--text-secondary);
-  margin: 0;
-  font-size: var(--fs-body);
-  line-height: 1.6;
-  max-width: 48ch;
-}
 .chat-hero {
   text-align: center;
 }
-.hero-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-  justify-content: center;
-  margin-top: var(--sp-4);
-}
-
-/* ---- Composer ------------------------------------------------------------------- */
 
 .composer {
   flex: none;
-  padding: var(--sp-3) var(--sp-6) var(--sp-5);
+  /* Same 52px lane on the right as `.chat-log`, plus the node card's lane when
+     it is open: the box's edges land on the column's, closed and open alike. */
+  padding: var(--sp-4) calc(52px + var(--panel-lane)) var(--sp-5) var(--sp-6);
+  transition: padding-right var(--dur-med) var(--ease-standard);
   border-top: none;
   background: transparent;
 }
+/* Same width and centring as the transcript above it (see `.chat-log > *`): the
+   input box is the last line of the reading column, and a box of a different
+   width under it reads as two layouts stacked. */
 .composer > * {
-  max-width: 780px;
+  max-width: 900px;
   margin-left: auto;
   margin-right: auto;
 }
-.composer-toolbar {
+/* ---- Header tools + node card --------------------------------------------- */
+
+/* The head's right edge: download, then the node pick. Both are ghost icon
+   buttons one size up from the console's 28px `.icon-btn`, because both are
+   the only things in this bar you press (the rest of the header is a title and
+   a badge). 36px square with a 19px glyph is the weight Codex and WorkBuddy
+   both use for their header popovers — measured off their screenshots, where
+   the toolbar square is 40px around a 20px mark inside a 56px bar; this
+   header is 56 tall once these buttons are in it. */
+.chat-head-tools {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  margin-bottom: var(--sp-2);
+  gap: 2px;
+  flex: none;
+  margin-left: auto;
 }
-.composer-node-pick {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-.composer-node-select {
-  appearance: none;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  background: var(--bg-inset);
+.chat-head-tools .icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   color: var(--text-secondary);
-  font-size: var(--text-xs);
-  padding: 2px 18px 2px 6px;
-  cursor: pointer;
-  background-image: linear-gradient(45deg, transparent 50%, var(--text-tertiary) 50%),
-    linear-gradient(135deg, var(--text-tertiary) 50%, transparent 50%);
-  background-position: calc(100% - 10px) 55%, calc(100% - 6px) 55%;
-  background-size: 4px 4px;
-  background-repeat: no-repeat;
 }
-.composer-node-select:hover {
-  border-color: var(--border-strong);
+.chat-head-tools .icon-btn svg {
+  width: 19px;
+  height: 19px;
+}
+/* Open, the button keeps the tinted square the references give it: the card
+   below is an extension of this control, so the control has to look pressed
+   while it is up. */
+.chat-head-tools .icon-btn.open {
+  background: var(--bg-hover);
   color: var(--text);
 }
-.composer-project-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--text-xs);
+/* A pinned node is not the default any more, and the glyph is the only place
+   left that can say so — the header has no room for the node's name. */
+.node-pick-btn.pinned:not(.open) {
+  color: var(--accent);
+}
+/* Static, not relative: the card below anchors to the *header*, so it hangs
+   under the bar's bottom edge rather than under this 36px button (which would
+   start the card 2px inside the bar). */
+.node-picker {
+  display: flex;
+}
+.node-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: var(--sp-5);
+  z-index: 20;
+  /* 300px is the card's natural width (Codex's is 455 at a larger type scale;
+     this one holds a name and a tag per row, not file paths). The `min()` is
+     for a phone: below ~340px of pane the card gives up its width rather than
+     hanging off the left edge. */
+  width: min(300px, calc(100% - 40px));
+  padding: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  animation: node-panel-in var(--dur-fast) var(--ease-enter);
+}
+@keyframes node-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.node-panel-label {
+  margin: 0;
+  padding: 6px 10px 4px;
+  font-size: var(--text-sm);
   color: var(--text-tertiary);
+}
+.node-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.node-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.node-row:hover {
+  background: var(--bg-hover);
+}
+.node-row-ico {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.node-row-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 2px 6px;
-  background: var(--bg-inset);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-soft);
+}
+.node-row-tag {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.node-row-check {
+  flex: none;
+  color: var(--accent);
+}
+.node-row.on .node-row-ico {
+  color: var(--accent);
+}
+/* An offline machine stays in the list — "the node I wanted is down" is
+   information — but it cannot be picked, so it does not light up on hover. */
+.node-row.off,
+.node-row.off:hover {
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: default;
+}
+.node-panel-empty {
+  margin: 0;
+  padding: 6px 10px 8px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.node-panel-hint {
+  margin: 4px 0 0;
+  padding: 8px 10px 8px;
+  border-top: 1px solid var(--border-soft);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+.node-panel-foot {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 2px;
+}
+.node-foot-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.node-foot-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.node-foot-arrow {
+  margin-left: auto;
+  color: var(--text-tertiary);
 }
 .composer-box {
   position: relative;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  /* 20px, not the 10px card radius: at this height a card radius reads square,
+     and the composer is the roundest object on the page on purpose. */
+  border-radius: 20px;
   background: var(--bg-raised);
   box-shadow: var(--shadow-sm);
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
-  padding: 12px 14px 10px;
+  /* 6px, not 8: the row below takes the rest, see .composer-actions. */
+  padding: 10px 14px 6px;
 }
 .composer-box:focus-within {
-  border-color: var(--accent-border);
-  box-shadow: var(--shadow-sm), 0 0 0 3px var(--accent-soft);
+  /* Neutral focus: the accent ring and border coloured the whole composer
+     green the moment the caret landed in it, which made the page read as
+     "green box plus green button". A deepening grey says "focused" without
+     spending the one accent again. */
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
 }
 .composer-box.composer-running {
-  border-color: var(--accent-border);
+  border-color: var(--border-strong);
 }
 .composer-input {
   width: 100%;
-  min-height: 52px;
+  /* Two rows of typing, no more: the context row sits at the bottom of a flat
+     box, and extra min-height only pushed the controls up into the air. */
+  min-height: 64px;
   max-height: 220px;
   padding: 2px 10px;
   border: 0;
@@ -720,27 +1321,144 @@
   font-size: var(--text-lg);
   font-family: inherit;
   line-height: 1.5;
-  resize: none;
   outline: none;
+  /* A rich surface still behaves like a field: text wraps where the textarea's
+     did, a long unbroken token does not push the box wide, and the caret stays
+     visible once the content is taller than the ceiling. */
+  white-space: pre-wrap;
+  overflow-y: auto;
+  word-break: break-word;
 }
 .composer-input::placeholder {
   color: var(--text-tertiary);
 }
+/* The console's keyboard ring is a 2px + 4px double ring, which on a text
+   field reads as a second rounded box drawn inside the composer's own frame
+   the moment you click it. The field opts out: the box already answers "you
+   are typing here" by deepening its border. */
+.composer-input:focus-visible {
+  box-shadow: none;
+}
 .composer-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-2);
-  padding: 8px 10px;
-  border-top: 1px solid var(--border-soft);
+  /* No divider: a hairline here read as the box's own bottom edge, so the row
+     of context picks looked like a toolbar sitting outside the composer
+     instead of its footer. One surface, no seam. */
+  /* 20/0 with a 6px box floor, not 12/6 with 8. The box is docked to the pane's
+     bottom, so growing it only pushes the row *up*; the one way to move the
+     controls down is to take the space out from under them. Moving the 6px of
+     row padding to the top and trimming 2px off the box floor drops the row
+     8px — from 15px clear of the bottom edge to 7 — and costs the box nothing,
+     which matters because 141px is the height it was tuned to. Past ~10px the
+     send button starts reading as welded to the border. */
+  padding: 20px 10px 0;
 }
+/* Send is tonal for the same reason the rail's "new chat" is: the page's one
+   accent already lives in the nav and the active thread, so a solid primary
+   block read as the loudest thing on a screen whose job is to invite typing. */
+.composer-actions .btn.primary {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-strong);
+  box-shadow: none;
+}
+.composer-actions .btn.primary:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: none;
+}
+/* The trailing action owns the right edge — Send, or Stop while a reply
+   streams. The two are the same slot, so they must not drift apart: Stop
+   without this sat directly after the authorize toggle, where it read as one
+   more setting rather than as the way out of the running turn. The shortcut
+   hint below the box is what frees the row for this. */
+.composer-actions .btn.primary,
+.composer-actions .btn.stop-btn {
+  margin-left: auto;
+}
+/* A standing reference under the box. It used to share the action row, which
+   now carries the context picks and the authorize toggle instead. */
 .composer-shortcut-hint {
-  flex: 1;
+  margin: var(--sp-2) auto 0;
   color: var(--text-tertiary);
   font-size: var(--text-xs);
   user-select: none;
+}
+
+/* ---- Composer attachments (inline pills) --------------------------------- */
+
+/* An attachment is a pill *inside* the line being typed — the caret carries on
+   after it, and typing continues on the same line. That is what the reference
+   shows, and it is the reason the composer input is a contenteditable rather
+   than a textarea: a textarea cannot host a live node among its text.
+
+   Measured off the reference: a 23px-tall ink band on the secondary grey, a
+   glyph in front of the name, no size line and no remove cross — the pill is
+   its own control, so clicking it takes the file back out of the turn. */
+.attach-pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  margin: 0 2px;
+  padding: 1px 8px;
+  border-radius: 8px;
+  background: var(--bg-inset);
+  color: var(--text);
+  /* A shade under the composer's own type: the pill is chrome, and the name
+     still has to read at a glance. */
+  font-size: 0.92em;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  vertical-align: baseline;
+  /* Atomic to the caret: the browser steps over a contenteditable=false span
+     as one unit, so the pill can never be split mid-name by a delete. */
+}
+.attach-pill:hover {
+  background: var(--bg-active);
+}
+.attach-pill-ico {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-tertiary);
+}
+/* The image glyph carries a solid mountain inside its hairline frame, so it
+   holds noticeably more ink than the paperclip beside it: at --text-tertiary
+   the silhouette washed out and the frame disappeared, leaving a smudge. One
+   step up the text ramp keeps the shape legible at 16px. */
+.attach-pill-ico.img {
+  color: var(--text-secondary);
+}
+
+/* The placeholder. A contenteditable has no placeholder attribute, so the
+   empty state paints it from data-placeholder instead. */
+.composer-input.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+/* The drop state. A file dragged over the box has to land somewhere obvious,
+   so the whole composer answers rather than a thin target line. */
+.composer-box.composer-dropping {
+  border-color: var(--border-strong);
+}
+.attach-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: var(--bg-overlay);
+  color: var(--text);
+  font-size: var(--text-sm);
+  pointer-events: none;
 }
 /* Inline send failure: a soft danger strip under the composer, not bare red
    text floating in the gutter. */
@@ -760,9 +1478,247 @@
   align-items: center;
   gap: 6px;
   font-size: var(--text-sm);
-  color: var(--text-secondary);
+  /* Danger tone, not the neutral label tone: this is the one control in the
+     composer that can hand an agent unattended run of your machine, and it
+     used to sit in the same grey as everything beside it. */
+  color: var(--semantic-danger);
   cursor: pointer;
   user-select: none;
+  /* Optical, not geometric. The row centres every child's *box*, and this
+     control's box centre is already level with the "+" button's — but the ink
+     inside those boxes does not sit where the box does: the "+" glyph and the
+     CJK run in "发送" hang ~1.4px below their own line-box centres, while the
+     switch track (a drawn box) and this label's text sit dead centre. Measured
+     ink centres were "+" 44.1, "发送" 44.4, switch 42.5 — so the risk control
+     read ~1.9px high. 2px puts its ink at 44.5, level with both. */
+  position: relative;
+  top: 2px;
+}
+/* A switch, not a tick box: this is a mode you leave on, not a one-off box you
+   tick. The track is a <span> so the knob can be its ::after — pseudo-elements
+   on an <input> are not reliably rendered. */
+.ask-authorize .switch {
+  position: relative;
+  flex: none;
+  display: inline-block;
+  width: 30px;
+  height: 17px;
+}
+.ask-authorize .switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.ask-authorize .switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--semantic-danger-border);
+  background: var(--bg-inset);
+  pointer-events: none;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.ask-authorize .switch-track::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.ask-authorize .switch input:checked + .switch-track {
+  background: var(--semantic-danger);
+  border-color: var(--semantic-danger);
+}
+.ask-authorize .switch input:checked + .switch-track::after {
+  transform: translateX(13px);
+  background: #fff;
+}
+.ask-authorize .switch input:focus-visible + .switch-track {
+  box-shadow: var(--ring);
+}
+
+/* ---- Composer "+" menu ---------------------------------------------------- */
+
+.attach-wrap {
+  position: relative;
+  flex: none;
+}
+.attach-btn {
+  width: 24px;
+  height: 24px;
+  font-size: 17px;
+  line-height: 1;
+  color: var(--text-tertiary);
+}
+.attach-btn:hover {
+  color: var(--text);
+}
+.attach-menu {
+  position: absolute;
+  /* Above the button: the composer is docked to the bottom of the pane, so
+     there is no room below it. */
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 220px;
+  max-width: 360px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-md);
+}
+.attach-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  text-align: left;
+  /* An MCP entry is a whole launch command — let it wrap rather than clip. */
+  overflow-wrap: anywhere;
+}
+.attach-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.attach-item:disabled {
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+.attach-item svg {
+  flex: none;
+  opacity: 0.85;
+}
+.attach-back {
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-align: left;
+}
+.attach-back:hover {
+  color: var(--text);
+}
+.attach-empty {
+  margin: 0;
+  padding: 8px;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+/* The file browser inside the "+" menu: a path bar, the listing, and a foot
+   that carries the upload entry and the insert action. */
+.attach-browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 2px;
+}
+.attach-up {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+}
+.attach-up:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.attach-up:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.attach-cwd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Right-to-left keeps the *tail* of the path visible as it is clipped —
+     the deepest directory is the part that says where you are. */
+  direction: rtl;
+  text-align: left;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.attach-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.attach-check {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--semantic-danger);
+  font-size: 11px;
+}
+.attach-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attach-item.picked {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.attach-size {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+.attach-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px 2px;
+  border-top: 1px solid var(--border-soft);
+  margin-top: 2px;
+}
+.attach-upload {
+  flex: none;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+.attach-upload:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.attach-upload:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.attach-insert {
+  margin-left: auto;
 }
 .stop-btn {
   color: var(--semantic-danger);
@@ -832,7 +1788,9 @@
 .chat-skeleton {
   flex: 1;
   padding: var(--sp-8);
-  max-width: 780px;
+  /* The column's width, so the real transcript does not jump 50px sideways
+     when the skeleton is replaced. */
+  max-width: 900px;
   margin: 0 auto;
   width: 100%;
   display: flex;

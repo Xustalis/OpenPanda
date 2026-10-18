@@ -337,7 +337,10 @@ function OrbitStep(props: {
   return (
     <div class={'orbit-step' + (loading ? ' flash' : '')} aria-busy={loading}>
       <div class="orbit-step-head">
-        <span class="orbit-step-no">{t('orbit.stepNo', { n: props.no })}</span>
+        {/* The bare digit, not "Step {n}": the title beside it already names the
+            step, so a translated word in front of the number only pushed the
+            title away from the marker it belongs to. */}
+        <span class="orbit-step-no">{props.no}</span>
         <span class="orbit-step-title">:</span>
         <span class="orbit-step-title">{props.title}</span>
         {loading && <span class="orbit-step-skel">▫</span>}

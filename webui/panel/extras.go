@@ -9,11 +9,14 @@ package panel
 // ledger rollup over delegation_metrics).
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -34,9 +37,16 @@ func (h *handler) getDoctor(w http.ResponseWriter, r *http.Request) {
 }
 
 // allowedReadRoot reports whether abs may be read through /api/fs/read: the
-// workspace root, the memory tree, or the per-project memory tree. The TUI's
-// /read is unbounded because it runs in the user's own shell; the panel is a
-// network surface, so reads stay inside the directories the node owns.
+// workspace root, the memory tree, the per-project memory tree, or any
+// registered project's work dir. The TUI's /read is unbounded because it runs
+// in the user's own shell; the panel is a network surface, so reads stay
+// inside the directories the node owns.
+//
+// The project work dirs are the ones that matter in practice. A thread's files
+// live in its project — the composer's file browser is meant to offer "what
+// this thread's agent can act on" — so leaving them out of the allow-list left
+// the browser able to list nothing but the node's own openpanda-data tree, and
+// made @file fail on every path the user actually works on.
 func (h *handler) allowedReadRoot(abs string) bool {
 	if h.cfg == nil {
 		return false
@@ -45,6 +55,15 @@ func (h *handler) allowedReadRoot(abs string) bool {
 	h.readCfg(func(c *config.Config) {
 		roots = []string{c.Storage.WorkPath, c.Storage.MemoryPath, c.Storage.ProjectsPath}
 	})
+	if h.projectStore != nil {
+		if list, err := h.projectStore.List(); err == nil {
+			for _, p := range list {
+				if p.WorkDir != "" {
+					roots = append(roots, p.WorkDir)
+				}
+			}
+		}
+	}
 	for _, root := range roots {
 		if root == "" {
 			continue
@@ -224,6 +243,68 @@ func (h *handler) readFile(w http.ResponseWriter, r *http.Request) {
 		"size":      st.Size(),
 		"truncated": truncated,
 	})
+}
+
+// openInFileManager launches the desktop's file browser at dir. It is
+// deliberately fire-and-forget: Explorer returns a non-zero status even when
+// it succeeds, so waiting on the child would report a false failure. A var,
+// not a func, so tests can observe the call without opening a window.
+var openInFileManager = func(dir string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer.exe", dir)
+	case "darwin":
+		cmd = exec.Command("open", dir)
+	default:
+		cmd = exec.Command("xdg-open", dir)
+	}
+	return cmd.Start()
+}
+
+// revealPath serves POST /api/fs/reveal — "open this folder" from the
+// history's directory menu. The allow-list is the same one /api/fs/read
+// enforces: the panel is a network surface, and handing an arbitrary path to
+// the desktop shell is a bigger favour than reading a file. A missing
+// directory is a 404 rather than a silent no-op, because the console shows
+// the failure instead of a menu that appears to work.
+func (h *handler) revealPath(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	reqPath := strings.TrimSpace(req.Path)
+	if reqPath == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("path is required"))
+		return
+	}
+	absPath, err := h.resolveFsPath(reqPath)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid path"))
+		return
+	}
+	// Resolve before the root check so a symlink inside the workspace cannot
+	// point the file manager outside it.
+	if real, err := filepath.EvalSymlinks(absPath); err == nil {
+		absPath = real
+	}
+	if !h.allowedReadRoot(absPath) {
+		writeErr(w, http.StatusForbidden, errors.New("path is outside the workspace and memory roots"))
+		return
+	}
+	st, err := os.Stat(absPath)
+	if err != nil || !st.IsDir() {
+		writeErr(w, http.StatusNotFound, errors.New("no such directory"))
+		return
+	}
+	if err := openInFileManager(absPath); err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("could not open the file manager"))
+		return
+	}
+	writeJSON(w, map[string]any{"opened": absPath})
 }
 
 // getContext serves GET /api/context — the `/context` snapshot: which model,

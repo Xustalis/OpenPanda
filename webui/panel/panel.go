@@ -192,6 +192,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/cost", h.getCost)
 	mux.HandleFunc("GET /api/fs/read", h.readFile)
 	mux.HandleFunc("GET /api/fs/files", h.listFiles)
+	mux.HandleFunc("POST /api/fs/reveal", h.revealPath)
 	mux.HandleFunc("GET /api/version", h.getVersion)
 	mux.HandleFunc("GET /api/metrics", h.listMetrics)
 	mux.HandleFunc("GET /api/audit", h.verifyAudit)
@@ -259,6 +260,11 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("DELETE /api/sessions/{id}/approval", h.clearSessionApproval)
 		mux.HandleFunc("POST /api/sessions/{id}/cancel", h.sessionCancel)
 		mux.HandleFunc("POST /api/sessions/{id}/stop", h.sessionCancel)
+		// Uploads do not need the Worktrees object — without a repository they
+		// fall back to a per-session directory under the work path — so the
+		// route is registered wherever sessions are, not only when isolation
+		// is available.
+		mux.HandleFunc("POST /api/sessions/{id}/upload", h.uploadSessionFile)
 		if d.Worktrees != nil {
 			mux.HandleFunc("GET /api/sessions/{id}/diff", h.sessionDiff)
 			mux.HandleFunc("POST /api/sessions/{id}/merge", h.sessionMerge)

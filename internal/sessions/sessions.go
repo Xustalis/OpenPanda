@@ -48,6 +48,13 @@ type Turn struct {
 	// "model_config"), so a reloaded transcript can still offer the matching
 	// fix-it affordance the live stream's error event carried.
 	Code string `json:"code,omitempty"`
+	// DurationMS is how long the turn took, from the ask being accepted to the
+	// reply landing. Assistant turns only; absent on user turns and on
+	// transcripts written before it existed. The console prints it above the
+	// reply, and it has to survive a reload: the live timer that measures the
+	// turn lives in the browser, so a reloaded thread would otherwise lose
+	// every duration it had.
+	DurationMS int64 `json:"duration_ms,omitempty"`
 }
 
 // Session is one chat thread. Worktree/Branch are empty when the work path is
