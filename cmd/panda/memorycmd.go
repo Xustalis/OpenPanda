@@ -234,7 +234,10 @@ func summarizeFirst(entries []string) string {
 	if len(entries) == 0 {
 		return ""
 	}
-	s := strings.TrimSpace(entries[0])
+	// One listing row is one line: an entry that opens with a markdown
+	// heading ("## 2026-10-15\n- …") otherwise spills a second physical row
+	// and breaks the columns under it — same reason events.go oneLines them.
+	s := strings.Join(strings.Fields(entries[0]), " ")
 	if r := []rune(s); len(r) > 40 {
 		return string(r[:40]) + "…"
 	}
