@@ -175,6 +175,12 @@ type tuiModel struct {
 	wizardAPIType   string // "openai" | "anthropic" (custom/relay)
 	wizardThinking  string // "auto" | "on" | "off"
 	wizardContext   string // context window, raw text
+	wizardCtxManual bool   // user typed/cleared the context field — model changes stop re-suggesting it
+	wizardMaxTok    string // completion cap, raw text — blank = catalogue auto-load
+	wizardBudget    string // thinking budget, raw text
+	wizardRetries   string // transport retries, raw text
+	wizardParams    string // extra request params as a JSON object, raw text
+	wizardHeaders   string // extra request headers as a JSON object, raw text
 	wizardAlias     string // display name in the register
 	wizardEditAlias string // alias being edited ("" = adding a new entry)
 

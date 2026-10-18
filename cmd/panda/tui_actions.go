@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -441,6 +442,12 @@ func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
 	m.wizardAPIType = ""
 	m.wizardThinking = ""
 	m.wizardContext = ""
+	m.wizardCtxManual = false
+	m.wizardMaxTok = ""
+	m.wizardBudget = ""
+	m.wizardRetries = ""
+	m.wizardParams = ""
+	m.wizardHeaders = ""
 	m.wizardAlias = ""
 	m.wizardEditAlias = ""
 	m.form = nil
@@ -737,8 +744,40 @@ func (m tuiModel) editSelectedModel() (tuiModel, tea.Cmd) {
 	m.wizardThinking = curMC.Thinking
 	if curMC.ContextWindow > 0 {
 		m.wizardContext = strconv.Itoa(curMC.ContextWindow)
+		// A saved value is the operator's own — model changes in the editor
+		// must not silently re-suggest over it.
+		m.wizardCtxManual = true
 	} else {
 		m.wizardContext = ""
+	}
+	if curMC.MaxTokens > 0 {
+		m.wizardMaxTok = strconv.Itoa(curMC.MaxTokens)
+	} else {
+		m.wizardMaxTok = ""
+	}
+	if curMC.ThinkingBudget > 0 {
+		m.wizardBudget = strconv.Itoa(curMC.ThinkingBudget)
+	} else {
+		m.wizardBudget = ""
+	}
+	if curMC.MaxRetries != 0 {
+		m.wizardRetries = strconv.Itoa(curMC.MaxRetries)
+	} else {
+		m.wizardRetries = ""
+	}
+	if len(curMC.Params) > 0 {
+		if b, err := json.Marshal(curMC.Params); err == nil {
+			m.wizardParams = string(b)
+		}
+	} else {
+		m.wizardParams = ""
+	}
+	if len(curMC.Headers) > 0 {
+		if b, err := json.Marshal(curMC.Headers); err == nil {
+			m.wizardHeaders = string(b)
+		}
+	} else {
+		m.wizardHeaders = ""
 	}
 	m.wizardAlias = curMC.Alias()
 	m.wizardEditAlias = curMC.Alias()
@@ -773,6 +812,13 @@ func (m tuiModel) wizardConfig() config.ModelConfig {
 		if mc.APIType == "" {
 			mc.APIType = config.APITypeOpenAI
 		}
+		// A custom endpoint behind a known vendor inherits its catalogue
+		// tuning: the saved row carries the resolved context window and
+		// auto-loaded output budget just like a builtin provider's would.
+		if p, ok := providers.Detect(mc.BaseURL, mc.Model); ok {
+			mc.ContextWindow = p.ContextFor(mc.Model)
+			mc.MaxTokens = p.AutoMaxTokens(mc.Model)
+		}
 	} else {
 		mc, _ = providers.ModelConfig(m.wizardProvider, m.wizardModel, m.wizardKey)
 		// The base URL field is editable for builtins too: a relay standing
@@ -786,6 +832,33 @@ func (m tuiModel) wizardConfig() config.ModelConfig {
 	}
 	if n, err := strconv.Atoi(strings.TrimSpace(m.wizardContext)); err == nil && n > 0 {
 		mc.ContextWindow = n
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(m.wizardMaxTok)); err == nil && n > 0 {
+		mc.MaxTokens = n
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(m.wizardBudget)); err == nil && n > 0 {
+		mc.ThinkingBudget = n
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(m.wizardRetries)); err == nil && n != 0 {
+		mc.MaxRetries = n
+	}
+	if v := strings.TrimSpace(m.wizardParams); v != "" {
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(v), &obj); err == nil {
+			mc.Params = obj
+		}
+	}
+	if v := strings.TrimSpace(m.wizardHeaders); v != "" {
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(v), &obj); err == nil {
+			h := make(map[string]string, len(obj))
+			for k, val := range obj {
+				if s, ok := val.(string); ok {
+					h[k] = s
+				}
+			}
+			mc.Headers = h
+		}
 	}
 	return mc
 }

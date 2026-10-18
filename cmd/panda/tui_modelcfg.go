@@ -23,6 +23,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -84,6 +85,16 @@ func (m *tuiModel) mfieldGet(id string) string {
 		return m.wizardThinking
 	case "context":
 		return m.wizardContext
+	case "max_tokens":
+		return m.wizardMaxTok
+	case "budget":
+		return m.wizardBudget
+	case "retries":
+		return m.wizardRetries
+	case "params":
+		return m.wizardParams
+	case "headers":
+		return m.wizardHeaders
 	case "alias":
 		return m.wizardAlias
 	}
@@ -100,13 +111,64 @@ func (m *tuiModel) mfieldSet(id, v string) {
 		m.wizardKey = v
 	case "model":
 		m.wizardModel = v
+		m.refreshWizardContext()
 	case "thinking":
 		m.wizardThinking = v
 	case "context":
 		m.wizardContext = v
+		m.wizardCtxManual = true
+	case "max_tokens":
+		m.wizardMaxTok = v
+	case "budget":
+		m.wizardBudget = v
+	case "retries":
+		m.wizardRetries = v
+	case "params":
+		m.wizardParams = v
+	case "headers":
+		m.wizardHeaders = v
 	case "alias":
 		m.wizardAlias = v
 	}
+}
+
+// refreshWizardContext re-suggests the context window for the current model
+// while the field still holds a catalogue suggestion (or is empty); a value
+// the user typed — or one loaded from a saved config — stands untouched.
+func (m *tuiModel) refreshWizardContext() {
+	if m.wizardCtxManual {
+		return
+	}
+	p, ok := providers.Lookup(m.wizardProvider)
+	if !ok {
+		if d, dok := providers.Detect(m.wizardBaseURL, m.wizardModel); dok {
+			p, ok = d, true
+		}
+	}
+	if !ok {
+		return
+	}
+	if ctx := p.ContextFor(m.wizardModel); ctx > 0 {
+		m.wizardContext = strconv.Itoa(ctx)
+	}
+}
+
+// maxTokHint shows what a blank max_tokens field resolves to for the current
+// provider/model — the catalogue's auto-loaded budget — so the field reads
+// as an override rather than a required value.
+func (m *tuiModel) maxTokHint() string {
+	p, ok := providers.Lookup(m.wizardProvider)
+	if !ok {
+		if d, dok := providers.Detect(m.wizardBaseURL, m.wizardModel); dok {
+			p, ok = d, true
+		}
+	}
+	if ok {
+		if mt := p.AutoMaxTokens(m.wizardModel); mt > 0 {
+			return i18n.Tf(m.loc, "tui.mform.hint.maxTokDef", "def", strconv.Itoa(mt))
+		}
+	}
+	return i18n.T(m.loc, "tui.mform.hint.maxTok")
 }
 
 // buildModelForm lays out the editor for the picked provider. The base URL is
@@ -131,8 +193,10 @@ func (m *tuiModel) buildModelForm() {
 	if m.wizardModel == "" && ok {
 		m.wizardModel = p.DefaultModel
 	}
-	if m.wizardContext == "" && ok && p.ContextWindow > 0 {
-		m.wizardContext = strconv.Itoa(p.ContextWindow)
+	if m.wizardContext == "" && ok {
+		if ctx := p.ContextFor(m.wizardModel); ctx > 0 {
+			m.wizardContext = strconv.Itoa(ctx)
+		}
 	}
 	if m.wizardAlias == "" {
 		m.wizardAlias = prov
@@ -142,6 +206,8 @@ func (m *tuiModel) buildModelForm() {
 		// key — prefill it instead of making the user retype a secret.
 		m.wizardKey = m.r.findProviderKey(prov)
 	}
+
+	m.refreshWizardContext()
 
 	fields := []mfield{{
 		id:       "base_url",
@@ -171,8 +237,10 @@ func (m *tuiModel) buildModelForm() {
 		})
 	}
 	ctxHint := i18n.T(m.loc, "tui.mform.hint.ctx")
-	if ok && p.ContextWindow > 0 {
-		ctxHint = i18n.Tf(m.loc, "tui.mform.hint.ctxDef", "def", strconv.Itoa(p.ContextWindow))
+	if ok {
+		if ctx := p.ContextFor(m.wizardModel); ctx > 0 {
+			ctxHint = i18n.Tf(m.loc, "tui.mform.hint.ctxDef", "def", strconv.Itoa(ctx))
+		}
 	}
 	fields = append(fields,
 		mfield{
@@ -192,9 +260,34 @@ func (m *tuiModel) buildModelForm() {
 			},
 		},
 		mfield{
+			id:    "budget",
+			label: i18n.T(m.loc, "tui.mform.f.budget"),
+			hint:  i18n.T(m.loc, "tui.mform.hint.budget"),
+		},
+		mfield{
 			id:    "context",
 			label: i18n.T(m.loc, "tui.mform.f.context"),
 			hint:  ctxHint,
+		},
+		mfield{
+			id:    "max_tokens",
+			label: i18n.T(m.loc, "tui.mform.f.maxTok"),
+			hint:  m.maxTokHint(),
+		},
+		mfield{
+			id:    "retries",
+			label: i18n.T(m.loc, "tui.mform.f.retries"),
+			hint:  i18n.T(m.loc, "tui.mform.hint.retries"),
+		},
+		mfield{
+			id:    "params",
+			label: i18n.T(m.loc, "tui.mform.f.params"),
+			hint:  i18n.T(m.loc, "tui.mform.hint.params"),
+		},
+		mfield{
+			id:    "headers",
+			label: i18n.T(m.loc, "tui.mform.f.headers"),
+			hint:  i18n.T(m.loc, "tui.mform.hint.headers"),
 		},
 		mfield{
 			id:    "alias",
@@ -352,12 +445,32 @@ func (m *tuiModel) formValidate() (string, string) {
 					return f.id, i18n.T(m.loc, "tui.mform.err.context")
 				}
 			}
+		case "max_tokens", "budget":
+			if v != "" {
+				if n, err := strconv.Atoi(v); err != nil || n <= 0 {
+					return f.id, i18n.Tf(m.loc, "tui.mform.err.int", "field", f.label)
+				}
+			}
+		case "retries":
+			if v != "" {
+				if _, err := strconv.Atoi(v); err != nil {
+					return f.id, i18n.Tf(m.loc, "tui.mform.err.int", "field", f.label)
+				}
+			}
+		case "params", "headers":
+			if v != "" {
+				var obj map[string]any
+				if err := json.Unmarshal([]byte(v), &obj); err != nil {
+					return f.id, i18n.Tf(m.loc, "tui.mform.err.json", "field", f.label)
+				}
+			}
 		}
 	}
 	// A blank model on a catalogue provider takes the provider default.
 	if m.wizardModel == "" {
 		if p, ok := providers.Lookup(m.wizardProvider); ok && p.DefaultModel != "" {
 			m.wizardModel = p.DefaultModel
+			m.refreshWizardContext()
 		}
 	}
 	return "", ""
@@ -450,6 +563,7 @@ func (m tuiModel) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyEnter:
 			if it, ok := m.selectionList.Selected(); ok {
 				m.wizardModel = it.ID
+				m.refreshWizardContext()
 				for i := range m.form {
 					if m.form[i].id == "model" {
 						m.form[i].cursor = len([]rune(it.ID))
