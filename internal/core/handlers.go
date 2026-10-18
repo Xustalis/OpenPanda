@@ -531,22 +531,26 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 				release()
 				return
 			}
-			if err := c.store.SetWaitingContext(ctx, taskID, c.nodeID); err != nil {
-				c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
-				release()
-				return
-			}
 			// A task parked in waiting_context must carry a lease (P1-6):
 			// without one the timeout monitor never scans it, and if the
 			// context_fetch answer never arrives the task — and its pendingCtx
 			// entry — would leak forever. Fall back to the default delegation
-			// deadline when the wire carried no explicit timeout.
+			// deadline when the wire carried no explicit timeout. Stamp the
+			// lease BEFORE the state flip: the flip is the last write, so a
+			// reader that observes waiting_context — the expiry sweep, the
+			// exec-hold check, a poller like TestWaitingContextCarriesLease —
+			// always finds the lease already there.
 			timeoutMS := p.TimeoutMS
 			if timeoutMS <= 0 {
 				timeoutMS = c.lease().Milliseconds()
 			}
 			if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
 				c.logger.Warn("lease waiting-context task", "task", taskID, "err", err)
+			}
+			if err := c.store.SetWaitingContext(ctx, taskID, c.nodeID); err != nil {
+				c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
+				release()
+				return
 			}
 			// The fetch goes to the peer that handed us the task, not the
 			// origin: chain[0] is unreachable by construction on a partial

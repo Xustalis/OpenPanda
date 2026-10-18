@@ -507,16 +507,12 @@ func (c *Core) parkForArtifactPush(ctx context.Context, env bus.Envelope, taskID
 		release()
 		return
 	}
-	if err := c.store.SetWaitingContext(ctx, taskID, c.nodeID); err != nil {
-		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
-		c.terminalizeDeclined(ctx, taskID, err.Error())
-		release()
-		return
-	}
 	// A parked dtn task lives by the bundle's absolute deadline, not the
 	// live-track lease that bounds a context fetch — contact windows are
 	// measured in hours. Without an explicit deadline the default TTL bounds
-	// the wait so a push that never comes cannot park a slot forever.
+	// the wait so a push that never comes cannot park a slot forever. Stamp
+	// it before the state flip, as on the context-fetch park: waiting_context
+	// must never be observable lease-less.
 	timeoutMS := p.TimeoutMS
 	if p.DeadlineUnix > 0 {
 		timeoutMS = time.Until(time.Unix(p.DeadlineUnix, 0)).Milliseconds()
@@ -526,6 +522,12 @@ func (c *Core) parkForArtifactPush(ctx context.Context, env bus.Envelope, taskID
 	}
 	if err := c.store.SetLease(ctx, taskID, timeoutMS); err != nil {
 		c.logger.Warn("lease artifact-push wait", "task", taskID, "err", err)
+	}
+	if err := c.store.SetWaitingContext(ctx, taskID, c.nodeID); err != nil {
+		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, Reason: err.Error()})
+		c.terminalizeDeclined(ctx, taskID, err.Error())
+		release()
+		return
 	}
 	pc := &pendingContext{
 		intent: p.Intent, required: required, ctxType: p.ContextType,
