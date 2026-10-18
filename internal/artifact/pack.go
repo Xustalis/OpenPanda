@@ -47,10 +47,12 @@ import (
 const MaxBytes int64 = 512 << 20 // 512 MiB
 
 // maxEntries caps the entry count so an archive of a million empty files cannot
-// exhaust memory through the manifest alone. Unlike the byte cap this is not
-// configurable: it bounds memory, not disk, and memory has no free-space
-// probe to fall back on.
-const maxEntries = 200_000
+// exhaust memory through the manifest alone — nor the filesystem through an
+// inode flood of directories and links the manifest never records. Unlike the
+// byte cap this is not configurable: it bounds memory, not disk, and memory
+// has no free-space probe to fall back on. A var rather than a const so tests
+// can shrink the bound instead of materialising a six-figure tar.
+var maxEntries = 200_000
 
 // ErrTooLarge is returned when an archive or its decompressed content exceeds
 // the configured byte limit, or when it holds more than maxEntries entries.
