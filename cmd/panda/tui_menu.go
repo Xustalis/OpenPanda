@@ -303,7 +303,15 @@ func (mn *slashMenu) render(t theme, width, rows int) string {
 		if desc := strings.TrimSpace(it.desc); desc != "" && budget > 4 {
 			row += "  " + t.muted.Render(truncate(desc, budget))
 		}
-		sb.WriteString(strings.TrimRight(row, " "))
+		row = strings.TrimRight(row, " ")
+		if i == mn.sel {
+			// The highlight is a band the full row width, the way pickers
+			// elsewhere read — marker + weight alone left the selection to
+			// the gutter and lost it the moment the eye moved to the help
+			// column. Applied last so the band owns every cell's background.
+			row = t.menuSel.Width(max(1, width)).Render(row)
+		}
+		sb.WriteString(row)
 		if i < end-1 {
 			sb.WriteString("\n")
 		}
