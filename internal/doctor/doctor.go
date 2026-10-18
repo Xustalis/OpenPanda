@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,9 +115,18 @@ func Run(configPath string) []Check {
 				Model:         cfg.Model.Model,
 				KeyDefinitive: cfg.Model.APIKey != "",
 			})
-			if v.OK {
+			// Three verdicts, not two: "unreachable" and "reachable" do not
+			// cover "reachable but the endpoint rejected our credential"
+			// (a different fix — the key, not the route) or the keyless-✓
+			// case where a 401 only proves the service is up.
+			switch {
+			case v.Rejected:
+				add(fail("doctor.modelendpoint.rejected", "url", ep, "detail", v.Detail))
+			case v.OK && endpointProbeKeyless(v.Detail, cfg.Model.APIKey):
+				add(pass("doctor.modelendpoint.keyless", "url", ep, "ms", fmt.Sprintf("%d", time.Since(start).Milliseconds()), "detail", v.Detail))
+			case v.OK:
 				add(pass("doctor.modelendpoint.ok", "url", ep, "ms", fmt.Sprintf("%d", time.Since(start).Milliseconds()), "detail", v.Detail))
-			} else {
+			default:
 				add(fail("doctor.modelendpoint.no", "url", ep, "detail", v.Detail))
 			}
 		}
@@ -220,6 +230,25 @@ func Run(configPath string) []Check {
 	}
 
 	return out
+}
+
+// endpointProbeKeyless reports the confusing-✓ case: the endpoint answered an
+// auth-class status (401/402/403/429) while no credential was probed, so the
+// verdict is "the service is up" — not "the configured model would answer".
+// A bare ✓ next to "http 401" reads as both pass and failure at once.
+func endpointProbeKeyless(detail, apiKey string) bool {
+	if apiKey != "" {
+		return false
+	}
+	code, ok := strings.CutPrefix(detail, "http ")
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(strings.Fields(code)[0])
+	if err != nil {
+		return false
+	}
+	return n == 401 || n == 402 || n == 403 || n == 429
 }
 
 // Problems counts the failed checks.

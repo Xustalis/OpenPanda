@@ -93,3 +93,25 @@ func TestRunChecksAreWellFormed(t *testing.T) {
 		}
 	}
 }
+
+// The 401-with-no-key case is a pass, not a failure — but only when the
+// endpoint detail really is an auth-class status and no key was probed.
+func TestEndpointProbeKeyless(t *testing.T) {
+	for _, tc := range []struct {
+		detail, apiKey string
+		want           bool
+	}{
+		{"http 401", "", true},
+		{"http 403", "", true},
+		{"http 429", "", true},
+		{"http 200", "", false},      // healthy response is just a pass
+		{"http 401", "sk-x", false},  // with a key, 401 means the key was rejected
+		{"http 500", "", false},      // server error is unreachable, not "unproven"
+		{"timeout", "", false},       // transport failure
+		{"http 401 extra", "", true}, // detail may append latency etc.
+	} {
+		if got := endpointProbeKeyless(tc.detail, tc.apiKey); got != tc.want {
+			t.Fatalf("endpointProbeKeyless(%q, %q) = %v, want %v", tc.detail, tc.apiKey, got, tc.want)
+		}
+	}
+}
