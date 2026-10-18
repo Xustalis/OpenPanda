@@ -182,7 +182,10 @@ if env -i PATH="${PATH:-/usr/bin:/bin}" HOME="$HOME_DIR" \
         > "$WORK/run4.log" 2>&1; then
     bad "installer accepted a mismatched SHA-256"
 else
-    if grep -q 'SHA-256 校验失败' "$WORK/run4.log"; then
+    # The installer is bilingual (English default, zh under a zh locale);
+    # env -i above leaves LANG unset, so this is the English form — match
+    # either so the assertion survives a locale-detection change.
+    if grep -qE 'SHA-256 (mismatch|校验失败)' "$WORK/run4.log"; then
         ok "installer refused the mismatched checksum"
     else
         bad "installer refused, but not for the checksum (see below)"
