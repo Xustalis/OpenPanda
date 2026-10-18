@@ -107,6 +107,15 @@ func runAgents(args []string) {
 		return
 	}
 
+	// A positional that is not a verb is a typo'd agent name or a mistaken
+	// command ("agents claude_code" meaning "agents test claude_code") —
+	// listing anyway would report success on a misspelling.
+	if sub != "" {
+		fmt.Fprintf(os.Stderr, "panda: %s\n", i18n.Tf(loc, "cli.unknownNamedOpts",
+			"kind", "agents verb", "name", sub, "opts", "test, install"))
+		os.Exit(2)
+	}
+
 	statuses := probeAgentStatuses()
 	if jsonOutput {
 		emitJSON(statuses)
