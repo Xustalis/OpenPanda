@@ -67,7 +67,8 @@ func runWeb(args []string) {
 
 	// Ensure background log directory and file
 	logDir := filepath.Join(cliStateDir(), "logs")
-	_ = os.MkdirAll(logDir, 0o755)
+	_ = os.MkdirAll(logDir, 0o700)
+	_ = os.Chmod(logDir, 0o700)
 	logFile := filepath.Join(logDir, "web.log")
 
 	// Daemon mode: spawn detached background process and return immediately
@@ -84,10 +85,15 @@ func runWeb(args []string) {
 			childArgs = append(childArgs, a)
 		}
 		subArgs := append([]string{"web"}, childArgs...)
-		lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		// 0o600, not 0o644: the daemon child's stdout lands here, and it prints
+		// the LAN console URLs with the bearer token appended — a 0644 log
+		// hands every local account the panel. Tighten an existing file too:
+		// a web.log first written under the old mode keeps leaking otherwise.
+		lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			fatal("open web log", err)
 		}
+		_ = os.Chmod(logFile, 0o600)
 		cmd := exec.Command(exe, subArgs...)
 		cmd.Stdout = lf
 		cmd.Stderr = lf
