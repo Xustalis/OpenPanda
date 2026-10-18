@@ -609,7 +609,7 @@ func figlet(word string) []string {
 }
 
 // printBanner draws the startup screen: the OpenPanda wordmark in figlet
-// lettering, then node/model/workdir info lines and orientation hints.
+// lettering, then version/workdir info lines and orientation hints.
 // Implementation lives behind the lite split: banner_full.go renders the
 // themed banner in a full build, tui_lite.go a one-line greeting.
 

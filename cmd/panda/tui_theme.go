@@ -47,7 +47,6 @@ type theme struct {
 	userPanel       lipgloss.Style // the user block's background band
 	inputBox        lipgloss.Style // the bottom rounded input frame
 	inputBoxRunning lipgloss.Style // the in-flight runtime input frame
-	welcome         lipgloss.Style // the startup welcome frame
 	approval        lipgloss.Style // the tier-2 approval card frame
 	listBox         lipgloss.Style // the boxed selection-list frame (border only; set Width per use)
 	menuBox         lipgloss.Style // the slash-menu popup frame — quieter than the input's green
@@ -105,7 +104,6 @@ func newTheme(loc i18n.Locale) theme {
 	frame := lipgloss.NewStyle().Border(border).Padding(0, 1)
 	t.inputBox = frame
 	t.inputBoxRunning = frame
-	t.welcome = frame
 	t.approval = frame
 	t.listBox = frame
 	t.menuBox = frame
@@ -114,7 +112,6 @@ func newTheme(loc i18n.Locale) theme {
 		t.inputBox = t.inputBox.BorderForeground(brandGreen)
 		t.listBox = t.listBox.BorderForeground(brandGreen)
 		t.inputBoxRunning = t.inputBoxRunning.BorderForeground(lipgloss.Color("#E5C07B"))
-		t.welcome = t.welcome.BorderForeground(brandGreen)
 		t.approval = t.approval.BorderForeground(lipgloss.Color("3"))
 		t.border = lipgloss.Color("238")
 		// Grey, not green: a second brand-coloured box stacked under the input

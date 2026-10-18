@@ -106,7 +106,7 @@ func (m tuiModel) View() string {
 }
 
 // mainChatView renders the full-screen chat interface in AltScreen mode:
-//   - The welcome banner (OpenPanda ASCII art wordmark, version, node/model, workdir, tips)
+//   - The welcome banner (OpenPanda ASCII art wordmark, version, workdir, tips)
 //   - Committed conversation history blocks
 //   - In-flight live output (streaming response, reasoning, task progress card, spinner)
 //   - Vertical padding so the input box stays anchored at the bottom of the screen
@@ -333,9 +333,7 @@ func (m tuiModel) splashView() string {
 	centerContent := strings.Join(blockLines, "\n")
 	bottomPrompt := m.th.muted.Render(i18n.T(m.loc, "tui.splash.prompt"))
 
-	// The same welcome card the chat banner wears — the splash is the first
-	// thing a run shows, so it gets the product's signature rounded frame.
-	centerRendered := lipgloss.PlaceHorizontal(w, lipgloss.Center, m.th.welcome.Render(centerContent))
+	centerRendered := lipgloss.PlaceHorizontal(w, lipgloss.Center, centerContent)
 	centerLines := strings.Split(centerRendered, "\n")
 
 	padTop := max(0, (h-len(centerLines)-3)/2)
@@ -1221,10 +1219,9 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 		workPath = cfg.Storage.WorkPath
 	}
 
-	// The card renders width-2 wide overall; its border (2) + padding (2)
-	// leaves width-6 of inner text room — truncate there or lipgloss wraps
-	// the overlong line and the banner grows a row per wrap.
-	contentWidth := max(20, width-6)
+	// Every line is truncated to the terminal width itself — an overlong
+	// line would wrap and grow the banner a row per wrap.
+	contentWidth := max(20, width)
 	var sb strings.Builder
 
 	if width >= 76 {
@@ -1279,14 +1276,7 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 		sb.WriteString("\n" + th.warn.Render(cliui.Truncate("    for Chinese on this screen: sudo apt install fbterm fonts-wqy-zenhei && fbterm", contentWidth, uni)))
 	}
 
-	// Wrap in the welcome card — the same rounded frame the input box, the
-	// pickers and the approval card use — so the entry screen reads as one
-	// designed surface rather than loose text. A sliver of a terminal has no
-	// room for a card; bare text degrades better than a two-cell box.
-	if width >= 8 {
-		return th.welcome.Width(width - 2).Render(strings.TrimRight(sb.String(), "\n"))
-	}
-	return sb.String()
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // welcomeCache memoizes the rendered banner. The banner is static between

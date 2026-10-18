@@ -387,20 +387,19 @@ func TestTUIWelcomeWaitsForTheTerminalSize(t *testing.T) {
 	// The first size report is what prints the banner, and only the first.
 	_, cmd := m.Update(tea.WindowSizeMsg{Width: 52, Height: 30})
 	if cmd == nil {
-		t.Fatal("first WindowSizeMsg should print the welcome frame")
+		t.Fatal("first WindowSizeMsg should print the welcome banner")
 	}
 	m = step(m, tea.WindowSizeMsg{Width: 52, Height: 30})
 	if _, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40}); cmd != nil {
-		t.Fatal("a resize must not reprint the welcome frame")
+		t.Fatal("a resize must not reprint the welcome banner")
 	}
 }
 
 // TestTUIWelcomeFitsItsTerminal tests that the welcome banner adapts to the
 // terminal size: narrow terminals (<76 columns) receive the compact header
 // while standard/wide terminals (>=76 columns) receive the full ASCII
-// wordmark, both inside the rounded welcome card, and no line ever exceeds
-// the terminal width. The banner carries no node/model line — only version,
-// work dir and tips.
+// wordmark, and no line ever exceeds the terminal width. The banner carries
+// no node/model line — only version, work dir and tips.
 func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 	for _, width := range []int{40, 52, 80, 200} {
 		m := newTestTUI(t)
@@ -409,9 +408,9 @@ func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 		m.r.cfg.Model.Model = "deepseek-v4-flash"
 		m = step(m, tea.WindowSizeMsg{Width: width, Height: 30})
 		lines := strings.Split(m.welcome(), "\n")
-		wantRows := 12 // 10 content rows + the welcome card's top/bottom border
+		wantRows := 10
 		if width < 76 {
-			wantRows = 6
+			wantRows = 4
 		}
 		if len(lines) != wantRows {
 			t.Errorf("width %d: banner is %d rows, want %d", width, len(lines), wantRows)
@@ -994,20 +993,20 @@ done:
 	}
 }
 
-// TestTUIStartupIsNotBottomPadded pins the layout fix: the welcome frame is
+// TestTUIStartupIsNotBottomPadded pins the layout fix: the welcome banner is
 // committed where the cursor already is — the top of a fresh terminal — and
-// the transcript grows downward from it. The frame used to be preceded by
+// the transcript grows downward from it. The banner used to be preceded by
 // blank lines computed to push it to the bottom edge, which stranded the
-// greeting under a screenful of dead space on anything taller than the frame
+// greeting under a screenful of dead space on anything taller than the banner
 // and put the only interactive row where the eye is not.
 func TestTUIStartupIsNotBottomPadded(t *testing.T) {
 	m := newTestTUI(t)
 	prints := m.startupPrints()
 	if len(prints) == 0 {
-		t.Fatal("startup must print the welcome frame")
+		t.Fatal("startup must print the welcome banner")
 	}
 	if strings.HasPrefix(prints[0], "\n") {
-		t.Fatal("the welcome frame must print at the cursor, not be padded down to the bottom edge")
+		t.Fatal("the welcome banner must print at the cursor, not be padded down to the bottom edge")
 	}
 }
 

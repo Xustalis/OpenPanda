@@ -281,7 +281,7 @@ type tuiModel struct {
 
 // pulseStar is the thinking spinner: a star that swells and shrinks in place
 // rather than a glyph that spins. It is the same ✻ the thought header and the
-// welcome frame use, so "working" reads as one idea across the screen instead of
+// welcome banner use, so "working" reads as one idea across the screen instead of
 // three unrelated symbols, and the frames run up and back down so it breathes.
 var pulseStar = spinner.Spinner{
 	Frames: []string{"·", "✢", "✳", "∗", "✻", "✽", "✻", "∗", "✳", "✢"},
@@ -424,10 +424,10 @@ func (m tuiModel) Init() tea.Cmd {
 	if m.r != nil {
 		m.r.resetWatchBaseline() // adopt already-finished tasks, so startup is quiet
 	}
-	// The welcome frame is not printed here: Init runs before Bubble Tea reports
+	// The welcome banner is not printed here: Init runs before Bubble Tea reports
 	// the terminal size, so a banner printed now would be drawn to the fallback
-	// width — an 80-column box in a 52-column window. The first WindowSizeMsg
-	// prints it (see Update), which is the earliest moment the frame can match
+	// width — 80-column art in a 52-column window. The first WindowSizeMsg
+	// prints it (see Update), which is the earliest moment the banner can match
 	// the terminal it is sitting in.
 	return tea.Batch(textarea.Blink, watchTasks(m.r), altScrollCmd(m.mouse))
 }
