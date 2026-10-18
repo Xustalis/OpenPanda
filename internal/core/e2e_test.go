@@ -793,31 +793,78 @@ func TestHelloRejectAuthSurfaces(t *testing.T) {
 	}
 }
 
-// startPair boots two cores and wires them together, failing the test on error.
-func startPair(t *testing.T, ctx context.Context, entry, worker *Core, entryAddr, workerAddr string) {
+// registerAndListen registers c and starts its WebSocket listener on addr,
+// returning a channel that delivers the Listen result: a bind failure lands
+// in it as soon as it happens, for linkPair to surface. t.Cleanup drains the
+// channel, so a following test never dials a draining listener.
+func registerAndListen(t *testing.T, ctx context.Context, c *Core, addr string) <-chan error {
 	t.Helper()
-	must := func(err error) {
-		t.Helper()
-		if err != nil {
-			t.Fatalf("startup: %v", err)
-		}
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("startup: %v", err)
 	}
-	must(entry.Register(ctx))
-	must(worker.Register(ctx))
+	done := make(chan error, 1)
+	go func() { done <- c.Listen(ctx, addr) }()
 
-	ed := make(chan error, 1)
-	wd := make(chan error, 1)
-	go func() { ed <- entry.Listen(ctx, entryAddr) }()
-	go func() { wd <- worker.Listen(ctx, workerAddr) }()
+	// The test's own defer cancel() stops the listener, but ctx→Shutdown is
+	// not synchronous — the socket can still be accepting (and answering
+	// hellos under the shared test secret with a DIFFERENT node id) while the
+	// next test starts reusing the same port. Wait, bounded, for Listen to
+	// return so a following test never dials a draining listener.
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	return done
+}
 
-	// Listeners bind inside Listen; retry the dial until both are up instead
-	// of sleeping a fixed 200ms — loaded CI runners can exceed that.
+// linkPair dials entry → workerAddr and waits until both directions see a
+// live conn. The listenErr channels (from registerAndListen) are polled each
+// round: a Listen that already returned — a bind failure on a contended port,
+// or a second bind of a port the test already holds, which Linux rejects with
+// EADDRINUSE while macOS tolerates it — fails fast instead of waiting out the
+// dial deadline against a listener that will never come up.
+//
+// Listeners bind inside Listen; retry the dial until both are up instead of
+// sleeping a fixed 200ms — loaded CI runners can exceed that.
+//
+// The ports are shared across tests, and a finished test's listener can still
+// be accepting during its ctx-cancel shutdown window: a dial that lands on it
+// gets a hello reply signed by the WRONG node id. A transport-level "success"
+// is therefore not enough — keep redialing until the conn actually registers
+// the expected id.
+func linkPair(t *testing.T, ctx context.Context, entry, worker *Core, workerAddr string, listenErrs ...<-chan error) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if err := entry.DialPeer(ctx, workerAddr); err == nil {
+		for _, ch := range listenErrs {
+			select {
+			case err := <-ch:
+				if err != nil {
+					t.Fatalf("startup: %v", err)
+				}
+			default:
+			}
+		}
+		if err := entry.DialPeer(ctx, workerAddr); err != nil {
+			if time.Now().After(deadline) {
+				t.Fatalf("startup: %v", err)
+			}
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		// Dial "succeeded" — but which node answered? Poll briefly for the
+		// expected id; a stale listener's wrong-id conn expires and we redial.
+		regDeadline := time.Now().Add(2 * time.Second)
+		for entry.connFor(worker.node.id) == nil && time.Now().Before(regDeadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if entry.connFor(worker.node.id) != nil {
 			break
-		} else if time.Now().After(deadline) {
-			must(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("peer %s never connected", worker.node.id)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -828,6 +875,19 @@ func startPair(t *testing.T, ctx context.Context, entry, worker *Core, entryAddr
 	// so wait until both directions see a live conn.
 	waitPeer(t, entry, worker.node.id)
 	waitPeer(t, worker, entry.node.id)
+}
+
+// startPair boots two cores and wires them together, failing the test on
+// error. Neither core may already hold a listener: startPair binds both
+// ports, and a rebind of a held one is an EADDRINUSE on Linux (macOS quietly
+// allows it, which is how such a double bind can pass every local run and
+// still break CI). To extend an existing pair, use registerAndListen for the
+// new core and linkPair for the edge.
+func startPair(t *testing.T, ctx context.Context, entry, worker *Core, entryAddr, workerAddr string) {
+	t.Helper()
+	ed := registerAndListen(t, ctx, entry, entryAddr)
+	wd := registerAndListen(t, ctx, worker, workerAddr)
+	linkPair(t, ctx, entry, worker, workerAddr, ed, wd)
 }
 
 // waitPeer polls until core c has a live conn to the given peer id.

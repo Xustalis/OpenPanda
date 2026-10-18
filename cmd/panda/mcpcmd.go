@@ -48,7 +48,8 @@ const maxSelfToolOut = 8192
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml (default: discovered)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda mcp")
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {

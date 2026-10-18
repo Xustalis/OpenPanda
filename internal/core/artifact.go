@@ -64,6 +64,12 @@ const (
 	// 100 ms link reaches line rate, small enough that a refusal still
 	// costs little.
 	artifactFetchWindow = 4
+
+	// artServeMaxOffsets caps the distinct offsets a relayed pull tracks.
+	// Honest fetches cover at most ceil(512 MiB / 1 MiB) ≈ 512 offsets; the
+	// cap leaves generous headroom while bounding the waiter/inflight maps
+	// a requester spamming fresh offsets could otherwise grow without bound.
+	artServeMaxOffsets = 1024
 )
 
 // artifactTransfer is one in-flight inbound pull. source is the node the fetches
@@ -670,6 +676,17 @@ func (c *Core) relayArtifactFetch(ctx context.Context, env bus.Envelope, p bus.A
 	sv.mu.Lock()
 	sv.requesters[env.From] = true
 	if sv.waiters[p.Offset] == nil {
+		// An honest pull asks for at most ceil(max-artifact / 1 MiB chunk)
+		// distinct offsets (~512) per entry; a requester minting fresh ones
+		// past the cap is growing these maps, not fetching bytes — deny it
+		// rather than tracking.
+		if len(sv.waiters) >= artServeMaxOffsets {
+			sv.mu.Unlock()
+			deny := bus.ArtifactChunkPayload{TaskID: p.TaskID, Hash: p.Hash, Offset: p.Offset,
+				OK: false, Reason: "relay offset table full"}
+			_ = c.sendDataFrame(env.From, bus.MsgArtifactChunk, deny, deny, nil)
+			return true
+		}
 		sv.waiters[p.Offset] = map[string]bool{}
 	}
 	sv.waiters[p.Offset][env.From] = true

@@ -3,6 +3,7 @@
 package panel
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 // chooseDirectoryResponse is the JSON response for POST /api/dialog/choose-directory.
@@ -37,12 +39,20 @@ func (h *handler) chooseDirectoryDialog(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// dialogTimeout bounds a native picker invocation: a dialog left open forever
+// would otherwise park this handler's goroutine, and repeated clicks would pile
+// up zombie osascript/zenity/powershell processes behind it. Generous enough
+// that a slow legitimate selection still wins.
+const dialogTimeout = 5 * time.Minute
+
 // openNativeDirectoryDialog opens the OS native file dialog to choose a folder.
 func openNativeDirectoryDialog() (string, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dialogTimeout)
+	defer cancel()
 	switch runtime.GOOS {
 	case "darwin":
 		// macOS: AppleScript choose folder
-		cmd := exec.Command("osascript", "-e", `POSIX path of (choose folder with prompt "Select Project Folder")`)
+		cmd := exec.CommandContext(ctx, "osascript", "-e", `POSIX path of (choose folder with prompt "Select Project Folder")`)
 		out, err := cmd.Output()
 		if err != nil {
 			// User clicked Cancel in osascript
@@ -58,7 +68,7 @@ func openNativeDirectoryDialog() (string, bool, error) {
 	case "windows":
 		// Windows: PowerShell FolderBrowserDialog
 		psScript := `Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select Project Folder'; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }`
-		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
+		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
 		out, err := cmd.Output()
 		if err != nil {
 			return "", false, err
@@ -72,7 +82,7 @@ func openNativeDirectoryDialog() (string, bool, error) {
 	case "linux":
 		// Linux: try zenity then kdialog
 		if _, err := exec.LookPath("zenity"); err == nil {
-			cmd := exec.Command("zenity", "--file-selection", "--directory", "--title=Select Project Folder")
+			cmd := exec.CommandContext(ctx, "zenity", "--file-selection", "--directory", "--title=Select Project Folder")
 			out, err := cmd.Output()
 			if err != nil {
 				return "", true, nil // zenity returns exit 1 on cancel
@@ -81,7 +91,7 @@ func openNativeDirectoryDialog() (string, bool, error) {
 			return strings.TrimRight(path, "/"), false, nil
 		}
 		if _, err := exec.LookPath("kdialog"); err == nil {
-			cmd := exec.Command("kdialog", "--getexistingdirectory", ".")
+			cmd := exec.CommandContext(ctx, "kdialog", "--getexistingdirectory", ".")
 			out, err := cmd.Output()
 			if err != nil {
 				return "", true, nil
@@ -123,7 +133,7 @@ func (h *handler) listDirectories(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	absPath, err := filepath.Abs(reqPath)
+	absPath, err := h.resolveFsPath(reqPath)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid path: "+err.Error()))
 		return

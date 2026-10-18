@@ -28,6 +28,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
@@ -125,6 +126,9 @@ func (s *TaskStore) PostUserMessage(ctx context.Context, taskID, text, grade, lo
 		SenderSeq:   seq,
 		Grade:       grade,
 		Body:        text,
+		// SentAt went unset once and every user note rendered as "~57 years
+		// ago" on `panda task board` — the store writes m.SentAt verbatim.
+		SentAt: time.Now().Unix(),
 	}); err != nil {
 		return fmt.Errorf("post user message: %w", err)
 	}

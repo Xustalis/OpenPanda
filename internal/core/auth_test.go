@@ -32,9 +32,19 @@ func rawDial(t *testing.T, addr string) *websocket.Conn {
 func startListener(t *testing.T, c *Core, addr string) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() { done <- c.Listen(ctx, addr) }()
+	// Cancel first, then wait, bounded, for Listen to return: the tests that
+	// follow reuse these ports, and a listener still draining its shutdown
+	// window keeps accepting (and answering hellos with the wrong node id)
+	// until it is actually gone.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	})
 	time.Sleep(200 * time.Millisecond)
 }
 
@@ -429,6 +439,9 @@ func TestDelegateStampsRemoteProvenance(t *testing.T) {
 	if !tk.Remote {
 		t.Fatalf("wire-intake task not stamped remote")
 	}
+	// The admitted task is already executing asynchronously — let it settle
+	// before returning so its workdir writes are done when TempDir cleans up.
+	waitLocalTasksSettled(t, c)
 
 	// Contrast: the local submit path stays local.
 	lt, err := c.store.Create(ctx, "", "", "local task", c.nodeID, []string{c.nodeID})

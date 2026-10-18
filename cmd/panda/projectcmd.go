@@ -97,7 +97,8 @@ func projectStores(configPath string) (*projects.Store, *memory.Projects, *core.
 func runProjectList(args []string) {
 	fs := flag.NewFlagSet("project list", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda project list")
 	store, mem, _, closeDB := projectStores(*configPath)
 	defer closeDB()
 
@@ -188,7 +189,7 @@ func runProjectNew(args []string) {
 	dir := fs.String("dir", "", "work directory for this project's tasks")
 	desc := fs.String("desc", "", "one-line description")
 	enter := fs.Bool("enter", true, "make the new project current")
-	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "dir": true, "desc": true}))
+	fs.Parse(reorderFlags(fs, args))
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda project new <name> [--dir PATH] [--desc S] [--enter=false]")
@@ -231,7 +232,7 @@ func runProjectNew(args []string) {
 func runProjectShow(args []string) {
 	fs := flag.NewFlagSet("project show", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	store, mem, tasks, closeDB := projectStores(*configPath)
 	defer closeDB()
 
@@ -342,7 +343,7 @@ func printProjectSessions(loc i18n.Locale, configPath, name string) {
 func runProjectApproval(args []string) {
 	fs := flag.NewFlagSet("project approval", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 	loc := i18n.Detect()
 	usage := func() {
@@ -405,7 +406,7 @@ func runProjectApproval(args []string) {
 func runProjectEnter(args []string) {
 	fs := flag.NewFlagSet("project enter", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	name := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if name == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda project enter <name>")
@@ -446,7 +447,8 @@ func runProjectEnter(args []string) {
 func runProjectExit(args []string) {
 	fs := flag.NewFlagSet("project exit", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda project exit")
 	store, _, _, closeDB := projectStores(*configPath)
 	defer closeDB()
 
@@ -469,7 +471,7 @@ func runProjectExit(args []string) {
 func runProjectRename(args []string) {
 	fs := flag.NewFlagSet("project rename", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	if fs.NArg() != 2 {
 		fmt.Fprintln(os.Stderr, "usage: panda project rename <old> <new>")
 		os.Exit(2)
@@ -525,7 +527,7 @@ func runProjectRemove(args []string) {
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	keepMemory := fs.Bool("keep-memory", false, "leave the project's memory file in place")
 	deleteSessions := fs.Bool("delete-sessions", false, "delete all sessions belonging to this project")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	name := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if name == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda project rm <name> [--keep-memory] [--delete-sessions]")

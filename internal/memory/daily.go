@@ -70,14 +70,20 @@ func (d *Daily) append(now time.Time, entry string, external bool) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := os.MkdirAll(d.dir, 0o755); err != nil {
+	if err := os.MkdirAll(d.dir, 0o700); err != nil {
 		return fmt.Errorf("memory: create daily dir: %w", err)
 	}
-	f, err := os.OpenFile(d.PathFor(now), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	// MkdirAll leaves an existing directory's mode alone and O_CREATE's mode
+	// only applies to a fresh file: tighten both so a log first written under
+	// a looser umask does not stay readable to other local accounts.
+	_ = os.Chmod(d.dir, 0o700)
+	path := d.PathFor(now)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("memory: open daily log: %w", err)
 	}
 	defer f.Close()
+	_ = os.Chmod(path, 0o600)
 	if _, err := fmt.Fprintf(f, "- %s %s\n", now.Format("15:04:05"), entry); err != nil {
 		return fmt.Errorf("memory: append daily log: %w", err)
 	}
@@ -160,7 +166,7 @@ func (d *Daily) pruneArchive(now time.Time) error {
 
 func (d *Daily) archive(name string) error {
 	dir := filepath.Join(d.dir, "archive")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("memory: create archive dir: %w", err)
 	}
 	if err := os.Rename(filepath.Join(d.dir, name), filepath.Join(dir, name)); err != nil {

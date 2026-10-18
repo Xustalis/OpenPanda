@@ -157,10 +157,10 @@ func (s *Store) Save(sk *Skill) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("skills: create skill dir: %w", err)
 	}
-	if err := util.WriteFileAtomic(path, data, 0o644); err != nil {
+	if err := util.WriteFileAtomic(path, data, 0o600); err != nil {
 		return fmt.Errorf("skills: write %s: %w", sk.Name, err)
 	}
 	return nil

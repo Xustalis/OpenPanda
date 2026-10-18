@@ -128,8 +128,16 @@ func TestPeerLiveSiblingHoldsEdge(t *testing.T) {
 	if err := a.DialPeer(ctx, "127.0.0.1:17962"); err != nil {
 		t.Fatalf("dial 1: %v", err)
 	}
-	time.Sleep(300 * time.Millisecond)
-	first := b.connFor("node-a")
+	// DialPeer returns on the hello REPLY, which b sends before ensurePeer
+	// registers the conn — poll instead of assuming registration landed.
+	var first *bus.Conn
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if first = b.connFor("node-a"); first != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if first == nil {
 		t.Fatalf("b has no conn for node-a after first dial")
 	}
@@ -172,8 +180,14 @@ func TestPeerAuthoritativeNewcomerTakesEdge(t *testing.T) {
 	if err := a.DialPeer(ctx, "127.0.0.1:17972"); err != nil {
 		t.Fatalf("sibling dial: %v", err)
 	}
-	time.Sleep(300 * time.Millisecond)
-	first := b.connFor("node-a")
+	var first *bus.Conn
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if first = b.connFor("node-a"); first != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if first == nil {
 		t.Fatalf("b has no conn for node-a after sibling dial")
 	}
@@ -186,7 +200,7 @@ func TestPeerAuthoritativeNewcomerTakesEdge(t *testing.T) {
 		t.Fatalf("authoritative dial: %v", err)
 	}
 	var second *bus.Conn
-	deadline := time.Now().Add(3 * time.Second)
+	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if second = b.connFor("node-a"); second != nil && second != first {
 			break

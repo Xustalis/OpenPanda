@@ -329,7 +329,8 @@ func runHeatmap(args []string) {
 	fs := flag.NewFlagSet("heatmap", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	weeks := fs.Int("weeks", 0, "weeks of history to show (default: one year)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda heatmap [--weeks N]")
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {

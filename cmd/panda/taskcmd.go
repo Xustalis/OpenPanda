@@ -113,7 +113,7 @@ func runTaskShow(args []string) {
 	fs := flag.NewFlagSet("task", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	trace := fs.Bool("trace", false, "show the hop-by-hop delegation trace instead of the task record")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
 		taskUsage()
@@ -694,7 +694,7 @@ func runTaskAdd(args []string) {
 	actionSpec := fs.String("action-spec", "", "actuator dispatch JSON: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{...}}")
 	wait := fs.Bool("wait", false, "block until the task settles (done/failed/cancelled/review) and print the result")
 	waitTimeout := fs.Duration("wait-timeout", 30*time.Minute, "with --wait: stop watching after this long (the task itself keeps running)")
-	fs.Parse(reorderFlags(args, taskAddValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 
 	loc := i18n.Detect()
 	// Positional words join --prompt: `task add --title T do the thing` —
@@ -1050,7 +1050,7 @@ func runTaskAddNodes(loc i18n.Locale, engine *askengine.Engine, cfg *config.Conf
 func runTaskPriority(args []string) {
 	fs := flag.NewFlagSet("task priority", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	loc := i18n.Detect()
 	if fs.NArg() != 2 {
 		fmt.Fprintln(os.Stderr, "usage: panda task priority <task-id> <"+cliPriorities+">")
@@ -1087,7 +1087,7 @@ func runTaskPriority(args []string) {
 func runTaskMove(args []string) {
 	fs := flag.NewFlagSet("task move", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	if fs.NArg() != 2 {
 		fmt.Fprintln(os.Stderr, "usage: panda task move <task-id> <seq>")
 		os.Exit(2)
@@ -1125,7 +1125,7 @@ func runTaskMove(args []string) {
 func runTaskDelete(args []string) {
 	fs := flag.NewFlagSet("task delete", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	loc := i18n.Detect()
 	if id == "" {
@@ -1199,7 +1199,7 @@ func taskGitDirs(t core.Task, cfg *config.Config) []string {
 func runTaskRevert(args []string) {
 	fs := flag.NewFlagSet("task revert", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	loc := i18n.Detect()
 	if id == "" {
@@ -1254,7 +1254,7 @@ func runTaskRevert(args []string) {
 func runTaskFollowup(args []string) {
 	fs := flag.NewFlagSet("task followup", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	ref := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	loc := i18n.Detect()
 	if ref == "" {
@@ -1284,7 +1284,7 @@ func runTaskFollowup(args []string) {
 func runTaskBoard(args []string) {
 	fs := flag.NewFlagSet("task board", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	ref := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if ref == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda task board <task-id>")
@@ -1346,7 +1346,7 @@ func runTaskSend(args []string) {
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	cardPath := fs.String("card", "", "path to capabilities.yaml")
 	inject := fs.Bool("inject", false, "abort the in-flight round and make the text the next round's leading directive")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 	loc := i18n.Detect()
 	if len(rest) < 2 {
@@ -1400,7 +1400,7 @@ func runTaskContinue(args []string) {
 	cardPath := fs.String("card", "", "path to capabilities.yaml")
 	note := fs.String("m", "", "operator note leading the continued round")
 	fs.StringVar(note, "note", "", "operator note leading the continued round")
-	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "card": true, "m": true, "note": true}))
+	fs.Parse(reorderFlags(fs, args))
 	loc := i18n.Detect()
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {

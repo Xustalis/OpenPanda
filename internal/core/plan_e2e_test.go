@@ -170,6 +170,11 @@ func waitPlanDone(t *testing.T, ctx context.Context, c *Core, planID string, wan
 			}
 		}
 		if done == want && len(stages) == want {
+			// The stage rows reached done before the origin's replica pull
+			// finished — adoptStageOutput detaches it past the result
+			// envelope — so "plan done" for a caller must mean the pool
+			// writes landed too, not just the state transition.
+			waitArtifactWrites(t, c)
 			return stages
 		}
 		time.Sleep(100 * time.Millisecond)

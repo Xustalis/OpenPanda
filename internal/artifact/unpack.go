@@ -86,6 +86,7 @@ func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool)
 	var written int64
 	var skipped int
 	var skippedPaths []string
+	var entries int
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -94,7 +95,12 @@ func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool)
 		if err != nil {
 			return Manifest{}, fmt.Errorf("artifact: read tar: %w", err)
 		}
-		if len(meta) > maxEntries {
+		// The cap is on every entry, not just the regular files meta
+		// records: an archive of empty directories compresses to almost
+		// nothing and would otherwise run an unbounded MkdirAll/Symlink
+		// sweep — an inode flood that no byte limit ever sees.
+		entries++
+		if entries > maxEntries {
 			return Manifest{}, fmt.Errorf("%w: more than %d entries", ErrTooLarge, maxEntries)
 		}
 		rel, err := safeRel(hdr.Name)
@@ -109,6 +115,9 @@ func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool)
 			continue
 		}
 		target := filepath.Join(root, rel)
+		if err := ancestorsInside(root, target); err != nil {
+			return Manifest{}, err
+		}
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
@@ -133,11 +142,11 @@ func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool)
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return Manifest{}, fmt.Errorf("artifact: mkdir %s: %w", filepath.Dir(rel), err)
 			}
-			mode := fileMode(hdr)
-			if err := writeRegular(tr, target, mode, hdr.Size); err != nil {
+			landed, err := writeRegular(tr, target, fileMode(hdr), hdr.Size)
+			if err != nil {
 				return Manifest{}, fmt.Errorf("artifact: write %s: %w", rel, err)
 			}
-			meta = append(meta, EntryMeta{Path: filepath.ToSlash(rel), Mode: mode, Size: hdr.Size})
+			meta = append(meta, EntryMeta{Path: filepath.ToSlash(rel), Mode: landed, Size: hdr.Size})
 		case tar.TypeSymlink:
 			if err := checkLinkTarget(root, rel, hdr.Linkname); err != nil {
 				return Manifest{}, err
@@ -149,8 +158,11 @@ func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool)
 			// a read-only file (the error is deliberately ignored here), and
 			// the following Symlink then dies "file exists" on exactly the
 			// re-extracted git trees this path serves. Clear the attribute
-			// first so the replace can land on every platform.
-			if _, lerr := os.Lstat(target); lerr == nil {
+			// first so the replace can land on every platform. The guard is
+			// "not a symlink": os.Chmod follows links, so chmodding a link
+			// that happens to sit at target would retag whatever it points
+			// at — the link itself needs no permission to be removed.
+			if fi, lerr := os.Lstat(target); lerr == nil && fi.Mode()&os.ModeSymlink == 0 {
 				_ = os.Chmod(target, 0o666)
 			}
 			_ = os.Remove(target)
@@ -256,29 +268,91 @@ func contains(root, path string) bool {
 	return strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
+// ancestorsInside verifies that path's parent chain stays under root in the
+// filesystem, not just textually: safeRel vets the entry's own name and
+// checkLinkTarget the archive's own links, but dst is often a pre-existing
+// tree (the project checkout an adoption writes over) whose already-present
+// symlinked directories MkdirAll and OpenFile follow without comment — an
+// entry below one of those writes straight outside the destination. The
+// probe resolves the deepest existing ancestor for real and re-appends the
+// not-yet-created tail textually, so the verdict reflects what the entry
+// will hit, not the layout the archive claimed.
+func ancestorsInside(root, path string) error {
+	probe := filepath.Dir(path)
+	var tail []string
+	for {
+		if _, err := os.Lstat(probe); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("artifact: stat %s: %w", probe, err)
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return fmt.Errorf("artifact: %q has no existing ancestor under the destination", path)
+		}
+		tail = append([]string{filepath.Base(probe)}, tail...)
+		probe = parent
+	}
+	resolved, err := filepath.EvalSymlinks(probe)
+	if err != nil {
+		return fmt.Errorf("artifact: resolve %s: %w", probe, err)
+	}
+	for _, seg := range tail {
+		resolved = filepath.Join(resolved, seg)
+	}
+	if !contains(root, resolved) {
+		return fmt.Errorf("artifact: refusing %q: lands at %q outside the destination through a pre-existing link", path, resolved)
+	}
+	return nil
+}
+
 // writeRegular streams exactly size bytes into path through a temp file and an
 // atomic rename, so a partially written file never appears at the final name —
-// and never at a name a concurrent reader might pick up as complete.
-func writeRegular(r io.Reader, path string, mode os.FileMode, size int64) error {
+// and never at a name a concurrent reader might pick up as complete. It
+// returns the mode the file landed with — the archive's mode merged with the
+// exec-bit rule below and masked by the process umask — so a manifest entry
+// describes the file a verifier will stat, not the request that produced it.
+func writeRegular(r io.Reader, path string, mode os.FileMode, size int64) (os.FileMode, error) {
+	// A packer that cannot express POSIX exec bits reports every file without
+	// them (Windows fi.Mode().Perm() is 0666 on a regular file), so an archive
+	// mode carrying no exec bits is "unknown", not "strip them": an existing
+	// executable keeps its bits or every project-tree adoption from such a
+	// peer silently de-executabilizes the checkout's scripts. The trade-off —
+	// a POSIX packer's deliberate chmod -x then fails to propagate — is the
+	// better error: a stale exec bit is harmless next to scripts that stop
+	// running. New files get the archive mode verbatim. The probe is Lstat:
+	// only a regular file at the very path carries its own bits over, not
+	// whatever a symlink there happens to point at.
+	if mode&0o111 == 0 {
+		if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() {
+			mode |= fi.Mode().Perm() & 0o111
+		}
+	}
 	tmp := path + ".partial"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
-		return err
+		return mode, err
+	}
+	// What actually landed can differ from the request (umask; a stale
+	// .partial from a crashed run keeps its own mode under O_TRUNC).
+	landed := mode
+	if fi, err := f.Stat(); err == nil {
+		landed = fi.Mode().Perm()
 	}
 	n, err := io.Copy(f, io.LimitReader(r, size))
 	if err != nil {
 		f.Close()
 		os.Remove(tmp)
-		return err
+		return landed, err
 	}
 	if n != size {
 		f.Close()
 		os.Remove(tmp)
-		return fmt.Errorf("truncated entry: %d of %d bytes", n, size)
+		return landed, fmt.Errorf("truncated entry: %d of %d bytes", n, size)
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
-		return err
+		return landed, err
 	}
 	// A destination that already exists may be read-only — git marks every
 	// object file read-only, and a re-extraction of the same tree lands
@@ -286,14 +360,17 @@ func writeRegular(r io.Reader, path string, mode os.FileMode, size int64) error 
 	// ACCESS_DENIED in that case. Clearing the attribute first keeps the
 	// atomic-rename contract on every platform: the chmod touches only the
 	// doomed old inode, the rename still installs tmp's mode and contents.
-	if _, err := os.Stat(path); err == nil {
-		_ = os.Chmod(path, mode|0o200)
+	// Lstat, and links are skipped: os.Chmod follows a symlink to its target,
+	// so a pre-existing link at path would retag an unrelated file while the
+	// rename that replaces the link needs no permission from it.
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink == 0 {
+		_ = os.Chmod(path, landed|0o200)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
-		return err
+		return landed, err
 	}
-	return nil
+	return landed, nil
 }
 
 // fileMode returns a sane permission set for a file entry: an archive may

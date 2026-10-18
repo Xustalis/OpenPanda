@@ -27,7 +27,9 @@ import (
 func Open(path string) (*sql.DB, error) {
 	if path != ":memory:" {
 		if dir := filepath.Dir(path); dir != "" && dir != "." {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
+			// 0700 like the files it will hold: this is usually the node's data
+			// dir, and its listing alone tells a local account plenty.
+			if err := os.MkdirAll(dir, 0o700); err != nil {
 				return nil, fmt.Errorf("create db dir %s: %w", dir, err)
 			}
 		}

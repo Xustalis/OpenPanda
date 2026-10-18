@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -70,7 +72,7 @@ func TestWriteRegularReplacesReadOnlyDestination(t *testing.T) {
 	if err := os.Chmod(path, 0o444); err != nil {
 		t.Fatalf("chmod read-only: %v", err)
 	}
-	if err := writeRegular(strings.NewReader("new content"), path, 0o644, int64(len("new content"))); err != nil {
+	if _, err := writeRegular(strings.NewReader("new content"), path, 0o644, int64(len("new content"))); err != nil {
 		t.Fatalf("writeRegular over read-only destination: %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -82,6 +84,88 @@ func TestWriteRegularReplacesReadOnlyDestination(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".partial"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("partial temp file left behind: %v", err)
+	}
+}
+
+// TestWriteRegularKeepsExecBitsOnWindowsMode pins the cross-platform project
+// contract: a packer that cannot express POSIX exec bits ships every file at
+// 0666, and adopting that tree over a POSIX checkout must not turn every
+// script un-executable — the failure showed up for real as `git status`
+// reporting dozens of 100755→100644 mode flips after a remote task ran on
+// Windows.
+func TestWriteRegularKeepsExecBitsOnWindowsMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no POSIX exec bits to preserve")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "run.sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("seed executable: %v", err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatalf("chmod executable: %v", err)
+	}
+	// The Windows fingerprint: every regular file arrives at 0666.
+	landed, err := writeRegular(strings.NewReader("#!/bin/sh\necho hi\n"), path, 0o666, int64(len("#!/bin/sh\necho hi\n")))
+	if err != nil {
+		t.Fatalf("writeRegular over executable destination: %v", err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat result: %v", err)
+	}
+	if fi.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("mode = %o, exec bits were stripped from an existing executable", fi.Mode().Perm())
+	}
+	// The mode the writer reports is the mode on disk (umask included), so
+	// a manifest entry describes the file a verifier will actually stat.
+	if landed != fi.Mode().Perm() {
+		t.Fatalf("writeRegular reported mode %o, disk has %o", landed, fi.Mode().Perm())
+	}
+
+	// The same archive mode on a path that does not exist yet must land
+	// verbatim — "keep exec" is a destination-merge rule, not a reason to
+	// make every new file executable.
+	fresh := filepath.Join(dir, "new.txt")
+	landed, err = writeRegular(strings.NewReader("x"), fresh, 0o666, 1)
+	if err != nil {
+		t.Fatalf("writeRegular new file: %v", err)
+	}
+	if fi, err := os.Stat(fresh); err != nil {
+		t.Fatalf("stat new file: %v", err)
+	} else if fi.Mode().Perm()&0o111 != 0 {
+		t.Fatalf("new file mode = %o, exec bits were invented", fi.Mode().Perm())
+	} else if landed != fi.Mode().Perm() {
+		t.Fatalf("writeRegular reported mode %o for a new file, disk has %o", landed, fi.Mode().Perm())
+	}
+
+	// A symlink at the destination is a reference, not the file itself: its
+	// target's exec bits must not be carried onto the replacement (the probe
+	// is Lstat deliberately), and the reported mode still matches the disk.
+	target := filepath.Join(dir, "real.sh")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("seed symlink target: %v", err)
+	}
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatalf("chmod symlink target: %v", err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	landed, err = writeRegular(strings.NewReader("x"), link, 0o666, 1)
+	if err != nil {
+		t.Fatalf("writeRegular over symlink destination: %v", err)
+	}
+	fi, err = os.Lstat(link)
+	if err != nil {
+		t.Fatalf("lstat link: %v", err)
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 != 0 {
+		t.Fatalf("link replacement mode = %o, want the archive mode without exec bits", fi.Mode().Perm())
+	}
+	if landed != fi.Mode().Perm() {
+		t.Fatalf("writeRegular reported mode %o over a symlink, disk has %o", landed, fi.Mode().Perm())
 	}
 }
 
@@ -170,6 +254,78 @@ func TestUnpackRejectsHostileEntries(t *testing.T) {
 				t.Fatalf("%s wrote a file outside the destination", tc.name)
 			}
 		})
+	}
+}
+
+// TestUnpackRefusesWriteThroughExistingSymlink is the other half of the link
+// contract: safeRel and checkLinkTarget vet the archive's own names and
+// links, but the destination is often a pre-existing tree (the project
+// checkout a worktree adoption writes over). A symlinked directory that was
+// already there — node_modules, a mounted checkout, a planted hole — is
+// followed silently by MkdirAll and OpenFile, so an entry under it would
+// write outside dst. The whole archive must be refused instead.
+func TestUnpackRefusesWriteThroughExistingSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	outside := t.TempDir()
+	dst := filepath.Join(t.TempDir(), "checkout")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatalf("make dst: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dst, "linked-out")); err != nil {
+		t.Fatalf("plant pre-existing link: %v", err)
+	}
+
+	raw := buildTarGz(t, hostileEntry{
+		hdr:  tar.Header{Name: "linked-out/pwned.txt", Typeflag: tar.TypeReg},
+		body: "pwned",
+	})
+	if _, err := Unpack(bytes.NewReader(raw), dst); err == nil {
+		t.Fatal("unpack wrote through a pre-existing symlink out of the destination")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "pwned.txt")); err == nil {
+		t.Fatal("file landed outside the destination")
+	}
+
+	// The archive's own link pointing back inside is still legitimate: an
+	// entry under it resolves within dst and must not be confused with the
+	// escape above.
+	raw = buildTarGz(t,
+		hostileEntry{hdr: tar.Header{Name: "real", Typeflag: tar.TypeDir}},
+		hostileEntry{hdr: tar.Header{Name: "alias", Linkname: "real", Typeflag: tar.TypeSymlink}},
+		hostileEntry{hdr: tar.Header{Name: "alias/note.txt", Typeflag: tar.TypeReg}, body: "kept"},
+	)
+	if _, err := Unpack(bytes.NewReader(raw), dst); err != nil {
+		t.Fatalf("unpack through an in-archive link that stays inside: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(dst, "real", "note.txt")); err != nil || string(data) != "kept" {
+		t.Fatalf("inside-link write lost: data=%q err=%v", data, err)
+	}
+}
+
+// TestUnpackCapsDirectoryEntries pins the count contract: maxEntries bounds
+// every tar member, not only the regular files the manifest lists — an
+// archive of nothing but directories compresses to almost nothing, so a
+// files-only cap would still allow an inode-flood of MkdirAll calls. The
+// cap is shrunk for the test rather than materialising a six-figure
+// tar — the contract under test is that directory members count, not the
+// particular bound.
+func TestUnpackCapsDirectoryEntries(t *testing.T) {
+	orig := maxEntries
+	maxEntries = 4
+	defer func() { maxEntries = orig }()
+
+	entries := make([]hostileEntry, 0, maxEntries+1)
+	for i := 0; i <= maxEntries; i++ {
+		entries = append(entries, hostileEntry{
+			hdr: tar.Header{Name: fmt.Sprintf("dir-%d", i), Typeflag: tar.TypeDir},
+		})
+	}
+	raw := buildTarGz(t, entries...)
+	_, err := Unpack(bytes.NewReader(raw), filepath.Join(t.TempDir(), "out"))
+	if err == nil || !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("unpack of %d directory entries: err = %v, want ErrTooLarge", maxEntries+1, err)
 	}
 }
 

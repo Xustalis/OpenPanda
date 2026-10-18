@@ -92,7 +92,8 @@ func runSessionList(args []string) {
 	fs := flag.NewFlagSet("session list", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	projectName := fs.String("project", "", "filter sessions by project")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda session list [--project P]")
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -163,7 +164,8 @@ func runSessionNew(args []string) {
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	title := fs.String("title", "", "session title (default: derived from the first ask)")
 	projectName := fs.String("project", "", "project name (default: active project)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda session new [--title T] [--project P]")
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -200,7 +202,7 @@ func runSessionNew(args []string) {
 func runSessionShow(args []string) {
 	fs := flag.NewFlagSet("session show", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session show <id>")
@@ -262,7 +264,7 @@ func runSessionMove(args []string) {
 	fs := flag.NewFlagSet("session mv", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	projectName := fs.String("project", "", "target project name (empty to disassociate)")
-	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "project": true}))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session mv <id> --project <name>")
@@ -308,7 +310,7 @@ func runSessionRm(args []string) {
 	projectName := fs.String("project", "", "delete every session of this project")
 	olderThan := fs.String("older-than", "", "delete sessions idle longer than this (e.g. 30d, 2w, 12h)")
 	all := fs.Bool("all", false, "delete every session")
-	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "project": true, "older-than": true}))
+	fs.Parse(reorderFlags(fs, args))
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -505,7 +507,7 @@ func runSessionFork(args []string) {
 	fs := flag.NewFlagSet("session fork", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	at := fs.Int("at", 0, "number of turns to copy into the fork (default: all)")
-	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "at": true}))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session fork <id> [--at N]")
@@ -557,7 +559,7 @@ func runSessionFork(args []string) {
 func runSessionTree(args []string) {
 	fs := flag.NewFlagSet("session tree", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -650,7 +652,7 @@ func runSessionAsk(args []string) {
 	cardPath := fs.String("card", cardFlagDefault(), "path to capabilities.yaml (default: discovered; required to execute tasks)")
 	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
 	authorize := fs.Bool("authorize", false, "authorize tier-2 (irreversible) commands")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(fs.Arg(0))
 	prompt := strings.TrimSpace(strings.Join(fs.Args()[1:], " "))
 	if id == "" || prompt == "" {
@@ -831,7 +833,7 @@ func runSessionDiff(args []string) {
 	fs := flag.NewFlagSet("session diff", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	statOnly := fs.Bool("stat", false, "summary only: counts and risk flags, no patch")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session diff [--stat] <id>")
@@ -907,7 +909,7 @@ func runSessionMerge(args []string) {
 	fs := flag.NewFlagSet("session merge", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	message := fs.String("message", "", "merge commit message (default: generated)")
-	fs.Parse(reorderFlags(args, map[string]bool{"config": true, "message": true}))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(fs.Arg(0))
 	if id == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda session merge <id> [--message M]")
@@ -944,7 +946,7 @@ func runSessionMerge(args []string) {
 func runSessionRevert(args []string) {
 	fs := flag.NewFlagSet("session revert", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(fs.Arg(0))
 	loc := i18n.Detect()
 	if id == "" {

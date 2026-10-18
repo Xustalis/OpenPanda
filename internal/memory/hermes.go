@@ -245,10 +245,12 @@ func (h *Hermes) save(path string, m MemFile, defaultLimit int) error {
 	// interleave with this one, which would leave a torn MEMORY.md on disk.
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("memory: create memory dir: %w", err)
 	}
-	if err := util.WriteFileAtomic(path, m.Bytes(), 0o644); err != nil {
+	// 0o600 like sessions and config: USER.md/MEMORY.md record verbatim user
+	// facts and history, which other local accounts have no business reading.
+	if err := util.WriteFileAtomic(path, m.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("memory: write %s: %w", filepath.Base(path), err)
 	}
 	return nil

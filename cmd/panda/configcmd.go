@@ -116,7 +116,8 @@ func configWritePath(flagPath string) string {
 func runConfigGet(section string, args []string) {
 	fs := flag.NewFlagSet("config "+section+" get", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda config "+section+" get")
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)
@@ -198,7 +199,8 @@ func runConfigSet(section string, args []string) {
 		model := fs.String("model", "", "model name")
 		maxTokens := fs.Int("max-tokens", 0, "max tokens per completion (0 keeps current)")
 		authProvider := fs.String("auth", "", "subscription OAuth provider (e.g. anthropic; 'none' clears)")
-		fs.Parse(args)
+		fs.Parse(reorderFlags(fs, args))
+		rejectExtraArgs(fs, "usage: panda config model set [--base-url U] [--model M] [--api-key K] [--max-tokens N] [--auth P]")
 		cfg, err := config.Load(*configPath)
 		if err != nil {
 			fatal("load config", err)
@@ -235,7 +237,7 @@ func runConfigSet(section string, args []string) {
 	case "mcp":
 		fs := flag.NewFlagSet("config mcp set", flag.ExitOnError)
 		configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-		fs.Parse(args)
+		fs.Parse(reorderFlags(fs, args))
 		command := strings.TrimSpace(strings.Join(fs.Args(), " "))
 		if err := config.UpdateMCPSection(configWritePath(*configPath), command); err != nil {
 			fatal("config mcp set", err)
@@ -244,7 +246,7 @@ func runConfigSet(section string, args []string) {
 	case "limits":
 		fs := flag.NewFlagSet("config limits set", flag.ExitOnError)
 		configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-		fs.Parse(args)
+		fs.Parse(reorderFlags(fs, args))
 		if fs.NArg() != 2 {
 			fmt.Fprintln(os.Stderr, "usage: panda config limits set <user|memory|project> <int>")
 			os.Exit(2)
@@ -268,7 +270,7 @@ func runConfigSet(section string, args []string) {
 	case "routing":
 		fs := flag.NewFlagSet("config routing set", flag.ExitOnError)
 		configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-		fs.Parse(args)
+		fs.Parse(reorderFlags(fs, args))
 		if fs.NArg() < 1 || fs.Arg(0) != "preferred_agents" {
 			fmt.Fprintln(os.Stderr, "usage: panda config routing set preferred_agents <a,b,c>")
 			os.Exit(2)
@@ -288,7 +290,7 @@ func runConfigSet(section string, args []string) {
 	case "injection":
 		fs := flag.NewFlagSet("config injection set", flag.ExitOnError)
 		configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-		fs.Parse(args)
+		fs.Parse(reorderFlags(fs, args))
 		value := strings.TrimSpace(fs.Arg(0))
 		switch value {
 		case config.InjectionModelAuto, config.InjectionModelAlways, config.InjectionModelNever:
@@ -303,7 +305,7 @@ func runConfigSet(section string, args []string) {
 	case "approval":
 		fs := flag.NewFlagSet("config approval set", flag.ExitOnError)
 		configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-		fs.Parse(args)
+		fs.Parse(reorderFlags(fs, args))
 		value := strings.TrimSpace(fs.Arg(0))
 		switch value {
 		case config.ApprovalModeAlways, config.ApprovalModeOnRequest, config.ApprovalModeNever:
@@ -333,7 +335,8 @@ func configSetDone(loc i18n.Locale, section string) {
 func runConfigTest(section string, args []string) {
 	fs := flag.NewFlagSet("config "+section+" test", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda config "+section+" test")
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fatal("load config", err)

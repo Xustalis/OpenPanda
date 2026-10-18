@@ -116,7 +116,11 @@ func TestDelegationMetricRecordsFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	entryAddr, workerAddr := "127.0.0.1:17961", "127.0.0.1:17962"
+	// Unique ports: 17961/17962 are shared by maintain_loop and the reconnect
+	// tests — a previous test's listener can still be draining its ctx-cancel
+	// shutdown when this test dials, and the dial then lands on a dying
+	// listener that answers with a different node id.
+	entryAddr, workerAddr := "127.0.0.1:17761", "127.0.0.1:17762"
 	entry := newCoreWithNative(t, "entry-fail", entryAddr, ledger.NativeAbility{
 		ID: "noop", Command: "echo", Args: []string{"noop"},
 	})

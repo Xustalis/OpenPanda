@@ -639,7 +639,7 @@ func (c *Core) adoptStageOutput(ctx context.Context, t Task, from, hash string) 
 	if _, held := c.artifacts.Has(hash); held {
 		return
 	}
-	c.goGuarded("plan artifact replica "+hash, func() {
+	c.goArtifact("plan artifact replica "+hash, func() {
 		// Replica pull for resilience: the producer remains the successor's
 		// primary source, this node's copy is the fallback named by the same
 		// input ref once it lands.

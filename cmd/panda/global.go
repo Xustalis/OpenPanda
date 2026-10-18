@@ -8,6 +8,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 // jsonOutput is set by the global --json flag (extractGlobalFlags strips it
@@ -317,49 +319,71 @@ func priorityName(p int) string {
 const cliPriorities = "low|medium|normal|high|critical"
 
 // reorderFlags rewrites argv so every "-…" flag (and the value of the
-// known value-carrying ones) precedes the positional words. The std flag
-// package stops parsing at the first non-flag argument, which makes the
-// natural `panda task <id> --reason x` silently swallow the trailing flags
-// into the positional text — a trap users hit constantly. Unknown "-…"
-// tokens are hoisted too; flag.Parse then reports them as errors rather
-// than misinterpreting. valueFlags is keyed by the bare flag name so the
-// -name and --name spellings match alike (the flag package treats them
-// identically, so argv must too).
-func reorderFlags(args []string, valueFlags map[string]bool) []string {
+// value-carrying ones) precedes the positional words. The std flag package
+// stops parsing at the first non-flag argument, which makes the natural
+// `panda task <id> --reason x` silently swallow the trailing flags into the
+// positional text — a trap users hit constantly. Unknown "-…" tokens are
+// hoisted too; flag.Parse then reports them as errors rather than
+// misinterpreting.
+//
+// Which flags carry a value is read off the FlagSet itself — every flag that
+// is not a bare boolean — so the table cannot drift from the definitions. A
+// hand-kept table once did: a value flag missing from it hoisted bare, and
+// its value slid back among the positionals, so `task artifact <id> --file f`
+// handed the id to --file, `plan run p.yaml --priority high` read `high` as
+// the plan path, and the documented `panda pair --secret s --peer a` set the
+// secret to "--peer". Both dash spellings land in the same map, matching
+// flag.Parse, which treats -name and --name identically.
+//
+// "-" is a positional (the stdin convention), and "--" ends flag scanning
+// outright: tokens after it are literal, never reordered into flags — a
+// `panda task send <id> -- --text` message must reach fs.Args() verbatim.
+func reorderFlags(fs *flag.FlagSet, args []string) []string {
+	valueFlags := make(map[string]bool)
+	fs.VisitAll(func(f *flag.Flag) {
+		if _, isBool := f.Value.(interface{ IsBoolFlag() bool }); !isBool {
+			valueFlags[f.Name] = true
+		}
+	})
 	var flags, positional []string
+	terminated := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if strings.HasPrefix(a, "-") && a != "-" && a != "--" {
+		switch {
+		case terminated:
+			positional = append(positional, a)
+		case a == "--":
+			// The terminator keeps its seat at the boundary: everything the
+			// user wrote before it (flags and already-seen positionals) is
+			// emitted after it, so Parse still stops there and the literal
+			// tail reaches fs.Args() verbatim.
+			flags = append(flags, a)
+			terminated = true
+		case !strings.HasPrefix(a, "-") || a == "-":
+			positional = append(positional, a)
+		default:
 			flags = append(flags, a)
 			if eq := strings.IndexByte(a, '='); eq < 0 && valueFlags[strings.TrimLeft(a, "-")] && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				i++
 				flags = append(flags, args[i])
 			}
-			continue
 		}
-		if strings.HasPrefix(a, "-") {
-			flags = append(flags, a) // bare "-" or "--" terminator: keep order
-			continue
-		}
-		positional = append(positional, a)
 	}
 	return append(flags, positional...)
 }
 
-// commonValueFlags are the value-carrying flags shared by the task-ish
-// subcommands, keyed by bare name (see reorderFlags). The global
-// --config/--card never reach a FlagSet — extractGlobalFlags lifts them —
-// but listing them here keeps the tables truthful for direct call sites.
-var commonValueFlags = map[string]bool{
-	"config": true, "card": true, "trust": true,
-}
-
-// taskAddValueFlags lets `task add --title X do the thing` keep its flags
-// after reorderFlags hoists positionals: every value flag of runTaskAdd must
-// be listed or reordering would split a flag from its value.
-var taskAddValueFlags = map[string]bool{
-	"config": true, "card": true, "mcp": true,
-	"title": true, "prompt": true, "priority": true, "project": true,
-	"requires": true, "agents": true, "mode": true, "parent-id": true,
-	"preferred": true, "nodes": true, "action-spec": true, "wait-timeout": true,
+// rejectExtraArgs is the tail guard for a command that takes no positional
+// arguments. Without it a stray word — or a flag after a positional that the
+// std parser stopped at — rides fs.Args() into silence: `panda detect junk -o
+// card.yaml` used to write the draft to stdout and never mention the file
+// flag was dropped. Reject instead of running a command the user did not ask
+// for; usage names the command so the error teaches the right spelling.
+func rejectExtraArgs(fs *flag.FlagSet, usage string) {
+	if fs.NArg() == 0 {
+		return
+	}
+	loc := i18n.Detect()
+	fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(loc, "cli.unexpectedArgs", "args", strings.Join(fs.Args(), " ")))
+	fmt.Fprintln(os.Stderr, usage)
+	os.Exit(2)
 }

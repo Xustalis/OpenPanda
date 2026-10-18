@@ -67,7 +67,7 @@ func runCard(args []string) {
 	case "invoke":
 		runCardInvoke(rest)
 	case "path":
-		fmt.Println(orDash(cardTargetPath("")))
+		runCardPath(rest)
 	default:
 		fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamed", "kind", "card subcommand", "name", sub))
 		fmt.Fprintln(os.Stderr, "usage: panda card [show|rescan|edit|set|native|agent|manual|invoke|path]")
@@ -76,19 +76,22 @@ func runCard(args []string) {
 }
 
 // cardSubcommand splits `card <sub> [flags…]` into the subcommand and the rest
-// of argv, then reorders the rest so the std flag package sees the flags first.
+// of argv; the sub-functions reorder their own argv against their own FlagSet
+// at the parse site.
 //
-// The scan has to know which flags carry a value: with a naive "first word that
-// does not start with -" rule, `panda card rescan --card ./capabilities.yaml`
-// picks the *path* as the subcommand, because reordering hoists the flag pair in
-// front of the verb.
+// The split itself happens before any FlagSet exists, so the scan needs its
+// own table of value-carrying flags: with a naive "first word that does not
+// start with -" rule, `panda card rescan --card ./capabilities.yaml` picks the
+// *path* as the subcommand. The table is the union across the card subtree
+// (cardMutValueFlags), which also keeps `panda card --tier 1 native …` from
+// reading the tier as the subcommand.
 func cardSubcommand(args []string) (string, []string) {
 	sub := ""
 	subIdx := -1
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if strings.HasPrefix(a, "-") {
-			if !strings.Contains(a, "=") && cardValueFlags[strings.TrimLeft(a, "-")] {
+			if !strings.Contains(a, "=") && cardMutValueFlags[strings.TrimLeft(a, "-")] {
 				i++ // this flag's value is not the subcommand
 			}
 			continue
@@ -100,15 +103,8 @@ func cardSubcommand(args []string) (string, []string) {
 	if subIdx >= 0 {
 		rest = append(append([]string{}, args[:subIdx]...), args[subIdx+1:]...)
 	}
-	// cardMutValueFlags (a superset of commonValueFlags) so the structured
-	// edits' value-carrying flags — "--command go" et al. — keep their pair
-	// through the hoist instead of stranding the value among the positionals.
-	return sub, reorderFlags(rest, cardMutValueFlags)
+	return sub, rest
 }
-
-// cardValueFlags are the value-carrying flags `panda card` accepts, keyed by
-// their bare name so both -card and --card match.
-var cardValueFlags = map[string]bool{"card": true, "config": true}
 
 // cardTargetPath resolves which file `panda card` reads and writes: --card when
 // given, else the discovered card, else the path `panda init` would have written
@@ -131,10 +127,21 @@ func cardTargetPath(explicit string) string {
 // path matters as much as the content: every other subcommand and the daemon
 // discover the card the same way, and "which file am I actually editing" is the
 // first question a multi-node setup raises.
+// runCardPath prints the path every card verb resolves to — a `--card` flag is
+// honoured so scripts can ask "where would this edit land" for a specific file.
+func runCardPath(args []string) {
+	fs := flag.NewFlagSet("card path", flag.ExitOnError)
+	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda card path [--card F]")
+	fmt.Println(orDash(cardTargetPath(*cardFlag)))
+}
+
 func runCardShow(args []string) {
 	fs := flag.NewFlagSet("card show", flag.ExitOnError)
 	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda card show [--card F]")
 
 	path := cardTargetPath(*cardFlag)
 	card, err := ledger.LoadCard(path)
@@ -194,7 +201,8 @@ func runCardRescan(args []string) {
 	fs := flag.NewFlagSet("card rescan", flag.ExitOnError)
 	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
 	write := fs.Bool("write", false, "apply the merge (a .bak of the old card is kept)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda card rescan [--card F] [--write]")
 
 	path := cardTargetPath(*cardFlag)
 	old, err := ledger.LoadCard(path)
@@ -268,7 +276,8 @@ func underlyingErr(err error) error {
 func runCardEdit(args []string) {
 	fs := flag.NewFlagSet("card edit", flag.ExitOnError)
 	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda card edit [--card F]")
 
 	path := cardTargetPath(*cardFlag)
 	original, err := os.ReadFile(path)
@@ -348,7 +357,7 @@ func openEditor(path string) error {
 func runCardSet(args []string) {
 	fs := flag.NewFlagSet("card set", flag.ExitOnError)
 	cardFlag := fs.String("card", cliCardPath, "path to capabilities.yaml (default: discovered)")
-	fs.Parse(reorderFlags(args, cardValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 
 	assignments := fs.Args()
 	if len(assignments) == 0 {
@@ -579,7 +588,7 @@ func runCardInvoke(args []string) {
 	intentFlag := fs.String("intent", "", "text substituted into {intent} placeholders")
 	authFlag := fs.Bool("authorize", false, "consent to a tier-2 (irreversible) actuator command")
 	dryFlag := fs.Bool("dry-run", false, "print the resolved argv without executing")
-	fs.Parse(reorderFlags(args, map[string]bool{"card": true, "config": true, "intent": true}))
+	fs.Parse(reorderFlags(fs, args))
 	pos := fs.Args()
 	if len(pos) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: panda card invoke <actuator-id> [action] [name=value ...] [--intent text] [--authorize] [--dry-run]")

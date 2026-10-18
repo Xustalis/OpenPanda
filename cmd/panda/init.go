@@ -43,7 +43,8 @@ func runInit(args []string) {
 		"CI: never wait for input — every would-be prompt takes its default (model setup skipped); auto-enabled when stdin is not a terminal. Unlike --defaults, env model vars are NOT written into the file (the daemon still reads them live at startup)")
 	force := fs.Bool("force", false,
 		"rewrite an existing config: back up to <path>.bak first, keep your settings, re-detect node name/resource class/kind")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda init [--defaults | --non-interactive] [--force]")
 
 	loc := i18n.Detect()
 	target := resolveInitConfigPath(*configPath)

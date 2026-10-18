@@ -118,10 +118,10 @@ func (p *Projects) Save(name string, m MemFile) error {
 	// interleave into a torn file (P1-21); the write itself is atomic (P1-20).
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("memory: create project dir: %w", err)
 	}
-	if err := util.WriteFileAtomic(path, m.Bytes(), 0o644); err != nil {
+	if err := util.WriteFileAtomic(path, m.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("memory: write project memory %q: %w", name, err)
 	}
 	return nil

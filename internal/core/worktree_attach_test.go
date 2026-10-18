@@ -198,6 +198,10 @@ func TestFileTaskWorktreeTravelsRoundTrip(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	// The poll sees the first landed file; the same adopt goroutine is still
+	// extracting the remaining entries — and still writing into the pool —
+	// after it fires. Drain before t.TempDir cleanup unlinks the repo.
+	waitArtifactWrites(t, root)
 	// The leaf row reports the task done in its private task dir, not in the
 	// node's shared work dir.
 	lt, err := leaf.store.Get(ctx, task.TaskID)
@@ -261,6 +265,10 @@ func TestScheduledFileTaskShipsWorktree(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	// The delegated run and its input fetch continue past the row change the
+	// poll observed; let both nodes finish before the temp trees go away.
+	waitLocalTasksSettled(t, leaf)
+	waitLocalTasksSettled(t, root)
 }
 
 // TestScheduledFileTaskNonRepoStaysLocal keeps the other half of the queue

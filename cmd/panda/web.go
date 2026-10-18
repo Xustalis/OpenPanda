@@ -56,7 +56,8 @@ func runWeb(args []string) {
 	daemon := fs.Bool("daemon", false, "run web console quietly in the background")
 	fs.BoolVar(daemon, "d", false, "alias for -daemon")
 	lan := fs.Bool("lan", false, "bind all interfaces so the console is reachable from the LAN (auto-generates a token when none is configured)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda web [--daemon] [--lan] [--no-browser]")
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -66,7 +67,8 @@ func runWeb(args []string) {
 
 	// Ensure background log directory and file
 	logDir := filepath.Join(cliStateDir(), "logs")
-	_ = os.MkdirAll(logDir, 0o755)
+	_ = os.MkdirAll(logDir, 0o700)
+	_ = os.Chmod(logDir, 0o700)
 	logFile := filepath.Join(logDir, "web.log")
 
 	// Daemon mode: spawn detached background process and return immediately
@@ -83,10 +85,15 @@ func runWeb(args []string) {
 			childArgs = append(childArgs, a)
 		}
 		subArgs := append([]string{"web"}, childArgs...)
-		lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		// 0o600, not 0o644: the daemon child's stdout lands here, and it prints
+		// the LAN console URLs with the bearer token appended — a 0644 log
+		// hands every local account the panel. Tighten an existing file too:
+		// a web.log first written under the old mode keeps leaking otherwise.
+		lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			fatal("open web log", err)
 		}
+		_ = os.Chmod(logFile, 0o600)
 		cmd := exec.Command(exe, subArgs...)
 		cmd.Stdout = lf
 		cmd.Stderr = lf
@@ -160,9 +167,11 @@ func runWeb(args []string) {
 	}
 	defer db.Close()
 
-	// Redirect logger to file to prevent console spam
+	// Redirect logger to file to prevent console spam — owner-only like the
+	// daemon path above: this log catches everything slog emits.
 	var logWriter io.Writer = io.Discard
-	if lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+	if lf, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		_ = os.Chmod(lf.Name(), 0o600)
 		defer lf.Close()
 		logWriter = lf
 	}

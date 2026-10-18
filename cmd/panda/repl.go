@@ -240,7 +240,8 @@ func runRepl(args []string) {
 	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
 	yesFlag := fs.Bool("yes", false, "accept workspace confirmation without prompting")
 	fs.BoolVar(yesFlag, "y", false, "accept workspace confirmation without prompting (shorthand)")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda repl [--card F] [--mcp CMD] [-y]")
 
 	cfg, err := loadConfigQuietly(*configPath)
 	if err != nil {
@@ -2611,10 +2612,15 @@ func (r *repl) cmdWeb(arg string) {
 		Token:      token,
 		Updater:    updateMgr,
 	})
+	// The same log file `panda web --daemon` fills with the tokenized LAN
+	// URLs — owner-only like the daemon path, and tighten whatever an older
+	// build left behind at 0755/0644.
 	logDir := filepath.Join(cliStateDir(), "logs")
-	_ = os.MkdirAll(logDir, 0o755)
+	_ = os.MkdirAll(logDir, 0o700)
+	_ = os.Chmod(logDir, 0o700)
 	var logWriter io.Writer = io.Discard
-	if lf, err := os.OpenFile(filepath.Join(logDir, "web.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+	if lf, err := os.OpenFile(filepath.Join(logDir, "web.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		_ = os.Chmod(lf.Name(), 0o600)
 		defer lf.Close()
 		logWriter = lf
 	}

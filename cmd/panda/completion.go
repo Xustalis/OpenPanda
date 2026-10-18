@@ -69,7 +69,7 @@ var completionFlagValues = map[string][]string{
 
 func runCompletion(args []string) {
 	fs := flag.NewFlagSet("completion", flag.ExitOnError)
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
 	shell := ""
 	if fs.NArg() > 0 {
 		shell = strings.ToLower(fs.Arg(0))

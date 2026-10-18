@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -67,11 +68,31 @@ func sighupDaemon(configPath string) (int, bool) {
 	if err := syscall.Kill(pid, 0); err != nil {
 		return 0, false
 	}
+	if !looksLikePandaProcess(pid) {
+		return 0, false
+	}
 	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
 		fmt.Fprintf(os.Stderr, "could not signal daemon (pid %d): %v\n", pid, err)
 		return 0, false
 	}
 	return pid, true
+}
+
+// looksLikePandaProcess keeps a stale pidfile from becoming a footgun: a
+// crashed daemon leaves the file, the number gets reused by an unrelated
+// same-user process, and signal 0 alone cannot tell them apart — SIGHUP's
+// default action terminates whatever it lands on. Comm names the program;
+// anything that does not look like this binary degrades to the restart hint
+// instead of signaling a stranger. ps exists on every unix the daemon runs
+// on, and a miss is fail-closed (no signal, hint printed), never a wrong kill.
+func looksLikePandaProcess(pid int) bool {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err != nil {
+		return false
+	}
+	comm := strings.ToLower(filepath.Base(strings.TrimSpace(string(out))))
+	self := strings.ToLower(filepath.Base(os.Args[0]))
+	return comm == self || strings.Contains(comm, "panda")
 }
 
 // notifyDaemonReloadTo SIGHUPs a running daemon so it hot-reloads the card,

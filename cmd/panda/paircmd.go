@@ -65,7 +65,7 @@ func runNodesAdd(args []string) {
 	fs := flag.NewFlagSet("nodes add", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	trustLevel := fs.String("trust", "", "trust level for the new peer (mesh|guarded|open)")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 	if len(rest) != 1 {
 		fatal("usage", fmt.Errorf("panda nodes add <host:port>"))
@@ -247,7 +247,7 @@ func runNodesAdmit(args []string) {
 	fs := flag.NewFlagSet("nodes admit", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	trustLevel := fs.String("trust", "", "trust level for the admitted peer (mesh|guarded|open)")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 	if len(rest) > 1 {
 		fatal("usage", fmt.Errorf("panda nodes admit [node-id]"))
@@ -304,7 +304,7 @@ func runNodesAdmit(args []string) {
 func runNodesDisconnect(args []string) {
 	fs := flag.NewFlagSet("nodes disconnect", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 	if len(rest) != 1 {
 		fatal("usage", fmt.Errorf("panda nodes disconnect <host:port>"))
@@ -342,7 +342,8 @@ func runNodesDisconnect(args []string) {
 func runNodesInvite(args []string) {
 	fs := flag.NewFlagSet("nodes invite", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda nodes invite")
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -384,7 +385,7 @@ func runPair(args []string) {
 	listen := fs.String("listen", "", "this node's listen address (default: keep current)")
 	yes := fs.Bool("yes", false, "skip the interactive code-compare prompt (confirm only)")
 	trustLevel := fs.String("trust", "", "trust level pinned on the joined peer (mesh|guarded|open; default mesh)")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 	if lv, err := trust.ParseLevel(*trustLevel); err != nil {
 		fatal("bad trust level", err)
@@ -575,7 +576,7 @@ func syncPeerTrustConfig(db *sql.DB, cfg *config.Config, configPath string, ids 
 func runNodesTrust(args []string) {
 	fs := flag.NewFlagSet("nodes trust", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 	if len(rest) < 1 || len(rest) > 2 {
 		fatal("usage", fmt.Errorf("panda nodes trust <id> [mesh|guarded|open]"))
@@ -687,7 +688,7 @@ func runNodesDrain(args []string) {
 	fs := flag.NewFlagSet("nodes drain", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	off := fs.Bool("off", false, "lift the drain and resume accepting work")
-	fs.Parse(reorderFlags(args, commonValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 	rest := fs.Args()
 	if len(rest) > 1 {
 		fatal("usage", fmt.Errorf("panda nodes drain [id] [--off]"))

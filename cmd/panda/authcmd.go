@@ -58,7 +58,7 @@ func authUsage() {
 
 func runAuthLogin(args []string) {
 	fs := flag.NewFlagSet("auth login", flag.ExitOnError)
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
 	provider := strings.TrimSpace(fs.Arg(0))
 	if provider == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda auth login <provider>")
@@ -157,7 +157,7 @@ func tryOpenBrowser(url string) {
 
 func runAuthLogout(args []string) {
 	fs := flag.NewFlagSet("auth logout", flag.ExitOnError)
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
 	provider := strings.TrimSpace(fs.Arg(0))
 	if provider == "" {
 		fmt.Fprintln(os.Stderr, "usage: panda auth logout <provider>")
@@ -172,7 +172,8 @@ func runAuthLogout(args []string) {
 
 func runAuthStatus(args []string) {
 	fs := flag.NewFlagSet("auth status", flag.ExitOnError)
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
+	rejectExtraArgs(fs, "usage: panda auth status")
 	store := auth.OpenStore(auth.DefaultStateDir())
 	tokens, err := store.Tokens()
 	if err != nil {

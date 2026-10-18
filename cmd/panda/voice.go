@@ -30,12 +30,6 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
-// voiceValueFlags enumerates `panda voice`'s value-carrying flags for
-// reorderFlags (see global.go).
-var voiceValueFlags = map[string]bool{
-	"config": true, "card": true, "mcp": true, "listen": true,
-}
-
 // maxSpeakChars caps what gets read aloud. A long answer spoken in full is worse
 // than a truncated one: the listener cannot skim, cannot scroll back, and has no
 // way to interrupt a paragraph of prose. The full text still prints.
@@ -57,7 +51,7 @@ func runVoice(args []string) {
 	listen := fs.Float64("listen", 0, "seconds to wait for the wake word each round (0 = wait indefinitely)")
 	once := fs.Bool("once", false, "handle a single utterance and exit")
 	mute := fs.Bool("mute", false, "print the reply instead of speaking it (TTS driver not needed)")
-	fs.Parse(reorderFlags(args, voiceValueFlags))
+	fs.Parse(reorderFlags(fs, args))
 
 	cfg, err := loadConfigQuietly(*configPath)
 	if err != nil {
