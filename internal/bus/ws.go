@@ -457,10 +457,16 @@ func (c *Conn) enqueueFrame(data []byte, binaryFrame bool, lane int) error {
 // type picks the lane, so callers get §5.3 priority without any change.
 func (c *Conn) Send(v any) error {
 	lane := QoSBulk
+	var data []byte
+	var err error
 	if env, ok := v.(Envelope); ok {
 		lane = qosForType(env.Type)
+		// Envelope marshal splices the payload RawMessage in verbatim —
+		// json.Marshal would compact-escape the whole base64 body again.
+		data, err = marshalEnvelope(env)
+	} else {
+		data, err = json.Marshal(v)
 	}
-	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
@@ -476,10 +482,14 @@ func (c *Conn) Send(v any) error {
 // never reaches here.
 func (c *Conn) SendData(v any, body []byte) error {
 	lane := QoSBulk
+	var header []byte
+	var err error
 	if env, ok := v.(Envelope); ok {
 		lane = qosForType(env.Type)
+		header, err = marshalEnvelope(env)
+	} else {
+		header, err = json.Marshal(v)
 	}
-	header, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}

@@ -169,8 +169,9 @@ func runDaemon(args []string) {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, fmt.Sprintf("path to config.yaml (default %s)", config.SystemConfigPath()))
 	cardPath := fs.String("card", cardFlagDefault(), fmt.Sprintf("path to capabilities.yaml (default: discovered — ./capabilities.yaml, next to the resolved config, or %s)", systemCardPath()))
+	debugAddr := fs.String("debug-addr", "", "serve net/http/pprof on this loopback address (e.g. 127.0.0.1:6060); empty disables it")
 	fs.Parse(reorderFlags(fs, args))
-	rejectExtraArgs(fs, "usage: panda daemon [--config F] [--card F]")
+	rejectExtraArgs(fs, "usage: panda daemon [--config F] [--card F] [--debug-addr HOST:PORT]")
 
 	// Before anything looks for an agent CLI: a launchd/systemd/task-scheduler
 	// launch inherits a minimal PATH, and the CLIs live in user dirs it never
@@ -204,6 +205,15 @@ func runDaemon(args []string) {
 	// the right shape for journald and wrong shape for eyes.
 	log.SetupTTY(cfg.Log.Level, nil, stdoutIsTTY())
 	logger := log.From(context.Background())
+
+	// The pprof listener exists so a stalled node can report itself: heap,
+	// goroutine and CPU profiles straight off the running daemon. Loopback
+	// only, off unless asked — see debug.go.
+	if *debugAddr != "" {
+		if err := startDebugServer(*debugAddr); err != nil {
+			fatal("daemon --debug-addr", err)
+		}
+	}
 
 	db, err := openStore(cfg)
 	if err != nil {

@@ -46,7 +46,7 @@ var completionVerbs = map[string][]string{
 // suggestion is worse than none.
 var completionFlags = map[string][]string{
 	"ask":           {"--authorize", "--continue", "--project", "--output-format", "--config", "--card", "--mcp"},
-	"daemon":        {"--config", "--card"},
+	"daemon":        {"--config", "--card", "--debug-addr"},
 	"queue":         {"--state", "--project", "--watch", "--json"},
 	"task add":      {"--title", "--prompt", "--priority", "--project", "--authorize", "--requires", "--agents", "--mode", "--preferred", "--nodes", "--action-spec", "--wait", "--wait-timeout", "--json"},
 	"task artifact": {"--list", "--file", "--out", "--json"},

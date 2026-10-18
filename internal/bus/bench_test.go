@@ -55,7 +55,10 @@ func BenchmarkEnvelopeChunkMarshal(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		if _, err := json.Marshal(env); err != nil {
+		// marshalEnvelope is the Conn.Send/UDPConn.SendEnvelope path: the
+		// payload RawMessage splices in verbatim instead of being compacted
+		// a second time.
+		if _, err := marshalEnvelope(env); err != nil {
 			b.Fatal(err)
 		}
 	}

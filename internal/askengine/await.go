@@ -31,10 +31,26 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 )
 
-// awaitPollInterval is the settle-poll cadence: fast enough that a task
-// finishing between polls is noticed promptly, slow enough to be free (one
-// indexed row read plus one incremental event read per tick).
-const awaitPollInterval = time.Second
+// awaitPollInterval is the settle-poll cadence — now only the cross-process
+// backstop. Same-process task events wake the watch instantly through
+// AddOnEvent; the tick exists because the writer that finishes the row is
+// routinely a different process (the daemon's consumer claims it, forwards
+// it, writes the result back into the same SQLite file) and no listener of
+// ours fires for its writes. 5s keeps that fallback cheap: one indexed row
+// read plus one incremental event read per tick.
+const awaitPollInterval = 5 * time.Second
+
+// queuedConsumerGrace is how long a queued/submitted row may sit unclaimed
+// before the wait logs the "no consumer alive" warning. It used to ride the
+// poll interval (20 ticks × 1s); now that the tick is the cross-process
+// backstop the grace is spelled out on its own.
+const queuedConsumerGrace = 20 * time.Second
+
+// awaitConfirmDelay is the re-read scheduled after an event wake. Event
+// listeners fire inside the writer's transaction — the wake can observe the
+// row a beat BEFORE the new state commits, and a single-event settle would
+// otherwise hide until the 5s tick. One confirm pass closes that window.
+const awaitConfirmDelay = 150 * time.Millisecond
 
 // settledState answers "what happened to my task?" — done/cancelled/expired,
 // plus failed and review. Failed is broader than core.Terminal on purpose: a
@@ -70,15 +86,38 @@ func (e *Engine) awaitSettled(ctx context.Context, sched *core.Core, cur core.Ta
 	last := cur.State
 	e.logger.Debug("askengine: task parked, following it to the outcome", "task", cur.TaskID, "state", last)
 	cb.progress(Progress{Kind: ProgressWait, Name: last})
+	// Same-process task events for this row wake the watch the instant they
+	// land — an engine embedded in the daemon (the panel's) sits in the same
+	// process as the consumer, so its waits poll zero times. The ticker stays
+	// as the cross-process backstop: another process writing the same SQLite
+	// file fires no listener here.
+	wake := make(chan struct{}, 1)
+	unsubscribe := store.AddOnEvent(func(taskID, _ string, _ any) {
+		if taskID != cur.TaskID {
+			return
+		}
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	})
+	defer unsubscribe()
 	tick := time.NewTicker(awaitPollInterval)
 	defer tick.Stop()
 	queuedSince := time.Now()
 	consumerChecked := false
+	var confirm <-chan time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return cur, res
 		case <-tick.C:
+		case <-wake:
+			if confirm == nil {
+				confirm = time.After(awaitConfirmDelay)
+			}
+		case <-confirm:
+			confirm = nil
 		}
 		t, err := store.Get(ctx, cur.TaskID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -114,7 +153,7 @@ func (e *Engine) awaitSettled(ctx context.Context, sched *core.Core, cur core.Ta
 		// store-aware: a daemon draining a different db_path holds the
 		// identity lock but never claims this store's rows.
 		if !consumerChecked && (t.State == core.StateQueued || t.State == core.StateSubmitted) &&
-			time.Since(queuedSince) > 20*awaitPollInterval && !e.queueConsumerAlive(ctx) {
+			time.Since(queuedSince) > queuedConsumerGrace && !e.queueConsumerAlive(ctx) {
 			consumerChecked = true
 			e.logger.Warn("askengine: queued task unclaimed and no queue consumer is alive; it waits until one starts",
 				"task", cur.TaskID)
@@ -233,13 +272,34 @@ func (e *Engine) awaitPlanSettled(ctx context.Context, sched *core.Core, planID 
 	cursors := map[string]*int64{} // per-stage timeline cursor for the event bridge
 	seen := map[string]string{}    // last announced state per stage
 	var board []core.Task
+	// Same-process events for any stage task wake the watch instantly — a
+	// stage's task id only becomes known through a board read, so the filter
+	// cannot be "this task only" the way awaitSettled's is. Waking on any
+	// task event still costs one PlanStages read, far cheaper than the old
+	// 1s heartbeat against an empty queue. The ticker is the cross-process
+	// backstop: the stage writer can be a different process sharing the db.
+	wake := make(chan struct{}, 1)
+	unsubscribe := store.AddOnEvent(func(_ string, _ string, _ any) {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	})
+	defer unsubscribe()
 	tick := time.NewTicker(awaitPollInterval)
 	defer tick.Stop()
+	var confirm <-chan time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return board
 		case <-tick.C:
+		case <-wake:
+			if confirm == nil {
+				confirm = time.After(awaitConfirmDelay)
+			}
+		case <-confirm:
+			confirm = nil
 		}
 		stages, err := store.PlanStages(ctx, planID)
 		if err != nil {

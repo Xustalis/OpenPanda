@@ -51,10 +51,9 @@ type TaskStore struct {
 	// bridges it to the CLI status line during a synchronous Submit). The callback
 	// MUST NOT touch the store and MUST NOT block: it runs on the goroutine that
 	// recorded the event, inside its transaction.
-	onEvent        func(taskID, typ string, data any)
-	eventListeners map[uint64]func(taskID, typ string, data any)
-	nextListenerID uint64
-	onEventMu      sync.RWMutex
+	onEvent   func(taskID, typ string, data any)
+	hub       *eventHub
+	onEventMu sync.RWMutex
 	// eventKey/eventPub sign each recorded event's chain hash with the node's
 	// Ed25519 identity (P2-9). Nil on stores opened without a key (read-only
 	// tools, tests that never wired one) — unsigned events stay legal; they
@@ -64,16 +63,49 @@ type TaskStore struct {
 	eventKeyM sync.RWMutex
 }
 
+// eventHubs routes task-event notifications to every TaskStore sharing one
+// *sql.DB. Two store objects in the same process can wrap the same database
+// handle — the scheduler's and a fixture's, an ask engine's and the store a
+// driver hands back — and a write through one must still wake listeners
+// registered on the other, or the shared-file notification path silently
+// degrades to polling. Entries live for the process: stores are long-lived
+// per daemon run, and the map is bounded by the number of distinct *sql.DB
+// handles a process opens (one in practice).
+var eventHubs = struct {
+	sync.Mutex
+	m map[*sql.DB]*eventHub
+}{m: make(map[*sql.DB]*eventHub)}
+
+// eventHub fans one database's events out to every registered listener.
+// Callbacks fire synchronously inside the writer's transaction — they must
+// not touch the store or block, same contract as SetOnEvent.
+type eventHub struct {
+	mu        sync.Mutex
+	listeners map[uint64]func(taskID, typ string, data any)
+	next      uint64
+}
+
+func hubFor(db *sql.DB) *eventHub {
+	eventHubs.Lock()
+	defer eventHubs.Unlock()
+	h := eventHubs.m[db]
+	if h == nil {
+		h = &eventHub{listeners: make(map[uint64]func(taskID, typ string, data any))}
+		eventHubs.m[db] = h
+	}
+	return h
+}
+
 // NewTaskStore wraps a DB. now may be nil (defaults to Unix time).
 func NewTaskStore(db *sql.DB, logger *slog.Logger) *TaskStore {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &TaskStore{
-		db:             db,
-		logger:         logger,
-		now:            storage.Now,
-		eventListeners: make(map[uint64]func(taskID, typ string, data any)),
+		db:     db,
+		logger: logger,
+		now:    storage.Now,
+		hub:    hubFor(db),
 	}
 }
 
@@ -124,24 +156,22 @@ func (s *TaskStore) SetOnEvent(fn func(taskID, typ string, data any)) {
 }
 
 // AddOnEvent registers a concurrent-safe per-event observer fired after every task
-// event is appended. Returns an unsubscribe function that removes the listener.
+// event is appended by ANY TaskStore sharing this database handle — see eventHub.
+// Returns an unsubscribe function that removes the listener.
 func (s *TaskStore) AddOnEvent(fn func(taskID, typ string, data any)) func() {
 	if fn == nil {
 		return func() {}
 	}
-	s.onEventMu.Lock()
-	if s.eventListeners == nil {
-		s.eventListeners = make(map[uint64]func(taskID, typ string, data any))
-	}
-	s.nextListenerID++
-	id := s.nextListenerID
-	s.eventListeners[id] = fn
-	s.onEventMu.Unlock()
+	s.hub.mu.Lock()
+	s.hub.next++
+	id := s.hub.next
+	s.hub.listeners[id] = fn
+	s.hub.mu.Unlock()
 
 	return func() {
-		s.onEventMu.Lock()
-		delete(s.eventListeners, id)
-		s.onEventMu.Unlock()
+		s.hub.mu.Lock()
+		delete(s.hub.listeners, id)
+		s.hub.mu.Unlock()
 	}
 }
 
@@ -439,14 +469,16 @@ func (s *TaskStore) recordEventTx(ctx context.Context, tx *sql.Tx, taskID, typ s
 	// from touching the store or blocking, so this cannot deadlock the connection.
 	s.onEventMu.RLock()
 	fn := s.onEvent
+	s.onEventMu.RUnlock()
 	var extraListeners []func(taskID, typ string, data any)
-	if len(s.eventListeners) > 0 {
-		extraListeners = make([]func(taskID, typ string, data any), 0, len(s.eventListeners))
-		for _, l := range s.eventListeners {
+	if s.hub != nil {
+		s.hub.mu.Lock()
+		extraListeners = make([]func(taskID, typ string, data any), 0, len(s.hub.listeners))
+		for _, l := range s.hub.listeners {
 			extraListeners = append(extraListeners, l)
 		}
+		s.hub.mu.Unlock()
 	}
-	s.onEventMu.RUnlock()
 	if fn != nil {
 		fn(taskID, typ, data)
 	}

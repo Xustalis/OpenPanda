@@ -183,7 +183,7 @@ func (u *UDPConn) Close() error { return u.conn.Close() }
 // SendEnvelope seals env into one datagram addressed to src. Oversize frames
 // are refused rather than fragmented — see UDPMaxDatagram.
 func (u *UDPConn) SendEnvelope(env Envelope, to *net.UDPAddr) error {
-	raw, err := json.Marshal(env)
+	raw, err := marshalEnvelope(env)
 	if err != nil {
 		return fmt.Errorf("udp: marshal envelope: %w", err)
 	}

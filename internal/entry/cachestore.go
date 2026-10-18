@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,9 +22,12 @@ import (
 // deliberately best-effort: a cache that cannot be read or written degrades
 // to a plain uncached call, never an error for the user.
 type DiskCache struct {
-	db        *sql.DB
-	ttl       time.Duration
-	lastEvict int64
+	db  *sql.DB
+	ttl time.Duration
+	// lastEvict is atomic: Puts arrive from concurrent asks, and a plain
+	// int64 read-modify-write would race under -race even though a lost
+	// update only costs one extra cleanup pass.
+	lastEvict atomic.Int64
 }
 
 // defaultCacheTTL is how long a cached decision stays valid. Inputs are
@@ -73,8 +77,8 @@ func (c *DiskCache) Put(ctx context.Context, ns, k1, k2 string, v any) {
 		return
 	}
 	now := time.Now().Unix()
-	if c.ttl <= 0 || now-c.lastEvict >= evictThrottleInterval {
-		c.lastEvict = now
+	if c.ttl <= 0 || now-c.lastEvict.Load() >= evictThrottleInterval {
+		c.lastEvict.Store(now)
 		_, _ = c.db.ExecContext(ctx,
 			`DELETE FROM entry_cache WHERE created_at < ?`, now-int64(c.ttl/time.Second))
 	}

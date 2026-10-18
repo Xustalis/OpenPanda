@@ -20,10 +20,12 @@ func staticHandler(staticDir string) http.Handler {
 		return http.FileServer(http.Dir(staticDir))
 	}
 	if dist, ok := embeddedDist(); ok {
-		// Real build present? Serve it.
+		// Real build present? Serve it, precompressed: the bundle is the
+		// panel's largest transfer and the embedded tree never changes inside
+		// the process (see static_gzip.go).
 		if _, err := fs.Stat(dist, "dist/app/index.html"); err == nil {
 			if sub, err := fs.Sub(dist, "dist/app"); err == nil {
-				return http.FileServer(http.FS(sub))
+				return gzipAssets(sub)
 			}
 		}
 		// Source checkout without `make web`: the placeholder explains what

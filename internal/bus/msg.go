@@ -129,7 +129,7 @@ func NewEnvelope(typ, from, msgID string, payload any) (Envelope, error) {
 		if c, ok := payload.(wireClamper); ok {
 			payload = c.clampForWire()
 		}
-		b, err := json.Marshal(payload)
+		b, err := marshalPayload(payload)
 		if err != nil {
 			return Envelope{}, fmt.Errorf("marshal payload: %w", err)
 		}
