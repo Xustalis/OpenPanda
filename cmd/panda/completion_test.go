@@ -33,6 +33,7 @@ func TestCompletionScriptsContainCommands(t *testing.T) {
 		{"bash", bashCompletion},
 		{"zsh", zshCompletion},
 		{"fish", fishCompletion},
+		{"powershell", powershellCompletion},
 	} {
 		out := shell.gen()
 		for _, want := range []string{"task", "daemon", "ask", "queue", "init"} {
@@ -43,6 +44,34 @@ func TestCompletionScriptsContainCommands(t *testing.T) {
 		for _, want := range []string{"approve", "reject", "priority"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("%s script missing task verb %q", shell.name, want)
+			}
+		}
+	}
+}
+
+// completionFlags keys are "cmd" or "cmd verb" shapes — a renamed command or
+// verb leaves the flag list unreachable in every generated script.
+func TestCompletionFlagsSyncWithVerbs(t *testing.T) {
+	names := map[string]bool{}
+	for _, n := range subcommandNames() {
+		names[n] = true
+	}
+	for key := range completionFlags {
+		cmd, verb, twoPart := strings.Cut(key, " ")
+		if !names[cmd] {
+			t.Errorf("completionFlags key %q starts with unknown command %q", key, cmd)
+			continue
+		}
+		if twoPart {
+			ok := false
+			for _, v := range completionVerbs[cmd] {
+				if v == verb {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				t.Errorf("completionFlags key %q names a verb %q not in completionVerbs[%q]", key, verb, cmd)
 			}
 		}
 	}

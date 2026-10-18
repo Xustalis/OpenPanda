@@ -2,7 +2,7 @@
 
 package main
 
-// `panda completion bash|zsh|fish` prints a static completion script to
+// `panda completion bash|zsh|fish|powershell` prints a static completion script to
 // stdout — `source <(panda completion zsh)` or install it into the shell's
 // completion dir (scripts/install.sh offers to). Static word lists, no
 // runtime probing: a completer must never block the prompt on the network
@@ -82,8 +82,10 @@ func runCompletion(args []string) {
 		out = zshCompletion()
 	case "fish":
 		out = fishCompletion()
+	case "powershell", "pwsh":
+		out = powershellCompletion()
 	default:
-		fmt.Fprintln(os.Stderr, "usage: panda completion bash|zsh|fish")
+		fmt.Fprintln(os.Stderr, "usage: panda completion bash|zsh|fish|powershell")
 		fmt.Fprintln(os.Stderr, "  prints the completion script — e.g. `source <(panda completion zsh)`")
 		os.Exit(2)
 	}
@@ -174,7 +176,7 @@ _panda() {
 			words = completionVerbsFor("model")
 		}
 		if cmd == "completion" {
-			words = "bash zsh fish"
+			words = "bash zsh fish powershell"
 		}
 		fmt.Fprintf(&b, "        %s) COMPREPLY=( $(compgen -W \"%s\" -- \"$cur\") ) ;;\n", cmd, words)
 	}
@@ -235,7 +237,7 @@ _panda() {
 		case "models":
 			words = completionVerbsFor("model")
 		case "completion":
-			words = "bash zsh fish"
+			words = "bash zsh fish powershell"
 		}
 		fmt.Fprintf(&b, "        %s) verbs=(%s) ;;\n", cmd, words)
 	}
@@ -275,7 +277,7 @@ complete -c panda -f -n 'test (__fish_panda_bare_count) -eq 0' -a '` + completio
 		case "models":
 			words = completionVerbsFor("model")
 		case "completion":
-			words = "bash zsh fish"
+			words = "bash zsh fish powershell"
 		}
 		fmt.Fprintf(&b, "complete -c panda -f -n 'test (__fish_panda_bare_count) -eq 1; and __fish_seen_subcommand_from %s' -a '%s' -d '%s verb'\n", cmd, words, cmd)
 	}
@@ -288,5 +290,86 @@ complete -c panda -f -n 'test (__fish_panda_bare_count) -eq 0' -a '` + completio
 		fmt.Fprintf(&b, "complete -c panda -f -n '__fish_seen_argument -l %s' -a '%s'\n",
 			strings.TrimLeft(flagName, "-"), strings.Join(vals, " "))
 	}
+	return b.String()
+}
+
+// powershellCompletion emits a Register-ArgumentCompleter script covering the
+// same three levels as the POSIX scripts (command → verb → flag/flag-value),
+// driven by the same tables so all four shells stay in sync by construction.
+func powershellCompletion() string {
+	var b strings.Builder
+	quote := func(words []string) string {
+		q := make([]string, len(words))
+		for i, w := range words {
+			q[i] = "'" + w + "'"
+		}
+		return strings.Join(q, ",")
+	}
+	b.WriteString(`# PowerShell completion for panda — persist it via your profile:
+#   panda completion powershell >> $PROFILE
+# or load it just for this session:  . (panda completion powershell | Out-String)
+
+$_pandaCommands = @(` + quote(subcommandNames()) + ")\n")
+	b.WriteString("$_pandaVerbs = @{\n")
+	for _, cmd := range []string{"nodes", "task", "plan", "session", "skill", "model", "config", "memory", "project", "reminder", "card", "agents", "auth", "completion"} {
+		words := completionVerbs[cmd]
+		if cmd == "completion" {
+			words = []string{"bash", "zsh", "fish", "powershell"}
+		}
+		fmt.Fprintf(&b, "    '%s' = @(%s)\n", cmd, quote(words))
+	}
+	b.WriteString("}\n$_pandaFlags = @{\n")
+	for _, key := range []string{"task add", "task artifact", "plan run", "ask", "daemon", "queue", "init", "web", "status", "doctor", "repl"} {
+		fmt.Fprintf(&b, "    '%s' = @(%s)\n", key, quote(completionFlags[key]))
+	}
+	b.WriteString("}\n$_pandaFlagValues = @{\n")
+	for _, flagName := range []string{"--state", "--priority", "--mode", "--output-format"} {
+		fmt.Fprintf(&b, "    '%s' = @(%s)\n", flagName, quote(completionFlagValues[flagName]))
+	}
+	b.WriteString(`}
+
+Register-ArgumentCompleter -Native -CommandName 'panda' -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    # Tokens after 'panda'; the word under the cursor arrives as the last
+    # element, so drop it — the rest describes the context being completed.
+    $elems = @($commandAst.CommandElements | ForEach-Object { $_.ToString() } | Select-Object -Skip 1)
+    if ($wordToComplete -ne '' -and $elems.Count -gt 0 -and $elems[-1] -eq $wordToComplete) {
+        $elems = @($elems | Select-Object -First ($elems.Count - 1))
+    }
+    $prev = if ($elems.Count -gt 0) { $elems[-1] } else { '' }
+    $bare = @($elems | Where-Object { -not $_.StartsWith('-') })
+
+    $suggest = {
+        param([string[]]$words)
+        $words | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+            [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+        }
+    }
+
+    if ($_pandaFlagValues.ContainsKey($prev)) {
+        return & $suggest $_pandaFlagValues[$prev]
+    }
+    if ($wordToComplete.StartsWith('-')) {
+        $key = if ($bare.Count -gt 0) { $bare[0] } else { '' }
+        if ($bare.Count -gt 1 -and $_pandaFlags.ContainsKey("$($bare[0]) $($bare[1])")) {
+            $key = "$($bare[0]) $($bare[1])"
+        }
+        if ($_pandaFlags.ContainsKey($key)) { return & $suggest $_pandaFlags[$key] }
+        return & $suggest @('--config','--card','--mcp','--json','--help')
+    }
+    if ($bare.Count -eq 0) {
+        return & $suggest $_pandaCommands
+    }
+    if ($bare.Count -eq 1) {
+        $verbKey = $bare[0]
+        if ($verbKey -eq 'sessions') { $verbKey = 'session' }
+        if ($verbKey -eq 'models') { $verbKey = 'model' }
+        if ($_pandaVerbs.ContainsKey($verbKey)) {
+            return & $suggest $_pandaVerbs[$verbKey]
+        }
+    }
+}
+`)
 	return b.String()
 }
