@@ -75,11 +75,31 @@ func eventLine(e core.Event, indent string) string {
 		if k, v, ok := strings.Cut(payload, "="); ok && eventTailKeys[k] {
 			vBudget := budget - cliui.DisplayWidth(k) - 1
 			if vBudget > 8 {
-				return head + " " + p.Muted(k+"="+cliui.TruncateTail(v, vBudget, p.Unicode()))
+				return head + " " + p.Muted(k+"="+truncateTailWords(v, vBudget, p.Unicode()))
 			}
 		}
 	}
 	return head + " " + p.Muted(cliui.Truncate(payload, budget, p.Unicode()))
+}
+
+// truncateTailWords is cliui.TruncateTail that also drops the partial leading
+// word: "…aiting headers" looks like a broken paste — the visible tail should
+// start on a whole token whenever the value actually contains spaces (CJK
+// text simply keeps its rune cut, unchanged behaviour).
+func truncateTailWords(s string, max int, unicode bool) string {
+	out := cliui.TruncateTail(s, max, unicode)
+	mark := "…"
+	if !unicode {
+		mark = "..."
+	}
+	rest, ok := strings.CutPrefix(out, mark)
+	if !ok {
+		return out // nothing was clipped
+	}
+	if i := strings.IndexByte(rest, ' '); i >= 0 && i < len(rest)-1 {
+		return mark + rest[i+1:]
+	}
+	return out
 }
 
 // eventPayload flattens an event's JSON object into sorted k=v pairs, dropping

@@ -110,6 +110,24 @@ func TestEventLineKeepsErrorTail(t *testing.T) {
 	}
 }
 
+// A clipped error tail starts on a whole word — "…aiting headers" read as a
+// broken paste; the leading fragment is dropped to the first space.
+func TestTruncateTailWordsBoundary(t *testing.T) {
+	got := truncateTailWords("something failed while awaiting response headers", 20, true)
+	if !strings.HasPrefix(got, "…response headers") {
+		t.Fatalf("tail = %q, want …response headers", got)
+	}
+	// No space inside the kept tail → fall back to the rune cut.
+	got = truncateTailWords("aaaaaaabbbbbbbb", 8, true)
+	if got != "…bbbbbbb" {
+		t.Fatalf("tail = %q", got)
+	}
+	// Short value is untouched.
+	if got := truncateTailWords("short", 20, true); got != "short" {
+		t.Fatalf("short = %q", got)
+	}
+}
+
 func mustJSON(t *testing.T, s string) string {
 	t.Helper()
 	out := strings.Builder{}
