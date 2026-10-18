@@ -34,3 +34,19 @@ func TestShutdownDeadlineBoundsArtifactDrain(t *testing.T) {
 		t.Fatalf("Shutdown waited %v on a wedged transfer despite a 150ms ctx deadline", elapsed)
 	}
 }
+
+// TestGoArtifactAfterShutdownRunsInline pins the other half of the drain
+// contract: a result handler that reaches goArtifact while Shutdown is
+// already waiting must not spawn an untracked goroutine — an Add landing at
+// counter 0 after Wait began is never awaited — and must not be dropped
+// either, or the adoption simply never happens. The work runs inline instead.
+func TestGoArtifactAfterShutdownRunsInline(t *testing.T) {
+	c := newCore(t, "drain-node2", "127.0.0.1:17998")
+	c.Shutdown(context.Background())
+
+	ran := false
+	c.goArtifact("late adoption", func() { ran = true })
+	if !ran {
+		t.Fatal("goArtifact after Shutdown dropped the adoption instead of running it inline")
+	}
+}

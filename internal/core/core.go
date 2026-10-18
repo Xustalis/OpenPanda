@@ -287,6 +287,11 @@ type Core struct {
 	// worktree. WaitArtifacts drains it, so a shutdown — and a test's
 	// TempDir cleanup — never races a write still in flight.
 	artWG sync.WaitGroup
+	// artMu pairs with artClosing to close the drain's edge window: a handler
+	// that reached goArtifact while Shutdown was already waiting must not
+	// Add past a Wait that can no longer see it.
+	artMu      sync.Mutex
+	artClosing bool
 
 	// pushAck maps peer|hash -> the receiver's latest reported contiguous
 	// waterline for an outbound push (§8.3). It lives beside the persisted
@@ -855,7 +860,19 @@ func (c *Core) goGuarded(name string, fn func()) {
 // lifetime. It is additionally tracked in artWG so WaitArtifacts can drain
 // the writes before the process exits or a test unlinks the pool directory.
 func (c *Core) goArtifact(name string, fn func()) {
+	c.artMu.Lock()
+	if c.artClosing {
+		// Shutdown is draining or past it: an Add landing at counter 0 after
+		// Wait began is never awaited, so the write would run untracked — and
+		// dropping the call would lose the adoption outright. Run it inline
+		// instead: still panic-guarded, still bounded by the transfer budget
+		// inside fn, and it completes inside the caller that asked for it.
+		c.artMu.Unlock()
+		guard.Call(c.logger, "core: "+name, nil, fn)
+		return
+	}
 	c.artWG.Add(1)
+	c.artMu.Unlock()
 	c.goGuarded(name, func() {
 		defer c.artWG.Done()
 		fn()
@@ -1751,6 +1768,9 @@ func (c *Core) Shutdown(ctx context.Context) {
 	// shutdown deadline binds it too: a wedged transfer must not stretch a
 	// stop past the point the caller committed to, or the supervisor would
 	// SIGKILL at its own timeout with nothing logged.
+	c.artMu.Lock()
+	c.artClosing = true
+	c.artMu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		c.artWG.Wait()
