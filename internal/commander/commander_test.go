@@ -333,6 +333,7 @@ func TestExecuteRemoteUnconsentedAgentRestricted(t *testing.T) {
 	// hole restricted mode exists to close.
 	card2 := testCard()
 	op := card2.Agents["opencode"]
+	op.Adapter = "generic.py" // generic has no declared restricted face
 	op.Capabilities = []string{"code:modify"}
 	card2.Agents["opencode"] = op
 	delete(card2.Agents, "claude_code")

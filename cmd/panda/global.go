@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -183,24 +184,71 @@ func termSupportsUnicode() bool {
 	return false
 }
 
-// cliStateDir is where CLI state (REPL history) lives: XDG_STATE_HOME when
-// set (unix convention), %LOCALAPPDATA%\openpanda on Windows — creating
-// ~/.local/state there is unix leakage and scatters hidden folders through a
-// Windows home — else ~/.local/state (the stdlib has no UserStateDir).
+// cliStateDir is where CLI state (REPL history, conversation mirrors, web
+// logs) lives: XDG_STATE_HOME when set (unix convention), else the
+// platform-native spot. The stdlib has no UserStateDir, so each OS gets its
+// own answer:
+//   - Linux/other unix: ~/.local/state/openpanda
+//   - macOS: ~/Library/Application Support/openpanda/state — macOS has no
+//     ~/.local convention, and a second root there would scatter the app's
+//     footprint across two trees while the data dir already owns one
+//   - Windows: %LOCALAPPDATA%\openpanda-data\state — plain %LOCALAPPDATA%\
+//     openpanda collapses into the install prefix %LOCALAPPDATA%\OpenPanda
+//     on case-insensitive NTFS (the collision openpanda-data exists to
+//     avoid), and an uninstall would take the CLI's history with it
 func cliStateDir() string {
 	if d := os.Getenv("XDG_STATE_HOME"); d != "" {
 		return filepath.Join(d, "openpanda")
 	}
-	if runtime.GOOS == "windows" {
+	var dir string
+	switch runtime.GOOS {
+	case "windows":
 		if base := os.Getenv("LOCALAPPDATA"); base != "" {
-			return filepath.Join(base, "openpanda")
+			dir = filepath.Join(base, "openpanda-data", "state")
+		}
+	case "darwin":
+		if ucd, err := os.UserConfigDir(); err == nil && ucd != "" {
+			dir = filepath.Join(ucd, "openpanda", "state")
 		}
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return ""
+		}
+		dir = filepath.Join(home, ".local", "state", "openpanda")
 	}
-	return filepath.Join(home, ".local", "state", "openpanda")
+	migrateLegacyStateDir(dir)
+	return dir
+}
+
+// migrateLegacyStateDir folds the pre-platform-fix state root (~/.local/
+// state/openpanda, which older builds used on every OS) into dir exactly
+// once: a macOS/Windows box that ran an older build keeps its REPL history
+// and conversation mirrors instead of silently starting over. It is a
+// no-op when dir IS the legacy path, when the target already exists, or
+// when there is nothing to move; os.Rename is atomic within a filesystem.
+var migrateStateOnce sync.Once
+
+func migrateLegacyStateDir(dir string) {
+	migrateStateOnce.Do(func() {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return
+		}
+		old := filepath.Join(home, ".local", "state", "openpanda")
+		if old == dir {
+			return // dir is already the legacy path — nothing to migrate
+		}
+		if _, err := os.Stat(dir); err == nil {
+			return // target exists already: never clobber it
+		}
+		if _, err := os.Stat(old); err != nil {
+			return
+		}
+		_ = os.MkdirAll(filepath.Dir(dir), 0o700)
+		_ = os.Rename(old, dir)
+	})
 }
 
 // loadConfigQuietly loads config with config.Load's slog chatter muted

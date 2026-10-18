@@ -25,6 +25,7 @@ func TestCapacityFullDeclinesDelegation(t *testing.T) {
 		Capacity:      ledger.Capacity{CPUCores: 2, RAMGB: 4, MaxConcurrent: 1},
 	}
 	c := NewCore(db, "tiny", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 
 	// Occupy the single execution slot with a running task owned by this node.

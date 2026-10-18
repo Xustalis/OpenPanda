@@ -20,6 +20,10 @@ import (
 func TestPackContextLevels(t *testing.T) {
 	ctx := context.Background()
 	c := newCore(t, "pack", "")
+	// packContext promotes a non-"." workDir into a workspace snapshot, so the
+	// summary branch under test only exists at the daemon's pre-config "."
+	// default — pin it rather than inherit the helper's temp dir.
+	c.SetWorkDir(".")
 
 	hash, level, err := c.packContext(ctx, TaskInput{ContextType: "command", Intent: "x"})
 	if err != nil {

@@ -664,7 +664,7 @@ func (c *Core) stageWorkDir(planID, stageID string) (string, error) {
 	if !plan.ValidID(planID) || !plan.ValidID(stageID) {
 		return "", fmt.Errorf("unsafe stage identity: plan %q stage %q", planID, stageID)
 	}
-	root := c.workDir
+	root := c.scratchRoot()
 	if root == "" {
 		root = os.TempDir()
 	}
@@ -688,7 +688,7 @@ func (c *Core) attachedWorkDir(taskID string) (string, error) {
 	if !plan.ValidID(taskID) {
 		return "", fmt.Errorf("unsafe task id %q", taskID)
 	}
-	root := c.workDir
+	root := c.scratchRoot()
 	if root == "" {
 		root = os.TempDir()
 	}

@@ -242,6 +242,8 @@ func (c *Core) execLockAcquire(ctx context.Context, taskID, runID string, keys, 
 			return ErrAlreadyRunning
 		}
 	}
+	tick := time.NewTicker(execLockPollEvery)
+	defer tick.Stop()
 	for {
 		c.execAcquireMu.Lock()
 		already := false
@@ -269,7 +271,7 @@ func (c *Core) execLockAcquire(ctx context.Context, taskID, runID string, keys, 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(execLockPollEvery):
+		case <-tick.C:
 		}
 	}
 }

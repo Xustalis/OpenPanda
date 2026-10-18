@@ -84,6 +84,7 @@ func newTaggedCore(t *testing.T, tag, id, addr string) *Core {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil)).With("side", tag)
 	c := NewCore(db, id, card, 5, logger, config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 	return c
 }

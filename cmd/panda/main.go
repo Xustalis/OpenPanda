@@ -29,7 +29,6 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/executil"
 	"github.com/Xustalis/OpenPanda/internal/guard"
-	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -73,213 +72,19 @@ func main() {
 		}
 	}
 	if sub != "" {
-		switch sub {
-		case "daemon", "serve":
-			runDaemon(args)
-			return
-		case "ask":
-			runAsk(args)
-			return
-		case "repl", "chat":
-			runRepl(args)
-			return
-		case "web":
-			runWeb(args)
-			return
-		case "voice":
-			runVoice(args)
-			return
-		case "install":
-			runInstall(args)
-			return
-		case "uninstall":
-			runUninstall(args)
-			return
-		case "update":
-			runUpdate(args)
-			return
-		case "upgrade":
-			runUpgrade(args)
-			return
-		case "doctor":
-			runDoctor(args)
-			return
-		case "status":
-			runStatus(args)
-			return
-		case "nodes":
-			// Verbs that rewrite the peer list live here; `remove` drops a
-			// stale directory row; `verify` stamps a fingerprint the human has
-			// compared out-of-band; bare `nodes` lists the fleet.
-			if len(args) > 0 {
-				switch args[0] {
-				case "add":
-					runNodesAdd(args[1:])
-					return
-				case "disconnect", "dc":
-					runNodesDisconnect(args[1:])
-					return
-				case "invite":
-					runNodesInvite(args[1:])
-					return
-				case "remove", "rm":
-					runNodeRemove(args[1:])
-					return
-				case "prune":
-					runNodePrune(args[1:])
-					return
-				case "verify":
-					runNodesVerify(args[1:])
-					return
-				case "trust":
-					runNodesTrust(args[1:])
-					return
-				case "admit":
-					runNodesAdmit(args[1:])
-					return
-				case "drain":
-					runNodesDrain(args[1:])
-					return
-				}
-			}
-			runStatus(args)
-			return
-		case "pair":
-			runPair(args)
-			return
-		case "queue":
-			runQueue(args)
-			return
-		case "task":
-			runTask(args)
-			return
-		case "plan":
-			runPlan(args)
-			return
-		case "cancel":
-			runCancel(args)
-			return
-		case "approve":
-			runApprove(args)
-			return
-		case "reject":
-			runReject(args)
-			return
-		case "logs":
-			runLogs(args)
-			return
-		case "skill":
-			runSkill(args)
-			return
-		case "mcp":
-			runMCP(args)
-			return
-		case "auth":
-			runAuth(args)
-			return
-		case "rpc":
-			runRPC(args)
-			return
-		case "reminder":
-			runReminder(args)
-			return
-		case "detect":
-			runDetect(args)
-			return
-		case "card":
-			runCard(args)
-			return
-		case "init":
-			runInit(args)
-			return
-		case "metrics":
-			runMetrics(args)
-			return
-		case "heatmap":
-			runHeatmap(args)
-			return
-		case "audit":
-			runAudit(args)
-			return
-		case "session", "sessions":
-			runSession(args)
-			return
-		case "memory":
-			runMemory(args)
-			return
-		case "config":
-			runConfig(args)
-			return
-		case "model", "models":
-			runModel(args)
-			return
-		case "agents":
-			runAgents(args)
-			return
-		case "project":
-			runProject(args)
-			return
-		case "version":
-			printVersion(args)
-			return
-		case "completion":
-			runCompletion(args)
-			return
-		case "read", "view", "cat", "md", "markdown":
-			runRead(args)
-			return
-		case "help", "-h", "--help":
-			printUsage(os.Stdout)
-			return
-		default:
-			// If the argument points to an existing file on disk (e.g. `panda README.md`),
-			// automatically read and render it without requiring a subcommand.
-			if fi, err := os.Stat(sub); err == nil && !fi.IsDir() {
-				runRead(append([]string{sub}, args...))
-				return
-			}
-
-			// Bare-input routing: words that can't be a command get treated
-			// as the prompt they almost surely are (`panda fix the bug`,
-			// `panda 你好`), while a single all-lowercase ASCII word stays a
-			// probable typo and keeps the did-you-mean error below — the one
-			// shape where "send it to the model" would surprise.
-			if bareInputIsAsk(sub, args) {
-				runAsk(append([]string{sub}, args...))
-				return
-			}
-
-			// A bare unknown word must not silently fall through (P1-25):
-			// "panda statsu" (a typo) should neither start the REPL nor a
-			// resident daemon — name the fix instead. When the word is one
-			// typo away from a real subcommand, say which: that is the whole
-			// difference between a dead end and a correction.
-			//
-			// The correction is the message. This used to print the whole
-			// command tree underneath, which pushed the "did you mean status?"
-			// line off a short terminal — burying the answer in the reference
-			// manual. One line naming `panda help` keeps the reference one
-			// keystroke away without making every typo cost sixty lines.
-			loc := i18n.Detect()
-			p := palFor(os.Stderr)
-			fmt.Fprintf(os.Stderr, "panda: %s %s\n", i18n.T(loc, "cli.unknownSub"), p.Command(sub))
-			if s := suggest(sub, subcommandNames()); s != "" {
-				fmt.Fprintf(os.Stderr, "  %s\n", i18n.Tf(loc, "repl.didyoumean", "cmd", p.Command(s)))
-			}
-			fmt.Fprintf(os.Stderr, "  %s\n", p.Muted(i18n.T(loc, "cli.unknownSub.askHint")))
-			fmt.Fprintf(os.Stderr, "  %s\n", p.Muted(i18n.T(loc, "cli.help.more")))
-			os.Exit(2)
-		}
+		dispatchSub(sub, args)
+		return
 	}
 	// No subcommand: the interactive REPL is the product's front door;
 	// the kernel is an explicit `panda daemon` away.
 	runRepl(args)
 }
 
-// subcommandNames lists every accepted subcommand for typo suggestions. It is
-// the switch in main() written out once more, deliberately: the switch is the
-// dispatcher and must stay a switch (aliases share a case), while this is the
-// vocabulary, and a name missing here costs a suggestion, not a command.
+// subcommandNames lists every accepted subcommand for typo suggestions and
+// shell completion. It is dispatchSub's switch written out once more,
+// deliberately: the switch is the dispatcher and must stay a switch (aliases
+// share a case), while this is the vocabulary, and a name missing here costs
+// a suggestion, not a command.
 func subcommandNames() []string {
 	return []string{
 		"daemon", "serve", "ask", "repl", "chat", "web", "voice",
@@ -489,10 +294,30 @@ func runDaemon(args []string) {
 	// and make python's subprocess.run fail instantly.
 	if absWork, err := filepath.Abs(cfg.Storage.WorkPath); err == nil {
 		coreNode.SetWorkDir(absWork)
+		// A work root that is not the node's own data dir is a user-visible
+		// workspace (an adopted launch dir, or an explicit work_path): keep
+		// panda's runtime scratch — per-task dirs, plan stages, landed remote
+		// project copies — inside one hidden .openpanda directory there, the
+		// same convention session worktrees already use, rather than tasks/,
+		// plans/ and projects/ appearing in the user's tree. Under the
+		// default data dir they stay at the top level beside the database.
+		if sr := cfg.ScratchRoot(); sr != "" {
+			coreNode.SetScratchRoot(sr)
+			// The workspace will host .openpanda scratch — keep it out of
+			// `git status` via .git/info/exclude so the daemon never dirties
+			// the user's checkout nor edits their .gitignore. A non-repo
+			// work_path skips silently.
+			excludePandaDir(absWork)
+		}
 	} else {
 		coreNode.SetWorkDir(cfg.Storage.WorkPath)
 	}
 	coreNode.SetHostStatePaths(cfg.HostStatePaths())
+	// The node's own config and card are never artifact content: a tree that
+	// happens to contain them (a project rooted at the daemon dir, a dev node
+	// running work_path="." in its checkout) must not ship the mesh secret
+	// or the card to whoever asked for the pack.
+	coreNode.SetPackProtectedPaths([]string{*configPath, *cardPath})
 	// OS sandbox (sandbox.*): the environment filter always applies; when a
 	// mode is configured, every spawned native command and adapter runs under
 	// the platform's deny-default confinement on top. The node's own

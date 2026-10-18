@@ -324,5 +324,5 @@ func cardEditDone(path, kind, id, action string) {
 		return
 	}
 	fmt.Printf("%s %s %q %s\n", path, kind, id, action)
-	notifyDaemonReload()
+	notifyDaemonReload(cliConfigPath)
 }

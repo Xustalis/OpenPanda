@@ -272,6 +272,11 @@ var known = []Known{
 			APIKey:  "OPENAI_API_KEY",
 			Model:   "OPENCODE_MODEL",
 		},
+		// opencode's built-in "plan" agent is a real read-only face (its
+		// permission set denies file mutations and write-class bash while
+		// read tools keep working, and --auto cannot lift explicit denies),
+		// so --agent plan honors restricted runs on builds that have the flag.
+		Capabilities:        Capabilities{SupportsRestricted: true},
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "scripts"},
 		DefaultBestAt:       []string{"fast_scripts", "quick_edits", "code_search"},
 		DefaultCostTier:     "low",

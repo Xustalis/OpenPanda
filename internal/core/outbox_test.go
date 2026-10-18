@@ -26,6 +26,7 @@ func newCoreOnDB(t *testing.T, db *sql.DB, id string) *Core {
 		Capacity:      ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
 	c := NewCore(db, id, card, 5, verboseTestLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 	return c
 }

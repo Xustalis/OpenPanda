@@ -155,6 +155,7 @@ func TestRemoteResumeAfterDelegatorRestart(t *testing.T) {
 	}
 
 	entryB := NewCore(entryA.db, "entry-restart-22222222", entryA.card, 5, verboseTestLogger(), config.ModelConfig{})
+	entryB.SetWorkDir(t.TempDir())
 	entryB.SetSharedSecret(testSharedSecret)
 	if err := entryB.DialPeer(ctx, "127.0.0.1:17946"); err != nil {
 		t.Fatalf("replacement dial worker: %v", err)
@@ -631,6 +632,9 @@ func newCore(t *testing.T, id, addr string) *Core {
 		Capacity:      ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
 	c := NewCore(db, id, card, 5, verboseTestLogger(), config.ModelConfig{})
+	// Task execution writes per-task work dirs under workDir; the package's
+	// default "." would litter internal/core/tasks/ with empty UUID dirs.
+	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 	return c
 }

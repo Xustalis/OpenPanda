@@ -38,6 +38,7 @@ func TestDeclineReroutesToAlternateNode(t *testing.T) {
 			Capacity: ledger.Capacity{CPUCores: 2, RAMGB: 4, MaxConcurrent: maxConcurrent},
 		}
 		c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
+		c.SetWorkDir(t.TempDir())
 		c.SetSharedSecret(testSharedSecret)
 		return c
 	}
@@ -135,6 +136,7 @@ func TestDeclineRerouteExhaustedPropagates(t *testing.T) {
 		Capacity: ledger.Capacity{CPUCores: 2, RAMGB: 4, MaxConcurrent: 1},
 	}
 	leaf := NewCore(db, "only-leaf", card, 5, testLogger(), config.ModelConfig{})
+	leaf.SetWorkDir(t.TempDir())
 	leaf.SetSharedSecret(testSharedSecret)
 
 	// Saturate the only capable node.

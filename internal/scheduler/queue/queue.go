@@ -250,6 +250,8 @@ func (s *Scheduler) AcquireTask(ctx context.Context, taskID string, keys []strin
 	if len(keys) == 0 {
 		return true
 	}
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
 	for {
 		if s.registry.TryAcquire(keys, taskID) {
 			return true
@@ -257,7 +259,7 @@ func (s *Scheduler) AcquireTask(ctx context.Context, taskID string, keys []strin
 		select {
 		case <-ctx.Done():
 			return false
-		case <-time.After(200 * time.Millisecond):
+		case <-tick.C:
 		}
 	}
 }

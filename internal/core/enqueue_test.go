@@ -26,7 +26,9 @@ func queueTestCore(t *testing.T) *Core {
 		},
 		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 2},
 	}
-	return NewCore(db, "queue-node", card, 5, testLogger(), config.ModelConfig{})
+	c := NewCore(db, "queue-node", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
+	return c
 }
 
 // TestEnqueueRunsViaScheduler verifies the full async path: Enqueue parks the
@@ -127,6 +129,7 @@ func TestSameResourceSerializes(t *testing.T) {
 		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 4},
 	}
 	c := NewCore(db, "queue-node", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c.StartQueueScheduler(ctx)
@@ -251,6 +254,7 @@ func TestActuatorKeysSerializeInQueue(t *testing.T) {
 		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 4},
 	}
 	c := NewCore(db, "queue-edge", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c.StartQueueScheduler(ctx)

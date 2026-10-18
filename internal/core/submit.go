@@ -242,6 +242,9 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			if !n.Fits(req) {
 				continue
 			}
+			if scheduler.DiskStarved(n) {
+				continue // same exclusion RouteAtP applies
+			}
 			if n.Matches(in.Requires) || len(in.Requires) == 0 {
 				capable = append(capable, n)
 			}

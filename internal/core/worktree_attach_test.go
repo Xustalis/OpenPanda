@@ -123,6 +123,7 @@ func newCoreWithAgentListen(t *testing.T, id, addr string) *Core {
 	}
 	c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
 	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 	return c
 }
@@ -432,5 +433,57 @@ func TestSweepTaskDirsReapsOrphans(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(live, "out.txt")); err != nil {
 		t.Fatalf("live task dir reaped: %v", err)
+	}
+}
+
+// TestScratchRootHidesRuntimeDirs pins the workspace-layout rule the
+// SetScratchRoot wiring exists for: a workDir that is a user-visible
+// workspace (an adopted launch dir, an explicit work_path) must hold its
+// runtime scratch under one hidden .openpanda dir — tasks/, plans/ and
+// projects/ never appear as three visible directories in the user's tree —
+// and the scratch root is host state, so pack prune and drift masking
+// treat its churn as the node's own bookkeeping.
+func TestScratchRootHidesRuntimeDirs(t *testing.T) {
+	c := newCore(t, "scratch-node", "127.0.0.1:17991")
+	ws := t.TempDir()
+	c.SetWorkDir(ws)
+	scratch := filepath.Join(ws, ".openpanda")
+	c.SetScratchRoot(scratch)
+
+	for _, tc := range []struct {
+		name string
+		got  func() (string, error)
+		want string
+	}{
+		{"task dir", func() (string, error) { return c.attachedWorkDir("01h2x0zqmwvnc8pc4s6xvk5y7b") },
+			filepath.Join(scratch, "tasks", "01h2x0zqmwvnc8pc4s6xvk5y7b")},
+		{"stage dir", func() (string, error) {
+			return c.stageWorkDir("01h2x0zqmwvnc8pc4s6xvk5y7b", "01h2x0zqmwvnc8pc4s6xvk5y7c")
+		}, filepath.Join(scratch, "plans",
+			"01h2x0zqmwvnc8pc4s6xvk5y7b", "01h2x0zqmwvnc8pc4s6xvk5y7c")},
+		{"remote project", func() (string, error) { return c.projectWorkDir("peer-proj") },
+			filepath.Join(scratch, "projects", "peer-proj")},
+	} {
+		got, err := tc.got()
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// The scratch root is inside the workspace, so a pack of the workspace
+	// prunes it rather than shipping the node's task dirs to a peer.
+	pruned := c.hostStatePrune(ws)
+	if len(pruned) != 1 || pruned[0] != scratch {
+		t.Fatalf("hostStatePrune = %v, want [%s]", pruned, scratch)
+	}
+
+	// Drift from a task running at the workspace root masks scratch churn —
+	// a stage unpacking inputs there is the node's own bookkeeping.
+	drift := c.filterHostDrift(ws, []string{".openpanda/tasks/x/out.txt", "main.go"})
+	if len(drift) != 1 || drift[0] != "main.go" {
+		t.Fatalf("filterHostDrift = %v, want [main.go]", drift)
 	}
 }

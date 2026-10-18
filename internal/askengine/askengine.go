@@ -1002,6 +1002,13 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	}
 	sched.SetProjectStores(projectstore.NewStore(e.db), e.cfg.Storage.ProjectsPath)
 	sched.SetWorkDir(e.cfg.Storage.WorkPath)
+	// Same workspace-scratch rule as daemon wiring: a work path that is not
+	// the node data dir is a user-visible workspace, so runtime scratch
+	// (task/plan dirs, landed remote projects) hides under .openpanda there
+	// rather than appearing as three visible directories in the user's tree.
+	if sr := e.cfg.ScratchRoot(); sr != "" {
+		sched.SetScratchRoot(sr)
+	}
 	sched.SetHostStatePaths(e.cfg.HostStatePaths())
 	sched.SetSharedSecret(e.cfg.Network.SharedSecret)
 	sched.SetAllowCleartext(e.cfg.Network.AllowCleartext)

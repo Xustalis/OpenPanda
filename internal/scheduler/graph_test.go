@@ -69,6 +69,28 @@ func TestGraphFirstHopPrefersCheapestPath(t *testing.T) {
 	}
 }
 
+// Equal-cost paths resolve deterministically to the lowest-id first hop, not
+// to whatever map order produced first — a flapping hop makes traces and
+// outbox custody unpredictable.
+func TestGraphFirstHopTieBreakDeterministic(t *testing.T) {
+	// a--x--goal and a--y--goal both cost 10ms; x must win every time.
+	goal := ledger.Node{ID: "goal", Status: "online",
+		Neighbors: []string{"x", "y"}, Native: []ledger.NativeAbility{{ID: "cap1"}}}
+	x := ledger.Node{ID: "x", Status: "online",
+		Neighbors: []string{"a", "goal"}, LinkMetrics: map[string]int64{"a": 5, "goal": 5}}
+	y := ledger.Node{ID: "y", Status: "online",
+		Neighbors: []string{"a", "goal"}, LinkMetrics: map[string]int64{"a": 5, "goal": 5}}
+	self := ledger.Node{ID: "a", Status: "online",
+		Neighbors:   []string{"y", "x"}, // advertise y first: order must not matter
+		LinkMetrics: map[string]int64{"y": 5, "x": 5}}
+	nodes := []ledger.Node{self, y, x, goal}
+	for i := 0; i < 20; i++ {
+		if hop := graphFirstHop(self, nodes, nil, []string{"cap1"}, ledger.ResourceProfile{}); hop != "x" {
+			t.Fatalf("run %d: first hop = %q, want x (deterministic tie-break on equal cost)", i, hop)
+		}
+	}
+}
+
 // An advertised neighbor with no measured RTT costs the unknown-link default:
 // a measured path still wins, but an unmeasured one beats no path.
 func TestGraphFirstHopUnknownLinkCost(t *testing.T) {

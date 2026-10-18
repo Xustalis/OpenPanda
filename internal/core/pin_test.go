@@ -30,8 +30,8 @@ func pinCore(t *testing.T, id, marker string) *Core {
 		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
 	c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
-	c.SetSharedSecret(testSharedSecret)
 	c.SetWorkDir(t.TempDir())
+	c.SetSharedSecret(testSharedSecret)
 	return c
 }
 
@@ -578,8 +578,8 @@ func TestPinDeclineIsTerminal(t *testing.T) {
 		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 1},
 	}
 	leafA := NewCore(dbA, "leaf-a", cardA, 5, testLogger(), config.ModelConfig{})
-	leafA.SetSharedSecret(testSharedSecret)
 	leafA.SetWorkDir(t.TempDir())
+	leafA.SetSharedSecret(testSharedSecret)
 	leafB := pinCore(t, "leaf-b", "ran-on-b")
 
 	// Saturate leafA's only execution slot so it declines.
@@ -777,6 +777,7 @@ func TestPinSelfResourceMisfitDeclines(t *testing.T) {
 		Capacity:        ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
 	}
 	c := NewCore(db, "fit-self", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)

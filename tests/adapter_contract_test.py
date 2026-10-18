@@ -74,6 +74,7 @@ if "--help" in sys.argv:
     print("opencode run [message..]")
     print("      --format  format: default (formatted) or json (raw JSON events)")
     print("      --auto    auto-approve permissions that are not explicitly denied")
+    print("      --agent   agent to use")
     sys.exit(0)
 '''
 
@@ -906,6 +907,40 @@ print("plain opencode answer")
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "plain opencode answer")
+
+    def test_opencode_restricted_contract(self):
+        # A restricted request (unconsented remote task) narrows the run to
+        # opencode's built-in read-only agent: --agent plan lands on the
+        # command line next to --model, while --auto stays (it only lifts
+        # permissions that are not explicitly denied, and plan's denials are
+        # explicit).
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+args = sys.argv[1:]
+assert "--agent" in args and args[args.index("--agent") + 1] == "plan", args
+assert "--auto" in args, args
+print(json.dumps({"type":"message.part.updated","properties":{"part":{"id":"p","type":"text","text":"readonly run"}}}))
+''',
+            extra_request={"restricted": True},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "readonly run")
+        # A build whose help has no --agent cannot express the narrow face at
+        # all, so a restricted request is refused instead of running
+        # full-power — degrading to the default agent is the exact hole the
+        # mode exists to close.
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_LEGACY + r'''
+import sys
+args = sys.argv[1:]
+assert "--agent" not in args, args
+print("plain opencode answer")
+''',
+            extra_request={"restricted": True},
+        )
+        self.assertFalse(payload["ok"], payload)
+        self.assertIn("no --agent flag", payload["result"])
 
     def test_grok_session_contract(self):
         # A first run names its own session and returns it as session_id.

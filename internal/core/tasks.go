@@ -1901,6 +1901,9 @@ func (s *TaskStore) ExpireTasks(ctx context.Context) ([]string, error) {
 		dexpired = append(dexpired, e)
 	}
 	drows.Close()
+	if err := drows.Err(); err != nil {
+		return failed, err
+	}
 	for _, e := range dexpired {
 		if e.state == StateRunning {
 			if err := s.ForceFail(ctx, e.id, "deadline exceeded"); err != nil {

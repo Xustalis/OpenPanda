@@ -124,7 +124,8 @@ func admitPeerAddr(configPath string, cfg *config.Config, addr, trustLevel strin
 	if generated {
 		persistSecret = secret
 	}
-	if err := config.UpdateNetworkSection(configWritePath(configPath), config.NetworkConfig{
+	writePath := configWritePath(configPath)
+	if err := config.UpdateNetworkSection(writePath, config.NetworkConfig{
 		ListenAddr:   cfg.Network.ListenAddr,
 		SharedSecret: persistSecret,
 		Peers:        peers,
@@ -137,7 +138,7 @@ func admitPeerAddr(configPath string, cfg *config.Config, addr, trustLevel strin
 		fmt.Println(i18n.T(loc, "cli.nodes.secret.gen"))
 	}
 	fmt.Println(i18n.Tf(loc, "cli.nodes.add.done", "addr", addr))
-	notifyDaemonMeshTo(os.Stdout)
+	notifyDaemonMeshTo(os.Stdout, writePath)
 	// The in-memory cfg predates the write; the self-check must present the
 	// secret we just persisted, or it would test the old material.
 	cfg.Network.SharedSecret = secret
@@ -324,13 +325,14 @@ func runNodesDisconnect(args []string) {
 		fmt.Println(i18n.Tf(i18n.Detect(), "cli.nodes.disconnect.none", "addr", addr))
 		return
 	}
-	if err := config.UpdateNetworkSection(configWritePath(*configPath), config.NetworkConfig{
+	writePath := configWritePath(*configPath)
+	if err := config.UpdateNetworkSection(writePath, config.NetworkConfig{
 		Peers: remaining,
 	}); err != nil {
 		fatal("write config", err)
 	}
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.nodes.disconnect.done", "addr", addr))
-	notifyDaemonMeshTo(os.Stdout)
+	notifyDaemonMeshTo(os.Stdout, writePath)
 }
 
 // runNodesInvite implements `panda nodes invite` — print the peer-side join
@@ -433,7 +435,8 @@ func runPairLegacy(configPath, secret, peer, listen, trustLevel string) {
 	if !slices.ContainsFunc(peers, func(p config.PeerEntry) bool { return p.Addr == peer }) {
 		peers = append(peers, config.PeerEntry{Addr: peer, Trust: trustLevel})
 	}
-	if err := config.UpdateNetworkSection(configWritePath(configPath), config.NetworkConfig{
+	writePath := configWritePath(configPath)
+	if err := config.UpdateNetworkSection(writePath, config.NetworkConfig{
 		ListenAddr:   listen,
 		SharedSecret: secret,
 		Peers:        peers,
@@ -441,7 +444,7 @@ func runPairLegacy(configPath, secret, peer, listen, trustLevel string) {
 		fatal("write config", err)
 	}
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.pair.done", "peer", peer))
-	notifyDaemonMeshTo(os.Stdout)
+	notifyDaemonMeshTo(os.Stdout, writePath)
 	// Same caveat as admitPeerAddr: the loaded cfg predates the write, so
 	// hand the self-check the secret the joining operator just typed.
 	cfg.Network.SharedSecret = secret
@@ -623,11 +626,12 @@ func runNodesTrust(args []string) {
 		// address — same synchronization the id-form below (and the web
 		// console) performs. Without it a stale stricter hint re-asserts on
 		// the next SIGHUP and silently defeats a raise.
-		if uerr := syncPeerTrustConfig(db, cfg, configWritePath(*configPath), peerKeyRowIDs(db, pub), level); uerr != nil {
+		writePath := configWritePath(*configPath)
+		if uerr := syncPeerTrustConfig(db, cfg, writePath, peerKeyRowIDs(db, pub), level); uerr != nil {
 			fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.nodes.trust.cfgfail", "err", uerr.Error()))
 		}
 		fmt.Println(i18n.Tf(loc, "cli.nodes.trust.done", "id", id, "level", displayLevel(level)))
-		notifyDaemonMeshTo(os.Stdout)
+		notifyDaemonMeshTo(os.Stdout, writePath)
 		return
 	}
 
@@ -663,11 +667,12 @@ func runNodesTrust(args []string) {
 	// address the config already knows: the addr hint and the row pin are
 	// two writes of the same assertion, and a stale hint would resurrect a
 	// cleared tier on the next ApplyNetworkConfig.
-	if uerr := syncPeerTrustConfig(db, cfg, configWritePath(*configPath), map[string]bool{found: true}, level); uerr != nil {
+	writePath := configWritePath(*configPath)
+	if uerr := syncPeerTrustConfig(db, cfg, writePath, map[string]bool{found: true}, level); uerr != nil {
 		fmt.Fprintln(os.Stderr, i18n.Tf(loc, "cli.nodes.trust.cfgfail", "err", uerr.Error()))
 	}
 	fmt.Println(i18n.Tf(loc, "cli.nodes.trust.done", "id", found, "level", displayLevel(level)))
-	notifyDaemonMeshTo(os.Stdout)
+	notifyDaemonMeshTo(os.Stdout, writePath)
 }
 
 // runNodesDrain implements `panda nodes drain [id] [--off]` — maintenance
@@ -858,14 +863,15 @@ func adoptPairedSecret(w io.Writer, loc i18n.Locale, configPath string, cfg *con
 	if !slices.ContainsFunc(peers, func(e config.PeerEntry) bool { return e.Addr == peerAddr }) {
 		peers = append(peers, config.PeerEntry{Addr: peerAddr, Trust: trustLevel})
 	}
-	if err := config.UpdateNetworkSection(configWritePath(configPath), config.NetworkConfig{
+	writePath := configWritePath(configPath)
+	if err := config.UpdateNetworkSection(writePath, config.NetworkConfig{
 		SharedSecret: secret,
 		Peers:        peers,
 	}); err != nil {
 		fatal("write config", err)
 	}
 	fmt.Fprintln(w, i18n.Tf(loc, "cli.pair.joined", "addr", peerAddr))
-	notifyDaemonMeshTo(w)
+	notifyDaemonMeshTo(w, writePath)
 	cfg.Network.SharedSecret = secret
 	selfCheckPeer(w, loc, configPath, cfg, peerAddr)
 }
