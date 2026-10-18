@@ -147,7 +147,7 @@ func (m tuiModel) mainChatView(live string) string {
 	if m.chatHistory != nil && len(m.chatHistory.blocks) > 0 {
 		for i := range m.chatHistory.blocks {
 			contentLines = append(contentLines, "")
-			contentLines = append(contentLines, m.chatHistory.renderedAt(i, m.th, m.textWidth(), m.expandThought)...)
+			contentLines = append(contentLines, m.chatHistory.renderedAt(i, m.th, m.textWidth(), m.expandThought, m.expandHints)...)
 		}
 	}
 

@@ -88,3 +88,25 @@ func TestProgressNoteExecModel(t *testing.T) {
 		t.Fatalf("en exec line should format agent with model: %q", gotEn)
 	}
 }
+
+// TestProgressNoteRetry: a scheduled model retry must read as a localized
+// status ("重试中 in Ns · attempt/max") — the whole point of the retry
+// milestone is that a 429/5xx stops looking like a frozen spinner.
+func TestProgressNoteRetry(t *testing.T) {
+	for _, loc := range []i18n.Locale{i18n.English, i18n.ChineseSimp, i18n.Japanese} {
+		got := progressNote(loc, askengine.Progress{
+			Kind: askengine.ProgressRetry, Status: 429,
+			Attempt: 2, MaxAttempt: 6, Delay: 4 * time.Second,
+		})
+		for _, want := range []string{"429", "2/6", "4"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s: retry note %q missing %q", loc, got, want)
+			}
+		}
+	}
+	// No HTTP answer (transport drop) reads as a connection failure, not "HTTP 0".
+	got := progressNote(i18n.English, askengine.Progress{Kind: askengine.ProgressRetry, Attempt: 1, MaxAttempt: 3, Delay: time.Second})
+	if strings.Contains(got, "HTTP 0") || !strings.Contains(got, "connection") {
+		t.Fatalf("transport retry note: %q", got)
+	}
+}

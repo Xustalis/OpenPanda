@@ -523,6 +523,9 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlO:
 		m.expandThought = !m.expandThought
 		return m, nil
+	case tea.KeyCtrlE:
+		m.expandHints = !m.expandHints
+		return m, nil
 	}
 
 	switch m.mode {

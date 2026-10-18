@@ -221,7 +221,7 @@ func TestRenderTaskMarkdown(t *testing.T) {
 		title: "test task",
 		body:  "## Summary\n\n| Item | Count |\n|---|---|\n| Files | 42 |",
 	}
-	out := blk.render(th, 80, false)
+	out := blk.render(th, 80, false, false)
 	if !strings.Contains(out, "Summary") || !strings.Contains(out, "Files") || !strings.Contains(out, "42") {
 		t.Fatalf("renderTask did not render markdown table: %q", out)
 	}

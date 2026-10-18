@@ -1725,6 +1725,11 @@ export interface SessionTurn {
   /** Machine reason on an error-kind turn (e.g. "model_config") — the panel
    *  stamps it so a replayed transcript keeps the matching fix-it CTA. */
   code?: string
+  /** Classified model-error kind an error turn came from (entry.ErrKind*) —
+   *  picks which troubleshooting <details> renders under the bubble.
+   *  err_detail is the provider's own bounded reply, shown inside it. */
+  err_kind?: string
+  err_detail?: string
   /** How long the turn took, stamped by the panel when it files the reply.
    *  Absent on user turns and on transcripts written before the field
    *  existed; the console then has no duration to show. */
@@ -1868,17 +1873,41 @@ export async function openSSE(url: string, opts: OpenSSEOptions): Promise<void> 
 
 // ---- Streaming session ask (SSE over fetch POST) ----
 
+/** One `status` SSE event. `text` is the server's English fallback; `kind`
+ *  names the milestone ("task", "plan", "tool", "route", "exec", "judge",
+ *  "wait", "retry") so the console can re-phrase it in the user's locale. The
+ *  retry fields are populated when kind === 'retry'. */
+export interface AskStatusEvent {
+  text: string
+  kind?: string
+  attempt?: number
+  max?: number
+  delay_ms?: number
+  http_status?: number
+  reason?: string
+}
+
+/** Structured fields on an `error` SSE event beyond the message. `kind` is
+ *  the classified model-error kind (entry.ErrKind*) the console maps to a
+ *  troubleshooting hint block; `http_status`/`detail` come from the provider. */
+export interface AskErrorInfo {
+  code?: string
+  kind?: string
+  http_status?: number
+  detail?: string
+}
+
 export interface AskStreamHandlers {
   /** Chain-of-thought, on its own stream. Display-only (D14): never merge it
    *  into the answer or the stored turn. */
   onReasoning(text: string): void
   onDelta(text: string): void
-  onStatus(text: string): void
+  onStatus(text: string, ev?: AskStatusEvent): void
   onOperation(operationID: string): void
   onResult(r: AskResult): void
   /** `code` carries the panel's machine reason when one exists —
    *  "model_config" marks the fix-in-settings class of failure. */
-  onError(message: string, code?: string): void
+  onError(message: string, code?: string, info?: AskErrorInfo): void
 }
 
 /** POST /api/sessions/{id}/ask and consume its SSE stream. Resolves when the
@@ -1910,10 +1939,16 @@ export async function askSessionStream(
       }
       if (event === 'reasoning') h.onReasoning(payload.text ?? '')
       else if (event === 'delta') h.onDelta(payload.text ?? '')
-      else if (event === 'status') h.onStatus(payload.text ?? '')
+      else if (event === 'status') h.onStatus(payload.text ?? '', payload as AskStatusEvent)
       else if (event === 'operation') h.onOperation(payload.operation_id ?? '')
       else if (event === 'result') h.onResult(payload as AskResult)
-      else if (event === 'error') h.onError(payload.message ?? 'unknown error', payload.code || undefined)
+      else if (event === 'error')
+        h.onError(payload.message ?? 'unknown error', payload.code || undefined, {
+          code: payload.code || undefined,
+          kind: payload.kind || undefined,
+          http_status: payload.http_status,
+          detail: payload.detail || undefined,
+        })
     },
   })
   // openSSE resolves on abort; the composer's stop button contract is an

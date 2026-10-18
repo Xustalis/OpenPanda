@@ -829,6 +829,7 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 	thinkingProbed := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
+			notifyRetry(ctx, attempt, c.maxRetry, c.retryDelay(attempt), lastErr)
 			if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
 				return Response{}, err
 			}
@@ -1020,6 +1021,7 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 	thinkingProbed := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
+			notifyRetry(ctx, attempt, c.maxRetry, c.retryDelay(attempt), lastErr)
 			if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
 				return Response{}, err
 			}

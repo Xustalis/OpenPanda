@@ -120,14 +120,14 @@ func TestTUIClearDropsRenderMemo(t *testing.T) {
 	)
 	// Warm the memo the way a rendered frame does.
 	for i := range m.chatHistory.blocks {
-		m.chatHistory.renderedAt(i, m.th, m.textWidth(), m.expandThought)
+		m.chatHistory.renderedAt(i, m.th, m.textWidth(), m.expandThought, m.expandHints)
 	}
 
 	next, _ := m.submit("/clear")
 	m = next.(tuiModel)
 	m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: "fresh prompt"})
 
-	got := strings.Join(m.chatHistory.renderedAt(0, m.th, m.textWidth(), m.expandThought), "\n")
+	got := strings.Join(m.chatHistory.renderedAt(0, m.th, m.textWidth(), m.expandThought, m.expandHints), "\n")
 	if !strings.Contains(got, "fresh prompt") || strings.Contains(got, "previous session first input") {
 		t.Fatalf("post-clear render served the stale memo: %q", got)
 	}

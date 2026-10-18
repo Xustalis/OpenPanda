@@ -43,6 +43,10 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onRea
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
+			// Announce the backoff before sleeping it: a persistent 429/5xx
+			// otherwise sits behind a motionless spinner for the whole
+			// ladder and reads as a hang.
+			notifyRetry(ctx, attempt, c.maxRetry, c.retryDelay(attempt), lastErr)
 			if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
 				return Response{}, err
 			}

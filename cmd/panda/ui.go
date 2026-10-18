@@ -13,6 +13,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -102,6 +103,19 @@ func progressNote(loc i18n.Locale, p askengine.Progress) string {
 		// live yet); the state word is the store's own ("queued",
 		// "dispatched"), the same vocabulary the task board shows.
 		note = i18n.Tf(loc, "cli.progress.wait", "state", p.Name)
+	case askengine.ProgressRetry:
+		// The reason phrase is short — the HTTP code when the provider
+		// answered, the transport word when it never did. delay is a whole
+		// second count; the backoff ladder only trades in seconds.
+		reason := i18n.T(loc, "entry.short.transport")
+		if p.Status > 0 {
+			reason = i18n.Tf(loc, "entry.short.http", "status", strconv.Itoa(p.Status))
+		}
+		note = i18n.Tf(loc, "cli.progress.retry",
+			"reason", reason,
+			"delay", strconv.Itoa(int(p.Delay.Seconds())),
+			"attempt", strconv.Itoa(p.Attempt),
+			"max", strconv.Itoa(p.MaxAttempt))
 	default:
 		note = p.Name
 	}

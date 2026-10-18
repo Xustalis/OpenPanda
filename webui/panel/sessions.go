@@ -452,6 +452,27 @@ type sessionAskRequest struct {
 	Node string `json:"node"`
 }
 
+// statusEventOf is the JSON one progress event becomes on the SSE stream.
+// Text is the English fallback wording; the browser prefers the structured
+// fields (kind + the retry numbers) so it can phrase the status in its own
+// locale — a retry milestone scraped from English prose is what "一直加载"
+// used to look like.
+func statusEventOf(p askengine.Progress) map[string]any {
+	ev := map[string]any{"text": askengine.StatusText(p), "kind": string(p.Kind)}
+	if p.Kind == askengine.ProgressRetry {
+		ev["attempt"] = p.Attempt
+		ev["max"] = p.MaxAttempt
+		ev["delay_ms"] = p.Delay.Milliseconds()
+		if p.Status > 0 {
+			ev["http_status"] = p.Status
+		}
+		if p.Reason != "" {
+			ev["reason"] = p.Reason
+		}
+	}
+	return ev
+}
+
 // sessionAsk serves POST /api/sessions/{id}/ask as a Server-Sent Events
 // stream: the conversation runs with the session's full history, and the
 // session's git worktree is the execution directory for any classified task.
@@ -580,7 +601,12 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	cb := askengine.StreamCallbacks{
 		OnReasoning: func(text string) { send("reasoning", map[string]string{"text": text}) },
 		OnDelta:     func(text string) { send("delta", map[string]string{"text": text}) },
-		OnStatus:    func(text string) { send("status", map[string]string{"text": text}) },
+		// OnProgress (not OnStatus) so the structured event survives: the
+		// browser re-localizes retry milestones from the fields instead of
+		// scraping the English fallback sentence.
+		OnProgress: func(p askengine.Progress) {
+			send("status", statusEventOf(p))
+		},
 	}
 
 	// Every panel session is a workspace conversation: repo sessions run in
@@ -647,14 +673,35 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		if entry.IsModelConfigError(err) {
 			code = "model_config"
 		}
+		// A classified model failure carries its kind + provider detail so
+		// the console can render the troubleshooting <details> under the
+		// bubble — and so a thread reloaded from disk can too, via the
+		// persisted turn.
+		var ce *entry.ClassifyError
+		var errKind, errDetail string
+		var errStatus int
+		if errors.As(err, &ce) {
+			errKind, errDetail, errStatus = ce.Kind, ce.Detail, ce.Status
+		}
+		errPayload := map[string]any{"message": msg, "code": code}
+		if errKind != "" {
+			errPayload["kind"] = errKind
+		}
+		if errStatus > 0 {
+			errPayload["http_status"] = errStatus
+		}
+		if errDetail != "" {
+			errPayload["detail"] = errDetail
+		}
 		_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
 			ID: op.operationID, Status: status, Error: msg,
 		})
-		send("error", map[string]string{"message": msg, "code": code})
+		send("error", errPayload)
 		// The failed turn carries its duration too: "it died after 40 seconds"
 		// is the first thing you want to know about a timeout.
 		_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{
 			Role: "assistant", Text: "⚠ " + msg, Kind: "error", Code: code,
+			ErrKind: errKind, ErrDetail: errDetail,
 			DurationMS: askDuration,
 		})
 		return

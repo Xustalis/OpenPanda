@@ -57,13 +57,21 @@ type block struct {
 	// routeFallback names the peer the run was routed to before its link
 	// failed and the task executed locally — "meant for the Mac, ran here".
 	routeFallback string
+
+	// Model-error state (kind == blockError): errKind is the classified
+	// error kind (one of entry.ErrKind*) picking which troubleshooting block
+	// renders under the fold; errDetail is the provider's own bounded words,
+	// shown inside the expansion.
+	errKind   string
+	errDetail string
 }
 
 // render draws the block at the given width using the theme. expandThought
 // controls whether thought blocks show their full body or the one-line fold —
 // it is a global toggle (Ctrl+O), so every thought block folds together, which
-// matches how Claude Code's transcript behaves.
-func (b block) render(t theme, width int, expandThought bool) string {
+// matches how Claude Code's transcript behaves. expandHints does the same for
+// the troubleshooting tail on classified model errors (Ctrl+E).
+func (b block) render(t theme, width int, expandThought bool, expandHints bool) string {
 	switch b.kind {
 	case blockUser:
 		return userText(t, b.body, width)
@@ -80,7 +88,7 @@ func (b block) render(t theme, width int, expandThought bool) string {
 	case blockTask:
 		return b.renderTask(t, width)
 	case blockError:
-		return t.danger.Render(t.glyph("✗", "x") + " " + b.body)
+		return b.renderError(t, expandHints)
 	case blockInfo:
 		// Captured command output wears a muted left bar on every line: the
 		// transcript then reads "user asked · the terminal answered" — a quote
@@ -185,6 +193,33 @@ func (b block) renderThought(t theme, expand bool) string {
 	for _, line := range b.thoughtLines {
 		sb.WriteString("\n")
 		sb.WriteString(t.italic.Render("  " + line))
+	}
+	return sb.String()
+}
+
+// renderError draws a failed turn: the red headline, then the troubleshooting
+// tail when the failure was a classified model error (errKind set). Folded it
+// is one dim line advertising the key that opens it — AltScreen repaints the
+// transcript, so ctrl+e DOES redraw committed blocks and the hint is an honest
+// affordance. Expanded, the provider's own detail line heads the kind-specific
+// hints.
+func (b block) renderError(t theme, expand bool) string {
+	head := t.danger.Render(t.glyph("✗", "x") + " " + b.body)
+	if b.errKind == "" {
+		return head
+	}
+	var sb strings.Builder
+	sb.WriteString(head)
+	if !expand {
+		sb.WriteString("\n" + t.muted.Render("  "+t.glyph("▸", ">")+" "+i18n.T(t.loc, "tui.error.hints")))
+		return sb.String()
+	}
+	sb.WriteString("\n" + t.muted.Render("  "+t.glyph("▾", "v")+" "+i18n.T(t.loc, "entry.hints.title")))
+	if b.errDetail != "" {
+		sb.WriteString("\n" + t.muted.Render("    "+i18n.Tf(t.loc, "entry.hints.detail", "detail", b.errDetail)))
+	}
+	for _, line := range strings.Split(i18n.T(t.loc, "entry.hints."+b.errKind), "\n") {
+		sb.WriteString("\n" + t.muted.Render("    "+line))
 	}
 	return sb.String()
 }

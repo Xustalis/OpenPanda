@@ -1273,6 +1273,13 @@ const (
 	// every state change, so the card keeps advancing while the round waits
 	// instead of sitting frozen at the dispatch.
 	ProgressWait ProgressKind = "wait"
+	// ProgressRetry is emitted each time a model call schedules a transport
+	// retry (429, 5xx, network drop): Attempt counts to MaxAttempt while
+	// Delay is the backoff about to be slept, Status the HTTP answer the
+	// provider gave (0 when no response arrived), and Reason the machine
+	// error class (entry.ErrKind*). Without it a rate-limited provider sits
+	// behind a motionless spinner for the whole retry ladder.
+	ProgressRetry ProgressKind = "retry"
 )
 
 // Progress is one structured progress event: the action, and the name of what
@@ -1289,6 +1296,15 @@ type Progress struct {
 	Model  string
 	Round  int
 	Budget int
+	// Retry fields, valid when Kind == ProgressRetry: Attempt/MaxAttempt are
+	// the retry's position inside the call's budget, Delay the backoff about
+	// to be slept, Status the provider's HTTP answer (0 on transport failure),
+	// Reason the entry.ErrKind* class.
+	Attempt    int
+	MaxAttempt int
+	Delay      time.Duration
+	Status     int
+	Reason     string
 }
 
 // roundNote phrases the loop position for the English status fallback; "" for
@@ -1301,8 +1317,9 @@ func roundNote(p Progress) string {
 }
 
 // progress reports one event to whichever callback the caller supplied. The
-// English prose lives here, in one place, so it stays a fallback rather than
-// the only phrasing available.
+// English prose lives in StatusText — kept separate so a structured consumer
+// (the panel's SSE stream) can send the same sentence plus the fields it
+// needs to re-phrase it in the browser's own locale.
 func (cb StreamCallbacks) progress(p Progress) {
 	if cb.OnProgress != nil {
 		cb.OnProgress(p)
@@ -1311,32 +1328,46 @@ func (cb StreamCallbacks) progress(p Progress) {
 	if cb.OnStatus == nil {
 		return
 	}
+	cb.OnStatus(StatusText(p))
+}
+
+// StatusText phrases one progress event as one-line English prose — the
+// fallback wording surfaces use when they did not bind OnProgress, and the
+// wire text the panel re-localizes for the browser from the same event.
+func StatusText(p Progress) string {
 	switch p.Kind {
 	case ProgressTask:
-		cb.OnStatus(fmt.Sprintf("submitting task: %s", p.Name))
+		return fmt.Sprintf("submitting task: %s", p.Name)
 	case ProgressPlan:
-		cb.OnStatus(fmt.Sprintf("starting plan: %s", p.Name))
+		return fmt.Sprintf("starting plan: %s", p.Name)
 	case ProgressTool:
-		cb.OnStatus(fmt.Sprintf("running tool %s…", p.Name))
+		return fmt.Sprintf("running tool %s…", p.Name)
 	case ProgressRoute:
-		cb.OnStatus(fmt.Sprintf("routing to %s…", p.Name))
+		return fmt.Sprintf("routing to %s…", p.Name)
 	case ProgressExec:
 		extra := ""
 		if p.Model != "" {
 			extra = fmt.Sprintf(" (%s)", p.Model)
 		}
-		cb.OnStatus(fmt.Sprintf("running %s%s%s…", p.Name, extra, roundNote(p)))
+		return fmt.Sprintf("running %s%s%s…", p.Name, extra, roundNote(p))
 	case ProgressJudge:
 		// A judge_start marker arrives with no verdict yet; phrase it without
 		// the empty parens the missing verdict used to leave behind.
 		if p.Name == "" {
-			cb.OnStatus(fmt.Sprintf("reviewing result%s…", roundNote(p)))
-			return
+			return fmt.Sprintf("reviewing result%s…", roundNote(p))
 		}
-		cb.OnStatus(fmt.Sprintf("reviewing result (%s)%s…", p.Name, roundNote(p)))
+		return fmt.Sprintf("reviewing result (%s)%s…", p.Name, roundNote(p))
 	case ProgressWait:
-		cb.OnStatus(fmt.Sprintf("watching the task (%s)…", p.Name))
+		return fmt.Sprintf("watching the task (%s)…", p.Name)
+	case ProgressRetry:
+		reason := "connection failed"
+		if p.Status > 0 {
+			reason = fmt.Sprintf("HTTP %d", p.Status)
+		}
+		return fmt.Sprintf("model call failed (%s) — retrying in %ds · %d/%d",
+			reason, int(p.Delay.Seconds()), p.Attempt, p.MaxAttempt)
 	}
+	return p.Name
 }
 
 // Ask runs one prompt through the unified entry model. A tool_call intent is
@@ -1431,6 +1462,34 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		cb.progress(Progress{Kind: ProgressRoute, Name: fallbackUsed})
 	}
 
+	// Report every scheduled model retry as a progress event so a 429/5xx or
+	// network drop shows "retrying in Ns" on the surface's status line instead
+	// of looking like a silent hang for the whole backoff ladder. The hook
+	// rides the ask's context: whichever client eventually serves (primary or
+	// a mid-ask fallback) reports under its own name.
+	ctx = entry.WithRetryHook(ctx, func(n entry.RetryNote) {
+		kind, status := entry.APIErrorKind(n.Err)
+		name := ""
+		if c := client; c != nil {
+			name = c.ModelName()
+		}
+		cb.progress(Progress{
+			Kind: ProgressRetry, Name: name,
+			Attempt: n.Attempt, MaxAttempt: n.MaxAttempts,
+			Delay: n.Delay, Status: status, Reason: kind,
+		})
+	})
+
+	// The reply locale is resolved up here rather than next to the classifier
+	// options because the deferred catch-all below also speaks it: an escaped
+	// model error is re-dressed in the ask's own language.
+	effectiveLocale, explicit := e.localeNow()
+	if !explicit && !e.replyASCII {
+		if containsHan(prompt) {
+			effectiveLocale = i18n.ChineseSimp
+		}
+	}
+
 	// Bill the commander model's own token consumption for this ask into the
 	// delegation metrics once it finishes (whatever the outcome), so the
 	// panel's tokens column shows entry-model cost alongside adapter
@@ -1438,6 +1497,13 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	usageBefore := client.Usage()
 	askStart := time.Now()
 	defer func() {
+		// Catch-all for model-call failures that escaped unwrapped (a raw
+		// statusError/retryableError reads as provider JSON soup to a user).
+		// Non-model failures pass through untouched: a storage or routing
+		// error keeps its own wording rather than wearing a model message.
+		if err != nil {
+			err = entry.EnsureAPIError(err, effectiveLocale)
+		}
 		// Same numbers, two consumers: the result carries them back to the
 		// caller (the CLI's closing "1.8s · 1.2k tokens" line) and the metrics
 		// row bills them.
@@ -1463,13 +1529,6 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	turns := make([]entry.Turn, 0, len(history)+1)
 	turns = append(turns, history...)
 	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
-
-	effectiveLocale, explicit := e.localeNow()
-	if !explicit && !e.replyASCII {
-		if containsHan(prompt) {
-			effectiveLocale = i18n.ChineseSimp
-		}
-	}
 
 	var classifyOpts []entry.ClassifyOption
 	if e.replyASCII {
@@ -1536,7 +1595,11 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			}
 			if streamedAny {
 				if rerr != nil {
-					return nil, rerr
+					// The fast path bypasses the classify wrapper, so its
+					// failures arrive raw — dress them before they escape
+					// or the user sees "entry: api status 429: {json}"
+					// instead of the actionable message.
+					return nil, entry.EnsureAPIError(rerr, effectiveLocale)
 				}
 				// The stream guard withheld DSML markup from the user's view;
 				// hand back the prose around it, never the raw tags.

@@ -22,35 +22,35 @@ func TestChatHistoryRenderedAtMemoizes(t *testing.T) {
 		{kind: blockUser, body: "hi there"},
 		{kind: blockAnswer, body: "**bold** answer"},
 	}}
-	want := strings.Split(h.blocks[1].render(th, 80, false), "\n")
-	got := h.renderedAt(1, th, 80, false)
+	want := strings.Split(h.blocks[1].render(th, 80, false, false), "\n")
+	got := h.renderedAt(1, th, 80, false, false)
 	if !slices.Equal(got, want) {
 		t.Fatalf("renderedAt = %q, want %q", got, want)
 	}
 	// Same parameters: the memoized slice itself comes back — same backing
 	// array, not a fresh render that merely compares equal.
-	got2 := h.renderedAt(1, th, 80, false)
+	got2 := h.renderedAt(1, th, 80, false, false)
 	if len(got) > 0 && &got[0] != &got2[0] {
 		t.Fatal("identical parameters re-rendered instead of memoizing")
 	}
 	// A new block appends one render; the earlier memo stays.
 	h.blocks = append(h.blocks, block{kind: blockNote, body: "note"})
-	_ = h.renderedAt(2, th, 80, false)
+	_ = h.renderedAt(2, th, 80, false, false)
 	if len(h.renders) != 3 {
 		t.Fatalf("renders len = %d, want 3", len(h.renders))
 	}
-	if &h.renderedAt(1, th, 80, false)[0] != &got[0] {
+	if &h.renderedAt(1, th, 80, false, false)[0] != &got[0] {
 		t.Fatal("append invalidated earlier block renders")
 	}
 	// Width change rebuilds the whole memo.
-	narrow := h.renderedAt(1, th, 40, false)
-	wantNarrow := strings.Split(h.blocks[1].render(th, 40, false), "\n")
+	narrow := h.renderedAt(1, th, 40, false, false)
+	wantNarrow := strings.Split(h.blocks[1].render(th, 40, false, false), "\n")
 	if !slices.Equal(narrow, wantNarrow) {
 		t.Fatalf("width-40 render = %q, want %q", narrow, wantNarrow)
 	}
 	// Truncated blocks cannot outrun their memo.
 	h.blocks = h.blocks[:1]
-	if got := h.renderedAt(0, th, 40, false); !slices.Equal(got, strings.Split(h.blocks[0].render(th, 40, false), "\n")) {
+	if got := h.renderedAt(0, th, 40, false, false); !slices.Equal(got, strings.Split(h.blocks[0].render(th, 40, false, false), "\n")) {
 		t.Fatalf("post-truncation render = %q", got)
 	}
 }
@@ -62,8 +62,8 @@ func TestChatHistoryRenderedAtFold(t *testing.T) {
 	h := &chatHistory{blocks: []block{
 		{kind: blockThought, thoughtLines: []string{"line one", "line two"}},
 	}}
-	folded := h.renderedAt(0, th, 80, false)
-	expanded := h.renderedAt(0, th, 80, true)
+	folded := h.renderedAt(0, th, 80, false, false)
+	expanded := h.renderedAt(0, th, 80, true, false)
 	if slices.Equal(folded, expanded) {
 		t.Fatal("fold toggle served the folded memo for the expanded render")
 	}

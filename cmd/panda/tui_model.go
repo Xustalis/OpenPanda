@@ -241,7 +241,11 @@ type tuiModel struct {
 	thought          []string
 	thoughtDone      bool
 	expandThought    bool
-	note             string
+	// expandHints unfolds the troubleshooting tail on committed error blocks
+	// (Ctrl+E). Like expandThought it is one flag for every block — AltScreen
+	// repaints the transcript, so a toggle redraws what is already committed.
+	expandHints bool
+	note        string
 
 	// liveRC memoizes the live answer's markdown render across frames — a
 	// pointer every value-copy of the model shares, like scrollLimit and
@@ -297,6 +301,7 @@ type chatHistory struct {
 	renders       [][]string
 	renderW       int
 	renderFold    bool
+	renderHints   bool
 	renderColor   bool
 	renderUnicode bool
 	renderLoc     i18n.Locale
@@ -314,11 +319,11 @@ func (h *chatHistory) clear() {
 
 // renderedAt returns the cached rendered lines of blocks[i], filling entries
 // lazily. The update loop is single-goroutine, so no lock is needed.
-func (h *chatHistory) renderedAt(i int, t theme, width int, fold bool) []string {
-	if !h.renderOK || h.renderW != width || h.renderFold != fold ||
+func (h *chatHistory) renderedAt(i int, t theme, width int, fold bool, hints bool) []string {
+	if !h.renderOK || h.renderW != width || h.renderFold != fold || h.renderHints != hints ||
 		h.renderColor != t.color || h.renderUnicode != t.unicode || h.renderLoc != t.loc {
 		h.renders = h.renders[:0]
-		h.renderW, h.renderFold = width, fold
+		h.renderW, h.renderFold, h.renderHints = width, fold, hints
 		h.renderColor, h.renderUnicode, h.renderLoc = t.color, t.unicode, t.loc
 		h.renderOK = true
 	}
@@ -326,7 +331,7 @@ func (h *chatHistory) renderedAt(i int, t theme, width int, fold bool) []string 
 		h.renders = h.renders[:len(h.blocks)]
 	}
 	for len(h.renders) <= i {
-		rendered := h.blocks[len(h.renders)].render(t, width, fold)
+		rendered := h.blocks[len(h.renders)].render(t, width, fold, hints)
 		h.renders = append(h.renders, strings.Split(rendered, "\n"))
 	}
 	return h.renders[i]
@@ -445,7 +450,7 @@ func (m tuiModel) printBlock(b block) tea.Cmd {
 	if m.chatHistory != nil {
 		m.chatHistory.blocks = append(m.chatHistory.blocks, b)
 	}
-	rendered := "\n" + b.render(m.th, m.textWidth(), m.expandThought)
+	rendered := "\n" + b.render(m.th, m.textWidth(), m.expandThought, m.expandHints)
 	return func() tea.Msg {
 		return blockCommitMsg{text: rendered}
 	}
@@ -470,7 +475,7 @@ func (m tuiModel) startupPrints() []string {
 	turns := m.r.convoNow()
 	const maxTurns = 10 // user+assistant pairs, taken from the tail
 	add := func(b block) {
-		prints = append(prints, "\n"+b.render(m.th, m.textWidth(), m.expandThought))
+		prints = append(prints, "\n"+b.render(m.th, m.textWidth(), m.expandThought, m.expandHints))
 	}
 	if n := len(turns) / 2; n > maxTurns {
 		add(block{

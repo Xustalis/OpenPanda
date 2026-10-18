@@ -952,6 +952,38 @@
   justify-content: flex-start;
   margin-top: 2px;
 }
+
+/* The troubleshooting fold under a classified model error: a plain <details>
+   in the meta lane's voice — tertiary text, closed by default, the provider's
+   own reply leads the list when one arrived. */
+.bubble-slot-row.slot-hints {
+  display: block;
+  margin-top: var(--sp-1);
+}
+.err-hints {
+  font-size: var(--text-sm);
+}
+.err-hints > summary {
+  cursor: pointer;
+  color: var(--text-tertiary);
+  user-select: none;
+}
+.err-hints > summary:hover {
+  color: var(--text-secondary);
+}
+.err-hint-detail {
+  margin: var(--sp-1) 0 var(--sp-1) var(--sp-3);
+  font-size: var(--text-xs);
+  word-break: break-word;
+}
+.err-hint-list {
+  margin: 0 0 0 var(--sp-3);
+  padding-left: var(--sp-3);
+  color: var(--text-tertiary);
+}
+.err-hint-list li {
+  margin: 2px 0;
+}
 /* Usage sits at the far right of the header — the last thing the eye lands on
    after the title on the left. */
 /* The node pick's old slot in the composer row is now the "+" that adds

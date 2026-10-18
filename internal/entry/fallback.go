@@ -19,7 +19,36 @@ import (
 type ClassifyError struct {
 	UserMsg string // what to show the user
 	Err     error  // underlying cause
+
+	// Kind is the machine-readable failure class (the ErrKind* constants).
+	// Surfaces map it to their own troubleshooting copy — the TUI's foldable
+	// hint block, the console's <details> section — instead of parsing
+	// UserMsg back apart.
+	Kind string
+	// Status is the HTTP status the provider answered with, when the failure
+	// was a response (429, 400, 5xx…). 0 for transport-level failures that
+	// never got an answer.
+	Status int
+	// Detail carries the provider's own rejection reason when one rode along
+	// in the response body — bounded like UserMsg's appended detail.
+	Detail string
 }
+
+// Error-kind labels a ClassifyError (and APIErrorKind's verdicts) carries.
+// They double as i18n suffixes: entry.hints.<kind> is the troubleshooting
+// text a surface expands under the error.
+const (
+	ErrKindNoKey       = "no_key"       // no credential configured
+	ErrKindCanceled    = "canceled"     // caller aborted the call
+	ErrKindTimeout     = "timeout"      // deadline hit
+	ErrKindAuth        = "auth"         // 401/403 — key rejected
+	ErrKindNotFound    = "not_found"    // 404 — wrong endpoint/model id
+	ErrKindBadRequest  = "bad_request"  // 400 — provider rejected the payload
+	ErrKindRateLimited = "rate_limited" // 429 after retries
+	ErrKindUnavailable = "unavailable"  // 5xx after retries
+	ErrKindUnreachable = "unreachable"  // transport failure after retries
+	ErrKindGeneric     = "generic"      // anything else
+)
 
 func (e *ClassifyError) Error() string { return e.UserMsg }
 func (e *ClassifyError) Unwrap() error { return e.Err }
@@ -30,21 +59,24 @@ func (e *ClassifyError) Unwrap() error { return e.Err }
 // wait — so the user knows what to do instead of retrying blind. loc is the
 // reply locale of the ask that failed (PromptOptions.UserLocale); omitting it
 // falls back to the process default, matching the pre-locale behaviour.
+// Already-classified input is returned untouched so a boundary re-wrap (the
+// ask engine's catch-all) cannot flatten a specific kind into "generic".
 func WrapAPIError(err error, locs ...i18n.Locale) error {
+	var ce *ClassifyError
+	if errors.As(err, &ce) {
+		return err
+	}
 	loc := i18n.Locale("")
 	if len(locs) > 0 {
 		loc = locs[0]
 	}
 	switch {
-	case errors.Is(err, ErrNoKey):
-		return &ClassifyError{
-			UserMsg: i18n.T(loc, "entry.err.noKey"),
-			Err:     err,
-		}
+	case errors.Is(err, ErrNoKey) || errors.Is(err, ErrNoModel):
+		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.noKey"), Err: err, Kind: ErrKindNoKey}
 	case errors.Is(err, context.Canceled):
-		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.canceled"), Err: err}
+		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.canceled"), Err: err, Kind: ErrKindCanceled}
 	case errors.Is(err, context.DeadlineExceeded):
-		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.timeout"), Err: err}
+		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.timeout"), Err: err, Kind: ErrKindTimeout}
 	}
 
 	// A definitive provider rejection (the request was answered, not lost).
@@ -52,19 +84,33 @@ func WrapAPIError(err error, locs ...i18n.Locale) error {
 	if errors.As(err, &se) {
 		switch {
 		case se.status == http.StatusUnauthorized || se.status == http.StatusForbidden:
-			return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.unauthorized"), Err: err}
+			return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.unauthorized"), Err: err, Kind: ErrKindAuth, Status: se.status}
 		case se.status == http.StatusNotFound:
-			return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.notFound"), Err: err}
+			return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.notFound"), Err: err, Kind: ErrKindNotFound, Status: se.status}
 		case se.status == http.StatusBadRequest:
 			// The stock hint names the two most common causes, but a 400 can be
 			// anything the provider dislikes (a retired model name, an oversized
 			// context) — the provider's own reason rides along so the user fixes
 			// the real cause instead of chasing the hint.
 			msg := i18n.T(loc, "entry.err.badRequest")
-			if detail := providerDetail(se.body); detail != "" {
+			detail := providerDetail(se.body)
+			if detail != "" {
 				msg += "：" + detail
 			}
-			return &ClassifyError{UserMsg: msg, Err: err}
+			return &ClassifyError{UserMsg: msg, Err: err, Kind: ErrKindBadRequest, Status: se.status, Detail: detail}
+		default:
+			// A non-OK answer the retry ladder never saw (no budget left, or
+			// a path without retries): a definitive 429/5xx still deserves the
+			// precise kind — same verdict APIErrorKind returns — while truly
+			// odd statuses (413, 422…) fall to generic with theirs intact.
+			switch {
+			case se.status == http.StatusTooManyRequests:
+				return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.rateLimited"), Err: err, Kind: ErrKindRateLimited, Status: se.status}
+			case se.status >= 500:
+				return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.unavailable"), Err: err, Kind: ErrKindUnavailable, Status: se.status}
+			default:
+				return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.generic"), Err: err, Kind: ErrKindGeneric, Status: se.status}
+			}
 		}
 	}
 
@@ -73,19 +119,115 @@ func WrapAPIError(err error, locs ...i18n.Locale) error {
 	var re *retryableError
 	if errors.As(err, &re) {
 		if re.status == http.StatusTooManyRequests {
-			return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.rateLimited"), Err: err}
+			return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.rateLimited"), Err: err, Kind: ErrKindRateLimited, Status: re.status}
 		}
-		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.unavailable"), Err: err}
+		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.unavailable"), Err: err, Kind: ErrKindUnavailable, Status: re.status}
 	}
 
 	// A transport-level failure that survived its retries: the endpoint was
 	// never reached.
 	var te *transientError
 	if errors.As(err, &te) {
-		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.unreachable"), Err: err}
+		return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.unreachable"), Err: err, Kind: ErrKindUnreachable}
 	}
 
-	return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.generic"), Err: err}
+	return &ClassifyError{UserMsg: i18n.T(loc, "entry.err.generic"), Err: err, Kind: ErrKindGeneric}
+}
+
+// APIErrorKind classifies any model-call error — raw (statusError family) or
+// wrapped (ClassifyError) — into the ErrKind* vocabulary plus the HTTP status
+// the provider answered, if one exists. Surfaces that only see the error
+// (rather than the ClassifyError wrapper) get the same mapping WrapAPIError
+// applied. The second result is 0 when no response arrived.
+func APIErrorKind(err error) (kind string, status int) {
+	if err == nil {
+		return "", 0
+	}
+	var ce *ClassifyError
+	if errors.As(err, &ce) && ce.Kind != "" {
+		return ce.Kind, ce.Status
+	}
+	switch {
+	case errors.Is(err, ErrNoKey), errors.Is(err, ErrNoModel):
+		return ErrKindNoKey, 0
+	case errors.Is(err, context.Canceled):
+		return ErrKindCanceled, 0
+	case errors.Is(err, context.DeadlineExceeded):
+		return ErrKindTimeout, 0
+	}
+	var se *statusError
+	if errors.As(err, &se) {
+		switch {
+		case se.status == http.StatusUnauthorized || se.status == http.StatusForbidden:
+			return ErrKindAuth, se.status
+		case se.status == http.StatusNotFound:
+			return ErrKindNotFound, se.status
+		case se.status == http.StatusBadRequest:
+			return ErrKindBadRequest, se.status
+		case se.status == http.StatusTooManyRequests:
+			return ErrKindRateLimited, se.status
+		case se.status >= 500:
+			return ErrKindUnavailable, se.status
+		default:
+			return ErrKindGeneric, se.status
+		}
+	}
+	var re *retryableError
+	if errors.As(err, &re) {
+		if re.status == http.StatusTooManyRequests {
+			return ErrKindRateLimited, re.status
+		}
+		return ErrKindUnavailable, re.status
+	}
+	var te *transientError
+	if errors.As(err, &te) {
+		return ErrKindUnreachable, 0
+	}
+	return ErrKindGeneric, 0
+}
+
+// IsModelCallError reports whether err came out of a model call (provider
+// answer, transport failure, missing credential, deadline) rather than from
+// the machinery around it — the boundary wrap uses it to re-dress only model
+// failures, so a storage or routing error keeps its own message instead of
+// being relabeled "entry model call failed".
+func IsModelCallError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNoKey) || errors.Is(err, ErrNoModel) {
+		return true
+	}
+	// A deadline that expired mid-call is a model failure worth dressing; a
+	// user cancel is not — surfaces already phrase it as "interrupted" via
+	// errors.Is, and re-dressing it would only attach irrelevant hints.
+	if errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		return true
+	}
+	var se *statusError
+	if errors.As(err, &se) {
+		return true
+	}
+	var re *retryableError
+	if errors.As(err, &re) {
+		return true
+	}
+	var te *transientError
+	return errors.As(err, &te)
+}
+
+// EnsureAPIError applies WrapAPIError only to genuine model-call failures that
+// are not already classified — the idempotent form an outer boundary calls
+// without knowing which inner layer the error escaped from.
+func EnsureAPIError(err error, locs ...i18n.Locale) error {
+	if err == nil {
+		return nil
+	}
+	var ce *ClassifyError
+	if errors.As(err, &ce) || !IsModelCallError(err) {
+		return err
+	}
+	return WrapAPIError(err, locs...)
 }
 
 // providerDetail extracts the provider's rejection reason from a response

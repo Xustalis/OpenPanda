@@ -48,6 +48,12 @@ type Turn struct {
 	// "model_config"), so a reloaded transcript can still offer the matching
 	// fix-it affordance the live stream's error event carried.
 	Code string `json:"code,omitempty"`
+	// ErrKind is the classified model-error kind (entry.ErrKind*) an
+	// "error"-kind turn came from — it picks which troubleshooting block the
+	// console folds under the bubble. ErrDetail is the provider's bounded
+	// reply text, rendered first inside the expansion.
+	ErrKind   string `json:"err_kind,omitempty"`
+	ErrDetail string `json:"err_detail,omitempty"`
 	// DurationMS is how long the turn took, from the ask being accepted to the
 	// reply landing. Assistant turns only; absent on user turns and on
 	// transcripts written before it existed. The console prints it above the

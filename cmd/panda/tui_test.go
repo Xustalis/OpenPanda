@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // loc is the locale the block tests render in. It only matters for keys with
@@ -173,7 +175,7 @@ func TestResultBlockExecutionAttribution(t *testing.T) {
 	if b.agent != "claude_code" || b.model != "deepseek-v4-flash" || !b.injected {
 		t.Fatalf("resultBlock did not capture execution attribution: %+v", b)
 	}
-	rendered := b.render(newTheme(i18n.ChineseSimp), 80, false)
+	rendered := b.render(newTheme(i18n.ChineseSimp), 80, false, false)
 	if !strings.Contains(rendered, "claude_code (deepseek-v4-flash)") {
 		t.Fatalf("rendered block should contain agent and model: %q", rendered)
 	}
@@ -209,7 +211,7 @@ func TestResultBlockPlanFailed(t *testing.T) {
 func TestThoughtFoldDoesNotPromiseAnUnavailableKey(t *testing.T) {
 	b := block{kind: blockThought, thoughtLines: []string{"first", "second", "third"}}
 
-	folded := b.render(theme{loc: loc}, 80, false)
+	folded := b.render(theme{loc: loc}, 80, false, false)
 	if strings.Contains(folded, "ctrl+o") {
 		t.Fatalf("the fold must not point at a key that cannot redraw it: %q", folded)
 	}
@@ -220,7 +222,7 @@ func TestThoughtFoldDoesNotPromiseAnUnavailableKey(t *testing.T) {
 		t.Fatalf("the fold should keep a teaser of the reasoning: %q", folded)
 	}
 
-	expanded := b.render(theme{loc: loc}, 80, true)
+	expanded := b.render(theme{loc: loc}, 80, true, false)
 	if strings.Contains(expanded, "3 lines") {
 		t.Fatalf("an expanded thought should not report a fold: %q", expanded)
 	}
@@ -360,5 +362,40 @@ func TestResultBlockTaskDegradedIsLocalized(t *testing.T) {
 	}
 	if strings.Contains(body, "原始输出共") {
 		t.Fatalf("English output leaked the Chinese literal: %q", body)
+	}
+}
+
+// TestErrorBlockHintsFold pins the troubleshooting tail on classified model
+// errors: folded it is one line naming the key that opens it; expanded it
+// carries the provider detail and the kind's hint list; an unclassified
+// error renders no fold at all.
+func TestErrorBlockHintsFold(t *testing.T) {
+	th := theme{loc: loc}
+	b := block{
+		kind:      blockError,
+		body:      "model service is rate-limiting — try again later",
+		errKind:   entry.ErrKindRateLimited,
+		errDetail: "You exceeded your current quota",
+	}
+
+	folded := ansi.Strip(b.render(th, 80, false, false))
+	if !strings.Contains(folded, "ctrl+e") {
+		t.Fatalf("folded error must advertise its expand key: %q", folded)
+	}
+	if strings.Contains(folded, "quota") {
+		t.Fatalf("folded error leaks the provider detail: %q", folded)
+	}
+
+	expanded := ansi.Strip(b.render(th, 80, false, true))
+	for _, want := range []string{"troubleshooting", "quota", "rate tier"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expanded error missing %q: %q", want, expanded)
+		}
+	}
+
+	// Unclassified failures render exactly as before — no dangling fold.
+	plain := ansi.Strip(block{kind: blockError, body: "disk full"}.render(th, 80, false, true))
+	if strings.Contains(plain, "troubleshooting") || strings.Contains(plain, "ctrl+e") {
+		t.Fatalf("unclassified error grew a fold: %q", plain)
 	}
 }

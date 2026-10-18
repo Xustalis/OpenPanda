@@ -21,6 +21,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/cliui"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 )
@@ -72,6 +73,9 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 		if m.liveTask != nil {
 			m.liveTask.recordTool(label, now)
 		}
+	case askengine.ProgressRetry:
+		// A model retry note belongs on the status line only — folding it into
+		// the delegated-task card's trail would masquerade as a lifecycle stage.
 	default:
 		if m.liveTask != nil {
 			m.liveTask.advance(label, now)
@@ -107,6 +111,14 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(done, m.printBlock(note))
 		}
 		blk := block{kind: blockError, body: msg.err.Error()}
+		// A classified model failure carries its kind + provider detail into
+		// the block, which renders a foldable troubleshooting tail under the
+		// headline (ctrl+e) instead of leaving the user alone with "HTTP 429".
+		var ce *entry.ClassifyError
+		if errors.As(msg.err, &ce) {
+			blk.errKind = ce.Kind
+			blk.errDetail = ce.Detail
+		}
 		// Pair the persisted user turn with the failure (same guard as the
 		// classic loop): a thread left dangling on a user turn 400s on its
 		// every following ask. prompt was captured before resetLive, which

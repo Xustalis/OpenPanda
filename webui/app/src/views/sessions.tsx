@@ -9,6 +9,7 @@ import {
   isTaskStalled,
   type ApprovalScope,
   type AskResult,
+  type AskStatusEvent,
   type FsFileEntry,
   type MCPSettings,
   type SessionApprovalState,
@@ -263,6 +264,44 @@ interface CompletionItem {
   hint?: string
   group?: string
   run(arg?: string): void
+}
+
+// statusNote phrases one ask progress event for the composer status line.
+// A retry milestone carries the numbers needed to say it in the browser's
+// locale ("retrying in 3s · 2/6") instead of the server's English fallback;
+// every other kind keeps the wire text.
+function statusNote(text: string, ev?: AskStatusEvent): string {
+  if (ev?.kind === 'retry') {
+    const reason = ev.http_status ? `HTTP ${ev.http_status}` : t('sessions.retry.transport')
+    return t('sessions.retry', {
+      reason,
+      delay: Math.max(0, Math.round((ev.delay_ms ?? 0) / 1000)),
+      attempt: ev.attempt ?? 0,
+      max: ev.max ?? 0,
+    })
+  }
+  return text
+}
+
+// ErrHints is the troubleshooting fold under a classified model error: the
+// kind names its bullet list in i18n; the provider's own detail heads it when
+// one arrived. A browser-native <details> needs no state and reopens across
+// rerenders for free.
+function ErrHints({ kind, detail }: { kind: string; detail?: string }) {
+  const raw = t(`err.hints.${kind}`)
+  const known = raw !== `err.hints.${kind}`
+  const lines = (known ? raw : t('err.hints.generic')).split('\n').filter(Boolean)
+  return (
+    <details class="err-hints">
+      <summary class="dim">{t('err.hints.title')}</summary>
+      {detail && <p class="dim err-hint-detail">{t('err.hints.detail', { detail })}</p>}
+      <ul class="err-hint-list">
+        {lines.map((line, i) => (
+          <li key={i}>{line.replace(/^-\s*/, '')}</li>
+        ))}
+      </ul>
+    </details>
+  )
 }
 
 function fmtSize(n?: number): string {
@@ -978,7 +1017,7 @@ export function SessionsView({
         {
           onReasoning: (text) => patch((m) => ({ ...m, thought: (m.thought ?? '') + text })),
           onDelta: (text) => patch((m) => ({ ...m, text: m.text + text })),
-          onStatus: (text) => patch((m) => ({ ...m, status: text })),
+          onStatus: (text, ev) => patch((m) => ({ ...m, status: statusNote(text, ev) })),
           onOperation: (operationID) => {
             if (inflight.current === ctrl && inflightSid.current === sid) {
               inflightOperation.current = operationID
@@ -1009,7 +1048,19 @@ export function SessionsView({
                 : {}
             return { ...m, ...task, result: r, status: undefined, text }
           }),
-          onError: (message, code) => patch((m) => ({ ...m, status: undefined, kind: 'error', text: m.text || message, code })),
+          onError: (message, code, info) =>
+            patch((m) => ({
+              ...m,
+              status: undefined,
+              kind: 'error',
+              text: m.text || message,
+              code,
+              // The classified model-error kind + provider detail drive the
+              // troubleshooting <details> under the bubble — same fields the
+              // panel persists on the turn, so a reload renders identically.
+              err_kind: info?.kind,
+              err_detail: info?.detail,
+            })),
         },
         ctrl.signal,
         nodePref || undefined,
@@ -2461,6 +2512,15 @@ function ChatBubble(props: {
               <Markdown text={msg.text} class="msg-text" />
             ))}
         </div>
+
+        {/* — slot-hints: troubleshooting fold under a classified model error.
+              err_kind is also persisted on the turn, so a reloaded thread
+              shows the same fold the live stream drew. */}
+        {msg.kind === 'error' && msg.err_kind && (
+          <div class="bubble-slot-row slot-hints u-w-100">
+            <ErrHints kind={msg.err_kind} detail={msg.err_detail} />
+          </div>
+        )}
 
         {/* — slot-actions: copy, under the reply and on its left edge where
               the prose starts. The reply is copied as the Markdown it was
