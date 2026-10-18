@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -47,5 +48,40 @@ func TestListDirectories(t *testing.T) {
 	names := []string{resp.Directories[0].Name, resp.Directories[1].Name}
 	if names[0] != "alpha" || names[1] != "beta" {
 		t.Errorf("expected [alpha, beta], got %v", names)
+	}
+}
+
+// A "~/sub" path must expand against the home directory — before the
+// resolveFsPath switch only the bare "~" case was handled, so "~/x" fell
+// through filepath.Abs as a literal segment and the listing 500'd.
+func TestListDirectoriesExpandsTildePrefix(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("~ path expansion is a posix-style convenience")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sub := filepath.Join(home, "pickme")
+	if err := os.MkdirAll(filepath.Join(sub, "inner"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &handler{cfgMu: &sync.RWMutex{}}
+	req := httptest.NewRequest("GET", "/api/fs/directories?path=~/pickme", nil)
+	w := httptest.NewRecorder()
+
+	h.listDirectories(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp listDirectoriesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if resp.Current != sub {
+		t.Errorf("expected current %q, got %q", sub, resp.Current)
+	}
+	if len(resp.Directories) != 1 || resp.Directories[0].Name != "inner" {
+		t.Errorf("expected [inner], got %v", resp.Directories)
 	}
 }
