@@ -256,7 +256,7 @@ var messages = map[Locale]map[string]string{
 		"init.card.written":      "capability card written → {path}",
 		"init.next":              "You're ready — `panda doctor` verifies the setup, `panda web` opens the console, `panda` starts a chat.",
 
-		"cli.status.none":          "no nodes registered — `panda daemon` registers this node; `panda nodes add <host:port>` peers another",
+		"cli.status.none":          "no nodes registered — `panda daemon` registers this node; `panda nodes add <host:port>` peers another; `panda nodes invite` prints the join guide",
 		"cli.status.localDown":     "this node is not running — `panda daemon` starts it",
 		"cli.status.notRegistered": "this node has never registered — `panda daemon` runs it",
 		"cli.nodes.removed":        "node removed: {id}",
@@ -551,7 +551,7 @@ var messages = map[Locale]map[string]string{
 		"cli.project.sessionsKept":    "{n} session(s) kept (unassociated)",
 		"cli.project.sessionsDeleted": "{n} session(s) deleted",
 
-		"cli.ask.usage":         "usage: panda ask [--task] [--card <path>] [--output-format json|stream-json] <text>",
+		"cli.ask.usage":         "usage: panda ask [--card <path>] [--output-format json|stream-json] <text>",
 		"cli.ask.badFormat":     "invalid --output-format {format} — one of: text, json, stream-json",
 		"cli.ask.noModel":       "no model configured — run `panda init` or `panda model add`",
 		"cli.ask.task":          "task {id} → {state}",
@@ -1324,7 +1324,7 @@ var messages = map[Locale]map[string]string{
 		"init.card.written":      "能力卡片已写入 → {path}",
 		"init.next":              "准备就绪——`panda doctor` 检查配置，`panda web` 打开控制台，`panda` 开始对话。",
 
-		"cli.status.none":          "尚未注册任何节点——`panda daemon` 会注册本节点；`panda nodes add <host:port>` 添加对等节点",
+		"cli.status.none":          "尚未注册任何节点——`panda daemon` 会注册本节点；`panda nodes add <host:port>` 添加对等节点；`panda nodes invite` 打印组网指引",
 		"cli.status.localDown":     "本节点未在运行——`panda daemon` 启动它",
 		"cli.status.notRegistered": "本节点尚未注册——`panda daemon` 运行时自动注册",
 		"cli.nodes.removed":        "节点已移除：{id}",
@@ -1618,7 +1618,7 @@ var messages = map[Locale]map[string]string{
 		"cli.project.sessionsKept":    "{n} 个会话已保留（解除关联）",
 		"cli.project.sessionsDeleted": "{n} 个会话已删除",
 
-		"cli.ask.usage":         "用法：panda ask [--task] [--card <路径>] [--output-format json|stream-json] <文本>",
+		"cli.ask.usage":         "用法：panda ask [--card <路径>] [--output-format json|stream-json] <文本>",
 		"cli.ask.badFormat":     "无效的 --output-format {format} — 可选：text、json、stream-json",
 		"cli.ask.noModel":       "未配置模型——运行 `panda init` 或 `panda model add`",
 		"cli.ask.task":          "任务 {id} → {state}",
@@ -2440,7 +2440,7 @@ var messages = map[Locale]map[string]string{
 		"init.card.written":      "ケイパビリティカードを書き込みました → {path}",
 		"init.next":              "準備完了です — `panda doctor` で設定を確認、`panda web` でコンソールを開き、`panda` で会話を始められます。",
 
-		"cli.status.none":          "ノードが未登録です — `panda daemon` でこのノードを登録し、`panda nodes add <host:port>` でピアを追加",
+		"cli.status.none":          "ノードが未登録です — `panda daemon` でこのノードを登録し、`panda nodes add <host:port>` でピアを追加、`panda nodes invite` で参加手順を表示",
 		"cli.status.localDown":     "このノードは停止しています — `panda daemon` で起動します",
 		"cli.status.notRegistered": "このノードはまだ登録されていません — `panda daemon` の実行で登録されます",
 		"cli.nodes.removed":        "ノードを削除しました：{id}",
@@ -2734,7 +2734,7 @@ var messages = map[Locale]map[string]string{
 		"cli.project.sessionsKept":    "{n} 個のセッションを保持しました（関連付け解除）",
 		"cli.project.sessionsDeleted": "{n} 個のセッションを削除しました",
 
-		"cli.ask.usage":         "使い方：panda ask [--task] [--card <パス>] [--output-format json|stream-json] <テキスト>",
+		"cli.ask.usage":         "使い方：panda ask [--card <パス>] [--output-format json|stream-json] <テキスト>",
 		"cli.ask.badFormat":     "無効な --output-format {format} — 選択肢：text、json、stream-json",
 		"cli.ask.noModel":       "モデルが未設定です — `panda init` または `panda model add` を実行してください",
 		"cli.ask.task":          "タスク {id} → {state}",
@@ -3492,7 +3492,7 @@ var messages = map[Locale]map[string]string{
 		"init.card.written":      "tarjeta de capacidades escrita → {path}",
 		"init.next":              "Listo — `panda doctor` verifica la configuración, `panda web` abre la consola, `panda` inicia un chat.",
 
-		"cli.status.none":          "no hay nodos registrados — `panda daemon` registra este nodo; `panda nodes add <host:port>` empareja otro",
+		"cli.status.none":          "no hay nodos registrados — `panda daemon` registra este nodo; `panda nodes add <host:port>` empareja otro; `panda nodes invite` muestra la guía de unión",
 		"cli.status.localDown":     "este nodo no está en ejecución — `panda daemon` lo inicia",
 		"cli.status.notRegistered": "este nodo aún no se ha registrado — `panda daemon` lo registra al ejecutarse",
 		"cli.nodes.removed":        "nodo eliminado: {id}",
@@ -3782,7 +3782,7 @@ var messages = map[Locale]map[string]string{
 		"cli.project.sessionsKept":    "{n} sesión(es) conservada(s) (desvinculadas)",
 		"cli.project.sessionsDeleted": "{n} sesión(es) eliminada(s)",
 
-		"cli.ask.usage":         "uso: panda ask [--task] [--card <ruta>] [--output-format json|stream-json] <texto>",
+		"cli.ask.usage":         "uso: panda ask [--card <ruta>] [--output-format json|stream-json] <texto>",
 		"cli.ask.badFormat":     "--output-format inválido {format} — opciones: text, json, stream-json",
 		"cli.ask.noModel":       "sin modelo configurado — ejecuta `panda init` o `panda model add`",
 		"cli.ask.task":          "tarea {id} → {state}",
@@ -4540,7 +4540,7 @@ var messages = map[Locale]map[string]string{
 		"init.card.written":      "Fähigkeitenkarte geschrieben → {path}",
 		"init.next":              "Fertig — `panda doctor` prüft die Einrichtung, `panda web` öffnet die Konsole, `panda` startet einen Chat.",
 
-		"cli.status.none":          "keine Knoten registriert — `panda daemon` registriert diesen Knoten; `panda nodes add <host:port>` verbindet einen weiteren",
+		"cli.status.none":          "keine Knoten registriert — `panda daemon` registriert diesen Knoten; `panda nodes add <host:port>` verbindet einen weiteren; `panda nodes invite` zeigt die Beitrittsanleitung",
 		"cli.status.localDown":     "dieser Knoten läuft nicht — `panda daemon` startet ihn",
 		"cli.status.notRegistered": "dieser Knoten war noch nie registriert — `panda daemon` registriert ihn beim Lauf",
 		"cli.nodes.removed":        "Knoten entfernt: {id}",
@@ -4830,7 +4830,7 @@ var messages = map[Locale]map[string]string{
 		"cli.project.sessionsKept":    "{n} Sitzung(en) behalten (Verknüpfung gelöst)",
 		"cli.project.sessionsDeleted": "{n} Sitzung(en) gelöscht",
 
-		"cli.ask.usage":         "Aufruf: panda ask [--task] [--card <Pfad>] [--output-format json|stream-json] <Text>",
+		"cli.ask.usage":         "Aufruf: panda ask [--card <Pfad>] [--output-format json|stream-json] <Text>",
 		"cli.ask.badFormat":     "ungültiges --output-format {format} — Optionen: text, json, stream-json",
 		"cli.ask.noModel":       "kein Modell konfiguriert — `panda init` oder `panda model add` ausführen",
 		"cli.ask.task":          "Aufgabe {id} → {state}",
