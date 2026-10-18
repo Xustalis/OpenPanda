@@ -13,6 +13,20 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 )
 
+// isolateIdentityLockRoot redirects os.UserConfigDir() into a temp dir for
+// this test: the node lock root is user-scoped on every platform (macOS
+// ignores XDG_CONFIG_HOME), so an unredirected caller leaks lock files into
+// the real user directory — and fails outright in sandboxed test
+// environments that cannot write there. nodeidentity's own tests set its
+// package seam; a cross-package caller can only isolate the env it resolves.
+func isolateIdentityLockRoot(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Setenv("APPDATA", root)
+}
+
 // TestBorrowedEngineIsSubmitOnly pins the one-pipeline-per-identity rule:
 // when a daemon holds the identity lock, an engine sharing that identity —
 // `panda web`, the panel sidecar, any QueueTasks surface — must not start a
@@ -22,6 +36,7 @@ import (
 // sibling conns churned the daemon's held edges: two work logics for one
 // node.
 func TestBorrowedEngineIsSubmitOnly(t *testing.T) {
+	isolateIdentityLockRoot(t)
 	identity := "borrowed-engine-" + t.Name()
 	lock, err := nodeidentity.Acquire(config.NodeKindVM, identity)
 	if err != nil {
@@ -80,6 +95,7 @@ func TestBorrowedEngineIsSubmitOnly(t *testing.T) {
 // TestOwnerEngineConsumes is the control: the same engine shape with the lock
 // free owns the row, starts the queue consumer, and claims the task.
 func TestOwnerEngineConsumes(t *testing.T) {
+	isolateIdentityLockRoot(t)
 	identity := "owner-engine-" + t.Name()
 	root := t.TempDir()
 	cfg := &config.Config{}
