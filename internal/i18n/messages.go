@@ -270,6 +270,7 @@ var messages = map[Locale]map[string]string{
 		"cli.noSuch.plan":      "no such plan: {id}",
 		"cli.unknownNamed":     "unknown {kind}: {name}",
 		"cli.unknownNamedOpts": "unknown {kind}: {name} — valid: {opts}",
+		"cli.configMissing":    "warning: --config {path}: {err} — continuing with defaults (usual location: {usual})",
 
 		"cli.session.rm.one":       "{id} deleted",
 		"cli.session.rm.done":      "deleted {n} session(s)",
@@ -1335,6 +1336,7 @@ var messages = map[Locale]map[string]string{
 		"cli.noSuch.plan":          "计划不存在：{id}",
 		"cli.unknownNamed":         "未知的{kind}：{name}",
 		"cli.unknownNamedOpts":     "未知的{kind}：{name} — 可选：{opts}",
+		"cli.configMissing":        "警告：--config {path}：{err} — 将以默认配置继续（通常位置：{usual}）",
 
 		"cli.session.rm.one":       "已删除 {id}",
 		"cli.session.rm.done":      "已删除 {n} 个会话",
@@ -2451,6 +2453,7 @@ var messages = map[Locale]map[string]string{
 		"cli.noSuch.plan":          "そのようなプランはありません：{id}",
 		"cli.unknownNamed":         "不明な{kind}：{name}",
 		"cli.unknownNamedOpts":     "不明な{kind}：{name} — 有効値：{opts}",
+		"cli.configMissing":        "警告：--config {path}：{err} — デフォルトで続行します（通常の場所：{usual}）",
 
 		"cli.session.rm.one":       "{id} を削除しました",
 		"cli.session.rm.done":      "{n} 件のセッションを削除しました",
@@ -3503,6 +3506,7 @@ var messages = map[Locale]map[string]string{
 		"cli.noSuch.plan":          "no existe ese plan: {id}",
 		"cli.unknownNamed":         "{kind} desconocido: {name}",
 		"cli.unknownNamedOpts":     "{kind} desconocido: {name} — válidos: {opts}",
+		"cli.configMissing":        "aviso: --config {path}: {err} — se continuará con valores por defecto (ubicación habitual: {usual})",
 
 		"cli.session.rm.one":       "{id} eliminada",
 		"cli.session.rm.done":      "{n} sesión(es) eliminadas",
@@ -4551,6 +4555,7 @@ var messages = map[Locale]map[string]string{
 		"cli.noSuch.plan":          "kein solcher Plan: {id}",
 		"cli.unknownNamed":         "unbekannt {kind}: {name}",
 		"cli.unknownNamedOpts":     "unbekannt {kind}: {name} — gültig: {opts}",
+		"cli.configMissing":        "Warnung: --config {path}: {err} — fahre mit Standardwerten fort (üblicher Ort: {usual})",
 
 		"cli.session.rm.one":       "{id} gelöscht",
 		"cli.session.rm.done":      "{n} Sitzung(en) gelöscht",

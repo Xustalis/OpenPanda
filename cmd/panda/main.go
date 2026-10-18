@@ -66,10 +66,14 @@ func main() {
 	// An explicit --config pointing at a file that isn't there used to fall
 	// back to defaults silently — the typo then surfaced as a misleading
 	// "no API key configured" error. init is exempt: its --config is the
-	// write target and must NOT exist yet.
+	// write target and must NOT exist yet. The warning names where the node
+	// would look without the flag, so "wrong path" and "no config yet" read
+	// as different problems.
 	if cliConfigPath != "" && sub != "init" {
 		if _, err := os.Stat(cliConfigPath); err != nil {
-			fmt.Fprintf(os.Stderr, "panda: warning: --config %s: %v — continuing with defaults\n", cliConfigPath, err)
+			loc := i18n.Detect()
+			fmt.Fprintf(os.Stderr, "panda: %s\n", i18n.Tf(loc, "cli.configMissing",
+				"path", cliConfigPath, "err", err.Error(), "usual", config.ResolvePath("")))
 		}
 	}
 	if sub != "" {
