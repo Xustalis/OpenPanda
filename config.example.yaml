@@ -266,6 +266,15 @@ log:
 #   max_tokens: 4096            # completion cap (output, not context size);
 #                               # default 4096. A value above the provider's
 #                               # hard ceiling is clamped to it, not failed.
+#   offline_wait: true          # default true. When this endpoint needs the
+#                               # internet and the machine loses it, the call
+#                               # waits — probing the link every few seconds —
+#                               # and replays the moment it is back, instead of
+#                               # burning its retry budget on a dead route.
+#                               # false restores fail-fast; endpoints on
+#                               # loopback/LAN (a local model) are exempt.
+#   max_retries: 5              # transport retries on 429/5xx, past the first
+#                               # attempt. Negative disables them.
 
 # Multi-model registry: named models the REPL switches between with /model.
 # Each entry is a full model config; name is the alias `/model <name>` uses.

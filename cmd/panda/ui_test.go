@@ -110,3 +110,25 @@ func TestProgressNoteRetry(t *testing.T) {
 		t.Fatalf("transport retry note: %q", got)
 	}
 }
+
+// TestProgressNoteOffline: an outage being waited out must read as a link
+// problem in the user's own language — and the resume line must report what
+// the wait cost, so a turn that sat out a long outage explains its own gap.
+func TestProgressNoteOffline(t *testing.T) {
+	zhWait := progressNote(i18n.ChineseSimp, askengine.Progress{Kind: askengine.ProgressOffline, Detail: "waiting"})
+	if !strings.Contains(zhWait, "网络") {
+		t.Fatalf("zh offline note: %q", zhWait)
+	}
+	zhResumed := progressNote(i18n.ChineseSimp, askengine.Progress{
+		Kind: askengine.ProgressOffline, Detail: "resumed", Delay: 42 * time.Second,
+	})
+	if !strings.Contains(zhResumed, "42") || !strings.Contains(zhResumed, "网络") {
+		t.Fatalf("zh resumed note: %q", zhResumed)
+	}
+	// The wait line must not read as a provider failure the user has to act
+	// on: no HTTP status, no "retry" ladder wording.
+	enWait := progressNote(i18n.English, askengine.Progress{Kind: askengine.ProgressOffline, Detail: "waiting"})
+	if strings.Contains(enWait, "HTTP") || !strings.Contains(enWait, "network") {
+		t.Fatalf("en offline note: %q", enWait)
+	}
+}

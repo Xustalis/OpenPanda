@@ -479,6 +479,14 @@ func statusEventOf(p askengine.Progress) map[string]any {
 			ev["detail"] = p.Detail
 		}
 	}
+	if p.Kind == askengine.ProgressOffline {
+		// An outage milestone: the console needs the phase ("waiting" or
+		// "resumed") and how long it lasted to say it in its own language —
+		// the wire text is only the fallback.
+		ev["name"] = p.Name
+		ev["detail"] = p.Detail
+		ev["waited_ms"] = p.Delay.Milliseconds()
+	}
 	return ev
 }
 

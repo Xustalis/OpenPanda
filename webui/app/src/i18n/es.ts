@@ -349,6 +349,8 @@ const es: Messages = {
   'sessions.spawn.isolated': 'Iniciando subagente {name} (copia aislada, se fusiona al terminar)…',
   'sessions.spawn.scoped': 'Iniciando subagente {name} (ámbito: {paths})…',
   'sessions.retry.transport': 'conexión fallida',
+  'sessions.offline.waiting': 'Sin conexión de red — vigilando la conexión, la llamada se reanuda sola cuando vuelva',
+  'sessions.offline.resumed': 'Red restablecida tras {delay}s — reanudando la llamada al modelo',
 
   'err.hints.title': 'Solución de problemas',
   'err.hints.detail': 'Detalle del proveedor: {detail}',

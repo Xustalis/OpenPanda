@@ -348,6 +348,8 @@ const ja: Messages = {
   'sessions.spawn.isolated': 'サブエージェント {name} を起動中（分離コピー、完了時にマージ）…',
   'sessions.spawn.scoped': 'サブエージェント {name} を起動中（スコープ: {paths}）…',
   'sessions.retry.transport': '接続に失敗',
+  'sessions.offline.waiting': 'ネットワークに接続できません — 接続を監視し、復旧後に自動で再開します',
+  'sessions.offline.resumed': 'ネットワーク復旧（{delay}秒待機）— モデル呼び出しを再開します',
 
   'err.hints.title': 'トラブルシューティング',
   'err.hints.detail': 'プロバイダの応答: {detail}',

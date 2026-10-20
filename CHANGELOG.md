@@ -46,6 +46,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Added
+
+- **A lost network no longer fails the turn — it waits for the link and carries on** — a transport drop used to spend the whole retry budget on a dead route within a few seconds and then fail the call, which is the wrong answer for a laptop that just went through a tunnel: an outage is measured in minutes, the retry ladder in seconds. A failed model call now probes the provider's own endpoint plus two public anchors first; judged offline, it waits — announcing "network unreachable, watching the connection" on the CLI status line, the TUI and the console — and replays the moment anything answers back, without spending a retry attempt. Endpoints that need no internet (a local model on loopback or the LAN) are exempt, `model.offline_wait: false` restores fail-fast, and the wait ends on your cancellation rather than a timer.
+
 ### Changed
 
 - **The task detail page is one column, and its facts no longer leave a hole** — the page split into a 636px reading column beside a 272px facts rail, but the facts are seven short values: the rail ran out 240px in while the event log kept going for another thousand, so the right half of the page stayed empty for the whole scroll. The facts are now a label-over-value band across the top (four to five per row, the UUIDs taking a cell of their own to wrap on) and everything under it — result, brief, board, delegation chain, sub-agents, log — shares one measure, which also gives tool output the width it was being wrapped out of. Timeline markers hang in the left margin, so every event's timestamp starts on the same line as the section titles above it.

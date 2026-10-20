@@ -129,6 +129,15 @@ func progressNote(loc i18n.Locale, p askengine.Progress) string {
 			"delay", strconv.Itoa(int(p.Delay.Seconds())),
 			"attempt", strconv.Itoa(p.Attempt),
 			"max", strconv.Itoa(p.MaxAttempt))
+	case askengine.ProgressOffline:
+		// The link, not the provider. The wait itself has no number to show
+		// while it lasts; the resume line reports what it cost.
+		if p.Detail == "resumed" {
+			note = i18n.Tf(loc, "cli.progress.offlineResumed",
+				"delay", strconv.Itoa(int(p.Delay.Seconds())))
+		} else {
+			note = i18n.T(loc, "cli.progress.offline")
+		}
 	default:
 		note = p.Name
 	}

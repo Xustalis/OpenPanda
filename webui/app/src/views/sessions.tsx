@@ -285,6 +285,14 @@ function statusNote(text: string, ev?: AskStatusEvent): string {
       max: ev.max ?? 0,
     })
   }
+  if (ev?.kind === 'offline') {
+    // An outage is not a provider failure: say the link is being watched and
+    // that the turn picks itself back up, then report what the wait cost.
+    const waited = Math.max(0, Math.round((ev.waited_ms ?? 0) / 1000))
+    return ev.detail === 'resumed'
+      ? t('sessions.offline.resumed', { delay: waited })
+      : t('sessions.offline.waiting')
+  }
   if (ev?.kind === 'spawn' && ev.name) {
     // The fan-out milestone in the browser's own language: the mode
     // descriptor says how the child relates to the shared tree — a private

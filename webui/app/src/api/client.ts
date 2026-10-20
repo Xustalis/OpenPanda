@@ -2021,9 +2021,10 @@ export async function openSSE(url: string, opts: OpenSSEOptions): Promise<void> 
 
 /** One `status` SSE event. `text` is the server's English fallback; `kind`
  *  names the milestone ("task", "plan", "tool", "route", "exec", "spawn",
- *  "judge", "wait", "retry") so the console can re-phrase it in the user's
- *  locale. "spawn" marks a delegate fan-out — one per sub-agent the parent
- *  dispatched. The retry fields are populated when kind === 'retry'. */
+ *  "judge", "wait", "retry", "offline") so the console can re-phrase it in the
+ *  user's locale. "spawn" marks a delegate fan-out — one per sub-agent the
+ *  parent dispatched. The retry fields are populated when kind === 'retry';
+ *  "offline" carries `detail` ("waiting" | "resumed") plus `waited_ms`. */
 export interface AskStatusEvent {
   text: string
   kind?: string
@@ -2037,6 +2038,8 @@ export interface AskStatusEvent {
    *  fan-out milestone in the browser's own language. */
   name?: string
   detail?: string
+  /** kind === 'offline': how long the outage lasted, on the "resumed" event. */
+  waited_ms?: number
 }
 
 /** Structured fields on an `error` SSE event beyond the message. `kind` is

@@ -5,6 +5,7 @@ package askengine
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
@@ -95,6 +96,16 @@ func TestProgressStatusFallback(t *testing.T) {
 	cb.progress(Progress{Kind: ProgressExec, Name: "claude_code", Round: 1, Budget: 1})
 	if strings.Contains(got, "1/1") {
 		t.Fatalf("single-round run must not narrate its round: %q", got)
+	}
+	// An outage is the link, not the provider: the fallback prose says so and
+	// names the model, and the resume line carries the outage's length.
+	cb.progress(Progress{Kind: ProgressOffline, Name: "deepseek-flash", Detail: "waiting"})
+	if !strings.Contains(got, "network") || !strings.Contains(got, "deepseek-flash") {
+		t.Fatalf("offline status lost its subject: %q", got)
+	}
+	cb.progress(Progress{Kind: ProgressOffline, Name: "deepseek-flash", Detail: "resumed", Delay: 42 * time.Second})
+	if !strings.Contains(got, "42") || !strings.Contains(got, "restored") {
+		t.Fatalf("resumed status lost the outage length: %q", got)
 	}
 }
 

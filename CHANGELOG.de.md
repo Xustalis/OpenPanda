@@ -40,6 +40,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Ein Netzausfall lässt den Turn nicht mehr scheitern — er wartet auf die Verbindung und macht weiter** — ein Transportfehler verbrauchte bisher das gesamte Retry-Budget innerhalb von Sekunden auf einer toten Route und ließ den Aufruf dann scheitern; für ein Notebook, das gerade in einen Tunnel gefahren ist, ist das die falsche Antwort: Der Ausfall dauert Minuten, die Retry-Leiter Sekunden. Ein fehlgeschlagener Modellaufruf prüft jetzt zuerst den eigenen Endpunkt des Anbieters und zwei öffentliche Anker; gilt die Maschine als offline, wartet er — sichtbar in der Statuszeile der CLI, der TUI und der Konsole — und wiederholt den Aufruf, sobald irgendetwas antwortet, ohne einen Retry-Versuch zu verbrauchen. Endpunkte ohne Internetbedarf (ein lokales Modell auf Loopback oder im LAN) sind ausgenommen, `model.offline_wait: false` stellt das schnelle Scheitern wieder her, und die Wartezeit endet durch deinen Abbruch, nicht durch einen Timer.
+
 ### Geändert
 
 - **Die Task-Detailseite ist eine Spalte, und ihre Fakten lassen keine Lücke mehr** — die Seite teilte sich in eine 636px breite Lesespalte neben einer 272px breiten Fakten-Leiste, doch die Fakten sind sieben kurze Werte: Die Leiste war nach 240px zu Ende, während das Ereignisprotokoll noch tausend Pixel weiterlief — die rechte Hälfte der Seite blieb über den gesamten Scroll leer. Die Fakten stehen jetzt als Band aus Label über Wert oben (vier bis fünf pro Zeile, die UUIDs mit eigener Zelle zum Umbrechen), und alles darunter — Ergebnis, Brief, Board, Delegationskette, Sub-Agenten, Protokoll — teilt ein Maß, was auch der Tool-Ausgabe die Breite gibt, aus der sie vorher herausgebrochen ist. Die Marker der Zeitachse hängen im linken Rand, sodass die Uhrzeit jedes Ereignisses auf derselben Linie beginnt wie die Abschnittstitel darüber.

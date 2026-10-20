@@ -349,6 +349,8 @@ const de: Messages = {
   'sessions.spawn.isolated': 'Subagent {name} wird gestartet (isolierte Kopie, Merge bei Abschluss)…',
   'sessions.spawn.scoped': 'Subagent {name} wird gestartet (Bereich: {paths})…',
   'sessions.retry.transport': 'Verbindung fehlgeschlagen',
+  'sessions.offline.waiting': 'Keine Netzverbindung — Verbindung wird überwacht, der Aufruf läuft nach der Rückkehr automatisch weiter',
+  'sessions.offline.resumed': 'Netz wieder da nach {delay}s — Modellaufruf wird fortgesetzt',
 
   'err.hints.title': 'Fehlerbehebung',
   'err.hints.detail': 'Provider-Detail: {detail}',

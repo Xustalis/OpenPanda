@@ -73,9 +73,10 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 		if m.liveTask != nil {
 			m.liveTask.recordTool(label, now)
 		}
-	case askengine.ProgressRetry:
-		// A model retry note belongs on the status line only — folding it into
-		// the delegated-task card's trail would masquerade as a lifecycle stage.
+	case askengine.ProgressRetry, askengine.ProgressOffline:
+		// A model retry (or an outage being waited out) belongs on the status
+		// line only — folding it into the delegated-task card's trail would
+		// masquerade as a lifecycle stage.
 	default:
 		if m.liveTask != nil {
 			m.liveTask.advance(p.Kind, label, now)

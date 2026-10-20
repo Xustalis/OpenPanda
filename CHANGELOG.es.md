@@ -40,6 +40,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Añadido
+
+- **Perder la red ya no hace fallar el turno: espera a la conexión y continúa** — un fallo de transporte gastaba todo el presupuesto de reintentos en una ruta muerta en pocos segundos y luego daba la llamada por fallida, que es la respuesta equivocada para un portátil que acaba de entrar en un túnel: la caída se mide en minutos y la escalera de reintentos en segundos. Ahora una llamada fallida sondea primero el endpoint del proveedor y dos anclas públicas; si se concluye que no hay red, espera —anunciándolo en la línea de estado de la CLI, la TUI y la consola— y se reejecuta en cuanto algo responde, sin consumir un intento. Los endpoints que no necesitan internet (un modelo local en loopback o en la LAN) quedan exentos, `model.offline_wait: false` restaura el fallo inmediato, y la espera termina cuando tú cancelas, no con un temporizador.
+
 ### Cambiado
 
 - **La página de detalle de tarea es una sola columna, y sus datos ya no dejan un hueco** — la página se partía en una columna de lectura de 636px junto a un raíl de datos de 272px, pero los datos son siete valores cortos: el raíl se agotaba a los 240px mientras el registro de eventos seguía mil píxeles más, así que la mitad derecha quedaba vacía durante todo el desplazamiento. Los datos pasan a una banda de etiqueta sobre valor en la parte superior (cuatro o cinco por fila, los UUID con celda propia para partirse) y todo lo que hay debajo — resultado, brief, tablero, cadena de delegación, subagentes, registro — comparte una sola medida, lo que además da a la salida de herramientas el ancho que le faltaba. Los marcadores de la línea de tiempo cuelgan en el margen izquierdo, de modo que la hora de cada evento arranca en la misma línea que los títulos de sección de arriba.

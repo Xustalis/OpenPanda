@@ -41,8 +41,9 @@ func (c *Client) StreamTurnsWithTools(ctx context.Context, system string, turns 
 func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onReasoning func(string)) (Response, error), onDelta func(string), onReasoning func(string)) (Response, error) {
 	guard := newDeltaGuard(onDelta, onReasoning)
 	var lastErr error
+	noBackoff := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
-		if attempt > 0 {
+		if attempt > 0 && !noBackoff {
 			// Announce the backoff before sleeping it: a persistent 429/5xx
 			// otherwise sits behind a motionless spinner for the whole
 			// ladder and reads as a hang.
@@ -51,6 +52,7 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onRea
 				return Response{}, err
 			}
 		}
+		noBackoff = false
 		resp, err := stream(guard.on, guard.onReason)
 		if err == nil {
 			// The accumulators join every raw delta — including inlined
@@ -63,6 +65,17 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onRea
 		lastErr = err
 		if guard.delivered || ctx.Err() != nil || !retryable(err) {
 			break
+		}
+		// A dead link is not a failed attempt: wait for it and replay at once
+		// (offline.go). Nothing has been shown to the user (guard.delivered is
+		// false), so the replay cannot duplicate text.
+		waited, werr := c.awaitNetwork(ctx, err)
+		if werr != nil {
+			return Response{}, werr
+		}
+		if waited {
+			attempt--        // the outage costs no retry attempt
+			noBackoff = true // ...nor an extra backoff before the replay
 		}
 	}
 	return Response{}, lastErr

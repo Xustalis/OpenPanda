@@ -1299,6 +1299,14 @@ const (
 	// error class (entry.ErrKind*). Without it a rate-limited provider sits
 	// behind a motionless spinner for the whole retry ladder.
 	ProgressRetry ProgressKind = "retry"
+	// ProgressOffline is emitted while the offline gate (entry/offline.go)
+	// waits for a lost link: Detail is "waiting" on entering the wait and
+	// "resumed" once the network answered again, Delay how long the outage
+	// lasted, Name the model whose call stalled. It is a separate kind from
+	// ProgressRetry on purpose — "the link is down" and "the provider failed"
+	// are different problems, and a surface that shows the second for the
+	// first sends the user to the wrong page.
+	ProgressOffline ProgressKind = "offline"
 )
 
 // Progress is one structured progress event: the action, and the name of what
@@ -1318,12 +1326,14 @@ type Progress struct {
 	// Detail qualifies the milestone without a locale: for a spawn it is
 	// the parallel-mode descriptor — "isolated" for a private-copy child,
 	// the comma-joined lane paths for a scoped one, "" for the default
-	// whole-project claim. Renderers phrase it in their own language.
+	// whole-project claim; for an offline milestone it is "waiting" or
+	// "resumed". Renderers phrase it in their own language.
 	Detail string
 	// Retry fields, valid when Kind == ProgressRetry: Attempt/MaxAttempt are
 	// the retry's position inside the call's budget, Delay the backoff about
 	// to be slept, Status the provider's HTTP answer (0 on transport failure),
-	// Reason the entry.ErrKind* class.
+	// Reason the entry.ErrKind* class. Delay doubles as the outage's length on
+	// a resumed ProgressOffline.
 	Attempt    int
 	MaxAttempt int
 	Delay      time.Duration
@@ -1397,8 +1407,26 @@ func StatusText(p Progress) string {
 		}
 		return fmt.Sprintf("model call failed (%s) — retrying in %ds · %d/%d",
 			reason, int(p.Delay.Seconds()), p.Attempt, p.MaxAttempt)
+	case ProgressOffline:
+		// The link, not the provider: phrase it as something being waited
+		// out, never as a failure the user has to act on.
+		if p.Detail == "resumed" {
+			return fmt.Sprintf("network restored after %ds — replaying the model call%s",
+				int(p.Delay.Seconds()), modelNote(p))
+		}
+		return fmt.Sprintf("network unreachable — waiting for it to come back, then replaying automatically%s",
+			modelNote(p))
 	}
 	return p.Name
+}
+
+// modelNote renders the "(model)" tail a progress line carries when the event
+// names one, and "" otherwise.
+func modelNote(p Progress) string {
+	if p.Name == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (%s)", p.Name)
 }
 
 // Ask runs one prompt through the unified entry model. A tool_call intent is
@@ -1509,6 +1537,20 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			Attempt: n.Attempt, MaxAttempt: n.MaxAttempts,
 			Delay: n.Delay, Status: status, Reason: kind,
 		})
+	})
+	// The offline gate reports on its own channel: "the link is down, waiting
+	// for it" is not a retry milestone, and a surface that folded the two
+	// together would blame the provider for the user's Wi-Fi.
+	ctx = entry.WithOfflineHook(ctx, func(n entry.OfflineNote) {
+		name := ""
+		if c := client; c != nil {
+			name = c.ModelName()
+		}
+		detail := "waiting"
+		if !n.Waiting {
+			detail = "resumed"
+		}
+		cb.progress(Progress{Kind: ProgressOffline, Name: name, Detail: detail, Delay: n.Elapsed})
 	})
 
 	// The reply locale is resolved up here rather than next to the classifier

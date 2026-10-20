@@ -139,6 +139,30 @@ type Client struct {
 	// extraHeaders are user-supplied HTTP headers attached to every request
 	// (config.ModelConfig.Headers); they never replace built-in auth headers.
 	extraHeaders map[string]string
+
+	// offlineWait arms the offline gate (offline.go): a transport failure on
+	// an endpoint that needs the internet waits for the link to come back
+	// instead of spending the retry ladder on a dead route. model.offline_wait
+	// turns it off.
+	offlineWait bool
+	// localEndpoint marks an endpoint that needs no internet (Ollama on
+	// loopback, a LAN model box): waiting for the public network on its
+	// behalf would be pointless, so the gate stays disarmed.
+	localEndpoint bool
+	// offlineTarget is the host:port the gate dials — the endpoint, or the
+	// proxy in front of it (probeTargetFor).
+	offlineTarget string
+	// localProxy marks a client whose probe target is a proxy on this
+	// machine or the LAN: dialing it proves only that the proxy is
+	// listening, so it is no evidence about the endpoint (offline.go).
+	localProxy bool
+	// offlineEvery overrides the gate's poll cadence (tests shorten it).
+	offlineEvery time.Duration
+	// probe and anchor are the gate's two probes; nil means the real network
+	// ones. Fields rather than package globals so a test can simulate an
+	// outage without touching the machine's actual link.
+	probe  func(ctx context.Context, addr string, timeout time.Duration) error
+	anchor func(ctx context.Context) bool
 }
 
 // ResolveContextWindow resolves the advertised context window (tokens) a
@@ -299,6 +323,11 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		}
 	}
 	c.promptCache.Store(true)
+	// The offline gate dials what the call actually has to reach: the
+	// endpoint, or the proxy standing in front of it (offline.go).
+	c.offlineTarget, c.localProxy = probeTargetFor(base)
+	c.localEndpoint = IsLocalEndpoint(base)
+	c.offlineWait = resolveOfflineWait(model.OfflineWait)
 	if hasProvider {
 		c.provider = p.ID
 		c.noAuth = p.NoAuth
@@ -858,13 +887,15 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 	var lastErr error
 	probed := false
 	thinkingProbed := false
+	noBackoff := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
-		if attempt > 0 {
+		if attempt > 0 && !noBackoff {
 			notifyRetry(ctx, attempt, c.maxRetry, c.retryDelay(attempt), lastErr)
 			if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
 				return Response{}, err
 			}
 		}
+		noBackoff = false
 		resp, err := c.completeOnceOpenAI(ctx, system, msgs, tools)
 		if err == nil {
 			return resp, nil
@@ -885,6 +916,16 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 		}
 		if !retryable(err) {
 			return Response{}, err
+		}
+		// A dead link is not a failed attempt: wait for it and replay at once
+		// (offline.go). The caller's cancellation surfaces from here.
+		waited, werr := c.awaitNetwork(ctx, err)
+		if werr != nil {
+			return Response{}, werr
+		}
+		if waited {
+			attempt--        // the outage costs no retry attempt
+			noBackoff = true // ...nor an extra backoff before the replay
 		}
 	}
 	return Response{}, lastErr
@@ -1050,13 +1091,15 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 	var lastErr error
 	probed := false
 	thinkingProbed := false
+	noBackoff := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
-		if attempt > 0 {
+		if attempt > 0 && !noBackoff {
 			notifyRetry(ctx, attempt, c.maxRetry, c.retryDelay(attempt), lastErr)
 			if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
 				return Response{}, err
 			}
 		}
+		noBackoff = false
 		resp, err := c.completeOnce(ctx, req)
 		if err == nil {
 			return resp, nil
@@ -1077,6 +1120,16 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 		}
 		if !retryable(err) {
 			break
+		}
+		// A dead link is not a failed attempt: wait for it and replay at once
+		// (offline.go). The caller's cancellation surfaces from here.
+		waited, werr := c.awaitNetwork(ctx, err)
+		if werr != nil {
+			return Response{}, werr
+		}
+		if waited {
+			attempt--        // the outage costs no retry attempt
+			noBackoff = true // ...nor an extra backoff before the replay
 		}
 	}
 	return Response{}, lastErr

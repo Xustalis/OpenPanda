@@ -351,6 +351,8 @@ const en: Messages = {
   'sessions.spawn.isolated': 'Spawning sub-agent {name} (isolated copy, merges back)…',
   'sessions.spawn.scoped': 'Spawning sub-agent {name} (scope: {paths})…',
   'sessions.retry.transport': 'connection failed',
+  'sessions.offline.waiting': 'Network unreachable — watching the connection, the call resumes automatically when it returns',
+  'sessions.offline.resumed': 'Network restored after {delay}s — resuming the model call',
 
   'err.hints.title': 'Troubleshooting',
   'err.hints.detail': 'Provider detail: {detail}',

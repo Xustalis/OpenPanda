@@ -344,6 +344,8 @@ const zhCN: Messages = {
   'sessions.spawn.isolated': '正在派生子智能体 {name}（隔离副本，完成后合并回主树）…',
   'sessions.spawn.scoped': '正在派生子智能体 {name}（范围：{paths}）…',
   'sessions.retry.transport': '连接失败',
+  'sessions.offline.waiting': '网络连接失败 —— 正在持续检测网络，恢复后自动重试',
+  'sessions.offline.resumed': '网络已恢复（等待 {delay} 秒）——继续执行',
 
   'err.hints.title': '排查方法',
   'err.hints.detail': '服务商返回：{detail}',

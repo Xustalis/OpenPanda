@@ -932,6 +932,14 @@ type ModelConfig struct {
 	// (5); a negative value disables retries entirely — useful for
 	// deterministic endpoints where a replay would mask a fault.
 	MaxRetries int `yaml:"max_retries,omitempty"`
+	// OfflineWait arms the offline gate: when the endpoint needs the
+	// internet and the machine loses it, the call waits — probing until the
+	// link returns, then replaying — instead of spending its retry budget on
+	// a dead route in a few seconds. Unset means on; false restores the old
+	// fail-fast behaviour (one ladder, then the error). Endpoints that need
+	// no internet (a local model on loopback or the LAN) are exempt either
+	// way, and the wait is bounded by the caller's cancellation, not a timer.
+	OfflineWait *bool `yaml:"offline_wait,omitempty"`
 	// Params are extra request-body fields merged into every call — the
 	// escape hatch for relay-specific knobs a first-class field does not
 	// cover (temperature, top_p, enable_search, …). Top-level fields win
