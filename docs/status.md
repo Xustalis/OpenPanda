@@ -200,6 +200,12 @@ NAT）打不通时需要 TURN 式中继兜底；contact-plan 预约窗口投递�
 
 ## 下一步
 
+版本语义已于 2026-10-21 更新（README 五语同步）：**v0.0.x 打磨内核，
+确保功能可用；v0.1.x 特化为真正替你做事的助理；v0.2.x 自进化、
+自迭代**。下列清单按时代归组。
+
+### v0.0.x · 内核打磨（当前）
+
 1. **三设备真机 lab 首轮已还账**（v0.0.11-preview：macOS ↔ Windows ↔ Linux SBC
    实机委派、执行中杀节点、断线重连、消息重放、两跳流水线）；剩余欠账：
    项目包跨设备全链路（记忆内联 + 产出收回）、全新设备的 LAN 发现→指纹
@@ -217,8 +223,30 @@ NAT）打不通时需要 TURN 式中继兜底；contact-plan 预约窗口投递�
    两档的行为、签名 `task_accept` 与信誉路由需在真实多机上过一轮再谈
    转正；会话树/自动压缩/`panda rpc`/订阅 OAuth 已随 v0.0.10 合入
    （Experimental），真实模型与真实订阅的验证仍欠一轮。
-6. i18n 收尾、链路度量带宽/丢包维度、对称 NAT 的 TURN 式中继兜底，按需排期。
-7. 任务间消息板收尾：真实三设备互发验证；MCP 主动拉板与 webui 板视图；
-   通信效率遥测（消息数/陈旧率/预算命中率）。再往上是 **scout→plan 两阶段
-   协议**（先探测代码库、拿报告再动态拆解派发）——消息板是它的通信基座，
-   拆解协议本身仍待设计（见 `docs/plans/design-task-message-board.md` §8）。
+6. i18n 收尾、链路度量带宽/丢包维度，按需排期；记忆加固开关——external
+   来源提升的整体禁用配置（约半天工程量）。
+
+### v0.1.x · 助理特化
+
+7. 桌面薄壳：托盘常驻、全局热键、原生通知、自更新、三平台安装包与
+   macOS 公证（技术选型倾向 Wails，复用 `webui/app` + `webui/panel` +
+   `internal/updater`）——详见 `docs/plans/roadmap-desktop-and-packaging.md`
+   Stage 3。
+8. 织密网一层：**scout→plan 两阶段协议**（先探测代码库、拿报告再动态
+   拆解派发）——消息板是它的通信基座，拆解协议本身仍待设计（见
+   `docs/plans/design-task-message-board.md` §8）；对称 NAT 的 TURN 式
+   中继兜底与 contact-plan 预约窗口投递；消息板欠账（真实三设备互发、
+   MCP 主动拉板、webui 板视图、通信效率遥测——消息数/陈旧率/预算命中率）。
+9. 「在场」最小诚实版：`UNRESOLVED.md` 未解决清单 × dream 周期碰撞窗口
+   × 开口权——提案只进队列/面板提案区，沉默是默认态，开口是例外。
+10. 可商用边界声明：P2-8 / 审批门污点追踪 / P2-9 若延后，须在 release
+    notes 如实写边界——可商用 ≠ 无限制，是「边界写清楚的可用」。
+
+### v0.2.x · 自进化（前置先行）
+
+11. **设计稿先行，不动工**：自进化 × 签名更新通道的共存架构——updater
+    的 verify→swap 管线与 self-build 的 build→gate→swap 管线必须在架构上
+    共存（fail-closed 验签与自修改产物天然互斥）；node-signed self-build
+    作为第三类 provenance；`self_evolution.mode`（off → propose → auto）；
+    永远保留最近一份 release 签名二进制作兜底。设计稿（内部，
+    `docs/author/` 本地档）：`docs/author/2026-10-21-design-self-evolution.md`。
