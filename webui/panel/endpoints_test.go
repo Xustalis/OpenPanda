@@ -562,6 +562,7 @@ func TestModelSettingsTestEndpoint(t *testing.T) {
 }
 
 func TestModelSettingsToConfigMerge(t *testing.T) {
+	offlineOff := false
 	cur := config.ModelConfig{
 		Provider:       "minimax",
 		Name:           "mm",
@@ -574,6 +575,7 @@ func TestModelSettingsToConfigMerge(t *testing.T) {
 		Thinking:       "on",
 		ThinkingBudget: 8192,
 		MaxRetries:     3,
+		OfflineWait:    &offlineOff,
 		NoAuth:         true,
 		Auth:           "bearer",
 		Params:         map[string]any{"temperature": 0.5},
@@ -588,6 +590,11 @@ func TestModelSettingsToConfigMerge(t *testing.T) {
 	}
 	if got.Thinking != "on" || got.ThinkingBudget != 8192 || got.ContextWindow != 1000000 || got.MaxRetries != 3 || !got.NoAuth {
 		t.Fatalf("sparse save wiped tuning fields: %+v", got)
+	}
+	// The gateway has no form control: a save must not re-arm what the YAML
+	// turned off.
+	if got.OfflineWait == nil || *got.OfflineWait {
+		t.Fatalf("sparse save re-armed the offline gate: %+v", got.OfflineWait)
 	}
 	if got.APIType != "openai" {
 		t.Fatalf("api_type not applied: %+v", got)

@@ -54,6 +54,10 @@ func modelSettingsToConfig(req modelSettingsJSON, cur config.ModelConfig) config
 		Auth:          cur.Auth,
 		Params:        cur.Params,
 		Headers:       cur.Headers,
+		// The form has no switch for the offline gate, so it rides along
+		// untouched — a save must not silently re-arm a knob the user turned
+		// off in the YAML.
+		OfflineWait: cur.OfflineWait,
 	}
 	switch strings.ToLower(strings.TrimSpace(req.Thinking)) {
 	case "on", "off":
