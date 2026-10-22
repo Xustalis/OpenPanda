@@ -1669,6 +1669,20 @@ export const api = {
     for (const f of files) body.append('file', f, f.name)
     return upload('POST', `/api/sessions/${encodeURIComponent(id)}/upload`, body)
   },
+
+  /** Dictation: one recorded clip to the node's speech-to-text endpoint. The
+   *  clip carries no filename — MediaRecorder blobs never have one — so the
+   *  part's Content-Type is what names the container. A failure here is the
+   *  vendor's own sentence (bad model, unsupported format) and is shown as-is. */
+  transcribeAudio(clip: Blob): Promise<{ text: string }> {
+    const body = new FormData()
+    const ext = clip.type.includes('ogg') ? 'ogg'
+      : clip.type.includes('mp4') ? 'mp4'
+        : clip.type.includes('wav') ? 'wav'
+          : 'webm'
+    body.append('audio', clip, `dictation.${ext}`)
+    return upload('POST', '/api/voice/transcribe', body)
+  },
 }
 
 // ---- Multi-model registry wire types ----

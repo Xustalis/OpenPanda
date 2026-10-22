@@ -46,6 +46,7 @@ export type IconName =
   | 'list-checks'
   | 'menu'
   | 'message'
+  | 'mic'
   | 'more-horizontal'
   | 'network'
   | 'orbit'
@@ -278,6 +279,13 @@ const paths: Record<IconName, JSX.Element> = {
     </>
   ),
   message: <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />,
+  mic: (
+    <>
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <path d="M12 19v3" />
+    </>
+  ),
   'more-horizontal': (
     <>
       <circle cx="12" cy="12" r="1" />

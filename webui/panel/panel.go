@@ -203,6 +203,9 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("DELETE /api/models/{alias}", h.removeModel)
 	mux.HandleFunc("POST /api/models/fetch", h.fetchModels)
 	mux.HandleFunc("POST /api/models/test", h.testModel)
+	// Dictation: the composer records in the browser and this relays the clip
+	// to an OpenAI-compatible /audio/transcriptions endpoint (see voice.go).
+	mux.HandleFunc("POST /api/voice/transcribe", h.transcribeAudio)
 	// `/doctor`, `/context`, `/cost` and `/read` parity endpoints.
 	mux.HandleFunc("GET /api/onboarding", h.getOnboarding)
 	mux.HandleFunc("POST /api/onboarding", h.postOnboarding)

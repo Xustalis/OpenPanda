@@ -3303,6 +3303,170 @@
 .model-select-btn.open .model-select-arrow {
   color: var(--text-secondary);
 }
+/* ---- Dictation (voice-input.tsx) ----------------------------------------
+   A ghost icon button in the gap between the model switch and Send. It is the
+   switch's own 32px height so the row keeps one baseline, and it stays grey
+   until it is actually listening: a microphone that is always tinted reads as
+   a badge on the composer rather than a control. */
+/* The wrapper exists only to anchor the live card: the card has to hang off
+   the button, and the button itself cannot be its own containing block without
+   also being the thing the ring animates. */
+.voice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.voice-input {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+/* Hover is scoped away from the listening state: `:hover` out-specifies a
+   plain `.on`, and the pointer is still resting on the button right after the
+   click that started the take — without this the red never appears at the one
+   moment it is the whole point. */
+.voice-input:hover:not(:disabled):not(.on) {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.voice-input:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Listening. The ring is the signal and the red is the reinforcement, not the
+   other way round: a state carried by hue alone is invisible to some readers,
+   and the ring is a shape. It expands past the button, so the button keeps a
+   stacking context of its own — without it the ring paints under the row. */
+.voice-input.on {
+  position: relative;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.voice-input.on::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  pointer-events: none;
+  animation: voice-pulse 1.4s var(--ease) infinite;
+}
+@keyframes voice-pulse {
+  0% {
+    opacity: 0.65;
+    transform: scale(1);
+  }
+  70% {
+    opacity: 0;
+    transform: scale(1.22);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.22);
+  }
+}
+/* Transcribing: the clip is on its way to the vendor and the answer is a few
+   seconds out, so the glyph becomes a spinner rather than the button going
+   blank. */
+.voice-spin {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--border-soft);
+  border-top-color: var(--text-secondary);
+  animation: voice-spin 0.8s linear infinite;
+}
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* The live card: what the microphone is hearing, while it is hearing it. It
+   hangs off the button (upward — the composer is docked to the pane's bottom)
+   and never takes the pointer, so a press that lands on it still reaches the
+   box underneath. */
+.voice-live {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: -6px;
+  z-index: 30;
+  width: min(320px, calc(100vw - 32px));
+  padding: 10px 12px 11px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  transform-origin: bottom right;
+  animation: model-panel-in 150ms var(--ease-enter);
+}
+.voice-live-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+/* A dot, because "is it on?" is the one question this card answers before any
+   word has arrived. Grey while transcribing — the microphone is closed by
+   then, and a red dot would say otherwise. */
+.voice-live-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.voice-live-dot.on {
+  background: var(--danger);
+  animation: voice-dot 1.2s var(--ease) infinite;
+}
+@keyframes voice-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.voice-live-clock {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.voice-live-hint {
+  /* Pushed off the clock so a growing take does not shift the label. */
+  margin-left: auto;
+}
+.voice-live-text {
+  margin: 8px 0 0;
+  /* Six lines: enough for a spoken sentence, short enough that the card never
+     grows over the transcript it is covering. The text is the *tail* of the
+     take, so what falls off is the oldest thing said. */
+  max-height: 8.4em;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--text-md);
+  line-height: 1.4;
+  word-break: break-word;
+}
+.voice-live-text.dim {
+  color: var(--text-tertiary);
+}
 /* The card opens *upward* from the button: the composer is docked to the
    bottom of the pane, so a downward card would hang off the viewport. Right
    edge, not centre — the button is the last control before Send. */

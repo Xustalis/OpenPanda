@@ -42,6 +42,7 @@ import { sortSessions, turnsChanged } from '../components/session-list'
 import { splitReportHead } from '../components/report-head'
 import {
   prettyAgent,
+  roundStillOpen,
   speakerOf,
   stripRefId,
   trailingRunSummary,
@@ -61,6 +62,7 @@ import { ComposerPet } from '../components/composer-pet'
 import { OrchestrateCard } from '../components/orchestrate'
 import { DirButton } from '../components/dir-picker'
 import { ModelSelect } from '../components/model-select'
+import { VoiceInput } from '../components/voice-input'
 import { suggestProjectName } from '../components/dir-utils'
 import { EventTimeline } from '../components/event-timeline'
 import { acquireKeepAlive } from '../utils/keepalive'
@@ -172,6 +174,43 @@ function editorTextWalker(el: HTMLElement): TreeWalker {
  *  a hand-built Range insertion does not. */
 function editorInsertText(text: string): void {
   document.execCommand('insertText', false, text)
+}
+
+/** Is the document's selection inside `el`? Every caret read assumes it is:
+ *  `editorCaretOffset` builds a Range anchored in the editor, and a selection
+ *  parked elsewhere (a button that took the focus, a panel that opened) makes
+ *  that Range throw instead of answering. */
+function caretInside(el: HTMLElement): boolean {
+  const sel = el.ownerDocument.getSelection()
+  if (!sel || sel.rangeCount === 0) return false
+  return el.contains(sel.getRangeAt(0).startContainer)
+}
+
+/** Park the caret at the end of the editor — where a re-focused box lands when
+ *  there is no remembered selection to restore. */
+function caretToEnd(el: HTMLElement): void {
+  const rg = el.ownerDocument.createRange()
+  rg.selectNodeContents(el)
+  rg.collapse(false)
+  const sel = el.ownerDocument.getSelection()
+  if (!sel) return
+  sel.removeAllRanges()
+  sel.addRange(rg)
+}
+
+/** Drop plain text in at the caret of a contenteditable composer. Shared by
+ *  both composers (the thread's and the map's), because a dictated phrase has
+ *  to land the same way in either: the box may have lost its selection to the
+ *  button that started the dictation, so the caret is re-established first,
+ *  and a space is added when it sits at the end of a word — two phrases in a
+ *  row must not arrive welded together. */
+export function insertTextAtCaret(el: HTMLElement, text: string): void {
+  el.focus()
+  if (!caretInside(el)) caretToEnd(el)
+  const plain = editorTextOf(el)
+  const at = editorCaretOffset(el)
+  const needsSpace = at > 0 && !/\s/.test(plain.charAt(at - 1))
+  editorInsertText(needsSpace ? ` ${text}` : text)
 }
 
 /** A pill's markup. It has to be a raw string rather than the <Icon>
@@ -1924,6 +1963,18 @@ export function SessionsView({
     })
   }
 
+  /** A dictated phrase lands where the caret was, like typing does. */
+  function insertDictation(text: string): void {
+    const el = composer.current
+    if (!el) return
+    insertTextAtCaret(el, text)
+    requestAnimationFrame(() => {
+      setInput(editorTextOf(el))
+      setCaret(editorCaretOffset(el))
+      autoGrow(el)
+    })
+  }
+
   /** `/cmd args` typed straight into the box and submitted: run the matching
    *  chat command instead of sending it as a prompt (the REPL's rule — a
    *  slash line is a command, never a question). Returns false when nothing
@@ -1957,7 +2008,17 @@ export function SessionsView({
   // reported, and nothing has been said since. Derived from the turns already
   // on screen (see `trailingRunSummary`) — nothing new is written to the
   // transcript, so the model's own history is untouched.
-  const runSummary = busy ? null : trailingRunSummary(msgs)
+  //
+  // "Over" is the whole batch, not the first report: the finalizer files one
+  // turn per task as each settles, so closing on the last turn alone would
+  // print "本轮工作已全部完成" while a colleague was still running — and then
+  // rewrite the roll-up every time another one landed. The task board is the
+  // only place that knows the batch (see `useRoundOpen`).
+  const roundOpen = useRoundOpen(
+    activeId,
+    msgs.some((m) => m.kind === 'task' || m.kind === 'plan'),
+  )
+  const runSummary = busy || roundOpen ? null : trailingRunSummary(msgs)
 
   return (
     <section class="chat">
@@ -2632,6 +2693,11 @@ export function SessionsView({
                   is the one more thing that decision wants asked. WorkBuddy's
                   composer puts its model selector in the same slot. */}
               <ModelSelect disabled={busy} />
+              {/* Dictation sits between the two: it feeds the same box Send is
+                  about to take, so it belongs to the sending half of the row,
+                  and putting it on the far side of the model name would break
+                  the pair that reads as "how this turn will be answered". */}
+              <VoiceInput onText={insertDictation} />
               {busy ? (
                 // While a reply streams, the primary action is stopping it —
                 // a disabled "Thinking…" button leaves no way out of a bad ask.
@@ -3150,9 +3216,9 @@ function ChatBubble(props: {
         {/* — the head: who is talking, what they are doing here, and when.
               The duration used to sit above the reply as a caption with a
               hairline under it; in a chat it belongs beside the clock.
-              Your own row keeps only the clock: the face on the right and the
-              side of the column already say who it is, and a name beside them
-              would be saying it a third time. */}
+              Your own row keeps only the clock: the right side of the column
+              already says who it is, and a face of your own beside it would be
+              saying it a second time. */}
         <div class="msg-head">
           {speaker.who !== 'user' && (
             <>
@@ -3229,17 +3295,25 @@ function ChatBubble(props: {
               <TaskApproval taskId={msg.ref} />
               {msg.result?.report && <Markdown text={msg.result.report} class="task-report" />}
               {msg.result?.stdout && <TaskOutput text={msg.result.stdout} />}
-              <button class="btn small chain-toggle" onClick={() => setChainOpen((v) => !v)}>
-                {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
-              </button>
+              {/* One quiet row of controls: open the chain, talk to the
+                  employee, jump into the task. As three stacked children of
+                  the card's column they read as a form — a chip-shaped toggle
+                  above a full-width centred button — instead of what they
+                  are, three links about the same job. */}
+              <div class="task-card-actions">
+                <button class="chain-toggle" onClick={() => setChainOpen((v) => !v)}>
+                  {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
+                </button>
+                <TaskQuickSend taskId={msg.ref} />
+                <a
+                  class="task-card-open"
+                  href={`#/task/${encodeURIComponent(msg.ref)}`}
+                  onClick={(e) => inPlaceTaskClick(e, msg.ref!, onOpenTask)}
+                >
+                  {t('sessions.viewTask')} →
+                </a>
+              </div>
               {chainOpen && <TaskChain taskId={msg.ref} />}
-              <TaskQuickSend taskId={msg.ref} />
-              <a
-                href={`#/task/${encodeURIComponent(msg.ref)}`}
-                onClick={(e) => inPlaceTaskClick(e, msg.ref!, onOpenTask)}
-              >
-                {t('sessions.viewTask')} →
-              </a>
             </div>
           )}
 
@@ -3318,7 +3392,6 @@ function ChatBubble(props: {
           </div>
         )}
       </div>
-      {speaker.who === 'user' && <ChatAvatar speaker={speaker} />}
     </div>
   )
 }
@@ -3342,6 +3415,29 @@ function ChatTurn(props: {
       {task && <TaskProgress task={task} />}
     </>
   )
+}
+
+/** Whether the thread's round still has work in flight.
+ *
+ *  The roll-up under the transcript says "本轮工作已全部完成", so it may only
+ *  appear once every task this thread dispatched has settled. The turns alone
+ *  cannot answer that — the finalizer files one report per task as each one
+ *  lands, so the newest turn is a finished employee while its colleagues are
+ *  still running (see `roundStillOpen`). The task board knows the batch, so
+ *  it is read here and re-read on every change frame. Only a thread that
+ *  dispatched something pays for the read. */
+function useRoundOpen(sessionId: string | null, enabled: boolean): boolean {
+  const change = useChangeSignal()
+  const { data } = useAsync<Task[] | null>(
+    () =>
+      enabled && sessionId
+        ? api.tasks({ session: sessionId }).catch(() => null)
+        : Promise.resolve(null),
+    [sessionId, enabled],
+    change,
+  )
+  if (!enabled || !data) return false
+  return roundStillOpen(data.map((task) => task.state))
 }
 
 /** The panda's closing line for a round that just finished.
