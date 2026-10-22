@@ -25,7 +25,10 @@
 /* A selected device's card is wider than the fleet list (it carries facts,
    agents and history), so the lane the composer keeps clear follows it. */
 .ws-page.panel-open.detail-open {
-  --panel-lane: 450px;
+  /* Same lane as the fleet list and the orchestration card: the three cards
+     that hang off this corner are one family, and switching between them must
+     not resize the composer underneath. */
+  --panel-lane: 380px;
 }
 /* The pane owns its edges (like the chat): the map bleeds to the window. */
 .main:has(> .ws-page) {
@@ -69,34 +72,16 @@
    glyph + name pairs on one quiet line, no group labels. The two line styles
    need no entry — an edge names itself in its own tooltip — so the map has no
    footer at all and the pane belongs to the drawing. */
-.ws-legend {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 3px 13px;
-  margin-left: 8px;
+/* The fleet in two numbers: how many machines, how many of them are up. */
+.ws-count {
+  margin-left: 10px;
   min-width: 0;
   font-size: var(--text-xs);
+  letter-spacing: 0.04em;
   color: var(--text-tertiary);
   white-space: nowrap;
-}
-.ws-legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.ws-legend-item svg {
-  width: 15px;
-  height: 15px;
-  flex: none;
-  color: var(--text-tertiary);
-  fill: none;
-  stroke: currentColor;
-  /* Heavier than the 1.7 it carried as a footer: at 15px that weight
-     dissolved the dashed VM and unknown plates into grey smudge. */
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 @media (max-width: 860px) {
   /* Six names do not fit beside a title on a narrow pane; the plates carry
@@ -162,117 +147,10 @@
   min-height: 0;
   overflow: hidden;
 }
-.ws-canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-  user-select: none;
-  touch-action: none;
-}
-.ws-bg {
-  fill: transparent;
-  cursor: grab;
-}
-.ws-map.panning .ws-bg {
-  cursor: grabbing;
-}
 .ws-empty {
   margin: 0;
   padding: 40px 16px;
   text-align: center;
-}
-
-/* — Edges. A mesh link is the routing graph's own edge: solid. A one-sided
-   measurement is dashed — live, but only this console can see it. */
-.ws-edge {
-  fill: none;
-  stroke: var(--text-tertiary);
-  stroke-width: 1.4;
-  stroke-linecap: round;
-  opacity: 0.75;
-  transition:
-    stroke var(--dur-fast) var(--ease),
-    opacity var(--dur-fast) var(--ease);
-}
-.ws-edge-measured {
-  stroke-dasharray: 4 4;
-  opacity: 0.55;
-}
-.ws-edge-hit {
-  fill: none;
-  stroke: transparent;
-  stroke-width: 14;
-  pointer-events: stroke;
-}
-.ws-edge-g.dim {
-  opacity: 0.2;
-}
-.ws-edge-g.lit .ws-edge {
-  stroke: var(--accent);
-  opacity: 1;
-  filter: url(#ws-edge-glow);
-}
-
-/* — Nodes: a plate per device, the glyph inside, the name under it. */
-.ws-node {
-  cursor: pointer;
-  color: var(--text-secondary);
-  transition: opacity var(--dur-fast) var(--ease);
-}
-.ws-node.dim {
-  opacity: 0.3;
-}
-.ws-plate {
-  fill: var(--bg-raised);
-  stroke: var(--border);
-  stroke-width: 1.1;
-  transition:
-    stroke var(--dur-fast) var(--ease),
-    fill var(--dur-fast) var(--ease);
-}
-.ws-node:hover .ws-plate {
-  stroke: var(--border-strong);
-}
-.ws-node.self .ws-plate {
-  fill: var(--accent-soft);
-  stroke: var(--accent-border);
-}
-.ws-node.sel .ws-plate {
-  stroke: var(--accent);
-  stroke-width: 1.5;
-}
-.ws-node.off .ws-plate {
-  fill: var(--bg-inset);
-  stroke-dasharray: 3.5 3;
-  color: var(--text-disabled);
-}
-.ws-halo {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1;
-  opacity: 0.4;
-}
-.ws-glyph {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.ws-node.self .ws-glyph,
-.ws-node:hover .ws-glyph {
-  color: var(--text);
-}
-.ws-status {
-  fill: var(--good);
-  stroke: var(--bg-raised);
-  stroke-width: 1.5;
-}
-/* Holding a work slot: amber, and breathing, because "this machine is busy
-   right now" is the one fact that changes minute to minute. */
-.ws-status.busy {
-  fill: var(--warn);
-  animation: ws-busy-pulse 2.2s var(--ease) infinite;
 }
 @keyframes ws-busy-pulse {
   0%,
@@ -288,88 +166,6 @@
     animation: none;
   }
 }
-.ws-node.off .ws-status {
-  fill: var(--text-disabled);
-}
-.ws-name {
-  font-size: 11px;
-  font-weight: 500;
-  fill: var(--text);
-}
-.ws-node.off .ws-name {
-  fill: var(--text-tertiary);
-}
-.ws-os {
-  font-size: 9.5px;
-  fill: var(--text-tertiary);
-}
-.ws-tag {
-  font-size: 8px;
-  letter-spacing: 0.06em;
-  fill: var(--text-tertiary);
-}
-
-/* — A node's report. The bubble hanging off a plate: what that machine is
-   doing, or what it handed back when it finished. HTML over the canvas for the
-   same reason the hover card is — a report has to stay readable at 0.5× and
-   not become a billboard at 3× — and anchored to the plate's projected
-   position so it travels with the fleet. One column per device, oldest line on
-   top (the pipeline overview), the node's own report closest to the plate. */
-.ws-says {
-  position: absolute;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 190px;
-  transform: translate(-50%, -100%);
-  pointer-events: none;
-  transition: opacity var(--dur-fast) var(--ease-enter);
-}
-.ws-says.below {
-  transform: translate(-50%, 0);
-}
-.ws-says.dim {
-  opacity: 0.4;
-}
-/* The tail sits on the column's own edge, which is the last bubble's edge —
-   one tail per plate, pointing at the machine that said it. */
-.ws-says::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: -4px;
-  width: 8px;
-  height: 8px;
-  transform: translateX(-50%) rotate(45deg);
-  border-right: 1px solid var(--border-soft);
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-overlay);
-}
-.ws-says.below::after {
-  top: -4px;
-  bottom: auto;
-  transform: translateX(-50%) rotate(225deg);
-}
-.ws-say {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  padding: 6px 9px 5px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
-  background: var(--bg-overlay);
-  box-shadow: var(--shadow-sm);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  pointer-events: auto;
-  animation: ws-say-in var(--dur-fast) var(--ease-enter);
-}
-.ws-say:hover {
-  border-color: var(--border);
-}
 @keyframes ws-say-in {
   from {
     opacity: 0;
@@ -380,84 +176,10 @@
     transform: none;
   }
 }
-.ws-say-body {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
-  font-size: var(--text-xs);
-  line-height: 1.38;
-  color: var(--text);
-}
-.ws-say-note {
-  overflow: hidden;
-  font-size: 10px;
-  line-height: 1.3;
-  color: var(--text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ws-say-meta {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 1px;
-  font-size: 10px;
-  line-height: 1.3;
-  color: var(--text-tertiary);
-}
-/* The dot is the tone: it is the only colour the bubble spends, so a glance at
-   the map says which machines came back clean and which did not. */
-.ws-say-meta::before {
-  content: '';
-  flex: none;
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--text-disabled);
-}
-.ws-say.run .ws-say-meta::before {
-  background: var(--warn);
-  animation: ws-say-pulse 1.6s ease-in-out infinite;
-}
-.ws-say.done .ws-say-meta::before {
-  background: var(--good);
-}
-.ws-say.review .ws-say-meta::before {
-  background: var(--warn);
-}
-.ws-say.fail .ws-say-meta::before {
-  background: var(--danger);
-}
-.ws-say.plan .ws-say-meta::before {
-  background: var(--accent);
-}
 @keyframes ws-say-pulse {
   50% {
     opacity: 0.35;
   }
-}
-
-/* — Hover card. HTML over the canvas rather than an SVG child: the map's own
-   type is 9–11px, so a card that scaled with the zoom would be unreadable at
-   0.5× and enormous at 3×. Fixed width (the component's PEEK_W), anchored to
-   the plate's projected position, never interactive — it must not eat the
-   click that opens the rail. */
-.ws-peek {
-  position: absolute;
-  z-index: 6;
-  width: 236px;
-  padding: 8px 11px 7px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
-  background: var(--bg-overlay);
-  box-shadow: var(--shadow-md);
-  transform: translate(-50%, -100%);
-  pointer-events: none;
-  animation: ws-peek-in var(--dur-fast) var(--ease-enter);
-}
-.ws-peek.below {
-  transform: translate(-50%, 0);
 }
 @keyframes ws-peek-in {
   from {
@@ -466,74 +188,6 @@
   to {
     opacity: 1;
   }
-}
-.ws-peek-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--text-xs);
-  line-height: 1.3;
-  color: var(--text-secondary);
-}
-.ws-peek-dot {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--good);
-}
-.ws-peek-dot.busy {
-  background: var(--warn);
-}
-.ws-peek-dot.off {
-  background: var(--text-disabled);
-}
-.ws-peek-tag {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--text-tertiary);
-}
-.ws-peek-name {
-  margin: 2px 0 0;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  line-height: 1.35;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ws-peek-spec {
-  margin: 1px 0 0;
-  font-size: var(--text-xs);
-  line-height: 1.35;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ws-peek-foot {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-top: 5px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border-soft);
-  font-size: 10.5px;
-  line-height: 1.3;
-  color: var(--text-tertiary);
-}
-.ws-peek-load {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.ws-peek-hint {
-  flex: none;
-  opacity: 0.85;
 }
 
 /* — Rail: the selected device's facts, then the fleet list. A card hanging off
@@ -563,8 +217,13 @@
    the drawing — taking a grid lane would re-lay every plate the moment a
    device was picked. */
 .ws-rail.detail {
-  width: min(430px, calc(100% - 40px));
-  max-height: min(76vh, 700px);
+  /* The same 360 as the fleet list and the orchestration card — one width for
+     every card on this corner, so swapping between them does not resize the
+     panel. It used to be 430 (wider than its neighbours, mostly air in the
+     two-up fact grid); 360 still fits the widest pair, wrapping the chip name
+     onto a second line instead. */
+  width: min(360px, calc(100% - 40px));
+  max-height: min(68vh, 600px);
 }
 .ws-rail.detail .ws-detail {
   margin-bottom: 0;
@@ -574,8 +233,8 @@
 .ws-detail {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 8px 8px 12px;
+  gap: 4px;
+  padding: 8px 8px 10px;
   margin-bottom: 4px;
   border-bottom: 1px solid var(--border-soft);
 }
@@ -640,9 +299,9 @@
 .ws-detail-sec {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  margin-top: 11px;
-  padding-top: 10px;
+  gap: 6px;
+  margin-top: 9px;
+  padding-top: 8px;
   border-top: 1px solid var(--border-soft);
 }
 .ws-detail-sec:first-of-type {
@@ -668,7 +327,7 @@
 .ws-facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 14px;
+  gap: 6px 12px;
   margin: 0;
 }
 .ws-fact {
@@ -696,10 +355,10 @@
 .ws-agent-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 .ws-agent {
-  padding: 6px 8px;
+  padding: 5px 7px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   background: var(--bg-inset);
@@ -1042,4 +701,369 @@
   padding: 10px 10px 12px;
   font-size: var(--text-xs);
   color: var(--text-tertiary);
+}
+
+/* ==========================================================================
+   设备面板视图 (v6)
+   The map was a topology: one plate per device on a ring, one line per live
+   adjacency. This view keeps the same data and answers a different question —
+   what is running where — as a panel per machine holding a tile per agent.
+   The pet stands on the tile that is holding work.
+   ========================================================================== */
+
+/* The grid can outgrow the pane (a fleet of five devices at 1280px is two
+   rows of panels), so this surface scrolls where the map panned. */
+.ws-map {
+  overflow: auto;
+  /* 44px of headroom: the pet stands on the first panel's top edge and hangs
+     36px above it, and this box is the thing that would clip her. */
+  padding: 44px 26px 30px;
+  /* Dot paper, the way the drawing on the desk was ruled: the pane is mostly
+     empty with one or two machines on it, and a ruled surface reads as canvas
+     where a blank one reads as a rendering failure. `local` keeps the dots
+     travelling with the panels when the fleet outgrows the pane. */
+  background-image: radial-gradient(circle at 1px 1px, var(--border-soft) 1px, transparent 0);
+  background-size: 22px 22px;
+  background-attachment: local;
+}
+
+.ws-panels {
+  position: relative;
+  min-height: 100%;
+}
+
+/* Panels are content-sized and wrap: a machine with four agents is a wider
+   card than one with two, the way the drawing on paper was. The flex row is
+   only the *first* layout — the component measures it and then pins every
+   card to absolute coordinates, so this box is also the frame those
+   coordinates are relative to. */
+.ws-panels-grid {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: flex-start;
+}
+
+/* — A panel is a machine. The tint is the form factor, the same six classes
+   the glyphs name; a peer that never said what it is stays neutral. */
+.ws-panel {
+  position: relative;
+  flex: 0 0 auto;
+  max-width: 100%;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-xs);
+  /* Grab, not pointer: the card is draggable, and a hand is the honest
+     cursor for a thing you can pick up and put down. A click still opens the
+     drawer — the press only becomes a drag after `DRAG_SLOP` of travel. */
+  cursor: grab;
+  user-select: none;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.ws-panel:active {
+  cursor: grabbing;
+}
+/* The floating copy. Fixed, so it rides the pointer instead of the grid, and
+   pointer-transparent so the press that started it keeps landing on the
+   window rather than on the card being carried. */
+.ws-panel.dragging {
+  z-index: 40;
+  pointer-events: none;
+  cursor: grabbing;
+  box-shadow: var(--shadow-lg);
+  transform: rotate(-0.6deg);
+  transition: none;
+}
+.ws-panels.is-dragging .ws-tile {
+  pointer-events: none;
+}
+.ws-panel:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.ws-panel.sel {
+  border-color: var(--accent);
+}
+.ws-panel.off {
+  opacity: 0.66;
+  border-style: dashed;
+  background: var(--bg-inset);
+}
+/* The tint rides on the raised surface rather than on the page: composited
+   straight onto the page the dark theme turns a panel into a coloured block. */
+.ws-panel[data-form='laptop'],
+.ws-panel[data-form='desktop'] {
+  background-color: var(--bg-raised);
+  background-image: linear-gradient(var(--semantic-good-soft), var(--semantic-good-soft));
+  border-color: var(--semantic-good-border);
+}
+.ws-panel[data-form='mini'] {
+  background-color: var(--bg-raised);
+  background-image: linear-gradient(var(--accent-2-soft), var(--accent-2-soft));
+  border-color: var(--accent-2-border);
+}
+.ws-panel[data-form='server'],
+.ws-panel[data-form='vm'] {
+  background-color: var(--bg-raised);
+  background-image: linear-gradient(var(--semantic-info-soft), var(--semantic-info-soft));
+  border-color: var(--semantic-info-border);
+}
+
+.ws-panel-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ws-panel-glyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+}
+.ws-panel-glyph svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ws-panel-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-panel-meta {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-panel-tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  font-size: 9.5px;
+  color: var(--text-secondary);
+}
+.ws-panel-load {
+  margin-left: auto;
+  flex: none;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.ws-panel-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--good);
+}
+.ws-panel-dot.off {
+  background: var(--text-disabled);
+}
+.ws-panel-dot.busy {
+  background: var(--warn);
+  animation: ws-busy-pulse 2.2s var(--ease) infinite;
+}
+.ws-panel-state {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+/* The shelf: the band between the header and the tiles is the line the pet
+   stands on. 44px is one panda tall. */
+.ws-panel-bays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 44px;
+}
+/* No agents, no shelf: the band exists to give the pet a line to stand on,
+   and there is nothing up there to stand on. */
+.ws-panel-bays.none {
+  margin-top: 12px;
+}
+.ws-panel-none {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* — A tile is an agent: the CLI's own mark, and whether it is working. */
+.ws-tile {
+  position: relative;
+  width: 86px;
+  height: 86px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition:
+    transform var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+.ws-tile[data-run='0'] {
+  opacity: 0.74;
+}
+.ws-tile:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
+  opacity: 1;
+}
+.ws-tile-plate {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 62px;
+  height: 62px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  background: var(--bg-inset);
+}
+/* The plate the artwork is drawn for, not a theme preference: near-black marks
+   need a light plate, near-white ones a dark plate. Same two colours the
+   roster avatars use, so an agent reads the same in both places and in both
+   themes. */
+.ws-tile-plate.plate-light {
+  background: #f4f4f1;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+.ws-tile-plate.plate-dark {
+  background: #121316;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.ws-tile-plate img {
+  display: block;
+  width: 34px;
+  height: 34px;
+}
+/* Behind the mark, for a CLI the bundle has no artwork for: the initial
+   carries the tile instead of an empty square. */
+.ws-tile-fb {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+.ws-tile-ring {
+  position: absolute;
+  inset: -1px;
+  border: 2.5px solid var(--warn);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 0 0 3px var(--warn-soft);
+  animation: ws-tile-ring 1.8s var(--ease) infinite;
+}
+@keyframes ws-tile-ring {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.ws-tile-dot {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-disabled);
+}
+
+/* — The pet. Same sprite as the composer's, drawn at 42px; the standing
+   frame's ink stops 36px into the box, which is the line its feet stand on.
+   Cream on paper needs the four hard shadows to hold an edge; on dark the
+   rim goes transparent instead. */
+:root {
+  --panda-rim: rgba(41, 41, 41, 0.32);
+}
+:root[data-theme='dark'] {
+  --panda-rim: transparent;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --panda-rim: transparent;
+  }
+}
+/* She stands on the local panel's top edge, in CSS: no script measures the
+   grid, so a re-flow moves her with the card she belongs to. 42px tall with
+   the standing frame's ink 36px in, hence `top: -36px` — feet on the border. */
+.ws-panel .ws-panda {
+  position: absolute;
+  left: 12px;
+  top: -36px;
+  z-index: 1;
+  width: 42px;
+  height: 42px;
+  pointer-events: none;
+}
+.ws-panda-sp {
+  display: block;
+  width: 42px;
+  height: 42px;
+  background-image: url('/panda-pet-sprites.png');
+  background-size: 252px 42px;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  image-rendering: pixelated;
+  transform-origin: 50% 86%;
+  filter: drop-shadow(1px 0 0 var(--panda-rim)) drop-shadow(-1px 0 0 var(--panda-rim))
+    drop-shadow(0 1px 0 var(--panda-rim)) drop-shadow(0 -1px 0 var(--panda-rim));
+  animation: ws-panda-bob 3.8s ease-in-out infinite;
+}
+.ws-panda.cheer .ws-panda-sp {
+  background-position: -168px 0;
+  animation: ws-panda-cheer 1.05s ease-in-out infinite;
+}
+@keyframes ws-panda-bob {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+  50% {
+    transform: translateY(-1px) scaleY(1.025);
+  }
+}
+@keyframes ws-panda-cheer {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws-panda-sp,
+  .ws-panda.cheer .ws-panda-sp {
+    animation: none;
+  }
 }

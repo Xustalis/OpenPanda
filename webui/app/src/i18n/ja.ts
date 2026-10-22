@@ -725,14 +725,17 @@ const ja: Messages = {
 
   // Nodes view
   // ワークスペース — デバイスのトポロジー
-  'workspace.subtitle': 'このコンソールから到達できるデバイスと、その接続関係。',
+  'workspace.subtitle': 'このコンソールから到達できるデバイスと、それぞれが動かすエージェント。',
   'workspace.devices': '台のデバイス',
   'workspace.online': 'オンライン',
   'workspace.offline': 'オフライン',
   'workspace.links': '本のリンク',
   'workspace.systems': '種類の OS',
   'workspace.empty': 'デバイスがありません — このコンソールはまだネットワークに参加していません。',
+  'workspace.count': '{devices} 台 · {online} オンライン',
   'workspace.local': 'このデバイス',
+  'workspace.tile.idle': '待機中',
+  'workspace.tile.running': '実行中',
   'workspace.rail': 'デバイス一覧',
   'workspace.state.working': '作業中',
   'workspace.state.idle': 'アイドル',
@@ -1392,6 +1395,15 @@ const ja: Messages = {
   'sessions.modelBtn': 'モデルを選択',
   'sessions.modelSwitched': '{alias} に切り替えました',
   'sessions.modelManage': 'モデルを管理',
+  'sessions.voiceBtn': '音声入力',
+  'sessions.voiceListening': '聞き取り中…クリックで終了',
+  'sessions.voiceTranscribing': '文字起こし中…',
+  'sessions.voiceWaiting': '聞き取り中です。そのまま話してください',
+  'sessions.voiceFallback': 'ブラウザの音声サービスに接続できないため、ノード側で録音して文字起こしします',
+  'sessions.voiceNoMic': 'マイクを利用できません：{err}',
+  'sessions.voiceInsecure': 'マイク入力には HTTPS または localhost が必要です——このページは HTTP で開かれています',
+  'sessions.voiceEmpty': '何も聞き取れませんでした。もう一度お試しください',
+  'sessions.voiceError': '音声入力に失敗しました：{err}',
 
   // プロフィール — サイドバーの素性チップの行き先
   'nav.profile': 'プロフィール',

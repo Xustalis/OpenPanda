@@ -7,8 +7,9 @@
  *
  *    - `ChatAvatar` — the face at the head of a row. The panda wears the pet
  *      sprite the composer uses, so the console's own mascot is the one voice
- *      that is always there; an employee wears its official mark; you get your
- *      initial on a neutral plate.
+ *      that is always there; an employee wears its official mark. Your own row
+ *      carries no face at all — it is the only speaker the layout already
+ *      identifies on its own.
  *    - `TaskCast` / `PlanCast` — what the panda handed out: the employee and
  *      the stage for a single task, the stage list for a plan. This is the
  *      orchestration half of the panda's message, read from the task row
@@ -23,13 +24,14 @@ import { api, type PlanDetail, type Task, type TraceEvent } from '../api/client'
 import { useAsync, useChangeSignal } from '../hooks'
 import { isActiveState } from './task-activity'
 import { formatTaskEvent } from './event-parser'
-import { agentInitial } from '../format/agent-role'
 import { AgentFace } from './team-picker'
 import { castAgent, prettyAgent, type Speaker } from './chat-speaker'
 import { Icon } from './icons'
 import { t } from '../i18n'
 
-/** The face at the head of a chat row. */
+/** The face at the head of a chat row. Your own row has none: the side of the
+ *  column already says who is talking, and a face there was only ever a
+ *  second, redundant "you". */
 export function ChatAvatar({ speaker }: { speaker: Speaker }) {
   if (speaker.who === 'agent') {
     return (
@@ -38,15 +40,7 @@ export function ChatAvatar({ speaker }: { speaker: Speaker }) {
       </span>
     )
   }
-  if (speaker.who === 'user') {
-    // Your own initial, on the plate the roster's fallback faces use: a
-    // person, not a glyph, and no invented portrait.
-    return (
-      <span class="msg-ava is-you" aria-hidden="true">
-        {agentInitial(t('sessions.you'))}
-      </span>
-    )
-  }
+  if (speaker.who === 'user') return null
   return (
     <span class="msg-ava is-panda" aria-hidden="true">
       {/* The same mascot the composer's pet is drawn from — cropped to the

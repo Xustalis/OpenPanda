@@ -881,13 +881,12 @@
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: none; }
 }
-/* Your own turn sits on the other side: the bubble hugs the right edge and the
-   face follows it, the way every group chat you have used does it. */
+/* Your own turn sits on the other side: the bubble hugs the right edge, the
+   way every group chat you have used does it. No face on this side — your own
+   avatar is the one thing a transcript never needs to tell you, and the 32px
+   lane it used to hold is what kept your bubbles off the edge. */
 .msg.user {
-  grid-template-columns: minmax(0, 1fr) 32px;
-}
-.msg.user > .msg-ava {
-  grid-column: 2;
+  grid-template-columns: minmax(0, 1fr);
 }
 .msg-body {
   grid-column: 2;

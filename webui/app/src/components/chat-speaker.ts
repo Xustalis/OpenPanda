@@ -134,6 +134,26 @@ export interface RunSummary {
  *  running. */
 const SETTLED = new Set(['done', 'failed', 'cancelled', 'expired', 'review'])
 
+/** States where a task still has an employee's hands on it. `review` is not
+ *  one of them — the work has stopped and a person has the say. */
+const IN_FLIGHT = new Set(['submitted', 'queued', 'dispatched', 'waiting_context', 'running'])
+
+/** roundStillOpen answers "is the batch this round dispatched finished?".
+ *
+ *  `trailingRunSummary` closes a round on the last report alone, which is
+ *  right for a single job and wrong for a batch: the session finalizer files
+ *  one report per task the moment each one settles, so the first employee
+ *  home would close the round — "本轮工作已全部完成" — while its colleagues
+ *  were still running, and the roll-up then rewrote itself (headcount,
+ *  titles) every time another one landed. The transcript cannot see the
+ *  batch; the task board can, so the caller hands its states in here. */
+export function roundStillOpen(states: Iterable<string>): boolean {
+  for (const s of states) {
+    if (IN_FLIGHT.has(s)) return true
+  }
+  return false
+}
+
 /** trailingRunSummary rolls up the round the thread just finished, or returns
  *  null while one is still open.
  *

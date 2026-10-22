@@ -1828,8 +1828,9 @@
   /* Every lane is the same height, empty or not — four equal panels read as
      one board, where a populated lane next to three stubs read as three
      unfinished widgets (2026-10-21). The row height still comes from the
-     tallest lane, and a populated lane is bounded by `.kanban-list` (the
-     six-card working set), so the stretch cannot run away with the page. */
+     tallest lane, and every lane — populated or empty — is bounded by
+     `.kanban-list` (the six-card working set), so the stretch cannot run
+     away with the page. */
   align-items: stretch;
 }
 
@@ -1902,21 +1903,29 @@
   margin-right: calc(-1 * var(--sp-1));
 }
 
-/* An empty lane has nothing to scroll and no height of its own: the grid row
-   stretches the column to the board's height, and this list just fills what is
-   left of it so the whole lane — not a 160px stub — is the drop target. */
+/* An empty lane has nothing to scroll, but it still reserves the six-card
+   working set: the row is only as tall as its tallest lane, so when every
+   lane is empty — a fresh install, a cleared board — there is nothing to
+   stretch to and the columns fell back to the 160px stub, four abandoned
+   widgets under a full page of void (the "又变短了" report, 2026-10-22).
+   Reserving the set keeps a populated lane and an empty one the same height
+   in every state. `flex: 1 1 auto` still fills a taller row, and
+   `min-height: 0` lets the fold guard's `max-height` shrink it on short
+   windows exactly as it does a populated list. */
 .kanban-list[data-empty='true'] {
-  height: auto;
   min-height: 0;
   flex: 1 1 auto;
 }
 
 /* Phones stack the four lanes, so every empty lane pushes the populated one
    further down. Keep a drop target, but stop three blank cells from eating
-   most of the first screen. */
+   most of the first screen — the reserved working set is a desktop rule. */
 @media (max-width: 720px) {
   .kanban-col:has(.kanban-list[data-empty='true']) {
     min-height: 96px;
+  }
+  .kanban-list[data-empty='true'] {
+    height: auto;
   }
 }
 
@@ -2447,9 +2456,45 @@
   cursor: pointer;
 }
 
-/* Task thinking chain inside a chat bubble (design §5). */
+/* The task card's action row: open the chain, message the employee, jump into
+   the task. As three stacked children of the card's column, flex stretched the
+   quick-send button to the full width and centred its label — the card read as
+   a form with a chip-shaped toggle on top of it. One line of quiet controls
+   instead: the two tools on the left, the jump pushed to the right. */
+.task-card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+/* Task thinking chain inside a chat bubble (design §5). The toggle opens a
+   fold, it does not act on the task, so it wears a link rather than a button:
+   a bordered, raised pill next to a real action read as a form field. */
 .chain-toggle {
-  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.chain-toggle:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* The send box takes the row under the controls once it is open. */
+.task-card-actions .task-quick-send {
+  flex: 1 1 100%;
+}
+
+.task-card-open {
+  margin-left: auto;
+  font-size: var(--text-sm);
+  white-space: nowrap;
 }
 
 .chain-empty {
@@ -6030,10 +6075,12 @@ main .pipeline-chip {
   border-color: var(--border);
   background: var(--bg-active);
 }
-.chat .task-card > a {
+.chat .task-card > a,
+.chat .task-card .task-card-actions > a {
   color: var(--text-secondary);
 }
-.chat .task-card > a:hover {
+.chat .task-card > a:hover,
+.chat .task-card .task-card-actions > a:hover {
   color: var(--text);
   text-decoration: underline;
 }

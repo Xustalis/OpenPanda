@@ -730,14 +730,17 @@ const de: Messages = {
 
   // Nodes view
   // Arbeitsbereich — die Geräte-Topologie
-  'workspace.subtitle': 'Die Geräte, die diese Konsole erreicht, und wie sie miteinander verbunden sind.',
+  'workspace.subtitle': 'Die Geräte, die diese Konsole erreicht, und die Agenten auf ihnen.',
   'workspace.devices': 'Geräte',
   'workspace.online': 'online',
   'workspace.offline': 'offline',
   'workspace.links': 'Verbindungen',
   'workspace.systems': 'Systeme',
   'workspace.empty': 'Noch keine Geräte — diese Konsole ist keinem Netzwerk beigetreten.',
+  'workspace.count': '{devices} Geräte · {online} online',
   'workspace.local': 'dieses Gerät',
+  'workspace.tile.idle': 'Leerlauf',
+  'workspace.tile.running': 'arbeitet',
   'workspace.rail': 'Geräteliste',
   'workspace.state.working': 'Arbeitet',
   'workspace.state.idle': 'Leerlauf',
@@ -1405,6 +1408,15 @@ const de: Messages = {
   'sessions.modelBtn': 'Modell wählen',
   'sessions.modelSwitched': 'Zu {alias} gewechselt',
   'sessions.modelManage': 'Modelle verwalten',
+  'sessions.voiceBtn': 'Spracheingabe',
+  'sessions.voiceListening': 'Hört zu… zum Beenden klicken',
+  'sessions.voiceTranscribing': 'Wird umgeschrieben…',
+  'sessions.voiceWaiting': 'Hört zu — einfach sprechen',
+  'sessions.voiceFallback': 'Der Sprachdienst des Browsers ist nicht erreichbar — Aufnahme und Umschrift laufen jetzt auf dem Node',
+  'sessions.voiceNoMic': 'Kein Mikrofon: {err}',
+  'sessions.voiceInsecure': 'Mikrofonaufnahme braucht HTTPS oder localhost — diese Seite wurde über einfaches HTTP geöffnet',
+  'sessions.voiceEmpty': 'Nichts gehört — bitte noch einmal',
+  'sessions.voiceError': 'Spracheingabe fehlgeschlagen: {err}',
 
   // Profil — Ziel des Identitäts-Chips in der Seitenleiste
   'nav.profile': 'Profil',

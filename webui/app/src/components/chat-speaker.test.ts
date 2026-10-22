@@ -7,6 +7,7 @@ import { splitReportHead } from './report-head.ts'
 import {
   castAgent,
   prettyAgent,
+  roundStillOpen,
   speakerOf,
   stripRefId,
   trailingRunSummary,
@@ -150,6 +151,23 @@ describe('trailingRunSummary', () => {
       { role: 'assistant', kind: 'answer', text: '[review] @codex · 等确认\n\n需要你点头。' },
     ])
     assert.equal(got?.state, 'review')
+  })
+})
+
+describe('roundStillOpen', () => {
+  it('waits for every task the round dispatched, not just the first home', () => {
+    // One employee reported, two are still working: the roll-up must wait.
+    assert.equal(roundStillOpen(['done', 'running']), true)
+    assert.equal(roundStillOpen(['done', 'queued', 'done']), true)
+    assert.equal(roundStillOpen(['done', 'dispatched']), true)
+    assert.equal(roundStillOpen(['done', 'waiting_context']), true)
+  })
+
+  it('closes once every row is settled', () => {
+    assert.equal(roundStillOpen(['done', 'done', 'failed']), false)
+    // A parked task has stopped the work; a person has the say.
+    assert.equal(roundStillOpen(['done', 'review']), false)
+    assert.equal(roundStillOpen([]), false)
   })
 })
 

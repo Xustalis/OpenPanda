@@ -730,14 +730,17 @@ const es: Messages = {
 
   // Nodes view
   // Espacio de trabajo — la topología de dispositivos
-  'workspace.subtitle': 'Los dispositivos que alcanza esta consola y cómo están conectados entre sí.',
+  'workspace.subtitle': 'Los dispositivos que alcanza esta consola y los agentes de cada uno.',
   'workspace.devices': 'dispositivos',
   'workspace.online': 'en línea',
   'workspace.offline': 'sin conexión',
   'workspace.links': 'enlaces',
   'workspace.systems': 'sistemas',
   'workspace.empty': 'Aún no hay dispositivos: esta consola no se ha unido a ninguna red.',
+  'workspace.count': '{devices} equipos · {online} en línea',
   'workspace.local': 'este equipo',
+  'workspace.tile.idle': 'inactivo',
+  'workspace.tile.running': 'trabajando',
   'workspace.rail': 'Lista de dispositivos',
   'workspace.state.working': 'Trabajando',
   'workspace.state.idle': 'Inactivo',
@@ -1405,6 +1408,15 @@ const es: Messages = {
   'sessions.modelBtn': 'Elegir modelo',
   'sessions.modelSwitched': 'Cambiado a {alias}',
   'sessions.modelManage': 'Gestionar modelos',
+  'sessions.voiceBtn': 'Entrada de voz',
+  'sessions.voiceListening': 'Escuchando… pulsa para detener',
+  'sessions.voiceTranscribing': 'Transcribiendo…',
+  'sessions.voiceWaiting': 'Escuchando: habla cuando quieras',
+  'sessions.voiceFallback': 'El servicio de voz del navegador no responde: se graba y transcribe en el nodo',
+  'sessions.voiceNoMic': 'Sin micrófono: {err}',
+  'sessions.voiceInsecure': 'El micrófono requiere HTTPS o localhost: esta página se abrió por HTTP simple',
+  'sessions.voiceEmpty': 'No se oyó nada, inténtalo de nuevo',
+  'sessions.voiceError': 'Falló la entrada de voz: {err}',
 
   // Perfil — destino del chip de identidad de la barra lateral
   'nav.profile': 'Perfil',
