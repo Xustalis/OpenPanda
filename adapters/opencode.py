@@ -50,10 +50,12 @@ The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the opencode difference:
 model resolution/selection, the command line and the event reduction.
 """
+import atexit
 import json
 import os
 import re
 import subprocess
+import tempfile
 
 import _harness as harness
 
@@ -385,6 +387,54 @@ def _resolve_model(requested):
     return "", "", "opencode has no model matching " + requested + "; available models: " + ", ".join(available)
 
 
+# The provider id panda's injected model rides under. opencode resolves
+# --model from its OWN provider registry: OPENAI_BASE_URL/OPENAI_API_KEY are
+# ignored (verified — the run dies with ProviderModelNotFoundError), and a
+# model outside the build's catalog is never served. So an injected endpoint
+# only becomes usable when the CLI is handed a provider of our own, which is
+# what the fragment below does.
+INJECTED_PROVIDER_ID = "panda"
+INJECTED_CONFIG_ENV = "OPENCODE_CONFIG"
+
+
+def _injected_provider_config(model):
+    """Write the provider fragment pointing opencode at panda's endpoint.
+
+    The endpoint and key ride env references ({env:...}) instead of the file:
+    the config lands on disk, the secret does not. Returns the path, or "" when
+    the injection carried no endpoint (nothing to point at).
+    """
+    base = (os.environ.get("OPENAI_BASE_URL") or "").strip()
+    if not base or not model:
+        return ""
+    body = {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+            INJECTED_PROVIDER_ID: {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Panda",
+                "options": {
+                    "baseURL": "{env:OPENPANDA_INJECT_BASE_URL}",
+                    "apiKey": "{env:OPENPANDA_INJECT_API_KEY}",
+                },
+                "models": {model: {"name": model}},
+            }
+        },
+    }
+    fd, path = tempfile.mkstemp(prefix="panda-opencode-", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(body, fh)
+    return path
+
+
+def _drop(path):
+    """Remove a temp file; cleanup must never fail an otherwise good run."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 def main():
     req = harness.read_request()
     prompt, timeout, cwd = req
@@ -399,10 +449,24 @@ def main():
     if flags["format"]:
         base += ["--format", "json"]
     model = ""
+    # injected marks a run whose model endpoint panda overrode. That model lives
+    # on OUR provider (written above), not on the build's roster, so both roster
+    # substitution and the rotate-and-retry below would hand the run back to a
+    # free model — recording an injection that never reached the wire.
+    injected = False
     if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
-        model = os.environ.get("OPENCODE_MODEL") or os.environ.get("OPENAI_MODEL", "")
-        if model and "/" not in model:
-            model = f"openai/{model}"
+        bare = (os.environ.get("OPENCODE_MODEL")
+                or os.environ.get("OPENAI_MODEL", "")).strip()
+        cfg = _injected_provider_config(bare)
+        if cfg:
+            os.environ["OPENPANDA_INJECT_BASE_URL"] = os.environ.get("OPENAI_BASE_URL", "")
+            os.environ["OPENPANDA_INJECT_API_KEY"] = os.environ.get("OPENAI_API_KEY", "")
+            os.environ[INJECTED_CONFIG_ENV] = cfg
+            atexit.register(_drop, cfg)
+            model = INJECTED_PROVIDER_ID + "/" + bare
+            injected = True
+        elif bare and "/" not in bare:
+            model = f"openai/{bare}"
     else:
         model = os.environ.get("OPENCODE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
         # A bare name was never passed on this path (it cannot resolve as a
@@ -422,14 +486,18 @@ def main():
     # the same view the TUI's /model shows — and `opencode api model.list`
     # (v2) adds the capability metadata whose keys double as the roster
     # when the bare list fails.
-    if model:
+    if injected:
+        # The roster describes this build's own catalog, which says nothing
+        # about the provider we just wrote — probing it only costs a call.
+        available = []
+    elif model:
         available = _available_models()
     else:
         available = _available_models() or sorted(_model_catalog())
-    if available:
+    if available and not injected:
         harness.progress("identified served models: %s" % ", ".join(available))
 
-    if model:
+    if model and not injected:
         # A request the roster does not carry is substituted with the
         # closest available id (progress-noted) or fails fast with the
         # roster, instead of an opaque seconds-long death.
@@ -439,6 +507,11 @@ def main():
             return
         if note:
             harness.progress(note)
+    elif injected:
+        # The injected model is served by the provider we just wrote, not by
+        # this build's catalog — resolving it against the roster could only
+        # swap it for a free model and drop the injection.
+        harness.progress("using injected model %s via %s" % (model, INJECTED_CONFIG_ENV))
     else:
         # Nothing pinned a model: pick the most capable entry off the live
         # roster instead of taking whatever default the build happens to
@@ -505,8 +578,11 @@ def main():
         except ProviderFailure as e:
             # A rejected --model means the roster rotated between this
             # run's probe and the run itself: re-identify and retry once
-            # on the fresh pick before reporting the failure.
-            retry = _retry_pick(model, tried, prefer_free, req.effort, str(e))
+            # on the fresh pick before reporting the failure. An injected
+            # model is exempt — a fresh pick would be a FREE model, quietly
+            # replacing the endpoint panda just asked us to use.
+            retry = "" if injected else _retry_pick(
+                model, tried, prefer_free, req.effort, str(e))
             st = getattr(e, "state", None) or {}
             if retry:
                 model = retry
@@ -533,7 +609,7 @@ def main():
         except FileNotFoundError:
             harness.emit(False, "opencode binary not found", 127)
             return
-        if not out["ok"] and _looks_like_model_failure(out["result"]):
+        if not injected and not out["ok"] and _looks_like_model_failure(out["result"]):
             retry = _retry_pick(model, tried, prefer_free, req.effort,
                                 out["result"])
             if retry:
@@ -551,6 +627,10 @@ def main():
 def _run_plain(prompt, cwd, timeout, resume, model, auto,
                prefer_free=False, tried=None, agent_face=""):
     """One-shot plain text mode for builds without --format json."""
+    # An injected run's model lives on panda's provider, not on this build's
+    # roster: the rotate-and-retry below would swap in a free model and drop
+    # the injection, so it is skipped entirely.
+    injected = os.environ.get("OPENPANDA_INJECTED_MODEL") == "1"
     if not model:
         # The built-in default rots as the free roster drifts; re-anchor it
         # against the live list too (probe failure keeps the constant).
@@ -580,7 +660,7 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
     except FileNotFoundError:
         harness.emit(False, "opencode binary not found", 127)
         return
-    if returncode != 0 and _looks_like_model_failure("%s\n%s" % (err, text)):
+    if not injected and returncode != 0 and _looks_like_model_failure("%s\n%s" % (err, text)):
         # Same roster-rotation retry as the stream path.
         tried = tried if tried is not None else set()
         if model:

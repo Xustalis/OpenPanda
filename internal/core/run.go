@@ -1754,6 +1754,13 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// and in the task event stream the Web task detail replays. Gated on
 			// the adapter actually running (a tier refusal spawns nothing).
 			if res.Injected {
+				// res.Injected is set by two different things: the policy
+				// decision (inject up front) or the failure-time rescue inside
+				// runAdapterDefault (the agent's own model failed). A rescue
+				// means the decision itself said "don't inject", so its reason
+				// describes the opposite of what happened — name the rescue
+				// instead of repeating "the agent ships its own model".
+				rescued := !injection.Inject
 				injection.Inject = true
 				if res.Model != "" {
 					injection.Model = res.Model
@@ -1761,8 +1768,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				if injection.BaseURL == "" {
 					injection.BaseURL = commander.EffectiveBaseURL(c.model)
 				}
-				if injection.Reason == "" {
-					injection.Reason = "credential rescue fallback"
+				if rescued || injection.Reason == "" {
+					injection.Reason = "credential rescue: the agent's own model failed, panda's model was injected for the retry"
 				}
 			}
 			if injection.Inject && res.Agent != "" {

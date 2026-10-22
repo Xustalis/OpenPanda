@@ -278,17 +278,22 @@ func TestDeepSeekProModelNeverInjected(t *testing.T) {
 	}
 }
 
-// TestDeepSeekInjectionOnlyForClaudeCode: agents that bring their own keys
-// (no registry model-env mapping) never receive a DeepSeek injection.
-func TestDeepSeekInjectionOnlyForClaudeCode(t *testing.T) {
+// TestDeepSeekInjectionSkipsOtherDialects: an Anthropic-dialect DeepSeek
+// model reaches only the agents whose registry mapping speaks Anthropic.
+// Codex/hermes declare OpenAI, opencode/grok/openclaw carry no mapping — all
+// of them are refused rather than handed an endpoint their wire format
+// cannot address. deepseek_harness used to sit in this list because it had no
+// mapping at all; it now declares Anthropic and is covered by
+// TestDeepSeekHarnessInjection.
+func TestDeepSeekInjectionSkipsOtherDialects(t *testing.T) {
 	cleanCredentialEnv(t)
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
 	for _, adapter := range []string{
 		"codex.py", "opencode.py", "grok_build.py",
-		"deepseek_harness.py", "openclaw.py", "hermes.py",
+		"openclaw.py", "hermes.py",
 	} {
 		if d := r.InjectionDecision(strings.TrimSuffix(adapter, ".py"), adapter); d.Inject {
-			t.Fatalf("%s must not be DeepSeek-injected (no registry model-env mapping): %+v", adapter, d)
+			t.Fatalf("%s must not be DeepSeek-injected (dialect/mapping mismatch): %+v", adapter, d)
 		}
 	}
 }
@@ -647,4 +652,185 @@ func TestModelCredsWithheldBlocksAuthFallback(t *testing.T) {
 	if attempts != 1 {
 		t.Fatalf("withholding must not trigger the injection retry, attempts=%d", attempts)
 	}
+}
+
+// TestDeepSeekHarnessInjection pins dsh's dialect and env contract. The
+// harness speaks Anthropic Messages ({base}/v1/messages), so panda injects
+// into it only when its own model is Anthropic-dialect, and the endpoint it
+// hands over is DeepSeek's /anthropic surface — not an OpenAI-style /v1 base
+// that dsh would append /v1/messages to. An OpenAI-dialect model is refused
+// instead of being aimed at an Anthropic client.
+func TestDeepSeekHarnessInjection(t *testing.T) {
+	cleanCredentialEnv(t)
+
+	anthropicModel := config.ModelConfig{
+		BaseURL: "https://api.deepseek.com/anthropic",
+		APIKey:  "sk-dsh-test",
+		Model:   "deepseek-v4-flash",
+	}
+	r := injectionRouter(anthropicModel, config.InjectionModelAuto)
+	d := r.InjectionDecision("deepseek_harness", "deepseek_harness.py")
+	if !d.Inject {
+		t.Fatalf("dsh with no own credentials must receive the anthropic model: %+v", d)
+	}
+	if d.BaseURL != "https://api.deepseek.com/anthropic" || d.Model != "deepseek-v4-flash" {
+		t.Fatalf("dsh decision model/url mismatch: %+v", d)
+	}
+	env := modelEnvForAdapter(anthropicModel, "deepseek_harness", "deepseek_harness.py")
+	assertEnv(t, env, map[string]string{
+		"DEEPSEEK_BASE_URL": "https://api.deepseek.com/anthropic",
+		"DEEPSEEK_API_KEY":  "sk-dsh-test",
+		"DEEPSEEK_MODEL":    "deepseek-v4-flash",
+	})
+
+	openaiModel := config.ModelConfig{
+		APIType: config.APITypeOpenAI,
+		BaseURL: "https://open.bigmodel.cn/api/paas/v4",
+		APIKey:  "sk-glm-test",
+		Model:   "glm-5.3-flash",
+	}
+	r2 := injectionRouter(openaiModel, config.InjectionModelAuto)
+	if d2 := r2.InjectionDecision("deepseek_harness", "deepseek_harness.py"); d2.Inject {
+		t.Fatalf("dsh must not take an OpenAI-dialect model: %+v", d2)
+	}
+	if env := modelEnvForAdapter(openaiModel, "deepseek_harness", "deepseek_harness.py"); len(env) != 0 {
+		t.Fatalf("dsh env must stay empty for an OpenAI model: %v", env)
+	}
+}
+
+// TestInjectionPerAgentModel: one node model cannot satisfy every agent's
+// dialect. A pin on injection.agents lets deepseek_harness (Anthropic) and
+// codex (OpenAI) both stay injectable from a single OpenAI-dialect node
+// model — the failure-time rescue keeps covering codex while dsh gets an
+// endpoint it can actually speak to. Unset fields inherit the node model, so
+// the key is declared once.
+func TestInjectionPerAgentModel(t *testing.T) {
+	cleanCredentialEnv(t)
+
+	node := config.ModelConfig{
+		APIType:  config.APITypeOpenAI,
+		Provider: "zhipu",
+		BaseURL:  "https://open.bigmodel.cn/api/paas/v4",
+		APIKey:   "sk-node-test",
+		Model:    "glm-5.3-flash",
+	}
+	r := NewRouter(testCard(), NewExecutor(), node, config.InjectionConfig{
+		Model: config.InjectionModelAuto,
+		Agents: map[string]config.ModelConfig{
+			"deepseek_harness": {
+				APIType: config.APITypeAnthropic,
+				BaseURL: "https://open.bigmodel.cn/api/anthropic",
+			},
+		},
+	}, config.RoutingConfig{})
+
+	// The pinned agent speaks Anthropic: injected model/endpoint come from the
+	// pin, while key and model name are inherited from the node model.
+	d := r.InjectionDecision("deepseek_harness", "deepseek_harness.py")
+	if !d.Inject {
+		t.Fatalf("pinned dsh must be injectable: %+v", d)
+	}
+	if d.BaseURL != "https://open.bigmodel.cn/api/anthropic" || d.Model != "glm-5.3-flash" {
+		t.Fatalf("dsh decision = %+v, want the pinned anthropic endpoint", d)
+	}
+	assertEnv(t, modelEnvForAdapter(r.injectionModelFor("deepseek_harness", "deepseek_harness.py"),
+		"deepseek_harness", "deepseek_harness.py"), map[string]string{
+		"DEEPSEEK_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+		"DEEPSEEK_API_KEY":  "sk-node-test",
+		"DEEPSEEK_MODEL":    "glm-5.3-flash",
+	})
+
+	// An unpinned agent keeps the node dialect — this is the regression the
+	// pin exists to prevent: flipping the node model to anthropic would have
+	// silently dropped codex out of the failure-time rescue.
+	cx := r.InjectionDecision("codex", "codex.py")
+	if !cx.Inject {
+		t.Fatalf("codex must stay injectable under the node's openai dialect: %+v", cx)
+	}
+	if cx.BaseURL != "https://open.bigmodel.cn/api/paas/v4" {
+		t.Fatalf("codex took the pinned endpoint: %+v", cx)
+	}
+
+	// A pin may also be keyed by the adapter file, so a card that aliases the
+	// agent still finds it (agents.Lookup falls back to the adapter too).
+	rByAdapter := NewRouter(testCard(), NewExecutor(), node, config.InjectionConfig{
+		Model: config.InjectionModelAuto,
+		Agents: map[string]config.ModelConfig{
+			"deepseek_harness.py": {
+				APIType: config.APITypeAnthropic,
+				BaseURL: "https://open.bigmodel.cn/api/anthropic",
+			},
+		},
+	}, config.RoutingConfig{})
+	for _, name := range []string{"deepseek_harness", "dsh-renamed"} {
+		d2 := rByAdapter.InjectionDecision(name, "deepseek_harness.py")
+		if !d2.Inject || d2.BaseURL != "https://open.bigmodel.cn/api/anthropic" {
+			t.Fatalf("adapter-keyed pin must apply to %q: %+v", name, d2)
+		}
+	}
+}
+
+// TestSelfContainedAgentSkipsInjectionButRescuesOnFailure: OpenCode ships its
+// own free tier (registry SelfContainedModel). Under auto panda must NOT inject
+// — opencode.py substitutes a model outside its own roster back to a free one,
+// so injecting would be recorded as applied while changing nothing. When that
+// free tier fails or runs out of quota, the failure-time rescue must inject
+// panda's model: "own model first, panda's model on failure".
+func TestSelfContainedAgentSkipsInjectionButRescuesOnFailure(t *testing.T) {
+	cleanCredentialEnv(t)
+	node := config.ModelConfig{
+		APIType: config.APITypeOpenAI,
+		BaseURL: "https://open.bigmodel.cn/api/paas/v4",
+		APIKey:  "sk-node-test",
+		Model:   "glm-5.3-flash",
+	}
+	r := injectionRouter(node, config.InjectionModelAuto)
+
+	d := r.InjectionDecision("opencode", "opencode.py")
+	if d.Inject {
+		t.Fatalf("self-contained agent must not be injected in auto mode: %+v", d)
+	}
+	if !strings.Contains(d.Reason, "self-contained") {
+		t.Fatalf("reason must name the self-contained model: %q", d.Reason)
+	}
+	// An explicit always is still an override.
+	if dAlways := injectionRouter(node, config.InjectionModelAlways).InjectionDecision("opencode", "opencode.py"); !dAlways.Inject {
+		t.Fatalf("injection.model=always must still override: %+v", dAlways)
+	}
+
+	// Free tier fails → one retry carrying panda's model.
+	attempts := 0
+	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
+		attempts++
+		if attempts == 1 {
+			if hasEnvPrefix(env, "OPENAI_API_KEY=") {
+				t.Fatalf("first attempt must run on the agent's own model, env=%v", env)
+			}
+			return AgentResult{OK: false, Result: "provider failure: Free usage limit reached", ExitCode: 1}
+		}
+		assertEnv(t, env, map[string]string{
+			"OPENAI_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
+			"OPENAI_API_KEY":  "sk-node-test",
+			"OPENCODE_MODEL":  "glm-5.3-flash",
+		})
+		return AgentResult{OK: true, Result: "completed on the injected model", ExitCode: 0}
+	})
+
+	res := r.runAdapterDefault(context.Background(), "opencode.py", "test prompt", "")
+	if !res.OK || attempts != 2 {
+		t.Fatalf("free-tier failure must be rescued by injection: ok=%v attempts=%d res=%+v", res.OK, attempts, res)
+	}
+	if !res.Injected {
+		t.Fatalf("rescued run must report the injection: %+v", res)
+	}
+}
+
+// hasEnvPrefix reports whether any env entry starts with prefix.
+func hasEnvPrefix(env []string, prefix string) bool {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
 }

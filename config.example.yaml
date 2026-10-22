@@ -384,6 +384,17 @@ log:
 #   never   never inject; agents always use their own models
 # Every injection is announced at the top of the task output and recorded in
 # the audit log and the task event stream.
+#
+# `agents` pins a model used ONLY for injection into that agent. One node model
+# cannot satisfy every dialect: a harness speaking Anthropic Messages rejects an
+# OpenAI-style endpoint and vice versa, so switching the node model to please one
+# agent silently removes the failure-time injection rescue for the others. Unset
+# fields inherit the node model — api_key and model included — so the common
+# case is just the two lines that change the dialect:
+#   agents:
+#     deepseek_harness:                        # agent name, or "foo.py"
+#       api_type: anthropic
+#       base_url: https://open.bigmodel.cn/api/anthropic
 injection:
   model: "auto"                # auto | always | never
 
@@ -535,6 +546,24 @@ push:
 # ui:
 #   locale: "zh-CN"               # en | zh-CN | ja | es | de
 #   mouse: "select"               # select | scroll
+
+# ── Speech-to-text (the composer's dictation button) ──────────────────────
+# The web console records in the browser and POSTs the clip to the node, which
+# relays it to an OpenAI-compatible `POST {base_url}/audio/transcriptions`
+# (multipart `file` + `model`). Browsers that ship their own recogniser use it
+# first; this section is what they fall back to, and the only path in Firefox.
+#
+# Empty is a working default: base_url and api_key are inherited from the
+# active model, and `model` falls back to whisper-1 — the relay that answers
+# chat usually answers Whisper too. Set the section only when speech lives
+# somewhere else, or when the relay has no Whisper at all.
+# asr:
+#   base_url: "https://api.openai.com/v1"
+#   api_key: ""                   # prefer env OPENPANDA_ASR_KEY where possible
+#   model: "whisper-1"
+#   language: ""                  # ISO-639-1 ("zh", "en"); empty = auto-detect.
+#                                 # Leave it empty unless you always speak one
+#                                 # language — a wrong hint degrades accuracy.
 
 # ── Self-evolution (v0.2.x, opt-in, off by default) ──────────────────────
 # Lets this node merge signed patch sets produced by itself (or, later, mesh

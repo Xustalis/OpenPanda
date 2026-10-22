@@ -344,8 +344,18 @@ var known = []Known{
 		CredentialFileFields: map[string][]string{
 			".dsh/.credentials.yaml": {"refs"},
 		},
+		// dsh's DeepSeek route speaks the ANTHROPIC Messages dialect, not
+		// OpenAI: the shipped default endpoint is api.deepseek.com/anthropic
+		// and the base URL is appended with /v1/messages (verified against a
+		// local endpoint — a base of .../v1 produced POST .../v1/messages).
+		// Declaring "openai" here aimed an OpenAI-style base (e.g.
+		// .../api/paas/v4) at an Anthropic client, which can only 404/401.
+		//
+		// dsh reads only DEEPSEEK_API_KEY and DEEPSEEK_BASE_URL from the
+		// environment; DEEPSEEK_MODEL is not consulted, so the adapter pins
+		// the model through a profile patch (see adapters/deepseek_harness.py).
 		ModelEnv: &ModelEnvMapping{
-			APIType: "openai",
+			APIType: "anthropic",
 			BaseURL: "DEEPSEEK_BASE_URL",
 			APIKey:  "DEEPSEEK_API_KEY",
 			Model:   "DEEPSEEK_MODEL",

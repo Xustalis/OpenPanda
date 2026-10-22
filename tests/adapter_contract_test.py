@@ -998,6 +998,25 @@ print("dsh answer")
         )
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "dsh answer")
+
+    def test_deepseek_harness_model_patch_caps_provider_tokens(self):
+        payload, _, _ = run_adapter(
+            "deepseek_harness.py", "dsh", r'''
+import pathlib, sys
+args = sys.argv[1:]
+assert args[:2] == ["--profile", "headless"]
+patch = pathlib.Path(args[args.index("--patch") + 1]).read_text()
+assert "id: agent-default-model" in patch
+assert 'model: "glm-5.3-flash"' in patch
+assert "id: llm-deepseek" in patch
+assert "maxTokens: 131072" in patch
+assert args[-1] == "contract prompt"
+print("dsh injected answer")
+''',
+            env={"DEEPSEEK_MODEL": "glm-5.3-flash"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "dsh injected answer")
         payload, _, _ = run_adapter(
             "hermes.py", "hermes", r'''
 import sys

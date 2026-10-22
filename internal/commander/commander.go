@@ -32,6 +32,9 @@ type Router struct {
 	// injectionModel is the normalized injection.model strategy
 	// (auto | always | never). Zero value means auto.
 	injectionModel string
+	// injectionAgents pins a per-agent model for injection only
+	// (injection.agents). Empty falls back to model for every agent.
+	injectionAgents map[string]config.ModelConfig
 	// toolsPolicy is the normalized routing.tools_policy strategy
 	// (minimal | extended) the adapters run under. Zero value means minimal.
 	toolsPolicy string
@@ -80,6 +83,7 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 		executor:       executor,
 		model:          model,
 		injectionModel: injection.NormalizedModel(),
+		injectionAgents: injection.Agents,
 		toolsPolicy:    routing.NormalizedToolsPolicy(),
 		pandaTools:     routing.NormalizedPandaTools(),
 		preferred:      routing.PreferredAgents,
@@ -99,6 +103,7 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 // builds its router before the full config is wired through).
 func (r *Router) SetPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
 	r.injectionModel = injection.NormalizedModel()
+	r.injectionAgents = injection.Agents
 	r.toolsPolicy = routing.NormalizedToolsPolicy()
 	r.pandaTools = routing.NormalizedPandaTools()
 	r.preferred = routing.PreferredAgents
@@ -850,6 +855,11 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// credential manifest or model-env mapping.
 	name := AgentName(ctx)
 	dec := r.InjectionDecision(name, adapter)
+	// The model actually injected into this agent: a per-agent pin
+	// (injection.agents) overrides the node model, so the endpoint guard,
+	// the env, and the failure-time retry below all have to read the same
+	// resolved config rather than r.model.
+	injModel := r.injectionModelFor(name, adapter)
 	if ModelCredsWithheld(ctx) && dec.Inject {
 		// Trust-zone cred withholding: the task's admission tier is
 		// sub-mesh, and this node's model credentials do not serve its
@@ -866,12 +876,12 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 		// The model endpoint must be HTTPS so the API key never travels
 		// cleartext, and pinned to the configured host so the allowlist is
 		// never empty (D7). Only enforced when we actually inject the env.
-		if r.model.BaseURL != "" {
-			if err := security.NewNetworkGuard(security.EndpointHost(r.model.BaseURL)).CheckURL(r.model.BaseURL); err != nil {
+		if injModel.BaseURL != "" {
+			if err := security.NewNetworkGuard(security.EndpointHost(injModel.BaseURL)).CheckURL(injModel.BaseURL); err != nil {
 				return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
 			}
 		}
-		env = modelEnvForAdapter(r.model, name, adapter)
+		env = modelEnvForAdapter(injModel, name, adapter)
 	}
 	// Native Agent credentials must survive the minimal sandbox even when PANDA
 	// does not inject its own model. Only adapter-specific keys are forwarded —
@@ -896,14 +906,14 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// different failure under injection is not more informative than the
 	// original failure — swapping it in would mask the real reason the task
 	// failed (e.g. report exit-code noise instead of "quota exhausted").
-	if !res.OK && !dec.Inject && !ModelCredsWithheld(ctx) && modelConfigured(r.model) && supportsModelInjection(name, adapter, r.model) && r.model.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
-		if r.model.BaseURL == "" || security.NewNetworkGuard(security.EndpointHost(r.model.BaseURL)).CheckURL(r.model.BaseURL) == nil {
-			injectedEnv := modelEnvForAdapter(r.model, name, adapter)
+	if !res.OK && !dec.Inject && !ModelCredsWithheld(ctx) && modelConfigured(injModel) && supportsModelInjection(name, adapter, injModel) && injModel.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
+		if injModel.BaseURL == "" || security.NewNetworkGuard(security.EndpointHost(injModel.BaseURL)).CheckURL(injModel.BaseURL) == nil {
+			injectedEnv := modelEnvForAdapter(injModel, name, adapter)
 			if len(injectedEnv) > 0 {
 				retryRes := r.runProcess(ctx, adapter, prompt, cwd, injectedEnv)
 				if retryRes.OK {
 					retryRes.Injected = true
-					retryRes.Model = effectiveModelName(r.model)
+					retryRes.Model = effectiveModelNameFor(name, adapter, injModel)
 					return retryRes
 				}
 			}
@@ -1042,7 +1052,8 @@ func (r *Router) AgentViable(name string, ag ledger.Agent) bool {
 	if r.injectionModel == config.InjectionModelNever {
 		return false
 	}
-	return modelConfigured(r.model) && r.model.APIKey != "" && supportsModelInjection(name, ag.Adapter, r.model)
+	m := r.injectionModelFor(name, ag.Adapter)
+	return modelConfigured(m) && m.APIKey != "" && supportsModelInjection(name, ag.Adapter, m)
 }
 
 // AgentDispatchable reports whether an agent is ready to receive a task right
@@ -1085,14 +1096,15 @@ func (r *Router) agentUsable(name string, ag ledger.Agent) (usable bool, reason 
 	}
 	if !k.SelfContainedModel {
 		if own, _ := probeAgentCredentials(name, ag.Adapter); !own {
+			m := r.injectionModelFor(name, ag.Adapter)
 			switch {
 			case r.injectionModel == config.InjectionModelNever:
 				return false, "no model configured (no own credentials; injection.model=never)"
-			case !modelConfigured(r.model):
+			case !modelConfigured(m):
 				return false, "no model configured (no own credentials; no panda model endpoint)"
-			case r.model.APIKey == "":
+			case m.APIKey == "":
 				return false, "no model configured (no own credentials; no panda model key)"
-			case !supportsModelInjection(name, ag.Adapter, r.model):
+			case !supportsModelInjection(name, ag.Adapter, m):
 				return false, "no model configured (no own credentials; injection unsupported for " + ag.Adapter + ")"
 			}
 		}
@@ -1140,22 +1152,23 @@ func (r *Router) agentTarget(name string, ag ledger.Agent) ProbeSpec {
 		return ProbeSpec{}
 	}
 	apiType := config.APITypeOpenAI
+	injModel := r.injectionModelFor(name, ag.Adapter)
 	if k.ModelEnv != nil {
 		apiType = k.ModelEnv.APIType
 		if apiType == "" {
 			// Polyglot agent (pi): the probe speaks the configured
 			// model's own protocol — that is what the run uses.
-			apiType = r.model.NormalizedAPIType()
+			apiType = injModel.NormalizedAPIType()
 		}
 	}
 	if dec := r.InjectionDecision(name, ag.Adapter); dec.Inject {
 		ep := dec.BaseURL
 		if ep == "" {
-			ep = effectiveBaseURL(r.model)
+			ep = effectiveBaseURL(injModel)
 		}
 		return ProbeSpec{
 			Endpoint: ep, APIType: apiType,
-			APIKey: r.model.APIKey, Model: dec.Model,
+			APIKey: injModel.APIKey, Model: dec.Model,
 			KeyDefinitive: true, // the injected key is exactly what the run sends
 		}
 	}

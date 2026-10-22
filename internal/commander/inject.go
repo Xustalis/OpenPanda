@@ -24,6 +24,50 @@ type InjectionDecision struct {
 	BaseURL string // endpoint injected (empty when Inject is false)
 }
 
+// injectionModelFor resolves the model used when injecting into one agent.
+// A per-agent pin (injection.agents) wins over the node model; every unset
+// field is inherited from the node model so the API key and model name are
+// declared once. Inheritance deliberately stops at the transport knobs
+// (Params/Headers/Thinking): an override exists because the target speaks a
+// different dialect, and carrying an OpenAI-only body field into an Anthropic
+// endpoint is exactly the mismatch this pin is here to avoid.
+//
+// Resolution is by agent name first (the capability card's key), then by
+// adapter file, so a card that aliases the agent still finds its entry.
+func (r *Router) injectionModelFor(name, adapter string) config.ModelConfig {
+	base := r.model
+	if len(r.injectionAgents) == 0 {
+		return base
+	}
+	ov, ok := r.injectionAgents[name]
+	if !ok {
+		ov, ok = r.injectionAgents[adapter]
+	}
+	if !ok {
+		return base
+	}
+	out := ov
+	if out.APIKey == "" {
+		out.APIKey = base.APIKey
+	}
+	if out.Provider == "" {
+		out.Provider = base.Provider
+	}
+	if out.Name == "" {
+		out.Name = base.Name
+	}
+	if out.Model == "" {
+		out.Model = base.Model
+	}
+	if out.MaxTokens == 0 {
+		out.MaxTokens = base.MaxTokens
+	}
+	if out.ContextWindow == 0 {
+		out.ContextWindow = base.ContextWindow
+	}
+	return out
+}
+
 // InjectionDecision evaluates the configured injection.model strategy for the
 // adapter that drives an agent. It never logs or returns secrets — only the
 // model name and endpoint, which are not sensitive.
@@ -40,21 +84,43 @@ type InjectionDecision struct {
 // ("claude_code.py"); both go to agents.Lookup so a generic.py custom CLI
 // resolves to no manifest instead of borrowing zcode's.
 func (r *Router) InjectionDecision(name, adapter string) InjectionDecision {
+	// m is the node model unless this agent carries a pin (injection.agents):
+	// one agent's dialect must not decide what the others get.
+	m := r.injectionModelFor(name, adapter)
 	switch r.injectionModel {
 	case config.InjectionModelNever:
 		return InjectionDecision{Inject: false, Reason: "injection.model=never"}
 	case config.InjectionModelAlways:
-		if !modelConfigured(r.model) {
+		if !modelConfigured(m) {
 			return InjectionDecision{Inject: false, Reason: "no model configured"}
 		}
-		if !supportsModelInjection(name, adapter, r.model) {
+		if !supportsModelInjection(name, adapter, m) {
 			return InjectionDecision{Inject: false, Reason: "model injection is not safely supported for " + adapter}
 		}
 		return InjectionDecision{
 			Inject:  true,
 			Reason:  "injection.model=always",
-			Model:   effectiveModelNameFor(name, adapter, r.model),
-			BaseURL: effectiveBaseURLFor(name, adapter, r.model),
+			Model:   effectiveModelNameFor(name, adapter, m),
+			BaseURL: effectiveBaseURLFor(name, adapter, m),
+		}
+	}
+	// auto: an agent that ships its own model (OpenCode's free tier) is
+	// self-sufficient. Injecting panda's endpoint would override the model the
+	// agent is built around — and opencode.py substitutes a request outside its
+	// own roster right back to a free model, so the injection would be recorded
+	// as applied while changing nothing.
+	//
+	// This does not lose the rescue: with Inject false here, the failure-time
+	// retry in runAdapterDefault still fires when the free tier errors out or
+	// runs out of quota, and that retry injects panda's model. "Own model
+	// first, panda's model on failure" is exactly the policy.
+	//
+	// injection.model=always still overrides (the switch above returned
+	// already), so a user who wants panda's model on every run can say so.
+	if k, ok := agents.Lookup(name, adapter); ok && k.SelfContainedModel {
+		return InjectionDecision{
+			Inject: false,
+			Reason: "agent ships its own model (self-contained)",
 		}
 	}
 	// auto: agent-native credentials win.
@@ -64,13 +130,13 @@ func (r *Router) InjectionDecision(name, adapter string) InjectionDecision {
 			Reason: "agent carries its own model credentials (" + source + ")",
 		}
 	}
-	if !modelConfigured(r.model) || r.model.APIKey == "" {
+	if !modelConfigured(m) || m.APIKey == "" {
 		return InjectionDecision{
 			Inject: false,
 			Reason: "agent has no own credentials but panda has no model key configured",
 		}
 	}
-	if !supportsModelInjection(name, adapter, r.model) {
+	if !supportsModelInjection(name, adapter, m) {
 		return InjectionDecision{
 			Inject: false,
 			Reason: "model injection is not safely supported for " + adapter,
@@ -79,8 +145,8 @@ func (r *Router) InjectionDecision(name, adapter string) InjectionDecision {
 	return InjectionDecision{
 		Inject:  true,
 		Reason:  "agent has no own model credentials and panda has a model configured",
-		Model:   effectiveModelNameFor(name, adapter, r.model),
-		BaseURL: effectiveBaseURLFor(name, adapter, r.model),
+		Model:   effectiveModelNameFor(name, adapter, m),
+		BaseURL: effectiveBaseURLFor(name, adapter, m),
 	}
 }
 

@@ -89,6 +89,15 @@ func main() {
 				"path", cliConfigPath, "err", err.Error(), "usual", config.ResolvePath("")))
 		}
 	}
+	// Before any subcommand can look for an agent CLI: a launchd / systemd /
+	// task-scheduler / shortcut launch inherits a minimal PATH, and the CLIs
+	// live in per-user dirs it never contains. Augmenting only in the daemon
+	// left `panda web` — the process that answers GET /api/agents for the
+	// employee panel — probing the launcher's PATH, so an agent installed
+	// after the shell was opened read as "not installed" everywhere. The call
+	// is idempotent (executil guards against duplicates), so every entry point
+	// can share it.
+	executil.AugmentProcessPath()
 	if sub != "" {
 		dispatchSub(sub, args)
 		return
@@ -185,12 +194,6 @@ func runDaemon(args []string) {
 	debugAddr := fs.String("debug-addr", "", "serve net/http/pprof on this loopback address (e.g. 127.0.0.1:6060); empty disables it")
 	fs.Parse(reorderFlags(fs, args))
 	rejectExtraArgs(fs, "usage: panda daemon [--config F] [--card F] [--debug-addr HOST:PORT]")
-
-	// Before anything looks for an agent CLI: a launchd/systemd/task-scheduler
-	// launch inherits a minimal PATH, and the CLIs live in user dirs it never
-	// contains — the node would advertise zero agents and peers would route
-	// no work to it.
-	executil.AugmentProcessPath()
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {

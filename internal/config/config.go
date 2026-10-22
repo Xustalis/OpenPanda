@@ -50,6 +50,13 @@ type Config struct {
 	UI         UIConfig         `yaml:"ui"`
 	Skills     SkillsConfig     `yaml:"skills"`
 	Sandbox    SandboxConfig    `yaml:"sandbox"`
+	// ASR is the speech-to-text endpoint behind the composer's dictation
+	// button. It is deliberately separate from `model:` — a chat model cannot
+	// transcribe, and the two routinely live on different vendors. Leaving it
+	// empty is not an error: the panel falls back to the active model's
+	// endpoint and `whisper-1`, which is what an OpenAI-compatible relay
+	// already serves.
+	ASR ASRConfig `yaml:"asr"`
 	// SelfEvolution is the opt-in self-modification pipeline. Entirely inert
 	// while enabled=false: no
 	// worktree, no queue, no merge proposals.
@@ -140,6 +147,47 @@ func (u UIConfig) TermsCurrent() bool {
 	return u.TermsAccepted && u.TermsVersion >= TermsVersionCurrent
 }
 
+// DefaultASRModel is what the dictation endpoint asks for when the asr section
+// names no model. Every OpenAI-compatible vendor that serves speech-to-text at
+// /audio/transcriptions answers to this id or aliases it (Groq, SiliconFlow and
+// the relays in between), so it is the one default worth carrying.
+const DefaultASRModel = "whisper-1"
+
+// ASRConfig is the speech-to-text side of the composer's dictation button: an
+// OpenAI-compatible `POST {base_url}/audio/transcriptions`. Empty BaseURL and
+// APIKey inherit the active model's — a relay that serves both chat and
+// Whisper is the common case, and making the user repeat the endpoint to get a
+// microphone working is a worse default than trying the one they already have.
+// Language is an ISO-639-1 hint ("zh", "en"); empty lets the vendor detect.
+type ASRConfig struct {
+	BaseURL  string `yaml:"base_url,omitempty"`
+	APIKey   string `yaml:"api_key,omitempty"`
+	Model    string `yaml:"model,omitempty"`
+	Language string `yaml:"language,omitempty"`
+}
+
+// ASRTarget resolves the section against the active model. It never fails: an
+// endpoint with nothing configured still returns a usable target (the model's
+// own base URL and DefaultASRModel), and the caller reports the upstream's
+// refusal — which names the vendor's real reason — instead of a guess about
+// missing configuration.
+func (a ASRConfig) ASRTarget(active ModelConfig) ASRConfig {
+	out := a
+	if out.BaseURL == "" {
+		out.BaseURL = active.BaseURL
+	}
+	if out.APIKey == "" {
+		out.APIKey = active.APIKey
+	}
+	if out.Model == "" {
+		out.Model = DefaultASRModel
+	}
+	out.BaseURL = strings.TrimRight(strings.TrimSpace(out.BaseURL), "/")
+	out.Model = strings.TrimSpace(out.Model)
+	out.Language = strings.TrimSpace(out.Language)
+	return out
+}
+
 // Injection model strategies (injection.model).
 const (
 	// InjectionModelAuto injects the panda model endpoint into an agent
@@ -157,6 +205,26 @@ const (
 // InjectionConfig controls what panda injects into agent subprocesses.
 type InjectionConfig struct {
 	Model string `yaml:"model"` // auto | always | never (default auto)
+	// Agents pins a per-agent model used ONLY for injection. One node model
+	// cannot satisfy every agent: a harness that speaks Anthropic Messages
+	// (deepseek_harness) rejects an OpenAI-dialect endpoint and vice versa, so
+	// switching the node model to please one agent silently removes the
+	// failure-time injection rescue for the others. An entry here overrides
+	// the node model for that agent's injected env and for the dialect gate
+	// that decides whether injection is safe, without touching the model
+	// panda's own ask/judge calls use.
+	//
+	// Keyed by agent name (the capability card's key); the adapter file name
+	// ("deepseek_harness.py") also matches, so a renamed card entry still
+	// resolves. Unset fields inherit the node model — api_key and model
+	// included, so the common case is two lines:
+	//
+	//	injection:
+	//	  agents:
+	//	    deepseek_harness:
+	//	      api_type: anthropic
+	//	      base_url: https://open.bigmodel.cn/api/anthropic
+	Agents map[string]ModelConfig `yaml:"agents,omitempty"`
 }
 
 // NormalizedModel returns the validated injection.model strategy, defaulting
