@@ -40,7 +40,11 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-Aún no hay cambios sin publicar.
+- **Un modelo fijado por agente** —— `injection.model` era una sola decisión para todo el nodo, así que un harness que habla Anthropic Messages solo podía recibir inyección cambiando el modelo del nodo a su dialecto, lo que dejaba sin rescate a todos los demás agentes. `injection.agents.<agent|adapter>` fija un modelo solo para ese agente: los campos sin definir heredan el del nodo, pero la herencia se detiene antes de `params`, `headers` y `thinking`, que son justo la vía por la que el cuerpo de un dialecto entra en el otro.
+
+- **El compositor acepta la voz** —— el dictado existía solo para la TUI, cuyos sidecars abren el micrófono de la máquina que ejecuta el proceso: la sala equivocada cuando el panel se abre por la LAN. Ahora la página graba WAV mono a 16 kHz y `POST /api/voice/transcribe` lo retransmite a un `/audio/transcriptions` compatible con OpenAI. La sección `asr` es opcional y hereda el modelo activo, y el rechazo del proveedor se muestra con sus propias palabras.
+
+- **El espacio de trabajo muestra dispositivos, no un mapa** —— paneles de marcas de agentes sustituyen al anillo de topología: el panel es la máquina, la ficha es el agente y si está trabajando ahora. Y una ronda ya no se cierra con el primer informe de un lote: `roundStillOpen()` lee el tablero de tareas, así que «el trabajo de esta ronda ha terminado» espera al último.
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 

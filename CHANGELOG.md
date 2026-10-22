@@ -46,7 +46,11 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+- **A model pin per agent** — `injection.model` was one node-wide decision, so a harness that speaks Anthropic Messages could only be injected by switching the node model to its dialect, which took the failure-time rescue away from every other agent. `injection.agents.<agent|adapter>` pins a model for that agent alone: unset fields inherit the node model, and the inheritance stops before `params`, `headers` and `thinking` — the transport knobs that would carry one dialect's body into the other.
+
+- **The composer takes the voice** — dictation existed only for the TUI, whose sidecars open the microphone on the machine running the process: the wrong room when the console is opened over the LAN. The page now records 16 kHz mono WAV and `POST /api/voice/transcribe` relays it to an OpenAI-compatible `/audio/transcriptions`. The `asr` section is optional and inherits the active model, and a vendor refusal is reported as the vendor's own sentence.
+
+- **The workspace shows devices, not a map** — panels of agent marks replace the topology ring: the panel is the machine, the tile is the agent and whether it is working right now. And a round no longer closes on the first report of a batch — `roundStillOpen()` reads the task board, so "the round is finished" waits for the last one home.
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 

@@ -40,7 +40,11 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-Noch keine unveröffentlichten Änderungen.
+- **Ein Modell pro Agent** —— `injection.model` war eine Entscheidung für den ganzen Knoten, also ließ sich ein Harness, der Anthropic Messages spricht, nur injizieren, indem man das Knotenmodell auf seinen Dialekt umstellt — und damit allen anderen Agenten die Rettungsinjektion nimmt. `injection.agents.<agent|adapter>` pinnt ein Modell nur für diesen Agenten: nicht gesetzte Felder erben das Knotenmodell, die Vererbung endet jedoch vor den Transportknöpfen `params`, `headers` und `thinking` — genau der Weg, auf dem der Body des einen Dialekts in den anderen gerät.
+
+- **Das Eingabefeld nimmt die Stimme** —— Diktat gab es nur für die TUI, deren Sidecars das Mikrofon der Maschine öffnen, auf der der Prozess läuft: der falsche Raum, wenn die Konsole über das LAN geöffnet wird. Jetzt nimmt die Seite 16-kHz-Mono-WAV auf, und `POST /api/voice/transcribe` reicht es an einen OpenAI-kompatiblen `/audio/transcriptions`-Endpunkt weiter. Der Abschnitt `asr` ist optional und erbt das aktive Modell, und eine Ablehnung des Anbieters wird mit dessen eigenem Satz gemeldet.
+
+- **Der Arbeitsbereich zeigt Geräte, keine Karte** —— Panels aus Agenten-Marken ersetzen den Topologie-Ring: das Panel ist die Maschine, die Kachel der Agent und ob er gerade arbeitet. Und eine Runde endet nicht mehr mit dem ersten Bericht eines Stapels — `roundStillOpen()` liest das Taskboard, sodass „die Arbeit dieser Runde ist abgeschlossen" auf den letzten wartet.
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 

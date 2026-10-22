@@ -40,7 +40,11 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
-暂无未发布内容。
+- **每个 agent 可以单独钉模型** —— `injection.model` 曾是全节点一个决定，说 Anthropic Messages 的 harness 只能靠把节点模型换成它的方言才能被注入，而这等于让其他所有 agent 失去失败时的兜底注入。`injection.agents.<agent|adapter>` 只为该 agent 钉一个模型：没写的字段继承节点模型，但继承刻意止步于 `params`、`headers`、`thinking` —— 那正是把一种方言的请求体带进另一种方言的入口。
+
+- **输入框可以直接说话** —— 语音输入此前只属于 TUI，而它的 sidecar 在运行进程的那台机器上开麦克风：用局域网打开控制台时，录到的是另一个房间。现在由页面录 16 kHz 单声道 WAV，`POST /api/voice/transcribe` 转发到 OpenAI 兼容的 `/audio/transcriptions`。`asr` 段可选、留空即继承当前模型，厂商的拒绝原样回给用户。
+
+- **工作空间展示的是设备，不是一张图** —— agent 徽标面板取代了拓扑环：面板是机器，磁贴是 agent 以及它此刻是否在忙。另外，一轮工作不再因为批量里的第一份报告就宣告结束 —— `roundStillOpen()` 读任务板，「本轮工作已全部完成」要等最后一个回家。
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 
