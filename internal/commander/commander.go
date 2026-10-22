@@ -79,14 +79,14 @@ type Router struct {
 // the preferred-agents bonus and falls back across scored candidates.
 func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, injection config.InjectionConfig, routing config.RoutingConfig) *Router {
 	r := &Router{
-		card:           card,
-		executor:       executor,
-		model:          model,
-		injectionModel: injection.NormalizedModel(),
+		card:            card,
+		executor:        executor,
+		model:           model,
+		injectionModel:  injection.NormalizedModel(),
 		injectionAgents: injection.Agents,
-		toolsPolicy:    routing.NormalizedToolsPolicy(),
-		pandaTools:     routing.NormalizedPandaTools(),
-		preferred:      routing.PreferredAgents,
+		toolsPolicy:     routing.NormalizedToolsPolicy(),
+		pandaTools:      routing.NormalizedPandaTools(),
+		preferred:       routing.PreferredAgents,
 	}
 	r.runAdapter = r.runAdapterDefault
 	r.runProcess = runAdapterProcess
