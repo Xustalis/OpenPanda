@@ -396,6 +396,13 @@ def _resolve_model(requested):
 INJECTED_PROVIDER_ID = "panda"
 INJECTED_CONFIG_ENV = "OPENCODE_CONFIG"
 
+# Set once a provider fragment was actually written for this run. The plain
+# path's rotate-and-retry has to tell two cases apart: panda pinned a model
+# that this build already serves (a retry is legitimate), or panda handed us
+# its own endpoint (a retry would silently swap the injection for a free
+# model). OPENPANDA_INJECTED_MODEL=1 alone cannot say which.
+_injected_provider = False
+
 
 def _injected_provider_config(model):
     """Write the provider fragment pointing opencode at panda's endpoint.
@@ -436,6 +443,7 @@ def _drop(path):
 
 
 def main():
+    global _injected_provider
     req = harness.read_request()
     prompt, timeout, cwd = req
     flags = _cli_flags()
@@ -465,8 +473,12 @@ def main():
             atexit.register(_drop, cfg)
             model = INJECTED_PROVIDER_ID + "/" + bare
             injected = True
-        elif bare and "/" not in bare:
-            model = f"openai/{bare}"
+            _injected_provider = True
+        elif bare:
+            # No endpoint came with the injection, so the request names a model
+            # this build already serves: keep it. A bare name still needs the
+            # openai/ provider every injected request used to get.
+            model = bare if "/" in bare else f"openai/{bare}"
     else:
         model = os.environ.get("OPENCODE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
         # A bare name was never passed on this path (it cannot resolve as a
@@ -629,8 +641,9 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
     """One-shot plain text mode for builds without --format json."""
     # An injected run's model lives on panda's provider, not on this build's
     # roster: the rotate-and-retry below would swap in a free model and drop
-    # the injection, so it is skipped entirely.
-    injected = os.environ.get("OPENPANDA_INJECTED_MODEL") == "1"
+    # the injection, so it is skipped entirely. A pinned model that this build
+    # still serves is not that case, and keeps the retry.
+    injected = _injected_provider
     if not model:
         # The built-in default rots as the free roster drifts; re-anchor it
         # against the live list too (probe failure keeps the constant).
