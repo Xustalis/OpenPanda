@@ -46,11 +46,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-- **A model pin per agent** — `injection.model` was one node-wide decision, so a harness that speaks Anthropic Messages could only be injected by switching the node model to its dialect, which took the failure-time rescue away from every other agent. `injection.agents.<agent|adapter>` pins a model for that agent alone: unset fields inherit the node model, and the inheritance stops before `params`, `headers` and `thinking` — the transport knobs that would carry one dialect's body into the other.
-
-- **The composer takes the voice** — dictation existed only for the TUI, whose sidecars open the microphone on the machine running the process: the wrong room when the console is opened over the LAN. The page now records 16 kHz mono WAV and `POST /api/voice/transcribe` relays it to an OpenAI-compatible `/audio/transcriptions`. The `asr` section is optional and inherits the active model, and a vendor refusal is reported as the vendor's own sentence.
-
-- **The workspace shows devices, not a map** — panels of agent marks replace the topology ring: the panel is the machine, the tile is the agent and whether it is working right now. And a round no longer closes on the first report of a batch — `roundStillOpen()` reads the task board, so "the round is finished" waits for the last one home.
+_No unreleased changes yet._
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 
@@ -75,6 +71,10 @@ What is not finished is written down rather than implied: UPnP/NAT-PMP port mapp
 
 ### Added
 
+- **A model pin per agent** — `injection.model` was one node-wide decision, so a harness that speaks Anthropic Messages could only be injected by switching the node model to its dialect, which took the failure-time rescue away from every other agent. `injection.agents.<agent|adapter>` pins a model for that agent alone: unset fields inherit the node model, and the inheritance stops before `params`, `headers` and `thinking` — the transport knobs that would carry one dialect's body into the other.
+
+- **The composer takes the voice** — dictation existed only for the TUI, whose sidecars open the microphone on the machine running the process: the wrong room when the console is opened over the LAN. The page now records 16 kHz mono WAV and `POST /api/voice/transcribe` relays it to an OpenAI-compatible `/audio/transcriptions`. The `asr` section is optional and inherits the active model, and a vendor refusal is reported as the vendor's own sentence.
+
 - **A screenshot in the transcript is a picture, not a path** — a tool row that read or produced an image (`Read` of a `shot.png`, a capture that answered "saved to …") showed nothing but the filename, so checking what the agent actually saw meant opening the file by hand. The log now draws the picture under the call — a framed thumbnail capped at 220px — and one click opens it full screen with the path in the footer; Esc, a click outside or × closes it. `GET /api/fs/image` streams the bytes from the storage roots or the OS temp tree (images only, 16 MiB cap, `nosniff`), loads them lazily as the row scrolls into view, and a path that no longer exists leaves one quiet "preview unavailable" line instead of a broken icon.
 
 - **To-do board: write it down first, decide later what Panda runs** — a new 待办 row in the rail: three lanes (to do / doing / done) where a note carries a title, description, priority, due date, tags and project; drag it between lanes, tick it off, and cancelled items fold into a footer line. "Hand to Panda" turns a todo into a queued task — its description becomes the prompt — and links the two. Todos live apart from the task queue on purpose: the queue drains itself, a todo only moves when you move it (migration v61, `/api/todos`).
@@ -89,6 +89,8 @@ What is not finished is written down rather than implied: UPnP/NAT-PMP port mapp
 - **A `--json` failure is JSON too** — `--json` promised a machine-readable answer and then broke that promise on the first error: `panda task add --title ""` printed `task add requires --title` as prose, leaving a script to scrape stderr or ignore the reason entirely. Every non-zero exit now writes one object to stderr — `{"error": {"code": 2, "message": "task add requires --title"}}`, plus the `step` that failed when there is one — so a consumer parses a single format and branches on the code. stdout stays a clean payload stream, and the text paths are unchanged byte for byte.
 
 ### Changed
+
+- **The workspace shows devices, not a map** — panels of agent marks replace the topology ring: the panel is the machine, the tile is the agent and whether it is working right now. And a round no longer closes on the first report of a batch — `roundStillOpen()` reads the task board, so "the round is finished" waits for the last one home.
 
 - **A queue write no longer opens a network socket** — `panda task add`, `task send` and `task continue` reached their row through a full engine init, which claimed the node row's transport duties and bound the LAN-discovery port for the milliseconds between argv and exit. Eight parallel `task add`s therefore fought over `:7837` and printed `bind: address already in use` for work that was entirely local. Those three now take a local-only path: schema, store, card and identity key still come up, the discovery socket and the startup peer dial do not.
 

@@ -179,23 +179,17 @@ English translation of [status.md](status.md)（中文版为准）· English
 > was verified (Mac → relay → cloud, a 3 MiB project tree hashing the same).
 > See `CHANGELOG.md`; not done: UPnP/NAT-PMP,
 > punch/dir source-signature convergence, a daemon→panel mesh-metrics IPC path,
-> and hello replay across peers (a protocol-level challenge-response, for
-> v0.1.1).
+> and hello replay across peers (a protocol-level challenge-response,
+> still open).
 >
-> 2026-10-23 (`v0.1.0` "Constellation" promoted: the same code as
-> `v0.1.0-preview` — same feature set, same wire format, same store schema,
-> same audit sign-off; what moved is the default channel. `/releases/latest`,
-> the one-liner, the Homebrew tap and `panda update` on a stable node serve
-> `v0.1.0` from now on, and the `v0.1.0-preview` tag stays published for
-> anyone who pinned it. Two claims were corrected before the promotion: the
-> site named `v0.1.0` while only the preview existed, and the preview's
-> release notes said the default channels already served it; the release
-> workflow now appends a pre-release block to any hyphenated tag. The repo was
-> tidied in the same pass — the old preview tags and releases
-> (`v0.0.8-preview` through `v0.0.12-preview`) and the local backup tags are
-> gone, leaving `v0.1.0-preview` as the only pre-release; only `main` remains
-> on the remote, and the scratch worktrees and stale branches are cleared.
-> The 23-check installer suite passes and `make gate` is green.)
+> 2026-10-23 (`v0.1.0` "Constellation" release preparation: the default
+> channels move from `v0.0.11` to `v0.1.0`; `v0.1.0-preview` and the earlier
+> preview tags/releases were restored and stay published for anyone pinning a
+> version. The public surfaces were brought in line before the cut — the site,
+> README and this document point at `v0.1.0`, the `0.1.0` changelog section
+> now carries the #104 work (console dictation, a per-agent model pin, device
+> panels), and the site no longer commits to a next version number. The 23-check installer
+> suite passes and `make gate` is green.)
 
 > 2026-10-21 (cross-network mesh P1–P5: dual-key identity and reachability cards,
 > transitive blind relay, epidemic directory sync, K=2 rendezvous edges and the
@@ -329,6 +323,9 @@ The 2026-08-31 review fix round has landed (merged into v0.0.7):
 | GPIO-driven servo (Orange Pi) | 🟡 Path landed, unverified on real hardware | v0.0.10 actuator dispatch: cards declare `actuators` + argv templates, `spec.action_spec` travels across delegation, the executor substitutes placeholders and runs the driver; `drivers/` ships seven reference implementations — servo/mic/camera/notify/mcu/screen/input |
 | **Computer-use eye/hand** (v0.0.11) | 🟡 Path landed | `hardware:screen_capture` (screenshot, tier 1) + `hardware:gui_input` (click/type/key/scroll, tier 2 as irreversible) reference drivers; `DetectActuators` auto-detects bundled `drivers/` (`OPENPANDA_DRIVERS_DIR` overrides exclusively), Windows resolves `.ps1` entries and runs them via `pwsh -File` (.cmd/.bat deliberately not resolved: cmd.exe parsing rules are incompatible with Go argv escaping); `Interface:"desktop"` actuators are advertised only when a GUI session is likely (console owner / DISPLAY·WAYLAND_DISPLAY / non-Session 0, `OPENPANDA_GUI_SESSION` overrides) — a headless daemon never fibs a screen; the routing prompt teaches the capture→reason→actuate chain |
 | **Task artifact retrieval** (v0.0.11) | ✅ | `panda task artifact <id> [--list|--file|--out]`; panel `GET /api/tasks/{id}/artifact`, `/files`, `/file?path=` (inside Bearer); console ArtifactSection lists + inline image/text preview + download; bare-task private-directory outputs auto-pack (empty dirs produce no empty pack, fixed workdirs are never packed whole) |
+| **Console dictation** (v0.1.0) | ✅ | `webui/panel/voice.go` + `POST /api/voice/transcribe`: the page records 16 kHz mono WAV and relays it to an OpenAI-compatible `/audio/transcriptions`; `asr` is optional and inherits the active model; vendor refusals are returned verbatim |
+| **Per-agent model pin** (v0.1.0) | ✅ | `injection.agents.<agent\|adapter>` pins a model for that agent alone; unset fields inherit the node model, stopping before `params`/`headers`/`thinking` so one dialect's body cannot leak into another |
+| **Workspace device panels** (v0.1.0) | ✅ | `webui/app/src/views/workspace-panels.tsx`: the panel is the machine, the tile is the agent and its live busy state; a round no longer closes on a batch's first report (`roundStillOpen()` reads the task board) |
 | Shortest-path multi-hop relay | ✅ graph routing landed | neighbor advertisements build the link-state graph, edge weights take `LinkMetrics` RTT samples (`unknownLinkCost` when unmeasured), `graphFirstHop` runs Dijkstra for the first hop of the globally cheapest path (`internal/scheduler/route.go`) |
 
 ## Both entry points reach it

@@ -40,11 +40,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-- **Ein Modell pro Agent** —— `injection.model` war eine Entscheidung für den ganzen Knoten, also ließ sich ein Harness, der Anthropic Messages spricht, nur injizieren, indem man das Knotenmodell auf seinen Dialekt umstellt — und damit allen anderen Agenten die Rettungsinjektion nimmt. `injection.agents.<agent|adapter>` pinnt ein Modell nur für diesen Agenten: nicht gesetzte Felder erben das Knotenmodell, die Vererbung endet jedoch vor den Transportknöpfen `params`, `headers` und `thinking` — genau der Weg, auf dem der Body des einen Dialekts in den anderen gerät.
-
-- **Das Eingabefeld nimmt die Stimme** —— Diktat gab es nur für die TUI, deren Sidecars das Mikrofon der Maschine öffnen, auf der der Prozess läuft: der falsche Raum, wenn die Konsole über das LAN geöffnet wird. Jetzt nimmt die Seite 16-kHz-Mono-WAV auf, und `POST /api/voice/transcribe` reicht es an einen OpenAI-kompatiblen `/audio/transcriptions`-Endpunkt weiter. Der Abschnitt `asr` ist optional und erbt das aktive Modell, und eine Ablehnung des Anbieters wird mit dessen eigenem Satz gemeldet.
-
-- **Der Arbeitsbereich zeigt Geräte, keine Karte** —— Panels aus Agenten-Marken ersetzen den Topologie-Ring: das Panel ist die Maschine, die Kachel der Agent und ob er gerade arbeitet. Und eine Runde endet nicht mehr mit dem ersten Bericht eines Stapels — `roundStillOpen()` liest das Taskboard, sodass „die Arbeit dieser Runde ist abgeschlossen" auf den letzten wartet.
+Noch keine unveröffentlichten Änderungen.
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 
@@ -69,6 +65,10 @@ Was nicht fertig ist, steht geschrieben statt angedeutet: UPnP/NAT-PMP-Portmappi
 
 ### Hinzugefügt
 
+- **Ein Modell pro Agent** —— `injection.model` war eine Entscheidung für den ganzen Knoten, also ließ sich ein Harness, der Anthropic Messages spricht, nur injizieren, indem man das Knotenmodell auf seinen Dialekt umstellt — und damit allen anderen Agenten die Rettungsinjektion nimmt. `injection.agents.<agent|adapter>` pinnt ein Modell nur für diesen Agenten: nicht gesetzte Felder erben das Knotenmodell, die Vererbung endet jedoch vor den Transportknöpfen `params`, `headers` und `thinking` — genau der Weg, auf dem der Body des einen Dialekts in den anderen gerät.
+
+- **Das Eingabefeld nimmt die Stimme** —— Diktat gab es nur für die TUI, deren Sidecars das Mikrofon der Maschine öffnen, auf der der Prozess läuft: der falsche Raum, wenn die Konsole über das LAN geöffnet wird. Jetzt nimmt die Seite 16-kHz-Mono-WAV auf, und `POST /api/voice/transcribe` reicht es an einen OpenAI-kompatiblen `/audio/transcriptions`-Endpunkt weiter. Der Abschnitt `asr` ist optional und erbt das aktive Modell, und eine Ablehnung des Anbieters wird mit dessen eigenem Satz gemeldet.
+
 - **Ein Screenshot in der Transkription ist jetzt ein Bild, kein Pfad** —— eine Tool-Zeile, die ein Bild gelesen oder erzeugt hat (`Read` auf `shot.png`, oder eine Aufnahme mit der Antwort „gespeichert unter …"), zeigte nur den Dateinamen; um zu prüfen, was der Agent gesehen hat, musste man die Datei selbst öffnen. Das Protokoll zeichnet das Bild nun unter dem Aufruf — gerahmte Vorschau, höchstens 220 px hoch — und ein Klick öffnet es im Vollbild, mit dem Pfad in der Fußzeile; Esc, ein Klick daneben oder × schließen es. `GET /api/fs/image` liefert die Bytes aus den Storage-Wurzeln oder dem temporären Verzeichnis des Systems (nur Bilder, 16-MiB-Grenze, `nosniff`), lädt sie erst beim Scrollen in die Zeile, und ein gelöschter Pfad hinterlässt nur eine leise Zeile „Bildvorschau nicht möglich" statt eines kaputten Bildsymbols.
 
 - **To-do-Board: erst notieren, später entscheiden, was Panda übernimmt** —— neue Zeile 待办 in der Leiste: drei Spuren (offen / in Arbeit / erledigt) mit Titel, Beschreibung, Priorität, Fälligkeit, Tags und Projekt; zwischen Spuren ziehen, per Kreis abhaken, Verworfenes klappt in eine Zeile am Fuß. „An Panda geben“ macht aus dem To-do eine eingereihte Aufgabe — die Beschreibung wird zum Auftrag — und verknüpft beide. To-dos liegen bewusst neben der Aufgaben-Warteschlange: die Queue leert sich selbst, ein To-do bewegt sich nur, wenn du es bewegst (Migration v61, `/api/todos`).
@@ -81,6 +81,8 @@ Was nicht fertig ist, steht geschrieben statt angedeutet: UPnP/NAT-PMP-Portmappi
 - **Ein Thread stellt sein eigenes Team ein** — der Fuß des Composers trägt jetzt eine Liste: jede Agent-CLI, die der Knoten kennt, erscheint als Person mit Gesicht, Namen und der Aufgabe, für die sie gut ist, und nur die gewählten Hände dürfen die Arbeit dieses Gesprächs übernehmen. Leer (der Standard) lässt den Scheduler je Aufgabe wählen; die Wahl liegt auf der Session, sodass ein wieder geöffneter Thread weiterhin weiß, wer daran arbeitet, und die Liste wird in das Spec jeder klassifizierten Aufgabe kopiert — sie gilt damit über Pläne, Sub-Agenten und einen Sprung auf einen anderen Knoten hinweg, statt ein Ratschlag zu sein, den das Modell ignorieren kann. Eine Liste, die nur Agenten nennt, die dieser Knoten nicht führt, fällt auf „keine Einschränkung“ zurück, statt die Aufgabe zu stranden.
 
 ### Geändert
+
+- **Der Arbeitsbereich zeigt Geräte, keine Karte** —— Panels aus Agenten-Marken ersetzen den Topologie-Ring: das Panel ist die Maschine, die Kachel der Agent und ob er gerade arbeitet. Und eine Runde endet nicht mehr mit dem ersten Bericht eines Stapels — `roundStillOpen()` liest das Taskboard, sodass „die Arbeit dieser Runde ist abgeschlossen" auf den letzten wartet.
 
 - **„Aufgabe ansehen" öffnet die Aufgabe neben dem Transkript, statt es zu verlassen** —— der Link unter einer delegierten Aufgabe führte nach 队列·任务·项目 und kostete den Leser die Unterhaltung selbst: Scrollposition, Entwurf, Stelle. Jetzt öffnet er die Orchestrierungskarte mit dieser Aufgabe bereits ausgewählt — die Aufgabenliste des Threads daneben —, und die volle Seite bleibt einen Klick in der Fußzeile der Karte entfernt; ⌘/Strg-Klick auf den Link geht direkt dorthin.
 

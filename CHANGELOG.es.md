@@ -40,11 +40,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-- **Un modelo fijado por agente** —— `injection.model` era una sola decisión para todo el nodo, así que un harness que habla Anthropic Messages solo podía recibir inyección cambiando el modelo del nodo a su dialecto, lo que dejaba sin rescate a todos los demás agentes. `injection.agents.<agent|adapter>` fija un modelo solo para ese agente: los campos sin definir heredan el del nodo, pero la herencia se detiene antes de `params`, `headers` y `thinking`, que son justo la vía por la que el cuerpo de un dialecto entra en el otro.
-
-- **El compositor acepta la voz** —— el dictado existía solo para la TUI, cuyos sidecars abren el micrófono de la máquina que ejecuta el proceso: la sala equivocada cuando el panel se abre por la LAN. Ahora la página graba WAV mono a 16 kHz y `POST /api/voice/transcribe` lo retransmite a un `/audio/transcriptions` compatible con OpenAI. La sección `asr` es opcional y hereda el modelo activo, y el rechazo del proveedor se muestra con sus propias palabras.
-
-- **El espacio de trabajo muestra dispositivos, no un mapa** —— paneles de marcas de agentes sustituyen al anillo de topología: el panel es la máquina, la ficha es el agente y si está trabajando ahora. Y una ronda ya no se cierra con el primer informe de un lote: `roundStillOpen()` lee el tablero de tareas, así que «el trabajo de esta ronda ha terminado» espera al último.
+Aún no hay cambios sin publicar.
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 
@@ -69,6 +65,10 @@ Lo que no está terminado se documenta en lugar de insinuarse: mapeo de puertos 
 
 ### Añadido
 
+- **Un modelo fijado por agente** —— `injection.model` era una sola decisión para todo el nodo, así que un harness que habla Anthropic Messages solo podía recibir inyección cambiando el modelo del nodo a su dialecto, lo que dejaba sin rescate a todos los demás agentes. `injection.agents.<agent|adapter>` fija un modelo solo para ese agente: los campos sin definir heredan el del nodo, pero la herencia se detiene antes de `params`, `headers` y `thinking`, que son justo la vía por la que el cuerpo de un dialecto entra en el otro.
+
+- **El compositor acepta la voz** —— el dictado existía solo para la TUI, cuyos sidecars abren el micrófono de la máquina que ejecuta el proceso: la sala equivocada cuando el panel se abre por la LAN. Ahora la página graba WAV mono a 16 kHz y `POST /api/voice/transcribe` lo retransmite a un `/audio/transcriptions` compatible con OpenAI. La sección `asr` es opcional y hereda el modelo activo, y el rechazo del proveedor se muestra con sus propias palabras.
+
 - **Una captura en la transcripción ahora es una imagen, no una ruta** —— una fila de herramienta que leía o producía una imagen (`Read` de un `shot.png`, o una captura que respondía «guardado en …») solo mostraba el nombre del archivo, así que comprobar qué había visto el agente obligaba a abrir el fichero a mano. El registro dibuja ahora la imagen bajo la llamada —miniatura con marco, 220 px de alto como máximo— y un clic la abre a pantalla completa con la ruta en el pie; Esc, un clic fuera o × la cierran. `GET /api/fs/image` sirve los bytes desde las raíces de almacenamiento o el directorio temporal del sistema (solo imágenes, tope de 16 MiB, `nosniff`), los carga cuando la fila entra en pantalla, y una ruta ya borrada deja una línea discreta de «no se puede previsualizar» en lugar de un icono roto.
 
 - **Tablero de tareas: anótalo primero y decide después qué ejecuta Panda** —— nueva fila 待办 en la barra: tres carriles (por hacer / en curso / hechas) con título, descripción, prioridad, fecha límite, etiquetas y proyecto; arrastra entre carriles, marca el círculo para terminar y lo cancelado se pliega en una línea al pie. «Pasar a Panda» convierte la tarea en una tarea de la cola usando su descripción como encargo, y enlaza ambas. Las tareas propias viven aparte de la cola a propósito: la cola se vacía sola, una tarea propia solo se mueve cuando la mueves (migración v61, `/api/todos`).
@@ -81,6 +81,8 @@ Lo que no está terminado se documenta en lugar de insinuarse: mapeo de puertos 
 - **Cada hilo contrata su propio equipo** — el pie del compositor lleva ahora una plantilla: cada CLI de agente que conoce el nodo aparece como una persona con cara, nombre y aquello en lo que es buena, y las elegidas son las únicas manos que pueden tomar el trabajo de esa conversación. Vacío (lo predeterminado) deja al planificador elegir por tarea; la elección se guarda en la sesión, así que un hilo reabierto sigue sabiendo quién trabaja en él, y la plantilla se copia en el spec de cada tarea clasificada, de modo que se mantiene a través de planes, subagentes y un salto a otro nodo en vez de ser un consejo que el modelo puede ignorar. Una plantilla que solo nombra agentes ausentes en este nodo vuelve a sin restricción en lugar de dejar la tarea varada.
 
 ### Cambiado
+
+- **El espacio de trabajo muestra dispositivos, no un mapa** —— paneles de marcas de agentes sustituyen al anillo de topología: el panel es la máquina, la ficha es el agente y si está trabajando ahora. Y una ronda ya no se cierra con el primer informe de un lote: `roundStillOpen()` lee el tablero de tareas, así que «el trabajo de esta ronda ha terminado» espera al último.
 
 - **«Ver tarea» abre la tarea junto a la transcripción en vez de abandonarla** —— el enlace bajo una tarea despachada llevaba a 队列·任务·项目 y le costaba al lector la conversación misma: su scroll, su borrador, su sitio. Ahora abre la tarjeta de orquestación con esa tarea ya seleccionada —la lista de tareas del hilo al lado— y la página completa sigue a un clic en el pie de la tarjeta, con ⌘/ctrl-clic en el enlace para ir directo.
 

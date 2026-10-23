@@ -40,11 +40,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
-- **每个 agent 可以单独钉模型** —— `injection.model` 曾是全节点一个决定，说 Anthropic Messages 的 harness 只能靠把节点模型换成它的方言才能被注入，而这等于让其他所有 agent 失去失败时的兜底注入。`injection.agents.<agent|adapter>` 只为该 agent 钉一个模型：没写的字段继承节点模型，但继承刻意止步于 `params`、`headers`、`thinking` —— 那正是把一种方言的请求体带进另一种方言的入口。
-
-- **输入框可以直接说话** —— 语音输入此前只属于 TUI，而它的 sidecar 在运行进程的那台机器上开麦克风：用局域网打开控制台时，录到的是另一个房间。现在由页面录 16 kHz 单声道 WAV，`POST /api/voice/transcribe` 转发到 OpenAI 兼容的 `/audio/transcriptions`。`asr` 段可选、留空即继承当前模型，厂商的拒绝原样回给用户。
-
-- **工作空间展示的是设备，不是一张图** —— agent 徽标面板取代了拓扑环：面板是机器，磁贴是 agent 以及它此刻是否在忙。另外，一轮工作不再因为批量里的第一份报告就宣告结束 —— `roundStillOpen()` 读任务板，「本轮工作已全部完成」要等最后一个回家。
+暂无未发布内容。
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 
@@ -69,6 +65,10 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增
 
+- **每个 agent 可以单独钉模型** —— `injection.model` 曾是全节点一个决定，说 Anthropic Messages 的 harness 只能靠把节点模型换成它的方言才能被注入，而这等于让其他所有 agent 失去失败时的兜底注入。`injection.agents.<agent|adapter>` 只为该 agent 钉一个模型：没写的字段继承节点模型，但继承刻意止步于 `params`、`headers`、`thinking` —— 那正是把一种方言的请求体带进另一种方言的入口。
+
+- **输入框可以直接说话** —— 语音输入此前只属于 TUI，而它的 sidecar 在运行进程的那台机器上开麦克风：用局域网打开控制台时，录到的是另一个房间。现在由页面录 16 kHz 单声道 WAV，`POST /api/voice/transcribe` 转发到 OpenAI 兼容的 `/audio/transcriptions`。`asr` 段可选、留空即继承当前模型，厂商的拒绝原样回给用户。
+
 - **时间线里的截图现在就是图，而不是一行路径** —— 过去工具读了或生成了图片（`Read` 一张 `shot.png`，或截图工具回一句「已保存到 …」），日志里只有文件名，想确认 Agent 究竟看到了什么，只能自己去把文件找出来。现在图片直接画在调用行下面——带边框的缩略图，高度上限 220px——点一下铺满全屏，页脚给出完整路径，Esc、点空白处或 × 关闭。字节由 `GET /api/fs/image` 从存储根目录或系统临时目录读出（仅图片类型、上限 16 MiB、`nosniff`），并随行滚入视野才加载；文件已被删掉时只留一行安静的「图片无法预览」，不会出现裂图。
 
 - **断网不再判死这一轮任务——等网回来接着跑** —— 过去一次传输失败会在几秒内把重试预算全砸在一条死路由上，然后把这一轮判失败；对刚钻进隧道的笔记本来说这是错的答案：断网以分钟计，重试阶梯以秒计。现在模型调用失败后会先探一次服务商自己的端点和两个公共锚点，判定为断网就进入持续检测——CLI 状态行、TUI 与网页控制台都会显示「网络连接失败，正在持续检测」——任何一路探测恢复就立刻重放，且不消耗重试次数。不需要公网的端点（回环或局域网上的本地模型）不受影响，`model.offline_wait: false` 可恢复旧的快速失败，等待只由你取消来结束，不设计时器上限。
@@ -83,6 +83,8 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **`--json` 的失败也是 JSON** —— `--json` 承诺机器可读，却在第一个错误上就破了功：`panda task add --title ""` 只打印一句 `task add requires --title`，脚本要么去刮 stderr，要么干脆不知道原因。现在所有非零退出都往 stderr 写一个对象——`{"error": {"code": 2, "message": "task add requires --title"}}`，有失败环节时再带一个 `step`——消费者只解析一种格式，按 code 分支。信封走 stderr，stdout 仍是干净的结果流；纯文本路径一个字节都没变。
 
 ### 变更
+
+- **工作空间展示的是设备，不是一张图** —— agent 徽标面板取代了拓扑环：面板是机器，磁贴是 agent 以及它此刻是否在忙。另外，一轮工作不再因为批量里的第一份报告就宣告结束 —— `roundStillOpen()` 读任务板，「本轮工作已全部完成」要等最后一个回家。
 
 - **写一条队列不再打开网络套接字** —— `panda task add`、`task send`、`task continue` 过去要经过一次完整 engine 初始化才写进那一行：它顺带认领了节点行的传输职责，并在 argv 到退出之间的几毫秒里绑住局域网发现端口。于是 8 路并发 `task add` 会为一个纯本地写操作抢 `:7837`，打出 `bind: address already in use`。这三条命令现在走 local-only 路径：schema、存储、能力卡、身份密钥照旧起来，发现套接字与启动时的一次性 peer 拨号不再发生。
 
