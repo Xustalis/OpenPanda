@@ -40,7 +40,14 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
-未リリースの変更はありません。
+### 追加
+
+- `OPENPANDA_UPDATE_BASE` で自己更新のダウンロード先をリリースアセットのミラーに向けられます。`api.github.com` には届くが `release-assets.githubusercontent.com` には届かないネットワークのための逃げ道です。インストーラが既に解釈する `OPENPANDA_RELEASE_BASE` も別名として受け付けるため、1 つの変数でインストールと更新の両方を制御できます。
+
+### 修正
+
+- `panda update` はアセットホストの一時的な不調で全体が失敗しなくなりました。リリースメタデータの取得は転送層のエラーで最大 3 回再試行し、GitHub のアセット CDN への TLS ハンドシェイクの上限を既定の 10 秒から 30 秒に延ばしています。アセット URL に付く署名済みクエリはエラーメッセージから伏せ字にしました。以前はこれが本当の原因を画面外に押し出していました。
+- `scripts/install.ps1` は Windows の `CRYPT_E_NO_REVOCATION_CHECK`（`0x80092012`）で中断しなくなりました。ローカルの curl が Schannel ビルドの場合は `--ssl-no-revoke` を付けるため、証明書の失効状態を確認できないことがインストールを止めません。証明書チェーン、ホスト名、有効期限の検証は従来どおりで、アーカイブは `checksums.txt` の SHA-256 で検証されます。
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 

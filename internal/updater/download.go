@@ -14,7 +14,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,16 +45,121 @@ func SetDownloadBaseForTest(base string) func() {
 // or a server that never finishes its response headers would otherwise park
 // the call until TCP gives up (minutes). Body streaming stays ctx-bound so a
 // large asset download on a slow link is not clipped mid-flight.
+//
+// TLSHandshakeTimeout is deliberately raised from the 10s DefaultTransport
+// value. GitHub redirects release downloads to release-assets.githubusercontent.com,
+// a separate host that has to complete its own TCP + TLS setup; on links with
+// a high RTT to that CDN, or through a proxy that only forwards after
+// establishing its own upstream tunnel, a 10s budget expires while the
+// handshake is still making progress. The failure then reads "net/http: TLS
+// handshake timeout" — indistinguishable from a genuine network block, but
+// happening on a link that would otherwise have worked.
 var httpClient = &http.Client{Transport: func() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.ResponseHeaderTimeout = 30 * time.Second
+	t.TLSHandshakeTimeout = 30 * time.Second
 	return t
 }()}
+
+// Retry policy. GitHub's asset host is the flakiest hop in this pipeline, and
+// a single TCP reset or one slow handshake used to fail the whole update: the
+// fetch helpers below are one-shot, so the operator saw "update failed" for a
+// condition that clears by itself a second later. Retries are bounded and
+// spaced so a genuinely blocked link still fails fast instead of hanging.
+const (
+	fetchAttempts    = 3
+	downloadAttempts = 2 // a release archive is ~35MB; a blocked link must not re-fetch it three times
+	retryBaseDelay   = 400 * time.Millisecond
+)
+
+// retryable reports whether err is a transient transport failure worth another
+// attempt. The test is intentionally about transport, not HTTP status: a 404
+// or a 403 from GitHub answers the same way every time, while a reset, a
+// timeout, or a DNS hiccup does not. 5xx is not retried here — GitHub's release
+// assets are served from object storage that does not return them in practice,
+// and treating them as retryable would mean classifying status codes, which
+// this helper has no response to do.
+func retryable(err error) bool {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	// Any dial/read/write error: connection reset by peer, EOF mid-response,
+	// a broken pipe through a proxy. *net.OpError is the wrapper net returns
+	// for all of them, including the "remote error" shape a TLS alert takes.
+	var oe *net.OpError
+	if errors.As(err, &oe) {
+		return true
+	}
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
+
+// withRetry runs fn up to attempts times, sleeping with exponential backoff
+// between attempts, and returns the last error unchanged when every attempt
+// fails. It stops early on ctx cancellation so a failed update never outlives
+// the caller's deadline, and on any non-retryable error so a definitive answer
+// (404, signature mismatch) is not masked by two pointless retries.
+func withRetry[T any](ctx context.Context, attempts int, fn func(context.Context) (T, error)) (T, error) {
+	var zero T
+	for attempt := 1; ; attempt++ {
+		v, err := fn(ctx)
+		if err == nil {
+			return v, nil
+		}
+		if attempt >= attempts || !retryable(err) {
+			return zero, err
+		}
+		timer := time.NewTimer(retryBaseDelay * time.Duration(1<<(attempt-1)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return zero, err
+		case <-timer.C:
+		}
+	}
+}
+
+// redactURL keeps scheme, host and path and replaces the query with an
+// ellipsis. GitHub release assets are served from signed URLs whose query
+// carries a several-hundred-byte token; embedded verbatim in an error, it
+// buries the actual cause ("net/http: TLS handshake timeout") far off-screen
+// and leaks a credential-shaped string into logs and bug reports.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.RawQuery == "" {
+		return raw
+	}
+	u.RawQuery = "…"
+	return u.String()
+}
+
+// scrubURLError rewrites a *url.Error so its message carries the redacted URL.
+// net/http wraps every request failure in one, and the default rendering
+// includes the full original URL.
+func scrubURLError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s %q: %w", ue.Op, redactURL(ue.URL), ue.Err)
+	}
+	return err
+}
 
 // downloadRelease fetches the release asset for version and its checksums.txt,
 // verifies the asset's SHA-256, and returns the archive path inside destDir.
 // destDir must already exist. A missing checksums entry or a hash mismatch is
 // an error: a silent corrupt archive is worse than a failed update.
+//
+// baseOverride, when non-empty, replaces the whole per-version asset directory
+// (not just the host) — the shape OPENPANDA_RELEASE_BASE already has in
+// scripts/install.ps1 and install.sh, so one environment variable steers both
+// the installer and the self-updater. It exists because the official asset host
+// (release-assets.githubusercontent.com) is unreachable from some networks
+// while api.github.com and github.com answer fine: without a way to point the
+// download at a mirror, such an install could check for updates but never
+// complete one. A mirror changes only the transport — the checksums, the
+// optional Ed25519 signature and the archive still have to agree with each
+// other, so a hostile mirror cannot install anything the official channel
+// would not have installed.
 //
 // When releaseKey is non-empty the release must also carry a valid
 // checksums.txt.sig — a detached Ed25519 signature over the raw checksums.txt
@@ -64,13 +171,16 @@ var httpClient = &http.Client{Transport: func() *http.Transport {
 // network path can route around it. allowUnsigned also clears a configured
 // or baked-in key: the operator's opt-out covers self-hosted channels that
 // ship no signature at all.
-func downloadRelease(ctx context.Context, repo, version, destDir, releaseKey string, allowUnsigned bool) (string, error) {
+func downloadRelease(ctx context.Context, repo, version, destDir, releaseKey string, allowUnsigned bool, baseOverride string) (string, error) {
 	if allowUnsigned {
 		releaseKey = ""
 	} else if releaseKey == "" {
 		return "", errors.New("no update release key configured: refusing an unverifiable release (set OPENPANDA_UPDATE_PUBKEY — the official channel's key is published in SECURITY.md — or OPENPANDA_UPDATE_UNSIGNED=1 to accept checksum-only verification)")
 	}
 	base := githubDownloadBase + "/" + repo + "/releases/download/v" + version
+	if o := strings.TrimRight(strings.TrimSpace(baseOverride), "/"); o != "" {
+		base = o
+	}
 	name, err := AssetName(version)
 	if err != nil {
 		return "", err
@@ -172,77 +282,85 @@ func decodeSignatureText(s string) ([]byte, error) {
 	return nil, errors.New("not a 64-byte Ed25519 signature (hex or base64)")
 }
 
-// fetchText GETs url and returns its body as a string.
-func fetchText(ctx context.Context, url string) (string, error) {
-	// Metadata payloads are ≤1MB; bound the whole request even when the
-	// caller's context is open-ended.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "OpenPanda-updater")
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s returned %s", url, resp.Status)
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
+// fetchText GETs url and returns its body as a string. Transient transport
+// failures are retried (fetchAttempts); a definitive response is not.
+func fetchText(ctx context.Context, rawURL string) (string, error) {
+	return withRetry(ctx, fetchAttempts, func(ctx context.Context) (string, error) {
+		// Metadata payloads are ≤1MB; bound the whole request even when the
+		// caller's context is open-ended. Per attempt, so each retry gets a
+		// full budget instead of inheriting a nearly spent one.
+		actx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(actx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("User-Agent", "OpenPanda-updater")
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return "", scrubURLError(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("%s returned %s", redactURL(rawURL), resp.Status)
+		}
+		b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if err != nil {
+			return "", scrubURLError(err)
+		}
+		return string(b), nil
+	})
 }
 
 // downloadFile fetches url into destDir (reusing the URL's base name) and
 // returns the written path. The download goes through a ".part" temp file so a
-// half-downloaded archive never sits at the final name.
-func downloadFile(ctx context.Context, url, destDir string) (string, error) {
-	// Release archives are ~35MB; a generous ceiling for slow links when the
-	// caller's context is open-ended, while ResponseHeaderTimeout still
-	// catches a server that stalls before streaming.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "OpenPanda-updater")
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download %s: %s", url, resp.Status)
-	}
-	if directoryTraversal(filepath.Base(url)) {
-		return "", fmt.Errorf("refusing to download from unsafe path %q", url)
-	}
-	dst := filepath.Join(destDir, filepath.Base(url))
-	tmp := dst + ".part"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return "", err
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
-		return "", err
-	}
-	return dst, nil
+// half-downloaded archive never sits at the final name — which is also what
+// makes a retry safe: a truncated attempt removes its temp file and the next
+// one starts clean.
+func downloadFile(ctx context.Context, rawURL, destDir string) (string, error) {
+	return withRetry(ctx, downloadAttempts, func(ctx context.Context) (string, error) {
+		// Release archives are ~35MB; a generous ceiling for slow links when
+		// the caller's context is open-ended, while ResponseHeaderTimeout
+		// still catches a server that stalls before streaming.
+		actx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+		defer cancel()
+		req, err := http.NewRequestWithContext(actx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("User-Agent", "OpenPanda-updater")
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return "", scrubURLError(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("download %s: %s", redactURL(rawURL), resp.Status)
+		}
+		if directoryTraversal(filepath.Base(rawURL)) {
+			return "", fmt.Errorf("refusing to download from unsafe path %q", rawURL)
+		}
+		dst := filepath.Join(destDir, filepath.Base(rawURL))
+		tmp := dst + ".part"
+		f, err := os.Create(tmp)
+		if err != nil {
+			return "", err
+		}
+		if _, err := io.Copy(f, resp.Body); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			return "", scrubURLError(err)
+		}
+		if err := f.Close(); err != nil {
+			os.Remove(tmp)
+			return "", err
+		}
+		if err := os.Rename(tmp, dst); err != nil {
+			os.Remove(tmp)
+			return "", err
+		}
+		return dst, nil
+	})
 }
 
 // checksumFor parses checksums.txt ("<hash>  <name>" or "<hash> *<name>",

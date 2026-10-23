@@ -48,6 +48,27 @@ ${XDG_DATA_HOME:-~/.local/share}/openpanda/
 
 **发布验签**：`checksums.txt` 与安装包同源下载，SHA-256 只能防传输损坏，防不住"两个文件一起被换掉"。真正的信任根是 Ed25519 签名 `checksums.txt.sig`——自更新器（`panda update apply`）在替换二进制前**强制**验签。安装器在本机 openssl 支持 Ed25519（`pkeyutl -rawin`，OpenSSL ≥ 1.1.1）时同样验签，签名不符直接中止；macOS 自带的 LibreSSL 3.3 不支持 Ed25519，此时降级为一条明确警告（SHA-256 仍已通过）。`OPENPANDA_REQUIRE_SIG=1` 把"无法验签"也当作失败，`OPENPANDA_SKIP_SIG=1` 显式跳过。Windows 的 `install.ps1` 无法验签（.NET/PowerShell 5.1 无 Ed25519），只做 SHA-256。
 
+### 受限网络下的安装与升级
+
+能连 `api.github.com` 不等于能连发布资产——GitHub 把 `releases/download/…` 302 到 `release-assets.githubusercontent.com`，这个域名在部分网络里不通，于是 `panda update check` 看得见新版本、`panda update apply` 却死在下载阶段。两个工具的症状不同，处置也不同：
+
+- **自更新器**：报 `fetch checksums: … net/http: TLS handshake timeout`。用 `OPENPANDA_UPDATE_BASE` 把下载指向镜像，值就是"到版本目录为止"的完整 URL：
+
+  ```powershell
+  $env:OPENPANDA_UPDATE_BASE = "https://<镜像>/Xustalis/OpenPanda/releases/download/v0.1.0"
+  panda upgrade
+  ```
+
+  安装脚本认的 `OPENPANDA_RELEASE_BASE` 是同一语义的别名，设一次两边都吃。走代理也行，但 Go 的 `ProxyFromEnvironment` 只读 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，不读 Windows「Internet 选项」里的系统代理——Clash 一类工具停在「系统代理」模式时，`panda` 拿不到它。
+
+- **Windows 安装脚本**：报 `curl: (35) schannel: … CRYPT_E_NO_REVOCATION_CHECK (0x80092012)`。这是本机 curl 使用 Schannel 后端、而证书吊销列表（CRL/OCSP）地址不可达，**不是**证书本身有问题；脚本在探测到该能力时自动补 `--ssl-no-revoke`，之后还有 `Invoke-WebRequest` 兜底。手工确认：
+
+  ```powershell
+  curl.exe -sS --ssl-no-revoke -o NUL -w "%{http_code}`n" https://api.github.com/repos/Xustalis/OpenPanda/releases/latest
+  ```
+
+镜像只改变传输路径，不改变信任：`checksums.txt`、Ed25519 签名与压缩包三者仍必须互相对应。
+
 ### Lite 构建：树莓派与纯命令行设备
 
 ```bash

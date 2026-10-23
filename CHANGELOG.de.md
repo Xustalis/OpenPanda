@@ -40,7 +40,14 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-Noch keine unveröffentlichten Änderungen.
+### Hinzugefügt
+
+- `OPENPANDA_UPDATE_BASE` lenkt den Download des Selbst-Updates auf einen Spiegel der Release-Assets um — der Ausweg für Netze, die `api.github.com` erreichen, `release-assets.githubusercontent.com` aber nicht. `OPENPANDA_RELEASE_BASE`, der Name, den die Installer bereits auswerten, wird als Alias akzeptiert, damit eine Variable beide steuert.
+
+### Behoben
+
+- `panda update` bricht bei einem wackeligen Asset-Host nicht mehr komplett ab: Die Release-Metadaten werden bei einem Transportfehler bis zu dreimal erneut abgerufen, und der TLS-Handshake zum Asset-CDN von GitHub erhält 30 s statt der standardmäßigen 10 s. Die signierte Query-Zeichenkette, die GitHub an Asset-URLs hängt, wird in der Fehlermeldung unkenntlich gemacht — sie hatte die eigentliche Ursache bisher aus dem Sichtfeld geschoben.
+- `scripts/install.ps1` bricht unter Windows nicht mehr mit `CRYPT_E_NO_REVOCATION_CHECK` (`0x80092012`) ab: curl läuft mit `--ssl-no-revoke`, wenn der lokale Schannel-Build dies unterstützt, sodass ein nicht erreichbarer Sperrstatus-Endpunkt die Installation nicht stoppt. Kette, Hostname und Gültigkeit werden weiterhin geprüft, und das Archiv wird weiterhin per SHA-256 gegen `checksums.txt` authentifiziert.
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 

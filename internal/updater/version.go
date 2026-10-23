@@ -62,6 +62,14 @@ type Options struct {
 	// Repo is the "owner/repo" whose GitHub releases host the assets. Empty
 	// falls back to DefaultRepo.
 	Repo string
+	// DownloadBase overrides the per-version asset directory the archive and
+	// checksums are fetched from — the URL that ends in
+	// "/releases/download/v<version>", matching OPENPANDA_RELEASE_BASE in the
+	// installers. Empty keeps the canonical GitHub path. This is the escape
+	// hatch for a network that reaches api.github.com but not the asset CDN;
+	// it does not weaken verification, because checksums, the Ed25519
+	// signature and the archive still have to agree with one another.
+	DownloadBase string
 	// ReleaseKey is an optional hex or base64 Ed25519 public key. When set,
 	// a release must ship checksums.txt.sig — a detached signature over the
 	// raw checksums.txt bytes — and the download is refused without a valid

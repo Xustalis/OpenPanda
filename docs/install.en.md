@@ -82,6 +82,43 @@ failure too; `OPENPANDA_SKIP_SIG=1` opts out. Windows' `install.ps1`
 cannot verify signatures (.NET / PowerShell 5.1 ship no Ed25519) and
 does SHA-256 only.
 
+### Installing and updating from a restricted network
+
+Reaching `api.github.com` does not mean reaching the release assets: GitHub
+redirects `releases/download/…` to `release-assets.githubusercontent.com`, a
+host that is unreachable on some networks. The result is an install that can
+see a new version and then fail while downloading it. The two tools fail
+differently, and are unblocked differently.
+
+- **The self-updater** reports `fetch checksums: … net/http: TLS handshake
+  timeout`. Point the download at a mirror with `OPENPANDA_UPDATE_BASE` — the
+  value is the full URL up to and including the version directory:
+
+  ```powershell
+  $env:OPENPANDA_UPDATE_BASE = "https://<mirror>/Xustalis/OpenPanda/releases/download/v0.1.0"
+  panda upgrade
+  ```
+
+  `OPENPANDA_RELEASE_BASE`, which the installers already read, is the same
+  knob under a different name — set one and both the installer and the updater
+  use it. A proxy works too, with one catch: Go's `ProxyFromEnvironment` reads
+  only the `HTTP_PROXY`/`HTTPS_PROXY` environment variables, never the Windows
+  "Internet Options" system proxy, so a tool left in system-proxy mode (the
+  Clash default) is invisible to `panda`.
+
+- **The Windows installer** reports `curl: (35) schannel: … CRYPT_E_NO_REVOCATION_CHECK (0x80092012)`.
+  That is curl using the Schannel backend and failing to reach a certificate
+  revocation endpoint (CRL/OCSP) — not a bad certificate. The script adds
+  `--ssl-no-revoke` by itself when the local curl supports it, and falls back
+  to `Invoke-WebRequest` after that. To check the link by hand:
+
+  ```powershell
+  curl.exe -sS --ssl-no-revoke -o NUL -w "%{http_code}`n" https://api.github.com/repos/Xustalis/OpenPanda/releases/latest
+  ```
+
+A mirror only changes the transport, not the trust: `checksums.txt`, the
+Ed25519 signature and the archive still have to agree with one another.
+
 ### Lite builds: Raspberry Pi and pure-CLI devices
 
 ```bash

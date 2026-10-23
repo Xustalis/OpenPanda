@@ -102,12 +102,12 @@ func TestDownloadReleaseSignatureEnforcement(t *testing.T) {
 
 	key := hex.EncodeToString(pub)
 	dir := t.TempDir()
-	if _, err := downloadRelease(context.Background(), "test/repo", version, dir, key, false); err != nil {
+	if _, err := downloadRelease(context.Background(), "test/repo", version, dir, key, false, ""); err != nil {
 		t.Fatalf("signed release refused: %v", err)
 	}
 
 	// A wrong key must refuse the release outright.
-	if _, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), hex.EncodeToString(mustKey(t)), false); err == nil {
+	if _, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), hex.EncodeToString(mustKey(t)), false, ""); err == nil {
 		t.Fatal("a release signed by another key was accepted")
 	}
 
@@ -125,13 +125,13 @@ func TestDownloadReleaseSignatureEnforcement(t *testing.T) {
 	defer noSig.Close()
 	cleanup2 := SetDownloadBaseForTest(noSig.URL)
 	defer cleanup2()
-	if _, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), key, false); err == nil {
+	if _, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), key, false, ""); err == nil {
 		t.Fatal("an unsigned release passed with a release key configured")
 	}
 	// …but allowUnsigned clears even a configured/baked key: the operator's
 	// opt-out is what keeps a self-hosted channel that ships no signature
 	// reachable from a build that has one compiled in.
-	if _, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), key, true); err != nil {
+	if _, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), key, true, ""); err != nil {
 		t.Fatalf("unsigned channel refused under allowUnsigned despite a configured key: %v", err)
 	}
 
@@ -140,10 +140,10 @@ func TestDownloadReleaseSignatureEnforcement(t *testing.T) {
 	// can anchor them. An explicit allowUnsigned opts back in.
 	cleanup3 := SetDownloadBaseForTest(srv.URL)
 	defer cleanup3()
-	if _, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), "", false); err == nil {
+	if _, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), "", false, ""); err == nil {
 		t.Fatal("an unsigned release passed without allowUnsigned")
 	}
-	archive, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), "", true)
+	archive, err := downloadRelease(context.Background(), "test/repo", version, t.TempDir(), "", true, "")
 	if err != nil {
 		t.Fatalf("key-less download refused under allowUnsigned: %v", err)
 	}

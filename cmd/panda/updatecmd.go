@@ -22,6 +22,14 @@ import (
 // knobs an operator uses to harden or self-host the update path:
 //
 //   - OPENPANDA_UPDATE_REPO: "owner/repo" of the GitHub release channel.
+//   - OPENPANDA_UPDATE_BASE: alternate asset directory for the download,
+//     ending in "/releases/download/v<version>". OPENPANDA_RELEASE_BASE — the
+//     name scripts/install.ps1 and install.sh already honour — is accepted as
+//     an alias so one variable steers both the installer and the updater.
+//     This covers the network that can reach api.github.com and github.com but
+//     not release-assets.githubusercontent.com, where `panda upgrade` would
+//     otherwise fail during the download with no recourse short of a manual
+//     install.
 //   - OPENPANDA_UPDATE_PUBKEY: hex or base64 Ed25519 public key. When set,
 //     a release must carry checksums.txt.sig (a detached signature over
 //     checksums.txt) or the update is refused, so a compromised release
@@ -40,6 +48,15 @@ import (
 func updateEnvOptions(opts updater.Options) updater.Options {
 	if opts.Repo == "" {
 		opts.Repo = os.Getenv("OPENPANDA_UPDATE_REPO")
+	}
+	if opts.DownloadBase == "" {
+		opts.DownloadBase = strings.TrimSpace(os.Getenv("OPENPANDA_UPDATE_BASE"))
+		if opts.DownloadBase == "" {
+			// The installers' spelling, kept as an alias: a host that already
+			// installs from a mirror should not need a second variable to
+			// update from it.
+			opts.DownloadBase = strings.TrimSpace(os.Getenv("OPENPANDA_RELEASE_BASE"))
+		}
 	}
 	if opts.ReleaseKey == "" {
 		opts.ReleaseKey = os.Getenv("OPENPANDA_UPDATE_PUBKEY")

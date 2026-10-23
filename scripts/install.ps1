@@ -77,11 +77,70 @@ function Fail($m)  { Write-Host "ERR  $m" -ForegroundColor Red; exit 1 }
 $script:CurlExe = $null
 try { $script:CurlExe = (Get-Command curl.exe -ErrorAction Stop).Source } catch {}
 
+# Windows curl builds link against Schannel, which validates certificate
+# revocation by default and hard-fails with CRYPT_E_NO_REVOCATION_CHECK
+# (0x80092012) when the CRL/OCSP endpoints cannot be queried:
+#
+#   curl: (35) schannel: next InitializeSecurityContext failed:
+#   CRYPT_E_NO_REVOCATION_CHECK (0x80092012) - the revocation function was
+#   unable to check for revocation.
+#
+# That is a strict-policy outcome, not a bad certificate: the chain, hostname
+# and expiry all verify, only the "is it revoked?" lookup has nowhere to go.
+# It is routine on networks that block or intercept CDN traffic.
+# --ssl-no-revoke skips exactly that lookup and nothing else. The transport is
+# not this installer's trust anchor anyway: every archive is authenticated by
+# SHA-256 against checksums.txt, so a tampered download still fails.
+#
+# The flag only exists on Schannel builds (an OpenSSL-linked curl, e.g. some
+# Git for Windows installs, rejects it), so probe once rather than assume.
+# Every string this script prints stays ASCII on purpose: Windows PowerShell
+# 5.1 decodes a BOM-less script with the system ANSI code page, so non-ASCII in
+# a message would reach the console as mojibake.
+$script:CurlTlsArgs = @()
+if ($script:CurlExe) {
+    & $script:CurlExe --ssl-no-revoke --version 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { $script:CurlTlsArgs = @("--ssl-no-revoke") }
+}
+
+# Curl's exit codes are the only structured signal it gives; without a mapping
+# the installer tells the operator "exited 35", which is not actionable.
+function ConvertFrom-CurlExit([int]$Code) {
+    switch ($Code) {
+        6  { "host not resolvable (DNS)" }
+        7  { "connection refused or host unreachable" }
+        28 { "timed out" }
+        35 { "TLS handshake failed (blocked proxy, or an unreachable certificate revocation endpoint)" }
+        56 { "connection reset while receiving" }
+        default { "exit code $Code" }
+    }
+}
+
+# GitHub release assets are served from signed URLs whose query is several
+# hundred bytes of token; printing it verbatim buries the reason for the
+# failure and floods the console the script is also trying to write into.
+function Format-UrlForMessage([string]$Url) {
+    $i = $Url.IndexOf("?")
+    if ($i -ge 0) { return $Url.Substring(0, $i) + "?..." }
+    return $Url
+}
+
 function Get-Url([string]$Url, [string]$OutFile) {
     if ($script:CurlExe) {
-        & $script:CurlExe -fsSL --retry 3 --connect-timeout 20 -o $OutFile $Url
-        if ($LASTEXITCODE -eq 0) { return }
-        Warn "curl.exe exited $LASTEXITCODE for $Url, retrying with Invoke-WebRequest..."
+        # stderr is captured rather than streamed: curl's raw multi-line
+        # diagnostic reads like a crash even when the very next line succeeds
+        # via the fallback below.
+        $errFile = [System.IO.Path]::GetTempFileName()
+        try {
+            $tls = $script:CurlTlsArgs
+            & $script:CurlExe -fsSL @tls --retry 3 --connect-timeout 20 -o $OutFile $Url 2>$errFile
+            if ($LASTEXITCODE -eq 0) { return }
+            $detail = (Get-Content -Raw $errFile -ErrorAction SilentlyContinue)
+        } finally {
+            Remove-Item -Force $errFile -ErrorAction SilentlyContinue
+        }
+        Warn "curl.exe failed for $(Format-UrlForMessage $Url): $(ConvertFrom-CurlExit $LASTEXITCODE) - retrying with Invoke-WebRequest..."
+        if ($detail) { Write-Verbose $detail.Trim() }
     }
     Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri $Url -OutFile $OutFile
 }
@@ -89,16 +148,23 @@ function Get-Url([string]$Url, [string]$OutFile) {
 function Get-Json([string]$Url) {
     if ($script:CurlExe) {
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("openpanda-api-" + [guid]::NewGuid().ToString("N") + ".json")
-        & $script:CurlExe -fsSL --retry 3 --connect-timeout 20 -o $tmp $Url
-        if ($LASTEXITCODE -eq 0) {
-            try { return (Get-Content -Raw $tmp | ConvertFrom-Json) }
-            # -Force, not -f: Remove-Item has both -Filter and -Force, so the
-            # one-letter form is an ambiguous parameter prefix and fails to
-            # bind — which with $ErrorActionPreference = "Stop" set above
-            # would abort the install at its first API call.
-            finally { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
+        $errFile = [System.IO.Path]::GetTempFileName()
+        try {
+            $tls = $script:CurlTlsArgs
+            & $script:CurlExe -fsSL @tls --retry 3 --connect-timeout 20 -o $tmp $Url 2>$errFile
+            if ($LASTEXITCODE -eq 0) {
+                try { return (Get-Content -Raw $tmp | ConvertFrom-Json) }
+                # -Force, not -f: Remove-Item has both -Filter and -Force, so the
+                # one-letter form is an ambiguous parameter prefix and fails to
+                # bind — which with $ErrorActionPreference = "Stop" set above
+                # would abort the install at its first API call.
+                finally { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
+            }
+            Warn "curl.exe failed for $(Format-UrlForMessage $Url): $(ConvertFrom-CurlExit $LASTEXITCODE) - retrying with Invoke-RestMethod..."
+        } finally {
+            Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+            Remove-Item -Force $errFile -ErrorAction SilentlyContinue
         }
-        Warn "curl.exe exited $LASTEXITCODE for $Url, retrying with Invoke-RestMethod..."
     }
     return (Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 -Uri $Url)
 }
@@ -132,7 +198,8 @@ if ($Version -eq "latest") {
         # used by Invoke-WebRequest is misconfigured).
         try {
             if ($script:CurlExe) {
-                $hdr = & $script:CurlExe -fsSI --connect-timeout 20 "$Repo/releases/latest" 2>$null
+                $tls = $script:CurlTlsArgs
+                $hdr = & $script:CurlExe -fsSI @tls --connect-timeout 20 "$Repo/releases/latest" 2>$null
                 $loc = ($hdr | Where-Object { $_ -match '^[Ll]ocation:' } | Select-Object -First 1)
                 if ($loc -match '^[Ll]ocation:\s*(\S+)') { $tag = $Matches[1] }
             }

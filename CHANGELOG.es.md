@@ -40,7 +40,14 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-Aún no hay cambios sin publicar.
+### Añadido
+
+- `OPENPANDA_UPDATE_BASE` dirige la descarga de la autoactualización a un espejo de los assets de la versión: la salida para una red que alcanza `api.github.com` pero no `release-assets.githubusercontent.com`. `OPENPANDA_RELEASE_BASE`, el nombre que ya respetan los instaladores, se acepta como alias para que una sola variable gobierne ambos.
+
+### Corregido
+
+- `panda update` ya no fracasa por completo cuando el host de assets falla de forma intermitente: los metadatos de la versión se reintentan hasta tres veces ante un error de transporte, y el handshake TLS con la CDN de assets de GitHub dispone de 30 s en lugar de los 10 s por defecto. La cadena de consulta firmada que GitHub añade a las URL de los assets se oculta en el mensaje de error, que antes empujaba la causa real fuera de la pantalla.
+- `scripts/install.ps1` ya no se interrumpe en Windows por `CRYPT_E_NO_REVOCATION_CHECK` (`0x80092012`): curl se ejecuta con `--ssl-no-revoke` cuando la compilación local de Schannel lo admite, de modo que un endpoint de revocación inaccesible no detiene la instalación. La cadena, el nombre de host y la caducidad se siguen verificando, y el archivo se autentica con SHA-256 contra `checksums.txt`.
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 

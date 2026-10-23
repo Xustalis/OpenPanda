@@ -40,7 +40,14 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
-暂无未发布内容。
+### 新增
+
+- `OPENPANDA_UPDATE_BASE` 可把自更新的下载指向发布资产镜像——这是给"能连 `api.github.com`、连不上 `release-assets.githubusercontent.com`"的网络留的出口。安装脚本已支持的 `OPENPANDA_RELEASE_BASE` 作为别名一并接受，一个变量同时管安装与升级。
+
+### 修复
+
+- `panda update` 不再因资产主机抖动而整轮失败：拉取发布元数据时对传输层错误最多重试三次，连接 GitHub 资产 CDN 的 TLS 握手预算从默认 10 秒提到 30 秒；同时从错误信息里隐去资产 URL 上带签名的查询串——它此前把真正的原因挤到了屏幕外。
+- `scripts/install.ps1` 不再因 Windows 的 `CRYPT_E_NO_REVOCATION_CHECK`（`0x80092012`）中断：当本机 curl 为 Schannel 构建时自动加上 `--ssl-no-revoke`，"查不到证书吊销状态"不再阻断安装。证书链、主机名与有效期仍照常校验，压缩包仍以 `checksums.txt` 的 SHA-256 校验。
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 
