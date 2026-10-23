@@ -50,16 +50,15 @@ _No unreleased changes yet._
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 
-**The promotion** — codename **Constellation**: `v0.1.0` is `v0.1.0-preview` moved onto the default channel. Same feature set, same wire format, same store schema, same audit sign-off. Nothing was added to earn the number; what changed is who gets it without asking.
+**The first stable release** — codename **Constellation**: OpenPanda 0.1.0 is the release-grade line: work is routed to the machines you own — same-project tasks in parallel, a cross-network mesh that holds through relays, one console to command it from — with the release audit's correctness and security work closed behind it.
 
-The full feature list and the audit's findings live in the `0.1.0-preview` section below. This section records only what moved between that cut and this one.
+It is `v0.1.0-preview` promoted to the default channel, so the feature set is unchanged and the full list stays in the `0.1.0-preview` section below. What follows is what a user of this release needs to know.
 
-- **The default channels resolve here.** `/releases/latest`, the one-liner, the Homebrew tap and `panda update` on a stable node all serve `v0.1.0` from now on; the `v0.1.0-preview` tag stays published for anyone who pinned it.
-- **The one-liner needs no `--version`.** It resolves the latest stable, which is this cut — the pinned form keeps working for anyone who wants an exact version.
-- **Nothing breaking moved in.** Configuration, capability cards, stored data and the wire format are unchanged from the preview, so an install on either line upgrades in place without a migration the preview had not already run.
-- **Two surfaces were corrected before promotion.** The site named `v0.1.0` while only the preview existed, and the preview's release notes claimed the default channels already served it; both now match reality, and the release workflow appends a pre-release block to any hyphenated tag so the next preview cannot repeat the mistake.
-- **The installer suite count in the status docs was wrong.** It is 23 checks, not 21 — the unsigned-release warning and the `OPENPANDA_REQUIRE_SIG` refusal were the two that went uncounted.
-- **What is still open is stated, not implied.** The cross-node hello replay and the `XPub` signature-domain gap are protocol-level and land in v0.1.1; `docs/status.md` and `docs/reports/release-audit-2026-10-22.md` list them alongside the rest.
+- **Install or upgrade with the usual command.** The one-liner, `/releases/latest` and the Homebrew tap resolve to `v0.1.0`; an existing install upgrades in place with `panda update` or by re-running the installer.
+- **Nothing breaks.** Configuration, capability cards, stored data and the wire format are unchanged from the preview, and the store schema is the same — no migration runs that the preview had not already run.
+- **NAT traversal still wants a reachable peer.** UPnP/NAT-PMP port mapping is not implemented; a node behind a symmetric NAT joins the mesh through a relay or an outbound connection.
+- **Two protocol items land in v0.1.1.** Signature convergence for punch and directory frames, and cross-node hello replay, are open by design in this release; both are listed in `docs/status.md`.
+- **Mesh counters stop at the daemon.** `panda nodes` and the workspace topology show what the daemon knows; relay byte counters are not yet bridged to the panel sidecar.
 
 ## [0.1.0-preview] - 2026-10-22
 

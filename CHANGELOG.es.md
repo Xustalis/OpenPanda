@@ -44,16 +44,15 @@ Aún no hay cambios sin publicar.
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 
-**El ascenso** — nombre en clave **Constellation**: `v0.1.0` es `v0.1.0-preview` trasladado al canal por defecto. Mismo conjunto de funciones, mismo formato de cable, mismo esquema de almacenamiento, misma firma de la auditoría. No se añadió nada para ganar el número; lo que cambió es quién lo recibe sin preguntar.
+**La primera versión estable** — nombre en clave **Constellation**: OpenPanda 0.1.0 es la línea de calidad de lanzamiento: el trabajo se reparte entre las máquinas que tú controlas —tareas del mismo proyecto en paralelo, una malla entre redes que se sostiene a través de relays, una sola consola para gobernarla— con las correcciones de corrección y seguridad de la auditoría ya cerradas detrás.
 
-La lista completa de funciones y las conclusiones de la auditoría están en la sección `0.1.0-preview` de abajo. Esta sección registra solo lo que se movió entre aquel corte y este.
+Es `v0.1.0-preview` ascendido al canal por defecto, así que el conjunto de funciones no cambia y la lista completa sigue en la sección `0.1.0-preview` de abajo. Lo que sigue es lo que necesita saber quien use esta versión.
 
-- **Los canales por defecto apuntan aquí.** `/releases/latest`, el instalador de una línea, el tap de Homebrew y `panda update` en un nodo de la línea estable sirven `v0.1.0` desde ahora; la etiqueta `v0.1.0-preview` sigue publicada para quien la fijó.
-- **El instalador de una línea ya no necesita `--version`.** Resuelve la última estable, que es este corte; la forma fijada sigue funcionando para quien quiera una versión exacta.
-- **No entró nada que rompa.** La configuración, las tarjetas de capacidad, los datos guardados y el formato de cable no cambian respecto al avance, así que una instalación de cualquiera de las dos líneas se actualiza en el sitio sin una migración que el avance no hubiera ejecutado ya.
-- **Dos superficies se corrigieron antes del ascenso.** El sitio nombraba `v0.1.0` cuando solo existía el avance, y las notas de la versión preliminar afirmaban que los canales por defecto ya la servían; ahora ambas dicen lo que es cierto, y el flujo de publicación añade un bloque de prepublicación a cualquier etiqueta con guion para que el próximo avance no repita el error.
-- **El recuento de pruebas del instalador en los documentos de estado estaba mal.** Son 23 comprobaciones, no 21: el aviso de publicación sin firma y el rechazo de `OPENPANDA_REQUIRE_SIG` fueron las dos que quedaron sin contar.
-- **Lo que sigue abierto se dice, no se insinúa.** La repetición de hello entre nodos y la ausencia de `XPub` en el dominio de firma son de nivel de protocolo y llegan en v0.1.1; `docs/status.md` y `docs/reports/release-audit-2026-10-22.md` los enumeran junto al resto.
+- **Se instala o se actualiza con el comando de siempre.** El instalador de una línea, `/releases/latest` y el tap de Homebrew resuelven `v0.1.0`; una instalación existente se actualiza en el sitio con `panda update` o volviendo a ejecutar el instalador.
+- **Nada se rompe.** La configuración, las tarjetas de capacidad, los datos guardados y el formato de cable no cambian respecto al avance, y el esquema de almacenamiento es el mismo: no corre ninguna migración que el avance no hubiera ejecutado ya.
+- **El tránsito por NAT aún necesita un par alcanzable.** La asignación de puertos UPnP/NAT-PMP no está implementada; un nodo detrás de un NAT simétrico entra en la malla mediante un relay o una conexión saliente.
+- **Dos asuntos de protocolo llegan en v0.1.1.** La convergencia de firmas para los marcos de punch y de directorio, y la repetición de hello entre nodos, quedan abiertas por diseño en esta versión; ambas figuran en `docs/status.md`.
+- **Los contadores de la malla llegan hasta el daemon.** `panda nodes` y la topología del espacio de trabajo muestran lo que el daemon sabe; los contadores de bytes del relay aún no se puentean al sidecar del panel.
 
 ## [0.1.0-preview] - 2026-10-22
 

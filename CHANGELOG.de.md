@@ -44,16 +44,15 @@ Noch keine unveröffentlichten Änderungen.
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 
-**Die Beförderung** — Codename **Constellation**: `v0.1.0` ist `v0.1.0-preview`, verschoben auf den Standardkanal. Gleicher Funktionsumfang, gleiches Wire-Format, gleiches Store-Schema, gleiche Audit-Freigabe. Nichts wurde hinzugefügt, um die Versionsnummer zu verdienen; geändert hat sich, wer sie ohne Nachfrage bekommt.
+**Die erste stabile Version** — Codename **Constellation**: OpenPanda 0.1.0 ist die reife Linie: Arbeit wird auf die Maschinen verteilt, die dir gehören — Aufgaben desselben Projekts parallel, ein netzübergreifendes Mesh, das über Relays hält, eine Konsole, von der aus alles gesteuert wird — mit den Korrektheits- und Sicherheitskorrekturen des Release-Audits dahinter.
 
-Die vollständige Funktionsliste und die Befunde des Audits stehen im Abschnitt `0.1.0-preview` weiter unten. Dieser Abschnitt hält nur fest, was sich zwischen jenem Schnitt und diesem bewegt hat.
+Es ist `v0.1.0-preview`, befördert auf den Standardkanal; der Funktionsumfang bleibt gleich, die vollständige Liste steht weiterhin im Abschnitt `0.1.0-preview` unten. Was folgt, ist das, was man über diese Version wissen muss.
 
-- **Die Standardkanäle zeigen hierher.** `/releases/latest`, der Ein-Zeilen-Installer, der Homebrew-Tap und `panda update` auf einem Knoten der stabilen Linie liefern ab jetzt `v0.1.0`; das Tag `v0.1.0-preview` bleibt für alle veröffentlicht, die es festgelegt haben.
-- **Der Ein-Zeilen-Installer braucht kein `--version` mehr.** Er löst die neueste stabile Version auf, also diesen Schnitt; die festgelegte Form funktioniert weiter für alle, die eine exakte Version wollen.
-- **Nichts Brechendes ist hinzugekommen.** Konfiguration, Capability-Karten, gespeicherte Daten und das Wire-Format sind gegenüber der Vorschau unverändert, sodass eine Installation auf beiden Linien an Ort und Stelle aktualisiert — ohne Migration, die die Vorschau nicht schon ausgeführt hätte.
-- **Zwei Oberflächen wurden vor der Beförderung korrigiert.** Die Website nannte `v0.1.0`, als es nur die Vorschau gab, und die Release-Notizen der Vorschau behaupteten, die Standardkanäle lieferten sie bereits; beide sagen jetzt, was stimmt, und der Release-Workflow hängt an jedes Tag mit Bindestrich einen Vorabveröffentlichungs-Hinweis, damit die nächste Vorschau den Fehler nicht wiederholt.
-- **Die Zahl der Installer-Prüfungen in den Statusdokumenten war falsch.** Es sind 23 Prüfungen, nicht 21 — die Warnung bei unsignierten Releases und die Ablehnung durch `OPENPANDA_REQUIRE_SIG` waren die beiden, die nicht mitgezählt wurden.
-- **Was offen bleibt, wird benannt, nicht angedeutet.** Der knotenübergreifende hello-Replay und die fehlende `XPub`-Bindung an die Signaturdomäne sind Protokollebene und kommen in v0.1.1; `docs/status.md` und `docs/reports/release-audit-2026-10-22.md` führen sie mit dem Rest auf.
+- **Installation und Update wie gewohnt.** Ein-Zeilen-Installer, `/releases/latest` und der Homebrew-Tap lösen `v0.1.0` auf; eine bestehende Installation aktualisiert sich an Ort und Stelle mit `panda update` oder durch erneutes Ausführen des Installers.
+- **Nichts bricht.** Konfiguration, Capability-Karten, gespeicherte Daten und das Wire-Format sind gegenüber der Vorschau unverändert, das Store-Schema ist dasselbe — es läuft keine Migration, die die Vorschau nicht schon ausgeführt hätte.
+- **NAT-Traversal braucht weiterhin einen erreichbaren Partner.** UPnP/NAT-PMP-Portmapping ist nicht implementiert; ein Knoten hinter symmetrischem NAT kommt über ein Relay oder eine ausgehende Verbindung ins Mesh.
+- **Zwei Protokollpunkte kommen in v0.1.1.** Die Signaturkonvergenz für Punch- und Verzeichnis-Frames sowie der knotenübergreifende hello-Replay bleiben in dieser Version bewusst offen; beide stehen in `docs/status.md`.
+- **Mesh-Zähler enden am Daemon.** `panda nodes` und die Topologie im Arbeitsbereich zeigen, was der Daemon weiß; die Byte-Zähler des Relays sind noch nicht an das Panel-Sidecar angebunden.
 
 ## [0.1.0-preview] - 2026-10-22
 
