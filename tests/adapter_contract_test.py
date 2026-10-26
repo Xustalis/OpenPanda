@@ -12,6 +12,7 @@ and the timeout process-tree kill.
 import json
 import os
 import pathlib
+import shutil
 import stat
 import subprocess
 import sys
@@ -67,6 +68,13 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=No
             "OPENCODE_MODEL", "ANTHROPIC_MODEL", "OPENAI_MODEL",
             "OPENPANDA_INJECTED_MODEL", "OPENPANDA_ADAPTER_CACHE",
             "OPENPANDA_CACHE_DIR",
+            # Ambient provider endpoints would otherwise leak into the
+            # adapter's injection detection (a developer shell inside
+            # Claude Code exports ANTHROPIC_BASE_URL).
+            "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY",
+            "OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENCODE_API_KEY",
+            "OPENPANDA_MODEL_BASE_URL", "OPENPANDA_MODEL_API_KEY",
+            "OPENPANDA_MODEL_NAME", "OPENPANDA_MODEL_API_TYPE",
         ):
             merged.pop(key, None)
         # Probes must answer from the fake CLI in every case, never from a
@@ -105,6 +113,7 @@ if "--help" in sys.argv:
     print("      --format  format: default (formatted) or json (raw JSON events)")
     print("      --auto    auto-approve permissions that are not explicitly denied")
     print("      --agent   agent to use")
+    print("      --standalone  run with a private server instead of the background service")
     sys.exit(0)
 '''
 
@@ -621,7 +630,159 @@ print(json.dumps({"type":"text","sessionID":"ses_p2","part":{"id":"px","type":"t
         )
         self.assertTrue(payload["ok"], payload)
 
-    def test_opencode_auto_pick_effort_maps_to_variant(self):
+    def test_opencode_catalog_is_the_roster_when_models_is_empty(self):
+        """v2 builds answer `opencode models` with an empty list. The catalog
+        probe must then be the roster: an unpinned run still picks a model and
+        identifies what is served, instead of passing no --model at all."""
+        payload, progress, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+if sys.argv[1:2] == ["models"]:
+    sys.exit(0)  # v2: empty roster
+if sys.argv[1:3] == ["api", "model.list"]:
+    print(json.dumps({"data": [
+        {"id": "deepseek-v4.1-flash-free", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 200000, "output": 32000},
+         "cost": [{"input": 0, "output": 0}],
+         "status": "active", "enabled": True},
+    ]}))
+    sys.exit(0)
+args = sys.argv[1:]
+assert args[args.index("--model") + 1] == "opencode/deepseek-v4.1-flash-free", args
+print(json.dumps({"type":"text","sessionID":"ses_c1","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "ok")
+        self.assertTrue(
+            any("identified served models: opencode/deepseek-v4.1-flash-free" in line
+                for line in progress),
+            progress,
+        )
+
+    def test_opencode_billing_failure_falls_back_to_free_model(self):
+        """A paid model the account cannot pay for is not a roster rotation:
+        the adapter retries the same task on the best free model instead of
+        ending the run with the gateway's billing error."""
+        payload, progress, _ = run_adapter(
+            "opencode.py", "opencode",
+            OC_HELP_CURRENT + self.OC_PAID_ROSTER + self.OC_PAID_API + r'''
+import json, sys
+args = sys.argv[1:]
+model = args[args.index("--model") + 1]
+if model == "anthropic/claude-4.6-opus":
+    print(json.dumps({"type": "error", "error": {
+        "type": "api_error",
+        "message": "Upstream request failed: Insufficient account funds"}}))
+    sys.exit(0)
+print(json.dumps({"type":"text","sessionID":"ses_b1","part":{"id":"px","type":"text","text":"ok on " + model}}))
+''',
+            extra_request={"complexity": 0.9},
+            env={"OPENPANDA_OPENCODE_ALLOW_PAID": "1"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "ok on opencode/nemotron-3.5-super-vl-free")
+        self.assertTrue(
+            any("rejected for billing/quota; retrying on free model" in line
+                for line in progress),
+            progress,
+        )
+
+    def test_opencode_go_models_need_a_credential(self):
+        """The subscription roster without a stored login cannot serve:
+        its models are disqualified so the pick lands on the free Zen tier
+        instead of dying on "Go requires a credential"."""
+        home = tempfile.mkdtemp()
+        cache = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        self.addCleanup(shutil.rmtree, cache, True)
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+if sys.argv[1:3] == ["api", "model.list"]:
+    print(json.dumps({"data": [
+        {"id": "iceman-contributor-free", "providerID": "opencode-go",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 262144, "output": 131072},
+         "cost": [{"input": 0, "output": 0}],
+         "status": "active", "enabled": True},
+        {"id": "deepseek-v4.1-flash-free", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 200000, "output": 32000},
+         "cost": [{"input": 0, "output": 0}],
+         "status": "active", "enabled": True},
+    ]}))
+    sys.exit(0)
+args = sys.argv[1:]
+assert args[args.index("--model") + 1] == "opencode/deepseek-v4.1-flash-free", args
+print(json.dumps({"type":"text","sessionID":"ses_g1","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={"HOME": home, "XDG_CACHE_HOME": cache},
+        )
+        self.assertTrue(payload["ok"], payload)
+
+    def test_opencode_injected_anthropic_endpoint_merges_native_config(self):
+        """An injected Anthropic-dialect model reaches opencode through the
+        Anthropic SDK provider, and the fragment is merged over the user's
+        native config instead of replacing it (MCP servers must survive)."""
+        native = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump({"mcp": {"demo": {"type": "local", "command": ["true"]}},
+                   "permission": {"external_directory": "allow"}}, native)
+        native.close()
+        self.addCleanup(os.unlink, native.name)
+        payload, progress, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, os, sys
+args = sys.argv[1:]
+assert "--standalone" in args, args
+assert args[args.index("--model") + 1] == "panda/deepseek-flash", args
+cfg = json.load(open(os.environ["OPENCODE_CONFIG"], encoding="utf-8"))
+prov = cfg["provider"]["panda"]
+assert prov["npm"] == "@ai-sdk/anthropic", prov
+assert prov["options"]["baseURL"] == "{env:OPENPANDA_MODEL_BASE_URL}", prov
+assert prov["models"]["deepseek-flash"]["name"] == "deepseek-flash", prov
+assert cfg["mcp"]["demo"]["type"] == "local", cfg
+assert cfg["permission"]["external_directory"] == "allow", cfg
+print(json.dumps({"type":"text","sessionID":"ses_i1","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "OPENPANDA_MODEL_BASE_URL": "https://api.deepseek.com/anthropic",
+                "OPENPANDA_MODEL_API_KEY": "sk-test",
+                "OPENPANDA_MODEL_NAME": "deepseek-flash",
+                "OPENPANDA_MODEL_API_TYPE": "anthropic",
+                "OPENCODE_CONFIG": native.name,
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "ok")
+        self.assertTrue(
+            any("using injected model panda/deepseek-flash (anthropic)" in line
+                for line in progress),
+            progress,
+        )
+
+    def test_opencode_injected_openai_endpoint_keeps_compatible_provider(self):
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, os, sys
+cfg = json.load(open(os.environ["OPENCODE_CONFIG"], encoding="utf-8"))
+prov = cfg["provider"]["panda"]
+assert prov["npm"] == "@ai-sdk/openai-compatible", prov
+print(json.dumps({"type":"text","sessionID":"ses_i2","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "OPENPANDA_MODEL_BASE_URL": "https://api.deepseek.com/v1",
+                "OPENPANDA_MODEL_API_KEY": "sk-test",
+                "OPENPANDA_MODEL_NAME": "deepseek-flash",
+                "OPENPANDA_MODEL_API_TYPE": "openai",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+
+
         """A requested reasoning effort rides the model's declared variant
         (provider/model#variant); an undeclared level leaves the bare id."""
         payload, _, _ = run_adapter(
@@ -678,10 +839,11 @@ if sys.argv[1:3] == ["api", "model.list"]:
 '''
 
     def test_opencode_simple_task_prefers_free_models(self):
-        """The default pick chases capability — the paid opus wins. A task the
-        entry classifier scored as simple (complexity < 0.4) demotes every paid
-        entry to last resort: the free flagship serves instead."""
-        # Capability-first: the paid model's score carries the run.
+        """Free is the default tier. A paid entry is selected automatically
+        only when the operator opted in (OPENPANDA_OPENCODE_ALLOW_PAID=1);
+        even then a simple task (complexity < 0.4) or a light effort request
+        demotes every paid entry to last resort."""
+        # Opted in and complex: capability decides, so the paid opus wins.
         payload, _, _ = run_adapter(
             "opencode.py", "opencode",
             OC_HELP_CURRENT + self.OC_PAID_ROSTER + self.OC_PAID_API + r'''
@@ -691,10 +853,23 @@ assert args[args.index("--model") + 1] == "anthropic/claude-4.6-opus", args
 print(json.dumps({"type":"text","sessionID":"ses_f1","part":{"id":"px","type":"text","text":"ok"}}))
 ''',
             extra_request={"complexity": 0.9},
+            env={"OPENPANDA_OPENCODE_ALLOW_PAID": "1"},
         )
         self.assertTrue(payload["ok"], payload)
-        # Simple task: the same roster resolves to the free entry, and the
-        # progress note says why.
+        # No opt-in: the same complex task still takes the free model.
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode",
+            OC_HELP_CURRENT + self.OC_PAID_ROSTER + self.OC_PAID_API + r'''
+import json, sys
+args = sys.argv[1:]
+assert args[args.index("--model") + 1] == "opencode/nemotron-3.5-super-vl-free", args
+print(json.dumps({"type":"text","sessionID":"ses_f0","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            extra_request={"complexity": 0.9},
+        )
+        self.assertTrue(payload["ok"], payload)
+        # Simple task: even opted in, the free entry serves, and the progress
+        # note says why.
         payload, progress, _ = run_adapter(
             "opencode.py", "opencode",
             OC_HELP_CURRENT + self.OC_PAID_ROSTER + self.OC_PAID_API + r'''
@@ -704,10 +879,11 @@ assert args[args.index("--model") + 1] == "opencode/nemotron-3.5-super-vl-free",
 print(json.dumps({"type":"text","sessionID":"ses_f2","part":{"id":"px","type":"text","text":"ok"}}))
 ''',
             extra_request={"complexity": 0.1},
+            env={"OPENPANDA_OPENCODE_ALLOW_PAID": "1"},
         )
         self.assertTrue(payload["ok"], payload)
         self.assertTrue(
-            any("simple task prefers free" in line for line in progress),
+            any("free tier first" in line for line in progress),
             progress,
         )
         # A light effort request means the same thing — and rides the picked
@@ -721,6 +897,7 @@ assert args[args.index("--model") + 1] == "opencode/nemotron-3.5-super-vl-free#l
 print(json.dumps({"type":"text","sessionID":"ses_f3","part":{"id":"px","type":"text","text":"ok"}}))
 ''',
             extra_request={"effort": "low"},
+            env={"OPENPANDA_OPENCODE_ALLOW_PAID": "1"},
         )
         self.assertTrue(payload["ok"], payload)
 
@@ -996,7 +1173,7 @@ assert "--auto" not in args
 # The plain path always carries a resolvable model: with no env model set it
 # must be the built-in default, never the empty string.
 assert "--model" in args
-assert args[args.index("--model") + 1] == "opencode/deepseek-v4-flash-free"
+assert args[args.index("--model") + 1] == "opencode/deepseek-v4.1-flash-free"
 print("plain opencode answer")
 ''',
         )

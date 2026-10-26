@@ -136,10 +136,17 @@ func effectiveModel(m config.ModelConfig) string {
 	return "-"
 }
 
-// effectiveBaseURL returns the displayed endpoint URL, falling back to the
-// provider's default endpoint when BaseURL is omitted.
+// effectiveBaseURL returns the displayed endpoint URL: the configured one,
+// rebased onto the catalogue's current surface when the config merely
+// restated one of the provider's own (including a retired endpoint), then the
+// provider's default.
 func effectiveBaseURL(m config.ModelConfig) string {
 	if m.BaseURL != "" {
+		if p, ok := providers.Lookup(m.Provider); ok && p.OwnsEndpoint(m.BaseURL) {
+			if base, _ := p.EndpointFor(m.Model); base != "" {
+				return base
+			}
+		}
 		return m.BaseURL
 	}
 	if p, ok := providers.Lookup(m.Provider); ok {
@@ -560,8 +567,13 @@ func (r *repl) modelAdd(args []string) {
 	}
 	if pa.thinking != "" {
 		switch strings.ToLower(pa.thinking) {
-		case "on", "off", "auto":
+		case "on", "off":
 			mc.Thinking = strings.ToLower(pa.thinking)
+		case "auto":
+			// Auto is the provider default: store it as unset, the same
+			// value the wizard and the web form write. Storing "auto" sent
+			// an explicit reasoning request instead.
+			mc.Thinking = ""
 		default:
 			r.outln(i18n.Tf(r.loc, "repl.model.add.badthinking", "value", pa.thinking))
 			return
@@ -570,7 +582,9 @@ func (r *repl) modelAdd(args []string) {
 	if pa.budget > 0 {
 		mc.ThinkingBudget = pa.budget
 	}
-	if pa.retries > 0 {
+	if pa.retries != 0 {
+		// A negative value disables retries (ModelConfig's contract); only
+		// zero means "unset", so the old >0 test made --retry -1 a no-op.
 		mc.MaxRetries = pa.retries
 	}
 	mc.Params = pa.params

@@ -1695,45 +1695,71 @@ func TestPromptLocaleResolution(t *testing.T) {
 	}
 }
 
-// TestNewClientRoutesOpenCodeGo pins the gateway's per-model surface
-// resolution at client construction: a config that restated the catalogue's
-// endpoint (or named none) is rebased onto the route serving the model, an
-// endpoint the user pointed elsewhere is honoured, and a family on an
-// unimplemented wire surface fails here with the reason.
-func TestNewClientRoutesOpenCodeGo(t *testing.T) {
-	claude, err := NewClient(config.ModelConfig{
-		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "claude-sonnet-5-5",
+// TestNewClientOpenCodeEndpoints pins the two OpenCode rows at client
+// construction: each model rides its roster's SDK base (Zen /zen/v1, Go
+// /zen/go/v1) on the OpenAI dialect, a config still carrying a retired
+// /inference URL is migrated onto the current catalogue endpoint, a relay the
+// user pointed at is left alone, and the Go row's required session header is
+// minted once per client.
+func TestNewClientOpenCodeEndpoints(t *testing.T) {
+	zen, err := NewClient(config.ModelConfig{
+		Provider: "opencode", APIKey: "oc_sk_test", Model: "deepseek-v4.1-flash-free",
 	})
 	if err != nil {
-		t.Fatalf("claude client: %v", err)
+		t.Fatalf("zen client: %v", err)
 	}
-	if claude.apiType != config.APITypeAnthropic || claude.baseURL != "https://opencode.ai/inference/anthropic" {
-		t.Fatalf("claude client = %s %s, want the Anthropic route", claude.apiType, claude.baseURL)
+	if zen.baseURL != "https://opencode.ai/zen/v1" || zen.apiType != config.APITypeOpenAI {
+		t.Fatalf("zen client = %s %s", zen.apiType, zen.baseURL)
 	}
 
-	chat, err := NewClient(config.ModelConfig{
-		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "kimi-k3",
+	gop, err := NewClient(config.ModelConfig{
+		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "claude-haiku-5-5",
 	})
 	if err != nil {
-		t.Fatalf("chat client: %v", err)
+		t.Fatalf("go client: %v", err)
 	}
-	if chat.apiType != config.APITypeOpenAI || chat.baseURL != "https://opencode.ai/inference/openai/v1" {
-		t.Fatalf("chat client = %s %s, want the OpenAI-chat row", chat.apiType, chat.baseURL)
+	if gop.baseURL != "https://opencode.ai/zen/go/v1" || gop.apiType != config.APITypeOpenAI {
+		t.Fatalf("go client = %s %s", gop.apiType, gop.baseURL)
 	}
 
-	// The TUI wizard writes the catalogue's base and its default dialect into
-	// the config even when the user then types a routed model; the route
-	// still wins because that base is one of the provider's own.
-	tui, err := NewClient(config.ModelConfig{
+	// A config written against the retired /inference surface is a catalogue
+	// restatement, not a user relay: it is rebased onto the row's endpoint.
+	legacy, err := NewClient(config.ModelConfig{
 		Provider: "opencode-go", APIType: config.APITypeOpenAI,
 		BaseURL: "https://opencode.ai/inference/openai/v1",
-		APIKey:  "oc_sk_test", Model: "qwen3.8-flash",
+		APIKey:  "oc_sk_test", Model: "deepseek-v4.1-flash",
 	})
 	if err != nil {
-		t.Fatalf("tui-shaped client: %v", err)
+		t.Fatalf("legacy client: %v", err)
 	}
-	if tui.apiType != config.APITypeAnthropic || tui.baseURL != "https://opencode.ai/inference/anthropic" {
-		t.Fatalf("tui-shaped client = %s %s, want the Anthropic route", tui.apiType, tui.baseURL)
+	if legacy.baseURL != "https://opencode.ai/zen/go/v1" {
+		t.Fatalf("legacy base = %s, want the current Go endpoint", legacy.baseURL)
+	}
+
+	// The session header is present and stable for the client's lifetime.
+	sess := ""
+	for k, v := range gop.extraHeaders {
+		if strings.EqualFold(k, "x-opencode-session") {
+			sess = v
+		}
+	}
+	if !strings.HasPrefix(sess, "ses_") {
+		t.Fatalf("session header = %q, want a ses_ id", sess)
+	}
+	if gop.extraHeaders["x-opencode-session"] != sess {
+		t.Fatalf("session id changed between reads")
+	}
+
+	// A user-supplied session id wins over the minted one.
+	own, err := NewClient(config.ModelConfig{
+		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "deepseek-v4.1-flash",
+		Headers: map[string]string{"X-OpenCode-Session": "ses_user"},
+	})
+	if err != nil {
+		t.Fatalf("own session client: %v", err)
+	}
+	if own.extraHeaders["X-OpenCode-Session"] != "ses_user" {
+		t.Fatalf("user session id was overwritten: %v", own.extraHeaders)
 	}
 
 	// An endpoint the user pointed elsewhere is not rebased.
@@ -1747,33 +1773,24 @@ func TestNewClientRoutesOpenCodeGo(t *testing.T) {
 	if relay.baseURL != "https://relay.example.com/v1" {
 		t.Fatalf("relay base = %s, want the user's endpoint", relay.baseURL)
 	}
+}
 
-	// The GPT family rides the Responses API and Gemini the Google API; both
-	// are driven by this client now, not refused.
-	gpt, err := NewClient(config.ModelConfig{
-		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "gpt-6.1-sol",
-	})
-	if err != nil {
-		t.Fatalf("gpt client: %v", err)
+// TestThinkingAutoMeansProviderDefault pins the one vocabulary every surface
+// shares: "auto" (the wizard/web default) and "" both mean "send no thinking
+// field", while on/off are explicit requests. Treating "auto" as an enabled
+// request silently turned reasoning on for every wizard-added model.
+func TestThinkingAutoMeansProviderDefault(t *testing.T) {
+	for _, v := range []string{"", "auto", "AUTO", "  auto  "} {
+		if got := normalizeThinking(v); got != "" {
+			t.Errorf("normalizeThinking(%q) = %q, want empty", v, got)
+		}
 	}
-	if gpt.apiType != config.APITypeResponses || gpt.baseURL != "https://opencode.ai/inference/openai/v1" {
-		t.Fatalf("gpt client = %s %s, want the Responses surface", gpt.apiType, gpt.baseURL)
-	}
-	gem, err := NewClient(config.ModelConfig{
-		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "gemini-4-argon",
-	})
-	if err != nil {
-		t.Fatalf("gemini client: %v", err)
-	}
-	if gem.apiType != config.APITypeGoogle || gem.baseURL != "https://opencode.ai/inference/google/v1beta" {
-		t.Fatalf("gemini client = %s %s, want the Google surface", gem.apiType, gem.baseURL)
-	}
-
-	// SystemOne has no client implementation; it still fails at construction
-	// with the reason rather than on every call.
-	if _, err := NewClient(config.ModelConfig{
-		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "jev-1.13",
-	}); err == nil || !strings.Contains(err.Error(), "System One") {
-		t.Fatalf("jev model error = %v, want the System One reason", err)
+	for in, want := range map[string]string{
+		"on": "on", "enabled": "on", "true": "on", "1": "on",
+		"off": "off", "disabled": "off", "false": "off", "0": "off",
+	} {
+		if got := normalizeThinking(in); got != want {
+			t.Errorf("normalizeThinking(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

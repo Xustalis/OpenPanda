@@ -89,9 +89,13 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 	}
 	if known {
 		e.ProviderLabel = p.Label
-		if e.BaseURL == "" {
-			// An aggregator serves a routed family on its own surface.
-			e.BaseURL, _ = p.EndpointFor(e.Model)
+		// A base that merely restated a catalogue endpoint (including one the
+		// catalogue has since retired) is shown as the endpoint the client
+		// will actually dial; a relay the user typed stays as typed.
+		if e.BaseURL == "" || p.OwnsEndpoint(e.BaseURL) {
+			if base, _ := p.EndpointFor(e.Model); base != "" {
+				e.BaseURL = base
+			}
 		}
 		if e.Model == "" {
 			e.Model = p.DefaultModel

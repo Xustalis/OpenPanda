@@ -22,27 +22,39 @@ degrade to the plain text mode. This adapter never prints secrets.
 
 OpenCode is model-agnostic, and the free-tier roster rotates constantly —
 between builds models are renamed, retired and replaced. So on every run the
-adapter re-reads the install's live roster (`opencode models`, the same view
-the TUI's /model shows) and, when nothing pins a model, picks the most
-capable entry itself: `opencode api model.list` (v2 builds) exposes each
-model's real metadata — context/output limits, tool support, modalities,
-reasoning variants, cost — which drives a capability score; on builds whose
-catalog probe fails the score falls back to slug heuristics (family, size and
-stability markers). Both probes are cached across adapter processes (keyed by
-the CLI's and config's fingerprints, with a short TTL), so a burst of tasks
-pays the roster once; a rejected model forces a fresh probe instead of
-trusting the cache. A paid entry only wins when it clearly outscores the free
-ones — opencode is the low-cost tier in the mesh — and a simple task (the
-request's low complexity score, or a light effort level) drops paid entries
-to last resort: any qualified free model beats every paid one there. Set
-OPENCODE_MODEL (or
+adapter re-reads the install's live roster (`opencode models` on older
+builds, `opencode api model.list` on v2 where the bare list can be empty)
+and, when nothing pins a model, picks the most capable free entry itself: the
+catalog exposes each model's real metadata — context/output limits, tool
+support, modalities, reasoning variants, cost — which drives a capability
+score; on builds whose catalog probe fails the score falls back to slug
+heuristics (family, size and stability markers). Both probes are cached
+across adapter processes (keyed by the CLI's and config's fingerprints, with
+a short TTL), so a burst of tasks pays the roster once; a rejected model
+forces a fresh probe instead of trusting the cache. Free is the default tier
+— opencode is the low-cost tier in the mesh, and auto-selecting a paid model
+is how a task bills an account that cannot pay for it. A paid entry is chosen
+automatically only with OPENPANDA_OPENCODE_ALLOW_PAID=1, and even then a
+simple task (low complexity, light effort) demotes every paid entry to last
+resort. A billing/quota rejection of a paid model retries once on the best
+free model instead of ending the run. Models under the `opencode-go`
+subscription provider are disqualified when no credential is stored, because
+they die on "Go requires a credential". Set OPENCODE_MODEL (or
 ANTHROPIC_MODEL) to a provider/model id (e.g. deepseek/deepseek-chat) to pin
 a custom model on both paths; a pinned id the roster no longer carries is
 substituted with the closest served model (a progress note names the swap) or
 refused with the roster in the diagnosis, because a stale id makes every run
-die in seconds with an opaque resolution error. tools_policy is noted but not
-enforced: opencode gates tools through its own permission config, not a CLI
-whitelist, so both policies run with the agent's configured tool face.
+die in seconds with an opaque resolution error.
+
+When panda injects its own model, the adapter receives a dialect-neutral
+contract (OPENPANDA_MODEL_BASE_URL/API_KEY/NAME/API_TYPE) and writes a
+provider fragment into a temporary OPENCODE_CONFIG. The fragment is merged
+over the user's native config so MCP servers and permissions survive, uses
+@ai-sdk/anthropic or @ai-sdk/openai-compatible according to the dialect, and
+the run takes --standalone because a v2 background service would keep the
+config it started with and answer "Model unavailable". tools_policy is noted
+but not enforced: opencode gates tools through its own permission config, not
+a CLI whitelist, so both policies run with the agent's configured tool face.
 restricted (unconsented remote task) narrows to the built-in read-only agent:
 `--agent plan` denies file mutations and write-class bash commands while
 read tools keep working, and --auto cannot lift it (it only auto-approves
@@ -67,8 +79,8 @@ import _harness as harness
 # so it is the default when no provider/model id is given. The list of models
 # an install actually serves drifts (free tiers are renamed/retired), so this
 # constant is only a starting point: _resolve_model re-anchors it against the
-# live `opencode models` output before anything is passed on the command line.
-DEFAULT_MODEL = "opencode/deepseek-v4-flash-free"
+# live roster/catalog before anything is passed on the command line.
+DEFAULT_MODEL = "opencode/deepseek-v4.1-flash-free"
 
 _FLAG_PROBE = None
 _MODEL_LIST = None
@@ -124,11 +136,15 @@ def _cli_flags():
         return _FLAG_PROBE
     identity = _cache_identity()
     cached = harness.cache_get("opencode-flags", identity, _FLAGS_CACHE_TTL)
-    if isinstance(cached, dict):
+    if isinstance(cached, dict) and "standalone" in cached:
+        # A cache written before the standalone probe is stale, not a
+        # build without the flag: re-probe instead of pinning every run to
+        # the old schema's answer for the whole TTL.
         auto = cached.get("auto") if cached.get("auto") in (
             "--auto", "--dangerously-skip-permissions") else ""
         _FLAG_PROBE = {"format": bool(cached.get("format")),
-                       "auto": auto, "agent": bool(cached.get("agent"))}
+                       "auto": auto, "agent": bool(cached.get("agent")),
+                       "standalone": bool(cached.get("standalone"))}
         return _FLAG_PROBE
     text = ""
     ok = False
@@ -145,7 +161,11 @@ def _cli_flags():
     elif re.search(r"--dangerously-skip-permissions\b", text):
         auto = "--dangerously-skip-permissions"
     _FLAG_PROBE = {"format": bool(re.search(r"--format\b", text)), "auto": auto,
-                   "agent": bool(re.search(r"--agent\b", text))}
+                   "agent": bool(re.search(r"--agent\b", text)),
+                   # v2 runs through a background service that keeps the
+                   # config it started with; an injected provider only takes
+                   # effect when the run owns its server.
+                   "standalone": bool(re.search(r"--standalone\b", text))}
     # Only a successful probe is an answer worth caching. A failed one prints
     # yargs usage or a stack trace, which reads as "this build has none of
     # these flags" — pinning an hour of runs to the plain-text fallback and
@@ -254,6 +274,24 @@ def _model_catalog(force=False):
     return catalog
 
 
+def _served_models(force=False):
+    """Every model this install can serve, from both probe surfaces.
+
+    `opencode models` is the historical roster, but v2 builds answer it with
+    an empty list while `opencode api model.list` carries the full catalog —
+    on such a build the bare roster alone made every pinned id look
+    unresolvable and left the pick with nothing to choose. The union keeps
+    older builds (catalog absent) and newer ones (roster empty) working.
+    """
+    models = list(_available_models(force=force))
+    seen = set(models)
+    for model in sorted(_model_catalog(force=force)):
+        if model not in seen:
+            seen.add(model)
+            models.append(model)
+    return models
+
+
 # Slug heuristics for the capability pick — the fallback when the catalog
 # probe fails, and the family/stability component of the score when it does
 # not. Coding-proven families outrank general ones (best first); _SIZE_UP /
@@ -309,20 +347,81 @@ def _slug_score(model):
     return score
 
 
+def _paid_allowed():
+    """Whether an unpinned run may auto-select a paid model.
+
+    Auto-picking the most capable entry out of the box is how a run bills a
+    model the account cannot pay for: on an install with no Go subscription
+    and an exhausted free tier, the pick landed on a paid flagship and every
+    task died with "Insufficient account funds". Free models are the default
+    for opencode — the mesh's low-cost tier — and spending money is an
+    explicit opt-in (OPENPANDA_OPENCODE_ALLOW_PAID=1).
+    """
+    for name in ("OPENPANDA_OPENCODE_ALLOW_PAID", "OPENCODE_ALLOW_PAID"):
+        if os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on"):
+            return True
+    return False
+
+
+_GO_CREDENTIAL = None
+
+
+def _has_go_credential():
+    """Whether the install carries a credential for the Go/Zen provider.
+
+    `opencode-go` is the subscription roster; without a stored login its
+    models fail with "Go requires a credential". OPENCODE_API_KEY is the
+    provider's own env contract; otherwise auth.json maps provider ids to
+    credentials, and only an opencode/opencode-go entry counts — the file
+    existing for some other vendor says nothing about this roster.
+    """
+    global _GO_CREDENTIAL
+    if _GO_CREDENTIAL is None:
+        found = bool(os.environ.get("OPENCODE_API_KEY", "").strip())
+        home = os.path.expanduser("~")
+        for rel in (".local/share/opencode/auth.json",
+                    ".config/opencode/auth.json"):
+            try:
+                with open(os.path.join(home, rel), "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict) and any(
+                    key in data for key in ("opencode", "opencode-go")):
+                found = True
+                break
+        _GO_CREDENTIAL = found
+    return _GO_CREDENTIAL
+
+
 def _is_paid(model, catalog):
     """Whether serving this model bills per token.
 
-    The catalog's cost entries answer directly when they exist. With no
-    catalog coverage the provider id is the tell: opencode's own provider is
-    the built-in free tier; anything else is a user-configured provider that
-    may bill — assuming paid is the safe error direction for a free-first
-    pick (a misjudged local provider still wins when no free model
-    qualifies)."""
+    The catalog's cost entries answer directly when they exist. Without
+    catalog coverage only an explicit -free id counts as free: guessing from
+    the provider id is how a paid flagship under opencode's own provider was
+    read as the free tier and picked for every run.
+    """
     entry = catalog.get(model)
     if entry is not None:
         return any(c.get("input") or c.get("output")
                    for c in entry.get("cost") or [] if isinstance(c, dict))
-    return model.split("/")[0] != "opencode"
+    return not model.split("/")[-1].lower().endswith("-free")
+
+
+def _looks_like_funds_failure(text):
+    """A run rejected the model for billing or quota reasons.
+
+    These are not roster rotations: retrying the same paid model cannot
+    succeed, but a free model (or panda's injected endpoint) can.
+    """
+    low = (text or "").lower()
+    markers = (
+        "insufficient account funds", "insufficient funds", "payment required",
+        "freeusagelimiterror", "free usage limit", "out of credit",
+        "credit balance", "go requires a credential", "quota",
+    )
+    return any(marker in low for marker in markers)
 
 
 def _score_model(model, catalog):
@@ -333,6 +432,11 @@ def _score_model(model, catalog):
     real limits and features refine the slug heuristic. Paid models take a
     penalty: opencode sits in the mesh's low-cost tier, so a paid entry must
     clearly outscore the free ones before the adapter spends on it."""
+    provider = model.split("/")[0]
+    if provider == "opencode-go" and not _has_go_credential():
+        # The subscription roster without a stored login: the run dies on
+        # "Go requires a credential" before doing any work.
+        return -1e9, []
     score = _slug_score(model)
     entry = catalog.get(model)
     if entry is None:
@@ -411,8 +515,7 @@ def _fresh_pick(excluded, prefer_free):
     global _MODEL_LIST, _MODEL_CATALOG
     _MODEL_LIST = None
     _MODEL_CATALOG = None
-    available = [m for m in (_available_models(force=True) or sorted(_model_catalog(force=True)))
-                 if m not in excluded]
+    available = [m for m in _served_models(force=True) if m not in excluded]
     return _pick_model(available, prefer_free)
 
 
@@ -432,6 +535,22 @@ def _retry_pick(model, tried, prefer_free, effort, err_text):
         pick += "#" + effort
     harness.progress("model %s rejected; re-probed roster, retrying on %s"
                      % (model or "default", pick))
+    return pick
+
+
+def _funds_retry(model, tried, available):
+    """Pick a free model after a billing/quota rejection. "" when none is
+    served (or the only candidates were already tried) — the orchestrator's
+    own injection fallback then takes over."""
+    tried.add((model or "").split("#")[0])
+    catalog = _model_catalog()
+    free = [m for m in available
+            if m not in tried and not _is_paid(m, catalog)]
+    if not free:
+        return ""
+    # _pick_model disqualifies unusable entries (an opencode-go model with no
+    # credential scores below the floor) and returns "" when none qualifies.
+    pick, _ = _pick_model(free, prefer_free=True)
     return pick
 
 
@@ -476,13 +595,13 @@ def _resolve_model(requested):
     TTL, because this runs before the run whose rejection would have forced a
     re-probe. A failed re-probe proves nothing, so the requested slug is
     passed through and the provider answers for itself."""
-    available = _available_models()
+    available = _served_models()
     if not available or not requested:
         return requested, "", ""
     model, note, err = _match_model(requested, available)
     if not err:
         return model, note, ""
-    fresh = _available_models(force=True)
+    fresh = _served_models(force=True)
     if not fresh:
         return requested, "", ""
     return _match_model(requested, fresh)
@@ -505,30 +624,162 @@ INJECTED_CONFIG_ENV = "OPENCODE_CONFIG"
 _injected_provider = False
 
 
-def _injected_provider_config(model):
+def _injected_endpoint():
+    """The endpoint panda injected, in a dialect-neutral form.
+
+    The registry contract carries panda's own variable names
+    (OPENPANDA_MODEL_BASE_URL/API_KEY/NAME plus OPENPANDA_MODEL_API_TYPE), so
+    the adapter no longer has to assume OpenAI: an Anthropic-dialect model
+    (DeepSeek's Messages endpoint, a Claude relay) is just as valid. The
+    older OPENAI_*/ANTHROPIC_* variables still work for a config written by
+    an earlier build.
+    """
+    api_type = (os.environ.get("OPENPANDA_MODEL_API_TYPE") or "").strip().lower()
+    base = (os.environ.get("OPENPANDA_MODEL_BASE_URL") or "").strip()
+    key = (os.environ.get("OPENPANDA_MODEL_API_KEY") or "").strip()
+    name = (os.environ.get("OPENPANDA_MODEL_NAME") or "").strip()
+    if not name:
+        name = (os.environ.get("OPENCODE_MODEL")
+                or os.environ.get("OPENAI_MODEL")
+                or os.environ.get("ANTHROPIC_MODEL", "")).strip()
+    if not base:
+        # Legacy contract only: an older build injected the CLI's own env
+        # names and no panda-named endpoint. Require the matching key so an
+        # ambient ANTHROPIC_BASE_URL in the parent shell (a developer running
+        # this adapter by hand) is not mistaken for an injected endpoint.
+        if (api_type == "anthropic" or (not api_type and os.environ.get("ANTHROPIC_API_KEY"))) \
+                and os.environ.get("ANTHROPIC_BASE_URL") and os.environ.get("ANTHROPIC_API_KEY"):
+            base = os.environ["ANTHROPIC_BASE_URL"].strip()
+            key = key or os.environ["ANTHROPIC_API_KEY"].strip()
+            api_type = api_type or "anthropic"
+        elif os.environ.get("OPENAI_BASE_URL") and os.environ.get("OPENAI_API_KEY"):
+            base = os.environ["OPENAI_BASE_URL"].strip()
+            key = key or os.environ["OPENAI_API_KEY"].strip()
+            api_type = api_type or "openai"
+    return name, base, key, api_type or "openai"
+
+
+def _strip_jsonc(text):
+    """Remove // and /* */ comments and trailing commas from a JSONC file.
+
+    opencode's native config is .jsonc (comments allowed); the standard
+    library has no parser for it, and the strip only has to be good enough
+    to merge one provider key without touching the user's other settings.
+    """
+    out, i, n = [], 0, len(text)
+    in_str = esc = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        if c == ",":
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1  # trailing comma: drop it
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _native_config():
+    """The user's opencode config as a dict, or {} when there is none.
+
+    The injected fragment must not become the whole config: opencode treats
+    OPENCODE_CONFIG as its global config file, so replacing it with only a
+    provider block would drop the user's MCP servers, permissions and
+    defaults for the duration of the run. Merging mirrors what cc-switch
+    does with its per-app common config.
+    """
+    candidates = []
+    override = (os.environ.get("OPENCODE_CONFIG") or "").strip()
+    if override:
+        candidates.append(override)
+    home = os.path.expanduser("~")
+    candidates += [os.path.join(home, ".config/opencode/opencode.json"),
+                   os.path.join(home, ".config/opencode/opencode.jsonc")]
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for doc in (text, _strip_jsonc(text)):
+            try:
+                parsed = json.loads(doc)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        return {}
+    return {}
+
+
+def _injected_provider_config(model, base, key, api_type):
     """Write the provider fragment pointing opencode at panda's endpoint.
 
     The endpoint and key ride env references ({env:...}) instead of the file:
-    the config lands on disk, the secret does not. Returns the path, or "" when
-    the injection carried no endpoint (nothing to point at).
+    the config lands on disk, the secret does not. The fragment is merged over
+    the user's native config so their MCP servers and permissions survive the
+    run. Returns the path, or "" when the injection carried no endpoint
+    (nothing to point at).
     """
-    base = (os.environ.get("OPENAI_BASE_URL") or "").strip()
     if not base or not model:
         return ""
-    body = {
-        "$schema": "https://opencode.ai/config.json",
-        "provider": {
-            INJECTED_PROVIDER_ID: {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "Panda",
-                "options": {
-                    "baseURL": "{env:OPENPANDA_INJECT_BASE_URL}",
-                    "apiKey": "{env:OPENPANDA_INJECT_API_KEY}",
-                },
-                "models": {model: {"name": model}},
-            }
+    os.environ["OPENPANDA_MODEL_BASE_URL"] = base
+    os.environ["OPENPANDA_MODEL_API_KEY"] = key
+    os.environ["OPENPANDA_MODEL_NAME"] = model
+    os.environ["OPENPANDA_MODEL_API_TYPE"] = api_type
+    # Anthropic-dialect endpoints need the Anthropic SDK provider: the
+    # OpenAI-compatible one sends a Chat Completions body to a Messages
+    # endpoint and every call fails with an opaque 400.
+    pkg = ("@ai-sdk/anthropic" if api_type == "anthropic"
+           else "@ai-sdk/openai-compatible")
+    body = _native_config()
+    body.setdefault("$schema", "https://opencode.ai/config.json")
+    providers = body.get("provider")
+    if not isinstance(providers, dict):
+        providers = {}
+    existing = providers.get(INJECTED_PROVIDER_ID)
+    models = existing.get("models") if isinstance(existing, dict) else None
+    if not isinstance(models, dict):
+        models = {}
+    models[model] = {"name": model}
+    providers[INJECTED_PROVIDER_ID] = {
+        "npm": pkg,
+        "name": "Panda",
+        "options": {
+            "baseURL": "{env:OPENPANDA_MODEL_BASE_URL}",
+            "apiKey": "{env:OPENPANDA_MODEL_API_KEY}",
         },
+        "models": models,
     }
+    body["provider"] = providers
     fd, path = tempfile.mkstemp(prefix="panda-opencode-", suffix=".json")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(body, fh)
@@ -564,17 +815,22 @@ def main():
     # free model — recording an injection that never reached the wire.
     injected = False
     if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
-        bare = (os.environ.get("OPENCODE_MODEL")
-                or os.environ.get("OPENAI_MODEL", "")).strip()
-        cfg = _injected_provider_config(bare)
+        bare, ibase, ikey, itype = _injected_endpoint()
+        cfg = _injected_provider_config(bare, ibase, ikey, itype)
         if cfg:
-            os.environ["OPENPANDA_INJECT_BASE_URL"] = os.environ.get("OPENAI_BASE_URL", "")
-            os.environ["OPENPANDA_INJECT_API_KEY"] = os.environ.get("OPENAI_API_KEY", "")
             os.environ[INJECTED_CONFIG_ENV] = cfg
             atexit.register(_drop, cfg)
             model = INJECTED_PROVIDER_ID + "/" + bare
             injected = True
             _injected_provider = True
+            if flags["standalone"]:
+                # v2 dispatches to a long-lived background service that was
+                # started with the user's config; OPENCODE_CONFIG only reaches
+                # a run that owns its server, or every injected model answers
+                # "Model unavailable: panda/<id>".
+                base.append("--standalone")
+            harness.progress("using injected model %s (%s)"
+                             % (model, itype))
         elif bare:
             # No endpoint came with the injection, so the request names a model
             # this build already serves: keep it. A bare name still needs the
@@ -587,26 +843,26 @@ def main():
         if model and "/" not in model:
             model = ""
 
-    # A simple task (low complexity score, or a light effort request)
-    # prefers the provider's free tier: paid models only fill in when no
-    # free entry qualifies.
-    prefer_free = (0 < req.complexity < _SIMPLE_COMPLEXITY
+    # Free models are this agent's default tier. A paid model is selected
+    # automatically only when the operator opted in; otherwise it takes a
+    # large penalty and wins only if nothing free is served at all. A simple
+    # task (low complexity, light effort) insists on free even then.
+    prefer_free = (not _paid_allowed()
+                   or 0 < req.complexity < _SIMPLE_COMPLEXITY
                    or req.effort in _LIGHT_EFFORTS)
 
     # Identify the served model set on every dispatch, before --model is
     # passed: the free tier rotates between builds, so nothing about it is
-    # carried over from the last run. `opencode models` gives the id list —
-    # the same view the TUI's /model shows — and `opencode api model.list`
-    # (v2) adds the capability metadata whose keys double as the roster
-    # when the bare list fails.
+    # carried over from the last run. `opencode models` is the historical
+    # roster; `opencode api model.list` (v2) adds the catalog and, on builds
+    # where the bare list is empty, is the roster itself.
     if injected:
-        # The roster describes this build's own catalog, which says nothing
-        # about the provider we just wrote — probing it only costs a call.
+        # The catalog describes this build's own providers, which says
+        # nothing about the provider we just wrote — probing it only costs a
+        # call.
         available = []
-    elif model:
-        available = _available_models()
     else:
-        available = _available_models() or sorted(_model_catalog())
+        available = _served_models()
     if available and not injected:
         harness.progress("identified served models: %s" % ", ".join(available))
 
@@ -623,8 +879,9 @@ def main():
     elif injected:
         # The injected model is served by the provider we just wrote, not by
         # this build's catalog — resolving it against the roster could only
-        # swap it for a free model and drop the injection.
-        harness.progress("using injected model %s via %s" % (model, INJECTED_CONFIG_ENV))
+        # swap it for a free model and drop the injection. The progress line
+        # naming the model and dialect was already emitted above.
+        pass
     else:
         # Nothing pinned a model: pick the most capable entry off the live
         # roster instead of taking whatever default the build happens to
@@ -639,7 +896,7 @@ def main():
                 pick = pick + "#" + req.effort
             harness.progress(
                 "auto-selected model %s (of %d served%s)" % (
-                    pick, len(available), "; simple task prefers free" if prefer_free else ""))
+                    pick, len(available), "; free tier first" if prefer_free else ""))
             model = pick
 
     # A restricted request (unconsented remote task) narrows the run to the
@@ -681,10 +938,14 @@ def main():
         # A build too old for --format json goes straight to the plain text
         # mode — the stream attempt could only fail with a usage line.
         return _run_plain(prompt, cwd, timeout, req.resume, model, auto,
-                          prefer_free, agent_face=agent_face)
+                          prefer_free, effort=req.effort, agent_face=agent_face)
 
     tried = set()
     resumed = req.resume
+    # Cap the free-model fallback: an account with an exhausted free tier
+    # would otherwise walk every free entry, each dying on the same quota
+    # error, before the orchestrator's injection rescue gets the task.
+    funds_tries = 0
     while True:
         try:
             out = _run_events(run_cmd(model), cwd, timeout)
@@ -694,8 +955,24 @@ def main():
             # on the fresh pick before reporting the failure. An injected
             # model is exempt — a fresh pick would be a FREE model, quietly
             # replacing the endpoint panda just asked us to use.
-            retry = "" if injected else _retry_pick(
-                model, tried, prefer_free, req.effort, str(e))
+            #
+            # A billing/quota rejection is a different animal: the model is
+            # served and resolvable, the account simply cannot pay for it.
+            # Falling back to the best free model keeps the task alive
+            # instead of surfacing a provider error the operator has to
+            # decode; when no free model remains, the result still says why
+            # and the orchestrator's injection rescue takes over.
+            retry = ""
+            if not injected:
+                if _looks_like_funds_failure(str(e)) and funds_tries < 2:
+                    retry = _funds_retry(model, tried, available)
+                    if retry:
+                        funds_tries += 1
+                        harness.progress(
+                            "model %s rejected for billing/quota; retrying on free model %s"
+                            % (model or "default", retry))
+                if not retry:
+                    retry = _retry_pick(model, tried, prefer_free, req.effort, str(e))
             st = getattr(e, "state", None) or {}
             if retry:
                 model = retry
@@ -715,16 +992,26 @@ def main():
             # could match a filtered token) and carries the build's own
             # permission flag and a resolvable model.
             return _run_plain(prompt, cwd, timeout, resumed, model, auto,
-                              prefer_free, tried, agent_face=agent_face)
+                              prefer_free, tried, agent_face=agent_face,
+                              effort=req.effort)
         except subprocess.TimeoutExpired:
             harness.emit(False, "opencode timed out", 124)
             return
         except FileNotFoundError:
             harness.emit(False, "opencode binary not found", 127)
             return
-        if not injected and not out["ok"] and _looks_like_model_failure(out["result"]):
-            retry = _retry_pick(model, tried, prefer_free, req.effort,
-                                out["result"])
+        if not injected and not out["ok"]:
+            retry = ""
+            if _looks_like_funds_failure(out["result"]) and funds_tries < 2:
+                retry = _funds_retry(model, tried, available)
+                if retry:
+                    funds_tries += 1
+                    harness.progress(
+                        "model %s rejected for billing/quota; retrying on free model %s"
+                        % (model or "default", retry))
+            if not retry and _looks_like_model_failure(out["result"]):
+                retry = _retry_pick(model, tried, prefer_free, req.effort,
+                                    out["result"])
             if retry:
                 model = retry
                 if out.get("session_id"):
@@ -738,7 +1025,8 @@ def main():
 
 
 def _run_plain(prompt, cwd, timeout, resume, model, auto,
-               prefer_free=False, tried=None, agent_face=""):
+               prefer_free=False, tried=None, agent_face="", effort="",
+               funds_tries=0):
     """One-shot plain text mode for builds without --format json."""
     # An injected run's model lives on panda's provider, not on this build's
     # roster: the rotate-and-retry below would swap in a free model and drop
@@ -747,20 +1035,29 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
     injected = _injected_provider
     if not model:
         # The built-in default rots as the free roster drifts; re-anchor it
-        # against the live list too (probe failure keeps the constant).
+        # against the live list too. When nothing matches, pick from the
+        # served set with the same free-first policy the event path uses
+        # instead of taking an arbitrary first entry.
         resolved, note, err = _resolve_model(DEFAULT_MODEL)
         if resolved:
             model = resolved
-        elif err:
-            # Nothing matches the built-in default either: any served model
-            # beats a guaranteed resolution failure on the one-shot path.
-            available = _available_models()
-            if available:
+        else:
+            available = _served_models()
+            pick, variants = _pick_model(available, prefer_free)
+            if pick:
+                if effort and effort in variants:
+                    pick += "#" + effort
+                model = pick
+                note = f"model {DEFAULT_MODEL} is not available; using {model}"
+            elif available:
                 model = available[0]
                 note = f"model {DEFAULT_MODEL} is not available; using {model}"
         if note:
             harness.progress(note)
-    plain = ["opencode", "run", "--print-logs=false"] + auto + ["--model", model]
+    plain = ["opencode", "run", "--print-logs=false"]
+    if injected and _cli_flags()["standalone"]:
+        plain.append("--standalone")
+    plain += auto + ["--model", model]
     if agent_face:
         plain += ["--agent", agent_face]
     if resume:
@@ -774,18 +1071,29 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
     except FileNotFoundError:
         harness.emit(False, "opencode binary not found", 127)
         return
-    if not injected and returncode != 0 and _looks_like_model_failure("%s\n%s" % (err, text)):
-        # Same roster-rotation retry as the stream path.
+    if not injected and returncode != 0:
+        detail = "%s\n%s" % (err, text)
         tried = tried if tried is not None else set()
-        if model:
-            tried.add(model.split("#")[0])
-        if len(tried) < 4:
-            pick, _ = _fresh_pick(tried, prefer_free)
+        if _looks_like_funds_failure(detail) and funds_tries < 2:
+            pick = _funds_retry(model, tried, _served_models())
             if pick:
-                harness.progress("model %s rejected; re-probed roster, "
-                                 "retrying on %s" % (model, pick))
+                harness.progress("model %s rejected for billing/quota; "
+                                 "retrying on free model %s" % (model, pick))
                 return _run_plain(prompt, cwd, timeout, resume, pick, auto,
-                                  prefer_free, tried, agent_face=agent_face)
+                                  prefer_free, tried, agent_face=agent_face,
+                                  effort=effort, funds_tries=funds_tries + 1)
+        if _looks_like_model_failure(detail):
+            # Same roster-rotation retry as the stream path.
+            if model:
+                tried.add(model.split("#")[0])
+            if len(tried) < 4:
+                pick, _ = _fresh_pick(tried, prefer_free)
+                if pick:
+                    harness.progress("model %s rejected; re-probed roster, "
+                                     "retrying on %s" % (model, pick))
+                    return _run_plain(prompt, cwd, timeout, resume, pick, auto,
+                                      prefer_free, tried, agent_face=agent_face,
+                                      effort=effort)
     harness.emit(returncode == 0, text.strip() or err.strip(), returncode)
 
 

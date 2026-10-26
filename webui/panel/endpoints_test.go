@@ -659,14 +659,32 @@ func TestModelSettingsToConfigMerge(t *testing.T) {
 	got = modelSettingsToConfig(modelSettingsJSON{
 		BaseURL:        cur.BaseURL,
 		Model:          "MiniMax-M2.7",
-		ContextWindow:  204800,
+		ContextWindow:  intPtr(204800),
 		Thinking:       "auto",
-		ThinkingBudget: 4096,
+		ThinkingBudget: intPtr(4096),
 		NoAuth:         &noAuth,
-		MaxRetries:     9,
+		MaxRetries:     intPtr(9),
 	}, cur)
 	if got.Thinking != "" || got.ThinkingBudget != 4096 || got.ContextWindow != 204800 || got.NoAuth || got.MaxRetries != 9 {
 		t.Fatalf("explicit overrides not applied: %+v", got)
+	}
+	// An explicit zero resets the knob — the form's empty box means "use the
+	// provider/entry default", not "keep whatever was there".
+	got = modelSettingsToConfig(modelSettingsJSON{
+		BaseURL:        cur.BaseURL,
+		Model:          cur.Model,
+		MaxTokens:      intPtr(0),
+		ContextWindow:  intPtr(0),
+		ThinkingBudget: intPtr(0),
+		MaxRetries:     intPtr(0),
+	}, cur)
+	if got.MaxTokens != 0 || got.ContextWindow != 0 || got.ThinkingBudget != 0 || got.MaxRetries != 0 {
+		t.Fatalf("explicit zeros did not reset: %+v", got)
+	}
+	// A negative retry budget is the documented way to disable retries.
+	got = modelSettingsToConfig(modelSettingsJSON{MaxRetries: intPtr(-1)}, cur)
+	if got.MaxRetries != -1 {
+		t.Fatalf("negative retry budget not applied: %+v", got)
 	}
 	got = modelSettingsToConfig(modelSettingsJSON{BaseURL: cur.BaseURL, Model: cur.Model, Thinking: "off"}, cur)
 	if got.Thinking != "off" {

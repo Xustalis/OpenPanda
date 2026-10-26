@@ -42,7 +42,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 追加
 
-- **OpenCode Go / Console が組み込みモデルプロバイダになりました** —— `panda model add opencode-go oc_sk_…` で、従量課金の Console カタログと Go/Go Plus サブスクリプションが共有するゲートウェイを登録できます。各モデルは同じキーのまま、それを提供する面へ振り分けられます：オープンモデルは OpenAI Chat、Claude と Anthropic 方言の Qwen は Anthropic Messages、GPT/Grok/Muse は OpenAI Responses API、Gemini は Google Generative AI API です。後ろ二つの方言はエントリクライアントに新たに加わったもので、ストリーミング・ツール呼び出し・使用量計測に対応します。SystemOne（Jev）だけは未対応のままで、呼び出しのたびに失敗する代わりに設定時に明示されます。価格はモデルごとです。
+- **OpenCode Zen と OpenCode Go を別々の組み込みプロバイダに分割** —— `panda model add opencode` は従量課金/無料の Zen カタログ（`https://opencode.ai/zen/v1`）を、`panda model add opencode-go` は Go/Go Plus サブスクリプションのロスター（`https://opencode.ai/zen/go/v1`）を登録します。両行は現行のモデル別コンテキスト/出力上限と価格を持ち、無料モデルを明示的に区別して（有料レートで課金されないように）扱い、Go ゲートウェイが要求する `x-opencode-session` ヘッダーを送ります。旧単一行とその `/inference` エンドポイントは廃止され、保存済みの設定は現在のエンドポイントへ自動的に書き換えられます。
 - `OPENPANDA_UPDATE_BASE` で自己更新のダウンロード先をリリースアセットのミラーに向けられます。`api.github.com` には届くが `release-assets.githubusercontent.com` には届かないネットワークのための逃げ道です。インストーラが既に解釈する `OPENPANDA_RELEASE_BASE` も別名として受け付けるため、1 つの変数でインストールと更新の両方を制御できます。
 - **同意カードは要約ではなく規約そのものを示します** —— ウィザードと設定のダイアログは、かつて十項目に圧縮した条項を表示していました。それは要約の対象であるファイルからずれうる、同じ法的文書の二つ目の複製でした。現在はどちらも `TERMS.md` そのもの——十七節すべてを、コンソールの言語で——トランスクリプトと同じ Markdown レンダラーで描画します。本文をコンソールへ複製することはもうありません。各翻訳はビルド時にリポジトリのファイルから取り込まれるため、直すべきテキストは一つだけです。
 - **選んだチームがそのままディスパッチ予算になります** —— ラウンドごとのサブエージェント上限は固定の `3` でした。そのためチームが claude_code、codex、deepseek_harness、opencode の会話は 3 件しかディスパッチせず、4 件目は投入される前に落ちていました。カードもエラーも、レシート上の記述もありません。上限は名簿から導出され（選んだエージェント 1 体につき 1 件）、`task_budget` で誰も列挙していない並列作業のために上限を広げられ（上限 8）、スレッドのチームはエントリのプロンプトにも入るため、モデルはあなたが選んだエージェントを名指しし、別の名前を作りません。
@@ -51,6 +51,10 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 修正
 
+- **OpenCode は既定で無料モデルを使う** —— モデル未指定の実行は最も能力の高いモデルを自動選択していたため、Go サブスクリプションも残高もないアカウントではすべてのタスクが "Insufficient account funds" で終わっていました。無料モデルを優先し、有料モデルの自動選択は明示的なオプトイン（`OPENPANDA_OPENCODE_ALLOW_PAID=1`）に限定しました。課金/クォータ拒否は最良の無料モデルで一度再試行し、資格情報がない場合は `opencode-go` のモデルを除外します。v2 ビルドで `opencode models` が空を返す場合は `api model.list` のカタログをロスターとして使います。
+- **panda のモデルをどちらのワイヤでも OpenCode に渡せる** —— 失敗時のフォールバックは OpenAI 方言のモデルしか受け付けず、DeepSeek の Anthropic エンドポイントを設定したノードは無料層の失敗を panda のモデルへ渡せませんでした。アダプターは方言非依存の `OPENPANDA_MODEL_*` 契約を受け取り、方言に応じて `@ai-sdk/anthropic` または `@ai-sdk/openai-compatible` の provider フラグメントをユーザーのネイティブ設定にマージし（MCP と権限は保持）、v2 のバックグラウンドサービスが古い設定を使い続けないよう `--standalone` で実行します。
+- **「自動」思考モードは全画面でプロバイダ既定を意味する** —— REPL とエントリクライアントは `thinking: auto` を明示的な思考要求として扱い、ウィザードと Web フォームは何も送っていませんでした。全画面で未設定として保存し、thinking フィールドを送らないようにしました。
+- **高度なモデル設定をリセットできる** —— 設定 API が `max_tokens`、`context_window`、`thinking_budget`、`max_retries` を単なる整数として読んでいたため、フォームの空欄（0）が古い値を保持し、保存済みの再試行予算を消去・無効化できませんでした。現在は省略可能なフィールドとし、省略は保持、0 はリセット、負の再試行予算は再試行無効を意味します。REPL の `--retry -1` も実際に適用されます。
 - `panda update` はアセットホストの一時的な不調で全体が失敗しなくなりました。リリースメタデータの取得は転送層のエラーで最大 3 回再試行し、GitHub のアセット CDN への TLS ハンドシェイクの上限を既定の 10 秒から 30 秒に延ばしています。アセット URL に付く署名済みクエリはエラーメッセージから伏せ字にしました。以前はこれが本当の原因を画面外に押し出していました。
 - `scripts/install.ps1` は Windows の `CRYPT_E_NO_REVOCATION_CHECK`（`0x80092012`）で中断しなくなりました。ローカルの curl が Schannel ビルドの場合は `--ssl-no-revoke` を付けるため、証明書の失効状態を確認できないことがインストールを止めません。証明書チェーン、ホスト名、有効期限の検証は従来どおりで、アーカイブは `checksums.txt` の SHA-256 で検証されます。
 - **チームにないエージェントを名指ししたタスクは、人を差し替えずに拒否します** —— `agent:claude_code`、`agent:codex`、`agent:deepseek_harness` を名指しした 3 件が `[deepseek_harness, opencode]` の名簿で実行され、3 件とも deepseek_harness で走り、それぞれ `<name> 调用成功` と出力しました。緑の通過 3 件のうち 2 件は虚構です。この矛盾はルーティング前に拒否され、理由は両側を明記します。名簿のエージェントがこのノードに 1 つも入っていない場合も、制限なしのカードへ降格せずにそう伝えます。

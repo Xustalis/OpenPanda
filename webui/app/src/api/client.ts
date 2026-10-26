@@ -1969,11 +1969,11 @@ export interface ModelSettings {
   api_type: 'anthropic' | 'openai' | 'responses' | 'google'
   base_url: string
   model: string
-  max_tokens: number
-  context_window?: number
+  max_tokens: number // 0 = provider/entry default; omitted = keep current
+  context_window?: number // 0 = unknown/auto; omitted = keep current
   thinking?: string // "on" | "off" | "auto" | ""; "auto" resets to provider default
-  thinking_budget?: number
-  max_retries?: number // transport retry budget; 0/omitted = keep current (default 5)
+  thinking_budget?: number // 0 = provider default; omitted = keep current
+  max_retries?: number // 0 = default (5), negative disables; omitted = keep current
   no_auth?: boolean // omitted = keep current
   api_key?: string // write-only: empty = keep the stored key
   api_key_set?: boolean

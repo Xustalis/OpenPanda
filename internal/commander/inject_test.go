@@ -26,6 +26,8 @@ func cleanCredentialEnv(t *testing.T) string {
 		"ANTHROPIC_MODEL", "OPENAI_MODEL", "GROK_MODEL", "DEEPSEEK_MODEL",
 		"XAI_API_KEY", "GROK_API_KEY", "DEEPSEEK_API_KEY",
 		"OPENCLAW_API_KEY", "HERMES_API_KEY", "OPENCODE_MODEL",
+		"OPENCODE_API_KEY", "OPENPANDA_MODEL_BASE_URL", "OPENPANDA_MODEL_API_KEY",
+		"OPENPANDA_MODEL_NAME", "OPENPANDA_MODEL_API_TYPE",
 	} {
 		t.Setenv(k, "")
 	}
@@ -865,15 +867,16 @@ func TestSelfContainedAgentSkipsInjectionButRescuesOnFailure(t *testing.T) {
 	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
 		attempts++
 		if attempts == 1 {
-			if hasEnvPrefix(env, "OPENAI_API_KEY=") {
+			if hasEnvPrefix(env, "OPENPANDA_MODEL_API_KEY=") {
 				t.Fatalf("first attempt must run on the agent's own model, env=%v", env)
 			}
 			return AgentResult{OK: false, Result: "provider failure: Free usage limit reached", ExitCode: 1}
 		}
 		assertEnv(t, env, map[string]string{
-			"OPENAI_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
-			"OPENAI_API_KEY":  "sk-node-test",
-			"OPENCODE_MODEL":  "glm-5.3-flash",
+			"OPENPANDA_MODEL_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
+			"OPENPANDA_MODEL_API_KEY":  "sk-node-test",
+			"OPENPANDA_MODEL_NAME":     "glm-5.3-flash",
+			"OPENPANDA_MODEL_API_TYPE": "openai",
 		})
 		return AgentResult{OK: true, Result: "completed on the injected model", ExitCode: 0}
 	})

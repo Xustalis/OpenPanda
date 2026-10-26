@@ -70,6 +70,17 @@ type Provider struct {
 	// carries the alternate endpoint and dialect for its model prefixes, and
 	// EndpointFor resolves a model through it.
 	Routes []Route
+	// LegacyBaseURLs are endpoints this provider used to publish. A config
+	// that still carries one is a catalogue restatement, not a user-chosen
+	// relay: OwnsEndpoint recognises them so the client rebases the entry
+	// onto the current BaseURL instead of dialing a retired path forever.
+	LegacyBaseURLs []string
+	// SessionHeader names a request header the provider requires to carry a
+	// stable per-conversation id (OpenCode's Go gateway routes and caches by
+	// x-opencode-session and answers 400 without it). The entry client mints
+	// one id per client — the lifetime of roughly one conversation — and a
+	// user-supplied header of the same name still wins.
+	SessionHeader string
 	// Unsupported names model families this provider serves on a wire
 	// surface the entry client does not implement (OpenAI Responses, Google
 	// Generative AI). A config naming one fails at client construction with
@@ -89,7 +100,7 @@ type Provider struct {
 	// thinking on (config.ModelConfig.Thinking). Anthropic-dialect providers
 	// always use the Anthropic thinking object regardless of this field; for
 	// OpenAI-dialect providers the choice is per vendor:
-	//   "object" → thinking:{type:"enabled"|"disabled"|"auto"} (Ark, GLM,
+	//   "object" → thinking:{type:"enabled"|"disabled"} (Ark, GLM,
 	//              DeepSeek OpenAI surface, most CN relays)
 	//   "flag"   → enable_thinking:bool + thinking_budget:int (DashScope/Qwen)
 	//   "effort" → reasoning_effort:"low"|"medium"|"high" (OpenAI, OpenRouter)
@@ -146,6 +157,11 @@ type ModelSpec struct {
 	ContextWindow    int
 	MaxTokensCap     int
 	DefaultMaxTokens int
+	// Free marks a model the provider serves at no charge. Pricing alone
+	// cannot express it: a zero Pricing is also what an unset field looks
+	// like, and falling through to the row price billed the free tier at
+	// the paid rate.
+	Free bool
 	// Pricing overrides the provider row's price for this model. Aggregators
 	// resell vendors at prices that differ by an order of magnitude
 	// (GLM-5.3-Flash vs Kimi K3), so one row price would misbill every other
@@ -396,75 +412,133 @@ var builtins = []Provider{
 		GeographicOrigin: RegionGlobal,
 	},
 	{
-		// OpenCode's own gateway: the pay-as-you-go Console catalogue and the
-		// Go/Go Plus subscription share one oc_sk_ key and one endpoint.
-		// Models are served on four wire surfaces and this client speaks all
-		// of them: open models on the OpenAI-chat surface below, Claude and
-		// the Anthropic-dialect Qwen ids on Anthropic Messages, GPT/Grok/Muse
-		// on the OpenAI Responses API, and Gemini on Google Generative AI —
-		// under the same key, resolved per model through Routes. SystemOne
-		// (Jev) remains refused with the reason. Console's free-tier ids are
-		// OpenCode-only (403 from other clients), which is why no free model
-		// is the default.
-		ID:            "opencode-go",
-		Label:         "OpenCode Go / Console",
-		APIType:       config.APITypeOpenAI,
-		BaseURL:       "https://opencode.ai/inference/openai/v1",
-		ModelsPath:    "https://opencode.ai/inference/v1/models",
-		DefaultModel:  "kimi-k3",
-		ThinkingStyle: "object",
-		PromptCache:   true,
-		Routes: []Route{
-			{
-				Prefixes: []string{"claude-", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.8-flash"},
-				BaseURL:  "https://opencode.ai/inference/anthropic",
-				APIType:  config.APITypeAnthropic,
-			},
-			{
-				Prefixes: []string{"gpt-", "grok-", "muse-"},
-				BaseURL:  "https://opencode.ai/inference/openai/v1",
-				APIType:  config.APITypeResponses,
-			},
-			{
-				Prefixes: []string{"gemini-"},
-				BaseURL:  "https://opencode.ai/inference/google/v1beta",
-				APIType:  config.APITypeGoogle,
-			},
-		},
-		Unsupported: []UnsupportedModel{
-			{Prefix: "jev-", Reason: "served on the System One API, which this client does not speak"},
-		},
-		// Token prices in USD per 1M as published for Go/Go Plus (2026-10);
-		// DeepSeek rows use the off-peak rate and the base tier of their
-		// long-context schedule. Console does not publish per model context
-		// windows here, so the rows carry pricing only and the client's flat
-		// completion floor applies unless --ctx/--max-tokens is set.
-		Models: []ModelSpec{
-			{ID: "glm-5.3-flash", Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.50}},
-			{ID: "glm-5.3", Pricing: Pricing{InputPerMillion: 1.40, OutputPerMillion: 4.40}},
-			{ID: "glm-5.2", Pricing: Pricing{InputPerMillion: 1.40, OutputPerMillion: 4.40}},
-			{ID: "kimi-k3.1-pro", Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00}},
-			{ID: "kimi-k3", Pricing: Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00}},
-			{ID: "kimi-k2.7-code", Pricing: Pricing{InputPerMillion: 0.95, OutputPerMillion: 4.00}},
-			{ID: "longcat-2.0", Pricing: Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20}},
-			{ID: "mimo-v2.6-flash", Pricing: Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28}},
-			{ID: "mimo-v2.6-pro", Pricing: Pricing{InputPerMillion: 0.435, OutputPerMillion: 0.87}},
-			{ID: "mimo-v2.5", Pricing: Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28}},
-			{ID: "minimax-m3.1-flash", Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}},
-			{ID: "minimax-m3", Pricing: Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20}},
-			{ID: "muse-spark-1.3", Pricing: Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.20}},
-			{ID: "muse-spark-1.2", Pricing: Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.20}},
-			{ID: "qwen3.8-max", Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 6.00}},
-			{ID: "qwen3.8-flash", Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.47}},
-			{ID: "qwen3.7-plus", Pricing: Pricing{InputPerMillion: 0.40, OutputPerMillion: 1.60}},
-			{ID: "deepseek-v4.1-flash", Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}},
-			{ID: "deepseek-v4-pro", Pricing: Pricing{InputPerMillion: 0.66, OutputPerMillion: 1.98}},
-			{ID: "hy4-preview", Pricing: Pricing{InputPerMillion: 0.834, OutputPerMillion: 2.501}},
-			{ID: "hy3", Pricing: Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.58}},
-			{ID: "grok-4.7", Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 6.00}},
-			{ID: "claude-haiku-5-5", Pricing: Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.50}},
-		},
+		// OpenCode Zen: the pay-as-you-go catalogue plus the free tier, on
+		// the public SDK surface OpenCode's own models.json publishes
+		// (/zen/v1). The free ids are the ones whose name ends in -free —
+		// they are the only models a key-less install can serve, and the
+		// ones an agent should reach for before spending money. The legacy
+		// /inference path is not a second vendor: it is the same catalogue
+		// behind an internal route that also requires the Go session header,
+		// which is why the client mints it for every row below.
+		ID:               "opencode",
+		Label:            "OpenCode Zen / Console",
+		APIType:          config.APITypeOpenAI,
+		BaseURL:          "https://opencode.ai/zen/v1",
+		ModelsPath:       "/models",
+		DefaultModel:     "deepseek-v4.1-flash-free",
+		DefaultMaxTokens: 4096,
+		ContextWindow:    1000000,
+		MaxTokensCap:     131072,
+		ThinkingStyle:    "object",
+		PromptCache:      true,
+		SessionHeader:    "x-opencode-session",
+		// Unknown ids bill at DeepSeek Flash's Zen rate rather than at zero:
+		// a resold model must never be reported as free by accident.
+		Pricing:          Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20},
 		GeographicOrigin: RegionGlobal,
+		Models: []ModelSpec{
+			{ID: "beam-free", ContextWindow: 1048576, MaxTokensCap: 131072, Free: true},
+			{ID: "big-pickle", ContextWindow: 200000, MaxTokensCap: 32000, Free: true},
+			{ID: "claude-fable-5-1", ContextWindow: 1000000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 10.00, OutputPerMillion: 50.00}},
+			{ID: "claude-haiku-5-5", ContextWindow: 1000000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.50}},
+			{ID: "claude-opus-5-5", ContextWindow: 1000000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 4.00, OutputPerMillion: 20.00}},
+			{ID: "claude-sonnet-5-5", ContextWindow: 1000000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00}},
+			{ID: "deepseek-v4-pro", ContextWindow: 1000000, MaxTokensCap: 384000, Pricing: Pricing{InputPerMillion: 1.74, OutputPerMillion: 3.48}},
+			{ID: "deepseek-v4.1-flash", ContextWindow: 1000000, MaxTokensCap: 384000, Pricing: Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20}},
+			{ID: "deepseek-v4.1-flash-free", ContextWindow: 200000, MaxTokensCap: 32000, Free: true},
+			{ID: "flint-40b-free", ContextWindow: 262144, MaxTokensCap: 65536, Free: true},
+			{ID: "gemini-3.1-pro", ContextWindow: 1048576, MaxTokensCap: 65536, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 12.00}},
+			{ID: "gemini-3.5-flash-lite", ContextWindow: 1048576, MaxTokensCap: 65536, Pricing: Pricing{InputPerMillion: 0.30, OutputPerMillion: 2.50}},
+			{ID: "gemini-3.8-flash", ContextWindow: 1048576, MaxTokensCap: 65536, Pricing: Pricing{InputPerMillion: 1.50, OutputPerMillion: 7.50}},
+			{ID: "gemini-4-argon", ContextWindow: 1048576, MaxTokensCap: 65536, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00}},
+			{ID: "glm-5.3", ContextWindow: 1000000, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 1.40, OutputPerMillion: 4.40}},
+			{ID: "glm-5.3-flash", ContextWindow: 1000000, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.50}},
+			{ID: "glm-5.3-flash-free", ContextWindow: 200000, MaxTokensCap: 32000, Free: true},
+			{ID: "gpt-5.3-codex", ContextWindow: 400000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 1.75, OutputPerMillion: 14.00}},
+			{ID: "gpt-5.3-codex-spark", ContextWindow: 128000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 1.75, OutputPerMillion: 14.00}},
+			{ID: "gpt-5.4-mini", ContextWindow: 400000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.75, OutputPerMillion: 4.50}},
+			{ID: "gpt-5.4-nano", ContextWindow: 400000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.20, OutputPerMillion: 1.25}},
+			{ID: "gpt-5.5", ContextWindow: 1050000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 5.00, OutputPerMillion: 30.00}},
+			{ID: "gpt-5.5-pro", ContextWindow: 1050000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 30.00, OutputPerMillion: 180.00}},
+			{ID: "gpt-5.6-terra", ContextWindow: 1050000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 12.00}},
+			{ID: "gpt-6-astra", ContextWindow: 1050000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 10.00, OutputPerMillion: 50.00}},
+			{ID: "gpt-6-luna", ContextWindow: 1050000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.50}},
+			{ID: "gpt-6.1-sol", ContextWindow: 1050000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00}},
+			{ID: "grok-4.7", ContextWindow: 500000, MaxTokensCap: 500000, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 6.00}},
+			{ID: "grok-build-0.1", ContextWindow: 256000, MaxTokensCap: 256000, Pricing: Pricing{InputPerMillion: 1.00, OutputPerMillion: 2.00}},
+			{ID: "kimi-k2.7-code", ContextWindow: 262144, MaxTokensCap: 262144, Pricing: Pricing{InputPerMillion: 0.95, OutputPerMillion: 4.00}},
+			{ID: "kimi-k3", ContextWindow: 1048576, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00}},
+			{ID: "mimo-v2.6-flash-free", ContextWindow: 200000, MaxTokensCap: 32000, Free: true},
+			{ID: "minimax-m3", ContextWindow: 512000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20}},
+			{ID: "mistral-large-4", ContextWindow: 524288, MaxTokensCap: 262144, Pricing: Pricing{InputPerMillion: 0.68, OutputPerMillion: 2.09}},
+			{ID: "muse-spark-1.3", ContextWindow: 1048576, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 1.25, OutputPerMillion: 4.25}},
+			{ID: "muse-wonder-1.0", ContextWindow: 1048576, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 4.00, OutputPerMillion: 20.00}},
+			{ID: "nemotron-3-ultra-free", ContextWindow: 1000000, MaxTokensCap: 128000, Free: true},
+			{ID: "nemotron-3.5-lightning-free", ContextWindow: 262144, MaxTokensCap: 262144, Free: true},
+			{ID: "nemotron-3.5-super-vl-free", ContextWindow: 1048576, MaxTokensCap: 131072, Free: true},
+			{ID: "qwen3.6-plus", ContextWindow: 262144, MaxTokensCap: 65536, Pricing: Pricing{InputPerMillion: 0.50, OutputPerMillion: 3.00}},
+			{ID: "qwen3.8-flash", ContextWindow: 1000000, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.47}},
+		},
+	},
+	{
+		// OpenCode Go / Go Plus: the subscription catalogue, served on its
+		// own SDK surface (/zen/go/v1 for OpenAI-chat). One oc_sk_ key also
+		// reaches the Zen catalogue above, but the two rosters and prices
+		// differ, so they are separate rows. Go requires a stable
+		// x-opencode-session on every request (the gateway answers 400
+		// MissingSessionID without it) and recognises Anthropic harnesses on
+		// https://opencode.ai/zen/go with the same key.
+		ID:               "opencode-go",
+		Label:            "OpenCode Go / Go Plus",
+		APIType:          config.APITypeOpenAI,
+		BaseURL:          "https://opencode.ai/zen/go/v1",
+		ModelsPath:       "/models",
+		DefaultModel:     "deepseek-v4.1-flash",
+		DefaultMaxTokens: 4096,
+		ContextWindow:    1000000,
+		MaxTokensCap:     131072,
+		ThinkingStyle:    "object",
+		PromptCache:      true,
+		SessionHeader:    "x-opencode-session",
+		LegacyBaseURLs: []string{
+			"https://opencode.ai/inference/openai/v1",
+			"https://opencode.ai/inference/anthropic",
+			"https://opencode.ai/inference/google/v1beta",
+		},
+		Pricing:          Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60},
+		GeographicOrigin: RegionGlobal,
+		Models: []ModelSpec{
+			{ID: "beam-free", ContextWindow: 1048576, MaxTokensCap: 131072, Free: true},
+			{ID: "claude-haiku-5-5", ContextWindow: 1000000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.50}},
+			{ID: "deepseek-v4-pro", ContextWindow: 1000000, MaxTokensCap: 384000, Pricing: Pricing{InputPerMillion: 0.66, OutputPerMillion: 1.98}},
+			{ID: "deepseek-v4.1-flash", ContextWindow: 1000000, MaxTokensCap: 384000, Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}},
+			{ID: "gemini-4-argon", ContextWindow: 1048576, MaxTokensCap: 65536, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00}},
+			{ID: "glm-5.2", ContextWindow: 1000000, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 1.40, OutputPerMillion: 4.40}},
+			{ID: "glm-5.3", ContextWindow: 1000000, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 1.40, OutputPerMillion: 4.40}},
+			{ID: "glm-5.3-flash", ContextWindow: 1000000, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.50}},
+			{ID: "gpt-5.6-luna", ContextWindow: 1050000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.20, OutputPerMillion: 1.20}},
+			{ID: "gpt-6-luna", ContextWindow: 1050000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.50}},
+			{ID: "grok-4.7", ContextWindow: 500000, MaxTokensCap: 500000, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 6.00}},
+			{ID: "hy3", ContextWindow: 256000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.58}},
+			{ID: "hy4-preview", ContextWindow: 1024000, MaxTokensCap: 64000, Pricing: Pricing{InputPerMillion: 0.834, OutputPerMillion: 2.501}},
+			{ID: "iceman-contributor-free", ContextWindow: 262144, MaxTokensCap: 131072, Free: true},
+			{ID: "kimi-k2.7-code", ContextWindow: 262144, MaxTokensCap: 262144, Pricing: Pricing{InputPerMillion: 0.95, OutputPerMillion: 4.00}},
+			{ID: "kimi-k3", ContextWindow: 1048576, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00}},
+			{ID: "kimi-k3.1-pro", ContextWindow: 1048576, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00}},
+			{ID: "longcat-2.0", ContextWindow: 1000000, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20}},
+			{ID: "mimo-v2.5", ContextWindow: 1000000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28}},
+			{ID: "mimo-v2.5-pro", ContextWindow: 1048576, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.435, OutputPerMillion: 0.87}},
+			{ID: "mimo-v2.6-flash", ContextWindow: 1048576, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 0.14, OutputPerMillion: 0.28}},
+			{ID: "mimo-v2.6-pro", ContextWindow: 1048576, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 0.435, OutputPerMillion: 0.87}},
+			{ID: "minimax-m3", ContextWindow: 1000000, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20}},
+			{ID: "minimax-m3.1-flash", ContextWindow: 1000000, MaxTokensCap: 512000, Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}},
+			{ID: "muse-spark-1.2-contributor", ContextWindow: 1048576, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.20}},
+			{ID: "muse-spark-1.3-contributor", ContextWindow: 1048576, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.20}},
+			{ID: "qwen3.7-plus", ContextWindow: 1000000, MaxTokensCap: 65536, Pricing: Pricing{InputPerMillion: 0.40, OutputPerMillion: 1.60}},
+			{ID: "qwen3.8-flash", ContextWindow: 1000000, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.47}},
+			{ID: "qwen3.8-max", ContextWindow: 1000000, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 6.00}},
+			{ID: "step-5-preview", ContextWindow: 1000000, MaxTokensCap: 65536, Pricing: Pricing{InputPerMillion: 1.00, OutputPerMillion: 2.70}},
+		},
 	},
 	{
 		ID:               "ollama",
@@ -574,7 +648,7 @@ func LookupPricing(providerID, model string) Pricing {
 		}
 		return Pricing{}
 	}
-	if s, ok := p.SpecFor(model); ok && s.Pricing != (Pricing{}) {
+	if s, ok := p.SpecFor(model); ok && (s.Free || s.Pricing != (Pricing{})) {
 		return s.Pricing
 	}
 	lower := strings.ToLower(model)
@@ -631,9 +705,10 @@ func (p Provider) EndpointFor(model string) (baseURL, apiType string) {
 }
 
 // OwnsEndpoint reports whether base is one of the provider's own catalogue
-// endpoints — its row's or a route's — after normalising case and the
-// trailing slash. Callers use it to tell a config that merely restated the
-// catalogue (which a route may rebase) from one the user pointed elsewhere.
+// endpoints — its row's, a route's, or a retired one it used to publish —
+// after normalising case and the trailing slash. Callers use it to tell a
+// config that merely restated the catalogue (which a route may rebase and a
+// legacy URL must migrate) from one the user pointed elsewhere.
 func (p Provider) OwnsEndpoint(base string) bool {
 	b := strings.TrimRight(strings.ToLower(strings.TrimSpace(base)), "/")
 	if b == "" {
@@ -647,6 +722,28 @@ func (p Provider) OwnsEndpoint(base string) bool {
 	}
 	for _, r := range p.Routes {
 		if own(r.BaseURL) {
+			return true
+		}
+	}
+	for _, u := range p.LegacyBaseURLs {
+		if own(u) {
+			return true
+		}
+	}
+	return false
+}
+
+// OwnsLegacyEndpoint reports whether base is an endpoint this provider has
+// retired. A config carrying one was written against the old catalogue, so
+// both its URL and its dialect are stale — unlike a current endpoint, where
+// a declared dialect may be a deliberate choice.
+func (p Provider) OwnsLegacyEndpoint(base string) bool {
+	b := strings.TrimRight(strings.ToLower(strings.TrimSpace(base)), "/")
+	if b == "" {
+		return false
+	}
+	for _, u := range p.LegacyBaseURLs {
+		if u != "" && b == strings.TrimRight(strings.ToLower(u), "/") {
 			return true
 		}
 	}
@@ -745,6 +842,14 @@ func Detect(baseURL, model string) (Provider, bool) {
 		// provider as its row: one key, one catalogue.
 		for _, r := range p.Routes {
 			if same(r.BaseURL) {
+				return p, true
+			}
+		}
+		// A retired endpoint is still this provider: recognising it lets a
+		// hand-written config without a provider id reach the row that can
+		// migrate it.
+		for _, u := range p.LegacyBaseURLs {
+			if same(u) {
 				return p, true
 			}
 		}

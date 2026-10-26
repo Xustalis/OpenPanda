@@ -1136,11 +1136,11 @@ type ModelConfig struct {
 	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
 	NoAuth        bool   `yaml:"no_auth,omitempty"`        // true for local models that need no API key
 	// Thinking selects the reasoning mode: "on" requests the provider's
-	// thinking/reasoning pass, "off" suppresses it, empty leaves the
-	// provider default. The wire shape is chosen per provider dialect
-	// (Anthropic budget object, DashScope enable_thinking flag, Ark
-	// thinking object, OpenAI reasoning_effort).
-	Thinking string `yaml:"thinking,omitempty"` // "on" | "off" | "" (provider default)
+	// thinking/reasoning pass, "off" suppresses it, and "" or "auto" leaves
+	// the provider default (no thinking field is sent at all). The wire shape
+	// is chosen per provider dialect (Anthropic budget object, DashScope
+	// enable_thinking flag, Ark thinking object, OpenAI reasoning_effort).
+	Thinking string `yaml:"thinking,omitempty"` // "on" | "off" | ""/"auto" (provider default)
 	// ThinkingBudget caps the reasoning budget in tokens where the dialect
 	// supports it (Anthropic budget_tokens, DashScope thinking_budget). 0 =
 	// provider default.

@@ -130,15 +130,15 @@ func TestStreamRetryResetsShapeGuard(t *testing.T) {
 	}
 }
 
-// TestNewClientKeepsDialectOnForeignRelay pins that a rebased endpoint and a
-// rebased dialect move together. The route's dialect describes the provider's
-// own surface; on a relay the user pointed at, applying it sent an Anthropic
-// body to an OpenAI-compatible gateway, and the 400 that followed named nothing
-// in the config.
+// TestNewClientKeepsDialectOnForeignRelay pins that rebasing an endpoint and
+// a dialect move together. The catalogue surface describes the provider's
+// own wire; on a relay the user pointed at, applying the catalogue's dialect
+// sent the wrong body shape, and the 400 that followed named nothing in the
+// config.
 func TestNewClientKeepsDialectOnForeignRelay(t *testing.T) {
 	c, err := NewClient(config.ModelConfig{
 		Provider: "opencode-go", Model: "claude-opus-4.6",
-		BaseURL: "https://relay.example.com/v1", APIType: config.APITypeOpenAI,
+		BaseURL: "https://relay.example.com/v1", APIType: config.APITypeAnthropic,
 		APIKey: "sk-test", MaxTokens: 64,
 	})
 	if err != nil {
@@ -147,23 +147,25 @@ func TestNewClientKeepsDialectOnForeignRelay(t *testing.T) {
 	if c.baseURL != "https://relay.example.com/v1" {
 		t.Fatalf("base = %q, want the relay left alone", c.baseURL)
 	}
-	if c.apiType != config.APITypeOpenAI {
-		t.Fatalf("apiType = %q, want the declared openai kept for a relay", c.apiType)
+	if c.apiType != config.APITypeAnthropic {
+		t.Fatalf("apiType = %q, want the declared anthropic kept for a relay", c.apiType)
 	}
 
-	// The catalogue endpoint still gets the route's surface, or the aggregator
-	// serves Claude on its chat endpoint and every request 400s.
+	// The catalogue base takes the row's surface: Go serves every model on
+	// its OpenAI-compatible endpoint, so a stale /inference URL is migrated
+	// there along with the dialect.
 	c, err = NewClient(config.ModelConfig{
 		Provider: "opencode-go", Model: "claude-opus-4.6",
+		BaseURL: "https://opencode.ai/inference/anthropic", APIType: config.APITypeAnthropic,
 		APIKey: "sk-test", MaxTokens: 64,
 	})
 	if err != nil {
 		t.Fatalf("catalogue client: %v", err)
 	}
-	if c.apiType != config.APITypeAnthropic {
-		t.Fatalf("apiType = %q, want the route's anthropic on the catalogue base", c.apiType)
+	if c.apiType != config.APITypeOpenAI {
+		t.Fatalf("apiType = %q, want the row's openai on the catalogue base", c.apiType)
 	}
-	if !strings.Contains(c.baseURL, "/inference/anthropic") {
-		t.Fatalf("base = %q, want the anthropic route", c.baseURL)
+	if c.baseURL != "https://opencode.ai/zen/go/v1" {
+		t.Fatalf("base = %q, want the current Go endpoint", c.baseURL)
 	}
 }
