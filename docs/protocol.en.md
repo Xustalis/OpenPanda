@@ -33,12 +33,16 @@ There are two data planes, both carrying **the same envelope** (below):
   - `kind 1 punch` / `kind 2 punch_ack`: a JSON `PunchFrame`, HMAC
     signed (`punch|<nonce>|<from>|<ts>`) proving mesh membership; opens
     the NAT hole;
-  - `kind 3 data`: `nonce(12) || AES-256-GCM(JSON Envelope)` with the
-    frame header as AAD — keys are domain-separated derivations of the
-    shared secret, so envelopes on the UDP plane are **encrypted end to
-    end**;
+  - `kind 3 data`: under `ver=2`, `idlen(1) || sender id || nonce(12) ||
+    AES-256-GCM(JSON Envelope)`, keyed per peer pair by ECDH + HKDF over
+    the two X25519 identities. The sender id rides in the clear as the
+    key selector and is covered by the AAD, and the envelope's `from` is
+    checked against it, so the receiver proves *who* sealed the frame,
+    not merely that a member did. `ver=1` is the old shared-secret
+    derivation, kept only for peers that publish no identity key, and
+    dropped outright when the source address belongs to one that does;
   - `kind 4 keepalive`: a sealed empty body keeping the NAT mapping
-    alive.
+    alive, sealed exactly like `kind 3`.
   The same socket also answers STUN binding requests (RFC 5389,
   recognized by magic cookie): reflected-address discovery with zero
   external dependencies.

@@ -21,9 +21,13 @@
   链路靠它打通和兜底。每个数据报是四种帧之一（4 字节头区分）：
   - `kind 1 punch` / `kind 2 punch_ack`：JSON `PunchFrame`，HMAC 签名
     （`punch|<nonce>|<from>|<ts>`）证明 mesh 成员身份，负责开 NAT 洞；
-  - `kind 3 data`：`nonce(12) || AES-256-GCM(JSON Envelope)`，AAD 为帧头——
-    密钥由共享密钥域分离派生，所以 UDP 平面上信封**全程加密**；
-  - `kind 4 keepalive`：密封空体，保活 NAT 映射。
+  - `kind 3 data`：`ver=2` 时为 `idlen(1) || 发送方 id || nonce(12) ||
+    AES-256-GCM(JSON Envelope)`，密钥由双方 X25519 身份经 ECDH + HKDF 派生，
+    每对端一把；发送方 id 明文充当密钥选择器，与帧头一并计入 AAD，信封的
+    `from` 还要再与它对账，所以接收方证明的是「谁封的」而不只是「有成员封的」。
+    `ver=1` 是由共享密钥派生的旧式，仅为未发布身份密钥的对端保留，且一旦
+    来源地址属于已发布身份密钥的对端就一律丢弃；
+  - `kind 4 keepalive`：密封空体，保活 NAT 映射，封法与 `kind 3` 相同。
   同一 socket 还应答 STUN binding 请求（RFC 5389，按 magic cookie 识别）：
   反射地址发现零外部依赖。
 - 服务端只接受**不带 `Origin` 头**的握手（节点间 Go 客户端不发 Origin；浏览器会发），
