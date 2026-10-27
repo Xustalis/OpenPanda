@@ -93,20 +93,47 @@ func HashDir(root string, maxFiles int) (hash string, nfiles int, err error) {
 	buf := make([]byte, 1<<20)
 	for _, f := range files {
 		fh.Reset()
-		fp, err := os.Open(f.path)
-		if err != nil {
+		if err := hashFileInto(fh, f.path, buf); err != nil {
 			return "", 0, err
-		}
-		_, copyErr := io.CopyBuffer(fh, fp, buf)
-		fp.Close()
-		if copyErr != nil {
-			return "", 0, copyErr
 		}
 		h.Write([]byte(f.rel))
 		h.Write([]byte{0})
 		h.Write(fh.Sum(nil))
 	}
 	return hex.EncodeToString(h.Sum(nil)), len(files), nil
+}
+
+// hashFileInto streams one file into h through the caller's reusable buffer.
+//
+// The read loop is hand-rolled rather than io.CopyBuffer(h, fp, buf) because
+// *os.File implements io.WriterTo (since Go 1.22): io.CopyBuffer consults
+// WriterTo before it looks at the buffer it was handed, so the 1 MB buf is
+// dropped on the floor and the copy re-enters os.File's generic WriteTo
+// fallback, which allocates a fresh 32 KB buffer per call. That is ~34 KB of
+// garbage for every file in the tree — on a 5000-file project, ~168 MB of
+// allocation per round hash, against ~2 KB/file here. Reading through the
+// shared buffer keeps the cost flat: one 1 MB buffer per HashDir call no matter
+// how many files the tree holds.
+func hashFileInto(h io.Writer, path string, buf []byte) error {
+	fp, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer fp.Close()
+	for {
+		n, rerr := fp.Read(buf)
+		if n > 0 {
+			if _, werr := h.Write(buf[:n]); werr != nil {
+				return werr
+			}
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				return nil
+			}
+			return rerr
+		}
+	}
 }
 
 // errTooManyFiles bails the walk past maxFiles. A private sentinel rather

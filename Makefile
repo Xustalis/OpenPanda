@@ -350,7 +350,7 @@ measure:
 # Run the performance benchmarks with allocation reporting: routing match and
 # decision, wire codec (control + 1 MiB data frames), dispatch dedup.
 bench:
-	go test -run '^$$' -bench . -benchmem ./internal/ledger/ ./internal/scheduler/ ./internal/bus/ ./internal/core/
+	go test -run '^$$' -bench . -benchmem ./internal/ledger/ ./internal/scheduler/ ./internal/bus/ ./internal/core/ ./internal/defense/
 
 clean:
 	rm -rf bin dist
