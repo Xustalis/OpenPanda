@@ -253,24 +253,32 @@ var known = []Known{
 	{
 		Name:               "opencode",
 		Adapter:            "opencode.py",
-		Endpoint:           "https://opencode.ai/zen",
+		Endpoint:           "https://opencode.ai/zen/v1",
 		Binaries:           []string{"opencode"},
 		DisplayName:        "OpenCode",
 		InstallHint:        "curl -fsSL https://opencode.ai/install | bash",
 		InstallURL:         "https://opencode.ai/docs",
 		SelfContainedModel: true,
-		CredentialEnvVars:  []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
+		CredentialEnvVars:  []string{"OPENCODE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
 		CredentialFiles:    []string{".local/share/opencode/auth.json", ".config/opencode/opencode.json", ".config/opencode/opencode.jsonc"},
 		CredentialFileFields: map[string][]string{
 			".config/opencode/opencode.json":  {"model", "provider", "apiKey", "providers"},
 			".config/opencode/opencode.jsonc": {"model", "provider", "apiKey", "providers"},
-			".local/share/opencode/auth.json": {"apiKey", "token", "access_token"},
+			// auth.json maps provider ids to credentials, so a login for the
+			// Zen or Go roster is a top-level key — not an "apiKey" field.
+			".local/share/opencode/auth.json": {"opencode", "opencode-go"},
 		},
 		ModelEnv: &ModelEnvMapping{
-			APIType: "openai",
-			BaseURL: "OPENAI_BASE_URL",
-			APIKey:  "OPENAI_API_KEY",
-			Model:   "OPENCODE_MODEL",
+			// OpenCode resolves --model against its own provider registry,
+			// so panda's endpoint reaches it through the adapter, not the
+			// CLI's env. The mapping therefore carries a dialect-neutral
+			// contract (APIType "" = accept whichever wire the model
+			// speaks) and panda's own variable names; opencode.py merges
+			// them into the provider fragment it hands the CLI.
+			APIType: "",
+			BaseURL: "OPENPANDA_MODEL_BASE_URL",
+			APIKey:  "OPENPANDA_MODEL_API_KEY",
+			Model:   "OPENPANDA_MODEL_NAME",
 		},
 		// opencode's built-in "plan" agent is a real read-only face (its
 		// permission set denies file mutations and write-class bash while

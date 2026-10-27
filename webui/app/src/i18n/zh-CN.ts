@@ -511,7 +511,7 @@ const zhCN: Messages = {
   'settings.maxTokens': '最大 Token 数',
   'settings.maxTokensHelp': '补全上限；0 = 使用服务商默认值。',
   'settings.maxRetries': '最大重试次数',
-  'settings.maxRetriesHelp': '请求失败（429、5xx、断连）后的重试上限；0 = 保持当前值（默认 5 次）。',
+  'settings.maxRetriesHelp': '请求失败（429、5xx、断连）后的重试上限；0 = 默认（5 次），-1 = 关闭重试。',
   'settings.contextWindow': '上下文窗口',
   'settings.contextWindowHelp': '模型声明的上下文长度；0 = 从目录自动解析。',
   'settings.thinking': '思考模式',

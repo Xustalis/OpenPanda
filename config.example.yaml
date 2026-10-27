@@ -347,7 +347,8 @@ log:
 # Built-in providers (internal/providers): deepseek, claude (Anthropic),
 # openai (ChatGPT), kimi (月之暗面), minimax, volcengine (火山引擎/豆包),
 # zhipu (智谱), qwen (通义千问), siliconflow (硅基流动), openrouter,
-# opencode-go (OpenCode Go / Console), ollama (本地), custom.
+# opencode (OpenCode Zen / Console), opencode-go (OpenCode Go / Go Plus),
+# ollama (本地), custom.
 #
 # models:
 #   - name: deepseek
@@ -368,12 +369,14 @@ log:
 #     model: "kimi-k3"
 #     api_type: "openai"
 #     api_key: ""
-#   - name: opencode-go        # one oc_sk_ key from OpenCode Console covers
-#     provider: opencode-go    # both pay-as-you-go and Go/Go Plus; each model
-#     model: "kimi-k3"         # is routed to the surface that serves it:
-#     api_key: ""              # open models → OpenAI Chat, claude-*/qwen3.x-plus
-#                              # → Anthropic Messages, gpt-*/grok-*/muse-* →
-#                              # OpenAI Responses, gemini-* → Google Generative AI
+#   - name: opencode          # OpenCode Zen / Console: pay-as-you-go plus
+#     provider: opencode      # the free tier; ids ending in -free cost nothing
+#     model: "deepseek-v4.1-flash-free"
+#     api_key: ""
+#   - name: opencode-go       # OpenCode Go / Go Plus subscription roster.
+#     provider: opencode-go   # One oc_sk_ key covers both rows, but the
+#     model: "deepseek-v4.1-flash"   # endpoint and model list are separate.
+#     api_key: ""
 
 # MCP server (Model Context Protocol): one stdio server whose tools become
 # callable by the ask engine. The command is space-separated argv; empty
@@ -411,6 +414,14 @@ injection:
 # at execution time, the next-best matching agent is tried (fallback chain).
 # routing:
 #   preferred_agents: []       # e.g. ["codex", "opencode"]
+#   agent_models:              # per agent: the models its own CLI should
+#     opencode:                # prefer, in order. The first entry the install
+#       - opencode-go/kimi-k3  # actually serves and can authenticate wins;
+#       - opencode-go/deepseek-v4.1-flash   # a paid or Go model here is an
+#                              # explicit choice, not auto-spend. Only adapters
+#                              # that pick among served models use it (opencode).
+#                              # Go entries need `opencode auth login` or
+#                              # OPENCODE_API_KEY in the daemon environment.
 #   reputation: false          # experimental (trust zones): fold each
 #                              # executor's locally observed delegation
 #                              # success rate into routing scores. Local

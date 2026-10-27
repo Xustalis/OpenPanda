@@ -93,6 +93,12 @@ injection:
 # panda_tools: extended 策略下是否向 agent 暴露 OpenPanda 自管理工具（panda mcp），默认 true
 # routing:
 #   preferred_agents: []
+#   agent_models:              # 每个 agent 自己的模型偏好，按顺序尝试；第一个本机
+#     opencode:                # 可用且已登录的模型生效（付费/Go 模型写在这里
+#       - opencode-go/kimi-k3  # 即视为显式选择）。目前仅 opencode 适配器使用。
+#       - opencode-go/deepseek-v4.1-flash
+#                              # Go 模型需要 `opencode auth login`，或在守护进程
+#                              # 环境里设置 OPENCODE_API_KEY。
 #   tools_policy: minimal
 #   panda_tools: true
 

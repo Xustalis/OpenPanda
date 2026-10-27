@@ -32,7 +32,7 @@ type oaiRequest struct {
 	StreamOptions       *oaiStreamOptions `json:"stream_options,omitempty"`
 	// Thinking dialects — exactly one is populated per request, chosen by the
 	// provider's ThinkingStyle (providers.ThinkingStyleFor):
-	//   Thinking        → Ark/DeepSeek/GLM object: {"type":"enabled"|"disabled"|"auto"}
+	//   Thinking        → Ark/DeepSeek/GLM object: {"type":"enabled"|"disabled"}
 	//   EnableThinking+ThinkingBudget → DashScope/Qwen flag form
 	//   ReasoningEffort → OpenAI/OpenRouter: "low"|"medium"|"high"
 	Thinking        map[string]any `json:"thinking,omitempty"`
@@ -82,7 +82,7 @@ func (c *Client) applyThinking(req *oaiRequest) {
 	if c.thinkingDenied.Load() || c.thinking == "" {
 		return
 	}
-	on := c.thinking == "on" || c.thinking == "auto"
+	on := c.thinking == "on"
 	switch c.thinkingStyle {
 	case "flag":
 		req.EnableThinking = &on
@@ -95,15 +95,10 @@ func (c *Client) applyThinking(req *oaiRequest) {
 			req.ReasoningEffort = "high"
 		case "off":
 			req.ReasoningEffort = "low"
-		default: // auto
-			req.ReasoningEffort = "medium"
 		}
 	case "object", "anthropic":
-		typ := "auto"
-		switch c.thinking {
-		case "on":
-			typ = "enabled"
-		case "off":
+		typ := "enabled"
+		if c.thinking == "off" {
 			typ = "disabled"
 		}
 		req.Thinking = map[string]any{"type": typ}

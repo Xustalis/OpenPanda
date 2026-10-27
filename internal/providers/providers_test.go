@@ -308,87 +308,161 @@ func TestAllReturnsCopy(t *testing.T) {
 	}
 }
 
-// TestOpenCodeGoGateway pins the OpenCode Go / Console row: one oc_sk_ key
-// serves all four wire surfaces this client speaks (OpenAI chat for open
-// models, Anthropic Messages for Claude and the Anthropic-dialect Qwen ids,
-// Responses for GPT/Grok/Muse, Google for Gemini), the SystemOne family is
-// refused with a reason, pricing is per model, and every catalogue endpoint
-// resolves back to the same provider.
-func TestOpenCodeGoGateway(t *testing.T) {
-	p, ok := Lookup("opencode-go")
+// TestOpenCodeGatewayRows pins the two OpenCode catalogue rows. Zen and Go
+// share one oc_sk_ key but not an endpoint or a roster: Zen is the
+// pay-as-you-go catalogue plus the free tier on /zen/v1, Go is the
+// subscription roster on /zen/go/v1. Every model on both is served on the
+// OpenAI-compatible SDK surface OpenCode's own models.json declares, so the
+// old four-surface routing table was both wrong and unnecessary.
+func TestOpenCodeGatewayRows(t *testing.T) {
+	zen, ok := Lookup("opencode")
+	if !ok {
+		t.Fatal("missing opencode provider")
+	}
+	if zen.BaseURL != "https://opencode.ai/zen/v1" || zen.ModelsPath != "/models" {
+		t.Fatalf("zen endpoint = %q models %q", zen.BaseURL, zen.ModelsPath)
+	}
+	if zen.DefaultModel != "deepseek-v4.1-flash-free" {
+		t.Fatalf("zen default = %q, want the free tier", zen.DefaultModel)
+	}
+	if zen.SessionHeader != "x-opencode-session" {
+		t.Fatalf("zen session header = %q", zen.SessionHeader)
+	}
+	zp, _ := ModelConfig("opencode", "deepseek-v4.1-flash", "oc_sk_test")
+	if zp.BaseURL != zen.BaseURL || zp.APIType != config.APITypeOpenAI {
+		t.Fatalf("zen model = %+v, want the /zen/v1 chat surface", zp)
+	}
+
+	gop, ok := Lookup("opencode-go")
 	if !ok {
 		t.Fatal("missing opencode-go provider")
 	}
-	if p.DefaultModel != "kimi-k3" || p.ModelsPath != "https://opencode.ai/inference/v1/models" {
-		t.Fatalf("unexpected row: %+v", p)
+	if gop.BaseURL != "https://opencode.ai/zen/go/v1" || gop.ModelsPath != "/models" {
+		t.Fatalf("go endpoint = %q models %q", gop.BaseURL, gop.ModelsPath)
+	}
+	if gop.DefaultModel != "deepseek-v4.1-flash" {
+		t.Fatalf("go default = %q", gop.DefaultModel)
+	}
+	if gop.SessionHeader != "x-opencode-session" {
+		t.Fatalf("go session header = %q", gop.SessionHeader)
+	}
+	gm, _ := ModelConfig("opencode-go", "claude-haiku-5-5", "oc_sk_test")
+	if gm.BaseURL != gop.BaseURL || gm.APIType != config.APITypeOpenAI {
+		t.Fatalf("go claude model = %+v, want the same OpenAI-chat surface", gm)
 	}
 
-	chat, ok := ModelConfig("opencode-go", "glm-5.3", "oc_sk_test")
-	if !ok || chat.BaseURL != "https://opencode.ai/inference/openai/v1" || chat.APIType != config.APITypeOpenAI {
-		t.Fatalf("chat model = %+v (ok=%v), want the OpenAI-chat surface", chat, ok)
+	// The free Zen model advertises a 200K window and a 32K completion
+	// ceiling; AutoMaxTokens lifts the 4096 default to an eighth of the
+	// window but never past that ceiling.
+	if ctx := zen.ContextFor("deepseek-v4.1-flash-free"); ctx != 200000 {
+		t.Errorf("free context = %d, want 200000", ctx)
 	}
-	anth, _ := ModelConfig("opencode-go", "claude-sonnet-5-5", "oc_sk_test")
-	if anth.BaseURL != "https://opencode.ai/inference/anthropic" || anth.APIType != config.APITypeAnthropic {
-		t.Fatalf("claude model = %+v, want the Anthropic surface", anth)
+	if _, cap := zen.TokenPolicy("deepseek-v4.1-flash-free"); cap != 32000 {
+		t.Errorf("free completion ceiling = %d, want 32000", cap)
 	}
-	gpt, _ := ModelConfig("opencode-go", "gpt-6.1-sol", "oc_sk_test")
-	if gpt.BaseURL != p.BaseURL || gpt.APIType != config.APITypeResponses {
-		t.Fatalf("gpt model = %+v, want the Responses surface", gpt)
-	}
-	if gem, _ := ModelConfig("opencode-go", "gemini-4-argon", "oc_sk_test"); gem.BaseURL != "https://opencode.ai/inference/google/v1beta" || gem.APIType != config.APITypeGoogle {
-		t.Fatalf("gemini model = %+v, want the Google surface", gem)
-	}
-	// Qwen3.8 Max is the chat-dialect exception in its family.
-	if qmax, _ := ModelConfig("opencode-go", "qwen3.8-max", "oc_sk_test"); qmax.APIType != config.APITypeOpenAI || qmax.BaseURL != p.BaseURL {
-		t.Fatalf("qwen3.8-max = %+v, want the default chat surface", qmax)
-	}
-	// A bare add lands on the paid default: Console's free tiers are
-	// OpenCode-only and answer 403 from other clients.
-	if def, _ := ModelConfig("opencode-go", "", "oc_sk_test"); def.Model != "kimi-k3" {
-		t.Fatalf("default model = %q, want kimi-k3", def.Model)
+	if mt := zen.AutoMaxTokens("deepseek-v4.1-flash-free"); mt != 25000 {
+		t.Errorf("free auto max tokens = %d, want 25000", mt)
 	}
 
-	// Only the SystemOne family has no client implementation here.
-	if got := p.UnsupportedReason("jev-1.13"); got == "" {
-		t.Error("jev-1.13 should be reported unsupported")
-	}
-	for _, supported := range []string{"kimi-k3", "claude-sonnet-5-5", "gpt-6.1-sol", "grok-4.7", "gemini-4-argon"} {
-		if got := p.UnsupportedReason(supported); got != "" {
-			t.Errorf("%s reported unsupported: %q", supported, got)
+	// New SDK endpoints and retired /inference aliases both identify the row
+	// they belong to.
+	for _, tc := range []struct{ url, want string }{
+		{"https://opencode.ai/zen/v1", "opencode"},
+		{"https://opencode.ai/zen", "opencode"},
+		{"https://opencode.ai/zen/go/v1", "opencode-go"},
+		{"https://opencode.ai/zen/go", "opencode-go"},
+		{"https://opencode.ai/inference/openai/v1", "opencode-go"},
+		{"https://opencode.ai/inference/anthropic", "opencode-go"},
+		{"https://opencode.ai/inference/google/v1beta", "opencode-go"},
+	} {
+		got, ok := Detect(tc.url, "")
+		if !ok || got.ID != tc.want {
+			t.Errorf("Detect(%q) = %v, %v; want %s", tc.url, got.ID, ok, tc.want)
 		}
 	}
 
-	// Every catalogue endpoint — including the gateways that embed another
-	// vendor's id — identifies this provider.
-	for _, u := range []string{p.BaseURL, "https://opencode.ai/inference/anthropic", "https://opencode.ai/inference/google/v1beta"} {
-		got, ok := Detect(u, "")
-		if !ok || got.ID != "opencode-go" {
-			t.Errorf("Detect(%q) = %v, %v; want opencode-go", u, got.ID, ok)
+	// Pricing is per model and per roster; an unlisted id falls back to the
+	// row rate rather than being reported as free.
+	if got := LookupPricing("opencode", "deepseek-v4.1-flash"); got != (Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20}) {
+		t.Errorf("zen deepseek pricing = %+v", got)
+	}
+	if got := LookupPricing("opencode-go", "deepseek-v4.1-flash"); got != (Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}) {
+		t.Errorf("go deepseek pricing = %+v", got)
+	}
+	if got := LookupPricing("opencode-go", "claude-haiku-5-5"); got != (Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.50}) {
+		t.Errorf("go haiku pricing = %+v", got)
+	}
+	if got := LookupPricing("opencode", "deepseek-v4.1-flash-free"); got != (Pricing{}) {
+		t.Errorf("free pricing = %+v, want zero", got)
+	}
+	if got := LookupPricing("opencode-go", "some-unlisted-model"); got != (Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}) {
+		t.Errorf("unlisted pricing = %+v, want the row rate", got)
+	}
+
+	// Every served model speaks the row's dialect.
+	for _, m := range []string{"kimi-k3", "claude-haiku-5-5", "gpt-6-luna", "gemini-4-argon"} {
+		if got := ThinkingStyleFor(config.ModelConfig{Provider: "opencode-go", Model: m}); got != "object" {
+			t.Errorf("%s thinking style = %q, want object", m, got)
+		}
+		if got := gop.UnsupportedReason(m); got != "" {
+			t.Errorf("%s reported unsupported: %q", m, got)
 		}
 	}
+}
 
-	// Pricing is per model rather than one row price.
-	if got := LookupPricing("opencode-go", "kimi-k3"); got != (Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00}) {
-		t.Errorf("kimi-k3 pricing = %+v", got)
+// TestSiblingForOpenCodeRosters pins the misconfiguration guard: a free Zen
+// id added under the Go provider (or a Go-only id under Zen) is reported as
+// belonging to the other row instead of failing at call time.
+func TestSiblingForOpenCodeRosters(t *testing.T) {
+	if p, ok := SiblingFor("opencode-go", "deepseek-v4.1-flash-free"); !ok || p.ID != "opencode" {
+		t.Fatalf("free Zen id under Go: %v %v, want opencode", p.ID, ok)
 	}
-	if got := LookupPricing("opencode-go", "minimax-m3.1-flash"); got != (Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}) {
-		t.Errorf("minimax-m3.1-flash pricing = %+v", got)
+	if p, ok := SiblingFor("opencode", "kimi-k3.1-pro"); !ok || p.ID != "opencode-go" {
+		t.Fatalf("Go id under Zen: %v %v, want opencode-go", p.ID, ok)
 	}
-	if got := LookupPricing("opencode-go", "some-unlisted-model"); got != (Pricing{}) {
-		t.Errorf("unlisted pricing = %+v, want zero", got)
+	// A model its own row lists is not a sibling miss.
+	if p, ok := SiblingFor("opencode", "deepseek-v4.1-flash-free"); ok {
+		t.Fatalf("own free id reported as sibling %q", p.ID)
 	}
+	// An unknown id has no sibling either.
+	if p, ok := SiblingFor("opencode", "no-such-model"); ok {
+		t.Fatalf("unknown id reported as sibling %q", p.ID)
+	}
+	// A model both rosters list has no unique sibling; a custom endpoint
+	// pointed at either surface must not be warned about.
+	if p, ok := SiblingFor("custom", "deepseek-v4.1-flash"); ok {
+		t.Fatalf("shared model reported as unique sibling %q", p.ID)
+	}
+}
 
-	// Thinking follows the routed dialect, not the row's default.
-	if got := ThinkingStyleFor(config.ModelConfig{Provider: "opencode-go", Model: "claude-sonnet-5-5"}); got != "anthropic" {
-		t.Errorf("claude thinking style = %q, want anthropic", got)
+// TestProviderRouteResolution keeps the alternate-surface mechanism honest
+// even though no shipped row needs it now: a route's longest prefix wins,
+// and its endpoint counts as the provider's own for rebasing.
+func TestProviderRouteResolution(t *testing.T) {
+	p := Provider{
+		BaseURL: "https://api.example.com/v1",
+		APIType: config.APITypeOpenAI,
+		Routes: []Route{
+			{Prefixes: []string{"claude-"}, BaseURL: "https://api.example.com/anthropic", APIType: config.APITypeAnthropic},
+			{Prefixes: []string{"claude-opus-"}, BaseURL: "https://api.example.com/opus", APIType: config.APITypeAnthropic},
+		},
+		LegacyBaseURLs: []string{"https://old.example.com/v1"},
 	}
-	if got := ThinkingStyleFor(config.ModelConfig{Provider: "opencode-go", Model: "kimi-k3"}); got != "object" {
-		t.Errorf("kimi thinking style = %q, want object", got)
+	if base, typ := p.EndpointFor("claude-opus-5-5"); base != "https://api.example.com/opus" || typ != config.APITypeAnthropic {
+		t.Fatalf("opus route = %q %q, want the longest prefix", base, typ)
 	}
-	if got := ThinkingStyleFor(config.ModelConfig{Provider: "opencode-go", Model: "gpt-6.1-sol"}); got != "responses" {
-		t.Errorf("gpt thinking style = %q, want responses", got)
+	if base, typ := p.EndpointFor("claude-haiku-5-5"); base != "https://api.example.com/anthropic" || typ != config.APITypeAnthropic {
+		t.Fatalf("haiku route = %q %q", base, typ)
 	}
-	if got := ThinkingStyleFor(config.ModelConfig{Provider: "opencode-go", Model: "gemini-4-argon"}); got != "google" {
-		t.Errorf("gemini thinking style = %q, want google", got)
+	if base, typ := p.EndpointFor("gpt-6-luna"); base != p.BaseURL || typ != config.APITypeOpenAI {
+		t.Fatalf("unrouted = %q %q, want the row surface", base, typ)
+	}
+	for _, own := range []string{p.BaseURL, "https://api.example.com/anthropic", "https://old.example.com/v1/"} {
+		if !p.OwnsEndpoint(own) {
+			t.Errorf("OwnsEndpoint(%q) = false", own)
+		}
+	}
+	if p.OwnsEndpoint("https://relay.example.com/v1") {
+		t.Error("a foreign relay must not be owned")
 	}
 }

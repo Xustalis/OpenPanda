@@ -46,7 +46,8 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增
 
-- **OpenCode Go / Console 成为内置模型供应商** —— `panda model add opencode-go oc_sk_…` 可注册这个网关：按量付费的 Console 目录与 Go/Go Plus 订阅共用同一把 key。每个模型都会路由到承载它的线面：开放模型走 OpenAI Chat，Claude 与 Anthropic 方言的 Qwen 走 Anthropic Messages，GPT/Grok/Muse 走 OpenAI Responses API，Gemini 走 Google Generative AI API——后两种方言是入口客户端新增的，含流式、工具调用与用量统计。只有 SystemOne（Jev）仍不支持，并在配置阶段直接说明，而不是每次调用才失败；定价按模型计价。
+- **每个 agent 可以指定模型偏好** —— `routing.agent_models.opencode`（或任意 agent 名）是一组按顺序尝试的模型 id；`panda config routing set agent_models opencode opencode-go/kimi-k3,opencode-go/deepseek-v4.1-flash` 写入。适配器取本机可用且已登录的第一个；买了 OpenCode Go 的用户可以直接点名订阅模型，而不必开启全局付费自动选择。未提供、缺少 Go 登录或不能调用工具的条目会在进度流里说明并继续尝试下一个。
+- **OpenCode Zen 与 OpenCode Go 拆成两个内置模型供应商** —— `panda model add opencode` 注册按量付费/免费的 Zen 目录（`https://opencode.ai/zen/v1`），`panda model add opencode-go` 注册 Go/Go Plus 订阅目录（`https://opencode.ai/zen/go/v1`）。两行都带现网每模型的上下文/输出上限与价格，显式标出免费模型（不再按付费价计费），并自动发送 Go 网关要求的 `x-opencode-session` 头。旧的单行及其 `/inference` 端点已退役，已保存的配置会自动改写为当前端点。
 - `OPENPANDA_UPDATE_BASE` 可把自更新的下载指向发布资产镜像——这是给"能连 `api.github.com`、连不上 `release-assets.githubusercontent.com`"的网络留的出口。安装脚本已支持的 `OPENPANDA_RELEASE_BASE` 作为别名一并接受，一个变量同时管安装与升级。
 - **同意卡片展示条款本身，而不是它的摘要** —— 引导向导与设置里的弹窗原先渲染十条压缩过的条款，那是同一份法律文本的第二份副本，随时可能与它所概括的文件脱节。现在两处都直接渲染 `TERMS.md` 本身——全部十七节，按控制台语言——走的是转写页同一个 Markdown 渲染器。正文完全不再复制进控制台：每份译本在构建时从仓库自己的文件内联进来，需要修改时只有一处。
 - **你选的团队就是派发预算** —— 每轮子代理上限原先是写死的 `3`，所以团队为 claude_code、codex、deepseek_harness 和 opencode 的会话只派出了三个任务，第四个在提交之前就被丢掉：没有卡片、没有报错、回执上什么都没有。上限现在由名单推导（每选一个 agent 一个任务），`task_budget` 让模型为没人枚举过的并行工作申报更大额度（上限 8），会话团队也进入入口提示词，模型会点名你选的 agent，而不是自己编。
@@ -56,6 +57,12 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 修复
 
+- **OpenCode Go 的会话头跟随端点，而不只看 provider id** —— 把自定义 `base_url` 指向 `https://opencode.ai/zen/go` 时，Go key 本身可用，却只得到 400 MissingSessionID，因为只有命名的 `opencode-go` 行才会生成 `x-opencode-session`。客户端现在会识别 OpenCode 端点（包括不带 `/v1` 的 harness 简写）并生成同样的每客户端 id，外部中继不会收到这个头。
+- **model CLI 的子命令参数会真正传给子命令** —— `panda model add … --force`、`--type`、`--url` 等参数原先会被重排到子命令名之前，被顶层解析器当成未定义 flag 拒绝（`flag provided but not defined: -force`）。现在 `panda model` 只提取 `--config`，其余参数原样交给子命令，无论 flag 写在哪里。
+- **OpenCode 默认走免费模型** —— 未指定模型时，适配器会自动挑能力最强的模型，于是在没有 Go 订阅或余额的账号上，每个任务都以 "Insufficient account funds" 结束。现在免费模型优先，付费模型只有显式开启（`OPENPANDA_OPENCODE_ALLOW_PAID=1`）才会自动选择；计费/配额拒绝会自动换到最好的免费模型重试一次；没有凭据时跳过 `opencode-go` 模型。v2 构建的 `opencode models` 返回空列表时，改以 `api model.list` 目录作为可用模型集。
+- **panda 的模型现在能以任一协议接入 OpenCode** —— 失败兜底原先只接受 OpenAI 方言的模型，配置了 DeepSeek Anthropic 端点的节点永远无法把失败的免费层任务交给 panda 的模型。适配器改为接收方言中立的 `OPENPANDA_MODEL_*` 约定，按方言写入 `@ai-sdk/anthropic` 或 `@ai-sdk/openai-compatible` 的 provider 片段，并合并到用户原生配置之上（MCP 与权限保留），同时以 `--standalone` 运行，避免 v2 后台服务继续使用旧配置。
+- **「自动」思考模式在所有界面统一为「跟随供应商默认」** —— REPL 与入口客户端把 `thinking: auto` 当成显式请求思考，而向导与网页表单不发送任何字段；现在所有入口都把它存为空值，不发送 thinking 字段。
+- **高级模型参数可以被重置** —— 设置接口把 `max_tokens`、`context_window`、`thinking_budget`、`max_retries` 当普通整数读取，表单留空（0）反而保留旧值，已保存的重试预算也无法清零或关闭。现在这些字段改为可选：缺省保留、显式 0 重置、负数关闭重试。负值现在也能写进配置文件（旧的 writer 会把它当成未设置丢掉），设置表单接受 -1，REPL 的 `--retry -1` 也会真正生效。
 - `panda update` 不再因资产主机抖动而整轮失败：拉取发布元数据时对传输层错误最多重试三次，连接 GitHub 资产 CDN 的 TLS 握手预算从默认 10 秒提到 30 秒；同时从错误信息里隐去资产 URL 上带签名的查询串——它此前把真正的原因挤到了屏幕外。
 - `scripts/install.ps1` 不再因 Windows 的 `CRYPT_E_NO_REVOCATION_CHECK`（`0x80092012`）中断：当本机 curl 为 Schannel 构建时自动加上 `--ssl-no-revoke`，"查不到证书吊销状态"不再阻断安装。证书链、主机名与有效期仍照常校验，压缩包仍以 `checksums.txt` 的 SHA-256 校验。
 - **任务点名的 agent 不在团队里时会被拒绝，而不是换人** —— 三个分别点名 `agent:claude_code`、`agent:codex`、`agent:deepseek_harness` 的任务跑在 `[deepseek_harness, opencode]` 名单上，三个都在 deepseek_harness 上执行，各自打印了 `<name> 调用成功`——三次绿色通过，两次是虚构的。现在这种矛盾在路由前就被拒绝，理由写明两侧；名单里的 agent 本机一个都没装时也会直说，而不是降级到不受限的能力卡。

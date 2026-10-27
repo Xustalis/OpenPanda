@@ -515,7 +515,7 @@ const de: Messages = {
   'settings.maxTokens': 'Max. Tokens',
   'settings.maxTokensHelp': 'Obergrenze; 0 = Provider-Standard.',
   'settings.maxRetries': 'Max. Wiederholungen',
-  'settings.maxRetriesHelp': 'Wiederholungen nach einem Fehler (429, 5xx, Verbindungsabbruch); 0 = aktuellen Wert behalten (Standard 5).',
+  'settings.maxRetriesHelp': 'Wiederholungen nach einem Fehler (429, 5xx, Verbindungsabbruch); 0 = Standard (5), -1 deaktiviert Wiederholungen.',
   'settings.contextWindow': 'Kontextfenster',
   'settings.contextWindowHelp': 'Angegebene Kontextlänge; 0 = automatisch aus dem Katalog.',
   'settings.thinking': 'Thinking',

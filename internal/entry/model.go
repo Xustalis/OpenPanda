@@ -20,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/security"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // anthropicVersion is the header required by Anthropic-compatible endpoints.
@@ -129,8 +130,9 @@ type Client struct {
 	// pricing is the cost structure per 1M tokens.
 	pricing providers.Pricing
 
-	// thinking is the user-selected reasoning mode: "on" | "off" | "auto" |
-	// "" (provider default — no thinking field is sent at all).
+	// thinking is the user-selected reasoning mode: "on" | "off" | ""
+	// (provider default — no thinking field is sent at all). Config's "auto"
+	// is normalized to "" on the way in.
 	thinking string
 	// thinkingBudget caps the reasoning token budget where the dialect
 	// supports it (Anthropic budget_tokens, DashScope thinking_budget).
@@ -238,6 +240,10 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	// empty): only there does the route's dialect describe the endpoint we
 	// will actually call.
 	routeSurface := base == ""
+	// A retired endpoint was written by an older catalogue, so the dialect
+	// stored beside it is stale too: rebase both, even when the config
+	// names a dialect that differs from the row's current one.
+	legacySurface := hasProvider && p.OwnsLegacyEndpoint(base)
 	if base == "" || (hasProvider && p.OwnsEndpoint(base)) {
 		// An empty base takes the catalogue's. A base that merely restated
 		// one of the provider's own endpoints is rebased onto the surface
@@ -317,7 +323,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		// rewriting the dialect sent an Anthropic body to an
 		// OpenAI-compatible gateway (a 400 whose text says nothing about the
 		// config that caused it).
-		if routeSurface && (apiType == "" || apiType == provType) {
+		if routeSurface && (legacySurface || apiType == "" || apiType == provType) {
 			if routedType != "" {
 				apiType = strings.ToLower(strings.TrimSpace(routedType))
 			}
@@ -331,6 +337,29 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		// each has its own request/response implementation
 	default:
 		apiType = config.APITypeAnthropic
+	}
+	extraHeaders := maps.Clone(model.Headers)
+	// A provider that routes by conversation (OpenCode Go) needs a stable id
+	// on every call. The header comes from the named provider row when there
+	// is one, and from endpoint detection otherwise: a "custom" entry pointed
+	// at https://opencode.ai/zen/go is still the Go gateway and answers 400
+	// MissingSessionID without it. One client is one conversation here, so
+	// minting at construction keeps prompt caching and routing stable across
+	// the turn's requests. A user header of the same name wins.
+	sessionHeader := ""
+	if hasProvider {
+		sessionHeader = p.SessionHeader
+	}
+	if sessionHeader == "" && hasTuning {
+		sessionHeader = tuning.SessionHeader
+	}
+	if sessionHeader != "" && !headerNamed(extraHeaders, sessionHeader) {
+		if id, err := util.UUIDv7(); err == nil {
+			if extraHeaders == nil {
+				extraHeaders = map[string]string{}
+			}
+			extraHeaders[sessionHeader] = "ses_" + id
+		}
 	}
 	c := &Client{
 		apiType:        apiType,
@@ -348,7 +377,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		thinkingBudget: model.ThinkingBudget,
 		thinkingStyle:  providers.ThinkingStyleFor(model),
 		extraParams:    maps.Clone(model.Params),
-		extraHeaders:   maps.Clone(model.Headers),
+		extraHeaders:   extraHeaders,
 	}
 	// Subscription OAuth (model.auth): the credential resolves per request
 	// through the token store, so refreshes apply without a restart. The
@@ -412,16 +441,18 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	return c, nil
 }
 
-// normalizeThinking reduces the configured thinking value to the supported
-// vocabulary: "on" | "off" | "auto" | "" (provider default).
+// normalizeThinking reduces the configured thinking value to the vocabulary
+// every dialect understands: "on" | "off" | "" (provider default). "auto"
+// means the provider decides, so it is the same as leaving the field unset —
+// the wizard, the web form and the CLI all present it that way, and sending
+// an explicit auto object instead made "Auto" silently enable reasoning on
+// Anthropic-compatible endpoints.
 func normalizeThinking(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "on", "enabled", "true", "yes", "1":
 		return "on"
 	case "off", "disabled", "false", "no", "0":
 		return "off"
-	case "auto":
-		return "auto"
 	}
 	return ""
 }
@@ -457,6 +488,19 @@ func (c *Client) marshalWithParams(req any) ([]byte, error) {
 	return out, nil
 }
 
+// headerNamed reports whether headers already carries a non-empty value for
+// name, ignoring case — HTTP header names are case-insensitive and a config
+// may spell them either way. An explicitly empty value is treated as unset,
+// so the provider-minted session id still applies.
+func headerNamed(headers map[string]string, name string) bool {
+	for k, v := range headers {
+		if strings.EqualFold(k, name) && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // applyExtraHeaders attaches user-supplied headers to httpReq. Headers the
 // caller already set (content-type, authorization, x-api-key,
 // anthropic-version, accept) are never replaced — a config typo must not
@@ -479,7 +523,7 @@ func (c *Client) anthropicThinking() (map[string]any, int) {
 		return nil, 0
 	}
 	switch c.thinking {
-	case "on", "auto":
+	case "on":
 		budget := c.thinkingBudget
 		if budget <= 0 {
 			budget = 4096

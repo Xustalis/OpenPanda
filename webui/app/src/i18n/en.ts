@@ -519,7 +519,7 @@ const en: Messages = {
   'settings.maxTokens': 'Max tokens',
   'settings.maxTokensHelp': 'Completion cap; 0 = provider default.',
   'settings.maxRetries': 'Max retries',
-  'settings.maxRetriesHelp': 'Retries after a failed request (429, 5xx, dropped connection); 0 keeps the current value (default 5).',
+  'settings.maxRetriesHelp': 'Retries after a failed request (429, 5xx, dropped connection); 0 = default (5), -1 disables retries.',
   'settings.contextWindow': 'Context window',
   'settings.contextWindowHelp': 'Advertised context length; 0 = resolved from the catalogue.',
   'settings.thinking': 'Thinking',

@@ -243,6 +243,25 @@ type RoutingConfig struct {
 	// PreferredAgents lists agent names that receive a score bonus during
 	// routing, so the user can pin favorites without editing capability cards.
 	PreferredAgents []string `yaml:"preferred_agents"`
+	// AgentModels lists, per agent, the models that agent's own CLI should
+	// prefer, in order. It is an ordered candidate list, not one pin: the
+	// adapter takes the first entry its install actually serves and falls
+	// back to the next one. Keys are agent names (the capability card's key)
+	// or adapter file names. Only adapters that choose among several served
+	// models consult it today (opencode.py); a single-model CLI ignores it.
+	// Precedence: an injected model (injection.model=always or an
+	// injection.agents pin) still overrides this list, and the adapter's own
+	// single-model env pin wins over it. An entry under the OpenCode Go
+	// subscription provider needs the CLI's own login (`opencode auth login`)
+	// or OPENCODE_API_KEY in the daemon environment; panda's model registry
+	// key is not forwarded to the agent CLI.
+	//
+	//	routing:
+	//	  agent_models:
+	//	    opencode:
+	//	      - opencode-go/kimi-k3
+	//	      - opencode-go/deepseek-v4.1-flash
+	AgentModels map[string][]string `yaml:"agent_models,omitempty"`
 	// ToolsPolicy grades the tool face agent adapters run with: minimal
 	// (default) keeps each adapter's safe whitelist; extended lifts the
 	// restriction so the agent's own skills, sub-agent tooling and MCP
@@ -1136,11 +1155,11 @@ type ModelConfig struct {
 	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
 	NoAuth        bool   `yaml:"no_auth,omitempty"`        // true for local models that need no API key
 	// Thinking selects the reasoning mode: "on" requests the provider's
-	// thinking/reasoning pass, "off" suppresses it, empty leaves the
-	// provider default. The wire shape is chosen per provider dialect
-	// (Anthropic budget object, DashScope enable_thinking flag, Ark
-	// thinking object, OpenAI reasoning_effort).
-	Thinking string `yaml:"thinking,omitempty"` // "on" | "off" | "" (provider default)
+	// thinking/reasoning pass, "off" suppresses it, and "" or "auto" leaves
+	// the provider default (no thinking field is sent at all). The wire shape
+	// is chosen per provider dialect (Anthropic budget object, DashScope
+	// enable_thinking flag, Ark thinking object, OpenAI reasoning_effort).
+	Thinking string `yaml:"thinking,omitempty"` // "on" | "off" | ""/"auto" (provider default)
 	// ThinkingBudget caps the reasoning budget in tokens where the dialect
 	// supports it (Anthropic budget_tokens, DashScope thinking_budget). 0 =
 	// provider default.
@@ -2193,7 +2212,10 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	setMapFieldInt(model, "context_window", mc.ContextWindow)
 	setMapField(model, "thinking", mc.Thinking)
 	setMapFieldInt(model, "thinking_budget", mc.ThinkingBudget)
-	setMapFieldInt(model, "max_retries", mc.MaxRetries)
+	// max_retries is the one signed knob: a negative value disables retries,
+	// so the positive-only writer would silently drop it and reload as the
+	// default budget.
+	setMapFieldIntSigned(model, "max_retries", mc.MaxRetries)
 	setMapFieldAnyMap(model, "params", mc.Params)
 	setMapFieldStringMap(model, "headers", mc.Headers)
 
@@ -2558,6 +2580,30 @@ func setMapFieldInt(m *yaml.Node, key string, value int) {
 		}
 	}
 	if value <= 0 {
+		return
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(value)},
+	)
+}
+
+// setMapFieldIntSigned is setMapFieldInt for fields where a negative value is
+// meaningful (max_retries: below zero disables retries). Only zero removes the
+// key, so -1 survives a save/reload instead of reverting to the default.
+func setMapFieldIntSigned(m *yaml.Node, key string, value int) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			if value == 0 {
+				m.Content = append(m.Content[:i], m.Content[i+2:]...)
+				return
+			}
+			m.Content[i+1].Value = strconv.Itoa(value)
+			m.Content[i+1].Tag = "!!int"
+			return
+		}
+	}
+	if value == 0 {
 		return
 	}
 	m.Content = append(m.Content,

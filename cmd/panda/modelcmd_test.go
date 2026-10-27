@@ -63,6 +63,26 @@ func TestModelCmdEffectiveHelpers(t *testing.T) {
 	if effectiveContextWindow(mc3) != 1048576 {
 		t.Fatalf("expected inferred 1048576, got %d", effectiveContextWindow(mc3))
 	}
+
+	// 4. A saved config that still carries a retired catalogue endpoint is
+	// displayed as the endpoint the client will actually dial; a relay the
+	// user typed is left alone.
+	legacy := config.ModelConfig{
+		Provider: "opencode-go",
+		BaseURL:  "https://opencode.ai/inference/openai/v1",
+		Model:    "deepseek-v4.1-flash",
+	}
+	if got := effectiveBaseURL(legacy); got != "https://opencode.ai/zen/go/v1" {
+		t.Fatalf("legacy base displayed as %q, want the current Go endpoint", got)
+	}
+	relay := config.ModelConfig{
+		Provider: "opencode-go",
+		BaseURL:  "https://relay.example.com/v1",
+		Model:    "deepseek-v4.1-flash",
+	}
+	if got := effectiveBaseURL(relay); got != "https://relay.example.com/v1" {
+		t.Fatalf("relay base displayed as %q, want the user's endpoint", got)
+	}
 }
 
 func TestLooksLikeAPIKey(t *testing.T) {
@@ -183,6 +203,36 @@ func TestModelAddMaxTokensFlag(t *testing.T) {
 	}
 	if m := r.cfg.Models[1]; m.MaxTokens != 131072 {
 		t.Fatalf("auto max_tokens = %d, want 131072", m.MaxTokens)
+	}
+}
+
+func TestModelAddAdvancedSemantics(t *testing.T) {
+	dir := t.TempDir()
+	r := &repl{cfg: &config.Config{Node: config.NodeConfig{Name: "test"}}, configPath: filepath.Join(dir, "config.yaml")}
+
+	// "auto" means the provider default, the same value the wizard and the
+	// web form persist — it must not be stored as an explicit reasoning
+	// request. A negative retry budget disables retries and is a real value,
+	// not "unset".
+	r.modelAdd([]string{"minimax", "sk-test-00000000000000000000000000",
+		"--thinking", "auto", "--retry", "-1", "--force"})
+	if len(r.cfg.Models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(r.cfg.Models))
+	}
+	m := r.cfg.Models[0]
+	if m.Thinking != "" {
+		t.Fatalf("--thinking auto stored %q, want the provider default", m.Thinking)
+	}
+	if m.MaxRetries != -1 {
+		t.Fatalf("--retry -1 stored %d, want -1 (retries disabled)", m.MaxRetries)
+	}
+
+	// Explicit on/off and a positive budget still survive.
+	r.modelAdd([]string{"minimax", "sk-test-00000000000000000000000000",
+		"think-on", "--thinking", "on", "--budget", "8192", "--retry", "3", "--force"})
+	m = r.cfg.Models[1]
+	if m.Thinking != "on" || m.ThinkingBudget != 8192 || m.MaxRetries != 3 {
+		t.Fatalf("explicit thinking/retry lost: %+v", m)
 	}
 }
 

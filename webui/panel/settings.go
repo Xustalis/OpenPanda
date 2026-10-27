@@ -13,44 +13,53 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 )
 
 // modelSettingsJSON is the wire form of the model configuration. The API key
 // is write-only: GET reports only whether one is set, PUT treats an empty key
 // as "keep the existing one".
 type modelSettingsJSON struct {
-	Provider       string `json:"provider,omitempty"`
-	Name           string `json:"name,omitempty"`
-	APIType        string `json:"api_type"` // "anthropic" | "openai"
-	BaseURL        string `json:"base_url"`
-	Model          string `json:"model"`
-	MaxTokens      int    `json:"max_tokens"`
-	ContextWindow  int    `json:"context_window,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Name     string `json:"name,omitempty"`
+	APIType  string `json:"api_type"` // "anthropic" | "openai"
+	BaseURL  string `json:"base_url"`
+	Model    string `json:"model"`
+	// The numeric knobs are pointers so "absent" and "explicit 0" mean
+	// different things: absent keeps the stored value (a sparse client), 0
+	// resets to the provider/entry default (what the form's empty box means).
+	MaxTokens      *int   `json:"max_tokens,omitempty"`
+	ContextWindow  *int   `json:"context_window,omitempty"`
 	Thinking       string `json:"thinking,omitempty"` // "on" | "off" | "auto" | ""
-	ThinkingBudget int    `json:"thinking_budget,omitempty"`
-	MaxRetries     int    `json:"max_retries"`       // transport retry budget; 0 = built-in default
-	NoAuth         *bool  `json:"no_auth,omitempty"` // pointer: absent means "keep current"
-	APIKey         string `json:"api_key,omitempty"` // write-only on PUT/POST; never returned
+	ThinkingBudget *int   `json:"thinking_budget,omitempty"`
+	MaxRetries     *int   `json:"max_retries,omitempty"` // 0 = default; negative disables
+	NoAuth         *bool  `json:"no_auth,omitempty"`     // pointer: absent means "keep current"
+	APIKey         string `json:"api_key,omitempty"`     // write-only on PUT/POST; never returned
 	APIKeySet      bool   `json:"api_key_set"`
 	APIKeyHint     string `json:"api_key_hint,omitempty"` // masked tail, e.g. "…f3ab"
 }
 
+// intPtr is the address of v — used to put a concrete value into the
+// pointer-typed wire fields without a second struct.
+func intPtr(v int) *int { return &v }
+
 // modelSettingsToConfig folds a request payload over the current config.
-// Empty/zero fields keep the stored value; secrets and the map/escape-hatch
-// fields (params, headers, auth) are always preserved from cur — they are
+// Absent fields keep the stored value (a partial client); a present zero
+// resets that knob to its default. Secrets and the map/escape-hatch fields
+// (params, headers, auth) are always preserved from cur — they are
 // write-only or advanced surfaces the form does not edit, so a save must
 // not wipe them.
 func modelSettingsToConfig(req modelSettingsJSON, cur config.ModelConfig) config.ModelConfig {
 	mc := config.ModelConfig{
 		Provider:      firstNonEmpty(strings.TrimSpace(req.Provider), cur.Provider),
 		Name:          firstNonEmpty(strings.TrimSpace(req.Name), cur.Name),
-		ContextWindow: firstPositive(req.ContextWindow, cur.ContextWindow),
+		ContextWindow: cur.ContextWindow,
 		APIType:       normalizeAPIType(firstNonEmpty(strings.TrimSpace(req.APIType), cur.APIType)),
 		BaseURL:       firstNonEmpty(strings.TrimSpace(req.BaseURL), cur.BaseURL),
 		APIKey:        cur.APIKey, // empty request key keeps the stored secret
 		Model:         firstNonEmpty(strings.TrimSpace(req.Model), cur.Model),
-		MaxTokens:     firstPositive(req.MaxTokens, cur.MaxTokens),
-		MaxRetries:    firstPositive(req.MaxRetries, cur.MaxRetries),
+		MaxTokens:     cur.MaxTokens,
+		MaxRetries:    cur.MaxRetries,
 		Auth:          cur.Auth,
 		Params:        cur.Params,
 		Headers:       cur.Headers,
@@ -58,6 +67,15 @@ func modelSettingsToConfig(req modelSettingsJSON, cur config.ModelConfig) config
 		// untouched — a save must not silently re-arm a knob the user turned
 		// off in the YAML.
 		OfflineWait: cur.OfflineWait,
+	}
+	if req.MaxTokens != nil {
+		mc.MaxTokens = *req.MaxTokens
+	}
+	if req.ContextWindow != nil {
+		mc.ContextWindow = *req.ContextWindow
+	}
+	if req.MaxRetries != nil {
+		mc.MaxRetries = *req.MaxRetries
 	}
 	switch strings.ToLower(strings.TrimSpace(req.Thinking)) {
 	case "on", "off":
@@ -71,8 +89,8 @@ func modelSettingsToConfig(req modelSettingsJSON, cur config.ModelConfig) config
 	default:
 		mc.Thinking = cur.Thinking
 	}
-	if req.ThinkingBudget != 0 {
-		mc.ThinkingBudget = req.ThinkingBudget
+	if req.ThinkingBudget != nil {
+		mc.ThinkingBudget = *req.ThinkingBudget
 	} else {
 		mc.ThinkingBudget = cur.ThinkingBudget
 	}
@@ -88,17 +106,33 @@ func modelSettingsToConfig(req modelSettingsJSON, cur config.ModelConfig) config
 
 func modelSettingsFromConfig(mc config.ModelConfig) modelSettingsJSON {
 	noAuth := mc.NoAuth
+	baseURL, apiType := mc.BaseURL, mc.NormalizedAPIType()
+	// A saved config that restated a catalogue endpoint (or one the catalogue
+	// has since retired) is shown as the endpoint and dialect the client
+	// actually dials; saving the form then migrates the file.
+	if p, ok := providers.Lookup(mc.Provider); ok && (baseURL == "" || p.OwnsEndpoint(baseURL)) {
+		if base, typ := p.EndpointFor(mc.Model); base != "" {
+			baseURL = base
+			// Mirror NewClient: a retired endpoint's dialect is stale and is
+			// replaced; on a current or shorthand endpoint an explicit
+			// different dialect is the user's choice and is kept.
+			if typ != "" && (p.OwnsLegacyEndpoint(mc.BaseURL) ||
+				mc.APIType == "" || mc.NormalizedAPIType() == p.APIType) {
+				apiType = typ
+			}
+		}
+	}
 	return modelSettingsJSON{
 		Provider:       mc.Provider,
 		Name:           mc.Name,
-		APIType:        mc.NormalizedAPIType(),
-		BaseURL:        mc.BaseURL,
+		APIType:        apiType,
+		BaseURL:        baseURL,
 		Model:          mc.Model,
-		MaxTokens:      mc.MaxTokens,
-		ContextWindow:  mc.ContextWindow,
+		MaxTokens:      intPtr(mc.MaxTokens),
+		ContextWindow:  intPtr(mc.ContextWindow),
 		Thinking:       mc.Thinking,
-		ThinkingBudget: mc.ThinkingBudget,
-		MaxRetries:     mc.MaxRetries,
+		ThinkingBudget: intPtr(mc.ThinkingBudget),
+		MaxRetries:     intPtr(mc.MaxRetries),
 		NoAuth:         &noAuth,
 		APIKeySet:      mc.APIKey != "",
 		APIKeyHint:     maskKey(mc.APIKey),
@@ -277,13 +311,6 @@ func normalizeAPIType(v string) string {
 
 func firstNonEmpty(v, fallback string) string {
 	if v != "" {
-		return v
-	}
-	return fallback
-}
-
-func firstPositive(v, fallback int) int {
-	if v > 0 {
 		return v
 	}
 	return fallback

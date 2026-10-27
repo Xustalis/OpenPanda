@@ -65,8 +65,9 @@ func TestUpdateModelsSectionPreservesOtherSections(t *testing.T) {
 }
 
 // TestUpdateModelSectionMaxRetries verifies the retry budget round-trips:
-// a positive value lands in the file, and writing 0 removes the key so the
-// built-in default applies on reload.
+// a positive value lands in the file, a negative value (retries disabled)
+// survives instead of being mistaken for unset, and writing 0 removes the key
+// so the built-in default applies on reload.
 func TestUpdateModelSectionMaxRetries(t *testing.T) {
 	p := writeTemp(t, "node:\n  name: \"n\"\n")
 	mc := ModelConfig{BaseURL: "https://api.anthropic.com", Model: "m", MaxRetries: 50}
@@ -79,6 +80,19 @@ func TestUpdateModelSectionMaxRetries(t *testing.T) {
 	}
 	if cfg.Model.MaxRetries != 50 {
 		t.Errorf("model.max_retries = %d, want 50", cfg.Model.MaxRetries)
+	}
+
+	// A negative budget is a real setting (retries disabled), not "unset".
+	mc.MaxRetries = -1
+	if err := UpdateModelSection(p, mc); err != nil {
+		t.Fatalf("UpdateModelSection negative: %v", err)
+	}
+	cfg, err = Load(p)
+	if err != nil {
+		t.Fatalf("Load after negative: %v", err)
+	}
+	if cfg.Model.MaxRetries != -1 {
+		t.Errorf("model.max_retries = %d, want -1", cfg.Model.MaxRetries)
 	}
 
 	mc.MaxRetries = 0

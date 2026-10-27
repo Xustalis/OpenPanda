@@ -22,7 +22,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"slices"
 	"strconv"
@@ -136,10 +135,17 @@ func effectiveModel(m config.ModelConfig) string {
 	return "-"
 }
 
-// effectiveBaseURL returns the displayed endpoint URL, falling back to the
-// provider's default endpoint when BaseURL is omitted.
+// effectiveBaseURL returns the displayed endpoint URL: the configured one,
+// rebased onto the catalogue's current surface when the config merely
+// restated one of the provider's own (including a retired endpoint), then the
+// provider's default.
 func effectiveBaseURL(m config.ModelConfig) string {
 	if m.BaseURL != "" {
+		if p, ok := providers.Lookup(m.Provider); ok && p.OwnsEndpoint(m.BaseURL) {
+			if base, _ := p.EndpointFor(m.Model); base != "" {
+				return base
+			}
+		}
 		return m.BaseURL
 	}
 	if p, ok := providers.Lookup(m.Provider); ok {
@@ -560,8 +566,13 @@ func (r *repl) modelAdd(args []string) {
 	}
 	if pa.thinking != "" {
 		switch strings.ToLower(pa.thinking) {
-		case "on", "off", "auto":
+		case "on", "off":
 			mc.Thinking = strings.ToLower(pa.thinking)
+		case "auto":
+			// Auto is the provider default: store it as unset, the same
+			// value the wizard and the web form write. Storing "auto" sent
+			// an explicit reasoning request instead.
+			mc.Thinking = ""
 		default:
 			r.outln(i18n.Tf(r.loc, "repl.model.add.badthinking", "value", pa.thinking))
 			return
@@ -570,7 +581,9 @@ func (r *repl) modelAdd(args []string) {
 	if pa.budget > 0 {
 		mc.ThinkingBudget = pa.budget
 	}
-	if pa.retries > 0 {
+	if pa.retries != 0 {
+		// A negative value disables retries (ModelConfig's contract); only
+		// zero means "unset", so the old >0 test made --retry -1 a no-op.
 		mc.MaxRetries = pa.retries
 	}
 	mc.Params = pa.params
@@ -578,6 +591,18 @@ func (r *repl) modelAdd(args []string) {
 	if mc.Model == "" {
 		r.outln(i18n.T(r.loc, "repl.model.add.nomodel"))
 		return
+	}
+	// A model listed by a sibling row (Zen vs Go on OpenCode) will not be
+	// served by this provider's own endpoint. Warn instead of letting the
+	// entry fail later with an opaque gateway error; the user may still add
+	// it. A foreign relay the user pointed at may serve the model under its
+	// own catalogue, so the warning is limited to the provider's own/default
+	// endpoint.
+	if other, ok := providers.SiblingFor(id, mc.Model); ok {
+		if p, known := providers.Lookup(id); known && (mc.BaseURL == "" || p.OwnsEndpoint(mc.BaseURL)) {
+			r.outln(i18n.Tf(r.loc, "repl.model.add.sibling",
+				"model", mc.Model, "provider", other.ID, "current", id))
+		}
 	}
 
 	if alias == "" {
@@ -934,20 +959,40 @@ func (r *repl) resolveModel(args []string, verb string) (config.ModelConfig, str
 }
 
 // runModel implements `panda model [status|list|add|remove|switch|fetch|test]`.
+//
+// Only the global --config flag is lifted here. The subcommands carry their
+// own flags (--force, --type, --url, --thinking…), and a generic flag parse
+// with reorderFlags would move them in front of the subcommand name, where the
+// top-level FlagSet rejects them as undefined (`panda model add … --force`
+// failed with "flag provided but not defined: -force").
 func runModel(args []string) {
-	fs := flag.NewFlagSet("model", flag.ExitOnError)
-	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(fs, args))
-	rest := fs.Args()
+	configPath := cliConfigPath
+	rest := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--config" || a == "-config":
+			if i+1 < len(args) {
+				i++
+				configPath = args[i]
+			}
+		case strings.HasPrefix(a, "--config="):
+			configPath = strings.TrimPrefix(a, "--config=")
+		case strings.HasPrefix(a, "-config="):
+			configPath = strings.TrimPrefix(a, "-config=")
+		default:
+			rest = append(rest, a)
+		}
+	}
 
 	loc := i18n.Detect()
-	cfg, err := loadConfigQuietly(*configPath)
+	cfg, err := loadConfigQuietly(configPath)
 	if err != nil {
 		fatal("load config", err)
 	}
 	r := &repl{
 		cfg:        cfg,
-		configPath: *configPath,
+		configPath: configPath,
 		loc:        loc,
 	}
 	if len(rest) == 0 {

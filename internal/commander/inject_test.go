@@ -26,6 +26,8 @@ func cleanCredentialEnv(t *testing.T) string {
 		"ANTHROPIC_MODEL", "OPENAI_MODEL", "GROK_MODEL", "DEEPSEEK_MODEL",
 		"XAI_API_KEY", "GROK_API_KEY", "DEEPSEEK_API_KEY",
 		"OPENCLAW_API_KEY", "HERMES_API_KEY", "OPENCODE_MODEL",
+		"OPENCODE_API_KEY", "OPENPANDA_MODEL_BASE_URL", "OPENPANDA_MODEL_API_KEY",
+		"OPENPANDA_MODEL_NAME", "OPENPANDA_MODEL_API_TYPE",
 	} {
 		t.Setenv(k, "")
 	}
@@ -865,15 +867,16 @@ func TestSelfContainedAgentSkipsInjectionButRescuesOnFailure(t *testing.T) {
 	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
 		attempts++
 		if attempts == 1 {
-			if hasEnvPrefix(env, "OPENAI_API_KEY=") {
+			if hasEnvPrefix(env, "OPENPANDA_MODEL_API_KEY=") {
 				t.Fatalf("first attempt must run on the agent's own model, env=%v", env)
 			}
 			return AgentResult{OK: false, Result: "provider failure: Free usage limit reached", ExitCode: 1}
 		}
 		assertEnv(t, env, map[string]string{
-			"OPENAI_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
-			"OPENAI_API_KEY":  "sk-node-test",
-			"OPENCODE_MODEL":  "glm-5.3-flash",
+			"OPENPANDA_MODEL_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
+			"OPENPANDA_MODEL_API_KEY":  "sk-node-test",
+			"OPENPANDA_MODEL_NAME":     "glm-5.3-flash",
+			"OPENPANDA_MODEL_API_TYPE": "openai",
 		})
 		return AgentResult{OK: true, Result: "completed on the injected model", ExitCode: 0}
 	})
@@ -888,6 +891,55 @@ func TestSelfContainedAgentSkipsInjectionButRescuesOnFailure(t *testing.T) {
 }
 
 // hasEnvPrefix reports whether any env entry starts with prefix.
+// TestAgentModelPreferencesReachAdapter: routing.agent_models is passed to
+// the adapter as an ordered JSON list on every run, injected or not, so a CLI
+// that chooses its own model can honour the user's shortlist. Resolution is
+// by card name first, then adapter file name.
+func TestAgentModelPreferencesReachAdapter(t *testing.T) {
+	cleanCredentialEnv(t)
+	prefs := []string{"opencode-go/kimi-k3", "opencode/deepseek-v4.1-flash-free"}
+	r := NewRouter(testCard(), NewExecutor(), testModel,
+		config.InjectionConfig{Model: config.InjectionModelNever},
+		config.RoutingConfig{AgentModels: map[string][]string{"opencode": prefs}})
+
+	var seen []string
+	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
+		seen = env
+		return AgentResult{OK: true, Result: "ok", ExitCode: 0}
+	})
+	ctx := WithAgentName(context.Background(), "opencode")
+	if res := r.runAdapterDefault(ctx, "opencode.py", "prompt", ""); !res.OK {
+		t.Fatalf("run failed: %+v", res)
+	}
+	assertEnv(t, seen, map[string]string{
+		"OPENPANDA_AGENT_MODELS": `["opencode-go/kimi-k3","opencode/deepseek-v4.1-flash-free"]`,
+	})
+
+	// An adapter-file key works the same way for a card entry with another
+	// name; SetPolicy applies a reloaded routing section in place.
+	r.SetPolicy(config.InjectionConfig{Model: config.InjectionModelNever},
+		config.RoutingConfig{AgentModels: map[string][]string{"opencode.py": {"opencode/glm-5.3"}}})
+	seen = nil
+	if res := r.runAdapterDefault(context.Background(), "opencode.py", "prompt", ""); !res.OK {
+		t.Fatalf("second run failed: %+v", res)
+	}
+	assertEnv(t, seen, map[string]string{
+		"OPENPANDA_AGENT_MODELS": `["opencode/glm-5.3"]`,
+	})
+
+	// No list for this agent → no variable, so an ambient value cannot leak
+	// into an unrelated adapter.
+	r.SetPolicy(config.InjectionConfig{Model: config.InjectionModelNever},
+		config.RoutingConfig{})
+	seen = nil
+	if res := r.runAdapterDefault(context.Background(), "codex.py", "prompt", ""); !res.OK {
+		t.Fatalf("third run failed: %+v", res)
+	}
+	if hasEnvPrefix(seen, "OPENPANDA_AGENT_MODELS=") {
+		t.Fatalf("unrelated adapter received model preferences: %v", seen)
+	}
+}
+
 func hasEnvPrefix(env []string, prefix string) bool {
 	for _, kv := range env {
 		if strings.HasPrefix(kv, prefix) {

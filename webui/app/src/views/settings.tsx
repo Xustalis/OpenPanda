@@ -392,7 +392,7 @@ function ModelSection() {
             id="max-retries"
             class="input"
             type="number"
-            min={0}
+            min={-1}
             step={1}
             value={form.max_retries || 0}
             onInput={(e) => patch({ max_retries: Number((e.target as HTMLInputElement).value) || 0 })}
