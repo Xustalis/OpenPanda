@@ -37,7 +37,7 @@ func TestUDPEnvelopeRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.To = "node-b"
-	if err := a.SendEnvelope(env, b.LocalAddr()); err != nil {
+	if err := a.SendEnvelope(env, b.LocalAddr(), "node-b"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -71,7 +71,7 @@ func TestUDPSealedTamper(t *testing.T) {
 	}
 	defer wrong.Close()
 	env, _ := NewEnvelope(MsgHeartbeat, "evil", "m1", nil)
-	if err := wrong.SendEnvelope(env, recv.LocalAddr()); err != nil {
+	if err := wrong.SendEnvelope(env, recv.LocalAddr(), ""); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -94,7 +94,7 @@ func TestUDPDatagramTooBig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := u.SendEnvelope(env, u.LocalAddr()); err != ErrDatagramTooBig {
+	if err := u.SendEnvelope(env, u.LocalAddr(), ""); err != ErrDatagramTooBig {
 		t.Fatalf("oversize envelope err = %v, want ErrDatagramTooBig", err)
 	}
 }

@@ -82,7 +82,7 @@ func TestUDPPairKeyRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.To = "node-b"
-	if err := a.SendEnvelope(env, b.LocalAddr()); err != nil {
+	if err := a.SendEnvelope(env, b.LocalAddr(), "node-b"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -119,7 +119,7 @@ func TestUDPMeshKeyForgeryRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	forged.To = "node-b"
-	if err := attacker.SendEnvelope(forged, victim.LocalAddr()); err != nil {
+	if err := attacker.SendEnvelope(forged, victim.LocalAddr(), ""); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -151,7 +151,7 @@ func TestUDPMeshKeyHonouredForLegacyPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.To = "node-b"
-	if err := old.SendEnvelope(env, ours.LocalAddr()); err != nil {
+	if err := old.SendEnvelope(env, ours.LocalAddr(), "node-b"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -245,12 +245,52 @@ func TestUDPSelectorMismatchRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.To = "node-b"
-	if err := sender.SendEnvelope(env, receiver.LocalAddr()); err != nil {
+	if err := sender.SendEnvelope(env, receiver.LocalAddr(), "node-b"); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case gotEnv := <-got:
 		t.Fatalf("envelope with a mismatched From was dispatched: %+v", gotEnv)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestUDPPairSealFollowsTheRecipient covers the relay case: an envelope whose
+// destination is node-c is handed to node-b, the next hop. The frame has to be
+// sealed to node-b — the node that opens it — because node-b holds no key for
+// node-c. Sealing to the envelope's destination instead made the sender fall
+// back to the mesh key, which the hop then refused as an impersonation from
+// node-a's address, so a punch-only relay silently carried nothing.
+func TestUDPPairSealFollowsTheRecipient(t *testing.T) {
+	sender := listenTestUDP(t, "mesh")
+	hop := listenTestUDP(t, "mesh")
+	shared := testAEAD(t, "a-b")
+	sender.SetKeySource(&fakeKeys{pair: map[string]cipher.AEAD{"node-b": shared}}, "node-a")
+	hop.SetKeySource(&fakeKeys{
+		pair:   map[string]cipher.AEAD{"node-a": shared},
+		atAddr: map[string]string{"127.0.0.1": "node-a"},
+	}, "node-b")
+
+	got := make(chan Envelope, 1)
+	hop.OnEnvelope = func(env Envelope, src *net.UDPAddr) { got <- env }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go hop.ReadLoop(ctx)
+
+	env, err := NewEnvelope(MsgHeartbeat, "node-a", "m-relay", HeartbeatPayload{Status: "online"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.To = "node-c"
+	if err := sender.SendEnvelope(env, hop.LocalAddr(), "node-b"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case gotEnv := <-got:
+		if gotEnv.To != "node-c" {
+			t.Fatalf("envelope destination = %q, want node-c", gotEnv.To)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pair-sealed frame for a relay hop was dropped")
 	}
 }

@@ -3173,7 +3173,7 @@ func (c *Core) sendToDetail(id string, env bus.Envelope) (relayed bool, err erro
 	addr := c.udpRoutes[id]
 	c.udpMu.Unlock()
 	if u != nil && addr != nil {
-		return false, u.SendEnvelope(env, addr)
+		return false, u.SendEnvelope(env, addr, id)
 	}
 	// No live track: kick the reachability ladder in the background — the
 	// directory addrs and the punch rung may turn up a direct edge so the

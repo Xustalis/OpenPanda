@@ -223,16 +223,21 @@ func (u *UDPConn) LocalAddr() *net.UDPAddr { return u.conn.LocalAddr().(*net.UDP
 // Close shuts the socket; an in-flight ReadLoop exits on the read error.
 func (u *UDPConn) Close() error { return u.conn.Close() }
 
-// SendEnvelope seals env into one datagram addressed to to. The seal uses the
-// destination's pair key when one exists and falls back to the mesh key for a
-// peer that has published no identity key. Oversize frames are refused rather
-// than fragmented — see UDPMaxDatagram.
-func (u *UDPConn) SendEnvelope(env Envelope, to *net.UDPAddr) error {
+// SendEnvelope seals env into one datagram addressed to to, under the pair key
+// shared with peer. peer is the datagram's RECIPIENT, which is not the
+// envelope's destination whenever a hop forwards the frame: a relay seals to
+// the key it shares with the next hop, because that is the node that has to
+// open the datagram. Sealing to env.To instead would leave the hop unable to
+// read the frame it is meant to relay, so the recipient is passed explicitly.
+// An empty peer, or a peer that published no identity key, falls back to the
+// mesh key. Oversize frames are refused rather than fragmented — see
+// UDPMaxDatagram.
+func (u *UDPConn) SendEnvelope(env Envelope, to *net.UDPAddr, peer string) error {
 	raw, err := marshalEnvelope(env)
 	if err != nil {
 		return fmt.Errorf("udp: marshal envelope: %w", err)
 	}
-	return u.sendSealed(kindData, raw, to, env.To)
+	return u.sendSealed(kindData, raw, to, peer)
 }
 
 // SendKeepalive emits a sealed empty datagram — proof-of-life that refreshes
