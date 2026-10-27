@@ -317,6 +317,28 @@ func TestFsFilesConfined(t *testing.T) {
 	}
 }
 
+// TestSafeReadRootRejectsWideWorkDirs pins the read-side half of the breadth
+// rule. projects.Create/Update validate on write, but a row written before that
+// rule existed keeps its work dir across an upgrade, and admitting it here would
+// widen /api/fs/read to the whole disk.
+func TestSafeReadRootRejectsWideWorkDirs(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	for _, dir := range []string{string(filepath.Separator), home, filepath.Dir(home)} {
+		if safeReadRoot(dir) {
+			t.Errorf("safeReadRoot(%q) = true, want false", dir)
+		}
+	}
+	if safeReadRoot("") {
+		t.Error(`safeReadRoot("") = true, want false`)
+	}
+	if !safeReadRoot(t.TempDir()) {
+		t.Error("safeReadRoot(ordinary project dir) = false, want true")
+	}
+}
+
 func TestFsRevealOpensAllowedDir(t *testing.T) {
 	h, tmp, _ := newFsPanel(t)
 

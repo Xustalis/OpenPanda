@@ -24,6 +24,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/doctor"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/projects"
 )
 
 // getDoctor serves GET /api/doctor — the same self-check suite `panda
@@ -58,7 +59,7 @@ func (h *handler) allowedReadRoot(abs string) bool {
 	if h.projectStore != nil {
 		if list, err := h.projectStore.List(); err == nil {
 			for _, p := range list {
-				if p.WorkDir != "" {
+				if safeReadRoot(p.WorkDir) {
 					roots = append(roots, p.WorkDir)
 				}
 			}
@@ -70,6 +71,20 @@ func (h *handler) allowedReadRoot(abs string) bool {
 		}
 	}
 	return false
+}
+
+// safeReadRoot admits a project's work dir to the read allow-list only while it
+// still passes the breadth rule that projects.Create/Update apply on write.
+//
+// The write gate is not enough on its own. A row written by an older binary —
+// before the rule existed — keeps its work dir across the upgrade untouched, and
+// a work dir of "/" or the home directory would make /api/fs/read a whole-disk
+// reader for every client of the panel. The read side therefore re-checks each
+// row it did not just validate itself; a rejected row simply contributes no
+// root, so the project's files stay unreadable through the panel until its work
+// dir is fixed.
+func safeReadRoot(workDir string) bool {
+	return workDir != "" && projects.ValidateWorkDir(workDir) == nil
 }
 
 // underRoot reports whether abs sits inside root. A root that is itself a
