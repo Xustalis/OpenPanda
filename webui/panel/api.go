@@ -405,6 +405,14 @@ func (h *handler) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := h.projectStore.Create(req.Name, req.WorkDir, req.Description)
 	if err != nil {
+		// A refused work dir must not fall through to the re-create path below:
+		// that path answers success for a name that already exists and a bare
+		// 500 for a new one, so the same rule reported two different things —
+		// and the success case hid the rejection entirely.
+		if errors.Is(err, projectstore.ErrWorkDirTooBroad) {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
 		// Already in the table (the memory seed above is idempotent, so this is a
 		// re-create): return the existing row rather than an error.
 		if p, err = h.projectStore.Get(req.Name); err != nil {

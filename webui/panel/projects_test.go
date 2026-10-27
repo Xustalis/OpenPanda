@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -43,6 +44,56 @@ func projectHandler(t *testing.T) (http.Handler, *projectstore.Store, *memory.Pr
 		Token:        testToken,
 	})
 	return h, ps, mem, sessStore
+}
+
+// TestProjectWorkDirRejectionIsABadRequest pins the console's answer when the
+// breadth rule refuses a work dir. It is the operator's mistake to fix, so both
+// entry points answer 400 with the rule that rejected it: the update path used
+// to say a bare "update failed" (which reads like a broken store), and the
+// create path fell through to its re-create branch, answering 200 for a name
+// that already existed and 500 for a new one.
+func TestProjectWorkDirRejectionIsABadRequest(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	h, _, _, _ := projectHandler(t)
+	body := func(name, workDir string) string {
+		b, _ := json.Marshal(map[string]string{"name": name, "work_dir": workDir})
+		return string(b)
+	}
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/projects", strings.NewReader(body("wide", home))))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("create with work_dir=home: status = %d, want 400 (body %s)", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "home directory") {
+		t.Errorf("create body = %q, want the rule that rejected it", rr.Body.String())
+	}
+
+	// Seeding a project and re-creating it with a refused work dir must not be
+	// reported as success just because the name already exists.
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/projects", strings.NewReader(body("narrow", ""))))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("seed project: status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/projects", strings.NewReader(body("narrow", home))))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("re-create with work_dir=home: status = %d, want 400 (body %s)", rr.Code, rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	patch, _ := json.Marshal(map[string]string{"work_dir": home})
+	h.ServeHTTP(rr, authedReq(http.MethodPatch, "/api/projects/narrow", strings.NewReader(string(patch))))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("patch work_dir=home: status = %d, want 400 (body %s)", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "home directory") {
+		t.Errorf("patch body = %q, want the rule that rejected it", rr.Body.String())
+	}
 }
 
 // TestProjectCRUDAndActive walks the surface the console gained: create with

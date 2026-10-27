@@ -227,6 +227,13 @@ func (h *handler) patchProject(w http.ResponseWriter, r *http.Request) {
 			desc = strings.TrimSpace(*req.Description)
 		}
 		if _, uerr := store.Update(name, workDir, desc); uerr != nil {
+			// A refused work dir is the operator's to fix: report the rule that
+			// rejected it instead of a bare "update failed", which reads like a
+			// broken store and leaves nothing to act on.
+			if errors.Is(uerr, projectstore.ErrWorkDirTooBroad) {
+				writeErr(w, http.StatusBadRequest, uerr)
+				return
+			}
 			writeErr(w, http.StatusInternalServerError, errors.New("update failed"))
 			return
 		}
