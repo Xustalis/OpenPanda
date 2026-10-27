@@ -429,3 +429,69 @@ func TestForeignPinSkipsLocalResources(t *testing.T) {
 func s2Runner(s *Scheduler) *gateRunner {
 	return s.runner.(*gateRunner)
 }
+
+// TestWaitOrdersAgainstDispatch pins the shutdown ordering the race detector
+// caught in the panel's teardown: a dispatch that is mid-tick when the
+// shutdown starts must not add to the runner counter while Wait is observing
+// it.
+//
+// Go models the two sides deliberately — the first increment of a WaitGroup
+// is a read of the waiter's state, the first waiter is a write of it (see
+// sync/waitgroup.go) — so an unordered pair of the two is reported as a data
+// race. The panel's engine close hit exactly that: WaitQueue observed the
+// counter while the queue scheduler's dispatch loop was still inside a tick.
+//
+// The dispatch runs on its own goroutine and is never released by anything
+// that waited for the wait: a channel the test closes after the wait returns
+// would order the two accesses and hide the very race this test exists for.
+func TestWaitOrdersAgainstDispatch(t *testing.T) {
+	store := &fakeStore{ready: []ReadyTask{{ID: "t1"}, {ID: "t2"}}}
+	runner := newGateRunner()
+	s := New(store, runner, 1, nil)
+
+	// The first pass starts t1 and nothing else: its runner blocks, so the
+	// runner counter is 1.
+	s.tick(context.Background())
+	waitForStarted(t, runner, 1)
+
+	// The dispatch loop, an independent goroutine as it is in production.
+	// It ticks after the in-flight runner has returned, so the counter is
+	// zero again and its Add is the first increment — the read the runtime
+	// pairs with Wait's write.
+	dispatchDone := make(chan struct{})
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		s.tick(context.Background())
+		close(dispatchDone)
+	}()
+
+	// The shutdown starts while a runner is in flight: Wait registers as the
+	// first waiter.
+	waitDone := make(chan struct{})
+	go func() {
+		s.Wait()
+		close(waitDone)
+	}()
+
+	// Let the wait register before the runner returns. A wait that arrives
+	// after the counter already reached zero takes the early return and never
+	// becomes a waiter — and then there is no write to pair the dispatch's
+	// read with.
+	time.Sleep(50 * time.Millisecond)
+
+	// The in-flight runner returns, so the counter reaches zero and the wait
+	// is released.
+	runner.release <- "t1"
+	<-runner.done
+	<-waitDone
+
+	<-dispatchDone
+
+	// And the task that was about to start must not start after the wait: the
+	// shutdown believes the queue is drained, and a runner that starts
+	// afterwards writes into a store the caller is already closing.
+	time.Sleep(100 * time.Millisecond)
+	if started := runner.startedIDs(); len(started) != 1 {
+		t.Fatalf("started = %v; no task may start after the queue was drained", started)
+	}
+}
