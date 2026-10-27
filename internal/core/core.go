@@ -601,9 +601,12 @@ type Core struct {
 	// observedIP are OUR OWN public hints (STUN answer / peer's You field).
 	// All guarded by udpMu; punching is the session table, guarded by
 	// punchMu and keyed by session nonce.
-	udpMu     sync.Mutex
-	udp       *bus.UDPConn
-	udpPort   int
+	udpMu   sync.Mutex
+	udp     *bus.UDPConn
+	udpPort int
+	// udpKeys derives the per-pair datagram seals (nil until the plane is
+	// listening). See udpkeys.go for why the mesh key is not enough.
+	udpKeys   *udpKeys
 	udpRoutes map[string]*net.UDPAddr
 	// udpHeard is the liveness timestamp behind each udpRoutes entry: the last
 	// time authenticated inbound traffic (envelope, punch, or a keepalive from

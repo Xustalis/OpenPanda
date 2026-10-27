@@ -317,6 +317,20 @@ func (c *Core) recordPeerPubKey(ctx context.Context, nodeID, pubKeyHex, xPubHex 
 	} else if len(stale) > 0 {
 		c.logger.Info("reaped stale rows sharing peer key", "peer", nodeID, "ids", stale)
 	}
+	// The datagram pair key is derived from this row, so a key that just
+	// changed must not keep sealing to the old one: drop the cache entry and
+	// let the next datagram re-derive (or fall back, if x_pub went empty).
+	if k := c.udpKeySource(); k != nil {
+		k.forget(nodeID)
+	}
+}
+
+// udpKeySource returns the installed datagram pair-key cache, or nil while the
+// plane is off.
+func (c *Core) udpKeySource() *udpKeys {
+	c.udpMu.Lock()
+	defer c.udpMu.Unlock()
+	return c.udpKeys
 }
 
 // recordSelfPubKey stamps this node's own key on its directory row, verified

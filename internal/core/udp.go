@@ -83,9 +83,15 @@ func (c *Core) ListenUDP(ctx context.Context, addr string, stunServers []string)
 	if err != nil {
 		return err
 	}
+	// Per-pair seals: the mesh key proves membership, the pair keys prove who
+	// sent the datagram. Installed before the read loop starts so no frame is
+	// ever accepted under the weaker rule.
+	keys := newUDPKeys(c)
+	u.SetKeySource(keys, c.nodeID)
 	c.udpMu.Lock()
 	c.udp = u
 	c.udpPort = u.LocalAddr().Port
+	c.udpKeys = keys
 	c.udpMu.Unlock()
 
 	u.OnEnvelope = func(env bus.Envelope, src *net.UDPAddr) { c.handleUDPEnvelope(ctx, env, src) }
@@ -265,9 +271,9 @@ func (c *Core) udpKeepaliveLoop(ctx context.Context) {
 		c.udpMu.Lock()
 		u := c.udp
 		stale := c.sweepStaleUDPRoutesLocked(time.Now())
-		targets := make([]*net.UDPAddr, 0, len(c.udpRoutes))
-		for _, a := range c.udpRoutes {
-			targets = append(targets, a)
+		targets := make(map[string]*net.UDPAddr, len(c.udpRoutes))
+		for peer, a := range c.udpRoutes {
+			targets[peer] = a
 		}
 		c.udpMu.Unlock()
 		for _, peer := range stale {
@@ -276,8 +282,8 @@ func (c *Core) udpKeepaliveLoop(ctx context.Context) {
 		if u == nil {
 			return
 		}
-		for _, a := range targets {
-			_ = u.SendKeepalive(a)
+		for peer, a := range targets {
+			_ = u.SendKeepalive(peer, a)
 		}
 	}
 }

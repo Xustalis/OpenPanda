@@ -31,11 +31,24 @@ import (
 // Datagram layout:  [ 'P' 'N' ] [ver] [kind] [body]
 //   kind 1 punch      — JSON PunchFrame, HMAC-signed proof of mesh membership
 //   kind 2 punch_ack  — same body; answers a punch to confirm the path is up
-//   kind 3 data       — nonce(12) || AESGCM(JSON Envelope); AAD = 4-byte header
+//   kind 3 data       — v2: idlen(1) || peer id || nonce(12) || AESGCM(JSON
+//                       Envelope); v1: nonce(12) || AESGCM(body). AAD = the
+//                       header through the selector.
 //   kind 4 keepalive  — sealed empty body; refreshes the NAT mapping
 // STUN binding traffic (RFC 5389, detected by its own magic cookie at bytes
 // 4..8) shares the socket: any node answers binding requests, which gives a
 // mesh member reflexive-address discovery without an external STUN server.
+//
+// Who sealed a v2 frame is not a claim the receiver takes on faith: the key is
+// derived from the pair's X25519 identities (UDPPairAEAD), so only the named
+// peer could have produced the ciphertext. The v1 form keeps the mesh-wide key
+// and therefore proves membership only — it survives for peers that publish no
+// identity key, and the plane refuses it from any address that does.
+//
+// One frame type is deliberately outside this: a punch carries its mesh HMAC
+// because it exists to open the pinhole before either side has learned the
+// other's identity key. It stays gated by the caller's address check, and it
+// can only bind an endpoint — it never carries a message.
 //
 // Replay discipline: sealed datagrams carry no counter — the AEAD is not the
 // replay check. The dedup lives one layer up in Core.claimMsgID keyed on the
@@ -43,15 +56,21 @@ import (
 // frames carry their own freshness timestamp and a per-session nonce.
 
 const (
-	udpMagic0   = 'P'
-	udpMagic1   = 'N'
-	udpVer      = 1
-	udpHdrLen   = 4
-	kindPunch   = 1
-	kindAck     = 2
-	kindData    = 3
-	kindKeep    = 4
-	udpNonceLen = 12 // AES-GCM standard nonce
+	udpMagic0 = 'P'
+	udpMagic1 = 'N'
+	udpVer    = 1
+	// udpVerPair marks a frame sealed to one peer pair (see UDPKeySource): the
+	// sender's id rides in the clear so the receiver can pick the key before
+	// decrypting. udpVer (1) is the legacy mesh-key form, accepted only from a
+	// peer that publishes no identity key.
+	udpVerPair   = 2
+	udpPairIDMax = 128
+	udpHdrLen    = 4
+	kindPunch    = 1
+	kindAck      = 2
+	kindData     = 3
+	kindKeep     = 4
+	udpNonceLen  = 12 // AES-GCM standard nonce
 )
 
 // UDPMaxDatagram is the largest datagram this plane emits: 1400 bytes stays
@@ -114,6 +133,8 @@ type UDPConn struct {
 	conn   *net.UDPConn
 	aead   cipher.AEAD
 	secret string
+	keys   UDPKeySource
+	selfID string
 	logger *slog.Logger
 
 	OnEnvelope func(env Envelope, src *net.UDPAddr)
@@ -137,6 +158,28 @@ type UDPConn struct {
 	// fields only, mirroring the hello replay cache.
 	punchMu   sync.Mutex
 	punchSeen map[string]time.Time
+}
+
+// UDPKeySource supplies the per-pair datagram keys and the address-to-peer map
+// the receiver needs to refuse a legacy frame from an address that belongs to a
+// peer able to seal to the pair. A nil source keeps the plane on the mesh key
+// alone, which only proves membership — the behaviour every build before this
+// one had, and the only thing available toward a peer that never published an
+// identity key.
+type UDPKeySource interface {
+	// PairKey returns the AEAD shared with peer. False means the peer
+	// published no identity key: unknown, or a build that predates them.
+	PairKey(peer string) (cipher.AEAD, bool)
+	// PeerAtAddr names the peer whose confirmed endpoint is src.
+	PeerAtAddr(src *net.UDPAddr) (string, bool)
+}
+
+// SetKeySource installs the per-pair key source and this node's own id — the
+// id a sealed frame carries as its sender selector. Call it before the read
+// loop starts.
+func (u *UDPConn) SetKeySource(src UDPKeySource, selfID string) {
+	u.keys = src
+	u.selfID = selfID
 }
 
 // ListenUDP binds addr (e.g. ":7836") and returns a plane ready to ReadLoop.
@@ -180,36 +223,64 @@ func (u *UDPConn) LocalAddr() *net.UDPAddr { return u.conn.LocalAddr().(*net.UDP
 // Close shuts the socket; an in-flight ReadLoop exits on the read error.
 func (u *UDPConn) Close() error { return u.conn.Close() }
 
-// SendEnvelope seals env into one datagram addressed to src. Oversize frames
-// are refused rather than fragmented — see UDPMaxDatagram.
+// SendEnvelope seals env into one datagram addressed to to. The seal uses the
+// destination's pair key when one exists and falls back to the mesh key for a
+// peer that has published no identity key. Oversize frames are refused rather
+// than fragmented — see UDPMaxDatagram.
 func (u *UDPConn) SendEnvelope(env Envelope, to *net.UDPAddr) error {
 	raw, err := marshalEnvelope(env)
 	if err != nil {
 		return fmt.Errorf("udp: marshal envelope: %w", err)
 	}
-	if len(raw)+udpHdrLen+udpNonceLen+16 > UDPMaxDatagram {
-		return ErrDatagramTooBig
-	}
-	return u.sendSealed(kindData, raw, to)
+	return u.sendSealed(kindData, raw, to, env.To)
 }
 
 // SendKeepalive emits a sealed empty datagram — proof-of-life that refreshes
-// the NAT mapping without carrying a message.
-func (u *UDPConn) SendKeepalive(to *net.UDPAddr) error {
-	return u.sendSealed(kindKeep, nil, to)
+// the NAT mapping without carrying a message. peer names the far end so the
+// frame seals to the pair like everything else on the plane.
+func (u *UDPConn) SendKeepalive(peer string, to *net.UDPAddr) error {
+	return u.sendSealed(kindKeep, nil, to, peer)
 }
 
 // sendSealed encrypts body under a random nonce and writes one datagram.
-func (u *UDPConn) sendSealed(kind byte, body []byte, to *net.UDPAddr) error {
+//
+// peer is the far end whose pair key seals the frame; the selector that rides
+// in the clear is this node's own id, because that is what the receiver needs
+// to pick the key and to check the envelope's From against. The header and the
+// selector are the AAD, so a rewritten id or a swapped version fails the open
+// exactly like a tampered body.
+func (u *UDPConn) sendSealed(kind byte, body []byte, to *net.UDPAddr, peer string) error {
+	aead, pair := u.aead, false
+	self := u.selfID
+	if u.keys != nil && peer != "" && self != "" {
+		if k, ok := u.keys.PairKey(peer); ok {
+			aead, pair = k, true
+		}
+	}
+	if pair && len(self) > udpPairIDMax {
+		return errors.New("udp: identity exceeds the selector bound")
+	}
 	nonce := make([]byte, udpNonceLen)
 	if _, err := rand.Read(nonce); err != nil {
 		return err
 	}
-	buf := make([]byte, 0, udpHdrLen+udpNonceLen+len(body)+16)
-	buf = append(buf, udpMagic0, udpMagic1, udpVer, kind)
+	hdrLen := udpHdrLen
+	if pair {
+		hdrLen = udpHdrLen + 1 + len(self)
+	}
+	if hdrLen+udpNonceLen+len(body)+16 > UDPMaxDatagram {
+		return ErrDatagramTooBig
+	}
+	buf := make([]byte, 0, hdrLen+udpNonceLen+len(body)+16)
+	if pair {
+		buf = append(buf, udpMagic0, udpMagic1, udpVerPair, kind, byte(len(self)))
+		buf = append(buf, self...)
+	} else {
+		buf = append(buf, udpMagic0, udpMagic1, udpVer, kind)
+	}
+	hdr := buf[:hdrLen]
 	buf = append(buf, nonce...)
-	hdr := buf[:udpHdrLen]
-	buf = u.aead.Seal(buf, nonce, body, hdr)
+	buf = aead.Seal(buf, nonce, body, hdr)
 	_, err := u.conn.WriteToUDP(buf, to)
 	return err
 }
@@ -260,12 +331,22 @@ func (u *UDPConn) ReadLoop(ctx context.Context) {
 			u.handleSTUN(d, src)
 			continue
 		}
-		if n < udpHdrLen || d[0] != udpMagic0 || d[1] != udpMagic1 || d[2] != udpVer {
+		if n < udpHdrLen || d[0] != udpMagic0 || d[1] != udpMagic1 {
 			continue
 		}
-		body := d[udpHdrLen:]
+		if d[2] != udpVer && d[2] != udpVerPair {
+			continue
+		}
 		switch d[3] {
 		case kindPunch, kindAck:
+			// Punch frames stay on the v1 layout and the mesh HMAC: they exist
+			// to open a pinhole, which happens before either side has learned
+			// the other's identity key, and the handler still holds them to
+			// udpPeerTrusted.
+			if d[2] != udpVer {
+				continue
+			}
+			body := d[udpHdrLen:]
 			var f PunchFrame
 			if err := json.Unmarshal(body, &f); err != nil || !VerifyPunch(u.secret, f, time.Now()) {
 				u.logger.Debug("udp: bad punch frame", "from", src)
@@ -278,10 +359,27 @@ func (u *UDPConn) ReadLoop(ctx context.Context) {
 			if u.OnPunch != nil {
 				u.OnPunch(f, src, d[3] == kindAck)
 			}
-		case kindData:
-			raw, err := u.open(body, d[:udpHdrLen])
+		case kindData, kindKeep:
+			aead, hdr, peer, ok := u.sealTarget(d)
+			if !ok {
+				u.logger.Debug("udp: no key for datagram", "from", src, "ver", d[2])
+				continue
+			}
+			raw, err := aead.Open(nil, d[len(hdr):len(hdr)+udpNonceLen], d[len(hdr)+udpNonceLen:], hdr)
 			if err != nil {
 				u.logger.Debug("udp: unseal failed", "from", src, "err", err)
+				continue
+			}
+			if peer == "" {
+				if p, refused := u.legacyRefused(src); refused {
+					u.logger.Warn("udp: mesh-key frame from a peer that must seal to the pair", "peer", p, "addr", src)
+					continue
+				}
+			}
+			if d[3] == kindKeep {
+				if u.OnKeepalive != nil {
+					u.OnKeepalive(src)
+				}
 				continue
 			}
 			var env Envelope
@@ -289,14 +387,16 @@ func (u *UDPConn) ReadLoop(ctx context.Context) {
 				u.logger.Debug("udp: bad envelope", "from", src, "err", err)
 				continue
 			}
+			// The pair key proves who sealed the frame. A body naming a
+			// different From than the selector never dispatches: it was sealed
+			// by someone else, and the identity it claims was not proven.
+			if peer != "" && env.From != peer {
+				u.logger.Warn("udp: envelope From does not match its sealed selector",
+					"selector", peer, "from", env.From)
+				continue
+			}
 			if u.OnEnvelope != nil {
 				u.OnEnvelope(env, src)
-			}
-		case kindKeep:
-			if _, err := u.open(body, d[:udpHdrLen]); err != nil {
-				u.logger.Debug("udp: unseal keepalive failed", "from", src)
-			} else if u.OnKeepalive != nil {
-				u.OnKeepalive(src)
 			}
 		}
 	}
@@ -329,12 +429,59 @@ func (u *UDPConn) claimPunch(f PunchFrame, now time.Time) bool {
 	return true
 }
 
-// open decrypts a sealed datagram body (nonce || ciphertext) with the frame
-// header as associated data — a tampered header fails the same way a tampered
-// body does.
-func (u *UDPConn) open(body, hdr []byte) ([]byte, error) {
-	if len(body) < udpNonceLen+16 {
-		return nil, errors.New("udp: short sealed body")
+// sealTarget picks the AEAD a received datagram has to open under, the bytes
+// its header contributes as AAD, and the peer its selector names (empty for a
+// legacy frame).
+//
+// A pair frame names its sender in the clear; that name is a claim until the
+// open succeeds, and the pair key is the only thing that can settle it. A
+// legacy frame names nobody, so it is admitted only when src does not belong to
+// a peer that could have sealed to the pair — an address that has published an
+// identity key must use it, and a mesh-key frame from that address is exactly
+// the impersonation this plane refuses.
+func (u *UDPConn) sealTarget(d []byte) (cipher.AEAD, []byte, string, bool) {
+	switch d[2] {
+	case udpVerPair:
+		if len(d) < udpHdrLen+1 {
+			return nil, nil, "", false
+		}
+		idLen := int(d[udpHdrLen])
+		hdrLen := udpHdrLen + 1 + idLen
+		if idLen == 0 || idLen > udpPairIDMax || len(d) < hdrLen+udpNonceLen+16 {
+			return nil, nil, "", false
+		}
+		if u.keys == nil {
+			return nil, nil, "", false
+		}
+		peer := string(d[udpHdrLen+1 : hdrLen])
+		aead, ok := u.keys.PairKey(peer)
+		if !ok {
+			return nil, nil, "", false
+		}
+		return aead, d[:hdrLen], peer, true
+	case udpVer:
+		if len(d) < udpHdrLen+udpNonceLen+16 {
+			return nil, nil, "", false
+		}
+		return u.aead, d[:udpHdrLen], "", true
 	}
-	return u.aead.Open(nil, body[:udpNonceLen], body[udpNonceLen:], hdr)
+	return nil, nil, "", false
+}
+
+// legacyRefused reports whether a mesh-key frame that just opened should be
+// dropped because src belongs to a peer that could have sealed to the pair.
+// It runs only after the mesh AEAD has accepted the frame, so an unauthenticated
+// flood cannot buy an address-table scan.
+func (u *UDPConn) legacyRefused(src *net.UDPAddr) (string, bool) {
+	if u.keys == nil {
+		return "", false
+	}
+	peer, ok := u.keys.PeerAtAddr(src)
+	if !ok {
+		return "", false
+	}
+	if _, hasPair := u.keys.PairKey(peer); hasPair {
+		return peer, true
+	}
+	return "", false
 }

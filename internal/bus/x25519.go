@@ -163,6 +163,32 @@ func TransitOpenMesh(secret, destKey string, blob []byte) ([]byte, error) {
 	return aead.Open(nil, blob[:transitNonceLen], blob[transitNonceLen:], nil)
 }
 
+// UDPPairAEAD derives the datagram-plane AEAD for one peer pair: a static-
+// static X25519 DH between the two identity keys, run through HKDF with both
+// node ids bound in sorted order so the two sides derive the same key
+// regardless of who speaks first.
+//
+// This is what makes a datagram's From provable. The mesh-wide key every
+// member holds can only prove membership — any member can mint a frame
+// claiming to be any other — so the datagram plane seals to the pair instead.
+// No handshake is needed: each side already publishes its X25519 public key in
+// an Ed25519-signed hello, and a third member watching the exchange learns
+// nothing, because the derivation needs a private key it does not have.
+func UDPPairAEAD(priv *ecdh.PrivateKey, peerPub *ecdh.PublicKey, selfID, peerID string) (cipher.AEAD, error) {
+	if priv == nil || peerPub == nil || selfID == "" || peerID == "" {
+		return nil, errors.New("bus: udp pair key needs both identities")
+	}
+	shared, err := priv.ECDH(peerPub)
+	if err != nil {
+		return nil, fmt.Errorf("bus: udp pair ecdh: %w", err)
+	}
+	a, b := selfID, peerID
+	if b < a {
+		a, b = b, a
+	}
+	return transitAEAD(shared, "panda-udp-aead-v2\x00"+a+"\x00"+b)
+}
+
 // transitAEAD turns raw key material into AES-256-GCM through HKDF-SHA256 —
 // the same derivation discipline SessionAEAD uses.
 func transitAEAD(keyMaterial []byte, info string) (cipher.AEAD, error) {

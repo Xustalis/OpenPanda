@@ -236,7 +236,7 @@ func TestUDPKeepalive(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go b.ReadLoop(ctx)
-	if err := a.SendKeepalive(b.LocalAddr()); err != nil {
+	if err := a.SendKeepalive("node-b", b.LocalAddr()); err != nil {
 		t.Fatal(err)
 	}
 	select {
