@@ -196,10 +196,9 @@ English translation of [status.md](status.md)（中文版为准）· English
 > migration, no renamed key — and the wire adds no new frame. The one format
 > change is the UDP datagram's peer-keyed seal, which does not interoperate
 > with a 0.1.0 node on that plane, so a mesh upgrades together. The entry
-> client gained
-> two native dialects (OpenAI Responses and Google Gemini, with streaming, tool
-> calls and usage metering; refusal text and the oversized-event boundary
-> closed in the same pass), OpenCode Go / Console joined the built-in
+> client gained two native dialects (OpenAI Responses and Google Gemini, with
+> streaming, tool calls and usage metering; refusal text and the oversized-event
+> boundary closed in the same pass), OpenCode Go / Console joined the built-in
 > providers, a thread's roster and node pin reached the terminal (`/team`,
 > `/node`, `panda ask --team/--node`, the to-do board), the dispatch budget
 > now derives from the roster (ceiling 8), cross-process read-modify-write is
