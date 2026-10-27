@@ -188,18 +188,21 @@ func supportsModelInjection(name, adapter string, model config.ModelConfig) bool
 	if !ok || k.ModelEnv == nil {
 		return false
 	}
-	apiType := model.NormalizedAPIType()
+	base, apiType := injectionEndpoint(model)
 	// The agent CLIs speak Messages or Chat Completions. A model on a surface
 	// only panda's own client drives (Responses, Google) is never injected:
 	// the CLI would send the wrong request shape to a valid endpoint.
 	if apiType != config.APITypeAnthropic && apiType != config.APITypeOpenAI {
 		return false
 	}
+	// A CLI that declares its dialect cannot take a model served on the other
+	// one. A polyglot agent (empty APIType) speaks whatever the model does.
 	if k.ModelEnv.APIType != "" && k.ModelEnv.APIType != apiType {
 		return false
 	}
 	if adapter == "claude_code.py" {
-		return isDeepSeekEndpoint(model.BaseURL)
+		// Claude Code has one endpoint contract; only DeepSeek's is proven.
+		return isDeepSeekEndpoint(base)
 	}
 	return true
 }
@@ -228,45 +231,84 @@ const (
 	deepseekFlashModel = "deepseek-flash"
 )
 
+// injectionEndpoint resolves the endpoint and dialect an injection should aim
+// at, following the same chain entry.NewClient uses: an explicit base_url the
+// user pointed somewhere else wins, an empty one takes the catalogue row's,
+// and a base_url that merely restated one of the row's own endpoints is
+// rebased onto the surface this model is actually served on.
+//
+// The previous shape skipped the catalogue entirely and fell back to a
+// hard-coded vendor when base_url was empty, so a node configured with a
+// provider id alone (`provider: opencode-go`) handed that provider's key to
+// api.openai.com — or to DeepSeek's Anthropic endpoint — and every run died on
+// a 401 that named nothing in the config.
+func injectionEndpoint(model config.ModelConfig) (base, apiType string) {
+	base = strings.TrimSpace(model.BaseURL)
+	apiType = model.NormalizedAPIType()
+	name := effectiveModelName(model)
+	p, ok := providers.Lookup(model.Provider)
+	if !ok {
+		return base, apiType
+	}
+	routedBase, routedType := p.EndpointFor(name)
+	if base == "" || p.OwnsEndpoint(base) {
+		if routedBase != "" {
+			base = routedBase
+		}
+		if routedType != "" {
+			apiType = strings.ToLower(strings.TrimSpace(routedType))
+		}
+	}
+	if base == "" {
+		// A catalogue row with no endpoint of its own (custom) and no
+		// base_url: the data-plane defaults, which is what an older config
+		// that named no provider at all got.
+		if apiType == config.APITypeAnthropic {
+			return "https://api.deepseek.com/anthropic", apiType
+		}
+		return "https://api.openai.com/v1", apiType
+	}
+	return base, apiType
+}
+
+// agentDialect resolves the wire dialect an agent's CLI expects: a declared
+// ModelEnv.APIType pins it (a CLI that only speaks Messages), and a polyglot
+// one (empty) takes the model's own.
+func agentDialect(name, adapter, modelAPIType string) string {
+	k, _ := agents.Lookup(name, adapter)
+	if k.ModelEnv != nil && k.ModelEnv.APIType != "" {
+		return k.ModelEnv.APIType
+	}
+	return modelAPIType
+}
+
+// injectedDialect is the dialect the injected endpoint actually speaks, as the
+// adapter has to be told it. The agent's own constraint wins (a Messages-only
+// CLI is handed an Anthropic endpoint and told so), and otherwise the resolved
+// surface decides.
+func injectedDialect(name, adapter string, model config.ModelConfig) string {
+	_, apiType := injectionEndpoint(model)
+	return agentDialect(name, adapter, apiType)
+}
+
 // effectiveBaseURLFor returns the target-appropriate endpoint URL for an agent.
 // DeepSeek supports both Anthropic and OpenAI endpoints.
 func effectiveBaseURLFor(name, adapter string, model config.ModelConfig) string {
-	k, _ := agents.Lookup(name, adapter)
-	targetAPIType := config.APITypeAnthropic
-	if k.ModelEnv != nil {
-		// A polyglot agent (APIType "") speaks the model's own protocol;
-		// a declared one pins the dialect regardless of the config.
-		targetAPIType = k.ModelEnv.APIType
-		if targetAPIType == "" {
-			targetAPIType = model.NormalizedAPIType()
-		}
-	}
-	if isDeepSeekEndpoint(model.BaseURL) {
+	base, apiType := injectionEndpoint(model)
+	targetAPIType := agentDialect(name, adapter, apiType)
+	if isDeepSeekEndpoint(base) {
 		if targetAPIType == config.APITypeOpenAI {
 			return "https://api.deepseek.com/v1"
 		}
 		return "https://api.deepseek.com/anthropic"
 	}
-	if model.BaseURL == "" {
-		if targetAPIType == config.APITypeOpenAI {
-			return "https://api.openai.com/v1"
-		}
-		return "https://api.deepseek.com/anthropic"
-	}
-	return model.BaseURL
+	return base
 }
 
 // effectiveModelNameFor returns the target-appropriate model name for an agent.
 func effectiveModelNameFor(name, adapter string, model config.ModelConfig) string {
-	k, _ := agents.Lookup(name, adapter)
-	targetAPIType := config.APITypeAnthropic
-	if k.ModelEnv != nil {
-		targetAPIType = k.ModelEnv.APIType
-		if targetAPIType == "" {
-			targetAPIType = model.NormalizedAPIType()
-		}
-	}
-	if isDeepSeekEndpoint(model.BaseURL) && targetAPIType == config.APITypeOpenAI {
+	base, apiType := injectionEndpoint(model)
+	if isDeepSeekEndpoint(base) && agentDialect(name, adapter, apiType) == config.APITypeOpenAI {
 		return "deepseek-flash"
 	}
 	return effectiveModelName(model)
@@ -275,13 +317,8 @@ func effectiveModelNameFor(name, adapter string, model config.ModelConfig) strin
 // effectiveBaseURL/effectiveModelName mirror the defaults modelEnv applies, so
 // the announcement and the injected env never diverge.
 func effectiveBaseURL(model config.ModelConfig) string {
-	if model.BaseURL == "" {
-		if model.NormalizedAPIType() == config.APITypeAnthropic {
-			return "https://api.deepseek.com/anthropic"
-		}
-		return "https://api.openai.com/v1"
-	}
-	return model.BaseURL
+	base, _ := injectionEndpoint(model)
+	return base
 }
 
 func effectiveModelName(model config.ModelConfig) string {

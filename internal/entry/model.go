@@ -5,6 +5,8 @@ package entry
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -151,6 +153,15 @@ type Client struct {
 	// extraHeaders are user-supplied HTTP headers attached to every request
 	// (config.ModelConfig.Headers); they never replace built-in auth headers.
 	extraHeaders map[string]string
+	// sessionHeader names the request header the provider routes and caches
+	// by (OpenCode's x-opencode-session), and sessionID is the value minted
+	// for this client. Both are empty for every provider that does not need
+	// one. A caller that knows which conversation a turn belongs to overrides
+	// sessionID per request through WithSessionID — one client can serve many
+	// conversations (the console's engine is one client for the whole node),
+	// and a single shared id makes the gateway treat every thread as one.
+	sessionHeader string
+	sessionID     string
 
 	// offlineWait arms the offline gate (offline.go): a transport failure on
 	// an endpoint that needs the internet waits for the link to come back
@@ -343,9 +354,8 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	// on every call. The header comes from the named provider row when there
 	// is one, and from endpoint detection otherwise: a "custom" entry pointed
 	// at https://opencode.ai/zen/go is still the Go gateway and answers 400
-	// MissingSessionID without it. One client is one conversation here, so
-	// minting at construction keeps prompt caching and routing stable across
-	// the turn's requests. A user header of the same name wins.
+	// MissingSessionID without it. A user header of the same name wins
+	// outright — it is an explicit pin, including across conversations.
 	sessionHeader := ""
 	if hasProvider {
 		sessionHeader = p.SessionHeader
@@ -353,12 +363,20 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	if sessionHeader == "" && hasTuning {
 		sessionHeader = tuning.SessionHeader
 	}
+	sessionID := ""
 	if sessionHeader != "" && !headerNamed(extraHeaders, sessionHeader) {
 		if id, err := util.UUIDv7(); err == nil {
+			sessionID = "ses_" + id
+		}
+		// The id also rides extraHeaders so a caller that never sets one
+		// (a probe, a one-shot Complete) still sends it. applyExtraHeaders
+		// yields to a header set on the request, which is how the
+		// per-conversation override below reaches the wire.
+		if sessionID != "" {
 			if extraHeaders == nil {
 				extraHeaders = map[string]string{}
 			}
-			extraHeaders[sessionHeader] = "ses_" + id
+			extraHeaders[sessionHeader] = sessionID
 		}
 	}
 	c := &Client{
@@ -378,6 +396,8 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		thinkingStyle:  providers.ThinkingStyleFor(model),
 		extraParams:    maps.Clone(model.Params),
 		extraHeaders:   extraHeaders,
+		sessionHeader:  sessionHeader,
+		sessionID:      sessionID,
 	}
 	// Subscription OAuth (model.auth): the credential resolves per request
 	// through the token store, so refreshes apply without a restart. The
@@ -505,13 +525,53 @@ func headerNamed(headers map[string]string, name string) bool {
 // caller already set (content-type, authorization, x-api-key,
 // anthropic-version, accept) are never replaced — a config typo must not
 // break auth.
-func (c *Client) applyExtraHeaders(httpReq *http.Request) {
+func (c *Client) applyExtraHeaders(ctx context.Context, httpReq *http.Request) {
 	for k, v := range c.extraHeaders {
 		if k == "" || httpReq.Header.Get(k) != "" {
 			continue
 		}
 		httpReq.Header.Set(k, v)
 	}
+	if c.sessionHeader == "" || c.sessionID == "" {
+		// No managed session, or the user pinned one of their own: their
+		// value is an explicit choice for every conversation.
+		return
+	}
+	if v, ok := sessionIDFrom(ctx); ok && v != "" {
+		// A conversation-scoped id replaces the client-wide one: the gateway
+		// routes and caches by this header, so a node serving several threads
+		// from one client must not put them all in one session.
+		httpReq.Header.Set(c.sessionHeader, v)
+	}
+}
+
+// sessionKey carries the conversation a request belongs to.
+type sessionKey struct{}
+
+// WithSessionID scopes one call's conversation. Callers that know the thread
+// (the console's chat, the REPL's session) pass it so the provider sees one
+// session per conversation; callers that do not leave it unset and the
+// client's own id stands.
+func WithSessionID(ctx context.Context, id string) context.Context {
+	if strings.TrimSpace(id) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, sessionKey{}, "ses_"+sessionToken(id))
+}
+
+// sessionToken turns an arbitrary conversation id into a header-safe token.
+// Provider ids are opaque strings (a console session id carries colons and
+// slashes); the header carries a flat token derived deterministically from it,
+// so the same conversation keeps the same provider-side session across calls
+// and processes.
+func sessionToken(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:16])
+}
+
+func sessionIDFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(sessionKey{}).(string)
+	return v, ok
 }
 
 // anthropicThinking returns the Messages API thinking object for the
@@ -1045,7 +1105,7 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 	if err := c.applyAuth(ctx, httpReq); err != nil {
 		return Response{}, err
 	}
-	c.applyExtraHeaders(httpReq)
+	c.applyExtraHeaders(ctx, httpReq)
 
 	resp, err := c.hc.Do(httpReq)
 	if err != nil {
@@ -1276,7 +1336,7 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 		return Response{}, err
 	}
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
-	c.applyExtraHeaders(httpReq)
+	c.applyExtraHeaders(ctx, httpReq)
 
 	resp, err := c.hc.Do(httpReq)
 	if err != nil {
@@ -1474,7 +1534,7 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if err := c.applyAuth(ctx, req); err != nil {
 		return nil, err
 	}
-	c.applyExtraHeaders(req)
+	c.applyExtraHeaders(ctx, req)
 
 	resp, err := c.hc.Do(req)
 	if err != nil {

@@ -961,13 +961,18 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	if dec.Inject {
 		// The model endpoint must be HTTPS so the API key never travels
 		// cleartext, and pinned to the configured host so the allowlist is
-		// never empty (D7). Only enforced when we actually inject the env.
-		if injModel.BaseURL != "" {
-			if err := security.NewNetworkGuard(security.EndpointHost(injModel.BaseURL)).CheckURL(injModel.BaseURL); err != nil {
+		// never empty (D7). Only enforced when we actually inject the env —
+		// and against the endpoint the run will really dial, which is the
+		// catalogue's when base_url is empty.
+		if ep := effectiveBaseURLFor(name, adapter, injModel); ep != "" {
+			if err := security.NewNetworkGuard(security.EndpointHost(ep)).CheckURL(ep); err != nil {
 				return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
 			}
 		}
-		env = modelEnvForAdapter(injModel, name, adapter)
+		// Merged rather than assigned: the preference list rides every run
+		// (the adapter ignores it on an injected one), and the agent's own
+		// credential vars must survive alongside.
+		env = mergeAdapterEnv(env, modelEnvForAdapter(injModel, name, adapter))
 	}
 	// Native Agent credentials must survive the minimal sandbox even when PANDA
 	// does not inject its own model. Only adapter-specific keys are forwarded —
@@ -997,8 +1002,12 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// "agents always use their own models", and a retry that hands the task
 	// panda's key is exactly the override the setting promises not to do.
 	if !res.OK && replayableFailure(res) && !dec.Inject && r.injectionModel != config.InjectionModelNever && !ModelCredsWithheld(ctx) && modelConfigured(injModel) && supportsModelInjection(name, adapter, injModel) && injModel.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
-		if injModel.BaseURL == "" || security.NewNetworkGuard(security.EndpointHost(injModel.BaseURL)).CheckURL(injModel.BaseURL) == nil {
-			injectedEnv := modelEnvForAdapter(injModel, name, adapter)
+		if ep := effectiveBaseURLFor(name, adapter, injModel); ep == "" || security.NewNetworkGuard(security.EndpointHost(ep)).CheckURL(ep) == nil {
+			// Merged with the first attempt's environment, not replacing it:
+			// the retry is the same run with a different model endpoint, so the
+			// agent's own credential vars, preference list and task id still
+			// belong in its environment.
+			injectedEnv := mergeAdapterEnv(env, modelEnvForAdapter(injModel, name, adapter))
 			if len(injectedEnv) > 0 {
 				retryRes := r.runProcess(ctx, adapter, prompt, cwd, injectedEnv)
 				if retryRes.OK {
@@ -1246,11 +1255,12 @@ func (r *Router) agentTarget(name string, ag ledger.Agent) ProbeSpec {
 	if k.ModelEnv != nil {
 		apiType = k.ModelEnv.APIType
 		if apiType == "" {
-			// Polyglot agent (pi): the probe speaks the configured
-			// model's own protocol — that is what the run uses. A dialect
-			// only panda's client speaks (Responses/Google) is not an agent
-			// protocol, so the probe falls back to Chat Completions.
-			switch mt := injModel.NormalizedAPIType(); mt {
+			// Polyglot agent (pi): the probe speaks the dialect the run
+			// actually uses — the resolved surface, which for an aggregator
+			// is the route serving this model, not the row's default. A
+			// dialect only panda's client speaks (Responses/Google) is not an
+			// agent protocol, so the probe falls back to Chat Completions.
+			switch mt := injectedDialect(name, ag.Adapter, injModel); mt {
 			case config.APITypeAnthropic, config.APITypeOpenAI:
 				apiType = mt
 			default:

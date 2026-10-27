@@ -247,8 +247,10 @@ type RoutingConfig struct {
 	// prefer, in order. It is an ordered candidate list, not one pin: the
 	// adapter takes the first entry its install actually serves and falls
 	// back to the next one. Keys are agent names (the capability card's key)
-	// or adapter file names. Only adapters that choose among several served
-	// models consult it today (opencode.py); a single-model CLI ignores it.
+	// or adapter file names. The list rides every agent run as
+	// OPENPANDA_AGENT_MODELS, injected or not; an adapter that picks among
+	// several served models honours it today (opencode.py), and one whose CLI
+	// takes a single model ignores the value it is handed.
 	// Precedence: an injected model (injection.model=always or an
 	// injection.agents pin) still overrides this list, and the adapter's own
 	// single-model env pin wins over it. An entry under the OpenCode Go

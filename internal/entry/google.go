@@ -340,7 +340,7 @@ func (c *Client) completeOnceGoogle(ctx context.Context, system string, turns []
 	if err := c.applyAuth(ctx, httpReq); err != nil {
 		return Response{}, err
 	}
-	c.applyExtraHeaders(httpReq)
+	c.applyExtraHeaders(ctx, httpReq)
 
 	resp, err := c.hc.Do(httpReq)
 	if err != nil {
@@ -496,7 +496,7 @@ func (c *Client) sendGoogleStream(ctx context.Context, system string, turns []Tu
 	if err := c.applyAuth(ctx, httpReq); err != nil {
 		return nil, err
 	}
-	c.applyExtraHeaders(httpReq)
+	c.applyExtraHeaders(ctx, httpReq)
 
 	resp, err := c.hcStream.Do(httpReq)
 	if err != nil {

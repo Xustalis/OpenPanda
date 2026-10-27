@@ -1775,6 +1775,12 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		}
 		cb.progress(Progress{Kind: ProgressOffline, Name: name, Detail: detail, Delay: n.Elapsed})
 	})
+	// One engine serves every conversation on this node, while a routing
+	// gateway (OpenCode) keys its session, cache and rate accounting on a
+	// per-request header. Scoping the ask to its thread keeps two chats from
+	// sharing provider-side state; an ask with no thread keeps the client's
+	// own id.
+	ctx = entry.WithSessionID(ctx, scope.SessionID)
 
 	// The reply locale is resolved up here rather than next to the classifier
 	// options because the deferred catch-all below also speaks it: an escaped

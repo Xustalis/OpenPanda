@@ -887,6 +887,105 @@ print(json.dumps({"type":"text","sessionID":"ses_pf3","part":{"id":"px","type":"
             progress,
         )
 
+    def test_opencode_preference_list_walks_on_after_a_rejected_model(self):
+        """A rejected entry moves the run to the NEXT preference, not off the
+        list. The retry used to re-probe the roster and take the heuristic
+        pick, so naming three models meant "try one, then whatever is free" —
+        the operator's second and third choices were never tried."""
+        payload, progress, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+if sys.argv[1:3] == ["api", "model.list"]:
+    print(json.dumps({"data": [
+        {"id": "glm-5.3", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 1000000, "output": 131072},
+         "cost": [{"input": 1.4, "output": 4.4}],
+         "status": "active", "enabled": True},
+        {"id": "kimi-k3", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 1048576, "output": 131072},
+         "cost": [{"input": 3, "output": 15}],
+         "status": "active", "enabled": True},
+        {"id": "deepseek-v4.1-flash-free", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 200000, "output": 32000},
+         "cost": [{"input": 0, "output": 0}],
+         "status": "active", "enabled": True},
+    ]}))
+    sys.exit(0)
+if sys.argv[1:2] == ["run"]:
+    args = sys.argv[1:]
+    model = args[args.index("--model") + 1] if "--model" in args else ""
+    if model.startswith("opencode/glm-5.3"):
+        print(json.dumps({"type": "error", "error": {
+            "type": "provider.no-route", "message": "Model unavailable: " + model}}))
+        sys.exit(0)
+    print(json.dumps({"type":"text","sessionID":"ses_walk","part":{"id":"px","type":"text","text":"ok on " + model}}))
+    sys.exit(0)
+print(json.dumps({"type":"text","sessionID":"ses_walk","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={"OPENPANDA_AGENT_MODELS": json.dumps(
+                ["opencode/glm-5.3", "opencode/kimi-k3",
+                 "opencode/deepseek-v4.1-flash-free"])},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "ok on opencode/kimi-k3")
+        self.assertTrue(
+            any("retrying on opencode/kimi-k3" in line for line in progress),
+            progress,
+        )
+
+    def test_opencode_billing_retry_honours_the_preference_list(self):
+        """A billing rejection is answered by the operator's list before the
+        free tier: what they named is what they are willing to pay for. The
+        retry used to jump straight to the free pick, so a paid model listed
+        after a subscription one was unreachable."""
+        payload, progress, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+if sys.argv[1:3] == ["api", "model.list"]:
+    print(json.dumps({"data": [
+        {"id": "glm-5.3", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 1000000, "output": 131072},
+         "cost": [{"input": 1.4, "output": 4.4}],
+         "status": "active", "enabled": True},
+        {"id": "deepseek-v4.1-flash", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 1000000, "output": 384000},
+         "cost": [{"input": 0.3, "output": 1.2}],
+         "status": "active", "enabled": True},
+        {"id": "mimo-v2.6-flash-free", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 200000, "output": 32000},
+         "cost": [{"input": 0, "output": 0}],
+         "status": "active", "enabled": True},
+    ]}))
+    sys.exit(0)
+if sys.argv[1:2] == ["run"]:
+    args = sys.argv[1:]
+    model = args[args.index("--model") + 1] if "--model" in args else ""
+    if model.startswith("opencode/glm-5.3"):
+        print(json.dumps({"type": "error", "error": {
+            "type": "api_error",
+            "message": "Upstream request failed: Insufficient account funds"}}))
+        sys.exit(0)
+    print(json.dumps({"type":"text","sessionID":"ses_bp","part":{"id":"px","type":"text","text":"ok on " + model}}))
+    sys.exit(0)
+print(json.dumps({"type":"text","sessionID":"ses_bp","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={"OPENPANDA_AGENT_MODELS": json.dumps(
+                ["opencode/glm-5.3", "opencode/deepseek-v4.1-flash"]),
+                "OPENPANDA_OPENCODE_ALLOW_PAID": "1"},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "ok on opencode/deepseek-v4.1-flash")
+        self.assertTrue(
+            any("opencode/deepseek-v4.1-flash" in line for line in progress),
+            progress,
+        )
+
     def test_opencode_injected_anthropic_endpoint_merges_native_config(self):
         """An injected Anthropic-dialect model reaches opencode through the
         Anthropic SDK provider, and the fragment is merged over the user's
@@ -1176,7 +1275,7 @@ if sys.argv[1:2] == ["run"]:
             any("auto-selected model opencode/deepseek-v4.1-flash-free" in l
                 for l in progress), progress)
         self.assertTrue(
-            any("re-probed roster, retrying on opencode/nemotron-3.5-super-vl-free" in l
+            any("rejected; retrying on opencode/nemotron-3.5-super-vl-free" in l
                 for l in progress), progress)
         self.assertTrue(
             any("served by this install" in l for l in progress), progress)

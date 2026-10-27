@@ -641,7 +641,7 @@ func (c *Client) sendOAIStream(ctx context.Context, system string, msgs []oaiMes
 	if err := c.applyAuth(ctx, httpReq); err != nil {
 		return nil, err
 	}
-	c.applyExtraHeaders(httpReq)
+	c.applyExtraHeaders(ctx, httpReq)
 
 	resp, err := c.hcStream.Do(httpReq)
 	if err != nil {
@@ -700,7 +700,7 @@ func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []
 		return nil, err
 	}
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
-	c.applyExtraHeaders(httpReq)
+	c.applyExtraHeaders(ctx, httpReq)
 
 	resp, err := c.hcStream.Do(httpReq)
 	if err != nil {

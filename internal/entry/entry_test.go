@@ -1792,6 +1792,104 @@ func TestNewClientOpenCodeEndpoints(t *testing.T) {
 	}
 }
 
+// TestSessionHeaderIsPerConversation: one client serves a whole node, and the
+// console's engine is exactly that — a single client for every thread. The
+// session id therefore has to follow the conversation, not the client: with
+// one shared id every thread the node served landed in one provider-side
+// session, sharing its routing, cache and rate accounting.
+func TestSessionHeaderIsPerConversation(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("x-opencode-session"))
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","object":"chat.completion","created":1,"model":"x","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(config.ModelConfig{
+		Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: srv.URL, APIKey: "k", Model: "m",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.sessionHeader != "" {
+		t.Fatalf("a plain relay minted a session header: %q", c.sessionHeader)
+	}
+
+	// The Go gateway is detected by endpoint, so point a custom row at it and
+	// only exercise the header decision (the request never leaves the test).
+	// Both halves are set the way NewClient leaves them: the minted id rides
+	// extraHeaders as well, so a caller that scopes nothing still sends one.
+	c.sessionHeader, c.sessionID = "x-opencode-session", "ses_client"
+	c.extraHeaders = map[string]string{"x-opencode-session": c.sessionID}
+
+	ctxA := WithSessionID(context.Background(), "console-thread-a")
+	ctxB := WithSessionID(context.Background(), "console-thread-b")
+	for _, ctx := range []context.Context{ctxA, ctxB} {
+		if _, err := c.Complete(ctx, "s", "u"); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+	}
+	// Same conversation twice: the provider-side session must be stable, or
+	// its cache and routing reset on every turn.
+	if _, err := c.Complete(ctxA, "s", "u"); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("requests = %d, want 3", len(got))
+	}
+	if got[0] == got[1] {
+		t.Fatalf("two conversations shared session id %q", got[0])
+	}
+	if got[0] != got[2] {
+		t.Fatalf("one conversation changed session id between turns: %q then %q", got[0], got[2])
+	}
+	for _, v := range got {
+		if !strings.HasPrefix(v, "ses_") || len(v) != len("ses_")+32 {
+			t.Fatalf("session id %q is not a minted token", v)
+		}
+	}
+
+	// No conversation scope: the client's own id stands, so a probe or a
+	// one-shot Complete still satisfies the gateway.
+	if _, err := c.Complete(context.Background(), "s", "u"); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if last := got[len(got)-1]; last != "ses_client" {
+		t.Fatalf("unscoped request sent %q, want the client's own id", last)
+	}
+}
+
+// TestSessionHeaderUserPinWins: an operator who wrote the header into
+// model.headers made an explicit choice and it applies to every conversation.
+func TestSessionHeaderUserPinWins(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("x-opencode-session")
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","object":"chat.completion","created":1,"model":"x","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	defer srv.Close()
+	c, err := NewClient(config.ModelConfig{
+		Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: srv.URL, APIKey: "k", Model: "m",
+		Headers: map[string]string{"X-OpenCode-Session": "ses_pinned"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// NewClient leaves sessionID empty when the operator pinned the header —
+	// the mint is skipped, which is what makes it the pin.
+	c.sessionHeader = "x-opencode-session"
+	if _, err := c.Complete(WithSessionID(context.Background(), "thread"), "s", "u"); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if got != "ses_pinned" {
+		t.Fatalf("session header = %q, want the operator's pin", got)
+	}
+}
+
 // TestNewClientSessionHeaderForCustomOpenCodeEndpoint: a custom row pointed at
 // the Go gateway is still the Go gateway. The header must be minted from
 // endpoint detection, not only from the named provider row, or the gateway

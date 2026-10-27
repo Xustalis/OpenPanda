@@ -873,10 +873,14 @@ func modelEnvForAdapter(model config.ModelConfig, name, adapter string) []string
 		env = append(env, k.ModelEnv.Model+"="+effectiveModelNameFor(name, adapter, model))
 	}
 	env = append(env, "OPENPANDA_INJECTED_MODEL=1",
-		// The configured protocol rides alongside the endpoint vars so
-		// adapters for multi-protocol CLIs (pi, which declares a dialect
-		// per provider) know which wire format the endpoint speaks.
-		"OPENPANDA_MODEL_API_TYPE="+model.NormalizedAPIType())
+		// The dialect the endpoint actually speaks rides alongside the
+		// endpoint vars so adapters for multi-protocol CLIs (pi, which declares
+		// a dialect per provider) know which wire format to hand the CLI. It is
+		// the resolved surface, not the stored api_type: an aggregator serves a
+		// routed family on a different wire than its row's default, and
+		// reporting the stored value made the adapter write the wrong SDK
+		// provider for exactly those models.
+		"OPENPANDA_MODEL_API_TYPE="+injectedDialect(name, adapter, model))
 	if adapter == "claude_code.py" {
 		env = append(env, "ANTHROPIC_AUTH_TOKEN=")
 	}

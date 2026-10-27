@@ -450,7 +450,7 @@ def _preferred_models():
     return out
 
 
-def _preferred_model(available, catalog):
+def _preferred_model(available, catalog, exclude=()):
     """The first configured preference this install can actually serve.
 
     Returns (model, variants, notes). model is "" when no preference is
@@ -460,12 +460,15 @@ def _preferred_model(available, catalog):
 
     A preference wins over the free-first default: naming a paid model is an
     explicit choice, and the same list is how a Go subscriber selects the
-    subscription roster.
+    subscription roster. exclude lists models this run already tried, so a
+    retry walks on to the next entry instead of returning the one that just
+    failed.
     """
     prefs = _preferred_models()
     if not prefs:
         return "", [], []
     notes = []
+    excluded = {m.split("#")[0] for m in exclude if m}
     for pref in prefs:
         want, _, variant = pref.partition("#")
         want, variant = want.strip(), variant.strip()
@@ -479,6 +482,7 @@ def _preferred_model(available, catalog):
                           if m.split("/")[-1].lower() == want.lower()]
         else:
             candidates = []
+        candidates = [m for m in candidates if m not in excluded]
         if not candidates:
             notes.append("preferred model %s is not served by this install" % pref)
             continue
@@ -630,45 +634,53 @@ def _looks_like_model_failure(text):
     return bool(_MODEL_FAILURE_RE.search(text or ""))
 
 
-def _fresh_pick(excluded, prefer_free):
-    """Drop the probe caches, re-identify the served models and pick the
-    best entry not in `excluded`. Returns _pick_model's (model, variants).
-
-    force=True on both probes: a rejected --model means the service rotated
-    since this run's answer (or a config changed under it), so neither the
-    in-process memo nor the cross-process cache may be trusted."""
-    global _MODEL_LIST, _MODEL_CATALOG
-    _MODEL_LIST = None
-    _MODEL_CATALOG = None
-    available = [m for m in _served_models(force=True) if m not in excluded]
-    return _pick_model(available, prefer_free)
-
-
 def _retry_pick(model, tried, prefer_free, effort, err_text):
-    """A run rejected its model: the served set rotated between this
-    dispatch's probe and the run itself (free tiers retire mid-flight).
-    Re-identify the roster and return a fresh pick with the effort variant
-    re-applied — "" when the failure is not a model-resolution error or
-    nothing new qualifies. Bounded: gives up after a few rotations."""
+    """A run rejected its model: move on to the next model this run may use.
+
+    The user's ordered preference list is consulted first — a failed entry
+    walks on to the next one rather than dropping the whole list for the
+    heuristic pick, which is what "ordered fallback" means. When the list is
+    exhausted (or none is configured) the served set is re-identified and the
+    best remaining entry picked: a rejected --model can also mean the roster
+    rotated between this dispatch's probe and the run itself (free tiers
+    retire mid-flight). Returns "" when the failure is not a model-resolution
+    error or nothing new qualifies, and is bounded: gives up after a few
+    rotations."""
     if not _looks_like_model_failure(err_text) or len(tried) >= 4:
         return ""
     tried.add(model.split("#")[0] if model else "")
-    pick, variants = _fresh_pick(tried, prefer_free)
+    global _MODEL_LIST, _MODEL_CATALOG
+    _MODEL_LIST = None
+    _MODEL_CATALOG = None
+    fresh = _served_models(force=True)
+    pick, variants, notes = _preferred_model(fresh, _model_catalog(force=True), exclude=tried)
+    if not pick:
+        pick, variants = _pick_model([m for m in fresh if m not in tried], prefer_free)
+    else:
+        for note in notes:
+            harness.progress(note)
     if not pick:
         return ""
-    if effort and effort in variants:
+    if effort and effort in variants and "#" not in pick:
         pick += "#" + effort
-    harness.progress("model %s rejected; re-probed roster, retrying on %s"
+    harness.progress("model %s rejected; retrying on %s"
                      % (model or "default", pick))
     return pick
 
 
 def _funds_retry(model, tried, available):
-    """Pick a free model after a billing/quota rejection. "" when none is
-    served (or the only candidates were already tried) — the orchestrator's
-    own injection fallback then takes over."""
+    """The next model to try after a billing/quota rejection.
+
+    A configured preference list is the explicit answer to "which model may
+    this cost" — the next entry that is not excluded wins, even when it bills
+    (the operator named it). Without one, the first free model this install
+    can serve is used; "" when none remains, and the orchestrator's own
+    injection fallback then takes over."""
     tried.add((model or "").split("#")[0])
     catalog = _model_catalog()
+    pick, _variants, _notes = _preferred_model(available, catalog, exclude=tried)
+    if pick:
+        return pick
     free = [m for m in available
             if m not in tried and not _is_paid(m, catalog)]
     if not free:
@@ -1259,14 +1271,14 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
                                   prefer_free, tried, agent_face=agent_face,
                                   effort=effort, funds_tries=funds_tries + 1)
         if _looks_like_model_failure(detail):
-            # Same roster-rotation retry as the stream path.
+            # Same ordered retry as the stream path: the preference list walks
+            # on to its next entry, and only an exhausted list falls back to
+            # re-probing the roster.
             if model:
                 tried.add(model.split("#")[0])
             if len(tried) < 4:
-                pick, _ = _fresh_pick(tried, prefer_free)
+                pick = _retry_pick(model, tried, prefer_free, effort, detail)
                 if pick:
-                    harness.progress("model %s rejected; re-probed roster, "
-                                     "retrying on %s" % (model, pick))
                     return _run_plain(prompt, cwd, timeout, resume, pick, auto,
                                       prefer_free, tried, agent_face=agent_face,
                                       effort=effort)

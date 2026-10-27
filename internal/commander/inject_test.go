@@ -940,6 +940,76 @@ func TestAgentModelPreferencesReachAdapter(t *testing.T) {
 	}
 }
 
+// TestInjectionResolvesTheProviderCatalogEndpoint pins the endpoint an
+// injection aims at when the config names a provider but no base_url.
+//
+// The old chain skipped the catalogue and fell back to a hard-coded vendor, so
+// `provider: opencode-go` with an OpenCode key handed that key to
+// api.openai.com and every run died on a 401 naming nothing. The provider's own
+// endpoint is the only correct answer, and a routed family takes its route's
+// surface rather than the row's default.
+func TestInjectionResolvesTheProviderCatalogEndpoint(t *testing.T) {
+	cleanCredentialEnv(t)
+	bare := config.ModelConfig{
+		Provider: "opencode-go",
+		APIKey:   "oc_sk_test",
+		Model:    "deepseek-v4.1-flash",
+	}
+	if got := effectiveBaseURLFor("opencode", "opencode.py", bare); got != "https://opencode.ai/zen/go/v1" {
+		t.Fatalf("provider-only config injected endpoint %q, want the catalogue's", got)
+	}
+	if got := EffectiveBaseURL(bare); got != "https://opencode.ai/zen/go/v1" {
+		t.Fatalf("announced endpoint %q, want the catalogue's", got)
+	}
+	// The dialect follows the same resolution: an OpenAI row stays Chat
+	// Completions for a polyglot agent.
+	if got := injectedDialect("opencode", "opencode.py", bare); got != config.APITypeOpenAI {
+		t.Fatalf("dialect = %q, want openai", got)
+	}
+
+	// A harness shorthand the user wrote is rebased onto the row's API base
+	// rather than injected verbatim: the SDK appends /chat/completions, so
+	// /zen/go without /v1 would 404.
+	shorthand := bare
+	shorthand.BaseURL = "https://opencode.ai/zen/go"
+	if got := effectiveBaseURLFor("opencode", "opencode.py", shorthand); got != "https://opencode.ai/zen/go/v1" {
+		t.Fatalf("shorthand injected endpoint %q, want the API base", got)
+	}
+
+	// A relay the user pointed at is theirs: it is never rewritten.
+	relay := bare
+	relay.BaseURL = "https://relay.example.com/v1"
+	if got := effectiveBaseURLFor("opencode", "opencode.py", relay); got != "https://relay.example.com/v1" {
+		t.Fatalf("foreign relay was rewritten to %q", got)
+	}
+}
+
+// TestInjectEnvKeepsAgentPreferences: an injected run still carries the
+// agent's ordered model list and its own credential vars. The injection used
+// to replace the whole environment slice, so a node that injected dropped both
+// — the list silently, the credentials whenever the CLI needed them for
+// anything the injection does not cover.
+func TestInjectEnvKeepsAgentPreferences(t *testing.T) {
+	cleanCredentialEnv(t)
+	r := NewRouter(testCard(), NewExecutor(), testModel,
+		config.InjectionConfig{Model: config.InjectionModelAlways},
+		config.RoutingConfig{AgentModels: map[string][]string{"opencode": {"opencode-go/kimi-k3"}}})
+	var seen []string
+	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
+		seen = env
+		return AgentResult{OK: true, Result: "ok", ExitCode: 0}
+	})
+	ctx := WithAgentName(context.Background(), "opencode")
+	if res := r.runAdapterDefault(ctx, "opencode.py", "prompt", ""); !res.OK {
+		t.Fatalf("run failed: %+v", res)
+	}
+	assertEnv(t, seen, map[string]string{
+		"OPENPANDA_AGENT_MODELS":   `["opencode-go/kimi-k3"]`,
+		"OPENPANDA_INJECTED_MODEL": "1",
+		"OPENPANDA_MODEL_BASE_URL": "https://api.deepseek.com/anthropic",
+	})
+}
+
 func hasEnvPrefix(env []string, prefix string) bool {
 	for _, kv := range env {
 		if strings.HasPrefix(kv, prefix) {
@@ -947,4 +1017,74 @@ func hasEnvPrefix(env []string, prefix string) bool {
 		}
 	}
 	return false
+}
+
+// TestInjectionEndpointFollowsTheProviderCatalogue pins the endpoint an
+// injection aims at when the config names a provider but no base_url.
+//
+// It used to fall through to a hard-coded vendor: with an empty base_url the
+// only question asked was the dialect, so `provider: opencode-go` (an OpenAI
+// row) was handed api.openai.com and sent that provider's key to a service it
+// does not belong to — a 401 that named nothing in the config. The catalogue
+// row now answers, exactly as entry.NewClient resolves it.
+func TestInjectionEndpointFollowsTheProviderCatalogue(t *testing.T) {
+	cases := []struct {
+		name     string
+		model    config.ModelConfig
+		wantBase string
+		wantType string
+	}{
+		{
+			name:     "a subscription gateway takes its own endpoint",
+			model:    config.ModelConfig{Provider: "opencode-go", APIKey: "oc_sk", Model: "deepseek-v4.1-flash"},
+			wantBase: "https://opencode.ai/zen/go/v1",
+			wantType: config.APITypeOpenAI,
+		},
+		{
+			name:     "a vendor row takes the catalogue surface, not the stored default",
+			model:    config.ModelConfig{Provider: "deepseek", APIKey: "sk", Model: "deepseek-flash"},
+			wantBase: "https://api.deepseek.com/anthropic",
+			wantType: config.APITypeAnthropic,
+		},
+		{
+			name: "a foreign relay is never rebased",
+			model: config.ModelConfig{Provider: "custom", BaseURL: "https://relay.example.com/v1",
+				APIType: config.APITypeOpenAI, APIKey: "sk", Model: "gpt-4o"},
+			wantBase: "https://relay.example.com/v1",
+			wantType: config.APITypeOpenAI,
+		},
+		{
+			name: "a restated catalogue endpoint is rebased onto the live one",
+			model: config.ModelConfig{Provider: "opencode-go", BaseURL: "https://opencode.ai/inference/openai/v1",
+				APIType: config.APITypeOpenAI, APIKey: "oc_sk", Model: "deepseek-v4.1-flash"},
+			wantBase: "https://opencode.ai/zen/go/v1",
+			wantType: config.APITypeOpenAI,
+		},
+	}
+	for _, tc := range cases {
+		base, apiType := injectionEndpoint(tc.model)
+		if base != tc.wantBase || apiType != tc.wantType {
+			t.Errorf("%s: injectionEndpoint = (%q, %q), want (%q, %q)",
+				tc.name, base, apiType, tc.wantBase, tc.wantType)
+		}
+	}
+}
+
+// TestInjectionDialectIsTheResolvedSurface: the dialect handed to an adapter is
+// the one the resolved endpoint speaks, not the stored api_type. An aggregator
+// serves a routed family on another wire, and telling the adapter the row's
+// default made it build the wrong SDK provider for exactly those models.
+func TestInjectionDialectIsTheResolvedSurface(t *testing.T) {
+	// A polyglot agent (pi declares no dialect of its own) takes the model's.
+	if got := injectedDialect("pi", "pi.py", config.ModelConfig{
+		Provider: "deepseek", APIType: config.APITypeOpenAI, APIKey: "sk", Model: "deepseek-flash",
+	}); got != config.APITypeAnthropic {
+		t.Errorf("pi dialect = %q, want the resolved anthropic surface", got)
+	}
+	// A CLI that declares its dialect keeps it: the endpoint is chosen to fit.
+	if got := injectedDialect("deepseek_harness", "deepseek_harness.py", config.ModelConfig{
+		Provider: "opencode-go", APIKey: "oc_sk", Model: "deepseek-v4.1-flash",
+	}); got != config.APITypeAnthropic {
+		t.Errorf("dsh dialect = %q, want the registry's anthropic pin", got)
+	}
 }
