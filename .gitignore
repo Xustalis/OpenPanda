@@ -199,9 +199,11 @@ fetch_emails.py
 zz_*_test.go
 
 # Internal design, roadmap, test and report documents live under author/docs/
-# and are not part of the public source tree. These three entries are a
-# backstop: a draft that lands in docs/ by mistake stays local instead of
-# being swept into the tracked tree by the next `git add -A`.
+# and are not part of the public source tree. These entries are a backstop: a
+# draft that lands in docs/ by mistake stays local instead of being swept into
+# the tracked tree by the next `git add -A`. docs/author/ is on the list for the
+# same reason as author/ itself — CLAUDE.md calls it a local-only tree.
 /docs/plans/
 /docs/reports/
 /docs/testing/
+/docs/author/
