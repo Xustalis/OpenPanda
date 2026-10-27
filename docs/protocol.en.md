@@ -459,8 +459,8 @@ truncated, full output remains on the executing node". The full output
 stays on the executing node, fetchable as an artifact when needed.
 
 ### The inter-task message board: `task_message`
-A bounded short-message channel between sibling tasks (design:
-`plans/design-task-message-board.md`), riding the QoSSignal lane. Only
+A bounded short-message channel between sibling tasks (implementation:
+`internal/core/messages.go`), riding the QoSSignal lane. Only
 two scopes: `plan:<plan-id>` (stages of one plan) and
 `task:<parent-id>` (a parent and its child set — the parent itself is a
 member).

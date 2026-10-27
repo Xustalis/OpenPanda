@@ -348,7 +348,7 @@ true 只会收窄受众，伪造不出放宽）/ `files_changed`（工作树相�
 「中间已截断，完整输出留在执行节点」。完整输出留在执行节点，按需以工件方式带走。
 
 ### 任务间消息板：`task_message`
-兄弟任务间的有界短消息通道（设计：`plans/design-task-message-board.md`），
+兄弟任务间的有界短消息通道（实现：`internal/core/messages.go`），
 走 QoSSignal 车道。scope 只有两种：`plan:<plan-id>`（同一 plan 的 stage）
 与 `task:<parent-id>`（父任务与它的子任务集，父本身是成员）。
 

@@ -112,14 +112,11 @@ Thumbs.db
 *.log
 logs/
 
-# Internal design & planning docs stay local-only under docs/author/.
-# The rest of docs/ is versioned normally (index, roadmap, user guides...).
+# Internal design & planning docs stay local-only under author/.
+# The rest of docs/ is versioned normally (index, user guides, protocol).
 /PANDA-*.md
-/docs/author/
-# Author's reference reports parked at the repo root. Same class as docs/author/
-# above: local working material, never versioned. This one needs its own entry
-# because only /docs/author/ was ignored — a root-level author/ would otherwise
-# have been swept into the next `git add -A`.
+# Author's design notes and reports: local working material, never versioned.
+# Kept out of the tracked tree so a `git add -A` never sweeps them in.
 /author/
 
 # Local personal configs and per-device capability cards:
@@ -202,7 +199,9 @@ fetch_emails.py
 zz_*_test.go
 
 # Internal design, roadmap, test and report documents live under author/docs/
-# and are not part of the public source tree.
+# and are not part of the public source tree. These three entries are a
+# backstop: a draft that lands in docs/ by mistake stays local instead of
+# being swept into the tracked tree by the next `git add -A`.
 /docs/plans/
 /docs/reports/
 /docs/testing/

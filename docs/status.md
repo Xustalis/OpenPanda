@@ -251,9 +251,27 @@ NAT）打不通时需要 TURN 式中继兜底；contact-plan 预约窗口投递�
 
 ### v0.2.x · 自进化（前置先行）
 
-11. **设计稿先行，不动工**：自进化 × 签名更新通道的共存架构——updater
-    的 verify→swap 管线与 self-build 的 build→gate→swap 管线必须在架构上
-    共存（fail-closed 验签与自修改产物天然互斥）；node-signed self-build
-    作为第三类 provenance；`self_evolution.mode`（off → propose → auto）；
-    永远保留最近一份 release 签名二进制作兜底。设计稿（内部，
-    `docs/author/` 本地档）：`docs/author/2026-10-21-design-self-evolution.md`。
+11. **自进化二期**：架构稿（updater 的 verify→swap 管线与 self-build 的
+    build→gate→swap 管线在架构上共存，fail-closed 验签与自修改产物天然
+    互斥；node-signed self-build 作为第三类 provenance；永远保留最近一份
+    release 签名二进制作兜底）已随 v0.1.0 落地 Phase 0–4，`self_evolution`
+    默认关闭。二期欠账：补丁集跨节点流转与逐跳 provenance 签名链、
+    `self_evolution.mode` 放开到 auto（propose ≥10 个无事故 merge 且 0 次
+    swap 回退）、macOS 稳定签名身份方案、swap 后启动即崩的自动回退。
+    设计稿（内部本地档）：`author/docs/plans/design-self-evolution.md`。
+
+### 工程债（无独立版本归属）
+
+12. 控制台前端收敛：样式层 1.6 万行、8 档宽度断点，`.btn` 在三个样式
+    文件里重复定义，`.input`/`.card`/`.badge`/`.modal` 在两个里重复。
+    共享 primitive 层（表单与 overlay 组件）与重复选择器的 lint 腿
+    都还没做。
+13. 分布式故障注入脚本化：断链、agent 中途被杀、结果回传前断链、
+    重放旧 attempt、伪造 sender 这几类目前只有单测覆盖，没有可在真机上
+    跑的注入器。
+14. 首次运行的连通性自检：`panda init` 填完 provider 凭据后不验一次
+    真实调用（1 token + RTT），凭据错误要等到第一次派任务才暴露；交互式
+    凭据挽救卡片同样没做。
+15. `claude_code` 适配器的凭据注入仍按适配器名硬编码（
+    `internal/commander/inject.go`：只有指向 DeepSeek 端点时才注入），
+    与其他适配器的 provider 判定口径不一致。
