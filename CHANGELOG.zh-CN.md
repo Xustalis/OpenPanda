@@ -57,6 +57,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 修复
 
+- **停驻任务的等待不再竞争自己的游标** —— 结算监听把每个事件里的任务 id 与它正在跟踪的那一行比对，而那个 id 取自等待循环每次都会重新赋值的同一个变量。监听器运行在记录事件的那个 goroutine 上（就在写入方的事务里），因此竞态检测器把这两次无序访问报成了数据竞争。现在 id 在监听安装前就被复制出来，行为不变。
 - **OpenCode Go 的会话头跟随端点，而不只看 provider id** —— 把自定义 `base_url` 指向 `https://opencode.ai/zen/go` 时，Go key 本身可用，却只得到 400 MissingSessionID，因为只有命名的 `opencode-go` 行才会生成 `x-opencode-session`。客户端现在会识别 OpenCode 端点（包括不带 `/v1` 的 harness 简写）并自行生成 id，外部中继不会收到这个头。该 id 跟着对话走而不是跟着客户端走：一个引擎服务这台节点上的所有会话，共用一个 id 会把它们全塞进同一个服务端会话；`model.headers` 里手写的 id 仍然对所有会话生效。
 - **注入给 agent 的端点就是 provider 自己的端点** —— 只配了 provider id、没写 `base_url` 时，注入解析会落到写死的厂商地址（`api.openai.com`，或 DeepSeek 的 Anthropic 端点），于是 `provider: opencode-go` 加一把 OpenCode key 会把 key 送去用户从未指定的厂商，每次运行都以一个跟配置毫无关系的 401 结束。现在它与入口客户端同一条解析链——显式 `base_url` 优先，其次是 provider 目录，重述目录的地址会被改写到该模型实际所属的线面——并把解析后的方言告诉适配器，而不是配置里存的那个。
 - **注入的运行会保留 agent 自己的设置** —— 注入原先整个替换适配器环境，把它接管的每一次运行里的 `routing.agent_models` 与该 agent 自己的凭据变量一起丢掉。现在改为合并，HTTPS 检查也改为校验真正会被拨打的端点，而不只是「恰好写了 base_url」的那个。
