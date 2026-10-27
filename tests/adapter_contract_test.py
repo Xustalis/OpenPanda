@@ -75,6 +75,7 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=No
             "OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENCODE_API_KEY",
             "OPENPANDA_MODEL_BASE_URL", "OPENPANDA_MODEL_API_KEY",
             "OPENPANDA_MODEL_NAME", "OPENPANDA_MODEL_API_TYPE",
+            "OPENPANDA_AGENT_MODELS",
         ):
             merged.pop(key, None)
         # Probes must answer from the fake CLI in every case, never from a
@@ -721,6 +722,126 @@ print(json.dumps({"type":"text","sessionID":"ses_g1","part":{"id":"px","type":"t
             env={"HOME": home, "XDG_CACHE_HOME": cache},
         )
         self.assertTrue(payload["ok"], payload)
+
+    def test_opencode_model_preferences_choose_in_order(self):
+        """routing.agent_models is an ordered shortlist: the first entry the
+        install serves and can authenticate wins, even a paid model. An entry
+        that cannot run (here, a Go model with no login) is skipped with a
+        progress note instead of silently replacing the list."""
+        home = tempfile.mkdtemp()
+        cache = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        self.addCleanup(shutil.rmtree, cache, True)
+        payload, progress, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+if sys.argv[1:3] == ["api", "model.list"]:
+    print(json.dumps({"data": [
+        {"id": "kimi-k3", "providerID": "opencode-go",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 1048576, "output": 131072},
+         "cost": [{"input": 3, "output": 15}],
+         "status": "active", "enabled": True},
+        {"id": "glm-5.3-flash", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 1000000, "output": 131072},
+         "cost": [{"input": 0.15, "output": 0.5}],
+         "status": "active", "enabled": True},
+        {"id": "deepseek-v4.1-flash-free", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 200000, "output": 32000},
+         "cost": [{"input": 0, "output": 0}],
+         "status": "active", "enabled": True},
+    ]}))
+    sys.exit(0)
+args = sys.argv[1:]
+assert args[args.index("--model") + 1] == "opencode/glm-5.3-flash", args
+print(json.dumps({"type":"text","sessionID":"ses_pf1","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={
+                "HOME": home,
+                "XDG_CACHE_HOME": cache,
+                "OPENPANDA_AGENT_MODELS": json.dumps(
+                    ["opencode-go/kimi-k3", "opencode/glm-5.3-flash"]),
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "ok")
+        self.assertTrue(
+            any("needs an OpenCode Go credential" in line for line in progress),
+            progress,
+        )
+        self.assertTrue(
+            any("using preferred model opencode/glm-5.3-flash" in line
+                for line in progress),
+            progress,
+        )
+
+    def test_opencode_model_preferences_use_go_after_login(self):
+        """With a stored Go credential the subscription model at the head of
+        the list runs, and no paid opt-in is needed: the operator named it."""
+        home = tempfile.mkdtemp()
+        cache = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        self.addCleanup(shutil.rmtree, cache, True)
+        auth = pathlib.Path(home) / ".local/share/opencode"
+        auth.mkdir(parents=True)
+        (auth / "auth.json").write_text(
+            json.dumps({"opencode-go": {"type": "api", "key": "oc_sk_test"}}),
+            encoding="utf-8")
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+if sys.argv[1:3] == ["api", "model.list"]:
+    print(json.dumps({"data": [
+        {"id": "kimi-k3", "providerID": "opencode-go",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 1048576, "output": 131072},
+         "cost": [{"input": 3, "output": 15}],
+         "status": "active", "enabled": True},
+    ]}))
+    sys.exit(0)
+args = sys.argv[1:]
+assert args[args.index("--model") + 1] == "opencode-go/kimi-k3", args
+print(json.dumps({"type":"text","sessionID":"ses_pf2","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={
+                "HOME": home,
+                "XDG_CACHE_HOME": cache,
+                "OPENPANDA_AGENT_MODELS": json.dumps(["opencode-go/kimi-k3"]),
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "ok")
+
+    def test_opencode_model_preferences_fall_back_when_none_served(self):
+        """A preference list that names nothing this install serves does not
+        leave the run without a model: the miss is reported and the free-first
+        pick takes over."""
+        payload, progress, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+if sys.argv[1:3] == ["api", "model.list"]:
+    print(json.dumps({"data": [
+        {"id": "deepseek-v4.1-flash-free", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 200000, "output": 32000},
+         "cost": [{"input": 0, "output": 0}],
+         "status": "active", "enabled": True},
+    ]}))
+    sys.exit(0)
+args = sys.argv[1:]
+assert args[args.index("--model") + 1] == "opencode/deepseek-v4.1-flash-free", args
+print(json.dumps({"type":"text","sessionID":"ses_pf3","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={"OPENPANDA_AGENT_MODELS": json.dumps(["opencode/nope-1.0"])},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertTrue(
+            any("preferred model opencode/nope-1.0 is not served" in line
+                for line in progress),
+            progress,
+        )
 
     def test_opencode_injected_anthropic_endpoint_merges_native_config(self):
         """An injected Anthropic-dialect model reaches opencode through the

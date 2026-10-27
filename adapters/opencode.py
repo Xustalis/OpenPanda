@@ -39,7 +39,14 @@ simple task (low complexity, light effort) demotes every paid entry to last
 resort. A billing/quota rejection of a paid model retries once on the best
 free model instead of ending the run. Models under the `opencode-go`
 subscription provider are disqualified when no credential is stored, because
-they die on "Go requires a credential". Set OPENCODE_MODEL (or
+they die on "Go requires a credential". An operator who wants a specific
+model, or a shortlist of them, sets routing.agent_models for this agent;
+panda delivers the ordered list as OPENPANDA_AGENT_MODELS, and the first
+entry the install actually serves and can authenticate wins — including a
+paid or Go model, because naming it is an explicit choice. Entries that are
+not served, lack a Go login, or cannot call tools are skipped with a progress
+note, and the heuristic free-first pick covers the rest. Set OPENCODE_MODEL
+(or
 ANTHROPIC_MODEL) to a provider/model id (e.g. deepseek/deepseek-chat) to pin
 a custom model on both paths; a pinned id the roster no longer carries is
 substituted with the closest served model (a progress note names the swap) or
@@ -392,6 +399,96 @@ def _has_go_credential():
                 break
         _GO_CREDENTIAL = found
     return _GO_CREDENTIAL
+
+
+def _preferred_models():
+    """The user's ordered model preference list, from routing.agent_models.
+
+    panda ships it as a JSON array; a comma-separated value is accepted too
+    for hand-run debugging. Duplicates are dropped, order is preserved.
+    """
+    raw = (os.environ.get("OPENPANDA_AGENT_MODELS") or "").strip()
+    if not raw:
+        return []
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        doc = None
+    values = doc if isinstance(doc, list) else raw.split(",")
+    out = []
+    for value in values:
+        item = str(value).strip()
+        if item and item not in out:
+            out.append(item)
+    return out
+
+
+def _preferred_model(available, catalog):
+    """The first configured preference this install can actually serve.
+
+    Returns (model, variants, notes). model is "" when no preference is
+    configured or none qualifies; notes explain each skip so a typo or a
+    missing Go login is visible in the progress stream instead of being
+    silently ignored and replaced by the default pick.
+
+    A preference wins over the free-first default: naming a paid model is an
+    explicit choice, and the same list is how a Go subscriber selects the
+    subscription roster.
+    """
+    prefs = _preferred_models()
+    if not prefs:
+        return "", [], []
+    notes = []
+    for pref in prefs:
+        want, _, variant = pref.partition("#")
+        want, variant = want.strip(), variant.strip()
+        model = ""
+        if want in available:
+            model = want
+        elif "/" not in want:
+            # A bare slug is matched against the served model ids, so
+            # `kimi-k3` works without spelling the provider prefix.
+            hits = [m for m in available
+                    if m.split("/")[-1].lower() == want.lower()]
+            if hits:
+                model = hits[0]
+        if not model:
+            notes.append("preferred model %s is not served by this install" % pref)
+            continue
+        if model.split("/")[0] == "opencode-go" and not _has_go_credential():
+            notes.append("preferred model %s needs an OpenCode Go credential "
+                         "(run `opencode auth login`)" % model)
+            continue
+        score, variants = _score_model(model, catalog)
+        if score <= -1e9:
+            notes.append("preferred model %s is not usable for agent work" % model)
+            continue
+        if variant:
+            return model + "#" + variant, variants, notes
+        return model, variants, notes
+    return "", [], notes
+
+
+def _preferred_fresh(available):
+    """Preference resolution plus the roster it resolved against.
+
+    A configured preference is an explicit instruction. When the cached
+    snapshot cannot find any entry, re-read the live roster before falling
+    back to the heuristic pick — the same rule _resolve_model applies to a
+    pinned id, and the reason a preference added after the cache was written
+    used to look "not served" for its whole TTL. The returned list is the one
+    the caller should keep using, so the fallback pick sees the same fresh
+    roster as the preference lookup.
+    """
+    preferred, variants, notes = _preferred_model(available, _model_catalog())
+    if preferred or not _preferred_models():
+        return preferred, variants, notes, available
+    global _MODEL_LIST, _MODEL_CATALOG
+    _MODEL_LIST = None
+    _MODEL_CATALOG = None
+    fresh = _served_models(force=True)
+    preferred, variants, notes = _preferred_model(fresh, _model_catalog(force=True))
+    return preferred, variants, notes, fresh
 
 
 def _is_paid(model, catalog):
@@ -883,21 +980,34 @@ def main():
         # naming the model and dialect was already emitted above.
         pass
     else:
-        # Nothing pinned a model: pick the most capable entry off the live
-        # roster instead of taking whatever default the build happens to
-        # ship. An all-failed probe keeps the old behaviour: no --model,
-        # the install's configured default.
-        pick, variants = _pick_model(available, prefer_free)
-        if pick:
-            # A requested reasoning effort rides the model's own declared
-            # variant (provider/model#variant); an undeclared or absent
-            # request leaves the provider default.
-            if req.effort and req.effort in variants:
-                pick = pick + "#" + req.effort
-            harness.progress(
-                "auto-selected model %s (of %d served%s)" % (
-                    pick, len(available), "; free tier first" if prefer_free else ""))
-            model = pick
+        # The user's ordered preference list (routing.agent_models) wins over
+        # the heuristic pick; an explicit choice may be a paid or Go model.
+        preferred, pref_variants, notes, available = _preferred_fresh(available)
+        if preferred:
+            for note in notes:
+                harness.progress(note)
+            if req.effort and "#" not in preferred and req.effort in pref_variants:
+                preferred += "#" + req.effort
+            harness.progress("using preferred model %s" % preferred)
+            model = preferred
+        else:
+            for note in notes:
+                harness.progress(note)
+            # Nothing pinned or preferred: pick the most capable entry off the
+            # live roster instead of taking whatever default the build happens
+            # to ship. An all-failed probe keeps the old behaviour: no
+            # --model, the install's configured default.
+            pick, variants = _pick_model(available, prefer_free)
+            if pick:
+                # A requested reasoning effort rides the model's own declared
+                # variant (provider/model#variant); an undeclared or absent
+                # request leaves the provider default.
+                if req.effort and req.effort in variants:
+                    pick = pick + "#" + req.effort
+                harness.progress(
+                    "auto-selected model %s (of %d served%s)" % (
+                        pick, len(available), "; free tier first" if prefer_free else ""))
+                model = pick
 
     # A restricted request (unconsented remote task) narrows the run to the
     # built-in read-only agent: opencode's "plan" mode denies file mutations
@@ -1034,26 +1144,39 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
     # still serves is not that case, and keeps the retry.
     injected = _injected_provider
     if not model:
-        # The built-in default rots as the free roster drifts; re-anchor it
-        # against the live list too. When nothing matches, pick from the
-        # served set with the same free-first policy the event path uses
-        # instead of taking an arbitrary first entry.
-        resolved, note, err = _resolve_model(DEFAULT_MODEL)
-        if resolved:
-            model = resolved
+        # The user's ordered preference list still applies on this path.
+        preferred, pref_variants, pref_notes, available = _preferred_fresh(
+            _served_models())
+        if preferred:
+            for pref_note in pref_notes:
+                harness.progress(pref_note)
+            if effort and "#" not in preferred and effort in pref_variants:
+                preferred += "#" + effort
+            harness.progress("using preferred model %s" % preferred)
+            model = preferred
         else:
-            available = _served_models()
-            pick, variants = _pick_model(available, prefer_free)
-            if pick:
-                if effort and effort in variants:
-                    pick += "#" + effort
-                model = pick
-                note = f"model {DEFAULT_MODEL} is not available; using {model}"
-            elif available:
-                model = available[0]
-                note = f"model {DEFAULT_MODEL} is not available; using {model}"
-        if note:
-            harness.progress(note)
+            for pref_note in pref_notes:
+                harness.progress(pref_note)
+            # The built-in default rots as the free roster drifts; re-anchor
+            # it against the live list too. When nothing matches, pick from the
+            # served set with the same free-first policy the event path uses
+            # instead of taking an arbitrary first entry.
+            resolved, note, err = _resolve_model(DEFAULT_MODEL)
+            if resolved:
+                model = resolved
+            else:
+                available = _served_models()
+                pick, variants = _pick_model(available, prefer_free)
+                if pick:
+                    if effort and effort in variants:
+                        pick += "#" + effort
+                    model = pick
+                    note = f"model {DEFAULT_MODEL} is not available; using {model}"
+                elif available:
+                    model = available[0]
+                    note = f"model {DEFAULT_MODEL} is not available; using {model}"
+            if note:
+                harness.progress(note)
     plain = ["opencode", "run", "--print-logs=false"]
     if injected and _cli_flags()["standalone"]:
         plain.append("--standalone")

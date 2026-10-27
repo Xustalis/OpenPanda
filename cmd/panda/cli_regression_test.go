@@ -261,6 +261,49 @@ func TestCLIConfigModelRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCLIConfigRoutingAgentModels(t *testing.T) {
+	home := t.TempDir()
+	configPath, _ := initNode(t, home)
+
+	set := runCLI(t, home, "config", "routing", "set", "agent_models",
+		"opencode", "opencode-go/kimi-k3,opencode/deepseek-v4.1-flash-free",
+		"--config", configPath)
+	if set.code != 0 {
+		t.Fatalf("config routing set agent_models exited %d: %s", set.code, set.output())
+	}
+
+	get := runCLI(t, home, "--json", "config", "routing", "get", "--config", configPath)
+	if get.code != 0 {
+		t.Fatalf("config routing get exited %d: %s", get.code, get.output())
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(get.stdout), &got); err != nil {
+		t.Fatalf("config routing get --json is not JSON: %v\n%s", err, get.stdout)
+	}
+	models, _ := got["agent_models"].(map[string]any)
+	list, _ := models["opencode"].([]any)
+	if len(list) != 2 || list[0] != "opencode-go/kimi-k3" ||
+		list[1] != "opencode/deepseek-v4.1-flash-free" {
+		t.Fatalf("agent_models = %v", got["agent_models"])
+	}
+
+	// "-" clears the list without disturbing preferred_agents.
+	clear := runCLI(t, home, "config", "routing", "set", "agent_models",
+		"opencode", "-", "--config", configPath)
+	if clear.code != 0 {
+		t.Fatalf("clear exited %d: %s", clear.code, clear.output())
+	}
+	get = runCLI(t, home, "--json", "config", "routing", "get", "--config", configPath)
+	if err := json.Unmarshal([]byte(get.stdout), &got); err != nil {
+		t.Fatalf("config routing get after clear is not JSON: %v\n%s", err, get.stdout)
+	}
+	if models, ok := got["agent_models"].(map[string]any); ok && len(models) > 0 {
+		if list, ok := models["opencode"].([]any); ok && len(list) > 0 {
+			t.Fatalf("agent_models not cleared: %v", got["agent_models"])
+		}
+	}
+}
+
 func TestCLICardAgentRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	configPath, cardPath := initNode(t, home)

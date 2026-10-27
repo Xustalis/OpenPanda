@@ -42,6 +42,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增
 
+- **每个 agent 可以指定模型偏好** —— `routing.agent_models.opencode`（或任意 agent 名）是一组按顺序尝试的模型 id；`panda config routing set agent_models opencode opencode-go/kimi-k3,opencode-go/deepseek-v4.1-flash` 写入。适配器取本机可用且已登录的第一个；买了 OpenCode Go 的用户可以直接点名订阅模型，而不必开启全局付费自动选择。未提供、缺少 Go 登录或不能调用工具的条目会在进度流里说明并继续尝试下一个。
 - **OpenCode Zen 与 OpenCode Go 拆成两个内置模型供应商** —— `panda model add opencode` 注册按量付费/免费的 Zen 目录（`https://opencode.ai/zen/v1`），`panda model add opencode-go` 注册 Go/Go Plus 订阅目录（`https://opencode.ai/zen/go/v1`）。两行都带现网每模型的上下文/输出上限与价格，显式标出免费模型（不再按付费价计费），并自动发送 Go 网关要求的 `x-opencode-session` 头。旧的单行及其 `/inference` 端点已退役，已保存的配置会自动改写为当前端点。
 - `OPENPANDA_UPDATE_BASE` 可把自更新的下载指向发布资产镜像——这是给"能连 `api.github.com`、连不上 `release-assets.githubusercontent.com`"的网络留的出口。安装脚本已支持的 `OPENPANDA_RELEASE_BASE` 作为别名一并接受，一个变量同时管安装与升级。
 - **同意卡片展示条款本身，而不是它的摘要** —— 引导向导与设置里的弹窗原先渲染十条压缩过的条款，那是同一份法律文本的第二份副本，随时可能与它所概括的文件脱节。现在两处都直接渲染 `TERMS.md` 本身——全部十七节，按控制台语言——走的是转写页同一个 Markdown 渲染器。正文完全不再复制进控制台：每份译本在构建时从仓库自己的文件内联进来，需要修改时只有一处。

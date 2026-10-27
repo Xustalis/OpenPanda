@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -160,14 +161,28 @@ func runConfigGet(section string, args []string) {
 		fmt.Printf("enabled:      %v\nmax_children: %d\nfanout:       %d\nmax_depth:    %d\n", enabled, cfg.Delegation.MaxChildren, cfg.Delegation.FanOut, cfg.Delegation.MaxDepth)
 	case "routing":
 		if jsonOutput {
-			emitJSON(map[string]any{"preferred_agents": cfg.Routing.PreferredAgents})
+			emitJSON(map[string]any{
+				"preferred_agents": cfg.Routing.PreferredAgents,
+				"agent_models":     cfg.Routing.AgentModels,
+			})
 			return
 		}
-		if len(cfg.Routing.PreferredAgents) == 0 {
+		if len(cfg.Routing.PreferredAgents) == 0 && len(cfg.Routing.AgentModels) == 0 {
 			fmt.Println(i18n.T(i18n.Detect(), "cli.config.routing.empty"))
 			return
 		}
-		fmt.Println("preferred_agents: " + strings.Join(cfg.Routing.PreferredAgents, ", "))
+		if len(cfg.Routing.PreferredAgents) > 0 {
+			fmt.Println("preferred_agents: " + strings.Join(cfg.Routing.PreferredAgents, ", "))
+		}
+		agents := make([]string, 0, len(cfg.Routing.AgentModels))
+		for name := range cfg.Routing.AgentModels {
+			agents = append(agents, name)
+		}
+		sort.Strings(agents)
+		for _, name := range agents {
+			fmt.Printf("agent_models.%s: %s\n", name,
+				strings.Join(cfg.Routing.AgentModels[name], ", "))
+		}
 	case "injection":
 		if jsonOutput {
 			emitJSON(map[string]string{"model": cfg.Injection.NormalizedModel()})
@@ -319,19 +334,46 @@ func runConfigSet(section string, args []string) {
 		fs := flag.NewFlagSet("config routing set", flag.ExitOnError)
 		configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 		fs.Parse(reorderFlags(fs, args))
-		if fs.NArg() < 1 || fs.Arg(0) != "preferred_agents" {
-			fail(2, "usage: panda config routing set preferred_agents <a,b,c>")
+		if fs.NArg() < 1 {
+			fail(2, "usage: panda config routing set preferred_agents <a,b,c> | agent_models <agent> <m1,m2,...>")
 		}
-		var agents []string
-		if fs.NArg() == 2 {
-			for _, name := range strings.Split(fs.Arg(1), ",") {
+		switch fs.Arg(0) {
+		case "agent_models":
+			if fs.NArg() < 3 {
+				fail(2, "usage: panda config routing set agent_models <agent> <m1,m2,...> (use - to clear)")
+			}
+			agent := strings.TrimSpace(fs.Arg(1))
+			if agent == "" {
+				fail(2, "panda: agent name is required")
+			}
+			var models []string
+			for _, name := range strings.Split(fs.Arg(2), ",") {
 				if name = strings.TrimSpace(name); name != "" {
-					agents = append(agents, name)
+					models = append(models, name)
 				}
 			}
-		}
-		if err := config.UpdateSectionList(configWritePath(*configPath), []string{"routing"}, "preferred_agents", agents); err != nil {
-			fatal("config routing set", err)
+			if len(models) == 1 && (models[0] == "-" || models[0] == "none") {
+				models = nil
+			}
+			if err := config.UpdateSectionList(configWritePath(*configPath),
+				[]string{"routing", "agent_models"}, agent, models); err != nil {
+				fatal("config routing set", err)
+			}
+		case "preferred_agents":
+			var agents []string
+			if fs.NArg() == 2 {
+				for _, name := range strings.Split(fs.Arg(1), ",") {
+					if name = strings.TrimSpace(name); name != "" {
+						agents = append(agents, name)
+					}
+				}
+			}
+			if err := config.UpdateSectionList(configWritePath(*configPath),
+				[]string{"routing"}, "preferred_agents", agents); err != nil {
+				fatal("config routing set", err)
+			}
+		default:
+			fail(2, "usage: panda config routing set preferred_agents <a,b,c> | agent_models <agent> <m1,m2,...>")
 		}
 		configSetDone(loc, "routing")
 	case "injection":

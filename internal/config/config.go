@@ -243,6 +243,25 @@ type RoutingConfig struct {
 	// PreferredAgents lists agent names that receive a score bonus during
 	// routing, so the user can pin favorites without editing capability cards.
 	PreferredAgents []string `yaml:"preferred_agents"`
+	// AgentModels lists, per agent, the models that agent's own CLI should
+	// prefer, in order. It is an ordered candidate list, not one pin: the
+	// adapter takes the first entry its install actually serves and falls
+	// back to the next one. Keys are agent names (the capability card's key)
+	// or adapter file names. Only adapters that choose among several served
+	// models consult it today (opencode.py); a single-model CLI ignores it.
+	// Precedence: an injected model (injection.model=always or an
+	// injection.agents pin) still overrides this list, and the adapter's own
+	// single-model env pin wins over it. An entry under the OpenCode Go
+	// subscription provider needs the CLI's own login (`opencode auth login`)
+	// or OPENCODE_API_KEY in the daemon environment; panda's model registry
+	// key is not forwarded to the agent CLI.
+	//
+	//	routing:
+	//	  agent_models:
+	//	    opencode:
+	//	      - opencode-go/kimi-k3
+	//	      - opencode-go/deepseek-v4.1-flash
+	AgentModels map[string][]string `yaml:"agent_models,omitempty"`
 	// ToolsPolicy grades the tool face agent adapters run with: minimal
 	// (default) keeps each adapter's safe whitelist; extended lifts the
 	// restriction so the agent's own skills, sub-agent tooling and MCP

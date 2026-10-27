@@ -414,6 +414,14 @@ injection:
 # at execution time, the next-best matching agent is tried (fallback chain).
 # routing:
 #   preferred_agents: []       # e.g. ["codex", "opencode"]
+#   agent_models:              # per agent: the models its own CLI should
+#     opencode:                # prefer, in order. The first entry the install
+#       - opencode-go/kimi-k3  # actually serves and can authenticate wins;
+#       - opencode-go/deepseek-v4.1-flash   # a paid or Go model here is an
+#                              # explicit choice, not auto-spend. Only adapters
+#                              # that pick among served models use it (opencode).
+#                              # Go entries need `opencode auth login` or
+#                              # OPENCODE_API_KEY in the daemon environment.
 #   reputation: false          # experimental (trust zones): fold each
 #                              # executor's locally observed delegation
 #                              # success rate into routing scores. Local

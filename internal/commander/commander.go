@@ -55,6 +55,11 @@ type Router struct {
 	selfConfigPath string
 	// preferred lists agent names that receive a score bonus during routing.
 	preferred []string
+	// agentModels lists, per agent, that agent's own model preferences in
+	// order (routing.agent_models). It is passed to the adapter as an ordered
+	// candidate list; a CLI that picks its own model consults it, and the
+	// adapter takes the first entry it serves.
+	agentModels map[string][]string
 	// allowedAgents, when non-empty, is the only agent pool routing may pick
 	// from — a chat thread's team roster (see WithAgents). Empty is the
 	// ordinary case: every agent on the card is a candidate.
@@ -93,6 +98,7 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 		toolsPolicy:     routing.NormalizedToolsPolicy(),
 		pandaTools:      routing.NormalizedPandaTools(),
 		preferred:       routing.PreferredAgents,
+		agentModels:     routing.AgentModels,
 	}
 	r.runAdapter = r.runAdapterDefault
 	r.runProcess = runAdapterProcess
@@ -113,6 +119,23 @@ func (r *Router) SetPolicy(injection config.InjectionConfig, routing config.Rout
 	r.toolsPolicy = routing.NormalizedToolsPolicy()
 	r.pandaTools = routing.NormalizedPandaTools()
 	r.preferred = routing.PreferredAgents
+	r.agentModels = routing.AgentModels
+}
+
+// agentModelPrefs resolves an agent's ordered model preference list by its
+// card name first, then by adapter file name — the same lookup order
+// injection.agents uses, so a renamed card entry still finds its list.
+func (r *Router) agentModelPrefs(name, adapter string) []string {
+	if len(r.agentModels) == 0 {
+		return nil
+	}
+	if prefs, ok := r.agentModels[name]; ok && len(prefs) > 0 {
+		return prefs
+	}
+	if prefs, ok := r.agentModels[adapter]; ok && len(prefs) > 0 {
+		return prefs
+	}
+	return nil
 }
 
 // SetMCPPassthrough sets the stdio MCP server (argv string, empty disables)
@@ -926,6 +949,15 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 		}
 	}
 	var env []string
+	// The agent's own model preference list (routing.agent_models) is
+	// advisory: the adapter picks the first entry its install serves. It
+	// rides every run, injected or not, because it describes the CLI's own
+	// model choice; an injected run ignores it.
+	if prefs := r.agentModelPrefs(name, adapter); len(prefs) > 0 {
+		if raw, err := json.Marshal(prefs); err == nil {
+			env = append(env, "OPENPANDA_AGENT_MODELS="+string(raw))
+		}
+	}
 	if dec.Inject {
 		// The model endpoint must be HTTPS so the API key never travels
 		// cleartext, and pinned to the configured host so the allowlist is

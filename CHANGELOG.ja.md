@@ -42,6 +42,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 追加
 
+- **エージェントごとにモデル優先リストを指定できる** —— `routing.agent_models.opencode`（任意のエージェント名）は、その CLI が優先して使うモデル id の順序付きリストです。`panda config routing set agent_models opencode opencode-go/kimi-k3,opencode-go/deepseek-v4.1-flash` で書き込みます。アダプターはこのインストールが提供し、認証できる最初のエントリを選ぶため、OpenCode Go の購読者は全体の有料自動選択を有効にせずに購読モデルを指名できます。提供されない、Go のログインがない、ツールを呼べないエントリは進捗ストリームで説明され、次の候補が試されます。
 - **OpenCode Zen と OpenCode Go を別々の組み込みプロバイダに分割** —— `panda model add opencode` は従量課金/無料の Zen カタログ（`https://opencode.ai/zen/v1`）を、`panda model add opencode-go` は Go/Go Plus サブスクリプションのロスター（`https://opencode.ai/zen/go/v1`）を登録します。両行は現行のモデル別コンテキスト/出力上限と価格を持ち、無料モデルを明示的に区別して（有料レートで課金されないように）扱い、Go ゲートウェイが要求する `x-opencode-session` ヘッダーを送ります。旧単一行とその `/inference` エンドポイントは廃止され、保存済みの設定は現在のエンドポイントへ自動的に書き換えられます。
 - `OPENPANDA_UPDATE_BASE` で自己更新のダウンロード先をリリースアセットのミラーに向けられます。`api.github.com` には届くが `release-assets.githubusercontent.com` には届かないネットワークのための逃げ道です。インストーラが既に解釈する `OPENPANDA_RELEASE_BASE` も別名として受け付けるため、1 つの変数でインストールと更新の両方を制御できます。
 - **同意カードは要約ではなく規約そのものを示します** —— ウィザードと設定のダイアログは、かつて十項目に圧縮した条項を表示していました。それは要約の対象であるファイルからずれうる、同じ法的文書の二つ目の複製でした。現在はどちらも `TERMS.md` そのもの——十七節すべてを、コンソールの言語で——トランスクリプトと同じ Markdown レンダラーで描画します。本文をコンソールへ複製することはもうありません。各翻訳はビルド時にリポジトリのファイルから取り込まれるため、直すべきテキストは一つだけです。
