@@ -13,7 +13,7 @@ class Openpanda < Formula
   desc "Personal adaptive node-based distributed assistant (agent-of-agents)"
   homepage "https://github.com/Xustalis/OpenPanda"
   license "AGPL-3.0-or-later"
-  version "0.1.0"
+  version "0.1.1"
 
   depends_on "python@3.12"
 

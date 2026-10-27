@@ -30,7 +30,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## Versioning
 
-- Versions follow `MAJOR.MINOR.PATCH`. `0.0.x` was the preview line: a patch release could add features, fix bugs and — exceptionally — break the wire, and each cut said so. From `0.1.0` on a release is release-grade, which is a promise about stability rather than about features: a `0.1.x` patch fixes defects and does not break configuration, stored data or the wire; new capability lands in a minor (`0.2.0`); and a break that cannot be avoided still gets a deprecation window and a **Breaking changes** entry rather than arriving unannounced.
+- Versions follow `MAJOR.MINOR.PATCH`. `0.0.x` was the preview line: a patch release could add features, fix bugs and — exceptionally — break the wire, and each cut said so. From `0.1.0` on a release is release-grade, which is a promise about stability rather than about features: a `0.1.x` patch may add capability and fix defects, but it does not break configuration, stored data or the wire; whatever breaks those three lands in a minor (`0.2.0`); and a break that cannot be avoided still gets a deprecation window and a **Breaking changes** entry rather than arriving unannounced.
 
 - A release is cut by tagging `vX.Y.Z`; every commit since the previous tag belongs to the new version's section. `[Unreleased]` collects work since the last tag.
 
@@ -46,6 +46,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-27 — "Constellation"
+
+**The patch on the release-grade line** — codename **Constellation**: the fleet as one sky, with the seams tightened. The entry client speaks OpenAI Responses and Google Gemini natively, a thread's roster and node pin reach the terminal beside the console, the dispatch budget follows the team you actually picked, cross-process writes are atomic behind a file lock, and a task can pin a work directory of its own. A project can no longer turn one authenticated request into a viewer for the whole disk. Configuration, stored data and the wire are unchanged — no schema migration, no new frame, no renamed key.
+
 ### Added
 
 - **OpenCode Go / Console is a built-in model provider** — `panda model add opencode-go oc_sk_…` registers the gateway behind both the pay-as-you-go Console catalogue and the Go/Go Plus subscription. Each model is routed to the surface that serves it under one key: open models on OpenAI Chat, Claude and the Anthropic-dialect Qwen ids on Anthropic Messages, GPT/Grok/Muse on the OpenAI Responses API, and Gemini on Google's Generative AI API — the last two dialects are new to the entry client, with streaming, tool calls and usage metering. Only SystemOne (Jev) remains unsupported and says so at setup instead of failing on every call; pricing is per model.
@@ -54,6 +58,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **The team you pick is the dispatch budget** — the per-round subagent limit was a hard `3`, so a conversation whose team was claude_code, codex, deepseek_harness and opencode dispatched three tasks and dropped the fourth before it was ever submitted: no card, no error, nothing on the receipt. The limit now derives from the roster (one task per agent you picked), `task_budget` lets the model declare a wider fan-out for work nobody enumerated (ceiling 8), and the thread's team is part of the entry prompt, so the model names your agents instead of inventing others.
 - **The task card is one panel with five buttons** — the chat card mounted the task page's five sections as a stack, each folded by default: five titles and a scrollbar in a 360px flyout. One row of buttons now opens one shared panel at 420px, a section with nothing to say gets no button, and the execution trace answers which model, which adapter, which machine and with what permission — with a clock on every step.
 - **The terminal now does what the console does** — a thread's roster was a web-only field. `/team` sets it from the REPL/TUI (bare opens a space-toggled picker), `/node` pins one turn to a machine, and `panda ask --team/--node`, `panda session ask --node` and the RPC surface carry both through `AskScope` — closing the hole where a roster chosen in the console did not bind turns sent from a terminal. The to-do board is reachable as `panda todo …` / `/todo` (list, add, edit, done, reopen, rm, and start-as-task), and `/task artifact <id>` reads the artifact pool from inside the session instead of failing on the id.
+- **A task can pin a work directory of its own** — a task that names a work directory runs there and holds that directory's lock instead of the project's, so two business domains in separate trees proceed side by side rather than queueing behind each other. The pin also keeps the task on this node: a peer has no such tree to run in. Inside the project's own tree the pin degrades to a scope leaf, so a whole-project task and this one cannot write one checkout at once.
 
 ### Fixed
 
@@ -81,6 +86,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **A promotion is recorded after it is written** — the Dreaming sweep announced each promotion to the audit log while the file was still unsaved, so a failed write left an "ok" record for an entry that never landed. The sweep also holds the store lock across load, score and save, so an entry an agent added mid-sweep is no longer overwritten.
 - **Renaming a project moves its memory in one locked step** — the console copied the old memory file and then dropped the old directory as two separate steps; an entry added in between was either copied stale or erased by the drop.
 - **A memory update that changes nothing writes nothing** — the store compared the result to the file it read and skips the rewrite, so a consolidation sweep that promotes nothing leaves the mtime (and every watcher) alone.
+- **A pinned work dir answers to the project breadth rule** — a task's work dir becomes the writable root of whatever the task launches, so pinning a volume root or the home directory handed one run the machine. The project table already refused those; the task pin now applies the same rule, covering the CLI's `--workdir`, the panel's task creation and a delegate marker's work dir at once. A marker naming the parent's own tree still has its pin discarded, but the lanes it declared survive.
+- **The queue's shutdown no longer races its own dispatch** — the dispatch loop took a runner slot with a bare `wg.Add(1)` while the engine's close was already inside `wg.Wait()`. Go models the first increment of a WaitGroup as a read of the waiter's state and the first waiter as a write of it, so the two unordered accesses are reported as a data race: the panel's queue engine hit it during teardown, and the gate's race leg caught it. The slot is now taken under a mutex the wait also takes, and refused once the shutdown has begun — a slot taken before the wait starts is awaited by it, one taken after is refused and the task stays queued.
 
 ### Changed
 

@@ -235,7 +235,7 @@ export const EN = {
   's8.label': 'TRAJECTORY',
   's8.title': 'Flight plan.',
   's8.lede':
-    'The current version is v0.1.0 Constellation; the last stable, v0.0.11, has been succeeded by it.',
+    'The current version is v0.1.1 Constellation; the last stable, v0.1.0, has been succeeded by it.',
   's8.m1.name': 'Apoapsis',
   's8.m1.d': 'Cross-node delegation, worktree following, actuator dispatch.',
   's8.m1.state': 'Released',
@@ -244,14 +244,14 @@ export const EN = {
   's8.m2.state': 'Stable',
   's8.m3.name': 'Constellation',
   's8.m3.d':
-    'The first stable cut of the release-grade line: cross-network mesh, same-project parallelism, audit close-out, one integrated console.',
+    'The current cut of the release-grade line: cross-network mesh, same-project parallelism, audit close-out, one integrated console, plus native dialects, the terminal roster and per-task work directories.',
   's8.m3.state': 'Current',
   's8.m4.name': 'Assistant',
   's8.m4.d':
     'Desktop shell (tray residency, global hotkeys, self-update), dense mesh layer, honest status reporting.',
   's8.m4.state': 'Planned',
   's8.note':
-    'The one-liner resolves the latest stable (v0.1.0); to install a specific version, add --version.',
+    'The one-liner resolves the latest stable (v0.1.1); to install a specific version, add --version.',
 
   /* ── 09 · licensing ────────────────────────────────────────────────── */
   'lic.title': 'Open source,<br>with the price in plain sight.',
@@ -303,7 +303,7 @@ export const EN = {
     'Six release targets: macOS, Linux and Windows × amd64 / arm64, plus a lite-linux variant. Ten adapters today — Claude Code, Codex, Antigravity, OpenCode, Grok Build, Hermes, OpenClaw, Pi, DeepSeek Harness, and a generic one that takes any headless CLI.',
   'faq.q5.q': 'Can I use it in production?',
   'faq.q5.a':
-    'v0.1.0 “Constellation” is the first stable cut of the release-grade line and holds up day to day. A single machine, a three-machine mesh, and a real cross-network multi-hop (Mac → relay → cloud host, 3 MiB project tree hash identical) all run; self-use and internal tooling are fine, but exposing it to the public is not advised yet. What is unfinished is listed item by item in <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a>: UPnP/NAT-PMP port mapping, source-signature convergence for punch and directory frames, and cross-node hello replay (protocol-level, still open).',
+    'v0.1.1 “Constellation” is the current cut of the release-grade line (that line went release-grade at v0.1.0) and holds up day to day. A single machine, a three-machine mesh, and a real cross-network multi-hop (Mac → relay → cloud host, 3 MiB project tree hash identical) all run; self-use and internal tooling are fine, but exposing it to the public is not advised yet. What is unfinished is listed item by item in <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a>: UPnP/NAT-PMP port mapping, source-signature convergence for punch and directory frames, and cross-node hello replay (protocol-level, still open).',
   'faq.q6.q': 'Is it free? How does licensing work?',
   'faq.q6.a':
     'Personal, study and internal company use cost nothing. Only when you distribute or host a modified version does <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL</a> require you to open your changes; if you would rather not, that is when a commercial licence comes in — just <a href="mailto:fing2024@outlook.com">email</a>.',
@@ -312,7 +312,7 @@ export const EN = {
     'Issues and PRs are both welcome. main carries 10 required checks and all of them run before a merge. You can also star the repo, or pick one of the known boundaries in status.md and reproduce it.',
   'faq.q8.q': 'Will there be a desktop app?',
   'faq.q8.a':
-    'v0.1.0 makes the kernel release-grade first: the CLI plus the local console are already usable daily, and config, data and protocol stay forward-compatible. The desktop shell sits on the v0.1.x line — tray residency, global hotkeys, native notifications, self-update, plus the dense mesh layer.',
+    'v0.1.1 keeps the kernel release-grade: the CLI plus the local console are already usable daily, and config, data and protocol stay forward-compatible. The desktop shell sits on the v0.1.x line — tray residency, global hotkeys, native notifications, self-update, plus the dense mesh layer.',
 
   /* ── 11 · install ──────────────────────────────────────────────────── */
   's9.label': 'LIFTOFF',
@@ -346,7 +346,7 @@ export const EN = {
   'foot.invest': 'Partnership / investment',
   'foot.green': 'main must be all green to merge',
   'foot.checks': '10 required checks · 6 release targets · weekly security scan',
-  'foot.latest': 'Latest v0.1.0 Constellation <span aria-hidden="true">↗</span>',
+  'foot.latest': 'Latest v0.1.1 Constellation <span aria-hidden="true">↗</span>',
   'foot.credit':
     'Imagery: ESO/S. Brunier Milky Way panorama (CC BY 4.0); NASA Blue Marble and Black Marble DNB city lights (public domain). Code released under AGPL-3.0-or-later; closed-source embedding and hosted modifications are licensable separately.',
   'foot.built': 'Built for machines you own.',

@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/ins
 Equivalent explicit invocations:
 
 ```bash
-sh scripts/install.sh --version 0.1.0           # install a specific version (default `latest` = newest stable; pre-releases must be pinned)
+sh scripts/install.sh --version 0.1.1           # install a specific version (default `latest` = newest stable; pre-releases must be pinned)
 sh scripts/install.sh --prefix /opt/openpanda  # custom install directory
 sh scripts/install.sh --lite                   # lite build: no embedded Web console/TUI (Linux only)
 sh scripts/install.sh --yes                    # also register auto-start (no prompt)
@@ -37,7 +37,7 @@ sh scripts/install.sh --no-service             # do not touch auto-start
 sh scripts/install.sh --force                  # force a version older than the data directory's schema
 ```
 
-The current stable is `0.1.0`; the previous stable, `0.0.11`, is still installable by naming it (`--version 0.0.11`), as is any pre-release — `latest` only ever resolves the newest stable.
+The current stable is `0.1.1`; the previous stable, `0.1.0`, is still installable by naming it (`--version 0.1.0`), as is any pre-release — `latest` only ever resolves the newest stable.
 
 Default prefix (aligned with Go's XDG/user-directory convention):
 
@@ -95,7 +95,7 @@ differently, and are unblocked differently.
   value is the full URL up to and including the version directory:
 
   ```powershell
-  $env:OPENPANDA_UPDATE_BASE = "https://<mirror>/Xustalis/OpenPanda/releases/download/v0.1.0"
+  $env:OPENPANDA_UPDATE_BASE = "https://<mirror>/Xustalis/OpenPanda/releases/download/v0.1.1"
   panda upgrade
   ```
 
@@ -157,7 +157,7 @@ irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps
 Or download first and run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.0 -Yes
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.1 -Yes
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force    # deliberate downgrade (skips the schema guard)
 ```
 
@@ -280,7 +280,7 @@ from "manual control" once more.
 ## Publishing a new release
 
 1. Merge the change into `main`, confirm that commit's **Gate is green**,
-   then tag: `git tag v0.1.0 && git push origin v0.1.0` (two caveats:
+   then tag: `git tag v0.1.1 && git push origin v0.1.1` (two caveats:
    the CHANGELOG must already contain a section for that version or the
    release pipeline refuses to publish; the release pipeline checks the
    Gate conclusion for **the same commit** — if there is no push-triggered

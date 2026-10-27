@@ -275,11 +275,47 @@ type Scheduler struct {
 	// observe that cancellation until it finishes — and its writes (memory
 	// consolidation, artifacts) then land after the owner closed the store.
 	wg sync.WaitGroup
+
+	// closeMu orders the transition from dispatching to drained. The
+	// WaitGroup's counter is plain memory: a dispatch that is mid-tick when
+	// the shutdown arrives can add to a counter Wait is already reading,
+	// which is a data race, and the runner it counted would start after the
+	// caller believed the queue was empty. Both sides take this mutex, so a
+	// runner slot is either counted before the wait begins — and awaited by
+	// it — or refused, and the task stays queued. This is the same ordering
+	// core's detached artifact transfers use (artMu / artClosing / artWG).
+	closeMu sync.Mutex
+	closing bool
 }
 
-// Wait blocks until every in-flight runner has returned. Callers bound it
-// with their own deadline: a wedged adapter must not hold a shutdown open.
-func (s *Scheduler) Wait() { s.wg.Wait() }
+// Wait stops the scheduler from starting anything new and blocks until every
+// in-flight runner has returned. Callers bound it with their own deadline: a
+// wedged adapter must not hold a shutdown open.
+//
+// The counter transition happens under closeMu, so a dispatch that is mid-tick
+// when the shutdown arrives is ordered against this wait rather than racing
+// it: a slot taken before the wait starts is awaited by it, and a slot taken
+// after is refused.
+func (s *Scheduler) Wait() {
+	s.closeMu.Lock()
+	s.closing = true
+	s.closeMu.Unlock()
+	s.wg.Wait()
+}
+
+// reserveRunner takes one runner slot, or reports false when the scheduler is
+// shutting down and must not start anything new. The slot is released by
+// s.wg.Done() once the runner returns — including on the paths where the task
+// turns out to be unclaimable, which release it without starting one.
+func (s *Scheduler) reserveRunner() bool {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.wg.Add(1)
+	return true
+}
 
 // The fallback poll relaxes once the queue has been empty for a while: 400ms
 // exists for cross-process pickup latency and stays the cadence while work
@@ -432,6 +468,13 @@ func (s *Scheduler) tick(ctx context.Context) int {
 		if active >= s.max {
 			return len(ready) // budget exhausted; a finishing task wakes the next pass
 		}
+		// Take the runner slot before anything is claimed. The slot is what
+		// the shutdown waits on, and a task claimed but never started would
+		// sit in the store claimed forever; a scheduler that is shutting down
+		// refuses the slot, leaving the task queued for the next process.
+		if !s.reserveRunner() {
+			return len(ready)
+		}
 		keys := DefaultKeys(t.ResourceKeys, t.Project, t.WorkDir, t.ID)
 		if t.Pin != "" && s.selfPin != nil && !s.selfPin(ctx, t.Pin) {
 			// Foreign-pinned work forwards in the runner and returns; the
@@ -442,17 +485,18 @@ func (s *Scheduler) tick(ctx context.Context) int {
 			keys = nil
 		}
 		if !s.registry.TryAcquire(keys, t.ID) {
+			s.wg.Done()
 			continue // a running task holds a needed resource: stay queued
 		}
 		if err := s.store.Claim(ctx, t.ID); err != nil {
 			// Another instance claimed it first (or it vanished): drop the
 			// locks and let the winner run it.
 			s.registry.Release(t.ID)
+			s.wg.Done()
 			continue
 		}
 		active++
 		s.logger.Info("queue: starting task", "task", t.ID, "resources", keys)
-		s.wg.Add(1)
 		guard.Go(s.logger, "queue: runner "+t.ID, nil, func() {
 			defer s.wg.Done()
 			defer s.registry.Release(t.ID)

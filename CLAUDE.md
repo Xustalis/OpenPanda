@@ -124,12 +124,13 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
   checks (`tui-*`, `watcher-*`), deploy/lab helpers, `panda_rpc.py`,
   `check-docs.sh`.
 - `skills/global/` — the bundled global SKILL.md library.
-- `docs/` — design docs, user guides and review reports;
-  `docs/README.md` indexes the set (`plans/`, `reports/`, `testing/`).
+- `docs/` — user guides and the public protocol spec;
+  `docs/README.md` indexes the set (`status.md`, `install.md`,
+  `faq.md`, `protocol.md` and their `.en.md` twins).
 - Runtime dirs (`data/`, `memory/`, `plans/`, `projects/`, `tasks/`,
   `MEMORY.md`/`USER.md`) appear at the repo root when a dev node runs
-  with `work_path="."` — gitignored node state, not source. `site/`,
-  `author/` and `docs/author/` are likewise local-only.
+  with `work_path="."` — gitignored node state, not source. `site/`
+  and `author/` are likewise local-only.
 
 ### `internal/` by concern
 
