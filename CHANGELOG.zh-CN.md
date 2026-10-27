@@ -57,7 +57,10 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 修复
 
-- **OpenCode Go 的会话头跟随端点，而不只看 provider id** —— 把自定义 `base_url` 指向 `https://opencode.ai/zen/go` 时，Go key 本身可用，却只得到 400 MissingSessionID，因为只有命名的 `opencode-go` 行才会生成 `x-opencode-session`。客户端现在会识别 OpenCode 端点（包括不带 `/v1` 的 harness 简写）并生成同样的每客户端 id，外部中继不会收到这个头。
+- **OpenCode Go 的会话头跟随端点，而不只看 provider id** —— 把自定义 `base_url` 指向 `https://opencode.ai/zen/go` 时，Go key 本身可用，却只得到 400 MissingSessionID，因为只有命名的 `opencode-go` 行才会生成 `x-opencode-session`。客户端现在会识别 OpenCode 端点（包括不带 `/v1` 的 harness 简写）并自行生成 id，外部中继不会收到这个头。该 id 跟着对话走而不是跟着客户端走：一个引擎服务这台节点上的所有会话，共用一个 id 会把它们全塞进同一个服务端会话；`model.headers` 里手写的 id 仍然对所有会话生效。
+- **注入给 agent 的端点就是 provider 自己的端点** —— 只配了 provider id、没写 `base_url` 时，注入解析会落到写死的厂商地址（`api.openai.com`，或 DeepSeek 的 Anthropic 端点），于是 `provider: opencode-go` 加一把 OpenCode key 会把 key 送去用户从未指定的厂商，每次运行都以一个跟配置毫无关系的 401 结束。现在它与入口客户端同一条解析链——显式 `base_url` 优先，其次是 provider 目录，重述目录的地址会被改写到该模型实际所属的线面——并把解析后的方言告诉适配器，而不是配置里存的那个。
+- **注入的运行会保留 agent 自己的设置** —— 注入原先整个替换适配器环境，把它接管的每一次运行里的 `routing.agent_models` 与该 agent 自己的凭据变量一起丢掉。现在改为合并，HTTPS 检查也改为校验真正会被拨打的端点，而不只是「恰好写了 base_url」的那个。
+- **模型被拒会继续尝试偏好列表的下一项** —— 花名册拒绝的模型会触发重探并落到启发式选择，计费拒绝则直接跳到免费层，于是 `routing.agent_models` 里只有第一项真正被执行过。现在两条重试路径都会沿列表往下走，列表耗尽后才回落到免费层。
 - **model CLI 的子命令参数会真正传给子命令** —— `panda model add … --force`、`--type`、`--url` 等参数原先会被重排到子命令名之前，被顶层解析器当成未定义 flag 拒绝（`flag provided but not defined: -force`）。现在 `panda model` 只提取 `--config`，其余参数原样交给子命令，无论 flag 写在哪里。
 - **OpenCode 默认走免费模型** —— 未指定模型时，适配器会自动挑能力最强的模型，于是在没有 Go 订阅或余额的账号上，每个任务都以 "Insufficient account funds" 结束。现在免费模型优先，付费模型只有显式开启（`OPENPANDA_OPENCODE_ALLOW_PAID=1`）才会自动选择；计费/配额拒绝会自动换到最好的免费模型重试一次；没有凭据时跳过 `opencode-go` 模型。v2 构建的 `opencode models` 返回空列表时，改以 `api model.list` 目录作为可用模型集。
 - **panda 的模型现在能以任一协议接入 OpenCode** —— 失败兜底原先只接受 OpenAI 方言的模型，配置了 DeepSeek Anthropic 端点的节点永远无法把失败的免费层任务交给 panda 的模型。适配器改为接收方言中立的 `OPENPANDA_MODEL_*` 约定，按方言写入 `@ai-sdk/anthropic` 或 `@ai-sdk/openai-compatible` 的 provider 片段，并合并到用户原生配置之上（MCP 与权限保留），同时以 `--standalone` 运行，避免 v2 后台服务继续使用旧配置。
