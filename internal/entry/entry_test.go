@@ -1736,6 +1736,23 @@ func TestNewClientOpenCodeEndpoints(t *testing.T) {
 		t.Fatalf("legacy base = %s, want the current Go endpoint", legacy.baseURL)
 	}
 
+	// The harness shorthand (no /v1) is rebased onto the API base, and an
+	// explicit Anthropic dialect is kept: /zen/go/v1/messages serves both.
+	shorthand, err := NewClient(config.ModelConfig{
+		Provider: "opencode-go", APIType: config.APITypeAnthropic,
+		BaseURL: "https://opencode.ai/zen/go", APIKey: "oc_sk_test",
+		Model: "deepseek-v4.1-flash",
+	})
+	if err != nil {
+		t.Fatalf("shorthand client: %v", err)
+	}
+	if shorthand.baseURL != "https://opencode.ai/zen/go/v1" || shorthand.apiType != config.APITypeAnthropic {
+		t.Fatalf("shorthand client = %s %s, want /zen/go/v1 anthropic", shorthand.apiType, shorthand.baseURL)
+	}
+	if got := shorthand.extraHeaders["x-opencode-session"]; !strings.HasPrefix(got, "ses_") {
+		t.Fatalf("shorthand session header = %q", got)
+	}
+
 	// The session header is present and stable for the client's lifetime.
 	sess := ""
 	for k, v := range gop.extraHeaders {

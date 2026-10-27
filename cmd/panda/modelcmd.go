@@ -22,7 +22,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"slices"
 	"strconv"
@@ -593,6 +592,18 @@ func (r *repl) modelAdd(args []string) {
 		r.outln(i18n.T(r.loc, "repl.model.add.nomodel"))
 		return
 	}
+	// A model listed by a sibling row (Zen vs Go on OpenCode) will not be
+	// served by this provider's own endpoint. Warn instead of letting the
+	// entry fail later with an opaque gateway error; the user may still add
+	// it. A foreign relay the user pointed at may serve the model under its
+	// own catalogue, so the warning is limited to the provider's own/default
+	// endpoint.
+	if other, ok := providers.SiblingFor(id, mc.Model); ok {
+		if p, known := providers.Lookup(id); known && (mc.BaseURL == "" || p.OwnsEndpoint(mc.BaseURL)) {
+			r.outln(i18n.Tf(r.loc, "repl.model.add.sibling",
+				"model", mc.Model, "provider", other.ID, "current", id))
+		}
+	}
 
 	if alias == "" {
 		alias = id
@@ -948,20 +959,40 @@ func (r *repl) resolveModel(args []string, verb string) (config.ModelConfig, str
 }
 
 // runModel implements `panda model [status|list|add|remove|switch|fetch|test]`.
+//
+// Only the global --config flag is lifted here. The subcommands carry their
+// own flags (--force, --type, --url, --thinking…), and a generic flag parse
+// with reorderFlags would move them in front of the subcommand name, where the
+// top-level FlagSet rejects them as undefined (`panda model add … --force`
+// failed with "flag provided but not defined: -force").
 func runModel(args []string) {
-	fs := flag.NewFlagSet("model", flag.ExitOnError)
-	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	fs.Parse(reorderFlags(fs, args))
-	rest := fs.Args()
+	configPath := cliConfigPath
+	rest := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--config" || a == "-config":
+			if i+1 < len(args) {
+				i++
+				configPath = args[i]
+			}
+		case strings.HasPrefix(a, "--config="):
+			configPath = strings.TrimPrefix(a, "--config=")
+		case strings.HasPrefix(a, "-config="):
+			configPath = strings.TrimPrefix(a, "-config=")
+		default:
+			rest = append(rest, a)
+		}
+	}
 
 	loc := i18n.Detect()
-	cfg, err := loadConfigQuietly(*configPath)
+	cfg, err := loadConfigQuietly(configPath)
 	if err != nil {
 		fatal("load config", err)
 	}
 	r := &repl{
 		cfg:        cfg,
-		configPath: *configPath,
+		configPath: configPath,
 		loc:        loc,
 	}
 	if len(rest) == 0 {

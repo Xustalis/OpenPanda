@@ -264,7 +264,9 @@ var known = []Known{
 		CredentialFileFields: map[string][]string{
 			".config/opencode/opencode.json":  {"model", "provider", "apiKey", "providers"},
 			".config/opencode/opencode.jsonc": {"model", "provider", "apiKey", "providers"},
-			".local/share/opencode/auth.json": {"apiKey", "token", "access_token"},
+			// auth.json maps provider ids to credentials, so a login for the
+			// Zen or Go roster is a top-level key — not an "apiKey" field.
+			".local/share/opencode/auth.json": {"opencode", "opencode-go"},
 		},
 		ModelEnv: &ModelEnvMapping{
 			// OpenCode resolves --model against its own provider registry,

@@ -78,6 +78,7 @@ import os
 import re
 import subprocess
 import tempfile
+from urllib.parse import urlsplit
 
 import _harness as harness
 
@@ -103,6 +104,22 @@ _FLAGS_CACHE_TTL = 3600
 _CACHE_IDENTITY = None
 
 
+def _opencode_paths(leaf):
+    """Candidate locations of one opencode state file.
+
+    XDG (~/.config/opencode) covers macOS and Linux; a Windows install keeps
+    the same file under %APPDATA%\\opencode or %LOCALAPPDATA%\\opencode, and a
+    node there must not lose its config merge or Go-login detection.
+    """
+    home = os.path.expanduser("~")
+    paths = [os.path.join(home, ".config", "opencode", leaf)]
+    for env in ("APPDATA", "LOCALAPPDATA"):
+        base = (os.environ.get(env) or "").strip()
+        if base:
+            paths.append(os.path.join(base, "opencode", leaf))
+    return paths
+
+
 def _cache_identity():
     """Everything that makes this install's roster answer unique.
 
@@ -119,9 +136,9 @@ def _cache_identity():
     cfg = os.environ.get("OPENCODE_CONFIG", "").strip()
     if cfg:
         parts.append(harness.file_fingerprint(cfg))
-    home = os.path.expanduser("~")
-    for rel in (".config/opencode/opencode.json", ".config/opencode/opencode.jsonc"):
-        parts.append(harness.file_fingerprint(os.path.join(home, rel)))
+    for leaf in ("opencode.json", "opencode.jsonc"):
+        for path in _opencode_paths(leaf):
+            parts.append(harness.file_fingerprint(path))
     _CACHE_IDENTITY = "|".join(parts)
     return _CACHE_IDENTITY
 
@@ -269,9 +286,12 @@ def _model_catalog(force=False):
             for entry in doc.get("data") or []:
                 if not isinstance(entry, dict):
                     continue
-                key = "%s/%s" % (entry.get("providerID"), entry.get("id"))
-                if "/" not in key.strip("/"):
+                pid, mid = entry.get("providerID"), entry.get("id")
+                if not isinstance(pid, str) or not pid.strip():
                     continue
+                if not isinstance(mid, str) or not mid.strip():
+                    continue
+                key = "%s/%s" % (pid.strip(), mid.strip())
                 catalog[key] = entry
     except Exception:
         catalog = {}
@@ -386,16 +406,23 @@ def _has_go_credential():
     if _GO_CREDENTIAL is None:
         found = bool(os.environ.get("OPENCODE_API_KEY", "").strip())
         home = os.path.expanduser("~")
-        for rel in (".local/share/opencode/auth.json",
-                    ".config/opencode/auth.json"):
+        auth_paths = [os.path.join(home, ".local", "share", "opencode", "auth.json")]
+        auth_paths += _opencode_paths("auth.json")
+        for path in auth_paths:
             try:
-                with open(os.path.join(home, rel), "r", encoding="utf-8") as fh:
+                with open(path, "r", encoding="utf-8") as fh:
                     data = json.load(fh)
             except (OSError, ValueError):
                 continue
-            if isinstance(data, dict) and any(
-                    key in data for key in ("opencode", "opencode-go")):
-                found = True
+            if not isinstance(data, dict):
+                continue
+            for key in ("opencode", "opencode-go"):
+                val = data.get(key)
+                if (isinstance(val, dict) and val) or \
+                        (isinstance(val, str) and val.strip()):
+                    found = True
+                    break
+            if found:
                 break
         _GO_CREDENTIAL = found
     return _GO_CREDENTIAL
@@ -442,30 +469,31 @@ def _preferred_model(available, catalog):
     for pref in prefs:
         want, _, variant = pref.partition("#")
         want, variant = want.strip(), variant.strip()
-        model = ""
         if want in available:
-            model = want
+            candidates = [want]
         elif "/" not in want:
             # A bare slug is matched against the served model ids, so
-            # `kimi-k3` works without spelling the provider prefix.
-            hits = [m for m in available
-                    if m.split("/")[-1].lower() == want.lower()]
-            if hits:
-                model = hits[0]
-        if not model:
+            # `kimi-k3` works without spelling the provider prefix. Both
+            # providers may serve it; try each until one is usable.
+            candidates = [m for m in available
+                          if m.split("/")[-1].lower() == want.lower()]
+        else:
+            candidates = []
+        if not candidates:
             notes.append("preferred model %s is not served by this install" % pref)
             continue
-        if model.split("/")[0] == "opencode-go" and not _has_go_credential():
-            notes.append("preferred model %s needs an OpenCode Go credential "
-                         "(run `opencode auth login`)" % model)
-            continue
-        score, variants = _score_model(model, catalog)
-        if score <= -1e9:
-            notes.append("preferred model %s is not usable for agent work" % model)
-            continue
-        if variant:
-            return model + "#" + variant, variants, notes
-        return model, variants, notes
+        for model in candidates:
+            if model.split("/")[0] == "opencode-go" and not _has_go_credential():
+                notes.append("preferred model %s needs an OpenCode Go credential "
+                             "(run `opencode auth login`)" % model)
+                continue
+            score, variants = _score_model(model, catalog)
+            if score <= -1e9:
+                notes.append("preferred model %s is not usable for agent work" % model)
+                continue
+            if variant:
+                return model + "#" + variant, variants, notes
+            return model, variants, notes
     return "", [], notes
 
 
@@ -817,15 +845,15 @@ def _native_config():
     override = (os.environ.get("OPENCODE_CONFIG") or "").strip()
     if override:
         candidates.append(override)
-    home = os.path.expanduser("~")
-    candidates += [os.path.join(home, ".config/opencode/opencode.json"),
-                   os.path.join(home, ".config/opencode/opencode.jsonc")]
+    candidates += _opencode_paths("opencode.json")
+    candidates += _opencode_paths("opencode.jsonc")
     for path in candidates:
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 text = fh.read()
         except OSError:
             continue
+        text = text.lstrip("\ufeff")
         for doc in (text, _strip_jsonc(text)):
             try:
                 parsed = json.loads(doc)
@@ -835,6 +863,26 @@ def _native_config():
                 return parsed
         return {}
     return {}
+
+
+def _injected_base(base, api_type):
+    """The base URL the SDK provider should receive.
+
+    The OpenAI-compatible provider appends /chat/completions directly, so the
+    base must carry the API version. OpenCode's harness form (/zen and
+    /zen/go) does not; the Anthropic provider adds /v1/messages itself, so it
+    keeps the shorthand. The entry client normalizes this on its own path,
+    which is why the adapter cannot simply reuse its URL rules.
+    """
+    if api_type == "anthropic":
+        return base
+    path = base.rstrip("/")
+    host = (urlsplit(path).hostname or "").lower()
+    if host == "opencode.ai" or host.endswith(".opencode.ai"):
+        for suffix in ("/zen", "/zen/go"):
+            if path.endswith(suffix):
+                return path + "/v1"
+    return base
 
 
 def _injected_provider_config(model, base, key, api_type):
@@ -848,6 +896,7 @@ def _injected_provider_config(model, base, key, api_type):
     """
     if not base or not model:
         return ""
+    base = _injected_base(base.rstrip("/"), api_type)
     os.environ["OPENPANDA_MODEL_BASE_URL"] = base
     os.environ["OPENPANDA_MODEL_API_KEY"] = key
     os.environ["OPENPANDA_MODEL_NAME"] = model
@@ -961,7 +1010,11 @@ def main():
     else:
         available = _served_models()
     if available and not injected:
-        harness.progress("identified served models: %s" % ", ".join(available))
+        # A count, not the whole roster: v2 serves over a hundred ids, and
+        # the full list buried every other progress line in the task log.
+        count = len(available)
+        harness.progress("identified %d model%s served by this install"
+                         % (count, "" if count == 1 else "s"))
 
     if model and not injected:
         # A request the roster does not carry is substituted with the

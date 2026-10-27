@@ -510,7 +510,7 @@ const es: Messages = {
   'settings.maxTokens': 'Máx. de tokens',
   'settings.maxTokensHelp': 'Límite de completado; 0 = valor por defecto del proveedor.',
   'settings.maxRetries': 'Reintentos máximos',
-  'settings.maxRetriesHelp': 'Reintentos tras un fallo (429, 5xx, conexión caída); 0 = mantener el valor actual (5 por defecto).',
+  'settings.maxRetriesHelp': 'Reintentos tras un fallo (429, 5xx, conexión caída); 0 = valor por defecto (5), -1 desactiva los reintentos.',
   'settings.contextWindow': 'Ventana de contexto',
   'settings.contextWindowHelp': 'Longitud de contexto anunciada; 0 = se resuelve del catálogo.',
   'settings.thinking': 'Pensamiento',

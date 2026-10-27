@@ -368,7 +368,9 @@ func TestOpenCodeGatewayRows(t *testing.T) {
 	// they belong to.
 	for _, tc := range []struct{ url, want string }{
 		{"https://opencode.ai/zen/v1", "opencode"},
+		{"https://opencode.ai/zen", "opencode"},
 		{"https://opencode.ai/zen/go/v1", "opencode-go"},
+		{"https://opencode.ai/zen/go", "opencode-go"},
 		{"https://opencode.ai/inference/openai/v1", "opencode-go"},
 		{"https://opencode.ai/inference/anthropic", "opencode-go"},
 		{"https://opencode.ai/inference/google/v1beta", "opencode-go"},
@@ -405,6 +407,31 @@ func TestOpenCodeGatewayRows(t *testing.T) {
 		if got := gop.UnsupportedReason(m); got != "" {
 			t.Errorf("%s reported unsupported: %q", m, got)
 		}
+	}
+}
+
+// TestSiblingForOpenCodeRosters pins the misconfiguration guard: a free Zen
+// id added under the Go provider (or a Go-only id under Zen) is reported as
+// belonging to the other row instead of failing at call time.
+func TestSiblingForOpenCodeRosters(t *testing.T) {
+	if p, ok := SiblingFor("opencode-go", "deepseek-v4.1-flash-free"); !ok || p.ID != "opencode" {
+		t.Fatalf("free Zen id under Go: %v %v, want opencode", p.ID, ok)
+	}
+	if p, ok := SiblingFor("opencode", "kimi-k3.1-pro"); !ok || p.ID != "opencode-go" {
+		t.Fatalf("Go id under Zen: %v %v, want opencode-go", p.ID, ok)
+	}
+	// A model its own row lists is not a sibling miss.
+	if p, ok := SiblingFor("opencode", "deepseek-v4.1-flash-free"); ok {
+		t.Fatalf("own free id reported as sibling %q", p.ID)
+	}
+	// An unknown id has no sibling either.
+	if p, ok := SiblingFor("opencode", "no-such-model"); ok {
+		t.Fatalf("unknown id reported as sibling %q", p.ID)
+	}
+	// A model both rosters list has no unique sibling; a custom endpoint
+	// pointed at either surface must not be warned about.
+	if p, ok := SiblingFor("custom", "deepseek-v4.1-flash"); ok {
+		t.Fatalf("shared model reported as unique sibling %q", p.ID)
 	}
 }
 

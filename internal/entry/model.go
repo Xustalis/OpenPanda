@@ -488,12 +488,13 @@ func (c *Client) marshalWithParams(req any) ([]byte, error) {
 	return out, nil
 }
 
-// headerNamed reports whether headers already carries name, ignoring case —
-// HTTP header names are case-insensitive and a config may spell them either
-// way.
+// headerNamed reports whether headers already carries a non-empty value for
+// name, ignoring case — HTTP header names are case-insensitive and a config
+// may spell them either way. An explicitly empty value is treated as unset,
+// so the provider-minted session id still applies.
 func headerNamed(headers map[string]string, name string) bool {
-	for k := range headers {
-		if strings.EqualFold(k, name) {
+	for k, v := range headers {
+		if strings.EqualFold(k, name) && strings.TrimSpace(v) != "" {
 			return true
 		}
 	}

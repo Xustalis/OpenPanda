@@ -13,6 +13,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 )
 
 // modelSettingsJSON is the wire form of the model configuration. The API key
@@ -105,11 +106,27 @@ func modelSettingsToConfig(req modelSettingsJSON, cur config.ModelConfig) config
 
 func modelSettingsFromConfig(mc config.ModelConfig) modelSettingsJSON {
 	noAuth := mc.NoAuth
+	baseURL, apiType := mc.BaseURL, mc.NormalizedAPIType()
+	// A saved config that restated a catalogue endpoint (or one the catalogue
+	// has since retired) is shown as the endpoint and dialect the client
+	// actually dials; saving the form then migrates the file.
+	if p, ok := providers.Lookup(mc.Provider); ok && (baseURL == "" || p.OwnsEndpoint(baseURL)) {
+		if base, typ := p.EndpointFor(mc.Model); base != "" {
+			baseURL = base
+			// Mirror NewClient: a retired endpoint's dialect is stale and is
+			// replaced; on a current or shorthand endpoint an explicit
+			// different dialect is the user's choice and is kept.
+			if typ != "" && (p.OwnsLegacyEndpoint(mc.BaseURL) ||
+				mc.APIType == "" || mc.NormalizedAPIType() == p.APIType) {
+				apiType = typ
+			}
+		}
+	}
 	return modelSettingsJSON{
 		Provider:       mc.Provider,
 		Name:           mc.Name,
-		APIType:        mc.NormalizedAPIType(),
-		BaseURL:        mc.BaseURL,
+		APIType:        apiType,
+		BaseURL:        baseURL,
 		Model:          mc.Model,
 		MaxTokens:      intPtr(mc.MaxTokens),
 		ContextWindow:  intPtr(mc.ContextWindow),

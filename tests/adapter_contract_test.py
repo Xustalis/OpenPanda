@@ -76,6 +76,9 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=No
             "OPENPANDA_MODEL_BASE_URL", "OPENPANDA_MODEL_API_KEY",
             "OPENPANDA_MODEL_NAME", "OPENPANDA_MODEL_API_TYPE",
             "OPENPANDA_AGENT_MODELS",
+            # Windows locations for opencode's state files must not leak a
+            # developer machine's config into the fixture.
+            "APPDATA", "LOCALAPPDATA",
         ):
             merged.pop(key, None)
         # Probes must answer from the fake CLI in every case, never from a
@@ -657,7 +660,7 @@ print(json.dumps({"type":"text","sessionID":"ses_c1","part":{"id":"px","type":"t
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "ok")
         self.assertTrue(
-            any("identified served models: opencode/deepseek-v4.1-flash-free" in line
+            any("identified 1 model served by this install" in line
                 for line in progress),
             progress,
         )
@@ -814,6 +817,47 @@ print(json.dumps({"type":"text","sessionID":"ses_pf2","part":{"id":"px","type":"
         self.assertTrue(payload["ok"], payload)
         self.assertEqual(payload["result"], "ok")
 
+    def test_opencode_bare_slug_preference_tries_each_provider(self):
+        """A bare slug can be served by both providers. When the first hit is
+        a Go model without a login, the same slug under Zen must still be
+        considered instead of the whole preference being dropped."""
+        home = tempfile.mkdtemp()
+        cache = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        self.addCleanup(shutil.rmtree, cache, True)
+        payload, progress, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+if sys.argv[1:3] == ["api", "model.list"]:
+    print(json.dumps({"data": [
+        {"id": "kimi-k3", "providerID": "opencode-go",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 1048576, "output": 131072},
+         "cost": [{"input": 3, "output": 15}],
+         "status": "active", "enabled": True},
+        {"id": "kimi-k3", "providerID": "opencode",
+         "capabilities": {"tools": True, "input": ["text"]},
+         "limit": {"context": 1048576, "output": 131072},
+         "cost": [{"input": 3, "output": 15}],
+         "status": "active", "enabled": True},
+    ]}))
+    sys.exit(0)
+args = sys.argv[1:]
+assert args[args.index("--model") + 1] == "opencode/kimi-k3", args
+print(json.dumps({"type":"text","sessionID":"ses_pf4","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={
+                "HOME": home,
+                "XDG_CACHE_HOME": cache,
+                "OPENPANDA_AGENT_MODELS": json.dumps(["kimi-k3"]),
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertTrue(
+            any("needs an OpenCode Go credential" in line for line in progress),
+            progress,
+        )
+
     def test_opencode_model_preferences_fall_back_when_none_served(self):
         """A preference list that names nothing this install serves does not
         leave the run without a model: the miss is reported and the free-first
@@ -884,6 +928,46 @@ print(json.dumps({"type":"text","sessionID":"ses_i1","part":{"id":"px","type":"t
             progress,
         )
 
+    def test_opencode_injected_openai_shorthand_gets_api_version(self):
+        """The OpenAI SDK provider appends /chat/completions to the base, so
+        OpenCode's harness shorthand must gain /v1; the Anthropic provider
+        adds its own /v1 and keeps the shorthand."""
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, os, sys
+cfg = json.load(open(os.environ["OPENCODE_CONFIG"], encoding="utf-8"))
+assert cfg["provider"]["panda"]["npm"] == "@ai-sdk/openai-compatible", cfg
+assert os.environ["OPENPANDA_MODEL_BASE_URL"] == "https://opencode.ai/zen/go/v1", os.environ
+print(json.dumps({"type":"text","sessionID":"ses_i3","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "OPENPANDA_MODEL_BASE_URL": "https://opencode.ai/zen/go",
+                "OPENPANDA_MODEL_API_KEY": "oc_sk_test",
+                "OPENPANDA_MODEL_NAME": "deepseek-v4.1-flash",
+                "OPENPANDA_MODEL_API_TYPE": "openai",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, os, sys
+cfg = json.load(open(os.environ["OPENCODE_CONFIG"], encoding="utf-8"))
+assert cfg["provider"]["panda"]["npm"] == "@ai-sdk/anthropic", cfg
+assert os.environ["OPENPANDA_MODEL_BASE_URL"] == "https://opencode.ai/zen/go", os.environ
+print(json.dumps({"type":"text","sessionID":"ses_i4","part":{"id":"px","type":"text","text":"ok"}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "OPENPANDA_MODEL_BASE_URL": "https://opencode.ai/zen/go",
+                "OPENPANDA_MODEL_API_KEY": "oc_sk_test",
+                "OPENPANDA_MODEL_NAME": "deepseek-v4.1-flash",
+                "OPENPANDA_MODEL_API_TYPE": "anthropic",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+
     def test_opencode_injected_openai_endpoint_keeps_compatible_provider(self):
         payload, _, _ = run_adapter(
             "opencode.py", "opencode", OC_HELP_CURRENT + r'''
@@ -903,7 +987,7 @@ print(json.dumps({"type":"text","sessionID":"ses_i2","part":{"id":"px","type":"t
         )
         self.assertTrue(payload["ok"], payload)
 
-
+    def test_opencode_auto_pick_effort_maps_to_variant(self):
         """A requested reasoning effort rides the model's declared variant
         (provider/model#variant); an undeclared level leaves the bare id."""
         payload, _, _ = run_adapter(
@@ -1095,7 +1179,7 @@ if sys.argv[1:2] == ["run"]:
             any("re-probed roster, retrying on opencode/nemotron-3.5-super-vl-free" in l
                 for l in progress), progress)
         self.assertTrue(
-            any("identified served models:" in l for l in progress), progress)
+            any("served by this install" in l for l in progress), progress)
 
     def test_opencode_current_stream_shape_contract(self):
         """The shipped 1.18.x CLI puts the payload on the event, not under

@@ -261,6 +261,30 @@ func TestCLIConfigModelRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCLIModelAddSubcommandFlags(t *testing.T) {
+	home := t.TempDir()
+	configPath, _ := initNode(t, home)
+
+	// Subcommand flags must reach modelAdd: the old top-level flag parse
+	// reordered --force in front of "add" and rejected it as undefined.
+	add := runCLI(t, home, "model", "add", "deepseek",
+		"sk-test-00000000000000000000000000", "--force", "--config", configPath)
+	if add.code != 0 {
+		t.Fatalf("model add --force exited %d: %s", add.code, add.output())
+	}
+	status := runCLI(t, home, "model", "--config", configPath)
+	if status.code != 0 || !strings.Contains(status.output(), "deepseek") {
+		t.Fatalf("model status after add = %d: %s", status.code, status.output())
+	}
+
+	// --config before the subcommand works the same way.
+	add = runCLI(t, home, "model", "--config", configPath, "add", "claude",
+		"sk-test-00000000000000000000000000", "--force")
+	if add.code != 0 {
+		t.Fatalf("model --config add exited %d: %s", add.code, add.output())
+	}
+}
+
 func TestCLIConfigRoutingAgentModels(t *testing.T) {
 	home := t.TempDir()
 	configPath, _ := initNode(t, home)

@@ -509,7 +509,7 @@ const ja: Messages = {
   'settings.maxTokens': '最大トークン数',
   'settings.maxTokensHelp': '補完の上限。0 = プロバイダーの既定値。',
   'settings.maxRetries': '最大リトライ回数',
-  'settings.maxRetriesHelp': '失敗したリクエスト（429・5xx・接続切断）の再試行上限。0 = 現在値を維持（既定 5 回）。',
+  'settings.maxRetriesHelp': '失敗したリクエスト（429・5xx・接続切断）の再試行上限。0 = 既定（5 回）、-1 = 再試行なし。',
   'settings.contextWindow': 'コンテキスト窓',
   'settings.contextWindowHelp': 'モデルの公称コンテキスト長。0 = カタログから自動解決。',
   'settings.thinking': '思考モード',

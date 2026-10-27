@@ -2212,7 +2212,10 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	setMapFieldInt(model, "context_window", mc.ContextWindow)
 	setMapField(model, "thinking", mc.Thinking)
 	setMapFieldInt(model, "thinking_budget", mc.ThinkingBudget)
-	setMapFieldInt(model, "max_retries", mc.MaxRetries)
+	// max_retries is the one signed knob: a negative value disables retries,
+	// so the positive-only writer would silently drop it and reload as the
+	// default budget.
+	setMapFieldIntSigned(model, "max_retries", mc.MaxRetries)
 	setMapFieldAnyMap(model, "params", mc.Params)
 	setMapFieldStringMap(model, "headers", mc.Headers)
 
@@ -2577,6 +2580,30 @@ func setMapFieldInt(m *yaml.Node, key string, value int) {
 		}
 	}
 	if value <= 0 {
+		return
+	}
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(value)},
+	)
+}
+
+// setMapFieldIntSigned is setMapFieldInt for fields where a negative value is
+// meaningful (max_retries: below zero disables retries). Only zero removes the
+// key, so -1 survives a save/reload instead of reverting to the default.
+func setMapFieldIntSigned(m *yaml.Node, key string, value int) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			if value == 0 {
+				m.Content = append(m.Content[:i], m.Content[i+2:]...)
+				return
+			}
+			m.Content[i+1].Value = strconv.Itoa(value)
+			m.Content[i+1].Tag = "!!int"
+			return
+		}
+	}
+	if value == 0 {
 		return
 	}
 	m.Content = append(m.Content,

@@ -75,6 +75,12 @@ type Provider struct {
 	// relay: OwnsEndpoint recognises them so the client rebases the entry
 	// onto the current BaseURL instead of dialing a retired path forever.
 	LegacyBaseURLs []string
+	// AltBaseURLs are current shorthand endpoints for the same surface — the
+	// harness form without the API version (OpenCode's https://…/zen/go,
+	// which its Anthropic-compatible clients use). They are rebased onto
+	// BaseURL like a catalogue restatement, but they do not carry the "old
+	// dialect" implication of LegacyBaseURLs, so an explicit api_type is kept.
+	AltBaseURLs []string
 	// SessionHeader names a request header the provider requires to carry a
 	// stable per-conversation id (OpenCode's Go gateway routes and caches by
 	// x-opencode-session and answers 400 without it). The entry client mints
@@ -432,6 +438,9 @@ var builtins = []Provider{
 		ThinkingStyle:    "object",
 		PromptCache:      true,
 		SessionHeader:    "x-opencode-session",
+		// The harness form without the API version, accepted by OpenCode's
+		// Anthropic-compatible clients.
+		AltBaseURLs: []string{"https://opencode.ai/zen"},
 		// Unknown ids bill at DeepSeek Flash's Zen rate rather than at zero:
 		// a resold model must never be reported as free by accident.
 		Pricing:          Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20},
@@ -500,6 +509,7 @@ var builtins = []Provider{
 		ThinkingStyle:    "object",
 		PromptCache:      true,
 		SessionHeader:    "x-opencode-session",
+		AltBaseURLs:      []string{"https://opencode.ai/zen/go"},
 		LegacyBaseURLs: []string{
 			"https://opencode.ai/inference/openai/v1",
 			"https://opencode.ai/inference/anthropic",
@@ -695,6 +705,48 @@ func (p Provider) RouteFor(model string) (Route, bool) {
 	return best, bestLen > 0
 }
 
+// HasModel reports whether the provider's curated catalogue lists model by
+// its exact id. Unlike SpecFor, a family prefix does not count: a sibling
+// hint must not fire for a model the row only knows as a prefix.
+func (p Provider) HasModel(model string) bool {
+	for _, s := range p.Models {
+		if s.ID == model {
+			return true
+		}
+	}
+	return false
+}
+
+// SiblingFor returns the one other catalogue row that lists model exactly,
+// when providerID does not. A model served by several other rows has no
+// unique sibling (it may simply be available on both endpoints), so the
+// report is withheld rather than naming an arbitrary row.
+func SiblingFor(providerID, model string) (Provider, bool) {
+	m := strings.TrimSpace(model)
+	if m == "" {
+		return Provider{}, false
+	}
+	self, ok := Lookup(providerID)
+	if !ok || self.HasModel(m) {
+		return Provider{}, false
+	}
+	var found Provider
+	hits := 0
+	for _, p := range builtins {
+		if p.ID == providerID {
+			continue
+		}
+		if p.HasModel(m) {
+			found = p
+			hits++
+		}
+	}
+	if hits == 1 {
+		return found, true
+	}
+	return Provider{}, false
+}
+
 // EndpointFor resolves the base URL and wire dialect a model uses on this
 // provider: the matching route's surface when one applies, else the row's own.
 func (p Provider) EndpointFor(model string) (baseURL, apiType string) {
@@ -726,6 +778,11 @@ func (p Provider) OwnsEndpoint(base string) bool {
 		}
 	}
 	for _, u := range p.LegacyBaseURLs {
+		if own(u) {
+			return true
+		}
+	}
+	for _, u := range p.AltBaseURLs {
 		if own(u) {
 			return true
 		}
@@ -849,6 +906,13 @@ func Detect(baseURL, model string) (Provider, bool) {
 		// hand-written config without a provider id reach the row that can
 		// migrate it.
 		for _, u := range p.LegacyBaseURLs {
+			if same(u) {
+				return p, true
+			}
+		}
+		// A current shorthand (the harness form without /v1) is still this
+		// provider, and must win over the loose substring pass below.
+		for _, u := range p.AltBaseURLs {
 			if same(u) {
 				return p, true
 			}

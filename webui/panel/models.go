@@ -90,11 +90,15 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 	if known {
 		e.ProviderLabel = p.Label
 		// A base that merely restated a catalogue endpoint (including one the
-		// catalogue has since retired) is shown as the endpoint the client
-		// will actually dial; a relay the user typed stays as typed.
+		// catalogue has since retired) is shown as the endpoint and dialect
+		// the client will actually dial; a relay the user typed stays as typed.
 		if e.BaseURL == "" || p.OwnsEndpoint(e.BaseURL) {
-			if base, _ := p.EndpointFor(e.Model); base != "" {
+			if base, typ := p.EndpointFor(e.Model); base != "" {
 				e.BaseURL = base
+				if typ != "" && (p.OwnsLegacyEndpoint(mc.BaseURL) ||
+					mc.APIType == "" || e.APIType == p.APIType) {
+					e.APIType = typ
+				}
 			}
 		}
 		if e.Model == "" {
