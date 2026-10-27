@@ -75,16 +75,21 @@ func (e *Engine) awaitSettled(ctx context.Context, sched *core.Core, cur core.Ta
 	if store == nil {
 		return cur, res
 	}
+	// The id is copied out before the watch starts: the listener below runs on
+	// whichever goroutine records an event — the writer's own, mid-transaction —
+	// while this loop reassigns cur every pass. Reading cur.TaskID from the
+	// closure raced that reassignment.
+	taskID := cur.TaskID
 	// Adopt the events already on the timeline as the cursor: the submit path
 	// recorded them through this process's own store, where the in-flight
 	// progress bridge already delivered them. Only what the consumer writes
 	// from here on is news.
 	cursor := int64(0)
-	if evs, err := store.Events(ctx, cur.TaskID); err == nil && len(evs) > 0 {
+	if evs, err := store.Events(ctx, taskID); err == nil && len(evs) > 0 {
 		cursor = evs[len(evs)-1].ID
 	}
 	last := cur.State
-	e.logger.Debug("askengine: task parked, following it to the outcome", "task", cur.TaskID, "state", last)
+	e.logger.Debug("askengine: task parked, following it to the outcome", "task", taskID, "state", last)
 	cb.progress(Progress{Kind: ProgressWait, Name: last})
 	// Same-process task events for this row wake the watch the instant they
 	// land — an engine embedded in the daemon (the panel's) sits in the same
@@ -92,8 +97,8 @@ func (e *Engine) awaitSettled(ctx context.Context, sched *core.Core, cur core.Ta
 	// as the cross-process backstop: another process writing the same SQLite
 	// file fires no listener here.
 	wake := make(chan struct{}, 1)
-	unsubscribe := store.AddOnEvent(func(taskID, _ string, _ any) {
-		if taskID != cur.TaskID {
+	unsubscribe := store.AddOnEvent(func(evTaskID, _ string, _ any) {
+		if evTaskID != taskID {
 			return
 		}
 		select {
@@ -119,7 +124,7 @@ func (e *Engine) awaitSettled(ctx context.Context, sched *core.Core, cur core.Ta
 		case <-confirm:
 			confirm = nil
 		}
-		t, err := store.Get(ctx, cur.TaskID)
+		t, err := store.Get(ctx, taskID)
 		if errors.Is(err, sql.ErrNoRows) {
 			// The row vanished under the watch — queued and submitted rows are
 			// Deletable, so a board clear or `task rm` can remove one mid-wait.
@@ -156,12 +161,12 @@ func (e *Engine) awaitSettled(ctx context.Context, sched *core.Core, cur core.Ta
 			time.Since(queuedSince) > queuedConsumerGrace && !e.queueConsumerAlive(ctx) {
 			consumerChecked = true
 			e.logger.Warn("askengine: queued task unclaimed and no queue consumer is alive; it waits until one starts",
-				"task", cur.TaskID)
+				"task", taskID)
 		}
 		// Bridge the timeline the consumer wrote since the last pass — before
 		// the settle check, so the notes recorded just ahead of the result
 		// still land on the card.
-		bridgeNewEvents(ctx, store, t.TaskID, &cursor, cb)
+		bridgeNewEvents(ctx, store, taskID, &cursor, cb)
 		if settledState(t.State) {
 			return t, settledPayload(t)
 		}

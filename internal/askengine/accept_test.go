@@ -47,6 +47,12 @@ func TestEngineAcceptMirrorsViaScheduler(t *testing.T) {
 	sched := core.NewCore(db, "test-node", card, 1, nil, cfg.Model)
 	e := &Engine{cfg: cfg, db: db, schedCtx: context.Background()}
 	e.sched.Store(sched)
+	// Engine.Close drains the scheduler and shuts the core down before the
+	// test's TempDir is removed. Without it the accept's background work —
+	// kickReachable's reachPeer query above all — outlives the assertion and
+	// races the directory deletion, which surfaced as an intermittent
+	// "TempDir RemoveAll cleanup: directory not empty" on the WAL sidecars.
+	t.Cleanup(e.Close)
 
 	store := core.NewTaskStore(db, nil)
 	task, err := store.Create(ctx, "", "proj", "accepted remotely", "test-node", []string{"test-node"})
@@ -111,6 +117,10 @@ func TestEngineDeferredResumeSkipsSummarize(t *testing.T) {
 	sched := core.NewCore(db, "test-node", card, 1, nil, cfg.Model)
 	e := &Engine{cfg: cfg, db: db, schedCtx: context.Background()}
 	e.sched.Store(sched)
+	// Same drain as the test above: the parked resume launches background
+	// delivery work that would otherwise write into the temp dir after the
+	// assertions finished.
+	t.Cleanup(e.Close)
 
 	store := core.NewTaskStore(db, nil)
 	task, err := store.Create(ctx, "", "proj", "consent for offline peer", "test-node", []string{"test-node"})
