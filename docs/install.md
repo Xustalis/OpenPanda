@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/ins
 等效的显式写法：
 
 ```bash
-sh scripts/install.sh --version 0.1.0           # 安装指定版本（默认 latest，即最新稳定版；预发布版必须显式指定）
+sh scripts/install.sh --version 0.1.1           # 安装指定版本（默认 latest，即最新稳定版；预发布版必须显式指定）
 sh scripts/install.sh --prefix /opt/openpanda  # 自定义安装目录
 sh scripts/install.sh --lite                   # lite 构建：无内嵌 Web 控制台/TUI（仅 Linux）
 sh scripts/install.sh --yes                    # 额外注册开机自启（不询问）
@@ -27,7 +27,7 @@ sh scripts/install.sh --no-service             # 不碰开机自启
 sh scripts/install.sh --force                  # 强制安装：跳过“版本低于数据目录 schema”的拒绝
 ```
 
-当前稳定版是 `0.1.0`；上一支稳定版 `0.0.11` 仍可按版本号显式安装（`--version 0.0.11`），预发布版同理，`latest` 永远只指最新稳定版。
+当前稳定版是 `0.1.1`；上一支稳定版 `0.1.0` 仍可按版本号显式安装（`--version 0.1.0`），预发布版同理，`latest` 永远只指最新稳定版。
 
 默认前缀（与 Go 的 XDG/用户目录约定对齐）：
 
@@ -55,7 +55,7 @@ ${XDG_DATA_HOME:-~/.local/share}/openpanda/
 - **自更新器**：报 `fetch checksums: … net/http: TLS handshake timeout`。用 `OPENPANDA_UPDATE_BASE` 把下载指向镜像，值就是"到版本目录为止"的完整 URL：
 
   ```powershell
-  $env:OPENPANDA_UPDATE_BASE = "https://<镜像>/Xustalis/OpenPanda/releases/download/v0.1.0"
+  $env:OPENPANDA_UPDATE_BASE = "https://<镜像>/Xustalis/OpenPanda/releases/download/v0.1.1"
   panda upgrade
   ```
 
@@ -97,7 +97,7 @@ irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps
 或下载后运行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.0 -Yes
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.1 -Yes
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force    # 强制降级（跳过 schema 守卫）
 ```
 
@@ -180,7 +180,7 @@ panda uninstall --backup-only
 
 ## 发布一个新版本
 
-1. 变更合入 `main`，确认该 commit 的 **Gate 已经跑绿**，再打标签：`git tag v0.1.0 && git push origin v0.1.0`（注意两点：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布；release 流水线会向 Gate 查验**同一个 commit** 的结论，没有 push 触发的 Gate 运行记录、或结论不是 success，都会直接拒绝发布并报错）。
+1. 变更合入 `main`，确认该 commit 的 **Gate 已经跑绿**，再打标签：`git tag v0.1.1 && git push origin v0.1.1`（注意两点：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布；release 流水线会向 Gate 查验**同一个 commit** 的结论，没有 push 触发的 Gate 运行记录、或结论不是 success，都会直接拒绝发布并报错）。
 2. `.github/workflows/release.yml` 自动跨平台构建 → 打包 `.tar.gz`/`.zip` → 生成 `checksums.txt` → 发布 GitHub Release。
 3. 预发布（带连字符的标签，如 `v0.0.9-beta`、`v0.0.8-alpha`、`v1.0.0-rc1`）会自动标记为 **pre-release**：它不会成为仓库的 Latest，`releases/latest` 仍指向最后一个稳定版，一键安装脚本也只装稳定版；同时**不会**同步 Homebrew tap。
 4. 落地后可用：

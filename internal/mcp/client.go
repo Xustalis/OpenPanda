@@ -24,6 +24,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/executil"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/security"
+	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
 // defaultCallTimeout is the hard upper bound for any single MCP request,
@@ -114,7 +115,7 @@ func (c *Client) initialize(ctx context.Context) error {
 	if err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "panda", "version": "0.1.0"},
+		"clientInfo":      map[string]any{"name": "panda", "version": version.Version},
 	}, &result); err != nil {
 		return err
 	}
