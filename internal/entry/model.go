@@ -339,16 +339,26 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		apiType = config.APITypeAnthropic
 	}
 	extraHeaders := maps.Clone(model.Headers)
-	if hasProvider && p.SessionHeader != "" && !headerNamed(extraHeaders, p.SessionHeader) {
-		// A provider that routes by conversation (OpenCode Go) needs a
-		// stable id on every call; one client is one conversation here, so
-		// minting at construction keeps prompt caching and routing stable
-		// across the turn's requests. A user header of the same name wins.
+	// A provider that routes by conversation (OpenCode Go) needs a stable id
+	// on every call. The header comes from the named provider row when there
+	// is one, and from endpoint detection otherwise: a "custom" entry pointed
+	// at https://opencode.ai/zen/go is still the Go gateway and answers 400
+	// MissingSessionID without it. One client is one conversation here, so
+	// minting at construction keeps prompt caching and routing stable across
+	// the turn's requests. A user header of the same name wins.
+	sessionHeader := ""
+	if hasProvider {
+		sessionHeader = p.SessionHeader
+	}
+	if sessionHeader == "" && hasTuning {
+		sessionHeader = tuning.SessionHeader
+	}
+	if sessionHeader != "" && !headerNamed(extraHeaders, sessionHeader) {
 		if id, err := util.UUIDv7(); err == nil {
 			if extraHeaders == nil {
 				extraHeaders = map[string]string{}
 			}
-			extraHeaders[p.SessionHeader] = "ses_" + id
+			extraHeaders[sessionHeader] = "ses_" + id
 		}
 	}
 	c := &Client{

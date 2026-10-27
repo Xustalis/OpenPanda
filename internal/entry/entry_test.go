@@ -1775,8 +1775,41 @@ func TestNewClientOpenCodeEndpoints(t *testing.T) {
 	}
 }
 
-// TestThinkingAutoMeansProviderDefault pins the one vocabulary every surface
-// shares: "auto" (the wizard/web default) and "" both mean "send no thinking
+// TestNewClientSessionHeaderForCustomOpenCodeEndpoint: a custom row pointed at
+// the Go gateway is still the Go gateway. The header must be minted from
+// endpoint detection, not only from the named provider row, or the gateway
+// answers 400 MissingSessionID. A foreign relay gets no such header.
+func TestNewClientSessionHeaderForCustomOpenCodeEndpoint(t *testing.T) {
+	c, err := NewClient(config.ModelConfig{
+		Provider: "custom",
+		BaseURL:  "https://opencode.ai/zen/go",
+		APIType:  config.APITypeAnthropic,
+		APIKey:   "oc_sk_test",
+		Model:    "deepseek-v4.1-flash",
+	})
+	if err != nil {
+		t.Fatalf("custom Go client: %v", err)
+	}
+	if got := c.extraHeaders["x-opencode-session"]; !strings.HasPrefix(got, "ses_") {
+		t.Fatalf("session header = %q, want a ses_ id", got)
+	}
+
+	relay, err := NewClient(config.ModelConfig{
+		Provider: "custom",
+		BaseURL:  "https://relay.example.com/v1",
+		APIType:  config.APITypeOpenAI,
+		APIKey:   "sk-test",
+		Model:    "gpt-test",
+	})
+	if err != nil {
+		t.Fatalf("relay client: %v", err)
+	}
+	if got := relay.extraHeaders["x-opencode-session"]; got != "" {
+		t.Fatalf("foreign relay received a session header: %q", got)
+	}
+}
+
+// TestThinkingAutoMeansProviderDefault pins the one vocabulary every surface// shares: "auto" (the wizard/web default) and "" both mean "send no thinking
 // field", while on/off are explicit requests. Treating "auto" as an enabled
 // request silently turned reasoning on for every wizard-added model.
 func TestThinkingAutoMeansProviderDefault(t *testing.T) {

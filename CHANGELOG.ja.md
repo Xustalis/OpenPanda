@@ -52,6 +52,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 修正
 
+- **OpenCode Go のセッションヘッダーは provider id ではなくエンドポイントに従う** —— カスタム `base_url` を `https://opencode.ai/zen/go` に向けると、Go キー自体は有効でも 400 MissingSessionID になっていました。`x-opencode-session` を生成していたのは名前付きの `opencode-go` 行だけだったためです。クライアントは OpenCode のエンドポイントを検出して同じクライアント単位の id を生成し、外部リレーにはこのヘッダーを送りません。
 - **OpenCode は既定で無料モデルを使う** —— モデル未指定の実行は最も能力の高いモデルを自動選択していたため、Go サブスクリプションも残高もないアカウントではすべてのタスクが "Insufficient account funds" で終わっていました。無料モデルを優先し、有料モデルの自動選択は明示的なオプトイン（`OPENPANDA_OPENCODE_ALLOW_PAID=1`）に限定しました。課金/クォータ拒否は最良の無料モデルで一度再試行し、資格情報がない場合は `opencode-go` のモデルを除外します。v2 ビルドで `opencode models` が空を返す場合は `api model.list` のカタログをロスターとして使います。
 - **panda のモデルをどちらのワイヤでも OpenCode に渡せる** —— 失敗時のフォールバックは OpenAI 方言のモデルしか受け付けず、DeepSeek の Anthropic エンドポイントを設定したノードは無料層の失敗を panda のモデルへ渡せませんでした。アダプターは方言非依存の `OPENPANDA_MODEL_*` 契約を受け取り、方言に応じて `@ai-sdk/anthropic` または `@ai-sdk/openai-compatible` の provider フラグメントをユーザーのネイティブ設定にマージし（MCP と権限は保持）、v2 のバックグラウンドサービスが古い設定を使い続けないよう `--standalone` で実行します。
 - **「自動」思考モードは全画面でプロバイダ既定を意味する** —— REPL とエントリクライアントは `thinking: auto` を明示的な思考要求として扱い、ウィザードと Web フォームは何も送っていませんでした。全画面で未設定として保存し、thinking フィールドを送らないようにしました。

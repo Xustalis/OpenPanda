@@ -52,6 +52,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 修复
 
+- **OpenCode Go 的会话头跟随端点，而不只看 provider id** —— 把自定义 `base_url` 指向 `https://opencode.ai/zen/go` 时，Go key 本身可用，却只得到 400 MissingSessionID，因为只有命名的 `opencode-go` 行才会生成 `x-opencode-session`。客户端现在会识别 OpenCode 端点并生成同样的每客户端 id，外部中继不会收到这个头。
 - **OpenCode 默认走免费模型** —— 未指定模型时，适配器会自动挑能力最强的模型，于是在没有 Go 订阅或余额的账号上，每个任务都以 "Insufficient account funds" 结束。现在免费模型优先，付费模型只有显式开启（`OPENPANDA_OPENCODE_ALLOW_PAID=1`）才会自动选择；计费/配额拒绝会自动换到最好的免费模型重试一次；没有凭据时跳过 `opencode-go` 模型。v2 构建的 `opencode models` 返回空列表时，改以 `api model.list` 目录作为可用模型集。
 - **panda 的模型现在能以任一协议接入 OpenCode** —— 失败兜底原先只接受 OpenAI 方言的模型，配置了 DeepSeek Anthropic 端点的节点永远无法把失败的免费层任务交给 panda 的模型。适配器改为接收方言中立的 `OPENPANDA_MODEL_*` 约定，按方言写入 `@ai-sdk/anthropic` 或 `@ai-sdk/openai-compatible` 的 provider 片段，并合并到用户原生配置之上（MCP 与权限保留），同时以 `--standalone` 运行，避免 v2 后台服务继续使用旧配置。
 - **「自动」思考模式在所有界面统一为「跟随供应商默认」** —— REPL 与入口客户端把 `thinking: auto` 当成显式请求思考，而向导与网页表单不发送任何字段；现在所有入口都把它存为空值，不发送 thinking 字段。
