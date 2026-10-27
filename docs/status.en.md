@@ -190,6 +190,28 @@ English translation of [status.md](status.md)（中文版为准）· English
 > now carries the #104 work (console dictation, a per-agent model pin, device
 > panels), and the site no longer commits to a next version number. The 23-check installer
 > suite passes and `make gate` is green.)
+>
+> 2026-10-27 (`v0.1.1` "Constellation" release preparation: the patch on the
+> release-grade line. Configuration, stored data and the wire are unchanged —
+> no schema migration, no new frame, no renamed key. The entry client gained
+> two native dialects (OpenAI Responses and Google Gemini, with streaming, tool
+> calls and usage metering; refusal text and the oversized-event boundary
+> closed in the same pass), OpenCode Go / Console joined the built-in
+> providers, a thread's roster and node pin reached the terminal (`/team`,
+> `/node`, `panda ask --team/--node`, the to-do board), the dispatch budget
+> now derives from the roster (ceiling 8), cross-process read-modify-write is
+> atomic behind a file lock (`internal/fslock`), a task can pin a work
+> directory of its own, a project's work directory can no longer be a
+> filesystem root or the home directory, `sandbox.mode: strict` refuses to run
+> without its backend, and the console caps request bodies, event streams and
+> agent probes. The audit closed a batch of false greens: a pinned agent the
+> roster excludes is refused rather than re-staffed, the round roll-up waits
+> for employees that actually ran, a substitute names both sides, and the
+> injection notice is one line. On CI, every workflow action is pinned to a
+> commit sha with a guard script, and the adapter contract plus both TUI pty
+> contracts run on Windows and macOS too. Not done: UPnP/NAT-PMP, punch/dir
+> source-signature convergence, the daemon→panel mesh-metrics IPC, cross-node
+> hello replay.)
 
 > 2026-10-21 (cross-network mesh P1–P5: dual-key identity and reachability cards,
 > transitive blind relay, epidemic directory sync, K=2 rendezvous edges and the
@@ -326,6 +348,11 @@ The 2026-08-31 review fix round has landed (merged into v0.0.7):
 | **Console dictation** (v0.1.0) | ✅ | `webui/panel/voice.go` + `POST /api/voice/transcribe`: the page records 16 kHz mono WAV and relays it to an OpenAI-compatible `/audio/transcriptions`; `asr` is optional and inherits the active model; vendor refusals are returned verbatim |
 | **Per-agent model pin** (v0.1.0) | ✅ | `injection.agents.<agent\|adapter>` pins a model for that agent alone; unset fields inherit the node model, stopping before `params`/`headers`/`thinking` so one dialect's body cannot leak into another |
 | **Workspace device panels** (v0.1.0) | ✅ | `webui/app/src/views/workspace-panels.tsx`: the panel is the machine, the tile is the agent and its live busy state; a round no longer closes on a batch's first report (`roundStillOpen()` reads the task board) |
+| **Native dialects: OpenAI Responses + Google Gemini** (v0.1.1) | ✅ | `internal/entry/responses.go` + `google.go`: the entry client drives both surfaces natively, with streaming, tool calls and usage metering; refusal text streams into the answer, arguments that arrive without their `output_item.added` fail with a diagnosis instead of an empty answer, the SSE event ceiling is 4 MiB and `bufio.ErrTooLong` is final instead of a replayed, re-billed request |
+| **OpenCode Go / Console built-in provider** (v0.1.1) | ✅ | `panda model add opencode-go oc_sk_…` — one key covers the pay-as-you-go catalogue and the Go/Go Plus subscription; each model routes to OpenAI Chat, Anthropic Messages, OpenAI Responses or Google Generative AI; only SystemOne (Jev) is unsupported, and it says so at setup |
+| **Terminal roster and node pin** (v0.1.1) | ✅ | `/team` (a space-toggled picker), `/node`, `panda ask --team/--node`, `panda session ask --node` and the RPC `AskScope` all carry the roster and the node; `panda todo …` / `/todo` bring the to-do board to the terminal; the dispatch budget derives from the roster (`task_budget` declares a wider fan-out, ceiling 8) |
+| **Atomic cross-process storage writes** (v0.1.1) | ✅ | new `internal/fslock`: sessions and memory hold the lock across the whole read-modify-write (the file lock ahead of the in-process mutex, one order everywhere), so two writers no longer overwrite each other; renaming a project moves its memory in one step, a Dreaming promotion is recorded after it is written, and a sweep that changes nothing rewrites nothing |
+| **Per-task work directory** (v0.1.1) | ✅ | a task that names a work directory runs there and holds that directory's lock instead of the project's, so two business domains in separate trees proceed side by side rather than queueing behind each other; a pinned task stays on this node; inside the project's own tree the pin degrades to a scope leaf. The task's pin answers to the same breadth rule as the project: a volume root, the home directory and the OS trees are refused |
 | Shortest-path multi-hop relay | ✅ graph routing landed | neighbor advertisements build the link-state graph, edge weights take `LinkMetrics` RTT samples (`unknownLinkCost` when unmeasured), `graphFirstHop` runs Dijkstra for the first hop of the globally cheapest path (`internal/scheduler/route.go`) |
 
 ## Both entry points reach it
