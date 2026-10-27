@@ -1,6 +1,6 @@
 # 项目现状
 
-> 2026-10-27 更新（`v0.1.1`「Constellation」发布准备：发布级版本线上的补丁版，配置、存储与协议不变——无 schema 迁移、无新帧、无改名的键。这一轮是入口客户端新增 OpenAI Responses 与 Google Gemini 两种原生方言（流式、工具调用、用量计量，拒绝文本与超大事件的边界一并补齐）、OpenCode Go / Console 成为内置供应商、会话花名册与节点 pin 打通终端（`/team`、`/node`、`panda ask --team/--node`、待办板）、派发预算改由名单推导（上限 8）、跨进程读写改为文件锁后的原子操作（`internal/fslock`）、任务可钉自己的工作目录、项目工作目录拒绝文件系统根与家目录、`sandbox.mode: strict` 在后端缺失时拒绝执行、控制台给请求体与事件流及 agent 探测加上限。发布审计关掉一批「报绿但没做」的假阳性：名册外点名被拒不换人、轮次小结等真正跑起来的员工、替补者报出双方名字、注入提示压成一行。CI 侧所有 workflow action 钉到 commit sha 并加守卫脚本，adapter 契约与两条 TUI pty 契约在 Windows 与 macOS 上也跑。未做：UPnP/NAT-PMP、punch/dir 源签名收敛、daemon→面板 mesh 指标 IPC、跨节点 hello 重放。）
+> 2026-10-27 更新（`v0.1.1`「Constellation」发布准备：发布级版本线上的补丁版，配置、存储与协议不变——无 schema 迁移、无新帧、无改名的键。这一轮是入口客户端新增 OpenAI Responses 与 Google Gemini 两种原生方言（流式、工具调用、用量计量，拒绝文本与超大事件的边界一并补齐）、OpenCode Go / Console 成为内置供应商、会话花名册与节点 pin 打通终端（`/team`、`/node`、`panda ask --team/--node`、待办板）、派发预算改由名单推导（上限 8）、跨进程读写改为文件锁后的原子操作（`internal/fslock`）、任务可钉自己的工作目录、项目工作目录拒绝文件系统根与家目录、`sandbox.mode: strict` 在后端缺失时拒绝执行、控制台给请求体与事件流及 agent 探测加上限。发布审计关掉一批「报绿但没做」的假阳性：名册外点名被拒不换人、轮次小结等真正跑起来的员工、替补者报出双方名字、注入提示压成一行。CI 侧所有 workflow action 钉到 commit sha 并加守卫脚本，adapter 契约与两条 TUI pty 契约在 Windows 与 macOS 上也跑。门禁的 race 腿还抓到并修掉了队列关停与派发之间的一处数据竞争——Go 把 WaitGroup 的首次自增与首个等待者建模成一对读写，两者无序即报竞争；现在运行位在等待方同样持有的锁下取，关停开始后拒绝再取。未做：UPnP/NAT-PMP、punch/dir 源签名收敛、daemon→面板 mesh 指标 IPC、跨节点 hello 重放。）
 
 > 2026-10-23 更新（`v0.1.0`「Constellation」发布准备：默认通道从 `v0.0.11` 切到 `v0.1.0`；`v0.1.0-preview` 与更早的预览 tag/release 已恢复保留，供显式钉版本的用户使用。发布前统一口径——站点、README 与本文件指向 `v0.1.0`，CHANGELOG 的 0.1.0 小节并入 #104 的控制台语音输入、每 agent 模型 pin 与工作空间设备面板，站点不再承诺具体下一版号。安装器 23 项自测通过，`make gate` 全绿。）
 
@@ -90,6 +90,7 @@ P0 安全发现（路径穿越、结果送达、TUI 退出）已关闭，P1 安�
 | **终端名册与节点 pin**（v0.1.1） | ✅ | `/team`（空格切换的多选卡片）、`/node`、`panda ask --team/--node`、`panda session ask --node` 与 RPC 的 `AskScope` 一起承载名册与节点；`panda todo …` / `/todo` 把待办板带进终端；派发预算由名单推导（`task_budget` 可申报更宽的扇出，上限 8） |
 | **跨进程存储原子写**（v0.1.1） | ✅ | 新增 `internal/fslock`：会话与记忆的读-改-写整段持锁（文件锁在进程内 mutex 之前，顺序一致），跨进程写入不再互相覆盖；项目改名一步搬完记忆，Dreaming 晋升先落盘再记账，什么都没晋升的整合清扫不重写文件 |
 | **任务级工作目录**（v0.1.1） | ✅ | 任务可钉自己的工作目录，跑在那里并锁那个目录而不是项目根，两个目录树里的业务并行推进而不是互相排队；钉住目录的任务留在本机；项目树内部降级为作用域叶子。任务的 pin 走与项目同一套宽度规则，卷根、家目录与系统目录一律拒绝 |
+| **队列关停与派发的顺序**（v0.1.1） | ✅ | `internal/scheduler/queue`：运行位在一把等待方同样持有的锁下取，关停开始后拒绝再取——等待开始前取到的位由它等待，之后取到的被拒绝，任务留在队列里；派发循环不再与引擎关闭时的 `wg.Wait()` 竞争（Go 把 WaitGroup 的首次自增与首个等待者建模成一对读写，两者无序即报数据竞争） |
 | 最短路径多跳中继 | ✅ 图路由已落地 | 邻居广告构建链路状态图，边权取 `LinkMetrics` 的 RTT 采样（无测量走 `unknownLinkCost`），`graphFirstHop` 跑 Dijkstra 取全局最便宜路径的第一跳（`internal/scheduler/route.go`） |
 
 ## 两条入口都可达

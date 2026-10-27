@@ -209,7 +209,12 @@ English translation of [status.md](status.md)（中文版为准）· English
 > for employees that actually ran, a substitute names both sides, and the
 > injection notice is one line. On CI, every workflow action is pinned to a
 > commit sha with a guard script, and the adapter contract plus both TUI pty
-> contracts run on Windows and macOS too. Not done: UPnP/NAT-PMP, punch/dir
+> contracts run on Windows and macOS too. The gate's race leg also caught and
+> closed a data race between the queue's shutdown and its dispatch: Go models
+> a WaitGroup's first increment and its first waiter as a read/write pair, and
+> the race detector reports the unordered pair. A runner slot is now taken
+> under a mutex the wait also holds, and refused once the shutdown has begun.
+> Not done: UPnP/NAT-PMP, punch/dir
 > source-signature convergence, the daemon→panel mesh-metrics IPC, cross-node
 > hello replay.)
 
@@ -353,6 +358,7 @@ The 2026-08-31 review fix round has landed (merged into v0.0.7):
 | **Terminal roster and node pin** (v0.1.1) | ✅ | `/team` (a space-toggled picker), `/node`, `panda ask --team/--node`, `panda session ask --node` and the RPC `AskScope` all carry the roster and the node; `panda todo …` / `/todo` bring the to-do board to the terminal; the dispatch budget derives from the roster (`task_budget` declares a wider fan-out, ceiling 8) |
 | **Atomic cross-process storage writes** (v0.1.1) | ✅ | new `internal/fslock`: sessions and memory hold the lock across the whole read-modify-write (the file lock ahead of the in-process mutex, one order everywhere), so two writers no longer overwrite each other; renaming a project moves its memory in one step, a Dreaming promotion is recorded after it is written, and a sweep that changes nothing rewrites nothing |
 | **Per-task work directory** (v0.1.1) | ✅ | a task that names a work directory runs there and holds that directory's lock instead of the project's, so two business domains in separate trees proceed side by side rather than queueing behind each other; a pinned task stays on this node; inside the project's own tree the pin degrades to a scope leaf. The task's pin answers to the same breadth rule as the project: a volume root, the home directory and the OS trees are refused |
+| **Queue shutdown ordered against dispatch** (v0.1.1) | ✅ | `internal/scheduler/queue`: a runner slot is taken under a mutex the wait also holds, and refused once the shutdown has begun — a slot taken before the wait starts is awaited by it, one taken after is refused and the task stays queued; the dispatch loop no longer races the engine's close inside `wg.Wait()` (Go models a WaitGroup's first increment and its first waiter as a read/write pair, and the race detector reports the unordered pair) |
 | Shortest-path multi-hop relay | ✅ graph routing landed | neighbor advertisements build the link-state graph, edge weights take `LinkMetrics` RTT samples (`unknownLinkCost` when unmeasured), `graphFirstHop` runs Dijkstra for the first hop of the globally cheapest path (`internal/scheduler/route.go`) |
 
 ## Both entry points reach it
