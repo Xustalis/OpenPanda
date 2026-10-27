@@ -192,8 +192,11 @@ English translation of [status.md](status.md)（中文版为准）· English
 > suite passes and `make gate` is green.)
 >
 > 2026-10-27 (`v0.1.1` "Constellation" release preparation: the patch on the
-> release-grade line. Configuration, stored data and the wire are unchanged —
-> no schema migration, no new frame, no renamed key. The entry client gained
+> release-grade line. Configuration and stored data are unchanged — no schema
+> migration, no renamed key — and the wire adds no new frame. The one format
+> change is the UDP datagram's peer-keyed seal, which does not interoperate
+> with a 0.1.0 node on that plane, so a mesh upgrades together. The entry
+> client gained
 > two native dialects (OpenAI Responses and Google Gemini, with streaming, tool
 > calls and usage metering; refusal text and the oversized-event boundary
 > closed in the same pass), OpenCode Go / Console joined the built-in
@@ -214,6 +217,18 @@ English translation of [status.md](status.md)（中文版为准）· English
 > a WaitGroup's first increment and its first waiter as a read/write pair, and
 > the race detector reports the unordered pair. A runner slot is now taken
 > under a mutex the wait also holds, and refused once the shutdown has begun.
+> Before the cut, three more items closed: the console re-applies the work-dir
+> breadth rule before admitting a project into its read roots (a row written by
+> an older build can no longer serve the disk), both project endpoints answer
+> 400 with the rule that refused the path, and `defense.HashDir` allocates
+> ~4 MB per supervision round where it allocated ~165 MB, with a byte-identical
+> digest. One security fix landed as well: UDP datagrams now seal to the peer
+> pair under an X25519 key derived from both node identities, with the sender's
+> id in the clear as the key selector and the envelope's `From` checked against
+> it; a peer that publishes no identity key keeps the old mesh-key path, but
+> 0.1.0 nodes all publish one, so that plane needs the whole mesh upgraded
+> together (the WebSocket track is unaffected and punch frames keep their old
+> form).
 > Not done: UPnP/NAT-PMP, punch/dir
 > source-signature convergence, the daemon→panel mesh-metrics IPC, cross-node
 > hello replay.)
