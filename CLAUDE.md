@@ -129,8 +129,10 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
   `faq.md`, `protocol.md` and their `.en.md` twins).
 - Runtime dirs (`data/`, `memory/`, `plans/`, `projects/`, `tasks/`,
   `MEMORY.md`/`USER.md`) appear at the repo root when a dev node runs
-  with `work_path="."` — gitignored node state, not source. `site/`
-  and `author/` are likewise local-only.
+  with `work_path="."` — gitignored node state, not source. `author/`
+  and `docs/author/` are local-only for the same reason. `site/` is
+  not: it is tracked and deployed by `.github/workflows/pages.yml` (see
+  the bilingual note below).
 
 ### `internal/` by concern
 
