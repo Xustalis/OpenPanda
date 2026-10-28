@@ -55,6 +55,19 @@ def source_path(path):
     return path.with_name(path.name + ".py") if sys.platform == "win32" else path
 
 
+def home_env(home):
+    """Point every platform's `~` at one fixture directory.
+
+    posixpath.expanduser reads HOME, ntpath reads USERPROFILE — so a case that
+    plants a credential under a temp home only reaches its own file on POSIX.
+    On windows-latest the adapter looked in the runner's profile instead, found
+    no opencode login, dropped the Go preference and ran without `--model`,
+    which read as a preference bug rather than a fixture that only spoke POSIX.
+    Both names, one directory; the unused one is inert on each platform.
+    """
+    return {"HOME": str(home), "USERPROFILE": str(home)}
+
+
 def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=None):
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
@@ -398,7 +411,8 @@ print(json.dumps({"type":"text","sessionID":"s1","part":{"id":"px","type":"text"
                         "OPENPANDA_INJECTED_MODEL", "OPENPANDA_CACHE_DIR"):
                 env.pop(key, None)
             env["PATH"] = str(tmp) + os.pathsep + env.get("PATH", "")
-            env["HOME"] = str(tmp)  # no ambient opencode config in the identity
+            # No ambient opencode config in the identity, on either platform.
+            env.update(home_env(tmp))
             env["XDG_CACHE_HOME"] = str(tmp / "cache")
             # cache_dir() reads LOCALAPPDATA on win32, not XDG_CACHE_HOME: without
             # this the test writes its fixtures into the developer's real cache.
@@ -722,7 +736,7 @@ args = sys.argv[1:]
 assert args[args.index("--model") + 1] == "opencode/deepseek-v4.1-flash-free", args
 print(json.dumps({"type":"text","sessionID":"ses_g1","part":{"id":"px","type":"text","text":"ok"}}))
 ''',
-            env={"HOME": home, "XDG_CACHE_HOME": cache},
+            env={**home_env(home), "XDG_CACHE_HOME": cache},
         )
         self.assertTrue(payload["ok"], payload)
 
@@ -762,7 +776,7 @@ assert args[args.index("--model") + 1] == "opencode/glm-5.3-flash", args
 print(json.dumps({"type":"text","sessionID":"ses_pf1","part":{"id":"px","type":"text","text":"ok"}}))
 ''',
             env={
-                "HOME": home,
+                **home_env(home),
                 "XDG_CACHE_HOME": cache,
                 "OPENPANDA_AGENT_MODELS": json.dumps(
                     ["opencode-go/kimi-k3", "opencode/glm-5.3-flash"]),
@@ -809,7 +823,7 @@ assert args[args.index("--model") + 1] == "opencode-go/kimi-k3", args
 print(json.dumps({"type":"text","sessionID":"ses_pf2","part":{"id":"px","type":"text","text":"ok"}}))
 ''',
             env={
-                "HOME": home,
+                **home_env(home),
                 "XDG_CACHE_HOME": cache,
                 "OPENPANDA_AGENT_MODELS": json.dumps(["opencode-go/kimi-k3"]),
             },
@@ -847,7 +861,7 @@ assert args[args.index("--model") + 1] == "opencode/kimi-k3", args
 print(json.dumps({"type":"text","sessionID":"ses_pf4","part":{"id":"px","type":"text","text":"ok"}}))
 ''',
             env={
-                "HOME": home,
+                **home_env(home),
                 "XDG_CACHE_HOME": cache,
                 "OPENPANDA_AGENT_MODELS": json.dumps(["kimi-k3"]),
             },
