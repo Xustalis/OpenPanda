@@ -464,6 +464,24 @@ for cfg in "$(user_config_path)" "/etc/openpanda/config.yaml"; do
     fi
 done
 
+# The PATH the auto-start service runs with. launchd gives a job
+# /usr/bin:/bin:/usr/sbin:/sbin and systemd --user little more, so every agent
+# CLI (claude, codex, opencode, dsh, ...) and every runtime a capability card
+# declares (node, python3, ...) resolves as "command not found" inside the
+# daemon — which prunes abilities the host really has and drops the router down
+# its fallback chain for no reason. A node started from a terminal works, the
+# same node started at login does not; this is why.
+#
+# Deliberately not the installer's own $PATH: that is inherited from whatever
+# shell launched the install and can carry tool-specific, version-pinned
+# directories (a bundled runtime's 22.x/bin) that go stale on the next upgrade.
+# These are the same directories internal/carddetect searches in
+# fallbackBinDirs, so "the card admits it" and "the daemon can exec it" stay the
+# same question. Keep the two lists in step.
+service_path() {
+    printf '%s' "$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.grok/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+}
+
 register_service() {
     if [ "$OS" = darwin ]; then
         launch_agent="$HOME/Library/LaunchAgents/com.openpanda.node.plist"
@@ -485,6 +503,11 @@ register_service() {
         <string>daemon</string>
     </array>
     <key>WorkingDirectory</key><string>$PREFIX</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$(service_path)</string>
+    </dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ProcessType</key><string>Background</string>
@@ -515,6 +538,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=PATH=$(service_path)
 ExecStart=$BINDIR/panda daemon
 WorkingDirectory=$PREFIX
 Restart=on-failure

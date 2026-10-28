@@ -4,11 +4,22 @@
   OpenPanda macOS node — LaunchAgent, runs the kernel daemon headless in the
   background: no terminal window, starts at login, restarts on crash.
 
-  Install (adjust the binary path / WorkingDirectory below to your checkout
-  or install prefix first):
+  Install (adjust the binary path / WorkingDirectory / PATH below to your
+  checkout or install prefix first):
     cp deploy/macos/com.openpanda.node.plist ~/Library/LaunchAgents/
     launchctl unload ~/Library/LaunchAgents/com.openpanda.node.plist 2>/dev/null
     launchctl load   ~/Library/LaunchAgents/com.openpanda.node.plist
+
+  The EnvironmentVariables/PATH entry is not optional. launchd hands a job
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin, so without it every agent CLI
+  (~/.local/bin/claude, /opt/homebrew/bin/codex, ...) and every runtime a
+  capability card declares (node, python3) resolves as "command not found"
+  inside the daemon: the card prunes abilities the host really has and the
+  router falls back down its agent chain for no visible reason. A node started
+  by hand from a terminal works and the same node started at login does not —
+  this dict is the difference. Replace /Users/you with your own home directory;
+  the list mirrors internal/carddetect's fallbackBinDirs, so keep the two in
+  step.
 
   No --config/--card flags: the daemon auto-discovers them the same way an
   interactive `panda daemon` does — OPENPANDA_CONFIG_PATH →
@@ -30,6 +41,11 @@
         </array>
         <key>WorkingDirectory</key>
         <string>/usr/local/openpanda</string>
+        <key>EnvironmentVariables</key>
+        <dict>
+                <key>PATH</key>
+                <string>/Users/you/.local/bin:/Users/you/.cargo/bin:/Users/you/.grok/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        </dict>
         <key>RunAtLoad</key>
         <true/>
         <key>KeepAlive</key>

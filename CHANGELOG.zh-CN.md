@@ -56,6 +56,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **任务可以钉自己的工作目录** —— 点名了工作目录的任务就跑在那里，锁的也是那个目录而不是项目根，于是两棵互不相干目录树里的业务可以并行推进，而不是排队等彼此。钉住目录也把任务留在这台机器上：对端没有那棵树可跑。项目树内部则降级为一个作用域叶子，因此整项目任务与它不会同时写同一个 checkout。
 
 ### 修复
+- **登录启动的节点能跑起自己声明的 agent 了** —— LaunchAgent 没有带 `PATH`，守护进程只拿到 launchd 那份 `/usr/bin:/bin:/usr/sbin:/sbin`：装在 `~/.local/bin` 或 `/opt/homebrew/bin` 下的 agent CLI 一律解析成「command not found」，能力卡里声明的 `node` 也在启动时被裁掉，而同一个节点从终端启动却一切正常。现在 macOS plist 与 Linux systemd 单元都把 `PATH` 设成 `carddetect` 本来就在搜索的那组目录，并加了一条契约测试：两份列表一旦漂移就红。
 - **`golang.org/x/net` 升到 0.62.0** —— GO-2026-6860（`html` 合并文本节点时的二次复杂度）可从网页工具的 `htmlToText` 触发，模块已升到带修复的版本，`govulncheck` 重新全绿。
 
 - **停驻任务的等待不再竞争自己的游标** —— 结算监听把每个事件里的任务 id 与它正在跟踪的那一行比对，而那个 id 取自等待循环每次都会重新赋值的同一个变量。监听器运行在记录事件的那个 goroutine 上（就在写入方的事务里），因此竞态检测器把这两次无序访问报成了数据竞争。现在 id 在监听安装前就被复制出来，行为不变。

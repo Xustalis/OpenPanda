@@ -37,6 +37,13 @@ func binaryFileNames(name string) []string { return []string{name} }
 // agent-CLI installers land in on this platform, outside PATH: Homebrew
 // (both Apple Silicon and Intel layouts), /usr/local, and the per-user bin
 // dirs npm/pip/cargo use.
+//
+// The auto-start service ships the same directories as its PATH
+// (scripts/install.sh's service_path, and deploy/macos/com.openpanda.node.plist)
+// because launchd and systemd both hand a job a bare system PATH. The two lists
+// answer two halves of one question — "is it installed" here, "can the daemon
+// exec it" there — and a mismatch shows up as a card that admits a binary the
+// daemon then cannot spawn. Keep them in step.
 func fallbackBinDirs(home string) []string {
 	return []string{
 		filepath.Join(home, ".local", "bin"),
