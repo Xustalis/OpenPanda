@@ -321,8 +321,10 @@ func maskKey(key string) string {
 	if key == "" {
 		return ""
 	}
-	if len(key) <= 4 {
+	if len(key) <= 8 {
 		return "••••"
 	}
-	return "…" + key[len(key)-4:]
+	// Head and tail: two accounts of one vendor often end alike ("…0000"),
+	// and the tail alone then cannot tell them apart in the list.
+	return key[:4] + "…" + key[len(key)-4:]
 }

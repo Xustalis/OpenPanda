@@ -141,14 +141,16 @@ select.input {
 }
 .model-picker > .input {
   width: 100%;
-  padding-right: 34px;
+  /* Just enough for the caret: every pixel here is taken from a model id the
+     user has to be able to read back in full. */
+  padding-right: 26px;
 }
 .model-picker-toggle {
   position: absolute;
   top: 1px;
   right: 1px;
   bottom: 1px;
-  width: 32px;
+  width: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -522,6 +524,10 @@ input[type='checkbox'].check,
 }
 .seg {
   padding: 5px 14px;
+  /* Without this a narrow column squeezes each label to one character per
+     line, which is how "自动" once rendered as a vertical stack. */
+  white-space: nowrap;
+  flex: none;
   border-radius: calc(var(--radius-md) - 3px);
   font-size: var(--text-sm);
   font-weight: 500;

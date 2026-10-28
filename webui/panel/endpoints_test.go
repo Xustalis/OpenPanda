@@ -551,7 +551,8 @@ func TestModelSettingsGetMasksKey(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if !got.APIKeySet || got.APIKeyHint != "…1234" {
+	// Head and tail: the tail alone cannot separate two accounts of one vendor.
+	if !got.APIKeySet || got.APIKeyHint != "sk-s…1234" {
 		t.Fatalf("key hint wrong: %+v", got)
 	}
 }

@@ -1615,12 +1615,18 @@ export const api = {
     return request('POST', '/api/models', req)
   },
 
-  useModel(alias: string): Promise<ModelEntry> {
-    return request('POST', `/api/models/${encodeURIComponent(alias)}/use`)
+  useModel(alias: string, ref?: ModelRef): Promise<ModelEntry> {
+    return request('POST', `/api/models/${encodeURIComponent(alias)}/use${refQuery(ref)}`)
   },
 
-  removeModel(alias: string): Promise<{ removed: string }> {
-    return request('DELETE', `/api/models/${encodeURIComponent(alias)}`)
+  /** Rewrite one registry row in place — the console's "edit". `ref` narrows
+   *  which row a legacy config's duplicate alias means. */
+  updateModel(alias: string, req: AddModelRequest, ref?: ModelRef): Promise<ModelEntry> {
+    return request('PUT', `/api/models/${encodeURIComponent(alias)}${refQuery(ref)}`, req)
+  },
+
+  removeModel(alias: string, ref?: ModelRef): Promise<{ removed: string; switched_to?: string }> {
+    return request('DELETE', `/api/models/${encodeURIComponent(alias)}${refQuery(ref)}`)
   },
 
   fetchModels(req: ModelRefRequest): Promise<{ ok: boolean; alias?: string; models?: string[]; error?: string }> {
@@ -1696,6 +1702,22 @@ export const api = {
 
 // ---- Multi-model registry wire types ----
 
+/** The pair that tells two rows with one alias apart — a legacy config can
+ *  hold both, and the address has to say which one is meant. */
+export interface ModelRef {
+  model?: string
+  base_url?: string
+}
+
+function refQuery(ref?: ModelRef): string {
+  if (!ref) return ''
+  const q = new URLSearchParams()
+  if (ref.model) q.set('model', ref.model)
+  if (ref.base_url) q.set('base_url', ref.base_url)
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
+
 export interface ModelEntry {
   alias: string
   provider?: string
@@ -1712,6 +1734,16 @@ export interface ModelEntry {
   active: boolean
   key_set: boolean
   key_hint?: string
+  /** True when the stored limit is the catalogue's own answer, i.e. the user
+   *  expressed no opinion — the form shows the number as a placeholder. */
+  context_auto?: boolean
+  max_tokens_auto?: boolean
+  auto_context_window?: number
+  auto_max_tokens?: number
+  /** "endpoint-owner": the endpoint belongs to the row named by warning_arg.
+   *  The console turns it into a sentence (and a fix), the wire stays stable. */
+  warning_code?: string
+  warning_arg?: string
 }
 
 export interface ProviderInfo {
@@ -1737,13 +1769,22 @@ export interface AddModelRequest {
   model?: string
   api_key?: string
   alias?: string
+  /** Alias of the entry whose key this one borrows — says *which* account of
+   *  a vendor is being extended when one vendor is registered twice. */
+  reuse_from?: string
   api_type?: string
   base_url?: string
   max_tokens?: number
+  /** Put the limit back on the catalogue's answer. Distinct from omitting the
+   *  number, which means "leave what is stored". */
+  max_tokens_reset?: boolean
   context_window?: number
+  context_window_reset?: boolean
   thinking?: string // "on" | "off" | "auto"
   thinking_budget?: number
+  thinking_budget_reset?: boolean
   max_retries?: number
+  max_retries_reset?: boolean
   no_auth?: boolean
   params?: Record<string, unknown>
   headers?: Record<string, string>

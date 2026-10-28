@@ -7,28 +7,17 @@ import {
   type AgentTestResult,
   type AppSettings,
   type MCPSettings,
-  type ModelSettings,
 } from '../api/client'
 import { useLocaleRerender } from '../hooks'
 import { Icon, type IconName } from '../components/icons'
 import { t } from '../i18n'
 import { locale, localeNames, locales, setLocale } from '../i18n'
-import { notifyModelSaved } from './onboarding'
 import { TermsModal } from '../components/terms'
 import { onThemeChange, setTheme, theme } from '../theme'
 import { MemoryView } from './memory'
 import { SkillsView } from './skills'
 import { SystemView } from './system'
 import { ModelsSection } from './models'
-
-type ApiType = 'anthropic' | 'openai' | 'responses' | 'google'
-
-const EXAMPLES: Record<ApiType, { base: string; model: string }> = {
-  anthropic: { base: 'https://api.anthropic.com', model: 'claude-sonnet-5-5' },
-  openai: { base: 'https://api.openai.com/v1', model: 'gpt-6.1-sol' },
-  responses: { base: 'https://api.openai.com/v1', model: 'gpt-6.1-sol' },
-  google: { base: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-4-argon' },
-}
 
 export type Section =
   | 'general'
@@ -90,16 +79,6 @@ export function SettingsView(props: {
 }) {
   useLocaleRerender()
   const [section, setSection] = useState<Section>(() => normalizeSection(props.initialSection))
-  // The single-model form lives behind a disclosure so the registry reads
-  // clean — which also buries the *fix* surface when the active model's key
-  // dies. ModelsSection can ask to open it (e.g. off a failed key test).
-  const [advancedOpen, setAdvancedOpen] = useState(false)
-
-  function openAdvancedModel() {
-    setAdvancedOpen(true)
-    // Focus waits a frame so the freshly-opened details is laid out first.
-    requestAnimationFrame(() => document.getElementById('api-key')?.focus())
-  }
 
   useEffect(() => {
     if (props.initialSection) {
@@ -136,19 +115,7 @@ export function SettingsView(props: {
 
         <div class="settings-body">
           {section === 'general' && <GeneralSection />}
-          {section === 'models' && (
-            <>
-              <ModelsSection onOpenAdvanced={openAdvancedModel} />
-              <details
-                class="raw-toggle settings-advanced"
-                open={advancedOpen}
-                onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
-              >
-                <summary>{t('settings.advancedModel')}</summary>
-                <ModelSection />
-              </details>
-            </>
-          )}
+          {section === 'models' && <ModelsSection />}
           {section === 'policy' && <PolicySection />}
           {section === 'agents' && <AgentsSection />}
           {section === 'mcp' && <MCPSection />}
@@ -218,266 +185,6 @@ function GeneralSection() {
 
       {showTerms && <TermsModal onClose={() => setShowTerms(false)} />}
     </div>
-  )
-}
-
-/** The LLM provider form: Anthropic or OpenAI-wire format, any base URL,
- *  any model. Changes persist to config.yaml and hot-swap the engine. */
-function ModelSection() {
-  const [form, setForm] = useState<ModelSettings | null>(null)
-  const [apiKey, setApiKey] = useState('')
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
-  const [testing, setTesting] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [testResult, setTestResult] = useState<{ ok: boolean; reply?: string; error?: string } | null>(null)
-
-  useEffect(() => {
-    api
-      .getModelSettings()
-      .then((s) => setForm(s))
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-  }, [])
-
-  if (!form) {
-    return (
-      <div class="card settings-card">
-        <h2 class="block-title">{t('settings.model')}</h2>
-        <p class="page-sub dim">{error || t('common.loading')}</p>
-      </div>
-    )
-  }
-
-  const apiType = (form.api_type || 'anthropic') as ApiType
-  const dirty = form.base_url.trim() !== '' || form.model.trim() !== ''
-
-  function patch(p: Partial<ModelSettings>) {
-    setForm((f) => (f ? { ...f, ...p } : f))
-    setNotice('')
-    setTestResult(null)
-  }
-
-  function payload(): ModelSettings {
-    return {
-      api_type: apiType,
-      base_url: form!.base_url.trim(),
-      model: form!.model.trim(),
-      max_tokens: Number(form!.max_tokens) || 0,
-      context_window: Number(form!.context_window) || 0,
-      thinking: form!.thinking || 'auto',
-      thinking_budget: Number(form!.thinking_budget) || 0,
-      max_retries: Number(form!.max_retries) || 0,
-      no_auth: !!form!.no_auth,
-      api_key: apiKey.trim() || undefined,
-    }
-  }
-
-  async function test() {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      setTestResult(await api.testModelSettings(payload()))
-    } catch (e: unknown) {
-      setTestResult({ ok: false, error: e instanceof Error ? e.message : String(e) })
-    } finally {
-      setTesting(false)
-    }
-  }
-
-  async function save(e: Event) {
-    e.preventDefault()
-    setSaving(true)
-    setError('')
-    try {
-      const saved = await api.putModelSettings(payload())
-      setForm(saved)
-      setApiKey('')
-      setNotice(t('settings.saved'))
-      notifyModelSaved() // the onboarding banner re-checks and hides
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <form class="card settings-card" onSubmit={save}>
-      <h2 class="block-title">{t('settings.model')}</h2>
-
-      <div class="field-group">
-        <label>{t('settings.apiType')}</label>
-        <div class="segmented" role="radiogroup">
-          {(['anthropic', 'openai', 'responses', 'google'] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              role="radio"
-              aria-checked={apiType === v}
-              class={`seg${apiType === v ? ' on' : ''}`}
-              onClick={() => patch({ api_type: v })}
-            >
-              {v === 'anthropic'
-                ? t('settings.anthropic')
-                : v === 'openai'
-                  ? t('settings.openai')
-                  : v === 'responses'
-                    ? t('settings.responses')
-                    : t('settings.google')}
-            </button>
-          ))}
-        </div>
-        <p class="hint">{t('settings.apiTypeHelp')}</p>
-      </div>
-
-      <div class="field-row">
-        <div class="field-group">
-          <label for="base-url">{t('settings.baseURL')}</label>
-          <input
-            id="base-url"
-            class="input mono"
-            type="url"
-            required
-            placeholder={EXAMPLES[apiType].base}
-            value={form.base_url}
-            onInput={(e) => patch({ base_url: (e.target as HTMLInputElement).value })}
-          />
-          <p class="hint">{t('settings.baseURLHelp')}</p>
-        </div>
-        <div class="field-group">
-          <label for="model">{t('settings.model')}</label>
-          <input
-            id="model"
-            class="input mono"
-            type="text"
-            required
-            placeholder={EXAMPLES[apiType].model}
-            value={form.model}
-            onInput={(e) => patch({ model: (e.target as HTMLInputElement).value })}
-          />
-          <p class="hint">{t('settings.modelHelp')}</p>
-        </div>
-      </div>
-
-      <div class="field-row">
-        <div class="field-group">
-          <label for="api-key">{t('settings.apiKey')}</label>
-          <input
-            id="api-key"
-            class="input mono"
-            type="password"
-            autocomplete="off"
-            placeholder={form.api_key_set ? `${t('settings.apiKeySet')} ${form.api_key_hint ?? ''}` : 'sk-…'}
-            value={apiKey}
-            onInput={(e) => setApiKey((e.target as HTMLInputElement).value)}
-          />
-          <p class="hint">{form.api_key_set ? t('settings.apiKeyKeep') : t('settings.apiKeyHelp')}</p>
-        </div>
-        <div class="field-group">
-          <label for="max-tokens">{t('settings.maxTokens')}</label>
-          <input
-            id="max-tokens"
-            class="input"
-            type="number"
-            min={0}
-            step={256}
-            value={form.max_tokens || 0}
-            onInput={(e) => patch({ max_tokens: Number((e.target as HTMLInputElement).value) || 0 })}
-          />
-          <p class="hint">{t('settings.maxTokensHelp')}</p>
-        </div>
-        <div class="field-group">
-          <label for="max-retries">{t('settings.maxRetries')}</label>
-          <input
-            id="max-retries"
-            class="input"
-            type="number"
-            min={-1}
-            step={1}
-            value={form.max_retries || 0}
-            onInput={(e) => patch({ max_retries: Number((e.target as HTMLInputElement).value) || 0 })}
-          />
-          <p class="hint">{t('settings.maxRetriesHelp')}</p>
-        </div>
-        <div class="field-group">
-          <label for="context-window">{t('settings.contextWindow')}</label>
-          <input
-            id="context-window"
-            class="input"
-            type="number"
-            min={0}
-            step={1024}
-            value={form.context_window || 0}
-            onInput={(e) => patch({ context_window: Number((e.target as HTMLInputElement).value) || 0 })}
-          />
-          <p class="hint">{t('settings.contextWindowHelp')}</p>
-        </div>
-      </div>
-
-      <div class="field-row">
-        <div class="field-group">
-          <label>{t('settings.thinking')}</label>
-          <div class="segmented" role="radiogroup">
-            {(['auto', 'on', 'off'] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                role="radio"
-                aria-checked={(form.thinking || 'auto') === v}
-                class={`seg${(form.thinking || 'auto') === v ? ' on' : ''}`}
-                onClick={() => patch({ thinking: v === 'auto' ? '' : v })}
-              >
-                {t(`settings.thinking.${v}`)}
-              </button>
-            ))}
-          </div>
-          <p class="hint">{t('settings.thinkingHelp')}</p>
-        </div>
-        <div class="field-group">
-          <label for="thinking-budget">{t('settings.thinkingBudget')}</label>
-          <input
-            id="thinking-budget"
-            class="input"
-            type="number"
-            min={0}
-            step={1024}
-            value={form.thinking_budget || 0}
-            onInput={(e) => patch({ thinking_budget: Number((e.target as HTMLInputElement).value) || 0 })}
-          />
-          <p class="hint">{t('settings.thinkingBudgetHelp')}</p>
-        </div>
-        <div class="field-group">
-          <label class="checkbox-label">
-            <input
-              type="checkbox"
-              checked={!!form.no_auth}
-              onChange={(e) => patch({ no_auth: (e.target as HTMLInputElement).checked })}
-            />{' '}
-            {t('settings.noAuth')}
-          </label>
-          <p class="hint">{t('settings.noAuthHelp')}</p>
-        </div>
-      </div>
-
-      {testResult && (
-        <p class={`test-result ${testResult.ok ? 'ok' : 'bad'}`}>
-          {testResult.ok
-            ? t('settings.testOk', { reply: (testResult.reply || '').slice(0, 80) })
-            : `${t('settings.testFail')} ${testResult.error ?? ''}`}
-        </p>
-      )}
-      {error && <p class="gate-error">{error}</p>}
-      {notice && <p class="test-result ok">{notice}</p>}
-
-      <div class="settings-actions">
-        <button type="button" class="btn" disabled={testing || !dirty} onClick={test}>
-          {testing ? t('settings.testing') : t('settings.test')}
-        </button>
-        <button class="btn primary" type="submit" disabled={saving}>
-          {saving ? t('common.save') + '…' : t('common.save')}
-        </button>
-      </div>
-    </form>
   )
 }
 

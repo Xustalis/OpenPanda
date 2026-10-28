@@ -427,7 +427,7 @@ var builtins = []Provider{
 		// behind an internal route that also requires the Go session header,
 		// which is why the client mints it for every row below.
 		ID:               "opencode",
-		Label:            "OpenCode Zen / Console",
+		Label:            "OpenCode Zen · pay-as-you-go",
 		APIType:          config.APITypeOpenAI,
 		BaseURL:          "https://opencode.ai/zen/v1",
 		ModelsPath:       "/models",
@@ -498,7 +498,7 @@ var builtins = []Provider{
 		// MissingSessionID without it) and recognises Anthropic harnesses on
 		// https://opencode.ai/zen/go with the same key.
 		ID:               "opencode-go",
-		Label:            "OpenCode Go / Go Plus",
+		Label:            "OpenCode Go · subscription",
 		APIType:          config.APITypeOpenAI,
 		BaseURL:          "https://opencode.ai/zen/go/v1",
 		ModelsPath:       "/models",

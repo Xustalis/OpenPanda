@@ -196,9 +196,11 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("PUT /api/settings/model", h.putModelSettings)
 	mux.HandleFunc("POST /api/settings/model/test", h.testModelSettings)
 	// The multi-model registry (`/model` in the TUI): list, add from the
-	// provider catalogue, switch, remove, remote fetch, connectivity test.
+	// provider catalogue, edit one row in place, switch, remove, remote
+	// fetch, connectivity test.
 	mux.HandleFunc("GET /api/models", h.listModels)
 	mux.HandleFunc("POST /api/models", h.addModel)
+	mux.HandleFunc("PUT /api/models/{alias}", h.updateModel)
 	mux.HandleFunc("POST /api/models/{alias}/use", h.useModel)
 	mux.HandleFunc("DELETE /api/models/{alias}", h.removeModel)
 	mux.HandleFunc("POST /api/models/fetch", h.fetchModels)

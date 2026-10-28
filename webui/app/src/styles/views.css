@@ -5256,11 +5256,14 @@ pre,
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--sp-4);
+  /* The confirm hint is a full-width flex item; without wrapping it squeezed
+     the identity column to nothing and the buttons landed on the model name. */
+  flex-wrap: wrap;
   padding: var(--sp-3) 0;
   border-top: 1px solid var(--border-soft);
 }
 .model-row-main {
-  flex: 1;
+  flex: 1 1 240px;
   min-width: 0;
 }
 .model-row-top {
@@ -5278,26 +5281,336 @@ pre,
   margin-top: 2px;
   overflow-wrap: anywhere;
 }
-.model-url {
-  font-size: var(--text-xs);
-}
-.model-row-actions {
+.model-row-actions,
+.conn-actions {
   display: flex;
   gap: 6px;
   flex: none;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-.settings-advanced {
-  margin-top: var(--sp-4);
+/* Four two-character buttons (switch, test, edit, remove) is the widest row;
+   reserving that width keeps the labels in one column whether or not the row
+   happens to be the live one and therefore has no "switch". Without it every
+   row's buttons sat at a different offset. */
+.model-row-actions {
+  min-width: 210px;
 }
-.settings-advanced > summary {
+.model-row-confirm {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+  text-align: right;
+  margin: 4px 0 0;
+}
+.model-active-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* The page head doubles as the "add a connection" entry point: the button
+   sits on the same line as the section title so the primary action is where
+   the eye lands after the active-model card. */
+.models-head .block-title {
+  margin-bottom: 2px;
+}
+.models-head {
+  align-items: flex-start;
+}
+
+/* Connection cards — one endpoint + one key (one account), models underneath.
+   The grouping is what makes "one key, several models" visible instead of a
+   flat list where every row re-states the same endpoint. */
+.conn-card {
+  padding-bottom: var(--sp-3);
+}
+.conn-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.conn-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.conn-provider {
+  font-weight: 600;
   font-size: var(--text-md);
+}
+.conn-endpoint {
+  font-size: var(--text-xs);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.badge.quiet {
+  color: var(--text-tertiary);
+  background: transparent;
+}
+
+/* A configuration that will dial the wrong roster. Amber, not red: the config
+   is saved and the key is fine, only the endpoint label disagrees. */
+.model-warn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--semantic-warn-border);
+  background: var(--semantic-warn-soft);
+  color: var(--semantic-warn);
+  font-size: var(--text-sm);
+}
+.model-warn-text {
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+  color: var(--semantic-warn);
+}
+
+/* The repair offer inside the edit dialog: names the mismatch and does the
+   switch in one click, instead of leaving the user to guess which of the two
+   fields — plan or endpoint — is the wrong one. */
+.fix-suggest {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--semantic-warn-border);
+  border-radius: var(--radius-md);
+  background: var(--semantic-warn-soft);
+  font-size: var(--text-sm);
+}
+
+/* ---- Add/edit dialogs ---- */
+
+/* Two classes deep on purpose: .wizard-modal's own 560px rule is defined
+   further down the sheet and would otherwise win on source order. */
+.wizard-modal.wizard-wide {
+  width: min(760px, calc(100vw - 32px));
+}
+.conn-form {
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  margin-bottom: var(--sp-4);
+}
+.conn-form .field-group:last-child {
+  margin-bottom: 0;
+}
+.proto-field {
+  flex: none;
+  width: 132px;
+}
+.models-table-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-2);
+}
+.models-table-actions {
+  display: flex;
+  gap: 6px;
+}
+.models-table {
+  display: flex;
+  flex-direction: column;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+.draft-row {
+  border-top: 1px solid var(--border-soft);
+  padding: var(--sp-3) 0;
+}
+.draft-row:first-child {
+  border-top: none;
+}
+.draft-main {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+.draft-check {
+  margin-top: 26px;
+  flex: none;
+}
+.draft-fields {
+  flex: 1;
+  min-width: 0;
+}
+.draft-fields-row {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.draft-fields-row > .field-group {
+  flex: 1;
+  min-width: 112px;
+  margin-bottom: 0;
+}
+/* A model id and its display name are longer than any number field, and a
+   clipped id is the one thing the user must be able to read back verbatim. */
+.draft-fields-row > .field-group:not(.narrow) {
+  flex: 2 1 168px;
+}
+.draft-fields-row > .field-group.narrow {
+  flex: 0 0 116px;
+}
+.draft-fields-row > .field-group > label {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+/* One header for the whole table. The column widths repeat the row's flex
+   weights exactly, so the labels sit over the fields they name. */
+.draft-head {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-end;
+  padding-bottom: 2px;
+}
+/* The checkbox's own margin is part of the row's layout; the spacer has to
+   carry it too or every label below drifts a few pixels left. */
+.draft-head-check {
+  flex: none;
+  width: 13px;
+  margin: 0 3px;
+}
+.draft-head .draft-fields-row {
+  align-items: flex-end;
+}
+.draft-head .draft-fields-row > .field-group {
+  margin-bottom: 0;
+}
+.draft-head-end {
+  flex: none;
+  width: 28px;
+}
+.draft-row.bare .draft-check {
+  margin-top: 9px;
+}
+/* Keep the label for assistive tech, drop it from the visual flow — the
+   header above already says it. */
+.draft-row.bare .draft-fields-row > .field-group > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+.draft-advanced-toggle {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  margin-top: 4px;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.draft-advanced-toggle:hover {
+  color: var(--text-primary);
+}
+.draft-advanced {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken, var(--bg-raised));
+}
+/* A grid, not a wrapping flex row: a hint under one field must not push that
+   field's label out of line with its neighbours. */
+.draft-grid {
+  display: grid;
+  gap: var(--sp-3);
+  align-items: start;
+  margin-bottom: var(--sp-1);
+}
+.draft-grid.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.draft-grid.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.draft-grid > .field-group {
+  margin-bottom: 0;
+  min-width: 0;
+}
+/* The number inputs carry their recommendation as a placeholder; Chrome's
+   stepper sits on top of it and reads as a broken glyph. */
+.wizard-modal input[type='number'] {
+  -moz-appearance: textfield;
+}
+.wizard-modal input[type='number']::-webkit-outer-spin-button,
+.wizard-modal input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.icon-btn {
+  padding: 4px 6px;
+}
+.modal-actions.spread {
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.u-flex-1 {
+  flex: 1;
+  min-width: 0;
+}
+.wizard-modal .field-row > .field-group {
+  margin-bottom: 0;
+  /* A row of labelled fields shares its top edge, not its centre. The third
+     group of the edit form carries a hint under its input, so centring pushed
+     that column's label 21px above the two beside it and the labels no longer
+     named the fields they sat over. */
+  align-self: flex-start;
 }
 
 /* Provider picker inside the add-model wizard. */
 .wizard-modal {
   width: min(560px, calc(100vw - 32px));
+  /* The edit form is taller than a confirmation; capping it at the shared
+     640px left the endpoint block permanently half-visible. */
+  max-height: min(760px, calc(100vh - 48px));
+}
+/* A row of labelled fields shares its top edge, not its centre. The third
+   group of the edit form carries a hint under its input, so centring pushed
+   that column's label 21px above the two beside it and the labels no longer
+   named the fields they sat over. */
+.wizard-modal .field-row > .field-group {
+  align-self: flex-start;
+}
+/* The form scrolls; the buttons must not scroll away with it. Expanding
+   "endpoint & protocol" made the save button unreachable without first
+   scrolling past everything it had just revealed. */
+.wizard-modal .modal-actions {
+  position: sticky;
+  bottom: calc(-1 * var(--sp-6));
+  margin: var(--sp-3) calc(-1 * var(--sp-6)) calc(-1 * var(--sp-6));
+  padding: var(--sp-3) var(--sp-6) var(--sp-6);
+  background: var(--bg-overlay);
+  border-top: 1px solid var(--border-soft);
+}
+/* The segmented control sizes itself — the fields beside it can share what
+   is left over. */
+.wizard-modal .thinking-field {
+  flex: 0 0 auto;
 }
 .wizard-region {
   margin: var(--sp-3) 0 var(--sp-2);
