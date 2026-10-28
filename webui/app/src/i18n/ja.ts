@@ -1344,6 +1344,8 @@ const ja: Messages = {
   'doctor.db.growth.no': '完了済みタスクが未削除',
   'doctor.modelendpoint.ok': 'モデルエンドポイント',
   'doctor.modelendpoint.no': 'モデルエンドポイント到達不可',
+  'doctor.modelendpoint.none': 'モデルエンドポイント未解決',
+  'doctor.modelendpoint.unset': 'モデルエンドポイント未設定',
   'doctor.network.ok': 'メッシュリスナー',
   'doctor.network.nosecret': 'shared_secret 未設定',
   'doctor.udp.ok': 'データグラム面',

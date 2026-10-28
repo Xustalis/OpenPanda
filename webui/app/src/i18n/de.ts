@@ -1357,6 +1357,8 @@ const de: Messages = {
   'doctor.db.growth.no': 'Erledigte Tasks werden nie bereinigt',
   'doctor.modelendpoint.ok': 'Modell-Endpunkt',
   'doctor.modelendpoint.no': 'Modell-Endpunkt nicht erreichbar',
+  'doctor.modelendpoint.none': 'Modell-Endpunkt unaufgelöst',
+  'doctor.modelendpoint.unset': 'Modell-Endpunkt nicht gesetzt',
   'doctor.network.ok': 'Mesh-Listener',
   'doctor.network.nosecret': 'shared_secret leer — Peers abgelehnt',
   'doctor.udp.ok': 'Datagramm-Ebene',

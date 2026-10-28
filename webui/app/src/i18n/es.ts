@@ -1357,6 +1357,8 @@ const es: Messages = {
   'doctor.db.growth.no': 'Tareas cerradas sin purgar',
   'doctor.modelendpoint.ok': 'Endpoint del modelo',
   'doctor.modelendpoint.no': 'Endpoint del modelo inaccesible',
+  'doctor.modelendpoint.none': 'Endpoint del modelo sin resolver',
+  'doctor.modelendpoint.unset': 'Endpoint del modelo sin configurar',
   'doctor.network.ok': 'Listener mesh',
   'doctor.network.nosecret': 'shared_secret vacío — pares rechazados',
   'doctor.udp.ok': 'Plano de datagramas',

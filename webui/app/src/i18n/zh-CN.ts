@@ -1373,6 +1373,8 @@ const zhCN: Messages = {
   'doctor.db.growth.no': '已完结任务未清理',
   'doctor.modelendpoint.ok': '模型端点',
   'doctor.modelendpoint.no': '模型端点不可达',
+  'doctor.modelendpoint.none': '模型端点未解析',
+  'doctor.modelendpoint.unset': '模型端点未配置',
   'doctor.network.ok': 'Mesh 监听',
   'doctor.network.nosecret': 'shared_secret 未配置',
   'doctor.udp.ok': '数据报平面',

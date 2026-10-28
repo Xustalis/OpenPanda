@@ -1389,6 +1389,8 @@ const en: Messages = {
   'doctor.db.growth.no': 'Settled tasks never pruned',
   'doctor.modelendpoint.ok': 'Model endpoint',
   'doctor.modelendpoint.no': 'Model endpoint unreachable',
+  'doctor.modelendpoint.none': 'Model endpoint unresolved',
+  'doctor.modelendpoint.unset': 'Model endpoint not set',
   'doctor.network.ok': 'Mesh listener',
   'doctor.network.nosecret': 'shared_secret empty — peers refused',
   'doctor.udp.ok': 'Datagram plane',

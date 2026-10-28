@@ -5,9 +5,12 @@ package doctor
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
@@ -112,6 +115,91 @@ func TestEndpointProbeKeyless(t *testing.T) {
 	} {
 		if got := endpointProbeKeyless(tc.detail, tc.apiKey); got != tc.want {
 			t.Fatalf("endpointProbeKeyless(%q, %q) = %v, want %v", tc.detail, tc.apiKey, got, tc.want)
+		}
+	}
+}
+
+// A model the resolver cannot point anywhere used to be silent here: the
+// endpoint probe was skipped and the only visible line was "api key
+// configured", which is precisely the state that hands a key to nobody. The
+// check must fire whenever the injection path would refuse — and stay quiet on
+// a fresh node, where modelkey.no already carries the message.
+func TestMissingEndpointCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  config.ModelConfig
+		want string // empty means "no line"
+		pair string
+	}{
+		{
+			name: "custom row with no base_url",
+			cfg:  config.ModelConfig{Provider: "custom", APIKey: "sk-x"},
+			want: "doctor.modelendpoint.none",
+			pair: "custom",
+		},
+		{
+			name: "a misspelled provider id has the same shape",
+			cfg:  config.ModelConfig{Provider: "deapseek", APIKey: "sk-x"},
+			want: "doctor.modelendpoint.none",
+			pair: "deapseek",
+		},
+		{
+			name: "a key with neither provider nor base_url",
+			cfg:  config.ModelConfig{APIKey: "sk-x"},
+			want: "doctor.modelendpoint.unset",
+		},
+		{
+			name: "fresh install: nothing is named, so nothing to explain",
+			cfg:  config.ModelConfig{},
+		},
+		{
+			name: "whitespace is not a provider",
+			cfg:  config.ModelConfig{Provider: "  ", BaseURL: "\t"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, show := missingEndpointCheck(tc.cfg)
+			if tc.want == "" {
+				if show {
+					t.Fatalf("expected no line, got %+v", c)
+				}
+				return
+			}
+			if !show || c.Key != tc.want || c.OK {
+				t.Fatalf("want failing %s, got show=%v %+v", tc.want, show, c)
+			}
+			// The line must never leave an unresolved placeholder: it is
+			// rendered through Tf, which keeps "{provider}" verbatim.
+			for _, loc := range i18n.Locales {
+				msg := i18n.Tf(loc, c.Key, c.Pairs...)
+				if strings.Contains(msg, "{") {
+					t.Fatalf("%s leaves a placeholder: %q", loc, msg)
+				}
+				if tc.pair != "" && !strings.Contains(msg, tc.pair) {
+					t.Fatalf("%s drops the provider id: %q", loc, msg)
+				}
+			}
+		})
+	}
+}
+
+// The check must fire exactly when the injection path refuses, otherwise
+// doctor says "fine" about a model that will be dropped at dispatch.
+func TestMissingEndpointCheckTracksTheResolver(t *testing.T) {
+	for _, cfg := range []config.ModelConfig{
+		{Provider: "custom", APIKey: "sk-x"},
+		{Provider: "custom", APIKey: "sk-x", APIType: config.APITypeAnthropic},
+		{Provider: "nosuchprovider", APIKey: "sk-x"},
+		{Provider: "deepseek", APIKey: "sk-x"},
+		{Provider: "opencode-go", APIKey: "sk-x"},
+	} {
+		ep := commander.EffectiveBaseURL(cfg)
+		_, show := missingEndpointCheck(cfg)
+		if ep == "" && !show {
+			t.Fatalf("resolver returns no endpoint for %q but doctor stays silent", cfg.Provider)
+		}
+		if ep != "" && show {
+			t.Fatalf("resolver resolves %q to %q yet doctor reports no endpoint", cfg.Provider, ep)
 		}
 	}
 }

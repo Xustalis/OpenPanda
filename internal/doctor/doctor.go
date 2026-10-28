@@ -132,6 +132,8 @@ func Run(configPath string) []Check {
 			default:
 				add(fail("doctor.modelendpoint.no", "url", ep, "detail", v.Detail))
 			}
+		} else if c, show := missingEndpointCheck(cfg.Model); show {
+			add(c)
 		}
 
 		// Network planes. Validate() already guarantees listen_addr and
@@ -252,6 +254,35 @@ func endpointProbeKeyless(detail, apiKey string) bool {
 		return false
 	}
 	return n == 401 || n == 402 || n == 403 || n == 429
+}
+
+// missingEndpointCheck explains a model that names no destination. Run only
+// probes the endpoint when EffectiveBaseURL resolves to something, so before
+// this check an unresolvable endpoint was silence: a row whose catalogue entry
+// declares no endpoint (`custom`) and a config with no base_url still read as
+// "key configured" while every agent run went out un-injected. The refusal
+// existed in the injection path but nothing on the diagnostic surface said
+// why, so the fix here is the missing sentence rather than a new behaviour.
+//
+// The resolver guard is part of the predicate, not of the call site: called on
+// its own, this must never claim "no endpoint" about a model that has one,
+// whichever branch Run happens to take.
+//
+// Silent when the node names no model at all: a fresh install has nothing to
+// explain, and doctor.modelkey.no already reports that the model is
+// unconfigured. `panda model add` is named because it is the only writer that
+// validates a URL, so pointing at it is a fix, not a suggestion.
+func missingEndpointCheck(m config.ModelConfig) (Check, bool) {
+	if commander.EffectiveBaseURL(m) != "" {
+		return Check{}, false
+	}
+	switch {
+	case strings.TrimSpace(m.Provider) != "":
+		return fail("doctor.modelendpoint.none", "provider", strings.TrimSpace(m.Provider)), true
+	case strings.TrimSpace(m.BaseURL) != "" || strings.TrimSpace(m.APIKey) != "":
+		return fail("doctor.modelendpoint.unset"), true
+	}
+	return Check{}, false
 }
 
 // Problems counts the failed checks.
