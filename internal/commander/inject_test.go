@@ -1060,6 +1060,26 @@ func TestInjectionEndpointFollowsTheProviderCatalogue(t *testing.T) {
 			wantBase: "https://opencode.ai/zen/go/v1",
 			wantType: config.APITypeOpenAI,
 		},
+		{
+			// custom carries an empty BaseURL by design, so this pair — a
+			// provider id and no base_url — is reachable through a
+			// hand-written config.yaml even though `model add` refuses it.
+			// The old fallback answered api.openai.com here and sent the
+			// relay's key to a vendor the user never named.
+			name:     "a row with no endpoint of its own resolves to none",
+			model:    config.ModelConfig{Provider: "custom", APIKey: "sk-relay", Model: "gpt-4o"},
+			wantBase: "",
+			wantType: config.APITypeOpenAI,
+		},
+		{
+			// The row declares the OpenAI dialect, so it still answers the
+			// stored type; what matters is that the empty endpoint survives
+			// instead of being replaced by DeepSeek's Anthropic surface.
+			name:     "an unendpointed row does not resurrect a vendor surface",
+			model:    config.ModelConfig{Provider: "custom", APIType: config.APITypeAnthropic, APIKey: "sk-relay"},
+			wantBase: "",
+			wantType: config.APITypeOpenAI,
+		},
 	}
 	for _, tc := range cases {
 		base, apiType := injectionEndpoint(tc.model)
@@ -1067,6 +1087,38 @@ func TestInjectionEndpointFollowsTheProviderCatalogue(t *testing.T) {
 			t.Errorf("%s: injectionEndpoint = (%q, %q), want (%q, %q)",
 				tc.name, base, apiType, tc.wantBase, tc.wantType)
 		}
+	}
+}
+
+// TestInjectionRefusesAModelWithNoEndpoint pins the verdict an empty endpoint
+// produces after the vendor fallback was removed. Two things must hold: the
+// empty URL is never read as DeepSeek's (which is how every empty-base config
+// used to end up on api.deepseek.com/anthropic), and the refusal names the
+// missing endpoint instead of blaming the adapter — the old wording sent the
+// reader looking at a registry entry that was fine.
+func TestInjectionRefusesAModelWithNoEndpoint(t *testing.T) {
+	if isDeepSeekEndpoint("") {
+		t.Fatal("an empty base_url must not be read as DeepSeek's endpoint")
+	}
+	custom := config.ModelConfig{Provider: "custom", APIKey: "sk-relay", Model: "gpt-4o"}
+	for _, strategy := range []string{config.InjectionModelAlways, config.InjectionModelAuto} {
+		r := NewRouter(testCard(), NewExecutor(), custom,
+			config.InjectionConfig{Model: strategy}, config.RoutingConfig{})
+		dec := r.InjectionDecision("pi", "pi.py")
+		if dec.Inject {
+			t.Fatalf("%s: injection with no endpoint = %+v, want a refusal", strategy, dec)
+		}
+		if !strings.Contains(dec.Reason, "no endpoint") {
+			t.Errorf("%s: reason = %q, want it to name the missing endpoint", strategy, dec.Reason)
+		}
+	}
+	// The env builder is the last line: an empty endpoint must never reach an
+	// adapter as `SOMETHING_BASE_URL=`.
+	if env := modelEnvForAdapter(custom, "pi", "pi.py"); len(env) != 0 {
+		t.Fatalf("modelEnvForAdapter = %v, want no injected env", env)
+	}
+	if got := effectiveBaseURLFor("pi", "pi.py", custom); got != "" {
+		t.Fatalf("effectiveBaseURLFor = %q, want empty", got)
 	}
 }
 

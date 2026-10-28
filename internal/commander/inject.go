@@ -113,7 +113,7 @@ func (r *Router) InjectionDecision(name, adapter string) InjectionDecision {
 			return InjectionDecision{Inject: false, Reason: "no model configured"}
 		}
 		if !supportsModelInjection(name, adapter, m) {
-			return InjectionDecision{Inject: false, Reason: "model injection is not safely supported for " + adapter}
+			return InjectionDecision{Inject: false, Reason: injectionRefusal(adapter, m)}
 		}
 		return InjectionDecision{
 			Inject:  true,
@@ -158,7 +158,7 @@ func (r *Router) InjectionDecision(name, adapter string) InjectionDecision {
 	if !supportsModelInjection(name, adapter, m) {
 		return InjectionDecision{
 			Inject: false,
-			Reason: "model injection is not safely supported for " + adapter,
+			Reason: injectionRefusal(adapter, m),
 		}
 	}
 	return InjectionDecision{
@@ -189,6 +189,14 @@ func supportsModelInjection(name, adapter string, model config.ModelConfig) bool
 		return false
 	}
 	base, apiType := injectionEndpoint(model)
+	// Nothing to dial. A provider id whose catalogue row declares no endpoint
+	// (custom) with no base_url of its own resolves to "", and injecting it
+	// would either set an empty endpoint in the adapter's environment or —
+	// under the old fallback — send the key to a vendor the config never
+	// named. Refuse; the refusal reason is resolved by injectionRefusal.
+	if base == "" {
+		return false
+	}
 	// The agent CLIs speak Messages or Chat Completions. A model on a surface
 	// only panda's own client drives (Responses, Google) is never injected:
 	// the CLI would send the wrong request shape to a valid endpoint.
@@ -207,15 +215,27 @@ func supportsModelInjection(name, adapter string, model config.ModelConfig) bool
 	return true
 }
 
+// injectionRefusal names why an agent that would otherwise be injectable gets
+// no model. "No endpoint" is the one case that used to be papered over with a
+// vendor default, so it says what is actually missing; every other refusal
+// keeps the historical wording.
+func injectionRefusal(adapter string, model config.ModelConfig) string {
+	if base, _ := injectionEndpoint(model); base == "" {
+		return "model has no endpoint: base_url is empty and provider " + strings.TrimSpace(model.Provider) + " declares none"
+	}
+	return "model injection is not safely supported for " + adapter
+}
+
 // deepSeekAPIHost is the DeepSeek API host panda injects credentials for.
 const deepSeekAPIHost = "api.deepseek.com"
 
 // isDeepSeekEndpoint reports whether base_url points at DeepSeek's API. An
-// empty base_url means the default endpoint (see effectiveBaseURL), which is
-// DeepSeek's anthropic API.
+// empty base_url is not DeepSeek's endpoint — it is no endpoint at all (see
+// injectionEndpoint), and treating it as DeepSeek was how a config with no
+// destination ended up dialing api.deepseek.com/anthropic.
 func isDeepSeekEndpoint(baseURL string) bool {
 	if baseURL == "" {
-		return true
+		return false
 	}
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -242,6 +262,12 @@ const (
 // provider id alone (`provider: opencode-go`) handed that provider's key to
 // api.openai.com — or to DeepSeek's Anthropic endpoint — and every run died on
 // a 401 that named nothing in the config.
+//
+// An empty return is now a verdict, not a gap to fill: the config names no
+// endpoint and the catalogue row contributes none, so the caller must refuse
+// the injection. `custom` is that row today (it carries an empty BaseURL by
+// design), and a hand-written config.yaml can produce the pair without going
+// through `model add`, which refuses an empty URL.
 func injectionEndpoint(model config.ModelConfig) (base, apiType string) {
 	base = strings.TrimSpace(model.BaseURL)
 	apiType = model.NormalizedAPIType()
@@ -259,15 +285,14 @@ func injectionEndpoint(model config.ModelConfig) (base, apiType string) {
 			apiType = strings.ToLower(strings.TrimSpace(routedType))
 		}
 	}
-	if base == "" {
-		// A catalogue row with no endpoint of its own (custom) and no
-		// base_url: the data-plane defaults, which is what an older config
-		// that named no provider at all got.
-		if apiType == config.APITypeAnthropic {
-			return "https://api.deepseek.com/anthropic", apiType
-		}
-		return "https://api.openai.com/v1", apiType
-	}
+	// No endpoint, no injection. A catalogue row with no endpoint of its own
+	// (custom) and no base_url names nothing to dial, and the old fallback —
+	// api.openai.com, or DeepSeek's Anthropic surface — handed that row's key
+	// to a vendor the user never named. Returning "" lets
+	// supportsModelInjection refuse the injection instead of substituting a
+	// destination nobody chose; every caller below treats empty as "do not
+	// inject". A future catalogue row that declares no endpoint inherits the
+	// same rule, so the defect cannot return by adding data.
 	return base, apiType
 }
 
