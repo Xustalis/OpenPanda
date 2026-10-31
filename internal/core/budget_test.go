@@ -5,6 +5,8 @@ package core
 import (
 	"testing"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/commander"
 )
 
 func TestDerivedAgentBudget(t *testing.T) {
@@ -74,5 +76,28 @@ func TestTaskDurationHint(t *testing.T) {
 	}
 	if got := taskDurationHint(`not json`); got != "" {
 		t.Fatalf("malformed hint = %q, want empty", got)
+	}
+}
+
+func TestTurnCapFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		res  commander.Result
+		want bool
+	}{
+		{"claude subtype", commander.Result{Stdout: "claude stopped at its turn cap after 60 turns without a final answer"}, true},
+		{"terminal reason", commander.Result{Stderr: `{"subtype":"error_max_turns"}`}, true},
+		{"max turns prose", commander.Result{Stdout: "hit max turns"}, true},
+		{"max_turns token", commander.Result{Stderr: "error: max_turns reached"}, true},
+		{"ordinary failure", commander.Result{Stderr: "command not found: cargo"}, false},
+		{"stall kill", commander.Result{Stdout: "adapter stalled: no progress", ExitCode: 124}, false},
+		{"empty", commander.Result{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := turnCapFailure(tc.res); got != tc.want {
+				t.Fatalf("turnCapFailure = %v, want %v (res=%+v)", got, tc.want, tc.res)
+			}
+		})
 	}
 }

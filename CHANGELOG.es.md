@@ -44,8 +44,11 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **Una ejecución de agente empieza con un mapa del espacio de trabajo** — cada tarea de agente lleva ahora un informe compacto y determinista de su espacio de trabajo: rama/commit de git y si el árbol tiene cambios sin confirmar, número de archivos y directorios, estructura de primer nivel, mezcla de lenguajes, archivos clave (README, AGENTS.md, CLAUDE.md, Makefile, manifiestos) y los comandos de compilación/verificación que el propio proyecto declara (objetivos de Makefile, scripts de package.json, entradas de Go/Cargo/pytest). Un repositorio grande ya no se redescubre turno a turno, y el mapa cuesta unos 2 KB de prompt — acotado y cacheado entre rondas de supervisión.
 
+- **El juez de finalización ve lo que el agente hizo realmente** — antes de aceptar una ejecución supervisada, el modelo juez recibe los comandos ejecutados en la ronda (los 20 más recientes), qué resultados de herramientas fallaron, el número de herramientas de edición/lectura, las entradas de verificación declaradas por el proyecto y si alguna se ejecutó de verdad, además de la línea base del contrato previa a la ejecución. Una respuesta que afirma «las pruebas pasan» sin ningún comando de prueba en la evidencia ya no se juzga solo por la respuesta.
+
 ### Corregido
 
+- **Alcanzar el límite de turnos del CLI ya no hace fallar la tarea** — cuando un agente se detiene en su límite de turnos por ejecución con una sesión reanudable, el orquestador continúa la misma conversación en una nueva ronda con un límite mayor (200 turnos, acotado por el presupuesto de supervisión) en lugar de registrar un fallo que cada reintento repite. Una parada por límite de turnos tampoco cuenta para el cortacircuitos del agente.
 - **Una llamada de herramienta larga ya no se mata como un agente bloqueado** — el vigilante de silencio no distinguía un agente que piensa de uno esperando una compilación de diez minutos, así que cualquier herramienta que no produjera salida más allá de `timeouts.silence_s` (240 s por defecto) hacía que se matara la ejecución completa. Ahora el vigilante trata «hay una llamada de herramienta en curso» como trabajo que esperar, acotado por el presupuesto duro del agente; un bloqueo fuera de una herramienta se sigue matando.
 
 - **La aprobación llega ahora al CLI del agente** — una tarea aparcada porque `claude_code` denegó un comando privilegiado (`systemctl`, una escritura en `/etc`) se reejecutaba con el mismo argv tras la aprobación, de modo que el CLI volvía a denegar las mismas llamadas y la tarea regresaba indefinidamente a la misma tarjeta de revisión. El consentimiento viaja ahora al adaptador en la petición y el adaptador eleva su postura de permisos a `bypassPermissions` para esa ejecución; una ejecución sin consentimiento mantiene `acceptEdits` y una ejecución restringida lo ignora.
@@ -55,6 +58,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 ### Cambiado
 
 - **Las tareas largas y difíciles reciben un presupuesto acorde con su forma** — una tarea que declaró `duration_hint: long` o puntuó alta complejidad ahora se ejecuta con hasta 120 turnos y un presupuesto de agente de 30 minutos en lugar del valor por defecto de 30 turnos/10 minutos; las tareas medianas y las tareas de código enviadas desde la CLI reciben 60 turnos y 20 minutos. Un `spec.max_turns` explícito o un `timeouts.agent_by_kind` configurado siguen teniendo prioridad.
+
+- **El contrato de ejecución nombra las entradas de verificación del propio proyecto** — el prompt del agente ahora exige ejecutar la entrada build/verify del mapa del espacio de trabajo que cubre el cambio y reportar el comando con su salida real; una respuesta final que no ejecutó ninguna no es completitud.
 
 ## [0.1.3] - 2026-10-30 — "Constellation"
 

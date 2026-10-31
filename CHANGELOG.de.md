@@ -44,8 +44,11 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **Ein Agent-Lauf beginnt mit einer Workspace-Karte** — jede Agent-Aufgabe trägt jetzt einen kompakten, deterministischen Bericht über ihren Arbeitsbereich: Git-Branch/Commit und ob der Baum uncommittete Änderungen hat, Datei- und Verzeichniszahlen, Top-Level-Struktur, Sprachverteilung, Schlüsseldateien (README, AGENTS.md, CLAUDE.md, Makefile, Manifeste) und die vom Projekt selbst deklarierten Build-/Verifikationsbefehle (Makefile-Ziele, package.json-Skripte, Go-/Cargo-/pytest-Einträge). Ein großes Repository wird nicht mehr Runde für Runde neu entdeckt, und die Karte kostet etwa 2 KB Prompt — begrenzt und zwischen Aufsichtsrunden zwischengespeichert.
 
+- **Der Abschluss-Judge sieht, was der Agent tatsächlich getan hat** — bevor ein beaufsichtigter Lauf akzeptiert wird, erhält das Richtermodell die in der Runde ausgeführten Befehle (die letzten 20), welche Tool-Ergebnisse fehlschlugen, die Anzahl der Datei-Änderungs-/Lese-Tools, die vom Projekt deklarierten Verifikationseinträge und ob einer davon tatsächlich lief, sowie die Vorlauf-Baseline des Liefervertrags. Eine Antwort, die „Tests bestehen" behauptet, während die Evidenz keinen Testbefehl zeigt, wird nicht mehr allein anhand der Antwort beurteilt.
+
 ### Behoben
 
+- **Das Erreichen des CLI-Turn-Limits lässt die Aufgabe nicht mehr scheitern** — stoppt ein Agent an seinem Turn-Limit pro Lauf mit einer fortsetzbaren Sitzung, setzt der Orchestrator dieselbe Unterhaltung in einer neuen Runde mit höherem Limit (200 Turns, begrenzt durch das Aufsichtsbudget) fort, statt einen Fehler zu protokollieren, den jeder Retry wiederholt. Ein Turn-Limit-Stopp belastet auch nicht mehr den Circuit Breaker des Agenten.
 - **Ein langer Tool-Aufruf wird nicht mehr als hängender Agent getötet** — der Stille-Watchdog konnte einen denkenden Agenten nicht von einem unterscheiden, der auf einen zehnminütigen Build wartet; jedes Tool, das über `timeouts.silence_s` (standardmäßig 240 s) hinaus keine Ausgabe lieferte, führte zum Abbruch des gesamten Laufs. Der Watchdog behandelt „ein Tool-Aufruf läuft" jetzt als abzuwartende Arbeit, begrenzt durch das harte Agent-Budget; ein Hänger außerhalb eines Tool-Aufrufs wird weiterhin beendet.
 
 - **Die Freigabe erreicht jetzt die Agent-CLI** — eine Aufgabe, die liegen blieb, weil `claude_code` einen privilegierten Befehl (`systemctl`, ein Schreibzugriff unter `/etc`) verweigerte, lief nach der Freigabe mit unverändertem argv erneut und die CLI verweigerte dieselben Aufrufe wieder, sodass die Aufgabe endlos zur selben Prüfkarte zurückkehrte. Die Zustimmung wird jetzt als Request-Feld an den Adapter übergeben, und der Adapter hebt für diesen Lauf die Berechtigungsstufe auf `bypassPermissions`; ein Lauf ohne Zustimmung bleibt bei `acceptEdits`, ein eingeschränkter Lauf ignoriert sie.
@@ -55,6 +58,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 ### Geändert
 
 - **Lange und schwierige Aufgaben erhalten ein Budget passend zu ihrer Form** — eine Aufgabe mit `duration_hint: long` oder hoher Komplexitätsbewertung läuft jetzt mit bis zu 120 Turns und einem 30-Minuten-Agent-Budget statt mit dem Standard von 30 Turns/10 Minuten; mittlere Aufgaben und über die CLI eingereichte Coding-Aufgaben erhalten 60 Turns und 20 Minuten. Ein explizites `spec.max_turns` oder ein konfiguriertes `timeouts.agent_by_kind` hat weiterhin Vorrang.
+
+- **Der Ausführungsvertrag nennt die Verifikationseinträge des Projekts** — der Agent-Prompt verlangt jetzt, den Build-/Verify-Eintrag der Workspace-Karte auszuführen, der die Änderung abdeckt, und den Befehl mit seiner tatsächlichen Ausgabe zu melden; eine abschließende Antwort ohne einen einzigen Lauf ist keine Fertigstellung.
 
 ## [0.1.3] - 2026-10-30 — "Constellation"
 
