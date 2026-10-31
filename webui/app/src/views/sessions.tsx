@@ -331,9 +331,9 @@ interface ChatMsg extends SessionTurn {
    *  persisted with the turn, so a thread reloaded from disk comes back
    *  without it. */
   thought?: string
-  /** Cumulative token consumption of this turn, streamed on `usage` events
-   *  and finalized by the result's billed total. */
-  tokens?: number
+  /** Newest delta/reasoning/usage/status timestamp (epoch ms). The live
+   *  header uses it to tell a quiet turn from a stalled one. */
+  lastActivity?: number
   /** @file paths that were expanded into fenced blocks for this prompt —
    *  shown as attachment chips on the user's bubble. */
   files?: string[]
@@ -456,15 +456,41 @@ function fmtTokens(n: number): string {
  *  felt while scrolling.
  *
  *  It formats through `fmtDuration`, the same function the finished line uses,
- *  so the number does not change shape the moment the turn lands. */
-function LiveElapsed({ from }: { from: number }) {
+ *  so the number does not change shape the moment the turn lands.
+ *
+ *  `last` is the newest delta/reasoning/usage/status timestamp. Once the turn
+ *  has gone quiet past a few seconds, the same one-second tick adds how long,
+ *  so a slow model reads differently from a dead connection. Before any event
+ *  it says the turn is waiting on the model, which is the prefill window. */
+function LiveElapsed({ from, last }: { from: number; last?: number }) {
   const [ms, setMs] = useState(() => Date.now() - from)
+  const [idle, setIdle] = useState(0)
+  // last changes on every delta; a ref keeps it out of the effect's dependency
+  // list so the one-second timer is not torn down and rebuilt constantly.
+  const lastRef = useRef(last)
+  lastRef.current = last
   useEffect(() => {
-    setMs(Date.now() - from)
-    const id = setInterval(() => setMs(Date.now() - from), 1000)
+    const tick = () => {
+      const now = Date.now()
+      setMs(now - from)
+      setIdle(lastRef.current ? now - lastRef.current : now - from)
+    }
+    tick()
+    const id = setInterval(tick, 1000)
     return () => clearInterval(id)
   }, [from])
-  return <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(ms) })}</span>
+  return (
+    <>
+      <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(ms) })}</span>
+      {idle >= 5000 ? (
+        <span class="msg-dur" data-testid="msg-quiet">
+          {last
+            ? t('sessions.quiet', { d: fmtDuration(idle) })
+            : t('sessions.awaiting', { d: fmtDuration(idle) })}
+        </span>
+      ) : null}
+    </>
+  )
 }
 
 /** One line for a prompt-rail tick's tooltip: a question can be a paragraph,
@@ -1462,8 +1488,9 @@ export function SessionsView({
       const thought = pendingThought
       pendingText = ''
       pendingThought = ''
-      if (text) patch((m) => ({ ...m, text: m.text + text }))
-      if (thought) patch((m) => ({ ...m, thought: (m.thought ?? '') + thought }))
+      if (text) patch((m) => ({ ...m, text: m.text + text, lastActivity: Date.now() }))
+      if (thought)
+        patch((m) => ({ ...m, thought: (m.thought ?? '') + thought, lastActivity: Date.now() }))
     }
     const scheduleFlush = () => {
       if (flushFrame) return
@@ -1623,13 +1650,19 @@ export function SessionsView({
           // Usage is its own event: a counter, not a status note. It lands at
           // most a few times a second (the engine throttles it), so it can
           // patch state directly.
-          onUsage: (input, output) => patch((m) => ({ ...m, tokens: input + output })),
-          onStatus: (text, ev) => patch((m) => ({ ...m, status: statusNote(text, ev) })),
+          onUsage: (input, output) =>
+            patch((m) => ({ ...m, tokens: input + output, lastActivity: Date.now() })),
+          onStatus: (text, ev) =>
+            patch((m) => ({ ...m, status: statusNote(text, ev), lastActivity: Date.now() })),
           // The note typed mid-turn reached a round. This is the upgrade from
           // "queued" to "delivered" — without it the user cannot tell a steer
           // the model read from one the turn ended before reaching.
           onSteer: (_text, round) =>
-            patch((m) => ({ ...m, status: t('sessions.steerDelivered', { n: String(round) }) })),
+            patch((m) => ({
+              ...m,
+              status: t('sessions.steerDelivered', { n: String(round) }),
+              lastActivity: Date.now(),
+            })),
           onOperation: (operationID) => {
             if (inflight.current === ctrl && inflightSid.current === sid) {
               inflightOperation.current = operationID
@@ -3429,7 +3462,7 @@ function ChatBubble(props: {
               </time>
             ) : null}
             {msg.streaming && liveFrom > 0 ? (
-              <LiveElapsed from={liveFrom} />
+              <LiveElapsed from={liveFrom} last={msg.lastActivity} />
             ) : elapsedMs !== undefined ? (
               <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(elapsedMs) })}</span>
             ) : null}

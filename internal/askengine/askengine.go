@@ -1603,6 +1603,13 @@ func (cb StreamCallbacks) progress(p Progress) {
 	if cb.OnStatus == nil {
 		return
 	}
+	// A usage counter has no one-line phrasing, and the text channel carries
+	// only milestones: a caller that wants the number binds OnProgress (the
+	// panel's SSE stream and the TUI do). Without this, every report became an
+	// empty status line on the --json stream.
+	if p.Kind == ProgressUsage {
+		return
+	}
 	cb.OnStatus(StatusText(p))
 }
 
@@ -1853,7 +1860,11 @@ func (t *usageTracker) final(in, out int64) {
 	if t == nil || t.report == nil {
 		return
 	}
-	if in > 0 || out > 0 {
+	// A fallback client's billed total can be lower than what the tracker
+	// accumulated across both clients. The status line must not walk backwards
+	// at the moment the turn ends, so the larger total stands; the Result still
+	// carries the provider's own numbers for billing and the closing line.
+	if in+out >= t.total.Total() {
 		t.total = entry.Usage{InputTokens: in, OutputTokens: out}
 		// The billed numbers replace the estimate: a CJK answer estimates high
 		// by design, and the closing figure must not be the high one.

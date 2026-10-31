@@ -356,6 +356,8 @@ const ja: Messages = {
   'sessions.thinking': '考え中…',
   'sessions.elapsed': '所要時間 {d}',
   'sessions.tokens': '{n} トークン',
+  'sessions.awaiting': 'モデル応答待ち {d}',
+  'sessions.quiet': '{d} 応答なし',
   'sessions.speakerPanda': 'パンダ',
   'sessions.role.plan': '編成',
   'sessions.role.report': '報告',

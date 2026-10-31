@@ -93,6 +93,11 @@ type Turn struct {
 	// turn lives in the browser, so a reloaded thread would otherwise lose
 	// every duration it had.
 	DurationMS int64 `json:"duration_ms,omitempty"`
+	// Tokens is the ask's billed total (input + output) for this reply. Filed
+	// with the turn for the same reason as DurationMS: the live counter lives
+	// in the browser stream, and a reloaded thread would otherwise lose every
+	// figure it had shown.
+	Tokens int64 `json:"tokens,omitempty"`
 	// Model is the entry model that wrote this reply (the ask's classify /
 	// answer calls). Stored with the turn so the console can still say which
 	// model answered after the thread is reloaded — the live result object

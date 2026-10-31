@@ -359,6 +359,8 @@ const en: Messages = {
   'sessions.thinking': 'Thinking…',
   'sessions.elapsed': 'Took {d}',
   'sessions.tokens': '{n} tokens',
+  'sessions.awaiting': 'awaiting model {d}',
+  'sessions.quiet': 'quiet for {d}',
   'sessions.speakerPanda': 'Panda',
   'sessions.role.plan': 'Orchestrating',
   'sessions.role.report': 'Report',

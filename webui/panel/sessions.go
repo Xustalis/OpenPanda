@@ -877,6 +877,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			Role: "assistant", Text: text, Kind: kind, Code: code,
 			ErrKind: errKind, ErrDetail: errDetail,
 			DurationMS: askDuration,
+			// A stopped turn still consumed tokens up to the cut, and the
+			// reloaded thread should show what it cost.
+			Tokens: out.Tokens(),
 		})
 		return
 	}
@@ -905,7 +908,8 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// The model that answered, filed with the turn: the console prints it
 		// beside the reply's copy button, and `out` only exists for the live
 		// stream — a reloaded thread reads this instead.
-		Model: out.EntryModel,
+		Model:  out.EntryModel,
+		Tokens: out.Tokens(),
 	}
 	switch out.Kind {
 	case "task":

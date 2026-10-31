@@ -171,10 +171,11 @@ Claude Code 的折叠行带耗时，这一点直接可借鉴。
 
 - `entry` 层新增 `WithUsageObserver`（stream.go），四种方言在收到 provider usage 时上报，150ms 节流，流结束时 force 上报一次，且在 `addUsage` 之前，避免双计。
 - `entry.ClassifyStreamWithTools` 通过 `WithStreamUsage` 把观察器透传给内部流式调用。
-- `askengine` 新增 `ProgressUsage` 与 `usageTracker`：provider 快照按增量累计，客户端 fallback 造成的回落只重置基线；按字符估算输出（约 3 字节/token），回合结束时用账单值覆盖估算。
-- TUI 状态行（`statusMeta`）显示累计 token、`等待模型响应 Ns` / `已静默 Ns`；思考折叠行显示行数与最后一句。
-- 经典 CLI 的 `Status.SetTokens` 在运行中更新。
-- Web 新增 `usage` SSE 事件，线程头部常驻 token，`AskResult.tokens` 供结果与重载使用。
+- `askengine` 新增 `ProgressUsage` 与 `usageTracker`：provider 快照按增量累计，客户端 fallback 造成的回落只重置基线；按字符估算输出（约 3 字节/token），回合结束时用账单值覆盖估算；fallback 下账单值小于累计值时保留较大的累计，状态行不倒退。
+- TUI 状态行（`statusMeta`）显示累计 token、`等待模型响应 Ns` / `已静默 Ns`；思考折叠行显示行数、耗时与最后一句。任务卡持有同一计数器，长时间任务执行期间同样可见。
+- 经典 CLI 的 `Status.SetTokens` 在运行中更新；审批恢复等逐行打印路径过滤 usage，不会产生空 bullet。
+- Web 新增 `usage` SSE 事件，线程头部常驻 token；运行中的耗时旁显示 `等待模型响应` / `已静默`；`AskResult.tokens` 供结果使用，`sessions.Turn.Tokens` 随轮次持久化，刷新后仍能看到每轮消耗。
+- `--json` 等只绑定 OnStatus 的调用者不再收到空的 usage 状态行。
 - 测试：`internal/entry/stream_usage_test.go`、`internal/askengine/usage_test.go`、`cmd/panda/tui_status_test.go`。
 
 ### 尚未做（P1/P2）

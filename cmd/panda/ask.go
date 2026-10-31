@@ -638,6 +638,11 @@ func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18
 	fmt.Println(p.Success(i18n.T(loc, "repl.approval.approved")))
 	cb := askengine.StreamCallbacks{
 		OnProgress: func(p askengine.Progress) {
+			// Usage reports have no one to update on this path (the resumed run
+			// prints no status line) and must not print an empty bullet.
+			if p.Kind == askengine.ProgressUsage {
+				return
+			}
 			fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(loc, p))
 		},
 	}

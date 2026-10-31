@@ -61,6 +61,9 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 	// note or advance the task card's trail.
 	if p.Kind == askengine.ProgressUsage {
 		m.liveInputTokens, m.liveOutputTokens = p.InputTokens, p.OutputTokens
+		if m.liveTask != nil {
+			m.liveTask.tokens = m.liveInputTokens + m.liveOutputTokens
+		}
 		return m, waitForActivity(msg.stream)
 	}
 	label := progressNote(m.loc, p)
@@ -79,6 +82,8 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.liveTask = newTaskProgress(p.Name, now, m.loc)
+		// Carry whatever usage already arrived before the card opened.
+		m.liveTask.tokens = m.liveInputTokens + m.liveOutputTokens
 	case askengine.ProgressTool:
 		if m.liveTask != nil {
 			m.liveTask.recordTool(label, now)
@@ -574,6 +579,7 @@ func (m *tuiModel) resetLive() {
 	}
 	m.thought = nil
 	m.thoughtDone = false
+	m.thoughtStarted = time.Time{}
 	m.note = ""
 	m.pendingPrompt = ""
 	m.turnMode = "" // the slash-mode lens is per-turn, never sticky

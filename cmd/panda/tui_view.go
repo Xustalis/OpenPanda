@@ -933,6 +933,11 @@ func (m tuiModel) thoughtView() string {
 		// wrote three words or three hundred, and "thinking" with nothing moving
 		// is what a stalled turn looks like.
 		meta := i18n.Tf(m.loc, "tui.thought.lines", "n", strconv.Itoa(len(m.thought)))
+		if !m.thoughtStarted.IsZero() {
+			if d := time.Since(m.thoughtStarted); d >= time.Second {
+				meta += " · " + elapsed(d)
+			}
+		}
 		return m.th.muted.Render(star+" "+i18n.T(m.loc, "tui.thinking")) +
 			m.th.muted.Render(" · "+meta+" · "+truncate(firstNonEmptyTail(m.thought), 60))
 	}

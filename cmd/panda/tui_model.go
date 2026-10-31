@@ -295,6 +295,10 @@ type tuiModel struct {
 	thought          []string
 	thoughtDone      bool
 	expandThought    bool
+	// thoughtStarted is when the first reasoning chunk arrived. The folded
+	// thought line reports it so "thinking" carries a clock, the way a tool
+	// call carries its own elapsed time.
+	thoughtStarted time.Time
 	// expandHints unfolds the troubleshooting tail on committed error blocks
 	// (Ctrl+E). Like expandThought it is one flag for every block — AltScreen
 	// repaints the transcript, so a toggle redraws what is already committed.

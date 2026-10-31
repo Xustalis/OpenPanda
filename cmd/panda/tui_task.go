@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -49,6 +50,10 @@ type taskProgress struct {
 	// same "running" stage and a spinner while the agent reads files, runs
 	// tests and reasons, which reads as a hang.
 	activity []string
+	// tokens is the turn's cumulative entry-model consumption. The card stands
+	// in for the status line while a task runs, so it carries the counter that
+	// line would otherwise show.
+	tokens int64
 }
 
 // newTaskProgress opens a card for a task the engine just submitted.
@@ -264,7 +269,11 @@ func (tp *taskProgress) renderLive(t theme, loc i18n.Locale, spin string, now ti
 	for _, line := range tp.activity {
 		sb.WriteString("\n     " + t.muted.Render("· "+line))
 	}
-	sb.WriteString("\n" + t.muted.Render(fmt.Sprintf("  (%s · %s)",
-		elapsed(total), i18n.T(loc, "cli.status.interrupt"))))
+	footer := elapsed(total)
+	if tp.tokens > 0 {
+		footer += " · " + cliui.HumanCount(tp.tokens) + " tokens"
+	}
+	footer += " · " + i18n.T(loc, "cli.status.interrupt")
+	sb.WriteString("\n" + t.muted.Render(fmt.Sprintf("  (%s)", footer)))
 	return sb.String()
 }

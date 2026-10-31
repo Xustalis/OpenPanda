@@ -2191,6 +2191,10 @@ export interface SessionTurn {
    *  Absent on user turns and on transcripts written before the field
    *  existed; the console then has no duration to show. */
   duration_ms?: number
+  /** Billed token total (input + output) the entry model consumed for this
+   *  turn, stamped when the panel files the reply. Absent on user turns and
+   *  on transcripts written before the field existed. */
+  tokens?: number
   /** The entry model that wrote the reply, filed with the turn so the console
    *  can name it beside the copy button — including after a reload, where the
    *  live `result` object no longer exists. Absent on user turns, on task

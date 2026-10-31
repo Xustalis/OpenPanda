@@ -357,6 +357,8 @@ const es: Messages = {
   'sessions.thinking': 'Pensando…',
   'sessions.elapsed': 'Duró {d}',
   'sessions.tokens': '{n} tokens',
+  'sessions.awaiting': 'esperando al modelo {d}',
+  'sessions.quiet': 'sin salida desde hace {d}',
   'sessions.speakerPanda': 'Panda',
   'sessions.role.plan': 'Organizando',
   'sessions.role.report': 'Informe',

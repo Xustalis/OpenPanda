@@ -259,6 +259,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.thought = appendReasoning(m.thought, msg.text)
+		if m.thoughtStarted.IsZero() {
+			m.thoughtStarted = time.Now()
+		}
 		m.lastActivity = time.Now()
 		return m, waitForActivity(msg.stream)
 	case progressMsg:
@@ -1760,6 +1763,7 @@ func (m tuiModel) askTurn(text, mode string) (tea.Model, tea.Cmd) {
 	m.liveAnswerBytes = 0
 	m.thought = nil
 	m.thoughtDone = false
+	m.thoughtStarted = time.Time{}
 	m.note = ""
 	// The turn reports its own outcome, so the out-of-band watcher holds its
 	// tongue until it commits (mirrors the classic loop's setAsking).
