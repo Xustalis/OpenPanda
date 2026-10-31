@@ -294,7 +294,7 @@ export const EN = {
     'Those are orchestration frameworks; they freeze how to think — how nodes, edges and state machines are written. OpenPanda freezes relational facts: identity, authorisation, boundary, lifecycle. It does not write agents for you, it wires the agents you already installed into a network that can be routed, supervised and accepted.',
   'faq.q2.q': 'Does it need a GPU or extra model quota?',
   'faq.q2.a':
-    'No GPU. Routing, supervision and acceptance all use the model provider you already configured — local model or API, either works. The daemon sits at about 20MB resident and is nearly idle on CPU.',
+    'No GPU. Routing, supervision and acceptance all use the model provider you already configured — local model or API, either works. The daemon sits at about 40MB resident when idle and barely touches the CPU.',
   'faq.q3.q': 'Does my data pass through your servers?',
   'faq.q3.a':
     'No, and there are no “our servers”. Nodes connect peer to peer, session content is AEAD-encrypted and clamped hop by hop against the three trust tiers. When the link drops, DTN store-and-forward carries it until the link returns.',
