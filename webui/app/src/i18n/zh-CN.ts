@@ -346,6 +346,7 @@ const zhCN: Messages = {
   'perm.bypassOn': '已切到「绕过权限」：高危操作不再询问，仍会写入审计',
   'perm.bypassOff': '已离开「绕过权限」，高风险操作恢复询问',
 
+  'sessions.authorize': '授权高风险操作',
   'sessions.send': '发送',
   'panda.ready': '待命',
   'panda.working': '正在执行',

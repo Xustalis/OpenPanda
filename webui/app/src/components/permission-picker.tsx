@@ -6,15 +6,20 @@ import { Icon } from './icons'
 
 /** The five permission policies a conversation can run under.
  *
- *  They answer the whole consent question: what the thread may do, turn after
- *  turn. bypass consents to everything, manual and plan to nothing, auto and
- *  edits ask on the irreversible tier. There used to be a second control —
- *  a per-turn 授权 switch beside this picker — but it restated the mode
- *  (bypass already means "yes to all of it"), so the picker is now the only
- *  place consent is given. */
+ *  They answer a coarser question than the approval switch beside them: the
+ *  switch grants *this turn* the right to run irreversible operations, while
+ *  the mode decides what the thread may do at all, turn after turn. The two
+ *  do not overlap — bypass consents to everything, manual and plan consent to
+ *  nothing — which is why the console hides the switch in those modes instead
+ *  of showing a control that cannot change the outcome. */
 export type PermissionMode = 'auto' | 'manual' | 'edits' | 'plan' | 'bypass'
 
 export const PERMISSION_MODES: PermissionMode[] = ['auto', 'manual', 'edits', 'plan', 'bypass']
+
+/** Modes where an explicit per-turn consent still means something. */
+export function authorizeRelevant(mode: PermissionMode): boolean {
+  return mode === 'auto' || mode === 'edits'
+}
 
 /** What an unset mode reads as. The server normalizes the same way. */
 export function normalizePermission(raw: string | undefined | null): PermissionMode {

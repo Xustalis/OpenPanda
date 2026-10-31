@@ -349,6 +349,7 @@ const es: Messages = {
   'perm.bypassOn': 'Omisión activada: nada pregunta y todo queda auditado',
   'perm.bypassOff': 'Omisión desactivada; las acciones de riesgo vuelven a preguntar',
 
+  'sessions.authorize': 'Autorizar acciones de riesgo',
   'sessions.send': 'Enviar',
   'panda.ready': 'Lista',
   'panda.working': 'Trabajando',

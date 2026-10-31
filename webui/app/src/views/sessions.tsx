@@ -71,6 +71,7 @@ import {
 import { ScopeSelect } from '../components/scope-select'
 import {
   PermissionPicker,
+  authorizeRelevant,
   normalizePermission,
   type PermissionMode,
 } from '../components/permission-picker'
@@ -558,11 +559,12 @@ export function SessionsView({
   const [noteDraft, setNoteDraft] = useState('')
   // True while a file is over the composer, so the box can say so.
   const [dropping, setDropping] = useState(false)
-  // The conversation's permission policy — the composer's one consent control.
-  // The old per-turn 授权 switch is gone: it sat beside this picker restating
-  // what bypass already means, and two controls answering "how much may this
-  // thread do" made the mode read as a modifier of the switch.
+  // The conversation's permission policy. It decides what the thread may do
+  // turn after turn; the authorize switch below grants THIS turn the right to
+  // run irreversible operations, which is a finer question the mode does not
+  // answer (auto and edits still stop at the tier-2 gate).
   const [permission, setPermission] = useState<PermissionMode>('auto')
+  const [authorize, setAuthorize] = useState(false)
   // The composer's environment pick: empty = let the scheduler route by
   // capability; a node id pins this turn's spawned task to that executor.
   const [nodePref, setNodePref] = useState('')
@@ -1632,12 +1634,7 @@ export function SessionsView({
       await askSessionStream(
         id,
         prompt,
-        // No per-turn grant: the thread's permission mode is the whole answer.
-        // bypass consents to everything, auto and edits ask on the irreversible
-        // tier, manual and plan refuse. The composer's 授权 switch used to send
-        // this flag, but it restated the mode beside it — removing it leaves one
-        // control answering one question.
-        false,
+        authorize,
         {
           onReasoning: (text) => {
             pendingThought += text
@@ -2964,6 +2961,23 @@ export function SessionsView({
                 project={session?.project || activeProject || ''}
               />
               <PermissionPicker value={permission} onChange={pickPermission} />
+              {authorizeRelevant(permission) && (
+                <label class="ask-authorize" title={t('approval.stateHint')}>
+                  {/* A switch, not a tick box: this is a mode you leave on, not a
+                      one-off box you tick. The knob rides a <span> rather than a
+                      pseudo-element on the <input> — ::after on an input is not
+                      reliably rendered. */}
+                  <span class="switch">
+                    <input
+                      type="checkbox"
+                      checked={authorize}
+                      onChange={(e) => setAuthorize((e.target as HTMLInputElement).checked)}
+                    />
+                    <span class="switch-track" aria-hidden="true" />
+                  </span>
+                  {t('sessions.authorize')}
+                </label>
+              )}
               {/* The model switch, immediately left of Send — the row's right
                   edge is where you reach for before sending, and "which model"
                   is the one more thing that decision wants asked. WorkBuddy's

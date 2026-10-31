@@ -351,6 +351,7 @@ const en: Messages = {
   'perm.bypassOn': 'Bypass is on: nothing asks, everything is still audited',
   'perm.bypassOff': 'Bypass is off; risky actions ask again',
 
+  'sessions.authorize': 'Authorize risky actions',
   'sessions.send': 'Send',
   'panda.ready': 'Ready',
   'panda.working': 'Working',
