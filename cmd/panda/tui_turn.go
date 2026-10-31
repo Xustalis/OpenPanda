@@ -32,6 +32,7 @@ import (
 // per the current Ctrl+O state) and the answer streams live below it.
 func (m tuiModel) onDelta(msg deltaMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	m.lastActivity = time.Now()
 	if !m.thoughtDone {
 		m.thoughtDone = true
 		if len(m.thought) > 0 {
@@ -54,11 +55,18 @@ func (m tuiModel) onDelta(msg deltaMsg) (tea.Model, tea.Cmd) {
 // turns that never delegate.
 func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 	p := msg.progress
+	now := time.Now()
+	m.lastActivity = now
+	// Usage is a counter update, not a phase: it must not overwrite the status
+	// note or advance the task card's trail.
+	if p.Kind == askengine.ProgressUsage {
+		m.liveInputTokens, m.liveOutputTokens = p.InputTokens, p.OutputTokens
+		return m, waitForActivity(msg.stream)
+	}
 	label := progressNote(m.loc, p)
 	if p.Kind != askengine.ProgressAgentText {
 		m.note = label
 	}
-	now := time.Now()
 
 	var cmds []tea.Cmd
 	switch p.Kind {
@@ -501,6 +509,8 @@ func (m tuiModel) approvePending() (tea.Model, tea.Cmd) {
 	note := m.rememberApproval(true)
 	m.mode = modeAsking
 	m.started = time.Now()
+	m.liveInputTokens, m.liveOutputTokens = 0, 0
+	m.lastActivity = time.Time{}
 	m.lastInterrupt = time.Time{} // the re-run gets its own double-tap window
 	// Resume in the tree the card was raised for. A task started inside a
 	// /resume'd session must not silently re-run under the engine's default

@@ -259,6 +259,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.thought = appendReasoning(m.thought, msg.text)
+		m.lastActivity = time.Now()
 		return m, waitForActivity(msg.stream)
 	case progressMsg:
 		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
@@ -1752,6 +1753,8 @@ func (m tuiModel) askTurn(text, mode string) (tea.Model, tea.Cmd) {
 	m.ta.SetHeight(1)
 	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder.running")
 	m.started = time.Now()
+	m.liveInputTokens, m.liveOutputTokens = 0, 0
+	m.lastActivity = time.Time{}
 	m.lastInterrupt = time.Time{} // each turn gets a fresh double-tap window
 	m.liveAnswerChunks = nil
 	m.liveAnswerBytes = 0

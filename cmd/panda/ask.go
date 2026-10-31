@@ -538,6 +538,12 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 			}
 		},
 		OnProgress: func(p askengine.Progress) {
+			// A usage report is a counter, not a phase: it updates the closing
+			// meta in place and must not push a log line or a note.
+			if p.Kind == askengine.ProgressUsage {
+				st.SetTokens(p.InputTokens + p.OutputTokens)
+				return
+			}
 			note := progressNote(loc, p)
 			// Advance the phase chain so the status line's trailing meta shows
 			// classify → routing → executing (P0 redesign §D3 parity with the

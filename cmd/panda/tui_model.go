@@ -105,11 +105,20 @@ type tuiModel struct {
 	// tui_mouse.go.
 	x10Payload int
 
-	stream      *askStream
-	exec        *commandExec
-	execGen     uint64
-	started     time.Time
-	chatHistory *chatHistory
+	stream  *askStream
+	exec    *commandExec
+	execGen uint64
+	started time.Time
+	// liveInputTokens/liveOutputTokens mirror the engine's ProgressUsage
+	// events: the ask's cumulative consumption while it runs. Zero before the
+	// first event and reset at every turn start.
+	liveInputTokens  int64
+	liveOutputTokens int64
+	// lastActivity is the newest delta, reasoning or progress timestamp. The
+	// status row reports the quiet time from it, so a working turn reads
+	// differently from a stalled one.
+	lastActivity time.Time
+	chatHistory  *chatHistory
 
 	// team mirrors the active conversation's roster for the status row; the
 	// source of truth stays in the session (or the bare conversation's file)

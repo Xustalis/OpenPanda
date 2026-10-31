@@ -52,6 +52,10 @@ type askResult struct {
 	// human-readable summary instead of raw stdout/stderr.
 	Report  string `json:"report,omitempty"`
 	Thought string `json:"thought,omitempty"`
+	// Tokens is the ask's billed total (input + output) across the entry
+	// model's calls. The live figures stream on `usage` events; this is what
+	// a reloaded thread and the result card show.
+	Tokens int64 `json:"tokens,omitempty"`
 	// Plan fields (kind == "plan"): a multi-stage pipeline has no single task id
 	// and no result yet — its stages are queued and run on other machines — so the
 	// client follows it by plan id and shows the stage ids it was decomposed into.
@@ -102,6 +106,7 @@ func planResultOf(out *askengine.Result) askResult {
 		WorkDir:      out.WorkDir,
 		EntryModel:   out.EntryModel,
 		Report:       out.Report,
+		Tokens:       out.Tokens(),
 		PlanID:       out.PlanID,
 		PlanGoal:     out.PlanGoal,
 		Denied:       out.Denied,

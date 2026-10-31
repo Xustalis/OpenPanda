@@ -355,6 +355,7 @@ const ja: Messages = {
   'panda.poke': 'つつく',
   'sessions.thinking': '考え中…',
   'sessions.elapsed': '所要時間 {d}',
+  'sessions.tokens': '{n} トークン',
   'sessions.speakerPanda': 'パンダ',
   'sessions.role.plan': '編成',
   'sessions.role.report': '報告',

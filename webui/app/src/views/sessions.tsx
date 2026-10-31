@@ -331,6 +331,9 @@ interface ChatMsg extends SessionTurn {
    *  persisted with the turn, so a thread reloaded from disk comes back
    *  without it. */
   thought?: string
+  /** Cumulative token consumption of this turn, streamed on `usage` events
+   *  and finalized by the result's billed total. */
+  tokens?: number
   /** @file paths that were expanded into fenced blocks for this prompt —
    *  shown as attachment chips on the user's bubble. */
   files?: string[]
@@ -433,6 +436,15 @@ function fmtDuration(ms: number): string {
     return `${Math.floor(whole / 60)}${t('time.unit.m')} ${whole % 60}${t('time.unit.s')}`
   }
   return `${Math.floor(whole / 3600)}${t('time.unit.h')} ${Math.floor((whole % 3600) / 60)}${t('time.unit.m')}`
+}
+
+/** Token counts in the reply header: exact below a thousand, one decimal in
+ *  the thousands, one decimal in the millions. A live count that printed all
+ *  seven digits would shove the rest of the header row around every update. */
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`
+  return `${(n / 1_000_000).toFixed(1)}m`
 }
 
 /** The reply's timer while the turn is still running: one tick a second, in the
@@ -1608,6 +1620,10 @@ export function SessionsView({
             pendingText += text
             scheduleFlush()
           },
+          // Usage is its own event: a counter, not a status note. It lands at
+          // most a few times a second (the engine throttles it), so it can
+          // patch state directly.
+          onUsage: (input, output) => patch((m) => ({ ...m, tokens: input + output })),
           onStatus: (text, ev) => patch((m) => ({ ...m, status: statusNote(text, ev) })),
           // The note typed mid-turn reached a round. This is the upgrade from
           // "queued" to "delivered" — without it the user cannot tell a steer
@@ -1659,7 +1675,18 @@ export function SessionsView({
                 r.kind === 'plan' && r.plan_id
                   ? ({ kind: 'plan', ref: r.plan_id } as const)
                   : {}
-              return { ...m, ...task, ...plan, result: r, status: undefined, text, liveTask: undefined }
+              return {
+                ...m,
+                ...task,
+                ...plan,
+                result: r,
+                status: undefined,
+                text,
+                liveTask: undefined,
+                // The billed total wins; a stream that ended before any usage
+                // event keeps whatever the live counter last showed.
+                tokens: r.tokens || m.tokens,
+              }
             })
           },
           onError: (message, code, info) => {
@@ -3405,6 +3432,11 @@ function ChatBubble(props: {
               <LiveElapsed from={liveFrom} />
             ) : elapsedMs !== undefined ? (
               <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(elapsedMs) })}</span>
+            ) : null}
+            {msg.tokens ? (
+              <span class="msg-dur" data-testid="msg-tokens">
+                {t('sessions.tokens', { n: fmtTokens(msg.tokens) })}
+              </span>
             ) : null}
           </span>
         </div>

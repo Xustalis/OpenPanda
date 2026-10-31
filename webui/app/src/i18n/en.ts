@@ -358,6 +358,7 @@ const en: Messages = {
   'panda.poke': 'Poke',
   'sessions.thinking': 'Thinking…',
   'sessions.elapsed': 'Took {d}',
+  'sessions.tokens': '{n} tokens',
   'sessions.speakerPanda': 'Panda',
   'sessions.role.plan': 'Orchestrating',
   'sessions.role.report': 'Report',

@@ -928,8 +928,13 @@ func (m tuiModel) thoughtView() string {
 	}
 	star := m.th.glyph("✻", "*")
 	if !m.expandThought {
+		// The line count is the cheapest honest evidence that reasoning is
+		// accumulating: a single tail sentence reads the same whether the model
+		// wrote three words or three hundred, and "thinking" with nothing moving
+		// is what a stalled turn looks like.
+		meta := i18n.Tf(m.loc, "tui.thought.lines", "n", strconv.Itoa(len(m.thought)))
 		return m.th.muted.Render(star+" "+i18n.T(m.loc, "tui.thinking")) +
-			m.th.muted.Render(" · "+truncate(firstNonEmptyTail(m.thought), 60))
+			m.th.muted.Render(" · "+meta+" · "+truncate(firstNonEmptyTail(m.thought), 60))
 	}
 	var sb strings.Builder
 	sb.WriteString(m.th.muted.Render(star + " " + i18n.T(m.loc, "tui.thinking")))
@@ -955,8 +960,53 @@ func (m tuiModel) statusLine() string {
 		parts = append(parts, m.th.muted.Render("· "+m.note))
 	}
 	parts = append(parts, m.th.muted.Render(fmt.Sprintf("(%s · %s)",
-		elapsed(time.Since(m.started)), i18n.T(m.loc, "cli.status.interrupt"))))
+		m.statusMeta(time.Now()), i18n.T(m.loc, "cli.status.interrupt"))))
 	return strings.Join(parts, " ")
+}
+
+// How long a turn may stay quiet before the status row says so. Before any
+// event has arrived the wait is the provider's prefill window, which can run
+// to ResponseHeaderTimeout; after activity starts, a gap means a slow model or
+// a stalled link. The two get different wording because they are different
+// problems.
+const (
+	quietAwaitAfter = 3 * time.Second
+	quietIdleAfter  = 5 * time.Second
+)
+
+// statusMeta is the parenthesised tail of the status row: elapsed clock, live
+// token consumption, and how long the turn has been quiet. Token counts come
+// from the engine's ProgressUsage events, so the number moves while the model
+// writes instead of appearing only in the closing result line.
+func (m tuiModel) statusMeta(now time.Time) string {
+	meta := elapsed(now.Sub(m.started))
+	if tok := m.liveInputTokens + m.liveOutputTokens; tok > 0 {
+		meta += " · " + cliui.HumanCount(tok) + " tokens"
+	}
+	if quiet := m.quietNote(now); quiet != "" {
+		meta += " · " + quiet
+	}
+	return meta
+}
+
+// quietNote phrases the turn's current silence. No event yet reads as "waiting
+// for the model", which is what the prefill gap actually is; silence after
+// activity reads as "quiet for Ns", which is the honest way to show a stream
+// that has stopped without claiming it failed.
+func (m tuiModel) quietNote(now time.Time) string {
+	seen := m.lastActivity.After(m.started)
+	if !seen {
+		idle := now.Sub(m.started)
+		if idle < quietAwaitAfter {
+			return ""
+		}
+		return i18n.Tf(m.loc, "tui.status.awaitModel", "d", elapsed(idle))
+	}
+	idle := now.Sub(m.lastActivity)
+	if idle < quietIdleAfter {
+		return ""
+	}
+	return i18n.Tf(m.loc, "tui.status.idle", "d", elapsed(idle))
 }
 
 // inputView is the rounded input box with one dim status row under it and a blank

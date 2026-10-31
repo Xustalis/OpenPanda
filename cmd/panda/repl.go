@@ -1041,6 +1041,12 @@ func (r *repl) askMode(text, mode string) {
 			st.Preview(lr.pending())
 		}
 		cb.OnProgress = func(p askengine.Progress) {
+			// A usage report is a counter, not a phase: update the closing meta
+			// in place instead of logging it as a milestone.
+			if p.Kind == askengine.ProgressUsage {
+				st.SetTokens(p.InputTokens + p.OutputTokens)
+				return
+			}
 			// Advance the phase chain (classify → routing → executing → judging)
 			// so the status line's trailing meta tracks a delegated run instead of
 			// sitting on "routing" until the result lands.

@@ -1,0 +1,71 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package askengine
+
+import (
+	"testing"
+
+	"github.com/Xustalis/OpenPanda/internal/entry"
+)
+
+// TestUsageTrackerFoldsProviderSnapshots: snapshots are cumulative within a
+// call, so the tracker must add their differences, not their absolute values.
+func TestUsageTrackerFoldsProviderSnapshots(t *testing.T) {
+	var got []Progress
+	tr := newUsageTracker(func(p Progress) { got = append(got, p) })
+	tr.observe(entry.Usage{InputTokens: 100, OutputTokens: 2})
+	tr.observe(entry.Usage{InputTokens: 100, OutputTokens: 9})
+	tr.final(100, 9)
+	if len(got) == 0 {
+		t.Fatal("tracker never reported")
+	}
+	last := got[len(got)-1]
+	if last.Kind != ProgressUsage {
+		t.Fatalf("kind = %q, want usage", last.Kind)
+	}
+	if last.InputTokens != 100 || last.OutputTokens != 9 {
+		t.Fatalf("last = %d/%d, want 100/9", last.InputTokens, last.OutputTokens)
+	}
+}
+
+// TestUsageTrackerSurvivesClientFallback: a fallback client restarts its own
+// counters, so a snapshot below the previous one is a new baseline, not
+// negative usage. Counts earned before the switch must stay.
+func TestUsageTrackerSurvivesClientFallback(t *testing.T) {
+	var got []Progress
+	tr := newUsageTracker(func(p Progress) { got = append(got, p) })
+	tr.observe(entry.Usage{InputTokens: 100, OutputTokens: 10})
+	tr.observe(entry.Usage{InputTokens: 5, OutputTokens: 5})  // fallback client
+	tr.observe(entry.Usage{InputTokens: 15, OutputTokens: 8}) // +10/+3 on it
+	tr.final(0, 0)
+	last := got[len(got)-1]
+	if last.InputTokens != 110 || last.OutputTokens != 13 {
+		t.Fatalf("last = %d/%d, want 110/13", last.InputTokens, last.OutputTokens)
+	}
+}
+
+// TestUsageTrackerEstimatesBeforeRealUsage: an endpoint that reports usage only
+// at the end still gets a number that moves, from streamed bytes.
+func TestUsageTrackerEstimatesBeforeRealUsage(t *testing.T) {
+	var got []Progress
+	tr := newUsageTracker(func(p Progress) { got = append(got, p) })
+	tr.addOutput(300) // roughly 100 tokens at the tracker's 3-bytes-per-token
+	tr.final(0, 0)
+	last := got[len(got)-1]
+	if last.OutputTokens != 100 {
+		t.Fatalf("estimated output = %d, want 100", last.OutputTokens)
+	}
+}
+
+// TestUsageTrackerFinalReplacesEstimate: the billed total wins even when the
+// estimate is higher, so the closing figure is the provider's own.
+func TestUsageTrackerFinalReplacesEstimate(t *testing.T) {
+	var got []Progress
+	tr := newUsageTracker(func(p Progress) { got = append(got, p) })
+	tr.addOutput(3000)
+	tr.final(120, 40)
+	last := got[len(got)-1]
+	if last.InputTokens != 120 || last.OutputTokens != 40 {
+		t.Fatalf("last = %d/%d, want the billed 120/40", last.InputTokens, last.OutputTokens)
+	}
+}

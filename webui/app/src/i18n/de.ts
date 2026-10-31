@@ -356,6 +356,7 @@ const de: Messages = {
   'panda.poke': 'Anstupsen',
   'sessions.thinking': 'Denkt nach…',
   'sessions.elapsed': 'Dauerte {d}',
+  'sessions.tokens': '{n} Tokens',
   'sessions.speakerPanda': 'Panda',
   'sessions.role.plan': 'Koordination',
   'sessions.role.report': 'Bericht',

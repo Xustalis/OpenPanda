@@ -353,6 +353,7 @@ const zhCN: Messages = {
   'panda.poke': '戳一下',
   'sessions.thinking': '思考中…',
   'sessions.elapsed': '用时 {d}',
+  'sessions.tokens': '{n} tokens',
   'sessions.speakerPanda': '熊猫',
   'sessions.role.plan': '编排',
   'sessions.role.report': '汇报',
