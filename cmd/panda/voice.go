@@ -142,8 +142,21 @@ func runVoice(args []string) {
 		}
 		fmt.Println("\n" + i18n.Tf(loc, "cli.voice.heard", "text", text))
 
+		// The thread exists before the ask, so a remembered approval and the
+		// console's live view bind to it from the first spoken turn. A failed
+		// first turn deletes the still-empty thread rather than leaving a
+		// blank row in the console's rail.
+		if voiceSess == nil {
+			voiceSess, _ = voiceStore.Create(sessions.Title(text), voiceProj)
+		}
 		out, err := engine.AskTurnsSession(ctx, history, text, "", "", voiceSessionID(), false, askengine.StreamCallbacks{})
 		if err != nil {
+			if voiceSess != nil {
+				if cur, gerr := voiceStore.Get(voiceSess.ID); gerr == nil && len(cur.Turns) == 0 {
+					_ = voiceStore.Delete(voiceSess.ID)
+					voiceSess = nil
+				}
+			}
 			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
 			if *once {
 				os.Exit(1)
@@ -151,11 +164,6 @@ func runVoice(args []string) {
 			continue
 		}
 		history = appendConvoTurns(history, loc, text, out, engine)
-		// The first utterance opens the thread when there was none; either way
-		// the exchange is recorded where the console can follow it.
-		if voiceSess == nil {
-			voiceSess, _ = voiceStore.Create(sessions.Title(text), voiceProj)
-		}
 		if voiceSess != nil {
 			appendExchangeToSession(voiceStore, voiceSess.ID, text, out, loc)
 			if out.Kind == "task" {

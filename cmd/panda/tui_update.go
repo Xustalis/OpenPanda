@@ -1575,14 +1575,20 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 // blank sheet rather than leaving the previous project's conversation on
 // screen while the next ask runs somewhere else.
 func (m tuiModel) seedTranscriptFromSession(sess *sessions.Session) {
-	var turns []entry.Turn
-	if sess != nil {
-		turns = make([]entry.Turn, 0, len(sess.Turns))
-		for _, t := range sess.Turns {
-			turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
-		}
+	m.seedTranscript(sessionTurnEntries(sess))
+}
+
+// sessionTurnEntries adapts a thread to the transcript's turn type. Both the
+// launch replay and /resume paint through it, so the two cannot drift.
+func sessionTurnEntries(sess *sessions.Session) []entry.Turn {
+	if sess == nil {
+		return nil
 	}
-	m.seedTranscript(turns)
+	turns := make([]entry.Turn, 0, len(sess.Turns))
+	for _, t := range sess.Turns {
+		turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
+	}
+	return turns
 }
 
 // seedTranscript repaints the scrollback from one conversation's turns. An

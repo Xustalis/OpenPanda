@@ -7,7 +7,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,9 +26,7 @@ func newSessionTUI(t *testing.T) (tuiModel, *sessions.Store) {
 	// saveConvo into XDG_STATE_HOME, which is the developer's real CLI state
 	// without this.
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	old := cliConfigPath
-	cliConfigPath = filepath.Join(t.TempDir(), "missing-config.yaml")
-	t.Cleanup(func() { cliConfigPath = old })
+	_ = writeTestConfig(t, t.TempDir())
 	st := sessions.NewStore(t.TempDir())
 	r := &repl{loc: i18n.Locale("en"), cfg: &config.Config{}, interactive: true, sessionsSt: st}
 	r.cfg.Storage.SkillsPath = t.TempDir()

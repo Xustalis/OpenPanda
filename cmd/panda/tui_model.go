@@ -419,10 +419,7 @@ func newTUIModel(r *repl) tuiModel {
 	// through the same folding so a long thread opens on its tail.
 	var turns []entry.Turn
 	if sess := r.boundSession(); sess != nil && len(sess.Turns) > 0 {
-		turns = make([]entry.Turn, 0, len(sess.Turns))
-		for _, t := range sess.Turns {
-			turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
-		}
+		turns = sessionTurnEntries(sess)
 	} else if r.convoLen() > 0 {
 		turns = r.convoNow()
 	}

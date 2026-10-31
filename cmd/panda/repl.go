@@ -1362,14 +1362,15 @@ func (r *repl) repeatLast() {
 // both resume it.
 func (r *repl) rememberTurn(text string, out *askengine.Result) {
 	loc := r.locale()
-	var turns []entry.Turn
 	r.editConvo(func(c []entry.Turn) []entry.Turn {
-		turns = appendConvoTurns(c, loc, text, out, r.engine.Load())
+		turns := appendConvoTurns(c, loc, text, out, r.engine.Load())
+		// Persist under sessMu: a save outside the lock can overwrite a
+		// turn another writer appended between the update and the write.
+		// The repl's own project shard, not the config pointer's, so a
+		// /project switch cannot write this conversation elsewhere.
+		r.saveConvoNow(turns)
 		return turns
 	})
-	// The repl's own project shard, not the config pointer's: a /project
-	// switch must not write this conversation into another project's file.
-	r.saveConvoNow(turns)
 }
 
 // cmdNew starts a fresh conversation (/new) — the "new chat" of a chat app.

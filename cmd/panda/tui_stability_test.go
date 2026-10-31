@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -25,9 +24,7 @@ import (
 func newIsolatedTUI(t *testing.T) tuiModel {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	old := cliConfigPath
-	cliConfigPath = filepath.Join(t.TempDir(), "missing-config.yaml")
-	t.Cleanup(func() { cliConfigPath = old })
+	_ = writeTestConfig(t, t.TempDir())
 	r := &repl{loc: i18n.Locale("en"), cfg: &config.Config{}, interactive: true}
 	r.cfg.Storage.SkillsPath = t.TempDir() // /skills hub must not seed builtins into cwd
 	m := newTUIModel(r)

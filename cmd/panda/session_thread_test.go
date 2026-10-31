@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,14 +17,55 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
+// writeTestConfig points cliConfigPath at a real temp config whose storage
+// roots all live under dir. A path to a missing file is not enough isolation:
+// config.Load then falls back to the default per-user paths, so convoPath's
+// active-project lookup opens (and migrates) the developer's node database.
+func writeTestConfig(t *testing.T, dir string) *config.Config {
+	t.Helper()
+	dataDir := filepath.Join(dir, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "config.yaml")
+	data := fmt.Sprintf(`node:
+  name: test-node
+storage:
+  db_path: "%s"
+  context_path: "%s"
+  memory_path: "%s"
+  projects_path: "%s"
+  skills_path: "%s"
+  work_path: "%s"
+  artifact_path: "%s"
+`,
+		filepath.Join(dataDir, "panda.db"),
+		filepath.Join(dataDir, "context"),
+		filepath.Join(dataDir, "memory"),
+		filepath.Join(dataDir, "projects"),
+		filepath.Join(dataDir, "skills"),
+		filepath.Join(dataDir, "work"),
+		filepath.Join(dataDir, "artifacts"),
+	)
+	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := cliConfigPath
+	cliConfigPath = cfgPath
+	t.Cleanup(func() { cliConfigPath = old })
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load test config: %v", err)
+	}
+	return cfg
+}
+
 func newThreadRepl(t *testing.T) (*repl, *sessions.Store) {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	old := cliConfigPath
-	cliConfigPath = filepath.Join(t.TempDir(), "missing-config.yaml")
-	t.Cleanup(func() { cliConfigPath = old })
+	cfg := writeTestConfig(t, t.TempDir())
 	st := sessions.NewStore(t.TempDir())
-	return &repl{loc: i18n.English, cfg: &config.Config{}, interactive: true, sessionsSt: st}, st
+	return &repl{loc: i18n.English, cfg: cfg, interactive: true, sessionsSt: st}, st
 }
 
 func TestSessionTitleCollapsesAndTruncates(t *testing.T) {
