@@ -163,6 +163,10 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
 - **Data & platform**: `storage` (SQLite WAL + migrations), `ctxstore`,
   `sessions`, `projects`, `config`, `log`, `util` (UUIDv7 etc.),
   `version`, `hwinfo`, `install`, `i18n` (EN/ZH/JA/ES/DE), `reminders`,
+  `nodecli` (the `panda` subcommand catalog: one registry feeding the
+  agent prompt reference, `subcommandNames()` for suggestions/completion,
+  and `panda help`'s descriptions; a test parses dispatch.go and fails a
+  switch case without a catalog row),
   `updater`, `doctor`, `cliui`, `providers`, `pyexec`, `askengine`,
   `artifact`, `mdtext`, `mcp`/`mcpserve`, `agents`, `plan`, `auth`
   (subscription-OAuth token store + PKCE flows), `self` (self-evolution:

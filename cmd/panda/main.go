@@ -34,6 +34,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/nodecli"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
@@ -108,20 +109,13 @@ func main() {
 }
 
 // subcommandNames lists every accepted subcommand for typo suggestions and
-// shell completion. It is dispatchSub's switch written out once more,
-// deliberately: the switch is the dispatcher and must stay a switch (aliases
-// share a case), while this is the vocabulary, and a name missing here costs
-// a suggestion, not a command.
+// shell completion. The vocabulary itself lives in internal/nodecli — the one
+// registry shared with the agent-facing command reference and with
+// `panda help` — so a new subcommand is named once, not once per consumer.
+// dispatch.go's switch stays the dispatcher (aliases share a case); a test
+// parses it and fails a case the catalog does not cover.
 func subcommandNames() []string {
-	return []string{
-		"daemon", "serve", "ask", "repl", "chat", "web", "voice",
-		"install", "uninstall", "update", "upgrade", "doctor", "status", "nodes", "pair", "join", "queue",
-		"task", "plan", "cancel", "approve", "reject", "logs", "skill", "mcp",
-		"reminder", "todo", "detect", "card", "init", "metrics", "heatmap", "audit", "session",
-		"sessions", "memory", "config", "model", "models", "agents", "project",
-		"auth", "rpc",
-		"read", "view", "cat", "md", "markdown", "version", "help", "completion", "self",
-	}
+	return nodecli.Names()
 }
 
 // looksLikeSubcommand reports whether a bare argv word could plausibly be a
@@ -939,9 +933,12 @@ func printUsage(w *os.File) {
 	h("  nodes verify <id>", "cli.help.d.nodes_verify", narrow)
 	h("  nodes drain [id]", "cli.help.d.nodes_drain", narrow)
 	h("  nodes prune", "cli.help.d.nodes_prune", narrow)
+	h("  nodes remove <id>", "cli.help.d.nodes_remove", narrow)
+	h("  nodes trust <id> [level]", "cli.help.d.nodes_trust", narrow)
 	h("  nodes disconnect <a>", "cli.help.d.nodes_disconnect", narrow)
 	line("  pair --secret S --peer <host:port>")
 	h("", "cli.help.d.pair", narrow)
+	h("  join <uri>", "cli.help.d.join", narrow)
 	h("  ask <text>", "cli.help.d.ask", narrow)
 	h("  repl", "cli.help.d.repl", narrow)
 	h("  web", "cli.help.d.web", narrow)

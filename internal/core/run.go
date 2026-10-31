@@ -1499,6 +1499,18 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		promptLang := policy.RecommendedPromptLang()
 		outputLang := policy.RecommendedOutputLang()
 
+		// A task stamped remote at intake carries off-node intent: commander
+		// holds its agent run to the restricted tool face unless the origin's
+		// consent grant authorized it. The persisted flag is authoritative —
+		// the chain fallback only catches rows written before the flag
+		// existed; a peer can claim chain[0]=us but cannot unset remote.
+		//
+		// Resolved before the prompt is assembled: the self-command reference
+		// is withheld from a read-only run, so the builder needs the verdict,
+		// not just the trace and the adapter request do.
+		remoteOrigin := task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID)
+		restricted := remoteOrigin && !task.Authorized
+
 		// assemblePrompt builds this round's prompt; a context-overflow retry
 		// rebuilds it under the shrunken overflowPromptBudget so every matched
 		// skill degrades to its index line.
@@ -1532,17 +1544,14 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if task.Isolate && task.Project != "" && !strings.Contains(task.Intent, "[isolated]") {
 				p += "\n\n[isolated] you work in a private copy of the project tree; changes merge back automatically when you finish — do not expect sibling edits to appear live."
 			}
+			// The node's own CLI surface. Last so it reads as a reference
+			// appendix: the task, the constraints and the matching protocol
+			// markers are what the agent acts on, the catalog is what it looks
+			// things up in.
+			p += selfManagementSection(c, restricted, promptLang)
 			return p
 		}
 		prompt := assemblePrompt(0)
-
-		// A task stamped remote at intake carries off-node intent: commander
-		// holds its agent run to the restricted tool face unless the origin's
-		// consent grant authorized it. The persisted flag is authoritative —
-		// the chain fallback only catches rows written before the flag
-		// existed; a peer can claim chain[0]=us but cannot unset remote.
-		remoteOrigin := task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID)
-		restricted := remoteOrigin && !task.Authorized
 
 		// — Trace: exec_agent_start (orbit Step-3 "starting this stage on N").
 		// We report before Execute so the orbit paints the stage bar as

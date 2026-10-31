@@ -14,6 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/nodecli"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
@@ -351,15 +352,34 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, promptBud
 	// mid-run, so a blocked agent ends its turn with the marker the run
 	// loop parks on. Same rider placement — every agent round.
 	prompt += i18n.T(promptLang, "prompt.question.hint")
-	// Self-management hint: under the extended tools policy the agent may
-	// reach the node's own surface — MCP-capable CLIs see the openpanda
-	// server from the materialized .mcp.json, shell-capable agents can run
-	// the panda binary already on PATH. Minimal policy keeps the tool face
-	// closed, so the hint only rides extended runs.
-	if c.router != nil && c.router.ToolsPolicy() == "extended" && c.router.PandaTools() {
-		prompt += i18n.T(promptLang, "prompt.selftools.hint")
-	}
+	// The node's own command reference is appended by the run loop instead
+	// (selfManagementSection): it needs the run's restricted verdict, which
+	// only the loop knows — a remote, unconsented task runs read-only and
+	// must not be told to operate the node.
 	return prompt, used
+}
+
+// selfManagementSection renders what an executing agent needs to know about
+// the node it is running on: that `panda` is the node's own CLI, and — when
+// routing.panda_tools is on — the full subcommand surface, so a task like
+// "start the web console" runs `panda web --daemon` instead of investigating
+// the host as if OpenPanda were a stranger's software.
+//
+// It rides under the minimal tools policy too, deliberately. Minimal keeps
+// the adapter's safe whitelist, and that whitelist includes Bash — running
+// `panda` is already permitted, so the reference grants no capability; it
+// only removes the guesswork that made agents probe for the binary first.
+// The MCP sentence in the hint applies only where the extended policy
+// materializes the openpanda server; under minimal it is inert.
+//
+// A restricted run is the one that must not see this: the remote-origin
+// admission tier strips the shell, and pointing a read-only agent at write
+// commands it cannot run would only produce failed attempts.
+func selfManagementSection(c *Core, restricted bool, loc i18n.Locale) string {
+	if c == nil || c.router == nil || !c.router.PandaTools() || restricted {
+		return ""
+	}
+	return i18n.T(loc, "prompt.selftools.hint") + nodecli.PromptReference(loc)
 }
 
 // withSkills prepends matched active skills to the intent via the lightweight
