@@ -133,7 +133,7 @@ export const EN = {
   's3.term.classify': 'classify intent → <b>task.graph</b>',
   's3.term.replan': 'artifact missing → re-dispatched with cause',
   's3.caption':
-    'Two views of the same run: the console shows state and approvals, the terminal shows routing and acceptance. Try switching.',
+    'An interface sketch: the console shows state and approvals, the terminal shows routing and acceptance. Both views describe the same run.',
   's3.flow1.t': 'Read the intent',
   's3.flow1.d':
     'First decide whether this is chat, a lookup, or real work. Only the third goes further.',
