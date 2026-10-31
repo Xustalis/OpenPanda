@@ -29,6 +29,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/todos"
@@ -162,6 +163,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/plans", h.listPlans)
 	mux.HandleFunc("GET /api/plans/{id}", h.getPlan)
 	mux.HandleFunc("POST /api/ask", h.ask)
+	mux.HandleFunc("POST /api/hardware/ask", h.askHardware)
 	mux.HandleFunc("GET /api/agents", h.listAgents)
 	mux.HandleFunc("POST /api/agents/{name}/test", h.testAgent)
 	mux.HandleFunc("GET /api/projects", h.listProjects)
@@ -178,6 +180,10 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/nodes/add", h.addNode)
 	mux.HandleFunc("POST /api/nodes/{id}/trust", h.setNodeTrust)
 	mux.HandleFunc("DELETE /api/nodes/{id}", h.removeNode)
+	// The configured dial list (network.peers), as distinct from the node
+	// directory above: the add-device card edits this list directly.
+	mux.HandleFunc("GET /api/peers", h.listPeers)
+	mux.HandleFunc("DELETE /api/peers", h.removePeer)
 	// Bluetooth-style pairing — the web twin of `panda pair` /
 	// `panda pair <device>` / `panda pair confirm` (see pair.go).
 	mux.HandleFunc("GET /api/pair", h.listPair)
@@ -593,6 +599,13 @@ type handler struct {
 	// answer turn, which has no task row to land a durable note on.
 	steerMu sync.Mutex
 	steers  map[string][]pendingNote
+	// carry holds the notes a turn ended without any round reading: a note
+	// typed into the last round has no later boundary to land on, and dropping
+	// it with the queue made the composer's "queued" a lie. They are parked
+	// here and become the next turn's opening input — the resumed ask drains
+	// them (the console auto-starts it), and a prompt the user sends first
+	// absorbs them rather than leaving them stranded.
+	carry map[string][]pendingNote
 	// memSeq stamps the in-memory notes' keys. Guarded by steerMu; monotonic
 	// per process so a key handed to the browser never names a later note.
 	memSeq int
@@ -605,6 +618,9 @@ type handler struct {
 	// the state the polling UI reads. Inbound requests need no field: the
 	// pair_sessions table is the shared surface (see pair.go).
 	pair pairTracker
+
+	// agentList shares the expensive local CLI probes across panel views.
+	agentList agentListCache
 }
 
 // taskChildJSON is the compact sub-agent reference embedded in a parent's
@@ -646,6 +662,13 @@ type taskJSON struct {
 	// session's task list, which is polled every change frame and must stay
 	// one row wide rather than dragging a task's whole event timeline.
 	Agent string `json:"agent,omitempty"`
+	// Requires is the capability set the task was routed with, including the
+	// `agent:<name>` pin when the submitter named one. The transcript's
+	// dispatch card reads it to name the employee the job was given to: a
+	// task that never started has no exec_agent_start on its trace, so the
+	// trace alone left exactly the failed rows — the ones a reader most needs
+	// to identify — without a face or a name, next to siblings that had both.
+	Requires []string `json:"requires,omitempty"`
 	// Queue redesign fields: the board sorts by priority, then seq (drag
 	// order, 0 = not dragged), and jumps into session_id when set.
 	Priority     string   `json:"priority"`
@@ -662,6 +685,18 @@ type taskJSON struct {
 	// accept_work / resume_execution / needs_changed_input — so the board can
 	// label the pending decision instead of a bare "awaiting approval".
 	ApprovalDisposition string `json:"approval_disposition,omitempty"`
+	// OriginNode is chain[0] — the device that FIRST created this task: self
+	// for locally submitted rows (and for sub-agents, which inherit the
+	// parent's chain), the delegator's id for rows that arrived over the
+	// wire. This is the board's device filter dimension; OwnerNode alone
+	// cannot serve because it rotates to the executing node on claim. Empty
+	// on legacy rows that predate the chain column.
+	OriginNode string `json:"origin_node,omitempty"`
+	// OriginLocal reports whether OriginNode names this console's own runtime
+	// node (SameRuntimeIdentity, so an instance-id drift still reads as
+	// self). Rows with no chain fall back to !Remote — everything before the
+	// column existed was created locally or arrived without a chain.
+	OriginLocal bool `json:"origin_local,omitempty"`
 	// ScopePaths/Isolate mirror the parallel-mode declaration on the row:
 	// scope_paths names the project-relative lanes this task claims inside
 	// the shared tree, isolate means it runs in a private copy whose changes
@@ -764,7 +799,7 @@ type tier2OpJSON struct {
 	Risk   string `json:"risk"` // "high" | "medium" | "low"
 }
 
-func toTaskJSON(t core.Task) taskJSON {
+func (h *handler) toTaskJSON(t core.Task) taskJSON {
 	out := taskJSON{
 		ID:           t.TaskID,
 		ParentID:     t.ParentID,
@@ -779,6 +814,7 @@ func toTaskJSON(t core.Task) taskJSON {
 		Result:       t.ResultJSON,
 		Risk:         t.Risk,
 		Agent:        strings.TrimSuffix(t.AgentSessionAdapter, ".py"),
+		Requires:     t.Requires,
 		Priority:     priorityLabel(t.Priority),
 		Seq:          t.Seq,
 		SessionID:    t.SessionID,
@@ -790,6 +826,19 @@ func toTaskJSON(t core.Task) taskJSON {
 		Isolate:      t.Isolate,
 		CreatedAt:    ts(t.CreatedAt),
 		UpdatedAt:    ts(t.UpdatedAt),
+	}
+	// Origin attribution for the board's device filter: chain[0] is the
+	// creating device, and SameRuntimeIdentity keeps a re-registered identity
+	// of this machine reading as local rather than as a foreign peer. A row
+	// without a chain predates the column — the persisted remote flag is the
+	// only provenance signal left.
+	if len(t.Chain) > 0 {
+		out.OriginNode = t.Chain[0]
+		if self := localNodeID(h.cfg); self != "" {
+			out.OriginLocal = scheduler.SameRuntimeIdentity(t.Chain[0], self)
+		}
+	} else {
+		out.OriginLocal = !t.Remote
 	}
 	if t.State == core.StateReview {
 		out.ApprovalDisposition = string(t.ApprovalDisposition)
@@ -915,7 +964,7 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]taskJSON, 0, len(filtered))
 	for _, t := range filtered {
-		out = append(out, toTaskJSON(t))
+		out = append(out, h.toTaskJSON(t))
 	}
 	if r.URL.Query().Get("brief") == "1" {
 		// The chat's own read of a thread's tasks: it renders state, the
@@ -1082,7 +1131,7 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errors.New("load task failed"))
 		return
 	}
-	out := toTaskJSON(t)
+	out := h.toTaskJSON(t)
 	h.enrichPlanMeta(r.Context(), &out, t)
 	// ?after=<eventID> is the poll loop's cursor: the row and its rollups stay
 	// complete, but only the timeline past that id goes on the wire. A page

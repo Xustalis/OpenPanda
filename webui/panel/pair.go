@@ -241,7 +241,11 @@ func (h *handler) finishPair(pc *core.PairClient, addr string) {
 		var rj *core.PairRejected
 		switch {
 		case errors.As(err, &rj):
-			mark(rj.Reason, "")
+			// The UI's state vocabulary is fixed (waiting|done|rejected|
+			// expired|error). PairRejected.Reason is prose for the badge, not
+			// a state — writing it into the state field left the row with no
+			// badge at all.
+			mark("rejected", rj.Reason)
 		case errors.Is(err, context.DeadlineExceeded):
 			mark("expired", "")
 		default:

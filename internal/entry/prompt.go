@@ -101,6 +101,20 @@ The Go core validates kind, tool whitelist, parameter schema, permissions, and n
 - Distinguish waiting-for-approval, queued-on-device, and actually-running: a parked task is not a dead one, and a remote task reports the node and directory where it runs.
 - A task that finishes while leaving a service running is DONE — describe it as completed and name what it left behind (URL, port, PID); "service retained" is not "task still running", and a long-lived server process is normal, not a stuck task.`
 
+// executionContract is the closing rider appended to every system prompt: a
+// checkable execution contract the model is bound to when it emits or
+// supervises a task. It is static so it stays in the cacheable prefix.
+const executionContract = `
+
+═══ Execution Contract ═══
+[execution context] Every task run is framed by its task title, its project, and the workspace-as-cwd. The executing agent must stay within spec.scope (the comma-separated relative paths it may modify) and must treat spec.success_definition as the check it must pass.
+Before you claim done:
+- Read the project's own sources before editing; do not work from memory of other repos.
+- Prove the success definition with the project's own build/test convention (make build / make test / make gate) before claiming done.
+- Stay inside the declared scope (spec.scope); do not touch paths outside it.
+- Report the commands you ran and their outcomes.
+- Name any criterion you could not verify.`
+
 // memoryRulesSection is the memory governance layer: when to record, what to
 // skip, and how to maintain a full memory. Attached only once the session has
 // actually used a memory tool (ChooseLayers) — the tool schemas alone carry
@@ -428,6 +442,7 @@ func BuildPrompt(opts PromptOptions) string {
 	}
 	var b strings.Builder
 	b.WriteString(coreRules)
+	b.WriteString(executionContract)
 	if layers.MemoryRules {
 		b.WriteString(memoryRulesSection)
 	}

@@ -63,11 +63,24 @@ func normalizeScopePaths(paths []string) []string {
 	return out
 }
 
-// scopeLeafKeys renders the exec/queue lock set for one scoped child.
-func scopeLeafKeys(project string, paths []string) []string {
+// scopeLeafKeys renders the exec/queue lock set for one scoped child. The
+// session lanes ride on top: a scoped child inside a conversation locks
+// "scope:<p>/@session/<sid>/<path>", so its siblings in that same conversation
+// keep the overlap rules while another conversation's identical path stays a
+// separate lane.
+//
+// A submitter with no conversation (CLI `task add --paths`, an inbound
+// delegate frame) stays on the bare leaf "scope:<p>/<path>". That leaf is a
+// sibling of every conversation's lane, so it does not conflict with a
+// conversation writing the same path — the same allowance two conversations
+// already have. Claiming the project root here would restore the exclusion but
+// serialize every conversation-less scoped task against every other one, which
+// TestScopedProjectChildrenRunInParallel pins as a regression. The trade-off is
+// deliberate and documented in docs/status.md.
+func scopeLeafKeys(project, sessionID string, paths []string) []string {
 	keys := make([]string, 0, len(paths))
 	for _, p := range paths {
-		keys = append(keys, queue.ScopeLeafKey(project, p))
+		keys = append(keys, queue.SessionScopeLeafKey(project, sessionID, p))
 	}
 	return keys
 }
@@ -159,7 +172,7 @@ func childResourceKeys(taskID string, in TaskInput) []string {
 	}
 	if in.Project != "" {
 		if paths := normalizeScopePaths(in.Paths); len(paths) > 0 {
-			return mergeActuatorKeys(scopeLeafKeys(in.Project, paths), in.Requires, in.SpecJSON)
+			return mergeActuatorKeys(scopeLeafKeys(in.Project, in.SessionID, paths), in.Requires, in.SpecJSON)
 		}
 	}
 	if wd := queue.WorkDirKey(in.WorkDir); wd != "" {

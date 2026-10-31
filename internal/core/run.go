@@ -1789,11 +1789,14 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// The structured contract wins when it carries a question: the
 			// schema field is parsed truth, while the marker pass above
 			// still strips any protocol line the agent also printed.
-			if structured != nil && strings.TrimSpace(structured.Question) != "" {
+			if structured != nil && strings.TrimSpace(structured.Question) != "" &&
+				!isNoQuestionSentinel(structured.Question) {
 				q, ask = strings.TrimSpace(structured.Question), true
 			}
+			// Also remove a recognized no-question protocol line when the
+			// successful run continues to completion instead of parking.
+			res.Stdout = cleaned
 			if ask {
-				res.Stdout = cleaned
 				if beforeOK {
 					if after, serr := defense.SnapshotDir(workDir); serr == nil {
 						filesTruncated = after.Truncated()
@@ -1933,7 +1936,15 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if res.Agent != "" && res.Agent != plan.Agent {
 				breakerKey = "agent:" + res.Agent
 				c.audit(ctx, taskID, "agent:fallback", plan.Agent, "fallback", "primary unavailable, fell back to "+res.Agent)
-				if err := c.store.RecordEvent(ctx, taskID, EvAgentFallback, map[string]any{"from": plan.Agent, "to": res.Agent}); err != nil {
+				// The reason rides the event, not just the audit line: the
+				// thread prints one sentence for the swap, and "claude_code
+				// 未执行" without a cause is the same dead end as no sentence
+				// at all.
+				fallback := map[string]any{"from": plan.Agent, "to": res.Agent}
+				if res.FallbackReason != "" {
+					fallback["reason"] = res.FallbackReason
+				}
+				if err := c.store.RecordEvent(ctx, taskID, EvAgentFallback, fallback); err != nil {
 					c.logger.Warn("record agent fallback event", "task", taskID, "err", err)
 				}
 			}

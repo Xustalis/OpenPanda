@@ -324,15 +324,53 @@ var known = []Known{
 		InstallHint:       "curl -fsSL https://x.ai/cli/install.sh | bash",
 		InstallURL:        "https://docs.x.ai/build/overview",
 		CredentialEnvVars: []string{"XAI_API_KEY", "GROK_API_KEY"},
-		CredentialFiles:   []string{".grok/config.toml", ".grok/auth.json"},
+		// grok writes ~/.grok/config.toml on first launch, before any login:
+		// the file is a shell with no provider in it, and treating its mere
+		// existence as credentials is why every grok task opened with
+		// "Error: Not signed in" and then had to be rescued by injection.
+		// Only a provider key / endpoint / auth helper inside it counts.
+		// ~/.grok/auth.json is written by `grok login` alone, so its presence
+		// needs no field check.
+		CredentialFiles: []string{".grok/config.toml", ".grok/auth.json"},
+		CredentialFileFields: map[string][]string{
+			".grok/config.toml": {"api_key", "env_key", "models_base_url", "auth_provider_command"},
+		},
 		ModelEnv: &ModelEnvMapping{
 			APIType: "openai",
-			BaseURL: "GROK_BASE_URL",
+			// grok reads GROK_MODELS_BASE_URL for a custom inference endpoint
+			// (it fetches {base}/models on startup and sends chat completions
+			// there). GROK_BASE_URL is not a variable this CLI knows, so
+			// injecting it left the run pointed at api.x.ai while handing it a
+			// key for another provider — a 401 that read as "the model failed".
+			BaseURL: "GROK_MODELS_BASE_URL",
 			APIKey:  "XAI_API_KEY",
 			Model:   "GROK_MODEL",
 		},
-		DefaultCapabilities: []string{"coding", "shell", "file_edit", "build"},
-		DefaultBestAt:       []string{"build_diagnostics", "code_search", "refactoring"},
+		// Text only, deliberately — no "shell", "file_edit" or "build".
+		//
+		// Measured on grok 1.0.67 / Windows / headless `-p` with an injected
+		// OpenAI-compatible endpoint: a turn that calls a tool never finishes.
+		// The tool itself runs (`shell.tool.exec_done … success:true`, ~3.6 s
+		// even for `echo` — that is the shell actor spinning up), and then the
+		// turn stops: `shell.turn.inference_start loop_index=2` is written and
+		// the matching `inference_done` never is. The process stays alive at
+		// 0% CPU with an empty log until something outside kills it, and the
+		// wait before the tool even starts runs 65–410 s (75/100/120/200/421 s
+		// — a ~100 s timeout retried a few times). Nothing PANDA can pass
+		// changes it: --no-plan, --permission-mode bypassPermissions, a tool
+		// allowlist and an HTTPS proxy were all tried. A text-only turn takes
+		// seconds and ends cleanly on `end`.
+		//
+		// So the card advertises what actually works. Routing matches task
+		// requirements against these strings, and summarizeDevices shows them
+		// to the orchestrator, so declaring "text" alone keeps command-shaped
+		// work away from an agent that would sit on it for the full watchdog
+		// and then report a timeout. Restore the previous set
+		// (coding, shell, file_edit, build) when the CLI can finish a
+		// tool-using turn — e.g. behind a real `grok login` or once the ACP
+		// path is wired up.
+		DefaultCapabilities: []string{"text"},
+		DefaultBestAt:       []string{"text_generation", "explanation"},
 		DefaultCostTier:     "medium",
 		DefaultTier:         TierAutoApproved,
 	},
@@ -401,11 +439,27 @@ var known = []Known{
 		Binaries:    []string{"agy", "antigravity"},
 		DisplayName: "Antigravity (Google)",
 		InstallURL:  "https://antigravity.google/docs/cli/install",
-		InitHint:    "agy  # sign in once interactively — headless runs reuse the keyring session",
-		// agy authenticates through the OS keyring or a Gemini API key; its env
-		// contract is not the OpenAI/Anthropic pair, so ModelEnv stays nil and
-		// PANDA never injects a model endpoint into it.
+		InitHint:    "agy  # sign in once interactively, or use a Gemini API key (see ModelEnv)",
+		// agy has no --api-key/--base-url flags, but its Gemini-API-key branch
+		// reads two env vars and never opens an account session:
+		//   GEMINI_API_KEY          → sent as x-goog-api-key
+		//   GOOGLE_GEMINI_BASE_URL  → where /v1beta/models/<m>:generateContent goes
+		// (the branch also needs {"modelProvider":"gemini"} in
+		// ~/.gemini/antigravity-cli/settings.json, which the adapter writes on
+		// an injected run).
+		//
+		// APIType is "" on purpose: agy always speaks Gemini's generateContent
+		// to whatever base URL it is given, so the dialect of PANDA's model is
+		// irrelevant here — the base URL must point at something that speaks
+		// Gemini. Pointing it straight at an OpenAI/Anthropic provider only
+		// works through a translating front (see docs/status.md), which is an
+		// operator decision, not something the adapter can paper over.
 		CredentialEnvVars: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+		ModelEnv: &ModelEnvMapping{
+			APIType: "",
+			BaseURL: "GOOGLE_GEMINI_BASE_URL",
+			APIKey:  "GEMINI_API_KEY",
+		},
 		Capabilities: Capabilities{
 			SupportsSkills:    true,
 			SupportsMCP:       true,
@@ -453,14 +507,22 @@ var known = []Known{
 		DefaultTier:         TierAutoApproved,
 	},
 	{
-		Name:              "hermes",
-		Adapter:           "hermes.py",
-		Endpoint:          "https://api.openai.com",
-		Binaries:          []string{"hermes", "hermes-agent"},
-		DisplayName:       "Hermes",
-		InstallHint:       "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
-		InstallURL:        "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
-		CredentialEnvVars: []string{"OPENAI_API_KEY", "HERMES_API_KEY"},
+		Name:        "hermes",
+		Adapter:     "hermes.py",
+		Endpoint:    "https://api.openai.com",
+		Binaries:    []string{"hermes", "hermes-agent"},
+		DisplayName: "Hermes",
+		InstallHint: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+		InstallURL:  "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+		// OPENAI_API_KEY is deliberately absent: hermes 0.19 does not read it
+		// (or OPENAI_BASE_URL/OPENAI_MODEL) for its model — it resolves
+		// `providers.<name>` + `model.*` out of $HERMES_HOME/config.yaml. A
+		// stray OPENAI_API_KEY in the operator's environment used to make the
+		// agent look credentialed, which suppressed injection and let the run
+		// die on "HTTP 401: Missing Authentication header" with the manifest
+		// insisting credentials were present. The adapter writes a throwaway
+		// config for injected runs (see adapters/hermes.py).
+		CredentialEnvVars: []string{"HERMES_API_KEY"},
 		CredentialFiles:   []string{".hermes/auth.json", ".hermes/config.yaml", ".hermes/.env"},
 		ModelEnv: &ModelEnvMapping{
 			APIType: "openai",

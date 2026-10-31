@@ -700,7 +700,7 @@ func (m tuiModel) onSplashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // startFromSplash transitions from splash to the model onboarding guide or main idle chat.
 func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
-	var onboarded, configured, termsCurrent bool
+	var onboarded, configured, termsCurrent, localeSet bool
 	if m.r != nil {
 		m.r.readConfig(func(c *config.Config) {
 			if c == nil {
@@ -709,6 +709,7 @@ func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
 			onboarded = c.UI.Onboarded
 			configured = modelConfigured(c)
 			termsCurrent = c.UI.TermsCurrent()
+			localeSet = strings.TrimSpace(c.UI.Locale) != ""
 		})
 	}
 	// Consent is the gate, not wizard completion. `onboarded` is written by
@@ -719,7 +720,13 @@ func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
 	// nothing to ask that the model guide cannot; a stale one re-opens the
 	// license step alone for someone who has signed before.
 	if m.r != nil && m.r.cfg != nil && !termsCurrent {
-		if onboarded {
+		// Any answer the wizard already recorded means it must not start from
+		// the top again: the flags are written by its last step, but the
+		// language choice is its first, and a model configured outside the
+		// wizard says the same. Without this, someone who closed the wizard
+		// halfway is walked through language → terms → approval on every
+		// launch — the complaint this gate exists to answer.
+		if onboarded || configured || localeSet {
 			return m.startTermsReconsent()
 		}
 		return m.startOnboarding()

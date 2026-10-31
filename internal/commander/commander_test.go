@@ -687,3 +687,49 @@ func TestExecAgentSwitchNoteEarly(t *testing.T) {
 		t.Fatalf("no agent_switch progress note emitted for the fallback run; notes=%v kinds=%v", notes, kinds)
 	}
 }
+
+// A substitution's reason is the failed attempt's diagnosis with the
+// wrapper's own phrasing peeled off: the substitution line already names the
+// agent, so repeating "claude_code (exec failed: …)" there reads as a log line
+// dropped into a sentence.
+func TestSubstitutionReasonPeelsTheWrapper(t *testing.T) {
+	cases := []struct{ agent, entry, want string }{
+		{"claude_code", "claude_code (exec failed: claude stopped at its turn cap after 31 turns without a final answer)",
+			"claude stopped at its turn cap after 31 turns without a final answer"},
+		{"claude_code", "claude_code (cli not found on PATH)", "cli not found on PATH"},
+		{"codex", "codex (exec failed: )", ""},
+		{"claude_code", "claude_code (not on card)", "not on card"},
+	}
+	for _, c := range cases {
+		if got := substitutionReason(c.agent, c.entry); got != c.want {
+			t.Fatalf("substitutionReason(%q) = %q, want %q", c.entry, got, c.want)
+		}
+	}
+}
+
+// A CLI's own wording for "you are not logged in" is a credential failure, not
+// a task failure: the rescue injection is what turns it into a working run
+// instead of a substitute answering the task. grok says "Not signed in. To
+// authenticate without a browser, run: grok login --device-code", which none
+// of the older patterns matched — so a grok_build task that had simply never
+// been logged in was handed to another agent.
+func TestProviderFailureRecognisesSignedOut(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"Not signed in. To authenticate without a browser, run:/n  grok login --device-code", true},
+		{"Error: Not signed in.", true},
+		{"Please log in to continue", true},
+		{"401 Unauthorized", true},
+		{"quota exhausted", true},
+		// A task that merely talks about signing in is not a provider failure.
+		{"the login page renders a signed-in header", false},
+		{"renamed the auth module", false},
+	}
+	for _, c := range cases {
+		if got := isProviderFailureOrAuth(c.text); got != c.want {
+			t.Fatalf("isProviderFailureOrAuth(%q) = %v, want %v", c.text, got, c.want)
+		}
+	}
+}

@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -239,5 +240,139 @@ func TestParseQuestionRequest(t *testing.T) {
 	// The ideographic space (U+3000) is a separator too.
 	if q6, _, ok6 := parseQuestionRequest("PANDA_QUESTION　哪个环境？"); !ok6 || q6 != "哪个环境？" {
 		t.Fatalf("ideographic space parse = %q ok=%v", q6, ok6)
+	}
+}
+
+// A real unattended run printed this no-question sentence as a protocol
+// payload. It must not turn a completed task into a clarification park.
+func TestParseQuestionRequestNoQuestionSentinel(t *testing.T) {
+	for _, payload := range []string{
+		"无，任务已完成，无需用户补充信息。",
+		"无，任务已完成，无需用户补充信息",
+		" \t无，任务已完成，无需用户补充信息. \t",
+		// Punctuation drift: the same sentence comes back with half-width
+		// commas, a shouting exclamation mark or a trailing ellipsis.
+		"无,任务已完成,无需用户补充信息",
+		"无，任务已完成，无需用户补充信息！",
+		"无，任务已完成，无需用户补充信息……",
+		"无 ，任务已完成 ， 无需用户补充信息。",
+		// A separator other than "，" is the same clause break.
+		"无；任务已完成；无需用户补充信息？",
+		"无：任务已完成：无需用户补充信息．",
+		"无;任务已完成;无需用户补充信息!",
+	} {
+		t.Run(payload, func(t *testing.T) {
+			q, cleaned, ok := parseQuestionRequest("xin: v26.5.0\nPANDA_QUESTION: " + payload)
+			if ok || q != "" {
+				t.Fatalf("no-question payload parked: question=%q ok=%v", q, ok)
+			}
+			if cleaned != "xin: v26.5.0" {
+				t.Fatalf("no-question marker not removed cleanly: %q", cleaned)
+			}
+		})
+	}
+	// Prefixes and completion wording are not enough to dismiss a real
+	// question, especially one asking for a permission the task lacks.
+	for _, payload := range []string{
+		"无权限，请授权我运行命令。",
+		"任务已完成，是否需要部署？",
+		"无，任务已完成，无需用户补充信息，但请确认部署环境。",
+	} {
+		q, _, ok := parseQuestionRequest("PANDA_QUESTION: " + payload)
+		if !ok || q != payload {
+			t.Fatalf("real question was dismissed: %q -> %q ok=%v", payload, q, ok)
+		}
+	}
+	q, cleaned, ok := parseQuestionRequest("partial\nPANDA_QUESTION: 哪个环境？\nPANDA_QUESTION: 无，任务已完成，无需用户补充信息。")
+	if !ok || q != "哪个环境？" || cleaned != "partial" {
+		t.Fatalf("sentinel hid a real question: question=%q cleaned=%q ok=%v", q, cleaned, ok)
+	}
+}
+
+func TestClarificationNoQuestionSentinelNotParked(t *testing.T) {
+	const sentinel = "无，任务已完成，无需用户补充信息。"
+	for _, status := range []string{"marker", "done", "question"} {
+		t.Run(status, func(t *testing.T) {
+			c := newSuperviseCore(t, "no-question", 1)
+			calls := 0
+			c.router.SetAdapterRunner(func(context.Context, string, string, string) commander.AgentResult {
+				calls++
+				res := commander.AgentResult{OK: true, Result: "xin: v26.5.0"}
+				if status == "marker" {
+					res.Result += "\nPANDA_QUESTION: " + sentinel
+				} else {
+					res.Structured, _ = json.Marshal(structuredAgentResult{
+						Status: status, Answer: res.Result, Question: sentinel,
+					})
+				}
+				return res
+			})
+			task, result, err := c.SubmitLocal(context.Background(), TaskInput{
+				Title: "read version", ContextType: "command",
+				Intent: "query Node version", Requires: []string{"code:modify"},
+			})
+			if err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+			if task.State != StateDone || !result.OK || result.Question != "" {
+				t.Fatalf("no-question run parked: state=%s ok=%v question=%q", task.State, result.OK, result.Question)
+			}
+			if calls != 1 || result.Stdout != "xin: v26.5.0" {
+				t.Fatalf("unexpected rerun or protocol leakage: calls=%d stdout=%q", calls, result.Stdout)
+			}
+		})
+	}
+}
+
+func TestClarificationNoQuestionSentinelPreservesFailuresAndQuestions(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		result   commander.AgentResult
+		question string
+	}{
+		{
+			name: "adapter failure",
+			result: commander.AgentResult{
+				OK: false, ExitCode: 1, Stderr: "query failed",
+				Result: "PANDA_QUESTION: 无，任务已完成，无需用户补充信息。",
+			},
+		},
+		{
+			name: "structured failure",
+			result: commander.AgentResult{
+				OK: true, Result: "query failed",
+				Structured: json.RawMessage(`{"status":"failed","answer":"query failed","question":"无，任务已完成，无需用户补充信息。"}`),
+			},
+		},
+		{
+			name: "real structured permission question",
+			result: commander.AgentResult{
+				OK: true, Result: "partial",
+				Structured: json.RawMessage(`{"status":"question","question":"无权限，请授权我运行命令。"}`),
+			},
+			question: "无权限，请授权我运行命令。",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newSuperviseCore(t, "no-question-safety", 1)
+			c.router.SetAdapterRunner(func(context.Context, string, string, string) commander.AgentResult {
+				return tc.result
+			})
+			task, result, err := c.SubmitLocal(context.Background(), TaskInput{
+				Title: "read version", ContextType: "command",
+				Intent: "query Node version", Requires: []string{"code:modify"},
+			})
+			if err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+			if tc.question != "" {
+				if task.State != StateReview || result.Question != tc.question ||
+					result.ApprovalDisposition != string(ApprovalResumeExecution) {
+					t.Fatalf("permission question lost: state=%s result=%+v", task.State, result)
+				}
+			} else if task.State == StateDone || result.OK || result.Question != "" {
+				t.Fatalf("failure promoted or parked as a question: state=%s result=%+v", task.State, result)
+			}
+		})
 	}
 }

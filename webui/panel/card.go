@@ -348,10 +348,14 @@ func (h *handler) cardPath() string {
 	return path
 }
 
-// nodesAddRequest is the body of POST /api/nodes/add.
+// nodesAddRequest is the body of POST /api/nodes/add. OriginalAddr turns the
+// call into an edit of an existing dial-list entry (the card's pencil action);
+// empty means "add a new one". An edit may rename the address or change only
+// the trust tier.
 type nodesAddRequest struct {
-	Addr  string `json:"addr"`
-	Trust string `json:"trust,omitempty"`
+	Addr         string `json:"addr"`
+	OriginalAddr string `json:"original_addr,omitempty"`
+	Trust        string `json:"trust,omitempty"`
 }
 
 // nodesAddResult reports what `panda nodes add` prints at the CLI: whether
@@ -362,6 +366,7 @@ type nodesAddRequest struct {
 type nodesAddResult struct {
 	Addr           string   `json:"addr"`
 	Added          bool     `json:"added"`
+	Updated        bool     `json:"updated,omitempty"`
 	SecretGen      bool     `json:"secret_generated"`
 	Dialed         bool     `json:"dialed"`
 	DialError      string   `json:"dial_error,omitempty"`
@@ -386,6 +391,7 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Addr = strings.TrimSpace(req.Addr)
+	req.OriginalAddr = strings.TrimSpace(req.OriginalAddr)
 	if req.Addr == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("addr is required"))
 		return
@@ -414,7 +420,7 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 	var secret, listenAddr string
 	var generated, allowCleartext bool
 	var allowFor []string
-	added := true
+	added, updated := false, false
 	err = h.mutateCfgErr(func(c *config.Config) error {
 		listenAddr = c.Network.ListenAddr
 		secret = c.Network.SharedSecret
@@ -429,11 +435,54 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 			generated = true
 		}
 		peers := slices.Clone(c.Network.Peers)
-		if slices.ContainsFunc(peers, func(e config.PeerEntry) bool { return e.Addr == req.Addr }) {
-			added = false
+		target := canonicalPeerAddr(req.Addr)
+
+		if req.OriginalAddr != "" {
+			// Edit in place. Refuse a rename onto another entry rather than
+			// merging two peers into one row: the operator asked for one
+			// address change, not a silent delete.
+			idx := -1
+			original := canonicalPeerAddr(req.OriginalAddr)
+			for i, e := range peers {
+				if canonicalPeerAddr(e.Addr) == original {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 {
+				return errPeerNotFound
+			}
+			for i, e := range peers {
+				if i != idx && canonicalPeerAddr(e.Addr) == target {
+					return errPeerConflict
+				}
+			}
+			if peers[idx].Addr != req.Addr || peers[idx].Trust != storedTrust {
+				peers[idx].Addr = req.Addr
+				peers[idx].Trust = storedTrust
+				updated = true
+			}
 		} else {
-			peers = append(peers, config.PeerEntry{Addr: req.Addr, Trust: storedTrust})
+			// Add, or update the tier when the same address is already in the
+			// list under a different spelling (bare host:port vs ws://…).
+			idx := -1
+			for i, e := range peers {
+				if canonicalPeerAddr(e.Addr) == target {
+					idx = i
+					break
+				}
+			}
+			if idx >= 0 {
+				if peers[idx].Trust != storedTrust {
+					peers[idx].Trust = storedTrust
+					updated = true
+				}
+			} else {
+				peers = append(peers, config.PeerEntry{Addr: req.Addr, Trust: storedTrust})
+				added = true
+			}
 		}
+
 		if h.configPath != "" {
 			// Only a secret this call generated belongs on disk — one
 			// injected via OPENPANDA_SHARED_SECRET must stay env-provided.
@@ -454,7 +503,14 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+		switch {
+		case errors.Is(err, errPeerNotFound):
+			writeErr(w, http.StatusNotFound, err)
+		case errors.Is(err, errPeerConflict):
+			writeErr(w, http.StatusConflict, err)
+		default:
+			writeErr(w, http.StatusInternalServerError, err)
+		}
 		return
 	}
 
@@ -478,6 +534,7 @@ func (h *handler) addNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, nodesAddResult{
 		Addr:      req.Addr,
 		Added:     added,
+		Updated:   updated,
 		SecretGen: generated,
 		Dialed:    dialed,
 		DialError: dialErr,

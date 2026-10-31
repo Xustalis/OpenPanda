@@ -433,6 +433,18 @@ own reason and exits 1 — it does not silently restart python.
 
 ## Known limits
 
+**A conversation's lock lane runs alongside conversation-less scoped work.**
+The `paths` scope now carries a session dimension: siblings in one
+conversation serialize by path, while two conversations never block each
+other on the same path. The cost is that a scoped task with **no conversation
+identity** (`panda task add --paths`, a scoped child delegated across nodes)
+is a sibling of every conversation's lane, so the two can write the same
+checkout path at once — an extension of "two conversations may run in
+parallel", not an oversight. When exclusive access is needed, use `--isolate`
+(a private worktree merged back three-way) or a whole-project claim (no
+`--paths`, which holds the `scope:<project>` root and conflicts with every
+lane).
+
 **P2-8 One shared secret for the whole network (partially mitigated).**
 The network shared secret remains the membership credential: a node
 holding it can complete mesh join. On top of it, Ed25519 node identity
