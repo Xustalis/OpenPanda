@@ -44,6 +44,9 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 修复
 
+- **八个适配器都能用上 panda 的模型，zcode 也加入** —— 每个内置 CLI 现在按它真正读取的位置写入注入的模型，而不是写它根本不读的环境变量：hermes 得到一次性 `HERMES_HOME`，openclaw 重定向 `HOME` 并加 `--config`/`--state-dir`，pi 写 `models.json`（`apiKey` 是环境变量名），zcode 写 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指向的个人 provider 配置（0.17 完全不读 `ZCODE_*`），agy 写一份退出时恢复的 settings，grok 用 `GROK_MODELS_BASE_URL`（不是 `GROK_BASE_URL`）。临时状态挂在 harness 的清理表上，取消的运行不再把带密钥的配置留在磁盘上——信号路径的 `os._exit` 会跳过 `atexit`。`_harness` 还会从种子副本里剔除选择模型的设置键，并在重建 argv 时知道哪些 flag 会吃掉下一个 token。zcode 同时离开 `generic.py`——那个适配器无法兑现清单声称的注入。
+- **grok_build 现在真的能跑** —— 背后是三个独立故障：未登录的措辞匹配不上任何凭据模式（救援注入从未触发）、端点走了一个这个 CLI 不读的变量、`--single` 在答完之后让进程继续挂着。适配器改为读事件流并在终止行收尾，每轮铸一个 UUID 会话，并把终止 `error` 事件当作失败、以错误消息为诊断，而不是把一句前言当成完成的回合。
+
 ## [0.1.3] - 2026-10-30 — "Constellation"
 
 **让控制台保持连接、让长任务不再被误杀的补丁** —— 代号 **Constellation**：无论是跨过休眠的笔记本、穿过反向代理，还是盯着一个忙节点，控制台都不再冻住，看一轮运行也不再比它看的工作更贵。长时间不输出、只是在思考的 agent 运行不会再被当成卡死杀掉，首次输出前的宽限窗口也终于真正生效。配置与存储兼容，schema 只多一条纯索引迁移（v65），自动执行。

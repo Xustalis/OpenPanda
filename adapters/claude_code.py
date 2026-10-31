@@ -63,6 +63,20 @@ import _harness as harness
 
 ALLOWED_TOOLS = "Read,Write,Edit,Bash,Grep,Glob"
 
+# Windows refuses a command line past 8191 characters — cmd.exe says
+# "命令行太长。" on a zh-CN build, which is what a task reported instead of
+# running. An npm-installed CLI sits behind a `.cmd` shim, and when the harness
+# cannot unwrap that shim (a hand-written launcher naming its target through a
+# variable — the claude-code-zh-cn wrapper does exactly that) the spawn falls
+# back to `cmd.exe /d /s /c "<whole command>"` and everything rides that one
+# string. The prompt is by far the largest element: the assembled intent carries
+# the project memory manifest, the skill bodies and the output rider, budgeted
+# at 128 KiB. So past this budget it travels on stdin instead of argv, which
+# `claude -p` reads when no positional prompt is given. 6000, not 8191: the
+# quoting list2cmdline adds, the shim path and the resolved exe all count
+# against the same limit, and the margin costs nothing.
+WIN_CMDLINE_SAFE = 6000
+
 # Read-only face for unconsented remote tasks: no Bash (arbitrary shell), no
 # Write/Edit (filesystem mutation), no WebFetch/WebSearch (egress). An agent
 # restricted to reads can still answer "what does this code do" — the class of
@@ -156,7 +170,8 @@ def main():
     try:
         out = _run_stream(_base_args(req, max_turns, v2=True), req, model,
                           req.cwd, req.timeout,
-                          disable_settings=_injected(), v2=True)
+                          disable_settings=_injected(), v2=True,
+                          max_turns=max_turns)
     except ProviderFailure as e:
         harness.emit(False, str(e), 1,
                      session_id=getattr(e, "session_id", "") or None)
@@ -169,7 +184,8 @@ def main():
         try:
             out = _run_stream(_base_args(req, max_turns, v2=False), req,
                               model, req.cwd, req.timeout,
-                              disable_settings=_injected(), v2=False)
+                              disable_settings=_injected(), v2=False,
+                              max_turns=max_turns)
         except ProviderFailure as e:
             harness.emit(False, str(e), 1,
                          session_id=getattr(e, "session_id", "") or None)
@@ -177,7 +193,8 @@ def main():
         except Unsupported:
             try:
                 out = _run_plain(_base_args(req, max_turns, v2=False),
-                                 model, req.cwd, req.timeout)
+                                 model, req.cwd, req.timeout,
+                                 req=req, max_turns=max_turns)
             except subprocess.TimeoutExpired:
                 harness.emit(False, "claude timed out", 124)
                 return
@@ -243,16 +260,22 @@ def _binary():
     return harness.resolve_binary(BINARIES, default="claude")
 
 
-def _base_args(req, max_turns, v2):
+def _base_args(req, max_turns, v2, prompt=True):
     """The shared argv head: prompt, turn cap, permission posture, tool face.
 
     v2 adds the flags only newer CLIs accept (--permission-prompts, the
     native --restricted mode); the v1 tier uses the flag set older CLIs
     already understand so a flag rejection never leaves a run unprotected.
+
+    prompt=False drops the positional prompt: `claude -p` with no prompt
+    argument reads it from stdin, which is how a prompt too large for a
+    command line reaches the CLI (see WIN_CMDLINE_SAFE).
     """
-    base = [_binary(), "-p", req.prompt,
-            "--max-turns", max_turns,
-            "--permission-mode", "acceptEdits"]
+    base = [_binary(), "-p"]
+    if prompt:
+        base.append(req.prompt)
+    base += ["--max-turns", max_turns,
+             "--permission-mode", "acceptEdits"]
     if v2:
         # Headless runs must never park on a permission prompt: "none"
         # auto-denies anything the mode does not already allow.
@@ -325,10 +348,43 @@ def _stream_argv(base, req, model, disable_settings, v2):
     return cmd
 
 
-def _run_stream(base, req, model, cwd, timeout, disable_settings=False, v2=True):
+def _prompt_to_stdin(cmd):
+    """Whether this command line has to shed the prompt to stay spawnable.
+
+    Only Windows has the problem: POSIX passes argv straight to execve, whose
+    per-argument ceiling is far above the prompt budget, and the CLI is spawned
+    directly rather than through a shell. See WIN_CMDLINE_SAFE for the rest.
+    """
+    if sys.platform != "win32":
+        return False
+    return len(subprocess.list2cmdline(cmd)) > WIN_CMDLINE_SAFE
+
+
+def _run_stream(base, req, model, cwd, timeout, disable_settings=False, v2=True,
+                max_turns="30"):
     """Stream mode: parse event lines, emit progress + typed events, return
     the result event."""
     cmd = _stream_argv(base, req, model, disable_settings, v2)
+    # The prompt is the one element big enough to push the whole line past
+    # Windows' limit, and the one element that has a second way in. Rebuild
+    # the head without it and hand it over on stdin.
+    prompt_input = None
+    if _prompt_to_stdin(cmd):
+        cmd = _stream_argv(_base_args(req, max_turns, v2, prompt=False),
+                           req, model, disable_settings, v2)
+        # Re-measure after shedding the prompt: --append-system-prompt,
+        # --json-schema and --mcp-config stay on the line, and a system prompt
+        # plus a pretty-printed schema can still exceed the limit. Spawning
+        # anyway is exactly the "The command line is too long" failure this
+        # branch exists to fix, so it fails with a diagnosis instead.
+        rebuilt = len(subprocess.list2cmdline(cmd))
+        if rebuilt > WIN_CMDLINE_SAFE:
+            raise ProviderFailure(
+                "claude_code: the command line is still %d characters after "
+                "moving the prompt to stdin (limit %d) — shorten "
+                "--append-system-prompt, --json-schema or --mcp-config"
+                % (rebuilt, WIN_CMDLINE_SAFE))
+        prompt_input = req.prompt
 
     state = {"final": None, "saw_event": False, "session_id": ""}
 
@@ -379,7 +435,7 @@ def _run_stream(base, req, model, cwd, timeout, disable_settings=False, v2=True)
                     raise exc
 
     returncode, err, timed_out = harness.run_stream(
-        cmd, cwd=cwd, timeout=timeout, on_line=on_line)
+        cmd, cwd=cwd, timeout=timeout, on_line=on_line, input=prompt_input)
     if timed_out:
         # A killed run that minted a session is a checkpoint, not a dead
         # end: the retry resumes it (--resume <id>) and keeps the work.
@@ -425,6 +481,14 @@ def _result_out(final, returncode):
     if is_err and (final.get("subtype") == "error_max_turns" or final.get("terminal_reason") == "max_turns"):
         if len(res_text.strip()) > 50:
             is_err = False
+    # A failed run must say why. The CLI's error envelope is not obliged to
+    # carry prose: a run that stops on the turn cap reports
+    # subtype=error_max_turns with an empty `result`, and the orchestrator's
+    # failover then records "exec failed: " with nothing after the colon — the
+    # reader cannot tell a crash from a cap, and neither can the next debugger.
+    # Name the cause from what the envelope does carry.
+    if is_err and not res_text.strip():
+        res_text = _failure_text(final, returncode)
     extra = {}
     if structured is not None:
         extra["structured"] = structured
@@ -441,6 +505,25 @@ def _result_out(final, returncode):
         "session_id": final.get("session_id") or "",
         "extra": extra or None,
     }
+
+
+def _failure_text(final, returncode):
+    """One line naming why a failed run produced no answer.
+
+    The result envelope of an error carries a `subtype` and little else, and
+    `result` is routinely empty for the ones that matter — the turn cap above
+    all. Returning "" here is what made a capped claude_code run read as an
+    unexplained substitution in the thread ("exec failed: " with no reason),
+    so the shape of the failure becomes the sentence.
+    """
+    subtype = final.get("subtype") or final.get("terminal_reason") or ""
+    if subtype in ("error_max_turns", "max_turns"):
+        turns = final.get("num_turns") or final.get("max_turns") or ""
+        where = " after %s turns" % turns if turns else ""
+        return "claude stopped at its turn cap%s without a final answer" % where
+    if subtype:
+        return "claude failed: %s (exit %s)" % (subtype, returncode)
+    return "claude failed without a result message (exit %s)" % returncode
 
 
 def _usage(raw):
@@ -540,12 +623,21 @@ def _emit_user_events(ev):
                            content=content, parent=parent)
 
 
-def _run_plain(base, model, cwd, timeout):
+def _run_plain(base, model, cwd, timeout, req=None, max_turns="30"):
     """One-shot mode for older CLIs: single JSON object on stdout."""
     cmd = base + ["--output-format", "json"]
     if model:
         cmd += ["--model", model]
-    returncode, out, err = harness.run_plain(cmd, cwd=cwd, timeout=timeout)
+    # Same overflow rule as the stream tiers: a prompt too big for the command
+    # line is delivered on stdin, which this tier already supports.
+    prompt_input = None
+    if req is not None and _prompt_to_stdin(cmd):
+        cmd = _base_args(req, max_turns, False, prompt=False) + ["--output-format", "json"]
+        if model:
+            cmd += ["--model", model]
+        prompt_input = req.prompt
+    returncode, out, err = harness.run_plain(cmd, cwd=cwd, timeout=timeout,
+                                             input=prompt_input)
     try:
         parsed = json.loads(out or "{}")
     except json.JSONDecodeError:
@@ -558,9 +650,14 @@ def _run_plain(base, model, cwd, timeout):
     extra = {}
     if isinstance(parsed.get("structured_output"), dict):
         extra["structured"] = parsed["structured_output"]
+    text = parsed.get("result") or ""
+    # Same rule as the stream path: an error envelope with no prose still owes
+    # the caller a reason, or the failover reports an empty diagnosis.
+    if not text.strip() and (parsed.get("is_error") or returncode != 0):
+        text = _failure_text(parsed, returncode)
     return {
         "ok": returncode == 0 and not parsed.get("is_error"),
-        "result": parsed.get("result") or "",
+        "result": text,
         "exit_code": returncode,
         "tokens": tokens or None,
         "cost": parsed.get("total_cost_usd"),

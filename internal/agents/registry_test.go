@@ -96,10 +96,15 @@ func TestPiEntry(t *testing.T) {
 // card name on either must resolve to NOTHING rather than borrowing another
 // generic entry's binaries, credentials, or endpoint.
 func TestGenericLookupIdentity(t *testing.T) {
-	// A card naming its agent "zcode" (a registry entry on generic.py)
-	// resolves; a card naming it anything else on the same adapter must not.
-	if _, ok := Lookup("zcode", "generic.py"); !ok {
-		t.Fatal("Lookup(zcode, generic.py) should resolve — that is its entry")
+	// zcode moved to its own adapter, so a card that still declares generic.py
+	// must NOT inherit its manifest: generic.py cannot honour the injection
+	// that manifest claims, and the old behaviour reported an injection that
+	// never reached the wire.
+	if _, ok := Lookup("zcode", "generic.py"); ok {
+		t.Fatal("zcode on generic.py must not resolve — that adapter cannot inject")
+	}
+	if _, ok := Lookup("zcode", "zcode.py"); !ok {
+		t.Fatal("Lookup(zcode, zcode.py) should resolve — that is its entry")
 	}
 	if _, ok := Lookup("some-custom-cli", "generic.py"); ok {
 		t.Fatal("unknown name on generic.py must not borrow another entry")
