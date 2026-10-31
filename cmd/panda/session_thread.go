@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
@@ -194,14 +195,14 @@ func (r *repl) prepareConversation(resumeID string, startFresh bool) (*sessions.
 	}
 	// Nothing to resume: fall back to the legacy file if a previous write
 	// landed after the migration pass (or the store is unavailable).
-	if c := loadConvo(); len(c) > 0 {
+	if c := r.loadConvoNow(); len(c) > 0 {
 		r.setConvo(c)
 	}
 	return nil, nil
 }
 
 // autoResumeSession binds the project's most recently updated non-empty
-// thread. Pinned threads sort first, so a pin is also "open this at launch".
+// thread.
 func (r *repl) autoResumeSession() *sessions.Session {
 	sess := latestSessionForProject(r.sessionsSt, r.activeProjectName())
 	if sess == nil {
@@ -214,18 +215,28 @@ func (r *repl) autoResumeSession() *sessions.Session {
 // latestSessionForProject returns the newest thread that has at least one
 // turn. Empty threads (a `session new` nobody wrote to) are skipped: resuming
 // one would show a blank conversation where the user expects their last one.
+// Stamps carry mtimes only, so the usual case (the newest file matches the
+// project) costs one Get instead of decoding the whole store. Pinned is a
+// rail-ordering flag, not a launch preference: the newest thread wins.
 func latestSessionForProject(st *sessions.Store, project string) *sessions.Session {
 	if st == nil {
 		return nil
 	}
-	list, err := st.ListByProject(strings.TrimSpace(project))
+	stamps, err := st.Stamps()
 	if err != nil {
 		return nil
 	}
-	for _, sess := range list {
-		if len(sess.Turns) > 0 {
-			return sess
+	sort.Slice(stamps, func(i, j int) bool { return stamps[i].ModUnixNano > stamps[j].ModUnixNano })
+	project = strings.TrimSpace(project)
+	for _, stamp := range stamps {
+		sess, err := st.Get(stamp.ID)
+		if err != nil {
+			continue
 		}
+		if sess.Project != project || len(sess.Turns) == 0 {
+			continue
+		}
+		return sess
 	}
 	return nil
 }
@@ -277,7 +288,7 @@ func (r *repl) startImplicitSession(prompt string) bool {
 	}
 	r.setSess(sess.ID)
 	r.setConvo(nil)
-	clearConvo()
+	r.clearConvoNow()
 	return true
 }
 
@@ -293,7 +304,7 @@ func (r *repl) rebindProjectConversation() *sessions.Session {
 		return sess
 	}
 	// No thread in the new project: the legacy file is the only history left.
-	r.setConvo(loadConvo())
+	r.setConvo(r.loadConvoNow())
 	return nil
 }
 
@@ -304,11 +315,6 @@ func appendExchangeToSession(st *sessions.Store, id, prompt string, out *askengi
 	if st == nil || id == "" || out == nil {
 		return
 	}
-	if _, err := st.AppendTurn(id, sessions.Turn{Role: "user", Text: prompt}); err != nil {
-		// Without the question there is nothing to pair the answer with; a
-		// second write would leave an assistant turn floating on its own.
-		return
-	}
 	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: convoSummaryOf(loc, out)}
 	switch out.Kind {
 	case "task":
@@ -316,7 +322,9 @@ func appendExchangeToSession(st *sessions.Store, id, prompt string, out *askengi
 	case "plan":
 		turn.Ref = out.PlanID
 	}
-	_, _ = st.AppendTurn(id, turn)
+	// One write for the pair: a question stored without its answer would be
+	// replayed back-to-back with the next prompt, which the API rejects.
+	_, _ = st.AppendTurns(id, sessions.Turn{Role: "user", Text: prompt}, turn)
 }
 
 // bindTaskToSession links a spawned task to the thread it came from, so the

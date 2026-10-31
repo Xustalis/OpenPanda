@@ -1467,9 +1467,9 @@ func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
 		_ = m.r.setTeam(nil)
 		m.r.setNextNode("")
 		m.nextNode = ""
+		m.r.clearConvoNow()
 	}
 	m.team = nil
-	clearConvo()
 	if m.chatHistory != nil {
 		m.chatHistory.clear()
 	}

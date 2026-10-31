@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -114,6 +115,62 @@ func TestPrepareConversationResumesNewestAndHonorsFlags(t *testing.T) {
 
 	if _, err := r.prepareConversation("no-such-session", false); err == nil {
 		t.Fatal("an unknown --resume id must be an error")
+	}
+}
+
+func TestContinueTargetPicksNewestThread(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Storage.DBPath = filepath.Join(t.TempDir(), "panda.db")
+	st := sessions.NewStore(sessionStoreRoot(cfg))
+
+	older, err := st.Create("older")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendTurns(older.ID,
+		sessions.Turn{Role: "user", Text: "old question"},
+		sessions.Turn{Role: "assistant", Text: "old answer"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	newer, err := st.Create("newer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendTurns(newer.ID,
+		sessions.Turn{Role: "user", Text: "new question"},
+		sessions.Turn{Role: "assistant", Text: "new answer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	store, sess, history := continueTarget(context.Background(), cfg, "", nil)
+	if store == nil || sess == nil || sess.ID != newer.ID {
+		t.Fatalf("continueTarget = %+v, %+v", store, sess)
+	}
+	if len(history) != 2 || history[0].Content != "new question" || history[1].Content != "new answer" {
+		t.Fatalf("replayed history = %+v", history)
+	}
+}
+
+func TestSessionHistoryDropsDanglingUserTurn(t *testing.T) {
+	st := sessions.NewStore(t.TempDir())
+	sess, err := st.Create("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendTurns(sess.ID,
+		sessions.Turn{Role: "user", Text: "question"},
+		sessions.Turn{Role: "assistant", Text: "answer"},
+		sessions.Turn{Role: "user", Text: "never answered"}); err != nil {
+		t.Fatal(err)
+	}
+	sess, err = st.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, history := sessionHistory(context.Background(), st, sess, nil)
+	if len(history) != 2 || history[1].Role != "assistant" {
+		t.Fatalf("replay = %+v", history)
 	}
 }
 

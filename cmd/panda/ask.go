@@ -175,18 +175,16 @@ func runAsk(args []string) {
 	if proj == "" {
 		proj, _ = activeProject(cfg)
 	}
-	var contSess *sessions.Session
 	var contStore *sessions.Store
-	if *continueConvo {
-		contStore = sessions.NewStore(sessionStoreRoot(cfg))
-		contSess = latestSessionForProject(contStore, proj)
-	}
+	var contSess *sessions.Session
 	var history []entry.Turn
+	var inheritTeam []string
 	if *continueConvo {
+		contStore, contSess, history = continueTarget(context.Background(), cfg, proj, engine)
 		if contSess != nil {
-			_, history = sessionHistory(context.Background(), contStore, contSess, engine)
+			inheritTeam = contSess.Team
 		} else {
-			history = loadConvo()
+			inheritTeam = loadBareTeam()
 		}
 	}
 	sessID := ""
@@ -195,16 +193,7 @@ func runAsk(args []string) {
 	}
 	// The roster: an explicit --team wins; --continue inherits the thread's
 	// persisted pick, so a team chosen in the TUI keeps binding the same thread
-	// from scripts. A one-shot ask with neither stays unrestricted (the
-	// scheduler chooses).
-	var inheritTeam []string
-	if *continueConvo {
-		if contSess != nil {
-			inheritTeam = contSess.Team
-		} else {
-			inheritTeam = loadBareTeam()
-		}
-	}
+	// from scripts. A one-shot ask with neither stays unrestricted.
 	agents, err := resolveAskTeamWith(*team, inheritTeam)
 	if err != nil {
 		fail(2, "panda: "+err.Error())

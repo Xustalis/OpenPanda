@@ -255,23 +255,51 @@ func init() {
 // SQLite store the daemon and the webui sidecar use. It never starts the
 // daemon loop; task execution happens through the ask engine exactly like
 // `panda ask` (and needs --card for the same reason).
-func runRepl(args []string) {
+// replFlags is the bare REPL's flag surface, defined once so the dispatcher
+// can tell which flags consume the next argv token (parseSubcommand) without
+// keeping a second copy of the names.
+type replFlags struct {
+	configPath *string
+	cardPath   *string
+	mcpCmd     *string
+	yesFlag    *bool
+	resumeID   *string
+	startNew   *bool
+}
+
+func newReplFlagSet() (*flag.FlagSet, *replFlags) {
 	fs := flag.NewFlagSet("repl", flag.ExitOnError)
-	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
-	cardPath := fs.String("card", cardFlagDefault(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
-	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
-	yesFlag := fs.Bool("yes", false, "accept workspace confirmation without prompting")
-	fs.BoolVar(yesFlag, "y", false, "accept workspace confirmation without prompting (shorthand)")
-	resumeID := fs.String("resume", "", "attach to this session id at launch")
-	fs.StringVar(resumeID, "r", "", "attach to this session id at launch (shorthand)")
-	startNew := fs.Bool("new", false, "start a fresh conversation instead of resuming the last one")
-	continueLatest := fs.Bool("continue", false, "resume the most recently updated session (the default)")
-	fs.BoolVar(continueLatest, "c", false, "resume the most recently updated session (shorthand)")
+	f := &replFlags{}
+	f.configPath = fs.String("config", cliConfigPath, "path to config.yaml")
+	f.cardPath = fs.String("card", cardFlagDefault(), fmt.Sprintf("path to capabilities.yaml (default: discovered ./capabilities.yaml or %s)", systemCardPath()))
+	f.mcpCmd = fs.String("mcp", cliMCP, "MCP server command (space-separated)")
+	f.yesFlag = fs.Bool("yes", false, "accept workspace confirmation without prompting")
+	fs.BoolVar(f.yesFlag, "y", false, "accept workspace confirmation without prompting (shorthand)")
+	f.resumeID = fs.String("resume", "", "attach to this session id at launch")
+	fs.StringVar(f.resumeID, "r", "", "attach to this session id at launch (shorthand)")
+	f.startNew = fs.Bool("new", false, "start a fresh conversation instead of resuming the last one")
+	return fs, f
+}
+
+// replValueFlagNames reports which REPL flags take the next argv token as
+// their value, for the dispatcher's subcommand scan.
+func replValueFlagNames() map[string]bool {
+	fs, _ := newReplFlagSet()
+	out := map[string]bool{}
+	fs.VisitAll(func(f *flag.Flag) {
+		if _, isBool := f.Value.(interface{ IsBoolFlag() bool }); !isBool {
+			out[f.Name] = true
+		}
+	})
+	return out
+}
+
+func runRepl(args []string) {
+	fs, flags := newReplFlagSet()
+	configPath, cardPath, mcpCmd, yesFlag := flags.configPath, flags.cardPath, flags.mcpCmd, flags.yesFlag
+	resumeID, startNew := flags.resumeID, flags.startNew
 	fs.Parse(reorderFlags(fs, args))
 	rejectExtraArgs(fs, "usage: panda repl [--card F] [--mcp CMD] [--resume ID | --new] [-y]")
-	if *startNew && *continueLatest {
-		fail(2, "panda: --new and --continue are mutually exclusive")
-	}
 	if *startNew && strings.TrimSpace(*resumeID) != "" {
 		fail(2, "panda: --new and --resume are mutually exclusive")
 	}
@@ -474,7 +502,7 @@ func runRepl(args []string) {
 	// for a store-less or mid-run-written file. --new means a blank sheet, so
 	// the fallback must not resurrect a file the migration pass did not see.
 	if !*startNew {
-		if c := loadConvo(); len(c) > 0 && r.convoLen() == 0 {
+		if c := r.loadConvoNow(); len(c) > 0 && r.convoLen() == 0 {
 			r.setConvo(c)
 			fmt.Println(i18n.Tf(r.loc, "repl.convo.resumed", "n", fmt.Sprint(len(c)/2)))
 		}
@@ -1334,9 +1362,14 @@ func (r *repl) repeatLast() {
 // both resume it.
 func (r *repl) rememberTurn(text string, out *askengine.Result) {
 	loc := r.locale()
+	var turns []entry.Turn
 	r.editConvo(func(c []entry.Turn) []entry.Turn {
-		return appendConvo(c, loc, text, out, r.engine.Load())
+		turns = appendConvoTurns(c, loc, text, out, r.engine.Load())
+		return turns
 	})
+	// The repl's own project shard, not the config pointer's: a /project
+	// switch must not write this conversation into another project's file.
+	r.saveConvoNow(turns)
 }
 
 // cmdNew starts a fresh conversation (/new) — the "new chat" of a chat app.
@@ -1345,7 +1378,7 @@ func (r *repl) rememberTurn(text string, out *askengine.Result) {
 func (r *repl) cmdNew(arg string) {
 	r.setSess("")
 	r.setConvo(nil)
-	clearConvo()
+	r.clearConvoNow()
 	// The roster belongs to the conversation, so a new conversation starts
 	// with the scheduler choosing — the same blank sheet the console opens.
 	_ = r.setTeam(nil)
@@ -1369,7 +1402,7 @@ func (r *repl) cmdHistory(arg string) {
 	} else {
 		turns = r.convoNow()
 		if len(turns) == 0 {
-			turns = loadConvo()
+			turns = r.loadConvoNow()
 		}
 	}
 	if len(turns) == 0 {

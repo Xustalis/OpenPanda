@@ -21,7 +21,7 @@ import (
 )
 
 // newIsolatedTUI builds a TUI whose convo persistence lands in a throwaway
-// XDG_STATE_HOME, so loadConvo/saveConvo/clearConvo never touch real CLI state.
+// XDG_STATE_HOME, so loadConvo/saveConvo never touch real CLI state.
 func newIsolatedTUI(t *testing.T) tuiModel {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())

@@ -380,6 +380,18 @@ func (s *Store) Stamps() ([]Stamp, error) {
 // arriving without a stamp gets one here, so every transcript written from
 // now on can be placed on the usage calendar.
 func (s *Store) AppendTurn(id string, turn Turn) (*Session, error) {
+	return s.AppendTurns(id, turn)
+}
+
+// AppendTurns appends several turns under one lock and one atomic write, so a
+// caller holding a complete exchange never persists half of it: a question
+// stored without its answer would be replayed back-to-back with the next
+// prompt, which the Messages API rejects, wedging every later turn. Title
+// derivation and timestamps follow AppendTurn.
+func (s *Store) AppendTurns(id string, turns ...Turn) (*Session, error) {
+	if len(turns) == 0 {
+		return s.Get(id)
+	}
 	// Cross-process first, then in-process: the CLI and a panel can both be
 	// appending to one thread, and the read-modify-write below would drop one
 	// side's turn without the file lock. Order matters — the file lock is the
@@ -396,14 +408,17 @@ func (s *Store) AppendTurn(id string, turn Turn) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	if turn.TS == 0 {
-		turn.TS = time.Now().Unix()
+	now := time.Now()
+	for _, turn := range turns {
+		if turn.TS == 0 {
+			turn.TS = now.Unix()
+		}
+		sess.Turns = append(sess.Turns, turn)
+		if turn.Role == "user" && sess.Title == "" {
+			sess.Title = truncateTitle(turn.Text)
+		}
 	}
-	sess.Turns = append(sess.Turns, turn)
-	if turn.Role == "user" && sess.Title == "" {
-		sess.Title = truncateTitle(turn.Text)
-	}
-	sess.UpdatedAt = time.Now()
+	sess.UpdatedAt = now
 	if err := s.save(sess); err != nil {
 		return nil, err
 	}
