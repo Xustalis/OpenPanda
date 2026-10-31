@@ -124,6 +124,13 @@ func planResultOf(out *askengine.Result) askResult {
 	return res
 }
 
+// askHardware is an internal gateway entry protected by the panel's normal
+// Bearer authentication. Only this route adds request-local plan consent;
+// the public device gateway rebuilds its payload from its owner policy.
+func (h *handler) askHardware(w http.ResponseWriter, r *http.Request) {
+	h.ask(w, r.WithContext(askengine.WithHardwarePlanConsent(r.Context())))
+}
+
 // ask serves POST /api/ask — the unified entry: one prompt in, answer or task
 // out, exactly the pipeline `panda ask` runs (shared askengine). This is the
 // panel's task-creation path: the web equivalent of typing at the CLI. Input

@@ -123,12 +123,12 @@ func TestTaskSummaryLeadsWithWhoRanIt(t *testing.T) {
 		ResultJSON: `{"ok":true,"stdout":"完成。新建 pelican-bike.html。\n\n动画为纯 SMIL，无 JS。"}`,
 	}
 	want := "[done] @claude_code · 2D SVG 鹈鹕骑车网页\n动画为纯 SMIL，无 JS。"
-	if got := summaryText(done, "", "claude_code", ""); got != want {
+	if got := summaryText(done, "", "claude_code", "", ""); got != want {
 		t.Fatalf("summary = %q, want %q", got, want)
 	}
 
 	// A run with no attribution still names the work, just without a person.
-	if got := summaryText(done, "", "", ""); !strings.HasPrefix(got, "[done] 2D SVG 鹈鹕骑车网页\n") {
+	if got := summaryText(done, "", "", "", ""); !strings.HasPrefix(got, "[done] 2D SVG 鹈鹕骑车网页\n") {
 		t.Fatalf("unattributed summary = %q", got)
 	}
 }
@@ -144,19 +144,29 @@ func TestTaskSummarySaysWhoWasReplaced(t *testing.T) {
 		SpecJSON:   `{"user_locale":"zh-CN"}`,
 		ResultJSON: `{"ok":true,"stdout":"通过。"}`,
 	}
-	got := summaryText(task, "", "deepseek_harness", "claude_code")
+	got := summaryText(task, "", "deepseek_harness", "claude_code", "")
 	want := "[done] @deepseek_harness · 连通性测试：agent:claude_code（claude_code 未执行，由 deepseek_harness 替代）\n通过。"
 	if got != want {
 		t.Fatalf("summary = %q, want %q", got, want)
 	}
 
 	// The agent that answered is the one the plan picked: nothing to add.
-	if got := summaryText(task, "", "claude_code", "claude_code"); !strings.HasPrefix(got, "[done] @claude_code · 连通性测试：agent:claude_code\n") {
+	if got := summaryText(task, "", "claude_code", "claude_code", ""); !strings.HasPrefix(got, "[done] @claude_code · 连通性测试：agent:claude_code\n") {
 		t.Fatalf("pinned summary = %q", got)
 	}
 
+	// A substitution that recorded a cause says the cause. "claude_code 未执行"
+	// alone tells the reader the reply is not the one they asked for but not
+	// whether to retry, reinstall or raise a turn cap.
+	why := "claude stopped at its turn cap after 30 turns without a final answer"
+	gotWhy := summaryText(task, "", "deepseek_harness", "claude_code", why)
+	wantWhy := "[done] @deepseek_harness · 连通性测试：agent:claude_code（claude_code 未执行：" + why + "；由 deepseek_harness 替代）\n通过。"
+	if gotWhy != wantWhy {
+		t.Fatalf("summary with cause = %q, want %q", gotWhy, wantWhy)
+	}
+
 	// An unattributed run has no speaker to contradict, so no note either.
-	if got := summaryText(task, "", "", "claude_code"); !strings.HasPrefix(got, "[done] 连通性测试：agent:claude_code\n") {
+	if got := summaryText(task, "", "", "claude_code", ""); !strings.HasPrefix(got, "[done] 连通性测试：agent:claude_code\n") {
 		t.Fatalf("unattributed summary = %q", got)
 	}
 }
@@ -166,17 +176,17 @@ func TestTaskSummarySaysWhoWasReplaced(t *testing.T) {
 func TestTaskSummaryCarriesTheFailureReason(t *testing.T) {
 	failed := core.Task{State: core.StateFailed, Risk: "low", Title: "总结仓库"}
 	want := "[failed] @claude_code · 总结仓库\nlease expired"
-	if got := summaryText(failed, "lease expired", "claude_code", ""); got != want {
+	if got := summaryText(failed, "lease expired", "claude_code", "", ""); got != want {
 		t.Fatalf("summary = %q, want %q", got, want)
 	}
 
 	// Nothing anywhere: the orchestration line alone is still honest.
-	if got := summaryText(core.Task{State: core.StateFailed, Title: "总结仓库"}, "", "", ""); got != "[failed] 总结仓库" {
+	if got := summaryText(core.Task{State: core.StateFailed, Title: "总结仓库"}, "", "", "", ""); got != "[failed] 总结仓库" {
 		t.Fatalf("bare summary = %q", got)
 	}
 
 	// A finished task never shows a stale reason from an earlier attempt.
-	if got := summaryText(core.Task{State: core.StateDone, Title: "写个网页"}, "reason ignored", "", ""); got != "[done] 写个网页" {
+	if got := summaryText(core.Task{State: core.StateDone, Title: "写个网页"}, "reason ignored", "", "", ""); got != "[done] 写个网页" {
 		t.Fatalf("done summary = %q", got)
 	}
 }
@@ -244,5 +254,82 @@ func TestFinalizerWritesTheOrchestrationLineAndTheConclusion(t *testing.T) {
 	}
 	if len(again.Turns) != 1 {
 		t.Fatalf("turns after a second sweep = %d, want 1", len(again.Turns))
+	}
+}
+
+// pinnedAgent reads the employee out of an `agent:<name>` requirement. Only
+// that exact prefix counts: "agents:pi" is a capability, not a pin, and a bare
+// "agent:" names nobody.
+func TestPinnedAgent(t *testing.T) {
+	cases := []struct {
+		requires []string
+		want     string
+	}{
+		{[]string{"agent:deepseek_harness"}, "deepseek_harness"},
+		{[]string{"coding", " agent:pi "}, "pi"},
+		{[]string{"agent:pi", "agent:codex"}, "pi"},
+		{[]string{"agents:pi"}, ""},
+		{[]string{"agent:"}, ""},
+		{[]string{"agent:   "}, ""},
+		{nil, ""},
+	}
+	for _, c := range cases {
+		if got := pinnedAgent(c.requires); got != c.want {
+			t.Errorf("pinnedAgent(%v) = %q, want %q", c.requires, got, c.want)
+		}
+	}
+}
+
+// A task that never reached an adapter still belongs to the employee it was
+// pinned to.
+//
+// The bug this pins down: a route failure records no exec_agent_start, so the
+// finalizer could not name anyone and filed a headless report — the panda
+// speaking the failure in the employee's place. In a round of three smoke
+// tests that meant two reports named their agent and the one that FAILED named
+// nobody, which is exactly the row a reader needs to identify.
+func TestFinalizerNamesThePinnedAgentWhenTheRunNeverStarted(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	sessStore := sessions.NewStore(t.TempDir())
+	s, err := sessStore.Create("thread", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &handler{store: store, sessions: sessStore}
+
+	task, err := store.Create(ctx, "", "proj", "调用测试：deepseek_harness", "node", []string{"node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDetail(ctx, task.TaskID, core.TaskDetail{
+		Requires: []string{"agent:deepseek_harness"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetQueueMeta(ctx, task.TaskID, core.PriorityNormal, s.ID, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Queue(ctx, task.TaskID, "node"); err != nil {
+		t.Fatal(err)
+	}
+	// The route refused before any adapter was spawned: no exec_agent_start.
+	reason := "route: no usable agent for [agent:deepseek_harness] on this node"
+	if err := store.ForceFail(ctx, task.TaskID, reason); err != nil {
+		t.Fatal(err)
+	}
+
+	h.finalizeSessionSweep(ctx)
+
+	got, err := sessStore.Get(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Turns) != 1 {
+		t.Fatalf("turns = %d, want the one report turn", len(got.Turns))
+	}
+	want := "[failed] @deepseek_harness · 调用测试：deepseek_harness\n" + reason
+	if got.Turns[0].Text != want {
+		t.Fatalf("report = %q, want %q", got.Turns[0].Text, want)
 	}
 }

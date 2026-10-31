@@ -16,7 +16,7 @@
 
 ## About
 
-OpenPanda organizes the terminal AI coding agents already on your machines — ten bundled adapters (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, ZCode, OpenClaw) plus a generic bridge for anything else — together with your devices into a single execution crew. It is not itself an agent: you issue one instruction; it handles intent classification, task decomposition, dispatch, execution supervision, and result verification — all locally, with zero cloud dependency.
+OpenPanda organizes the terminal AI coding agents already on your machines — nine dedicated adapters (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw) plus a configurable generic bridge for any headless CLI, including ZCode — together with your devices into a single execution crew. It is not itself an agent: you issue one instruction; it handles intent classification, task decomposition, dispatch, execution supervision, and result verification — all locally, with zero cloud dependency.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -43,7 +43,7 @@ The project evolves along two tracks:
 | Track | Description | Status |
 |---|---|---|
 | **Multi-Agent orchestration** | Hire and command multiple terminal agents: dispatch, supervision, failover, approval | ✅ Current focus |
-| **Multi-device collaboration** | Cross-node task routing and scheduling over a P2P mesh | ✅ Shipped in v0.0.10; v0.0.11 adds per-session AEAD, Bluetooth-style pairing, trust tiers, multi-hop relays; v0.0.12 adds same-project parallel execution via path-scoped lanes and isolated worktrees |
+| **Multi-device collaboration** | Cross-node task routing and scheduling over a P2P mesh | ✅ Shipped through v0.1.3: per-session AEAD, Bluetooth-style pairing, trust tiers, multi-hop relays, and same-project parallel execution via path-scoped lanes and isolated worktrees |
 
 ---
 

@@ -448,3 +448,50 @@ func TestRoutePinnedAgentHasNoAlternates(t *testing.T) {
 		t.Fatalf("alternates = %v, want none for a pinned plan", plan.Alternates)
 	}
 }
+
+// TestFallbackPromptNamesTheAgentThatActuallyRuns: the prompt is written for
+// the plan's agent and keeps naming it, so a supervision followup like
+// "report your identity as grok_build" reaches whichever agent stepped in.
+// Without a line saying who is actually running, the substitute answers the
+// question it was asked — it reports itself as grok_build and claims commands
+// grok_build never ran, which contradicts the swap note on the same result.
+// The note must ride only the fallback's prompt, and must not rewrite the
+// task text underneath it.
+func TestFallbackPromptNamesTheAgentThatActuallyRuns(t *testing.T) {
+	card := scoreCard()
+	card.Agents["cheap"] = ledger.Agent{Adapter: "opencode.py", Capabilities: []string{"code:modify"}, CostTier: "low", Tier: 1}
+	card.Agents["expensive"] = ledger.Agent{Adapter: "claude_code.py", Capabilities: []string{"code:modify"}, CostTier: "high", Tier: 1}
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+
+	prompts := make(map[string]string, 2)
+	r.SetAdapterRunner(func(_ context.Context, adapter, prompt, _ string) AgentResult {
+		prompts[adapter] = prompt
+		if adapter == "opencode.py" {
+			return AgentResult{OK: false, Result: "Error: Not signed in.", ExitCode: 1}
+		}
+		return AgentResult{OK: true, Result: "ran the command", ExitCode: 0}
+	})
+	plan, err := r.Route([]string{"code:modify"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	const task = "run echo hello-from-grok"
+	res := r.Execute(context.Background(), plan, task, "", false)
+	if !res.OK || res.Agent != "expensive" {
+		t.Fatalf("result = %+v, want ok via the fallback agent", res)
+	}
+	if first := prompts["opencode.py"]; strings.Contains(first, "代理替换") {
+		t.Fatalf("the primary's prompt must not carry a substitution note: %q", first)
+	}
+	got := prompts["claude_code.py"]
+	if !strings.Contains(got, "代理替换") || !strings.Contains(got, "不要冒充") {
+		t.Fatalf("fallback prompt must name the real runner: %q", got)
+	}
+	if !strings.Contains(got, "Not signed in") {
+		t.Fatalf("fallback prompt must carry the reason it stepped in: %q", got)
+	}
+	if !strings.HasSuffix(got, task) {
+		t.Fatalf("the plan's prompt must survive verbatim after the note: %q", got)
+	}
+}

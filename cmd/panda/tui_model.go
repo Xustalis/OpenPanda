@@ -229,14 +229,18 @@ type tuiModel struct {
 	wizardAlias     string // display name in the register
 	wizardEditAlias string // alias being edited ("" = adding a new entry)
 
-	form         []mfield // the single-screen editor's rows
-	formFocus    int      // focused row
-	formErr      string   // validation error shown under the form
-	formTesting  bool     // connectivity probe in flight
-	formTestErr  string   // non-empty once the probe failed
-	formFetching bool     // /models catalogue fetch in flight
-	formFetchErr string   // fetch failure shown under the form
-	formPicking  bool     // fetched-models picker overlay is up
+	form      []mfield // the single-screen editor's rows
+	formFocus int      // focused row
+	formErr   string   // validation error shown under the form
+	// panelNotice carries a one-off failure from a panel action (deleting the
+	// last model) into the panel title, so the error is visible instead of
+	// being dropped by a discarded error return.
+	panelNotice  string
+	formTesting  bool   // connectivity probe in flight
+	formTestErr  string // non-empty once the probe failed
+	formFetching bool   // /models catalogue fetch in flight
+	formFetchErr string // fetch failure shown under the form
+	formPicking  bool   // fetched-models picker overlay is up
 
 	// Panel state: the inline connectivity probe on the highlighted entry.
 	panelTesting       bool

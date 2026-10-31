@@ -1,6 +1,6 @@
 # Project status
 
-> 2026-10-30 (`v0.1.3` "Constellation" release preparation: a stability and cost patch; configuration and stored data are compatible — the schema gains one additive index migration (v65, an index on `tasks.session_id`) and the wire adds no frame. Adapters and execution: the one-shot silent CLI runs of hermes and openclaw heartbeat every 20 seconds, so a long task is no longer killed as `adapter stalled` by the silence watchdog; the spawn bookkeeping frame carries `phase: "spawn"`, so heartbeats alone no longer close the pre-first-output grace window; the orchestrator's own silence watchdog, tool-call fuse and hard deadline (exit 124 with a "timeout" verdict) no longer trigger a full re-run under the injected model, so side effects of the first attempt do not run twice. Console: the event feed cancels and re-dials after three missed heartbeats, a browser coming back online or waking reconnects at once, and a turn whose ask stream died mid-flight is followed to a deadline; behind a reverse proxy `/api/events` now sends `X-Accel-Buffering: no`; the board's last-activity query names the rows it lists, the live trace feed drains a burst in batches, and the task page and expanded event chain follow a cursor; a thread shares its session's task list, reuses each finished reply's parsed Markdown, and applies streaming deltas once per frame. Not done: UPnP/NAT-PMP, source-signature convergence for punch/dir frames, cross-node hello replay, daemon→panel mesh metrics.)
+> 2026-10-30 (`v0.1.3` "Constellation" release preparation: a stability and cost patch; configuration and stored data are compatible — the schema gains one additive index migration (v65, an index on `tasks.session_id`) and the wire adds no frame. Adapters and execution: the one-shot silent CLI runs of hermes and openclaw heartbeat every 20 seconds, so a long task is no longer killed as `adapter stalled` by the silence watchdog; the spawn bookkeeping frame carries `phase: "spawn"`, so heartbeats alone no longer close the pre-first-output grace window; the orchestrator's own silence watchdog, tool-call fuse and hard deadline (exit 124 with a "timeout" verdict) no longer trigger a full re-run under the injected model, so side effects of the first attempt do not run twice. Console: the event feed cancels and re-dials after three missed heartbeats, a browser coming back online or waking reconnects at once, and a turn whose ask stream died mid-flight is followed to a deadline; behind a reverse proxy `/api/events` now sends `X-Accel-Buffering: no`; the board's last-activity query names the rows it lists, the live trace feed drains a burst in batches, and the task page and expanded event chain follow a cursor; a thread shares its session's task list, reuses each finished reply's parsed Markdown, and applies streaming deltas once per frame. Not done: UPnP/NAT-PMP, source-signature convergence for punch/dir frames, daemon→panel mesh metrics. (Cross-node hello replay is closed — see Known limits.))
 
 > 2026-10-29 (`v0.1.2` "Constellation" release preparation: a conversation now has a permission policy, and a task carries its own evidence. Five modes (auto, manual, accept-edits, plan, bypass) live on the session and travel into every task spec — plan gives the agent the read-only tool face and holds native commands, manual asks before every state-changing step, bypass consents and is still audited; the mode outranks a remembered approval, an `--authorize` grant and a global `approval.mode: never`. The delivery contract lands with its holes closed: `panda task add --accept` (or `--accept auto`, ranked by how much a check verifies and capped at the contract's own ceiling) runs checks after the agent finishes, comparing baseline against final so a pre-existing red suite is named as such; the executor drops peer-authored `spec.acceptance`, refuses irreversible commands (recorded as skipped), accepts only verification subcommands in CI steps, refuses an artifact check on `.`, and records a timeout as a timeout. Console: floating workspace panels are pinned to the visible band, repaired on load, with a tidy control that re-forms the row; the to-do composer is always visible with an `n` shortcut, filter counts and a one-line empty state; an uninstalled agent is disabled in the roster with the reason in place. Kernel: the judge receives the exit code and declared scope, and a "done" with no output and no changed files parks for review; adapters resolve CLI aliases from PATH, guard dash-leading prompts, heartbeat a silent dsh run every 20 s, and escape the dsh model patch through JSON. Schema moves to 64. Not done: UPnP/NAT-PMP, source-signature convergence for punch/dir frames, cross-node hello replay, daemon→panel mesh metrics; plan mode re-staffs to an agent with a read-only face, and fails with a clear reason when the route has none.)
 
@@ -433,6 +433,18 @@ own reason and exits 1 — it does not silently restart python.
 
 ## Known limits
 
+**A conversation's lock lane runs alongside conversation-less scoped work.**
+The `paths` scope now carries a session dimension: siblings in one
+conversation serialize by path, while two conversations never block each
+other on the same path. The cost is that a scoped task with **no conversation
+identity** (`panda task add --paths`, a scoped child delegated across nodes)
+is a sibling of every conversation's lane, so the two can write the same
+checkout path at once — an extension of "two conversations may run in
+parallel", not an oversight. When exclusive access is needed, use `--isolate`
+(a private worktree merged back three-way) or a whole-project claim (no
+`--paths`, which holds the `scope:<project>` root and conflicts with every
+lane).
+
 **P2-8 One shared secret for the whole network (partially mitigated).**
 The network shared secret remains the membership credential: a node
 holding it can complete mesh join. On top of it, Ed25519 node identity
@@ -449,6 +461,19 @@ use. Therefore "irreversible operations need my approval" holds on a
 single machine and a trusted LAN, and stops holding once the network
 contains a node you do not fully trust. The real fix is per-node key
 distribution/admission — a trust-model change, not a patch.
+
+**Cross-node hello replay is closed, except on the legacy path.** A captured
+hello cannot be replayed at a different node: a hello can bind its receiver
+(the `to` field plus `SigB`/`EdSigB`), the receiver requires `to` to name its
+own node id and the bound signature to match, and a hello bound to another
+target is refused. Above `VerifyHelloP` sits a single-use cache (keyed on the
+sender id, timestamp and the signature that actually verified, bounded by
+`MaxHelloAge`), and a downgrade guard refuses an unbound hello from a node
+that has bound before. Together the three cover cross-node replay. What
+remains is a pre-binding peer that has never bound: it still verifies through
+the two-field HMAC, and the single-use cache only protects this node. The
+planned protocol-level challenge-response was not adopted because the bound
+signature closes the same hole without an extra round trip.
 
 **P2-9 The audit chain is signed, but anchored inside the database.**
 `task_events` and `audit_log` hash chains now carry per-row Ed25519

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
@@ -62,6 +63,12 @@ type TaskStore struct {
 	eventKey  ed25519.PrivateKey
 	eventPub  ed25519.PublicKey
 	eventKeyM sync.RWMutex
+	// skippedRows counts rows a list read had to drop because the driver
+	// could not convert them (a NULL in a column the schema calls text, a
+	// type that drifted under an older daemon). Without it the only trace is
+	// a log line, and "the board shows fewer tasks than the table holds"
+	// reads as a UI bug rather than a data one.
+	skippedRows atomic.Int64
 }
 
 // eventHubs routes task-event notifications to every TaskStore sharing one
@@ -3593,10 +3600,21 @@ func (s *TaskStore) deleteSettledBatch(ctx context.Context, ids []string, pred s
 // leave the terminal set. One NOT EXISTS probe per candidate — over the
 // existing task_events(task_id) index — replaces it, and the marker type
 // stays the caller's constant (the panel owns it).
+//
+// The marker is scoped to the attempt it reported (data.attempt_id). A task
+// that fails and is retried rotates its attempt id, so the report filed for
+// the failed attempt must not silence the one owed for the attempt that
+// actually finished — with a task-scoped marker the thread's last word on a
+// retried task stayed the stale failure forever. Markers written before the
+// field existed carry no attempt id and keep the old reading: one report per
+// task, never a second one for a row nobody retried.
 func (s *TaskStore) TerminalSessionTasksWithoutEvent(ctx context.Context, typ string) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+taskColumns+` FROM tasks t
 		WHERE t.session_id != '' AND t.state IN (?, ?, ?, ?)
-		  AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.task_id AND e.type = ?)
+		  AND NOT EXISTS (SELECT 1 FROM task_events e
+		                  WHERE e.task_id = t.task_id AND e.type = ?
+		                    AND (COALESCE(json_extract(e.data_json, '$.attempt_id'), '') = ''
+		                         OR json_extract(e.data_json, '$.attempt_id') = t.attempt_id))
 		ORDER BY t.created_at DESC`,
 		StateDone, StateFailed, StateCancelled, StateExpired, typ)
 	if err != nil {
@@ -3856,12 +3874,24 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 
 func (s *TaskStore) scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task
-	for rows.Next() {
+	for i := 0; rows.Next(); i++ {
 		t, err := s.scanTask(rows)
 		if err != nil {
-			return nil, err
+			// One undecodable row must not strand the whole listing: the board
+			// would read "no tasks" while the table is full. Skip it, keep
+			// reading, and leave the reason in the log — the row itself stays
+			// in the database for repair. The counter is the difference
+			// between "fewer tasks" and "this database has a broken column".
+			s.skippedRows.Add(1)
+			s.logger.Warn("skip undecodable task row", "row", i, "err", err)
+			continue
 		}
 		out = append(out, t)
 	}
 	return out, rows.Err()
 }
+
+// SkippedRows reports how many task rows list reads have dropped because the
+// driver could not decode them. Zero on a healthy database; a number that
+// keeps climbing means a column drifted and every listing is quietly short.
+func (s *TaskStore) SkippedRows() int64 { return s.skippedRows.Load() }

@@ -2845,3 +2845,86 @@ func TestListSurvivesNullColumns(t *testing.T) {
 		t.Fatalf("Get over a NULL-column row: %v", err)
 	}
 }
+
+// TestListSkipsUndecodableRow pins the other half of the listing contract the
+// board depends on: a row the driver genuinely cannot convert is skipped and
+// counted, not returned as an error. NULL is a "not recorded" value now
+// (TestListSurvivesNullColumns), so this needs a value no conversion accepts —
+// a word where an integer column is scanned.
+func TestListSkipsUndecodableRow(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	good := createTask(t, s, "", "readable row", "node")
+	broken := createTask(t, s, "", "unconvertible row", "node")
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET state_version = 'not-a-number' WHERE task_id = ?`,
+		broken.TaskID); err != nil {
+		t.Fatalf("break row: %v", err)
+	}
+
+	got, err := s.ListByState(ctx, StateSubmitted)
+	if err != nil {
+		t.Fatalf("list with a damaged row must not fail: %v", err)
+	}
+	if len(got) != 1 || got[0].TaskID != good.TaskID {
+		t.Fatalf("list = %d rows (%v), want just %s", len(got), got, good.TaskID)
+	}
+	if s.SkippedRows() == 0 {
+		t.Fatal("skipped row was not counted")
+	}
+}
+
+// A retried task owes the thread a second report.
+//
+// The marker that makes the finalizer exactly-once used to be task-scoped, so
+// the report filed for a failed attempt silenced every later one: a task that
+// failed, was retried, and then succeeded kept the stale "[failed] …" as the
+// thread's last word on it. Scoping the marker to the attempt it reported
+// fixes that without re-reporting rows nobody retried.
+func TestTerminalSessionTasksWithoutEventReportsEachAttempt(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+
+	tk := createTask(t, s, "", "retried after a failure", "root")
+	must(s.SetSessionID(ctx, tk.TaskID, "sess-1"))
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "win"))
+	must(s.Accept(ctx, tk.TaskID, "win"))
+	must(s.ForceFail(ctx, tk.TaskID, "bash shell missing"))
+
+	failed, err := s.Get(ctx, tk.TaskID)
+	must(err)
+	// The marker the finalizer writes carries the attempt it reported.
+	must(s.RecordEvent(ctx, tk.TaskID, "session_summary", map[string]string{
+		"session_id": "sess-1", "state": "failed", "attempt_id": failed.AttemptID,
+	}))
+
+	got, err := s.TerminalSessionTasksWithoutEvent(ctx, "session_summary")
+	must(err)
+	if len(got) != 0 {
+		t.Fatalf("candidates after the first report = %d, want 0", len(got))
+	}
+
+	// The retry rotates the attempt id and the task runs again.
+	if _, err := s.RequeueForRetry(ctx, tk.TaskID, "win", false); err != nil {
+		t.Fatalf("requeue for retry: %v", err)
+	}
+	must(s.Accept(ctx, tk.TaskID, "win"))
+	must(s.Complete(ctx, tk.TaskID, "win", map[string]any{"ok": true}))
+
+	got, err = s.TerminalSessionTasksWithoutEvent(ctx, "session_summary")
+	must(err)
+	if len(got) != 1 || got[0].TaskID != tk.TaskID {
+		t.Fatalf("candidates after the retry = %+v, want the task once", got)
+	}
+	if got[0].State != StateDone {
+		t.Fatalf("candidate state = %q, want done", got[0].State)
+	}
+}

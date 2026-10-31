@@ -131,7 +131,7 @@ if (!calm) {
 
 /* ── counters ──────────────────────────────────────────────────────────── */
 // The digits in the markup are the final values; the animation only replaces
-// them once the block is in view, so a crawler or a no-JS reader sees 2,000.
+// them once the block is in view, so a crawler or a no-JS reader sees 2,760.
 
 function runCounter(el) {
   const to = Number(el.dataset.count)

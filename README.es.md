@@ -55,6 +55,7 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 ## 🌟 ¿Qué puede hacer OpenPanda?
 
 ### 1. 🌐 Colaboración multidispositivo P2P heterogénea
+- **Estado multidispositivo (publicado hasta v0.1.3)**: AEAD por sesión, emparejamiento estilo Bluetooth, niveles de confianza, retransmisión multisalto y ejecución paralela en el mismo proyecto mediante ámbitos de ruta y worktrees aislados.
 - **Descubrimiento LAN + emparejamiento estilo Bluetooth**: Los nodos se encuentran en la LAN con admisión confirmada por huella; `panda pair` incorpora un dispositivo con un código corto confirmado en ambos extremos, y `panda nodes verify` fija la clave Ed25519 de cada par.
 - **Tarjetas de capacidad dinámicas**: Cada nodo declara su perfil de hardware (CPU, GPU, RAM, SO) y herramientas disponibles.
 - **Enrutamiento inteligente de tareas**: Asigna compilaciones pesadas a servidores potentes y tareas de sensores a placas de bajo consumo según capacidad medida; `panda nodes drain` retira un nodo para mantenimiento.
@@ -67,7 +68,7 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 - **Zonas de confianza**: Cada par lleva un nivel fijado por el operador (`panda nodes trust <id> mesh|guarded|open`) que limita lo que una tarea delegada puede exponerle y cómo se admite el trabajo entrante desde él; el contenido de pantalla es exclusivo de mesh de extremo a extremo — degradar la confianza corta una transferencia de pantalla en pleno vuelo.
 
 ### 2. 🤖 Orquestación universal de agentes y failover automático
-- **Adaptadores listos para usar**: Diez adaptadores incluidos (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, ZCode, OpenClaw), un puente generic para todo lo demás y comandos de shell.
+- **Adaptadores listos para usar**: Nueve adaptadores dedicados (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi y OpenClaw). Un puente genérico configurable permite usar cualquier CLI sin interfaz, incluido ZCode.
 - **Registro multimodelo y failover transparente**: `panda model add|switch|test` gestiona varios proveedores por nodo tras un cortacircuitos de salud; si un agente agota su cuota o fallan sus credenciales (401/403), se inyecta automáticamente un modelo alternativo y la tarea continúa.
 - **Ejecución multiharness**: `panda ask --agents a,b --mode parallel` reparte una instrucción a varios agentes como un plan y recoge los veredictos.
 - **Trazabilidad total en tiempo real**: Visualiza comandos bash, ediciones de archivos y llamadas a herramientas en tu terminal o navegador.
