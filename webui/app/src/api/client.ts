@@ -2426,9 +2426,9 @@ export interface AskStreamHandlers {
   onReasoning(text: string): void
   onDelta(text: string): void
   /** Live token usage for this turn: cumulative across every model call the
-   *  ask made. Output may be an estimate until the provider reports the real
-   *  count at end-of-stream. */
-  onUsage?(input: number, output: number): void
+   *  ask made. `estimated` marks the output share as a character-based guess
+   *  rather than the provider's own count. */
+  onUsage?(input: number, output: number, estimated?: boolean): void
   onStatus(text: string, ev?: AskStatusEvent): void
   onOperation(operationID: string): void
   /** A task row this turn dispatched, sent the moment the row exists — well
@@ -2482,7 +2482,8 @@ export async function askSessionStream(
       }
       if (event === 'reasoning') h.onReasoning(payload.text ?? '')
       else if (event === 'delta') h.onDelta(payload.text ?? '')
-      else if (event === 'usage') h.onUsage?.(payload.input ?? 0, payload.output ?? 0)
+      else if (event === 'usage')
+        h.onUsage?.(payload.input ?? 0, payload.output ?? 0, Boolean(payload.estimated))
       else if (event === 'status') h.onStatus(payload.text ?? '', payload as AskStatusEvent)
       else if (event === 'operation') h.onOperation(payload.operation_id ?? '')
       else if (event === 'task') {

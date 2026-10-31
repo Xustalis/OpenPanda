@@ -114,6 +114,9 @@ type tuiModel struct {
 	// first event and reset at every turn start.
 	liveInputTokens  int64
 	liveOutputTokens int64
+	// liveTokensEst is set while the output share of the total is a
+	// character-based estimate; the status row prefixes it with "~".
+	liveTokensEst bool
 	// lastActivity is the newest delta, reasoning or progress timestamp. The
 	// status row reports the quiet time from it, so a working turn reads
 	// differently from a stalled one.

@@ -52,8 +52,9 @@ type taskProgress struct {
 	activity []string
 	// tokens is the turn's cumulative entry-model consumption. The card stands
 	// in for the status line while a task runs, so it carries the counter that
-	// line would otherwise show.
-	tokens int64
+	// line would otherwise show. tokensEstimated marks a live guess.
+	tokens          int64
+	tokensEstimated bool
 }
 
 // newTaskProgress opens a card for a task the engine just submitted.
@@ -271,7 +272,11 @@ func (tp *taskProgress) renderLive(t theme, loc i18n.Locale, spin string, now ti
 	}
 	footer := elapsed(total)
 	if tp.tokens > 0 {
-		footer += " · " + cliui.HumanCount(tp.tokens) + " tokens"
+		label := cliui.HumanCount(tp.tokens)
+		if tp.tokensEstimated {
+			label = "~" + label
+		}
+		footer += " · " + label + " tokens"
 	}
 	footer += " · " + i18n.T(loc, "cli.status.interrupt")
 	sb.WriteString("\n" + t.muted.Render(fmt.Sprintf("  (%s)", footer)))

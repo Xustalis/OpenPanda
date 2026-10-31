@@ -55,6 +55,9 @@ func TestUsageTrackerEstimatesBeforeRealUsage(t *testing.T) {
 	if last.OutputTokens != 100 {
 		t.Fatalf("estimated output = %d, want 100", last.OutputTokens)
 	}
+	if !last.Estimated {
+		t.Fatal("an estimate must be marked estimated")
+	}
 }
 
 // TestUsageTrackerFinalReplacesEstimate: the billed total wins even when the
@@ -67,5 +70,8 @@ func TestUsageTrackerFinalReplacesEstimate(t *testing.T) {
 	last := got[len(got)-1]
 	if last.InputTokens != 120 || last.OutputTokens != 40 {
 		t.Fatalf("last = %d/%d, want the billed 120/40", last.InputTokens, last.OutputTokens)
+	}
+	if last.Estimated {
+		t.Fatal("the billed total must not be marked estimated")
 	}
 }

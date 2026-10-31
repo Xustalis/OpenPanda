@@ -729,7 +729,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// "usage" would erase what the turn is doing.
 		OnProgress: func(p askengine.Progress) {
 			if p.Kind == askengine.ProgressUsage {
-				send("usage", map[string]int64{"input": p.InputTokens, "output": p.OutputTokens})
+				send("usage", map[string]any{
+					"input": p.InputTokens, "output": p.OutputTokens, "estimated": p.Estimated,
+				})
 				return
 			}
 			send("status", statusEventOf(p))

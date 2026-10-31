@@ -334,6 +334,9 @@ interface ChatMsg extends SessionTurn {
   /** Newest delta/reasoning/usage/status timestamp (epoch ms). The live
    *  header uses it to tell a quiet turn from a stalled one. */
   lastActivity?: number
+  /** The token figure is a live estimate, not the provider's count. The
+   *  header prefixes it with "~" until the billed result lands. */
+  tokensEstimated?: boolean
   /** @file paths that were expanded into fenced blocks for this prompt —
    *  shown as attachment chips on the user's bubble. */
   files?: string[]
@@ -1650,8 +1653,13 @@ export function SessionsView({
           // Usage is its own event: a counter, not a status note. It lands at
           // most a few times a second (the engine throttles it), so it can
           // patch state directly.
-          onUsage: (input, output) =>
-            patch((m) => ({ ...m, tokens: input + output, lastActivity: Date.now() })),
+          onUsage: (input, output, estimated) =>
+            patch((m) => ({
+              ...m,
+              tokens: input + output,
+              tokensEstimated: estimated,
+              lastActivity: Date.now(),
+            })),
           onStatus: (text, ev) =>
             patch((m) => ({ ...m, status: statusNote(text, ev), lastActivity: Date.now() })),
           // The note typed mid-turn reached a round. This is the upgrade from
@@ -1719,6 +1727,7 @@ export function SessionsView({
                 // The billed total wins; a stream that ended before any usage
                 // event keeps whatever the live counter last showed.
                 tokens: r.tokens || m.tokens,
+                tokensEstimated: r.tokens ? false : m.tokensEstimated,
               }
             })
           },
@@ -3468,7 +3477,9 @@ function ChatBubble(props: {
             ) : null}
             {msg.tokens ? (
               <span class="msg-dur" data-testid="msg-tokens">
-                {t('sessions.tokens', { n: fmtTokens(msg.tokens) })}
+                {t('sessions.tokens', {
+                  n: (msg.tokensEstimated ? '~' : '') + fmtTokens(msg.tokens),
+                })}
               </span>
             ) : null}
           </span>

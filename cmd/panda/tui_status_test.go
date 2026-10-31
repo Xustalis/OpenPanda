@@ -50,3 +50,33 @@ func TestStatusMetaCarriesLiveTokens(t *testing.T) {
 		t.Fatalf("meta = %q, want the live total", meta)
 	}
 }
+
+// TestStatusMetaMarksEstimate: a character-based guess must be distinguishable
+// from the provider's count, or the number read as a bill.
+func TestStatusMetaMarksEstimate(t *testing.T) {
+	now := time.Now()
+	m := tuiModel{loc: i18n.English}
+	m.started = now.Add(-5 * time.Second)
+	m.lastActivity = now
+	m.liveOutputTokens = 2100
+	m.liveTokensEst = true
+	if meta := m.statusMeta(now); !strings.Contains(meta, "~2.1k tokens") {
+		t.Fatalf("meta = %q, want a marked estimate", meta)
+	}
+}
+
+// TestThoughtViewPreviewsRecentLines: the folded chain shows the newest few
+// lines, so the turn displays what it is reasoning about rather than only that
+// it is reasoning.
+func TestThoughtViewPreviewsRecentLines(t *testing.T) {
+	m := tuiModel{loc: i18n.English, thought: []string{"one", "two", "three", "four"}}
+	got := m.thoughtView()
+	for _, want := range []string{"4 lines", "two", "three", "four", "ctrl+o to expand"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("thought view = %q, missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "one") {
+		t.Fatalf("thought view = %q, the oldest line should be folded away", got)
+	}
+}

@@ -1577,9 +1577,12 @@ type Progress struct {
 	Status     int
 	Reason     string
 	// InputTokens/OutputTokens are the ask's cumulative token counts, valid
-	// when Kind == ProgressUsage.
+	// when Kind == ProgressUsage. Estimated marks OutputTokens as a
+	// character-based estimate rather than the provider's own count: surfaces
+	// render it with a "~" so a live guess is never mistaken for the bill.
 	InputTokens  int64
 	OutputTokens int64
+	Estimated    bool
 }
 
 // roundNote phrases the loop position for the English status fallback; "" for
@@ -1839,8 +1842,10 @@ func (t *usageTracker) publish(force bool) {
 		return
 	}
 	out := t.total.OutputTokens
+	estimated := false
 	if est := t.chars / 3; est > out {
 		out = est
+		estimated = true
 	}
 	if t.total.InputTokens == 0 && out == 0 {
 		return
@@ -1849,7 +1854,10 @@ func (t *usageTracker) publish(force bool) {
 		return
 	}
 	t.reported = time.Now()
-	t.report(Progress{Kind: ProgressUsage, InputTokens: t.total.InputTokens, OutputTokens: out})
+	t.report(Progress{
+		Kind: ProgressUsage, InputTokens: t.total.InputTokens,
+		OutputTokens: out, Estimated: estimated,
+	})
 }
 
 // final publishes the billed totals at the end of the ask, replacing any

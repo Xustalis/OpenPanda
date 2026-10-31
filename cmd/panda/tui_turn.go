@@ -61,8 +61,10 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 	// note or advance the task card's trail.
 	if p.Kind == askengine.ProgressUsage {
 		m.liveInputTokens, m.liveOutputTokens = p.InputTokens, p.OutputTokens
+		m.liveTokensEst = p.Estimated
 		if m.liveTask != nil {
 			m.liveTask.tokens = m.liveInputTokens + m.liveOutputTokens
+			m.liveTask.tokensEstimated = p.Estimated
 		}
 		return m, waitForActivity(msg.stream)
 	}
@@ -84,6 +86,7 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 		m.liveTask = newTaskProgress(p.Name, now, m.loc)
 		// Carry whatever usage already arrived before the card opened.
 		m.liveTask.tokens = m.liveInputTokens + m.liveOutputTokens
+		m.liveTask.tokensEstimated = m.liveTokensEst
 	case askengine.ProgressTool:
 		if m.liveTask != nil {
 			m.liveTask.recordTool(label, now)
@@ -515,6 +518,7 @@ func (m tuiModel) approvePending() (tea.Model, tea.Cmd) {
 	m.mode = modeAsking
 	m.started = time.Now()
 	m.liveInputTokens, m.liveOutputTokens = 0, 0
+	m.liveTokensEst = false
 	m.lastActivity = time.Time{}
 	m.lastInterrupt = time.Time{} // the re-run gets its own double-tap window
 	// Resume in the tree the card was raised for. A task started inside a

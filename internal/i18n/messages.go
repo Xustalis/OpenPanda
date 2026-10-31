@@ -731,6 +731,7 @@ var messages = map[Locale]map[string]string{
 
 		"tui.input.placeholder":              "Ask anything, or type / for commands",
 		"tui.thinking":                       "thinking",
+		"tui.thought.expand":                 "ctrl+o to expand",
 		"tui.answer.partial":                 "partial output — the stream ended early",
 		"tui.thought.head":                   "thought",
 		"tui.thought.lines":                  "{n} lines",
@@ -1921,6 +1922,7 @@ var messages = map[Locale]map[string]string{
 
 		"tui.input.placeholder":              "问点什么，或输入 / 使用命令",
 		"tui.thinking":                       "思考中",
+		"tui.thought.expand":                 "ctrl+o 展开全文",
 		"tui.answer.partial":                 "部分输出 —— 流式中断，以下内容不完整",
 		"tui.thought.head":                   "思维链",
 		"tui.thought.lines":                  "{n} 行",
@@ -3177,6 +3179,7 @@ var messages = map[Locale]map[string]string{
 
 		"tui.input.placeholder":              "何でも質問、または / でコマンド",
 		"tui.thinking":                       "思考中",
+		"tui.thought.expand":                 "ctrl+o で展開",
 		"tui.answer.partial":                 "途中までの出力 — ストリームが切断されました",
 		"tui.thought.head":                   "思考",
 		"tui.thought.lines":                  "{n} 行",
@@ -4352,6 +4355,7 @@ var messages = map[Locale]map[string]string{
 
 		"tui.input.placeholder":              "Pregunta lo que sea, o escribe / para comandos",
 		"tui.thinking":                       "pensando",
+		"tui.thought.expand":                 "ctrl+o para expandir",
 		"tui.answer.partial":                 "salida parcial — la transmisión se cortó",
 		"tui.thought.head":                   "pensamiento",
 		"tui.thought.lines":                  "{n} líneas",
@@ -5527,6 +5531,7 @@ var messages = map[Locale]map[string]string{
 
 		"tui.input.placeholder":              "Frag irgendwas, oder tippe / für Befehle",
 		"tui.thinking":                       "denkt nach",
+		"tui.thought.expand":                 "ctrl+o zum Ausklappen",
 		"tui.answer.partial":                 "Teilausgabe — der Stream wurde unterbrochen",
 		"tui.thought.head":                   "Gedanke",
 		"tui.thought.lines":                  "{n} Zeilen",
