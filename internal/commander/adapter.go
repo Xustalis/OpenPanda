@@ -180,6 +180,27 @@ func Restricted(ctx context.Context) bool {
 	return v
 }
 
+// authorizedKey carries the operator's tier-2 consent into the adapter
+// request. It is set on the run context, not the request the caller writes,
+// so the runAdapter test seam's signature stays unchanged.
+type authorizedKey struct{}
+
+// WithAuthorized tells the adapter that a human consented to this run's
+// irreversible operations. An adapter that gates its own tool calls (claude
+// --permission-prompts none auto-denies anything its permission mode does not
+// allow) lifts that posture only when this is set — otherwise an approval
+// from OpenPanda can never reach the CLI, and the task parks in review again
+// with the same question (issue #165).
+func WithAuthorized(ctx context.Context) context.Context {
+	return context.WithValue(ctx, authorizedKey{}, true)
+}
+
+// Authorized reports whether a human consented to this run's operations.
+func Authorized(ctx context.Context) bool {
+	v, _ := ctx.Value(authorizedKey{}).(bool)
+	return v
+}
+
 // AdapterSupportsRestricted reports whether the named adapter can honor a
 // read-only run. The answer comes from the agent registry's capability
 // declaration (Capabilities.SupportsRestricted), not a local table, so the
@@ -808,6 +829,12 @@ type AdapterRequest struct {
 	// extended still gets no shell. Only adapters whose registry entry
 	// declares Capabilities.SupportsRestricted ever see it set.
 	Restricted bool `json:"restricted,omitempty"`
+	// Authorized carries the operator's tier-2 consent (a foreground
+	// approval, --authorize, or a bypass session) to the adapter. Adapters
+	// that gate their own tool calls use it to lift that posture for this
+	// run; adapters without such a gate ignore it. Never set together with
+	// Restricted — consent is what removes the read-only face.
+	Authorized bool `json:"authorized,omitempty"`
 	// TaskID carries the OpenPanda task ID that this process executes for.
 	// Used for causal subagent tree linkage and subtask dispatch.
 	TaskID string `json:"task_id,omitempty"`
@@ -1043,8 +1070,9 @@ func AgentHardTimeout() time.Duration { return adapterHardTimeout }
 
 // buildAdapterRequest maps the execution context onto the wire request:
 // the prompt/timeout/cwd basics plus every opt-in field an adapter may
-// understand (resume, tools policy, restricted, turn cap, cmd template,
-// system prompt, result schema, MCP config, effort). The Session flag is
+// understand (resume, tools policy, restricted, consent, turn cap, cmd
+// template, system prompt, result schema, MCP config, effort). The Session
+// flag is
 // decided by the caller — it depends on the pool existing and the adapter
 // declaring the capability, which are per-run facts, not request fields.
 // A non-nil refusal result means the request must not be sent at all
@@ -1073,6 +1101,11 @@ func buildAdapterRequest(ctx context.Context, name, prompt, cwd string) (Adapter
 			}
 		}
 		req.Restricted = true
+	}
+	// Restricted wins if both are somehow set: the read-only face is the
+	// narrower promise, and consent never widens a run that was pinned to it.
+	if Authorized(ctx) && !req.Restricted {
+		req.Authorized = true
 	}
 	if mt, ok := ctx.Value(maxTurnsKey{}).(int); ok && mt > 0 {
 		req.MaxTurns = mt

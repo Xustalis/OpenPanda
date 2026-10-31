@@ -44,6 +44,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 修正
 
+- **承認がエージェント CLI に届くようになった** — `claude_code` が特権コマンド（`systemctl`、`/etc` への書き込み）を拒否して停泊したタスクは、承認後の再実行でも同一の argv で走り、CLI が同じ呼び出しを再び自動拒否して同じレビューカードに戻り続けていた。同意はリクエストとしてアダプターに渡り、その実行の権限姿勢は `bypassPermissions` に上がる。同意のない実行は `acceptEdits` のまま、読み取り専用の実行は同意を無視する。
 - **8 つのアダプターが panda のモデルを使えるようになり、zcode も加わりました** —— 各 CLI が実際に読む場所へ注入モデルを書きます：hermes は使い捨ての `HERMES_HOME`、openclaw は `HOME` のリダイレクトと `--config`/`--state-dir`、pi は `models.json`（`apiKey` は環境変数名）、zcode は `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` が指す個人プロバイダ設定（0.17 は `ZCODE_*` を読みません）、agy は終了時に復元する settings、grok は実際に読む `GROK_MODELS_BASE_URL`（`GROK_BASE_URL` ではありません）。一時状態は harness のクリーンアップ一覧に載るため、キャンセルされた実行が鍵入りの設定をディスクに残しません——シグナル経路の `os._exit` は `atexit` を飛ばします。`_harness` はシード複製からモデル選択キーを外し、argv 再構築時に次のトークンを消費するフラグも把握します。zcode は `generic.py` から離れます。
 - **grok_build が実際に動くようになりました** —— 三つの別々の不具合でした：未ログインの文言がどの資格情報パターンにも一致せず（救援注入が発火しない）、端点がこの CLI の読まない変数を通り、`--single` が回答後もプロセスを生かし続けました。アダプターはイベントストリームを読み終端行でターンを閉じ、ラウンドごとに UUID セッションを発行し、終端の `error` イベントを失敗として扱い、そのメッセージを診断にします。
 

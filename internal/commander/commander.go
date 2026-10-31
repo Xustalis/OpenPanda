@@ -632,6 +632,14 @@ func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd stri
 		if RemoteTask(ctx) && !authorized {
 			ctx = WithRestricted(ctx)
 		}
+		// Consent must reach the adapter, not just this gate: a CLI that runs
+		// with its own permission prompts disabled (claude --permission-prompts
+		// none) auto-denies anything its permission mode does not allow, so an
+		// approval here used to re-run byte-identical argv and park the task in
+		// review again with the same question (issue #165).
+		if authorized {
+			ctx = WithAuthorized(ctx)
+		}
 		return r.execAgent(ctx, plan, prompt, cwd)
 	case "manual":
 		return Result{OK: false, ExitCode: 0, Stdout: plan.Notify, NeedManual: true}

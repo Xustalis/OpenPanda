@@ -864,3 +864,23 @@ func TestResumeAdapterAffinity(t *testing.T) {
 		t.Fatalf("legacy resume = %q refusal %v, want sess-old", req.Resume, refusal)
 	}
 }
+
+// TestBuildAdapterRequestCarriesConsent: the operator's tier-2 consent must
+// reach the adapter subprocess, or a CLI that gates its own tool calls keeps
+// auto-denying what a human just approved (issue #165). Restricted is the
+// narrower promise and outranks consent.
+func TestBuildAdapterRequestCarriesConsent(t *testing.T) {
+	req, _, refusal := buildAdapterRequest(WithAuthorized(context.Background()), "claude_code.py", "p", "")
+	if refusal != nil || !req.Authorized {
+		t.Fatalf("consented request: authorized=%v refusal=%v, want true", req.Authorized, refusal)
+	}
+	req, _, refusal = buildAdapterRequest(context.Background(), "claude_code.py", "p", "")
+	if refusal != nil || req.Authorized {
+		t.Fatalf("unconsented request: authorized=%v refusal=%v, want false", req.Authorized, refusal)
+	}
+	req, _, refusal = buildAdapterRequest(WithAuthorized(WithRestricted(context.Background())), "claude_code.py", "p", "")
+	if refusal != nil || !req.Restricted || req.Authorized {
+		t.Fatalf("restricted consent: restricted=%v authorized=%v refusal=%v, want restricted only",
+			req.Restricted, req.Authorized, refusal)
+	}
+}
