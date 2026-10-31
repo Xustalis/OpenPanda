@@ -241,11 +241,38 @@ def _reap_children():
             pass
 
 
+# Cleanup registered by adapters that materialise state on disk (a throwaway
+# HOME, a provider config carrying the API key, a rewritten CLI settings file).
+# atexit alone is not enough: _terminate_children exits with os._exit, which
+# skips atexit handlers, so a cancelled run — `panda cancel`, a daemon
+# shutdown, a watchdog timeout — would leave that state behind, and on Windows
+# %TEMP% survives reboots. One list serves both exit paths.
+_CLEANUP = []
+
+
+def at_cleanup(fn, *args, **kwargs):
+    """Register work that must run before the process exits, including signals."""
+    _CLEANUP.append((fn, args, kwargs))
+
+
+def _run_cleanup():
+    # LIFO, like atexit: a restore registered after a mkdtemp must run before
+    # the directory it reads from disappears.
+    while _CLEANUP:
+        fn, args, kwargs = _CLEANUP.pop()
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            pass
+
+
 def _terminate_children(signum, _frame):
     _reap_children()
+    _run_cleanup()
     os._exit(128 + (signum or 15))
 
 
+atexit.register(_run_cleanup)
 atexit.register(_reap_children)
 if sys.platform != "win32":
     signal.signal(signal.SIGTERM, _terminate_children)
@@ -338,12 +365,72 @@ def resolve_argv(cmd):
         prefix = _shim_exe(found)
         if prefix:
             return prefix + cmd[1:]
+        # A wrapper the static unwrap cannot read — a localization launcher,
+        # for instance, whose body re-execs whatever `claude` PATH resolves to
+        # once its own directory is filtered out. Follow the same rule and take
+        # the next candidate, because going through the shell is not survivable
+        # for this adapter: a batch file's %* re-expansion mangles quoted
+        # arguments, and a pretty-printed JSON Schema handed to
+        # `claude --json-schema` arrives as its first character alone — the CLI
+        # then fails every run with `--json-schema is not valid JSON: JSON Parse
+        # error: Unterminated string`, and the task never starts.
+        alt = _win_which_next(os.path.basename(exe), os.path.dirname(found))
+        if alt and os.path.normcase(alt) != os.path.normcase(found):
+            alt_prefix = _shim_exe(alt) if alt.lower().endswith((".cmd", ".bat")) else [alt]
+            if alt_prefix:
+                return alt_prefix + cmd[1:]
         comspec = os.environ.get("COMSPEC") or "cmd.exe"
-        # /d skips AutoRun; /s keeps the command string verbatim so the
-        # list2cmdline quoting reaches the shim's %* intact.
+        # Nothing else to try: keep the COMSPEC route, with the one concession
+        # the shell can honour — no line breaks inside an argument.
         return [comspec, "/d", "/s", "/c",
-                subprocess.list2cmdline([found] + cmd[1:])]
+                _flatten_newlines(subprocess.list2cmdline([found] + cmd[1:]))]
     return [found] + cmd[1:]
+
+
+def _win_which_next(exe, skip_dir):
+    """The next `exe` on PATH, ignoring the directory that already answered.
+
+    A launcher shim that cannot be statically unwrapped usually exists to
+    filter itself out of PATH and re-exec the CLI it shadows (the zh-CN
+    wrapper for `claude` does exactly this). Resolving the same way here keeps
+    the spawn off the shell entirely: the alternative on PATH is either a real
+    `.exe` or an npm shim, and both hand their arguments through untouched.
+    """
+    if not exe:
+        return None
+    try:
+        skip = os.path.normcase(os.path.abspath(skip_dir))
+    except OSError:
+        skip = ""
+    for d in (os.environ.get("PATH") or "").split(os.pathsep):
+        if not d:
+            continue
+        try:
+            if skip and os.path.normcase(os.path.abspath(d)) == skip:
+                continue
+        except OSError:
+            pass
+        for ext in (".exe", ".cmd", ".bat"):
+            cand = os.path.join(d, exe + ext)
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
+def _flatten_newlines(arg):
+    """Fold line breaks out of one argument on its way to a .cmd shim.
+
+    A batch file re-expands its arguments through %*, and that expansion ends
+    an argument at the first line break: a pretty-printed JSON Schema arrived
+    as the single character "{" (→ `--json-schema is not valid JSON`), and a
+    multi-line `--append-system-prompt` lost every line after the first.
+    A break becomes a space; what is lost is whitespace between JSON tokens or
+    between the lines of a prose rider, which neither receiver reads as
+    content.
+    """
+    if "\n" not in arg and "\r" not in arg:
+        return arg
+    return arg.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
 
 
 def _win_which(exe):
@@ -424,7 +511,11 @@ def _shim_exe(shim_path):
     # adapter contract tests generate on Windows). Both halves are quoted
     # paths, so the pair resolves to [interpreter, script] and the spawn skips
     # cmd.exe and its %* requoting. Without this branch the single-.exe scan
-    # below would return the interpreter alone and drop the script.
+    # below would return the interpreter alone and drop the script, so the
+    # resolved command line starts `node --prompt …` and dies in node's own
+    # option parser ("bad option: --prompt") — which reads like an adapter
+    # bug rather than a shim the harness failed to unwrap. Pairing is by kind
+    # rather than by adjacency, so a flag between the two still resolves.
     quoted = [resolve(m.group(1)) for m in re.finditer(r'"([^"]+)"', body)]
     exes = [p for p in quoted
             if p.lower().endswith(".exe") and os.path.isfile(p)]
@@ -776,24 +867,76 @@ def kill_tree(proc):
     proc.kill()
 
 
-def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=None):
+def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=None,
+               stop_when=None, idle_after=None, idle_timeout=6.0, input=None):
     """Stream-mode runtime shared by the JSONL / stream-json adapters.
 
     Spawns cmd with pipes, forwards every stdout line to on_line(line), drains
     stderr on a background thread (forwarding to on_stderr if provided), and enforces
     the timeout over the WHOLE run with a watchdog that kills the process tree.
 
+    input (optional) is written to the child's stdin, which is then closed — the
+    streaming twin of run_plain's input. A prompt that does not fit an argv
+    element travels this way (see claude_code's WIN_CMDLINE_SAFE): the write
+    happens on its own thread because the payload can exceed the pipe buffer
+    while the child is still starting up, and a synchronous write would hold
+    the stdout reader this function is here to run.
+
+    stop_when is the escape hatch for a CLI that prints its answer and then
+    never exits: the line it returns True for ends the run, and the tree is
+    killed there instead of waiting out the deadline. grok 1.0.67 does exactly
+    that under `-p` — the turn's `end` event is the last thing it writes, and
+    the process stays alive afterwards — so without this every grok task sat
+    until the 600s watchdog and was then reported as a timeout even though it
+    had answered. A stopped run is a completed run: it returns normally, not
+    as timed_out. Pick the CLI's true terminator: grok also emits a `usage`
+    event per assistant message, and that one arrives before the message's
+    tool calls, so stopping there cuts a tool-using turn at its first
+    sentence.
+
+    idle_after / idle_timeout cover the CLIs whose terminator is not
+    guaranteed. grok writes `end` on most turns and then sometimes just
+    doesn't: the answer, its `usage` line and the text are all out, the
+    process sits at 0% CPU, and `end` never comes — measured repeatedly at
+    00:00 on a text-only prompt that the same command finished in four
+    seconds a few minutes earlier. Waiting for `end` there is a hang. So a
+    line matching idle_after arms a silence timer: any further line disarms
+    it (and re-arms if it matches too), and idle_timeout seconds of quiet end
+    the run the same way stop_when does — killed tree, normal return. `usage`
+    is the right arm: it is written after every assistant message, so a
+    tool-using turn re-arms only after its tool calls have been read.
+
     Returns (returncode, stderr_text, timed_out). Raises FileNotFoundError
     when the CLI binary is missing; a timeout is reported via timed_out=True
     (the tree is already dead), not via an exception.
     """
     proc = _popen(
-        resolve_argv(cmd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        resolve_argv(cmd),
+        stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
     err_chunks = []
     drain_exc = []
+
+    if input is not None:
+        def feed():
+            try:
+                proc.stdin.write(input.encode("utf-8"))
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                # The child exited or closed its end before reading the whole
+                # payload. Its stderr already carries the real reason; a write
+                # error here is a symptom, not the diagnosis.
+                pass
+            finally:
+                try:
+                    proc.stdin.close()
+                except (BrokenPipeError, OSError, ValueError):
+                    pass
+
+        threading.Thread(target=feed, daemon=True).start()
 
     def drain():
         for raw in iter(proc.stderr.readline, b""):
@@ -822,13 +965,45 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
 
     threading.Thread(target=watchdog, daemon=True).start()
 
+    # Silence timer (see idle_after in the docstring). State is shared with
+    # the reader loop under a lock; the watcher only ever kills the tree, so
+    # the loop below finishes on stdout EOF and the run returns normally.
+    idle_lock = threading.Lock()
+    idle_state = {"armed": False, "last": time.monotonic(), "fired": False}
+
+    def idle_watch():
+        while not finished.is_set():
+            if finished.wait(0.5):
+                return
+            with idle_lock:
+                armed, quiet = idle_state["armed"], time.monotonic() - idle_state["last"]
+            if armed and quiet >= idle_timeout:
+                with idle_lock:
+                    idle_state["fired"] = True
+                kill_tree(proc)
+                return
+
+    if idle_after is not None:
+        threading.Thread(target=idle_watch, daemon=True).start()
+
     timed_out = False
     try:
         for raw_line in proc.stdout:
             if drain_exc:
                 raise drain_exc[0]
+            line = decode_cli(raw_line)
             if on_line is not None:
-                on_line(decode_cli(raw_line))
+                on_line(line)
+            if stop_when is not None and stop_when(line):
+                # The answer is in hand; the CLI simply does not exit (see the
+                # docstring). Kill the tree and stop reading, so the caller
+                # gets the run back now instead of at the watchdog.
+                kill_tree(proc)
+                break
+            if idle_after is not None:
+                with idle_lock:
+                    idle_state["armed"] = bool(idle_after(line))
+                    idle_state["last"] = time.monotonic()
         if drain_exc:
             raise drain_exc[0]
         proc.wait(timeout=timeout)

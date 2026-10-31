@@ -72,6 +72,12 @@ import (
 // serialized by execAcquireMu, so polling never races itself.
 const execLockPollEvery = 200 * time.Millisecond
 
+// execLockDupWait bounds how long a duplicate runner waits for this
+// process's own previous run to release before reporting ErrAlreadyRunning.
+// The window is a park-to-approve race measured in milliseconds; the bound
+// keeps a genuinely stuck holder from blocking the caller forever.
+const execLockDupWait = 5 * time.Second
+
 // errExecLockBusy is the in-transaction signal that a key is held by a live
 // run; it never leaves TryAcquireExecLocks (which converts it to false).
 var errExecLockBusy = errors.New("exec lock busy")
@@ -329,8 +335,28 @@ func (c *Core) execLockAcquire(ctx context.Context, taskID, runID string, keys, 
 		return nil
 	}
 	if dupCheck {
+		// A review park hands the row to the operator, who can approve in the
+		// same tick the parked run is still unwinding: the approval's re-run
+		// then finds THIS process's own hold and used to report "already
+		// running", which the approval path records as a cancel of the row it
+		// just resumed (issue #159). Wait, bounded, for that run to release
+		// instead of failing a run that is about to be legal. A holder that
+		// really is stuck still ends in ErrAlreadyRunning, just later.
 		if _, ok := c.execHold.Load(taskID); ok {
-			return ErrAlreadyRunning
+			deadline := time.Now().Add(execLockDupWait)
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(execLockPollEvery):
+				}
+				if _, held := c.execHold.Load(taskID); !held {
+					break
+				}
+				if !time.Now().Before(deadline) {
+					return ErrAlreadyRunning
+				}
+			}
 		}
 	}
 	tick := time.NewTicker(execLockPollEvery)
