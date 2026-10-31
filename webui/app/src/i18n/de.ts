@@ -349,6 +349,7 @@ const de: Messages = {
   'perm.bypassOn': 'Umgehung ist an: nichts fragt, alles wird weiterhin auditiert',
   'perm.bypassOff': 'Umgehung ist aus; riskante Aktionen fragen wieder',
 
+  'sessions.authorize': 'Risikoreiche Aktionen erlauben',
   'sessions.send': 'Senden',
   'panda.ready': 'Bereit',
   'panda.working': 'In Arbeit',

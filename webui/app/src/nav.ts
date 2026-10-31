@@ -101,9 +101,11 @@ export function parseHash(): Route {
   if (path === 'projects') return { view: 'control', tab: 'projects' }
   // 团队: its own destination, beside the boards. The page is empty for now —
   // it holds the slot for team work so the rail's shape does not have to change
-  // again when that lands. `#/todos` was this row before the rename, so old
-  // links land here instead of falling through to the thread list.
-  if (path === 'team' || path === 'todos' || path === 'todo') return { view: 'team' }
+  // again when that lands.
+  if (path === 'team') return { view: 'team' }
+  // The to-do board was folded into the task centre; its old URLs land on the
+  // board where that work now lives instead of on the empty team page.
+  if (path === 'todos' || path === 'todo') return { view: 'control', tab: 'queue' }
   // 节点网络 (fleet) is gone from the console; its legacy URLs (`#/fleet`,
   // `#/nodes`) fall through to the thread list below.
   if (path === 'workspace') return { view: 'workspace' }

@@ -348,6 +348,7 @@ const ja: Messages = {
   'perm.bypassOn': '「権限をバイパス」に切り替えました：確認なしで実行し、監査記録は残ります',
   'perm.bypassOff': 'バイパスを解除しました。高リスク操作は再び確認します',
 
+  'sessions.authorize': '高リスク操作を許可',
   'sessions.send': '送信',
   'panda.ready': '待機中',
   'panda.working': '作業中',

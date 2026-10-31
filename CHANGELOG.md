@@ -48,6 +48,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Added
 
+- **The console settles on one shell** — every page opens with one header line; the task centre's three lenses share one segmented control; task detail is four independently collapsible cards; the model registry is a connection-grouped grid; devices get one connect card and one dial list. Settings becomes a modal, dropdowns share one component, and the dark theme is a grey scale. Old `#/todos` links land on the task board; the to-do data and `panda todo` are unchanged. The per-turn authorize switch stays beside the permission picker: it grants this turn what the thread's mode alone does not.
+
 ### Fixed
 
 - **The first-run wizard remembers the language you kept** — the chips wrote their locale on click, but "next" was the obvious button and wrote nothing, so `ui.locale` stayed empty on every install that accepted the preselected language. That empty string is one of the four signals the gate reads to call an install fresh, so the next re-onboard — a config rewritten under the console, a stale terms revision — opened at the language step again, the one step the user had already answered. Advancing now persists whatever locale is active.

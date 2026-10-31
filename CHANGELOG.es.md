@@ -42,6 +42,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Añadido
 
+- **La consola se asienta en un solo armazón** — cada página abre con una línea de título; las tres lentes del centro de tareas comparten un control segmentado; el detalle de tarea son cuatro tarjetas plegables por separado; el registro de modelos es una rejilla agrupada por conexión; los dispositivos tienen una tarjeta de conexión y una lista de marcado. Ajustes pasa a ser un modal, los desplegables comparten un componente y el tema oscuro es una escala de grises. Los enlaces antiguos `#/todos` aterrizan en el tablero de tareas; los datos de tareas pendientes y `panda todo` no cambian. El interruptor de autorización por turno sigue junto al selector de permisos: concede a este turno lo que el modo del hilo no da.
+
 ### Corregido
 
 - **El asistente inicial recuerda el idioma que conservaste** — los chips escribían su locale al hacer clic, pero «siguiente» era el botón obvio y no escribía nada, así que `ui.locale` quedaba vacío en toda instalación que aceptaba el idioma preseleccionado. Esa cadena vacía es una de las cuatro señales que la puerta lee para considerar una instalación nueva, así que el siguiente re-onboarding —una configuración reescrita bajo la consola, una revisión de términos obsoleta— volvía a abrirse en el paso del idioma, el único que el usuario ya había respondido. Ahora avanzar persiste el locale que esté activo.
