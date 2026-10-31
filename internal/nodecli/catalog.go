@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package nodecli is the authoritative catalog of the `panda` command
-// surface as an executing agent should see it. The CLI's own help page
-// (cmd/panda's printUsage) is written for a human at a terminal; an agent
-// handed a task needs the same vocabulary in one compact block, and it needs
-// it in the prompt — not behind a discovery step it may never take.
+// Package nodecli is the registry of the `panda` command surface, one
+// description per consumer:
 //
-// Why this exists as data: the previous self-management hint was a hand-
-// written list of four example commands, and the moment a task asked for
-// something outside those four (start the web console) the agent treated the
-// host as a stranger's box and went prospecting instead of running
-// `panda web`. A catalog that covers every subcommand, with a test that
-// refuses a new subcommand without an entry, keeps that failure from
-// returning through the next command someone adds.
+//   - Catalog is the agent-facing reference injected into task prompts —
+//     every subcommand, its primary usage and a one-line purpose;
+//   - helpPage is the human `panda help` page, with its own curated order and
+//     layout rows;
+//   - completionVerbs is the second-level vocabulary shell completion offers.
 //
-// The one-line descriptions reuse the `cli.help.d.*` strings, so the
-// reference is localized in all five project languages and cannot drift from
-// what `panda help` says.
+// They live together because they describe one CLI. When the page and the
+// completion tables were hand-maintained in cmd/panda (alongside a third list
+// for typo suggestions), adding a command meant editing three places and
+// forgetting one failed silently; now a subcommand is named once, and tests
+// keep the surfaces consistent with the dispatcher and with each other.
+//
+// The one-line descriptions reuse the `cli.help.d.*` strings, so every
+// surface is localized in all five project languages and cannot drift from
+// what the others say.
 package nodecli
 
 import (

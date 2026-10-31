@@ -18,27 +18,16 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/nodecli"
 )
 
-// completionVerbs maps a top-level command to its second-level verbs. Only
-// commands with real subverbs get an entry — single-word commands (ask,
-// queue, init) complete flags and files instead.
-var completionVerbs = map[string][]string{
-	"nodes":    {"add", "disconnect", "invite", "remove", "prune", "verify", "admit", "drain", "trust"},
-	"task":     {"add", "priority", "move", "approve", "reject", "cancel", "delete", "revert", "followup", "continue", "send", "board", "artifact", "logs", "show"},
-	"plan":     {"run", "show", "example"},
-	"session":  {"list", "new", "show", "mv", "rm", "fork", "tree", "ask", "diff", "merge", "revert"},
-	"skill":    {"list", "approve", "reject", "reset", "find", "import", "hub", "install"},
-	"model":    {"status", "list", "add", "remove", "switch", "fetch", "test"},
-	"config":   {"get", "set", "test"},
-	"memory":   {"list", "get", "set", "rm"},
-	"project":  {"list", "new", "show", "enter", "exit", "rename", "rm", "approval"},
-	"reminder": {"list", "add", "rm"},
-	"todo":     {"list", "add", "edit", "show", "done", "reopen", "pause", "running", "rm", "move", "start"},
-	"card":     {"show", "rescan", "edit", "set", "native", "agent", "manual", "invoke", "path"},
-	"agents":   {"test", "install"},
-	"auth":     {"login", "logout", "status"},
-}
+// completionVerbs maps a top-level command to its second-level verbs. The
+// vocabulary is owned by internal/nodecli (the same registry the agent
+// reference and `panda help` read): only commands with real subverbs get an
+// entry — single-word commands (ask, queue, init) complete flags and files
+// instead.
+var completionVerbs = nodecli.CompletionVerbs()
 
 // completionFlags holds the flags worth offering per context — key is the
 // command line shape ("task add"), value the flag names. Flag *values* for
