@@ -100,6 +100,8 @@ func (m tuiModel) View() string {
 		return m.mainChatView(live)
 	case modeApproving:
 		return m.mainChatView("\n" + m.approvalCard())
+	case modeClarifying:
+		return m.mainChatView("\n" + m.clarifyCard())
 	case modeConfirm:
 		return m.mainChatView("\n" + m.confirmCard())
 	default:

@@ -48,6 +48,14 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **La clasificación de tareas también ve el repositorio** — cuando una conversación está fijada a un espacio de trabajo, el modelo clasificador recibe ahora el mismo mapa que el ejecutor, así que puede fijar `spec.scope` con rutas reales, marcar el trabajo grande como `duration_hint: long` y subir `max_turns` en lugar de adivinarlo del texto. La clave de caché de clasificación incluye ahora el mapa del espacio de trabajo y la lista de aceptación, de modo que dos conversaciones en árboles distintos ya no comparten un veredicto (y un id de comprobación) elegido para otro árbol.
 
+- **Aclaración estructurada antes de ejecutar (estilo AskUserQuestion)** — el modelo clasificador puede ahora hacer hasta cuatro preguntas acotadas (de dos a cuatro opciones concretas cada una, encabezado de 12 caracteres, la recomendada primero) antes de crear una tarea, en lugar de adivinar ante una petición grande o ambigua. Las respuestas se integran en el mismo turno y el modelo clasifica de nuevo; se admiten «Otro» de texto libre, omitir una pregunta y respuestas parciales. El prompt enseña cuándo no preguntar: solo cuando la respuesta cambia el trabajo, nunca por datos legibles del espacio de trabajo, y como máximo una ronda por petición.
+
+- **Una tarea grande pide aprobación antes de ejecutarse** — una tarea clasificada con complejidad ≥ 0,6 o riesgo high/critical se detiene antes del despacho y muestra su objetivo y contrato de verificación con tres opciones: ejecutar (recomendado), análisis de solo lectura (modo plan, sin ediciones) o cancelar. Una ronda de aclaración ya respondida cuenta como aprobación, así que una misma petición no se pregunta dos veces.
+
+### Corregido
+
+- **Una pregunta se puede responder en línea** — la TUI muestra la tarjeta de opciones con flechas/números, multiselección, texto libre y Esc para cancelar; `panda ask` imprime las opciones y lee una línea por pregunta. Las superficies sin interacción reciben `needs_clarification` y las preguntas ya renderizadas.
+
 ### Corregido
 
 - **Alcanzar el límite de turnos del CLI ya no hace fallar la tarea** — cuando un agente se detiene en su límite de turnos por ejecución con una sesión reanudable, el orquestador continúa la misma conversación en una nueva ronda con un límite mayor (200 turnos, acotado por el presupuesto de supervisión) en lugar de registrar un fallo que cada reintento repite. Una parada por límite de turnos tampoco cuenta para el cortacircuitos del agente.

@@ -54,7 +54,13 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **Task classification sees the repository too** — when a conversation is pinned to a workspace, the classifier now receives the same workspace map the executor gets, so it can set `spec.scope` to real paths, mark large work `duration_hint: long`, and raise `max_turns` instead of guessing from the request text. The classification cache key now includes the workspace map and the acceptance shortlist, so two conversations in different trees can no longer share a verdict (and a check id) selected for another tree.
 
+- **Pre-execution clarification, AskUserQuestion-style** — the entry model can now ask up to four bounded questions (two to four concrete options each, a 12-character header, the recommended option first) before it creates a task, instead of guessing on a large or ambiguous request. Answers are folded into the same turn and the model classifies again; free-text "Other", skipping a question and partial answers are supported. The prompt teaches when not to ask: only when the answer changes what the work will be, never for facts readable from the workspace, and at most one round per request.
+
+- **A large task asks for approval before it runs** — a classified task with complexity ≥ 0.6 or high/critical risk pauses before dispatch and shows its target and verification contract with three choices: run it (recommended), read-only analysis (plan mode, no edits), or cancel. A clarify round the user already answered counts as the approval, so one request is never asked twice.
+
 ### Fixed
+
+- **A question can be answered inline** — the TUI renders the choice card with arrow/number picking, multi-select, a free-text answer and Esc to cancel; `panda ask` prints the options and reads one line per question. Headless surfaces receive `needs_clarification` plus the rendered questions instead of a blocked run.
 
 - **Hitting a CLI turn cap no longer fails the task** — when an agent stops at its per-run turn limit while holding a resumable session, the orchestrator continues the same conversation in a new round with a higher cap (200 turns, bounded by the supervision budget) instead of recording a failure that every retry repeats. A turn-cap stop also no longer charges the agent's circuit breaker.
 - **A long tool call is no longer killed as a stalled agent** — the silence watchdog could not tell an agent that is thinking from one waiting on a ten-minute build, so any tool that produced no output past `timeouts.silence_s` (240 s by default) got the whole run killed. The watchdog now treats "a tool call is in flight" as work to wait on, bounded by the hard agent budget; a wedge outside a tool call is still killed.

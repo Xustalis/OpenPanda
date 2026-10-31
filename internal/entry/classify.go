@@ -32,7 +32,7 @@ const ToolNameTaskBudget = "task_budget"
 // produced it. Bump it whenever the key coverage or the cacheability rules
 // change, so rows written under the previous semantics can never be served
 // (they expire by TTL).
-const classificationCacheVersion = "v3"
+const classificationCacheVersion = "v4"
 
 // classificationCacheable reports whether a classified Output may be replayed
 // from the disk cache. Kinds that materialize durable work — a task row, or a
@@ -42,7 +42,10 @@ const classificationCacheVersion = "v3"
 // it are stored live only as well.
 func classificationCacheable(out Output) bool {
 	switch out.Kind {
-	case KindPlan, KindTask:
+	case KindPlan, KindTask, KindClarify:
+		// A clarify round is an interaction, not a verdict: replaying it from
+		// cache would show a stale question (and options) for a sentence whose
+		// workspace may have changed since.
 		return false
 	case KindToolCall:
 		// A text-parsed tool call carries only Tool; the native path fills

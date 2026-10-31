@@ -48,6 +48,14 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **Die Aufgabenklassifikation sieht das Repository** — ist eine Unterhaltung an einen Workspace gebunden, erhält das Klassifikationsmodell jetzt dieselbe Workspace-Karte wie der Executor. Es kann `spec.scope` auf echte Pfade setzen, große Arbeit als `duration_hint: long` markieren und `max_turns` erhöhen, statt aus dem Anfragetext zu raten. Der Klassifikations-Cache-Schlüssel enthält jetzt die Workspace-Karte und die Akzeptanzliste, sodass zwei Unterhaltungen in verschiedenen Bäumen kein für einen anderen Baum gewähltes Urteil (samt Check-ID) mehr teilen.
 
+- **Strukturierte Rückfrage vor der Ausführung (AskUserQuestion-Stil)** — das Klassifikationsmodell kann jetzt bis zu vier begrenzte Fragen (je zwei bis vier konkrete Optionen, 12-Zeichen-Header, empfohlene Option zuerst) stellen, bevor es eine Aufgabe erstellt, statt bei einer großen oder mehrdeutigen Anfrage zu raten. Antworten werden in denselben Turn eingefügt und das Modell klassifiziert erneut; Freitext-„Anderes", Überspringen einer Frage und Teilantworten werden unterstützt. Der Prompt lehrt, wann nicht gefragt wird: nur wenn die Antwort die Arbeit ändert, nie für Fakten aus dem Workspace, höchstens eine Runde pro Anfrage.
+
+- **Eine große Aufgabe fragt vor der Ausführung um Freigabe** — eine klassifizierte Aufgabe mit Komplexität ≥ 0,6 oder hohem/kritischem Risiko pausiert vor dem Versand und zeigt Ziel und Verifikationsvertrag mit drei Optionen: ausführen (empfohlen), Nur-Lese-Analyse (Plan-Modus, keine Änderungen) oder abbrechen. Eine bereits beantwortete Klärungsrunde zählt als Freigabe, sodass eine Anfrage nie zweimal gefragt wird.
+
+### Behoben
+
+- **Eine Frage lässt sich inline beantworten** — die TUI zeigt die Auswahlkarte mit Pfeil-/Zahlennavigation, Mehrfachauswahl, Freitext und Esc; `panda ask` druckt die Optionen und liest eine Zeile pro Frage. Nicht-interaktive Oberflächen erhalten `needs_clarification` plus die gerenderten Fragen.
+
 ### Behoben
 
 - **Das Erreichen des CLI-Turn-Limits lässt die Aufgabe nicht mehr scheitern** — stoppt ein Agent an seinem Turn-Limit pro Lauf mit einer fortsetzbaren Sitzung, setzt der Orchestrator dieselbe Unterhaltung in einer neuen Runde mit höherem Limit (200 Turns, begrenzt durch das Aufsichtsbudget) fort, statt einen Fehler zu protokollieren, den jeder Retry wiederholt. Ein Turn-Limit-Stopp belastet auch nicht mehr den Circuit Breaker des Agenten.

@@ -274,6 +274,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// would leave those commands targeting whatever the picker last opened.
 		m.streamTask = msg.taskID
 		return m, waitForActivity(msg.stream)
+	case questionMsg:
+		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
+			return m, nil
+		}
+		// The ask goroutine is parked on msg.reply; the card owns the keyboard
+		// until the last question is answered or the round is cancelled.
+		m.pendingQuestion = newClarifyPrompt(msg.spec, msg.reply)
+		m.mode = modeClarifying
+		m.ta.Reset()
+		m.ta.SetHeight(1)
+		return m, waitForActivity(msg.stream)
 	case doneMsg:
 		return m.onDone(msg)
 	case resumedMsg:
@@ -669,6 +680,8 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case modeApproving:
 		return m.onApprovalKey(msg)
+	case modeClarifying:
+		return m.onClarifyKey(msg)
 	default:
 		return m.onIdleKey(msg)
 	}

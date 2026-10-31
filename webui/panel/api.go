@@ -66,6 +66,11 @@ type askResult struct {
 	Approval      *approvalPayload `json:"approval,omitempty"`
 	Denied        bool             `json:"denied,omitempty"`
 	ConsentScope  string           `json:"consent_scope,omitempty"`
+	// Clarification: the entry model asked before acting and the console's ask
+	// path cannot answer inline (yet). The rendered questions are also in
+	// Answer; the structured set lets a card render the options.
+	NeedsClarification bool               `json:"needs_clarification,omitempty"`
+	Clarification      *entry.ClarifySpec `json:"clarification,omitempty"`
 	// Warning is a non-fatal advisory the surface should show alongside the
 	// result — currently the "queued work with no consumer to drain this
 	// store" notice, which distinguishes parked work from dispatched work.
@@ -86,27 +91,29 @@ type approvalPayload struct {
 // session-ask handlers cannot drift on which fields a plan carries.
 func planResultOf(out *askengine.Result) askResult {
 	res := askResult{
-		Kind:         out.Kind,
-		Answer:       out.Answer,
-		Thought:      out.Thought,
-		TaskID:       out.TaskID,
-		TaskState:    out.TaskState,
-		OK:           out.OK,
-		Stdout:       out.Stdout,
-		Stderr:       out.Stderr,
-		ExitCode:     out.ExitCode,
-		Agent:        out.Agent,
-		Model:        out.Model,
-		Injected:     out.Injected,
-		Executor:     out.Executor,
-		WorkDir:      out.WorkDir,
-		EntryModel:   out.EntryModel,
-		Report:       out.Report,
-		PlanID:       out.PlanID,
-		PlanGoal:     out.PlanGoal,
-		Denied:       out.Denied,
-		ConsentScope: out.ConsentSource,
-		Warning:      out.Warning,
+		Kind:               out.Kind,
+		Answer:             out.Answer,
+		Thought:            out.Thought,
+		TaskID:             out.TaskID,
+		TaskState:          out.TaskState,
+		OK:                 out.OK,
+		Stdout:             out.Stdout,
+		Stderr:             out.Stderr,
+		ExitCode:           out.ExitCode,
+		Agent:              out.Agent,
+		Model:              out.Model,
+		Injected:           out.Injected,
+		Executor:           out.Executor,
+		WorkDir:            out.WorkDir,
+		EntryModel:         out.EntryModel,
+		Report:             out.Report,
+		PlanID:             out.PlanID,
+		PlanGoal:           out.PlanGoal,
+		Denied:             out.Denied,
+		ConsentScope:       out.ConsentSource,
+		Warning:            out.Warning,
+		NeedsClarification: out.NeedsClarification,
+		Clarification:      out.Clarification,
 	}
 	if out.NeedsApproval && out.Approval != nil {
 		res.NeedsApproval = true

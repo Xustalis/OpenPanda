@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
@@ -72,6 +73,11 @@ type askJSON struct {
 	PlanID   string          `json:"plan_id,omitempty"`
 	PlanGoal string          `json:"plan_goal,omitempty"`
 	Stages   []planStageJSON `json:"stages,omitempty"`
+	// Clarification: the entry model asked before acting and this surface
+	// could not answer inline. A script answers by sending the next ask with
+	// the answers in the prompt; the question set is echoed for it.
+	NeedsClarification bool               `json:"needs_clarification,omitempty"`
+	Clarification      *entry.ClarifySpec `json:"clarification,omitempty"`
 }
 
 func resultToJSON(out *askengine.Result) askJSON {
@@ -82,6 +88,7 @@ func resultToJSON(out *askengine.Result) askJSON {
 		Executor: out.Executor, WorkDir: out.WorkDir, RouteFallback: out.RouteFallback, EntryModel: out.EntryModel,
 		Verification: out.Verification, Verified: out.Verified,
 		PlanID: out.PlanID, PlanGoal: out.PlanGoal,
+		NeedsClarification: out.NeedsClarification, Clarification: out.Clarification,
 	}
 	for _, t := range out.PlanStages {
 		j.Stages = append(j.Stages, planStageJSON{
@@ -332,6 +339,10 @@ func runAsk(args []string) {
 		}
 	case "plan":
 		printAskPlan(loc, out)
+	case "clarify":
+		// A headless ask could not show a choice card; the rendered questions
+		// are the answer. The next ask should carry the choices.
+		fmt.Println(renderCliMd(out.Answer))
 	}
 	printCost(st, out)
 }
@@ -537,6 +548,15 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 				st.Preview(pal().Muted(line))
 			}
 		},
+		OnQuestion: func(spec entry.ClarifySpec) ([]entry.ClarifyAnswer, bool) {
+			// The choice card owns the terminal: stop the spinner so the
+			// options are not painted over, then restart the wait line when
+			// the answers release the classifier.
+			st.Stop()
+			answers, ok := promptClarifyCLI(spec, loc)
+			st.Start(statusVerb(loc))
+			return answers, ok
+		},
 		OnProgress: func(p askengine.Progress) {
 			note := progressNote(loc, p)
 			// Advance the phase chain so the status line's trailing meta shows
@@ -646,6 +666,81 @@ func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18
 		}
 	}
 	return resumed
+}
+
+// promptClarifyCLI renders a pre-execution question round on the terminal and
+// reads one line per question: option numbers (comma-separated for a
+// multi-select) or free text, which becomes the "Other" answer. It returns
+// ok=false when stdin is not interactive, so the engine hands the question
+// back as a NeedsClarification Result instead of blocking a piped ask.
+func promptClarifyCLI(spec entry.ClarifySpec, loc i18n.Locale) ([]entry.ClarifyAnswer, bool) {
+	if !stdinIsTTY() || !stdoutIsTTY() {
+		return nil, false
+	}
+	p := pal()
+	fmt.Println(p.Warn(p.MarkBullet() + " " + i18n.T(loc, "clarify.title")))
+	if plan := strings.TrimSpace(spec.Plan); plan != "" {
+		fmt.Println(renderCliMd(plan))
+	}
+	reader := bufio.NewReader(os.Stdin)
+	answers := make([]entry.ClarifyAnswer, 0, len(spec.Questions))
+	for i, q := range spec.Questions {
+		fmt.Printf("\n[%s] %s (%d/%d)\n", q.Header, q.Question, i+1, len(spec.Questions))
+		for j, o := range q.Options {
+			suffix := ""
+			if o.Label == q.Recommended {
+				suffix = " " + i18n.T(loc, "clarify.recommended")
+			}
+			desc := ""
+			if d := strings.TrimSpace(o.Description); d != "" {
+				desc = " — " + p.Muted(d)
+			}
+			fmt.Printf("  %d) %s%s%s\n", j+1, o.Label, suffix, desc)
+		}
+		if q.MultiSelect {
+			fmt.Println("  " + p.Muted(i18n.T(loc, "clarify.multi")))
+		}
+		fmt.Print("> ")
+		line, err := reader.ReadString('\n')
+		if err != nil && strings.TrimSpace(line) == "" {
+			return nil, false
+		}
+		answers = append(answers, parseClarifyLine(q, strings.TrimSpace(line)))
+	}
+	return answers, true
+}
+
+// parseClarifyLine turns one typed line into an answer. A line of option
+// numbers selects those labels; anything else is free text ("Other"). An empty
+// line leaves the question unanswered, and the model falls back to its
+// recommendation.
+func parseClarifyLine(q entry.ClarifyQuestion, line string) entry.ClarifyAnswer {
+	a := entry.ClarifyAnswer{ID: q.ID}
+	if line == "" {
+		return a
+	}
+	parts := strings.FieldsFunc(line, func(r rune) bool {
+		return r == ',' || r == '，' || r == ' ' || r == '\t'
+	})
+	var labels []string
+	allIndices := len(parts) > 0
+	for _, part := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || n < 1 || n > len(q.Options) {
+			allIndices = false
+			break
+		}
+		labels = append(labels, q.Options[n-1].Label)
+	}
+	if allIndices {
+		if !q.MultiSelect && len(labels) > 1 {
+			labels = labels[:1]
+		}
+		a.Selected = labels
+		return a
+	}
+	a.Other = line
+	return a
 }
 
 // printCost closes an interactive ask with what it cost: elapsed time, and the

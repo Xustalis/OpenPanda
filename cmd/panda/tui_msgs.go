@@ -66,6 +66,16 @@ type (
 		stream *askStream
 		taskID string
 	}
+
+	// questionMsg is a pre-execution clarify round the entry model asked
+	// before it will classify a task. The ask goroutine blocks until the UI
+	// sends the answers on reply; a dropped stream cancels its context, which
+	// unblocks the goroutine without an answer.
+	questionMsg struct {
+		stream *askStream
+		spec   entry.ClarifySpec
+		reply  chan []entry.ClarifyAnswer
+	}
 )
 
 // askStream carries one in-flight ask: the channel the callbacks write to, the
@@ -136,6 +146,18 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, s
 		OnDelta:     func(text string) { s.send(ctx, deltaMsg{stream: s, text: text}) },
 		OnReasoning: func(text string) { s.send(ctx, reasoningMsg{stream: s, text: text}) },
 		OnProgress:  func(p askengine.Progress) { s.send(ctx, progressMsg{stream: s, progress: p}) },
+		OnQuestion: func(spec entry.ClarifySpec) ([]entry.ClarifyAnswer, bool) {
+			reply := make(chan []entry.ClarifyAnswer, 1)
+			s.send(ctx, questionMsg{stream: s, spec: spec, reply: reply})
+			select {
+			case answers := <-reply:
+				return answers, true
+			case <-ctx.Done():
+				// The user cancelled the card (drop cancels ctx) — the engine
+				// sees a cancelled ask, not an unanswered question.
+				return nil, false
+			}
+		},
 		// GetSteer / OnSteerConsumed stay nil on purpose. Mid-turn input is the
 		// user's NEXT turn, not a late fragment of the one already streaming: a
 		// steer channel let the model read the same words twice (once in the
