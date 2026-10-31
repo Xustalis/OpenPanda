@@ -46,7 +46,11 @@ dir); the flag degrade path uses the read-only --allowedTools whitelist.
 The default stays minimal: unattended runs only widen their tool face
 under an explicit operator choice. --permission-prompts none keeps the
 run non-interactive: anything that would prompt is denied rather than
-silently waited on.
+silently waited on. A consented run (request "authorized", set by a
+foreground approval or --authorize) lifts the permission mode to
+bypassPermissions — with nobody able to answer a prompt, acceptEdits
+would auto-deny the very operations the operator just approved and park
+the task in review again.
 
 The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the Claude Code
@@ -250,9 +254,17 @@ def _base_args(req, max_turns, v2):
     native --restricted mode); the v1 tier uses the flag set older CLIs
     already understand so a flag rejection never leaves a run unprotected.
     """
+    # A consented run lifts the CLI's own gate. acceptEdits auto-denies the
+    # privileged operations (systemctl, writes outside the work dir) that
+    # caused the review park; the operator already answered that question, so
+    # re-running the identical argv would park it again with the same card
+    # (issue #165). restricted still wins — consent never widens a read-only
+    # run.
+    perm_mode = ("bypassPermissions"
+                 if req.authorized and not req.restricted else "acceptEdits")
     base = [_binary(), "-p", req.prompt,
             "--max-turns", max_turns,
-            "--permission-mode", "acceptEdits"]
+            "--permission-mode", perm_mode]
     if v2:
         # Headless runs must never park on a permission prompt: "none"
         # auto-denies anything the mode does not already allow.
@@ -582,7 +594,9 @@ def _main_session(req, model, max_turns):
            "--input-format", "stream-json",
            "--output-format", "stream-json", "--verbose",
            "--max-turns", max_turns,
-           "--permission-mode", "acceptEdits",
+           "--permission-mode",
+           ("bypassPermissions"
+            if req.authorized and not req.restricted else "acceptEdits"),
            "--permission-prompts", "none",
            "--forward-subagent-text"]
     if req.restricted:

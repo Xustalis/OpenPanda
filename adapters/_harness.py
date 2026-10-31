@@ -12,8 +12,11 @@ of this module; the shared runtime lives here, once:
     "resume" carries the agent session id a previous run returned so a
     follow-up round continues the agent's own conversation instead of
     cold-starting; "tools_policy" is minimal (adapter's safe tool whitelist)
-    or extended (no whitelist restriction). "usage" is the structured token
-    breakdown; "session_id" is what a later run can resume with.
+    or extended (no whitelist restriction); "authorized" carries the
+    operator's tier-2 consent, and an adapter whose CLI gates its own tool
+    calls lifts that gate for the run instead of re-parking the task.
+    "usage" is the structured token breakdown; "session_id" is what a later
+    run can resume with.
   * watchdog       — the timeout covers the WHOLE run, not just the tail
     after stdout EOF: the stream loop blocks on the CLI's pipe, so a timer
     thread kills the process tree at the deadline and the closed pipes
@@ -489,6 +492,7 @@ def _build_request(req, default_timeout):
     resume = req.get("resume") or ""
     tools_policy = req.get("tools_policy") or ""
     restricted = bool(req.get("restricted"))
+    authorized = bool(req.get("authorized"))
     cmd = req.get("cmd") or ""
     try:
         max_turns = max(0, int(req.get("max_turns", 0) or 0))
@@ -512,6 +516,7 @@ def _build_request(req, default_timeout):
         session=bool(req.get("session")),
         task_id=req.get("task_id") or "",
         complexity=complexity,
+        authorized=authorized,
     )
 
 
@@ -523,7 +528,8 @@ class Request:
     def __init__(self, prompt, timeout, cwd, resume, tools_policy, cmd="",
                  max_turns=0, restricted=False, system_prompt="",
                  result_schema="", mcp_config="", max_budget_usd=0.0,
-                 effort="", session=False, task_id="", complexity=0.0):
+                 effort="", session=False, task_id="", complexity=0.0,
+                 authorized=False):
         self.prompt = prompt
         self.timeout = timeout
         self.cwd = cwd
@@ -541,6 +547,12 @@ class Request:
         # request carrying restricted=true at an adapter that ignores it is
         # already a bug — never widen flags to work around it here.
         self.restricted = restricted
+        # authorized carries the operator's tier-2 consent. An adapter whose
+        # CLI gates its own tool calls lifts that gate only when this is set;
+        # otherwise an approval from OpenPanda can never reach the CLI and the
+        # task parks in review again with the same question (issue #165).
+        # Never true together with restricted.
+        self.authorized = authorized
         # system_prompt rides --append-system-prompt on CLIs that have the
         # flag: the Go side puts the static protocol riders there so the user
         # prompt carries only the task, and the stable prefix caches better.

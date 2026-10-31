@@ -44,6 +44,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
+- **La aprobación llega ahora al CLI del agente** — una tarea aparcada porque `claude_code` denegó un comando privilegiado (`systemctl`, una escritura en `/etc`) se reejecutaba con el mismo argv tras la aprobación, de modo que el CLI volvía a denegar las mismas llamadas y la tarea regresaba indefinidamente a la misma tarjeta de revisión. El consentimiento viaja ahora al adaptador en la petición y el adaptador eleva su postura de permisos a `bypassPermissions` para esa ejecución; una ejecución sin consentimiento mantiene `acceptEdits` y una ejecución restringida lo ignora.
+
 ## [0.1.3] - 2026-10-30 — "Constellation"
 
 **El parche que mantiene viva la consola y vivo el trabajo** — clave **Constellation**: una consola abierta mientras el portátil se suspende, detrás de un proxy inverso o mirando un nodo ocupado ya no se congela, y observar una ejecución ya no cuesta más que el trabajo que se observa. Una ejecución larga de un agente que no imprime nada mientras piensa ya no se mata como bloqueada, y la ventana de gracia previa a la primera salida por fin se aplica. La configuración y los datos guardados son compatibles; el esquema gana una migración aditiva de solo índice (v65), que se ejecuta automáticamente.

@@ -44,6 +44,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
+- **Die Freigabe erreicht jetzt die Agent-CLI** — eine Aufgabe, die liegen blieb, weil `claude_code` einen privilegierten Befehl (`systemctl`, ein Schreibzugriff unter `/etc`) verweigerte, lief nach der Freigabe mit unverändertem argv erneut und die CLI verweigerte dieselben Aufrufe wieder, sodass die Aufgabe endlos zur selben Prüfkarte zurückkehrte. Die Zustimmung wird jetzt als Request-Feld an den Adapter übergeben, und der Adapter hebt für diesen Lauf die Berechtigungsstufe auf `bypassPermissions`; ein Lauf ohne Zustimmung bleibt bei `acceptEdits`, ein eingeschränkter Lauf ignoriert sie.
+
 ## [0.1.3] - 2026-10-30 — "Constellation"
 
 **Der Patch, der die Konsole lebendig und den Lauf am Leben hält** — Codename **Constellation**: eine Konsole, die über einen schlafenden Laptop hinweg, hinter einem Reverse-Proxy oder auf einem beschäftigten Knoten offen bleibt, friert nicht mehr ein, und einem Lauf zuzusehen kostet nicht mehr als die Arbeit, die er leistet. Ein langer Agent-Lauf, der während des Nachdenkens nichts ausgibt, wird nicht mehr als hängend beendet, und das Gnadenfenster vor der ersten Ausgabe greift nun tatsächlich. Konfiguration und gespeicherte Daten bleiben kompatibel; das Schema erhält eine rein additive Index-Migration (v65), die automatisch läuft.

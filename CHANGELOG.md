@@ -50,6 +50,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **An approval now reaches the agent CLI** — a task parked because `claude_code` denied a privileged command (`systemctl`, a write under `/etc`) re-ran with byte-identical argv after the operator approved it, so the CLI auto-denied the same calls and the task returned to the same review card indefinitely. Consent now travels to the adapter on the request, and the adapter lifts its permission posture to `bypassPermissions` for that run; an unconsented run keeps `acceptEdits` and a restricted run ignores consent. (issue #165)
+
 ## [0.1.3] - 2026-10-30 — "Constellation"
 
 **The patch that keeps the console live and the run alive** — codename **Constellation**: a console left open across a sleeping laptop, a reverse proxy or a busy node no longer freezes, and watching a run no longer costs more than the work it watches. A long agent run that prints nothing while it thinks is no longer killed as stalled, and the pre-first-output grace window now applies at all. Configuration and stored data are compatible; the schema gains one additive index migration (v65), which runs automatically.
