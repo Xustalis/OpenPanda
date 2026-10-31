@@ -35,36 +35,18 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
-// sessionTitleMax bounds a generated title in runes. A title is a rail label,
-// not the prompt: the prompt itself is stored as the first user turn.
-const sessionTitleMax = 48
-
-// sessionTitle derives a thread title from a prompt, collapsing whitespace so
-// a pasted multi-line block still reads as one rail row.
-func sessionTitle(prompt string) string {
-	prompt = strings.Join(strings.Fields(prompt), " ")
-	if prompt == "" {
-		return ""
-	}
-	runes := []rune(prompt)
-	if len(runes) > sessionTitleMax {
-		return string(runes[:sessionTitleMax]) + "…"
-	}
-	return prompt
-}
-
 // convoTitle picks the title a migrated bare conversation should carry: its
 // first user turn, else its first non-empty turn.
 func convoTitle(turns []entry.Turn) string {
 	for _, t := range turns {
 		if t.Role == "user" {
-			if title := sessionTitle(t.Content); title != "" {
+			if title := sessions.Title(t.Content); title != "" {
 				return title
 			}
 		}
 	}
 	for _, t := range turns {
-		if title := sessionTitle(t.Content); title != "" {
+		if title := sessions.Title(t.Content); title != "" {
 			return title
 		}
 	}
@@ -133,42 +115,51 @@ func (r *repl) migrateLegacyConvos() {
 			continue
 		}
 		path := filepath.Join(dir, name)
+		archived := strings.TrimSuffix(path, ".json") + ".json.migrated"
+		// Claim the file by renaming first: a second launch racing this one
+		// then sees no .json and cannot import the same conversation twice.
+		// The failure paths below move it back so a later launch can retry.
+		if err := os.Rename(path, archived); err != nil {
+			continue
+		}
 		project := strings.TrimSuffix(name, ".json")
 		if project == "default" {
 			project = ""
 		}
 		var kept []entry.Turn
-		for _, t := range readConvoFile(path) {
+		for _, t := range readConvoFile(archived) {
 			if migratableTurn(t) {
 				kept = append(kept, t)
 			}
 		}
-		if len(kept) > 0 {
-			sess, cerr := r.sessionsSt.Create(convoTitle(kept), project)
-			if cerr != nil {
-				continue // store unavailable: keep the file for the next launch
-			}
-			ok := true
-			for _, t := range kept {
-				if _, aerr := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: t.Role, Text: t.Content}); aerr != nil {
-					ok = false
-					break
-				}
-			}
-			if !ok {
-				// A partially written import would make the thread look like a
-				// shorter conversation than it was. Drop it and leave the source
-				// file in place (not archived) so the next launch can retry.
-				_ = r.sessionsSt.Delete(sess.ID)
-				continue
-			}
-			if team := readTeamFile(bareTeamFileFor(project)); len(team) > 0 {
-				_ = r.sessionsSt.SetTeam(sess.ID, team)
+		if len(kept) == 0 {
+			// Nothing importable (empty, or only the synthetic digest): the
+			// archived copy is the backup, and retrying buys nothing.
+			continue
+		}
+		sess, cerr := r.sessionsSt.Create(convoTitle(kept), project)
+		if cerr != nil {
+			_ = os.Rename(archived, path) // store unavailable: retry next launch
+			continue
+		}
+		ok := true
+		for _, t := range kept {
+			if _, aerr := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: t.Role, Text: t.Content}); aerr != nil {
+				ok = false
+				break
 			}
 		}
-		// Archive even an empty file: retrying it on every launch buys
-		// nothing, and the original bytes stay on disk under a new name.
-		_ = os.Rename(path, strings.TrimSuffix(path, ".json")+".json.migrated")
+		if !ok {
+			// A partially written import would make the thread look like a
+			// shorter conversation than it was. Drop it and restore the source
+			// so the next launch can retry.
+			_ = r.sessionsSt.Delete(sess.ID)
+			_ = os.Rename(archived, path)
+			continue
+		}
+		if team := readTeamFile(bareTeamFileFor(project)); len(team) > 0 {
+			_ = r.sessionsSt.SetTeam(sess.ID, team)
+		}
 	}
 }
 
@@ -184,8 +175,10 @@ func (r *repl) prepareConversation(resumeID string, startFresh bool) (*sessions.
 	if startFresh {
 		// --new: leave whatever was bound behind; the next prompt opens a new
 		// thread. Detach explicitly so the contract holds for any caller, not
-		// only the launch path where nothing is bound yet.
+		// only the launch path where nothing is bound yet, and drop any
+		// in-memory bare conversation the caller may have loaded already.
 		r.setSess("")
+		r.setConvo(nil)
 		return nil, nil
 	}
 	if id := strings.TrimSpace(resumeID); id != "" {
@@ -261,7 +254,7 @@ func (r *repl) startImplicitSession(prompt string) bool {
 	if r == nil || r.sessionsSt == nil {
 		return false
 	}
-	sess, err := r.sessionsSt.Create(sessionTitle(prompt), r.activeProjectName())
+	sess, err := r.sessionsSt.Create(sessions.Title(prompt), r.activeProjectName())
 	if err != nil {
 		return false
 	}
@@ -311,7 +304,11 @@ func appendExchangeToSession(st *sessions.Store, id, prompt string, out *askengi
 	if st == nil || id == "" || out == nil {
 		return
 	}
-	_, _ = st.AppendTurn(id, sessions.Turn{Role: "user", Text: prompt})
+	if _, err := st.AppendTurn(id, sessions.Turn{Role: "user", Text: prompt}); err != nil {
+		// Without the question there is nothing to pair the answer with; a
+		// second write would leave an assistant turn floating on its own.
+		return
+	}
 	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: convoSummaryOf(loc, out)}
 	switch out.Kind {
 	case "task":

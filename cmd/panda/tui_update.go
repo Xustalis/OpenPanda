@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
@@ -1574,21 +1575,46 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 // blank sheet rather than leaving the previous project's conversation on
 // screen while the next ask runs somewhere else.
 func (m tuiModel) seedTranscriptFromSession(sess *sessions.Session) {
+	var turns []entry.Turn
+	if sess != nil {
+		turns = make([]entry.Turn, 0, len(sess.Turns))
+		for _, t := range sess.Turns {
+			turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
+		}
+	}
+	m.seedTranscript(turns)
+}
+
+// seedTranscript repaints the scrollback from one conversation's turns. An
+// empty slice clears it; the store-less fallback passes the legacy bare
+// conversation so the pane still shows what the next ask will replay.
+func (m tuiModel) seedTranscript(turns []entry.Turn) {
 	if m.chatHistory == nil {
 		return
 	}
 	m.chatHistory.clear()
-	if sess == nil {
-		return
-	}
-	for _, t := range sess.Turns {
+	for _, t := range turns {
 		switch t.Role {
 		case "user":
-			m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Text})
+			m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Content})
 		case "assistant":
-			m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Text})
+			m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Content})
 		}
 	}
+}
+
+// reseedProjectConversation rebinds after a project switch and repaints the
+// pane from whatever the next ask will actually replay: the new project's
+// newest thread, or the legacy bare conversation when there is none.
+func (m tuiModel) reseedProjectConversation() {
+	if m.r == nil {
+		return
+	}
+	if sess := m.r.rebindProjectConversation(); sess != nil {
+		m.seedTranscriptFromSession(sess)
+		return
+	}
+	m.seedTranscript(m.r.convoNow())
 }
 
 // enterProject implements "/project <name>" inline: validate, create-then-
@@ -1611,7 +1637,7 @@ func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
 		}
 		r.setProject("")
 		r.bindProject()
-		m.seedTranscriptFromSession(r.rebindProjectConversation())
+		m.reseedProjectConversation()
 		m.team = r.teamNow()
 		m.refreshProject()
 		note := block{kind: blockNote, body: i18n.T(m.loc, "cli.project.noActive")}
@@ -1646,7 +1672,7 @@ func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
 		}
 	}
 	r.bindProject()
-	m.seedTranscriptFromSession(r.rebindProjectConversation())
+	m.reseedProjectConversation()
 	m.team = r.teamNow()
 	m.refreshProject()
 	body := ""

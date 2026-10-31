@@ -154,7 +154,7 @@ func runVoice(args []string) {
 		// The first utterance opens the thread when there was none; either way
 		// the exchange is recorded where the console can follow it.
 		if voiceSess == nil {
-			voiceSess, _ = voiceStore.Create(sessionTitle(text), voiceProj)
+			voiceSess, _ = voiceStore.Create(sessions.Title(text), voiceProj)
 		}
 		if voiceSess != nil {
 			appendExchangeToSession(voiceStore, voiceSess.ID, text, out, loc)

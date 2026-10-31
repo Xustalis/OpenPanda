@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -25,18 +26,19 @@ func newThreadRepl(t *testing.T) (*repl, *sessions.Store) {
 }
 
 func TestSessionTitleCollapsesAndTruncates(t *testing.T) {
-	if got := sessionTitle("hello\n\n  world  "); got != "hello world" {
+	const titleMax = 48
+	if got := sessions.Title("hello\n\n  world  "); got != "hello world" {
 		t.Fatalf("title = %q", got)
 	}
-	long := make([]rune, sessionTitleMax+10)
+	long := make([]rune, titleMax+10)
 	for i := range long {
 		long[i] = 'x'
 	}
-	got := []rune(sessionTitle(string(long)))
-	if len(got) != sessionTitleMax+1 || got[sessionTitleMax] != '…' {
+	got := []rune(sessions.Title(string(long)))
+	if len(got) != titleMax+1 || got[titleMax] != '…' {
 		t.Fatalf("truncated title = %q", string(got))
 	}
-	if got := sessionTitle("   "); got != "" {
+	if got := sessions.Title("   "); got != "" {
 		t.Fatalf("blank title = %q", got)
 	}
 }
@@ -112,6 +114,31 @@ func TestPrepareConversationResumesNewestAndHonorsFlags(t *testing.T) {
 
 	if _, err := r.prepareConversation("no-such-session", false); err == nil {
 		t.Fatal("an unknown --resume id must be an error")
+	}
+}
+
+func TestAppendExchangeToSessionRecordsPair(t *testing.T) {
+	st := sessions.NewStore(t.TempDir())
+	sess, err := st.Create("thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendExchangeToSession(st, sess.ID, "question", &askengine.Result{
+		Kind: "task", TaskID: "t-1", Answer: "done",
+	}, i18n.English)
+
+	got, err := st.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Turns) != 2 {
+		t.Fatalf("turns = %+v", got.Turns)
+	}
+	if got.Turns[0].Role != "user" || got.Turns[0].Text != "question" {
+		t.Fatalf("user turn = %+v", got.Turns[0])
+	}
+	if got.Turns[1].Role != "assistant" || got.Turns[1].Kind != "task" || got.Turns[1].Ref != "t-1" {
+		t.Fatalf("assistant turn = %+v", got.Turns[1])
 	}
 }
 

@@ -471,10 +471,13 @@ func runRepl(args []string) {
 	// Resume the persisted bare-mode conversation (people reopen
 	// terminals, not conversations); /new starts a fresh one. prepareConversation
 	// already loaded it when no session could be bound — this is the fallback
-	// for a store-less or mid-run-written file.
-	if c := loadConvo(); len(c) > 0 && r.convoLen() == 0 {
-		r.setConvo(c)
-		fmt.Println(i18n.Tf(r.loc, "repl.convo.resumed", "n", fmt.Sprint(len(c)/2)))
+	// for a store-less or mid-run-written file. --new means a blank sheet, so
+	// the fallback must not resurrect a file the migration pass did not see.
+	if !*startNew {
+		if c := loadConvo(); len(c) > 0 && r.convoLen() == 0 {
+			r.setConvo(c)
+			fmt.Println(i18n.Tf(r.loc, "repl.convo.resumed", "n", fmt.Sprint(len(c)/2)))
+		}
 	}
 
 	sc := bufio.NewScanner(os.Stdin)

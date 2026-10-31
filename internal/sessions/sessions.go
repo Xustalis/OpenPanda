@@ -824,10 +824,21 @@ func (s *Store) save(sess *Session) error {
 	return util.WriteFileAtomic(s.path(sess.ID), data, 0o600)
 }
 
-func truncateTitle(s string) string {
-	s = strings.TrimSpace(s)
-	if len([]rune(s)) > 40 {
-		return string([]rune(s)[:40]) + "…"
+// Title derives a thread title from a prompt: one rail row, at most 48 runes.
+// Both the console and the CLI create threads with it, so a conversation has
+// the same label whichever surface opened it.
+func Title(prompt string) string {
+	prompt = strings.Join(strings.Fields(prompt), " ")
+	if prompt == "" {
+		return ""
 	}
-	return s
+	runes := []rune(prompt)
+	if len(runes) > 48 {
+		return string(runes[:48]) + "…"
+	}
+	return prompt
+}
+
+func truncateTitle(s string) string {
+	return Title(s)
 }
