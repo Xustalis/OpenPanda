@@ -29,10 +29,11 @@ const ToolNameTaskSubmit = "task_submit"
 const ToolNameTaskBudget = "task_budget"
 
 // classificationCacheVersion tags every cache row with the semantics that
-// produced it. Bump it whenever the key coverage or the cacheability rules
-// change, so rows written under the previous semantics can never be served
-// (they expire by TTL).
-const classificationCacheVersion = "v2"
+// produced it. Bump it whenever the key coverage, the cacheability rules or
+// the resident prompt rules change, so rows written under the previous
+// semantics can never be served (they expire by TTL). v3: coreRules gained
+// the "Operating this node" routing guidance.
+const classificationCacheVersion = "v3"
 
 // classificationCacheable reports whether a classified Output may be replayed
 // from the disk cache. Kinds that materialize durable work — a task row, or a

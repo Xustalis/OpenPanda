@@ -122,3 +122,39 @@ func TestAgentPromptCarriesNodeCommandReference(t *testing.T) {
 		t.Errorf("agent prompt leaks an i18n key:\n%s", got)
 	}
 }
+
+// TestSelfManagementNamesBinaryWithoutPATH covers a source-run node: when
+// `panda` does not resolve, the reference must name the running binary, or
+// every command in it fails with "not found" and the agent goes back to
+// probing the host.
+func TestSelfManagementNamesBinaryWithoutPATH(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	r := commander.NewRouter(ledger.Card{Agents: map[string]ledger.Agent{"x": {}}},
+		commander.NewExecutor(), config.ModelConfig{}, config.InjectionConfig{},
+		config.RoutingConfig{ToolsPolicy: config.ToolsPolicyMinimal})
+	got := selfManagementSection(&Core{router: r}, false, i18n.English)
+	if !strings.Contains(got, "[panda binary]") {
+		t.Fatalf("reference does not name the node binary when panda is off PATH:\n%s", got)
+	}
+	if !strings.Contains(got, "panda web [--daemon]") {
+		t.Fatal("binary note must not replace the command reference")
+	}
+}
+
+// TestPromptBudgetFor pins the reservation contract: the node reference is
+// appended after buildAgentPrompt, so its bytes come out of the budget the
+// skill section sees, and a fully consumed budget degrades to 1 rather than
+// falling into buildAgentPrompt's "<= 0 means default" branch.
+func TestPromptBudgetFor(t *testing.T) {
+	cases := []struct{ budget, reserved, want int }{
+		{0, 100, agentPromptBudget - 100},
+		{1000, 200, 800},
+		{overflowPromptBudget, overflowPromptBudget, 1},
+		{overflowPromptBudget, overflowPromptBudget + 10, 1},
+	}
+	for _, tc := range cases {
+		if got := promptBudgetFor(tc.budget, tc.reserved); got != tc.want {
+			t.Errorf("promptBudgetFor(%d, %d) = %d, want %d", tc.budget, tc.reserved, got, tc.want)
+		}
+	}
+}

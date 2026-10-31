@@ -1511,11 +1511,18 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		remoteOrigin := task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID)
 		restricted := remoteOrigin && !task.Authorized
 
+		// The node's own CLI surface is part of every round's prompt, so its
+		// bytes are reserved before the budget reaches buildAgentPrompt: the
+		// overflow retry rebuilds under a shrunken budget, and a section added
+		// afterwards would push the prompt back over the window it was just
+		// shrunk to fit.
+		selfSection := selfManagementSection(c, restricted, promptLang)
+
 		// assemblePrompt builds this round's prompt; a context-overflow retry
 		// rebuilds it under the shrunken overflowPromptBudget so every matched
 		// skill degrades to its index line.
 		assemblePrompt := func(promptBudget int) string {
-			p, used := buildAgentPrompt(c, fullIntent(), task.Project, task.Title, workDir, promptBudget, promptLang, outputLang)
+			p, used := buildAgentPrompt(c, fullIntent(), task.Project, task.Title, workDir, promptBudgetFor(promptBudget, len(selfSection)), promptLang, outputLang)
 			usedSkills = used
 			// §4.2 Sub-MainAgent protocol hint: only a task with depth budget
 			// left learns the marker format — a task at delegation.max_depth
@@ -1548,7 +1555,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// appendix: the task, the constraints and the matching protocol
 			// markers are what the agent acts on, the catalog is what it looks
 			// things up in.
-			p += selfManagementSection(c, restricted, promptLang)
+			p += selfSection
 			return p
 		}
 		prompt := assemblePrompt(0)

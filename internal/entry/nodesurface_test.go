@@ -19,6 +19,7 @@ func TestPromptCarriesNodeSurfaceGuidance(t *testing.T) {
 		"panda web",
 		"panda status",
 		"spec.target",
+		"is Kind 1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("system prompt omits %q", want)

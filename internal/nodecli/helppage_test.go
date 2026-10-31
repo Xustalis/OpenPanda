@@ -19,8 +19,12 @@ func TestHelpPageShape(t *testing.T) {
 	for _, g := range groupOrder {
 		allowed[g] = true
 	}
+	sections := HelpPage()
+	if len(sections) != len(groupOrder) {
+		t.Fatalf("page has %d sections, want one per group (%d)", len(sections), len(groupOrder))
+	}
 	seen := map[Group]bool{}
-	for i, sec := range HelpPage() {
+	for i, sec := range sections {
 		if !allowed[sec.Group] {
 			t.Fatalf("section %d: unknown group %q", i, sec.Group)
 		}

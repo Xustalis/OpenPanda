@@ -32,14 +32,31 @@ func TestHelpCoversCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read help: %v", err)
 	}
-	page := string(blob)
+	page := strings.Split(string(blob), "\n")
+	// A command's row is a line whose command column starts with the name and
+	// is followed by a word boundary, a pipe (shared rows like
+	// `cancel|approve|…`) or the end of the column. Matching the whole page
+	// for the bare word would let a description ("…read it, re-scan…")
+	// satisfy the check after the row was deleted.
+	hasRow := func(name string) bool {
+		for _, ln := range page {
+			rest, ok := strings.CutPrefix(ln, "  ")
+			if !ok || !strings.HasPrefix(rest, name) {
+				continue
+			}
+			if len(rest) == len(name) || rest[len(name)] == ' ' || rest[len(name)] == '|' {
+				return true
+			}
+		}
+		return false
+	}
 	for _, c := range nodecli.Catalog() {
 		name := c.Names[0]
 		if strings.Contains(name, " ") || name == "(no subcommand)" {
 			continue
 		}
-		if !strings.Contains(page, name) {
-			t.Errorf("`panda help` does not list %q (catalog row %q)", name, c.Usage)
+		if !hasRow(name) {
+			t.Errorf("`panda help` has no row for %q (catalog row %q)", name, c.Usage)
 		}
 	}
 }

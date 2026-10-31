@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -153,6 +155,22 @@ const agentPromptBudget = 128000
 // index line, so the retry only overflows again when the intent or manifest
 // alone exceeds the agent's window.
 const overflowPromptBudget = agentPromptBudget / 4
+
+// promptBudgetFor subtracts bytes already committed to the prompt (the node
+// reference, appended after buildAgentPrompt) from a caller's budget.
+// buildAgentPrompt treats a non-positive budget as "use agentPromptBudget",
+// so the result never falls to zero or below: a section that consumes the
+// whole budget leaves 1 byte for skills, degrading them to index lines
+// rather than silently restoring the default budget.
+func promptBudgetFor(budget, reserved int) int {
+	if budget <= 0 {
+		budget = agentPromptBudget
+	}
+	if budget -= reserved; budget < 1 {
+		budget = 1
+	}
+	return budget
+}
 
 // compactRunNotes folds a run's accumulated intent extras (delegated-child
 // results, board posts, supervisor follow-ups) into one digest for a
@@ -379,7 +397,29 @@ func selfManagementSection(c *Core, restricted bool, loc i18n.Locale) string {
 	if c == nil || c.router == nil || !c.router.PandaTools() || restricted {
 		return ""
 	}
-	return i18n.T(loc, "prompt.selftools.hint") + nodecli.PromptReference(loc)
+	section := i18n.T(loc, "prompt.selftools.hint") + nodecli.PromptReference(loc)
+	if exe := nodeBinaryFallback(); exe != "" {
+		section += i18n.Tf(loc, "prompt.selfcmd.binary", "path", exe)
+	}
+	return section
+}
+
+// nodeBinaryFallback names the running binary when `panda` is not on PATH.
+// The reference's commands assume `panda` resolves; a node launched from a
+// source checkout (`go run ./cmd/panda`, `./bin/panda`) on a machine without
+// an install would otherwise hand agents a catalog whose every command fails
+// with "not found", and the agent would fall back to probing the host — the
+// failure this feature exists to prevent. Empty when PATH already resolves
+// `panda` (the installed case, where the bare name is the right answer).
+func nodeBinaryFallback() string {
+	if _, err := exec.LookPath("panda"); err == nil {
+		return ""
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(exe)
 }
 
 // withSkills prepends matched active skills to the intent via the lightweight

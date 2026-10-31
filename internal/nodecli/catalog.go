@@ -257,12 +257,15 @@ var catalog = []Command{
 		HelpKey: "cli.help.d.completion", Group: GroupSetup},
 }
 
-// Catalog returns every command in display order. The slice is a copy: a
-// caller may sort or trim it without disturbing the reference other callers
-// render.
+// Catalog returns every command in display order. The rows and their Names
+// slices are copies: a caller may sort or rewrite the result without
+// disturbing the registry every other caller reads.
 func Catalog() []Command {
 	out := make([]Command, len(catalog))
-	copy(out, catalog)
+	for i, c := range catalog {
+		c.Names = append([]string(nil), c.Names...)
+		out[i] = c
+	}
 	return out
 }
 

@@ -37,11 +37,24 @@ func dispatcherCases(t *testing.T, fn string) []string {
 	if body == nil {
 		t.Fatalf("%s not found in dispatch.go", fn)
 	}
+	// Only the function's own switch counts. Walking every CaseClause would
+	// also pick up a future nested switch's literals — values that are not
+	// subcommands — and demand catalog rows for them.
+	var sw *ast.SwitchStmt
+	for _, stmt := range body.List {
+		if s, ok := stmt.(*ast.SwitchStmt); ok {
+			sw = s
+			break
+		}
+	}
+	if sw == nil {
+		t.Fatalf("%s has no top-level switch in dispatch.go", fn)
+	}
 	var names []string
-	ast.Inspect(body, func(n ast.Node) bool {
-		cc, ok := n.(*ast.CaseClause)
+	for _, stmt := range sw.Body.List {
+		cc, ok := stmt.(*ast.CaseClause)
 		if !ok {
-			return true
+			continue
 		}
 		for _, expr := range cc.List {
 			lit, ok := expr.(*ast.BasicLit)
@@ -54,8 +67,7 @@ func dispatcherCases(t *testing.T, fn string) []string {
 			}
 			names = append(names, name)
 		}
-		return true
-	})
+	}
 	if len(names) == 0 {
 		t.Fatalf("%s has no string cases", fn)
 	}

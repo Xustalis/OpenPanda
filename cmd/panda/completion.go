@@ -8,10 +8,12 @@ package main
 // runtime probing: a completer must never block the prompt on the network
 // or the store.
 //
-// SYNC WARNING: the tables below are the dispatch switches in main.go and
-// the runXxx verb routers written out as data. subcommandNames() has the
-// same warning for the same reason — add a command in three places, or the
-// new verb silently stops completing.
+// The completion vocabulary (subcommandNames and completionVerbs) comes from
+// internal/nodecli — the same registry the agent reference and `panda help`
+// read. Only the per-context flag lists below are local: which flags are
+// worth offering is completion tuning, not a description of the CLI. The
+// sync tests in completion_test.go fail a flag key whose command or verb the
+// registry does not know.
 
 import (
 	"flag"
