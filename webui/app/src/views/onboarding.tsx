@@ -13,6 +13,9 @@ import { toast } from '../components/toast'
 import { TermsContent } from '../components/terms'
 import { ModelPicker } from '../components/model-picker'
 import { useModalFocus } from '../components/modal-focus'
+import { ProviderCard } from '../components/provider-card'
+import { onboardingGate } from '../utils/onboarding'
+import { needsPlaintextConsent } from './model-endpoint'
 
 // First-run onboarding: `panda web` boots zero-config — the panel is fully
 // reachable but chat cannot answer until a model is set up, and the TUI
@@ -32,27 +35,13 @@ export function notifyModelSaved(): void {
 type Step = 'language' | 'terms' | 'approval' | 'model'
 const STEPS: Step[] = ['language', 'terms', 'approval', 'model']
 
-/** Effective consent: accepted AND stamped at the revision this binary
- *  enforces. The revision comes from the server (`terms_version_current`)
- *  rather than a local constant — a hard-coded copy drifts the moment
- *  config.TermsVersionCurrent moves, and it drifts in the dangerous
- *  direction: a stale browser would treat an old consent as current and
- *  never re-prompt. */
-function termsCurrent(state: OnboardingState): boolean {
-  const current = state.terms_version_current ?? 0
-  return state.terms_accepted && (state.terms_version ?? 0) >= current
-}
 /** First-run gate rendered at the top of the main pane. Fresh installs
- *  (no consent yet) get the full wizard immediately; an install that has
- *  accepted the current terms but still has no usable model gets a
- *  persistent banner whose CTA reopens the wizard on the model step.
- *
- *  The gate keys off CONSENT, not wizard completion. `onboarded` is only
- *  written by the wizard's last step, so anyone who closed it halfway —
- *  Escape, a backdrop click, a closed tab — lost every answer they had
- *  already given and was marched through language → terms → approval
- *  again on the next visit, and the one after that. Consent is the only
- *  answer that actually gates anything; the rest is a banner. */
+ *  (no answer recorded yet) get the full wizard immediately; a recorded
+ *  install whose consent is stale gets a persistent banner whose CTA opens
+ *  the terms step. The gate keys off CONSENT, not wizard completion, but a
+ *  dismissal is an answer too: re-opening the full wizard on every page load
+ *  after the user clicked "not now" is nagging, so only a genuinely fresh
+ *  install auto-opens. */
 export function OnboardingBanner() {
   useLocaleRerender()
   const [state, setState] = useState<OnboardingState | null>(null)
@@ -70,26 +59,38 @@ export function OnboardingBanner() {
     return () => window.removeEventListener(MODEL_SAVED_EVENT, check)
   }, [])
 
-  const needsWizard = Boolean(state && !termsCurrent(state))
-  // Re-consent for someone who has signed before: the license step is the
-  // whole errand. A first-time install still walks the four steps.
-  const termsOnly = needsWizard && Boolean(state?.onboarded || state?.terms_accepted)
-  // Fresh installs get the wizard without a click — state setters belong in
-  // an effect, not the render path.
+  const gate = state ? onboardingGate(state) : null
+  const termsOnly = gate?.termsOnly ?? false
+  const needsWizard = gate?.needsWizard ?? false
+  const banner = gate?.banner ?? 'none'
+  // Only a genuinely fresh install opens without a click. A recorded install
+  // with stale consent gets the banner; opening the modal every launch was
+  // the "why does this keep popping up" complaint.
   useEffect(() => {
-    if (needsWizard) setOpen(true)
-  }, [needsWizard])
+    if (gate?.firstRun) setOpen(true)
+  }, [gate?.firstRun])
 
   if (!state || completed) return null
 
-  const showBanner = !needsWizard && !state.model_configured
+  // Closing the wizard is an explicit "not now" — record it so the next visit
+  // shows the banner instead of marching through language → terms again. The
+  // consent gate itself is unchanged: the banner stays until terms are current.
+  function dismiss() {
+    setOpen(false)
+    setState((prev) => (prev ? { ...prev, onboarded: true } : prev))
+    void api.postOnboarding({ onboarded: true }).catch(() => {})
+  }
+
+  const showBanner = !open && banner !== 'none'
   return (
     <>
       {showBanner && (
         <div class="onboarding-banner" role="status">
-          <span class="onboarding-banner-text">{t('onboarding.banner')}</span>
+          <span class="onboarding-banner-text">
+            {t(banner === 'terms' ? 'onboarding.termsBanner' : 'onboarding.banner')}
+          </span>
           <button class="btn primary small" onClick={() => setOpen(true)}>
-            {t('onboarding.cta')}
+            {t(banner === 'terms' ? 'onboarding.termsCta' : 'onboarding.cta')}
           </button>
         </div>
       )}
@@ -98,7 +99,7 @@ export function OnboardingBanner() {
           state={state}
           modelOnly={!needsWizard}
           termsOnly={termsOnly}
-          onClose={() => setOpen(false)}
+          onClose={dismiss}
           onDone={() => {
             setCompleted(true)
             setOpen(false)
@@ -144,6 +145,12 @@ function OnboardingWizard(props: {
   }
 
   async function next() {
+    // The language chips persist their own locale on click, but the step is
+    // preselected and "next" is the obvious button — so the common path wrote
+    // nothing and config kept locale:"". That empty string is one of the four
+    // signals the gate uses to decide "fresh install", and it is why a later
+    // re-onboard started from the language step again.
+    if (step === 'language' && !(await save({ locale: locale() }))) return
     if (step === 'terms' && !(await save({ terms_accepted: true }))) return
     if (stepIdx < steps.length - 1) {
       setStepIdx(stepIdx + 1)
@@ -324,6 +331,10 @@ function ModelStep(props: { onSaved(): void }) {
   const [apiKey, setApiKey] = useState('')
   const [apiType, setApiType] = useState<ApiType>('openai')
   const [baseUrl, setBaseUrl] = useState('')
+  // Consent to reach a plain-http endpoint; the network guard refuses the
+  // endpoint without it.
+  const [allowPlaintext, setAllowPlaintext] = useState(false)
+  const plaintextEndpoint = needsPlaintextConsent(baseUrl)
   const [maxTokens, setMaxTokens] = useState(0)
   const [remoteModels, setRemoteModels] = useState<string[] | null>(null)
   const [busy, setBusy] = useState('')
@@ -375,6 +386,7 @@ function ModelStep(props: { onSaved(): void }) {
           base_url: baseUrl.trim(),
           model: model.trim(),
           api_key: apiKey.trim() || undefined,
+          allow_plaintext: plaintextEndpoint ? allowPlaintext : undefined,
         }
       : {
           provider: provider.id,
@@ -431,7 +443,12 @@ function ModelStep(props: { onSaved(): void }) {
         model: model.trim() || undefined,
         api_key: apiKey.trim() || undefined,
         ...(provider!.id === 'custom'
-          ? { api_type: apiType, base_url: baseUrl.trim(), max_tokens: maxTokens || undefined }
+          ? {
+              api_type: apiType,
+              base_url: baseUrl.trim(),
+              max_tokens: maxTokens || undefined,
+              allow_plaintext: plaintextEndpoint ? allowPlaintext : undefined,
+            }
           : {}),
       })
       notifyModelSaved()
@@ -460,14 +477,7 @@ function ModelStep(props: { onSaved(): void }) {
                   <div class="section-title wizard-region">{t(`models.region.${r}`)}</div>
                   <div class="provider-grid">
                     {regions[r]!.map((p) => (
-                      <button key={p.id} type="button" class="provider-card" onClick={() => pick(p)}>
-                        <span class="provider-name">{p.label}</span>
-                        <span class="provider-sub dim mono">{p.default_model || p.api_type}</span>
-                        <span class="provider-badges">
-                          {p.no_auth && <span class="badge">{t('models.noAuth')}</span>}
-                          {p.key_saved && <span class="badge green">{t('models.keySaved')}</span>}
-                        </span>
-                      </button>
+                      <ProviderCard key={p.id} provider={p} onPick={() => pick(p)} />
                     ))}
                   </div>
                 </div>
@@ -536,6 +546,22 @@ function ModelStep(props: { onSaved(): void }) {
               }}
             />
             <p class="hint">{t('settings.baseURLHelp')}</p>
+            {plaintextEndpoint && (
+              <>
+                <label class="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={allowPlaintext}
+                    onChange={(e) => {
+                      setAllowPlaintext((e.target as HTMLInputElement).checked)
+                      setTestResult(null)
+                    }}
+                  />{' '}
+                  {t('settings.allowPlaintext')}
+                </label>
+                <p class="hint">{t('settings.allowPlaintextHelp')}</p>
+              </>
+            )}
           </div>
         </>
       )}

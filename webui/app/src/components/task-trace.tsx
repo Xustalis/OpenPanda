@@ -39,18 +39,28 @@ interface Step {
   hint?: string
 }
 
-export function TaskTrace({
-  task,
-  defaultOpen,
-  bare,
-}: {
-  task: Task
-  defaultOpen?: boolean
-  /** Render the strip for a panel that already names it: no label, no fold,
-   *  detail always shown. The chat card gives each section one button and one
-   *  shared panel, so the strip's own chevron would be a second fold. */
-  bare?: boolean
-}) {
+/** Everything the strip and its detail panel read off one task. Split out of
+ *  the component because the detail page now draws the two halves in different
+ *  places — the strip as a card's always-visible lead, the cells inside that
+ *  card's fold — and both must read the same derivation. */
+export interface TraceModel {
+  steps: Step[]
+  round: string
+  progress: number
+  live: string
+  running: boolean
+  hasDetail: boolean
+  classify: ClassifyData | null
+  route: RouteData | null
+  exec: ExecData | null
+  supervision: SupervisionData | null
+  classifyEv: TraceEvent | null
+  routeEv: TraceEvent | null
+  execEv: TraceEvent | null
+  execLabel: string
+}
+
+export function useTaskTrace(task: Task): TraceModel {
   // Same seeding as the orbit: the task's newest event may be the only row
   // that says what a mid-flight run is doing on first paint.
   const seed = useMemo(() => {
@@ -145,16 +155,46 @@ export function TaskTrace({
       supervision?.judge_summary ||
       supervision?.verdict_status,
   )
-  // Folded on the page, where the strip is one of eight sections and the
-  // reader is scrolling; open in the chat card, where clicking the task *was*
-  // the request to see how it ran.
-  const [unfolded, setUnfolded] = useState(Boolean(defaultOpen))
-  const open = bare || unfolded
 
+  return {
+    steps,
+    round,
+    progress,
+    live,
+    running,
+    hasDetail,
+    classify,
+    route,
+    exec,
+    supervision,
+    classifyEv,
+    routeEv,
+    execEv,
+    execLabel,
+  }
+}
+
+/** The strip itself: [step] ─ [step] ─ [step], the facts that vary attached to
+ *  their step, the live status on the right. This is the half that earns its
+ *  place above a fold — the cells below it are reference material, which is
+ *  why the detail page keeps the strip in a card's lead and the cells inside
+ *  that card's fold. */
+export function TraceStrip({
+  model,
+  label,
+  tail,
+}: {
+  model: TraceModel
+  /** Left-hand label. Omitted when the host panel already names the section. */
+  label?: string
+  /** Extra controls after the live status (the standalone strip's chevron). */
+  tail?: ComponentChildren
+}) {
+  const { steps, live, round, running, progress } = model
   return (
-    <section class="tt" aria-label={t('detail.trace')}>
+    <>
       <div class="tt-row">
-        {!bare && <span class="tt-label">{t('detail.trace')}</span>}
+        {label && <span class="tt-label">{label}</span>}
 
         <ol class="tt-steps">
           {steps.map((s, i) => (
@@ -190,18 +230,7 @@ export function TaskTrace({
           )}
           {round && <span class="tt-meta">{round}</span>}
           {running && <span class="tt-meta tt-pct">{progress}%</span>}
-          {hasDetail && !bare && (
-            <button
-              type="button"
-              class={'tt-toggle' + (open ? ' is-open' : '')}
-              aria-expanded={open}
-              aria-label={t('detail.trace.detail')}
-              title={t('detail.trace.detail')}
-              onClick={() => setUnfolded((v) => !v)}
-            >
-              <Icon name="chevron-down" size={14} />
-            </button>
-          )}
+          {tail}
         </span>
       </div>
 
@@ -217,81 +246,122 @@ export function TaskTrace({
           <span class="tt-progress-fill" style={`--prog:${progress}%`} />
         </span>
       )}
+    </>
+  )
+}
 
-      {open && hasDetail && (
-        <div class="tt-detail">
-          {/* One cell per step, and every fact the trace actually carries: the
-              panel is where a reader comes to ask "which machine, which model,
-              with what permission" — a cell that answered with one word left
-              them opening the raw log instead. */}
-          <TraceCell label={t('orbit.step.classify')} at={classifyEv?.ts}>
-            {classify ? (
-              <>
-                {classifyText && <span class="tt-lead">{classifyText}</span>}
-                <KV k={t('detail.trace.goal')} v={classify.plan_goal} />
-                <KV k={t('detail.trace.note')} v={classify.note ?? classify.label} />
-                <KV k={t('detail.trace.stages')} v={stagesOf(classify)} />
-                {!classifyText &&
-                  !classify.plan_goal &&
-                  !classify.note &&
-                  !classify.label &&
-                  !stagesOf(classify) && <span class="dim">—</span>}
-              </>
-            ) : (
-              <span class="dim">{t('detail.trace.dispatch')}</span>
-            )}
-          </TraceCell>
+/** The cells behind the strip — one per step, every fact the trace carries. */
+export function TraceDetail({ model }: { model: TraceModel }) {
+  const { classify, route, exec, supervision, classifyEv, routeEv, execEv, execLabel } = model
+  const classifyText = classify ? classifyFact(classify) : undefined
+  return (
+    <div class="tt-detail">
+      {/* One cell per step, and every fact the trace actually carries: the
+          panel is where a reader comes to ask "which machine, which model,
+          with what permission" — a cell that answered with one word left
+          them opening the raw log instead. */}
+      <TraceCell label={t('orbit.step.classify')} at={classifyEv?.ts}>
+        {classify ? (
+          <>
+            {classifyText && <span class="tt-lead">{classifyText}</span>}
+            <KV k={t('detail.trace.goal')} v={classify.plan_goal} />
+            <KV k={t('detail.trace.note')} v={classify.note ?? classify.label} />
+            <KV k={t('detail.trace.stages')} v={stagesOf(classify)} />
+            {!classifyText &&
+              !classify.plan_goal &&
+              !classify.note &&
+              !classify.label &&
+              !stagesOf(classify) && <span class="dim">—</span>}
+          </>
+        ) : (
+          <span class="dim">{t('detail.trace.dispatch')}</span>
+        )}
+      </TraceCell>
 
-          {/* No route decision means no routing happened — the task went
-              straight to an agent. The cell used to be drawn anyway, headed
-              "route" over the word "dispatch", which read as a step that ran
-              and decided nothing. */}
-          {route && (
-            <TraceCell label={t('orbit.step.route')} at={routeEv?.ts}>
-              {route.candidates?.length ? (
-                route.candidates.map((c) => {
-                  const chosen = routedId(route) === c.node_id
-                  const score = c.score_breakdown?.total ?? c.total_score
-                  return (
-                    <span key={c.node_id} class={chosen ? 'tt-cand is-chosen' : 'tt-cand'}>
-                      <span>{c.node_name ?? c.node_id}</span>
-                      {typeof score === 'number' && (
-                        <span class="dim">{score.toFixed(2)}★</span>
-                      )}
-                    </span>
-                  )
-                })
-              ) : (
-                <span class="dim">
-                  {routedName(route) ?? t('orbit.route.declined')}
+      {/* No route decision means no routing happened — the task went straight
+          to an agent. The cell used to be drawn anyway, headed "route" over
+          the word "dispatch", which read as a step that ran and decided
+          nothing. */}
+      {route && (
+        <TraceCell label={t('orbit.step.route')} at={routeEv?.ts}>
+          {route.candidates?.length ? (
+            route.candidates.map((c) => {
+              const chosen = routedId(route) === c.node_id
+              const score = c.score_breakdown?.total ?? c.total_score
+              return (
+                <span key={c.node_id} class={chosen ? 'tt-cand is-chosen' : 'tt-cand'}>
+                  <span>{c.node_name ?? c.node_id}</span>
+                  {typeof score === 'number' && <span class="dim">{score.toFixed(2)}★</span>}
                 </span>
-              )}
-              <KV k={t('detail.trace.decision')} v={route.action} />
-            </TraceCell>
+              )
+            })
+          ) : (
+            <span class="dim">{routedName(route) ?? t('orbit.route.declined')}</span>
           )}
-
-          <TraceCell label={execLabel} at={execEv?.ts}>
-            {exec?.agent && <AgentTag name={exec.agent} />}
-            <KV k={t('detail.model')} v={exec?.model} mono />
-            <KV k={t('detail.adapter')} v={exec?.adapter} mono />
-            <KV k={t('detail.node')} v={exec?.node_name ? `@${exec.node_name}` : ''} mono />
-            <KV k={t('detail.trace.tier')} v={tierOf(exec)} />
-            <KV k={t('detail.trace.access')} v={accessOf(exec)} />
-            <KV k={t('detail.workdir')} v={exec?.workdir} mono />
-            {/* The round is on the strip's own top line (`.tt-tail`), beside
-                the live status — repeating it down here put the same "轮次
-                1/5" twice in one card, one under the other. */}
-            {supervision?.verdict_status && (
-              <span class="dim">
-                {t('detail.result.verdict', { verdict: supervision.verdict_status })}
-              </span>
-            )}
-            {supervision?.judge_summary && (
-              <span class="dim tt-judge">{supervision.judge_summary}</span>
-            )}
-          </TraceCell>
-        </div>
+          <KV k={t('detail.trace.decision')} v={route.action} />
+        </TraceCell>
       )}
+
+      <TraceCell label={execLabel} at={execEv?.ts}>
+        {exec?.agent && <AgentTag name={exec.agent} />}
+        <KV k={t('detail.model')} v={exec?.model} mono />
+        <KV k={t('detail.adapter')} v={exec?.adapter} mono />
+        <KV k={t('detail.node')} v={exec?.node_name ? `@${exec.node_name}` : ''} mono />
+        <KV k={t('detail.trace.tier')} v={tierOf(exec)} />
+        <KV k={t('detail.trace.access')} v={accessOf(exec)} />
+        <KV k={t('detail.workdir')} v={exec?.workdir} mono />
+        {/* The round is on the strip's own top line (`.tt-tail`), beside the
+            live status — repeating it down here put the same "轮次 1/5" twice
+            in one card, one under the other. */}
+        {supervision?.verdict_status && (
+          <span class="dim">
+            {t('detail.result.verdict', { verdict: supervision.verdict_status })}
+          </span>
+        )}
+        {supervision?.judge_summary && (
+          <span class="dim tt-judge">{supervision.judge_summary}</span>
+        )}
+      </TraceCell>
+    </div>
+  )
+}
+
+/** The strip as one self-contained block, with its own fold — what the chat
+ *  card mounts. `bare` is the card's variant: no label, no chevron, detail
+ *  always open, because the card's own panel is already the fold. */
+export function TaskTrace({
+  task,
+  defaultOpen,
+  bare,
+}: {
+  task: Task
+  defaultOpen?: boolean
+  bare?: boolean
+}) {
+  const model = useTaskTrace(task)
+  const [unfolded, setUnfolded] = useState(Boolean(defaultOpen))
+  const open = bare || unfolded
+  return (
+    <section class="tt" aria-label={t('detail.trace')}>
+      <TraceStrip
+        model={model}
+        label={bare ? undefined : t('detail.trace')}
+        tail={
+          model.hasDetail && !bare ? (
+            <button
+              type="button"
+              class={'tt-toggle' + (open ? ' is-open' : '')}
+              aria-expanded={open}
+              aria-label={t('detail.trace.detail')}
+              title={t('detail.trace.detail')}
+              onClick={() => setUnfolded((v) => !v)}
+            >
+              <Icon name="chevron-down" size={14} />
+            </button>
+          ) : undefined
+        }
+      />
+      {open && model.hasDetail && <TraceDetail model={model} />}
     </section>
   )
 }

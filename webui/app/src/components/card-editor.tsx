@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useState } from 'preact/hooks'
-import {
-  api,
-  type CardAgent,
-  type CardFile,
-  type CardNative,
-  type NodesAddResult,
-} from '../api/client'
+import { api, type CardAgent, type CardFile, type CardNative } from '../api/client'
 import { t } from '../i18n'
+import { Icon } from './icons'
 import { toast, toastError } from './toast'
 import { confirmDialog } from './confirm'
 
@@ -35,8 +30,15 @@ export function CardEditor({ onChanged }: { onChanged(): void }) {
 
   return (
     <div class="card card-editor">
-      <h2 class="block-title">{t('card.title')}</h2>
-      <p class="hint">{t('card.hint', { path: card?.path ?? '' })}</p>
+      <div class="card-editor-head">
+        <h2 class="block-title">{t('card.title')}</h2>
+        {card?.path && (
+          <span class="card-path mono" title={card.path}>
+            {card.path}
+          </span>
+        )}
+      </div>
+      <p class="hint">{t('card.hint')}</p>
 
       {!card || loading ? (
         <p class="dim">
@@ -92,6 +94,40 @@ function useCard(tick: number): {
   return { data, error, loading }
 }
 
+/** Section head: what this list is, how many entries it holds, and the one
+ *  action that changes it. The add form used to be three always-visible input
+ *  rows at the bottom of every section — a third of the card spent on three
+ *  forms nobody was filling in. */
+function SectionHead({
+  title,
+  count,
+  addLabel,
+  adding,
+  onToggle,
+}: {
+  title: string
+  count: number
+  addLabel: string
+  adding: boolean
+  onToggle(): void
+}) {
+  return (
+    <div class="card-section-head">
+      <h3 class="section-title">{title}</h3>
+      <span class="block-count">{count}</span>
+      <button
+        class="btn small ghost card-add-toggle"
+        type="button"
+        aria-expanded={adding}
+        onClick={onToggle}
+      >
+        <Icon name={adding ? 'x' : 'plus'} size={13} />
+        {addLabel}
+      </button>
+    </div>
+  )
+}
+
 // ---- Agents ----
 
 function CardAgentsSection({
@@ -107,6 +143,7 @@ function CardAgentsSection({
   const [name, setName] = useState('')
   const [adapter, setAdapter] = useState('')
   const [command, setCommand] = useState('')
+  const [adding, setAdding] = useState(false)
 
   async function add() {
     const n = name.trim()
@@ -133,36 +170,55 @@ function CardAgentsSection({
 
   return (
     <div class="card-section">
-      <h3 class="section-title">{t('card.agents.title')}</h3>
-      {agents.length === 0 && <p class="dim">{t('card.agents.empty')}</p>}
-      {agents.map(([agentName, ag]) => (
-        <AgentRow key={agentName} name={agentName} agent={ag} reload={reload} onChanged={onChanged} />
-      ))}
-      <div class="card-add-row">
-        <input
-          class="input"
-          placeholder={t('card.agent.name')}
-          value={name}
-          onInput={(e) => setName((e.target as HTMLInputElement).value)}
-        />
-        <input
-          class="input"
-          placeholder={t('card.agent.adapter')}
-          value={adapter}
-          onInput={(e) => setAdapter((e.target as HTMLInputElement).value)}
-        />
-        {adapter.trim() === 'generic.py' && (
+      <SectionHead
+        title={t('card.agents.title')}
+        count={agents.length}
+        addLabel={t('card.agent.add')}
+        adding={adding}
+        onToggle={() => setAdding(!adding)}
+      />
+      {agents.length === 0 ? (
+        <p class="dim">{t('card.agents.empty')}</p>
+      ) : (
+        <div class="card-entries">
+          {agents.map(([agentName, ag]) => (
+            <AgentRow
+              key={agentName}
+              name={agentName}
+              agent={ag}
+              reload={reload}
+              onChanged={onChanged}
+            />
+          ))}
+        </div>
+      )}
+      {adding && (
+        <div class="card-add-row">
           <input
             class="input"
-            placeholder={t('card.agent.command')}
-            value={command}
-            onInput={(e) => setCommand((e.target as HTMLInputElement).value)}
+            placeholder={t('card.agent.name')}
+            value={name}
+            onInput={(e) => setName((e.target as HTMLInputElement).value)}
           />
-        )}
-        <button class="btn small" type="button" onClick={add}>
-          {t('card.agent.add')}
-        </button>
-      </div>
+          <input
+            class="input"
+            placeholder={t('card.agent.adapter')}
+            value={adapter}
+            onInput={(e) => setAdapter((e.target as HTMLInputElement).value)}
+          />
+          {adapter.trim() === 'generic.py' && (
+            <input
+              class="input"
+              placeholder={t('card.agent.command')}
+              value={command}
+              onInput={(e) => setCommand((e.target as HTMLInputElement).value)}
+            />
+          )}
+          <button class="btn small" type="button" onClick={add}>
+            {t('card.agent.add')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -226,18 +282,20 @@ function AgentRow({
       <div class="card-entry-head">
         <span class="mono card-entry-name">{name}</span>
         <span class="badge dim">{agent.cost_tier || ''}</span>
-        <button
-          class={`btn small ${agent.tier === 2 ? 'warn' : ''}`}
-          type="button"
-          disabled={busy}
-          title={t('card.agent.tierHint')}
-          onClick={toggleTier}
-        >
-          tier {agent.tier}
-        </button>
-        <button class="btn small danger" type="button" disabled={busy} onClick={remove}>
-          {t('card.remove')}
-        </button>
+        <div class="card-entry-actions">
+          <button
+            class={`btn small ${agent.tier === 2 ? 'warn' : ''}`}
+            type="button"
+            disabled={busy}
+            title={t('card.agent.tierHint')}
+            onClick={toggleTier}
+          >
+            tier {agent.tier}
+          </button>
+          <button class="btn small danger" type="button" disabled={busy} onClick={remove}>
+            {t('card.remove')}
+          </button>
+        </div>
       </div>
       {agent.command && <p class="dim mono">{agent.command}</p>}
       {agent.capabilities && agent.capabilities.length > 0 && (
@@ -261,6 +319,7 @@ function CardNativeSection({
   const natives: CardNative[] = card.card.native ?? []
   const [id, setId] = useState('')
   const [command, setCommand] = useState('')
+  const [adding, setAdding] = useState(false)
 
   async function add() {
     const i = id.trim()
@@ -282,35 +341,50 @@ function CardNativeSection({
 
   return (
     <div class="card-section">
-      <h3 class="section-title">{t('card.native.title')}</h3>
-      {natives.length === 0 && <p class="dim">{t('card.native.empty')}</p>}
-      {natives.map((ab) => (
-        <div class="card-entry" key={ab.id}>
-          <div class="card-entry-head">
-            <span class="mono card-entry-name">{ab.id}</span>
-            <span class="badge dim">tier {ab.tier}</span>
-            <NativeRemove id={ab.id} reload={reload} onChanged={onChanged} />
-          </div>
-          <p class="dim mono">{ab.command}{ab.args?.length ? ' ' + ab.args.join(' ') : ''}</p>
+      <SectionHead
+        title={t('card.native.title')}
+        count={natives.length}
+        addLabel={t('card.native.add')}
+        adding={adding}
+        onToggle={() => setAdding(!adding)}
+      />
+      {natives.length === 0 ? (
+        <p class="dim">{t('card.native.empty')}</p>
+      ) : (
+        <div class="card-entries">
+          {natives.map((ab) => (
+            <div class="card-entry" key={ab.id}>
+              <div class="card-entry-head">
+                <span class="mono card-entry-name">{ab.id}</span>
+                <span class="badge dim">tier {ab.tier}</span>
+                <div class="card-entry-actions">
+                  <NativeRemove id={ab.id} reload={reload} onChanged={onChanged} />
+                </div>
+              </div>
+              <p class="dim mono">{ab.command}{ab.args?.length ? ' ' + ab.args.join(' ') : ''}</p>
+            </div>
+          ))}
         </div>
-      ))}
-      <div class="card-add-row">
-        <input
-          class="input"
-          placeholder={t('card.native.id')}
-          value={id}
-          onInput={(e) => setId((e.target as HTMLInputElement).value)}
-        />
-        <input
-          class="input"
-          placeholder={t('card.native.command')}
-          value={command}
-          onInput={(e) => setCommand((e.target as HTMLInputElement).value)}
-        />
-        <button class="btn small" type="button" onClick={add}>
-          {t('card.native.add')}
-        </button>
-      </div>
+      )}
+      {adding && (
+        <div class="card-add-row">
+          <input
+            class="input"
+            placeholder={t('card.native.id')}
+            value={id}
+            onInput={(e) => setId((e.target as HTMLInputElement).value)}
+          />
+          <input
+            class="input"
+            placeholder={t('card.native.command')}
+            value={command}
+            onInput={(e) => setCommand((e.target as HTMLInputElement).value)}
+          />
+          <button class="btn small" type="button" onClick={add}>
+            {t('card.native.add')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -358,6 +432,7 @@ function CardManualSection({
   const manual = card.card.manual ?? []
   const [id, setId] = useState('')
   const [notify, setNotify] = useState('')
+  const [adding, setAdding] = useState(false)
 
   async function add() {
     const i = id.trim()
@@ -396,36 +471,51 @@ function CardManualSection({
 
   return (
     <div class="card-section">
-      <h3 class="section-title">{t('card.manual.title')}</h3>
-      {manual.length === 0 && <p class="dim">{t('card.manual.empty')}</p>}
-      {manual.map((m) => (
-        <div class="card-entry" key={m.id}>
-          <div class="card-entry-head">
-            <span class="mono card-entry-name">{m.id}</span>
-            <span class="dim">{m.notify}</span>
-            <button class="btn small danger" type="button" onClick={() => remove(m.id)}>
-              {t('card.remove')}
-            </button>
-          </div>
+      <SectionHead
+        title={t('card.manual.title')}
+        count={manual.length}
+        addLabel={t('card.manual.add')}
+        adding={adding}
+        onToggle={() => setAdding(!adding)}
+      />
+      {manual.length === 0 ? (
+        <p class="dim">{t('card.manual.empty')}</p>
+      ) : (
+        <div class="card-entries">
+          {manual.map((m) => (
+            <div class="card-entry" key={m.id}>
+              <div class="card-entry-head">
+                <span class="mono card-entry-name">{m.id}</span>
+                <span class="dim card-entry-note">{m.notify}</span>
+                <div class="card-entry-actions">
+                  <button class="btn small danger" type="button" onClick={() => remove(m.id)}>
+                    {t('card.remove')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
-      ))}
-      <div class="card-add-row">
-        <input
-          class="input"
-          placeholder={t('card.manual.id')}
-          value={id}
-          onInput={(e) => setId((e.target as HTMLInputElement).value)}
-        />
-        <input
-          class="input"
-          placeholder={t('card.manual.notify')}
-          value={notify}
-          onInput={(e) => setNotify((e.target as HTMLInputElement).value)}
-        />
-        <button class="btn small" type="button" onClick={add}>
-          {t('card.manual.add')}
-        </button>
-      </div>
+      )}
+      {adding && (
+        <div class="card-add-row">
+          <input
+            class="input"
+            placeholder={t('card.manual.id')}
+            value={id}
+            onInput={(e) => setId((e.target as HTMLInputElement).value)}
+          />
+          <input
+            class="input"
+            placeholder={t('card.manual.notify')}
+            value={notify}
+            onInput={(e) => setNotify((e.target as HTMLInputElement).value)}
+          />
+          <button class="btn small" type="button" onClick={add}>
+            {t('card.manual.add')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -485,88 +575,6 @@ function CardRawSection({
           <button class="btn small" type="button" disabled={busy} onClick={save}>
             {busy ? t('common.loading') : t('card.raw.save')}
           </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** — Add device (stage 6): the join-a-second-machine form, the web twin of
- *  `panda nodes add`. Submits the address, then renders the same join guide
- *  the CLI prints — the three steps for whoever sets up the other machine,
- *  never the shared secret itself (only the file it lives in). */
-export function AddDeviceCard({ onAdded }: { onAdded(): void }) {
-  const [addr, setAddr] = useState('')
-  const [trust, setTrust] = useState('mesh')
-  const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<NodesAddResult | null>(null)
-
-  async function submit(e: Event) {
-    e.preventDefault()
-    if (busy) return
-    const a = addr.trim()
-    if (!a) return
-    setBusy(true)
-    try {
-      setResult(await api.addNode(a, trust))
-      setAddr('')
-      onAdded()
-    } catch (err) {
-      toastError(err)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div class="card add-device-card">
-      <h2 class="block-title">{t('nodes.addDevice.title')}</h2>
-      <p class="hint">{t('nodes.addDevice.hint')}</p>
-      <form class="card-add-row" onSubmit={submit}>
-        <input
-          class="input"
-          placeholder={t('nodes.addDevice.placeholder')}
-          value={addr}
-          onInput={(e) => setAddr((e.target as HTMLInputElement).value)}
-        />
-        <label class="badge" title={t('nodes.trust')}>
-          {t('nodes.trust')}:&nbsp;
-          <select
-            class={trust === 'open' ? 'trust-sel open' : 'trust-sel'}
-            value={trust}
-            onChange={(e) => setTrust((e.target as HTMLSelectElement).value)}
-          >
-            <option value="mesh">mesh</option>
-            <option value="guarded">guarded</option>
-            <option value="open">open</option>
-          </select>
-          <span class="trust-caret" aria-hidden="true">▾</span>
-        </label>
-        <button class="btn" type="submit" disabled={busy || !addr.trim()}>
-          {busy ? t('common.loading') : t('nodes.addDevice.submit')}
-        </button>
-      </form>
-      {result && (
-        <div class="join-guide">
-          <p>
-            {result.added ? t('nodes.addDevice.added', { addr: result.addr }) : t('nodes.addDevice.exists', { addr: result.addr })}
-            {result.secret_generated && ' · ' + t('nodes.addDevice.secretGen')}
-          </p>
-          {result.dialed ? (
-            <p class="ok">{t('nodes.addDevice.dialed', { addr: result.addr })}</p>
-          ) : (
-            result.dial_error && <p class="node-remove-error">{t('nodes.addDevice.dialFailed', { addr: result.addr })}</p>
-          )}
-          {result.cleartext_hint && <p class="hint">{t('nodes.addDevice.cleartextHint')}</p>}
-          <h3 class="section-title">{t('nodes.addDevice.guideTitle')}</h3>
-          <ol class="join-steps">
-            <li>
-              <code class="mono">{result.install_command}</code>
-            </li>
-            {result.invite_steps.slice(1).map((s) => (
-              <li key={s}>{s}</li>
-            ))}
-          </ol>
         </div>
       )}
     </div>

@@ -271,6 +271,31 @@ a.sidebar-node:hover {
   color: var(--text-tertiary);
 }
 
+/* The footer is one row: the node chip takes the slack, the gear keeps its
+   28px square. The chip used to share the tail with two full-width buttons
+   (设置 / 断开连接) — the labels said what a gear says for free, and
+   断开连接 turned out to be a session verb that belongs in the settings
+   sheet, not on the rail. `min-width: 0` on the chip is what lets a long
+   node name or codename ellipsize instead of shoving the gear off the rail. */
+.sidebar-foot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+}
+.sidebar-foot .sidebar-node {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.sidebar-foot .sidebar-gear {
+  flex: none;
+}
+.sidebar-foot .sidebar-gear.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
 /* ---- Main column ---------------------------------------------------------- */
 
 .main {

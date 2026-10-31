@@ -66,6 +66,20 @@
   background: var(--bg-hover);
   color: var(--text);
 }
+/* Filled destructive button. Reserved for actions that wipe a whole scope
+   (clear the queue), where the red surface is the warning itself — ordinary
+   destructive affordances stay outlined so the page keeps one loud button. */
+.btn.danger.solid {
+  background: var(--danger-solid);
+  border-color: var(--danger-solid);
+  color: var(--danger-ink);
+  font-weight: 600;
+}
+.btn.danger.solid:hover:not(:disabled) {
+  background: var(--danger-solid-hover);
+  border-color: var(--danger-solid-hover);
+  color: var(--danger-ink);
+}
 
 /* Icon-only square button. */
 .icon-btn,
@@ -131,6 +145,152 @@ select.input {
   background-repeat: no-repeat;
 }
 
+/* ---- Select (components/select.tsx) -------------------------------------
+ * A field plus its list. The list used to be the OS's: a square white panel
+ * with a system-blue band on the current row — the one surface in the console
+ * that ignored the theme, and unstyleable by design (Chrome still hands the
+ * popup to the platform even with `appearance: base-select`). So the list is
+ * ours: same card, radius, hover wash and shadow as `.ctx-menu`, and the
+ * current choice is marked with a tick instead of a colour band. */
+.select {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+/* In a form column the field fills the column like every other `.input`; in a
+   filter row it sizes to its own label (`.filters .input` sets the width). */
+.field-group > .select {
+  display: flex;
+  width: 100%;
+}
+.select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.select-trigger:disabled {
+  cursor: not-allowed;
+}
+.select-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Hover and open both lean on the border, never on a fill: the field sits in
+   a row of other fields and a background change reads as a state of the row. */
+.select-trigger:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+.select-trigger.open {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.select-caret {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+/* The field keeps the count it always showed ("全部设备 16"), but as a quiet
+   aside before the caret instead of glued into the label. */
+.select-hint {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.select-trigger:hover .select-caret {
+  color: var(--text-secondary);
+}
+.select-trigger.open .select-caret {
+  transform: rotate(180deg);
+  color: var(--text-secondary);
+}
+
+/* Fixed, not absolute: the field can sit inside a scrolling card or a dialog
+   with overflow hidden, and the list must not be clipped by either. */
+.select-menu {
+  position: fixed;
+  z-index: 70;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: ctx-menu-in var(--dur-fast) var(--ease-enter);
+}
+.select-menu:focus {
+  outline: none;
+}
+.select-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+/* Pointer hover and keyboard position are one state — the row the pointer is
+   on is the row Enter would take, exactly like .ctx-menu-item. */
+.select-opt:hover,
+.select-opt.on {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.select-opt[aria-selected='true'] {
+  color: var(--text);
+}
+.select-opt[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+.select-opt-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The aside (a count, a device kind) shrinks first, so a long label never
+   loses its own text to a number. */
+.select-opt-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.select-opt-check {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--text);
+}
+
 /* Model field with the fetched list built into it (components/model-picker.tsx).
  * The caret rides inside the input so the value and its picker are one control
  * instead of two stacked fields. */
@@ -169,22 +329,26 @@ select.input {
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* Fixed and anchored by the component's own measurement: the field sits in the
+ * add-model sheet, whose scrolling body clips an absolutely positioned list —
+ * a 21-model roster was cut at the sheet footer after two ids. Coordinates,
+ * width and max-height arrive inline; this block only owns the look. */
 .model-picker-list {
-  position: absolute;
-  z-index: 5;
-  left: 0;
-  right: 0;
-  top: calc(100% + 4px);
+  position: fixed;
+  z-index: 70;
   display: flex;
   flex-direction: column;
   gap: 1px;
-  max-height: 224px;
-  overflow: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px;
   background: var(--bg-overlay);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lg);
+}
+.model-picker-list:focus {
+  outline: none;
 }
 .model-picker-item {
   display: block;
@@ -497,6 +661,18 @@ input[type='checkbox'].check,
 .modal.terms-modal {
   width: min(680px, calc(100vw - 32px));
 }
+/* The confirm dialog is a native <dialog> (components/confirm.tsx) rather than
+   a .modal-backdrop div: it can be raised from inside another sheet — 设置 →
+   记忆 asks before deleting a topic — and only the top layer guarantees it
+   paints over that sheet instead of behind it. Same scrim, painted through
+   the ::backdrop pseudo-element the top layer owns. */
+dialog.confirm-modal {
+  margin: auto;
+}
+dialog.confirm-modal::backdrop {
+  background: var(--backdrop-darker);
+  backdrop-filter: blur(4px);
+}
 .modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -584,6 +760,15 @@ input[type='checkbox'].check,
 /* ---- Toasts -------------------------------------------------------------------- */
 
 .toast-host {
+  /* Manual popover: it joins the top layer so it can sit above the settings
+     <dialog>. The UA's default popover box (centred, bordered, opaque) is
+     reset here, and the placement rules below still position it. */
+  inset: auto;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  overflow: visible;
   position: fixed;
   bottom: var(--sp-6);
   right: var(--sp-6);
@@ -592,6 +777,14 @@ input[type='checkbox'].check,
   gap: var(--sp-2);
   z-index: 120;
   max-width: min(420px, calc(100vw - 32px));
+}
+.toast-host-top-center {
+  top: 72px;
+  bottom: auto;
+  right: auto;
+  left: 50%;
+  width: max-content;
+  transform: translateX(-50%);
 }
 .toast {
   display: flex;
@@ -677,6 +870,21 @@ input[type='checkbox'].check,
   bottom: auto;
   top: calc(100% + 6px);
 }
+/* A tip that is a sentence, not a label: the default is one unwrapped line,
+   which is right for a button name and wrong for an explanation. `tip-wrap`
+   lets it break; `tip-right` hangs it from the element's right edge so a
+   control at the end of a row does not push the tip off the sheet. */
+[data-tip].tip-wrap::after {
+  white-space: normal;
+  width: 220px;
+  text-align: left;
+  line-height: 1.45;
+}
+[data-tip].tip-right::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
 
 /* ---- Details / raw blocks ---------------------------------------------------------------- */
 
@@ -743,4 +951,137 @@ input[type='checkbox'].check,
 .tab.on {
   color: var(--text);
   border-bottom-color: var(--accent);
+}
+
+/* ---- Context menu (components/context-menu.tsx) -------------------------------------- */
+/* The same shell as the chat's thread menu, placed by the pointer instead of a
+   trigger. Fixed, because the surface it opens over scrolls; the call site
+   hands it viewport pixels and the component flips it inward near an edge. */
+
+.ctx-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 196px;
+  max-width: 280px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: ctx-menu-in var(--dur-fast) var(--ease-enter);
+}
+@keyframes ctx-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.ctx-menu:focus {
+  outline: none;
+}
+
+/* The subject line: what the verbs below apply to. A menu opened over a dense
+   row of marks has to say which one it is about. */
+.ctx-menu-hd {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 9px 6px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.ctx-menu-title {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-menu-sub {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.ctx-menu-item svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+/* Hover and keyboard focus are one state: the row the pointer is on is the
+   row Enter would run. */
+.ctx-menu-item:hover:not(:disabled),
+.ctx-menu-item.on:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.ctx-menu-item:hover:not(:disabled) svg,
+.ctx-menu-item.on:not(:disabled) svg {
+  color: var(--text);
+}
+.ctx-menu-item:focus-visible {
+  outline: none;
+}
+.ctx-menu-item.danger:hover:not(:disabled),
+.ctx-menu-item.danger.on:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.ctx-menu-item.danger:hover:not(:disabled) svg,
+.ctx-menu-item.danger.on:not(:disabled) svg {
+  color: var(--danger);
+}
+.ctx-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ctx-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The aside never pushes the label out of shape: it shrinks first. */
+.ctx-menu-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* An item with no icon keeps the label on the same column as the others. */
+.ctx-menu-gap {
+  flex: none;
+  width: 14px;
 }

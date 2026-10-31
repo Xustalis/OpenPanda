@@ -3,26 +3,31 @@
 import { useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import type { ControlTab } from '../nav'
+import { Icon, type IconName } from '../components/icons'
 import { QueueView } from './queue'
-import { PlansView } from './plans'
 import { ProjectsView } from './projects'
 
-// 队列·任务·项目 — the node's three boards under one tab strip. They used to be
-// three rail rows; they are now one page named after what it holds: the live
-// kanban (what is waiting / running / needs your approval), the plan pipelines
-// (what the engine has broken into stages), and the projects (where that work
-// lands and what it remembers). They answer the same question at three time
-// scales, so they share one page and one header; the boards themselves are
-// unchanged — each view still owns its own layout and simply stops painting its
-// own title (`head={false}`).
-
+// Task Centre has two destinations, not three: plans are another lens on the
+// same tasks, so their old top-level tab becomes a view switch inside the task
+// surface. Projects stay separate because they own directories, memory and
+// approval policy rather than task state. Legacy #/plans links still work.
+//
+// The strip is one dimension, not two. It used to be 任务/项目 in the page head
+// with a second 看板/计划 switch inside the board, which asked the reader to
+// decode a hierarchy that does not exist: all three are lenses on the same
+// node's work. One strip, three lenses, no nesting.
 const TABS: ControlTab[] = ['queue', 'plans', 'projects']
-
-/** One subtitle per board, so the header says what the visible tab shows. */
-const SUBTITLE: Record<ControlTab, string> = {
-  queue: 'queue.subtitle',
-  plans: 'plans.subtitle',
-  projects: 'projects.subtitle',
+const TAB_ICON: Record<ControlTab, IconName> = {
+  queue: 'kanban',
+  plans: 'route',
+  projects: 'folder',
+}
+// The board is named 看板 here, not 任务: "任务" beside "任务中心" would name
+// the page twice.
+const TAB_LABEL: Record<ControlTab, string> = {
+  queue: 'queue.board',
+  plans: 'nav.plans',
+  projects: 'nav.projects',
 }
 
 export function ControlView({
@@ -32,6 +37,7 @@ export function ControlView({
   onSelectTab,
   onOpen,
   onOpenSession,
+  onNewChat,
   onOpenProject,
   onOpenQueue,
 }: {
@@ -41,6 +47,7 @@ export function ControlView({
   onSelectTab(tab: ControlTab): void
   onOpen(id: string): void
   onOpenSession(id: string): void
+  onNewChat(project: string | null): void
   onOpenProject(name: string): void
   onOpenQueue(project: string): void
 }) {
@@ -48,43 +55,45 @@ export function ControlView({
 
   return (
     <section class="control-section">
-      {/* Title row, not a title block: the tab strip rides beside the heading
-          instead of under it. A stacked strip would push the board down by
-          ~44px, and the board is height-locked to six cards — it would then
-          run past the fold and the page would scroll under a board that
-          already scrolls inside each column. */}
-      <div class="control-head">
-        <div class="control-head-text">
-          <h1 class="page-title">{t('nav.control')}</h1>
-          <p class="page-sub">{t(SUBTITLE[tab])}</p>
-        </div>
+      {/* One bar, same top edge as 工作空间 and a thread: the mark, the page's
+          name, then the three lenses at the right. The old head was a 26px
+          display title over a one-line description with a rule under it — a
+          headline for a page whose whole job is a board. The name is a label,
+          and the description repeated what the tabs and the columns say. */}
+      <header class="control-head">
+        <Icon name="list-checks" size={16} class="control-head-icon" />
+        <span class="control-title">{t('nav.control')}</span>
         <div class="segmented control-tabs" role="tablist" aria-label={t('nav.control')}>
-          {TABS.map((k) => (
-            <button
-              key={k}
-              type="button"
-              role="tab"
-              aria-selected={tab === k}
-              class={`seg${tab === k ? ' on' : ''}`}
-              onClick={() => onSelectTab(k)}
-            >
-              {t(`nav.${k}`)}
-            </button>
-          ))}
+          {TABS.map((k) => {
+            const selected = k === tab
+            return (
+              <button
+                key={k}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                class={`seg${selected ? ' on' : ''}`}
+                onClick={() => onSelectTab(k)}
+              >
+                <Icon name={TAB_ICON[k]} size={14} />
+                {t(TAB_LABEL[k])}
+              </button>
+            )
+          })}
         </div>
-      </div>
+      </header>
 
-      {tab === 'plans' ? (
-        <PlansView head={false} />
-      ) : tab === 'projects' ? (
+      {tab === 'projects' ? (
         <ProjectsView head={false} onOpenProject={onOpenProject} onOpenQueue={onOpenQueue} />
       ) : (
         <QueueView
-          head={false}
+          mode={tab === 'plans' ? 'plans' : 'board'}
+          onModeChange={(mode) => onSelectTab(mode === 'plans' ? 'plans' : 'queue')}
           project={project}
           focusReview={focusReview}
           onOpen={onOpen}
           onOpenSession={onOpenSession}
+          onNewChat={onNewChat}
         />
       )}
     </section>

@@ -28,18 +28,30 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
   return ask ? ask(opts) : Promise.resolve(false)
 }
 
-/** Mount once in the app shell. */
+/** Mount once in the app shell.
+ *
+ *  A native `<dialog>` opened with `showModal()`: a confirmation can be raised
+ *  from anywhere, including from inside another sheet (设置 → 记忆 asks before
+ *  deleting a topic), and only the top layer guarantees it paints over that
+ *  sheet instead of behind it. */
 export function ConfirmHost() {
   const [current, setCurrent] = useState<{
     opts: ConfirmOptions
     resolve: (v: boolean) => void
   } | null>(null)
   const box = useRef<HTMLDivElement>(null)
+  const sheet = useRef<HTMLDialogElement>(null)
 
   // Focus trap: focus moves into the dialog on open (the cancel button is
   // the first focusable, which is the safe default for a destructive ask),
   // Tab cycles inside, and closing restores the opener's focus.
   useModalFocus(box, current !== null)
+
+  useEffect(() => {
+    const el = sheet.current
+    if (!el || el.open) return
+    el.showModal()
+  }, [current])
 
   useEffect(() => {
     ask = (opts) =>
@@ -65,25 +77,26 @@ export function ConfirmHost() {
   const { opts } = current
 
   return (
-    <div
-      class="modal-backdrop"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) done(false)
+    <dialog
+      ref={sheet}
+      class="modal confirm-modal"
+      role="alertdialog"
+      aria-label={opts.title}
+      onCancel={(e) => {
+        // Escape is a legitimate "no" here — unlike 设置, this dialog's whole
+        // job is a yes/no, and the safe answer is the one a stray keypress
+        // picks.
+        e.preventDefault()
+        done(false)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation()
+          done(false)
+        }
       }}
     >
-      <div
-        ref={box}
-        class="modal"
-        role="alertdialog"
-        aria-modal="true"
-        aria-label={opts.title}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            e.stopPropagation()
-            done(false)
-          }
-        }}
-      >
+      <div ref={box}>
         <h2 class="modal-title">{opts.title}</h2>
         <p class="modal-msg">{opts.message}</p>
         <div class="modal-actions">
@@ -98,6 +111,6 @@ export function ConfirmHost() {
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }

@@ -20,7 +20,9 @@ import { AgentFace, TeamRoster } from './team-picker'
  *  count as "outside", Escape closes the card before anything behind it
  *  reacts, and a single press toggles it rather than reopening it. */
 export function ComposerPet(props: {
-  /** A turn is streaming: the pet is cheering and the roster is locked. */
+  /** A turn is streaming: the pet cheers instead of bobbing, and a press opens
+   *  the card at once instead of waiting out the double-press window. The
+   *  roster stays reachable — see the press model in composer-panda.tsx. */
   working: boolean
   /** The thread's roster, as the session carries it. */
   team: string[]
@@ -30,8 +32,9 @@ export function ComposerPet(props: {
   const [open, setOpen] = useState(false)
   const box = useRef<HTMLDivElement>(null)
 
-  // A send starts a turn; a card hanging over the transcript while the answer
-  // streams is in the way, and the roster cannot be changed mid-turn anyway.
+  // A send starts a turn, and the card belongs to the composition that just
+  // ended: it closes itself rather than hanging over the streaming answer.
+  // Reopening it mid-turn is one press away — a turn does not lock the roster.
   useEffect(() => {
     if (props.working) setOpen(false)
   }, [props.working])

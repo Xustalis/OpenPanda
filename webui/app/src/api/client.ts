@@ -360,6 +360,11 @@ export interface Task {
    *  ("claude_code"). Present on list rows as well as the detail, so a light
    *  row can name the employee without dragging the task's traces along. */
   agent?: string
+  /** The capability set the task was routed with, `agent:<name>` included
+   *  when the submitter pinned one. The dispatch card reads it to name the
+   *  employee a job was given to when the trace never got an
+   *  `exec_agent_start` (a route failure, a task cancelled while queued). */
+  requires?: string[]
   // Queue redesign fields: the board sorts by seq (drag order) then
   // priority, and jumps into session_id when set.
   priority?: 'high' | 'normal' | 'low'
@@ -377,6 +382,13 @@ export interface Task {
    *  is set — a private copy whose changes merge back on completion. */
   scope_paths?: string[]
   isolate?: boolean
+  /** chain[0] — the device that FIRST created this task: this node's id for
+      locally submitted rows (sub-agents inherit the parent's chain), the
+      delegator's id for rows that arrived over the wire. Empty on legacy
+      rows predating the chain column. */
+  origin_node?: string
+  /** True when origin_node names this console's own node. */
+  origin_local?: boolean
   /** WorkDir is the submitter's pin (a session worktree); ExecWorkDir is where
    *  the run actually happened. The detail card shows the latter — a finished
    *  row should be locatable on the machine that ran it. */
@@ -777,6 +789,8 @@ export interface CardFile {
 export interface NodesAddResult {
   addr: string
   added: boolean
+  /** True when an existing dial-list entry was renamed or its tier changed. */
+  updated?: boolean
   secret_generated: boolean
   dialed: boolean
   dial_error?: string
@@ -785,6 +799,26 @@ export interface NodesAddResult {
   listen_addr: string
   invite_steps: string[]
   install_command: string
+}
+
+/** One configured network.peers entry, joined with the directory row its
+ *  address resolves to when the daemon has seen that peer. */
+export interface PeerEntry {
+  addr: string
+  trust: string
+  node_id?: string
+  name?: string
+  status?: string
+  online: boolean
+  last_seen?: string
+}
+
+/** GET /api/peers — the dial list the add-device card manages. HasSecret says
+ *  whether the next add still needs a join guide (no shared secret yet). */
+export interface PeersView {
+  peers: PeerEntry[]
+  listen_addr?: string
+  has_secret: boolean
 }
 
 /** GET /api/pair — the Bluetooth-style pairing surface: inbound requests
@@ -1039,8 +1073,8 @@ export const api = {
 
   // ---- Agent CLIs (settings visibility) ----
 
-  agents(): Promise<AgentInfo[]> {
-    return request('GET', '/api/agents')
+  agents(refresh = false): Promise<AgentInfo[]> {
+    return request('GET', `/api/agents${refresh ? '?refresh=1' : ''}`)
   },
 
   testAgent(name: string): Promise<AgentTestResult> {
@@ -1204,8 +1238,24 @@ export const api = {
    *  missing) and dial it live when an engine is running. Returns the join
    *  guide for the other machine. trust pins the peer's trust-zone tier
    *  (experimental): absent = mesh, the pre-feature default. */
-  addNode(addr: string, trust?: string): Promise<NodesAddResult> {
-    return request('POST', '/api/nodes/add', trust ? { addr, trust } : { addr })
+  addNode(addr: string, trust?: string, originalAddr?: string): Promise<NodesAddResult> {
+    const body: { addr: string; trust?: string; original_addr?: string } = { addr }
+    if (trust) body.trust = trust
+    if (originalAddr) body.original_addr = originalAddr
+    return request('POST', '/api/nodes/add', body)
+  },
+
+  /** GET /api/peers — the configured dial list (network.peers), with the
+   *  directory row each address currently resolves to. Never carries the
+   *  shared secret. */
+  peers(): Promise<PeersView> {
+    return request('GET', '/api/peers')
+  },
+
+  /** DELETE /api/peers?addr=… — drop one entry from the dial list. The
+   *  daemon's peer sync closes the keepalive loop for that address. */
+  removePeer(addr: string): Promise<{ addr: string; removed: boolean }> {
+    return request('DELETE', `/api/peers?addr=${encodeURIComponent(addr)}`)
   },
 
   /** POST /api/nodes/{id}/trust — the console twin of `panda nodes trust`:
@@ -1450,41 +1500,6 @@ export const api = {
 
   deleteReminder(id: number): Promise<{ deleted: number }> {
     return request('DELETE', `/api/reminders/${id}`)
-  },
-
-  // ---- 待办 (the user's own board) ----
-
-  /** The whole board in one read; the page paints every lane from it. */
-  todos(params?: { status?: string; project?: string; q?: string }): Promise<Todo[]> {
-    const q = new URLSearchParams()
-    if (params?.status) q.set('status', params.status)
-    if (params?.project) q.set('project', params.project)
-    if (params?.q) q.set('q', params.q)
-    const suffix = q.size > 0 ? `?${q}` : ''
-    return request('GET', `/api/todos${suffix}`)
-  },
-
-  createTodo(body: TodoInput): Promise<Todo> {
-    return request('POST', '/api/todos', body)
-  },
-
-  /** Partial update: only the fields present are touched. `due_at` takes
-   *  "" (clear), "YYYY-MM-DD", or an RFC3339 stamp. */
-  patchTodo(id: number, body: TodoPatch): Promise<Todo> {
-    return request('PATCH', `/api/todos/${id}`, body)
-  },
-
-  deleteTodo(id: number): Promise<{ deleted: number }> {
-    return request('DELETE', `/api/todos/${id}`)
-  },
-
-  reorderTodos(ids: number[]): Promise<{ reordered: number }> {
-    return request('POST', '/api/todos/reorder', { ids })
-  },
-
-  /** 交给熊猫: enqueue a task from this todo and link the two rows. */
-  startTodo(id: number): Promise<TodoStartResult> {
-    return request('POST', `/api/todos/${id}/start`, {})
   },
 
   // ---- Memory (USER.md / MEMORY.md / DREAMS.md) ----
@@ -1762,6 +1777,13 @@ export interface ModelEntry {
   active: boolean
   key_set: boolean
   key_hint?: string
+  /** A short digest of the stored key. key_hint is the last four
+   *  characters, which two accounts of one vendor can share; the console
+   *  groups connections by this instead, so "extend" cannot borrow the
+   *  other account's key. Empty when no key is set. */
+  key_fingerprint?: string
+  /** The stored consent to dial this endpoint over plain http. */
+  allow_plaintext?: boolean
   /** True when the stored limit is the catalogue's own answer, i.e. the user
    *  expressed no opinion — the form shows the number as a placeholder. */
   context_auto?: boolean
@@ -1802,6 +1824,9 @@ export interface AddModelRequest {
   reuse_from?: string
   api_type?: string
   base_url?: string
+  // Explicit consent to reach a plain-http endpoint (the network guard refuses
+  // a non-loopback http endpoint without it).
+  allow_plaintext?: boolean
   max_tokens?: number
   /** Put the limit back on the catalogue's answer. Distinct from omitting the
    *  number, which means "leave what is stored". */
@@ -1816,6 +1841,10 @@ export interface AddModelRequest {
   no_auth?: boolean
   params?: Record<string, unknown>
   headers?: Record<string, string>
+  /** Alias of the row to duplicate. The source's key, raw params/headers and
+   *  plaintext waiver are filled in server-side — the panel never echoes them
+   *  back, so a client-side copy would submit an empty credential. */
+  copy_from?: string
 }
 
 export interface ModelRefRequest {
@@ -1825,6 +1854,7 @@ export interface ModelRefRequest {
   model?: string
   api_type?: string
   base_url?: string
+  allow_plaintext?: boolean
 }
 
 // ---- Plan wire types ----
@@ -2063,58 +2093,6 @@ export interface Reminder {
   fired_at: number // 0 = never fired; for recurring rows it is the LAST fire time
   source: string // "tool" | "cli" | "web"
   repeat_seconds: number // >0 = recurring; the row stays pending between fires
-}
-
-/** 待办 lanes. `paused` is a todo the owner parked; `cancelled` is one they
- *  gave up on — both stay on the board rather than being deleted, so the
- *  history of "I decided not to" survives. */
-export type TodoStatus = 'pending' | 'running' | 'paused' | 'done' | 'cancelled'
-
-/** One row of the to-do board. Times are Unix seconds, 0 = unset. */
-export interface Todo {
-  id: number
-  title: string
-  description: string
-  status: TodoStatus
-  priority: 'high' | 'normal' | 'low'
-  due_at: number
-  started_at: number
-  done_at: number
-  tags: string[] | null
-  project: string
-  task_id: string // the task started from this todo; "" until 开始
-  seq: number // manual lane order; 0 = never dragged
-  created_at: number
-  updated_at: number
-}
-
-export interface TodoInput {
-  title: string
-  description?: string
-  status?: TodoStatus
-  priority?: 'high' | 'normal' | 'low'
-  due_at?: string
-  tags?: string[]
-  project?: string
-}
-
-export interface TodoPatch {
-  title?: string
-  description?: string
-  status?: TodoStatus
-  priority?: 'high' | 'normal' | 'low'
-  due_at?: string
-  tags?: string[]
-  project?: string
-  seq?: number
-}
-
-export interface TodoStartResult {
-  todo?: Todo
-  task_id: string
-  session_id: string
-  state: string
-  warning?: string
 }
 
 export interface MemoryFiles {
@@ -2431,6 +2409,11 @@ export interface AskStreamHandlers {
    *  this event is the proof it reached the model, so the console can stop
    *  calling it "queued". Fires zero or more times per turn. */
   onSteer?(text: string, round: number): void
+  /** Notes the turn ended without any round reading. They are not lost: the
+   *  server parked them and the console opens the next turn with them (see
+   *  `resumeQueued` on askSessionStream). Fires at most once, after the last
+   *  result, before the stream closes. */
+  onQueuedTurn?(text: string, count: number): void
   /** `code` carries the panel's machine reason when one exists —
    *  "model_config" marks the fix-in-settings class of failure. */
   onError(message: string, code?: string, info?: AskErrorInfo): void
@@ -2458,10 +2441,22 @@ export async function askSessionStream(
    *  thread's stored policy; the console normally PATCHes the session on a
    *  flip, so this only covers a send that races the PATCH. */
   permissionMode?: string,
+  /** Marks this ask as the automatic continuation of notes a finished turn
+   *  never read. The server drains its parked notes as this turn's input, so
+   *  `prompt` may be the same words purely for display — the parked copy is
+   *  the authority and is consumed exactly once. */
+  resumeQueued?: boolean,
 ): Promise<void> {
   await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
     method: 'POST',
-    body: { prompt, authorize, node: node || undefined, agents, permission_mode: permissionMode || undefined },
+    body: {
+      prompt,
+      authorize,
+      node: node || undefined,
+      agents,
+      permission_mode: permissionMode || undefined,
+      resume_queued: resumeQueued || undefined,
+    },
     signal,
     onEvent: (event, data) => {
       let payload: any
@@ -2479,6 +2474,7 @@ export async function askSessionStream(
         if (taskID) h.onTask?.(taskID)
       }
       else if (event === 'steer') h.onSteer?.(payload.text ?? '', payload.round ?? 0)
+      else if (event === 'queued_turn') h.onQueuedTurn?.(payload.text ?? '', payload.count ?? 0)
       else if (event === 'result') h.onResult(payload as AskResult)
       else if (event === 'error')
         h.onError(payload.message ?? 'unknown error', payload.code || undefined, {

@@ -43,7 +43,16 @@ import { PANDA_REST_POSE_MS, isPandaAwake, restingPose } from './panda-rest'
  * The first press therefore waits out the double-press window before it acts.
  * 240ms is the whole trade: shorter and a deliberate double tap lands after
  * the card already opened, longer and the card feels like it ignored the
- * click. Without an `onPress` the pet has no second job and pokes at once. */
+ * click. Without an `onPress` the pet has no second job and pokes at once.
+ *
+ * A running turn used to freeze the whole pet — the press returned early and
+ * the roster was unreachable until the answer landed. That was wrong about
+ * the card: who works on a thread is a decision people revise *while* the
+ * answer streams ("add the reviewer, this is getting big"), and a control
+ * that goes dead for the length of a turn reads as broken, not as busy. So a
+ * turn now only freezes the toy. During a turn a press opens the card at
+ * once, with no double-press window: the working frame owns the sprite, a
+ * squish would replace it mid-cheer, and there is no poke to wait for. */
 export function ComposerPanda({
   working,
   onPress,
@@ -111,18 +120,14 @@ export function ComposerPanda({
      after the last one, so a burst stays a toy while the next deliberate
      click opens the card again.
 
-     `workingRef` exists because the parked single press outlives the render
-     that set it: a turn that starts inside the 240ms window must not let a
-     parked press open a card over the streaming answer. */
+     While a turn streams the card is opened immediately, before any of that
+     bookkeeping: the window exists to tell a poke from a click, and a poke is
+     exactly what the working frame cannot take. */
   const tap = useRef<number | null>(null)
   const poking = useRef(false)
   const streak = useRef(0)
   const lastPress = useRef(0)
   const idle = useRef<number | null>(null)
-  const workingRef = useRef(working)
-  useEffect(() => {
-    workingRef.current = working
-  }, [working])
   useEffect(
     () => () => {
       if (tap.current !== null) window.clearTimeout(tap.current)
@@ -141,13 +146,18 @@ export function ComposerPanda({
   }
 
   function press() {
-    // While a turn streams the pet is busy cheering, and a squish would fight
-    // the working animation — a press there is ignored rather than queued for
-    // the moment the turn ends. The roster is locked for the same reason.
-    if (working) return
-    // No second job: this pet is only a toy, and a toy answers at once.
+    // No second job: this pet is only a toy, and a toy answers at once. Mid-turn
+    // the working frame is the answer already, and a squish would replace it.
     if (!onPress) {
-      setBounce((n) => n + 1)
+      if (!working) setBounce((n) => n + 1)
+      return
+    }
+    // The roster is a live control, not part of the turn: a press while the
+    // answer streams toggles the card on the spot. Nothing is parked and no
+    // window is waited out — the second press of a double tap has no squish to
+    // land on, so it can only mean the same thing the first one did.
+    if (working) {
+      onPress()
       return
     }
     const now = performance.now()
@@ -169,7 +179,9 @@ export function ComposerPanda({
     }
     tap.current = window.setTimeout(() => {
       tap.current = null
-      if (workingRef.current) return
+      // A turn that started inside the window does not cancel the click: the
+      // card is allowed mid-turn now, and swallowing the press here is exactly
+      // the dead-click this used to be reported as.
       onPress()
     }, 240)
   }

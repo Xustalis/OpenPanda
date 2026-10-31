@@ -13,9 +13,15 @@ import { test } from 'node:test'
 import { mergeTailTurn, patchStreaming, slashQuery } from './chatstate.ts'
 
 interface Msg {
-  role: string
+  role: 'user' | 'assistant'
   text: string
+  kind?: string
+  ref?: string
   streaming?: boolean
+  /** Display-only fields the transcript never keeps (see mergeTailTurn). */
+  result?: unknown
+  thought?: string
+  k?: string
 }
 
 test('patchStreaming targets the streaming assistant bubble, not the last message', () => {
@@ -116,4 +122,46 @@ test('mergeTailTurn ignores a transcript whose tail is not an answer', () => {
   ]
   assert.deepEqual(mergeTailTurn(msgs, [{ role: 'user' as const, text: 'q' }]), msgs)
   assert.deepEqual(mergeTailTurn([], []), [])
+})
+
+test('mergeTailTurn inserts the extra turns a fanned-out round persisted', () => {
+  // The wire sends one result frame for a round that dispatched three tasks;
+  // the panel files one dispatch turn per task. Without adopting the surplus
+  // the thread shows one card while the task board shows three.
+  const msgs = [
+    { role: 'user' as const, text: '测一下这几个 agent' },
+    { role: 'assistant' as const, text: '', kind: 'task', ref: 't3', result: { ok: true } },
+  ]
+  const turns = [
+    { role: 'user' as const, text: '测一下这几个 agent' },
+    { role: 'assistant' as const, text: '已派发任务：a（t1）', kind: 'task', ref: 't1' },
+    { role: 'assistant' as const, text: '已派发任务：b（t2）', kind: 'task', ref: 't2' },
+    { role: 'assistant' as const, text: '已派发任务：c（t3）', kind: 'task', ref: 't3' },
+  ]
+  let n = 0
+  const got = mergeTailTurn<Msg>(msgs, turns, (turn) => ({ ...turn, k: `extra-${n++}` }) as Msg)
+  assert.equal(got.length, 4)
+  assert.deepEqual(
+    got.slice(1).map((m) => m.ref),
+    ['t1', 't2', 't3'],
+  )
+  // The local tail keeps the streamed result the transcript never stores.
+  assert.deepEqual(got[3]!.result, { ok: true })
+})
+
+test('mergeTailTurn reconciles only the tail when no adopter is given', () => {
+  // Callers that cannot build pane-shaped rows keep the old single-merge
+  // behaviour rather than pasting raw transcript rows in.
+  const msgs = [
+    { role: 'user' as const, text: 'q' },
+    { role: 'assistant' as const, text: '', kind: 'task', ref: 't2' },
+  ]
+  const turns = [
+    { role: 'user' as const, text: 'q' },
+    { role: 'assistant' as const, text: '已派发任务：a（t1）', kind: 'task', ref: 't1' },
+    { role: 'assistant' as const, text: '已派发任务：b（t2）', kind: 'task', ref: 't2' },
+  ]
+  const got = mergeTailTurn(msgs, turns)
+  assert.equal(got.length, 2)
+  assert.equal(got[1]!.ref, 't2')
 })

@@ -491,10 +491,13 @@
   align-items: center;
   gap: var(--sp-3);
   padding: 10px var(--sp-5);
-  /* Raised white, no hairline. The header is the top edge of the page rather
-     than a bar laid over it, and the log scrolls in its own box below, so
-     nothing ever slides under this that would need a line to stop it. */
-  background: var(--bg-raised);
+  /* The header is the top edge of the page rather than a bar laid over it, and
+     the log scrolls in its own box below, so nothing ever slides under this
+     that would need a line to stop it. It takes the chrome grey — one step
+     under the page, so the bar caps the reading surface instead of floating on
+     it — and no hairline, because a line under a band that is already darker
+     than the page is a second edge for the same border. */
+  background: var(--chat-head);
   flex: none;
   /* The node card hangs out of this bar and over the transcript. Owning a
      stacking context here is what lets it paint above the log (and above the
@@ -1048,6 +1051,22 @@
 .msg-bubble.is-wide {
   width: min(100%, 620px);
 }
+/* One reply that handed out several jobs: the cards share the panda's face and
+   clock, so they are told apart by rhythm — a hairline between blocks — rather
+   than by repeating the avatar five times down the column. The block keeps the
+   bubble's own stacking (line, cast row, card) so a single-dispatch reply looks
+   exactly as it did before the wrapper existed. */
+.msg-batch-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.msg-batch-item + .msg-batch-item {
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
 /* The panda's closing roll-up wears the panda's colour: it is the one message
    whose authority comes from being the panda's. */
 .msg-bubble.is-summary {
@@ -1140,6 +1159,14 @@
   gap: 6px;
   color: var(--text);
   font-weight: 600;
+}
+/* The slot before an employee is named. It is an absence, not a person, so it
+   drops to the quiet weight the rest of the cast line uses — a bold, full
+   contrast "正在挑选员工" read as the row's headline and fought both the
+   dispatch sentence above it and the state chip beside it. */
+.msg-cast-agent.is-pending {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 .msg-cast-bot {
   width: 18px;
@@ -3026,14 +3053,24 @@
 .team-row.on {
   background: var(--bg-active);
 }
-/* Not installed on this node is a fact about the machine, and the scheduler
-   cannot staff a pick that names a binary the node does not have. The row
-   stays visible — the reader needs to know the roster is short a person and
-   why — but it is not an option: no hover wash, no pointer, and the second
-   line says what to do about it. A row already on the roster stays clickable
-   so a stale pick can be removed without installing anything. */
-.team-row.off .team-name {
-  color: var(--text-secondary);
+/* Not installed on this node is a fact about the machine: the row stays in the
+   list so the roster is honest about what the console knows, but it cannot be
+   hired — nothing here can start it. Name and face step back, the tag says
+   why, and the row drops the pointer and the hover wash so it never reads as
+   a pick. A leftover pick (installed when it was chosen, gone since) keeps its
+   tick and its click, because taking it back out is the only way to clear it. */
+.team-row.off .team-name,
+.team-row.off .team-role {
+  color: var(--text-tertiary);
+}
+.team-row.off .team-ava {
+  opacity: 0.55;
+}
+.team-row.off:not(.on) {
+  cursor: default;
+}
+.team-row.off:not(.on):hover {
+  background: none;
 }
 .team-row:disabled {
   cursor: not-allowed;
@@ -3798,77 +3835,6 @@
 .folder-btn {
   flex: none;
 }
-.ask-authorize {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--text-sm);
-  /* Danger tone, not the neutral label tone: this is the one control in the
-     composer that can hand an agent unattended run of your machine, and it
-     used to sit in the same grey as everything beside it. */
-  color: var(--semantic-danger);
-  cursor: pointer;
-  user-select: none;
-  /* Optical, not geometric. The row centres every child's *box*, and this
-     control's box centre is already level with the "+" button's — but the ink
-     inside those boxes does not sit where the box does: the "+" glyph and the
-     CJK run in "发送" hang ~1.4px below their own line-box centres, while the
-     switch track (a drawn box) and this label's text sit dead centre. Measured
-     ink centres were "+" 44.1, "发送" 44.4, switch 42.5 — so the risk control
-     read ~1.9px high. 2px puts its ink at 44.5, level with both. */
-  position: relative;
-  top: 2px;
-}
-/* A switch, not a tick box: this is a mode you leave on, not a one-off box you
-   tick. The track is a <span> so the knob can be its ::after — pseudo-elements
-   on an <input> are not reliably rendered. */
-.ask-authorize .switch {
-  position: relative;
-  flex: none;
-  display: inline-block;
-  width: 30px;
-  height: 17px;
-}
-.ask-authorize .switch input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-.ask-authorize .switch-track {
-  position: absolute;
-  inset: 0;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--semantic-danger-border);
-  background: var(--bg-inset);
-  pointer-events: none;
-  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
-}
-.ask-authorize .switch-track::after {
-  content: '';
-  position: absolute;
-  top: 1px;
-  left: 1px;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-  transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
-}
-.ask-authorize .switch input:checked + .switch-track {
-  background: var(--semantic-danger);
-  border-color: var(--semantic-danger);
-}
-.ask-authorize .switch input:checked + .switch-track::after {
-  transform: translateX(13px);
-  background: #fff;
-}
-.ask-authorize .switch input:focus-visible + .switch-track {
-  box-shadow: var(--ring);
-}
 
 /* ---- Composer "+" menu ---------------------------------------------------- */
 
@@ -4123,43 +4089,171 @@
   gap: 22px;
 }
 
-/* ---- pending-note strip -------------------------------------------------
-   Notes typed into a running turn, listed between the transcript and the
-   composer: they have not been delivered yet, so each row carries the three
-   things a waiting message needs — send it ahead of the round, fix it, or take
-   it back. One row per note, numbered, oldest first (the oldest is the one a
-   round reads first).
+/* ---- pending-note bubbles -----------------------------------------------
+   Notes typed into a running turn, worn by the pet instead of listed above
+   it: they have not been delivered yet, so the user can still send one ahead
+   of the round, fix it, or take it back. One row per note, numbered, oldest
+   first (the oldest is the one a round reads first).
 
-   It is a tray, not a stack of cards. The rows used to be full-bleed cards
-   spanning the whole pane — wider than the input box they sit on and wider
-   than the transcript above them, so the queue read as a detached list that
-   belonged to neither. The tray takes the reading column's width and centring
-   (`.note-tray`, the same 900px as `.composer > *` and `.chat-log > *`) and
-   groups the rows behind one hairline, which is also what lets the list cap
-   its height: four notes used to eat 150px of transcript, and nothing stopped
-   the fifth. */
+   Two earlier shapes are gone. First a tray spanning the reading column and
+   parked above the pet — a 900px shelf for one "你好", with the panda's head
+   poking out from under its left end. Then a short pill beside the pet, which
+   was the right idea at the wrong size: a queue is a count, not a paragraph,
+   and any bar big enough to read costs the log a row it cannot spare.
+
+   So the queue is a trail of three small round bubbles over the pet's head —
+   the panda thinking — and the notes themselves are behind a hover: the
+   bubbles open a popover with the full list, its verbs included. The strip
+   gives the trail its own band above the composer; nothing else moves. */
 .note-strip {
   flex: none;
+  /* 24px of real height, not zero: the whole trail has to sit above the pet's
+     head, and the log's own bottom padding is only 16 — the rest is bought
+     here. It is the transcript that gives it back, and only while a note is
+     waiting. */
+  height: 24px;
   /* Same lanes as the log and the composer: 52px of prompt rail on the right,
-     plus the header card's lane while one is open, so the tray slides with the
-     column instead of hanging off it. */
+     plus the header card's lane while one is open, so the bubbles slide with
+     the column instead of hanging off it. */
   padding: 0 calc(52px + var(--panel-lane)) 0 var(--sp-6);
+  /* Where the trail starts, measured from the composer's content box. The pet
+     is 18px in and 44px wide, so 54 puts the first bubble just past the head's
+     right edge and lets the trail climb away from it — the thought is the
+     pet's, not the roster's. The roster faces hang lower on the flank (their
+     top is 24px above the box, the trail's bottom 39), so the two never meet
+     and this lane needs no face count. */
+  --pet-lane: 54px;
   transition: padding-right var(--dur-med) var(--ease-standard);
 }
-.note-tray {
+/* The reading column, as a zero-height box the bubbles hang off. This has to be
+   a real element and not padding on the strip: measured from the strip, the
+   lane lands at the *pane's* edge, which in a wide window is ~150px left of the
+   centred composer — the bubbles ended up on top of the panda, which is the bug
+   this rail removes. `.composer > *` caps at the same 900px, so the two edges
+   stay in step at every width. */
+.note-rail {
   max-width: 900px;
-  margin: 0 auto 2px;
+  margin: 0 auto;
+  /* The strip's height, so `bottom` below is measured from the composer's top
+     edge — the line the trail floats over — rather than from the top of the
+     strip. */
+  height: 100%;
+  position: relative;
+}
+.note-bubbles {
+  position: absolute;
+  left: var(--pet-lane);
+  right: 0;
+  /* Flex, not a block with an inline button: an inline-level button sits on a
+     line box, and the font's descender under it lifted the whole trail 5px off
+     the `bottom` this rule asks for. */
+  display: flex;
+  align-items: flex-end;
+  /* 13px above the composer's top edge: the lowest bubble's feet land 39px
+     above the composer box's border, and the pet's ink starts at 35 — so the
+     whole trail clears the head instead of crossing its ears. */
+  bottom: 13px;
+  /* Above the composer (a later sibling that would otherwise paint — and
+     hit-test — over the bubbles hanging into its padding) and above the
+     jump-to-bottom slot, which is a zero-height layer at 5 in the same corner.
+     The pet's own cards sit higher still, and should: they are click-opened
+     popovers, this one is a hover. */
+  z-index: 6;
+  /* The band is only a positioning box. Hovering its empty part must not open
+     the list, so hit-testing is off here and back on for the two things that
+     are actually there — the popover stays inside this subtree either way,
+     which is what lets the pointer travel from a bubble up into it. */
+  pointer-events: none;
+}
+.note-dots {
+  pointer-events: auto;
+  display: inline-flex;
+  /* Bottom-aligned so the trail grows upward from one baseline, and the
+     tallest bubble still fits the button's own height — a bubble that poked
+     out of its button would have a dead strip where the pointer cannot reach
+     it. */
+  align-items: flex-end;
+  gap: 6px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+/* One bubble per note, and no number in it: the queue's order lives in the
+   list behind the hover, and a digit in a small disc read as a step counter
+   rather than as the pet thinking.
+
+   The trail is the thought bubble's own grammar: three circles at most, the
+   nearest to the head the smallest, each one larger and a step higher than the
+   one before it. Equal dots in a row read as a pagination indicator or a
+   loading spinner; the growth plus the climb is what says "the panda is
+   chewing on something". */
+.note-dot {
+  display: block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  /* Stronger than the card hairline: at this size `--border` is a smudge you
+     have to hunt for. */
+  border: 1px solid var(--border-strong);
+  /* Raised, not the well: a bubble sitting on the page (and half over the
+     composer's top edge) has to read as something floating, and a well-coloured
+     disc on white is a smudge. */
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-xs);
+  transition:
+    border-color var(--dur-fast) ease,
+    background var(--dur-fast) ease;
+}
+.note-dots .note-dot:nth-child(2) {
+  width: 13px;
+  height: 13px;
+  transform: translateY(-4px);
+}
+.note-dots .note-dot:nth-child(3) {
+  width: 16px;
+  height: 16px;
+  transform: translateY(-8px);
+}
+.note-dots:hover .note-dot,
+.note-dots[aria-expanded='true'] .note-dot {
+  border-color: var(--text-tertiary);
+  background: var(--bg-inset);
+}
+/* The queue itself, on hover or focus. It opens upward out of the bubbles and
+   over the transcript, which is where the room is; the 8px gap above the
+   bubbles lives in this box's padding, so the pointer crosses from one to the
+   other without ever leaving the subtree (see `.note-bubbles`).
+   It hugs its widest row: a 400px card around one "你好" is the same empty
+   shelf this whole shape exists to get rid of. */
+.note-pop {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  width: fit-content;
+  max-width: min(400px, 100%);
+  padding-bottom: 8px;
+  pointer-events: auto;
+}
+.note-pop-card {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
-  /* Recessed, not raised: the composer below it is the thing you type into and
-     keeps the white card. The tray reads as a shelf the notes are parked on. */
-  background: var(--bg-chrome);
+  /* Raised this time: a popover floats over the page, and the recessed well
+     that read as a shelf behind the composer reads as a hole in the air. */
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
   overflow: hidden;
 }
-/* Four rows: a normal mid-turn queue is visible whole, and the fifth is where
-   the list starts to scroll instead of growing into the page. */
+/* The list is capped by height rather than by row count: the popover is
+   transient, so it can afford four rows where the shelf could afford three,
+   and past that the edges fade (see the masks below).
+   240 is the ceiling, not the cap: the popover measures the room it actually
+   has when it opens and sets max-height inline (sessions.tsx), so a short
+   window scrolls its queue instead of drawing the list over the page header. */
 .note-list {
-  max-height: 132px;
+  max-height: 240px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -4388,14 +4482,16 @@
   max-height: min(60vh, 440px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 8px;
+  /* 4, matching the rows' own vertical padding: the card is a switch, and the
+     air around its rows should not be larger than the air inside them. */
+  padding: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background: var(--bg-raised);
   box-shadow: var(--shadow-lg);
 }
 .perm-menu-head {
-  margin: 2px 6px 6px;
+  margin: 1px 6px 3px;
   font-size: var(--text-xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -4406,7 +4502,12 @@
   align-items: flex-start;
   gap: 9px;
   width: 100%;
-  padding: 8px 8px;
+  /* 6, not 8, on the left: with the icons gone this is the only text in the
+     row, and it has to sit on the same left edge as the menu's head and foot
+     lines. The vertical 4 is the menu's density — this card is a switch you
+     read once and click, not a settings screen, and the two-line rows already
+     carry their own leading. */
+  padding: 4px 8px 4px 6px;
   border: 0;
   border-radius: var(--radius-lg);
   background: transparent;
@@ -4420,25 +4521,17 @@
 .perm-row.on {
   background: var(--bg-inset);
 }
-.perm-row-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--bg-inset);
-  color: var(--text-secondary);
-}
-.perm-row.danger .perm-row-icon {
+/* The rows used to wear a shield each — the same shield, five times, saying
+   nothing the label did not. Bypass is the one mode that has to keep a mark,
+   and it keeps it on the word: a red label is where the eye already is, and it
+   does not depend on a 14px glyph being legible. */
+.perm-row.danger .perm-row-name {
   color: var(--semantic-danger);
-  background: var(--semantic-danger-soft);
 }
 .perm-row-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
 }
 .perm-row-name {
@@ -4447,7 +4540,9 @@
 }
 .perm-row-hint {
   font-size: var(--text-xs);
-  line-height: 1.45;
+  /* Tighter than the 1.45 the rest of the console uses: the hint is one line
+     under its name, and at 1.45 the pair read as two separate paragraphs. */
+  line-height: 1.3;
   color: var(--text-tertiary);
 }
 .perm-check {
@@ -4457,7 +4552,7 @@
   align-self: center;
 }
 .perm-foot {
-  margin: 6px 6px 2px;
+  margin: 3px 6px 1px;
   font-size: var(--text-xs);
   line-height: 1.45;
   color: var(--text-tertiary);

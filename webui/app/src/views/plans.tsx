@@ -7,18 +7,26 @@ import { t } from '../i18n'
 import { navigate } from '../nav'
 import { Icon } from '../components/icons'
 
-/** The plan board — web parity with `/plans`. A plan is the set of tasks
- *  sharing a plan_id; the board summarizes each pipeline (stages, progress,
- *  failures) and drills into the stage list with artifacts and owners. It is
- *  the second tab of 队列·任务·项目, so it can drop its own heading. */
-export function PlansView({ head = true }: { head?: boolean }) {
+/** Plans are a second lens on the task centre, not a separate destination.
+ *  The optional id set comes from the same project/device-filtered task list
+ *  as the kanban, so switching lenses never silently drops the active scope. */
+export function PlansView({
+  head = true,
+  planIds,
+  filtered = false,
+}: {
+  head?: boolean
+  planIds?: Set<string>
+  filtered?: boolean
+}) {
   useLocaleRerender()
   const change = useChangeSignal()
   const { data: plans, error } = useAsync(() => api.plans(), [], change)
   const [openId, setOpenId] = useState<string | null>(null)
+  const visible = planIds ? plans?.filter((p) => planIds.has(p.plan_id)) : plans
 
   return (
-    <section>
+    <section class="plans-section">
       {head && (
         <>
           <h1 class="page-title">{t('plans.title')}</h1>
@@ -27,11 +35,16 @@ export function PlansView({ head = true }: { head?: boolean }) {
       )}
 
       {error && <p class="gate-error">{error}</p>}
-      {!error && !plans && <p class="dim">{t('common.loading')}</p>}
-      {plans && plans.length === 0 && <p class="dim empty-hint">{t('plans.empty')}</p>}
+      {!error && !visible && <p class="dim">{t('common.loading')}</p>}
+      {visible && visible.length === 0 && (
+        <div class="plan-empty">
+          <Icon name="route" size={22} />
+          <p>{filtered ? t('plans.emptyFiltered') : t('plans.empty')}</p>
+        </div>
+      )}
 
       <div class="plan-list">
-        {plans?.map((p) => (
+        {visible?.map((p) => (
           <PlanCard
             key={p.plan_id}
             plan={p}

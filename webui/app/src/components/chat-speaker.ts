@@ -285,6 +285,57 @@ export function castAgent(traces?: { type: string; data?: any }[]): string {
   return ''
 }
 
+/** pinnedAgent names the employee a task was submitted to, from its
+ *  `agent:<name>` requirement. Empty when the task named no one. */
+export function pinnedAgent(requires?: string[]): string {
+  for (const req of requires ?? []) {
+    const trimmed = req.trim()
+    if (!trimmed.startsWith('agent:')) continue
+    const name = trimmed.slice('agent:'.length).trim()
+    if (name) return name
+  }
+  return ''
+}
+
+/** dispatchAgent answers "whose job is this?" for one dispatched task.
+ *
+ *  The trace is the authority on who *ran* it, and it is the only source that
+ *  can tell a fallback apart from the plan. But a task that never reached an
+ *  adapter — it failed at routing, or was cancelled while queued — has no
+ *  `exec_agent_start` at all, and reading the trace alone left exactly those
+ *  rows without a face or a name: a fanned-out round drew two cards that named
+ *  their employee and one that named nobody, which reads as "this job has no
+ *  owner" instead of "this job's owner never started". The pin is what the
+ *  submitter actually asked for, so it is the right answer for that row. */
+export function dispatchAgent(task: {
+  traces?: { type: string; data?: any }[]
+  /** The adapter the row itself names (`task.agent`): the only signal a light
+   *  list row carries, since it has no trace timeline to read. */
+  agent?: string
+  requires?: string[]
+}): string {
+  return castAgent(task.traces) || task.agent || pinnedAgent(task.requires)
+}
+
+/** What the cast row says in the slot where the employee's name goes.
+ *
+ *  The row answers "who got the job". Before `exec_agent_start` lands there is
+ *  no name yet, and the row used to say "picking an employee" in every one of
+ *  those states — so a queued or already-running task wore "picking an
+ *  employee" right next to its own state chip ("已派发 · 正在挑选员工",
+ *  "运行中 · 正在挑选员工"), contradicting the word beside it.
+ *
+ *  Only a freshly submitted task is still being routed, so only that state
+ *  earns "picking". Queued and dispatched rows have an employee — the console
+ *  just cannot name them until the run starts — and say so. Every other state
+ *  (running, review, settled) gets no placeholder at all: the state chip is
+ *  the whole truth there, and an invented word would only fight it. */
+export function castPending(state: string): 'picking' | 'waiting' | '' {
+  if (state === 'submitted') return 'picking'
+  if (state === 'queued' || state === 'dispatched') return 'waiting'
+  return ''
+}
+
 /** The turn kinds this module understands, read off a stored turn. */
 export function castTurn(turn: SessionTurn & { streaming?: boolean }): CastTurn {
   return {

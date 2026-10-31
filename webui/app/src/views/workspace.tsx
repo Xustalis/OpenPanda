@@ -6,6 +6,7 @@ import {
   api,
   askSessionStream,
   type AgentInfo,
+  type AgentTestResult,
   type NodeAgentDetail,
   type NodeInfo,
   type SelfInfo,
@@ -27,14 +28,17 @@ import { VoiceInput } from '../components/voice-input'
 import { suggestProjectName } from '../components/dir-utils'
 import { expandFileRefs } from '../components/attach'
 import { OrchestrateCard } from '../components/orchestrate'
+import { ConnectPanel } from '../components/connect-card'
 import { layerAboveOwnsEscape } from '../components/card-dismiss'
 import { SessionPick } from '../components/session-pick'
+import { confirmDialog } from '../components/confirm'
 import { autoGrow, editorClear, editorPlain, editorTextOf, insertTextAtCaret, range_or_append, useBrParagraphSeparator } from './sessions'
 import { DeviceGlyph, type Form as FormKind } from '../components/device-glyph'
-import { WorkspacePanels } from './workspace-panels'
+import { WorkspacePanels, panelAgents, tileKey } from './workspace-panels'
+import { agentLogo } from '../format/agent-logo'
+import { agentInitial } from '../format/agent-role'
 import {
   PermissionPicker,
-  authorizeRelevant,
   normalizePermission,
   type PermissionMode,
 } from '../components/permission-picker'
@@ -74,6 +78,8 @@ interface Device {
   /** The node's own capability card: what it says it can hand work to. */
   agents: Record<string, NodeAgentDetail>
   abilities: string[]
+  /** Native IDs distinguish card entries we can delete from actuator IDs. */
+  nativeIds: string[]
   kind: string
   tier: number
   /** Is this node holding a work slot right now — the question the map's
@@ -233,6 +239,7 @@ function buildDevices(nodes: NodeInfo[], self: SelfInfo | null, tasks: Task[]): 
         neighbors: n.neighbors ?? [],
         agents: n.agents ?? {},
         abilities: n.abilities ?? [],
+        nativeIds: n.native_ids ?? [],
         kind: n.node_kind ?? '',
         tier: n.scheduler_tier ?? 0,
         busy: false,
@@ -273,6 +280,7 @@ function buildDevices(nodes: NodeInfo[], self: SelfInfo | null, tasks: Task[]): 
       neighbors: [],
       agents: self.node?.agents ?? {},
       abilities: self.node?.abilities ?? [],
+      nativeIds: self.node?.native_ids ?? [],
       kind: self.node_kind ?? '',
       tier: self.node?.scheduler_tier ?? 0,
       busy: false,
@@ -326,6 +334,91 @@ function attachWork(devices: Device[], tasks: Task[]): void {
 
 
 
+/** One agent tile taken off the workspace. The pair, not a key: the restore
+ *  list has to name the machine a tile came from, and a bare agent name
+ *  cannot be put back anywhere. */
+interface HiddenAgent {
+  device: string
+  agent: string
+}
+
+/** One drawable agent tile, with the one fact the batch verbs need: whether
+ *  this console can run its CLI itself. */
+interface TileRef {
+  device: string
+  agent: string
+  local: boolean
+}
+
+/** Where "removed from view" lives. It is a preference — which marks this
+ *  reader wants to see on this drawing — not fleet state, so it stays in the
+ *  browser and never travels to a node. */
+const HIDDEN_KEY = 'openpanda.workspace.hidden'
+
+/** The bench's own memory of "where I was": the directory the last send ran
+ *  in, and the thread it was appended to. Like the hidden-tiles list it is a
+ *  preference, not fleet state — it stays in the browser and never travels to
+ *  a node. Restoring both is what makes reopening 工作空间 a continuation
+ *  rather than a fresh bench the reader has to set up again. */
+const BENCH_KEY = 'openpanda.workspace.bench'
+
+interface BenchPick {
+  dir: string
+  /** Session id of the picked thread; '' means "mint a new one". */
+  session: string
+}
+
+function readBench(): BenchPick {
+  try {
+    const raw = localStorage.getItem(BENCH_KEY)
+    const v = raw ? (JSON.parse(raw) as unknown) : null
+    const o = v as Partial<BenchPick> | null
+    if (!o || typeof o.dir !== 'string' || typeof o.session !== 'string') {
+      return { dir: '', session: '' }
+    }
+    return { dir: o.dir, session: o.session }
+  } catch {
+    // A blocked localStorage (private mode, a locked-down profile) costs the
+    // memory, not the page: the bench simply starts unseeded.
+    return { dir: '', session: '' }
+  }
+}
+
+function writeBench(pick: BenchPick): void {
+  try {
+    localStorage.setItem(BENCH_KEY, JSON.stringify(pick))
+  } catch {
+    /* preference not saved — the pick still holds for this visit */
+  }
+}
+
+function readHidden(): HiddenAgent[] {
+  try {
+    const raw = localStorage.getItem(HIDDEN_KEY)
+    const v = raw ? (JSON.parse(raw) as unknown) : null
+    if (!Array.isArray(v)) return []
+    const out: HiddenAgent[] = []
+    for (const row of v) {
+      const o = row as Partial<HiddenAgent> | null
+      if (!o || typeof o.device !== 'string' || typeof o.agent !== 'string') continue
+      out.push({ device: o.device, agent: o.agent })
+    }
+    return out
+  } catch {
+    // A blocked localStorage (private mode, a locked-down profile) costs the
+    // preference, not the page: every card simply comes back on reload.
+    return []
+  }
+}
+
+function writeHidden(rows: HiddenAgent[]): void {
+  try {
+    localStorage.setItem(HIDDEN_KEY, JSON.stringify(rows))
+  } catch {
+    /* preference not saved — the removal still holds for this visit */
+  }
+}
+
 export function WorkspaceView() {
   useLocaleRerender()
   const change = useChangeSignal()
@@ -341,6 +434,11 @@ export function WorkspaceView() {
   // declares no agents (a fresh install has a card with hardware only).
   const { data: probedAgents } = useAsync(() => api.agents(), [], tick)
   const [selected, setSelected] = useState<string | null>(null)
+  /** A press that began on the paper, not on a card. The click that follows a
+   *  card drag also lands on the paper (the pointer was released over it), so
+   *  the press — not the click target — is what decides whether the selection
+   *  is being dismissed. */
+  const blankPress = useRef(false)
   const [railOpen, setRailOpen] = useState(false)
   // The bench's own state: where the next task runs, and which thread of that
   // directory it continues (null = mint a new one). It lives up here because
@@ -351,6 +449,18 @@ export function WorkspaceView() {
   const [dirTouched, setDirTouched] = useState(false)
   const [pickedSession, setPickedSession] = useState<Session | null>(null)
   const [orchOpen, setOrchOpen] = useState(false)
+  // The drawing's own state: which agent marks the reader picked, and which
+  // ones they folded away. Both are views of the fleet, not fleet state.
+  const [pickedTiles, setPickedTiles] = useState<Set<string>>(new Set())
+  const [hiddenAgents, setHiddenAgents] = useState<HiddenAgent[]>(readHidden)
+  const [hiddenOpen, setHiddenOpen] = useState(false)
+  // The third card on the header's right corner: the way another machine joins
+  // the fleet. It is the same 接入设备 body the 节点网络 page carries, hung here
+  // because adding a device is a thing you do *to* this list, not on a page of
+  // its own.
+  const [connectOpen, setConnectOpen] = useState(false)
+  const [testingTiles, setTestingTiles] = useState<Set<string>>(new Set())
+  const hiddenRef = useRef<HTMLDivElement>(null)
   // Bumped by the 整理布局 control; WorkspacePanels throws the saved
   // arrangement away when it changes.
   const [layoutReset, setLayoutReset] = useState(0)
@@ -365,14 +475,27 @@ export function WorkspaceView() {
   // before the picker can list what it now owns.
   const { data: projects } = useAsync(() => api.projects(), [], tick)
 
-  // Seed the bench with the active project's directory, the way the thread
-  // composer's footer does: the pick is a statement first and a control
+  // Seed the bench with where the reader last was — the directory and thread
+  // of the previous visit, kept by writeBench below. An empty memory falls
+  // back to the active project's directory, the way the thread composer's
+  // footer does. Either way the pick is a statement first and a control
   // second, and an empty footer would make the history picker useless on
   // arrival. A directory the user chose always wins over the seed.
   const seeded = useRef(false)
+  // The thread id waiting for its directory's session list to arrive. Staged
+  // here because a session can only be restored from the list it belongs to —
+  // the list is scoped by project, which resolves only after the directory
+  // does.
+  const pendingSession = useRef('')
   useEffect(() => {
     if (seeded.current || dirTouched || !projects) return
     seeded.current = true
+    const bench = readBench()
+    if (bench.dir) {
+      setPickedDir(bench.dir)
+      pendingSession.current = bench.session
+      return
+    }
     const active = (projects.detail ?? []).find((d) => d.name === projects.active)
     if (active?.work_dir) setPickedDir(active.work_dir)
   }, [projects, dirTouched])
@@ -391,14 +514,188 @@ export function WorkspaceView() {
     tick,
   )
 
+  // Restore the staged thread once its directory's list is in. A thread that
+  // was deleted while the page was away restores nothing — the pill simply
+  // stays on 新对话, which is the honest answer.
+  useEffect(() => {
+    if (!pendingSession.current || !dirSessions) return
+    const id = pendingSession.current
+    pendingSession.current = ''
+    const hit = dirSessions.find((s) => s.id === id)
+    if (hit) setPickedSession(hit)
+  }, [dirSessions])
+
   const devices = useMemo(() => buildDevices(nodes ?? [], self, tasks ?? []), [nodes, self, tasks])
   const deviceOf = useMemo(() => new Map(devices.map((d) => [d.id, d])), [devices])
 
   const sel = selected ? deviceOf.get(selected) ?? null : null
 
+  const hiddenTiles = useMemo(
+    () => new Set(hiddenAgents.map((h) => tileKey(h.device, h.agent))),
+    [hiddenAgents],
+  )
+  const fallbackAgents = useMemo(
+    () => (probedAgents ?? []).filter((a) => a.installed).map((a) => a.name),
+    [probedAgents],
+  )
+  // Every tile the page could draw, keyed the way the panels key them. The
+  // batch bar reads it to know what a pick refers to and whether the CLI is
+  // one this machine can spawn.
+  const tileIndex = useMemo(() => {
+    const map = new Map<string, TileRef>()
+    for (const d of devices) {
+      for (const a of panelAgents(d, fallbackAgents)) {
+        map.set(tileKey(d.id, a), { device: d.id, agent: a, local: d.local })
+      }
+    }
+    return map
+  }, [devices, fallbackAgents])
+  const pickedList = useMemo(
+    () =>
+      [...pickedTiles]
+        .map((k) => tileIndex.get(k))
+        .filter((t): t is TileRef => t !== undefined),
+    [pickedTiles, tileIndex],
+  )
+  // The roster a send carries: the distinct CLIs behind the picked cards.
+  // Two cards of the same agent on two machines are one roster entry — the
+  // restriction is about hands, not about which box they sit on.
+  const pickedAgents = useMemo(() => {
+    const names: string[] = []
+    for (const t of pickedList) if (!names.includes(t.agent)) names.push(t.agent)
+    return names
+  }, [pickedList])
+
+  // A tile that leaves the fleet (a node went away, an agent left a card)
+  // must not stay picked: the bar would count a card nobody can see and a
+  // batch verb would act on a ghost.
+  useEffect(() => {
+    setPickedTiles((prev) => {
+      const live = [...prev].filter((k) => tileIndex.has(k))
+      return live.length === prev.size ? prev : new Set(live)
+    })
+  }, [tileIndex])
+
+  const toggleTile = (key: string) =>
+    setPickedTiles((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+
+  const hideTile = (device: string, agent: string) => {
+    setHiddenAgents((prev) => {
+      if (prev.some((h) => h.device === device && h.agent === agent)) return prev
+      const next = [...prev, { device, agent }]
+      writeHidden(next)
+      return next
+    })
+    setPickedTiles((prev) => {
+      const key = tileKey(device, agent)
+      if (!prev.has(key)) return prev
+      const next = new Set(prev)
+      next.delete(key)
+      return next
+    })
+  }
+
+  const hidePicked = () => {
+    if (pickedList.length === 0) return
+    setHiddenAgents((prev) => {
+      const next = [...prev]
+      for (const t of pickedList) {
+        if (!next.some((h) => h.device === t.device && h.agent === t.agent)) {
+          next.push({ device: t.device, agent: t.agent })
+        }
+      }
+      writeHidden(next)
+      return next
+    })
+    setPickedTiles(new Set())
+  }
+
+  const restoreTile = (device: string, agent: string) =>
+    setHiddenAgents((prev) => {
+      const next = prev.filter((h) => !(h.device === device && h.agent === agent))
+      writeHidden(next)
+      return next
+    })
+
+  const restoreDevice = (device: string) =>
+    setHiddenAgents((prev) => {
+      const next = prev.filter((h) => h.device !== device)
+      writeHidden(next)
+      return next
+    })
+
+  const restoreAll = () => {
+    setHiddenAgents([])
+    writeHidden([])
+  }
+
+  /** `<cli> --version` on this console's own machine — the panel's own test
+   *  endpoint. Resolves with the verdict rather than throwing, so a batch can
+   *  count it; a transport failure is the caller's to report. */
+  const probe = async (device: string, agent: string): Promise<AgentTestResult> => {
+    const key = tileKey(device, agent)
+    setTestingTiles((prev) => new Set(prev).add(key))
+    try {
+      return await api.testAgent(agent)
+    } finally {
+      setTestingTiles((prev) => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
+    }
+  }
+
+  const testTile = async (device: string, agent: string) => {
+    try {
+      const r = await probe(device, agent)
+      const name = r.version ? `${agent} · ${r.version}` : agent
+      toast(
+        r.ok
+          ? t('workspace.test.ok', { name })
+          : t('workspace.test.fail', { name, error: r.error ?? '' }),
+        r.ok ? 'success' : 'error',
+      )
+    } catch (e) {
+      toastError(e)
+    }
+  }
+
+  const testPicked = async () => {
+    const rows = pickedList.filter((t) => t.local)
+    if (rows.length === 0) {
+      toast(t('workspace.test.none'), 'info')
+      return
+    }
+    let ok = 0
+    let bad = 0
+    // One at a time: each probe spawns a CLI, and a batch of them at once is
+    // exactly what made the roster card slow (see panel/agents.go).
+    for (const tile of rows) {
+      try {
+        const r = await probe(tile.device, tile.agent)
+        if (r.ok) ok += 1
+        else bad += 1
+      } catch {
+        bad += 1
+      }
+    }
+    toast(
+      t('workspace.test.summary', { ok, bad }),
+      bad === 0 ? 'success' : 'error',
+    )
+  }
+
   const toggleRail = () => {
     const next = !railOpen
     setRailOpen(next)
+    setHiddenOpen(false)
+    setConnectOpen(false)
     if (next) {
       setOrchOpen(false)
       // The toggle is the device *list*; a device read before the panel was
@@ -407,9 +704,24 @@ export function WorkspaceView() {
       setSelected(null)
     }
   }
+  // 新增设备 and 设备列表 are two answers to the same corner, so one puts the
+  // other away — the reader asked for a different card, not for a second one.
+  const toggleConnect = () => {
+    const next = !connectOpen
+    setConnectOpen(next)
+    if (next) {
+      setRailOpen(false)
+      setHiddenOpen(false)
+      setOrchOpen(false)
+    }
+  }
   const toggleOrch = (open: boolean) => {
     setOrchOpen(open)
-    if (open) setRailOpen(false)
+    if (open) {
+      setRailOpen(false)
+      setHiddenOpen(false)
+      setConnectOpen(false)
+    }
   }
   // Picking a device is a request for its facts, and those only live in the
   // rail — so a pick opens the panel it writes to. Clearing a selection
@@ -417,6 +729,7 @@ export function WorkspaceView() {
   const pick = (id: string | null) => {
     setSelected(id)
     if (id) toggleOrch(false)
+    if (id) setConnectOpen(false)
     if (id) setRailOpen(true)
   }
   // The card's own ×: a close button on a panel puts the panel away, it does
@@ -443,6 +756,41 @@ export function WorkspaceView() {
     return () => document.removeEventListener('keydown', onKey, true)
   }, [railOpen])
 
+  // Same key, same corner: the connect card is one of these header cards, and
+  // Escape is the way out the reader already knows there.
+  // `layerAboveOwnsEscape` leaves the key to anything stacked on top of it (a
+  // confirm dialog, a menu) so one press undoes one layer.
+  useEffect(() => {
+    if (!connectOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || layerAboveOwnsEscape()) return
+      e.stopPropagation()
+      setConnectOpen(false)
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [connectOpen])
+
+  // The hidden list is a popover, not a card: it is read once and put away,
+  // so a press anywhere else is a way out of it as well.
+  useEffect(() => {
+    if (!hiddenOpen) return
+    const onDown = (e: PointerEvent) => {
+      if (!hiddenRef.current?.contains(e.target as Node)) setHiddenOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || layerAboveOwnsEscape('.ws-hidden-card')) return
+      e.stopPropagation()
+      setHiddenOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [hiddenOpen])
+
   if (error)
     return (
       <ErrorState
@@ -455,7 +803,7 @@ export function WorkspaceView() {
 
   return (
     <section
-      class={`ws-page${orchOpen || railOpen ? ' panel-open' : ''}${railOpen && sel ? ' detail-open' : ''}`}
+      class={`ws-page${orchOpen || railOpen || connectOpen ? ' panel-open' : ''}${railOpen && sel ? ' detail-open' : ''}`}
     >
       {/* Same top edge as a thread: a mark, the name, the key for the
           drawing, and the two controls the page has. The drawing below is the
@@ -492,6 +840,107 @@ export function WorkspaceView() {
           >
             <Icon name="layout" size={15} />
           </button>
+          {/* Removed cards, kept reachable: a delete that cannot be undone is
+              not what "remove from view" means. The chip only exists while
+              something is hidden, so a page with nothing put away carries no
+              stray control in its header. */}
+          {hiddenAgents.length > 0 && (
+            <div class="ws-hidden-picker" ref={hiddenRef}>
+              <button
+                type="button"
+                class={`icon-btn ws-hidden-toggle${hiddenOpen ? ' on' : ''}`}
+                aria-label={t('workspace.hidden.title')}
+                aria-expanded={hiddenOpen}
+                title={t('workspace.hidden.title')}
+                onClick={() => {
+                  const next = !hiddenOpen
+                  setHiddenOpen(next)
+                  if (next) {
+                    setRailOpen(false)
+                    setOrchOpen(false)
+                    setConnectOpen(false)
+                  }
+                }}
+              >
+                <Icon name="eye-off" size={16} />
+                <span class="ws-hidden-count mono">{hiddenAgents.length}</span>
+              </button>
+              {hiddenOpen && (
+                <aside class="ws-hidden-card" role="dialog" aria-label={t('workspace.hidden.title')}>
+                  <div class="ws-hidden-hd">
+                    <span class="ws-hidden-title">{t('workspace.hidden.title')}</span>
+                    <button
+                      type="button"
+                      class="icon-btn"
+                      aria-label={t('common.close')}
+                      onClick={() => setHiddenOpen(false)}
+                    >
+                      <Icon name="x" size={14} />
+                    </button>
+                  </div>
+                  <div class="ws-hidden-list">
+                    {hiddenAgents.map((h) => {
+                      const logo = agentLogo(h.agent)
+                      const dev = deviceOf.get(h.device)
+                      return (
+                        <div class="ws-hidden-row" key={tileKey(h.device, h.agent)}>
+                          <span class={`ws-hidden-plate${logo ? ` plate-${logo.plate}` : ''}`}>
+                            {logo ? (
+                              <img src={`/agents/${logo.file}`} alt="" />
+                            ) : (
+                              <span class="ws-hidden-fb">{agentInitial(h.agent)}</span>
+                            )}
+                          </span>
+                          <span class="ws-hidden-text">
+                            <span class="ws-hidden-agent">{h.agent}</span>
+                            <span class="ws-hidden-dev dim">{dev?.name ?? h.device}</span>
+                          </span>
+                          <button
+                            type="button"
+                            class="ws-hidden-act"
+                            onClick={() => restoreTile(h.device, h.agent)}
+                          >
+                            {t('workspace.hidden.restore')}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {hiddenAgents.length > 1 && (
+                    <button type="button" class="ws-hidden-all" onClick={restoreAll}>
+                      {t('workspace.hidden.restoreAll')}
+                    </button>
+                  )}
+                </aside>
+              )}
+            </div>
+          )}
+          {/* Bringing another machine in, one press from the list it lands in.
+              It sits left of the list toggle because it is the same subject —
+              the fleet — and the panel behind it is the 节点网络 card's own
+              body, so pairing and an address are asked for the same way on
+              both pages. */}
+          <div class="ws-connect-picker">
+            <button
+              type="button"
+              class={`icon-btn ws-connect-toggle${connectOpen ? ' on' : ''}`}
+              aria-label={t('workspace.addDevice')}
+              aria-haspopup="dialog"
+              aria-expanded={connectOpen}
+              title={t('workspace.addDevice')}
+              onClick={toggleConnect}
+            >
+              <Icon name="plug" size={16} />
+            </button>
+            {connectOpen && (
+              <aside class="ws-connect" role="dialog" aria-label={t('nodes.connect.title')}>
+                <ConnectPanel
+                  onChanged={() => setTick((v) => v + 1)}
+                  onClose={() => setConnectOpen(false)}
+                />
+              </aside>
+            )}
+          </div>
           {/* The rail is a card, not a column: it hangs off the same corner as
               the orchestration card beside it, over the drawing. Taking a grid
               column instead made the map narrower, which re-laid the plates out
@@ -522,6 +971,7 @@ export function WorkspaceView() {
                     onPick={pick}
                     onBack={backToList}
                     onClose={closeRail}
+                    onChanged={() => setTick((v) => v + 1)}
                   />
                 ) : (
                   <div class="ws-list">
@@ -566,16 +1016,50 @@ export function WorkspaceView() {
 
       <div class="ws-body">
         <div class="ws-main">
-          <div class="ws-map">
+          {/* The paper is the dismiss target: a card is a question about one
+              machine, and a click off the cards is the answer "never mind".
+              A press that started on a card keeps its meaning even when the
+              pointer is released over the paper, so dragging never deselects. */}
+          <div
+            class="ws-map"
+            onPointerDown={(e) => {
+              const t = e.target as Element
+              blankPress.current = !t.closest('.ws-panel') && !t.closest('.context-menu')
+            }}
+            onClick={(e) => {
+              if (!blankPress.current) return
+              blankPress.current = false
+              const t = e.target as Element
+              if (t.closest('.ws-panel') || t.closest('.context-menu')) return
+              pick(null)
+            }}
+          >
             <WorkspacePanels
               devices={devices}
               selected={selected}
               onPick={pick}
               meta={(d) => `${osLabel(d.os)} · ${formLabel(d.form as Form)}`}
-              fallbackAgents={(probedAgents ?? []).filter((a) => a.installed).map((a) => a.name)}
+              fallbackAgents={fallbackAgents}
+              pickedTiles={pickedTiles}
+              hiddenTiles={hiddenTiles}
+              testingTiles={testingTiles}
+              onTogglePick={toggleTile}
+              onTest={testTile}
+              onHide={hideTile}
+              onShowAll={restoreDevice}
+              hiddenNote={(n) => t('workspace.hidden.note', { n })}
+              menuSelect={t('workspace.menu.select')}
+              menuDeselect={t('workspace.menu.deselect')}
+              menuTest={t('workspace.menu.test')}
+              menuRemove={t('workspace.menu.remove')}
+              menuLocalOnly={t('workspace.menu.localOnly')}
+              menuHint={t('workspace.tile.menu')}
               localLabel={t('workspace.local')}
               onlineLabel={t('workspace.online')}
               offlineLabel={t('workspace.offline')}
+              meshLabel={t('workspace.edge.mesh')}
+              measuredLabel={t('workspace.edge.measured')}
+              occludedLabel={t('workspace.edge.occluded')}
               emptyLabel={t('workspace.empty')}
               idleLabel={t('workspace.tile.idle')}
               runningLabel={t('workspace.tile.running')}
@@ -583,6 +1067,31 @@ export function WorkspaceView() {
               resetSignal={layoutReset}
             />
           </div>
+          {/* The bar floats over the drawing instead of taking a row: picking
+              a card must never re-flow the fleet under the cursor. It is the
+              only place the picks add up to something, so it carries the two
+              verbs that make sense on a set — test them, put them away. */}
+          {pickedList.length > 0 && (
+            <div class="ws-selbar" role="toolbar" aria-label={t('workspace.sel.tools')}>
+              <span class="ws-selbar-count">{t('workspace.sel.count', { n: pickedList.length })}</span>
+              <span class="ws-selbar-sep" aria-hidden="true" />
+              <button type="button" class="ws-selbar-act" onClick={testPicked}>
+                <Icon name="plug" size={13} />
+                {t('workspace.sel.test')}
+              </button>
+              <button type="button" class="ws-selbar-act danger" onClick={hidePicked}>
+                <Icon name="trash" size={13} />
+                {t('workspace.sel.remove')}
+              </button>
+              <button
+                type="button"
+                class="ws-selbar-act quiet"
+                onClick={() => setPickedTiles(new Set())}
+              >
+                {t('workspace.sel.clear')}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -601,15 +1110,22 @@ export function WorkspaceView() {
           // picked across a directory switch would silently append the next
           // task to a conversation from somewhere else.
           setPickedSession(null)
+          writeBench({ dir: path, session: '' })
         }}
         project={project}
         sessions={dirSessions ?? []}
         picked={pickedSession}
-        onPick={setPickedSession}
+        onPick={(s) => {
+          setPickedSession(s)
+          writeBench({ dir: pickedDir, session: s?.id ?? '' })
+        }}
+        agents={pickedAgents}
+        onClearAgents={() => setPickedTiles(new Set())}
         onSent={(s) => {
           // A new thread becomes the pick: the next send continues what this
           // one started, the same rule the chat composer follows.
           setPickedSession(s)
+          writeBench({ dir: pickedDir, session: s.id })
           setTick((v) => v + 1)
           // Feedback, since there is no transcript to watch: the card that
           // answers "what did I just dispatch" is the task list.
@@ -670,6 +1186,12 @@ function WorkspaceComposer(props: {
   sessions: Session[]
   picked: Session | null
   onPick(session: Session | null): void
+  /** The agent cards picked on the drawing. Empty means "no restriction": the
+   *  router may use anything on the card. Non-empty is a hard roster — the
+   *  turn may only be taken by these agents, wherever it runs. */
+  agents: string[]
+  /** Drop the picks — the chip's × and the only way back to "let it choose". */
+  onClearAgents(): void
   /** Called with the thread the task was sent to, after the stream is up. */
   onSent(session: Session): void
 }) {
@@ -677,10 +1199,10 @@ function WorkspaceComposer(props: {
   const composer = useRef<HTMLDivElement>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
-  const [authorize, setAuthorize] = useState(false)
   // The permission policy this bench sends under. It is written to whichever
   // thread the send lands in, so a task dispatched from here carries the same
-  // autonomy it was given at the bench.
+  // autonomy it was given at the bench. This is the bench's only consent
+  // control — the 授权 switch that used to sit beside it duplicated bypass.
   const [permission, setPermission] = useState<PermissionMode>('auto')
 
   // The chip must show the policy the send will actually use. A picked thread
@@ -754,7 +1276,9 @@ function WorkspaceComposer(props: {
       void askSessionStream(
         target.id,
         prompt,
-        authorize,
+        // The mode picked above is the whole consent answer; there is no
+        // separate per-turn grant on this surface.
+        false,
         {
           onDelta() {},
           onReasoning() {},
@@ -769,8 +1293,18 @@ function WorkspaceComposer(props: {
           },
         },
         undefined,
+        // No node pin: the workspace does not choose a machine, it chooses
+        // hands. The roster below rides the spec, so it holds wherever the
+        // scheduler runs the work.
         undefined,
-        undefined,
+        // Always sent, including as an empty list: on this surface the picks
+        // on the drawing are the whole story, and an empty list is the
+        // explicit "no restriction" the reader sees. Sending undefined would
+        // silently inherit a roster this page never showed.
+        props.agents,
+        // The mode the bench is set to. The session was patched above when one
+        // already existed; this covers the thread this send just created, and
+        // a PATCH still in flight.
         permission,
       ).catch(toastError)
       editorClear(composer.current)
@@ -844,19 +1378,6 @@ function WorkspaceComposer(props: {
         />
         <div class="composer-actions">
           <PermissionPicker value={permission} onChange={pickPermission} disabled={sending} />
-          {authorizeRelevant(permission) && (
-            <label class="ask-authorize" title={t('approval.stateHint')}>
-              <span class="switch">
-                <input
-                  type="checkbox"
-                  checked={authorize}
-                  onChange={(e) => setAuthorize((e.target as HTMLInputElement).checked)}
-                />
-                <span class="switch-track" aria-hidden="true" />
-              </span>
-              {t('sessions.authorize')}
-            </label>
-          )}
           <ModelSelect disabled={sending} />
           <VoiceInput onText={insertDictation} />
           <button class="btn primary" type="submit" disabled={!input.trim() || sending}>
@@ -869,6 +1390,27 @@ function WorkspaceComposer(props: {
           this page exists — a send appends to the picked conversation without
           ever opening it. */}
       <div class="composer-foot">
+        {/* The picks are a standing instruction, so the composer says so in
+            its own footer: a send from this page may only be taken by the
+            cards below, and the chip is where that is read (and undone)
+            without going back to the drawing. */}
+        {props.agents.length > 0 && (
+          <span class="ws-team-chip" title={props.agents.join(' · ')}>
+            <Icon name="users" size={12} />
+            <span class="ws-team-chip-label">
+              {t('workspace.composer.team', { n: props.agents.length })}
+            </span>
+            <button
+              type="button"
+              class="ws-team-chip-clear"
+              aria-label={t('workspace.composer.teamClear')}
+              title={t('workspace.composer.teamClear')}
+              onClick={props.onClearAgents}
+            >
+              <Icon name="x" size={11} />
+            </button>
+          </span>
+        )}
         <DirButton
           value={props.dir}
           onChange={props.onDirChange}
@@ -902,6 +1444,7 @@ function DeviceDetail({
   onPick,
   onBack,
   onClose,
+  onChanged,
 }: {
   device: Device
   devices: Map<string, Device>
@@ -909,11 +1452,42 @@ function DeviceDetail({
   onPick(id: string): void
   onBack(): void
   onClose(): void
+  onChanged(): void
 }) {
   const neighbors = d.neighbors.filter((id) => devices.has(id))
   const agents = Object.entries(d.agents)
   const work = d.work.slice(0, 6)
   const cliAgents = probedAgents.filter((a) => a.installed)
+  const [removing, setRemoving] = useState('')
+
+  async function removeAbility(ability: string) {
+    if (!d.local || removing) return
+    const agentName = ability.startsWith('agent:') ? ability.slice('agent:'.length) : ''
+    const isAgent = agentName !== '' && Object.hasOwn(d.agents, agentName)
+    const isNative = d.nativeIds.includes(ability)
+    if (!isAgent && !isNative) return
+    const ok = await confirmDialog({
+      title: isAgent ? t('card.agent.removeTitle') : t('card.native.removeTitle'),
+      message: isAgent
+        ? t('card.agent.removeConfirm', { name: agentName })
+        : t('card.native.removeConfirm', { id: ability }),
+      confirmLabel: t('card.remove'),
+    })
+    if (!ok) return
+    setRemoving(ability)
+    try {
+      const res = isAgent
+        ? await api.removeCardAgent(agentName)
+        : await api.removeNativeAbility(ability)
+      toast(res.live ? t('card.saved.live') : t('card.saved.restart'), 'success')
+      onChanged()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setRemoving('')
+    }
+  }
+
   return (
     <div class="ws-detail">
       <div class="ws-detail-head">
@@ -991,11 +1565,29 @@ function DeviceDetail({
       {d.abilities.length > 0 && (
         <DetailSection title={t('workspace.detail.abilities')}>
           <div class="ws-detail-chips">
-            {d.abilities.slice(0, 12).map((a) => (
-              <span class="ability-tag" key={a}>
-                {a}
-              </span>
-            ))}
+            {d.abilities.slice(0, 12).map((a) => {
+              const agentName = a.startsWith('agent:') ? a.slice('agent:'.length) : ''
+              const removable =
+                d.local &&
+                (d.nativeIds.includes(a) || (agentName !== '' && Object.hasOwn(d.agents, agentName)))
+              return (
+                <span class={`ability-tag${removable ? ' removable' : ''}`} key={a}>
+                  <span>{a}</span>
+                  {removable && (
+                    <button
+                      type="button"
+                      class="ability-remove"
+                      aria-label={t('workspace.detail.removeAbility', { id: a })}
+                      title={t('workspace.detail.removeAbility', { id: a })}
+                      disabled={removing === a}
+                      onClick={() => removeAbility(a)}
+                    >
+                      <Icon name="x" size={11} />
+                    </button>
+                  )}
+                </span>
+              )
+            })}
             {d.abilities.length > 12 && (
               <span class="ability-tag more">+{d.abilities.length - 12}</span>
             )}

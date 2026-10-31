@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { api, subscribeEvents } from './api/client.ts'
+import { ApiError, api, subscribeEvents } from './api/client.ts'
 import type { ChangeEvent, Task, TaskEvent, TraceEvent } from './api/client.ts'
 import { mergeEvents, newestCursor } from './components/event-merge.ts'
 import { onLocaleChange } from './i18n/index.ts'
@@ -17,6 +17,9 @@ export function useLocaleRerender(): void {
 export function useAsync<T>(fn: () => Promise<T>, deps: unknown[], reloadKey = 0) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The status is kept beside the message: a 404 is not a failure to
+  // retry, it is a surface this panel does not have.
+  const [errorStatus, setErrorStatus] = useState(0)
   const fnRef = useRef(fn)
   fnRef.current = fn
   // Every run claims a generation and only the newest may write. The change
@@ -35,10 +38,12 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[], reloadKey = 0
         if (!alive || mine !== generation.current) return
         setData(v)
         setError(null)
+        setErrorStatus(0)
       })
       .catch((e: unknown) => {
         if (!alive || mine !== generation.current) return
         setError(e instanceof Error ? e.message : String(e))
+        setErrorStatus(e instanceof ApiError ? e.status : 0)
       })
     return () => {
       alive = false
@@ -46,7 +51,7 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[], reloadKey = 0
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, reloadKey])
 
-  return { data, error }
+  return { data, error, errorStatus }
 }
 
 // — Unified event bus. ONE fetch-SSE connection to /api/events?trace=1 is

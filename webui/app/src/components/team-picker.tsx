@@ -1,27 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useState } from 'preact/hooks'
-import { api, type AgentInfo } from '../api/client'
+import { type AgentInfo } from '../api/client'
 import { agentLogo } from '../format/agent-logo'
 import { agentInitial, agentRoles, agentTint } from '../format/agent-role'
 import { t } from '../i18n'
+import { loadAgentRoster } from '../utils/agent-roster'
 import { Icon } from './icons'
-
-/** The roster probe behind GET /api/agents runs `<cli> --version` for every
- *  installed agent, so it is not a call to make each time the card opens.
- *  One fetch per page load is enough: hiring a new CLI is not something that
- *  happens between two sends. A failed fetch clears the cache so the next
- *  open retries instead of pinning an error for the session. */
-let roster: Promise<AgentInfo[]> | null = null
-function loadRoster(): Promise<AgentInfo[]> {
-  if (!roster) {
-    roster = api.agents().catch((err: unknown) => {
-      roster = null
-      throw err
-    })
-  }
-  return roster
-}
 
 /** One employee's face: the official mark on the plate its artwork is drawn
  *  for, or — for a CLI the console has no mark for, and for a mark that fails
@@ -80,7 +65,7 @@ export function TeamRoster(props: {
   useEffect(() => {
     let alive = true
     setError('')
-    loadRoster()
+    loadAgentRoster()
       .then((list) => {
         if (alive) setAgents(list)
       })
@@ -129,6 +114,13 @@ export function TeamRoster(props: {
           const roles = agentRoles(a.best_at)
             .slice(0, 2)
             .map((r) => t(`sessions.teamRole.${r}`))
+          // Only a CLI this machine can run is a hire. The row stays in the
+          // list so the operator can see the console knows about it (and hover
+          // the install hint), but it takes no pick — a member that cannot
+          // start here would only fail a turn later. The one exception is a
+          // pick left over from before an uninstall: it is already in the
+          // team, so it must stay clickable to be taken back out.
+          const pickable = a.installed || on
           return (
             <button
               key={a.name}
@@ -136,27 +128,23 @@ export function TeamRoster(props: {
               class={`team-row${on ? ' on' : ''}${a.installed ? '' : ' off'}`}
               role="option"
               aria-selected={on}
-              aria-disabled={!a.installed && !on}
+              aria-disabled={!pickable}
+              disabled={!pickable}
               aria-label={`${a.display_name || a.name}${
                 a.installed ? ` — ${t('sessions.teamOnDuty')}` : ` — ${t('sessions.teamNotInstalled')}`
               }`}
               title={
                 a.installed
                   ? a.version || a.path || a.binary
-                  : t('sessions.teamNotInstalledHint')
+                  : a.install_hint || a.install_url || t('sessions.teamNotInstalledHint')
               }
-              // A CLI this node does not have cannot take a task here, so the
-              // row is not an option. It stays clickable only when it is
-              // already on the thread's roster — removing a stale pick must
-              // never need the binary to be installed first.
-              disabled={!a.installed && !on}
               onClick={() => toggle(a.name)}
             >
               {/* The green pip is the roster's "on the floor" mark: this CLI is
                   installed on the node, so this person can take a task today.
-                  An uninstalled row keeps the pip off, says so in words, and
-                  is disabled — a pick that can never be staffed is a promise
-                  the scheduler would have to break at dispatch time. */}
+                  An uninstalled row keeps the pip off, says so in words, and is
+                  disabled — a pick that can never be staffed is a promise the
+                  scheduler would have to break at dispatch time. */}
               <AgentFace name={a.name} label={a.display_name || a.name} onDuty={a.installed} />
               <span class="team-text">
                 <span class="team-name">{a.display_name || a.name}</span>

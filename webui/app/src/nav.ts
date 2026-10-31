@@ -16,9 +16,9 @@ export type ControlTab = 'queue' | 'plans' | 'projects'
 export type Route =
   | { view: 'sessions'; id: string | null; project?: string | null; ws?: string | null }
   | { view: 'control'; tab?: ControlTab; project?: string | null; review?: boolean }
-  | { view: 'todos' }
+  | { view: 'team' }
+  | { view: 'memory' }
   | { view: 'workspace' }
-  | { view: 'fleet' }
   | { view: 'profile' }
   | { view: 'settings'; tab?: string | null }
   | { view: 'detail'; id: string }
@@ -27,11 +27,12 @@ export type Route =
  *
  *  The rail no longer has sections: every row that is a *place to work* now
  *  sits in one block at the top (app.tsx's quick block), because the headings
- *  had stopped earning their 24px — 节点网络 hung under a heading that repeated
- *  its own name, and 队列·任务·项目 was the only row left under a second one. 新对话 leads
- *  (it is an action, but it reads as a row); then the three machines-and-work
- *  destinations: 工作空间 (the fleet as a map), 节点网络 (what each node can do),
- *  and 队列·任务·项目 (the node's boards).
+ *  had stopped earning their 24px. 新对话 leads
+ *  (it is an action, but it reads as a row); then the machines-and-work
+ *  destinations: 工作空间 (the fleet as a map) and 队列·任务·项目 (the node's
+ *  boards). 团队 closes the block — it is a slot reserved for team work, and
+ *  its page is empty until that lands. The 节点网络 page (fleet) was removed
+ *  from the console; its old routes land on the thread list instead.
  *
  *  What is deliberately NOT a row: 对话 — the thread history is the tail of the
  *  rail (app.tsx), and a row whose only job was to unfold a list that is now
@@ -44,9 +45,12 @@ export type Route =
 export const navViews: Array<[view: string, key: string]> = [
   ['sessions', 'nav.sessions'],
   ['workspace', 'nav.workspace'],
-  ['fleet', 'nav.fleet'],
   ['control', 'nav.control'],
-  ['todos', 'nav.todos'],
+  ['team', 'nav.team'],
+  // 记忆 sits right under 团队 in the rail: what the node has learned is a
+  // place you go and read, not a knob you turn, so it left 设置 when the sheet
+  // was rebuilt. 技能 stayed behind — it is configuration.
+  ['memory', 'nav.memory'],
   // The two boards that are tabs rather than rows.
   ['control:plans', 'nav.plans'],
   ['control:projects', 'nav.projects'],
@@ -95,18 +99,19 @@ export function parseHash(): Route {
   }
   if (path === 'plans') return { view: 'control', tab: 'plans' }
   if (path === 'projects') return { view: 'control', tab: 'projects' }
-  // 待办: the user's own list, beside the boards. It is its own destination
-  // (not a tab) because it is not about what a node is doing — it is what the
-  // human decided to do.
-  if (path === 'todos' || path === 'todo') return { view: 'todos' }
-  if (path === 'fleet' || path === 'nodes') return { view: 'fleet' }
-  // 工作空间: the topology of connected devices. `#/workspace` is the only
-  // spelling — there is no legacy URL for a page that never existed.
+  // 团队: its own destination, beside the boards. The page is empty for now —
+  // it holds the slot for team work so the rail's shape does not have to change
+  // again when that lands. `#/todos` was this row before the rename, so old
+  // links land here instead of falling through to the thread list.
+  if (path === 'team' || path === 'todos' || path === 'todo') return { view: 'team' }
+  // 节点网络 (fleet) is gone from the console; its legacy URLs (`#/fleet`,
+  // `#/nodes`) fall through to the thread list below.
   if (path === 'workspace') return { view: 'workspace' }
-  // 记忆 and 技能 were standalone rows before they became tabs of 设置. Old
-  // deep links (`#/memory`, `#/memory/topics`, `#/skills`) land on the same
-  // surfaces, just under the merged route.
-  if (path === 'memory' || path.startsWith('memory/')) return { view: 'settings', tab: 'memory' }
+  // 记忆 is its own destination (under 团队 in the rail) and 技能 is a tab of
+  // 设置. Old deep links (`#/memory`, `#/memory/topics`) still land on the
+  // memory page; `#/skills` still opens the settings sheet on its tab, and a
+  // `#/settings?tab=memory` bookmark is answered by the redirect below.
+  if (path === 'memory' || path.startsWith('memory/')) return { view: 'memory' }
   if (path === 'skills') return { view: 'settings', tab: 'skills' }
   // The identity chip's destination. It is not a rail row: the chip in the
   // footer is the only way in, which is the point — "who am I / what am I
@@ -114,8 +119,9 @@ export function parseHash(): Route {
   if (path === 'profile') return { view: 'profile' }
   if (path.startsWith('settings/') || path === 'settings') {
     const tab = path.startsWith('settings/') ? decodeURIComponent(path.slice(9)) : tabParam
-    // Promoted views: old settings deep-links land on the standalone routes.
-    if (tab === 'nodes' || tab === 'devices') return { view: 'fleet' }
+    // 记忆 used to be a tab of the sheet; a bookmark to it is a bookmark to
+    // the page, so answer with the page instead of a sheet on a dead tab.
+    if (tab === 'memory') return { view: 'memory' }
     return { view: 'settings', tab }
   }
 
@@ -129,9 +135,21 @@ export function parseHash(): Route {
   return { view: 'sessions', id: null, project: projectParam }
 }
 
-export function navigate(route: Route): void {
+export function navigate(route: Route, replace = false): void {
+  // Closing a modal must not leave a history entry behind: Back would reopen
+  // the dialog the user just dismissed. replaceState does not fire
+  // hashchange, so the route listener is nudged by hand.
+  const commit = (hash: string) => {
+    if (!replace) {
+      location.hash = hash
+      return
+    }
+    if (location.hash === hash) return
+    history.replaceState(history.state, '', hash)
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  }
   if (route.view === 'detail') {
-    location.hash = `#/task/${encodeURIComponent(route.id)}`
+    commit(`#/task/${encodeURIComponent(route.id)}`)
   } else if (route.view === 'sessions') {
     let base = route.id ? `#/chat/${encodeURIComponent(route.id)}` : '#/chat'
     const params: string[] = []
@@ -140,7 +158,7 @@ export function navigate(route: Route): void {
     // open thread answers for itself, from its own project row.
     if (!route.id && route.ws) params.push(`ws=${encodeURIComponent(route.ws)}`)
     if (params.length) base += `?${params.join('&')}`
-    location.hash = base
+    commit(base)
   } else if (route.view === 'control') {
     // The queue tab is the page's default, so it stays out of the URL — a
     // plain `#/control` is the board, and only 计划 / 项目 need saying.
@@ -148,11 +166,11 @@ export function navigate(route: Route): void {
     if (route.tab && route.tab !== 'queue') params.push(`tab=${route.tab}`)
     if (route.project) params.push(`project=${encodeURIComponent(route.project)}`)
     if (route.review) params.push('review=1')
-    location.hash = params.length ? `#/control?${params.join('&')}` : '#/control'
+    commit(params.length ? `#/control?${params.join('&')}` : '#/control')
   } else if (route.view === 'settings') {
-    location.hash = route.tab ? `#/settings?tab=${encodeURIComponent(route.tab)}` : '#/settings'
+    commit(route.tab ? `#/settings?tab=${encodeURIComponent(route.tab)}` : '#/settings')
   } else {
-    location.hash = `#/${route.view}`
+    commit(`#/${route.view}`)
   }
 }
 

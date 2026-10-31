@@ -25,7 +25,7 @@
  *  different components that already own their own state — the alternative was
  *  threading an "is any menu open" flag through the pane and every menu. */
 const ESCAPE_LAYERS =
-  '.model-panel, .attach-menu, .complete-menu, .modal-backdrop, .reminder-pop, .wd-panel'
+  '.model-panel, .attach-menu, .complete-menu, .modal-backdrop, .settings-dialog, .reminder-pop, .wd-panel, .ctx-menu, .select-menu, .ws-hidden-card'
 
 /** Whether a layer above the caller owns Escape right now.
  *

@@ -11,21 +11,11 @@ import { ScopeSelect } from '../components/scope-select'
 import { StateBadge } from '../components/state-badge'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
-import { TaskTrace } from '../components/task-trace'
-import {
-  InfoSection,
-  SpecCard,
-  TimelineSection,
-  fmtFull,
-  fmtShort,
-  parseResult,
-  shortId,
-  text,
-} from '../components/task-sections'
+import { fmtShort, parseResult, plainLine, shortId, text } from '../components/task-sections'
 import { DiffViewer } from '../components/diff-viewer'
-import { Markdown } from '../md/render'
 import { Icon } from '../components/icons'
-import { prettifyJson } from '../format/json'
+import { OutputPanel } from '../components/task-output'
+import { BriefPanel, ChainPanel, InfoPanel } from '../components/task-panels'
 
 /** The task row plus its timeline, followed incrementally.
  *
@@ -206,14 +196,10 @@ export function DetailView({
   // Read for every review state, not only the blocked banner: the verdict
   // block falls back to it when the result carries no reason of its own.
   const parkReason = task.state === 'review' ? reviewReason(task.events ?? []) : ''
-  // Whether the result carries anything worth a section. A `{"failed": …}`
-  // blob has already been read out in the verdict block, and the log's own
-  // raw toggle still reaches it.
-  const showResult = Boolean(task.result) && resultHasBody(task.result!)
   // Computed once: the verdict sentence is also the lead line of the output
   // when a run reported its outcome as prose, and printing it twice — once as
   // the answer, once as the first line of the panel — is the page's oldest
-  // habit. ResultView drops it from the body when they match.
+  // habit. The output card drops it from the body when they match.
   const verdict = verdictOf(task, parkReason)
 
   return (
@@ -366,8 +352,6 @@ export function DetailView({
           for its one sentence. */}
       <VerdictBlock verdict={verdict} />
 
-      <TaskTrace task={task} />
-
       {cancellable && (
         // Send into the task while it runs: queue leaves the round alone
         // (the note is read as context at the next one), inject steers it
@@ -397,121 +381,71 @@ export function DetailView({
         </div>
       )}
 
+      {board && board.messages.length > 0 && (
+        // The board scope is where queued user notes, steers and sibling posts
+        // land — reading it back is what makes "queued" a state the user can
+        // see rather than a toast that forgot itself. It sits under the
+        // composer because that is where the notes were written.
+        <section class="dt-sec">
+          <h2 class="dt-sec-title">{t('detail.board.title')}</h2>
+          <ul class="dt-board">
+            {board.messages.map((m, i) => (
+              <li key={`${m.sender}-${m.sender_seq}-${i}`} class="dt-board-row">
+                <span class="dt-board-sender">
+                  {m.sender === 'user' || m.sender.startsWith('user:')
+                    ? t('detail.board.you')
+                    : m.sender_label || m.sender}
+                </span>
+                {m.grade !== 'status' && (
+                  <span class={`badge ${m.grade === 'steer' ? 'blue' : 'dim'}`}>{m.grade}</span>
+                )}
+                {/* Delivery state, on the user's own notes only: a note lands
+                    on the board the moment it is posted, so without this the
+                    row reads "queued" forever and "did the agent see it?"
+                    has no answer on screen. consumed_at is stamped by the
+                    round that folded the note into its prompt. */}
+                {(m.sender === 'user' || m.sender.startsWith('user:')) &&
+                  (m.consumed_at ? (
+                    <span class="badge dim">{t('detail.board.read')}</span>
+                  ) : (
+                    <span class="badge yellow">{t('detail.board.pending')}</span>
+                  ))}
+                <span class="dt-board-body">{m.body}</span>
+                <span class="dim dt-board-time">
+                  {m.sent_at ? fmtShort(new Date(m.sent_at * 1000).toISOString()) : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div class="dt-body">
         {isTaskStalled(task) && (
           // The row has not moved past its own bound — nothing is consuming,
           // expiring, or answering for it. Surface that instead of letting the
           // open state sit silently.
-          <section class="dt-sec">
-            <div class="dt-note">
-              <span class="badge yellow">{t('task.stalled')}</span>
-              <span class="dim">{t('task.stalledHint')}</span>
-            </div>
-          </section>
+          <div class="dt-note">
+            <span class="badge yellow">{t('task.stalled')}</span>
+            <span class="dim">{t('task.stalledHint')}</span>
+          </div>
         )}
 
-        {showResult && <ResultView raw={task.result!} lead={verdict.text} />}
-
-        {/* What the run was asked to produce — target, guardrails, scope and
-            the bar the supervisor judges against. Without this section the
-            spec only existed as a JSON blob users had to decode. Folded by
-            default: it is the task's contract, not its outcome, and read open
-            it pushed the result a third of a screen down. */}
         {/* A self-merge proposal's "spec" IS the patch set — the review the
             approve button answers is this diff, so it renders ahead of the
-            generic spec card. */}
+            four cards. */}
         <SelfMergeCard spec={task.spec} />
 
-        <SpecCard spec={task.spec} fallback={task.intent} />
-
-        {board && board.messages.length > 0 && (
-          // The board scope is where queued user notes, steers and sibling
-          // posts land — reading it back is what makes "queued" a state the
-          // user can see rather than a toast that forgot itself.
-          <section class="dt-sec">
-            <h2 class="dt-sec-title">{t('detail.board.title')}</h2>
-            <ul class="dt-board">
-              {board.messages.map((m, i) => (
-                <li key={`${m.sender}-${m.sender_seq}-${i}`} class="dt-board-row">
-                  <span class="dt-board-sender">
-                    {m.sender === 'user' || m.sender.startsWith('user:')
-                      ? t('detail.board.you')
-                      : m.sender_label || m.sender}
-                  </span>
-                  {m.grade !== 'status' && (
-                    <span class={`badge ${m.grade === 'steer' ? 'blue' : 'dim'}`}>{m.grade}</span>
-                  )}
-                  {/* Delivery state, on the user's own notes only: a note lands
-                      on the board the moment it is posted, so without this the
-                      row reads "queued" forever and "did the agent see it?"
-                      has no answer on screen. consumed_at is stamped by the
-                      round that folded the note into its prompt. */}
-                  {(m.sender === 'user' || m.sender.startsWith('user:')) &&
-                    (m.consumed_at ? (
-                      <span class="badge dim">{t('detail.board.read')}</span>
-                    ) : (
-                      <span class="badge yellow">{t('detail.board.pending')}</span>
-                    ))}
-                  <span class="dt-board-body">{m.body}</span>
-                  <span class="dim dt-board-time">
-                    {m.sent_at ? fmtShort(new Date(m.sent_at * 1000).toISOString()) : ''}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {/* Structured delegation chain from the ledger: each hop is one leg of
-            the task's trip across nodes (originator → executor → …). Unacked
-            hops render hollow — the outbound leg fired but no node confirmed. */}
-        {task.delegation_chain && task.delegation_chain.length > 0 && (
-          <section class="dt-sec">
-            <h2 class="dt-sec-title">{t('detail.chain')}</h2>
-            <div class="dt-chain">
-              <span class="chain-node root">{task.delegation_chain[0]?.from_node}</span>
-              {task.delegation_chain.map((hop, i) => (
-                <span key={i} style="display:contents">
-                  <span class="chain-arrow" aria-hidden="true">→</span>
-                  <span
-                    class={`chain-node${hop.accepted ? '' : ' unacked'}`}
-                    title={`hop ${hop.hop}${hop.via ? ` · ${hop.via}` : ''} · ${fmtFull(new Date(hop.ts * 1000).toISOString())}`}
-                  >
-                    {hop.to_node}
-                  </span>
-                </span>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* Sub-agent tree: the children this task is orchestrating, with live
-            states and each child's parallel mode. This is the "parent fanned
-            out to N sub-agents" view — without it the children only existed
-            as separate board cards. */}
-        {task.children && task.children.length > 0 && (
-          <section class="dt-sec">
-            <h2 class="dt-sec-title">{t('detail.children', { n: String(task.children.length) })}</h2>
-            <div class="dt-children">
-              {task.children.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  class="dt-child"
-                  onClick={() => onOpenTask?.(c.id)}
-                  title={c.id}
-                >
-                  <StateBadge state={c.state} />
-                  <span class="dt-child-title">{c.title || c.id}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <InfoSection task={task} onOpenTask={onOpenTask} />
-
-        <TimelineSection events={task.events ?? []} suppressResult={showResult} />
+        {/* The four answers this page owes: what came out, how it ran, what it
+            was asked to do, and what it is. All four are on screen at once —
+            each one's body is a preview or a fold, so a 2,000-character output
+            no longer pushes the other three off the page. */}
+        <div class="dt-panels">
+          <OutputPanel task={task} lead={verdict.text} />
+          <ChainPanel task={task} onOpenTask={onOpenTask} />
+          <BriefPanel task={task} />
+          <InfoPanel task={task} onOpenTask={onOpenTask} />
+        </div>
       </div>
     </section>
   )
@@ -614,23 +548,12 @@ function VerdictBlock({ verdict }: { verdict: Verdict }) {
 }
 
 /** First line of a multi-line output, shortened to something a sentence can
- *  carry. Used when a successful run has no verdict of its own. */
+ *  carry. Used when a successful run has no verdict of its own. Markdown
+ *  decoration is dropped: a report opening on `## 测试结果` was quoted as
+ *  "## 测试结果：通过", hashes and all. */
 function firstLine(s: string): string {
-  const line = s.trim().split('\n')[0]?.trim() ?? ''
+  const line = plainLine(s.trim().split('\n')[0]?.trim() ?? '')
   return line.length > 160 ? line.slice(0, 160) + '…' : line
-}
-
-/** Drops a leading sentence the page has already printed elsewhere — the
- *  verdict block quotes a done run's opening line, and the output panel then
- *  opened on the same words. Exact prefix only, and only when a real body
- *  remains: trimming a 12-character remainder would leave the panel emptier
- *  than it started. */
-function stripLead(body: string, lead?: string): string {
-  if (!lead) return body
-  const trimmed = body.trimStart()
-  if (!trimmed.startsWith(lead)) return body
-  const rest = trimmed.slice(lead.length).replace(/^[\s。.!！]+/, '')
-  return rest.length > 40 ? rest : body
 }
 
 /** SelfMergeCard renders a self-evolution merge proposal: the signed patch
@@ -702,259 +625,6 @@ function SelfMergePatch({ id, name }: { id: string; name: string }) {
   if (error) return <p class="gate-error">{String(error)}</p>
   if (!data) return <p class="dim">…</p>
   return <DiffViewer patch={data} />
-}
-
-/** Whether a result blob carries anything beyond its outcome. The page uses
- *  this to decide if a 执行结果 section is worth drawing at all: a run that
- *  only reported `{"failed": …}` has already been read out in the verdict
- *  block, and an empty section under a title reads as a broken panel. */
-function resultHasBody(raw: string): boolean {
-  const r = parseResult(raw)
-  if (!r) return true
-  if (typeof r.exit_code === 'number' || r.injected === true) return true
-  if (text(r.agent) || text(r.model) || text(r.executor) || text(r.stdout) || text(r.stderr)) {
-    return true
-  }
-  return Array.isArray(r.files_changed)
-    ? r.files_changed.some((f) => typeof f === 'string' && f !== '' && !FILE_NOISE.test(f))
-    : false
-}
-
-/** A task result is a JSON blob with a handful of well-known keys — ok,
- *  exit_code, stdout, stderr, agent, plus whatever the supervisor added.
- *  Rendering the blob itself is what made this page read as a wall of JSON:
- *  the useful parts were in there, buried in escaping. This lifts them out,
- *  renders the agent's markdown the way it was written, and keeps the
- *  original one click away rather than one keypress of devtools.
- *
- *  What is left here is the *output*, not the verdict: the outcome sentence,
- *  the tokens and the money moved up into the verdict block. Repeating them
- *  here was the page's habit of saying one thing in three places.
- *
- *  Anything that is not an object we recognise falls back to the raw text —
- *  a half-understood result shown verbatim beats a blank panel. */
-function ResultView({ raw, lead }: { raw: string; lead?: string }) {
-  const [rawOpen, setRawOpen] = useState(false)
-  const r = parseResult(raw)
-  if (!r) return <RawResult raw={raw} />
-
-  const exit = typeof r.exit_code === 'number' ? r.exit_code : null
-  const agent = text(r.agent)
-  const model = text(r.model)
-  const executor = text(r.executor)
-  const injected = r.injected === true
-  // The verdict block above already reads out the run's opening sentence
-  // (a done run's verdict *is* the first line of its output). Dropping that
-  // one line here is what stops the page saying the same sentence twice, ten
-  // pixels apart.
-  const stdout = stripLead(text(r.stdout), lead)
-  const stderr = text(r.stderr)
-  const files = Array.isArray(r.files_changed)
-    ? r.files_changed
-        .filter((f): f is string => typeof f === 'string' && f !== '')
-        .filter((f) => !FILE_NOISE.test(f))
-    : []
-
-  // Chips rather than a sentence: the old meta line was three grey phrases of
-  // equal weight sitting one line above a label that looked exactly like them,
-  // so the section opened on three lines nobody could rank. A chip names its
-  // own field, and the exit code carries the tone — a zero is the one fact
-  // that answers "did it work" before anything is read.
-  const chips: Array<{ text: string; tone?: 'ok' | 'bad'; mono?: boolean; agent?: boolean }> = []
-  if (exit !== null) {
-    chips.push({
-      text: t('detail.result.exit', { n: String(exit) }),
-      tone: exit === 0 ? 'ok' : 'bad',
-      mono: true,
-    })
-  }
-  if (agent) chips.push({ text: t('detail.result.agent', { agent }), agent: true })
-  if (model) chips.push({ text: t('detail.result.model', { model }), mono: true })
-  if (injected) chips.push({ text: t('detail.result.injected') })
-  if (executor) chips.push({ text: t('detail.result.node', { node: executor }), mono: true })
-
-  // A result that carried nothing but its failure (`{"failed": "..."}`) has
-  // already been read out in the verdict block. Rendering an empty section
-  // titled 执行结果 with one lone "原始 JSON" toggle under it read as a broken
-  // panel — the blob is still reachable from the log's own raw toggle.
-  if (chips.length === 0 && files.length === 0 && !stdout && !stderr) return null
-
-  return (
-    <section class="dt-sec">
-      {/* The raw blob used to trail the section as a bulleted "▸ 原始 JSON"
-          line under a full-width button. It is an escape hatch, not content:
-          it belongs on the section's action rail, where every other section
-          keeps its secondary control. */}
-      <div class="dt-sec-head">
-        <h2 class="dt-sec-title">{t('detail.result')}</h2>
-        <button
-          type="button"
-          class="dt-sec-action"
-          aria-expanded={rawOpen}
-          onClick={() => setRawOpen((v) => !v)}
-        >
-          {rawOpen ? t('events.collapse') : t('detail.result.raw')}
-        </button>
-      </div>
-
-      <div class="result-view">
-        {chips.length > 0 && (
-          <div class="result-chips">
-            {chips.map((c) => (
-              <span
-                key={c.text}
-                class={`result-chip${c.tone ? ` is-${c.tone}` : ''}${c.mono ? ' mono' : ''}${c.agent ? ' is-agent' : ''}`}
-                title={c.text}
-              >
-                {c.text}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {files.length > 0 && (
-          <div class="result-files">
-            <span class="dim result-files-label">
-              {t('detail.result.files', { n: String(files.length) })}
-            </span>
-            <FileChips files={files} />
-          </div>
-        )}
-
-        {stdout && <CollapsibleOutput text={stdout} label={t('detail.result.stdout')} />}
-        {stderr && <CollapsibleOutput text={stderr} label={t('detail.result.stderr')} error />}
-
-        {rawOpen && <pre class="detail-raw">{prettifyJson(raw)}</pre>}
-      </div>
-    </section>
-  )
-}
-
-/** A result that is not a JSON object: shown verbatim rather than dropped —
- *  a half-understood blob beats a blank panel. */
-function RawResult({ raw }: { raw: string }) {
-  return (
-    <section class="dt-sec">
-      <h2 class="dt-sec-title">{t('detail.result')}</h2>
-      <pre class="detail-raw detail-raw-capped">{raw}</pre>
-    </section>
-  )
-}
-
-/** VCS internals, dependency trees, build output and agent-session scratch
- *  files a task's file list picks up along the way — real on disk, noise on
- *  the card. `.claude` is the adapter's own transcript/snapshot directory:
- *  one run listed thirteen of its files as "changed", none of them the
- *  user's. `.codebuddy` and `.codex` are the same thing under the other two
- *  CLIs — one task's "4 files changed" was three of their logs plus a
- *  switcher's sqlite. */
-const FILE_NOISE =
-  /(?:^|\/|\\)(?:\.git|\.svn|\.hg|node_modules|dist|build|__pycache__|\.next|\.cache|\.claude|\.codebuddy|\.codex)(?:\/|\\|$)|\.DS_Store$/
-
-const FILE_CHIP_CAP = 12
-
-/** Changed-file chips: capped so a large change set reads as a summary
- *  instead of a wall, with the rest one click away. */
-function FileChips({ files }: { files: string[] }) {
-  const [open, setOpen] = useState(false)
-  const shown = open ? files : files.slice(0, FILE_CHIP_CAP)
-  const hidden = files.length - shown.length
-  return (
-    <div class="result-file-list">
-      {shown.map((f, i) => (
-        <code key={i} class="result-file-chip" title={f}>
-          {f}
-        </code>
-      ))}
-      {hidden > 0 && (
-        <button type="button" class="result-file-more" onClick={() => setOpen(true)}>
-          {t('detail.result.filesMore', { n: String(hidden) })}
-        </button>
-      )}
-    </div>
-  )
-}
-
-/** Agent output reads as markdown (the adapters report it that way) and lives
- *  in a panel of its own: label, size and copy in a head bar, the prose in a
- *  body, the fold as a footer band.
- *
- *  It used to be a bare label over a wall of text, clamped at 600 characters
- *  — which cut mid-word — with a full-width bordered button under it that
- *  read as a stray input field. The clamp is a height now, so the last line
- *  fades instead of breaking, and the fold is a band that says how much is
- *  behind it. */
-const OUTPUT_CLAMP_PX = 300
-
-function CollapsibleOutput({
-  text,
-  label,
-  error = false,
-}: {
-  text: string
-  label: string
-  error?: boolean
-}) {
-  const [open, setOpen] = useState(false)
-  const [copied, setCopied] = useState(false)
-  // Short outputs are shown whole — folding a four-line report costs a click
-  // and saves nothing.
-  const long = text.length > 700
-  const clamped = long && !open
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1600)
-    } catch {
-      // Clipboard denied (insecure origin, permission): the text is selectable
-      // and a failed copy needs no error of its own.
-    }
-  }
-
-  return (
-    <div class={`result-panel${error ? ' is-error' : ''}`}>
-      <div class="result-panel-head">
-        <span class="result-panel-label">{label}</span>
-        <span class="result-panel-size">
-          {t('detail.result.chars', { n: text.length.toLocaleString() })}
-        </span>
-        <button
-          type="button"
-          class="result-panel-copy"
-          onClick={copy}
-          aria-label={t('md.copy')}
-          title={t('md.copy')}
-        >
-          {copied ? `✓ ${t('md.copied')}` : t('md.copy')}
-        </button>
-      </div>
-
-      <div
-        class={'result-panel-body' + (clamped ? ' is-clamped' : '')}
-        style={clamped ? `max-height:${OUTPUT_CLAMP_PX}px` : undefined}
-      >
-        {error ? (
-          <pre class="result-err">{text}</pre>
-        ) : (
-          <Markdown text={text} />
-        )}
-      </div>
-
-      {long && (
-        <button
-          type="button"
-          class="result-panel-more"
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-        >
-          <span>{open ? t('detail.result.collapse') : t('detail.result.expand')}</span>
-          <Icon name="chevron-down" size={12} />
-        </button>
-      )}
-    </div>
-  )
 }
 
 /** The failure that parked a task in review: the newest review event carrying
