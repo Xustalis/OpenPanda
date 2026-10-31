@@ -14,6 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/scout"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
@@ -85,6 +86,76 @@ func taskMaxTurns(specJSON string) int {
 		return 0
 	}
 	return spec.MaxTurns
+}
+
+// taskDurationHint extracts resource_profile.duration_hint from a task's
+// persisted resource JSON. The hint is what the entry model declared when it
+// classified the request ("long" = expected to exceed several minutes), and
+// unlike cpu/ram it also describes the TIME budget the work needs.
+func taskDurationHint(resourceJSON string) string {
+	if resourceJSON == "" {
+		return ""
+	}
+	var res struct {
+		DurationHint string `json:"duration_hint"`
+	}
+	if err := json.Unmarshal([]byte(resourceJSON), &res); err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(res.DurationHint))
+}
+
+// Derived execution budgets. The adapter defaults (30 turns, agent_s=600) are
+// sized for an edit-and-verify task, not for the work the same orchestrator
+// advertises as needing an hour: a full-repo refactor, a build-test-debug
+// loop, a migration. A declared long task or a high complexity score raises
+// the ceiling; it does not force the agent to use it — a run that finishes
+// early still ends early — and the silence/hard watchdogs keep bounding a
+// run that has actually wedged.
+const (
+	derivedLongTurns     = 120
+	derivedHardTurns     = 80
+	derivedMediumTurns   = 60
+	derivedLongTimeout   = 30 * time.Minute
+	derivedHardTimeout   = 25 * time.Minute
+	derivedMediumTimeout = 20 * time.Minute
+)
+
+// derivedAgentBudget derives a per-task turn cap and timeout from the task's
+// own declared shape. Both return zero when the task is ordinary, meaning
+// "keep the adapter/orchestrator default". An explicit spec.max_turns always
+// wins over the derived turn cap; a per-kind timeout configured by the
+// operator (timeouts.agent_by_kind) always wins over the derived timeout.
+func derivedAgentBudget(task Task) (turns int, timeout time.Duration) {
+	if taskDurationHint(task.ResourceJSON) == "long" {
+		return derivedLongTurns, derivedLongTimeout
+	}
+	switch {
+	case task.Complexity >= 0.75:
+		return derivedHardTurns, derivedHardTimeout
+	case task.Complexity >= 0.45:
+		return derivedMediumTurns, derivedMediumTimeout
+	case codingTask(task.Requires):
+		// A task submitted straight from the CLI (or a hand-written plan
+		// stage) carries no classifier score; its declared coding/agent
+		// requirement is the only signal that this is real work rather than a
+		// one-shot lookup, so it gets the medium floor instead of the
+		// adapter's 30-turn default.
+		return derivedMediumTurns, derivedMediumTimeout
+	}
+	return 0, 0
+}
+
+// codingTask reports whether a requirement set marks execution work: the
+// CLI's default "coding" ability, or an explicit agent harness.
+func codingTask(required []string) bool {
+	for _, r := range required {
+		req := strings.ToLower(strings.TrimSpace(r))
+		if req == "coding" || req == "code" || strings.HasPrefix(req, "agent:") {
+			return true
+		}
+	}
+	return false
 }
 
 // taskSpecEnvelope extracts the acceptance side of a task's persisted spec —
@@ -317,6 +388,15 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, promptBud
 	}
 	if workDir != "" {
 		frame.WriteString("\nworkspace: " + workDir + " (your working directory — resolve relative paths from here)")
+		// Workspace map (scout): on a large repository the agent would
+		// otherwise spend its first turns rediscovering the layout, and a
+		// wrong-scope run is not visible until it writes somewhere it should
+		// not. The map is deterministic orientation — repo identity, size,
+		// layout, key files and the project's declared build/verify commands —
+		// not a substitute for reading the files it names.
+		if m := scout.Cached(workDir).Render(); m != "" {
+			frame.WriteString("\n\n" + m)
+		}
 	}
 
 	manifest := ""

@@ -42,11 +42,19 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增功能
 
+- **agent 运行现在从一张工作区地图开始** —— 每个 agent 任务都会带上一段确定性的紧凑报告：git 分支/提交与工作树是否有未提交改动、文件与目录规模、顶层结构、语言分布、关键文件（README、AGENTS.md、CLAUDE.md、Makefile、清单文件），以及项目自己声明的构建/验证命令（Makefile 目标、package.json 脚本、Go/Cargo/pytest 入口）。大仓库不再靠一轮轮试错去重新认识，地图本身约占 2 KB 提示词，有上限，并在监督轮之间缓存。
+
 ### 修复
+
+- **长时间运行的工具调用不再被当成卡死 agent 杀掉** —— 静默看门狗原先无法区分「agent 在思考」和「agent 在等一个十分钟的构建」，任何超过 `timeouts.silence_s`（默认 240 秒）没有输出的工具都会让整轮运行被杀。现在看门狗把「有工具调用正在进行」当作需要等待的工作，由 agent 硬预算兜底；工具之外的真卡死仍然会被杀。
 
 - **审批结果现在能送达智能体 CLI**——因 `claude_code` 拒绝特权命令（`systemctl`、写 `/etc`）而停驻的任务，在用户批准后曾以逐字相同的 argv 重跑，CLI 再次自动拒绝，任务无限回到同一张审批卡。同意现在随请求送到适配器，该次运行的权限姿态提升为 `bypassPermissions`；未获同意的运行仍用 `acceptEdits`，只读受限运行忽略同意。
 - **八个适配器都能用上 panda 的模型，zcode 也加入** —— 每个内置 CLI 现在按它真正读取的位置写入注入的模型，而不是写它根本不读的环境变量：hermes 得到一次性 `HERMES_HOME`，openclaw 重定向 `HOME` 并加 `--config`/`--state-dir`，pi 写 `models.json`（`apiKey` 是环境变量名），zcode 写 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指向的个人 provider 配置（0.17 完全不读 `ZCODE_*`），agy 写一份退出时恢复的 settings，grok 用 `GROK_MODELS_BASE_URL`（不是 `GROK_BASE_URL`）。临时状态挂在 harness 的清理表上，取消的运行不再把带密钥的配置留在磁盘上——信号路径的 `os._exit` 会跳过 `atexit`。`_harness` 还会从种子副本里剔除选择模型的设置键，并在重建 argv 时知道哪些 flag 会吃掉下一个 token。zcode 同时离开 `generic.py`——那个适配器无法兑现清单声称的注入。
 - **grok_build 现在真的能跑** —— 背后是三个独立故障：未登录的措辞匹配不上任何凭据模式（救援注入从未触发）、端点走了一个这个 CLI 不读的变量、`--single` 在答完之后让进程继续挂着。适配器改为读事件流并在终止行收尾，每轮铸一个 UUID 会话，并把终止 `error` 事件当作失败、以错误消息为诊断，而不是把一句前言当成完成的回合。
+
+### 变更
+
+- **长任务与高难度任务获得与形态匹配的执行预算** —— 声明 `duration_hint: long` 或复杂度评分高的任务，现在最多可用 120 轮、30 分钟 agent 预算，而不是默认的 30 轮/10 分钟；中等任务与 CLI 直接提交的编码任务为 60 轮/20 分钟。显式的 `spec.max_turns` 或已配置的 `timeouts.agent_by_kind` 仍然优先。
 
 ## [0.1.3] - 2026-10-30 — "Constellation"
 

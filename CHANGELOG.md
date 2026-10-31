@@ -48,11 +48,18 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Added
 
+- **An agent run starts with a workspace map** — every agent task now carries a compact, deterministic report of its workspace: git branch/commit and whether the tree is dirty, file and directory counts, top-level layout, language mix, key files (README, AGENTS.md, CLAUDE.md, Makefile, manifests) and the project's own declared build/verify commands (Makefile targets, package.json scripts, Go/Cargo/pytest entries). A large repository is no longer rediscovered turn by turn, and the map costs about 2 KB of prompt — capped, and cached between supervision rounds.
+
 ### Fixed
 
+- **A long tool call is no longer killed as a stalled agent** — the silence watchdog could not tell an agent that is thinking from one waiting on a ten-minute build, so any tool that produced no output past `timeouts.silence_s` (240 s by default) got the whole run killed. The watchdog now treats "a tool call is in flight" as work to wait on, bounded by the hard agent budget; a wedge outside a tool call is still killed.
 - **An approval now reaches the agent CLI** — a task parked because `claude_code` denied a privileged command (`systemctl`, a write under `/etc`) re-ran with byte-identical argv after the operator approved it, so the CLI auto-denied the same calls and the task returned to the same review card indefinitely. Consent now travels to the adapter on the request, and the adapter lifts its permission posture to `bypassPermissions` for that run; an unconsented run keeps `acceptEdits` and a restricted run ignores consent. (issue #165)
 - **Eight adapters can take panda's model; zcode joins them** — every bundled CLI now seeds exactly what it reads for an injected run instead of env vars it ignores: hermes a throwaway `HERMES_HOME`, openclaw a redirected `HOME` plus `--config`/`--state-dir`, pi a `models.json` whose `apiKey` is an env-var name, zcode the personal provider config behind `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` (its `ZCODE_*` trio is dead in 0.17), agy a settings file it restores on the way out, and grok the endpoint variable it actually reads (`GROK_MODELS_BASE_URL`, not `GROK_BASE_URL`). The temp state rides the harness cleanup list, so a cancelled run no longer leaves a config carrying the key on disk — the signal path exits with `os._exit`, which skips `atexit`. `_harness` also drops the settings keys that pick a model from a seeded copy and knows which flags consume the next token when it rebuilds an argv. zcode leaves `generic.py`, which could never honour the injection its manifest claimed.
 - **grok_build can actually run** — the trail was three separate faults: a sign-in wording that matched no credential pattern (the rescue injection never fired), an endpoint that rode a variable this CLI does not read, and `--single` keeping the process alive after the answer. The adapter reads the event stream and ends the turn at its terminal line, mints a UUID session per round, and treats a terminal `error` event as a failure with the message as the diagnosis instead of reporting a preamble as a completed turn.
+
+### Changed
+
+- **Long and hard tasks get a budget proportional to their shape** — a task that declared `duration_hint: long` or scored high complexity now runs with up to 120 turns and a 30-minute agent budget instead of the 30-turn/10-minute default; medium tasks and CLI-submitted coding tasks get 60 turns and 20 minutes. An explicit `spec.max_turns` or a configured `timeouts.agent_by_kind` still wins.
 
 ## [0.1.3] - 2026-10-30 — "Constellation"
 

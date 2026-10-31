@@ -447,6 +447,44 @@ func AgentEvents(ctx context.Context) AgentEventFunc {
 	return nil
 }
 
+// toolCounter tracks tool calls that have started but whose result has not
+// arrived yet. An agent inside a tool call is opaque by design — a build, a
+// test suite, a package install or a long shell command can legitimately
+// produce no output for far longer than the silence limit — so the silence
+// watchdogs treat "a tool is in flight" as activity to wait on, bounded by
+// the hard timeout, rather than as a wedge to kill. The counter is shared
+// between the stderr parser (which sees the events) and the watchdog (which
+// reads it).
+type toolCounter struct{ inFlight atomic.Int64 }
+
+func (c *toolCounter) started() {
+	if c != nil {
+		c.inFlight.Add(1)
+	}
+}
+
+// finished decrements without going negative: adapters may emit a tool_result
+// without a matching tool_use (a resumed session, a dropped event), and a
+// stuck negative counter would re-enable the silence kill on the next call.
+func (c *toolCounter) finished() {
+	if c == nil {
+		return
+	}
+	for {
+		n := c.inFlight.Load()
+		if n <= 0 {
+			return
+		}
+		if c.inFlight.CompareAndSwap(n, n-1) {
+			return
+		}
+	}
+}
+
+func (c *toolCounter) active() bool {
+	return c != nil && c.inFlight.Load() > 0
+}
+
 // progressWriter splits an adapter's stderr stream: {"type":"progress",…}
 // lines go to the compact-note sink (if any), {"type":"event",…} lines go
 // to the structured transcript sink; everything else is retained for
@@ -457,7 +495,8 @@ type progressWriter struct {
 	capture    executil.Capture
 	sink       ProgressFunc
 	evSink     AgentEventFunc
-	onActivity func() // set before Start; read-only afterwards
+	tools      *toolCounter // nil when the caller does not need tool tracking
+	onActivity func()       // set before Start; read-only afterwards
 	// onOutput fires only when the CLI itself speaks — a non-protocol stderr
 	// line or a real agent event. The adapter's own spawn bookkeeping and
 	// silence heartbeats prove the process is alive (onActivity) but not that
@@ -597,6 +636,19 @@ func (w *progressWriter) event(b []byte) {
 	}
 	if err := json.Unmarshal(b, &ev); err != nil || ev.Ev == "" {
 		return
+	}
+	// Tool tracking drives the silence watchdogs: a real tool call is opaque
+	// work whose silence must not be mistaken for a wedge. The adapter's
+	// {"phase":"spawn"} bookkeeping also travels as a tool_use event, but it
+	// announces the task hand-off, not a tool that will ever return — counting
+	// it would suppress the silence kill for the whole run.
+	if ev.Phase != "spawn" {
+		switch ev.Ev {
+		case "tool_use":
+			w.tools.started()
+		case "tool_result":
+			w.tools.finished()
+		}
 	}
 	// "session" is the adapter announcing the conversation id it minted (or
 	// is resuming under). Latch it regardless of whether a transcript sink
@@ -1068,6 +1120,11 @@ func SetSilenceTimeout(d time.Duration) {
 // work that is still legitimately running — see core.Core.SetTimeouts.
 func AgentHardTimeout() time.Duration { return adapterHardTimeout }
 
+// AgentTimeout reports the advertised per-execution budget (before the
+// wind-down grace). The orchestration layer reads it to decide whether a
+// task's own declared shape warrants a longer budget than the global one.
+func AgentTimeout() time.Duration { return time.Duration(adapterTimeoutS) * time.Second }
+
 // buildAdapterRequest maps the execution context onto the wire request:
 // the prompt/timeout/cwd basics plus every opt-in field an adapter may
 // understand (resume, tools policy, restricted, consent, turn cap, cmd
@@ -1261,6 +1318,9 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	// goroutine can publish silence heartbeats into the same channel the
 	// adapter's own notes use.
 	progressSink, _ := ctx.Value(progressKey{}).(ProgressFunc)
+	// tools is fed by the stderr parser and read by the watchdog below: a
+	// run inside a tool call is silent by nature, not wedged.
+	tools := &toolCounter{}
 
 	// The watchdog runs even with no silence limit configured: the kill is
 	// opt-in, but the heartbeat notes are not — a hung adapter produces zero
@@ -1304,7 +1364,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 					if !started && startupGrace > limit {
 						limit = startupGrace
 					}
-					if limit > 0 && silentFor >= limit {
+					if limit > 0 && silentFor >= limit && !tools.active() {
 						actMu.Lock()
 						stalled = true
 						startupStall = !started
@@ -1338,6 +1398,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	var stdout activityWriter
 	stdout.onActivity = touch
 	var stderr progressWriter
+	stderr.tools = tools
 	stderr.onActivity = alive
 	stderr.onOutput = touch
 	stderr.sink = progressSink
@@ -1766,7 +1827,7 @@ func startAgentSession(spawnCtx, turnCtx context.Context, name string, req Adapt
 		cancel()
 		return nil, err
 	}
-	stderr := &progressWriter{adapterName: name}
+	stderr := &progressWriter{adapterName: name, tools: &toolCounter{}}
 	if sink, ok := turnCtx.Value(progressKey{}).(ProgressFunc); ok {
 		stderr.sink = sink
 	}
@@ -1861,7 +1922,7 @@ func (s *agentSession) watchSilence(ctx context.Context, limit, heartbeat, start
 			if !s.turnSeen.Load() && startupGrace > lim {
 				lim = startupGrace
 			}
-			if lim > 0 && silentFor >= lim {
+			if lim > 0 && silentFor >= lim && !s.stderr.tools.active() {
 				s.kill()
 				return
 			}

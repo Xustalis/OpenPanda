@@ -42,11 +42,19 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Añadido
 
+- **Una ejecución de agente empieza con un mapa del espacio de trabajo** — cada tarea de agente lleva ahora un informe compacto y determinista de su espacio de trabajo: rama/commit de git y si el árbol tiene cambios sin confirmar, número de archivos y directorios, estructura de primer nivel, mezcla de lenguajes, archivos clave (README, AGENTS.md, CLAUDE.md, Makefile, manifiestos) y los comandos de compilación/verificación que el propio proyecto declara (objetivos de Makefile, scripts de package.json, entradas de Go/Cargo/pytest). Un repositorio grande ya no se redescubre turno a turno, y el mapa cuesta unos 2 KB de prompt — acotado y cacheado entre rondas de supervisión.
+
 ### Corregido
+
+- **Una llamada de herramienta larga ya no se mata como un agente bloqueado** — el vigilante de silencio no distinguía un agente que piensa de uno esperando una compilación de diez minutos, así que cualquier herramienta que no produjera salida más allá de `timeouts.silence_s` (240 s por defecto) hacía que se matara la ejecución completa. Ahora el vigilante trata «hay una llamada de herramienta en curso» como trabajo que esperar, acotado por el presupuesto duro del agente; un bloqueo fuera de una herramienta se sigue matando.
 
 - **La aprobación llega ahora al CLI del agente** — una tarea aparcada porque `claude_code` denegó un comando privilegiado (`systemctl`, una escritura en `/etc`) se reejecutaba con el mismo argv tras la aprobación, de modo que el CLI volvía a denegar las mismas llamadas y la tarea regresaba indefinidamente a la misma tarjeta de revisión. El consentimiento viaja ahora al adaptador en la petición y el adaptador eleva su postura de permisos a `bypassPermissions` para esa ejecución; una ejecución sin consentimiento mantiene `acceptEdits` y una ejecución restringida lo ignora.
 - **Ocho adaptadores pueden usar el modelo de panda; zcode se suma** — cada CLI incluida recibe el modelo inyectado exactamente donde lo lee: hermes un `HERMES_HOME` desechable, openclaw un `HOME` redirigido más `--config`/`--state-dir`, pi un `models.json` cuyo `apiKey` es un nombre de variable de entorno, zcode la configuración personal de proveedor tras `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` (su trío `ZCODE_*` no lo lee 0.17), agy un archivo de settings que se restaura al salir, y grok la variable de endpoint que realmente lee (`GROK_MODELS_BASE_URL`, no `GROK_BASE_URL`). El estado temporal va en la lista de limpieza del harness, así que una ejecución cancelada ya no deja en disco una configuración con la clave — la ruta de señal sale con `os._exit`, que omite `atexit`. `_harness` también descarta las claves que eligen modelo de la copia sembrada y sabe qué flags consumen el siguiente token al reconstruir el argv. zcode deja `generic.py`.
 - **grok_build ya puede ejecutarse de verdad** — eran tres fallos separados: un texto de inicio de sesión que no coincidía con ningún patrón de credenciales (la inyección de rescate nunca se disparó), un endpoint que viajaba en una variable que esta CLI no lee, y `--single` manteniendo el proceso vivo tras la respuesta. El adaptador lee el flujo de eventos, cierra el turno en su línea terminal, acuña una sesión UUID por ronda y trata un evento `error` terminal como fallo con el mensaje como diagnóstico.
+
+### Cambiado
+
+- **Las tareas largas y difíciles reciben un presupuesto acorde con su forma** — una tarea que declaró `duration_hint: long` o puntuó alta complejidad ahora se ejecuta con hasta 120 turnos y un presupuesto de agente de 30 minutos en lugar del valor por defecto de 30 turnos/10 minutos; las tareas medianas y las tareas de código enviadas desde la CLI reciben 60 turnos y 20 minutos. Un `spec.max_turns` explícito o un `timeouts.agent_by_kind` configurado siguen teniendo prioridad.
 
 ## [0.1.3] - 2026-10-30 — "Constellation"
 

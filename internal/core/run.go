@@ -1157,7 +1157,15 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 		if taskPermissionMode(task.SpecJSON) == defense.ModePlan {
 			execCtx = commander.WithRestricted(execCtx)
 		}
+		// Execution budget: an operator-configured per-kind timeout wins; a
+		// task that declared itself long (resource_profile.duration_hint) or
+		// scored as high complexity gets a larger budget than the global
+		// default, because the work this orchestrator advertises as needing
+		// an hour is exactly what a 10-minute agent budget truncates. The
+		// derived value never lowers an explicitly configured limit.
 		if d := c.agentTimeoutForKind(plan.Kind); d > 0 {
+			execCtx = commander.WithAgentTimeout(execCtx, d)
+		} else if _, d := derivedAgentBudget(task); d > commander.AgentTimeout() {
 			execCtx = commander.WithAgentTimeout(execCtx, d)
 		}
 		// Per-task tools policy: the entry model can request "extended"
@@ -1169,8 +1177,12 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 			execCtx = commander.WithToolsPolicy(execCtx, tp)
 		}
 		// Per-task turn cap: a task that needs a long build-test loop declares
-		// it in spec.max_turns rather than inheriting the adapter default.
+		// it in spec.max_turns rather than inheriting the adapter default. An
+		// undeclared cap on a long/high-complexity task is derived from the
+		// same shape instead of falling back to the 30-turn default.
 		if mt := taskMaxTurns(task.SpecJSON); mt > 0 {
+			execCtx = commander.WithMaxTurns(execCtx, mt)
+		} else if mt, _ := derivedAgentBudget(task); mt > 0 {
 			execCtx = commander.WithMaxTurns(execCtx, mt)
 		}
 		// The entry classifier's 0–1 score rides to model-selecting adapters
