@@ -8,6 +8,9 @@
 <meta name="description" data-i18n-content="meta.desc" content="OpenPanda 是本地优先的图状编排内核。它不替代 Claude Code、Codex，而是把你所有设备上已有的 Agent 连成一张网：意图、拆解、路由、监督、验收，全部在本地完成。" />
 <meta name="author" content="Xustalis" />
 <link rel="canonical" href="https://xustalis.github.io/OpenPanda/" />
+<link rel="alternate" hreflang="zh-CN" href="https://xustalis.github.io/OpenPanda/" />
+<link rel="alternate" hreflang="en" href="https://xustalis.github.io/OpenPanda/?lang=en" />
+<link rel="alternate" hreflang="x-default" href="https://xustalis.github.io/OpenPanda/" />
 
 <!-- Open Graph / social. The canonical host is set once here and in sitemap.xml;
      change both if the site moves to a custom domain. -->
@@ -35,6 +38,9 @@
 <link rel="preconnect" href="https://api.github.com" crossorigin />
 <link rel="preload" href="fonts/inter-normal-400_700.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="fonts/newsreader-normal-300_500.woff2" as="font" type="font/woff2" crossorigin />
+<!-- The hero still is the first paint (and the LCP) while scene.js decodes
+     the 3D plate; start it in the head so it does not wait for the stylesheet. -->
+<link rel="preload" href="textures/hero-still.webp" as="image" type="image/webp" fetchpriority="high" />
 <link rel="stylesheet" href="css/site.css" />
 
 <!-- Language bootstrap. Runs before the body parses so <html lang>, the toggle
@@ -101,7 +107,7 @@
         {
           "@type": "Question",
           "name": "支持哪些平台和 Agent？",
-          "acceptedAnswer": { "@type": "Answer", "text": "六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 10 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。" }
+          "acceptedAnswer": { "@type": "Answer", "text": "六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 11 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、ZCode、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。" }
         },
         {
           "@type": "Question",
@@ -165,7 +171,7 @@
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
       <span>K</span>
     </button>
-    <button class="menu-toggle" id="menu-toggle" aria-label="Open menu" data-i18n-aria="nav.menu" aria-expanded="false" aria-controls="mobile-menu">
+    <button class="menu-toggle" id="menu-toggle" aria-label="打开菜单" data-i18n-aria="nav.menu" aria-expanded="false" aria-controls="mobile-menu">
       <span></span><span></span>
     </button>
     <a class="nav-gh" href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">
@@ -254,6 +260,7 @@
       <li>Antigravity</li>
       <li>OpenCode</li>
       <li>Grok Build</li>
+      <li>ZCode</li>
       <li>Hermes</li>
       <li>OpenClaw</li>
       <li>Pi</li>
@@ -533,7 +540,7 @@
     </div>
     <div class="stat-grid">
       <div class="stat reveal"><b data-count="3">3</b><span data-i18n="s6.stat1">台真机</span></div>
-      <div class="stat reveal"><b data-count="10">10</b><span data-i18n="s6.stat2">个 Agent 适配器</span></div>
+      <div class="stat reveal"><b data-count="11">11</b><span data-i18n="s6.stat2">个 Agent 适配器</span></div>
       <div class="stat reveal"><b data-count="2760" data-prefix="~">~2760</b><span data-i18n="s6.stat3">项自动化测试</span></div>
       <div class="stat reveal"><b data-count="20" data-prefix="~" data-suffix="MB">~20MB</b><span data-i18n="s6.stat4">常驻内存</span></div>
       <div class="stat reveal"><b data-count="0">0</b><span data-i18n="s6.stat5">云端中转</span></div>
@@ -640,7 +647,7 @@
         <p class="lic-desc" data-i18n="lic.c1.desc">个人使用、学习、公司内部工具、二次开发。</p>
         <ul class="lic-list">
           <li data-i18n="lic.c1.l1">全部源码与预编译产物</li>
-          <li data-i18n="lic.c1.l2">10 个 Agent 适配器，持续增加</li>
+          <li data-i18n="lic.c1.l2">11 个 Agent 适配器，持续增加</li>
           <li data-i18n="lic.c1.l3">可自行修改；对外分发时改动同样开源</li>
           <li data-i18n="lic.c1.l4">GitHub Issues 支持</li>
         </ul>
@@ -729,7 +736,7 @@
             <span class="faq-q" data-i18n="faq.q4.q">支持哪些平台和 Agent？</span>
             <span class="faq-icon" aria-hidden="true"></span>
           </summary>
-          <div class="faq-body"><p data-i18n="faq.q4.a">六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 10 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。</p></div>
+          <div class="faq-body"><p data-i18n="faq.q4.a">六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 11 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、ZCode、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。</p></div>
         </details>
 
         <details class="faq reveal">

@@ -259,6 +259,9 @@ html[data-lang='zh'] .lang-toggle-menu .lang-zh { color: var(--jade); }
   border-radius: 999px;
   padding: 1px 6px;
   font-size: 9px;
+  /* The star glyph and the count are one token; on a phone the pill is only
+     as wide as the icon, and without this the badge wraps between them. */
+  white-space: nowrap;
 }
 .site-nav.solid .nav-stars { color: var(--jade); background: var(--jade-soft); }
 .menu-toggle {
@@ -343,6 +346,12 @@ html[data-lang='zh'] .lang-toggle-menu .lang-zh { color: var(--jade); }
      identical frame — and visitors without WebGL see the same sky, not a
      differently-composed stock shot. */
   background: #05060a url('../textures/hero-still.jpg') center / cover no-repeat;
+  /* WebP first (about a third smaller, and it is the first paint); the JPEG in
+     the shorthand above stays as the fallback for engines without it. */
+  background-image: image-set(
+    url('../textures/hero-still.webp') type('image/webp'),
+    url('../textures/hero-still.jpg') type('image/jpeg')
+  );
 }
 .hero-canvas {
   position: absolute;
@@ -1010,6 +1019,10 @@ html[data-lang='en'] .hero-en {
   inset: 0;
   opacity: .1;
   background: url('../textures/milkyway_2k.jpg') center 30% / cover no-repeat;
+  background: image-set(
+    url('../textures/milkyway_2k.webp') type('image/webp'),
+    url('../textures/milkyway_2k.jpg') type('image/jpeg')
+  ) center 30% / cover no-repeat;
   filter: grayscale(.35) brightness(.8);
 }
 .night-section::after {
@@ -1246,6 +1259,12 @@ html[data-lang='en'] .hero-en {
   background:
     linear-gradient(180deg, rgba(5, 7, 11, .88), rgba(5, 7, 11, .96)),
     url('../textures/milkyway_2k.jpg') center 62%/cover no-repeat;
+  background:
+    linear-gradient(180deg, rgba(5, 7, 11, .88), rgba(5, 7, 11, .96)),
+    image-set(
+      url('../textures/milkyway_2k.webp') type('image/webp'),
+      url('../textures/milkyway_2k.jpg') type('image/jpeg')
+    ) center 62%/cover no-repeat;
   color: var(--paper);
   overflow: hidden;
   isolation: isolate;
@@ -1266,6 +1285,10 @@ html[data-lang='en'] .hero-en {
   height: 720px;
   border-radius: 50%;
   background: url('../textures/earth_night_2k.jpg') center/cover no-repeat;
+  background: image-set(
+    url('../textures/earth_night_2k.webp') type('image/webp'),
+    url('../textures/earth_night_2k.jpg') type('image/jpeg')
+  ) center/cover no-repeat;
   opacity: .34;
   -webkit-mask-image: radial-gradient(circle at 40% 35%, #000 0%, #000 45%, transparent 72%);
   mask-image: radial-gradient(circle at 40% 35%, #000 0%, #000 45%, transparent 72%);
@@ -1452,6 +1475,10 @@ html[data-lang='en'] .hero-en {
   inset: 0;
   opacity: .12;
   background: url('../textures/milkyway_2k.jpg') center 62% / cover no-repeat;
+  background: image-set(
+    url('../textures/milkyway_2k.webp') type('image/webp'),
+    url('../textures/milkyway_2k.jpg') type('image/jpeg')
+  ) center 62% / cover no-repeat;
   -webkit-mask-image: linear-gradient(to left, #000, transparent 68%);
   mask-image: linear-gradient(to left, #000, transparent 68%);
 }
@@ -2639,17 +2666,32 @@ kbd {
 body.palette-open { overflow: hidden; }
 
 /* ── responsive: second pass ────────────────────────────────────────── */
-/* English nav labels are longer than the Chinese ones, and between ~820 and
-   ~950px they no longer fit at the default rhythm. Tighten the gap and the
-   type, and drop the ⌘K chip (still reachable by keyboard and from the mobile
-   index) before anything wraps or pushes the GitHub pill off the edge. */
-@media (min-width: 821px) and (max-width: 950px) {
+/* English nav labels are longer than the Chinese ones, and below ~1320px they
+   no longer fit at the default rhythm — at 44px side padding the full bar needs
+   about 1261px, which left no room for a growing star count. Tighten the gap
+   and the type, and drop the ⌘K chip (still reachable by keyboard and from the
+   mobile index) before anything wraps or pushes the GitHub pill off the edge. */
+@media (min-width: 821px) and (max-width: 1320px) {
   .nav-links { gap: 12px; }
   .nav-links a { font-size: 11px; }
   .nav-actions { gap: 8px; }
   .nav-gh { padding: 8px 10px; }
+  .nav-gh span:not(.nav-stars) { display: none; }
   .lang-toggle { padding: 6px 8px; }
   .nav-k { display: none; }
+}
+/* Below 900 even the tightened rhythm leaves the English pill hanging off the
+   edge by a few pixels, and shrinking the type further would look like an
+   apology. The sheet takes the links; the bar keeps the brand, language and
+   GitHub. */
+@media (max-width: 900px) {
+  .nav-links { display: none; }
+  .menu-toggle { display: grid; }
+  .nav-gh span:not(.nav-stars) { display: none; }
+  .nav-gh { padding: 8px 10px; }
+  /* Without the links, nothing carries the auto margin that holds the actions
+     against the right edge; put it on the actions themselves. */
+  .nav-actions { margin-left: auto; }
 }
 @media (max-width: 1100px) {
   .adapter-list { gap: 12px 30px; }
@@ -2671,7 +2713,8 @@ body.palette-open { overflow: hidden; }
 }
 @media (max-width: 560px) {
   /* Ten names in a centred flex-wrap leave an orphan on the last line and
-     ragged row lengths. A 2×5 grid is tidy at every phone width. */
+     ragged row lengths. A 2×5 grid is tidy at every phone width; the generic
+     bridge then closes the list on a centred row of its own. */
   .adapter-list {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -2680,6 +2723,11 @@ body.palette-open { overflow: hidden; }
     margin: 0 auto;
     justify-items: start;
   }
+  .adapter-list .adapter-any {
+    grid-column: 1 / -1;
+    justify-self: center;
+    margin-top: 4px;
+  }
   .adapter-list li { font-size: 10.5px; letter-spacing: .02em; }
   .term-body { padding: 16px 13px 20px; font-size: 10px; line-height: 1.9; }
   .t-row { grid-template-columns: 10px 42px 1fr; gap: 6px; }
@@ -2687,6 +2735,16 @@ body.palette-open { overflow: hidden; }
   .palette-item .pi-hint { display: none; }
   .nav-k { display: none; }
   .footer-status { font-size: 9px; gap: 8px 12px; }
+}
+/* Up to 420px the bar cannot hold brand, language, menu and GitHub at once —
+   the star pill hangs into the right padding and, on a 320px phone, off the
+   screen. GitHub is one tap away in the hero and the sheet, so the bar drops
+   it and tightens its own frame instead. */
+@media (max-width: 420px) {
+  .nav-gh { display: none; }
+}
+@media (max-width: 360px) {
+  .site-nav { padding: 0 16px; gap: 16px; }
 }
 
 /* ── toast (palette copy feedback) ──────────────────────────────────── */

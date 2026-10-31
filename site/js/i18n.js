@@ -260,7 +260,7 @@ export const EN = {
   'lic.c1.flag': 'Default path',
   'lic.c1.desc': 'Personal use, study, internal tools, further development.',
   'lic.c1.l1': 'All source and prebuilt artifacts',
-  'lic.c1.l2': '10 agent adapters, growing',
+  'lic.c1.l2': '11 agent adapters, growing',
   'lic.c1.l3': 'Modify freely; distribute changes under the same licence',
   'lic.c1.l4': 'GitHub Issues support',
   'lic.c1.cta': 'Start installing <span aria-hidden="true">→</span>',
@@ -300,7 +300,7 @@ export const EN = {
     'No, and there are no “our servers”. Nodes connect peer to peer, session content is AEAD-encrypted and clamped hop by hop against the three trust tiers. When the link drops, DTN store-and-forward carries it until the link returns.',
   'faq.q4.q': 'Which platforms and agents are supported?',
   'faq.q4.a':
-    'Six release targets: macOS, Linux and Windows × amd64 / arm64, plus a lite-linux variant. Ten adapters today — Claude Code, Codex, Antigravity, OpenCode, Grok Build, Hermes, OpenClaw, Pi, DeepSeek Harness, and a generic one that takes any headless CLI.',
+    'Six release targets: macOS, Linux and Windows × amd64 / arm64, plus a lite-linux variant. Eleven adapters today — Claude Code, Codex, Antigravity, OpenCode, Grok Build, ZCode, Hermes, OpenClaw, Pi, DeepSeek Harness, and a generic one that takes any headless CLI.',
   'faq.q5.q': 'Can I use it in production?',
   'faq.q5.a':
     'v0.1.3 “Constellation” is the current cut of the release-grade line (that line went release-grade at v0.1.0) and holds up day to day. A single machine, a three-machine mesh, and a real cross-network multi-hop (Mac → relay → cloud host, 3 MiB project tree hash identical) all run; self-use and internal tooling are fine, but exposing it to the public is not advised yet. What is unfinished is listed item by item in <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a>: UPnP/NAT-PMP port mapping, source-signature convergence for punch and directory frames, and cross-node hello replay (protocol-level, still open).',

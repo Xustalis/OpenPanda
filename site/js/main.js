@@ -64,20 +64,21 @@ const navLinks = [...document.querySelectorAll('.nav-links a')].filter((a) =>
 const linkFor = new Map(navLinks.map((a) => [a.getAttribute('href').slice(1), a]))
 
 if (navLinks.length) {
+  // Observe every section, not just the ones the nav links to: the page runs
+  // longer than the nav (capabilities, proof, scales have no entry), and
+  // watching only the linked sections left the last one lit while the reader
+  // was three sections past it.
+  const sections = [...document.querySelectorAll('main section[id], main header[id]')]
   const spy = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue
       const link = linkFor.get(entry.target.id)
-      if (!link) continue
       for (const other of navLinks) other.classList.remove('on')
-      link.classList.add('on')
+      link?.classList.add('on')
     }
   }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 })
 
-  for (const id of linkFor.keys()) {
-    const section = $(id)
-    if (section) spy.observe(section)
-  }
+  for (const section of sections) spy.observe(section)
 }
 
 /* ── mobile index ──────────────────────────────────────────────────────── */
@@ -98,7 +99,7 @@ function setMenu(open) {
 menuBtn?.addEventListener('click', () => setMenu(menu.hidden))
 menu?.querySelectorAll('a').forEach((a) => a.addEventListener('click', () => setMenu(false)))
 addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false) })
-matchMedia('(min-width: 821px)').addEventListener('change', (e) => { if (e.matches) setMenu(false) })
+matchMedia('(min-width: 901px)').addEventListener('change', (e) => { if (e.matches) setMenu(false) })
 
 /* ── scroll reveals ────────────────────────────────────────────────────── */
 // .js .reveal starts at opacity:0; anything that enters the viewport gets .in.

@@ -97,12 +97,13 @@ export function initHero(canvas) {
   level.add(skyFrame)
 
   // ── Milky Way plate ────────────────────────────────────────────────────
-  // Mobile takes the 2K cut (345 KB); desktop the 4K plate (2.0 MB). 4K is
-  // already ~1:1 with the sky at 1440 px after the sphere's projection, and
-  // the 6K original only cost VRAM and decode time.
+  // Mobile takes the 2K cut (~260 KB); desktop a 3K plate (~750 KB). Both are
+  // WebP: the plate is a photograph, and at 1440 px the sphere's projection
+  // already stretches the 2K map, so the 4K source only bought decode time and
+  // VRAM. The JPEG originals stay in textures/ as the source of these copies.
   let onPlateReady = () => {}
   const skyTex = loader.load(
-    isMobile ? 'textures/milkyway_2k.jpg' : 'textures/milkyway_4k.jpg',
+    isMobile ? 'textures/milkyway_2k.webp' : 'textures/milkyway_3k.webp',
     () => onPlateReady(),
     undefined,
     // Plate missing → fall back to the CSS star mat rather than a black box.
@@ -371,9 +372,9 @@ export function initHero(canvas) {
   }
 
   // ── Earth ──────────────────────────────────────────────────────────────
-  const dayTex = loader.load('textures/earth_day_2k.jpg')
-  const nightTex = loader.load('textures/earth_night_2k.jpg')
-  const cloudTex = loader.load('textures/clouds_2k.jpg')
+  const dayTex = loader.load('textures/earth_day_2k.webp')
+  const nightTex = loader.load('textures/earth_night_2k.webp')
+  const cloudTex = loader.load('textures/clouds_2k.webp')
   for (const t of [dayTex, nightTex]) {
     t.colorSpace = THREE.SRGBColorSpace
     t.anisotropy = renderer.capabilities.getMaxAnisotropy()
