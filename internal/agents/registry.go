@@ -472,12 +472,12 @@ var known = []Known{
 	},
 	{
 		Name:    "zcode",
-		Adapter: "generic.py",
-		// zcode's headless contract is `zcode --prompt "…"` — community-
-		// verified (Z.AI documents no non-interactive mode yet). The prompt
-		// rides as one literal argv element; there is no session/resume flag,
-		// which is exactly the plain-argv surface generic.py exists for.
-		Command:     "zcode --prompt {prompt}",
+		Adapter: "zcode.py",
+		// zcode's headless contract is `zcode --prompt "…"`; the prompt rides
+		// as one literal argv element. It moved off generic.py because
+		// injection needs more than env: 0.17 reads its model from the
+		// personal provider config, not from ZCODE_*, so the adapter writes
+		// that config for an injected run (see adapters/zcode.py).
 		Endpoint:    "https://api.z.ai/api/anthropic",
 		Binaries:    []string{"zcode"},
 		DisplayName: "ZCode (Z.AI)",
@@ -485,12 +485,18 @@ var known = []Known{
 		// `zcode login` OAuth is buggy upstream: the reliable auth paths are
 		// the TUI setup wizard's ~/.zcode/cli/config.json (credential-free
 		// until configured — so its mere existence is NOT a credential
-		// signal and stays out of CredentialFiles) or the ZCODE_* env trio,
-		// which doubles as the injection surface below.
+		// signal and stays out of CredentialFiles) or the ZCODE_* env trio.
 		InitHint:          "zcode  # run once for the setup wizard, or set ZCODE_API_KEY/ZCODE_MODEL/ZCODE_BASE_URL",
 		CredentialEnvVars: []string{"ZCODE_API_KEY"},
+		// APIType is "" on purpose: zcode speaks both wires (its own catalog
+		// ships openai-chat-completions and anthropic-messages templates) and
+		// the adapter writes the dialect panda's model speaks into the
+		// provider entry. Pinning "anthropic" here made an OpenAI-dialect node
+		// refuse to inject at all, and the refusal was reported as
+		// "injection unsupported for generic.py" — a dialect mismatch dressed
+		// up as an unsupported adapter.
 		ModelEnv: &ModelEnvMapping{
-			APIType: "anthropic",
+			APIType: "",
 			BaseURL: "ZCODE_BASE_URL",
 			APIKey:  "ZCODE_API_KEY",
 			Model:   "ZCODE_MODEL",

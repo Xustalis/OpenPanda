@@ -43,6 +43,7 @@ flags, the injection shim, and the event reduction. It never prints secrets.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -75,6 +76,19 @@ class Unsupported(Exception):
     """The CLI rejected --mode json — degrade to print mode."""
 
 
+class UnknownFlags(Exception):
+    """The CLI refused specific flags as unknown — rebuild without them.
+
+    Carries the names the CLI itself listed, so the caller drops exactly what
+    this build does not implement and retries, rather than guessing a version
+    surface or paying for a `pi --help` probe (7–10 s on a cold node).
+    """
+
+    def __init__(self, flags):
+        super().__init__(", ".join(sorted(flags)) or "unknown flags")
+        self.flags = set(flags)
+
+
 def _injected_model():
     """Build the temporary agent dir for an injected run.
 
@@ -90,37 +104,153 @@ def _injected_model():
     provider = {"api": api, "models": [{"id": model}]}
     if base_url:
         provider["baseUrl"] = base_url
-    # The key rides an env interpolation — models.json never stores it.
+    # models.json never stores the secret: pi's `apiKey` field resolves a bare
+    # name as an environment variable (docs/models.md "Value Resolution"), so
+    # writing the VARIABLE NAME makes pi read PI_API_KEY at request time.
+    #
+    # It must be the bare name — "${PI_API_KEY}" is not a template pi
+    # understands, so it is sent as the literal string and the provider
+    # answers "401 token invalid", which reads like a bad key rather than a
+    # bad manifest.
     if os.environ.get("PI_API_KEY"):
-        provider["apiKey"] = "${PI_API_KEY}"
+        provider["apiKey"] = "PI_API_KEY"
     agent_dir = tempfile.mkdtemp(prefix="panda-pi-agent-")
     try:
+        _seed_settings(agent_dir)
         with open(os.path.join(agent_dir, "models.json"), "w", encoding="utf-8") as f:
             json.dump({"providers": {"panda": provider}}, f)
     except OSError:
         shutil.rmtree(agent_dir, ignore_errors=True)
         return "", ""
+    # The finally in main() covers a normal exit; a signal path calls os._exit
+    # and skips it, so the directory also rides the harness cleanup list.
+    harness.at_cleanup(shutil.rmtree, agent_dir, True)
     os.environ["PI_CODING_AGENT_DIR"] = agent_dir
     return "panda/" + model, agent_dir
 
 
-def _common_flags(req):
-    """Tool-face and trust flags shared by the JSON and print-mode paths."""
+# Settings keys that pick a model. They are dropped from the seeded copy: the
+# run is pinned with --model panda/<id>, and a leftover defaultProvider naming
+# a provider whose auth.json was NOT copied (that file is a secret store and
+# stays out of the temp dir) is a startup failure waiting to happen.
+MODEL_SETTING_KEYS = ("defaultProvider", "defaultModel")
+
+
+def _seed_settings(agent_dir):
+    """Copy the user's settings.json into the temporary agent dir.
+
+    PI_CODING_AGENT_DIR is the whole agent home — models.json, settings.json,
+    auth.json, bin/. Pointing it at a fresh temp dir therefore does not just
+    swap the provider, it drops every setting the user ever made. The one that
+    bites on Windows is `shellPath`: without it pi's bash tool probes only
+    `C:\\Program Files (x86)\\Git\\bin\\bash.exe`, fails with "No bash shell
+    found", and the agent — which cannot run a single command — spends its
+    whole turn reading pi's own source to work out why. A smoke test that
+    should take one command ran for ten minutes and ended in a directory
+    listing instead of a result.
+
+    Copying the file keeps shellPath, theme and the rest of the user's setup.
+    Anything unreadable is skipped: a missing settings.json is a working
+    default, and refusing to run because a preference file is corrupt would
+    trade one broken run for another.
+    """
+    src = os.path.join(_default_agent_dir(), "settings.json")
+    if not os.path.isfile(src):
+        return
+    try:
+        with open(src, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(settings, dict):
+        return
+    for key in MODEL_SETTING_KEYS:
+        settings.pop(key, None)
+    with open(os.path.join(agent_dir, "settings.json"), "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+
+
+def _default_agent_dir():
+    """The agent dir pi would use with no injection: PI_CODING_AGENT_DIR when
+    the caller set one, else ~/.pi/agent (pi's own default, config.js
+    getAgentDir)."""
+    env = os.environ.get("PI_CODING_AGENT_DIR", "").strip()
+    if env:
+        return os.path.expanduser(env)
+    return os.path.join(os.path.expanduser("~"), ".pi", "agent")
+
+
+def _common_flags(req, dropped=frozenset()):
+    """Tool-face and trust flags shared by the JSON and print-mode paths.
+
+    `dropped` carries the flags this build already rejected as unknown (see
+    _strip_flags): pi's CLI surface moves between minor versions — 0.73
+    dropped --approve, --no-approve, --exclude-tools and the bare `--`
+    separator outright, so a fixed command line dies on "Unknown options"
+    before any model call. Rebuilding without the named flags keeps one
+    adapter working across versions without a help probe (pi --help costs
+    7–10 s on a cold node, which is a whole supervision round).
+    """
     if req.restricted:
         # Read-only face for an unconsented remote task: no writes, no shell,
         # and no .pi/ project resources (extensions/MCP included) — the work
         # dir is where the attack surface lives.
-        return ["--tools", READONLY_TOOLS, "--no-mcp", "--no-extensions",
-                "--no-approve"]
-    flags = ["--approve"]  # project resources load inside the task's work dir
-    if req.tools_policy != "extended":
-        flags += ["--tools", SAFE_TOOLS, "--exclude-tools", "mcp__*"]
-    return flags
+        flags = ["--tools", READONLY_TOOLS, "--no-mcp", "--no-extensions",
+                 "--no-approve"]
+    else:
+        flags = ["--approve"]  # project resources load inside the task's work dir
+        if req.tools_policy != "extended":
+            flags += ["--tools", SAFE_TOOLS, "--exclude-tools", "mcp__*"]
+    return _strip_flags(flags, dropped)
 
 
-def _build_cmd(req, injected_model):
+# Flags in _common_flags that consume the following token as their value.
+_VALUE_FLAGS = {"--tools", "--exclude-tools"}
+
+
+def _strip_flags(flags, dropped):
+    """Remove the flags in `dropped` (and their values) from `flags`.
+
+    The `--` separator is special: it owns no value, so the prompt that
+    follows it must survive. Getting that wrong would silently delete the
+    task's own text.
+    """
+    if not dropped:
+        return list(flags)
+    out = []
+    i = 0
+    while i < len(flags):
+        tok = flags[i]
+        if tok in dropped:
+            if tok in _VALUE_FLAGS and i + 1 < len(flags):
+                i += 2
+            else:
+                i += 1
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
+_UNKNOWN_OPTION_RE = re.compile(r"unknown options?:\s*(.+)", re.IGNORECASE)
+
+
+def _rejected_flags(stderr):
+    """The flags a CLI named in its "Unknown options: a, b" refusal."""
+    m = _UNKNOWN_OPTION_RE.search(stderr or "")
+    if not m:
+        return set()
+    names = set()
+    for part in m.group(1).split(","):
+        tok = part.strip().strip("'\"")
+        if tok.startswith("-"):
+            names.add(tok)
+    return names
+
+
+def _build_cmd(req, injected_model, dropped=frozenset()):
     cmd = ["pi", "--mode", "json"]
-    cmd += _common_flags(req)
+    cmd += _common_flags(req, dropped)
     if injected_model:
         cmd += ["--model", injected_model]
     else:
@@ -141,8 +271,11 @@ def _build_cmd(req, injected_model):
     if effort in THINKING_LEVELS:
         cmd += ["--thinking", effort]
     # "--" stops option parsing so a prompt beginning with "-" cannot be
-    # misparsed as a flag.
-    cmd += ["--", req.prompt]
+    # misparsed as a flag. Builds that dropped the separator say so in their
+    # "Unknown options" refusal, and it lands in `dropped`.
+    if "--" not in dropped:
+        cmd += ["--"]
+    cmd.append(req.prompt)
     return cmd
 
 
@@ -234,10 +367,32 @@ def main():
     injected_model, agent_dir = "", ""
     if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
         injected_model, agent_dir = _injected_model()
+    # dropped: flags this build has already refused as unknown. pi's surface
+    # drifts (0.73 lost --approve/--exclude-tools/`--`), and the CLI names the
+    # offending flags in its refusal — so the adapter learns the surface from
+    # one cheap failure instead of paying 7–10 s for `pi --help` every round.
+    dropped = set()
+    out = None
+    plain_fallback = False
     try:
-        cmd = _build_cmd(req, injected_model)
         try:
-            out = _run_events(cmd, cwd, timeout)
+            while True:
+                cmd = _build_cmd(req, injected_model, dropped)
+                try:
+                    out = _run_events(cmd, cwd, timeout)
+                    break
+                except UnknownFlags as e:
+                    new = {f for f in e.flags if f not in dropped}
+                    if not new:
+                        # Nothing left to drop: the rejection was not about our
+                        # optional flags (e.g. --mode json itself) — degrade to
+                        # print mode exactly as before.
+                        plain_fallback = True
+                        break
+                    dropped |= new
+                except Unsupported:
+                    plain_fallback = True
+                    break
         except ProviderFailure as e:
             st = getattr(e, "state", None) or {}
             usage = st.get("usage") if isinstance(st.get("usage"), dict) else {}
@@ -246,11 +401,18 @@ def main():
                          cost=st.get("cost") or None, usage=usage or None,
                          session_id=st.get("session_id") or None)
             return
-        except Unsupported:
-            # Older pi without --mode json: one-shot print-mode run. The
-            # command is rebuilt, never token-filtered (the prompt could
-            # itself match a filtered token).
-            plain = ["pi", "--print"] + _common_flags(req)
+        except subprocess.TimeoutExpired:
+            harness.emit(False, "pi timed out", 124)
+            return
+        except FileNotFoundError:
+            harness.emit(False, "pi binary not found", 127)
+            return
+        if plain_fallback:
+            # Older pi without --mode json: one-shot print-mode run. The command
+            # is rebuilt, never token-filtered (the prompt could itself match a
+            # filtered token), and it inherits the flags this build already
+            # refused so the fallback does not die on the same refusal.
+            plain = ["pi", "--print"] + _common_flags(req, dropped)
             if injected_model:
                 plain += ["--model", injected_model]
             elif os.environ.get("PI_MODEL"):
@@ -265,7 +427,9 @@ def main():
                     plain += ["--session-dir",
                               os.path.join(os.path.expanduser("~"), ".pi", "agent", "sessions")]
                 plain += ["--session", req.resume]
-            plain += ["--", prompt]
+            if "--" not in dropped:
+                plain += ["--"]
+            plain.append(prompt)
             try:
                 rc, text, err = harness.run_plain(plain, cwd=cwd, timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -275,12 +439,6 @@ def main():
                 harness.emit(False, "pi binary not found", 127)
                 return
             harness.emit(rc == 0, text.strip() or err.strip(), rc)
-            return
-        except subprocess.TimeoutExpired:
-            harness.emit(False, "pi timed out", 124)
-            return
-        except FileNotFoundError:
-            harness.emit(False, "pi binary not found", 127)
             return
         harness.emit(out["ok"], out["result"], out["exit_code"],
                      tokens=out.get("tokens"), cost=out.get("cost"),
@@ -340,13 +498,36 @@ def _run_events(cmd, cwd, timeout):
         if returncode != 0 and ("unknown option" in low or "unrecognized" in low
                                 or "invalid value" in low or "unknown flag" in low
                                 or "unknown argument" in low):
+            # "Unknown options: --a, --b" names what this build does not
+            # implement; anything vaguer is treated as "this CLI has no
+            # --mode json" and degrades to print mode.
+            named = _rejected_flags(err)
+            if named:
+                raise UnknownFlags(named)
             raise Unsupported()
         msg = err.strip() or f"pi exited {returncode} without events"
         return {"ok": False, "result": msg, "exit_code": returncode or 1}
 
     text = state["last_text"]
     if not text and state["tool_outputs"]:
-        text = "\n\n".join(state["tool_outputs"])
+        # The agent ran tools and stopped without ever writing an answer.
+        # Handing the tool log back as the result is how a failed run came out
+        # looking finished: a smoke test that could not start a shell at all
+        # reported "bash.exe\ngit.exe\nsh.exe\n\n.claude/\n.inject-test/…" —
+        # a directory listing — as its conclusion, the supervisor read that as
+        # work, and the thread printed it as the employee's closing paragraph.
+        # A run with no answer is a failure that needs a reason, not a green
+        # ok carrying a log; the tail is kept as evidence, one line, bounded.
+        tail = " / ".join(line.strip() for line in state["tool_outputs"][-3:] if line.strip())
+        if len(tail) > 300:
+            tail = tail[:300] + "…"
+        return {
+            "ok": False,
+            "result": ("pi ran tools but never produced a final answer"
+                       + (f"; last tool output: {tail}" if tail else "")),
+            "exit_code": returncode or 1,
+            "session_id": state["session_id"],
+        }
     if not text:
         # Events streamed but no assistant text: report failure, not a green
         # "ok" — a silent success here makes the supervisor re-run the agent
