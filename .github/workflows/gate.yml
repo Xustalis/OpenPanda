@@ -160,7 +160,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -178,7 +178,7 @@ jobs:
         run: make tui-pty-exit-test
 
   # The review ruleset requires the bare `tui-pty` context, but a matrix job's
-  # check names carry their axis value ("tui-pty (macos-14)"), so the required
+  # check names carry their axis value ("tui-pty (macos-15)"), so the required
   # context would sit "Expected" forever and no PR could merge. This summary
   # carries the required name and passes only when every platform run passed —
   # a failed (or skipped) matrix leg skips it, which the ruleset counts as not
@@ -188,7 +188,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Both platform contracts passed
-        run: echo "TUI pty contracts passed on ubuntu-latest and macos-14"
+        run: echo "TUI pty contracts passed on ubuntu-latest and macos-15"
 
   race:
     runs-on: ubuntu-latest

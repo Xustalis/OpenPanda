@@ -55,6 +55,7 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 ## 🌟 Was kann OpenPanda?
 
 ### 1. 🌐 Heterogene P2P-Gerätezusammenarbeit
+- **Geräteübergreifender Status (bis v0.1.3 ausgeliefert)**: AEAD pro Sitzung, Bluetooth-artige Kopplung, Vertrauensstufen, Multi-Hop-Relays und parallele Ausführung im selben Projekt über pfadbezogene Lanes und isolierte Worktrees.
 - **LAN-Discovery + Bluetooth-artige Kopplung**: Knoten finden sich im LAN mit fingerprint-bestätigter Aufnahme; `panda pair` fügt ein Gerät über einen auf beiden Seiten bestätigten Kurzcode hinzu, und `panda nodes verify` pinnt den Ed25519-Schlüssel jedes Peers.
 - **Dynamische Fähigkeitskarten**: Jeder Knoten erfasst automatisch sein Hardwareprofil (CPU, RAM, OS) und verfügbare Agenten.
 - **Intelligente Aufgabenverteilung**: Routet nach gemessener Kapazität — schwere Kompiliervorgänge an leistungsstarke Server, Sensoraufgaben an Edge-Knoten; `panda nodes drain` entfernt einen Knoten für Wartung.
@@ -67,7 +68,7 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 - **Trust-Zonen**: Jeder Peer trägt eine vom Betreiber gesetzte Stufe (`panda nodes trust <id> mesh|guarded|open`), die begrenzt, was eine delegierte Aufgabe ihm offenlegen darf und wie eingehende Arbeit von ihm zugelassen wird; Bildschirminhalte sind durchgehend mesh-exklusiv — eine Abstufung des Vertrauens kappt eine laufende Screen-Übertragung mitten im Flug.
 
 ### 2. 🤖 Universelle Agenten-Orchestrierung & Ausfallsicherung
-- **Vorkonfigurierte Adapter**: Zehn mitgelieferte Adapter (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, ZCode, OpenClaw), eine generic-Brücke für alles Übrige und Shell-Befehle.
+- **Vorkonfigurierte Adapter**: Neun dedizierte Adapter (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi und OpenClaw). Eine konfigurierbare generische Brücke bindet jede headless CLI ein, darunter ZCode.
 - **Multi-Modell-Registry & transparentes Failover**: `panda model add|switch|test` verwaltet mehrere Provider pro Knoten hinter einem Health-Breaker; bei aufgebrauchten Kontingenten oder ungültigen Schlüsseln (401/403) wird automatisch ein Ausweichmodell injiziert und die Aufgabe läuft weiter.
 - **Multi-Harness-Läufe**: `panda ask --agents a,b --mode parallel` verteilt eine Anweisung als Plan an mehrere Agenten und sammelt die Urteile ein.
 - **Vollständige Transparenz**: Verfolge Bash-Befehle, Dateiänderungen und Werkzeugaufrufe live im Terminal oder Browser.

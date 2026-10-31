@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from unittest import mock
 
 
@@ -89,6 +90,18 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=No
             "OPENPANDA_MODEL_BASE_URL", "OPENPANDA_MODEL_API_KEY",
             "OPENPANDA_MODEL_NAME", "OPENPANDA_MODEL_API_TYPE",
             "OPENPANDA_AGENT_MODELS",
+            # Ambient homes and provider settings the new injected-run cases
+            # read. A developer shell that exports any of these would make
+            # "a plain run leaves the operator's config alone" fail spuriously.
+            "HERMES_HOME",
+            "ZCODE_API_KEY", "ZCODE_BASE_URL", "ZCODE_MODEL",
+            "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+            "PI_API_KEY", "PI_MODEL", "PI_PROVIDER", "PI_CODING_AGENT_DIR",
+            "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GEMINI_BASE_URL",
+            "GROK_MODEL", "GROK_MODELS_BASE_URL", "GROK_BASE_URL",
+            "GROK_API_KEY",
+            "OPENCLAW_API_KEY", "OPENCLAW_MODEL", "OPENCLAW_CONFIG",
+            "OPENCLAW_STATE_DIR",
             # Windows locations for opencode's state files must not leak a
             # developer machine's config into the fixture.
             "APPDATA", "LOCALAPPDATA",
@@ -236,6 +249,55 @@ print(json.dumps({"type":"result", "is_error":False, "result":"ok",
                   "usage":{"input_tokens":1,"output_tokens":1}}))
 ''',
             extra_request={"tools_policy": "minimal"},
+        )
+        self.assertTrue(payload["ok"], payload)
+
+    def test_claude_authorized_run_lifts_the_permission_gate(self):
+        """A consented run may execute what the operator approved.
+
+        acceptEdits (the unconsented posture) auto-denies privileged calls;
+        re-running it after an approval is byte-identical and parks the task
+        in review again with the same question (issue #165).
+        """
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+assert "--permission-prompts" in args
+assert args[args.index("--permission-mode") + 1] == "bypassPermissions"
+print(json.dumps({"type":"result", "is_error":False, "result":"ran",
+                  "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            extra_request={"authorized": True},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "ran")
+
+    def test_claude_unconsented_run_stays_on_accept_edits(self):
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+assert args[args.index("--permission-mode") + 1] == "acceptEdits"
+print(json.dumps({"type":"result", "is_error":False, "result":"ok",
+                  "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            extra_request={},
+        )
+        self.assertTrue(payload["ok"], payload)
+
+    def test_claude_restricted_run_ignores_consent(self):
+        """restricted is the narrower promise; consent never widens it."""
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+assert args[args.index("--permission-mode") + 1] == "acceptEdits"
+assert "--restricted" in args
+print(json.dumps({"type":"result", "is_error":False, "result":"read-only",
+                  "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            extra_request={"authorized": True, "restricted": True},
         )
         self.assertTrue(payload["ok"], payload)
 
@@ -1533,42 +1595,62 @@ print("plain opencode answer")
         self.assertIn("no --agent flag", payload["result"])
 
     def test_grok_session_contract(self):
-        # A first run names its own session and returns it as session_id.
+        # Every run mints its own session and returns it as session_id. grok
+        # types --session-id as a UUID, so the handle it is given must be one:
+        # a name-shaped id fails the run before any work starts.
         payload, _, _ = run_adapter(
             "grok_build.py", "grok", r'''
-import json, sys
+import json, sys, uuid
 args = sys.argv[1:]
-assert "-s" in args and args[args.index("-s") + 1].startswith("panda-")
+sid = args[args.index("-s") + 1]
+assert str(uuid.UUID(sid)) == sid, sid
+assert "-r" not in args, args
 assert "--single" in args and "contract prompt" in args
-assert "--output-format" in args and "plain" in args
+# streaming-json, not plain: this build prints its answer and then keeps
+# running, so the adapter needs an event stream with a terminal line.
+assert args[args.index("--output-format") + 1] == "streaming-json"
 assert "--always-approve" in args
-print(json.dumps({"session": args[args.index("-s") + 1]}))
-print("grok answer")
+print(json.dumps({"type": "text", "data": "grok "}), flush=True)
+print(json.dumps({"type": "text", "data": "answer"}), flush=True)
+print(json.dumps({"type": "usage", "usage": {}}), flush=True)
 ''',
         )
         self.assertTrue(payload["ok"], payload)
-        self.assertIn("grok answer", payload["result"])
-        self.assertTrue(payload.get("session_id", "").startswith("panda-"), payload)
-        # A follow-up round resumes that named session via -s.
+        self.assertEqual(payload["result"], "grok answer")
+        first = payload.get("session_id", "")
+        self.assertEqual(str(uuid.UUID(first)), first, payload)
+        # A stored handle is NOT resumed: grok 1.0.67 cannot resume headless
+        # (-r with --single answers nothing at all, and -s with an existing id
+        # is refused as "already in use"), so a round cold-starts with a fresh
+        # UUID and reports that one.
+        prev = "0f5c1d3e-2b44-4a71-9c8e-6d1b2a3f4c55"
+        payload, _, _ = run_adapter(
+            "grok_build.py", "grok", r'''
+import json, sys, uuid
+args = sys.argv[1:]
+assert "-r" not in args, args
+sid = args[args.index("-s") + 1]
+assert str(uuid.UUID(sid)) == sid, sid
+assert sid != "0f5c1d3e-2b44-4a71-9c8e-6d1b2a3f4c55", "the stored handle must not be reused as a new session id"
+print(json.dumps({"type": "text", "data": "grok fresh"}), flush=True)
+print(json.dumps({"type": "usage", "usage": {}}), flush=True)
+''',
+            extra_request={"resume": prev},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "grok fresh")
+        self.assertNotEqual(payload.get("session_id"), prev)
+        # A build too old for streaming-json falls back to the one-shot plain
+        # run, which those builds do exit from — nameless, since -s may be
+        # missing there too.
         payload, _, _ = run_adapter(
             "grok_build.py", "grok", r'''
 import sys
 args = sys.argv[1:]
-assert args[args.index("-s") + 1] == "panda-prev"
-print("grok resumed")
-''',
-            extra_request={"resume": "panda-prev"},
-        )
-        self.assertTrue(payload["ok"], payload)
-        self.assertEqual(payload["session_id"], "panda-prev")
-        # A CLI without -s degrades to a nameless one-shot run.
-        payload, _, _ = run_adapter(
-            "grok_build.py", "grok", r'''
-import sys
-args = sys.argv[1:]
-if "-s" in args:
-    sys.stderr.write("error: unrecognized option '-s'\n")
+if args[args.index("--output-format") + 1] != "plain":
+    sys.stderr.write("error: invalid value 'streaming-json'\n")
     sys.exit(1)
+assert "-s" not in args and "-r" not in args
 print("grok legacy answer")
 ''',
         )
@@ -1895,8 +1977,11 @@ print("pi print answer")
 
     def test_pi_injected_model_contract(self):
         # Injection writes a temp agent dir whose models.json declares the
-        # "panda" provider; the api key rides a ${PI_API_KEY} interpolation —
-        # the secret never lands in the file or argv.
+        # "panda" provider. The api key field carries the bare ENV VAR NAME:
+        # pi resolves a non-secret string as "read this variable" (docs/
+        # models.md "Value Resolution"), so the secret never lands in the file
+        # or argv. A "${PI_API_KEY}" template is NOT interpolated by pi — it is
+        # sent as the literal string and the provider answers 401.
         payload, _, _ = run_adapter(
             "pi.py", "pi", r'''
 import json, os, sys
@@ -1907,7 +1992,8 @@ assert agent_dir, "PI_CODING_AGENT_DIR must point at the temp dir"
 with open(os.path.join(agent_dir, "models.json")) as f:
     doc = json.load(f)
 prov = doc["providers"]["panda"]
-assert "${PI_API_KEY}" in json.dumps(prov), doc
+assert prov.get("apiKey") == "PI_API_KEY", doc
+assert "${" not in json.dumps(prov), doc
 assert "sekret-key" not in json.dumps(prov)
 assert "--session-dir" in args, args
 print(json.dumps({"type":"message_end","message":{"role":"assistant",
@@ -2005,6 +2091,234 @@ sys.exit(1)
         # The FAILED envelope carried no response text, so the stderr
         # diagnosis is what the operator sees.
         self.assertIn("authentication required", payload["result"])
+
+    def test_antigravity_injected_run_selects_gemini_provider(self):
+        # An injected run must land agy on its Gemini-API-key branch: without
+        # {"modelProvider":"gemini"} the CLI ignores GEMINI_API_KEY and
+        # GOOGLE_GEMINI_BASE_URL entirely and opens a Google OAuth flow, which
+        # headless reads as "authentication required" — i.e. injection looks
+        # like it did nothing.
+        #
+        # HOME/USERPROFILE point at a throwaway dir so the adapter's
+        # settings.json write cannot touch the developer's real ~/.gemini.
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        settings = pathlib.Path(home) / ".gemini" / "antigravity-cli" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"theme": "dark"}))
+        payload, _, _ = run_adapter(
+            "antigravity.py", "agy", r'''
+import json, os, sys
+p = os.path.join(os.environ.get("HOME") or os.environ.get("USERPROFILE"),
+                 ".gemini", "antigravity-cli", "settings.json")
+doc = json.load(open(p, encoding="utf-8"))
+print(json.dumps({"conversation_id": "c1", "status": "SUCCESS",
+                  "response": "provider=%s theme=%s" % (doc.get("modelProvider"), doc.get("theme"))}))
+''',
+            env={"OPENPANDA_INJECTED_MODEL": "1", "HOME": home, "USERPROFILE": home},
+        )
+        # The CLI sees the switch while it runs — and the operator's own
+        # preferences are merged in, not overwritten.
+        self.assertIn("provider=gemini", payload.get("result", ""))
+        self.assertIn("theme=dark", payload.get("result", ""))
+        # … and the file is put back when the run ends. Leaving it rewritten
+        # would pin the operator's interactive agy to the API-key branch, where
+        # it answers "authentication required" instead of using its OAuth
+        # session, with no way back except hand-editing.
+        self.assertEqual(json.loads(settings.read_text()), {"theme": "dark"})
+
+        # A run that is NOT injected leaves the file alone — an account login
+        # the operator configured by hand must not be switched underneath them.
+        other = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, other, True)
+        keep = pathlib.Path(other) / ".gemini" / "antigravity-cli" / "settings.json"
+        keep.parent.mkdir(parents=True)
+        keep.write_text(json.dumps({"modelProvider": "oauth-personal"}))
+        run_adapter(
+            "antigravity.py", "agy", r'''
+import json, sys
+print(json.dumps({"conversation_id":"c2","status":"SUCCESS","response":"own auth"}))
+''',
+            env={"HOME": other, "USERPROFILE": other},
+        )
+        self.assertEqual(json.loads(keep.read_text()).get("modelProvider"), "oauth-personal")
+
+    def test_hermes_injected_run_writes_provider_config(self):
+        # hermes 0.19 ignores OPENAI_BASE_URL/OPENAI_API_KEY and resolves its
+        # model from $HERMES_HOME/config.yaml, so injection only works if the
+        # adapter materialises a config. The endpoint and key must ride the
+        # environment as ${ENV} references: a literal key in the file would be
+        # a credential on disk for the life of the run.
+        payload, _, _ = run_adapter(
+            "hermes.py", "hermes", r'''
+import os, sys
+args = sys.argv[1:]
+assert args[:3] == ["--cli", "--yolo", "-z"], args
+home = os.environ.get("HERMES_HOME", "")
+assert home, "HERMES_HOME must point at the generated config"
+with open(os.path.join(home, "config.yaml"), encoding="utf-8") as f:
+    cfg = f.read()
+assert "provider: panda" in cfg, cfg
+assert "model: injected-model" in cfg, cfg
+assert "${OPENPANDA_INJECT_BASE_URL}" in cfg, cfg
+assert "key_env: OPENPANDA_INJECT_API_KEY" in cfg, cfg
+assert "sekret-key" not in cfg, "the key must never be written to the config"
+assert os.environ["OPENPANDA_INJECT_BASE_URL"] == "https://api.example/v1"
+assert os.environ["OPENPANDA_INJECT_API_KEY"] == "sekret-key"
+print("hermes answer")
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "OPENAI_BASE_URL": "https://api.example/v1",
+                "OPENAI_API_KEY": "sekret-key",
+                "OPENAI_MODEL": "injected-model",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "hermes answer")
+
+    def test_hermes_plain_run_leaves_hermes_home_alone(self):
+        # No injection → no HERMES_HOME override: the CLI keeps reading the
+        # operator's own home (skills, sessions, hooks) exactly as before.
+        payload, _, _ = run_adapter(
+            "hermes.py", "hermes", r'''
+import os, sys
+assert sys.argv[1:3] == ["--cli", "--yolo"]
+assert "HERMES_HOME" not in os.environ, os.environ.get("HERMES_HOME")
+print("own model")
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "own model")
+
+    def test_openclaw_injected_run_pins_config_state_and_home(self):
+        # An injected openclaw turn must not touch three things: the ambient
+        # config (--config), the gateway state (--state-dir) and the
+        # auth-profile store under ~/.openclaw — the last one has no flag, so
+        # HOME/USERPROFILE are redirected instead. The key rides a secret
+        # reference (source: env), never the config file.
+        payload, _, _ = run_adapter(
+            "openclaw.py", "openclaw", r'''
+import json, os, sys
+args = sys.argv[1:]
+assert args[:2] == ["agent", "exec"], args
+cfg = args[args.index("--config") + 1]
+state = args[args.index("--state-dir") + 1]
+assert args[args.index("--model") + 1] == "panda/injected-model", args
+assert "--json" in args, args
+with open(cfg, encoding="utf-8") as f:
+    doc = json.load(f)
+prov = doc["models"]["providers"]["panda"]
+assert prov["baseUrl"] == "https://api.example/v1", prov
+assert prov["api"] == "openai-completions", prov
+assert prov["apiKey"] == {"source": "env", "provider": "pandaenv",
+                          "id": "OPENCLAW_API_KEY"}, prov
+assert "sekret-key" not in json.dumps(doc), "the key must not reach the config"
+assert doc["secrets"]["providers"]["pandaenv"] == {"source": "env"}, doc
+assert os.path.isdir(state), state
+home = os.environ["HOME"]
+assert os.path.normcase(home) in (os.path.normcase(os.environ["USERPROFILE"]),), os.environ["USERPROFILE"]
+assert os.path.isdir(home), home
+print(json.dumps({"ok": True, "status": "ok", "final": "openclaw answer",
+                  "payloads": [{"text": "openclaw answer"}],
+                  "model": "injected-model", "provider": "panda",
+                  "sessionId": "sess-oc",
+                  "usage": {"input": 7, "output": 3, "cacheRead": 2,
+                            "cacheWrite": 0, "total": 10}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "OPENAI_BASE_URL": "https://api.example/v1",
+                "OPENCLAW_API_KEY": "sekret-key",
+                "OPENCLAW_MODEL": "injected-model",
+                "OPENPANDA_MODEL_API_TYPE": "openai",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "openclaw answer")
+        self.assertEqual(payload["session_id"], "sess-oc")
+        self.assertEqual(payload["tokens"], 10)
+        self.assertEqual(payload["usage"], {
+            "input_tokens": 7, "output_tokens": 3,
+            "cache_read_tokens": 2, "cache_write_tokens": 0,
+        })
+
+    def test_openclaw_envelope_failure_is_not_a_pass(self):
+        # ok:false in the envelope is a failed turn even when the process
+        # exits 0 — the CLI reports provider/auth errors that way.
+        payload, _, _ = run_adapter(
+            "openclaw.py", "openclaw", r'''
+import json, sys
+print(json.dumps({"ok": False, "status": "error", "final": "",
+                  "payloads": [],
+                  "error": {"message": "auth profile needs migration"}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "OPENAI_BASE_URL": "https://api.example/v1",
+                "OPENCLAW_API_KEY": "k",
+                "OPENCLAW_MODEL": "injected-model",
+            },
+        )
+        self.assertFalse(payload["ok"], payload)
+        self.assertIn("auth profile needs migration", payload["result"])
+
+    def test_zcode_injected_run_writes_model_selection(self):
+        # zcode refuses to send anything until a model is selected, and the
+        # selection lives in the personal provider config — not in ZCODE_*.
+        # defaultModelSelection must sit INSIDE config: a top-level copy is
+        # dropped silently and the CLI keeps asking for a model.
+        payload, _, _ = run_adapter(
+            "zcode.py", "zcode", r'''
+import json, os, sys
+args = sys.argv[1:]
+assert args[args.index("--prompt") + 1] == "contract prompt", args
+assert "--json" in args, args
+path = os.environ.get("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "")
+assert path and os.path.isfile(path), path
+with open(path, encoding="utf-8") as f:
+    doc = json.load(f)
+cfg = doc["config"]
+assert cfg["defaultModelSelection"] == {"providerId": "panda",
+                                        "modelId": "injected-model"}, cfg
+assert "defaultModelSelection" not in doc, "must live inside config"
+rule = cfg["providerConfigRules"]["providerRules"][0]
+assert rule["providerId"] == "panda", rule
+assert rule["config"]["group"] == "standard-personal", rule
+assert rule["config"]["api"] == {"type": "openai-chat-completions",
+                                 "baseUrl": "https://api.example/v1"}, rule
+assert rule["config"]["access"]["apiKey"] == "sekret-key", rule
+assert rule["config"]["personalModelIds"] == ["injected-model"], rule
+print(json.dumps({"sessionId": "sess-zc", "response": "zcode answer",
+                  "usage": {"inputTokens": 5, "outputTokens": 2,
+                            "totalTokens": 7}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "ZCODE_BASE_URL": "https://api.example/v1",
+                "ZCODE_API_KEY": "sekret-key",
+                "ZCODE_MODEL": "injected-model",
+                "OPENPANDA_MODEL_API_TYPE": "openai",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "zcode answer")
+        self.assertEqual(payload["session_id"], "sess-zc")
+        self.assertEqual(payload["tokens"], 7)
+
+    def test_zcode_plain_run_keeps_its_own_config(self):
+        # No injection → no ZCODE_PERSONAL_PROVIDER_CONFIG_FILE override, so
+        # the CLI keeps using the model the operator picked in its TUI.
+        payload, _, _ = run_adapter(
+            "zcode.py", "zcode", r'''
+import os, sys
+assert sys.argv[1] == "--prompt", sys.argv
+assert "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE" not in os.environ
+print("own model")
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "own model")
 
     def test_codex_timeout_is_reported(self):
         payload, _, _ = run_adapter(
@@ -2296,6 +2610,12 @@ class ResolveArgvTest(unittest.TestCase):
 
     def test_posix_passthrough(self):
         # sys.platform untouched → the argv comes back byte-identical.
+        # Only a POSIX host passes a bare command through: on Windows the
+        # _shim_exe branch resolves it to the real executable, because
+        # CreateProcess does not search PATH for a bare name the way a POSIX
+        # shell does. The resolved shape is covered by the win32 cases below.
+        if sys.platform == "win32":
+            self.skipTest("Windows resolves a bare command to its real exe")
         payload, proc = run_harness(
             "import json; print(json.dumps(_harness.resolve_argv("
             "['opencode', 'run', 'hi'])))")
@@ -2355,6 +2675,28 @@ class ResolveArgvTest(unittest.TestCase):
             self.assertEqual(out[0], str(npm / "node.exe"))
             self.assertEqual(out[1], str(script))
             self.assertEqual(out[2:], ["run", "a prompt"])
+
+    def test_win32_handwritten_interpreter_pair(self):
+        # A hand-written wrapper (no npm shim involved) names the interpreter
+        # first and the script second with absolute paths:
+        #   "C:\...\node.exe" "C:\...\zcode.cjs" %*
+        # Resolving only the .exe would drop the script and hand the CLI's
+        # flags to node itself — which is exactly how zcode died with
+        # "bad option: --prompt" while looking like an adapter bug.
+        with tempfile.TemporaryDirectory() as td:
+            npm = pathlib.Path(td) / "npm"
+            npm.mkdir()
+            interp = npm / "node.exe"
+            interp.write_text("x")
+            script = npm / "cli.cjs"
+            script.write_text("// js\n")
+            (npm / "zzagent.cmd").write_text(
+                '@echo off\r\n"%s" "%s" %%*\r\n' % (interp, script))
+            out = self._resolve(["zzagent", "--prompt", "a prompt"],
+                                env={"APPDATA": td})
+            self.assertEqual(out[0], str(interp))
+            self.assertEqual(out[1], str(script))
+            self.assertEqual(out[2:], ["--prompt", "a prompt"])
 
     def test_win32_launcher_shim_resolves_script_pair(self):
         # The shape the contract suite writes on Windows: a .cmd launcher
