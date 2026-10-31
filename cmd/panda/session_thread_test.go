@@ -241,6 +241,18 @@ func TestAppendExchangeToSessionRecordsPair(t *testing.T) {
 	}
 }
 
+func TestContinueWorkDir(t *testing.T) {
+	if got := continueWorkDir("/cwd", &sessions.Session{Worktree: "/worktree"}, nil); got != "/worktree" {
+		t.Fatalf("worktree session = %q", got)
+	}
+	if got := continueWorkDir("/cwd", &sessions.Session{}, nil); got != "/cwd" {
+		t.Fatalf("thread without worktree = %q", got)
+	}
+	if got := continueWorkDir("/cwd", nil, nil); got != "/cwd" {
+		t.Fatalf("no thread = %q", got)
+	}
+}
+
 func TestNewTUIModelSeedsBoundThread(t *testing.T) {
 	m, st := newSessionTUI(t)
 	sess, err := st.Create("thread")

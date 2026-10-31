@@ -93,19 +93,16 @@ func runVoice(args []string) {
 	// spoken at the Pi is the same conversation a terminal or the web console
 	// opens next. The bare-conversation file is the pre-session fallback.
 	voiceProj, _ := activeProject(cfg)
-	voiceStore := sessions.NewStore(sessionStoreRoot(cfg))
-	voiceSess := latestSessionForProject(voiceStore, voiceProj)
+	vt := &voiceThread{
+		store:   sessions.NewStore(sessionStoreRoot(cfg)),
+		project: voiceProj,
+	}
 	var history []entry.Turn
-	if voiceSess != nil {
-		_, history = sessionHistory(ctx, voiceStore, voiceSess, engine)
+	if sess := latestSessionForProject(vt.store, voiceProj); sess != nil {
+		vt.sess = sess
+		_, history = sessionHistory(ctx, vt.store, sess, engine)
 	} else {
 		history = loadConvo()
-	}
-	voiceSessionID := func() string {
-		if voiceSess != nil {
-			return voiceSess.ID
-		}
-		return ""
 	}
 
 	if *cardPath == "" {
@@ -143,20 +140,12 @@ func runVoice(args []string) {
 		fmt.Println("\n" + i18n.Tf(loc, "cli.voice.heard", "text", text))
 
 		// The thread exists before the ask, so a remembered approval and the
-		// console's live view bind to it from the first spoken turn. A failed
-		// first turn deletes the still-empty thread rather than leaving a
-		// blank row in the console's rail.
-		if voiceSess == nil {
-			voiceSess, _ = voiceStore.Create(sessions.Title(text), voiceProj)
-		}
-		out, err := engine.AskTurnsSession(ctx, history, text, "", "", voiceSessionID(), false, askengine.StreamCallbacks{})
+		// console's live view bind to it from the first spoken turn.
+		vt.ensure(text)
+		workDir := continueWorkDir("", vt.sess, engine)
+		out, err := engine.AskTurnsSession(ctx, history, text, workDir, "", vt.sessionID(), false, askengine.StreamCallbacks{})
 		if err != nil {
-			if voiceSess != nil {
-				if cur, gerr := voiceStore.Get(voiceSess.ID); gerr == nil && len(cur.Turns) == 0 {
-					_ = voiceStore.Delete(voiceSess.ID)
-					voiceSess = nil
-				}
-			}
+			vt.discardEmpty()
 			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
 			if *once {
 				os.Exit(1)
@@ -164,16 +153,58 @@ func runVoice(args []string) {
 			continue
 		}
 		history = appendConvoTurns(history, loc, text, out, engine)
-		if voiceSess != nil {
-			appendExchangeToSession(voiceStore, voiceSess.ID, text, out, loc)
-			if out.Kind == "task" {
-				bindTaskToSession(ctx, engine, out.TaskID, voiceSess.ID)
-			}
-		}
+		vt.record(ctx, engine, text, out, loc)
 		speakBack(ctx, loc, out, *mute)
 		if *once {
 			return
 		}
+	}
+}
+
+// voiceThread is the spoken conversation's session binding: the thread the
+// utterances accumulate into, created on the first utterance so approval
+// decisions and the console's view bind to it before the ask returns.
+type voiceThread struct {
+	store   *sessions.Store
+	project string
+	sess    *sessions.Session
+}
+
+func (v *voiceThread) sessionID() string {
+	if v == nil || v.sess == nil {
+		return ""
+	}
+	return v.sess.ID
+}
+
+func (v *voiceThread) ensure(title string) {
+	if v == nil || v.store == nil || v.sess != nil {
+		return
+	}
+	if sess, err := v.store.Create(sessions.Title(title), v.project); err == nil {
+		v.sess = sess
+	}
+}
+
+// discardEmpty drops a thread created for an ask that produced no turn, so a
+// failed first utterance does not leave a blank row in the console's rail.
+func (v *voiceThread) discardEmpty() {
+	if v == nil || v.store == nil || v.sess == nil {
+		return
+	}
+	if cur, err := v.store.Get(v.sess.ID); err == nil && len(cur.Turns) == 0 {
+		_ = v.store.Delete(v.sess.ID)
+		v.sess = nil
+	}
+}
+
+func (v *voiceThread) record(ctx context.Context, eng *askengine.Engine, text string, out *askengine.Result, loc i18n.Locale) {
+	if v == nil || v.sess == nil || out == nil {
+		return
+	}
+	appendExchangeToSession(v.store, v.sess.ID, text, out, loc)
+	if out.Kind == "task" {
+		bindTaskToSession(ctx, eng, out.TaskID, v.sess.ID)
 	}
 }
 

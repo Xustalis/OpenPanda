@@ -354,6 +354,24 @@ func continueTarget(ctx context.Context, cfg *config.Config, project string, eng
 	return store, nil, loadConvo()
 }
 
+// continueWorkDir picks where a continued thread runs: its worktree, else the
+// engine's bound work path, else the caller's cwd. A thread with a worktree
+// must keep running there — continuing it in another checkout would edit the
+// wrong tree while replaying the right conversation.
+func continueWorkDir(cwd string, sess *sessions.Session, eng *askengine.Engine) string {
+	if sess != nil {
+		if sess.Worktree != "" {
+			return sess.Worktree
+		}
+		if eng != nil {
+			if wp := eng.WorkPath(); wp != "" {
+				return wp
+			}
+		}
+	}
+	return cwd
+}
+
 // maxConvoAnswerChars bounds one recorded assistant answer. A single
 // oversized reply (a long report, or the raw tool transcript a budget-cut
 // loop falls back to) must not crowd every other exchange out of the

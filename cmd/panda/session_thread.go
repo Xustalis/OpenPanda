@@ -32,6 +32,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/fslock"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
@@ -93,8 +94,11 @@ func migratableTurn(t entry.Turn) bool {
 }
 
 // migrateLegacyConvos imports every bare-conversation file into a session and
-// archives the file as <name>.json.migrated. It runs once per launch and is
-// idempotent: the rename is what stops a second import.
+// archives the file as <name>.json.migrated. A non-blocking cross-process lock
+// serializes the pass, so two launches cannot import the same file twice. The
+// file is renamed only after a successful import: a crash leaves the source in
+// place and the next launch retries — at worst duplicating a thread, never
+// losing its history.
 func (r *repl) migrateLegacyConvos() {
 	if r == nil || r.sessionsSt == nil {
 		return
@@ -106,6 +110,11 @@ func (r *repl) migrateLegacyConvos() {
 	if dir == "" {
 		return
 	}
+	unlock, err := fslock.Acquire(filepath.Join(dir, ".migrate.lock"), false)
+	if err != nil {
+		return // another launch owns the pass; it imports these files
+	}
+	defer unlock()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -116,51 +125,42 @@ func (r *repl) migrateLegacyConvos() {
 			continue
 		}
 		path := filepath.Join(dir, name)
-		archived := strings.TrimSuffix(path, ".json") + ".json.migrated"
-		// Claim the file by renaming first: a second launch racing this one
-		// then sees no .json and cannot import the same conversation twice.
-		// The failure paths below move it back so a later launch can retry.
-		if err := os.Rename(path, archived); err != nil {
-			continue
-		}
 		project := strings.TrimSuffix(name, ".json")
 		if project == "default" {
 			project = ""
 		}
 		var kept []entry.Turn
-		for _, t := range readConvoFile(archived) {
+		for _, t := range readConvoFile(path) {
 			if migratableTurn(t) {
 				kept = append(kept, t)
 			}
 		}
-		if len(kept) == 0 {
-			// Nothing importable (empty, or only the synthetic digest): the
-			// archived copy is the backup, and retrying buys nothing.
-			continue
-		}
-		sess, cerr := r.sessionsSt.Create(convoTitle(kept), project)
-		if cerr != nil {
-			_ = os.Rename(archived, path) // store unavailable: retry next launch
-			continue
-		}
-		ok := true
-		for _, t := range kept {
-			if _, aerr := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: t.Role, Text: t.Content}); aerr != nil {
-				ok = false
-				break
+		if len(kept) > 0 {
+			sess, cerr := r.sessionsSt.Create(convoTitle(kept), project)
+			if cerr != nil {
+				continue // store unavailable: keep the file for the next launch
+			}
+			ok := true
+			for _, t := range kept {
+				if _, aerr := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: t.Role, Text: t.Content}); aerr != nil {
+					ok = false
+					break
+				}
+			}
+			if !ok {
+				// A partially written import would make the thread look like a
+				// shorter conversation than it was. Drop it and keep the source
+				// so the next launch can retry.
+				_ = r.sessionsSt.Delete(sess.ID)
+				continue
+			}
+			if team := readTeamFile(bareTeamFileFor(project)); len(team) > 0 {
+				_ = r.sessionsSt.SetTeam(sess.ID, team)
 			}
 		}
-		if !ok {
-			// A partially written import would make the thread look like a
-			// shorter conversation than it was. Drop it and restore the source
-			// so the next launch can retry.
-			_ = r.sessionsSt.Delete(sess.ID)
-			_ = os.Rename(archived, path)
-			continue
-		}
-		if team := readTeamFile(bareTeamFileFor(project)); len(team) > 0 {
-			_ = r.sessionsSt.SetTeam(sess.ID, team)
-		}
+		// Archive even an empty file: retrying it on every launch buys nothing,
+		// and the original bytes stay on disk under a new name.
+		_ = os.Rename(path, strings.TrimSuffix(path, ".json")+".json.migrated")
 	}
 }
 
@@ -226,7 +226,15 @@ func latestSessionForProject(st *sessions.Store, project string) *sessions.Sessi
 	if err != nil {
 		return nil
 	}
-	sort.Slice(stamps, func(i, j int) bool { return stamps[i].ModUnixNano > stamps[j].ModUnixNano })
+	sort.Slice(stamps, func(i, j int) bool {
+		if stamps[i].ModUnixNano != stamps[j].ModUnixNano {
+			return stamps[i].ModUnixNano > stamps[j].ModUnixNano
+		}
+		// Coarse filesystems report the same mtime for threads saved in the
+		// same second. Session ids are UUIDv7, so the descending id is the
+		// newer thread — a deterministic tie-break instead of readdir order.
+		return stamps[i].ID > stamps[j].ID
+	})
 	project = strings.TrimSpace(project)
 	for _, stamp := range stamps {
 		sess, err := st.Get(stamp.ID)

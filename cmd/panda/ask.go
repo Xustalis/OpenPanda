@@ -218,9 +218,13 @@ func runAsk(args []string) {
 	}
 
 	cwd, _ := os.Getwd()
+	// Continuing a thread runs where the thread lives: its worktree when it has
+	// one, else the engine's bound work path. A one-shot ask keeps the caller's
+	// cwd — the TUI's askContext makes the same choice for a bound session.
+	workDir := continueWorkDir(cwd, contSess, engine)
 	var acceptChecks []contract.Check
 	if len(accept) > 0 {
-		checks, cerr := buildAcceptanceChecks(accept, cwd)
+		checks, cerr := buildAcceptanceChecks(accept, workDir)
 		if cerr != nil {
 			fail(2, i18n.Tf(loc, "cli.task.add.badAccept", "err", cerr.Error()))
 		}
@@ -229,7 +233,7 @@ func runAsk(args []string) {
 	switch *outputFormat {
 	case "json":
 		out, err := engine.AskTurnsScoped(context.Background(), history, prompt, askengine.AskScope{
-			WorkDir: cwd, Agents: agents, Node: strings.TrimSpace(*node), AmbientProject: true,
+			WorkDir: workDir, Agents: agents, Node: strings.TrimSpace(*node), AmbientProject: true,
 			SessionID: sessID, Acceptance: acceptChecks,
 		}, *authorize, askengine.StreamCallbacks{})
 		if err != nil {
@@ -243,11 +247,11 @@ func runAsk(args []string) {
 		}
 		return
 	case "stream-json":
-		runAskStreamJSON(engine, history, prompt, cwd, agents, strings.TrimSpace(*node), *authorize, acceptChecks, sessID, recordConvo)
+		runAskStreamJSON(engine, history, prompt, workDir, agents, strings.TrimSpace(*node), *authorize, acceptChecks, sessID, recordConvo)
 		return
 	}
 
-	out, streamedText, st, err := askStreaming(engine, history, prompt, cwd, agents, strings.TrimSpace(*node), *authorize, acceptChecks, sessID, loc)
+	out, streamedText, st, err := askStreaming(engine, history, prompt, workDir, agents, strings.TrimSpace(*node), *authorize, acceptChecks, sessID, loc)
 	if err != nil {
 		fail(1, "panda: "+err.Error())
 	}
