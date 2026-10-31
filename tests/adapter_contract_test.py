@@ -252,6 +252,55 @@ print(json.dumps({"type":"result", "is_error":False, "result":"ok",
         )
         self.assertTrue(payload["ok"], payload)
 
+    def test_claude_authorized_run_lifts_the_permission_gate(self):
+        """A consented run may execute what the operator approved.
+
+        acceptEdits (the unconsented posture) auto-denies privileged calls;
+        re-running it after an approval is byte-identical and parks the task
+        in review again with the same question (issue #165).
+        """
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+assert "--permission-prompts" in args
+assert args[args.index("--permission-mode") + 1] == "bypassPermissions"
+print(json.dumps({"type":"result", "is_error":False, "result":"ran",
+                  "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            extra_request={"authorized": True},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "ran")
+
+    def test_claude_unconsented_run_stays_on_accept_edits(self):
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+assert args[args.index("--permission-mode") + 1] == "acceptEdits"
+print(json.dumps({"type":"result", "is_error":False, "result":"ok",
+                  "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            extra_request={},
+        )
+        self.assertTrue(payload["ok"], payload)
+
+    def test_claude_restricted_run_ignores_consent(self):
+        """restricted is the narrower promise; consent never widens it."""
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+assert args[args.index("--permission-mode") + 1] == "acceptEdits"
+assert "--restricted" in args
+print(json.dumps({"type":"result", "is_error":False, "result":"read-only",
+                  "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            extra_request={"authorized": True, "restricted": True},
+        )
+        self.assertTrue(payload["ok"], payload)
+
     def test_codex_workspace_write_contract(self):
         payload, progress, _ = run_adapter(
             "codex.py", "codex", r'''
