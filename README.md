@@ -9,14 +9,14 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/Memory%20Footprint-~20MB%20RSS-brightgreen)
-![Local First](https://img.shields.io/badge/Cloud%20Dependency-Zero-success)
+![Memory](https://img.shields.io/badge/Memory%20Footprint-~40MB%20RSS-brightgreen)
+![No Cloud Relay](https://img.shields.io/badge/Cloud%20Relay-None-success)
 
 ---
 
 ## About
 
-OpenPanda organizes the terminal AI coding agents already on your machines — nine dedicated adapters (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw) plus a configurable generic bridge for any headless CLI, including ZCode — together with your devices into a single execution crew. It is not itself an agent: you issue one instruction; it handles intent classification, task decomposition, dispatch, execution supervision, and result verification — all locally, with zero cloud dependency.
+OpenPanda organizes the terminal AI coding agents already on your machines — nine dedicated adapters (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw) plus a configurable generic bridge for any headless CLI, including ZCode — together with your devices into a single execution crew. It is not itself an agent: you issue one instruction; it handles intent classification, task decomposition, dispatch, execution supervision, and result verification — all locally, with no relay service between the machines.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -95,7 +95,7 @@ The project evolves along two tracks:
 - **Voice entry** (experimental): `panda voice` runs the wake → transcribe → dispatch → speak loop through the bundled `extensions/voice` sidecar scripts (needs its own Python deps).
 - **Scriptable CLI**: `panda ask` drops straight into automation scripts.
 - **Self-updating**: `panda update check|apply` (or `panda upgrade`) probes a staged binary and swaps it in place.
-- **Featherweight**: single static Go binary, ~20MB RSS, no external runtime dependencies.
+- **Featherweight**: single static Go binary, about 40MB RSS at idle, no external runtime dependencies.
 
 ---
 

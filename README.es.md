@@ -11,8 +11,8 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/plataformas-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/Memoria%20RSS-~20MB-brightgreen)
-![Local First](https://img.shields.io/badge/Dependencia%20Cloud-Cero%20(Local--First)-success)
+![Memory](https://img.shields.io/badge/Memoria%20RSS-~40MB-brightgreen)
+![No Cloud Relay](https://img.shields.io/badge/Relay%20Cloud-Ninguno-success)
 
 ---
 
@@ -97,7 +97,7 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 - **`panda rpc`** (experimental): Superficie de incrustación NDJSON sobre stdio (`status`, `ask` en streaming, `session.*`); `scripts/panda_rpc.py` es un cliente de referencia solo-stdlib.
 - **OAuth de suscripción** (experimental): `panda auth login anthropic` inicia sesión en Claude Pro/Max vía PKCE con refresco transparente del token.
 
-### 6. 🪶 Ultraligero (~20MB de memoria)
+### 6. 🪶 Ultraligero (~40MB de memoria en reposo)
 - Binario estático único en Go puro (SQLite en modo WAL).
 - Funciona sin esfuerzo en una SBC de 20 \$ (Raspberry Pi) o en servidores potentes.
 
