@@ -44,6 +44,7 @@ import (
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/scout"
 	"github.com/Xustalis/OpenPanda/internal/self"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -1890,6 +1891,12 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	if workDir != "" {
 		if cands := contract.Enumerate(workDir); len(cands) > 0 {
 			classifyOpts = append(classifyOpts, entry.WithAcceptanceCandidates(cands))
+		}
+		// Same workspace, broader view: the scout report lets the classifier
+		// set a real scope, a duration hint and a turn cap for a large tree
+		// instead of guessing from the request text alone.
+		if m := scout.Cached(workDir).Render(); m != "" {
+			classifyOpts = append(classifyOpts, entry.WithWorkspaceMap(m))
 		}
 	}
 

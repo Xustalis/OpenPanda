@@ -46,6 +46,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **Der Abschluss-Judge sieht, was der Agent tatsächlich getan hat** — bevor ein beaufsichtigter Lauf akzeptiert wird, erhält das Richtermodell die in der Runde ausgeführten Befehle (die letzten 20), welche Tool-Ergebnisse fehlschlugen, die Anzahl der Datei-Änderungs-/Lese-Tools, die vom Projekt deklarierten Verifikationseinträge und ob einer davon tatsächlich lief, sowie die Vorlauf-Baseline des Liefervertrags. Eine Antwort, die „Tests bestehen" behauptet, während die Evidenz keinen Testbefehl zeigt, wird nicht mehr allein anhand der Antwort beurteilt.
 
+- **Die Aufgabenklassifikation sieht das Repository** — ist eine Unterhaltung an einen Workspace gebunden, erhält das Klassifikationsmodell jetzt dieselbe Workspace-Karte wie der Executor. Es kann `spec.scope` auf echte Pfade setzen, große Arbeit als `duration_hint: long` markieren und `max_turns` erhöhen, statt aus dem Anfragetext zu raten. Der Klassifikations-Cache-Schlüssel enthält jetzt die Workspace-Karte und die Akzeptanzliste, sodass zwei Unterhaltungen in verschiedenen Bäumen kein für einen anderen Baum gewähltes Urteil (samt Check-ID) mehr teilen.
+
 ### Behoben
 
 - **Das Erreichen des CLI-Turn-Limits lässt die Aufgabe nicht mehr scheitern** — stoppt ein Agent an seinem Turn-Limit pro Lauf mit einer fortsetzbaren Sitzung, setzt der Orchestrator dieselbe Unterhaltung in einer neuen Runde mit höherem Limit (200 Turns, begrenzt durch das Aufsichtsbudget) fort, statt einen Fehler zu protokollieren, den jeder Retry wiederholt. Ein Turn-Limit-Stopp belastet auch nicht mehr den Circuit Breaker des Agenten.

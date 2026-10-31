@@ -52,6 +52,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **The completion judge sees what the agent actually did** — before a supervised run is accepted, the judging model now receives the round's executed commands (the newest 20), which tool results failed, file-edit/read tool counts, the project's declared verification entries and whether one actually ran, plus the delivery contract's pre-run baseline. A reply that claims "tests pass" while the evidence shows no test command is no longer judged on the reply alone.
 
+- **Task classification sees the repository too** — when a conversation is pinned to a workspace, the classifier now receives the same workspace map the executor gets, so it can set `spec.scope` to real paths, mark large work `duration_hint: long`, and raise `max_turns` instead of guessing from the request text. The classification cache key now includes the workspace map and the acceptance shortlist, so two conversations in different trees can no longer share a verdict (and a check id) selected for another tree.
+
 ### Fixed
 
 - **Hitting a CLI turn cap no longer fails the task** — when an agent stops at its per-run turn limit while holding a resumable session, the orchestrator continues the same conversation in a new round with a higher cap (200 turns, bounded by the supervision budget) instead of recording a failure that every retry repeats. A turn-cap stop also no longer charges the agent's circuit breaker.

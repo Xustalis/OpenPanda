@@ -275,6 +275,11 @@ type PromptOptions struct {
 	// spec.acceptance; it never invents a command. Empty means "no project
 	// in view" and the task will be reported unverified.
 	AcceptanceCandidates []contract.Candidate
+	// WorkspaceMap is the scout's rendered report of the workspace this
+	// conversation is pinned to. It grounds the model's scope, duration hint
+	// and turn cap in the real tree instead of a guess from the request text.
+	// Empty means no workspace in view.
+	WorkspaceMap string
 }
 
 // ClassifyOption tweaks the system prompt the Classify* entry points build.
@@ -340,6 +345,19 @@ func WithAcceptanceCandidates(cands []contract.Candidate) ClassifyOption {
 			out = append(out, c)
 		}
 		p.AcceptanceCandidates = out
+	}
+}
+
+// WithWorkspaceMap attaches the scout's workspace report to the classification
+// prompt. The map is already bounded by the scout; the cap here keeps a caller
+// that renders its own text from inflating the system prompt.
+func WithWorkspaceMap(text string) ClassifyOption {
+	return func(p *PromptOptions) {
+		text = strings.TrimSpace(text)
+		if len(text) > 4000 {
+			text = text[:4000]
+		}
+		p.WorkspaceMap = text
 	}
 }
 
@@ -437,6 +455,15 @@ func BuildPrompt(opts PromptOptions) string {
 	if len(opts.AcceptanceCandidates) > 0 {
 		b.WriteString("\n\n═══ Acceptance Candidates ═══\n")
 		b.WriteString(acceptanceCandidatesLine(opts.AcceptanceCandidates))
+	}
+	if opts.WorkspaceMap != "" {
+		b.WriteString("\n\n═══ Workspace ═══\n")
+		b.WriteString("Use this map to ground the task spec in the real tree: set spec.scope to the\n")
+		b.WriteString("relative paths the work will touch (leave empty only when you truly cannot\n")
+		b.WriteString("tell), set resource_profile.duration_hint to \"long\" when the tree or the work\n")
+		b.WriteString("is larger than a single edit, and raise max_turns for multi-step build-test\n")
+		b.WriteString("loops. Do not restate the map in your answer.\n")
+		b.WriteString(opts.WorkspaceMap)
 	}
 	b.WriteString("\n\n═══ Connected Devices ═══\n")
 	b.WriteString(devices)

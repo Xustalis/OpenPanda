@@ -46,6 +46,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **El juez de finalización ve lo que el agente hizo realmente** — antes de aceptar una ejecución supervisada, el modelo juez recibe los comandos ejecutados en la ronda (los 20 más recientes), qué resultados de herramientas fallaron, el número de herramientas de edición/lectura, las entradas de verificación declaradas por el proyecto y si alguna se ejecutó de verdad, además de la línea base del contrato previa a la ejecución. Una respuesta que afirma «las pruebas pasan» sin ningún comando de prueba en la evidencia ya no se juzga solo por la respuesta.
 
+- **La clasificación de tareas también ve el repositorio** — cuando una conversación está fijada a un espacio de trabajo, el modelo clasificador recibe ahora el mismo mapa que el ejecutor, así que puede fijar `spec.scope` con rutas reales, marcar el trabajo grande como `duration_hint: long` y subir `max_turns` en lugar de adivinarlo del texto. La clave de caché de clasificación incluye ahora el mapa del espacio de trabajo y la lista de aceptación, de modo que dos conversaciones en árboles distintos ya no comparten un veredicto (y un id de comprobación) elegido para otro árbol.
+
 ### Corregido
 
 - **Alcanzar el límite de turnos del CLI ya no hace fallar la tarea** — cuando un agente se detiene en su límite de turnos por ejecución con una sesión reanudable, el orquestador continúa la misma conversación en una nueva ronda con un límite mayor (200 turnos, acotado por el presupuesto de supervisión) en lugar de registrar un fallo que cada reintento repite. Una parada por límite de turnos tampoco cuenta para el cortacircuitos del agente.

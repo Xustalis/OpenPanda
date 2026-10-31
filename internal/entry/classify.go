@@ -32,7 +32,7 @@ const ToolNameTaskBudget = "task_budget"
 // produced it. Bump it whenever the key coverage or the cacheability rules
 // change, so rows written under the previous semantics can never be served
 // (they expire by TTL).
-const classificationCacheVersion = "v2"
+const classificationCacheVersion = "v3"
 
 // classificationCacheable reports whether a classified Output may be replayed
 // from the disk cache. Kinds that materialize durable work — a task row, or a
@@ -118,6 +118,20 @@ func classifyCacheKey(po PromptOptions, model string, registry *Registry) (k1, k
 	}
 	b.WriteString("memory:\n")
 	b.WriteString(po.Memory)
+	// The acceptance shortlist and the workspace map are both prompt content:
+	// two conversations with the same history in DIFFERENT workspaces must
+	// not share a cached classification, or the second one can select a
+	// check id its tree does not have.
+	for _, c := range po.AcceptanceCandidates {
+		b.WriteString("\naccept:")
+		b.WriteString(c.ID)
+		b.WriteByte('=')
+		b.WriteString(c.Run)
+	}
+	if po.WorkspaceMap != "" {
+		b.WriteString("\nworkspace:\n")
+		b.WriteString(po.WorkspaceMap)
+	}
 	if registry != nil {
 		for _, s := range registry.Specs() {
 			b.WriteString("\ntool:")
