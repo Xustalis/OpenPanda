@@ -519,7 +519,12 @@ func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 	}
 
 	items := m.buildModelItems()
-	sl := NewSelectionList(i18n.T(m.loc, "tui.model.panelTitle"), items)
+	title := i18n.T(m.loc, "tui.model.panelTitle")
+	if m.panelNotice != "" {
+		title += " — " + m.panelNotice
+		m.panelNotice = ""
+	}
+	sl := NewSelectionList(title, items)
 	// Reopens (after add/edit/delete) keep the highlight where it was instead
 	// of snapping back to the first row.
 	if prev := m.selectionList.Cursor; len(items) > 0 {
@@ -814,18 +819,24 @@ func (m tuiModel) executeDeleteModel(alias string) (tuiModel, tea.Cmd) {
 		return config.UpdateModelsSection(configWritePath(m.r.configPath), newModels)
 	})
 
-	// If active model was deleted, switch to first remaining or clear
+	// If active model was deleted, switch to the first remaining one, or clear
+	// the section deliberately when the registry is now empty. That clear is
+	// the one write the downgrade guard must let through — the operator asked
+	// for it, it is not a stale document — so it goes through
+	// ClearModelSection. A failure leaves the in-memory model untouched (file
+	// and engine stay in agreement) and is shown on the panel instead of being
+	// dropped.
 	if activeHit {
 		if len(newModels) > 0 {
 			_ = m.r.applyModel(newModels[0])
-		} else {
-			_ = m.r.mutateConfigErr(func(c *config.Config) error {
-				if err := config.UpdateModelSection(configWritePath(m.r.configPath), config.ModelConfig{}); err != nil {
-					return err
-				}
-				c.Model = config.ModelConfig{}
-				return nil
-			})
+		} else if err := m.r.mutateConfigErr(func(c *config.Config) error {
+			if err := config.ClearModelSection(configWritePath(m.r.configPath)); err != nil {
+				return err
+			}
+			c.Model = config.ModelConfig{}
+			return nil
+		}); err != nil {
+			m.panelNotice = err.Error()
 		}
 	}
 

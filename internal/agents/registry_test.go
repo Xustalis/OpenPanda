@@ -2,7 +2,28 @@
 
 package agents
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// TestEveryAdapterNamesAFile pins the other half of Lookup: a registry entry
+// that names an adapter script must point at one that ships. A row pointing at
+// a file that lives on another branch compiles, passes every unit test, and
+// fails on the operator's machine the moment carddetect writes it into a
+// capability card.
+func TestEveryAdapterNamesAFile(t *testing.T) {
+	for _, k := range known {
+		if k.Adapter == "" || k.Adapter == "generic.py" {
+			continue
+		}
+		path := filepath.Join("..", "..", "adapters", k.Adapter)
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s: Adapter %q has no file at %s", k.Name, k.Adapter, path)
+		}
+	}
+}
 
 // TestCredentialManifest pins the credential manifest (the registry's job as
 // the single source of truth the commander's probe/injection reads from):
@@ -106,11 +127,11 @@ func TestGenericLookupIdentity(t *testing.T) {
 	if _, ok := Lookup("zcode", "zcode.py"); !ok {
 		t.Fatal("Lookup(zcode, zcode.py) should resolve — that is its entry")
 	}
+	// No registry entry rides generic.py: a card that declares it is a custom
+	// CLI, and an unknown name must resolve to nothing rather than borrowing
+	// another entry's binaries, credentials, or endpoint.
 	if _, ok := Lookup("some-custom-cli", "generic.py"); ok {
 		t.Fatal("unknown name on generic.py must not borrow another entry")
-	}
-	if _, ok := Lookup("zcode", "generic"); ok {
-		t.Fatal("zcode's manifest is generic.py — the native adapter is a different identity")
 	}
 	if _, ok := Lookup("some-custom-cli", "generic"); ok {
 		t.Fatal("unknown name on native generic must resolve to nothing")

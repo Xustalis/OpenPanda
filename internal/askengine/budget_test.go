@@ -186,6 +186,20 @@ func TestRosterRaisesDispatchBudget(t *testing.T) {
 	if got := countTasksWithTitlePrefix(t, e, "roster-budget-"); got != len(titles) {
 		t.Fatalf("dispatched %d tasks, want %d (the roster is the budget)", got, len(titles))
 	}
+	// The receipt names the last dispatch, so a surface that files one turn
+	// from it shows one card over a board of four. Dispatched is what lets the
+	// panel write a turn per task instead.
+	if len(res.Dispatched) != len(titles) {
+		t.Fatalf("Dispatched = %d rows, want %d", len(res.Dispatched), len(titles))
+	}
+	for i, d := range res.Dispatched {
+		if d.TaskTitle != titles[i] {
+			t.Fatalf("Dispatched[%d] = %q, want %q (dispatch order)", i, d.TaskTitle, titles[i])
+		}
+		if d.TaskID == "" {
+			t.Fatalf("Dispatched[%d] has no id", i)
+		}
+	}
 	if res.Warning != "" {
 		t.Fatalf("warning = %q, want none when every pick was dispatched", res.Warning)
 	}

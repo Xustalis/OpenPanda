@@ -5,6 +5,7 @@ package queue
 import (
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -140,5 +141,54 @@ func TestProjectKeyFoldsCase(t *testing.T) {
 	b := DefaultKeys(nil, "needlen", "", "t2")
 	if a[0] != b[0] {
 		t.Fatalf("default project keys diverged: %q vs %q", a[0], b[0])
+	}
+}
+
+// TestSessionLanesParallelize pins the conversation-lane contract: two
+// conversations on ONE checkout run side by side, each stays serial against
+// itself, and a claim with no conversation keeps excluding everyone.
+func TestSessionLanesParallelize(t *testing.T) {
+	a := SessionScopeKey("proj", "sess-a")
+	b := SessionScopeKey("proj", "sess-b")
+	if !strings.HasSuffix(a, "/@session/sess-a") {
+		t.Fatalf("lane key = %q, want the @session level under the project root", a)
+	}
+	if ScopeKeysConflict(a, b) {
+		t.Fatalf("two conversations must not conflict: %q vs %q", a, b)
+	}
+	if !ScopeKeysConflict(ScopeRootKey("proj"), a) {
+		t.Fatal("a whole-project claim (no conversation) must still exclude a lane")
+	}
+	if !ScopeKeysConflict(SessionScopeKey("proj", "sess-a"), SessionScopeLeafKey("proj", "sess-a", "src")) {
+		t.Fatal("a conversation's own scoped child must stay inside its lane")
+	}
+	if ScopeKeysConflict(SessionScopeLeafKey("proj", "sess-a", "src"), SessionScopeLeafKey("proj", "sess-b", "src")) {
+		t.Fatal("the same path in two conversations must stay disjoint")
+	}
+	if SessionScopeKey("proj", "") != ScopeRootKey("proj") {
+		t.Fatalf("empty session must fall back to the root, got %q", SessionScopeKey("proj", ""))
+	}
+	if SessionScopeLeafKey("proj", "", "src") != ScopeLeafKey("proj", "src") {
+		t.Fatal("empty session must keep the legacy leaf")
+	}
+	if SessionProjectKey("proj", "") != ProjectKey("proj") {
+		t.Fatal("empty session must keep the legacy project key")
+	}
+	if SessionProjectKey("proj", "sess-a") == SessionProjectKey("proj", "sess-b") {
+		t.Fatal("project keys of two conversations must differ")
+	}
+
+	r := NewResourceRegistry()
+	if !r.TryAcquire([]string{a}, "t1") {
+		t.Fatal("first lane must acquire")
+	}
+	if !r.TryAcquire([]string{b}, "t2") {
+		t.Fatal("a second conversation must acquire while the first holds its lane")
+	}
+	if r.TryAcquire([]string{SessionScopeKey("proj", "sess-a")}, "t3") {
+		t.Fatal("the same lane must conflict with itself")
+	}
+	if r.TryAcquire([]string{ScopeRootKey("proj")}, "t4") {
+		t.Fatal("a whole-project claim must wait for every lane")
 	}
 }

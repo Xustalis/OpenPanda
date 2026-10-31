@@ -261,7 +261,7 @@ func getAgentOutputRider(locs ...i18n.Locale) string {
 		return fmt.Sprintf(`
 
 执行约定：
-- 在 workspace 目录内工作；动手前先读项目里相关的源文件与文档，有源码可读就不要去反汇编二进制。
+- 在 workspace 目录内工作；只在确实需要改动代码时才去读相关的源文件与文档（有源码可读就不要去反汇编二进制），不要为了"了解项目"而通读仓库。
 - 宣布完成前必须验证：用该项目自身的构建/测试方式（按其 Makefile、scripts、CI 或包管理器惯例）跑通能证明成功定义的命令；只写"应该可行"不算完成。
 - 只改动任务范围内（scope）的文件；不要顺手重构或格式化无关代码。
 - 最终回复用%s，直接说明：改了什么、在哪个文件、如何验证（运行的命令及其结果）。有无法满足的验收标准要明确写出，不许含糊带过。
@@ -270,7 +270,7 @@ func getAgentOutputRider(locs ...i18n.Locale) string {
 	return fmt.Sprintf(`
 
 Execution contract:
-- Work inside the workspace; read the project's relevant source files and docs before editing — never disassemble a binary whose source is on disk.
+- Work inside the workspace; read only the source files and docs the change actually touches — never disassemble a binary whose source is on disk, and do not survey the repository just to "understand the project".
 - Verify before claiming done: run whatever proves the success definition using the project's own build/test convention (its Makefile, scripts, CI, or package manager); reporting what "should" work is not completion.
 - Touch only files inside the declared scope; do not refactor or reformat unrelated code.
 - Final reply in %s, stating plainly: what changed, in which files, and how it was verified (the commands run and their outcomes). Name any acceptance criterion you could not verify — do not imply it passed.

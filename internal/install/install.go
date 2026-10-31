@@ -691,6 +691,12 @@ func BackupZip(dest string, targets []Target) (int, error) {
 			if d.IsDir() {
 				return nil
 			}
+			// Pre-write config snapshots are restore aids derived from
+			// config.yaml, not state of their own — archiving them would make
+			// an uninstall backup carry a dozen stale copies of the same file.
+			if strings.Contains(d.Name(), config.ConfigSnapshotMark) {
+				return nil
+			}
 			rel, err := filepath.Rel(t.Path, p)
 			if err != nil {
 				return fmt.Errorf("backup path %s: %w", p, err)

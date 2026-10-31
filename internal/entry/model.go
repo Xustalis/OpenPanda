@@ -268,7 +268,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	if base == "" {
 		return nil, ErrNoModel
 	}
-	if err := security.NewNetworkGuard(security.EndpointHost(base)).CheckURL(base); err != nil {
+	if err := security.CheckModelEndpoint(base, model.AllowPlaintext); err != nil {
 		return nil, err
 	}
 	// tuning carries the catalogue row of the vendor actually behind the

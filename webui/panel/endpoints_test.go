@@ -747,6 +747,68 @@ func TestAddModelAdvancedFields(t *testing.T) {
 	}
 }
 
+// TestAddModelKeepsCustomKeyOnEdit pins the upsert contract the registry's
+// edit action leans on: re-submitting an existing alias without a key keeps
+// the credential on file, so fixing a model id cannot silently turn a keyed
+// relay into a keyless one. An explicit 免密钥 is a decision and still wins.
+func TestAddModelKeepsCustomKeyOnEdit(t *testing.T) {
+	h, _, _ := newEnginePanel(t)
+	base := `{"provider":"custom","api_type":"openai","base_url":"http://127.0.0.1:9/v1"`
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/models",
+		base+`,"model":"relay-a","api_key":"sk-keep","alias":"relay"}`))
+	if code != http.StatusOK || out["key_set"] != true {
+		t.Fatalf("add = %d %v", code, out)
+	}
+
+	// Same alias, new model id, key left blank: the key survives. Editing is
+	// PUT now — POST always appends another account, so a repeated alias is a
+	// second row, not an update of the first.
+	code, out = doJSON(t, h, jsonReq(http.MethodPut, "/api/models/relay",
+		base+`,"model":"relay-b","alias":"relay"}`))
+	if code != http.StatusOK {
+		t.Fatalf("edit = %d %v", code, out)
+	}
+	if out["model"] != "relay-b" || out["key_set"] != true || out["no_auth"] != nil {
+		t.Fatalf("edit dropped the stored key: %v", out)
+	}
+
+	// Ticking 免密钥 clears it instead of inheriting.
+	code, out = doJSON(t, h, jsonReq(http.MethodPut, "/api/models/relay",
+		base+`,"model":"relay-b","alias":"relay","no_auth":true}`))
+	if code != http.StatusOK || out["no_auth"] != true || out["key_set"] == true {
+		t.Fatalf("explicit no_auth ignored: %d %v", code, out)
+	}
+}
+
+// TestAddModelPlaintextEndpoint covers the escape hatch for a relay that only
+// speaks http: the network guard refuses a non-loopback plaintext endpoint
+// unless the request says so, and the consent is what persists — the endpoint
+// has to keep working after a restart, not just in the request that added it.
+func TestAddModelPlaintextEndpoint(t *testing.T) {
+	h, _, configPath := newEnginePanel(t)
+	const relay = `{"provider":"custom","api_type":"openai","base_url":"http://106.53.40.245:8080","model":"relay-m","api_key":"sk-x","alias":"relay"}`
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, jsonReq(http.MethodPost, "/api/models", relay))
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "allow_plaintext") {
+		t.Fatalf("plaintext endpoint without consent = %d %q", rr.Code, rr.Body.String())
+	}
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/models",
+		strings.Replace(relay, `"alias":"relay"`, `"alias":"relay","allow_plaintext":true`, 1)))
+	if code != http.StatusOK {
+		t.Fatalf("add with consent = %d %v", code, out)
+	}
+	saved, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(saved), "allow_plaintext: true") {
+		t.Fatalf("consent not persisted:\n%s", saved)
+	}
+}
+
 func TestMCPSettings(t *testing.T) {
 	h, _, _ := newEnginePanel(t)
 
@@ -1154,6 +1216,57 @@ func TestAgentProbeAndTest(t *testing.T) {
 	if code, _ := doJSON(t, h, authedReq(http.MethodPost, "/api/agents/ghost/test", nil)); code != http.StatusNotFound {
 		t.Fatalf("unknown agent status = %d, want 404", code)
 	}
+}
+
+func TestAgentListCache(t *testing.T) {
+	t.Run("reuses fresh results and honors expiry and force refresh", func(t *testing.T) {
+		var cache agentListCache
+		calls := 0
+		probe := func() []agentJSON {
+			calls++
+			return []agentJSON{{Name: "agent", Version: strings.Repeat("v", calls)}}
+		}
+		if got := cache.get(false, probe); got[0].Version != "v" {
+			t.Fatalf("first probe = %+v", got)
+		}
+		if got := cache.get(false, probe); got[0].Version != "v" || calls != 1 {
+			t.Fatalf("cached probe = %+v, calls = %d", got, calls)
+		}
+		if got := cache.get(true, probe); got[0].Version != "vv" || calls != 2 {
+			t.Fatalf("forced probe = %+v, calls = %d", got, calls)
+		}
+		cache.expires = cache.expires.Add(-agentListCacheTTL)
+		if got := cache.get(false, probe); got[0].Version != "vvv" || calls != 3 {
+			t.Fatalf("expired probe = %+v, calls = %d", got, calls)
+		}
+	})
+
+	t.Run("coalesces concurrent cold reads", func(t *testing.T) {
+		var cache agentListCache
+		calls := 0
+		started := make(chan struct{})
+		release := make(chan struct{})
+		probe := func() []agentJSON {
+			calls++
+			close(started)
+			<-release
+			return []agentJSON{{Name: "agent"}}
+		}
+		results := make(chan []agentJSON, 8)
+		for range 8 {
+			go func() { results <- cache.get(false, probe) }()
+		}
+		<-started
+		close(release)
+		for range 8 {
+			if got := <-results; len(got) != 1 || got[0].Name != "agent" {
+				t.Fatalf("concurrent result = %+v", got)
+			}
+		}
+		if calls != 1 {
+			t.Fatalf("probe calls = %d, want 1", calls)
+		}
+	})
 }
 
 // TestRemoveNode covers DELETE /api/nodes/{id}: a stale offline remote is
