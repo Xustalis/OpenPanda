@@ -127,6 +127,9 @@ func TestGenericLookupIdentity(t *testing.T) {
 	if _, ok := Lookup("zcode", "zcode.py"); !ok {
 		t.Fatal("Lookup(zcode, zcode.py) should resolve — that is its entry")
 	}
+	// No registry entry rides generic.py: a card that declares it is a custom
+	// CLI, and an unknown name must resolve to nothing rather than borrowing
+	// another entry's binaries, credentials, or endpoint.
 	if _, ok := Lookup("some-custom-cli", "generic.py"); ok {
 		t.Fatal("unknown name on generic.py must not borrow another entry")
 	}
