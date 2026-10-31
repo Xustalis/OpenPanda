@@ -3,6 +3,7 @@
 package bus
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 )
@@ -26,6 +27,14 @@ import (
 // Wire shape is unchanged: same fields, same quoting — peers on the stock
 // codec interoperate, and any code path still calling json.Marshal directly
 // produces a decodable frame, just slower.
+//
+// The decoding side gets the same treatment. A stock json.Unmarshal walks the
+// base64 string rune by rune, copies it into a string for base64.DecodeString,
+// and pays that twice (Envelope.Payload, then PayloadInto). unmarshalWire finds
+// the data member with a byte scan, base64-decodes it in place, and hands only
+// the small header to the stock decoder. Anything the fast path cannot prove
+// canonical — escapes, duplicate keys, whitespace, malformed base64 — falls
+// back to the stock decoder, so acceptance is identical to encoding/json's.
 
 // envelopeHead is Envelope minus Payload, in wire order.
 type envelopeHead struct {
@@ -55,6 +64,14 @@ func marshalEnvelope(env Envelope) ([]byte, error) {
 	}
 	out = append(out, '}')
 	return out, nil
+}
+
+// MarshalEnvelope is marshalEnvelope for callers outside this package that
+// put a frame on the wire themselves — transit seals the inner envelope's
+// bytes, and an artifact chunk is the one payload big enough that the stock
+// marshal's second compact pass shows up in transfer time.
+func MarshalEnvelope(env Envelope) ([]byte, error) {
+	return marshalEnvelope(env)
 }
 
 // marshalPayload is json.Marshal with the bulk-carrier types routed to their
@@ -133,4 +150,101 @@ func appendB64Field(head []byte, name string, data []byte) []byte {
 		out = append(out, '"')
 	}
 	return append(out, '}')
+}
+
+// dataMember is the member the fast decoder lifts out of a bulk payload.
+// Both bulk-carrier types name it "data" and encode it as a base64 string.
+var dataMember = []byte(`"data":"`)
+
+// splitDataMember returns the payload's header object with the data member
+// removed, plus the raw base64 text of that member. ok is false whenever the
+// payload is not in the canonical shape this scan can prove it understands;
+// callers then use the stock decoder and keep its exact acceptance.
+//
+// Canonical shape means: base64 uses no escapes, so the value ends at the
+// first unescaped quote; the member appears once (json's last-wins rule for
+// duplicates would otherwise be silently inverted); and the object is compact,
+// so removing the member is a comma trim on the two surrounding fragments.
+func splitDataMember(raw []byte) (head, value []byte, ok bool) {
+	i := bytes.Index(raw, dataMember)
+	if i < 0 {
+		return nil, nil, false
+	}
+	start := i + len(dataMember)
+	rel := bytes.IndexByte(raw[start:], '"')
+	if rel < 0 {
+		return nil, nil, false
+	}
+	end := start + rel
+	value = raw[start:end]
+	if bytes.IndexByte(value, '\\') >= 0 {
+		return nil, nil, false
+	}
+	if bytes.Contains(raw[end+1:], dataMember) {
+		return nil, nil, false
+	}
+	pre, post := raw[:i], raw[end+1:]
+	switch {
+	case len(post) > 0 && post[0] == ',':
+		post = post[1:]
+	case len(pre) > 0 && pre[len(pre)-1] == ',':
+		pre = pre[:len(pre)-1]
+	}
+	head = make([]byte, 0, len(pre)+len(post))
+	head = append(head, pre...)
+	head = append(head, post...)
+	return head, value, true
+}
+
+// decodeB64 decodes the base64 text the fast path found. It allocates exactly
+// once — the destination slice the payload keeps.
+func decodeB64(value []byte) ([]byte, bool) {
+	buf := make([]byte, base64.StdEncoding.DecodedLen(len(value)))
+	n, err := base64.StdEncoding.Decode(buf, value)
+	if err != nil {
+		return nil, false
+	}
+	return buf[:n], true
+}
+
+// unmarshalWire mirrors marshalWire. The data field never passes through the
+// stock decoder's string handling; every other field does, from the same
+// bytes minus that member.
+func (p *ArtifactChunkPayload) unmarshalWire(raw []byte) error {
+	head, value, ok := splitDataMember(raw)
+	if !ok {
+		return json.Unmarshal(raw, p)
+	}
+	var h artifactChunkHead
+	if err := json.Unmarshal(head, &h); err != nil {
+		return json.Unmarshal(raw, p)
+	}
+	data, ok := decodeB64(value)
+	if !ok {
+		return json.Unmarshal(raw, p)
+	}
+	*p = ArtifactChunkPayload{
+		TaskID: h.TaskID, Hash: h.Hash, Offset: h.Offset, Data: data,
+		Total: h.Total, EOF: h.EOF, OK: h.OK, Reason: h.Reason,
+	}
+	return nil
+}
+
+func (p *ArtifactPushPayload) unmarshalWire(raw []byte) error {
+	head, value, ok := splitDataMember(raw)
+	if !ok {
+		return json.Unmarshal(raw, p)
+	}
+	var h artifactPushHead
+	if err := json.Unmarshal(head, &h); err != nil {
+		return json.Unmarshal(raw, p)
+	}
+	data, ok := decodeB64(value)
+	if !ok {
+		return json.Unmarshal(raw, p)
+	}
+	*p = ArtifactPushPayload{
+		TaskID: h.TaskID, Hash: h.Hash, Offset: h.Offset, Data: data, Total: h.Total,
+	}
+	return nil
 }

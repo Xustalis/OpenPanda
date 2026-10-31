@@ -5,6 +5,7 @@ package bus
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -92,5 +93,75 @@ func TestPushWireRoundTrip(t *testing.T) {
 	if got.TaskID != p.TaskID || got.Hash != p.Hash || got.Offset != p.Offset ||
 		got.Total != p.Total || !bytes.Equal(got.Data, p.Data) {
 		t.Fatalf("got %+v want %+v", got, p)
+	}
+}
+
+// TestChunkDecodeMatchesStock pins the fast decoder to encoding/json's
+// acceptance: same fields, same errors, same bytes — including every shape the
+// fast path refuses (spaces, escapes, duplicate keys, bad base64), which must
+// fall back rather than diverge.
+func TestChunkDecodeMatchesStock(t *testing.T) {
+	stock := func(p ArtifactChunkPayload) []byte {
+		b, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	cases := []struct {
+		name string
+		raw  []byte
+	}{
+		{"stock-order", stock(ArtifactChunkPayload{
+			TaskID: "t", Hash: "h", Offset: 1, Data: []byte("hello"), Total: 5, EOF: true, OK: true,
+		})},
+		{"fast-order", func() []byte {
+			p := ArtifactChunkPayload{TaskID: "t", OK: true, Data: []byte("hello")}
+			b, err := p.marshalWire()
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}()},
+		{"no-data", stock(ArtifactChunkPayload{TaskID: "t", OK: false, Reason: `say "hi"`})},
+		{"empty-data", []byte(`{"task_id":"t","data":"","ok":true}`)},
+		{"null-data", []byte(`{"task_id":"t","data":null,"ok":true}`)},
+		{"data-first", []byte(`{"data":"aGk=","task_id":"t","ok":true}`)},
+		{"duplicate-data", []byte(`{"task_id":"t","data":"aGk=","data":"Ynll","ok":true}`)},
+		{"spaced", []byte(`{ "task_id": "t", "data": "aGk=", "ok": true }`)},
+		{"trailing-space", []byte(`{"task_id":"t","ok":true,"data":"aGk=" }`)},
+		{"escaped-head", []byte(`{"task_id":"t","reason":"x\"data\":\"y","ok":true}`)},
+		{"invalid-base64", []byte(`{"task_id":"t","data":"!!!","ok":true}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var fast, want ArtifactChunkPayload
+			fastErr := (&Envelope{Type: MsgArtifactChunk, Payload: tc.raw}).PayloadInto(&fast)
+			wantErr := json.Unmarshal(tc.raw, &want)
+			if (fastErr == nil) != (wantErr == nil) {
+				t.Fatalf("error mismatch: fast=%v stock=%v", fastErr, wantErr)
+			}
+			if wantErr == nil && !reflect.DeepEqual(fast, want) {
+				t.Fatalf("fast decode diverged:\n fast=%+v\nstock=%+v", fast, want)
+			}
+		})
+	}
+}
+
+func TestPushDecodeMatchesStock(t *testing.T) {
+	p := ArtifactPushPayload{TaskID: "t", Hash: "h", Offset: 3, Data: []byte("push"), Total: 9}
+	fast, err := p.marshalWire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotFast, gotStock ArtifactPushPayload
+	if err := (&Envelope{Type: MsgArtifactPush, Payload: fast}).PayloadInto(&gotFast); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(fast, &gotStock); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotFast, gotStock) {
+		t.Fatalf("fast decode diverged:\n fast=%+v\nstock=%+v", gotFast, gotStock)
 	}
 }
