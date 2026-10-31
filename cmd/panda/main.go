@@ -169,16 +169,27 @@ func bareInputIsAsk(sub string, rest []string) bool {
 	return false
 }
 
+// bareValueFlags are flags the bare REPL accepts with a separate value token.
+// parseSubcommand has to skip the value, or `panda --resume <id>` reads the id
+// as a subcommand. (--config/--card/--mcp never reach it: extractGlobalFlags
+// claims them first.)
+var bareValueFlags = map[string]bool{"resume": true, "r": true}
+
 // parseSubcommand returns the first bare word (the subcommand) plus the rest
 // of argv. Global flags are already gone — extractGlobalFlags lifted them —
 // so any leading dash tokens belong to the subcommand (`panda --watch
 // queue`) and forward to its FlagSet, which either accepts them or errors,
-// instead of being silently dropped here. A value flag before the
-// subcommand can't be resolved (its table belongs to the subcommand), so its
-// value would read as the subcommand — an ambiguity no dispatcher can lift.
+// instead of being silently dropped here. A value flag before the subcommand
+// cannot generally be resolved (its table belongs to the subcommand), so the
+// few the bare REPL defines are listed in bareValueFlags.
 func parseSubcommand(args []string) (string, []string) {
-	for i, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if strings.HasPrefix(a, "-") && a != "-" {
+			name := strings.TrimLeft(a, "-")
+			if !strings.Contains(name, "=") && bareValueFlags[name] && i+1 < len(args) {
+				i++ // the next token is this flag's value, not a subcommand
+			}
 			continue // flag token: belongs to the subcommand (or "--")
 		}
 		rest := append(append([]string{}, args[:i]...), args[i+1:]...)

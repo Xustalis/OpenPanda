@@ -48,6 +48,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Added
 
+### Changed
+
+- **The terminal's conversation is a session** — the first prompt of a REPL/TUI chat creates a thread that appears in the web console's rail, and launching resumes the project's most recently updated thread (`--resume ID`, `--new` to start fresh). Tasks spawned from a terminal turn carry the thread id, so the console's board links back to the conversation. Legacy `conversations/*.json` files are imported once and archived as `.json.migrated`; `/new` now detaches instead of refusing while a session is bound.
+
 ### Fixed
 
 - **Eight adapters can take panda's model; zcode joins them** — every bundled CLI now seeds exactly what it reads for an injected run instead of env vars it ignores: hermes a throwaway `HERMES_HOME`, openclaw a redirected `HOME` plus `--config`/`--state-dir`, pi a `models.json` whose `apiKey` is an env-var name, zcode the personal provider config behind `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` (its `ZCODE_*` trio is dead in 0.17), agy a settings file it restores on the way out, and grok the endpoint variable it actually reads (`GROK_MODELS_BASE_URL`, not `GROK_BASE_URL`). The temp state rides the harness cleanup list, so a cancelled run no longer leaves a config carrying the key on disk — the signal path exits with `os._exit`, which skips `atexit`. `_harness` also drops the settings keys that pick a model from a seeded copy and knows which flags consume the next token when it rebuilds an argv. zcode leaves `generic.py`, which could never honour the injection its manifest claimed.

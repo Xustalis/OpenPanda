@@ -28,6 +28,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
 // maxSpeakChars caps what gets read aloud. A long answer spoken in full is worse
@@ -87,10 +88,25 @@ func runVoice(args []string) {
 	}
 	defer engine.Close()
 
-	// Voice shares the persisted thread with the REPL and `panda ask --continue`:
-	// you speak a task at the Pi and follow it up from a terminal on another
-	// machine, which is the point of a mobile entry surface.
-	history := loadConvo()
+	// Voice shares the console's thread model: it continues the project's most
+	// recently updated session and records each spoken exchange back, so a task
+	// spoken at the Pi is the same conversation a terminal or the web console
+	// opens next. The bare-conversation file is the pre-session fallback.
+	voiceProj, _ := activeProject(cfg)
+	voiceStore := sessions.NewStore(sessionStoreRoot(cfg))
+	voiceSess := latestSessionForProject(voiceStore, voiceProj)
+	var history []entry.Turn
+	if voiceSess != nil {
+		_, history = sessionHistory(ctx, voiceStore, voiceSess, engine)
+	} else {
+		history = loadConvo()
+	}
+	voiceSessionID := func() string {
+		if voiceSess != nil {
+			return voiceSess.ID
+		}
+		return ""
+	}
 
 	if *cardPath == "" {
 		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.voice.noCard"))
@@ -126,7 +142,7 @@ func runVoice(args []string) {
 		}
 		fmt.Println("\n" + i18n.Tf(loc, "cli.voice.heard", "text", text))
 
-		out, err := engine.AskTurns(ctx, history, text, "", false, askengine.StreamCallbacks{})
+		out, err := engine.AskTurnsSession(ctx, history, text, "", "", voiceSessionID(), false, askengine.StreamCallbacks{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
 			if *once {
@@ -134,7 +150,18 @@ func runVoice(args []string) {
 			}
 			continue
 		}
-		history = appendConvo(history, loc, text, out, engine)
+		history = appendConvoTurns(history, loc, text, out, engine)
+		// The first utterance opens the thread when there was none; either way
+		// the exchange is recorded where the console can follow it.
+		if voiceSess == nil {
+			voiceSess, _ = voiceStore.Create(sessionTitle(text), voiceProj)
+		}
+		if voiceSess != nil {
+			appendExchangeToSession(voiceStore, voiceSess.ID, text, out, loc)
+			if out.Kind == "task" {
+				bindTaskToSession(ctx, engine, out.TaskID, voiceSess.ID)
+			}
+		}
 		speakBack(ctx, loc, out, *mute)
 		if *once {
 			return

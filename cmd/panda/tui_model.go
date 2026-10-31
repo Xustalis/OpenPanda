@@ -414,8 +414,19 @@ func newTUIModel(r *repl) tuiModel {
 	sp.Style = th.accent
 
 	cHist := &chatHistory{}
-	if r.convoLen() > 0 {
-		turns := r.convoNow()
+	// The sitting's conversation is the bound thread (auto-resumed at launch or
+	// /resume-d); the bare conversation is the store-less fallback. Both replay
+	// through the same folding so a long thread opens on its tail.
+	var turns []entry.Turn
+	if sess := r.boundSession(); sess != nil && len(sess.Turns) > 0 {
+		turns = make([]entry.Turn, 0, len(sess.Turns))
+		for _, t := range sess.Turns {
+			turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
+		}
+	} else if r.convoLen() > 0 {
+		turns = r.convoNow()
+	}
+	if len(turns) > 0 {
 		const maxTurns = 10
 		if len(turns)/2 > maxTurns {
 			cHist.blocks = append(cHist.blocks, block{

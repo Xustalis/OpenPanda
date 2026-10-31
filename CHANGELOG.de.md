@@ -42,6 +42,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Hinzugefügt
 
+### Geändert
+
+- **Das Terminalgespräch ist eine Sitzung** — die erste Nachricht eines REPL/TUI-Chats legt einen Thread an, der in der Sitzungsleiste der Web-Konsole erscheint; beim Start wird der zuletzt aktualisierte Thread des Projekts fortgesetzt (`--resume ID`, `--new` für einen Neustart). Aufgaben aus einem Terminal-Turn tragen die Thread-ID, und das Board der Konsole verlinkt zurück zum Gespräch. Alte `conversations/*.json` werden beim ersten Start importiert und als `.json.migrated` archiviert; `/new` löst jetzt die Bindung, statt bei aktiver Sitzung abzulehnen.
+
 ### Behoben
 
 - **Acht Adapter können jetzt das Modell von panda nutzen; zcode kommt hinzu** — jede gebündelte CLI bekommt das injizierte Modell genau dorthin geschrieben, wo sie es liest: hermes ein wegwerfbares `HERMES_HOME`, openclaw ein umgeleitetes `HOME` plus `--config`/`--state-dir`, pi eine `models.json` (deren `apiKey` ein Umgebungsvariablenname ist), zcode die persönliche Provider-Konfiguration hinter `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` (die `ZCODE_*`-Triade liest 0.17 nicht), agy eine Settings-Datei, die beim Beenden zurückgesetzt wird, und grok die Endpunktvariable, die sie tatsächlich liest (`GROK_MODELS_BASE_URL`, nicht `GROK_BASE_URL`). Der temporäre Zustand hängt an der Cleanup-Liste des Harness, sodass ein abgebrochener Lauf keine Konfiguration mit Schlüssel auf der Platte hinterlässt — der Signalpfad beendet sich mit `os._exit` und überspringt `atexit`. `_harness` entfernt außerdem die Modellwahl-Schlüssel aus der Kopie und weiß, welche Flags beim Neuaufbau eines argv das nächste Token verbrauchen. zcode verlässt `generic.py`.

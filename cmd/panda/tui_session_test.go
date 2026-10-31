@@ -36,23 +36,37 @@ func newSessionTUI(t *testing.T) (tuiModel, *sessions.Store) {
 	return newTUIModel(r), st
 }
 
-// TestHistoryBareModeReplaysConvo checks that with no session bound the TUI
-// replays this run's in-memory conversation and asks for no worktree.
-func TestHistoryBareModeReplaysConvo(t *testing.T) {
-	m, _ := newSessionTUI(t)
+// TestHistoryUnboundSittingStartsSession checks that a sitting with no thread
+// gets one on its first prompt: the bare conversation moves into the new
+// session, the prompt is replayed as history (minus itself), and the working
+// directory stays the engine's — an implicit thread does not carve a worktree.
+func TestHistoryUnboundSittingStartsSession(t *testing.T) {
+	m, st := newSessionTUI(t)
 	m.r.convo = append(m.r.convo, entry.Turn{Role: "user", Content: "hi"}, entry.Turn{Role: "assistant", Content: "hello"})
 
 	history, workDir := m.history("what now")
 	if len(history) != 2 || history[0].Content != "hi" {
-		t.Fatalf("bare history = %+v", history)
+		t.Fatalf("replayed history = %+v", history)
 	}
 	if workDir != "" {
-		t.Errorf("bare mode should not pin a worktree, got %q", workDir)
+		t.Errorf("an implicit session should not pin a worktree, got %q", workDir)
 	}
-	// The user's turn is only paired with its answer at commit time in bare mode,
-	// so asking for context must not have grown the convo.
-	if len(m.r.convo) != 2 {
-		t.Errorf("bare mode should not record the turn early: %+v", m.r.convo)
+	if len(m.r.convo) != 0 {
+		t.Errorf("the bare conversation should move into the thread: %+v", m.r.convo)
+	}
+	sid := m.r.sessID()
+	if sid == "" {
+		t.Fatal("the first prompt should bind a session")
+	}
+	sess, err := st.Get(sid)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(sess.Turns) != 3 || sess.Turns[0].Text != "hi" || sess.Turns[2].Text != "what now" {
+		t.Fatalf("thread turns = %+v", sess.Turns)
+	}
+	if sess.Title != "what now" {
+		t.Fatalf("title = %q, want the first prompt", sess.Title)
 	}
 }
 

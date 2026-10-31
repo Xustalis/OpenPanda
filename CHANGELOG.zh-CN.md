@@ -42,6 +42,10 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增功能
 
+### 变更
+
+- **终端对话就是会话** —— REPL/TUI 聊天的第一条消息会创建线程，直接出现在 Web 控制台的会话栏；启动时自动接上当前项目最近更新的线程（`--resume ID` 指定，`--new` 开新对话）。终端回合派生的任务会带上线程 id，控制台的任务板可以跳回对话。旧版 `conversations/*.json` 首次启动导入并归档为 `.json.migrated`；`/new` 改为解绑当前线程，而不是在绑定会话时拒绝。
+
 ### 修复
 
 - **八个适配器都能用上 panda 的模型，zcode 也加入** —— 每个内置 CLI 现在按它真正读取的位置写入注入的模型，而不是写它根本不读的环境变量：hermes 得到一次性 `HERMES_HOME`，openclaw 重定向 `HOME` 并加 `--config`/`--state-dir`，pi 写 `models.json`（`apiKey` 是环境变量名），zcode 写 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指向的个人 provider 配置（0.17 完全不读 `ZCODE_*`），agy 写一份退出时恢复的 settings，grok 用 `GROK_MODELS_BASE_URL`（不是 `GROK_BASE_URL`）。临时状态挂在 harness 的清理表上，取消的运行不再把带密钥的配置留在磁盘上——信号路径的 `os._exit` 会跳过 `atexit`。`_harness` 还会从种子副本里剔除选择模型的设置键，并在重建 argv 时知道哪些 flag 会吃掉下一个 token。zcode 同时离开 `generic.py`——那个适配器无法兑现清单声称的注入。

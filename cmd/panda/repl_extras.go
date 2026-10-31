@@ -369,7 +369,7 @@ func (r *repl) cmdProjectEnter(arg string) {
 		}
 		r.setProject("")
 		r.bindProject()
-		r.setConvo(loadConvo())
+		r.rebindProjectConversation()
 		r.outln(i18n.T(r.loc, "cli.project.noActive"))
 		return
 	}
@@ -403,7 +403,9 @@ func (r *repl) cmdProjectEnter(arg string) {
 		r.outln(i18n.Tf(r.loc, "repl.project.created", "name", name))
 	}
 	r.bindProject()
-	r.setConvo(loadConvo())
+	if sess := r.rebindProjectConversation(); sess != nil {
+		r.outln(i18n.Tf(r.loc, "repl.resume.done", "id", sess.ID))
+	}
 	r.outln(i18n.Tf(r.loc, "cli.project.entered", "name", name))
 }
 

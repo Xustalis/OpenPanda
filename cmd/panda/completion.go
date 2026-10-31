@@ -62,7 +62,7 @@ var completionFlags = map[string][]string{
 	"plan run":      {"--dry-run", "--config", "--card"},
 	"status":        {"--config"},
 	"doctor":        {"--config"},
-	"repl":          {"--config", "--card", "--mcp"},
+	"repl":          {"--config", "--card", "--mcp", "--resume", "--continue", "--new"},
 }
 
 // completionFlagValues maps a flag name to its closed value set — offered

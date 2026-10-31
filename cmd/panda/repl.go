@@ -262,8 +262,19 @@ func runRepl(args []string) {
 	mcpCmd := fs.String("mcp", cliMCP, "MCP server command (space-separated)")
 	yesFlag := fs.Bool("yes", false, "accept workspace confirmation without prompting")
 	fs.BoolVar(yesFlag, "y", false, "accept workspace confirmation without prompting (shorthand)")
+	resumeID := fs.String("resume", "", "attach to this session id at launch")
+	fs.StringVar(resumeID, "r", "", "attach to this session id at launch (shorthand)")
+	startNew := fs.Bool("new", false, "start a fresh conversation instead of resuming the last one")
+	continueLatest := fs.Bool("continue", false, "resume the most recently updated session (the default)")
+	fs.BoolVar(continueLatest, "c", false, "resume the most recently updated session (shorthand)")
 	fs.Parse(reorderFlags(fs, args))
-	rejectExtraArgs(fs, "usage: panda repl [--card F] [--mcp CMD] [-y]")
+	rejectExtraArgs(fs, "usage: panda repl [--card F] [--mcp CMD] [--resume ID | --new] [-y]")
+	if *startNew && *continueLatest {
+		fail(2, "panda: --new and --continue are mutually exclusive")
+	}
+	if *startNew && strings.TrimSpace(*resumeID) != "" {
+		fail(2, "panda: --new and --resume are mutually exclusive")
+	}
 
 	cfg, err := loadConfigQuietly(*configPath)
 	if err != nil {
@@ -413,6 +424,15 @@ func runRepl(args []string) {
 		r.bindProject()
 	}
 
+	// The terminal speaks the console's conversation model: launch resumes the
+	// project's newest thread, and a sitting with nothing to resume gets one on
+	// its first prompt. This must run before the TUI starts so the transcript
+	// can be seeded from the thread.
+	resumed, resumeErr := r.prepareConversation(*resumeID, *startNew)
+	if resumeErr != nil {
+		fatalMsg(i18n.Tf(detected, "repl.resume.bad", "id", *resumeID))
+	}
+
 	// The rich full-screen front end (Bubble Tea) drives an interactive TTY with
 	// a configured engine; it replaces the banner, footer, task watcher and line
 	// loop below with a managed display. PANDA_CLASSIC_REPL falls back here.
@@ -423,6 +443,9 @@ func runRepl(args []string) {
 	}
 
 	r.printBanner()
+	if resumed != nil {
+		fmt.Println(i18n.Tf(r.loc, "repl.resume.done", "id", resumed.ID))
+	}
 	// No config file anywhere ResolvePath looks means a first run — say so,
 	// because every other surface assumes `panda init` already happened.
 	if r.interactive {
@@ -446,8 +469,10 @@ func runRepl(args []string) {
 	}
 
 	// Resume the persisted bare-mode conversation (people reopen
-	// terminals, not conversations); /new starts a fresh one.
-	if c := loadConvo(); len(c) > 0 {
+	// terminals, not conversations); /new starts a fresh one. prepareConversation
+	// already loaded it when no session could be bound — this is the fallback
+	// for a store-less or mid-run-written file.
+	if c := loadConvo(); len(c) > 0 && r.convoLen() == 0 {
 		r.setConvo(c)
 		fmt.Println(i18n.Tf(r.loc, "repl.convo.resumed", "n", fmt.Sprint(len(c)/2)))
 	}
@@ -829,6 +854,12 @@ func (r *repl) outln(args ...any) {
 // /resume binds a session for either one instead of only the loop it was typed
 // in.
 func (r *repl) askContext(text string) ([]entry.Turn, string) {
+	// A sitting with no thread of its own gets one on its first prompt, so the
+	// terminal chat is the same conversation the console's rail lists. A failed
+	// create leaves bare mode exactly as it was.
+	if r.sessID() == "" {
+		r.startImplicitSession(text)
+	}
 	var history []entry.Turn
 	workDir := ""
 	sessID := r.sessID()
@@ -1305,21 +1336,18 @@ func (r *repl) rememberTurn(text string, out *askengine.Result) {
 	})
 }
 
-// cmdNew clears the bare-mode conversation (/new) — the "new chat" of a
-// chat app. Bound sessions keep their own history and are unaffected.
+// cmdNew starts a fresh conversation (/new) — the "new chat" of a chat app.
+// The bound thread is detached, not cleared: it keeps its history and stays in
+// the console's rail, and the next prompt lazily opens a new one.
 func (r *repl) cmdNew(arg string) {
-	if r.sessID() != "" {
-		r.outln(i18n.T(r.loc, "repl.new.session"))
-		return
-	}
-	n := r.convoLen()
+	r.setSess("")
 	r.setConvo(nil)
 	clearConvo()
-	// The roster belongs to the conversation, so a wiped conversation starts
+	// The roster belongs to the conversation, so a new conversation starts
 	// with the scheduler choosing — the same blank sheet the console opens.
 	_ = r.setTeam(nil)
 	r.setNextNode("")
-	r.outln(i18n.Tf(r.loc, "repl.new.cleared", "n", fmt.Sprint(n/2)))
+	r.outln(i18n.T(r.loc, "repl.new.fresh"))
 }
 
 // cmdHistory prints the recent conversation compactly — the "scroll up" of a

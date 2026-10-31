@@ -120,17 +120,7 @@ func loadConvo() []entry.Turn {
 	if p == "" {
 		return nil
 	}
-	data, err := os.ReadFile(p)
-	if err != nil {
-		return nil
-	}
-	var f struct {
-		Turns []entry.Turn `json:"turns"`
-	}
-	if json.Unmarshal(data, &f) != nil {
-		return nil
-	}
-	return trimConvo(f.Turns, convoBudget(nil))
+	return trimConvo(readConvoFile(p), convoBudget(nil))
 }
 
 // saveConvo persists the conversation (atomic-enough for CLI state: one
@@ -243,6 +233,15 @@ func compactConvo(turns []entry.Turn, engine *askengine.Engine) []entry.Turn {
 // (the REPL's, so /lang is honoured), not a freshly detected one. When an
 // engine is supplied, overflowing history is compacted instead of dropped.
 func appendConvo(turns []entry.Turn, loc i18n.Locale, text string, out *askengine.Result, engine ...*askengine.Engine) []entry.Turn {
+	turns = appendConvoTurns(turns, loc, text, out, engine...)
+	saveConvo(turns)
+	return turns
+}
+
+// appendConvoTurns grows an in-memory conversation without persisting it. Voice
+// mode keeps its replay window in memory and records the exchange to the
+// session thread separately, so it must not write the bare-conversation file.
+func appendConvoTurns(turns []entry.Turn, loc i18n.Locale, text string, out *askengine.Result, engine ...*askengine.Engine) []entry.Turn {
 	assistant := convoSummaryOf(loc, out)
 	turns = append(turns,
 		entry.Turn{Role: "user", Content: text},
@@ -252,9 +251,7 @@ func appendConvo(turns []entry.Turn, loc i18n.Locale, text string, out *askengin
 	if len(engine) > 0 {
 		eng = engine[0]
 	}
-	turns = compactConvo(turns, eng)
-	saveConvo(turns)
-	return turns
+	return compactConvo(turns, eng)
 }
 
 // summarizeSessionTurns adapts the engine's entry.Turn summarizer to the

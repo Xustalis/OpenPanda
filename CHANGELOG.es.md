@@ -42,6 +42,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Añadido
 
+### Cambiado
+
+- **La conversación del terminal es una sesión** — el primer mensaje de un chat REPL/TUI crea un hilo que aparece en la barra del panel web, y el arranque retoma el hilo del proyecto actualizado más recientemente (`--resume ID`, `--new` para empezar de cero). Las tareas nacidas de un turno del terminal llevan el id del hilo, y el tablero del panel enlaza de vuelta a la conversación. Los archivos antiguos `conversations/*.json` se importan una vez y se archivan como `.json.migrated`; `/new` ahora se desvincula en lugar de rechazar cuando hay una sesión activa.
+
 ### Corregido
 
 - **Ocho adaptadores pueden usar el modelo de panda; zcode se suma** — cada CLI incluida recibe el modelo inyectado exactamente donde lo lee: hermes un `HERMES_HOME` desechable, openclaw un `HOME` redirigido más `--config`/`--state-dir`, pi un `models.json` cuyo `apiKey` es un nombre de variable de entorno, zcode la configuración personal de proveedor tras `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` (su trío `ZCODE_*` no lo lee 0.17), agy un archivo de settings que se restaura al salir, y grok la variable de endpoint que realmente lee (`GROK_MODELS_BASE_URL`, no `GROK_BASE_URL`). El estado temporal va en la lista de limpieza del harness, así que una ejecución cancelada ya no deja en disco una configuración con la clave — la ruta de señal sale con `os._exit`, que omite `atexit`. `_harness` también descarta las claves que eligen modelo de la copia sembrada y sabe qué flags consumen el siguiente token al reconstruir el argv. zcode deja `generic.py`.

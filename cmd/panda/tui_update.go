@@ -1445,19 +1445,23 @@ func (m tuiModel) startExec(text string) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// newChat is "/new": wipe the bare-mode conversation — memory AND the
-// persisted file — and clear the screen. A bound session refuses, exactly as
-// the classic handler spells it.
+// newChat is "/new": detach from the current thread, clear the pane and the
+// legacy bare-conversation file, and let the next prompt open a fresh session
+// — the same blank sheet the classic handler spells.
 func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
-	if m.r != nil && m.r.sessID() != "" {
-		note := block{kind: blockNote, body: i18n.T(m.loc, "repl.new.session")}
+	// Switching threads mid-turn would route the outcome into the new
+	// conversation (recordOutcome reads the binding at commit time), so the
+	// turn has to settle first.
+	if m.mode == modeAsking {
+		note := block{kind: blockNote, body: i18n.T(m.loc, "repl.ask.busy")}
 		return m, m.printBlock(note)
 	}
-	n := 0
 	if m.r != nil {
-		n = m.r.convoLen()
+		// Detach, don't clear: the thread keeps its history and stays in the
+		// console's rail; the next prompt lazily opens a new one.
+		m.r.setSess("")
 		m.r.setConvo(nil)
-		// A new bare conversation starts with no roster and no pending pin —
+		// A new conversation starts with no roster and no pending pin —
 		// the same blank sheet the console's 新对话 opens.
 		_ = m.r.setTeam(nil)
 		m.r.setNextNode("")
@@ -1468,7 +1472,7 @@ func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
 	if m.chatHistory != nil {
 		m.chatHistory.clear()
 	}
-	note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.new.cleared", "n", fmt.Sprint(n/2))}
+	note := block{kind: blockNote, body: i18n.T(m.loc, "repl.new.fresh")}
 	return m, tea.Batch(tea.ClearScreen, m.printBlock(note))
 }
 
@@ -1556,23 +1560,35 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 		m.nextNode = m.r.nextNodeNow()
 	}
 	m.mode = modeIdle
-	if m.chatHistory != nil {
-		m.chatHistory.clear()
-		for _, t := range sess.Turns {
-			switch t.Role {
-			case "user":
-				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Text})
-			case "assistant":
-				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Text})
-			}
-		}
-	}
+	m.seedTranscriptFromSession(sess)
 	title := sess.Title
 	if title == "" {
 		title = shortID(sess.ID)
 	}
 	note := block{kind: blockNote, body: i18n.Tf(m.loc, "tui.resume.ok", "id", shortID(sess.ID), "title", title)}
 	return m, m.printBlock(note)
+}
+
+// seedTranscriptFromSession repaints the scrollback from a thread's turns. A
+// nil session clears it — the project switch with nothing to resume opens a
+// blank sheet rather than leaving the previous project's conversation on
+// screen while the next ask runs somewhere else.
+func (m tuiModel) seedTranscriptFromSession(sess *sessions.Session) {
+	if m.chatHistory == nil {
+		return
+	}
+	m.chatHistory.clear()
+	if sess == nil {
+		return
+	}
+	for _, t := range sess.Turns {
+		switch t.Role {
+		case "user":
+			m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Text})
+		case "assistant":
+			m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Text})
+		}
+	}
 }
 
 // enterProject implements "/project <name>" inline: validate, create-then-
@@ -1595,7 +1611,7 @@ func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
 		}
 		r.setProject("")
 		r.bindProject()
-		r.setConvo(loadConvo())
+		m.seedTranscriptFromSession(r.rebindProjectConversation())
 		m.team = r.teamNow()
 		m.refreshProject()
 		note := block{kind: blockNote, body: i18n.T(m.loc, "cli.project.noActive")}
@@ -1630,7 +1646,7 @@ func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
 		}
 	}
 	r.bindProject()
-	r.setConvo(loadConvo())
+	m.seedTranscriptFromSession(r.rebindProjectConversation())
 	m.team = r.teamNow()
 	m.refreshProject()
 	body := ""

@@ -42,6 +42,10 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 追加
 
+### 変更
+
+- **ターミナルの会話はセッションになる** — REPL/TUI の最初のプロンプトがスレッドを作成し、Web コンソールのセッション一覧に表示されます。起動時はプロジェクトで最も新しく更新されたスレッドを自動的に再開します（`--resume ID` で指定、`--new` で新規開始）。ターミナルのターンから生まれたタスクにはスレッド id が付き、コンソールのボードから会話へ戻れます。旧 `conversations/*.json` は初回起動時にインポートされ `.json.migrated` としてアーカイブされます。`/new` はセッション接続中でも拒否せず、デタッチするようになりました。
+
 ### 修正
 
 - **8 つのアダプターが panda のモデルを使えるようになり、zcode も加わりました** —— 各 CLI が実際に読む場所へ注入モデルを書きます：hermes は使い捨ての `HERMES_HOME`、openclaw は `HOME` のリダイレクトと `--config`/`--state-dir`、pi は `models.json`（`apiKey` は環境変数名）、zcode は `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` が指す個人プロバイダ設定（0.17 は `ZCODE_*` を読みません）、agy は終了時に復元する settings、grok は実際に読む `GROK_MODELS_BASE_URL`（`GROK_BASE_URL` ではありません）。一時状態は harness のクリーンアップ一覧に載るため、キャンセルされた実行が鍵入りの設定をディスクに残しません——シグナル経路の `os._exit` は `atexit` を飛ばします。`_harness` はシード複製からモデル選択キーを外し、argv 再構築時に次のトークンを消費するフラグも把握します。zcode は `generic.py` から離れます。
