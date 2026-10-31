@@ -27,7 +27,7 @@
 <meta property="og:image:height" content="630" />
 <meta property="og:image:alt" data-i18n-content="meta.ogAlt" content="OpenPanda — 深空银河与地球边缘上的项目标题" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" data-i18n-content="meta.title" content="OpenPanda — Local-first graph orchestration" />
+<meta name="twitter:title" data-i18n-content="meta.title" content="OpenPanda — 让异构的智能体与设备，像一个整体一样工作" />
 <meta name="twitter:description" data-i18n-content="meta.ogDesc" content="把异构的智能体与设备，编成一张会自己调度、监督、验收的网。零云端中转。" />
 <meta name="twitter:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
 
@@ -107,12 +107,12 @@
         {
           "@type": "Question",
           "name": "支持哪些平台和 Agent？",
-          "acceptedAnswer": { "@type": "Answer", "text": "六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 11 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、ZCode、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。" }
+          "acceptedAnswer": { "@type": "Answer", "text": "六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 10 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。" }
         },
         {
           "@type": "Question",
           "name": "现在能用在生产环境吗？",
-          "acceptedAnswer": { "@type": "Answer", "text": "v0.1.3「Constellation」是发布级这条线的当前版本（v0.1.0 起这条线进入发布级），可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 status.md 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、跨节点 hello 重放（协议级，后续版本处理）。逐条列出，不含糊。" }
+          "acceptedAnswer": { "@type": "Answer", "text": "v0.1.3「Constellation」是发布级这条线的当前版本（v0.1.0 起这条线进入发布级），可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 status.md 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、daemon→面板 mesh 指标 IPC。逐条列出，不含糊。" }
         },
         {
           "@type": "Question",
@@ -149,7 +149,7 @@
 <div class="scroll-progress" id="scroll-progress" aria-hidden="true"><i></i></div>
 
 <!-- ═══════════════════════════════ NAV ═══════════════════════════════ -->
-<nav class="site-nav" id="site-nav" aria-label="Primary">
+<nav class="site-nav" id="site-nav" aria-label="主导航" data-i18n-aria="nav.primary">
   <a class="brand" href="#top" aria-label="OpenPanda">
     <svg class="brand-mark" width="27" height="27" viewBox="0 0 40 40" aria-hidden="true"><defs><mask id="pmNav"><rect width="40" height="40" fill="#000"/><circle cx="20" cy="21.9" r="11.6" fill="#fff"/><circle cx="12.1" cy="10.7" r="4.7" fill="#fff"/><circle cx="27.9" cy="10.7" r="4.7" fill="#fff"/><ellipse cx="15.2" cy="20.1" rx="2.45" ry="3.05" transform="rotate(-16 15.2 20.1)" fill="#000"/><ellipse cx="24.8" cy="20.1" rx="2.45" ry="3.05" transform="rotate(16 24.8 20.1)" fill="#000"/><ellipse cx="20" cy="26.4" rx="1.55" ry="1.15" fill="#000"/></mask></defs><rect width="40" height="40" fill="currentColor" mask="url(#pmNav)"/></svg>
     <span>Open<b>Panda</b></span>
@@ -182,7 +182,7 @@
   </div>
 </nav>
 
-<div class="mobile-menu" id="mobile-menu" hidden>
+<div class="mobile-menu" id="mobile-menu" role="dialog" aria-modal="true" aria-label="导航" data-i18n-aria="menu.aria" hidden>
   <div class="mobile-menu-inner">
     <p class="mono-label" data-i18n="menu.label">INDEX</p>
     <a href="#why"><b>01</b><span data-i18n="nav.why">四堵墙</span></a>
@@ -260,7 +260,6 @@
       <li>Antigravity</li>
       <li>OpenCode</li>
       <li>Grok Build</li>
-      <li>ZCode</li>
       <li>Hermes</li>
       <li>OpenClaw</li>
       <li>Pi</li>
@@ -540,7 +539,7 @@
     </div>
     <div class="stat-grid">
       <div class="stat reveal"><b data-count="3">3</b><span data-i18n="s6.stat1">台真机</span></div>
-      <div class="stat reveal"><b data-count="11">11</b><span data-i18n="s6.stat2">个 Agent 适配器</span></div>
+      <div class="stat reveal"><b data-count="10">10</b><span data-i18n="s6.stat2">个 Agent 适配器</span></div>
       <div class="stat reveal"><b data-count="2760" data-prefix="~">~2760</b><span data-i18n="s6.stat3">项自动化测试</span></div>
       <div class="stat reveal"><b data-count="20" data-prefix="~" data-suffix="MB">~20MB</b><span data-i18n="s6.stat4">常驻内存</span></div>
       <div class="stat reveal"><b data-count="0">0</b><span data-i18n="s6.stat5">云端中转</span></div>
@@ -624,7 +623,7 @@
         <span class="mile-state" data-i18n="s8.m4.state">计划中</span>
       </article>
     </div>
-    <p class="roadmap-note reveal" data-i18n="s8.note">一键安装默认取最新稳定版（v0.1.3）；要装指定版本，加 --version。</p>
+    <p class="roadmap-note reveal" data-i18n="s8.note">一键安装默认取最新稳定版（v0.1.3）；要装指定版本，安装脚本加 --version（Windows 用 -Version）。</p>
   </div>
 </section>
 
@@ -647,7 +646,7 @@
         <p class="lic-desc" data-i18n="lic.c1.desc">个人使用、学习、公司内部工具、二次开发。</p>
         <ul class="lic-list">
           <li data-i18n="lic.c1.l1">全部源码与预编译产物</li>
-          <li data-i18n="lic.c1.l2">11 个 Agent 适配器，持续增加</li>
+          <li data-i18n="lic.c1.l2">10 个 Agent 适配器，持续增加</li>
           <li data-i18n="lic.c1.l3">可自行修改；对外分发时改动同样开源</li>
           <li data-i18n="lic.c1.l4">GitHub Issues 支持</li>
         </ul>
@@ -736,7 +735,7 @@
             <span class="faq-q" data-i18n="faq.q4.q">支持哪些平台和 Agent？</span>
             <span class="faq-icon" aria-hidden="true"></span>
           </summary>
-          <div class="faq-body"><p data-i18n="faq.q4.a">六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 11 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、ZCode、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。</p></div>
+          <div class="faq-body"><p data-i18n="faq.q4.a">六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 10 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。</p></div>
         </details>
 
         <details class="faq reveal">
@@ -744,7 +743,7 @@
             <span class="faq-q" data-i18n="faq.q5.q">现在能用在生产环境吗？</span>
             <span class="faq-icon" aria-hidden="true"></span>
           </summary>
-          <div class="faq-body"><p data-i18n="faq.q5.a">v0.1.3「Constellation」是发布级这条线的当前版本（v0.1.0 起这条线进入发布级），可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a> 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、跨节点 hello 重放（协议级，后续版本处理）。逐条列出，不含糊。</p></div>
+          <div class="faq-body"><p data-i18n="faq.q5.a">v0.1.3「Constellation」是发布级这条线的当前版本（v0.1.0 起这条线进入发布级），可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a> 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、daemon→面板 mesh 指标 IPC。逐条列出，不含糊。</p></div>
         </details>
 
         <details class="faq reveal">
@@ -782,7 +781,7 @@
     <div class="install-panel reveal">
       <div class="install-top">
         <h2 class="install-title" data-i18n="s9.title">一行命令，<br>点火入轨。</h2>
-        <p class="install-note" data-i18n="s9.note">安装器会按平台与架构取产物，校验 <span class="nowrap">SHA-256</span>、解压并写进 PATH，装完跑一次 <b>panda init</b> 就绪。默认装最新稳定版，要指定版本就加 <b>--version</b>。</p>
+        <p class="install-note" data-i18n="s9.note">安装器会按平台与架构取产物，校验 <span class="nowrap">SHA-256</span>、解压并写进 PATH，装完跑一次 <b>panda init</b> 就绪。默认装最新稳定版；要指定版本，macOS / Linux 加 <b>--version</b>，Windows 加 <b>-Version</b>。</p>
       </div>
       <div class="install-tabs" role="tablist" aria-label="Install method">
         <button class="install-tab active" data-os="unix" role="tab" aria-selected="true" data-i18n="s9.tab.unix"
@@ -809,7 +808,7 @@
         <div class="qs"><span class="qs-num">03</span><code>panda ask "check system status"</code><p data-i18n="s9.s3">一次性：回答、工具调用或派发。</p></div>
       </div>
       <div class="install-foot">
-        <span data-i18n="s9.license">AGPL-3.0-or-later · 商业许可 · 使用条款</span>
+        <span data-i18n="s9.license"><a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0-or-later</a> · <a href="https://github.com/Xustalis/OpenPanda/blob/main/COMMERCIAL.zh-CN.md" target="_blank" rel="noopener">商业许可</a> · <a href="https://github.com/Xustalis/OpenPanda/blob/main/TERMS.zh-CN.md" target="_blank" rel="noopener">使用条款</a></span>
         <a href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener" data-i18n="s9.star">在 GitHub 上查看 / Star ↗</a>
       </div>
       <div class="install-platforms">
@@ -883,7 +882,7 @@
   <div class="palette-box" role="dialog" aria-modal="true" aria-label="快速跳转" data-i18n-aria="pal.aria">
     <div class="palette-head">
       <svg class="palette-ico" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
-      <input class="palette-input" id="palette-input" type="text" placeholder="跳转章节、打开链接、复制命令…" data-i18n-placeholder="pal.placeholder" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" />
+      <input class="palette-input" id="palette-input" type="text" placeholder="跳转章节、打开链接、复制命令…" data-i18n-placeholder="pal.placeholder" aria-label="快速跳转" data-i18n-aria="pal.aria" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" />
       <kbd>ESC</kbd>
     </div>
     <ul class="palette-list" id="palette-list" role="listbox" aria-label="结果" data-i18n-aria="pal.results"></ul>
