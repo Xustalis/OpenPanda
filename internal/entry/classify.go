@@ -97,6 +97,11 @@ func classifyCacheKey(po PromptOptions, model string, registry *Registry) (k1, k
 	if po.ASCIIOnly {
 		b.WriteString("\nascii")
 	}
+	// A side channel renders a different system prompt for the same turns; its
+	// verdict is not interchangeable with the main thread's.
+	if po.Side {
+		b.WriteString("\nside")
+	}
 	// The team pick is part of the system prompt, so two threads that differ
 	// only in roster must not share a cached classification: one may legally
 	// pin agent:opencode where the other must refuse it.

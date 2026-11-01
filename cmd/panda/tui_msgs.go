@@ -124,7 +124,11 @@ func (s *askStream) send(ctx context.Context, m tea.Msg) {
 // the conversation's roster (the console's team pick): it bounds this round's
 // dispatch budget and rides every task's spec, exactly as the panel's ask does.
 // node is the one-shot /node pin for this turn ("" lets the scheduler choose).
-func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, sessionID string, agents []string, node string, authorize bool, mode string) (*askStream, tea.Cmd) {
+// newAskStream allocates one in-flight ask — its event channel, its cancel, its
+// dropped signal — and the callbacks that fan engine events onto it. The main
+// turn and the side channel build on it alike; they differ only in the scope
+// they ask with and in which part of the model folds the events.
+func newAskStream() (*askStream, context.Context, askengine.StreamCallbacks) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &askStream{
 		events:  make(chan tea.Msg, 256),
@@ -153,13 +157,18 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, s
 		// (the engine parks the task and returns it) and prompt on the model loop,
 		// then ResumeApproved — the same split the classic REPL uses.
 	}
+	return s, ctx, cb
+}
+
+func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, sessionID string, agents []string, node string, authorize bool, mode string) (*askStream, tea.Cmd) {
+	s, ctx, cb := newAskStream()
 	guard.Go(nil, "tui: ask worker", func() {
 		// A panicking worker must still land a doneMsg: without it the pump
 		// parks on events forever and the turn hangs on the spinner. The
 		// deferred cancel already ran, so send needs an uncancelled ctx.
 		s.send(context.Background(), doneMsg{stream: s, err: errors.New("ask worker panicked (see log)")})
 	}, func() {
-		defer cancel()
+		defer s.cancel()
 		// Ambient fallback keeps parity with the classic REPL path — a
 		// session-less ask may still bind the daemon's working dir — and the
 		// scoped form carries the thread's roster and node pin.
@@ -178,6 +187,31 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, s
 		// the defer above, which runs after this send. So while a turn is on
 		// screen the send blocks until it is delivered, and once the turn is
 		// released it unblocks instead of leaking a goroutine.
+		s.send(ctx, doneMsg{stream: s, out: out, err: err})
+	})
+	return s, waitForActivity(s)
+}
+
+// startSideAsk is startAsk for the side channel: same pump, same cancellation,
+// but the scope marks the ask as side, so the engine narrows the prompt, trims
+// the tool face to read-only and refuses to dispatch. It keeps the main
+// thread's workDir and roster — the whole point of a side question is that it
+// is about the same work — while carrying its own session id so nothing it
+// learns is written into the main thread's approval record.
+func startSideAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, sessionID string, agents []string, node string, authorize bool) (*askStream, tea.Cmd) {
+	s, ctx, cb := newAskStream()
+	guard.Go(nil, "tui: side worker", func() {
+		s.send(context.Background(), doneMsg{stream: s, err: errors.New("side ask worker panicked (see log)")})
+	}, func() {
+		defer s.cancel()
+		out, err := engine.AskTurnsScoped(ctx, history, prompt, askengine.AskScope{
+			WorkDir:        workDir,
+			SessionID:      sessionID,
+			Agents:         agents,
+			Node:           node,
+			AmbientProject: true,
+			Side:           true,
+		}, authorize, cb)
 		s.send(ctx, doneMsg{stream: s, out: out, err: err})
 	})
 	return s, waitForActivity(s)

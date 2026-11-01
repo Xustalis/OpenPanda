@@ -31,6 +31,10 @@ func (m tuiModel) View() string {
 	if m.quitting {
 		return ""
 	}
+	// The side channel replaces the frame while it is open; see tui_side.go.
+	if m.sideShowing() {
+		return m.sideView()
+	}
 	if m.mode == modeExec {
 		var live strings.Builder
 		live.WriteString("\n")

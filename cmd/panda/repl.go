@@ -191,6 +191,8 @@ var replCommands []replCmd
 func init() {
 	replCommands = []replCmd{
 		{"ask", "chat", "cmd.ask", (*repl).cmdAsk},
+		{"side", "chat", "cmd.side", (*repl).cmdSide},
+		{"btw", "chat", "cmd.side", (*repl).cmdSide},
 		{"goal", "chat", "cmd.goal", (*repl).cmdModeGoal},
 		{"plan", "chat", "cmd.planMode", (*repl).cmdModePlan},
 		{"spec", "chat", "cmd.spec", (*repl).cmdModeSpec},

@@ -147,10 +147,10 @@ jobs:
   # (miss the re-arm and the wheel is dead after the switch back). Drives the
   # real binary in a pty. Needs both Go and python3, so it is its own leg.
   #
-  # Two contracts, not one: `tui-pty-exit-test` (the "chat saved / resume" note
-  # on the restored screen, and a failed turn persisted to the convo file) is
-  # part of `make gate-all` and was in no CI job at all — a check that only
-  # ever ran on a developer's laptop. Both run here now.
+  # Three contracts, not one: `tui-pty-exit-test` (the "chat saved / resume"
+  # note on the restored screen, and a failed turn persisted to the convo file)
+  # is part of `make gate-all` and was in no CI job at all — a check that only
+  # ever ran on a developer's laptop. All three run here now.
   #
   # macOS is in the matrix because `cmd/panda/term_darwin.go` takes the other
   # branch of the terminal setup (term_unix.go is what Linux exercises), and
@@ -176,6 +176,8 @@ jobs:
         run: make tui-pty-test
       - name: TUI exit visibility (pty)
         run: make tui-pty-exit-test
+      - name: TUI side channel (pty)
+        run: make tui-pty-side-test
 
   # The review ruleset requires the bare `tui-pty` context, but a matrix job's
   # check names carry their axis value ("tui-pty (macos-15)"), so the required

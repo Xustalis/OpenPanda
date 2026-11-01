@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -208,6 +209,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Clamp to the actual available width; a tiny terminal must shed
 		// decoration rather than creating a component wider than the screen.
 		m.ta.SetWidth(max(1, msg.Width-4))
+		m.sizeSideInput()
 		if first {
 			m.refreshProject()
 		}
@@ -242,7 +244,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.animTick++
 		// Outside a turn the spinner still has work to do while a model
 		// probe or catalogue fetch is in flight in the config surfaces.
-		if m.mode != modeAsking && !m.formTesting && !m.formFetching && !m.panelTesting {
+		if m.mode != modeAsking && !m.formTesting && !m.formFetching && !m.panelTesting &&
+			(m.side == nil || m.side.stream == nil) {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -250,17 +253,31 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case deltaMsg:
+		if m.side != nil && m.side.stream != nil && msg.stream == m.side.stream {
+			return m, m.onSideDelta(msg.text)
+		}
 		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
 			return m, nil
 		}
 		return m.onDelta(msg)
 	case reasoningMsg:
+		if m.side != nil && m.side.stream != nil && msg.stream == m.side.stream {
+			m.side.thought = appendReasoning(m.side.thought, msg.text)
+			return m, waitForActivity(msg.stream)
+		}
 		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
 			return m, nil
 		}
 		m.thought = appendReasoning(m.thought, msg.text)
 		return m, waitForActivity(msg.stream)
 	case progressMsg:
+		// The side channel has no task of its own, but routing and retry notes
+		// still arrive; they belong on its status line, not on the main
+		// turn's — the two streams run at once when a turn is in flight.
+		if m.side != nil && m.side.stream != nil && msg.stream == m.side.stream {
+			m.side.status = askengine.StatusText(msg.progress)
+			return m, waitForActivity(msg.stream)
+		}
 		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
 			return m, nil
 		}
@@ -275,6 +292,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamTask = msg.taskID
 		return m, waitForActivity(msg.stream)
 	case doneMsg:
+		if m.side != nil && msg.stream == m.side.stream {
+			return m, m.onSideDone(msg)
+		}
 		return m.onDone(msg)
 	case resumedMsg:
 		return m.onResumed(msg)
@@ -515,6 +535,13 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// cannot select anything.
 	if isMouseToggleKey(msg) {
 		return m.toggleMouse()
+	}
+	// The side channel owns the whole keyboard while it is on screen. Its own
+	// handler runs before any mode branch: the main thread's bindings (Esc to
+	// interrupt, Ctrl+C to quit) would otherwise fire on the turn the user is
+	// not looking at.
+	if m.sideShowing() {
+		return m.onSideKey(msg)
 	}
 	if m.mode == modeExec {
 		if lines, ok := m.arrowScrollLines(msg); ok && strings.TrimSpace(m.ta.Value()) == "" {
@@ -1228,6 +1255,11 @@ func (m tuiModel) submitDuringTurn(text string) (tea.Model, tea.Cmd) {
 	case "quit", "exit":
 		m.quitting = true
 		return m, tea.Quit
+	case "side", "btw":
+		// Unlike a picker or a turn-spawning command, the side channel does
+		// not need the foreground: it is a second ask worker beside this one,
+		// which is exactly what a user wants while a turn is still streaming.
+		return m, m.openSide(arg)
 	case "clear", "cls", "claer":
 		// Visual clear only — safe mid-turn; it never touches the stream.
 		if m.chatHistory != nil {
@@ -1312,6 +1344,12 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 	case "quit", "exit":
 		m.quitting = true
 		return m, tea.Quit
+	case "side", "btw":
+		// /side opens the read-only channel beside this thread; /btw is the
+		// Claude Code spelling, kept as an alias. It is deliberately available
+		// mid-turn — asking a question the main thread should not carry is the
+		// whole reason it exists.
+		return m, m.openSide(arg)
 	case "clear", "cls", "claer":
 		// Visual clear only — the conversation survives (/new is the wipe).
 		// Blocks vanish from the next frame; ClearScreen forces a repaint so

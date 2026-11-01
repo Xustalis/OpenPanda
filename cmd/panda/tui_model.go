@@ -326,6 +326,14 @@ type tuiModel struct {
 
 	animTick int
 	quitting bool
+
+	// side is the /side channel's state (see tui_side.go), nil until first
+	// opened and kept across hide/show. sideVisible decides whether the frame
+	// and the keyboard belong to the channel or to the main thread; the two
+	// are independent on purpose, so a side question can be asked, parked, and
+	// returned to while the main turn keeps running.
+	side        *sideState
+	sideVisible bool
 }
 
 // pulseStar is the thinking spinner: a star that swells and shrinks in place

@@ -1784,6 +1784,16 @@ type AskScope struct {
 	// a model-selected check, bypasses the project shortlist: the user is the
 	// authority on how their own work is judged.
 	Acceptance []contract.Check
+
+	// Side marks a side-channel ask: a multi-turn conversation beside the main
+	// thread whose history is a fork-point snapshot. It narrows this ask on
+	// three axes — the prompt says the history is reference only, the tool face
+	// drops to a read-only subset (no task_submit, no task_budget, no mutation
+	// tools), and a classification that still lands on a task or plan is
+	// answered with a fixed note instead of being executed. None of the three is
+	// sufficient alone: the prompt is a hint the model may disobey, and the tool
+	// face only covers dispatch that goes through tools.
+	Side bool
 }
 
 // AskTurns is the backward-compatible session-aware entry point. Callers that
@@ -1898,8 +1908,14 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
 	}()
 
-	turns := make([]entry.Turn, 0, len(history)+1)
+	turns := make([]entry.Turn, 0, len(history)+2)
 	turns = append(turns, history...)
+	if scope.Side && len(history) > 0 {
+		// The replayed thread ends here. Without this marker the side ask's own
+		// question reads as the next turn of the main conversation, and the
+		// model continues that work instead of answering the question asked.
+		turns = append(turns, sideBoundaryTurn(effectiveLocale))
+	}
 	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
 
 	var classifyOpts []entry.ClassifyOption
@@ -1911,6 +1927,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	}
 	if scope.Mode != "" {
 		classifyOpts = append(classifyOpts, entry.WithRequestMode(scope.Mode))
+	}
+	if scope.Side {
+		classifyOpts = append(classifyOpts, entry.WithSideMode())
 	}
 	// The thread's roster goes into the prompt as well as into the task spec.
 	// The spec is what the executor enforces; the prompt is what keeps the
@@ -2101,12 +2120,19 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// KindTask directive.
 	var taskCapture taskDispatchCapture
 	if reg != nil {
-		reg = reg.Copy()
-		reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
-		// task_budget sits beside task_submit: the limit is derived (roster
-		// size or defaultTaskBudget), and this is how a model widens it for a
-		// fan-out the user described in prose instead of in the team picker.
-		reg.Register(e.taskBudgetTool(budget, effectiveLocale))
+		if scope.Side {
+			// A side ask gets the read-only subset and neither dispatch tool:
+			// task_submit and task_budget exist to start and resize work, which
+			// is exactly what a side channel may not do.
+			reg = reg.Filter(sideToolAllowed)
+		} else {
+			reg = reg.Copy()
+			reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
+			// task_budget sits beside task_submit: the limit is derived (roster
+			// size or defaultTaskBudget), and this is how a model widens it for a
+			// fan-out the user described in prose instead of in the team picker.
+			reg.Register(e.taskBudgetTool(budget, effectiveLocale))
+		}
 	}
 
 rounds:
@@ -2182,6 +2208,15 @@ rounds:
 			}
 			return budgetAdvisory(&Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}), nil
 		case entry.KindTask:
+			if scope.Side {
+				// A side ask that still lands on a task stops here. The prompt
+				// asked it not to and the tool face has no dispatch, but the
+				// verdict comes from the model, not from either — a concrete
+				// request backed by a snapshot full of prior work classifies as
+				// a task often enough that leaving this to the prompt made /side
+				// a silent way to dispatch work the user believed was parked.
+				return &Result{Kind: "answer", Answer: sideRefusalNote(effectiveLocale), Thought: accumulatedReasoning.String()}, nil
+			}
 			if budget.exhausted() {
 				// Refuse before submitTask: the budget limits actual task
 				// execution, not merely how many outcomes are replayed. The
@@ -2238,6 +2273,11 @@ rounds:
 				entry.Turn{Role: "user", Content: taskObservation(res, effectiveLocale)},
 			)
 		case entry.KindPlan:
+			if scope.Side {
+				// Same rule as KindTask: a plan is dispatch in stages, and a
+				// side channel dispatches nothing.
+				return &Result{Kind: "answer", Answer: sideRefusalNote(effectiveLocale), Thought: accumulatedReasoning.String()}, nil
+			}
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
 			return e.startClassifiedPlan(ctx, out.Plan, scope, authorize, cb)
 		case entry.KindToolCall:
