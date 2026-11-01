@@ -120,6 +120,24 @@ func TestMigrateLegacyConvosImportsAndArchives(t *testing.T) {
 	}
 }
 
+// TestMigrateLegacyConvosLeavesTheRosterAlone: <project>.team.json sits in the
+// same directory as the bare conversation, but it is a roster, not a
+// conversation. Archiving it would drop a team that never had a turn.
+func TestMigrateLegacyConvosLeavesTheRosterAlone(t *testing.T) {
+	r, st := newThreadRepl(t)
+	if err := r.saveBareTeam([]string{"codex"}); err != nil {
+		t.Fatal(err)
+	}
+	teamPath := bareTeamFileFor("")
+	r.migrateLegacyConvos()
+	if _, err := os.Stat(teamPath); err != nil {
+		t.Fatalf("bare roster was moved away: %v", err)
+	}
+	if list, _ := st.List(); len(list) != 0 {
+		t.Fatalf("team file imported as a session: %+v", list)
+	}
+}
+
 func TestPrepareConversationResumesNewestAndHonorsFlags(t *testing.T) {
 	r, st := newThreadRepl(t)
 	older, err := st.Create("older")

@@ -124,6 +124,11 @@ func (r *repl) migrateLegacyConvos() {
 		if e.IsDir() || !strings.HasSuffix(name, ".json") {
 			continue
 		}
+		if strings.HasSuffix(name, teamFileName) {
+			// A bare roster shares this directory and the .json suffix with
+			// the conversation; it is not one, and readTeamFile still owns it.
+			continue
+		}
 		path := filepath.Join(dir, name)
 		project := strings.TrimSuffix(name, ".json")
 		if project == "default" {
