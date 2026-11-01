@@ -106,11 +106,23 @@ type tuiModel struct {
 	// tui_mouse.go.
 	x10Payload int
 
-	stream      *askStream
-	exec        *commandExec
-	execGen     uint64
-	started     time.Time
-	chatHistory *chatHistory
+	stream  *askStream
+	exec    *commandExec
+	execGen uint64
+	started time.Time
+	// liveInputTokens/liveOutputTokens mirror the engine's ProgressUsage
+	// events: the ask's cumulative consumption while it runs. Zero before the
+	// first event and reset at every turn start.
+	liveInputTokens  int64
+	liveOutputTokens int64
+	// liveTokensEst is set while the output share of the total is a
+	// character-based estimate; the status row prefixes it with "~".
+	liveTokensEst bool
+	// lastActivity is the newest delta, reasoning or progress timestamp. The
+	// status row reports the quiet time from it, so a working turn reads
+	// differently from a stalled one.
+	lastActivity time.Time
+	chatHistory  *chatHistory
 
 	// team mirrors the active conversation's roster for the status row; the
 	// source of truth stays in the session (or the bare conversation's file)
@@ -230,14 +242,18 @@ type tuiModel struct {
 	wizardAlias     string // display name in the register
 	wizardEditAlias string // alias being edited ("" = adding a new entry)
 
-	form         []mfield // the single-screen editor's rows
-	formFocus    int      // focused row
-	formErr      string   // validation error shown under the form
-	formTesting  bool     // connectivity probe in flight
-	formTestErr  string   // non-empty once the probe failed
-	formFetching bool     // /models catalogue fetch in flight
-	formFetchErr string   // fetch failure shown under the form
-	formPicking  bool     // fetched-models picker overlay is up
+	form      []mfield // the single-screen editor's rows
+	formFocus int      // focused row
+	formErr   string   // validation error shown under the form
+	// panelNotice carries a one-off failure from a panel action (deleting the
+	// last model) into the panel title, so the error is visible instead of
+	// being dropped by a discarded error return.
+	panelNotice  string
+	formTesting  bool   // connectivity probe in flight
+	formTestErr  string // non-empty once the probe failed
+	formFetching bool   // /models catalogue fetch in flight
+	formFetchErr string // fetch failure shown under the form
+	formPicking  bool   // fetched-models picker overlay is up
 
 	// Panel state: the inline connectivity probe on the highlighted entry.
 	panelTesting       bool
@@ -287,6 +303,10 @@ type tuiModel struct {
 	thought          []string
 	thoughtDone      bool
 	expandThought    bool
+	// thoughtStarted is when the first reasoning chunk arrived. The folded
+	// thought line reports it so "thinking" carries a clock, the way a tool
+	// call carries its own elapsed time.
+	thoughtStarted time.Time
 	// expandHints unfolds the troubleshooting tail on committed error blocks
 	// (Ctrl+E). Like expandThought it is one flag for every block — AltScreen
 	// repaints the transcript, so a toggle redraws what is already committed.
@@ -420,8 +440,16 @@ func newTUIModel(r *repl) tuiModel {
 	sp.Style = th.accent
 
 	cHist := &chatHistory{}
-	if r.convoLen() > 0 {
-		turns := r.convoNow()
+	// The sitting's conversation is the bound thread (auto-resumed at launch or
+	// /resume-d); the bare conversation is the store-less fallback. Both replay
+	// through the same folding so a long thread opens on its tail.
+	var turns []entry.Turn
+	if sess := r.boundSession(); sess != nil && len(sess.Turns) > 0 {
+		turns = sessionTurnEntries(sess)
+	} else if r.convoLen() > 0 {
+		turns = r.convoNow()
+	}
+	if len(turns) > 0 {
 		const maxTurns = 10
 		if len(turns)/2 > maxTurns {
 			cHist.blocks = append(cHist.blocks, block{

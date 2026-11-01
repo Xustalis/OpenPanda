@@ -44,6 +44,35 @@ func TestNetworkGuardRejectsBadURL(t *testing.T) {
 	}
 }
 
+// TestCheckModelEndpointPlaintext covers the per-model opt-in: a relay on a
+// plain-http address is reachable only when the model itself says so, and the
+// waiver stays pinned to that endpoint's host — it is a statement about one
+// endpoint, not a licence to reach anything.
+func TestCheckModelEndpointPlaintext(t *testing.T) {
+	const relay = "http://106.53.40.245:8080"
+	if err := CheckModelEndpoint(relay, false); err == nil {
+		t.Fatal("plaintext endpoint without the opt-in must be rejected")
+	}
+	if err := CheckModelEndpoint(relay, true); err != nil {
+		t.Fatalf("plaintext endpoint with the opt-in should pass: %v", err)
+	}
+	// https is unaffected by the flag in either direction.
+	if err := CheckModelEndpoint("https://api.deepseek.com/anthropic", false); err != nil {
+		t.Fatalf("https endpoint should pass: %v", err)
+	}
+	// The opt-in never widens the host pin: the guard is built from this
+	// endpoint, so a different host is still refused.
+	g := NewNetworkGuard(EndpointHost(relay))
+	g.plaintext = true
+	if err := g.CheckURL("http://10.0.0.5:8080"); err == nil {
+		t.Fatal("the opt-in must not admit a different host")
+	}
+	// Loopback keeps needing no opt-in at all.
+	if err := CheckModelEndpoint("http://127.0.0.1:11434/v1", false); err != nil {
+		t.Fatalf("loopback endpoint should pass without the opt-in: %v", err)
+	}
+}
+
 func TestEndpointHost(t *testing.T) {
 	cases := map[string]string{
 		"https://api.deepseek.com/anthropic": "api.deepseek.com",

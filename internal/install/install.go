@@ -411,6 +411,7 @@ func distributionEntries(prefix string) []string {
 		"capabilities.example-desktop.yaml",
 		"capabilities.example-edge.yaml",
 		"LICENSE",
+		"LICENSING.md",
 		"README.md",
 	} {
 		if _, err := os.Stat(filepath.Join(prefix, name)); err == nil {
@@ -689,6 +690,12 @@ func BackupZip(dest string, targets []Target) (int, error) {
 				return fmt.Errorf("walk %s: %w", p, err)
 			}
 			if d.IsDir() {
+				return nil
+			}
+			// Pre-write config snapshots are restore aids derived from
+			// config.yaml, not state of their own — archiving them would make
+			// an uninstall backup carry a dozen stale copies of the same file.
+			if strings.Contains(d.Name(), config.ConfigSnapshotMark) {
 				return nil
 			}
 			rel, err := filepath.Rel(t.Path, p)

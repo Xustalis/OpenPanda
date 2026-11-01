@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useMemo, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, ApiError, isTaskStalled, type ApprovalScope, type NodeInfo, type Task } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender, useTraceForTask, useVisibleInterval } from '../hooks'
 import { t } from '../i18n'
 import { isNodeConnected } from '../format/node-status'
 import { ScopeSelect } from '../components/scope-select'
+import { Select, type SelectOption } from '../components/select'
 import { StateBadge } from '../components/state-badge'
 import { ErrorState } from '../components/page'
 import { Icon } from '../components/icons'
 import { confirmDialog } from '../components/confirm'
+import { useModalFocus } from '../components/modal-focus'
+import { ContextMenu, type ContextMenuItem } from '../components/context-menu'
 import { toast, toastError } from '../components/toast'
 import { fmtElapsed, isActiveState, latestActivity } from '../components/task-activity'
+import { PlansView } from './plans'
 
 // The queue is a kanban board (design §11.2): the user never navigates a task
 // tree — they see what is waiting, what is running, what needs their approval,
@@ -57,48 +61,116 @@ function sortTasks(tasks: Task[]): Task[] {
 }
 
 export function QueueView({
-  head = true,
+  mode = 'board',
+  onModeChange,
   focusReview,
   project,
   onOpen,
   onOpenSession,
+  onNewChat,
 }: {
-  /** Paint the page title/subtitle. False when 队列·任务·项目 hosts the board: the
-   *  merged page owns the heading, and two titles for one board read as a
-   *  duplicate. Everything below the heading is untouched either way. */
-  head?: boolean
+  /** Plans are a lens on this same scoped task list, not another page. */
+  mode?: 'board' | 'plans'
+  onModeChange?(mode: 'board' | 'plans'): void
   /** Deep-link filter (#/control?project=x) — seeds the board's project
    *  filter so a link from a project card lands on that project's work. */
   project?: string | null
   focusReview?: boolean
   onOpen(id: string): void
   onOpenSession(id: string): void
+  onNewChat(project: string | null): void
 }) {
   useLocaleRerender()
   const change = useChangeSignal()
   const [refresh, setRefresh] = useState(0)
   const [projectFilter, setProjectFilter] = useState(project ?? '')
+  // Device filter: '' = every origin, 'local' = this machine, 'unknown' =
+  // rows with no recorded origin, otherwise an origin node id (chain[0]).
+  const [deviceFilter, setDeviceFilter] = useState('')
   // Re-seed when the route's project param changes — the view stays mounted
   // across hash changes, so the prop is the source of truth for deep links.
   useEffect(() => {
     if (project != null) setProjectFilter(project)
   }, [project])
+  // The sidebar badge jumps here in focus-review mode. A device filter left
+  // over from an earlier visit would hide every row while the badge still
+  // counts > 0, so the board would open empty.
+  useEffect(() => {
+    if (focusReview) setDeviceFilter('')
+  }, [focusReview])
   const bump = () => setRefresh((v) => v + 1)
   // A stalled task emits no SSE event — nothing changes — so the badge can
   // only appear on a local clock tick.
   const [, setStallTick] = useState(0)
   useVisibleInterval(() => setStallTick((v) => v + 1), 30_000)
 
-  const { data: tasks, error } = useAsync(
+  const { data: allTasks, error } = useAsync(
     () => api.tasks({ project: projectFilter || undefined }),
     [projectFilter],
     change + refresh,
   )
 
+  // The fleet list maps an origin id to its display name and VM marker for
+  // the device dropdown and the card chips. One fetch per mount — the board
+  // itself never pays for it — and a failure degrades to raw ids.
+  const { data: nodes } = useAsync<NodeInfo[]>(
+    () => api.nodes().catch(() => [] as NodeInfo[]),
+    [],
+  )
+  const nodeById = useMemo(() => {
+    const m = new Map<string, NodeInfo>()
+    for (const n of nodes ?? []) m.set(n.id, n)
+    return m
+  }, [nodes])
+  /** Origin id → display label: the configured node name is the part before
+   *  the last '@' in the runtime id, and VM-kind peers carry a marker — the
+   *  "which of these is a virtual machine" question the filter exists for. */
+  const deviceLabel = (id: string): string => {
+    const i = id.lastIndexOf('@')
+    const name = i > 0 ? id.slice(0, i) : id
+    return nodeById.get(id)?.node_kind === 'vm' ? `${name} · ${t('queue.device.vm')}` : name
+  }
+
+  // The device dimension applied on top of the server's project filter —
+  // client-side, because the board already holds every row and the census
+  // below must see the unfiltered set.
+  const tasks = useMemo(() => {
+    const list = allTasks ?? []
+    if (!deviceFilter) return list
+    if (deviceFilter === 'local') return list.filter((task) => task.origin_local)
+    if (deviceFilter === 'unknown')
+      return list.filter((task) => !task.origin_local && !task.origin_node)
+    return list.filter((task) => !task.origin_local && task.origin_node === deviceFilter)
+  }, [allTasks, deviceFilter])
+
+  // The composer must offer every project, including one with no tasks yet.
+  // Task rows only supplement this list for legacy nodes without a projects
+  // table; they are not the source of truth for what can be selected.
+  const { data: projectList } = useAsync(() => api.projects().catch(() => null), [])
   const projects = useMemo(() => {
-    const set = new Set((tasks ?? []).map((task) => task.project).filter(Boolean))
-    return [...set].sort()
-  }, [tasks])
+    const set = new Set(projectList?.projects ?? [])
+    for (const task of allTasks ?? []) {
+      if (task.project) set.add(task.project)
+    }
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [allTasks, projectList])
+
+  // Origin census for the dropdown: one bucket for this machine, one per
+  // foreign device — noisiest first, so the VM flooding the queue surfaces
+  // at the top of the list with its count in the label.
+  const devices = useMemo(() => {
+    let local = 0
+    const counts = new Map<string, number>()
+    for (const task of allTasks ?? []) {
+      if (task.origin_local) local++
+      else {
+        const key = task.origin_node ?? ''
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+    }
+    const remote = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    return { local, remote }
+  }, [allTasks])
 
   // Sub-agent map: parent_id → number of spawned children. A card that
   // fanned out shows the count; a child card shows the ↳ marker, so the
@@ -106,17 +178,18 @@ export function QueueView({
   // rendering children as indistinguishable plain tasks.
   const subagents = useMemo(() => {
     const m = new Map<string, number>()
-    for (const task of tasks ?? []) {
+    for (const task of tasks) {
       if (task.parent_id) m.set(task.parent_id, (m.get(task.parent_id) ?? 0) + 1)
     }
     return m
   }, [tasks])
 
   /** One-click board wipe: confirm first (it cancels running work), then
-   *  DELETE /api/tasks and refresh from server truth. */
+   *  DELETE /api/tasks and refresh from server truth. Gated on the unfiltered
+   *  set — a device filter must not hide the button that clears everything. */
   const [busyClear, setBusyClear] = useState(false)
   async function clearQueue() {
-    if (!tasks?.length || busyClear) return
+    if (!allTasks?.length || busyClear) return
     const ok = await confirmDialog({
       title: t('queue.clearConfirmTitle'),
       message: t('queue.clearConfirmMsg'),
@@ -136,10 +209,62 @@ export function QueueView({
     bump()
   }
 
+  // A card's right-click menu. The board's corner control is the way into the
+  // conversation now, so the per-task delete — still the only way to drop a
+  // task that was queued by mistake — lives here, where a pointer user looks
+  // for a row's less frequent actions. The menu is rendered at the board, not
+  // inside the card: the card clips its children and lifts on hover, which
+  // would crop and drag a `position: fixed` panel with it.
+  const [menu, setMenu] = useState<{ task: Task; x: number; y: number } | null>(null)
+
+  /** Delete one task (and its subtree). The server refuses a moving task with
+   *  409 — surfaced as the localized "cancel first" hint, not raw JSON. */
+  async function removeTask(task: Task) {
+    const ok = await confirmDialog({
+      title: t('queue.deleteConfirmTitle'),
+      message: t('queue.deleteConfirmMsg'),
+      confirmLabel: t('queue.deleteTask'),
+      danger: true,
+    })
+    if (!ok) return
+    try {
+      await api.deleteTask(task.id)
+      bump()
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        toast(t('queue.deleteActive'), 'error')
+        return
+      }
+      toastError(e)
+    }
+  }
+
+  function cardMenuItems(task: Task): ContextMenuItem[] {
+    const items: ContextMenuItem[] = []
+    if (task.session_id) {
+      items.push({
+        id: 'session',
+        label: t('queue.openSession'),
+        icon: 'message',
+        onSelect: () => onOpenSession(task.session_id!),
+      })
+    }
+    if (DELETABLE_STATES.has(task.state)) {
+      items.push({
+        id: 'delete',
+        label: t('queue.deleteTask'),
+        icon: 'x',
+        danger: true,
+        onSelect: () => void removeTask(task),
+      })
+    }
+    return items
+  }
+
   if (error)
     return (
       <ErrorState
-        head={head}
+        head={false}
         title={t('nav.queue')}
         sub={t('queue.subtitle')}
         error={error}
@@ -149,7 +274,7 @@ export function QueueView({
 
   const byColumn = new Map<string, Task[]>()
   for (const col of COLUMNS) byColumn.set(col.key, [])
-  for (const task of tasks ?? []) {
+  for (const task of tasks) {
     for (const col of COLUMNS) {
       if (col.states.includes(task.state)) {
         byColumn.get(col.key)!.push(task)
@@ -164,23 +289,92 @@ export function QueueView({
   // parallel interface — the board otherwise only shows them scattered
   // across columns, which reads as "several tasks" rather than "N agents
   // running at once".
-  const running = (tasks ?? []).filter((task) => task.state === 'running')
+  const running = tasks.filter((task) => task.state === 'running')
+  const reviewCount = tasks.filter((task) => task.state === 'review').length
+  const plansFiltered = Boolean(projectFilter || deviceFilter)
+  const visiblePlanIds = plansFiltered
+    ? new Set(tasks.flatMap((task) => (task.plan_meta?.plan_id ? [task.plan_meta.plan_id] : [])))
+    : undefined
 
   return (
     <section class="queue-section">
-      {head && (
-        <>
-          <h1 class="page-title">{t('nav.queue')}</h1>
-          <p class="page-sub">{t('queue.subtitle')}</p>
-        </>
-      )}
-      <div class="queue-toolbar">
-        <NewTaskForm projects={projects} onCreated={bump} />
-        {(tasks?.length ?? 0) > 0 && (
-          <button class="btn danger queue-clear" disabled={busyClear} onClick={() => void clearQueue()}>
-            {t('queue.clear')}
+      {/* One quiet line over the board: the two scopes, the live counts, then
+          the page's actions. It replaces a command bar (lens switch + three
+          buttons) stacked over a boxed filter panel — two frames, a switch and
+          five controls between the page name and the first column. The lens
+          switch moved into the page head, the cross-surface routes became the
+          icon buttons they always were, and what is left is a caption, not a
+          deck. */}
+      <div class="queue-bar">
+        <div class="filters queue-filters">
+          <Select
+            ariaLabel={t('queue.filterProject')}
+            value={projectFilter}
+            options={[
+              { value: '', label: t('queue.allProjects') },
+              ...projects.map((p) => ({ value: p, label: p })),
+            ]}
+            onChange={setProjectFilter}
+          />
+          {(allTasks?.length ?? 0) > 0 && (
+            <Select
+              ariaLabel={t('queue.filterDevice')}
+              value={deviceFilter}
+              options={[
+                { value: '', label: t('queue.allDevices'), hint: String(allTasks?.length ?? 0) },
+                { value: 'local', label: t('queue.device.local'), hint: String(devices.local) },
+                ...devices.remote.map(([id, n]) => ({
+                  value: id || 'unknown',
+                  label: id ? deviceLabel(id) : t('queue.device.unknown'),
+                  hint: String(n),
+                })),
+              ]}
+              onChange={setDeviceFilter}
+            />
+          )}
+        </div>
+        <div class="queue-bar-end">
+          {/* Nothing on the board means nothing to count: an empty queue reads
+              "0 进行中 · 0 审核中" otherwise, which is a row of noise about the
+              absence of rows. */}
+          {(allTasks?.length ?? 0) > 0 && (
+            <div class="queue-census" aria-live="polite">
+              <span class="doing">{running.length} {t('queue.col.doing')}</span>
+              <span class={reviewCount > 0 ? 'review has-work' : 'review'}>
+                {reviewCount} {t('queue.col.review')}
+              </span>
+            </div>
+          )}
+          <button
+            type="button"
+            class="icon-btn queue-chat"
+            title={t('queue.chatHint')}
+            aria-label={t('sessions.new')}
+            onClick={() => onNewChat(projectFilter || null)}
+          >
+            <Icon name="square-pen" size={16} />
           </button>
-        )}
+          {mode === 'board' && (allTasks?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              class="icon-btn queue-clear"
+              title={t('queue.clear')}
+              aria-label={t('queue.clear')}
+              disabled={busyClear}
+              onClick={() => void clearQueue()}
+            >
+              <Icon name="trash" size={16} />
+            </button>
+          )}
+          <NewTaskForm
+            projects={projects}
+            defaultProject={projectFilter}
+            onCreated={() => {
+              bump()
+              if (mode === 'plans') onModeChange?.('board')
+            }}
+          />
+        </div>
       </div>
 
       {running.length > 0 && (
@@ -212,55 +406,81 @@ export function QueueView({
         </div>
       )}
 
-      <div class="filters">
-        <select
-          class="input"
-          aria-label={t('queue.filterProject')}
-          value={projectFilter}
-          onChange={(e) => setProjectFilter((e.target as HTMLSelectElement).value)}
-        >
-          <option value="">{t('queue.allProjects')}</option>
-          {projects.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {tasks === null ? (
-        <p class="dim">{t('common.loading')}</p>
+      {mode === 'plans' ? (
+        <PlansView head={false} planIds={visiblePlanIds} filtered={plansFiltered} />
       ) : (
-        // The board always renders its four columns — an empty board should
-        // still show the shape (todo → doing → review → done), not a blank
-        // page with a hint. In focus-review mode (#/control?review=1, reached
-        // via the nav badge) it collapses to the approval column alone.
-        <div class={`kanban${focusReview ? ' focus-review' : ''}`}>
-          {(focusReview ? COLUMNS.filter((c) => c.key === 'review') : COLUMNS).map((col) => (
-            <KanbanColumn
-              key={col.key}
-              colKey={col.key}
-              tasks={sortTasks(byColumn.get(col.key)!)}
-              subagents={subagents}
-              onOpen={onOpen}
-              onOpenSession={onOpenSession}
-              onMutated={bump}
-            />
-          ))}
-        </div>
+        <>
+          {/* A device bucket can be empty by definition (this machine submitted
+              nothing; everything on the board arrived from a peer). Say so
+              instead of leaving four blank columns to be misread as "loading". */}
+          {deviceFilter && allTasks !== null && tasks.length === 0 && (
+            <p class="dim queue-device-empty">{t('queue.device.none')}</p>
+          )}
+
+          {allTasks === null ? (
+            <p class="dim">{t('common.loading')}</p>
+          ) : (
+            // The board always renders its four columns — an empty board should
+            // still show the shape (todo → doing → review → done), not a blank
+            // page with a hint. In focus-review mode (#/control?review=1, reached
+            // via the nav badge) it collapses to the approval column alone.
+            <div class={`kanban${focusReview ? ' focus-review' : ''}`}>
+              {(focusReview ? COLUMNS.filter((c) => c.key === 'review') : COLUMNS).map((col) => (
+                <KanbanColumn
+                  key={col.key}
+                  colKey={col.key}
+                  tasks={sortTasks(byColumn.get(col.key)!)}
+                  subagents={subagents}
+                  deviceLabel={deviceLabel}
+                  onOpen={onOpen}
+                  onOpenSession={onOpenSession}
+                  onMutated={bump}
+                  onCardMenu={(task, x, y) => setMenu({ task, x, y })}
+                />
+              ))}
+            </div>
+          )}
+          {focusReview && (
+            <p class="dim queue-focus-note">
+              <a href="#/control">{t('queue.showBoard')}</a>
+            </p>
+          )}
+        </>
       )}
-      {focusReview && (
-        <p class="dim queue-focus-note">
-          <a href="#/control">{t('queue.showBoard')}</a>
-        </p>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          title={menu.task.title || menu.task.id}
+          sub={t(`state.${menu.task.state}`, menu.task.state)}
+          items={cardMenuItems(menu.task)}
+          onClose={() => setMenu(null)}
+        />
       )}
     </section>
   )
 }
 
-/** The board's "new task" form: title is the card, prompt doubles as the
- *  task intent and the linked session's first message. */
-function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated(): void }) {
+/** The board's "new task" composer: title is the card, prompt doubles as the
+ *  task intent and the linked session's first message.
+ *
+ *  It opens as a modal, not as a card inside the header row. Inline, a
+ *  four-field form claimed the full width of the toolbar and pushed the four
+ *  columns down the page every time someone reached for "new task" — the board
+ *  reflowed mid-scan for a form that is not part of the board. As a dialog the
+ *  trigger stays one button on the header line and the form floats over the
+ *  board, with the console's usual modal contract: focus lands in the title
+ *  field, Tab stays inside, Esc / backdrop / ✕ dismiss without losing the
+ *  draft. */
+function NewTaskForm({
+  projects,
+  defaultProject,
+  onCreated,
+}: {
+  projects: string[]
+  defaultProject: string
+  onCreated(): void
+}) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [prompt, setPrompt] = useState('')
@@ -285,6 +505,40 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
     () => (open ? api.nodes().catch(() => [] as NodeInfo[]) : Promise.resolve([])),
     [open],
   )
+  const box = useRef<HTMLFormElement>(null)
+  const titleInput = useRef<HTMLInputElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const wasOpen = useRef(false)
+  // Tab stays inside the dialog while it is open.
+  useModalFocus(box, open)
+  // …but the trap lands on the ✕ first. A create form starts at the title:
+  // the one field the submit button is gated on.
+  useEffect(() => {
+    if (open) titleInput.current?.focus()
+  }, [open])
+  // The trap also promises to hand focus back to the opener, and cannot here:
+  // the trigger is swapped out for the dialog, so the element it captured is
+  // detached by the time the dialog closes. Remember the round trip and focus
+  // the re-mounted trigger ourselves.
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true
+      return
+    }
+    if (!wasOpen.current) return
+    wasOpen.current = false
+    trigger.current?.focus()
+  }, [open])
+
+  /** Dismiss without submitting. A draft survives — an accidental Esc must not
+   *  cost the paragraph the user just typed — but a create already in flight
+   *  stays put: closing then would report "nothing happened" for a task that
+   *  is being created. */
+  function close() {
+    if (busy) return
+    setError('')
+    setOpen(false)
+  }
 
   async function submit(e: Event) {
     e.preventDefault()
@@ -334,17 +588,75 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
 
   if (!open) {
     return (
-      <button class="btn primary queue-new" onClick={() => setOpen(true)}>
-        + {t('queue.new')}
+      <button
+        ref={trigger}
+        class="btn primary queue-new"
+        onClick={() => {
+          // A fresh draft inherits the board scope; an existing draft keeps
+          // the project the user explicitly picked before dismissing it.
+          if (!title.trim() && !prompt.trim()) setProject(defaultProject)
+          setOpen(true)
+        }}
+      >
+        <Icon name="plus" size={14} />
+        {t('queue.new')}
       </button>
     )
   }
+  // The two lane modes describe a project's own tree, so they only exist once
+  // one is chosen — the same condition the `<option>`s carried.
+  const parallelOptions: SelectOption[] = [
+    { value: 'default', label: t('queue.parallel.default') },
+    ...(project
+      ? [
+          { value: 'paths', label: t('queue.parallel.paths') },
+          { value: 'isolate', label: t('queue.parallel.isolate') },
+        ]
+      : []),
+    { value: 'workdir', label: t('queue.parallel.workdir') },
+  ]
   return (
-    <form class="card queue-form" onSubmit={submit}>
-      <div class="field-row">
+    <div
+      class="modal-backdrop"
+      onClick={(e) => {
+        // Only a click on the backdrop itself dismisses: a drag that ends
+        // outside a field must not throw the form away.
+        if (e.target === e.currentTarget) close()
+      }}
+    >
+      <form
+        ref={box}
+        class="modal queue-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('queue.new')}
+        onSubmit={submit}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            close()
+          }
+        }}
+      >
+        <div class="queue-modal-head">
+          <h2 class="modal-title">{t('queue.new')}</h2>
+          <button
+            type="button"
+            class="btn-icon"
+            onClick={close}
+            title={t('common.close')}
+            aria-label={t('common.close')}
+          >
+            <Icon name="x" size={16} />
+          </button>
+        </div>
+        {/* The title gets its own line: it is the card's headline and the
+            only field submit is gated on, so it should not share a row with
+            three selects that all clamp their labels. */}
         <div class="field-group">
           <label for="nt-title">{t('queue.newTitle')}</label>
           <input
+            ref={titleInput}
             id="nt-title"
             class="input"
             type="text"
@@ -353,130 +665,120 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
             onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
           />
         </div>
-        <div class="field-group">
-          <label for="nt-priority">{t('queue.newPriority')}</label>
-          <select
-            id="nt-priority"
-            class="input"
-            value={priority}
-            onChange={(e) => setPriority((e.target as HTMLSelectElement).value as Task['priority'])}
-          >
-            {PRIO_CYCLE.map((p) => (
-              <option key={p} value={p}>
-                {t(`queue.priority.${p}`)}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div class="field-group">
-          <label for="nt-project">{t('queue.newProject')}</label>
-          <select
-            id="nt-project"
-            class="input"
-            value={project}
-            onChange={(e) => {
-              const next = (e.target as HTMLSelectElement).value
-              setProject(next)
-              // The lane modes describe the project's own tree, so clearing the
-              // project must not leave one selected: the server rejects it and
-              // the option is no longer on screen to explain why.
-              if (!next && (parallel === 'paths' || parallel === 'isolate')) setParallel('default')
-            }}
-          >
-            <option value="">{t('queue.allProjects')}</option>
-            {projects.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div class="field-group">
-          <label for="nt-node">{t('queue.newNode')}</label>
-          <select
-            id="nt-node"
-            class="input"
-            value={node}
-            onChange={(e) => setNode((e.target as HTMLSelectElement).value)}
-          >
-            <option value="">{t('queue.nodeAuto')}</option>
-            {(nodes ?? [])
-              .filter((n) => isNodeConnected(n.status))
-              .map((n) => (
-                <option key={n.id} value={n.id}>
-                  {n.name || n.id}
-                </option>
-              ))}
-          </select>
-        </div>
-      </div>
-      <div class="field-group">
-        <label for="nt-prompt">{t('queue.newPrompt')}</label>
-        <textarea
-          id="nt-prompt"
-          class="input"
-          rows={2}
-          value={prompt}
-          onInput={(e) => setPrompt((e.target as HTMLTextAreaElement).value)}
-        />
-      </div>
-      {/* A pinned directory needs no project, so the row shows even without
-          one — the project-scoped modes are the only options that require it. */}
-      <div class="field-row">
-        <div class="field-group">
-          <label for="nt-parallel">{t('queue.parallelMode')}</label>
-          <select
-            id="nt-parallel"
-            class="input"
-            value={parallel}
-            onChange={(e) => setParallel((e.target as HTMLSelectElement).value as typeof parallel)}
-          >
-            <option value="default">{t('queue.parallel.default')}</option>
-            {project && <option value="paths">{t('queue.parallel.paths')}</option>}
-            {project && <option value="isolate">{t('queue.parallel.isolate')}</option>}
-            <option value="workdir">{t('queue.parallel.workdir')}</option>
-          </select>
-        </div>
-        {parallel === 'paths' && project && (
+        <div class="field-row">
           <div class="field-group">
-            <label for="nt-paths">{t('queue.parallel.pathsLabel')}</label>
-            <input
-              id="nt-paths"
-              class="input"
-              type="text"
-              placeholder={t('queue.parallel.pathsPlaceholder')}
-              value={pathsText}
-              onInput={(e) => setPathsText((e.target as HTMLInputElement).value)}
+            <label for="nt-priority">{t('queue.newPriority')}</label>
+            <Select
+              id="nt-priority"
+              ariaLabel={t('queue.newPriority')}
+              value={priority ?? 'normal'}
+              options={PRIO_CYCLE.map((p) => ({ value: p, label: t(`queue.priority.${p}`) }))}
+              onChange={(v) => setPriority(v as Task['priority'])}
             />
           </div>
-        )}
-        {parallel === 'workdir' && (
           <div class="field-group">
-            <label for="nt-workdir">{t('queue.parallel.workdirLabel')}</label>
-            <input
-              id="nt-workdir"
-              class="input"
-              type="text"
-              placeholder={t('queue.parallel.workdirPlaceholder')}
-              value={workdirText}
-              onInput={(e) => setWorkdirText((e.target as HTMLInputElement).value)}
+            <label for="nt-project">{t('queue.newProject')}</label>
+            <Select
+              id="nt-project"
+              ariaLabel={t('queue.newProject')}
+              value={project}
+              options={[
+                { value: '', label: t('queue.allProjects') },
+                ...projects.map((p) => ({ value: p, label: p })),
+              ]}
+              onChange={(next) => {
+                setProject(next)
+                // The lane modes describe the project's own tree, so clearing
+                // the project must not leave one selected: the server rejects
+                // it and the option is no longer on screen to explain why.
+                if (!next && (parallel === 'paths' || parallel === 'isolate')) setParallel('default')
+              }}
             />
           </div>
-        )}
-      </div>
-      {parallel === 'workdir' && (
-        <p class="hint">{t('queue.parallel.workdirHint')}</p>
-      )}
-      {error && <p class="gate-error">{error}</p>}
-      <div class="settings-actions">
-        <button class="btn primary" type="submit" disabled={busy || !title.trim()}>
-          {busy ? t('queue.creating') : t('queue.create')}
-        </button>
-        <button class="btn" type="button" onClick={() => setOpen(false)}>
-          {t('common.cancel')}
-        </button>
-      </div>
-    </form>
+          <div class="field-group">
+            <label for="nt-node">{t('queue.newNode')}</label>
+            <Select
+              id="nt-node"
+              ariaLabel={t('queue.newNode')}
+              value={node}
+              options={[
+                { value: '', label: t('queue.nodeAuto') },
+                ...(nodes ?? [])
+                  .filter((n) => isNodeConnected(n.status))
+                  .map((n) => ({
+                    value: n.id,
+                    label: n.name || n.id,
+                    ...(n.is_local ? { hint: t('nodes.self') } : {}),
+                  })),
+              ]}
+              onChange={setNode}
+            />
+          </div>
+        </div>
+        <div class="field-group">
+          <label for="nt-prompt">{t('queue.newPrompt')}</label>
+          <textarea
+            id="nt-prompt"
+            class="input"
+            rows={3}
+            value={prompt}
+            onInput={(e) => setPrompt((e.target as HTMLTextAreaElement).value)}
+          />
+        </div>
+        {/* A pinned directory needs no project, so the row shows even without
+            one — the project-scoped modes are the only options that require it. */}
+        <div class="field-row">
+          <div class="field-group">
+            <label for="nt-parallel">{t('queue.parallelMode')}</label>
+            <Select
+              id="nt-parallel"
+              ariaLabel={t('queue.parallelMode')}
+              value={parallel}
+              options={parallelOptions}
+              onChange={(v) => setParallel(v as typeof parallel)}
+            />
+          </div>
+          {parallel === 'paths' && project && (
+            <div class="field-group">
+              <label for="nt-paths">{t('queue.parallel.pathsLabel')}</label>
+              <input
+                id="nt-paths"
+                class="input"
+                type="text"
+                placeholder={t('queue.parallel.pathsPlaceholder')}
+                value={pathsText}
+                onInput={(e) => setPathsText((e.target as HTMLInputElement).value)}
+              />
+            </div>
+          )}
+          {parallel === 'workdir' && (
+            <div class="field-group">
+              <label for="nt-workdir">{t('queue.parallel.workdirLabel')}</label>
+              <input
+                id="nt-workdir"
+                class="input"
+                type="text"
+                placeholder={t('queue.parallel.workdirPlaceholder')}
+                value={workdirText}
+                onInput={(e) => setWorkdirText((e.target as HTMLInputElement).value)}
+              />
+            </div>
+          )}
+        </div>
+        {parallel === 'workdir' && <p class="hint">{t('queue.parallel.workdirHint')}</p>}
+        {error && <p class="gate-error">{error}</p>}
+        {/* Cancel then create, the order every other dialog in the console
+            uses: the destructive/committing button sits at the far edge. */}
+        <div class="settings-actions">
+          <button class="btn" type="button" onClick={close} disabled={busy}>
+            {t('common.cancel')}
+          </button>
+          <button class="btn primary" type="submit" disabled={busy || !title.trim()}>
+            {busy ? t('queue.creating') : t('queue.create')}
+          </button>
+        </div>
+      </form>
+    </div>
   )
 }
 
@@ -492,16 +794,23 @@ function KanbanColumn({
   colKey,
   tasks,
   subagents,
+  deviceLabel,
   onOpen,
   onOpenSession,
   onMutated,
+  onCardMenu,
 }: {
   colKey: 'todo' | 'doing' | 'review' | 'done'
   tasks: Task[]
   subagents: Map<string, number>
+  /** Origin id → display label, from the board's fleet list. */
+  deviceLabel(id: string): string
   onOpen(id: string): void
   onOpenSession(id: string): void
   onMutated(): void
+  /** Right-click on a card, at viewport coordinates — the board owns the menu
+   *  so it is not clipped by the card it belongs to. */
+  onCardMenu(task: Task, x: number, y: number): void
 }) {
   const [drag, setDrag] = useState<DragState | null>(null)
   const [expanded, setExpanded] = useState(false)
@@ -544,6 +853,7 @@ function KanbanColumn({
   return (
     <div
       class={`kanban-col col-${colKey}`}
+      data-col={colKey}
       data-testid={`kanban-${colKey}`}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
@@ -572,9 +882,11 @@ function KanbanColumn({
             index={i}
             childCount={subagents.get(task.id) ?? 0}
             dropBefore={drag != null && drag.dragID !== task.id && drag.overIndex === i}
+            deviceLabel={deviceLabel}
             onOpen={onOpen}
             onOpenSession={onOpenSession}
             onMutated={onMutated}
+            onCardMenu={onCardMenu}
             onDragStart={(id) => setDrag({ dragID: id, overIndex: i })}
             onDragOver={(index) => setDrag((d) => (d ? { ...d, overIndex: index } : d))}
             onDragEnd={() => setDrag(null)}
@@ -608,9 +920,11 @@ function KanbanCard({
   index,
   childCount,
   dropBefore,
+  deviceLabel,
   onOpen,
   onOpenSession,
   onMutated,
+  onCardMenu,
   onDragStart,
   onDragOver,
   onDragEnd,
@@ -620,9 +934,12 @@ function KanbanCard({
   /** Number of spawned sub-agent children (0 = leaf task). */
   childCount: number
   dropBefore: boolean
+  /** Origin id → display label, from the board's fleet list. */
+  deviceLabel(id: string): string
   onOpen(id: string): void
   onOpenSession(id: string): void
   onMutated(): void
+  onCardMenu(task: Task, x: number, y: number): void
   onDragStart(id: string): void
   onDragOver(index: number): void
   onDragEnd(): void
@@ -655,43 +972,41 @@ function KanbanCard({
     void act(() => api.patchTask(task.id, next))
   }
 
-  /** Delete the card's task (and subtree). The server refuses a moving task
-   *  with 409 — surfaced as the localized "cancel first" hint, not raw JSON. */
-  async function remove() {
-    const ok = await confirmDialog({
-      title: t('queue.deleteConfirmTitle'),
-      message: t('queue.deleteConfirmMsg'),
-      confirmLabel: t('queue.deleteTask'),
-      danger: true,
-    })
-    if (!ok) return
-    try {
-      await api.deleteTask(task.id)
-      onMutated()
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        setError(t('queue.deleteActive'))
-        return
-      }
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }
-
   const isReview = task.state === 'review'
   const finished = ['done', 'failed', 'cancelled', 'expired'].includes(task.state)
-  const deletable = DELETABLE_STATES.has(task.state)
-  const open = () => (task.session_id ? onOpenSession(task.session_id) : onOpen(task.id))
+  // A card opens the task, never the chat behind it. The board answers "what is
+  // this node doing" — clicking through to a conversation answered a different
+  // question and left the reader scrolling a transcript to find out whether the
+  // run worked. The detail page owns that answer, and the conversation is one
+  // deliberate click further: the arrow in the card's corner, or 打开会话 on the
+  // detail page.
+  const open = () => onOpen(task.id)
   const elapsed = fmtElapsed(task.updated_at)
 
   return (
     <div
-      class={`kanban-card${finished ? ' finished' : ''}${dropBefore ? ' drop-before' : ''}${deletable ? ' has-del' : ''}`}
+      class={`kanban-card${finished ? ' finished' : ''}${dropBefore ? ' drop-before' : ''}${task.session_id ? ' has-go' : ''}`}
       data-state={task.state}
       role="button"
       tabIndex={0}
       draggable={!finished}
       onClick={open}
+      onContextMenu={(e) => {
+        // Delete (and the conversation, for a pointer user) live in the menu:
+        // the corner belongs to the arrow, so the row's rarer actions moved to
+        // the place a right-click already promises.
+        e.preventDefault()
+        onCardMenu(task, e.clientX, e.clientY)
+      }}
       onKeyDown={(e) => {
+        // The keyboard's context menu key (and Shift+F10) opens the same menu
+        // the pointer gets — delete must not become pointer-only.
+        if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+          e.preventDefault()
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          onCardMenu(task, r.left + Math.min(r.width, 120), r.top + 24)
+          return
+        }
         // The card doubles as a button for the keyboard; nested controls
         // (priority badge, approve/reject) keep their own keys, so only act
         // when the card itself is the event target.
@@ -736,20 +1051,6 @@ function KanbanCard({
           )}
           {task.title || task.id}
         </span>
-        {deletable && (
-          <button
-            class="kanban-del"
-            title={t('queue.deleteTask')}
-            aria-label={t('queue.deleteTask')}
-            disabled={busy}
-            onClick={(e) => {
-              e.stopPropagation()
-              void remove()
-            }}
-          >
-            ×
-          </button>
-        )}
         <StateBadge state={task.state} />
       </div>
       {/* The prompt behind the title — the TUI shows `intent:` as its own
@@ -772,6 +1073,19 @@ function KanbanCard({
         </button>
         {task.project && <span class="kanban-project">{task.project}</span>}
         {task.owner && <span class="kanban-owner">@{task.owner}</span>}
+        {/* Foreign origin: the device this task CAME FROM (chain[0]). Local
+            rows stay unmarked — the default reading of an unmarked card is
+            "mine" — so a board flooded by VM submissions shows exactly the
+            foreign chips that explain it. */}
+        {!task.origin_local && (
+          <span
+            class="kanban-owner kanban-origin"
+            title={task.origin_node ? `${t('queue.originHint')}: ${task.origin_node}` : t('queue.device.unknown')}
+          >
+            <Icon name="devices" size={11} />
+            {task.origin_node ? deviceLabel(task.origin_node) : t('queue.device.unknown')}
+          </span>
+        )}
         {(task.delegation_chain?.length ?? 0) > 0 && (
           <span
             class="kanban-owner"
@@ -783,11 +1097,6 @@ function KanbanCard({
         {childCount > 0 && (
           <span class="kanban-owner" title={t('queue.children', { n: String(childCount) })}>
             <Icon name="bot" size={11} /> {childCount}
-          </span>
-        )}
-        {task.session_id && (
-          <span class="kanban-session" title={t('queue.openSession')}>
-            <Icon name="message" size={12} />
           </span>
         )}
         {elapsed && <span>{t('time.ago', { d: elapsed })}</span>}
@@ -842,23 +1151,26 @@ function KanbanCard({
         </div>
       )}
       {error && <p class="gate-error kanban-error">{error}</p>}
-      {/* Per-card delete, pinned to the card's bottom-right corner. It used to
-          sit in the title row and fade in on hover; on a board where the only
-          way to get rid of a finished task is this glyph, hiding it until the
-          pointer found it made the card look inert. Always visible now, and
-          out of the title's way so a long title keeps its full width. */}
-      {deletable && (
+      {/* The card's edge, at half height: step into the conversation this task
+          is running in. It replaced the × that used to sit in the corner — on
+          a board whose cards are read to find out *what happened*, the
+          frequent move is "go look at the transcript", and the destructive one
+          now lives behind the card's right-click menu where it cannot be hit
+          by accident. Only a task that already has a session gets the arrow: a
+          queued row with no transcript yet would have nowhere to go, and a
+          control that does nothing is worse than no control. */}
+      {task.session_id && (
         <button
-          class="kanban-del"
-          title={t('queue.deleteTask')}
-          aria-label={t('queue.deleteTask')}
-          disabled={busy}
+          type="button"
+          class="kanban-go"
+          title={t('queue.openSession')}
+          aria-label={t('queue.openSession')}
           onClick={(e) => {
             e.stopPropagation()
-            void remove()
+            onOpenSession(task.session_id!)
           }}
         >
-          ×
+          <Icon name="arrow-right" size={14} />
         </button>
       )}
     </div>

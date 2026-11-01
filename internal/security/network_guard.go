@@ -17,6 +17,10 @@ import (
 // top; this guards the one host PANDA itself hands to the adapter.
 type NetworkGuard struct {
 	allowed map[string]bool
+	// plaintext waives the https requirement for a caller that has explicitly
+	// opted in (a model's own `allow_plaintext`). It never widens the
+	// allowlist: the host still has to be the one that was pinned.
+	plaintext bool
 }
 
 // NewNetworkGuard builds a guard allowing the given hostnames (bare or
@@ -50,8 +54,9 @@ func (g *NetworkGuard) CheckURL(rawurl string) error {
 	if err != nil {
 		return fmt.Errorf("network guard: parse endpoint: %w", err)
 	}
-	if u.Scheme != "https" && u.Hostname() != "localhost" && !isLoopback(u.Hostname()) {
-		return fmt.Errorf("network guard: model endpoint must be https (got %q)", u.Scheme)
+	if u.Scheme != "https" && u.Hostname() != "localhost" && !isLoopback(u.Hostname()) && !g.plaintext {
+		return fmt.Errorf("network guard: model endpoint must be https (got %q) — "+
+			"a plaintext endpoint needs allow_plaintext on that model", u.Scheme)
 	}
 	host := strings.ToLower(u.Host)
 	if g.allowed[host] || g.allowed[strings.ToLower(u.Hostname())] {
@@ -63,6 +68,16 @@ func (g *NetworkGuard) CheckURL(rawurl string) error {
 		return nil
 	}
 	return fmt.Errorf("network guard: host %q not in allowlist", u.Host)
+}
+
+// CheckModelEndpoint is the one call the model paths make: pin the guard to
+// this endpoint's own host and honour the model's plaintext opt-in. A model
+// that never opted in keeps the https rule, so the waiver has to be asked for
+// in the model's own config rather than inferred from the URL.
+func CheckModelEndpoint(rawurl string, allowPlaintext bool) error {
+	g := NewNetworkGuard(EndpointHost(rawurl))
+	g.plaintext = allowPlaintext
+	return g.CheckURL(rawurl)
 }
 
 // isLoopback reports whether host parses as a loopback IP — covering ::1 and

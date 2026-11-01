@@ -1546,11 +1546,30 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		promptLang := policy.RecommendedPromptLang()
 		outputLang := policy.RecommendedOutputLang()
 
+		// A task stamped remote at intake carries off-node intent: commander
+		// holds its agent run to the restricted tool face unless the origin's
+		// consent grant authorized it. The persisted flag is authoritative —
+		// the chain fallback only catches rows written before the flag
+		// existed; a peer can claim chain[0]=us but cannot unset remote.
+		//
+		// Resolved before the prompt is assembled: the self-command reference
+		// is withheld from a read-only run, so the builder needs the verdict,
+		// not just the trace and the adapter request do.
+		remoteOrigin := task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID)
+		restricted := remoteOrigin && !task.Authorized
+
+		// The node's own CLI surface is part of every round's prompt, so its
+		// bytes are reserved before the budget reaches buildAgentPrompt: the
+		// overflow retry rebuilds under a shrunken budget, and a section added
+		// afterwards would push the prompt back over the window it was just
+		// shrunk to fit.
+		selfSection := selfManagementSection(c, restricted, promptLang)
+
 		// assemblePrompt builds this round's prompt; a context-overflow retry
 		// rebuilds it under the shrunken overflowPromptBudget so every matched
 		// skill degrades to its index line.
 		assemblePrompt := func(promptBudget int) string {
-			p, used := buildAgentPrompt(c, fullIntent(), task.Project, task.Title, workDir, promptBudget, promptLang, outputLang)
+			p, used := buildAgentPrompt(c, fullIntent(), task.Project, task.Title, workDir, promptBudgetFor(promptBudget, len(selfSection)), promptLang, outputLang)
 			usedSkills = used
 			// §4.2 Sub-MainAgent protocol hint: only a task with depth budget
 			// left learns the marker format — a task at delegation.max_depth
@@ -1579,17 +1598,14 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if task.Isolate && task.Project != "" && !strings.Contains(task.Intent, "[isolated]") {
 				p += "\n\n[isolated] you work in a private copy of the project tree; changes merge back automatically when you finish — do not expect sibling edits to appear live."
 			}
+			// The node's own CLI surface. Last so it reads as a reference
+			// appendix: the task, the constraints and the matching protocol
+			// markers are what the agent acts on, the catalog is what it looks
+			// things up in.
+			p += selfSection
 			return p
 		}
 		prompt := assemblePrompt(0)
-
-		// A task stamped remote at intake carries off-node intent: commander
-		// holds its agent run to the restricted tool face unless the origin's
-		// consent grant authorized it. The persisted flag is authoritative —
-		// the chain fallback only catches rows written before the flag
-		// existed; a peer can claim chain[0]=us but cannot unset remote.
-		remoteOrigin := task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID)
-		restricted := remoteOrigin && !task.Authorized
 
 		// — Trace: exec_agent_start (orbit Step-3 "starting this stage on N").
 		// We report before Execute so the orbit paints the stage bar as
@@ -1836,9 +1852,13 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// The structured contract wins when it carries a question: the
 			// schema field is parsed truth, while the marker pass above
 			// still strips any protocol line the agent also printed.
-			if structured != nil && strings.TrimSpace(structured.Question) != "" {
+			if structured != nil && strings.TrimSpace(structured.Question) != "" &&
+				!isNoQuestionSentinel(structured.Question) {
 				q, ask = strings.TrimSpace(structured.Question), true
 			}
+			// Also remove a recognized no-question protocol line when the
+			// successful run continues to completion instead of parking.
+			res.Stdout = cleaned
 			// The schema's clarify field carries the bounded option set for
 			// schema-capable adapters (Claude Code among them). A malformed
 			// one is ignored: the free-text question still parks the task.
@@ -1852,7 +1872,6 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				}
 			}
 			if ask {
-				res.Stdout = cleaned
 				if beforeOK {
 					if after, serr := defense.SnapshotDir(workDir); serr == nil {
 						filesTruncated = after.Truncated()
@@ -2001,7 +2020,15 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if res.Agent != "" && res.Agent != plan.Agent {
 				breakerKey = "agent:" + res.Agent
 				c.audit(ctx, taskID, "agent:fallback", plan.Agent, "fallback", "primary unavailable, fell back to "+res.Agent)
-				if err := c.store.RecordEvent(ctx, taskID, EvAgentFallback, map[string]any{"from": plan.Agent, "to": res.Agent}); err != nil {
+				// The reason rides the event, not just the audit line: the
+				// thread prints one sentence for the swap, and "claude_code
+				// 未执行" without a cause is the same dead end as no sentence
+				// at all.
+				fallback := map[string]any{"from": plan.Agent, "to": res.Agent}
+				if res.FallbackReason != "" {
+					fallback["reason"] = res.FallbackReason
+				}
+				if err := c.store.RecordEvent(ctx, taskID, EvAgentFallback, fallback); err != nil {
 					c.logger.Warn("record agent fallback event", "task", taskID, "err", err)
 				}
 			}

@@ -444,7 +444,9 @@ function OrchChip(props: {
  *  all share: pressing a button opens that section in the panel, pressing it
  *  again closes it, pressing another swaps what the panel shows. The panel is
  *  the fold, so the sections are mounted unfolded (`bare`) and a section that
- *  has nothing to say gets no button at all. */
+ *  has nothing to say gets no button at all. The card opens with its first
+ *  section already in the panel — the trace, for any run that has one — so a
+ *  click on a tile lands on the run's route instead of five shut lids. */
 function OrchTask(props: {
   task: Task
   busy: boolean
@@ -458,10 +460,13 @@ function OrchTask(props: {
   const active = isActiveState(task.state)
   const review = task.state === 'review'
   const blocked = task.approval_disposition === 'needs_changed_input'
-  // Which button's section the shared panel is showing; null when every
-  // section is put away, which is how the card opens.
-  const [tab, setTab] = useState<OrchTabKey | null>(null)
+  // Which button's section the shared panel is showing. The card opens on the
+  // first section this task can fill — 执行链路 whenever there is one — because
+  // "what is this run doing" is the question that made the reader press the
+  // tile; a task with no trace opens on whatever it does have, and the pill
+  // above the panel still puts it away.
   const tabs = orchTabs(task)
+  const [tab, setTab] = useState<OrchTabKey | null>(() => tabs[0]?.key ?? null)
   // A section can disappear between two paints — a result arrives, the log is
   // emptied by a revert — and a panel left open on a section that no longer
   // exists would show a blank card with a pressed button above it.

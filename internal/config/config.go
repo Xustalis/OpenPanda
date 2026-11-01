@@ -21,7 +21,6 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
 	"github.com/Xustalis/OpenPanda/internal/trust"
-	"github.com/Xustalis/OpenPanda/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -271,12 +270,13 @@ type RoutingConfig struct {
 	// servers configured for the work directory are reachable. Widening the
 	// tool face is an explicit operator choice, never a default.
 	ToolsPolicy string `yaml:"tools_policy"`
-	// PandaTools gates the self-management surface agents get under the
-	// extended tools policy: the openpanda MCP server (panda mcp) injected
-	// into MCP-capable CLIs plus the prompt hint pointing shell-capable
-	// agents at the panda binary on PATH. Nil means enabled — the extended
-	// policy already opted into a wider tool face — and an explicit false
-	// keeps extended tools while closing the self-management path.
+	// PandaTools gates the self-management surface agents get: the openpanda
+	// MCP server (panda mcp) materialized for MCP-capable CLIs under the
+	// extended tools policy, plus the command reference pointing
+	// shell-capable agents at the panda binary on PATH. The reference rides
+	// under both policies — minimal's whitelist already includes Bash, so
+	// knowing the CLI exists grants nothing new — while the MCP server stays
+	// extended-only. Nil means enabled; an explicit false closes both paths.
 	PandaTools *bool `yaml:"panda_tools"`
 	// Reputation opts node scoring into a local track-record term
 	// (trust_zones §9): each executor's smoothed success rate out of this
@@ -304,8 +304,10 @@ func (r RoutingConfig) NormalizedToolsPolicy() string {
 }
 
 // NormalizedPandaTools reports whether the self-management tool surface is
-// enabled (routing.panda_tools, default true). The caller still gates it on
-// the extended tools policy — the flag is an opt-out, not an opt-in.
+// enabled (routing.panda_tools, default true). The MCP server still only
+// materializes under the extended tools policy; the prompt command reference
+// rides under either policy, because the minimal whitelist already includes a
+// shell. The flag is an opt-out, not an opt-in.
 func (r RoutingConfig) NormalizedPandaTools() bool {
 	return r.PandaTools == nil || *r.PandaTools
 }
@@ -1207,6 +1209,13 @@ type ModelConfig struct {
 	MaxTokens     int    `yaml:"max_tokens"`               // completion cap; 0 = provider/entry default
 	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
 	NoAuth        bool   `yaml:"no_auth,omitempty"`        // true for local models that need no API key
+	// AllowPlaintext lets this one endpoint speak http. The network guard
+	// requires https so the API key never travels cleartext, and exempts only
+	// loopback; a relay reached over plain http on any other address has to
+	// say so here, per model, because the key is exactly what the rule is
+	// protecting. Spelled "plaintext" for the same reason
+	// network.allow_cleartext is: opting out should never read as a good idea.
+	AllowPlaintext bool `yaml:"allow_plaintext,omitempty"`
 	// Thinking selects the reasoning mode: "on" requests the provider's
 	// thinking/reasoning pass, "off" suppresses it, and "" or "auto" leaves
 	// the provider default (no thinking field is sent at all). The wire shape
@@ -2209,6 +2218,20 @@ func (c *Config) applyEnv() {
 // edit byte-for-byte; only the model mapping's values are replaced. Fields mc
 // leaves empty-string are dropped from the file so defaults apply again.
 func UpdateModelSection(path string, mc ModelConfig) error {
+	return updateModelSection(path, mc, false)
+}
+
+// ClearModelSection writes an empty `model:` section on purpose. It is the
+// delete-the-last-model path: the caller has removed every entry from the
+// registry and asked the active model to go with them. guardModelDowngrade
+// exists to refuse the *accidental* clear (a writer working from a stale
+// document); this is the deliberate one, so it skips that guard and nothing
+// else.
+func ClearModelSection(path string) error {
+	return updateModelSection(path, ModelConfig{}, true)
+}
+
+func updateModelSection(path string, mc ModelConfig, allowClear bool) error {
 	var root yaml.Node
 	data, err := os.ReadFile(path)
 	switch {
@@ -2229,7 +2252,7 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		return util.WriteFileAtomic(path, out, 0o600)
+		return writeConfigFile(path, out)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -2276,7 +2299,12 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
+	if allowClear {
+		err = writeConfigFileAllowingClear(path, out)
+	} else {
+		err = writeConfigFile(path, out)
+	}
+	if err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -2310,7 +2338,7 @@ func UpdateModelsSection(path string, models []ModelConfig) error {
 		if err != nil {
 			return err
 		}
-		return util.WriteFileAtomic(path, out, 0o600)
+		return writeConfigFile(path, out)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -2340,7 +2368,7 @@ func UpdateModelsSection(path string, models []ModelConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
+	if err := writeConfigFile(path, out); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -2394,7 +2422,7 @@ func UpdateMCPSection(path string, command string) error {
 		if err != nil {
 			return err
 		}
-		return util.WriteFileAtomic(path, out, 0o600)
+		return writeConfigFile(path, out)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -2418,7 +2446,7 @@ func UpdateMCPSection(path string, command string) error {
 	if err != nil {
 		return err
 	}
-	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
+	if err := writeConfigFile(path, out); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -2463,7 +2491,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		return util.WriteFileAtomic(path, out, 0o600)
+		return writeConfigFile(path, out)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -2490,7 +2518,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
+	if err := writeConfigFile(path, out); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)

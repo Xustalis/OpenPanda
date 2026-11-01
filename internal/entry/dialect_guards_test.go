@@ -109,7 +109,7 @@ func TestStreamRetryResetsShapeGuard(t *testing.T) {
 	var got []string
 	attempt := 0
 	resp, err := c.streamWithRetry(context.Background(),
-		func(onDelta, onReasoning func(string)) (Response, error) {
+		func(onDelta, onReasoning func(string), _ *usageEmitter) (Response, error) {
 			attempt++
 			if attempt == 1 {
 				onDelta(`{"status":"answer","text":"hi"}`)
@@ -118,7 +118,7 @@ func TestStreamRetryResetsShapeGuard(t *testing.T) {
 			onDelta("hello")
 			return Response{Text: "hello"}, nil
 		},
-		func(s string) { got = append(got, s) }, nil)
+		func(s string) { got = append(got, s) }, nil, nil)
 	if err != nil {
 		t.Fatalf("streamWithRetry: %v", err)
 	}

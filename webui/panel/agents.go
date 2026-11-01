@@ -78,6 +78,40 @@ func firstLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// Both sides of the merge keep their own cache layer, because they sit at
+// different granularities: the list cache (local) makes GET /api/agents cost
+// nothing while views poll it, and the version cache (upstream) stops one
+// CLI's --version from being re-run by every view that renders a roster.
+// listAgents below reads through the former; probeVersion backs the roster's
+// version column and the test button.
+//
+// agentListCacheTTL keeps the expensive CLI probes out of the panel's polling
+// path while still noticing an install or removal promptly. A settings-page
+// refresh bypasses the TTL explicitly.
+const agentListCacheTTL = time.Minute
+
+// agentListCache serializes the slow probe and shares its result with every
+// concurrent reader. Holding the lock through the probe is intentional: it is
+// also the single-flight mechanism, so a cold cache cannot start one CLI queue
+// per open view. Entries are immutable after publication.
+type agentListCache struct {
+	mu      sync.Mutex
+	entries []agentJSON
+	expires time.Time
+}
+
+func (c *agentListCache) get(force bool, probe func() []agentJSON) []agentJSON {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !force && c.entries != nil && time.Now().Before(c.expires) {
+		return c.entries
+	}
+	entries := probe()
+	c.entries = entries
+	c.expires = time.Now().Add(agentListCacheTTL)
+	return entries
+}
+
 // versionTTL bounds how stale a cached version string may be. Long enough that
 // opening the console repeatedly costs one probe, short enough that an upgrade
 // shows up without a restart — and the explicit test button always bypasses it.
@@ -144,11 +178,15 @@ func probeVersion(path string, force bool) (string, error) {
 // saturate the disk and blow through the 5s per-probe timeout. One at a time
 // is the faster queue here, and the card opens on skeletons meanwhile.
 func (h *handler) listAgents(w http.ResponseWriter, r *http.Request) {
-	known := agents.Registry()
-	out := make([]agentJSON, 0, len(known))
-	for _, k := range known {
-		out = append(out, probeAgent(k))
-	}
+	force := r.URL.Query().Get("refresh") == "1"
+	out := h.agentList.get(force, func() []agentJSON {
+		known := agents.Registry()
+		entries := make([]agentJSON, 0, len(known))
+		for _, k := range known {
+			entries = append(entries, probeAgent(k))
+		}
+		return entries
+	})
 	writeJSON(w, out)
 }
 

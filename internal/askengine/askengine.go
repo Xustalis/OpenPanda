@@ -782,6 +782,13 @@ type Result struct {
 	Stdout    string
 	Stderr    string
 	ExitCode  int
+	// Dispatched names every task this ask enqueued, in dispatch order, when a
+	// single round fanned out several `task_submit` calls. The task fields
+	// above still describe the last one — the receipt this Result has always
+	// carried — so a surface that draws one card keeps working unchanged. A
+	// round that dispatched exactly one task leaves this empty: the receipt
+	// already says everything there is to say.
+	Dispatched []DispatchedTask
 	// Deferred marks a parked-for-delivery outcome: the approval was
 	// accepted into an outbox because the executor's link is down, so the
 	// correct rendering is "queued for delivery" with exit 0 — not a
@@ -881,6 +888,38 @@ type Result struct {
 	// one did ("session" or "project"), so surfaces can show the task ran on
 	// a standing answer rather than a fresh prompt.
 	ConsentSource string
+}
+
+// DispatchedTask is one row of a fan-out: a task this ask enqueued, named the
+// way the transcript names it. It carries only what a surface needs to draw a
+// receipt — the row itself is read back through the task API, which is where
+// state, traces and the employee's face live.
+type DispatchedTask struct {
+	TaskID    string `json:"task_id"`
+	TaskTitle string `json:"title,omitempty"`
+	TaskState string `json:"state,omitempty"`
+}
+
+// dispatchedBriefs names every task a round handed out, in dispatch order.
+//
+// The receipt the Result carries is the last dispatch only, because that is
+// what a one-card surface can draw. A batch — the model emitting several
+// `task_submit` calls in one round — is invisible from that single receipt:
+// the conversation shows one card while the board shows every row. Rows
+// without an id (a submission that failed before a row existed) are skipped,
+// and a batch of one returns nil so callers keep their old single-card path.
+func dispatchedBriefs(ds []*Result) []DispatchedTask {
+	var out []DispatchedTask
+	for _, d := range ds {
+		if d == nil || d.TaskID == "" {
+			continue
+		}
+		out = append(out, DispatchedTask{TaskID: d.TaskID, TaskTitle: d.TaskTitle, TaskState: d.TaskState})
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
 }
 
 // ApprovalRequest describes a tier-2 (irreversible) action awaiting the user's
@@ -1558,6 +1597,13 @@ const (
 	// material, not a lifecycle milestone: a task that runs for twenty
 	// minutes must show the work happening, not a frozen spinner.
 	ProgressAgentText ProgressKind = "agent_text"
+	// ProgressUsage reports the ask's cumulative token consumption while it
+	// runs: InputTokens/OutputTokens are the totals so far across every model
+	// call this ask made. Output may be a character-based estimate on
+	// dialects that report usage only at end-of-stream; the final event of a
+	// turn always carries the provider's real numbers. Surfaces render it next
+	// to the clock instead of waiting for the closing result line.
+	ProgressUsage ProgressKind = "usage"
 )
 
 // Progress is one structured progress event: the action, and the name of what
@@ -1590,6 +1636,13 @@ type Progress struct {
 	Delay      time.Duration
 	Status     int
 	Reason     string
+	// InputTokens/OutputTokens are the ask's cumulative token counts, valid
+	// when Kind == ProgressUsage. Estimated marks OutputTokens as a
+	// character-based estimate rather than the provider's own count: surfaces
+	// render it with a "~" so a live guess is never mistaken for the bill.
+	InputTokens  int64
+	OutputTokens int64
+	Estimated    bool
 }
 
 // roundNote phrases the loop position for the English status fallback; "" for
@@ -1611,6 +1664,13 @@ func (cb StreamCallbacks) progress(p Progress) {
 		return
 	}
 	if cb.OnStatus == nil {
+		return
+	}
+	// A usage counter has no one-line phrasing, and the text channel carries
+	// only milestones: a caller that wants the number binds OnProgress (the
+	// panel's SSE stream and the TUI do). Without this, every report became an
+	// empty status line on the --json stream.
+	if p.Kind == ProgressUsage {
 		return
 	}
 	cb.OnStatus(StatusText(p))
@@ -1780,6 +1840,111 @@ func (e *Engine) AskTurnsSession(ctx context.Context, history []entry.Turn, prom
 	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, Mode: mode, SessionID: sessionID, AmbientProject: true}, authorize, cb)
 }
 
+// usagePublishInterval bounds how often the ask republishes its running token
+// totals. Provider usage is already throttled inside entry; this gate covers
+// the character estimate, which changes on every delta.
+const usagePublishInterval = 200 * time.Millisecond
+
+// usageTracker aggregates one ask's token consumption for live display.
+//
+// Two sources feed it. The provider reports real counts through the streaming
+// call's usage observer, but only Anthropic-compatible endpoints report them
+// mid-stream; Chat Completions and Gemini often report once at the end. Streamed
+// answer bytes therefore feed a character estimate, so a surface always has a
+// number that moves. The estimate is deliberately crude (about three bytes per
+// token, which is close for CJK and high for English) and the end-of-turn
+// publish replaces it with the billed totals.
+type usageTracker struct {
+	report   func(Progress)
+	last     entry.Usage
+	total    entry.Usage
+	chars    int64
+	reported time.Time
+}
+
+// newUsageTracker starts from the client's cumulative count at the ask's
+// beginning. Provider snapshots carry everything the client has billed since
+// construction, so a zero baseline would fold every earlier ask in a
+// long-lived process into this turn's live figure.
+func newUsageTracker(report func(Progress), before entry.Usage) *usageTracker {
+	return &usageTracker{report: report, last: before}
+}
+
+// observe folds one provider usage snapshot in. The snapshot is the client's
+// cumulative count including the call in flight, so consecutive snapshots
+// differ by exactly the new tokens. A snapshot below the last one means a
+// fallback client took over and restarted its own counters; the step is
+// dropped and the baseline moves, rather than reporting negative usage.
+func (t *usageTracker) observe(u entry.Usage) {
+	if t == nil {
+		return
+	}
+	if u.Total() >= t.last.Total() {
+		d := u.Sub(t.last)
+		t.total.InputTokens += d.InputTokens
+		t.total.OutputTokens += d.OutputTokens
+	}
+	t.last = u
+	t.publish(false)
+}
+
+// addOutput counts streamed answer or reasoning bytes for the estimate used
+// before the provider reports real usage.
+func (t *usageTracker) addOutput(n int) {
+	if t == nil || n <= 0 {
+		return
+	}
+	t.chars += int64(n)
+	t.publish(false)
+}
+
+// publish sends the current totals at most once per interval. Output prefers
+// the provider's number and falls back to the estimate, so the figure does not
+// move backwards when real usage overtakes the estimate mid-stream.
+func (t *usageTracker) publish(force bool) {
+	if t == nil || t.report == nil {
+		return
+	}
+	out := t.total.OutputTokens
+	estimated := false
+	if est := t.chars / 3; est > out {
+		out = est
+		estimated = true
+	}
+	if t.total.InputTokens == 0 && out == 0 {
+		return
+	}
+	if !force && time.Since(t.reported) < usagePublishInterval {
+		return
+	}
+	t.reported = time.Now()
+	t.report(Progress{
+		Kind: ProgressUsage, InputTokens: t.total.InputTokens,
+		OutputTokens: out, Estimated: estimated,
+	})
+}
+
+// final publishes the billed totals at the end of the ask, replacing any
+// estimate. A nil Result (a failure before anything was billed) still flushes
+// whatever the tracker has, so the last number on screen matches the call that
+// was actually made.
+func (t *usageTracker) final(in, out int64) {
+	if t == nil || t.report == nil {
+		return
+	}
+	// A fallback client's billed total can be lower than what the tracker
+	// accumulated across both clients. The status line must not walk backwards
+	// at the moment the turn ends, so the larger total stands; the Result still
+	// carries the provider's own numbers for billing and the closing line.
+	if in+out >= t.total.Total() {
+		t.total = entry.Usage{InputTokens: in, OutputTokens: out}
+		// The billed numbers replace the estimate: a CJK answer estimates high
+		// by design, and the closing figure must not be the high one.
+		t.chars = 0
+	}
+	t.publish(true)
+}
+
 // AskTurnsScoped is the session-aware ask with request-scoped project/workspace.
 func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, prompt string, scope AskScope, authorize bool, cb StreamCallbacks) (res *Result, err error) {
 	workDir := scope.WorkDir
@@ -1850,6 +2015,24 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// delegations. The record survives the ask's context via WithoutCancel.
 	usageBefore := client.Usage()
 	askStart := time.Now()
+	// Live token accounting for the status line. Provider snapshots arrive
+	// through entry.WithStreamUsage on every streaming call below; streamed
+	// bytes cover dialects that report usage only at end-of-stream.
+	tracker := newUsageTracker(cb.progress, usageBefore)
+	if cb.OnDelta != nil {
+		onDelta := cb.OnDelta
+		cb.OnDelta = func(text string) {
+			tracker.addOutput(len(text))
+			onDelta(text)
+		}
+	}
+	if cb.OnReasoning != nil {
+		onReasoning := cb.OnReasoning
+		cb.OnReasoning = func(text string) {
+			tracker.addOutput(len(text))
+			onReasoning(text)
+		}
+	}
 	defer func() {
 		// Catch-all for model-call failures that escaped unwrapped (a raw
 		// statusError/retryableError reads as provider JSON soup to a user).
@@ -1867,6 +2050,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			res.Latency = time.Since(askStart)
 			res.Cost = client.EstimateCost(d.InputTokens, d.OutputTokens)
 			res.EntryModel = client.ModelName()
+			tracker.final(res.InputTokens, res.OutputTokens)
 			if fallbackUsed != "" && res.Note == "" {
 				loc, _ := e.localeNow()
 				res.Note = i18n.Tf(loc, "entry.note.fallback", "name", fallbackUsed)
@@ -1876,6 +2060,10 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			// conversation history and the panel, even if a future provider
 			// path forgets the per-parse removal.
 			res.Answer = entry.StripThinking(res.Answer)
+		} else {
+			// Nothing was billed (the ask failed before a call completed), but
+			// the estimate from streamed bytes is still the honest last state.
+			tracker.publish(true)
 		}
 		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
 	}()
@@ -1885,6 +2073,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
 
 	var classifyOpts []entry.ClassifyOption
+	// Live usage rides the classify options: the streaming entry point reads
+	// it, the non-streaming one ignores it.
+	classifyOpts = append(classifyOpts, entry.WithStreamUsage(tracker.observe))
 	if e.replyASCII {
 		classifyOpts = append(classifyOpts, entry.WithASCIIOnly())
 	}
@@ -1962,7 +2153,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 				}
 			}
 			if cb.OnDelta != nil || cb.OnReasoning != nil {
-				resp, rerr = client.StreamTurnsWithTools(ctx, fastSystem, turns, nil, wrapDelta, cb.OnReasoning)
+				resp, rerr = client.StreamTurnsWithTools(ctx, fastSystem, turns, nil, wrapDelta, cb.OnReasoning, entry.WithUsageObserver(tracker.observe))
 			} else {
 				resp, rerr = client.CompleteTurnsWithTools(ctx, fastSystem, turns, nil)
 			}
@@ -2402,6 +2593,7 @@ rounds:
 				}
 			}
 			if queuedReceipt != nil {
+				queuedReceipt.Dispatched = dispatchedBriefs(dispatched)
 				if refusedThisRound == 0 {
 					return budgetAdvisory(queuedReceipt), nil
 				}
@@ -2670,11 +2862,10 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // the case the project exists for, since the point of a plan is not having to
 // visit three machines yourself.
 //
-// The plan's `authorize` flag is deliberately ignored: a stage never carries
-// tier-2 consent (core.StartPlan), so an irreversible stage parks in review for
-// a person instead of inheriting a blanket approval given to the whole sentence.
-// Consent for one shell command is not consent for a three-machine pipeline.
-func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, scope AskScope, _ bool, cb StreamCallbacks) (*Result, error) {
+// Ordinary asks retain per-stage consent. The authenticated hardware entry can
+// additionally carry explicit owner consent for this request's whole plan;
+// it still passes through the existing approval policy before rows are created.
+func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, scope AskScope, authorize bool, cb StreamCallbacks) (*Result, error) {
 	sched := e.sched.Load()
 	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
@@ -2687,6 +2878,14 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 		return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error())}, nil
 	}
 	q := core.DefaultQueueSpec()
+	if hardwarePlanConsent(ctx) && authorize {
+		project, _ := e.scopeProject(scope)
+		authorized, denied := e.approvalFor(scope.SessionID, project).gate(authorize)
+		if denied {
+			return &Result{Kind: "plan", PlanGoal: p.Goal, Denied: true, Stderr: ErrApprovalDenied.Error(), ExitCode: 1}, nil
+		}
+		q.Authorized = authorized
+	}
 	// No work dir, for the same reason `panda plan run` sets none: a path on this
 	// machine means nothing on the machine that runs the stage.
 	q.WorkDir = ""

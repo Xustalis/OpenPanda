@@ -62,10 +62,13 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) {
 		summary := h.taskSummary(ctx, t)
 		// Marker first (see evSessionSummary): a crash after the marker but
 		// before the turn loses one turn, a crash the other way round would
-		// duplicate it on restart.
+		// duplicate it on restart. The attempt id scopes the marker to the run
+		// it reported: a retried task rotates it, and the attempt that finally
+		// finished owes the thread a report of its own.
 		if err := h.store.RecordEvent(ctx, t.TaskID, evSessionSummary, map[string]string{
 			"session_id": t.SessionID,
 			"state":      t.State,
+			"attempt_id": t.AttemptID,
 		}); err != nil {
 			continue
 		}
@@ -101,12 +104,14 @@ func (h *handler) taskSummary(ctx context.Context, t core.Task) string {
 		reason = h.failureReason(ctx, t.TaskID)
 	}
 	agent := h.taskAgent(ctx, t)
-	return summaryText(t, reason, agent, h.substitutedFrom(ctx, t.TaskID, agent))
+	from, why := h.substitutedFrom(ctx, t.TaskID, agent)
+	return summaryText(t, reason, agent, from, why)
 }
 
 // substitutedFrom names the agent the plan had chosen when the executor could
-// not run it and the fallback chain finished the round instead. Empty when the
-// agent that answered is the one the plan picked.
+// not run it and the fallback chain finished the round instead, together with
+// the reason that attempt recorded. Both empty when the agent that answered is
+// the one the plan picked.
 //
 // The swap is deliberate (core/run.go annotateAgentSubstitution explains why
 // refusing the whole task serves nobody) and it is recorded twice: as an
@@ -115,30 +120,36 @@ func (h *handler) taskSummary(ctx context.Context, t core.Task) string {
 // "agent:claude_code" answered by deepseek_harness read as a silent
 // bait-and-switch: the line named one employee for the job and another for the
 // reply. This is where that sentence is read, so this is where it gets said.
-func (h *handler) substitutedFrom(ctx context.Context, taskID, agent string) string {
+//
+// The reason is half of the sentence. "claude_code 未执行" tells the reader the
+// reply is not the one they asked for but not whether to retry, reinstall or
+// raise a turn cap; the fallback event carries the diagnosis the failed attempt
+// reported, and it rides along when it is there.
+func (h *handler) substitutedFrom(ctx context.Context, taskID, agent string) (string, string) {
 	if agent == "" {
-		return ""
+		return "", ""
 	}
 	events, err := h.store.Events(ctx, taskID)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].Type != "agent_fallback" {
 			continue
 		}
 		var d struct {
-			From string `json:"from"`
-			To   string `json:"to"`
+			From   string `json:"from"`
+			To     string `json:"to"`
+			Reason string `json:"reason"`
 		}
 		if json.Unmarshal([]byte(events[i].DataJSON), &d) != nil {
 			continue
 		}
 		if d.From != "" && d.To == agent {
-			return d.From
+			return d.From, strings.TrimSpace(d.Reason)
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // summaryText is the pure composition of the report, in two parts and no
@@ -153,7 +164,7 @@ func (h *handler) substitutedFrom(ctx context.Context, taskID, agent string) str
 // into the model's own history spent the context window on its own past
 // prose. One conclusion paragraph is the summary — the sections above it are
 // the evidence behind it.
-func summaryText(t core.Task, reason, agent, substituted string) string {
+func summaryText(t core.Task, reason, agent, substituted, substitutedWhy string) string {
 	head := "[" + t.State + "] "
 	if agent != "" {
 		head += "@" + agent + " · "
@@ -165,7 +176,12 @@ func summaryText(t core.Task, reason, agent, substituted string) string {
 	// that actually spoke. The leading space is part of the Latin strings —
 	// CJK locales set the note in full-width brackets and need none.
 	if substituted != "" && agent != "" && substituted != agent {
-		head += i18n.Tf(t.GetUserLocale(), "web.session.agentSubstituted", "from", substituted, "to", agent)
+		if why := clipSubstitutionWhy(substitutedWhy); why != "" {
+			head += i18n.Tf(t.GetUserLocale(), "web.session.agentSubstitutedWhy",
+				"from", substituted, "to", agent, "why", why)
+		} else {
+			head += i18n.Tf(t.GetUserLocale(), "web.session.agentSubstituted", "from", substituted, "to", agent)
+		}
 	}
 
 	// A failed run's own reason is its conclusion: there is no adapter answer
@@ -179,6 +195,22 @@ func summaryText(t core.Task, reason, agent, substituted string) string {
 		return head
 	}
 	return head + "\n" + body
+}
+
+// maxSubstitutionWhy bounds the cause printed inside the swap note. The note
+// sits on the orchestration line, which is a caption — an adapter that failed
+// with a 400-character stack trace must not turn the line into a paragraph.
+// The full diagnosis stays where it belongs: the task's own event trace.
+const maxSubstitutionWhy = 80
+
+// clipSubstitutionWhy shortens a fallback reason for the caption, on runes so a
+// CJK diagnosis is not cut at a third of its length.
+func clipSubstitutionWhy(why string) string {
+	why = strings.TrimSpace(strings.ReplaceAll(why, "\n", " "))
+	if utf8.RuneCountInString(why) <= maxSubstitutionWhy {
+		return why
+	}
+	return strings.TrimSpace(string([]rune(why)[:maxSubstitutionWhy])) + "…"
 }
 
 // maxConclusionRunes bounds one employee's closing paragraph. A conclusion is
@@ -259,6 +291,14 @@ func clipConclusion(s string) string {
 // on its timeline instead (exec_agent_start) and leaves the payload without an
 // agent field, so the events are read as the fallback — otherwise the thread
 // says "done" without ever saying who did it.
+//
+// A task that never reached an adapter has neither: it failed at routing, or
+// was cancelled while queued. Its row still carries the pin it was submitted
+// with (`agent:deepseek_harness`), and that pin is the employee the user named
+// — so the report says the job belongs to them instead of falling through to
+// the headless form. Without this the one report a user is most likely to be
+// staring at ("why did deepseek_harness not answer?") was the only one spoken
+// by the panda, which reads as the console answering in the employee's place.
 func (h *handler) taskAgent(ctx context.Context, t core.Task) string {
 	// A result that travelled (delegated, remote) names the agent it was run
 	// by; that is the authoritative answer and needs no timeline read.
@@ -274,7 +314,7 @@ func (h *handler) taskAgent(ctx context.Context, t core.Task) string {
 	}
 	events, err := h.store.Events(ctx, t.TaskID)
 	if err != nil {
-		return ""
+		return pinnedAgent(t.Requires)
 	}
 	for i := len(events) - 1; i >= 0; i-- {
 		switch events[i].Type {
@@ -287,6 +327,21 @@ func (h *handler) taskAgent(ctx context.Context, t core.Task) string {
 		}
 		if json.Unmarshal([]byte(events[i].DataJSON), &d) == nil && strings.TrimSpace(d.Agent) != "" {
 			return strings.TrimSpace(d.Agent)
+		}
+	}
+	return pinnedAgent(t.Requires)
+}
+
+// pinnedAgent returns the employee named by an `agent:<name>` requirement, or
+// "" when the task named none. Only the prefix is stripped: the pin is stored
+// exactly as submitted, and the registry key is what the view resolves a face
+// and a display name from.
+func pinnedAgent(requires []string) string {
+	for _, req := range requires {
+		if name, ok := strings.CutPrefix(strings.TrimSpace(req), "agent:"); ok {
+			if name = strings.TrimSpace(name); name != "" {
+				return name
+			}
 		}
 	}
 	return ""

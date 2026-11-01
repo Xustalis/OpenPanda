@@ -77,7 +77,7 @@ func TestTUIClarifyMultiSelectAndSkip(t *testing.T) {
 	m = step(m, keyRune('2'))
 	m = step(m, tea.KeyMsg{Type: tea.KeyEnter})
 	// Skip the second question: no preference is a valid answer.
-	m = step(m, keyRune('s'))
+	step(m, keyRune('s'))
 	answers := <-reply
 	if len(answers[0].Selected) != 2 {
 		t.Fatalf("multi-select = %+v, want both labels", answers[0])

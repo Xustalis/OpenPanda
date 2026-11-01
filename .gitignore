@@ -23,6 +23,10 @@ __debug_bin*
 # Config (contains local node credentials / peers)
 config.yaml
 capabilities.yaml
+# Pre-write snapshots of config.yaml (ring of 20). They carry the same
+# secrets — shared_secret, panel_token, model API keys — so a `git add -A`
+# in a tree where `make dev` ran must not pick them up.
+config.yaml.snap-*
 
 # Secret material — never committed regardless of where it lands. Force-add
 # (-f) only for deliberate, non-secret fixtures.

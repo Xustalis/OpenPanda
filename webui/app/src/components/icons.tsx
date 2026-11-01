@@ -21,6 +21,7 @@ export type IconName =
   | 'alert'
   | 'arrow-down'
   | 'arrow-left'
+  | 'arrow-right'
   | 'arrow-up'
   | 'bell'
   | 'bell-off'
@@ -34,6 +35,8 @@ export type IconName =
   | 'cpu'
   | 'devices'
   | 'download'
+  | 'eye'
+  | 'eye-off'
   | 'folder'
   | 'folder-closed'
   | 'folder-open'
@@ -58,6 +61,7 @@ export type IconName =
   | 'pin-off'
   | 'plug'
   | 'plus'
+  | 'refresh'
   | 'route'
   | 'search'
   | 'send'
@@ -66,6 +70,7 @@ export type IconName =
   | 'square-pen'
   | 'trash'
   | 'users'
+  | 'wifi'
   | 'x'
 
 const paths: Record<IconName, JSX.Element> = {
@@ -89,6 +94,14 @@ const paths: Record<IconName, JSX.Element> = {
     <>
       <path d="m12 19-7-7 7-7" />
       <path d="M19 12H5" />
+    </>
+  ),
+  // Its mirror: "go on to the thing this row stands for" — a kanban card's
+  // corner uses it to step into the task's conversation.
+  'arrow-right': (
+    <>
+      <path d="M5 12h14" />
+      <path d="m12 5 7 7-7 7" />
     </>
   ),
   'arrow-up': (
@@ -176,6 +189,22 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
       <path d="m7 10 5 5 5-5" />
       <path d="M12 15V3" />
+    </>
+  ),
+  // The workspace's "removed from view" mark: a card hidden, not deleted —
+  // the same crossed-out eye a reader already knows from notifications.
+  'eye': (
+    <>
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  'eye-off': (
+    <>
+      <path d="M10.7 5.1A10 10 0 0 1 12 5c7 0 10 7 10 7a17.4 17.4 0 0 1-2.2 3.2" />
+      <path d="M6.6 6.6A17.6 17.6 0 0 0 2 12s3 7 10 7a10.9 10.9 0 0 0 5.4-1.4" />
+      <path d="M14.1 14.1a3 3 0 1 1-4.2-4.2" />
+      <path d="m2 2 20 20" />
     </>
   ),
   folder: (
@@ -376,6 +405,12 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M12 5v14" />
     </>
   ),
+  refresh: (
+    <>
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </>
+  ),
   // The header's orchestration button. Two endpoints joined by one path that
   // snakes between them: the glyph reads as a run — start, hand-off, arrive —
   // rather than as a shape (the old `workflow` was two boxes and an elbow, which
@@ -435,6 +470,17 @@ const paths: Record<IconName, JSX.Element> = {
       <circle cx="9" cy="7" r="4" />
       <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
       <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </>
+  ),
+  // Wi-Fi arcs rather than a Bluetooth rune: pairing here is LAN discovery,
+  // and the arcs read as "nearby network" at 14px where the rune needed
+  // explanation.
+  wifi: (
+    <>
+      <path d="M12 20h.01" />
+      <path d="M2 8.82a15 15 0 0 1 20 0" />
+      <path d="M5 12.86a10 10 0 0 1 14 0" />
+      <path d="M8.5 16.43a5 5 0 0 1 7 0" />
     </>
   ),
   x: (

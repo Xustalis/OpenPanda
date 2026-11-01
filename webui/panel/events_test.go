@@ -531,7 +531,7 @@ func TestAttachLastEventsCoversEveryBatch(t *testing.T) {
 			map[string]any{"note": "working"}); err != nil {
 			t.Fatalf("event %d: %v", i, err)
 		}
-		out = append(out, toTaskJSON(task))
+		out = append(out, h.toTaskJSON(task))
 	}
 	h.attachLastEvents(ctx, out)
 	for i := range out {

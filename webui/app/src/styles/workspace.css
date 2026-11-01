@@ -125,6 +125,74 @@
   background: var(--bg-hover);
 }
 
+/* 新增设备 sits to the left of the list toggle: same subject (the fleet), one
+   step earlier in the story — a list you can only read is a list you cannot
+   grow. Same ghost square, same pressed state as its neighbour. */
+.ws-connect-picker {
+  display: flex;
+}
+.ws-connect-toggle {
+  flex: none;
+}
+.ws-connect-toggle.on {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* The connect card hangs off the same corner as the fleet list and the
+   orchestration card — same 360px, same radius, same shadow — so opening it
+   does not resize the composer underneath. It scrolls itself: the add form
+   answers with an install guide, which can be taller than the popover. */
+.ws-connect {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: var(--sp-5);
+  z-index: 20;
+  width: min(360px, calc(100% - 40px));
+  max-height: min(72vh, 640px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 14px 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  animation: node-panel-in var(--dur-fast) var(--ease-enter);
+}
+/* The popover's own title row. The card on the 节点网络 page carries the same
+   title in a `.card-head`; here it needs a × because this card has no page
+   behind it to walk away to. */
+.connect-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.connect-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.connect-panel-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.connect-panel-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--text-tertiary);
+}
+.connect-panel-close:hover {
+  color: var(--text);
+}
+
 /* Map. One column, always: the rail floats over it rather than taking a lane
    out of it — a lane narrowed the canvas, and the ring layout re-centred every
    plate the moment a list opened. */
@@ -136,6 +204,8 @@
 }
 
 .ws-main {
+  /* The multi-select bar floats over the drawing; this is its frame. */
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -349,6 +419,51 @@
   flex-wrap: wrap;
   gap: 4px;
 }
+.ws-detail-chips .ability-tag.removable {
+  position: relative;
+  /* Reserve the × lane up front: appearing on hover must not move the chip
+     or the pointer target underneath the user's cursor. */
+  padding-right: 24px;
+}
+.ability-remove {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--text-tertiary);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.ability-tag.removable:hover .ability-remove,
+.ability-tag.removable:focus-within .ability-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+.ability-remove:hover {
+  color: var(--semantic-danger);
+  background: var(--semantic-danger-soft);
+}
+.ability-remove:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+@media (hover: none) {
+  .ws-detail-chips .ability-tag.removable {
+    padding-right: 24px;
+  }
+  .ability-remove {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
 /* — Agents: one block per declared agent, its capabilities as the second
    line. The panel's job is "what is on this machine", so a name alone is not
    an answer. */
@@ -537,13 +652,15 @@
   text-align: right;
 }
 
-/* The composer keeps the chat's dock, minus the transcript's 52px prompt-rail
-   lane: nothing hangs off this page's right edge but the orchestration card,
-   so the box centres under the map instead of inside a lane that is not
-   there — until that card opens, when the lane it reserves is added back. */
+/* The composer keeps the chat's dock verbatim — the same right lane, the same
+   centring — because the reader walks between 新对话, a thread and this page,
+   and a box that shifts 14px sideways (and rides 28px wider on a narrow
+   window) reads as three different composers instead of one control in three
+   places. The lane is empty here unless a header card opens; reserving it is
+   what lands the box on the same pixel the chat's does. */
 .ws-page .composer {
   flex: none;
-  padding-right: calc(var(--sp-6) + var(--panel-lane));
+  padding-right: calc(52px + var(--panel-lane));
   /* The lane is the same for both header cards, so swapping one for the other
      moves nothing; this transition only ever runs when a card opens or closes,
      and it is what makes the box slide rather than jump. */
@@ -745,10 +862,110 @@
   align-items: flex-start;
 }
 
+/* Only the selected machine's edges are mounted. The SVG lives in the same
+   scrolling frame as the cards, so no scroll handler or second coordinate
+   system is needed. */
+.ws-panel-links {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.ws-panel-link-group {
+  animation: ws-panel-link-in var(--dur-normal) var(--ease-enter);
+}
+/* The halo is the canvas colour, not a shadow: it wipes the dot paper out
+   from under the stroke so the line reads as drawn on top of the grid
+   instead of tangled in it. */
+.ws-panel-link-halo {
+  stroke: var(--bg);
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+.ws-panel-link {
+  stroke: var(--accent);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  opacity: 0.62;
+  transition:
+    opacity var(--dur-fast) var(--ease-standard),
+    stroke-width var(--dur-fast) var(--ease-standard);
+}
+.ws-panel-link.measured {
+  stroke: var(--text-tertiary);
+  stroke-dasharray: 5 5;
+}
+/* Ink dot with a canvas-coloured ring: the card border runs underneath, and a
+   plain dot on a hairline reads as a printing artefact. */
+.ws-panel-link-dot {
+  fill: var(--accent);
+  stroke: var(--bg);
+  stroke-width: 2;
+  opacity: 0.85;
+  transition: opacity var(--dur-fast) var(--ease-standard);
+}
+.ws-panel-link-group.measured .ws-panel-link-dot {
+  fill: var(--text-tertiary);
+}
+.ws-panel-link-group:hover .ws-panel-link {
+  opacity: 1;
+  stroke-width: 2;
+}
+.ws-panel-link-group:hover .ws-panel-link-dot {
+  opacity: 1;
+}
+/* An edge that has to pass over a third card is still drawn: the machines are
+   connected whether or not the map has room for the line. It is dimmed and
+   dashed so it reads as going *behind* the card, and its tooltip names the
+   blocker. Dropping it instead would say "not connected" — a worse lie than a
+   faint line, especially for a measured link that only exists locally. The
+   halo goes: an opaque wipe under a 22% stroke reads as a stripe cut out of
+   the dot paper. */
+.ws-panel-link-group.occluded .ws-panel-link {
+  opacity: 0.25;
+  stroke-dasharray: 3 4;
+}
+.ws-panel-link-group.occluded .ws-panel-link-halo {
+  opacity: 0;
+}
+.ws-panel-link-group.occluded .ws-panel-link-dot {
+  opacity: 0.5;
+}
+/* Hover still answers, but the line stays visibly behind the card. */
+.ws-panel-link-group.occluded:hover .ws-panel-link {
+  opacity: 0.6;
+  stroke-width: 1.4;
+}
+.ws-panel-link-group.occluded:hover .ws-panel-link-dot {
+  opacity: 0.75;
+}
+.ws-panel-link-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: help;
+}
+@keyframes ws-panel-link-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws-panel-link-group {
+    animation: none;
+  }
+}
+
 /* — A panel is a machine. The tint is the form factor, the same six classes
    the glyphs name; a peer that never said what it is stays neutral. */
 .ws-panel {
   position: relative;
+  z-index: 1;
   flex: 0 0 auto;
   max-width: 100%;
   padding: 12px 14px 14px;
@@ -812,6 +1029,17 @@
   background-color: var(--bg-raised);
   background-image: linear-gradient(var(--semantic-info-soft), var(--semantic-info-soft));
   border-color: var(--semantic-info-border);
+}
+/* Selection is a stronger statement than the machine-class tint. Keeping
+   these after the form rules also makes the two endpoints readable at a
+   glance instead of relying on the hairline alone. */
+.ws-panel.linked:not(.sel) {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.ws-panel.sel {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .ws-panel-hd {
@@ -996,6 +1224,335 @@
   height: 7px;
   border-radius: 50%;
   background: var(--text-disabled);
+}
+
+/* — Picked. The card's own edge turns accent, doubled by a hairline outside
+   it so a 86px tile reads as chosen from across the drawing without a badge
+   sitting on the artwork that identifies the agent.
+   The card also comes back to full strength. A quiet shelf is drawn at 74%
+   so idle agents recede, but that wash is exactly what made a chosen card
+   look hazy: the edge was crisp while the mark under it was not. The border
+   carries the pick; the artwork under it must stay sharp, so the fade is
+   lifted here rather than deepened. */
+.ws-tile[data-picked='1'] {
+  opacity: 1;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.ws-tile[data-picked='1']:hover {
+  opacity: 1;
+  border-color: var(--accent);
+}
+/* A connectivity test is in flight: the mark breathes rather than the card
+   jumping, so a batch of probes stays readable while it runs. */
+.ws-tile[data-testing='1'] .ws-tile-plate {
+  animation: ws-tile-probe 1.1s var(--ease) infinite;
+}
+@keyframes ws-tile-probe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws-tile[data-testing='1'] .ws-tile-plate {
+    animation: none;
+  }
+}
+
+/* The note left where a panel's tiles were folded away. It is also the way
+   back: "declares no agents" and "every agent hidden" are different facts and
+   must not draw the same sentence. */
+.ws-panel-restore {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+.ws-panel-restore:hover {
+  color: var(--text-secondary);
+}
+
+/* — The picks, totalled. A bar over the drawing rather than a row under it:
+   picking a card must not re-flow the fleet under the cursor. */
+.ws-selbar {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 6px 5px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+  animation: ws-selbar-in var(--dur-fast) var(--ease-enter);
+}
+@keyframes ws-selbar-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+/* A card hanging off the right edge reserves a lane (`--panel-lane`); the bar
+   centres on the drawing that is left, not on the pane, so the rail never
+   covers a control the reader just made appear. */
+.ws-page .ws-selbar {
+  left: calc(50% - var(--panel-lane) / 2);
+}
+.ws-selbar-count {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.ws-selbar-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 5px;
+  background: var(--border-soft);
+}
+.ws-selbar-act {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.ws-selbar-act:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.ws-selbar-act.danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.ws-selbar-act.quiet {
+  color: var(--text-tertiary);
+}
+
+/* — The pick, restated where the send happens. Same pill grammar as the
+   directory chip beside it: a fill, a hairline, and one small × to drop it.
+   The picks are a standing instruction, so they have to be readable at the
+   moment the instruction is given. */
+.ws-team-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.ws-team-chip > svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.ws-team-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-team-chip-clear {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.ws-team-chip-clear:hover {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+/* — The hidden shelf. A chip in the header, only while something is folded
+   away; the card under it is the way each card comes back. */
+.ws-hidden-picker {
+  position: relative;
+  flex: none;
+}
+.ws-hidden-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  padding: 0 7px;
+}
+.ws-hidden-toggle.on {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.ws-hidden-count {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  line-height: 1;
+}
+.ws-hidden-card {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 272px;
+  padding: 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+  animation: sp-panel-in var(--dur-fast) var(--ease-enter);
+}
+.ws-hidden-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 2px 4px 8px;
+}
+.ws-hidden-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.ws-hidden-hd .icon-btn {
+  margin-left: auto;
+}
+.ws-hidden-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ws-hidden-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+}
+.ws-hidden-row:hover {
+  background: var(--bg-hover);
+}
+.ws-hidden-plate {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+.ws-hidden-plate.plate-light {
+  background: #f4f4f1;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+.ws-hidden-plate.plate-dark {
+  background: #121316;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.ws-hidden-plate img {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+.ws-hidden-fb {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+.ws-hidden-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.ws-hidden-agent {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-hidden-dev {
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-hidden-act {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.ws-hidden-act:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.ws-hidden-all {
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.ws-hidden-all:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 /* — The pet. Same sprite as the composer's, drawn at 42px; the standing

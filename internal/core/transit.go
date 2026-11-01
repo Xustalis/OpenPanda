@@ -135,7 +135,11 @@ func (c *Core) sendViaTransit(ctx context.Context, id string, env bus.Envelope) 
 	if dest == "" {
 		dest = target
 	}
-	envJSON, err := json.Marshal(env)
+	// marshalEnvelope rather than json.Marshal: an artifact chunk's payload is
+	// already compact JSON, and the stock marshal would scan and copy its
+	// 1.4 MiB base64 body a second time. Transit is exactly where that cost
+	// lands, because chunks are the one bulk payload it carries.
+	envJSON, err := bus.MarshalEnvelope(env)
 	if err != nil {
 		return err
 	}

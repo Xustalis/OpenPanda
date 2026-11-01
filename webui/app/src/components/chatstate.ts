@@ -55,21 +55,37 @@ export interface TurnLike {
  *  turns as the pane does: fewer means the bookkeeping write failed and the
  *  wire copy is all there is. Display-only fields the transcript never keeps
  *  (chain-of-thought, the streamed result) survive because the spread is
- *  applied to the local message. */
-export function mergeTailTurn<T extends TurnLike>(msgs: T[], turns: TurnLike[]): T[] {
+ *  applied to the local message.
+ *
+ *  A round can also persist MORE turns than the wire delivered: when the model
+ *  fans out several `task_submit` calls, the engine enqueues every task but
+ *  hands back a single receipt, and the panel files one dispatch turn per
+ *  task. The pane holds one bubble for the round and the server holds one
+ *  turn per task, so the rows in between are inserted ahead of the local tail
+ *  — that is what used to leave one card in the thread over a board of three.
+ *  `adopt` builds those rows in the pane's own shape (they need render keys
+ *  the transcript has no notion of); without it, a surplus transcript is
+ *  ignored and only the tail is reconciled. */
+export function mergeTailTurn<T extends TurnLike>(
+  msgs: T[],
+  turns: TurnLike[],
+  adopt?: (turn: TurnLike) => T,
+): T[] {
   const last = turns[turns.length - 1]
   if (!last || last.role !== 'assistant') return msgs
   if (turns.length < msgs.length) return msgs
   const i = msgs.length - 1
   const m = msgs[i]
   if (!m || m.role !== 'assistant') return msgs
-  return [
-    ...msgs.slice(0, i),
-    {
-      ...m,
-      text: last.text || m.text,
-      kind: last.kind || m.kind,
-      ref: last.ref || m.ref,
-    },
-  ]
+  const tail = {
+    ...m,
+    text: last.text || m.text,
+    kind: last.kind || m.kind,
+    ref: last.ref || m.ref,
+  }
+  const extra = turns.length - msgs.length
+  if (extra === 0) return [...msgs.slice(0, i), tail]
+  if (!adopt) return [...msgs.slice(0, i), tail]
+  const inserted = turns.slice(turns.length - 1 - extra, turns.length - 1).map(adopt)
+  return [...msgs.slice(0, i), ...inserted, tail]
 }

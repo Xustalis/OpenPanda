@@ -60,10 +60,13 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
   }, [])
 
   // ⌘K / Ctrl+K anywhere, including from inside the chat composer — the whole
-  // point is that it works without first reaching for the mouse.
+  // point is that it works without first reaching for the mouse. A modal
+  // dialog (设置) is the exception: it lives in the top layer, so a palette
+  // raised behind it would be invisible while stealing the keyboard.
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        if (document.querySelector('dialog[open]')) return
         e.preventDefault()
         setOpen((v) => !v)
       }
@@ -194,7 +197,8 @@ export function buildCommands(onLogout: () => void): Command[] {
     'control:plans': 'control plans pipeline stages',
     'control:projects': 'control projects workspaces repos directories',
     workspace: 'workspace map topology devices graph network fleet wiring',
-    fleet: 'fleet nodes devices cluster hardware',
+    team: 'team people members collaborators',
+    memory: 'memory knowledge graph store brain dreams topics daily projects',
     settings: 'settings preferences config',
   }
   // The tabs 队列·任务·项目 absorbed still answer to their old names. The alias
@@ -230,7 +234,6 @@ export function buildCommands(onLogout: () => void): Command[] {
     { tab: 'policy', key: 'settings.policy', alias: 'policy security rules permissions' },
     { tab: 'agents', key: 'settings.group.agents', alias: 'agents subagents roles' },
     { tab: 'mcp', key: 'settings.mcp', alias: 'mcp tools servers integrations' },
-    { tab: 'memory', key: 'nav.memory', alias: 'memory knowledge graph store brain dreams topics daily projects' },
     { tab: 'skills', key: 'nav.skills', alias: 'skills capabilities plugins tools hub import' },
     { tab: 'system', key: 'nav.system', alias: 'system status health audit metrics telemetry' },
   ]

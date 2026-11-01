@@ -526,7 +526,7 @@ func (c *Client) sendGoogleStream(ctx context.Context, system string, turns []Tu
 
 // streamGoogle runs one streaming Gemini call, replaying once without the
 // thinkingConfig when the model rejects it before any chunk.
-func (c *Client) streamGoogle(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
+func (c *Client) streamGoogle(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string), em *usageEmitter) (Response, error) {
 	if c.noCredential() {
 		return Response{}, ErrNoKey
 	}
@@ -579,6 +579,12 @@ func (c *Client) streamGoogle(ctx context.Context, system string, turns []Turn, 
 		if err := acc.feed(&chunk, onDelta, onReasoning); err != nil {
 			return Response{}, err
 		}
+		// usageMetadata rides the chunks Gemini finishes a turn with; a
+		// provider that sends it on every chunk gets the throttle, not a
+		// redraw per chunk.
+		if chunk.UsageMetadata != nil {
+			em.emit(acc.usage(c), false)
+		}
 	}
 	if err := streamEnded(ctx, scanner.Err()); err != nil {
 		return Response{}, err
@@ -588,8 +594,18 @@ func (c *Client) streamGoogle(ctx context.Context, system string, turns []Turn, 
 			return Response{}, err
 		}
 	}
+	// Final usage report before addUsage: the accumulator's counts are still
+	// this attempt's own, so the observer sees the attempt's true total rather
+	// than a value that addUsage is about to fold twice into the client.
+	em.emit(acc.usage(c), true)
 	c.addUsage(acc.usageIn, acc.usageOut)
 	return acc.result(), nil
+}
+
+// usage is the client's cumulative token total including this attempt's
+// counts, which are folded into the client only once the stream succeeds.
+func (a *googleAccumulator) usage(c *Client) Usage {
+	return Usage{InputTokens: c.usageIn.Load() + a.usageIn, OutputTokens: c.usageOut.Load() + a.usageOut}
 }
 
 // feedGoogleJSON folds a non-SSE generateContent body into the accumulator: an

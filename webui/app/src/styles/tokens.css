@@ -21,6 +21,12 @@
   --bg-hover: #eaeaec;
   --bg-active: rgba(28, 28, 32, 0.08);
 
+  /* The chat header band. On paper it is the same white as the page (the title
+     and its tools are the only edge it needs); in dark it drops to the chrome
+     grey, one step under the page, so the bar caps the reading surface instead
+     of floating on it. */
+  --chat-head: var(--bg-raised);
+
   /* — Hairlines: neutral, so edges read engineered rather than warm. */
   --border: #d8d8dd;
   --border-soft: #eaeaee;
@@ -77,6 +83,11 @@
   --semantic-danger: #b8493b;
   --semantic-danger-soft: rgba(184, 73, 59, 0.1);
   --semantic-danger-border: rgba(184, 73, 59, 0.34);
+  /* Solid destructive surface: here the fill carries the warning, so the
+     label sits in white ink instead of the muted tone outlines use. */
+  --danger-solid: #b8493b;
+  --danger-solid-hover: #a13c30;
+  --danger-ink: #ffffff;
 
   /* — Radius: tight and precise. Large radii read friendly; small ones read
      engineered. Controls sit at sm, cards at md, sheets at lg. */
@@ -163,35 +174,43 @@
   --content-max: 860px;
 }
 
-/* Forced dark theme — Codex's neutrals: a near-black page, one step darker
-   chrome, greys that lift by lightness alone, and a white accent (a primary
-   action is a white block with a near-black label; emphasis is simply
-   brighter white). No warm cast, no brand hue in the interface. */
+/* Forced dark theme — a grey ramp, not a black one. The page sits at #1e1e1e:
+   near-black (#0d0d0d, where this started) read as a terminal rather than a
+   console, every hairline and 12px caption on it was guesswork, and the
+   mascot — black ears and limbs on a cream body — sank into the page until the
+   pet was a few specks. One step darker for the chrome that frames the work,
+   one step up for cards and the composer, one more for menus, and a well below
+   the page for insets. Greys lift by lightness alone, and the accent is white
+   (a primary action is a white block with a near-black label; emphasis is
+   simply brighter white). No warm cast, no brand hue in the interface. */
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #0d0d0d;
-  --bg-chrome: #080808;
-  --bg-raised: #171717;
-  --bg-overlay: #1f1f1f;
-  --bg-inset: #050505;
-  --bg-hover: #202020;
-  --bg-active: rgba(255, 255, 255, 0.09);
+  --bg: #1e1e1e;
+  --bg-chrome: #161616;
+  --bg-raised: #282828;
+  --bg-overlay: #303030;
+  --bg-inset: #181818;
+  --bg-hover: #303030;
+  --bg-active: rgba(255, 255, 255, 0.1);
+  /* The bar over the transcript takes the chrome grey: darker than the page it
+     caps, which is what makes the header read as the top edge of the window. */
+  --chat-head: var(--bg-chrome);
 
-  --border: #2a2a2a;
-  --border-soft: #1d1d1d;
-  --border-strong: #3d3d3d;
+  --border: #3b3b3b;
+  --border-soft: #2f2f2f;
+  --border-strong: #545454;
 
-  --text: #ececec;
-  --text-secondary: #a3a3a3;
-  --text-tertiary: #7a7a7a;
-  --text-disabled: #4d4d4d;
+  --text: #f2f2f2;
+  --text-secondary: #bfbfbf;
+  --text-tertiary: #9d9d9d;
+  --text-disabled: #6b6b6b;
 
   --brand: #5fd0a0;
   --brand-ink: #06231a;
   --accent: #ededed;
   --accent-strong: #ffffff;
-  --accent-ink: #0d0d0d;
+  --accent-ink: #1a1a1a;
   --accent-soft: rgba(255, 255, 255, 0.08);
   --accent-border: rgba(255, 255, 255, 0.3);
   --accent-1: #ededed;
@@ -220,6 +239,11 @@
   --semantic-danger: #ff7b72;
   --semantic-danger-soft: rgba(255, 123, 114, 0.12);
   --semantic-danger-border: rgba(255, 123, 114, 0.34);
+  /* Darker than `--semantic-danger` on purpose: a salmon fill would leave
+     white label ink unreadable at 13px. */
+  --danger-solid: #c9403a;
+  --danger-solid-hover: #d94943;
+  --danger-ink: #ffffff;
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.34), 0 1px 2px rgba(0, 0, 0, 0.2);
@@ -246,25 +270,26 @@
   :root:not([data-theme]) {
     color-scheme: dark;
 
-    --bg: #0d0d0d;
-    --bg-chrome: #080808;
-    --bg-raised: #171717;
-    --bg-overlay: #1f1f1f;
-    --bg-inset: #050505;
-    --bg-hover: #202020;
-    --bg-active: rgba(255, 255, 255, 0.09);
-    --border: #2a2a2a;
-    --border-soft: #1d1d1d;
-    --border-strong: #3d3d3d;
-    --text: #ececec;
-    --text-secondary: #a3a3a3;
-    --text-tertiary: #7a7a7a;
-    --text-disabled: #4d4d4d;
+    --bg: #1e1e1e;
+    --bg-chrome: #161616;
+    --bg-raised: #282828;
+    --bg-overlay: #303030;
+    --bg-inset: #181818;
+    --bg-hover: #303030;
+    --bg-active: rgba(255, 255, 255, 0.1);
+    --chat-head: var(--bg-chrome);
+    --border: #3b3b3b;
+    --border-soft: #2f2f2f;
+    --border-strong: #545454;
+    --text: #f2f2f2;
+    --text-secondary: #bfbfbf;
+    --text-tertiary: #9d9d9d;
+    --text-disabled: #6b6b6b;
     --brand: #5fd0a0;
     --brand-ink: #06231a;
     --accent: #ededed;
     --accent-strong: #ffffff;
-    --accent-ink: #0d0d0d;
+    --accent-ink: #1a1a1a;
     --accent-soft: rgba(255, 255, 255, 0.08);
     --accent-border: rgba(255, 255, 255, 0.3);
     --accent-1: #ededed;
@@ -291,6 +316,9 @@
     --semantic-danger: #ff7b72;
     --semantic-danger-soft: rgba(255, 123, 114, 0.12);
     --semantic-danger-border: rgba(255, 123, 114, 0.34);
+    --danger-solid: #c9403a;
+    --danger-solid-hover: #d94943;
+    --danger-ink: #ffffff;
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.34), 0 1px 2px rgba(0, 0, 0, 0.2);
     --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.22);

@@ -675,11 +675,11 @@ func TestClearTasks(t *testing.T) {
 // from, so it has to leave the wire bare of the adapter's file extension
 // ("claude_code", not "claude_code.py").
 func TestTaskJSONNamesTheRunningAdapter(t *testing.T) {
-	got := toTaskJSON(core.Task{TaskID: "t-1", AgentSessionAdapter: "claude_code.py"})
+	got := (&handler{}).toTaskJSON(core.Task{TaskID: "t-1", AgentSessionAdapter: "claude_code.py"})
 	if got.Agent != "claude_code" {
 		t.Fatalf("agent = %q, want claude_code", got.Agent)
 	}
-	if bare := toTaskJSON(core.Task{TaskID: "t-2"}); bare.Agent != "" {
+	if bare := (&handler{}).toTaskJSON(core.Task{TaskID: "t-2"}); bare.Agent != "" {
 		t.Fatalf("agent on a task with none = %q, want empty", bare.Agent)
 	}
 }

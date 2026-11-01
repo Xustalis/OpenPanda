@@ -606,3 +606,49 @@ func TestResourceKeysForPinnedWorkDir(t *testing.T) {
 		t.Fatalf("projectless pin = %v, want %v", got, want)
 	}
 }
+
+// TestResourceKeysSessionLane: a task carrying its conversation claims a lane
+// one level under the project root instead of the root itself — two
+// conversations on one checkout run in parallel — while a task with no
+// conversation (CLI submit, plan stage, inbound delegate) keeps the root
+// claim that still excludes every lane.
+func TestResourceKeysSessionLane(t *testing.T) {
+	a := deriveResourceKeys(TaskInput{Project: "p", SessionID: "sess-a"})
+	b := deriveResourceKeys(TaskInput{Project: "p", SessionID: "sess-b"})
+	root := deriveResourceKeys(TaskInput{Project: "p"})
+
+	if len(a) != 2 || len(b) != 2 || len(root) != 2 {
+		t.Fatalf("key sets = %v / %v / %v, want two keys each", a, b, root)
+	}
+	if want := queue.SessionScopeKey("p", "sess-a"); a[1] != want {
+		t.Fatalf("session scope key = %q, want %q", a[1], want)
+	}
+	if root[0] != queue.ProjectKey("p") || root[1] != queue.ScopeRootKey("p") {
+		t.Fatalf("sessionless keys = %v, want the legacy root pair", root)
+	}
+	if queue.ScopeKeysConflict(a[1], b[1]) {
+		t.Fatalf("two conversations must not conflict: %q vs %q", a[1], b[1])
+	}
+	if !queue.ScopeKeysConflict(root[1], a[1]) {
+		t.Fatalf("a whole-project claim must still exclude a lane: %q vs %q", root[1], a[1])
+	}
+
+	// A scoped child stays inside its own conversation's lane.
+	scoped := childResourceKeys("t1", TaskInput{Project: "p", SessionID: "sess-a", Paths: []string{"src"}})
+	if want := queue.SessionScopeLeafKey("p", "sess-a", "src"); len(scoped) != 1 || scoped[0] != want {
+		t.Fatalf("scoped child keys = %v, want [%q]", scoped, want)
+	}
+	if queue.ScopeKeysConflict(scoped[0], b[1]) {
+		t.Fatalf("a scoped child must not conflict with another conversation: %q vs %q", scoped[0], b[1])
+	}
+
+	// A conversation-less scoped child keeps the bare leaf: it is a sibling of
+	// every lane, so it can write the same path a conversation is writing. The
+	// alternative — claiming the project root — would restore that exclusion at
+	// the cost of serializing every conversation-less scoped task against every
+	// other one, which TestScopedProjectChildrenRunInParallel refuses.
+	loose := childResourceKeys("t2", TaskInput{Project: "p", Paths: []string{"src"}})
+	if want := queue.ScopeLeafKey("p", "src"); len(loose) != 1 || loose[0] != want {
+		t.Fatalf("conversation-less scoped keys = %v, want [%q]", loose, want)
+	}
+}

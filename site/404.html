@@ -19,9 +19,10 @@
     --serif: 'Newsreader', 'Songti SC', 'STSong', Georgia, serif;
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; }
+  html { height: 100%; }
   body {
     margin: 0;
+    min-height: 100%;
     display: grid;
     place-items: center;
     padding: 32px;
@@ -29,7 +30,9 @@
     color: var(--paper);
     font-family: var(--sans);
     -webkit-font-smoothing: antialiased;
-    overflow: hidden;
+    /* A short phone can be taller than the sheet; let it scroll instead of
+       clipping the links and the footer (the sky itself is fixed). */
+    overflow-x: hidden;
   }
   .sky {
     position: fixed;

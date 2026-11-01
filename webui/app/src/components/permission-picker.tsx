@@ -36,9 +36,9 @@ export function normalizePermission(raw: string | undefined | null): PermissionM
 
 /** The mode chip and its menu.
  *
- *  The trigger lives in the composer's action row, where the old authorize
- *  switch sat: permission is a property of sending, and a control that
- *  changes what Enter means belongs next to the box it sends from. The menu
+ *  The trigger lives in the composer's action row: permission is a property of
+ *  sending, and a control that changes what Enter means belongs next to the box
+ *  it sends from. The menu
  *  opens upward — the composer sits at the bottom of the pane — and every row
  *  carries its own one-line consequence, because "接受编辑" without "shell 命令
  *  仍会询问" is a promise the gate does not keep. */
@@ -160,9 +160,6 @@ export function PermissionPicker(props: {
                 if (m !== mode) props.onChange(m)
               }}
             >
-              <span class="perm-row-icon" aria-hidden="true">
-                <Icon name={m === 'bypass' ? 'alert' : 'shield'} size={14} />
-              </span>
               <span class="perm-row-text">
                 <span class="perm-row-name">{t(`perm.${m}`)}</span>
                 <span class="perm-row-hint">{t(`perm.${m}Hint`)}</span>

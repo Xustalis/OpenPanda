@@ -12,6 +12,8 @@ package panel
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +48,16 @@ type modelEntryJSON struct {
 	Active         bool   `json:"active"`
 	KeySet         bool   `json:"key_set"`
 	KeyHint        string `json:"key_hint,omitempty"`
+	// KeyFingerprint is a short digest of the stored key. key_hint is the
+	// last four characters, which two accounts of one vendor can share; the
+	// console groups models into connections by this instead, so "extend"
+	// cannot borrow the other account's key. Not the secret, and not
+	// reversible.
+	KeyFingerprint string `json:"key_fingerprint,omitempty"`
+	// AllowPlaintext is the stored waiver for a plain-http endpoint. It is
+	// reported so the edit form can show the box already ticked instead of
+	// asking again (or, worse, revoking it by submitting an unticked box).
+	AllowPlaintext bool `json:"allow_plaintext,omitempty"`
 	// LimitsAuto says the stored value is unset and the numbers below are the
 	// catalogue's — the console shows them as placeholders ("auto · 1.0M") so a
 	// user can tell what they chose from what the resolver picked.
@@ -99,6 +111,8 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 		NoAuth:         mc.NoAuth || (known && p.NoAuth),
 		KeySet:         mc.APIKey != "",
 		KeyHint:        maskKey(mc.APIKey),
+		KeyFingerprint: keyFingerprint(mc.APIKey),
+		AllowPlaintext: mc.AllowPlaintext,
 		ContextAuto:    mc.ContextWindow == 0,
 		MaxTokensAuto:  mc.MaxTokens == 0,
 		WarningCode:    "",
@@ -250,6 +264,39 @@ type addModelRequest struct {
 	NoAuth              *bool             `json:"no_auth,omitempty"`
 	Params              map[string]any    `json:"params,omitempty"`
 	Headers             map[string]string `json:"headers,omitempty"`
+	// AllowPlaintext is the caller's explicit consent to reach this endpoint
+	// over http. The network guard refuses a plaintext dial otherwise, and the
+	// consent has to live on the entry: the daemon dials it long after this
+	// request is gone. A pointer, not a bool — an edit that does not mention
+	// the field must keep the stored waiver instead of silently revoking it.
+	AllowPlaintext *bool `json:"allow_plaintext,omitempty"`
+	// CopyFrom names an existing alias to duplicate. The panel never echoes a
+	// key back, and params/headers are not part of the entry JSON, so a "copy
+	// this model" that only re-sent the visible fields would hand the user an
+	// empty credential — the source's secret and raw overrides travel here
+	// instead, and every field the request does carry still wins.
+	CopyFrom string `json:"copy_from,omitempty"`
+}
+
+// modelByAlias resolves a saved entry by alias, falling back to the live
+// model: the registry paints the active one at the head of the page, so
+// "copy this" has to work on it even though it lives in `model:`, not
+// `models:`.
+func (h *handler) modelByAlias(alias string) (config.ModelConfig, bool) {
+	var out config.ModelConfig
+	found := false
+	h.readCfg(func(c *config.Config) {
+		for _, m := range c.Models {
+			if m.Alias() == alias {
+				out, found = m, true
+				return
+			}
+		}
+		if c.Model.Alias() == alias && (c.Model.Model != "" || c.Model.Provider != "") {
+			out, found = c.Model, true
+		}
+	})
+	return out, found
 }
 
 // modelFromRequest builds the ModelConfig a request describes. existingKey is
@@ -273,6 +320,13 @@ func (h *handler) modelFromRequest(req addModelRequest, existingKey string) (con
 		if err := checkCustomBaseURL(base); err != nil {
 			return config.ModelConfig{}, err
 		}
+		// "Extend this connection" applies to custom relays too: the form
+		// prefills the saved row and submits without a key, so without this the
+		// entry persisted keyless (NoAuth: true) and the user lost the key that
+		// was already on file.
+		if key == "" && req.ReuseFrom != "" {
+			key = h.keyForAlias(req.ReuseFrom)
+		}
 		mc = config.ModelConfig{
 			Provider:  "custom",
 			APIType:   normalizeAPIType(req.APIType),
@@ -283,6 +337,9 @@ func (h *handler) modelFromRequest(req addModelRequest, existingKey string) (con
 			// A keyless relay is a local-style endpoint — the CLI's
 			// `model add custom` marks it no-auth for the same reason.
 			NoAuth: key == "",
+			// The endpoint's own plaintext opt-in travels with the entry: it is
+			// the caller who knows whether this relay speaks https.
+			AllowPlaintext: req.AllowPlaintext != nil && *req.AllowPlaintext,
 		}
 	} else {
 		p, ok := providers.Lookup(provider)
@@ -375,6 +432,12 @@ func (h *handler) modelFromRequest(req addModelRequest, existingKey string) (con
 	}
 	if req.NoAuth != nil {
 		mc.NoAuth = *req.NoAuth
+		// 免密钥 is a statement that this endpoint takes none: keeping the
+		// stored secret would leave a credential the user just said is unused,
+		// and the badge would keep claiming one is set.
+		if *req.NoAuth && strings.TrimSpace(req.APIKey) == "" {
+			mc.APIKey = ""
+		}
 	}
 	if req.Params != nil {
 		mc.Params = req.Params
@@ -495,10 +558,42 @@ func (h *handler) addModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A copy starts from the source entry's invisible half: the credential,
+	// the raw params/headers, the plaintext waiver, and the OAuth binding.
+	// Anything the request states explicitly still overrides — this only
+	// fills what the client could not have sent.
+	var copied *config.ModelConfig
+	if src := strings.TrimSpace(req.CopyFrom); src != "" {
+		from, ok := h.modelByAlias(src)
+		if !ok {
+			writeErr(w, http.StatusNotFound, fmt.Errorf("no model named %q to copy", src))
+			return
+		}
+		copied = &from
+		if strings.TrimSpace(req.APIKey) == "" {
+			req.APIKey = from.APIKey
+		}
+		if req.Params == nil {
+			req.Params = from.Params
+		}
+		if req.Headers == nil {
+			req.Headers = from.Headers
+		}
+		if req.AllowPlaintext == nil && from.AllowPlaintext {
+			waiver := true
+			req.AllowPlaintext = &waiver
+		}
+	}
+
 	mc, err := h.modelFromRequest(req, "")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
+	}
+	// The OAuth binding has no request field: without it a copied
+	// subscription-backed entry would silently become a keyless one.
+	if copied != nil && mc.Auth == "" {
+		mc.Auth = copied.Auth
 	}
 	alias := strings.TrimSpace(req.Alias)
 	if alias == "" {
@@ -621,6 +716,12 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = old.Model
+	}
+	// The waiver is not part of the visible form for a provider row, so an
+	// edit that omits it means "unchanged", not "revoke".
+	if req.AllowPlaintext == nil && old.AllowPlaintext {
+		waiver := true
+		req.AllowPlaintext = &waiver
 	}
 
 	existingKey := old.APIKey
@@ -837,6 +938,15 @@ type modelRefRequest struct {
 	// shape inline rather than resolving it from config.
 	APIType string `json:"api_type,omitempty"`
 	BaseURL string `json:"base_url,omitempty"`
+	// AllowPlaintext carries the form's http consent into fetch/test, so a
+	// relay that has not been saved yet can still be probed over plain http.
+	AllowPlaintext bool `json:"allow_plaintext,omitempty"`
+	// CopyFrom names the entry a draft was duplicated from. A copy has no key
+	// of its own yet — the console never receives one — so "fetch the model
+	// list" on the copy sheet would otherwise dial the endpoint keyless. The
+	// source's credential (and its plaintext waiver) fill the gap; an explicit
+	// api_key in the same request still wins.
+	CopyFrom string `json:"copy_from,omitempty"`
 }
 
 // resolveModelRefErr maps the request onto a ModelConfig, mirroring the REPL's
@@ -845,6 +955,19 @@ type modelRefRequest struct {
 // named must not be dialed" — the second is a security refusal and deserves
 // its own message.
 func (h *handler) resolveModelRefErr(req modelRefRequest) (config.ModelConfig, error) {
+	// A copy borrows its source's credential until it has one of its own: the
+	// form cannot show the key, so a fetch/test on a not-yet-saved duplicate
+	// arrives keyless. Explicit fields still win over the borrowed ones.
+	if strings.TrimSpace(req.APIKey) == "" {
+		if src := strings.TrimSpace(req.CopyFrom); src != "" {
+			if from, ok := h.modelByAlias(src); ok {
+				req.APIKey = from.APIKey
+				if !req.AllowPlaintext {
+					req.AllowPlaintext = from.AllowPlaintext
+				}
+			}
+		}
+	}
 	if req.Alias == "" && req.Provider == "" {
 		return h.engineModel(), nil
 	}
@@ -893,12 +1016,24 @@ func (h *handler) resolveModelRefErr(req modelRefRequest) (config.ModelConfig, e
 		if err := checkCustomBaseURL(base); err != nil {
 			return config.ModelConfig{}, err
 		}
+		key := strings.TrimSpace(req.APIKey)
+		if key == "" {
+			// A relay that is already on file already has its key on file, and
+			// the form can never show it — so "fetch the model list" on a saved
+			// endpoint arrives keyless and fails before it dials. Borrow the
+			// stored credential, matched on the endpoint itself: the key belongs
+			// to the host that issued it, so it never crosses to another base.
+			key = h.keyForEndpoint(base)
+		}
 		return config.ModelConfig{
 			Provider: "custom",
 			APIType:  normalizeAPIType(req.APIType),
 			BaseURL:  base,
 			Model:    strings.TrimSpace(req.Model),
-			APIKey:   strings.TrimSpace(req.APIKey),
+			APIKey:   key,
+			// A probe carries the form's consent too: the model is not saved
+			// yet, so nothing on disk can answer for it.
+			AllowPlaintext: req.AllowPlaintext,
 		}, nil
 	}
 	p, ok := providers.Lookup(pid)
@@ -1034,6 +1169,32 @@ func (h *handler) keyForAlias(alias string) string {
 	return key
 }
 
+// keyForEndpoint returns the key stored on an entry that dials exactly this
+// endpoint — the live model first, then the registry. The form can never show
+// a saved secret, so a fetch/test against an endpoint that is already on file
+// would otherwise arrive keyless and fail before it dials. Matching the base
+// URL rather than the provider id is deliberate: the credential belongs to the
+// host that issued it, so it is never handed to a different base.
+func (h *handler) keyForEndpoint(base string) string {
+	want := strings.TrimRight(strings.TrimSpace(base), "/")
+	if want == "" {
+		return ""
+	}
+	key := ""
+	h.readCfg(func(c *config.Config) {
+		for _, m := range append([]config.ModelConfig{c.Model}, c.Models...) {
+			if m.APIKey == "" {
+				continue
+			}
+			if strings.EqualFold(strings.TrimRight(strings.TrimSpace(m.BaseURL), "/"), want) {
+				key = m.APIKey
+				return
+			}
+		}
+	})
+	return key
+}
+
 func (h *handler) findProviderKey(providerID string) string {
 	key := ""
 	h.readCfg(func(c *config.Config) {
@@ -1139,4 +1300,16 @@ func (h *handler) applyModelConfig(mc config.ModelConfig) error {
 		return h.engines.Reload()
 	}
 	return nil
+}
+
+// keyFingerprint is a stable, non-reversible digest of a stored key. It exists
+// so the console can tell two accounts of one vendor apart: key_hint (the last
+// four characters) collides, and a merged connection makes "extend this
+// connection" hand the new row the other account's key.
+func keyFingerprint(key string) string {
+	if key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:4])
 }

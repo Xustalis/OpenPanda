@@ -57,10 +57,17 @@ type TaskInput struct {
 	RepoPath     string // file-type repo root for auto-packing (wired by askengine from WorkDir)
 	// WorkDir pins execution to the originating workspace. It is persisted before
 	// routing/execution so concurrent callers never swap the Core's ambient work dir.
-	WorkDir  string
-	Intent   string
-	SpecJSON string
-	Requires []string
+	WorkDir string
+	// SessionID names the conversation that asked for this task, when one did.
+	// It scopes the project lock: two conversations against one checkout get
+	// sibling lanes (queue.SessionScopeKey) and run in parallel, while tasks
+	// from the same conversation — and every task with no conversation at all,
+	// such as a CLI submit or a plan stage — keep serializing on the project
+	// root. Empty is the conservative answer, never a wildcard.
+	SessionID string
+	Intent    string
+	SpecJSON  string
+	Requires  []string
 	// Paths declares the project-relative directories the task owns inside a
 	// shared worktree — a delegate child's scope claim. Non-empty turns the
 	// monolithic project lock into leaf keys so siblings on disjoint paths
@@ -315,6 +322,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 				"target", decision.Target, "link", linkState, "task", t.TaskID)
 			qSpec := DefaultQueueSpec()
 			qSpec.WorkDir = in.WorkDir
+			qSpec.SessionID = in.SessionID
 			qSpec.ResourceKeys = deriveResourceKeys(in)
 			if err := c.store.SetQueueMeta(ctx, t.TaskID, qSpec.Priority, qSpec.SessionID, qSpec.WorkDir, qSpec.ResourceKeys); err != nil {
 				return t, bus.TaskResultPayload{}, fmt.Errorf("set queue meta: %w", err)

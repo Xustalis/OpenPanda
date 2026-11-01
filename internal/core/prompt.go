@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -14,6 +16,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/nodecli"
 	"github.com/Xustalis/OpenPanda/internal/scout"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -229,6 +232,22 @@ const agentPromptBudget = 128000
 // alone exceeds the agent's window.
 const overflowPromptBudget = agentPromptBudget / 4
 
+// promptBudgetFor subtracts bytes already committed to the prompt (the node
+// reference, appended after buildAgentPrompt) from a caller's budget.
+// buildAgentPrompt treats a non-positive budget as "use agentPromptBudget",
+// so the result never falls to zero or below: a section that consumes the
+// whole budget leaves 1 byte for skills, degrading them to index lines
+// rather than silently restoring the default budget.
+func promptBudgetFor(budget, reserved int) int {
+	if budget <= 0 {
+		budget = agentPromptBudget
+	}
+	if budget -= reserved; budget < 1 {
+		budget = 1
+	}
+	return budget
+}
+
 // compactRunNotes folds a run's accumulated intent extras (delegated-child
 // results, board posts, supervisor follow-ups) into one digest for a
 // context-overflow retry — they are the bulk of a long-running prompt, and
@@ -337,7 +356,7 @@ func getAgentOutputRider(locs ...i18n.Locale) string {
 		return fmt.Sprintf(`
 
 执行约定：
-- 在 workspace 目录内工作；动手前先读项目里相关的源文件与文档，有源码可读就不要去反汇编二进制。
+- 在 workspace 目录内工作；只在确实需要改动代码时才去读相关的源文件与文档（有源码可读就不要去反汇编二进制），不要为了"了解项目"而通读仓库。
 - 宣布完成前必须验证：用该项目自身的构建/测试方式（按其 Makefile、scripts、CI 或包管理器惯例）跑通能证明成功定义的命令；只写"应该可行"不算完成。
 - 工作区地图列出了项目的 build/verify 入口时，运行与你改动相关的那一条或几条，并在回复里给出命令与实际输出；最终回复里没有跑过任何一条，不算完成。
 - 只改动任务范围内（scope）的文件；不要顺手重构或格式化无关代码。
@@ -347,7 +366,7 @@ func getAgentOutputRider(locs ...i18n.Locale) string {
 	return fmt.Sprintf(`
 
 Execution contract:
-- Work inside the workspace; read the project's relevant source files and docs before editing — never disassemble a binary whose source is on disk.
+- Work inside the workspace; read only the source files and docs the change actually touches — never disassemble a binary whose source is on disk, and do not survey the repository just to "understand the project".
 - Verify before claiming done: run whatever proves the success definition using the project's own build/test convention (its Makefile, scripts, CI, or package manager); reporting what "should" work is not completion.
 - When the workspace map lists the project's build/verify entries, run the one(s) that cover your change and report the command and its actual output. A final reply that never ran one is not completion.
 - Touch only files inside the declared scope; do not refactor or reformat unrelated code.
@@ -438,15 +457,56 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, promptBud
 	// mid-run, so a blocked agent ends its turn with the marker the run
 	// loop parks on. Same rider placement — every agent round.
 	prompt += i18n.T(promptLang, "prompt.question.hint")
-	// Self-management hint: under the extended tools policy the agent may
-	// reach the node's own surface — MCP-capable CLIs see the openpanda
-	// server from the materialized .mcp.json, shell-capable agents can run
-	// the panda binary already on PATH. Minimal policy keeps the tool face
-	// closed, so the hint only rides extended runs.
-	if c.router != nil && c.router.ToolsPolicy() == "extended" && c.router.PandaTools() {
-		prompt += i18n.T(promptLang, "prompt.selftools.hint")
-	}
+	// The node's own command reference is appended by the run loop instead
+	// (selfManagementSection): it needs the run's restricted verdict, which
+	// only the loop knows — a remote, unconsented task runs read-only and
+	// must not be told to operate the node.
 	return prompt, used
+}
+
+// selfManagementSection renders what an executing agent needs to know about
+// the node it is running on: that `panda` is the node's own CLI, and — when
+// routing.panda_tools is on — the full subcommand surface, so a task like
+// "start the web console" runs `panda web --daemon` instead of investigating
+// the host as if OpenPanda were a stranger's software.
+//
+// It rides under the minimal tools policy too, deliberately. Minimal keeps
+// the adapter's safe whitelist, and that whitelist includes Bash — running
+// `panda` is already permitted, so the reference grants no capability; it
+// only removes the guesswork that made agents probe for the binary first.
+// The MCP sentence in the hint applies only where the extended policy
+// materializes the openpanda server; under minimal it is inert.
+//
+// A restricted run is the one that must not see this: the remote-origin
+// admission tier strips the shell, and pointing a read-only agent at write
+// commands it cannot run would only produce failed attempts.
+func selfManagementSection(c *Core, restricted bool, loc i18n.Locale) string {
+	if c == nil || c.router == nil || !c.router.PandaTools() || restricted {
+		return ""
+	}
+	section := i18n.T(loc, "prompt.selftools.hint") + nodecli.PromptReference(loc)
+	if exe := nodeBinaryFallback(); exe != "" {
+		section += i18n.Tf(loc, "prompt.selfcmd.binary", "path", exe)
+	}
+	return section
+}
+
+// nodeBinaryFallback names the running binary when `panda` is not on PATH.
+// The reference's commands assume `panda` resolves; a node launched from a
+// source checkout (`go run ./cmd/panda`, `./bin/panda`) on a machine without
+// an install would otherwise hand agents a catalog whose every command fails
+// with "not found", and the agent would fall back to probing the host — the
+// failure this feature exists to prevent. Empty when PATH already resolves
+// `panda` (the installed case, where the bare name is the right answer).
+func nodeBinaryFallback() string {
+	if _, err := exec.LookPath("panda"); err == nil {
+		return ""
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(exe)
 }
 
 // withSkills prepends matched active skills to the intent via the lightweight

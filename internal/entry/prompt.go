@@ -39,6 +39,13 @@ For informational, conversational, or conceptual requests with no external side 
 When invoking controlled tools provided in the tools schema (e.g. memory management, system status, card inspection, reminders), use native tool calling. The Go core validates, authorizes, executes, and records tool calls.
 Note: Native abilities and agent capabilities listed under devices (such as sys:info, build:macos, agent:claude_code, agent:codex, etc.) are NOT controlled tools and MUST be dispatched as a subagent task (Kind 3).
 
+═══ Operating this node ═══
+The node serving this conversation runs OpenPanda, whose CLI covers every part of the node: panda status, panda queue, panda nodes, panda web, panda daemon, panda model, panda config, panda skill, panda memory, panda doctor, panda update.
+- A read or queue disposition that a controlled tool already covers — system status, card or peer inspection, listing, cancelling, prioritising, moving, approving or rejecting a queued task — is a Kind 2 tool call. Do not send it to an agent as a shell command.
+- An imperative request with no controlled tool behind it (start or stop the web console or daemon, switch models, run diagnostics, install an update) is a Kind 3 task: put the exact panda command in spec.target — e.g. "run panda web --daemon --no-browser, then report the URL it printed" — so the agent executes the node's own command instead of investigating the host as if panda were unknown software.
+- A question about how to do one of these ("怎么启动 web 面板？", "how do I see the queue?") is Kind 1: answer it and start nothing.
+- Ask which target the user means only when their words are genuinely ambiguous (a bare "start web" may mean a project's dev server). Once they name OpenPanda's own console, kernel, queue or nodes, dispatch.
+
 ═══ Kind 3: task ═══
 When a request requires executing commands, modifying files, writing code, running tests, compiling/building software, GPU computation, capturing screenshots, or dispatching any agent harness (such as claude_code, codex, hermes, opencode, grok_build, etc.) or scheduling specific devices (such as orangepi/香橙派, win/Windows, mac, linux) as subagents, you MUST emit a structured task JSON object. The scheduler executes it immediately in subagent mode, streams progress, supervises the outcome, and reports back to you.
 Routing criteria:
@@ -114,6 +121,20 @@ The Go core validates kind, tool whitelist, parameter schema, permissions, and n
 - Work that already exists is operated on by id (check status, resume, approve, cancel). Never re-submit or re-plan the same work unless the user asks for a fresh attempt.
 - Distinguish waiting-for-approval, queued-on-device, and actually-running: a parked task is not a dead one, and a remote task reports the node and directory where it runs.
 - A task that finishes while leaving a service running is DONE — describe it as completed and name what it left behind (URL, port, PID); "service retained" is not "task still running", and a long-lived server process is normal, not a stuck task.`
+
+// executionContract is the closing rider appended to every system prompt: a
+// checkable execution contract the model is bound to when it emits or
+// supervises a task. It is static so it stays in the cacheable prefix.
+const executionContract = `
+
+═══ Execution Contract ═══
+[execution context] Every task run is framed by its task title, its project, and the workspace-as-cwd. The executing agent must stay within spec.scope (the comma-separated relative paths it may modify) and must treat spec.success_definition as the check it must pass.
+Before you claim done:
+- Read the project's own sources before editing; do not work from memory of other repos.
+- Prove the success definition with the project's own build/test convention (make build / make test / make gate) before claiming done.
+- Stay inside the declared scope (spec.scope); do not touch paths outside it.
+- Report the commands you ran and their outcomes.
+- Name any criterion you could not verify.`
 
 // memoryRulesSection is the memory governance layer: when to record, what to
 // skip, and how to maintain a full memory. Attached only once the session has
@@ -294,6 +315,9 @@ type PromptOptions struct {
 	// and turn cap in the real tree instead of a guess from the request text.
 	// Empty means no workspace in view.
 	WorkspaceMap string
+	// UsageObserver is delivered to the streaming call this prompt is sent
+	// through; see WithStreamUsage. It takes no part in building the prompt.
+	UsageObserver func(Usage)
 }
 
 // ClassifyOption tweaks the system prompt the Classify* entry points build.
@@ -308,6 +332,13 @@ func WithASCIIOnly() ClassifyOption {
 // WithLocale sets the user language preference for prompt construction.
 func WithLocale(loc i18n.Locale) ClassifyOption {
 	return func(p *PromptOptions) { p.UserLocale = loc }
+}
+
+// WithStreamUsage attaches the live token-usage observer to the streaming
+// classification this prompt is used for. Apply it at the ask boundary so a
+// status line can show consumption while the model is still writing.
+func WithStreamUsage(fn func(Usage)) ClassifyOption {
+	return func(p *PromptOptions) { p.UsageObserver = fn }
 }
 
 // WithRequestMode records the slash-prefix mode the user chose for the turn
@@ -460,6 +491,7 @@ func BuildPrompt(opts PromptOptions) string {
 	}
 	var b strings.Builder
 	b.WriteString(coreRules)
+	b.WriteString(executionContract)
 	if layers.MemoryRules {
 		b.WriteString(memoryRulesSection)
 	}

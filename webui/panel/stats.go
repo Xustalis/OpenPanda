@@ -63,6 +63,12 @@ type statsJSON struct {
 	FirstDay      string         `json:"first_day,omitempty"`
 	LastDay       string         `json:"last_day,omitempty"`
 	Daily         []statsDayJSON `json:"daily"`
+	// SkippedRows is a health number, not a usage one: task rows every listing
+	// had to drop because the driver could not decode them. Omitted when zero
+	// so a healthy install's payload does not change. It rides here because
+	// the alternative — "the board quietly shows fewer tasks than the table
+	// holds" — is indistinguishable from a UI bug.
+	SkippedRows int64 `json:"skipped_rows,omitempty"`
 }
 
 // getStats serves GET /api/stats — the profile page's activity calendar and
@@ -102,7 +108,11 @@ func (h *handler) getStats(w http.ResponseWriter, r *http.Request) {
 	if h.cfg != nil {
 		fallbackModel = h.cfg.Model.Model
 	}
-	writeJSON(w, aggregateUsage(list, tasks, metrics, fallbackModel))
+	out := aggregateUsage(list, tasks, metrics, fallbackModel)
+	if h.store != nil {
+		out.SkippedRows = h.store.SkippedRows()
+	}
+	writeJSON(w, out)
 }
 
 // aggregateUsage folds the three sources onto one calendar. See the package
