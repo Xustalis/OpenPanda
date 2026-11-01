@@ -54,7 +54,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
-- **Una pregunta se puede responder en línea** — la TUI muestra la tarjeta de opciones con flechas/números, multiselección, texto libre y Esc para cancelar; `panda ask` imprime las opciones y lee una línea por pregunta. Las superficies sin interacción reciben `needs_clarification` y las preguntas ya renderizadas.
+- **Una pregunta se puede responder en línea** — la TUI muestra la tarjeta de opciones con flechas/números, multiselección, texto libre y Esc para cancelar; `panda ask` imprime las opciones y lee una línea por pregunta. La consola web muestra la misma tarjeta sobre su compositor y reanuda el turno SSE aparcado con la respuesta, no un nuevo turno. Las superficies sin interacción reciben `needs_clarification` y las preguntas ya renderizadas.
 
 ### Corregido
 

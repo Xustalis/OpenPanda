@@ -432,6 +432,76 @@ func (h *handler) cancelSessionAsk(id, operationID string) bool {
 	return false
 }
 
+// clarifyWaiter parks one running ask on the browser's answer. The session id
+// rides along so an operation id from another thread cannot answer this one.
+type clarifyWaiter struct {
+	sessionID string
+	ch        chan []entry.ClarifyAnswer
+}
+
+// setClarifyWaiter registers the channel a question event will be answered on.
+func (h *handler) setClarifyWaiter(sessionID, operationID string, ch chan []entry.ClarifyAnswer) {
+	h.clarifyMu.Lock()
+	defer h.clarifyMu.Unlock()
+	if h.clarifyWaiters == nil {
+		h.clarifyWaiters = make(map[string]clarifyWaiter)
+	}
+	h.clarifyWaiters[operationID] = clarifyWaiter{sessionID: sessionID, ch: ch}
+}
+
+func (h *handler) clearClarifyWaiter(operationID string) {
+	h.clarifyMu.Lock()
+	delete(h.clarifyWaiters, operationID)
+	h.clarifyMu.Unlock()
+}
+
+// answerClarify delivers one answer set to the parked ask. The waiter is
+// consumed on delivery: a second POST for the same operation is a conflict,
+// not a second answer.
+func (h *handler) answerClarify(sessionID, operationID string, answers []entry.ClarifyAnswer) bool {
+	h.clarifyMu.Lock()
+	w, ok := h.clarifyWaiters[operationID]
+	if !ok || w.sessionID != sessionID {
+		h.clarifyMu.Unlock()
+		return false
+	}
+	delete(h.clarifyWaiters, operationID)
+	h.clarifyMu.Unlock()
+	select {
+	case w.ch <- answers:
+		return true
+	default:
+		return false
+	}
+}
+
+// sessionClarify serves POST /api/sessions/{id}/clarify — the browser's answer
+// to a pre-execution question the running SSE turn is parked on. The same
+// AskTurnsScoped call resumes with the answers; this is not a new turn.
+func (h *handler) sessionClarify(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		OperationID string                `json:"operation_id"`
+		Answers     []entry.ClarifyAnswer `json:"answers"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+			return
+		}
+	}
+	req.OperationID = strings.TrimSpace(req.OperationID)
+	if req.OperationID == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("operation_id is required"))
+		return
+	}
+	if !h.answerClarify(id, req.OperationID, req.Answers) {
+		writeErr(w, http.StatusConflict, errors.New("no pending question for this operation"))
+		return
+	}
+	writeJSON(w, map[string]any{"id": id, "operation_id": req.OperationID, "answered": true})
+}
+
 // sessionCancel serves POST /api/sessions/{id}/cancel and /stop.
 func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -795,6 +865,32 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		send("error", map[string]string{"message": "save operation failed"})
 		return
+	}
+
+	// Pre-execution questions (entry clarify + the large-task plan card) park
+	// this turn on the browser: the question rides the same SSE stream, the
+	// answer comes back through POST /api/sessions/{id}/clarify, and the same
+	// AskTurnsScoped call continues with it. A closed stream, a cancelled
+	// operation or the request context ending releases the wait; the engine
+	// then treats the turn as interrupted instead of holding a goroutine.
+	cb.OnQuestion = func(spec entry.ClarifySpec) ([]entry.ClarifyAnswer, bool) {
+		ch := make(chan []entry.ClarifyAnswer, 1)
+		h.setClarifyWaiter(sess.ID, op.operationID, ch)
+		defer h.clearClarifyWaiter(op.operationID)
+		if !send("question", map[string]any{
+			"operation_id":  op.operationID,
+			"clarification": spec,
+		}) {
+			return nil, false
+		}
+		select {
+		case answers := <-ch:
+			return answers, true
+		case <-execCtx.Done():
+			return nil, false
+		case <-r.Context().Done():
+			return nil, false
+		}
 	}
 
 	// The clock starts here rather than at the top of the handler: setup above

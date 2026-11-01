@@ -542,6 +542,39 @@ export interface AskResult {
    *  live consumer drains this store, so the receipt is parked work, not
    *  dispatch. Rendered verbatim (server-localized). */
   warning?: string
+  /** A pre-execution question the non-stream ask path could not answer
+   *  inline; the streaming session path delivers the same shape on the
+   *  `question` SSE event instead. */
+  needs_clarification?: boolean
+  clarification?: ClarifySpec
+}
+
+/** The pre-execution question round: optional plan prose plus up to four
+ *  bounded questions. Mirrors entry.ClarifySpec on the server. */
+export interface ClarifySpec {
+  plan?: string
+  questions: ClarifyQuestion[]
+}
+
+export interface ClarifyQuestion {
+  id: string
+  header: string
+  question: string
+  options: ClarifyOption[]
+  multi_select?: boolean
+  recommended?: string
+}
+
+export interface ClarifyOption {
+  label: string
+  description?: string
+}
+
+/** One question's answer, sent to POST /api/sessions/{id}/clarify. */
+export interface ClarifyAnswer {
+  id: string
+  selected?: string[]
+  other?: string
 }
 
 /** The parked tier-2 request inside an ask result — what it is, and the
@@ -1408,6 +1441,19 @@ export const api = {
 
   cancelSession(id: string, operationID: string): Promise<{ id: string; operation_id: string; cancelled: boolean }> {
     return request('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`, { operation_id: operationID })
+  },
+
+  /** Answer the pre-execution question a running session turn is parked on.
+   *  The same SSE turn resumes; this is not a new ask. */
+  answerSessionClarify(
+    id: string,
+    operationID: string,
+    answers: ClarifyAnswer[],
+  ): Promise<{ id: string; operation_id: string; answered: boolean }> {
+    return request('POST', `/api/sessions/${encodeURIComponent(id)}/clarify`, {
+      operation_id: operationID,
+      answers,
+    })
   },
 
   /** The approval policy the session's next tier-2 gate will apply. */
@@ -2431,6 +2477,10 @@ export interface AskStreamHandlers {
    *  this event is the proof it reached the model, so the console can stop
    *  calling it "queued". Fires zero or more times per turn. */
   onSteer?(text: string, round: number): void
+  /** A pre-execution question the running turn is parked on. Answer it with
+   *  answerSessionClarify(sessionID, operationID, answers); the same stream
+   *  resumes. */
+  onQuestion?(spec: ClarifySpec, operationID: string): void
   /** `code` carries the panel's machine reason when one exists —
    *  "model_config" marks the fix-in-settings class of failure. */
   onError(message: string, code?: string, info?: AskErrorInfo): void
@@ -2479,6 +2529,12 @@ export async function askSessionStream(
         if (taskID) h.onTask?.(taskID)
       }
       else if (event === 'steer') h.onSteer?.(payload.text ?? '', payload.round ?? 0)
+      else if (event === 'question') {
+        const spec = payload.clarification as ClarifySpec | undefined
+        if (spec && Array.isArray(spec.questions)) {
+          h.onQuestion?.(spec, typeof payload.operation_id === 'string' ? payload.operation_id : '')
+        }
+      }
       else if (event === 'result') h.onResult(payload as AskResult)
       else if (event === 'error')
         h.onError(payload.message ?? 'unknown error', payload.code || undefined, {

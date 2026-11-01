@@ -304,6 +304,7 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("DELETE /api/sessions/{id}/approval", h.clearSessionApproval)
 		mux.HandleFunc("POST /api/sessions/{id}/cancel", h.sessionCancel)
 		mux.HandleFunc("POST /api/sessions/{id}/stop", h.sessionCancel)
+		mux.HandleFunc("POST /api/sessions/{id}/clarify", h.sessionClarify)
 		// Uploads do not need the Worktrees object — without a repository they
 		// fall back to a per-session directory under the work path — so the
 		// route is registered wherever sessions are, not only when isolation
@@ -596,6 +597,12 @@ type handler struct {
 	// memSeq stamps the in-memory notes' keys. Guarded by steerMu; monotonic
 	// per process so a key handed to the browser never names a later note.
 	memSeq int
+
+	// clarifyMu guards clarifyWaiters: one parked pre-execution question per
+	// running operation. The SSE handler blocks on the channel the browser
+	// answers through POST /api/sessions/{id}/clarify.
+	clarifyMu      sync.Mutex
+	clarifyWaiters map[string]clarifyWaiter
 
 	approvalMu         sync.Mutex
 	approvalOperations map[string]approvalOperation

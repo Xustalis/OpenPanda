@@ -10,6 +10,8 @@ import {
   type ApprovalScope,
   type AskResult,
   type AskStatusEvent,
+  type ClarifyAnswer,
+  type ClarifySpec,
   type FsFileEntry,
   type MCPSettings,
   type SessionApprovalState,
@@ -594,6 +596,13 @@ export function SessionsView({
     noteCount.current = 0
   }, [activeId])
   const [busy, setBusy] = useState(false)
+  // The pre-execution question the running turn is parked on. Cleared when the
+  // browser answers, when the turn ends, or when the user cancels it.
+  const [clarify, setClarify] = useState<{
+    sessionID: string
+    operationID: string
+    spec: ClarifySpec
+  } | null>(null)
   const [loadError, setLoadError] = useState('')
   // Poll the pending strip only while there is something to watch: a live turn
   // produces notes, and a waiting note disappears the moment a round folds it.
@@ -736,6 +745,30 @@ export function SessionsView({
     // The reply carries the number from here on; a second timer would keep
     // ticking beside it.
     setLiveFrom(0)
+  }
+
+  /** Answer the parked pre-execution question. The same SSE turn resumes, so
+   *  the card clears immediately and the stream carries on. */
+  async function submitClarify(answers: ClarifyAnswer[]): Promise<void> {
+    const pending = clarify
+    if (!pending) return
+    setClarify(null)
+    try {
+      await api.answerSessionClarify(pending.sessionID, pending.operationID, answers)
+    } catch (err) {
+      toastError(err)
+    }
+  }
+
+  /** Cancel the parked turn: the same request the stop button sends, so the
+   *  ask goroutine's question wait is released by the cancelled context. */
+  function cancelClarify(): void {
+    const pending = clarify
+    setClarify(null)
+    if (!pending) return
+    api.cancelSession(pending.sessionID, pending.operationID).catch(() => {
+      /* the stream's own stop path reports a real failure */
+    })
   }
 
   useEffect(() => {
@@ -1614,6 +1647,12 @@ export function SessionsView({
           // the model read from one the turn ended before reaching.
           onSteer: (_text, round) =>
             patch((m) => ({ ...m, status: t('sessions.steerDelivered', { n: String(round) }) })),
+          // The entry model asked before it will create the task (or the
+          // runtime's plan-confirm gate fired). The ask goroutine is parked on
+          // this answer; the card below the transcript collects it.
+          onQuestion: (spec, operationID) => {
+            if (live()) setClarify({ sessionID: sid, operationID, spec })
+          },
           onOperation: (operationID) => {
             if (inflight.current === ctrl && inflightSid.current === sid) {
               inflightOperation.current = operationID
@@ -1784,6 +1823,7 @@ export function SessionsView({
       // (or stop) has nowhere to render. The persisted transcript stands.
     } finally {
       keepAlive.release()
+      setClarify(null)
       if (inflight.current === ctrl) {
         inflight.current = null
         inflightSid.current = null
@@ -2594,6 +2634,14 @@ export function SessionsView({
               </div>
             </div>
           </div>
+        )}
+
+        {clarify && clarify.sessionID === activeId && (
+          <ClarifyCard
+            spec={clarify.spec}
+            onSubmit={(answers) => void submitClarify(answers)}
+            onCancel={cancelClarify}
+          />
         )}
 
         {/* Textarea and actions share one bordered box so the composer reads
@@ -3693,6 +3741,127 @@ function RunSummaryRow({ run, onOpenTask }: { run: RunSummary; onOpenTask(id: st
             </a>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+/** Pre-execution question card. The entry model asked (or the runtime's
+ *  plan-confirm gate fired) before it will create the task; the running SSE
+ *  turn is parked on the answer. Questions are answered one at a time so four
+ *  of them stay readable in a narrow chat column. Option labels, the
+ *  recommended marker, multi-select, free text ("Other") and skip mirror the
+ *  CLI's choice card and Claude Code's AskUserQuestion. */
+function ClarifyCard({
+  spec,
+  onSubmit,
+  onCancel,
+}: {
+  spec: ClarifySpec
+  onSubmit(answers: ClarifyAnswer[]): void
+  onCancel(): void
+}) {
+  const [index, setIndex] = useState(0)
+  const [picked, setPicked] = useState<Record<string, boolean>>({})
+  const [other, setOther] = useState('')
+  const [otherOpen, setOtherOpen] = useState(false)
+  const answers = useRef<ClarifyAnswer[]>([])
+  const q = spec.questions[index]
+  if (!q) return null
+
+  const advance = (answer: ClarifyAnswer) => {
+    const next = [...answers.current, answer]
+    answers.current = next
+    if (index + 1 < spec.questions.length) {
+      setIndex(index + 1)
+      setPicked({})
+      setOther('')
+      setOtherOpen(false)
+      return
+    }
+    onSubmit(next)
+  }
+  const selectedLabels = () => q.options.filter((o) => picked[o.label]).map((o) => o.label)
+  const choose = (label: string) => {
+    if (q.multi_select) {
+      setPicked((p) => ({ ...p, [label]: !p[label] }))
+      return
+    }
+    advance({ id: q.id, selected: [label] })
+  }
+  const submitOther = (e: Event) => {
+    e.preventDefault()
+    const text = other.trim()
+    if (!text) return
+    advance({
+      id: q.id,
+      selected: q.multi_select ? selectedLabels() : undefined,
+      other: text,
+    })
+  }
+
+  return (
+    <div class="clarify-card" data-testid="session-clarify" role="dialog" aria-label={q.question}>
+      <div class="clarify-head">
+        <span class="badge">{t('clarify.title')}</span>
+        <span class="clarify-progress">
+          {t('clarify.progress', { i: String(index + 1), n: String(spec.questions.length) })}
+        </span>
+      </div>
+      {spec.plan && <div class="clarify-plan">{spec.plan}</div>}
+      <div class="clarify-question">
+        <span class="clarify-header">{q.header}</span> {q.question}
+      </div>
+      <div class="clarify-options">
+        {q.options.map((o) => {
+          const on = Boolean(picked[o.label])
+          return (
+            <button
+              type="button"
+              class={`clarify-option${on ? ' is-picked' : ''}`}
+              aria-pressed={q.multi_select ? on : undefined}
+              onClick={() => choose(o.label)}
+            >
+              <span class="clarify-option-label">
+                {q.multi_select && <span class="clarify-check">{on ? '✓' : ''}</span>}
+                {o.label}
+                {o.label === q.recommended && (
+                  <span class="clarify-recommended">{t('clarify.recommended')}</span>
+                )}
+              </span>
+              {o.description && <span class="clarify-option-desc">{o.description}</span>}
+            </button>
+          )
+        })}
+      </div>
+      {otherOpen && (
+        <form class="clarify-other" onSubmit={submitOther}>
+          <input
+            value={other}
+            onInput={(e) => setOther(e.currentTarget.value)}
+            placeholder={t('clarify.otherPlaceholder')}
+            autofocus
+          />
+          <button type="submit" class="btn primary small">
+            {t('clarify.submit')}
+          </button>
+        </form>
+      )}
+      <div class="clarify-actions">
+        {q.multi_select && (
+          <button type="button" class="btn primary small" onClick={() => advance({ id: q.id, selected: selectedLabels() })}>
+            {t('clarify.confirm')}
+          </button>
+        )}
+        <button type="button" class="btn small" onClick={() => setOtherOpen((v) => !v)}>
+          {t('clarify.other')}
+        </button>
+        <button type="button" class="btn small" onClick={() => advance({ id: q.id })}>
+          {t('clarify.skip')}
+        </button>
+        <button type="button" class="btn small danger" onClick={onCancel}>
+          {t('clarify.cancel')}
+        </button>
       </div>
     </div>
   )

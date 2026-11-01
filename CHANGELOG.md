@@ -60,7 +60,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
-- **A question can be answered inline** — the TUI renders the choice card with arrow/number picking, multi-select, a free-text answer and Esc to cancel; `panda ask` prints the options and reads one line per question. Headless surfaces receive `needs_clarification` plus the rendered questions instead of a blocked run.
+- **A question can be answered inline** — the TUI renders the choice card with arrow/number picking, multi-select, a free-text answer and Esc to cancel; `panda ask` prints the options and reads one line per question. The web console renders the same card above its composer and resumes the parked SSE turn with the answer — not a new ask. Headless surfaces receive `needs_clarification` plus the rendered questions instead of a blocked run.
 
 - **Hitting a CLI turn cap no longer fails the task** — when an agent stops at its per-run turn limit while holding a resumable session, the orchestrator continues the same conversation in a new round with a higher cap (200 turns, bounded by the supervision budget) instead of recording a failure that every retry repeats. A turn-cap stop also no longer charges the agent's circuit breaker.
 - **A long tool call is no longer killed as a stalled agent** — the silence watchdog could not tell an agent that is thinking from one waiting on a ten-minute build, so any tool that produced no output past `timeouts.silence_s` (240 s by default) got the whole run killed. The watchdog now treats "a tool call is in flight" as work to wait on, bounded by the hard agent budget; a wedge outside a tool call is still killed.

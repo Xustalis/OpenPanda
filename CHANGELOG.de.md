@@ -54,7 +54,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
-- **Eine Frage lässt sich inline beantworten** — die TUI zeigt die Auswahlkarte mit Pfeil-/Zahlennavigation, Mehrfachauswahl, Freitext und Esc; `panda ask` druckt die Optionen und liest eine Zeile pro Frage. Nicht-interaktive Oberflächen erhalten `needs_clarification` plus die gerenderten Fragen.
+- **Eine Frage lässt sich inline beantworten** — die TUI zeigt die Auswahlkarte mit Pfeil-/Zahlennavigation, Mehrfachauswahl, Freitext und Esc; `panda ask` druckt die Optionen und liest eine Zeile pro Frage. Die Web-Konsole zeigt dieselbe Karte über ihrem Composer und setzt den wartenden SSE-Lauf mit der Antwort fort — kein neuer Turn. Nicht-interaktive Oberflächen erhalten `needs_clarification` plus die gerenderten Fragen.
 
 ### Behoben
 
