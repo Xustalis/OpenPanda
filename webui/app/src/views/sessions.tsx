@@ -3783,6 +3783,13 @@ function ClarifyCard({
   if (!q) return null
   const preview = q.multi_select ? '' : (q.options[focused]?.preview ?? '').trim()
   const recMarker = t('clarify.recommended')
+  // A spec that already offers a Cancel choice (the runtime's plan-confirm
+  // card does) must not render a second Cancel in the action row: the option
+  // is the answer, the action would be a different way to abort the turn.
+  const cancelMarker = t('clarify.cancel')
+  const hasCancelOption = spec.questions.some((question) =>
+    question.options.some((o) => o.label.trim() === cancelMarker),
+  )
 
   const advance = (answer: ClarifyAnswer) => {
     const next = [...answers.current, answer]
@@ -3883,7 +3890,7 @@ function ClarifyCard({
         <button type="button" class="btn small" onClick={() => advance({ id: q.id })}>
           {t('clarify.skip')}
         </button>
-        {onCancel && (
+        {onCancel && !hasCancelOption && (
           <button type="button" class="btn small danger" onClick={onCancel}>
             {t('clarify.cancel')}
           </button>
