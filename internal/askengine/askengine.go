@@ -1802,8 +1802,12 @@ type usageTracker struct {
 	reported time.Time
 }
 
-func newUsageTracker(report func(Progress)) *usageTracker {
-	return &usageTracker{report: report}
+// newUsageTracker starts from the client's cumulative count at the ask's
+// beginning. Provider snapshots carry everything the client has billed since
+// construction, so a zero baseline would fold every earlier ask in a
+// long-lived process into this turn's live figure.
+func newUsageTracker(report func(Progress), before entry.Usage) *usageTracker {
+	return &usageTracker{report: report, last: before}
 }
 
 // observe folds one provider usage snapshot in. The snapshot is the client's
@@ -1954,7 +1958,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// Live token accounting for the status line. Provider snapshots arrive
 	// through entry.WithStreamUsage on every streaming call below; streamed
 	// bytes cover dialects that report usage only at end-of-stream.
-	tracker := newUsageTracker(cb.progress)
+	tracker := newUsageTracker(cb.progress, usageBefore)
 	if cb.OnDelta != nil {
 		onDelta := cb.OnDelta
 		cb.OnDelta = func(text string) {
