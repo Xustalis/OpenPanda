@@ -245,6 +245,7 @@ func init() {
 		{"lang", "system", "cmd.lang", (*repl).cmdLang},
 		{"version", "system", "cmd.version", (*repl).cmdVersion},
 		{"read", "system", "cmd.read", (*repl).cmdRead},
+		{"edit", "system", "cmd.edit", (*repl).cmdEdit},
 		{"view", "system", "cmd.read", (*repl).cmdRead},
 		{"cat", "system", "cmd.read", (*repl).cmdRead},
 		{"md", "system", "cmd.read", (*repl).cmdRead},

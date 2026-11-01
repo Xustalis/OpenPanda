@@ -367,6 +367,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// submits exactly as if the user had waited for the prompt.
 		next, drain := m.drainPending()
 		return next, drain
+	case editDoneMsg:
+		// The editor came back. Its failure is worth a line in the transcript
+		// (a mistyped $EDITOR is otherwise silent); a clean exit needs nothing.
+		if msg.err != nil {
+			return m, m.printBlock(block{kind: blockError, body: msg.err.Error()})
+		}
+		return m, nil
 	case blockCommitMsg:
 		return m, nil
 	case droppedMsg:
@@ -1350,6 +1357,10 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 		// mid-turn — asking a question the main thread should not carry is the
 		// whole reason it exists.
 		return m, m.openSide(arg)
+	case "edit":
+		// The editor takes the terminal, so this hands off through ExecProcess
+		// rather than running an exec pump.
+		return m.editFile(arg)
 	case "clear", "cls", "claer":
 		// Visual clear only — the conversation survives (/new is the wipe).
 		// Blocks vanish from the next frame; ClearScreen forces a repaint so

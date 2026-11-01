@@ -221,6 +221,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/context", h.getContext)
 	mux.HandleFunc("GET /api/cost", h.getCost)
 	mux.HandleFunc("GET /api/fs/read", h.readFile)
+	mux.HandleFunc("GET /api/fs/file", h.viewFile)
 	mux.HandleFunc("GET /api/fs/image", h.getImage)
 	mux.HandleFunc("GET /api/fs/files", h.listFiles)
 	mux.HandleFunc("POST /api/fs/reveal", h.revealPath)

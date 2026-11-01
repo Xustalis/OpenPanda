@@ -8,6 +8,9 @@ package i18n
 
 var messages = map[Locale]map[string]string{
 	English: {
+		"cmd.edit":                     "[path][:line] — open a file in $EDITOR at a line",
+		"repl.edit.usage":              "usage: /edit <path>[:line]",
+		"repl.edit.failed":             "editor failed",
 		"tui.side.title":               "SIDE CHANNEL",
 		"tui.side.escape":              "esc back",
 		"tui.side.footer":              "enter send · esc back · ctrl+c stop · /side close discards",
@@ -1217,6 +1220,9 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "The plan cannot run: {err}",
 	},
 	ChineseSimp: {
+		"cmd.edit":                     "[路径][:行号] — 在 $EDITOR 里按行打开文件",
+		"repl.edit.usage":              "用法：/edit <路径>[:行号]",
+		"repl.edit.failed":             "编辑器启动失败",
 		"tui.side.title":               "侧边对话",
 		"tui.side.escape":              "esc 返回主线程",
 		"tui.side.footer":              "enter 发送 · esc 返回 · ctrl+c 停止 · /side close 丢弃",
@@ -2417,6 +2423,9 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "计划无法执行：{err}",
 	},
 	Japanese: {
+		"cmd.edit":                               "[パス][:行] — $EDITOR でファイルをその行から開く",
+		"repl.edit.usage":                        "使い方: /edit <パス>[:行]",
+		"repl.edit.failed":                       "エディタの起動に失敗しました",
 		"tui.side.title":                         "サイドチャンネル",
 		"tui.side.escape":                        "esc でメインへ戻る",
 		"tui.side.footer":                        "enter 送信 · esc で戻る · ctrl+c 停止 · /side close で破棄",
@@ -3602,6 +3611,9 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "計画を実行できません：{err}",
 	},
 	Spanish: {
+		"cmd.edit":                               "[ruta][:línea] — abrir un archivo en $EDITOR en una línea",
+		"repl.edit.usage":                        "uso: /edit <ruta>[:línea]",
+		"repl.edit.failed":                       "el editor falló",
 		"tui.side.title":                         "CANAL LATERAL",
 		"tui.side.escape":                        "esc volver",
 		"tui.side.footer":                        "enter enviar · esc volver · ctrl+c detener · /side close descartar",
@@ -4787,6 +4799,9 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "El plan no puede ejecutarse: {err}",
 	},
 	German: {
+		"cmd.edit":                               "[Pfad][:Zeile] — eine Datei in $EDITOR an einer Zeile öffnen",
+		"repl.edit.usage":                        "Nutzung: /edit <Pfad>[:Zeile]",
+		"repl.edit.failed":                       "Editor fehlgeschlagen",
 		"tui.side.title":                         "SEITENKANAL",
 		"tui.side.escape":                        "esc zurück",
 		"tui.side.footer":                        "enter senden · esc zurück · ctrl+c stoppen · /side close verwerfen",
