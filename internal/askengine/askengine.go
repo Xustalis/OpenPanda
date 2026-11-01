@@ -594,6 +594,19 @@ func (e *Engine) TaskStore() *core.TaskStore {
 	return core.NewSigningTaskStore(e.db, e.logger)
 }
 
+// FetchArtifact pulls a task's output artifact from the node that ran it into
+// this node's pool. A task report travels back as a hash and the bytes stay
+// where they were made until someone asks — so this is what "bring it here so I
+// can look at it" calls, for the console's preview or a stage that needs the
+// files.
+func (e *Engine) FetchArtifact(ctx context.Context, source, taskID, hash string) (artifact.Manifest, error) {
+	c := e.sched.Load()
+	if c == nil {
+		return artifact.Manifest{}, errors.New("askengine: no scheduler — this node cannot reach the executor")
+	}
+	return c.FetchArtifact(ctx, source, taskID, hash)
+}
+
 // stableNodeID is the runtime identity this engine registers under — the
 // same value initSchedulerLocked computes for the scheduler core. Valid even
 // when the scheduler never came up (card init failure): the owner guard on

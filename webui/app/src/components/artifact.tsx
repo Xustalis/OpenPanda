@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../i18n'
 import { api, fetchBlob, ArtifactFileList, Task } from '../api/client'
+import { ArtifactPreview } from './artifact-preview'
 
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i
 const TEXT_RE = /\.(txt|md|log|json|ya?ml|csv|xml|go|py|ts|tsx|jsx|js|sh|css|html?)$/i
@@ -41,6 +42,7 @@ export function ArtifactSection(props: { task: Task }) {
   const [list, setList] = useState<ArtifactFileList | null>(null)
   const [err, setErr] = useState('')
   const [preview, setPreview] = useState<{ path: string; kind: 'image' | 'text'; url?: string; text?: string } | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const previewURL = useRef('')
 
   useEffect(
@@ -123,6 +125,11 @@ export function ArtifactSection(props: { task: Task }) {
         <button type="button" class="orbit-action-btn" onClick={downloadArchive}>
           {t('artifact.downloadArchive')}
         </button>
+        {/* The page view: the artifact rendered as it was built, on the
+            separate preview origin (see artifact-preview.tsx). */}
+        <button type="button" class="orbit-action-btn" onClick={() => setPreviewOpen(true)}>
+          {t('artifactPreview.open')}
+        </button>
       </div>
       {open && (
         <div class="artifact-body">
@@ -159,6 +166,7 @@ export function ArtifactSection(props: { task: Task }) {
           )}
         </div>
       )}
+      {previewOpen && <ArtifactPreview taskId={taskID} onClose={() => setPreviewOpen(false)} />}
     </div>
   )
 }

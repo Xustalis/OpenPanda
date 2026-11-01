@@ -86,6 +86,10 @@ type Deps struct {
 	// console binary — not the panda install target. The daemon and
 	// `panda web` (both running the panda binary) leave this false.
 	Sidecar bool
+	// Preview is the artifact preview origin (see preview.go). nil disables the
+	// preview endpoints, which then answer 503 like any other unconfigured
+	// dependency.
+	Preview *Preview
 }
 
 // New builds the panel HTTP handler: the static web app under StaticDir plus
@@ -124,6 +128,7 @@ func New(d Deps) http.Handler {
 		cardFilePath:       d.CardPath,
 		updater:            d.Updater,
 		sidecar:            d.Sidecar,
+		preview:            d.Preview,
 		activeAsks:         make(map[string]sessionOperation),
 		approvalOperations: make(map[string]approvalOperation),
 		serviceCtx:         context.Background(),
@@ -157,6 +162,10 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/artifact", h.getTaskArtifact)
 	mux.HandleFunc("GET /api/tasks/{id}/artifact/files", h.listTaskArtifact)
 	mux.HandleFunc("GET /api/tasks/{id}/artifact/file", h.getTaskArtifactFile)
+	// The preview origin (preview.go): a second listener renders the artifact
+	// as a page, and these two say where and pull the bytes here first.
+	mux.HandleFunc("GET /api/tasks/{id}/artifact/preview", h.previewTaskArtifact)
+	mux.HandleFunc("POST /api/tasks/{id}/artifact/fetch", h.fetchTaskArtifact)
 	// The plan plane: read-only views over the tasks that already carry a
 	// plan_id. Starting a plan stays on /api/ask, which classifies and returns
 	// the id; these two are how the console follows one afterwards.
@@ -328,7 +337,7 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("POST /api/push/unsubscribe", h.pushUnsubscribe)
 	}
 	mux.Handle("/", staticHandler(d.StaticDir))
-	return securityHeaders(authMiddleware(d.Token, maxRequestBody(mux)))
+	return h.securityHeaders(authMiddleware(d.Token, maxRequestBody(mux)))
 }
 
 // maxAPIBodyBytes bounds any mutating API request body. Every JSON decoder
@@ -386,7 +395,7 @@ func maxRequestBody(next http.Handler) http.Handler {
 // served by the panel. Even though the panel defaults to loopback binding,
 // these headers protect against MIME sniffing, clickjacking, and referrer
 // leakage if the panel is ever exposed behind a reverse proxy.
-func securityHeaders(next http.Handler) http.Handler {
+func (h *handler) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -397,14 +406,22 @@ func securityHeaders(next http.Handler) http.Handler {
 		// session-export download. No frames, no objects, no foreign
 		// origins anywhere — so a same-origin default with script-src
 		// pinned to 'self' is a strict CSP, not a placeholder.
-		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; script-src 'self'; "+
-				"style-src 'self' 'unsafe-inline'; "+
-				"img-src 'self' data: blob:; connect-src 'self'; "+
-				"font-src 'self' data:; manifest-src 'self'; "+
-				"worker-src 'self'; object-src 'none'; "+
-				"base-uri 'self'; form-action 'self'; "+
-				"frame-ancestors 'none'")
+		csp := "default-src 'self'; script-src 'self'; " +
+			"style-src 'self' 'unsafe-inline'; " +
+			"img-src 'self' data: blob:; connect-src 'self'; " +
+			"font-src 'self' data:; manifest-src 'self'; " +
+			"worker-src 'self'; object-src 'none'; " +
+			"base-uri 'self'; form-action 'self'; " +
+			"frame-ancestors 'none'"
+		// Artifact previews are a second origin on purpose (preview.go); the
+		// console may frame exactly that one and no other. Without this the
+		// default-src 'self' would block the frame outright.
+		if h.preview != nil {
+			if origin := h.preview.Origin(); origin != "" {
+				csp += "; frame-src " + origin
+			}
+		}
+		w.Header().Set("Content-Security-Policy", csp)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -584,6 +601,9 @@ type handler struct {
 	// sidecar is true in the standalone panda-webui process; a self-merge
 	// approval there would overwrite the console binary.
 	sidecar bool
+	// preview is the artifact preview origin; nil leaves the preview endpoints
+	// answering 503.
+	preview *Preview
 
 	// cfgMu guards h.cfg only when no engine exists to borrow a lock from —
 	// degraded static mode still serves concurrent HTTP handlers. When the

@@ -1719,6 +1719,17 @@ export const api = {
     return request('GET', `/api/fs/file?${q}`)
   },
 
+  /** Where the console should frame a task's artifact. `state: "remote"` means
+   *  the bytes are still on the node that ran the task; fetch pulls them. */
+  previewTaskArtifact(id: string): Promise<ArtifactPreviewMeta> {
+    return request('GET', `/api/tasks/${encodeURIComponent(id)}/artifact/preview`)
+  },
+
+  /** Pull a task's artifact back from the executor so the preview has bytes. */
+  fetchTaskArtifact(id: string): Promise<{ hash: string; files?: number; already?: boolean; source?: string }> {
+    return request('POST', `/api/tasks/${encodeURIComponent(id)}/artifact/fetch`, {})
+  },
+
   fsFiles(path?: string): Promise<FsFilesResult> {
     const q = path ? `?path=${encodeURIComponent(path)}` : ''
     return request('GET', `/api/fs/files${q}`)
@@ -2014,6 +2025,22 @@ export interface FsFileResult {
   binary: boolean
   size: number
   ext?: string
+}
+
+/** /api/tasks/{id}/artifact/preview. `state` is the only field always present:
+ *  "ready" carries the preview URL, "remote" carries where the archive still
+ *  lives. */
+export interface ArtifactPreviewMeta {
+  state: 'ready' | 'remote'
+  hash: string
+  id?: string
+  entry?: string
+  kind?: 'html' | 'media' | 'file' | 'none'
+  url?: string
+  origin?: string
+  files?: number
+  source?: string
+  can_fetch?: boolean
 }
 
 export interface SessionDiffStat {

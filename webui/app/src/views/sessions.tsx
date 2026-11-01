@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
   ApiError,
@@ -25,7 +25,9 @@ import {
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
 import { FileViewer } from '../components/file-viewer'
+import { ArtifactSection } from '../components/artifact'
 import { FileViewContext, type FileOpener, type FileRef } from '../components/file-link'
+import { ComposerContext } from '../components/composer-context'
 import {
   useAsync,
   useChangeSignal,
@@ -591,6 +593,16 @@ export function SessionsView({
   // One stable opener for every inline code span in the transcript: a new
   // object per render would re-render every clickable mention on each frame.
   const fileOpener = useMemo<FileOpener>(() => ({ open: (ref) => setFileRef(ref) }), [])
+  // The same text-into-the-composer action for every surface that produces a
+  // reference (the file drawer, the artifact preview): the draft lands at the
+  // caret and is never sent on its own.
+  const composerInsert = useCallback((text: string) => {
+    const el = composer.current
+    if (!el) return
+    insertTextAtCaret(el, text)
+    setInput(editorTextOf(el))
+    el.focus()
+  }, [])
   // The task a transcript link asked for. Held here, not in the card, because
   // the click that asks for it is the transcript's: `{ id }` is rebuilt on
   // every request so a second click on the same 查看任务 still re-opens a pane
@@ -2280,6 +2292,7 @@ export function SessionsView({
 
   return (
     <FileViewContext.Provider value={fileOpener}>
+    <ComposerContext.Provider value={composerInsert}>
     <section class="chat">
 
 
@@ -2409,13 +2422,7 @@ export function SessionsView({
             line={fileRef.line}
             session={session?.id ?? null}
             onClose={() => setFileRef(null)}
-            onInsert={(ref) => {
-              const el = composer.current
-              if (!el) return
-              insertTextAtCaret(el, ref)
-              setInput(editorTextOf(el))
-              el.focus()
-            }}
+            onInsert={composerInsert}
           />
         )}
 
@@ -3086,6 +3093,7 @@ export function SessionsView({
         {loadError && <p class="gate-error composer-error">{loadError}</p>}
       </div>
     </section>
+    </ComposerContext.Provider>
     </FileViewContext.Provider>
   )
 }
@@ -3785,6 +3793,11 @@ function DispatchBlock(props: {
             </a>
           </div>
           {chainOpen && <TaskChain taskId={msg.ref} />}
+          {/* The task's output, where the result is read: the file list, the
+              downloads, and the page view on the preview origin. It hangs off
+              the card rather than the task page because the moment a user
+              wants to look at what a task produced is the moment it reports. */}
+          {task?.plan_meta?.output_artifact && <ArtifactSection task={task} />}
         </div>
       )}
     </div>

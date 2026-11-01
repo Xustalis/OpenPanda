@@ -8,6 +8,7 @@ package i18n
 
 var messages = map[Locale]map[string]string{
 	English: {
+		"web.preview.failed":           "artifact preview unavailable: {err}",
 		"cmd.rewind":                   "[turn] — put the thread and its files back to a finished turn",
 		"tui.rewind.title":             "Rewind to a turn",
 		"tui.rewind.item":              "after turn {n}",
@@ -1231,6 +1232,7 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "The plan cannot run: {err}",
 	},
 	ChineseSimp: {
+		"web.preview.failed":           "产物预览不可用：{err}",
 		"cmd.rewind":                   "[轮次] — 把对话和文件一起退回某一轮",
 		"tui.rewind.title":             "回退到某一轮",
 		"tui.rewind.item":              "第 {n} 条之后",
@@ -2445,6 +2447,7 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "计划无法执行：{err}",
 	},
 	Japanese: {
+		"web.preview.failed":                     "成果物プレビューを起動できません: {err}",
 		"cmd.rewind":                             "[ターン] — 会話とファイルを完了したターンまで戻す",
 		"tui.rewind.title":                       "ターンまで戻す",
 		"tui.rewind.item":                        "ターン {n} の後",
@@ -3644,6 +3647,7 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "計画を実行できません：{err}",
 	},
 	Spanish: {
+		"web.preview.failed":                     "vista previa de artefactos no disponible: {err}",
 		"cmd.rewind":                             "[turno] — devolver el hilo y sus archivos a un turno terminado",
 		"tui.rewind.title":                       "Volver a un turno",
 		"tui.rewind.item":                        "tras el turno {n}",
@@ -4843,6 +4847,7 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "El plan no puede ejecutarse: {err}",
 	},
 	German: {
+		"web.preview.failed":                     "Artefakt-Vorschau nicht verfügbar: {err}",
 		"cmd.rewind":                             "[Zug] — Thread und Dateien auf einen abgeschlossenen Zug zurücksetzen",
 		"tui.rewind.title":                       "Auf einen Zug zurücksetzen",
 		"tui.rewind.item":                        "nach Zug {n}",
