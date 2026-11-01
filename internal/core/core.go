@@ -33,6 +33,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
+	"github.com/Xustalis/OpenPanda/internal/hooks"
 	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -93,6 +94,14 @@ type Core struct {
 	// isolation wall). Nil disables injection; tests and minimal nodes leave it
 	// nil and are unaffected.
 	memory *memory.Injector
+	// hookRunner fires the operator's lifecycle hooks (see hooks.go). Nil when
+	// none are configured, which is the default — the observer is only
+	// registered once a node actually binds one.
+	hookRunner *hooks.Runner
+	// hookUnsub removes this core's event observer. Kept so a test (or an
+	// embedder) that builds several cores on one database handle can detach
+	// rather than accumulate listeners on the shared hub.
+	hookUnsub func()
 	// daily feeds the Dreaming engine with a line per completed task. Nil
 	// disables daily logging.
 	daily *memory.Daily

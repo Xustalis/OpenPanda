@@ -1228,6 +1228,10 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// that leaves tasks stranded when the process exits.
 	sched := core.NewCore(e.db, stableID, card, schedulerTier(e.cfg.Node.ResourceClass), e.logger, e.cfg.Model)
 	sched.SetDelegationLimits(e.cfg.Delegation)
+	// Lifecycle hooks. A daemon sharing this database has already claimed the
+	// one observer (see core.hookOwners), so this is a no-op there and the
+	// only wiring in a bare CLI.
+	sched.SetHooks(e.cfg.Hooks)
 	// Self-evolution merge approvals may land on this engine (panda approve).
 	// oneShot=true: an engine process must never re-exec itself onto the fresh
 	// binary — the swap's install.RestartDaemon already bounces the service.

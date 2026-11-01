@@ -108,6 +108,8 @@ func dispatchSub(sub string, args []string) {
 		runCompletion(args)
 	case "read", "view", "cat", "md", "markdown":
 		runRead(args)
+	case "hooks":
+		runHooks(args)
 	case "self":
 		runSelf(args)
 	case "help", "-h", "--help":
