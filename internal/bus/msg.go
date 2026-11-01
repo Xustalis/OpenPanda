@@ -183,6 +183,27 @@ func (e *Envelope) PayloadInto(v any) error {
 	if len(e.Payload) == 0 {
 		return nil
 	}
+	// The bulk carriers take the codec's single-pass decoder: their data
+	// member is a megabyte of base64 whose stock decode is the receive side's
+	// dominant cost (see payloads_codec.go). Type and target must agree, or a
+	// caller naming the wrong struct for its message still gets the stock
+	// decoder's answer.
+	switch p := v.(type) {
+	case *ArtifactChunkPayload:
+		if e.Type == MsgArtifactChunk {
+			if err := p.unmarshalWire(e.Payload); err != nil {
+				return fmt.Errorf("decode %s payload: %w", e.Type, err)
+			}
+			return nil
+		}
+	case *ArtifactPushPayload:
+		if e.Type == MsgArtifactPush {
+			if err := p.unmarshalWire(e.Payload); err != nil {
+				return fmt.Errorf("decode %s payload: %w", e.Type, err)
+			}
+			return nil
+		}
+	}
 	if err := json.Unmarshal(e.Payload, v); err != nil {
 		return fmt.Errorf("decode %s payload: %w", e.Type, err)
 	}

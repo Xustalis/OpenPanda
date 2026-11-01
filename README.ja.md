@@ -11,8 +11,8 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/プラットフォーム-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/常駐メモリ-~20MB%20RSS-brightgreen)
-![Local First](https://img.shields.io/badge/クラウド依存-ゼロ%20(完全ローカル)-success)
+![Memory](https://img.shields.io/badge/常駐メモリ-~40MB%20RSS-brightgreen)
+![No Cloud Relay](https://img.shields.io/badge/クラウド中継-なし-success)
 
 ---
 
@@ -68,7 +68,7 @@
 - **トラストゾーン**: 各ピアはオペレーター設定の信頼ティア（`panda nodes trust <id> mesh|guarded|open`）を持ち、委譲タスクがそのピアへ公開してよい範囲と、そのピア発の受入タスクの准入を制限します。表示コンテンツはエンドツーエンドで mesh 限定——信頼を降格すると転送中の画面送信も遮断されます。
 
 ### 2. 🤖 あらゆるエージェントの統括 ＆ 自動フォールバック
-- **主要エージェント対応**: 専用アダプターは9種類（Claude Code、OpenAI Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、OpenClaw）。ZCode を含む任意のヘッドレス CLI は設定可能な generic ブリッジで接続できます。
+- **主要エージェント対応**: 専用アダプターは10種類（Claude Code、OpenAI Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、OpenClaw、ZCode）。その他の任意のヘッドレス CLI は設定可能な generic ブリッジで接続できます。
 - **マルチモデルレジストリと自動フォールバック**: `panda model add|switch|test` がヘルスブレーカー付きで複数プロバイダーを管理。API 残高不足や 401/403 の資格情報失効時、設定済みの代替モデルを自動注入してタスクを完遂。
 - **マルチハーネス実行**: `panda ask --agents a,b --mode parallel` が一つの指示を plan として複数エージェントに送り、それぞれの結果を回収。
 - **完全透明な実行トレース**: Bash コマンド、ファイル編集、ツール呼び出しをリアルタイムにターミナルやブラウザへ表示。
@@ -97,7 +97,7 @@
 - **`panda rpc`**（実験的）: `status`・ストリーミング `ask`・`session.*` を提供する NDJSON-over-stdio 埋め込み面。`scripts/panda_rpc.py` が最小の参照クライアント。
 - **サブスクリプション OAuth**（実験的）: `panda auth login anthropic` が PKCE で Claude Pro/Max をサインインし、トークンを透過リフレッシュ。
 
-### 6. 🪶 超軽量（常駐メモリ約 20MB）
+### 6. 🪶 超軽量（アイドル時常駐メモリ約 40MB）
 - 単一の純 Go 静的バイナリ（Pure Go SQLite WAL モード）。
 - 20 ドルの SBC（Raspberry Pi）からハイエンドサーバーまで軽快に常駐動作。
 

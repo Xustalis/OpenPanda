@@ -29,10 +29,11 @@ const ToolNameTaskSubmit = "task_submit"
 const ToolNameTaskBudget = "task_budget"
 
 // classificationCacheVersion tags every cache row with the semantics that
-// produced it. Bump it whenever the key coverage or the cacheability rules
-// change, so rows written under the previous semantics can never be served
-// (they expire by TTL).
-const classificationCacheVersion = "v2"
+// produced it. Bump it whenever the key coverage, the cacheability rules or
+// the resident prompt rules change, so rows written under the previous
+// semantics can never be served (they expire by TTL). v3: coreRules gained
+// the "Operating this node" routing guidance.
+const classificationCacheVersion = "v3"
 
 // classificationCacheable reports whether a classified Output may be replayed
 // from the disk cache. Kinds that materialize durable work — a task row, or a
@@ -223,11 +224,15 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 	if registry != nil {
 		specs = registry.Specs()
 	}
-	resp, err := c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning)
+	var streamOpts []StreamOption
+	if po.UsageObserver != nil {
+		streamOpts = append(streamOpts, WithUsageObserver(po.UsageObserver))
+	}
+	resp, err := c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning, streamOpts...)
 	if err == nil && emptyCompletion(resp) {
 		// Nothing streamed (Text is empty by definition here), so replaying
 		// the call cannot double-display deltas on the user's screen.
-		resp, err = c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning)
+		resp, err = c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning, streamOpts...)
 	}
 	if err != nil {
 		return Output{}, WrapAPIError(err, po.UserLocale)

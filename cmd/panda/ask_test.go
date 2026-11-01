@@ -65,6 +65,8 @@ func TestParseSubcommand(t *testing.T) {
 		{"config after prompt", []string{"ask", "hi", "-config", "x.yaml"}, "ask", []string{"hi"}, "x.yaml"},
 		{"repl no flags", []string{}, "", []string{}, ""},
 		{"non-global flag forwards", []string{"--watch", "queue"}, "queue", []string{"--watch"}, ""},
+		{"repl resume takes a value", []string{"--resume", "abc"}, "", []string{"--resume", "abc"}, ""},
+		{"repl resume value after globals", []string{"--config", "x.yaml", "--resume", "abc"}, "", []string{"--resume", "abc"}, "x.yaml"},
 		{"dashdash ends flags", []string{"ask", "--", "-config"}, "ask", []string{"--", "-config"}, ""},
 	}
 	for _, tc := range cases {

@@ -411,6 +411,7 @@ func distributionEntries(prefix string) []string {
 		"capabilities.example-desktop.yaml",
 		"capabilities.example-edge.yaml",
 		"LICENSE",
+		"LICENSING.md",
 		"README.md",
 	} {
 		if _, err := os.Stat(filepath.Join(prefix, name)); err == nil {

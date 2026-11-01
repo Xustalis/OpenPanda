@@ -278,11 +278,15 @@ keeping the token out of browser history and proxy logs.
 
 **How long does REPL session context last?**
 
-Persisted per project shard at
-`~/.local/state/openpanda/conversations/<project>.json` (`default.json`
-outside projects; the old `conversation.json` migrates on first access);
-when the 24k-character budget overflows, overflowing history is folded
-into a model-written running digest first (automatic compression), and
-only when the model is unreachable does it degrade to trimming the
-oldest. `/new` clears, `/history` views, `panda ask --continue`
-continues; long threads can also `panda session fork` at any turn.
+Terminal conversations and the web console share one session store: each
+thread lives under `<data>/sessions/`, and a launch continues the project's
+most recently updated thread (`panda --resume <id>` picks one, `--new`
+starts fresh). When the 24k-character budget overflows, historical turns are
+folded into a model-written running digest first (automatic compression), and
+only when the model is unreachable does it degrade to trimming the oldest.
+`/new` starts a new conversation (the old thread is kept), `/history` views,
+`/sessions` switches, `panda ask --continue` continues; long threads can also
+`panda session fork` at any turn. Legacy
+`~/.local/state/openpanda/conversations/*.json` files are imported into
+sessions once on first launch and renamed to `.json.migrated` (the original
+is kept).

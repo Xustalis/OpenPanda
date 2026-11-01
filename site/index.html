@@ -8,6 +8,9 @@
 <meta name="description" data-i18n-content="meta.desc" content="OpenPanda 是本地优先的图状编排内核。它不替代 Claude Code、Codex，而是把你所有设备上已有的 Agent 连成一张网：意图、拆解、路由、监督、验收，全部在本地完成。" />
 <meta name="author" content="Xustalis" />
 <link rel="canonical" href="https://xustalis.github.io/OpenPanda/" />
+<link rel="alternate" hreflang="zh-CN" href="https://xustalis.github.io/OpenPanda/" />
+<link rel="alternate" hreflang="en" href="https://xustalis.github.io/OpenPanda/?lang=en" />
+<link rel="alternate" hreflang="x-default" href="https://xustalis.github.io/OpenPanda/" />
 
 <!-- Open Graph / social. The canonical host is set once here and in sitemap.xml;
      change both if the site moves to a custom domain. -->
@@ -17,15 +20,15 @@
 <meta property="og:locale:alternate" content="en_US" />
 <meta property="og:url" content="https://xustalis.github.io/OpenPanda/" />
 <meta property="og:title" data-i18n-content="meta.title" content="OpenPanda — 让异构的智能体与设备，像一个整体一样工作" />
-<meta property="og:description" data-i18n-content="meta.ogDesc" content="本地优先的图状编排内核：把 Claude Code、Codex 与每一台设备连成一张会自己调度、监督、验收的网。零云端中转。" />
+<meta property="og:description" data-i18n-content="meta.ogDesc" content="本地优先的图状编排内核：把 Claude Code、Codex 与每一台设备连成一张会自己调度、监督、验收的网。无厂商中转。" />
 <meta property="og:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
 <meta property="og:image:type" content="image/jpeg" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta property="og:image:alt" data-i18n-content="meta.ogAlt" content="OpenPanda — 深空银河与地球边缘上的项目标题" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" data-i18n-content="meta.title" content="OpenPanda — Local-first graph orchestration" />
-<meta name="twitter:description" data-i18n-content="meta.ogDesc" content="把异构的智能体与设备，编成一张会自己调度、监督、验收的网。零云端中转。" />
+<meta name="twitter:title" data-i18n-content="meta.title" content="OpenPanda — 让异构的智能体与设备，像一个整体一样工作" />
+<meta name="twitter:description" data-i18n-content="meta.ogDesc" content="把异构的智能体与设备，编成一张会自己调度、监督、验收的网。无厂商中转。" />
 <meta name="twitter:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
 
 <meta name="theme-color" content="#05070b" media="(prefers-color-scheme: dark)" />
@@ -35,6 +38,9 @@
 <link rel="preconnect" href="https://api.github.com" crossorigin />
 <link rel="preload" href="fonts/inter-normal-400_700.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="fonts/newsreader-normal-300_500.woff2" as="font" type="font/woff2" crossorigin />
+<!-- The hero still is the first paint (and the LCP) while scene.js decodes
+     the 3D plate; start it in the head so it does not wait for the stylesheet. -->
+<link rel="preload" href="textures/hero-still.webp" as="image" type="image/webp" fetchpriority="high" />
 <link rel="stylesheet" href="css/site.css" />
 
 <!-- Language bootstrap. Runs before the body parses so <html lang>, the toggle
@@ -71,7 +77,7 @@
       "name": "OpenPanda",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Linux, Windows",
-      "description": "本地优先的图状编排内核：把异构的智能体与设备连成一张可路由、可监督、可验收的网，零云端中转。",
+      "description": "本地优先的图状编排内核：把异构的智能体与设备连成一张可路由、可监督、可验收的网，无厂商中转。",
       "url": "https://xustalis.github.io/OpenPanda/",
       "downloadUrl": "https://github.com/Xustalis/OpenPanda/releases",
       "codeRepository": "https://github.com/Xustalis/OpenPanda",
@@ -91,7 +97,7 @@
         {
           "@type": "Question",
           "name": "需要 GPU 或额外的模型额度吗？",
-          "acceptedAnswer": { "@type": "Answer", "text": "不需要 GPU。路由、监督和验收都用你已经配置的模型提供方，本机模型或 API 都可以。守护进程常驻内存约 20MB，空闲时几乎不占 CPU。" }
+          "acceptedAnswer": { "@type": "Answer", "text": "不需要 GPU。路由、监督和验收都用你已经配置的模型提供方，本机模型或 API 都可以。守护进程空闲时常驻内存约 40MB，几乎不占 CPU。" }
         },
         {
           "@type": "Question",
@@ -101,12 +107,12 @@
         {
           "@type": "Question",
           "name": "支持哪些平台和 Agent？",
-          "acceptedAnswer": { "@type": "Answer", "text": "六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 10 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。" }
+          "acceptedAnswer": { "@type": "Answer", "text": "六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 11 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness、ZCode，以及一个可以接任意其他无头 CLI 的通用适配器。" }
         },
         {
           "@type": "Question",
           "name": "现在能用在生产环境吗？",
-          "acceptedAnswer": { "@type": "Answer", "text": "v0.1.3「Constellation」是发布级这条线的当前版本（v0.1.0 起这条线进入发布级），可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 status.md 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、跨节点 hello 重放（协议级，后续版本处理）。逐条列出，不含糊。" }
+          "acceptedAnswer": { "@type": "Answer", "text": "v0.1.3「Constellation」是发布级这条线的当前版本（v0.1.0 起这条线进入发布级），可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 status.md 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、daemon→面板 mesh 指标 IPC。逐条列出，不含糊。" }
         },
         {
           "@type": "Question",
@@ -143,7 +149,7 @@
 <div class="scroll-progress" id="scroll-progress" aria-hidden="true"><i></i></div>
 
 <!-- ═══════════════════════════════ NAV ═══════════════════════════════ -->
-<nav class="site-nav" id="site-nav" aria-label="Primary">
+<nav class="site-nav" id="site-nav" aria-label="主导航" data-i18n-aria="nav.primary">
   <a class="brand" href="#top" aria-label="OpenPanda">
     <svg class="brand-mark" width="27" height="27" viewBox="0 0 40 40" aria-hidden="true"><defs><mask id="pmNav"><rect width="40" height="40" fill="#000"/><circle cx="20" cy="21.9" r="11.6" fill="#fff"/><circle cx="12.1" cy="10.7" r="4.7" fill="#fff"/><circle cx="27.9" cy="10.7" r="4.7" fill="#fff"/><ellipse cx="15.2" cy="20.1" rx="2.45" ry="3.05" transform="rotate(-16 15.2 20.1)" fill="#000"/><ellipse cx="24.8" cy="20.1" rx="2.45" ry="3.05" transform="rotate(16 24.8 20.1)" fill="#000"/><ellipse cx="20" cy="26.4" rx="1.55" ry="1.15" fill="#000"/></mask></defs><rect width="40" height="40" fill="currentColor" mask="url(#pmNav)"/></svg>
     <span>Open<b>Panda</b></span>
@@ -165,7 +171,7 @@
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
       <span>K</span>
     </button>
-    <button class="menu-toggle" id="menu-toggle" aria-label="Open menu" data-i18n-aria="nav.menu" aria-expanded="false" aria-controls="mobile-menu">
+    <button class="menu-toggle" id="menu-toggle" aria-label="打开菜单" data-i18n-aria="nav.menu" aria-expanded="false" aria-controls="mobile-menu">
       <span></span><span></span>
     </button>
     <a class="nav-gh" href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">
@@ -176,7 +182,7 @@
   </div>
 </nav>
 
-<div class="mobile-menu" id="mobile-menu" hidden>
+<div class="mobile-menu" id="mobile-menu" role="dialog" aria-modal="true" aria-label="导航" data-i18n-aria="menu.aria" hidden>
   <div class="mobile-menu-inner">
     <p class="mono-label" data-i18n="menu.label">INDEX</p>
     <a href="#why"><b>01</b><span data-i18n="nav.why">四堵墙</span></a>
@@ -258,6 +264,7 @@
       <li>OpenClaw</li>
       <li>Pi</li>
       <li>DeepSeek Harness</li>
+      <li>ZCode</li>
       <li class="adapter-any" data-i18n="adapters.any">任意无头 CLI</li>
     </ul>
   </div>
@@ -375,40 +382,40 @@
           <span class="dots"><i></i><i></i><i></i></span>
           <span class="console-title">OpenPanda — Console</span>
           <span class="console-live"><i></i> LIVE</span>
-          <span class="console-url">127.0.0.1:8787</span>
+          <span class="console-url">127.0.0.1:7840</span>
         </div>
         <div class="console-body">
           <aside class="console-rail">
             <div class="console-brand"><svg class="console-mark" width="15" height="15" viewBox="0 0 40 40" aria-hidden="true"><defs><mask id="pmCon"><rect width="40" height="40" fill="#000"/><circle cx="20" cy="21.9" r="11.6" fill="#fff"/><circle cx="12.1" cy="10.7" r="4.7" fill="#fff"/><circle cx="27.9" cy="10.7" r="4.7" fill="#fff"/><ellipse cx="15.2" cy="20.1" rx="2.45" ry="3.05" transform="rotate(-16 15.2 20.1)" fill="#000"/><ellipse cx="24.8" cy="20.1" rx="2.45" ry="3.05" transform="rotate(16 24.8 20.1)" fill="#000"/><ellipse cx="20" cy="26.4" rx="1.55" ry="1.15" fill="#000"/></mask></defs><rect width="40" height="40" fill="currentColor" mask="url(#pmCon)"/></svg> OpenPanda</div>
             <div class="console-new">+ New task</div>
             <nav>
-              <a class="on">Control <em>3</em></a>
-              <a>Tasks <em>12</em></a>
-              <a>Sessions <em>8</em></a>
-              <a>Skills</a>
-              <a>Memory</a>
+              <a class="on">Chat <em>3</em></a>
+              <a>Workspace</a>
+              <a>Nodes</a>
+              <a>Queue · Tasks · Projects <em>12</em></a>
+              <a>To-dos <em>8</em></a>
               <a>Settings</a>
             </nav>
             <div class="console-user"><span class="av"></span><div><b>This machine · Hub</b><small>panda daemon</small></div></div>
           </aside>
           <div class="console-main">
             <header>
-              <div><h3>Tasks</h3><p>3 running · 1 waiting for approval</p></div>
-              <div class="console-filters"><span class="on">All</span><span>Running</span><span>Approval</span></div>
+              <div><h3>Queue · Tasks · Projects</h3><p>3 in progress · 1 waiting for approval</p></div>
+              <div class="console-filters"><span class="on">All</span><span>In progress</span><span>In review</span></div>
             </header>
             <div class="console-board">
               <div class="console-col">
-                <div class="console-colhead"><span>Queue</span><b>2</b></div>
+                <div class="console-colhead"><span>To do</span><b>2</b></div>
                 <div class="console-card"><h5>Refactor release pipeline</h5><p>build-box · codex</p><div class="console-tags"><span class="tag-auto">Auto</span><span class="tag-muted">2 stages</span></div></div>
                 <div class="console-card"><h5>Generate API docs</h5><p>macbook-pro · claude-code</p><div class="console-tags"><span class="tag-auto">Auto</span></div></div>
               </div>
               <div class="console-col">
-                <div class="console-colhead"><span>Running</span><b>2</b></div>
+                <div class="console-colhead"><span>In progress</span><b>2</b></div>
                 <div class="console-card active"><h5>Fix scheduler tests</h5><p>macbook-pro · claude-code</p><div class="console-progress"><i style="width:64%"></i></div><div class="console-tags"><span class="tag-auto">Judge 2/5</span><span class="tag-muted">Running</span></div></div>
                 <div class="console-card"><h5>Sync dataset to NAS</h5><p>nas-01 · restic</p><div class="console-progress"><i style="width:32%"></i></div><div class="console-tags"><span class="tag-info">Transfer</span></div></div>
               </div>
               <div class="console-col">
-                <div class="console-colhead"><span>Approval</span><b>1</b></div>
+                <div class="console-colhead"><span>In review</span><b>1</b></div>
                 <div class="console-card warn"><h5>Deploy to production</h5><p>build-box · codex</p><div class="console-tags"><span class="tag-warn">Needs approval</span></div><div class="console-approve"><span>Approve</span><span>Reject</span></div></div>
               </div>
             </div>
@@ -451,7 +458,7 @@
         </div>
       </div>
 
-      <p class="figure-caption"><b>FIG. 01</b><span data-i18n="s3.caption">同一次运行的两个视角：控制台看状态与审批，终端看路由与验收。切换看看。</span></p>
+      <p class="figure-caption"><b>FIG. 01</b><span data-i18n="s3.caption">界面示意：控制台看状态与审批，终端看路由与验收，两个视角对应同一次运行。</span></p>
       </div>
     </div>
 
@@ -533,10 +540,10 @@
     </div>
     <div class="stat-grid">
       <div class="stat reveal"><b data-count="3">3</b><span data-i18n="s6.stat1">台真机</span></div>
-      <div class="stat reveal"><b data-count="10">10</b><span data-i18n="s6.stat2">个 Agent 适配器</span></div>
+      <div class="stat reveal"><b data-count="11">11</b><span data-i18n="s6.stat2">个 Agent 适配器</span></div>
       <div class="stat reveal"><b data-count="2760" data-prefix="~">~2760</b><span data-i18n="s6.stat3">项自动化测试</span></div>
-      <div class="stat reveal"><b data-count="20" data-prefix="~" data-suffix="MB">~20MB</b><span data-i18n="s6.stat4">常驻内存</span></div>
-      <div class="stat reveal"><b data-count="0">0</b><span data-i18n="s6.stat5">云端中转</span></div>
+      <div class="stat reveal"><b data-count="40" data-prefix="~" data-suffix="MB">~40MB</b><span data-i18n="s6.stat4">常驻内存</span></div>
+      <div class="stat reveal"><b data-count="0">0</b><span data-i18n="s6.stat5">厂商中转</span></div>
       <div class="stat reveal"><b data-count="6">6</b><span data-i18n="s6.stat6">个发布目标</span></div>
     </div>
     <div class="boundaries reveal">
@@ -617,7 +624,7 @@
         <span class="mile-state" data-i18n="s8.m4.state">计划中</span>
       </article>
     </div>
-    <p class="roadmap-note reveal" data-i18n="s8.note">一键安装默认取最新稳定版（v0.1.3）；要装指定版本，加 --version。</p>
+    <p class="roadmap-note reveal" data-i18n="s8.note">一键安装默认取最新稳定版（v0.1.3）；要装指定版本，安装脚本加 --version（Windows 用 -Version）。</p>
   </div>
 </section>
 
@@ -640,7 +647,7 @@
         <p class="lic-desc" data-i18n="lic.c1.desc">个人使用、学习、公司内部工具、二次开发。</p>
         <ul class="lic-list">
           <li data-i18n="lic.c1.l1">全部源码与预编译产物</li>
-          <li data-i18n="lic.c1.l2">10 个 Agent 适配器，持续增加</li>
+          <li data-i18n="lic.c1.l2">11 个 Agent 适配器，持续增加</li>
           <li data-i18n="lic.c1.l3">可自行修改；对外分发时改动同样开源</li>
           <li data-i18n="lic.c1.l4">GitHub Issues 支持</li>
         </ul>
@@ -713,7 +720,7 @@
             <span class="faq-q" data-i18n="faq.q2.q">需要 GPU 或额外的模型额度吗？</span>
             <span class="faq-icon" aria-hidden="true"></span>
           </summary>
-          <div class="faq-body"><p data-i18n="faq.q2.a">不需要 GPU。路由、监督和验收都用你已经配置的模型提供方，本机模型或 API 都可以。守护进程常驻内存约 20MB，空闲时几乎不占 CPU。</p></div>
+          <div class="faq-body"><p data-i18n="faq.q2.a">不需要 GPU。路由、监督和验收都用你已经配置的模型提供方，本机模型或 API 都可以。守护进程空闲时常驻内存约 40MB，几乎不占 CPU。</p></div>
         </details>
 
         <details class="faq reveal">
@@ -729,7 +736,7 @@
             <span class="faq-q" data-i18n="faq.q4.q">支持哪些平台和 Agent？</span>
             <span class="faq-icon" aria-hidden="true"></span>
           </summary>
-          <div class="faq-body"><p data-i18n="faq.q4.a">六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 10 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。</p></div>
+          <div class="faq-body"><p data-i18n="faq.q4.a">六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 11 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness、ZCode，以及一个可以接任意其他无头 CLI 的通用适配器。</p></div>
         </details>
 
         <details class="faq reveal">
@@ -737,7 +744,7 @@
             <span class="faq-q" data-i18n="faq.q5.q">现在能用在生产环境吗？</span>
             <span class="faq-icon" aria-hidden="true"></span>
           </summary>
-          <div class="faq-body"><p data-i18n="faq.q5.a">v0.1.3「Constellation」是发布级这条线的当前版本（v0.1.0 起这条线进入发布级），可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a> 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、跨节点 hello 重放（协议级，后续版本处理）。逐条列出，不含糊。</p></div>
+          <div class="faq-body"><p data-i18n="faq.q5.a">v0.1.3「Constellation」是发布级这条线的当前版本（v0.1.0 起这条线进入发布级），可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a> 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、daemon→面板 mesh 指标 IPC。逐条列出，不含糊。</p></div>
         </details>
 
         <details class="faq reveal">
@@ -775,7 +782,7 @@
     <div class="install-panel reveal">
       <div class="install-top">
         <h2 class="install-title" data-i18n="s9.title">一行命令，<br>点火入轨。</h2>
-        <p class="install-note" data-i18n="s9.note">安装器会按平台与架构取产物，校验 <span class="nowrap">SHA-256</span>、解压并写进 PATH，装完跑一次 <b>panda init</b> 就绪。默认装最新稳定版，要指定版本就加 <b>--version</b>。</p>
+        <p class="install-note" data-i18n="s9.note">安装器会按平台与架构取产物，校验 <span class="nowrap">SHA-256</span>、解压并写进 PATH，装完跑一次 <b>panda init</b> 就绪。默认装最新稳定版；要指定版本，macOS / Linux 加 <b>--version</b>，Windows 加 <b>-Version</b>。</p>
       </div>
       <div class="install-tabs" role="tablist" aria-label="Install method">
         <button class="install-tab active" data-os="unix" role="tab" aria-selected="true" data-i18n="s9.tab.unix"
@@ -802,7 +809,7 @@
         <div class="qs"><span class="qs-num">03</span><code>panda ask "check system status"</code><p data-i18n="s9.s3">一次性：回答、工具调用或派发。</p></div>
       </div>
       <div class="install-foot">
-        <span data-i18n="s9.license">AGPL-3.0-or-later · 商业许可 · 使用条款</span>
+        <span data-i18n="s9.license"><a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0-or-later</a> · <a href="https://github.com/Xustalis/OpenPanda/blob/main/COMMERCIAL.zh-CN.md" target="_blank" rel="noopener">商业许可</a> · <a href="https://github.com/Xustalis/OpenPanda/blob/main/TERMS.zh-CN.md" target="_blank" rel="noopener">使用条款</a></span>
         <a href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener" data-i18n="s9.star">在 GitHub 上查看 / Star ↗</a>
       </div>
       <div class="install-platforms">
@@ -876,7 +883,7 @@
   <div class="palette-box" role="dialog" aria-modal="true" aria-label="快速跳转" data-i18n-aria="pal.aria">
     <div class="palette-head">
       <svg class="palette-ico" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
-      <input class="palette-input" id="palette-input" type="text" placeholder="跳转章节、打开链接、复制命令…" data-i18n-placeholder="pal.placeholder" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" />
+      <input class="palette-input" id="palette-input" type="text" placeholder="跳转章节、打开链接、复制命令…" data-i18n-placeholder="pal.placeholder" aria-label="快速跳转" data-i18n-aria="pal.aria" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" />
       <kbd>ESC</kbd>
     </div>
     <ul class="palette-list" id="palette-list" role="listbox" aria-label="结果" data-i18n-aria="pal.results"></ul>

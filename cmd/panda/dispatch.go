@@ -14,9 +14,9 @@ import (
 // one-command-per-line shape stays the cheapest read of the CLI's surface.
 // Every handled case runs its runner and returns to main, which returns;
 // the default branch either finds a file/bare-prompt route or exits 2 on a
-// real typo. subcommandNames() is the same list written out as data for
-// `suggest` and shell completion — a name missing there costs a suggestion,
-// not a command.
+// real typo. subcommandNames() (internal/nodecli) is the same vocabulary as
+// data, for `suggest` and shell completion; a test parses this switch and
+// fails a case the catalog does not cover.
 func dispatchSub(sub string, args []string) {
 	switch sub {
 	case "daemon", "serve":

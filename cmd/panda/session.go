@@ -836,6 +836,11 @@ func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, wor
 			lr.delta(chunk)
 		},
 		OnProgress: func(p askengine.Progress) {
+			// A usage counter is not a milestone: printing it here would emit a
+			// bare bullet for every report.
+			if p.Kind == askengine.ProgressUsage {
+				return
+			}
 			if !lr.printed {
 				fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(i18n.Detect(), p))
 			}

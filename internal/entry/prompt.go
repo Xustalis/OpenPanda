@@ -39,6 +39,13 @@ For informational, conversational, or conceptual requests with no external side 
 When invoking controlled tools provided in the tools schema (e.g. memory management, system status, card inspection, reminders), use native tool calling. The Go core validates, authorizes, executes, and records tool calls.
 Note: Native abilities and agent capabilities listed under devices (such as sys:info, build:macos, agent:claude_code, agent:codex, etc.) are NOT controlled tools and MUST be dispatched as a subagent task (Kind 3).
 
+═══ Operating this node ═══
+The node serving this conversation runs OpenPanda, whose CLI covers every part of the node: panda status, panda queue, panda nodes, panda web, panda daemon, panda model, panda config, panda skill, panda memory, panda doctor, panda update.
+- A read or queue disposition that a controlled tool already covers — system status, card or peer inspection, listing, cancelling, prioritising, moving, approving or rejecting a queued task — is a Kind 2 tool call. Do not send it to an agent as a shell command.
+- An imperative request with no controlled tool behind it (start or stop the web console or daemon, switch models, run diagnostics, install an update) is a Kind 3 task: put the exact panda command in spec.target — e.g. "run panda web --daemon --no-browser, then report the URL it printed" — so the agent executes the node's own command instead of investigating the host as if panda were unknown software.
+- A question about how to do one of these ("怎么启动 web 面板？", "how do I see the queue?") is Kind 1: answer it and start nothing.
+- Ask which target the user means only when their words are genuinely ambiguous (a bare "start web" may mean a project's dev server). Once they name OpenPanda's own console, kernel, queue or nodes, dispatch.
+
 ═══ Kind 3: task ═══
 When a request requires executing commands, modifying files, writing code, running tests, compiling/building software, GPU computation, capturing screenshots, or dispatching any agent harness (such as claude_code, codex, hermes, opencode, grok_build, etc.) or scheduling specific devices (such as orangepi/香橙派, win/Windows, mac, linux) as subagents, you MUST emit a structured task JSON object. The scheduler executes it immediately in subagent mode, streams progress, supervises the outcome, and reports back to you.
 Routing criteria:
@@ -289,6 +296,9 @@ type PromptOptions struct {
 	// spec.acceptance; it never invents a command. Empty means "no project
 	// in view" and the task will be reported unverified.
 	AcceptanceCandidates []contract.Candidate
+	// UsageObserver is delivered to the streaming call this prompt is sent
+	// through; see WithStreamUsage. It takes no part in building the prompt.
+	UsageObserver func(Usage)
 }
 
 // ClassifyOption tweaks the system prompt the Classify* entry points build.
@@ -303,6 +313,13 @@ func WithASCIIOnly() ClassifyOption {
 // WithLocale sets the user language preference for prompt construction.
 func WithLocale(loc i18n.Locale) ClassifyOption {
 	return func(p *PromptOptions) { p.UserLocale = loc }
+}
+
+// WithStreamUsage attaches the live token-usage observer to the streaming
+// classification this prompt is used for. Apply it at the ask boundary so a
+// status line can show consumption while the model is still writing.
+func WithStreamUsage(fn func(Usage)) ClassifyOption {
+	return func(p *PromptOptions) { p.UsageObserver = fn }
 }
 
 // WithRequestMode records the slash-prefix mode the user chose for the turn

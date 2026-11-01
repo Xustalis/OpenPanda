@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,13 +20,11 @@ import (
 )
 
 // newIsolatedTUI builds a TUI whose convo persistence lands in a throwaway
-// XDG_STATE_HOME, so loadConvo/saveConvo/clearConvo never touch real CLI state.
+// XDG_STATE_HOME, so loadConvo/saveConvo never touch real CLI state.
 func newIsolatedTUI(t *testing.T) tuiModel {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	old := cliConfigPath
-	cliConfigPath = filepath.Join(t.TempDir(), "missing-config.yaml")
-	t.Cleanup(func() { cliConfigPath = old })
+	_ = writeTestConfig(t, t.TempDir())
 	r := &repl{loc: i18n.Locale("en"), cfg: &config.Config{}, interactive: true}
 	r.cfg.Storage.SkillsPath = t.TempDir() // /skills hub must not seed builtins into cwd
 	m := newTUIModel(r)
@@ -161,10 +158,15 @@ func TestTUINewWipesConvoAndFile(t *testing.T) {
 		t.Fatal("/new should batch the repaint with the note")
 	}
 
-	// With a bound session /new refuses, mirroring the classic guard.
+	// With a bound session /new detaches: the thread keeps its history in the
+	// store and stays in the console's rail, while the pane clears and the next
+	// prompt opens a fresh thread.
 	st := sessions.NewStore(t.TempDir())
 	sess, err := st.Create("thread")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: "keep"}); err != nil {
 		t.Fatal(err)
 	}
 	m.r.sessionsSt = st
@@ -172,11 +174,17 @@ func TestTUINewWipesConvoAndFile(t *testing.T) {
 	m.r.convo = append(m.r.convo, entry.Turn{Role: "user", Content: "keep"})
 	next, _ = m.submit("/new")
 	m = next.(tuiModel)
-	if len(m.r.convo) != 1 {
-		t.Fatal("/new with a bound session must not clear the bare convo")
+	if m.r.sessID() != "" {
+		t.Fatal("/new must detach the bound session")
 	}
-	if got := lastBlock(m); !strings.Contains(got.body, "session") {
-		t.Fatalf("/new with a bound session should explain the refusal, got %q", got.body)
+	if got, err := st.Get(sess.ID); err != nil || len(got.Turns) != 1 {
+		t.Fatalf("/new must not clear the thread: %+v, %v", got, err)
+	}
+	if len(m.r.convo) != 0 {
+		t.Fatalf("/new must clear the bare convo: %+v", m.r.convo)
+	}
+	if got := lastBlock(m); !strings.Contains(got.body, "new conversation") {
+		t.Fatalf("/new should announce the fresh conversation, got %q", got.body)
 	}
 }
 

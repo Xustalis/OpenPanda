@@ -130,4 +130,4 @@ OpenPanda 自己不执行长程任务，而是委派给设备上安装的 agent 
 
 **REPL 里会话上下文能存多久？**
 
-按项目分片持久化在 `~/.local/state/openpanda/conversations/<项目>.json`（项目外为 `default.json`，旧的 `conversation.json` 首次访问自动迁移）；24k 字符预算超出时优先把溢出的历史折叠成模型写的 running digest（自动压缩），模型不可达才退化为直接裁剪最旧内容。`/new` 清空，`/history` 查看，`panda ask --continue` 接续；长线程还可用 `panda session fork` 在任意轮次分叉。
+终端对话和 Web 控制台是同一套会话：按线程保存在 `<data>/sessions/`，启动时自动接上当前项目最近更新的那条（`panda --resume <id>` 指定、`--new` 开新对话）；24k 字符预算超出时优先把溢出的历史折叠成模型写的 running digest（自动压缩），模型不可达才退化为直接裁剪最旧内容。`/new` 开始新对话（旧线程保留），`/history` 查看，`/sessions` 切换，`panda ask --continue` 接续；长线程还可用 `panda session fork` 在任意轮次分叉。旧版 `~/.local/state/openpanda/conversations/*.json` 在首次启动时导入成会话并改名为 `.json.migrated`，原文件保留。
