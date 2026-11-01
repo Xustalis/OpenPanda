@@ -19,6 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/mdtext"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
 // askValueFlags enumerates `panda ask`'s value-carrying flags for the
@@ -167,16 +168,33 @@ func runAsk(args []string) {
 
 	// --continue: replay the persisted conversation (the REPL's thread)
 	// as history, and record this exchange back into it — a one-shot ask
-	// that behaves like the next turn of the sitting.
-	var history []entry.Turn
-	if *continueConvo {
-		history = loadConvo()
+	// that behaves like the next turn of the sitting. The thread is a session
+	// now, so "the REPL's thread" means the project's newest one; the bare
+	// conversation file is the fallback for a node that never migrated.
+	proj := strings.TrimSpace(*project)
+	if proj == "" {
+		proj, _ = activeProject(cfg)
 	}
-	// The roster: an explicit --team wins; --continue inherits the bare
-	// conversation's persisted pick, so a team chosen in the TUI keeps binding
-	// the same thread from scripts. A one-shot ask with neither stays
-	// unrestricted (the scheduler chooses).
-	agents, err := resolveAskTeam(*team, *continueConvo)
+	var contStore *sessions.Store
+	var contSess *sessions.Session
+	var history []entry.Turn
+	var inheritTeam []string
+	if *continueConvo {
+		contStore, contSess, history = continueTarget(context.Background(), cfg, proj, engine)
+		if contSess != nil {
+			inheritTeam = contSess.Team
+		} else {
+			inheritTeam = loadBareTeam()
+		}
+	}
+	sessID := ""
+	if contSess != nil {
+		sessID = contSess.ID
+	}
+	// The roster: an explicit --team wins; --continue inherits the thread's
+	// persisted pick, so a team chosen in the TUI keeps binding the same thread
+	// from scripts. A one-shot ask with neither stays unrestricted.
+	agents, err := resolveAskTeamWith(*team, inheritTeam)
 	if err != nil {
 		fail(2, "panda: "+err.Error())
 	}
@@ -186,15 +204,27 @@ func runAsk(args []string) {
 		}
 	}
 	recordConvo := func(out *askengine.Result) {
-		if *continueConvo {
-			appendConvo(history, loc, prompt, out, engine)
+		if !*continueConvo {
+			return
 		}
+		if contSess != nil {
+			appendExchangeToSession(contStore, contSess.ID, prompt, out, loc)
+			if out.Kind == "task" {
+				bindTaskToSession(context.Background(), engine, out.TaskID, contSess.ID)
+			}
+			return
+		}
+		appendConvo(history, loc, prompt, out, engine)
 	}
 
 	cwd, _ := os.Getwd()
+	// Continuing a thread runs where the thread lives: its worktree when it has
+	// one, else the engine's bound work path. A one-shot ask keeps the caller's
+	// cwd — the TUI's askContext makes the same choice for a bound session.
+	workDir := continueWorkDir(cwd, contSess, engine)
 	var acceptChecks []contract.Check
 	if len(accept) > 0 {
-		checks, cerr := buildAcceptanceChecks(accept, cwd)
+		checks, cerr := buildAcceptanceChecks(accept, workDir)
 		if cerr != nil {
 			fail(2, i18n.Tf(loc, "cli.task.add.badAccept", "err", cerr.Error()))
 		}
@@ -203,8 +233,8 @@ func runAsk(args []string) {
 	switch *outputFormat {
 	case "json":
 		out, err := engine.AskTurnsScoped(context.Background(), history, prompt, askengine.AskScope{
-			WorkDir: cwd, Agents: agents, Node: strings.TrimSpace(*node), AmbientProject: true,
-			Acceptance: acceptChecks,
+			WorkDir: workDir, Agents: agents, Node: strings.TrimSpace(*node), AmbientProject: true,
+			SessionID: sessID, Acceptance: acceptChecks,
 		}, *authorize, askengine.StreamCallbacks{})
 		if err != nil {
 			emitJSON(map[string]string{"error": err.Error()})
@@ -217,11 +247,11 @@ func runAsk(args []string) {
 		}
 		return
 	case "stream-json":
-		runAskStreamJSON(engine, history, prompt, cwd, agents, strings.TrimSpace(*node), *authorize, acceptChecks, recordConvo)
+		runAskStreamJSON(engine, history, prompt, workDir, agents, strings.TrimSpace(*node), *authorize, acceptChecks, sessID, recordConvo)
 		return
 	}
 
-	out, streamedText, st, err := askStreaming(engine, history, prompt, cwd, agents, strings.TrimSpace(*node), *authorize, acceptChecks, loc)
+	out, streamedText, st, err := askStreaming(engine, history, prompt, workDir, agents, strings.TrimSpace(*node), *authorize, acceptChecks, sessID, loc)
 	if err != nil {
 		fail(1, "panda: "+err.Error())
 	}
@@ -459,7 +489,7 @@ func answerTail(streamed, answer string) string {
 
 // runAskStreamJSON is the headless streaming mode: one NDJSON event per line
 // (status / delta / result / error), consumable by scripts and other tools.
-func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, record func(*askengine.Result)) {
+func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, sessionID string, record func(*askengine.Result)) {
 	write := func(v map[string]any) {
 		line, err := json.Marshal(v)
 		if err != nil {
@@ -473,7 +503,7 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, wo
 		OnStatus:    func(text string) { write(map[string]any{"type": "status", "text": text}) },
 	}
 	out, err := engine.AskTurnsScoped(context.Background(), history, prompt, askengine.AskScope{
-		WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept,
+		WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept, SessionID: sessionID,
 	}, authorize, cb)
 	if err != nil {
 		write(map[string]any{"type": "error", "message": err.Error()})
@@ -500,8 +530,8 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, wo
 // attached, nothing is animated, and the full answer prints once at the end.
 // The streamed marker tells the caller to skip the duplicate final print; the
 // returned status line carries the run's numbers for a closing cost line.
-func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, loc i18n.Locale) (*askengine.Result, string, *cliui.Status, error) {
-	scope := askengine.AskScope{WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept}
+func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, sessionID string, loc i18n.Locale) (*askengine.Result, string, *cliui.Status, error) {
+	scope := askengine.AskScope{WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept, SessionID: sessionID}
 	st := newStatusLine(loc)
 	if !stdoutIsTTY() {
 		out, err := engine.AskTurnsScoped(context.Background(), history, prompt, scope, authorize, askengine.StreamCallbacks{})

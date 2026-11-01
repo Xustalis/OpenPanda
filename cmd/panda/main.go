@@ -167,12 +167,24 @@ func bareInputIsAsk(sub string, rest []string) bool {
 // of argv. Global flags are already gone — extractGlobalFlags lifted them —
 // so any leading dash tokens belong to the subcommand (`panda --watch
 // queue`) and forward to its FlagSet, which either accepts them or errors,
-// instead of being silently dropped here. A value flag before the
-// subcommand can't be resolved (its table belongs to the subcommand), so its
-// value would read as the subcommand — an ambiguity no dispatcher can lift.
+// instead of being silently dropped here. A value flag before the subcommand
+// cannot generally be resolved (its table belongs to the subcommand), so the
+// REPL's own table is consulted — one definition, shared with runRepl.
 func parseSubcommand(args []string) (string, []string) {
-	for i, a := range args {
+	var valueFlags map[string]bool
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if strings.HasPrefix(a, "-") && a != "-" {
+			if valueFlags == nil {
+				// Built on first use: constructing the REPL flag set evaluates
+				// its defaults (card discovery), which a flagless command need
+				// not pay for.
+				valueFlags = replValueFlagNames()
+			}
+			name := strings.TrimLeft(a, "-")
+			if !strings.Contains(name, "=") && valueFlags[name] && i+1 < len(args) {
+				i++ // the next token is this flag's value, not a subcommand
+			}
 			continue // flag token: belongs to the subcommand (or "--")
 		}
 		rest := append(append([]string{}, args[:i]...), args[i+1:]...)
