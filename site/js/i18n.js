@@ -55,7 +55,9 @@ export const EN = {
   'nav.why': 'Four Walls',
   'nav.palette': 'Quick jump (⌘K)',
   'nav.menu': 'Open menu',
+  'nav.primary': 'Primary navigation',
   'menu.label': 'INDEX',
+  'menu.aria': 'Navigation',
 
   /* ── hero ──────────────────────────────────────────────────────────── */
   'hero.kicker': 'LOCAL-FIRST ORCHESTRATION KERNEL',
@@ -251,7 +253,7 @@ export const EN = {
     'Desktop shell (tray residency, global hotkeys, self-update), dense mesh layer, honest status reporting.',
   's8.m4.state': 'Planned',
   's8.note':
-    'The one-liner resolves the latest stable (v0.1.3); to install a specific version, add --version.',
+    'The one-liner resolves the latest stable (v0.1.3); to install a specific version, add --version to the installer script (or -Version on Windows).',
 
   /* ── 09 · licensing ────────────────────────────────────────────────── */
   'lic.title': 'Open source,<br>with the price in plain sight.',
@@ -303,7 +305,7 @@ export const EN = {
     'Six release targets: macOS, Linux and Windows × amd64 / arm64, plus a lite-linux variant. Ten adapters today — Claude Code, Codex, Antigravity, OpenCode, Grok Build, Hermes, OpenClaw, Pi, DeepSeek Harness, and a generic one that takes any headless CLI.',
   'faq.q5.q': 'Can I use it in production?',
   'faq.q5.a':
-    'v0.1.3 “Constellation” is the current cut of the release-grade line (that line went release-grade at v0.1.0) and holds up day to day. A single machine, a three-machine mesh, and a real cross-network multi-hop (Mac → relay → cloud host, 3 MiB project tree hash identical) all run; self-use and internal tooling are fine, but exposing it to the public is not advised yet. What is unfinished is listed item by item in <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a>: UPnP/NAT-PMP port mapping, source-signature convergence for punch and directory frames, and cross-node hello replay (protocol-level, still open).',
+    'v0.1.3 “Constellation” is the current cut of the release-grade line (that line went release-grade at v0.1.0) and holds up day to day. A single machine, a three-machine mesh, and a real cross-network multi-hop (Mac → relay → cloud host, 3 MiB project tree hash identical) all run; self-use and internal tooling are fine, but exposing it to the public is not advised yet. What is unfinished is listed item by item in <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a>: UPnP/NAT-PMP port mapping, source-signature convergence for punch and directory frames, and the daemon→panel mesh-metrics IPC.',
   'faq.q6.q': 'Is it free? How does licensing work?',
   'faq.q6.a':
     'Personal, study and internal company use cost nothing. Only when you distribute or host a modified version does <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL</a> require you to open your changes; if you would rather not, that is when a commercial licence comes in — just <a href="mailto:fing2024@outlook.com">email</a>.',
@@ -318,13 +320,14 @@ export const EN = {
   's9.label': 'LIFTOFF',
   's9.title': 'One command,<br>ignition.',
   's9.note':
-    'The installer picks the artifact for your platform and architecture, verifies <span class="nowrap">SHA-256</span>, unpacks it and writes it into PATH. Then run <b>panda init</b> once. It installs the latest stable by default; add <b>--version</b> to pin a specific one.',
+    'The installer picks the artifact for your platform and architecture, verifies <span class="nowrap">SHA-256</span>, unpacks it and writes it into PATH. Then run <b>panda init</b> once. It installs the latest stable by default; pin a version with <b>--version</b> on macOS / Linux, or <b>-Version</b> on Windows.',
   's9.tab.unix': 'macOS / Linux',
   's9.copy': 'Copy',
   's9.s1': 'Initialise the node, model provider and capability card.',
   's9.s2': 'Enter the interactive TUI console.',
   's9.s3': 'One-shot: answer, tool call, or dispatch.',
-  's9.license': 'AGPL-3.0-or-later · commercial licence · terms of use',
+  's9.license':
+    '<a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0-or-later</a> · <a href="https://github.com/Xustalis/OpenPanda/blob/main/COMMERCIAL.md" target="_blank" rel="noopener">Commercial licence</a> · <a href="https://github.com/Xustalis/OpenPanda/blob/main/TERMS.md" target="_blank" rel="noopener">Terms of use</a>',
   's9.star': 'View / star on GitHub ↗',
   's9.all': 'All archives and checksums ↗',
 
