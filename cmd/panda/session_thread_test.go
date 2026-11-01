@@ -28,6 +28,11 @@ func writeTestConfig(t *testing.T, dir string) *config.Config {
 		t.Fatal(err)
 	}
 	cfgPath := filepath.Join(dir, "config.yaml")
+	// Forward slashes: these values sit in YAML double-quoted scalars, where a
+	// Windows separator starts an escape (\U...) and the config fails to parse.
+	yamlPath := func(name string) string {
+		return filepath.ToSlash(filepath.Join(dataDir, name))
+	}
 	data := fmt.Sprintf(`node:
   name: test-node
 storage:
@@ -39,13 +44,13 @@ storage:
   work_path: "%s"
   artifact_path: "%s"
 `,
-		filepath.Join(dataDir, "panda.db"),
-		filepath.Join(dataDir, "context"),
-		filepath.Join(dataDir, "memory"),
-		filepath.Join(dataDir, "projects"),
-		filepath.Join(dataDir, "skills"),
-		filepath.Join(dataDir, "work"),
-		filepath.Join(dataDir, "artifacts"),
+		yamlPath("panda.db"),
+		yamlPath("context"),
+		yamlPath("memory"),
+		yamlPath("projects"),
+		yamlPath("skills"),
+		yamlPath("work"),
+		yamlPath("artifacts"),
 	)
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
