@@ -87,10 +87,15 @@ func (h *handler) viewFile(w http.ResponseWriter, r *http.Request) {
 			workDir = real
 		}
 	}
-	abs, err := h.resolveViewPath(reqPath, workDir)
+	abs, base, err := h.resolveViewPath(reqPath, workDir)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid path"))
 		return
+	}
+	if base != "" {
+		if real, err := filepath.EvalSymlinks(base); err == nil {
+			base = real
+		}
 	}
 	// Resolve symlinks before the root check, so a link inside the workspace
 	// cannot point outside it.
@@ -122,8 +127,10 @@ func (h *handler) viewFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errors.New("read failed"))
 		return
 	}
-	if workDir != "" {
-		if rel, err := filepath.Rel(workDir, abs); err == nil && !strings.HasPrefix(rel, "..") {
+	// The drawer names the file the way the thread did: relative to the
+	// workspace it runs in, not as a machine path the reader cannot place.
+	if base != "" {
+		if rel, err := filepath.Rel(base, abs); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
 			view.Rel = filepath.ToSlash(rel)
 		}
 	}
@@ -148,27 +155,28 @@ func (h *handler) sessionWorkDir(id string) string {
 	return sess.Worktree
 }
 
-// resolveViewPath turns a request path into an absolute one. ~ expands; a
-// relative path anchors at the session worktree when there is one, and at the
-// node's work path otherwise.
-func (h *handler) resolveViewPath(reqPath, workDir string) (string, error) {
+// resolveViewPath turns a request path into an absolute one and reports the
+// workspace it was anchored at. ~ expands; a relative path anchors at the
+// session worktree when there is one, and at the node's work path otherwise.
+// The base is returned for the caller's relative-name rendering — an absolute
+// request inside the workspace still deserves a short, recognisable name.
+func (h *handler) resolveViewPath(reqPath, workDir string) (abs, base string, err error) {
 	if strings.HasPrefix(reqPath, "~") {
-		if home, err := os.UserHomeDir(); err == nil {
+		if home, herr := os.UserHomeDir(); herr == nil {
 			reqPath = filepath.Join(home, strings.TrimPrefix(reqPath, "~"))
 		}
 	}
-	if !filepath.IsAbs(reqPath) {
-		base := workDir
-		if base == "" {
-			h.readCfg(func(c *config.Config) {
-				base = c.Storage.WorkPath
-			})
-		}
-		if base != "" {
-			reqPath = filepath.Join(base, reqPath)
-		}
+	base = workDir
+	if base == "" {
+		h.readCfg(func(c *config.Config) {
+			base = c.Storage.WorkPath
+		})
 	}
-	return filepath.Abs(reqPath)
+	if !filepath.IsAbs(reqPath) && base != "" {
+		reqPath = filepath.Join(base, reqPath)
+	}
+	abs, err = filepath.Abs(reqPath)
+	return abs, base, err
 }
 
 // allowedViewPath is allowedReadRoot widened by the session's own worktree.
