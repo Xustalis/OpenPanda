@@ -79,6 +79,17 @@ func planConfirmSpec(t *entry.TaskSpec, loc i18n.Locale) (spec entry.ClarifySpec
 	return spec, execLabel, readOnlyLabel, cancelLabel
 }
 
+// recommendedSuffix is the localized marker for a recommended option, or ""
+// when the label already carries it (the model may have appended the wording).
+func recommendedSuffix(label string, loc i18n.Locale) string {
+	marker := i18n.T(loc, "clarify.recommended")
+	bare := strings.NewReplacer("（", "", "）", "", "(", "", ")", "", " ", "").Replace(marker)
+	if strings.Contains(label, marker) || (bare != "" && strings.Contains(label, bare)) {
+		return ""
+	}
+	return " " + marker
+}
+
 // renderClarify is the human-readable form of a pre-execution question round.
 // It is what a surface without a choice card shows (CLI, panel transcript) and
 // what a NeedsClarification Result carries as its Answer: plan prose first,
@@ -103,7 +114,7 @@ func renderClarify(spec *entry.ClarifySpec, loc i18n.Locale) string {
 		for j, o := range q.Options {
 			b.WriteString("\n   " + strconv.Itoa(j+1) + ") " + strings.TrimSpace(o.Label))
 			if o.Label == q.Recommended {
-				b.WriteString(" " + i18n.T(loc, "clarify.recommended"))
+				b.WriteString(recommendedSuffix(o.Label, loc))
 			}
 			if d := strings.TrimSpace(o.Description); d != "" {
 				b.WriteString(" — " + d)

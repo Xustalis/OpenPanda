@@ -60,6 +60,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **Se rechaza reanudar una pregunta aparcada sin respuesta** — el endpoint de aprobación web y la CLI no interactiva ahora indican que se necesita una respuesta, en lugar de reejecutar al agente hacia la misma pregunta.
 
+- **La opción recomendada se marca una sola vez** — una etiqueta que ya lleva «(Recomendado)» no recibe la insignia por segunda vez en la TUI, la web o la CLI.
+
 ### Corregido
 
 - **Alcanzar el límite de turnos del CLI ya no hace fallar la tarea** — cuando un agente se detiene en su límite de turnos por ejecución con una sesión reanudable, el orquestador continúa la misma conversación en una nueva ronda con un límite mayor (200 turnos, acotado por el presupuesto de supervisión) en lugar de registrar un fallo que cada reintento repite. Una parada por límite de turnos tampoco cuenta para el cortacircuitos del agente.

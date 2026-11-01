@@ -710,7 +710,7 @@ func promptClarifyCLI(spec entry.ClarifySpec, loc i18n.Locale) ([]entry.ClarifyA
 		for j, o := range q.Options {
 			suffix := ""
 			if o.Label == q.Recommended {
-				suffix = " " + i18n.T(loc, "clarify.recommended")
+				suffix = clarifyRecommendedSuffix(o.Label, loc)
 			}
 			desc := ""
 			if d := strings.TrimSpace(o.Description); d != "" {
@@ -738,6 +738,18 @@ func promptClarifyCLI(spec entry.ClarifySpec, loc i18n.Locale) ([]entry.ClarifyA
 		answers = append(answers, parseClarifyLine(q, strings.TrimSpace(line)))
 	}
 	return answers, true
+}
+
+// clarifyRecommendedSuffix returns the localized recommended marker, or "" when
+// the label already carries it in any bracket style — the model is told to put
+// the recommendation first, and some models also append the wording.
+func clarifyRecommendedSuffix(label string, loc i18n.Locale) string {
+	marker := i18n.T(loc, "clarify.recommended")
+	bare := strings.NewReplacer("（", "", "）", "", "(", "", ")", "", " ", "").Replace(marker)
+	if strings.Contains(label, marker) || (bare != "" && strings.Contains(label, bare)) {
+		return ""
+	}
+	return " " + marker
 }
 
 // clarifyPreviewText bounds an option preview to a screen-sized sample: the

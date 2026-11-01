@@ -12,6 +12,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
 func clarifyFixture() entry.ClarifySpec {
@@ -160,6 +161,19 @@ func TestTUIClarifyCardShowsPreview(t *testing.T) {
 	card = m.clarifyCard()
 	if strings.Contains(card, "PREVIEW-LAYOUT") {
 		t.Fatalf("stale preview after moving focus:\n%s", card)
+	}
+}
+
+func TestClarifyRecommendedSuffix(t *testing.T) {
+	if got := clarifyRecommendedSuffix("internal", i18n.English); got != " (Recommended)" {
+		t.Fatalf("plain label suffix = %q", got)
+	}
+	// A model that already appended the wording must not get it twice.
+	if got := clarifyRecommendedSuffix("internal (Recommended)", i18n.English); got != "" {
+		t.Fatalf("marked label suffix = %q, want none", got)
+	}
+	if got := clarifyRecommendedSuffix("内部（推荐）", i18n.ChineseSimp); got != "" {
+		t.Fatalf("marked CJK label suffix = %q, want none", got)
 	}
 }
 

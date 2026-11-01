@@ -60,6 +60,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **Ohne Antwort wird ein Frage-Park nicht fortgesetzt** — der Web-Genehmigungsendpunkt und die nicht-interaktive CLI melden jetzt, dass eine Antwort nötig ist, statt den Agenten erneut auf dieselbe Frage laufen zu lassen.
 
+- **Die empfohlene Option wird nur einmal markiert** — ein Label, das „(Empfohlen)" bereits trägt, bekommt das Abzeichen in TUI, Web und CLI nicht ein zweites Mal.
+
 ### Behoben
 
 - **Das Erreichen des CLI-Turn-Limits lässt die Aufgabe nicht mehr scheitern** — stoppt ein Agent an seinem Turn-Limit pro Lauf mit einer fortsetzbaren Sitzung, setzt der Orchestrator dieselbe Unterhaltung in einer neuen Runde mit höherem Limit (200 Turns, begrenzt durch das Aufsichtsbudget) fort, statt einen Fehler zu protokollieren, den jeder Retry wiederholt. Ein Turn-Limit-Stopp belastet auch nicht mehr den Circuit Breaker des Agenten.

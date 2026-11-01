@@ -3746,6 +3746,14 @@ function RunSummaryRow({ run, onOpenTask }: { run: RunSummary; onOpenTask(id: st
   )
 }
 
+/** labelHasMarker reports whether a label already carries the "(Recommended)"
+ *  wording (any bracket style), so the card does not print it twice when the
+ *  model followed the prompt's own advice. */
+function labelHasMarker(label: string, marker: string): boolean {
+  const bare = marker.replace(/[()（）\s]/g, '')
+  return label.includes(marker) || (bare !== '' && label.includes(bare))
+}
+
 /** Pre-execution question card. The entry model asked (or the runtime's
  *  plan-confirm gate fired) before it will create the task; the running SSE
  *  turn is parked on the answer. Questions are answered one at a time so four
@@ -3774,6 +3782,7 @@ function ClarifyCard({
   const q = spec.questions[index]
   if (!q) return null
   const preview = q.multi_select ? '' : (q.options[focused]?.preview ?? '').trim()
+  const recMarker = t('clarify.recommended')
 
   const advance = (answer: ClarifyAnswer) => {
     const next = [...answers.current, answer]
@@ -3834,8 +3843,8 @@ function ClarifyCard({
                 <span class="clarify-option-label">
                   {q.multi_select && <span class="clarify-check">{on ? '✓' : ''}</span>}
                   {o.label}
-                  {o.label === q.recommended && (
-                    <span class="clarify-recommended">{t('clarify.recommended')}</span>
+                  {o.label === q.recommended && !labelHasMarker(o.label, recMarker) && (
+                    <span class="clarify-recommended">{recMarker}</span>
                   )}
                 </span>
                 {o.description && <span class="clarify-option-desc">{o.description}</span>}

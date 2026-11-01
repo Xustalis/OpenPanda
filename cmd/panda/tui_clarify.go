@@ -262,7 +262,7 @@ func (m tuiModel) clarifyCard() string {
 	for i, o := range cur.Options {
 		label := o.Label
 		if label == cur.Recommended {
-			label += " " + i18n.T(m.loc, "clarify.recommended")
+			label += clarifyRecommendedSuffix(label, m.loc)
 		}
 		if d := strings.TrimSpace(o.Description); d != "" {
 			label += m.th.muted.Render(" — " + d)
