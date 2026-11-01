@@ -514,6 +514,15 @@ const en: Messages = {
 
   // Markdown rendering (assistant replies)
   'md.copy': 'Copy',
+  'fileView.title': 'File',
+  'fileView.open': 'Open this file',
+  'fileView.copy': 'Copy path',
+  'fileView.insert': 'Insert',
+  'fileView.close': 'Close',
+  'fileView.binary': 'binary file — nothing to show here',
+  'fileView.empty': 'empty file',
+  'fileView.truncated': 'showing part of a large file',
+  'fileView.linesOf': 'showing {shown} of {total} lines',
   'md.copied': 'Copied',
 
   // Settings view

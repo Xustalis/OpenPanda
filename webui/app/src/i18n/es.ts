@@ -510,6 +510,15 @@ const es: Messages = {
 
   // Renderizado Markdown (respuestas del asistente)
   'md.copy': 'Copiar',
+  'fileView.title': 'Archivo',
+  'fileView.open': 'Abrir este archivo',
+  'fileView.copy': 'Copiar ruta',
+  'fileView.insert': 'Insertar',
+  'fileView.close': 'Cerrar',
+  'fileView.binary': 'archivo binario: no hay nada que mostrar',
+  'fileView.empty': 'archivo vacío',
+  'fileView.truncated': 'mostrando parte de un archivo grande',
+  'fileView.linesOf': 'mostrando {shown} de {total} líneas',
   'md.copied': 'Copiado',
 
   // Settings view

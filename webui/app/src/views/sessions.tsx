@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
   ApiError,
@@ -24,6 +24,8 @@ import {
 } from '../api/client'
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
+import { FileViewer } from '../components/file-viewer'
+import { FileViewContext, type FileOpener, type FileRef } from '../components/file-link'
 import {
   useAsync,
   useChangeSignal,
@@ -582,6 +584,13 @@ export function SessionsView({
   // last reply's line ends. The lane is the same for both cards on purpose:
   // switching from one to the other is a swap in place, not a re-layout.
   const [panel, setPanel] = useState<'' | 'node' | 'orch'>('')
+  // The file the transcript's latest click asked for. The drawer is the
+  // transcript's own surface — a path in a reply opens here, and switching
+  // threads closes it with the rest of the per-thread panel state.
+  const [fileRef, setFileRef] = useState<FileRef | null>(null)
+  // One stable opener for every inline code span in the transcript: a new
+  // object per render would re-render every clickable mention on each frame.
+  const fileOpener = useMemo<FileOpener>(() => ({ open: (ref) => setFileRef(ref) }), [])
   // The task a transcript link asked for. Held here, not in the card, because
   // the click that asks for it is the transcript's: `{ id }` is rebuilt on
   // every request so a second click on the same 查看任务 still re-opens a pane
@@ -599,6 +608,10 @@ export function SessionsView({
   // parent would outlive the card that asked for it.
   useEffect(() => {
     setPanel('')
+    // The file drawer belongs to the thread it was opened in for the same
+    // reason: its path is relative to that thread's worktree, and carrying it
+    // across would show the next thread a file it never mentioned.
+    setFileRef(null)
     // The queue belongs to the thread it was typed in: a counter carried over
     // from another thread would make the next note look like a removal.
     noteCount.current = 0
@@ -2266,6 +2279,7 @@ export function SessionsView({
   const { batchOf, absorbed } = groupDispatches(msgs)
 
   return (
+    <FileViewContext.Provider value={fileOpener}>
     <section class="chat">
 
 
@@ -2385,6 +2399,25 @@ export function SessionsView({
             />
           </div>
         </header>
+
+        {/* The transcript's file drawer: a path in a reply opened here, read
+            against this thread's worktree. It sits above the diff drawer
+            because it is about one file, and the diff is about all of them. */}
+        {fileRef && (
+          <FileViewer
+            path={fileRef.path}
+            line={fileRef.line}
+            session={session?.id ?? null}
+            onClose={() => setFileRef(null)}
+            onInsert={(ref) => {
+              const el = composer.current
+              if (!el) return
+              insertTextAtCaret(el, ref)
+              setInput(editorTextOf(el))
+              el.focus()
+            }}
+          />
+        )}
 
         {diffOpen && diff && (
           <div class="diff-drawer">
@@ -3053,6 +3086,7 @@ export function SessionsView({
         {loadError && <p class="gate-error composer-error">{loadError}</p>}
       </div>
     </section>
+    </FileViewContext.Provider>
   )
 }
 

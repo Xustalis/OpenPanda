@@ -509,6 +509,15 @@ const ja: Messages = {
 
   // Markdown 描画（アシスタントの返答）
   'md.copy': 'コピー',
+  'fileView.title': 'ファイル',
+  'fileView.open': 'このファイルを開く',
+  'fileView.copy': 'パスをコピー',
+  'fileView.insert': '挿入',
+  'fileView.close': '閉じる',
+  'fileView.binary': 'バイナリファイルのため表示できません',
+  'fileView.empty': '空のファイル',
+  'fileView.truncated': '大きいファイルの一部を表示しています',
+  'fileView.linesOf': '{total} 行中 {shown} 行を表示',
   'md.copied': 'コピーしました',
 
   // Settings view

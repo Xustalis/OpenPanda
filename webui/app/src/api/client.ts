@@ -1708,6 +1708,17 @@ export const api = {
     return request('GET', `/api/fs/read?path=${encodeURIComponent(path)}`)
   },
 
+  /** One file for the transcript's read-only drawer: the lines around a focus
+   *  line, resolved against the thread's own worktree. Distinct from fsRead,
+   *  which answers a prompt-sized blob with no line numbers. */
+  fsFile(params: { path: string; session?: string; line?: number; count?: number }): Promise<FsFileResult> {
+    const q = new URLSearchParams({ path: params.path })
+    if (params.session) q.set('session', params.session)
+    if (params.line && params.line > 0) q.set('line', String(params.line))
+    if (params.count && params.count > 0) q.set('count', String(params.count))
+    return request('GET', `/api/fs/file?${q}`)
+  },
+
   fsFiles(path?: string): Promise<FsFilesResult> {
     const q = path ? `?path=${encodeURIComponent(path)}` : ''
     return request('GET', `/api/fs/files${q}`)
@@ -1987,6 +1998,22 @@ export interface FsReadResult {
   content: string
   size: number
   truncated: boolean
+}
+
+/** One file window from /api/fs/file. Start/End are 1-based line numbers of
+ *  Content; TotalLines is -1 when the file was too large to count. */
+export interface FsFileResult {
+  path: string
+  rel?: string
+  content: string
+  start: number
+  end: number
+  total_lines: number
+  line?: number
+  truncated: boolean
+  binary: boolean
+  size: number
+  ext?: string
 }
 
 export interface SessionDiffStat {

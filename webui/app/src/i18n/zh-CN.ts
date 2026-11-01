@@ -506,6 +506,15 @@ const zhCN: Messages = {
 
   // Markdown 渲染（助手回复）
   'md.copy': '复制',
+  'fileView.title': '文件',
+  'fileView.open': '打开这个文件',
+  'fileView.copy': '复制路径',
+  'fileView.insert': '插入',
+  'fileView.close': '关闭',
+  'fileView.binary': '二进制文件，无法在此显示',
+  'fileView.empty': '空文件',
+  'fileView.truncated': '文件较大，仅显示部分',
+  'fileView.linesOf': '显示 {shown} / {total} 行',
   'md.copied': '已复制',
 
   // Settings view
