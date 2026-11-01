@@ -147,7 +147,7 @@ jobs:
   # (miss the re-arm and the wheel is dead after the switch back). Drives the
   # real binary in a pty. Needs both Go and python3, so it is its own leg.
   #
-  # Three contracts, not one: `tui-pty-exit-test` (the "chat saved / resume"
+  # Four contracts, not one: `tui-pty-exit-test` (the "chat saved / resume"
   # note on the restored screen, and a failed turn persisted to the convo file)
   # is part of `make gate-all` and was in no CI job at all — a check that only
   # ever ran on a developer's laptop. All three run here now.
@@ -178,6 +178,8 @@ jobs:
         run: make tui-pty-exit-test
       - name: TUI side channel (pty)
         run: make tui-pty-side-test
+      - name: TUI task rail (pty)
+        run: make tui-pty-sidebar-test
 
   # The review ruleset requires the bare `tui-pty` context, but a matrix job's
   # check names carry their axis value ("tui-pty (macos-15)"), so the required

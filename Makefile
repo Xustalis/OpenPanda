@@ -195,6 +195,16 @@ tui-pty-side-test: build
 		echo "tui-pty-side-test: skipped — this platform has no pty (run it on macOS/Linux)"; \
 	fi
 
+# TUI task-rail check: Ctrl+B opens a second column beside the transcript, the
+# column lists the thread's unfinished work, and closing it gives the columns
+# back. Layout splices are only observable in a real terminal.
+tui-pty-sidebar-test: build
+	@if [ "$$(uname -s)" = "Darwin" ] || [ "$$(uname -s)" = "Linux" ]; then \
+		PANDA_BIN=$(BIN) python3 scripts/tui-sidebar-pty-check.py; \
+	else \
+		echo "tui-pty-sidebar-test: skipped — this platform has no pty (run it on macOS/Linux)"; \
+	fi
+
 test: adapter-test
 	$(GO) test ./...
 
@@ -278,6 +288,7 @@ race-focused:
 #   8. tui-pty-test (真实 pty 下的鼠标所有权契约)
 #   9. tui-pty-exit-test (真实 pty 下的退出提示与失败轮次持久化契约)
 #  10. tui-pty-side-test (真实 pty 下的侧边对话进入/返回/重进/关闭契约)
+#  11. tui-pty-sidebar-test (真实 pty 下的任务侧栏开/关与列宽归还契约)
 #
 # 与 CI 的对应关系：
 #   gate.yml 的每个 job 都必须能在这里跑出来，否则一个只在 CI 里存在的
@@ -298,7 +309,7 @@ gate: fmt-check vet staticcheck vuln build adapter-test test race-focused
 # web tests) + the TUI pty check. CI runs these as separate jobs (see
 # .github/workflows/gate.yml); gate-all is the local equivalent for a pre-merge
 # pass.
-gate-all: gate web-gate tui-pty-test tui-pty-exit-test tui-pty-side-test
+gate-all: gate web-gate tui-pty-test tui-pty-exit-test tui-pty-side-test tui-pty-sidebar-test
 
 # Regenerate the PWA icon set (webui/app/public/icons/) from the stdlib-only generator.
 icons:

@@ -550,6 +550,16 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.sideShowing() {
 		return m.onSideKey(msg)
 	}
+	// The task rail answers Ctrl+B (and, once open, Alt+arrows and Ctrl+G) in
+	// every mode that has a transcript in front of it — the point of the rail
+	// is watching a fan-out while it runs, which is exactly when the input is
+	// busy or a card is up.
+	switch m.mode {
+	case modeIdle, modeAsking, modeExec, modeApproving:
+		if handled, next, cmd := m.sidebarKey(msg); handled {
+			return next, cmd
+		}
+	}
 	if m.mode == modeExec {
 		if lines, ok := m.arrowScrollLines(msg); ok && strings.TrimSpace(m.ta.Value()) == "" {
 			// Arrow scroll only wins while the draft is empty — once the user

@@ -339,6 +339,17 @@ type tuiModel struct {
 	// returned to while the main turn keeps running.
 	side        *sideState
 	sideVisible bool
+
+	// sidebar is the task rail (see tui_sidebar.go): the thread's work as a
+	// side column. Closed by default — the transcript is the default reading
+	// surface, and the rail is for the moments a fan-out makes it unclear.
+	sidebar sidebarState
+
+	// layout records where the last painted frame put each committed block, so
+	// a click on the rail can scroll the transcript to it. Shared through a
+	// pointer for the same reason scrollLimit is: View is a value method that
+	// can publish but cannot write back.
+	layout *transcriptLayout
 }
 
 // pulseStar is the thinking spinner: a star that swells and shrinks in place
@@ -470,6 +481,7 @@ func newTUIModel(r *repl) tuiModel {
 		activity:    &activityCache{},
 		liveRC:      &liveRenderCache{},
 		welcomeC:    &welcomeCache{},
+		layout:      &transcriptLayout{},
 	}
 }
 

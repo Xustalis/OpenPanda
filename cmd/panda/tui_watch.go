@@ -88,6 +88,11 @@ func absorbBaseline(r *repl) tea.Cmd {
 // but /approve and /reject still reach them.
 func (m tuiModel) onWatch(msg watchMsg) (tea.Model, tea.Cmd) {
 	m.projName = msg.proj
+	// The rail is a live view: the poll that keeps the transcript honest also
+	// keeps it current, with no second timer of its own.
+	if m.sidebar.visible {
+		m.refreshSidebar()
+	}
 	cmds := []tea.Cmd{watchTasks(m.r)}
 	note := func(body string) {
 		cmds = append(cmds, m.printBlock(block{kind: blockNote, body: body}))
