@@ -38,7 +38,7 @@ export const EN = {
   'meta.desc':
     'OpenPanda is a local-first graph orchestration kernel. It does not replace Claude Code or Codex — it wires the agents already on your machines into one network, with intent, decomposition, routing, supervision and acceptance all kept local.',
   'meta.ogDesc':
-    'A local-first graph orchestration kernel: Claude Code, Codex and every device you own, wired into one network that schedules, supervises and accepts its own work. Zero cloud relay.',
+    'A local-first graph orchestration kernel: Claude Code, Codex and every device you own, wired into one network that schedules, supervises and accepts its own work. No vendor relay.',
   'meta.ogAlt': 'OpenPanda — the project title over deep space and the limb of Earth',
 
   skip: 'Skip to content',
@@ -208,7 +208,7 @@ export const EN = {
   's6.stat2': 'agent adapters',
   's6.stat3': 'automated tests',
   's6.stat4': 'resident memory',
-  's6.stat5': 'cloud relay',
+  's6.stat5': 'vendor relay',
   's6.stat6': 'release targets',
   's6.bound.label': 'KNOWN BOUNDARIES',
   's6.boundaries':
@@ -262,7 +262,7 @@ export const EN = {
   'lic.c1.flag': 'Default path',
   'lic.c1.desc': 'Personal use, study, internal tools, further development.',
   'lic.c1.l1': 'All source and prebuilt artifacts',
-  'lic.c1.l2': '10 agent adapters, growing',
+  'lic.c1.l2': '11 agent adapters, growing',
   'lic.c1.l3': 'Modify freely; distribute changes under the same licence',
   'lic.c1.l4': 'GitHub Issues support',
   'lic.c1.cta': 'Start installing <span aria-hidden="true">→</span>',
@@ -302,7 +302,7 @@ export const EN = {
     'No, and there are no “our servers”. Nodes connect peer to peer, session content is AEAD-encrypted and clamped hop by hop against the three trust tiers. When the link drops, DTN store-and-forward carries it until the link returns.',
   'faq.q4.q': 'Which platforms and agents are supported?',
   'faq.q4.a':
-    'Six release targets: macOS, Linux and Windows × amd64 / arm64, plus a lite-linux variant. Ten adapters today — Claude Code, Codex, Antigravity, OpenCode, Grok Build, Hermes, OpenClaw, Pi, DeepSeek Harness, and a generic one that takes any headless CLI.',
+    'Six release targets: macOS, Linux and Windows × amd64 / arm64, plus a lite-linux variant. Eleven adapters today — Claude Code, Codex, Antigravity, OpenCode, Grok Build, Hermes, OpenClaw, Pi, DeepSeek Harness, ZCode, and a generic one that takes any other headless CLI.',
   'faq.q5.q': 'Can I use it in production?',
   'faq.q5.a':
     'v0.1.3 “Constellation” is the current cut of the release-grade line (that line went release-grade at v0.1.0) and holds up day to day. A single machine, a three-machine mesh, and a real cross-network multi-hop (Mac → relay → cloud host, 3 MiB project tree hash identical) all run; self-use and internal tooling are fine, but exposing it to the public is not advised yet. What is unfinished is listed item by item in <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a>: UPnP/NAT-PMP port mapping, source-signature convergence for punch and directory frames, and the daemon→panel mesh-metrics IPC.',

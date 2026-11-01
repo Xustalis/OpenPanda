@@ -10,13 +10,13 @@
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![Memory](https://img.shields.io/badge/Memory%20Footprint-~40MB%20RSS-brightgreen)
-![No Cloud Relay](https://img.shields.io/badge/Cloud%20Relay-None-success)
+![No Vendor Relay](https://img.shields.io/badge/Vendor%20Relay-None-success)
 
 ---
 
 ## About
 
-OpenPanda organizes the terminal AI coding agents already on your machines — nine dedicated adapters (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw) plus a configurable generic bridge for any headless CLI, including ZCode — together with your devices into a single execution crew. It is not itself an agent: you issue one instruction; it handles intent classification, task decomposition, dispatch, execution supervision, and result verification — all locally, with no relay service between the machines.
+OpenPanda organizes the terminal AI coding agents already on your machines — ten dedicated adapters (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw, ZCode) plus a configurable generic bridge for any other headless CLI — together with your devices into a single execution crew. It is not itself an agent: you issue one instruction; it handles intent classification, task decomposition, dispatch, execution supervision, and result verification — all locally, with no vendor-operated relay — any relay hop is one of your own nodes.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -29,7 +29,7 @@ OpenPanda organizes the terminal AI coding agents already on your machines — n
                   │   Route, Orchestrate,   │
                   │     Verify & Secure     │
                   └────────────┬────────────┘
-                               │ Direct P2P links (WS + sealed UDP, no cloud relay)
+                               │ Direct P2P links (WS + sealed UDP, no vendor relay)
      ┌─────────────────────────┼─────────────────────────┐
      │                         │                         │
 ┌────▼──────────────┐   ┌──────▼────────────┐   ┌────────▼────────────┐
@@ -71,7 +71,7 @@ The project evolves along two tracks:
 
 - **LAN auto-discovery + Bluetooth-style pairing** — nodes find each other on the LAN with fingerprint-confirmed admission; `panda pair` joins a device via a short code confirmed on both ends, and `panda nodes verify` pins each peer's Ed25519 key.
 - **Capability cards** — each node auto-declares its hardware and tool profile (CPU, RAM, OS, available agents).
-- **P2P mesh** — nodes communicate over an authenticated WebSocket with negotiated per-session AEAD encryption, plus an encrypted UDP data plane with NAT traversal; data never leaves your private network.
+- **P2P mesh** — nodes communicate over an authenticated WebSocket with negotiated per-session AEAD encryption, plus an encrypted UDP data plane with NAT traversal; mesh traffic stays on your own network; only the model calls you configure leave it.
 - **Trust zones** — every peer carries an operator-set tier (`panda nodes trust <id> mesh|guarded|open`) that clamps what a delegated task may expose to that peer and how work inbound from it is admitted; display content is mesh-only end to end, so a trust demotion cuts a screen transfer mid-flight.
 - **Capability-based routing** — the scheduler scores nodes on measured capacity and routes each task to the best match; `panda nodes drain` parks a node for maintenance.
 - **Worktree-traveling delegation** — a file task delegated to another node carries its checkout there and brings the result back.

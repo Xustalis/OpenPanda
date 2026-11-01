@@ -10,13 +10,13 @@
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![Memory](https://img.shields.io/badge/%E5%86%85%E5%AD%98%E5%B8%B8%E9%A9%BB-~40MB%20RSS-brightgreen)
-![No Cloud Relay](https://img.shields.io/badge/%E4%B8%AD%E8%BD%AC%E6%9C%8D%E5%8A%A1-%E6%97%A0-success)
+![无厂商中转](https://img.shields.io/badge/%E5%8E%82%E5%95%86%E4%B8%AD%E8%BD%AC-%E6%97%A0-success)
 
 ***
 
 ## 简介
 
-OpenPanda 将你机器上已有的终端 AI 编程助手——内置九个专用适配器（Claude Code、OpenAI Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、OpenClaw），另有可配置的通用桥接器，可接入任意无头 CLI（包括 ZCode）——与你的设备组织为一支统一的执行队伍。它本身不是 Agent：你发出一条指令，它负责意图理解、任务拆解、调度派发、执行监督与结果校验——全程本地运行，机器之间不经过任何中转服务。
+OpenPanda 将你机器上已有的终端 AI 编程助手——内置十个专用适配器（Claude Code、OpenAI Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、OpenClaw、ZCode），另有可配置的通用桥接器，可接入任意其他无头 CLI——与你的设备组织为一支统一的执行队伍。它本身不是 Agent：你发出一条指令，它负责意图理解、任务拆解、调度派发、执行监督与结果校验——全程本地运行，没有厂商运营的中转服务，中继跳点都是你自己的节点。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

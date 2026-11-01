@@ -565,6 +565,10 @@ export function initHero(canvas) {
   // on a black frame and the photograph appears to pop in afterwards.
   let started = false
   const start = () => {
+    // A late plate still has to produce one more frame: under reduced motion
+    // the loop only paints when needsPaint is set, so a start that arrives
+    // after the safety net would otherwise never reveal the canvas.
+    needsPaint = true
     if (started) return
     started = true
     frame()

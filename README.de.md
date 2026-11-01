@@ -68,7 +68,7 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 - **Trust-Zonen**: Jeder Peer trägt eine vom Betreiber gesetzte Stufe (`panda nodes trust <id> mesh|guarded|open`), die begrenzt, was eine delegierte Aufgabe ihm offenlegen darf und wie eingehende Arbeit von ihm zugelassen wird; Bildschirminhalte sind durchgehend mesh-exklusiv — eine Abstufung des Vertrauens kappt eine laufende Screen-Übertragung mitten im Flug.
 
 ### 2. 🤖 Universelle Agenten-Orchestrierung & Ausfallsicherung
-- **Vorkonfigurierte Adapter**: Neun dedizierte Adapter (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi und OpenClaw). Eine konfigurierbare generische Brücke bindet jede headless CLI ein, darunter ZCode.
+- **Vorkonfigurierte Adapter**: Zehn dedizierte Adapter (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw und ZCode). Eine konfigurierbare generische Brücke bindet jede weitere headless CLI ein.
 - **Multi-Modell-Registry & transparentes Failover**: `panda model add|switch|test` verwaltet mehrere Provider pro Knoten hinter einem Health-Breaker; bei aufgebrauchten Kontingenten oder ungültigen Schlüsseln (401/403) wird automatisch ein Ausweichmodell injiziert und die Aufgabe läuft weiter.
 - **Multi-Harness-Läufe**: `panda ask --agents a,b --mode parallel` verteilt eine Anweisung als Plan an mehrere Agenten und sammelt die Urteile ein.
 - **Vollständige Transparenz**: Verfolge Bash-Befehle, Dateiänderungen und Werkzeugaufrufe live im Terminal oder Browser.

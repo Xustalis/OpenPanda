@@ -20,7 +20,7 @@
 <meta property="og:locale:alternate" content="en_US" />
 <meta property="og:url" content="https://xustalis.github.io/OpenPanda/" />
 <meta property="og:title" data-i18n-content="meta.title" content="OpenPanda — 让异构的智能体与设备，像一个整体一样工作" />
-<meta property="og:description" data-i18n-content="meta.ogDesc" content="本地优先的图状编排内核：把 Claude Code、Codex 与每一台设备连成一张会自己调度、监督、验收的网。零云端中转。" />
+<meta property="og:description" data-i18n-content="meta.ogDesc" content="本地优先的图状编排内核：把 Claude Code、Codex 与每一台设备连成一张会自己调度、监督、验收的网。无厂商中转。" />
 <meta property="og:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
 <meta property="og:image:type" content="image/jpeg" />
 <meta property="og:image:width" content="1200" />
@@ -28,7 +28,7 @@
 <meta property="og:image:alt" data-i18n-content="meta.ogAlt" content="OpenPanda — 深空银河与地球边缘上的项目标题" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" data-i18n-content="meta.title" content="OpenPanda — 让异构的智能体与设备，像一个整体一样工作" />
-<meta name="twitter:description" data-i18n-content="meta.ogDesc" content="把异构的智能体与设备，编成一张会自己调度、监督、验收的网。零云端中转。" />
+<meta name="twitter:description" data-i18n-content="meta.ogDesc" content="把异构的智能体与设备，编成一张会自己调度、监督、验收的网。无厂商中转。" />
 <meta name="twitter:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
 
 <meta name="theme-color" content="#05070b" media="(prefers-color-scheme: dark)" />
@@ -77,7 +77,7 @@
       "name": "OpenPanda",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Linux, Windows",
-      "description": "本地优先的图状编排内核：把异构的智能体与设备连成一张可路由、可监督、可验收的网，零云端中转。",
+      "description": "本地优先的图状编排内核：把异构的智能体与设备连成一张可路由、可监督、可验收的网，无厂商中转。",
       "url": "https://xustalis.github.io/OpenPanda/",
       "downloadUrl": "https://github.com/Xustalis/OpenPanda/releases",
       "codeRepository": "https://github.com/Xustalis/OpenPanda",
@@ -107,7 +107,7 @@
         {
           "@type": "Question",
           "name": "支持哪些平台和 Agent？",
-          "acceptedAnswer": { "@type": "Answer", "text": "六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 10 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。" }
+          "acceptedAnswer": { "@type": "Answer", "text": "六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 11 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness、ZCode，以及一个可以接任意其他无头 CLI 的通用适配器。" }
         },
         {
           "@type": "Question",
@@ -264,6 +264,7 @@
       <li>OpenClaw</li>
       <li>Pi</li>
       <li>DeepSeek Harness</li>
+      <li>ZCode</li>
       <li class="adapter-any" data-i18n="adapters.any">任意无头 CLI</li>
     </ul>
   </div>
@@ -539,10 +540,10 @@
     </div>
     <div class="stat-grid">
       <div class="stat reveal"><b data-count="3">3</b><span data-i18n="s6.stat1">台真机</span></div>
-      <div class="stat reveal"><b data-count="10">10</b><span data-i18n="s6.stat2">个 Agent 适配器</span></div>
+      <div class="stat reveal"><b data-count="11">11</b><span data-i18n="s6.stat2">个 Agent 适配器</span></div>
       <div class="stat reveal"><b data-count="2760" data-prefix="~">~2760</b><span data-i18n="s6.stat3">项自动化测试</span></div>
       <div class="stat reveal"><b data-count="40" data-prefix="~" data-suffix="MB">~40MB</b><span data-i18n="s6.stat4">常驻内存</span></div>
-      <div class="stat reveal"><b data-count="0">0</b><span data-i18n="s6.stat5">云端中转</span></div>
+      <div class="stat reveal"><b data-count="0">0</b><span data-i18n="s6.stat5">厂商中转</span></div>
       <div class="stat reveal"><b data-count="6">6</b><span data-i18n="s6.stat6">个发布目标</span></div>
     </div>
     <div class="boundaries reveal">
@@ -646,7 +647,7 @@
         <p class="lic-desc" data-i18n="lic.c1.desc">个人使用、学习、公司内部工具、二次开发。</p>
         <ul class="lic-list">
           <li data-i18n="lic.c1.l1">全部源码与预编译产物</li>
-          <li data-i18n="lic.c1.l2">10 个 Agent 适配器，持续增加</li>
+          <li data-i18n="lic.c1.l2">11 个 Agent 适配器，持续增加</li>
           <li data-i18n="lic.c1.l3">可自行修改；对外分发时改动同样开源</li>
           <li data-i18n="lic.c1.l4">GitHub Issues 支持</li>
         </ul>
@@ -735,7 +736,7 @@
             <span class="faq-q" data-i18n="faq.q4.q">支持哪些平台和 Agent？</span>
             <span class="faq-icon" aria-hidden="true"></span>
           </summary>
-          <div class="faq-body"><p data-i18n="faq.q4.a">六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 10 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness，以及一个可以接任意无头 CLI 的通用适配器。</p></div>
+          <div class="faq-body"><p data-i18n="faq.q4.a">六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 11 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness、ZCode，以及一个可以接任意其他无头 CLI 的通用适配器。</p></div>
         </details>
 
         <details class="faq reveal">
