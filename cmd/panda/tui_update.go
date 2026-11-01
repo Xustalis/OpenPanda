@@ -1292,7 +1292,7 @@ func (m tuiModel) submitDuringTurn(text string) (tea.Model, tea.Cmd) {
 func (m tuiModel) turnNeedsForeground(name, arg string) bool {
 	switch name {
 	case "new", "resume", "fork", "authorize", "project",
-		"ask", "goal", "plan", "spec":
+		"ask", "goal", "plan", "spec", "rewind", "edit":
 		return true
 	case "sessions", "projects", "model":
 		return arg == "" // bare opens a picker; an argument prints text
@@ -1361,6 +1361,14 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 		// The editor takes the terminal, so this hands off through ExecProcess
 		// rather than running an exec pump.
 		return m.editFile(arg)
+	case "rewind":
+		// Bare opens the picker; "/rewind <turn>" skips straight to the card.
+		// Both end at the same confirmation — the argument changes how many
+		// keystrokes a rewind costs, never whether it asks.
+		if n, err := strconv.Atoi(strings.TrimSpace(arg)); err == nil && n > 0 {
+			return m.confirmRewind(n)
+		}
+		return m.openRewindList()
 	case "clear", "cls", "claer":
 		// Visual clear only — the conversation survives (/new is the wipe).
 		// Blocks vanish from the next frame; ClearScreen forces a repaint so

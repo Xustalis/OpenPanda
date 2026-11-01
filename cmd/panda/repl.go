@@ -205,6 +205,7 @@ func init() {
 		{"session", "chat", "cmd.session", (*repl).cmdSession},
 		{"resume", "chat", "cmd.resume", (*repl).cmdResume},
 		{"fork", "chat", "cmd.fork", (*repl).cmdFork},
+		{"rewind", "chat", "cmd.rewind", (*repl).cmdRewind},
 		{"clear", "chat", "cmd.clear", (*repl).cmdClear},
 		{"team", "chat", "cmd.team", (*repl).cmdTeam},
 		{"node", "system", "cmd.node", (*repl).cmdNode},

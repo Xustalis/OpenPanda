@@ -380,6 +380,24 @@ func (s *Store) Stamps() ([]Stamp, error) {
 // arriving without a stamp gets one here, so every transcript written from
 // now on can be placed on the usage calendar.
 func (s *Store) AppendTurn(id string, turn Turn) (*Session, error) {
+	sess, err := s.appendTurn(id, turn)
+	if err != nil {
+		return nil, err
+	}
+	if turn.Role == "assistant" {
+		// A finished answer is a rewind point (see checkpoint.go). Best-effort
+		// and after the lock is released: the snapshot shells out to git and
+		// must not block another surface's append, and a missing snapshot costs
+		// one rewind target, not the turn itself. Threads without a worktree
+		// cost a file read and return immediately.
+		_ = s.Checkpoint(context.Background(), id)
+	}
+	return sess, nil
+}
+
+// appendTurn is AppendTurn's locked half: the cross-process and in-process
+// read-modify-write, with no snapshotting in the middle of it.
+func (s *Store) appendTurn(id string, turn Turn) (*Session, error) {
 	// Cross-process first, then in-process: the CLI and a panel can both be
 	// appending to one thread, and the read-modify-write below would drop one
 	// side's turn without the file lock. Order matters — the file lock is the
@@ -772,7 +790,24 @@ func (s *Store) RenameProject(oldName, newName string) (int, error) {
 }
 
 // Delete removes the session file (worktree cleanup is the caller's job).
+// The thread's rewind snapshots go with it: they live in the worktree's git
+// directory and nothing would name them once the file is gone.
 func (s *Store) Delete(id string) error {
+	var worktree string
+	if sess, err := s.Get(id); err == nil {
+		worktree = sess.Worktree
+	}
+	if err := s.deleteFile(id); err != nil {
+		return err
+	}
+	if worktree != "" {
+		dropCheckpoints(context.Background(), worktree, id)
+	}
+	return nil
+}
+
+// deleteFile is Delete's locked half.
+func (s *Store) deleteFile(id string) error {
 	unlock, err := lockStore(s.root)
 	if err != nil {
 		return fmt.Errorf("sessions: lock: %w", err)

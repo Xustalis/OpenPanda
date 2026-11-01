@@ -54,6 +54,7 @@ const (
 	listResume
 	listTasks
 	listTeam
+	listRewind
 )
 
 type wizardStep int
@@ -275,6 +276,10 @@ type tuiModel struct {
 	// confirmYes is the slash line the exec pump runs when the user confirms.
 	confirmText string
 	confirmYes  string
+	// confirmRun is the in-loop alternative to confirmYes: an action that has
+	// to run on the Update goroutine (a store write followed by a repaint)
+	// rather than through the exec pump. When set it wins.
+	confirmRun func(*tuiModel) (tea.Model, tea.Cmd)
 
 	// pendingPrompt is the user text of the in-flight ask, kept so the turn can
 	// be recorded into conversation memory when it completes.
