@@ -48,6 +48,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Added
 
+- **The node's command surface reaches every agent** — the CLI's top-level commands, one-line usages and completion vocabulary now come from one registry (`internal/nodecli`), so `panda help` covers `join`, `nodes remove` and `nodes trust`, shell completion stays in step, and the agent prompt carries the exact local command set instead of probing the host. Reads and queue dispositions that controlled tools already cover stay tool calls; only operations with no tool behind them are dispatched to an agent.
+
 ### Fixed
 
 - **Eight adapters can take panda's model; zcode joins them** — every bundled CLI now seeds exactly what it reads for an injected run instead of env vars it ignores: hermes a throwaway `HERMES_HOME`, openclaw a redirected `HOME` plus `--config`/`--state-dir`, pi a `models.json` whose `apiKey` is an env-var name, zcode the personal provider config behind `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` (its `ZCODE_*` trio is dead in 0.17), agy a settings file it restores on the way out, and grok the endpoint variable it actually reads (`GROK_MODELS_BASE_URL`, not `GROK_BASE_URL`). The temp state rides the harness cleanup list, so a cancelled run no longer leaves a config carrying the key on disk — the signal path exits with `os._exit`, which skips `atexit`. `_harness` also drops the settings keys that pick a model from a seeded copy and knows which flags consume the next token when it rebuilds an argv. zcode leaves `generic.py`, which could never honour the injection its manifest claimed.

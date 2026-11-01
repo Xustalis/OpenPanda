@@ -51,7 +51,7 @@ var helpPage = []HelpSection{
 		{"nodes drain [id]", "cli.help.d.nodes_drain"},
 		{"nodes prune", "cli.help.d.nodes_prune"},
 		{"nodes remove <id>", "cli.help.d.nodes_remove"},
-		{"nodes trust <id> [level]", "cli.help.d.nodes_trust"},
+		{"nodes trust <id>", "cli.help.d.nodes_trust"},
 		{"nodes disconnect <a>", "cli.help.d.nodes_disconnect"},
 		{"pair --secret S --peer <host:port>", ""},
 		{"", "cli.help.d.pair"},

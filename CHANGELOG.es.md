@@ -42,6 +42,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Añadido
 
+- **La superficie de comandos del nodo llega a cada agente** — los comandos de primer nivel, las formas de uso de una línea y el vocabulario de autocompletado provienen ahora de un único registro (`internal/nodecli`), de modo que `panda help` cubre `join`, `nodes remove` y `nodes trust`, el autocompletado de los shells se mantiene sincronizado y el prompt del agente lleva el conjunto exacto de comandos locales en lugar de sondear el host. Las lecturas y las acciones sobre la cola que ya cubren las herramientas controladas siguen siendo llamadas de herramienta; solo las operaciones sin herramienta se despachan a un agente.
+
 ### Corregido
 
 - **Ocho adaptadores pueden usar el modelo de panda; zcode se suma** — cada CLI incluida recibe el modelo inyectado exactamente donde lo lee: hermes un `HERMES_HOME` desechable, openclaw un `HOME` redirigido más `--config`/`--state-dir`, pi un `models.json` cuyo `apiKey` es un nombre de variable de entorno, zcode la configuración personal de proveedor tras `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` (su trío `ZCODE_*` no lo lee 0.17), agy un archivo de settings que se restaura al salir, y grok la variable de endpoint que realmente lee (`GROK_MODELS_BASE_URL`, no `GROK_BASE_URL`). El estado temporal va en la lista de limpieza del harness, así que una ejecución cancelada ya no deja en disco una configuración con la clave — la ruta de señal sale con `os._exit`, que omite `atexit`. `_harness` también descarta las claves que eligen modelo de la copia sembrada y sabe qué flags consumen el siguiente token al reconstruir el argv. zcode deja `generic.py`.

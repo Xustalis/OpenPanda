@@ -42,6 +42,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Hinzugefügt
 
+- **Die Kommandofläche des Knotens erreicht jeden Agenten** — die Kommandos der obersten Ebene, die einzeiligen Verwendungen und das Vervollständigungsvokabular stammen jetzt aus einer Registrierung (`internal/nodecli`): `panda help` deckt `join`, `nodes remove` und `nodes trust` ab, die Shell-Vervollständigung bleibt im Takt, und der Agent-Prompt trägt den exakten lokalen Kommandosatz statt den Host zu sondieren. Lesezugriffe und Queue-Entscheidungen, die kontrollierte Tools bereits abdecken, bleiben Tool-Aufrufe; nur Operationen ohne Tool werden an einen Agenten delegiert.
+
 ### Behoben
 
 - **Acht Adapter können jetzt das Modell von panda nutzen; zcode kommt hinzu** — jede gebündelte CLI bekommt das injizierte Modell genau dorthin geschrieben, wo sie es liest: hermes ein wegwerfbares `HERMES_HOME`, openclaw ein umgeleitetes `HOME` plus `--config`/`--state-dir`, pi eine `models.json` (deren `apiKey` ein Umgebungsvariablenname ist), zcode die persönliche Provider-Konfiguration hinter `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` (die `ZCODE_*`-Triade liest 0.17 nicht), agy eine Settings-Datei, die beim Beenden zurückgesetzt wird, und grok die Endpunktvariable, die sie tatsächlich liest (`GROK_MODELS_BASE_URL`, nicht `GROK_BASE_URL`). Der temporäre Zustand hängt an der Cleanup-Liste des Harness, sodass ein abgebrochener Lauf keine Konfiguration mit Schlüssel auf der Platte hinterlässt — der Signalpfad beendet sich mit `os._exit` und überspringt `atexit`. `_harness` entfernt außerdem die Modellwahl-Schlüssel aus der Kopie und weiß, welche Flags beim Neuaufbau eines argv das nächste Token verbrauchen. zcode verlässt `generic.py`.

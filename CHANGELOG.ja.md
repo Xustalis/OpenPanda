@@ -42,6 +42,8 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 追加
 
+- **ノードのコマンド面がすべてのエージェントに届く** — CLI のトップレベルコマンド、一行の使い方、補完語彙は単一のレジストリ（`internal/nodecli`）から生成されるようになり、`panda help` は `join`、`nodes remove`、`nodes trust` を網羅し、シェル補完も同期し、エージェントのプロンプトはホストを探る代わりにローカルのコマンド一式を直接受け取ります。制御ツールが既に覆う読み取りとキューの処置はツール呼び出しのままで、ツールの無い操作だけがエージェントに委譲されます。
+
 ### 修正
 
 - **8 つのアダプターが panda のモデルを使えるようになり、zcode も加わりました** —— 各 CLI が実際に読む場所へ注入モデルを書きます：hermes は使い捨ての `HERMES_HOME`、openclaw は `HOME` のリダイレクトと `--config`/`--state-dir`、pi は `models.json`（`apiKey` は環境変数名）、zcode は `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` が指す個人プロバイダ設定（0.17 は `ZCODE_*` を読みません）、agy は終了時に復元する settings、grok は実際に読む `GROK_MODELS_BASE_URL`（`GROK_BASE_URL` ではありません）。一時状態は harness のクリーンアップ一覧に載るため、キャンセルされた実行が鍵入りの設定をディスクに残しません——シグナル経路の `os._exit` は `atexit` を飛ばします。`_harness` はシード複製からモデル選択キーを外し、argv 再構築時に次のトークンを消費するフラグも把握します。zcode は `generic.py` から離れます。

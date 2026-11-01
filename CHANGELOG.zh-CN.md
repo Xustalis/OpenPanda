@@ -42,6 +42,8 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增功能
 
+- **节点命令面完整交给每个 Agent** —— CLI 的一级命令、一行用法与补全词表现在都来自同一份注册表（`internal/nodecli`），`panda help` 补上 `join`、`nodes remove` 与 `nodes trust`，shell 补全同步，agent 提示词直接带上本机完整命令集而不是先探测主机。已有受控工具覆盖的读取与队列处置仍走工具调用，只有没有工具支撑的操作才派给 agent。
+
 ### 修复
 
 - **八个适配器都能用上 panda 的模型，zcode 也加入** —— 每个内置 CLI 现在按它真正读取的位置写入注入的模型，而不是写它根本不读的环境变量：hermes 得到一次性 `HERMES_HOME`，openclaw 重定向 `HOME` 并加 `--config`/`--state-dir`，pi 写 `models.json`（`apiKey` 是环境变量名），zcode 写 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指向的个人 provider 配置（0.17 完全不读 `ZCODE_*`），agy 写一份退出时恢复的 settings，grok 用 `GROK_MODELS_BASE_URL`（不是 `GROK_BASE_URL`）。临时状态挂在 harness 的清理表上，取消的运行不再把带密钥的配置留在磁盘上——信号路径的 `os._exit` 会跳过 `atexit`。`_harness` 还会从种子副本里剔除选择模型的设置键，并在重建 argv 时知道哪些 flag 会吃掉下一个 token。zcode 同时离开 `generic.py`——那个适配器无法兑现清单声称的注入。
