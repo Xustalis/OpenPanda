@@ -9,14 +9,14 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/%E5%86%85%E5%AD%98%E5%B8%B8%E9%A9%BB-~20MB%20RSS-brightgreen)
-![Local First](https://img.shields.io/badge/%E4%BA%91%E7%AB%AF%E4%BE%9D%E8%B5%96-%E9%9B%B6%E4%BE%9D%E8%B5%96-success)
+![Memory](https://img.shields.io/badge/%E5%86%85%E5%AD%98%E5%B8%B8%E9%A9%BB-~40MB%20RSS-brightgreen)
+![No Cloud Relay](https://img.shields.io/badge/%E4%B8%AD%E8%BD%AC%E6%9C%8D%E5%8A%A1-%E6%97%A0-success)
 
 ***
 
 ## 简介
 
-OpenPanda 将你机器上已有的终端 AI 编程助手——内置九个专用适配器（Claude Code、OpenAI Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、OpenClaw），另有可配置的通用桥接器，可接入任意无头 CLI（包括 ZCode）——与你的设备组织为一支统一的执行队伍。它本身不是 Agent：你发出一条指令，它负责意图理解、任务拆解、调度派发、执行监督与结果校验——全程本地运行，不依赖任何云端服务。
+OpenPanda 将你机器上已有的终端 AI 编程助手——内置九个专用适配器（Claude Code、OpenAI Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、OpenClaw），另有可配置的通用桥接器，可接入任意无头 CLI（包括 ZCode）——与你的设备组织为一支统一的执行队伍。它本身不是 Agent：你发出一条指令，它负责意图理解、任务拆解、调度派发、执行监督与结果校验——全程本地运行，机器之间不经过任何中转服务。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -121,7 +121,7 @@ OpenPanda 将你机器上已有的终端 AI 编程助手——内置九个专用
 
 - **自更新**：`panda update check|apply`（或 `panda upgrade`）先探测暂存的新二进制再原地替换。
 
-- **极致轻量**：纯 Go 单静态二进制，常驻内存约 20MB，无外部运行时依赖。
+- **极致轻量**：纯 Go 单静态二进制，空闲常驻内存约 40MB，无外部运行时依赖。
 
 ***
 

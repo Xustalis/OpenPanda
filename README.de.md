@@ -11,8 +11,8 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/Plattformen-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/Speicherbedarf-~20MB%20RSS-brightgreen)
-![Local First](https://img.shields.io/badge/Cloud--Abh%C3%A4ngigkeit-Keine%20(Local--First)-success)
+![Memory](https://img.shields.io/badge/Speicherbedarf-~40MB%20RSS-brightgreen)
+![No Cloud Relay](https://img.shields.io/badge/Cloud--Relay-Keiner-success)
 
 ---
 
@@ -97,7 +97,7 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 - **`panda rpc`** (experimentell): NDJSON-over-stdio-Einbettungsoberfläche (`status`, Streaming-`ask`, `session.*`); `scripts/panda_rpc.py` ist ein stdlib-Referenzclient.
 - **Abo-OAuth** (experimentell): `panda auth login anthropic` meldet Claude Pro/Max per PKCE an und erneuert Token transparent.
 
-### 6. 🪶 Extrem leichtgewichtig (~20MB Speicher)
+### 6. 🪶 Extrem leichtgewichtig (~40MB Speicher im Leerlauf)
 - Einzelne statische Go-Binärdatei ohne externe Laufzeitabhängigkeiten (reines Go SQLite im WAL-Modus).
 - Läuft mühelos auf 20\$-Einplatinencomputern bis hin zu großen Clustern.
 

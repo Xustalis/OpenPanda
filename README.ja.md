@@ -11,8 +11,8 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/プラットフォーム-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/常駐メモリ-~20MB%20RSS-brightgreen)
-![Local First](https://img.shields.io/badge/クラウド依存-ゼロ%20(完全ローカル)-success)
+![Memory](https://img.shields.io/badge/常駐メモリ-~40MB%20RSS-brightgreen)
+![No Cloud Relay](https://img.shields.io/badge/クラウド中継-なし-success)
 
 ---
 
@@ -97,7 +97,7 @@
 - **`panda rpc`**（実験的）: `status`・ストリーミング `ask`・`session.*` を提供する NDJSON-over-stdio 埋め込み面。`scripts/panda_rpc.py` が最小の参照クライアント。
 - **サブスクリプション OAuth**（実験的）: `panda auth login anthropic` が PKCE で Claude Pro/Max をサインインし、トークンを透過リフレッシュ。
 
-### 6. 🪶 超軽量（常駐メモリ約 20MB）
+### 6. 🪶 超軽量（アイドル時常駐メモリ約 40MB）
 - 単一の純 Go 静的バイナリ（Pure Go SQLite WAL モード）。
 - 20 ドルの SBC（Raspberry Pi）からハイエンドサーバーまで軽快に常駐動作。
 

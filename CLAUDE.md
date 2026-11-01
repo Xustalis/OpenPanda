@@ -191,5 +191,8 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
 - Top-level docs are localized too — README, CHANGELOG, CONTRIBUTING,
   CLA, CODE_OF_CONDUCT, COMMERCIAL, TERMS and SECURITY each carry
   per-locale variants (`zh-CN`/`ja`/`es`/`de`); keep them in sync.
+- Commits and PR bodies carry no AI attribution: no `Co-Authored-By` bot
+  trailers, no "Generated with" footers, and branch names should name the
+  change. The public history is part of the project's record.
 - Never log secrets; `internal/security` owns redaction — route new
   secret-handling through it rather than reinventing.
