@@ -56,7 +56,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Changed
 
-- **A large artifact chunk arrives about twice as fast** — decoding ran a 1 MiB chunk's base64 body through `encoding/json`'s string handling on both the envelope and the payload; the receive side now scans for the data member, base64-decodes it in place and leaves only the small header to the stock decoder, falling back whenever the payload is not canonical. The 1 MiB chunk benchmark drops from 12.3 ms to 7.1 ms (85 → 147 MB/s), and a transit hop no longer re-compacts the already-compact inner envelope it forwards.
+- **A large artifact chunk arrives about 60% faster** — decoding ran a 1 MiB chunk's base64 body through `encoding/json`'s string handling on both the envelope and the payload; the receive side now scans for the data member, base64-decodes it in place and leaves only the small header to the stock decoder, falling back whenever the payload is not canonical. The 1 MiB chunk benchmark drops from 12.3 ms to 7.7 ms (85 → 136 MB/s), and a transit hop no longer re-compacts the already-compact inner envelope it forwards.
 
 ## [0.1.3] - 2026-10-30 — "Constellation"
 

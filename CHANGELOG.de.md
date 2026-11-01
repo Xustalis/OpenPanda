@@ -50,7 +50,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Geändert
 
-- **Ein großer Artifact-Chunk kommt etwa doppelt so schnell an** — beim Dekodieren lief der base64-Body eines 1-MiB-Chunks im Envelope und im Payload zweimal durch die String-Behandlung von `encoding/json`; die Empfangsseite findet das data-Mitglied jetzt per Byte-Scan, dekodiert es direkt und überlässt nur den kleinen Header dem Standard-Decoder, mit automatischem Rückfall bei nicht-kanonischer Form. Der Benchmark des 1-MiB-Chunks sinkt von 12,3 ms auf 7,1 ms (85 → 147 MB/s), und ein Transit-Hop komprimiert den bereits kompakten inneren Envelope nicht mehr erneut.
+- **Ein großer Artifact-Chunk kommt etwa 1,6-mal so schnell an** — beim Dekodieren lief der base64-Body eines 1-MiB-Chunks im Envelope und im Payload zweimal durch die String-Behandlung von `encoding/json`; die Empfangsseite findet das data-Mitglied jetzt per Byte-Scan, dekodiert es direkt und überlässt nur den kleinen Header dem Standard-Decoder, mit automatischem Rückfall bei nicht-kanonischer Form. Der Benchmark des 1-MiB-Chunks sinkt von 12,3 ms auf 7,7 ms (85 → 136 MB/s), und ein Transit-Hop komprimiert den bereits kompakten inneren Envelope nicht mehr erneut.
 
 ## [0.1.3] - 2026-10-30 — "Constellation"
 

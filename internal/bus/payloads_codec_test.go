@@ -132,6 +132,18 @@ func TestChunkDecodeMatchesStock(t *testing.T) {
 		{"trailing-space", []byte(`{"task_id":"t","ok":true,"data":"aGk=" }`)},
 		{"escaped-head", []byte(`{"task_id":"t","reason":"x\"data\":\"y","ok":true}`)},
 		{"invalid-base64", []byte(`{"task_id":"t","data":"!!!","ok":true}`)},
+		{"nested-data", []byte(`{"task_id":"t","x":{"data":"aGk="},"ok":true}`)},
+		{"nested-and-top-data", []byte(`{"task_id":"t","x":{"data":"aGk="},"data":"Ynll","ok":true}`)},
+		{"duplicate-spaced", []byte(`{"task_id":"t","data":"aGk=", "data" :"Ynll","ok":true}`)},
+		{"duplicate-case", []byte(`{"task_id":"t","data":"aGk=","Data":"Ynll","ok":true}`)},
+		{"trailing-comma", []byte(`{"task_id":"t","data":"aGk=",}`)},
+		{"unterminated", []byte(`{"task_id":"t","data":"aGk="`)},
+		{"missing-comma-before", []byte(`{"task_id":"t" "data":"aGk=","ok":true}`)},
+		{"missing-comma-after", []byte(`{"task_id":"t","data":"aGk=" "ok":true}`)},
+		{"array-root", []byte(`["task_id","t","data","aGk="]`)},
+		{"leading-comma", []byte(`{,"data":""}`)},
+		{"cr-in-value", []byte("{\"data\":\"\r\"}")},
+		{"lf-in-value", []byte("{\"data\":\"\n\"}")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -164,4 +176,30 @@ func TestPushDecodeMatchesStock(t *testing.T) {
 	if !reflect.DeepEqual(gotFast, gotStock) {
 		t.Fatalf("fast decode diverged:\n fast=%+v\nstock=%+v", gotFast, gotStock)
 	}
+}
+
+// FuzzChunkDecodeMatchesStock keeps the fast path honest on arbitrary input:
+// every byte string must decode, or fail, exactly as encoding/json does. The
+// seeds cover the shapes the scan must refuse: nested, duplicated, spaced,
+// trailing-comma and unterminated frames.
+func FuzzChunkDecodeMatchesStock(f *testing.F) {
+	f.Add([]byte(`{"task_id":"t","data":"aGk=","ok":true}`))
+	f.Add([]byte(`{"data":"aGk="}`))
+	f.Add([]byte(`{"data":"aGk=",}`))
+	f.Add([]byte(`{"x":{"data":"aGk="}}`))
+	f.Add([]byte(`{"data":"aGk=","Data":"Ynll"}`))
+	f.Add([]byte(`{"task_id":"t","data":"aGk=" "ok":true}`))
+	f.Add([]byte(`{"task_id":"t" "data":"aGk="}`))
+	f.Add([]byte(`{"task_id":"t","data":"aGk="`))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		var fast, want ArtifactChunkPayload
+		fastErr := fast.unmarshalWire(raw)
+		wantErr := json.Unmarshal(raw, &want)
+		if (fastErr == nil) != (wantErr == nil) {
+			t.Fatalf("error mismatch on %q: fast=%v stock=%v", raw, fastErr, wantErr)
+		}
+		if wantErr == nil && !reflect.DeepEqual(fast, want) {
+			t.Fatalf("diverged on %q:\n fast=%+v\nstock=%+v", raw, fast, want)
+		}
+	})
 }

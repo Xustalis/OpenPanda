@@ -50,7 +50,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Cambiado
 
-- **Recibir un bloque grande de artifact cuesta aproximadamente la mitad** — la decodificación pasaba el cuerpo base64 de un bloque de 1 MiB por el manejo de cadenas de `encoding/json` dos veces, en el sobre y en el payload; el lado receptor ahora localiza el miembro data con un escaneo de bytes, lo decodifica en el sitio y entrega solo la cabecera pequeña al decodificador estándar, con retroceso automático cuando la forma no es canónica. El benchmark del bloque de 1 MiB baja de 12,3 ms a 7,1 ms (85 → 147 MB/s), y un salto de tránsito ya no recompacta el sobre interior.
+- **Recibir un bloque grande de artifact cuesta alrededor de un 40 % menos** — la decodificación pasaba el cuerpo base64 de un bloque de 1 MiB por el manejo de cadenas de `encoding/json` dos veces, en el sobre y en el payload; el lado receptor ahora localiza el miembro data con un escaneo de bytes, lo decodifica en el sitio y entrega solo la cabecera pequeña al decodificador estándar, con retroceso automático cuando la forma no es canónica. El benchmark del bloque de 1 MiB baja de 12,3 ms a 7,7 ms (85 → 136 MB/s), y un salto de tránsito ya no recompacta el sobre interior.
 
 ## [0.1.3] - 2026-10-30 — "Constellation"
 

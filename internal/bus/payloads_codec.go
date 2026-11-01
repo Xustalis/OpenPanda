@@ -154,46 +154,136 @@ func appendB64Field(head []byte, name string, data []byte) []byte {
 
 // dataMember is the member the fast decoder lifts out of a bulk payload.
 // Both bulk-carrier types name it "data" and encode it as a base64 string.
-var dataMember = []byte(`"data":"`)
+var (
+	dataMember = []byte(`"data":"`)
+	dataKey    = []byte("data")
+)
 
 // splitDataMember returns the payload's header object with the data member
 // removed, plus the raw base64 text of that member. ok is false whenever the
 // payload is not in the canonical shape this scan can prove it understands;
 // callers then use the stock decoder and keep its exact acceptance.
 //
-// Canonical shape means: base64 uses no escapes, so the value ends at the
-// first unescaped quote; the member appears once (json's last-wins rule for
-// duplicates would otherwise be silently inverted); and the object is compact,
-// so removing the member is a comma trim on the two surrounding fragments.
+// Canonical shape means: the root is an object; the member is a top-level key
+// written exactly "data": with no whitespace and appears once under any
+// spelling; it sits at a member boundary (a '{' or ',' before the key, a ','
+// or '}' after the value); and its base64 uses no escapes, so the value ends at
+// the first unescaped quote.
+//
+// The header left behind still goes through encoding/json, which validates
+// every other member, and the value is base64-checked, so the only malformed
+// shapes this scan could otherwise hide are seam errors around the removed
+// member: a missing separator or a trailing comma. Both are rejected below
+// rather than repaired.
 func splitDataMember(raw []byte) (head, value []byte, ok bool) {
-	i := bytes.Index(raw, dataMember)
-	if i < 0 {
+	if len(raw) == 0 || raw[0] != '{' {
 		return nil, nil, false
 	}
-	start := i + len(dataMember)
+	at, ok := dataKeyOffset(raw)
+	if !ok || !bytes.HasPrefix(raw[at:], dataMember) {
+		return nil, nil, false
+	}
+	start := at + len(dataMember)
 	rel := bytes.IndexByte(raw[start:], '"')
 	if rel < 0 {
 		return nil, nil, false
 	}
 	end := start + rel
 	value = raw[start:end]
-	if bytes.IndexByte(value, '\\') >= 0 {
+	// base64.StdEncoding ignores CR and LF, so a raw control character in the
+	// value would decode here while encoding/json rejects it as an invalid
+	// string literal. Escapes are refused for the same reason: the value must
+	// end at the first unescaped quote.
+	if bytes.IndexByte(value, '\\') >= 0 ||
+		bytes.IndexByte(value, '\r') >= 0 ||
+		bytes.IndexByte(value, '\n') >= 0 {
 		return nil, nil, false
 	}
-	if bytes.Contains(raw[end+1:], dataMember) {
+	pre, post := raw[:at], raw[end+1:]
+	if last := pre[len(pre)-1]; last != '{' && last != ',' {
 		return nil, nil, false
 	}
-	pre, post := raw[:i], raw[end+1:]
+	if len(post) == 0 || (post[0] != ',' && post[0] != '}') {
+		return nil, nil, false
+	}
 	switch {
-	case len(post) > 0 && post[0] == ',':
+	case post[0] == ',':
+		// A comma whose next significant byte closes the object is a trailing
+		// comma: encoding/json rejects the frame, and dropping the comma would
+		// hide that.
+		if rest := bytes.TrimLeft(post[1:], " \t\r\n"); len(rest) == 0 || rest[0] == '}' {
+			return nil, nil, false
+		}
 		post = post[1:]
-	case len(pre) > 0 && pre[len(pre)-1] == ',':
+	case pre[len(pre)-1] == ',':
 		pre = pre[:len(pre)-1]
+		// A comma opening the object ({,"data":...}) is not a separator; it
+		// would vanish with the member and leave a valid empty header.
+		if len(pre) == 0 || pre[len(pre)-1] == '{' {
+			return nil, nil, false
+		}
 	}
 	head = make([]byte, 0, len(pre)+len(post))
 	head = append(head, pre...)
 	head = append(head, post...)
 	return head, value, true
+}
+
+// dataKeyOffset reports where the outer object's "data" member starts. ok is
+// false when the key is absent, appears more than once under any spelling (the
+// stock decoder's last-wins rule would then disagree with taking the first),
+// sits under an escaped spelling, or any top-level key carries an escape this
+// scan cannot compare without decoding.
+func dataKeyOffset(raw []byte) (at int, ok bool) {
+	at = -1
+	seen := 0
+	depth := 0
+	for i := 0; i < len(raw); i++ {
+		switch raw[i] {
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+		case '"':
+			j := i + 1
+			for j < len(raw) && raw[j] != '"' {
+				if raw[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if depth != 1 {
+				i = j
+				continue
+			}
+			k := j + 1
+			for k < len(raw) && isJSONSpace(raw[k]) {
+				k++
+			}
+			if k < len(raw) && raw[k] == ':' {
+				key := raw[i+1 : j]
+				if bytes.IndexByte(key, '\\') >= 0 {
+					return 0, false
+				}
+				if bytes.EqualFold(key, dataKey) {
+					seen++
+					if seen > 1 {
+						return 0, false
+					}
+					at = i
+				}
+			}
+			i = j
+		}
+	}
+	if seen != 1 {
+		return 0, false
+	}
+	return at, true
+}
+
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
 // decodeB64 decodes the base64 text the fast path found. It allocates exactly
