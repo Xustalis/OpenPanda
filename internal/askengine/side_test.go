@@ -141,21 +141,48 @@ func TestSideAskPromptMarksHistoryReferenceOnly(t *testing.T) {
 		{Role: "user", Content: "把服务重构成三层架构"},
 		{Role: "assistant", Content: "好的，我先修改 storage 层。"},
 	}
-	if _, err := e.AskTurnsScoped(context.Background(), history, "这三层分别是什么含义", AskScope{Side: true}, false, StreamCallbacks{}); err != nil {
+	sideTurns := []entry.Turn{
+		{Role: "user", Content: "storage 层现在长什么样"},
+		{Role: "assistant", Content: "两个文件，一个负责打开连接。"},
+	}
+	if _, err := e.AskTurnsScoped(context.Background(), history, "这三层分别是什么含义", AskScope{Side: true, SideTurns: sideTurns}, false, StreamCallbacks{}); err != nil {
 		t.Fatalf("side ask: %v", err)
 	}
 	c := <-got
 	if !strings.Contains(c.system, "Side Channel (Reference Only)") {
 		t.Errorf("system prompt is missing the side section:\n%s", c.system)
 	}
-	var sawBoundary bool
-	for _, m := range c.messages {
+	boundary := -1
+	for i, m := range c.messages {
 		if strings.Contains(m, "Side channel boundary") || strings.Contains(m, "侧边对话边界") {
-			sawBoundary = true
+			boundary = i
 		}
 	}
-	if !sawBoundary {
-		t.Errorf("no boundary marker in the replayed transcript: %v", c.messages)
+	if boundary < 0 {
+		t.Fatalf("no boundary marker in the replayed transcript: %v", c.messages)
+	}
+	// Everything above the marker is the main thread; the channel's own turns
+	// sit at or below it. (Adjacent same-role turns are folded into one wire
+	// message, so the marker and the first side question arrive together.)
+	// Swapping the two would replay the channel's history as reference material
+	// and the thread's as this channel's own — neither would then be continued
+	// correctly.
+	if !strings.Contains(c.messages[0], "三层架构") {
+		t.Errorf("the main-thread history is not above the boundary: %v", c.messages)
+	}
+	var sawSideTurn bool
+	for _, m := range c.messages[boundary:] {
+		if strings.Contains(m, "storage 层现在长什么样") {
+			sawSideTurn = true
+		}
+	}
+	if !sawSideTurn {
+		t.Errorf("the channel's own turns are not at or below the boundary: %v", c.messages)
+	}
+	for _, m := range c.messages[:boundary] {
+		if strings.Contains(m, "storage 层现在长什么样") {
+			t.Errorf("the channel's own turn leaked above the boundary: %v", c.messages)
+		}
 	}
 }
 

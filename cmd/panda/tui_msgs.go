@@ -198,7 +198,12 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, s
 // thread's workDir and roster — the whole point of a side question is that it
 // is about the same work — while carrying its own session id so nothing it
 // learns is written into the main thread's approval record.
-func startSideAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, sessionID string, agents []string, node string, authorize bool) (*askStream, tea.Cmd) {
+//
+// history is the main-thread snapshot and sideTurns is this channel's own
+// conversation before the current question. They travel separately because the
+// engine puts a boundary marker between them: everything above it is reference,
+// everything below it is this channel talking to itself.
+func startSideAsk(engine *askengine.Engine, history, sideTurns []entry.Turn, prompt, workDir, sessionID string, agents []string, node string, authorize bool) (*askStream, tea.Cmd) {
 	s, ctx, cb := newAskStream()
 	guard.Go(nil, "tui: side worker", func() {
 		s.send(context.Background(), doneMsg{stream: s, err: errors.New("side ask worker panicked (see log)")})
@@ -211,6 +216,7 @@ func startSideAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 			Node:           node,
 			AmbientProject: true,
 			Side:           true,
+			SideTurns:      sideTurns,
 		}, authorize, cb)
 		s.send(ctx, doneMsg{stream: s, out: out, err: err})
 	})

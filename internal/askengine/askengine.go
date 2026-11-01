@@ -1794,6 +1794,13 @@ type AskScope struct {
 	// sufficient alone: the prompt is a hint the model may disobey, and the tool
 	// face only covers dispatch that goes through tools.
 	Side bool
+
+	// SideTurns is the side channel's own conversation so far. It replays AFTER
+	// the boundary marker, which is what keeps two things apart that would
+	// otherwise read as one: the main thread's history (history above, reference
+	// only) and the question-and-answer the user actually had with this channel.
+	// Only meaningful with Side.
+	SideTurns []entry.Turn
 }
 
 // AskTurns is the backward-compatible session-aware entry point. Callers that
@@ -1908,13 +1915,16 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
 	}()
 
-	turns := make([]entry.Turn, 0, len(history)+2)
+	turns := make([]entry.Turn, 0, len(history)+len(scope.SideTurns)+2)
 	turns = append(turns, history...)
-	if scope.Side && len(history) > 0 {
-		// The replayed thread ends here. Without this marker the side ask's own
-		// question reads as the next turn of the main conversation, and the
-		// model continues that work instead of answering the question asked.
-		turns = append(turns, sideBoundaryTurn(effectiveLocale))
+	if scope.Side {
+		if len(history) > 0 {
+			// The replayed thread ends here. Without this marker the side ask's
+			// own question reads as the next turn of the main conversation, and
+			// the model continues that work instead of answering what was asked.
+			turns = append(turns, sideBoundaryTurn(effectiveLocale))
+		}
+		turns = append(turns, scope.SideTurns...)
 	}
 	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
 

@@ -43,9 +43,10 @@ BIN = os.path.abspath(os.environ.get("PANDA_BIN") or os.path.join(ROOT, "bin", "
 ROWS, COLS = 30, 110
 ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][A-Z0-9]")
 
-# Side-channel frame markers (tui.side.title / tui.hint.newline in English).
+# Frame markers in English: the channel's title bar, and the main footer's
+# mouse-mode hint — a string the channel's own footer does not carry.
 SIDE_MARK = "SIDE CHANNEL"
-MAIN_MARK = "shift+enter"
+MAIN_MARK = "ctrl+t scroll mode"
 
 
 def terms_version_current():

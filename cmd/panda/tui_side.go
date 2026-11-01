@@ -191,15 +191,6 @@ func (m tuiModel) sideSnapshot() ([]entry.Turn, string) {
 	return m.r.convoNow(), ""
 }
 
-// sideReplay assembles the context for one side ask: the fork-point snapshot,
-// the side turns accumulated so far, and nothing from the main thread since.
-func (s *sideState) sideReplay() []entry.Turn {
-	out := make([]entry.Turn, 0, len(s.history)+len(s.turns))
-	out = append(out, s.history...)
-	out = append(out, s.turns...)
-	return out
-}
-
 // askSide submits one question to the channel. A second question while one is
 // still streaming is refused rather than queued: the side channel is a place to
 // read, and an answer racing another answer is not worth the model cost.
@@ -217,21 +208,27 @@ func (m *tuiModel) askSide(question string) tea.Cmd {
 		m.side.status = i18n.T(m.loc, "tui.side.busy")
 		return nil
 	}
-	m.side.turns = append(m.side.turns, entry.Turn{Role: "user", Content: question})
-	m.side.ch.blocks = append(m.side.ch.blocks, block{kind: blockUser, body: question})
-	m.side.answer = nil
-	m.side.thought = nil
-	m.side.status = i18n.T(m.loc, "tui.side.asking")
+	s := m.side
+	// prior is the channel's conversation before this question. It travels to
+	// the engine separately from the main-thread snapshot: the boundary marker
+	// goes between them.
+	prior := s.turns
+	s.turns = append(s.turns, entry.Turn{Role: "user", Content: question})
+	s.ch.blocks = append(s.ch.blocks, block{kind: blockUser, body: question})
+	s.answer = nil
+	s.thought = nil
+	s.status = i18n.T(m.loc, "tui.side.asking")
 	team := []string(nil)
 	if m.r != nil {
 		team = m.r.teamForAsk()
 	}
 	stream, pump := startSideAsk(
 		m.engine,
-		m.side.sideReplay(),
+		s.history,
+		prior,
 		question,
-		m.side.workDir,
-		m.side.sessionID,
+		s.workDir,
+		s.sessionID,
 		team,
 		m.nextNode,
 		m.r != nil && m.r.authorized(),
