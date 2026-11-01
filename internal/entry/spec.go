@@ -129,7 +129,10 @@ const (
 	maxClarifyQuestionRunes = 500
 	maxClarifyLabelRunes    = 60
 	maxClarifyDescRunes     = 200
-	maxClarifyPlanBytes     = 4000
+	// maxClarifyPreviewBytes bounds one option's preview: it is prompt space
+	// and UI space, not a document attachment.
+	maxClarifyPreviewBytes = 4000
+	maxClarifyPlanBytes    = 4000
 )
 
 // ValidateClarifySpec checks the shape of a model-emitted question round.
@@ -192,6 +195,12 @@ func ValidateClarifySpec(c *ClarifySpec) error {
 			labels[label] = true
 			if utf8.RuneCountInString(o.Description) > maxClarifyDescRunes {
 				return fmt.Errorf("entry: clarify.questions[%d].options[%d] description is longer than %d characters", i, j, maxClarifyDescRunes)
+			}
+			if len(o.Preview) > maxClarifyPreviewBytes {
+				return fmt.Errorf("entry: clarify.questions[%d].options[%d] preview is too long (%d bytes, limit %d)", i, j, len(o.Preview), maxClarifyPreviewBytes)
+			}
+			if q.MultiSelect && strings.TrimSpace(o.Preview) != "" {
+				return fmt.Errorf("entry: clarify.questions[%d] is multi-select and cannot carry option previews", i)
 			}
 		}
 		if rec := strings.TrimSpace(q.Recommended); rec != "" && !labels[rec] {

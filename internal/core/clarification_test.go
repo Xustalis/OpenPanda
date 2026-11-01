@@ -4,11 +4,13 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
 // TestClarificationParkAndAnswerResume pins the single-node Q4 loop: an agent
@@ -190,11 +192,27 @@ func TestAcceptanceEnvelopeReachesPrompt(t *testing.T) {
 	}
 }
 
-// TestParseQuestionRequest covers the marker extraction: last non-empty
+// TestStructuredClarifyResult pins the schema path: a schema-capable adapter
+// (Claude Code) reports the question and the bounded choices in one validated
+// object, and the parser keeps both.
+func TestStructuredClarifyResult(t *testing.T) {
+	raw := json.RawMessage(`{"answer":"","status":"question","question":"部署到哪个环境？","clarify":{"questions":[{"id":"env","header":"环境","question":"部署到哪个环境？","options":[{"label":"staging"},{"label":"prod"}],"recommended":"staging"}]}}`)
+	sr := parseStructuredResult(raw)
+	if sr == nil || sr.Clarify == nil || len(sr.Clarify.Questions) != 1 {
+		t.Fatalf("structured result = %+v", sr)
+	}
+	if err := entry.ValidateClarifySpec(sr.Clarify); err != nil {
+		t.Fatalf("structured clarify invalid: %v", err)
+	}
+	if got := clarifySpecSummary(sr.Clarify); got != "部署到哪个环境？" {
+		t.Fatalf("summary = %q", got)
+	}
+}
+
 // marker wins, empty payloads are left in place, and protocol lines are
 // stripped from the visible result.
 func TestParseQuestionRequest(t *testing.T) {
-	q, cleaned, ok := parseQuestionRequest("did part\nPANDA_QUESTION: which env?\ntrailing")
+	q, _, cleaned, ok := parseQuestionRequest("did part\nPANDA_QUESTION: which env?\ntrailing")
 	if !ok || q != "which env?" {
 		t.Fatalf("parse = %q ok=%v", q, ok)
 	}
@@ -206,20 +224,20 @@ func TestParseQuestionRequest(t *testing.T) {
 	}
 
 	// Empty marker payload is not a question — the line survives verbatim.
-	_, cleaned2, ok2 := parseQuestionRequest("all done\nPANDA_QUESTION:\n")
+	_, _, cleaned2, ok2 := parseQuestionRequest("all done\nPANDA_QUESTION:\n")
 	if ok2 {
 		t.Fatal("empty marker must not count as a question")
 	}
 	if !strings.Contains(cleaned2, questionMarker) {
 		t.Fatal("malformed marker line was eaten")
 	}
-	if _, _, ok3 := parseQuestionRequest("no markers here"); ok3 {
+	if _, _, _, ok3 := parseQuestionRequest("no markers here"); ok3 {
 		t.Fatal("clean output reported a question")
 	}
 
 	// The marker must end at a word boundary: agent prose that merely starts
 	// with the marker text is not the protocol and must survive verbatim.
-	_, cleaned4, ok4 := parseQuestionRequest("PANDA_QUESTIONABLE: design choice\nreal work")
+	_, _, cleaned4, ok4 := parseQuestionRequest("PANDA_QUESTIONABLE: design choice\nreal work")
 	if ok4 {
 		t.Fatal("PANDA_QUESTIONABLE line eaten as a protocol question")
 	}
@@ -229,7 +247,7 @@ func TestParseQuestionRequest(t *testing.T) {
 
 	// A full-width colon is the separator a Chinese IME produces without
 	// being asked; it must park the task exactly like the ASCII one.
-	q5, cleaned5, ok5 := parseQuestionRequest("做完了\nPANDA_QUESTION：要改哪个文件？")
+	q5, _, cleaned5, ok5 := parseQuestionRequest("做完了\nPANDA_QUESTION：要改哪个文件？")
 	if !ok5 || q5 != "要改哪个文件？" {
 		t.Fatalf("full-width colon parse = %q ok=%v", q5, ok5)
 	}
@@ -237,7 +255,28 @@ func TestParseQuestionRequest(t *testing.T) {
 		t.Fatalf("full-width marker not stripped: %q", cleaned5)
 	}
 	// The ideographic space (U+3000) is a separator too.
-	if q6, _, ok6 := parseQuestionRequest("PANDA_QUESTION　哪个环境？"); !ok6 || q6 != "哪个环境？" {
+	if q6, _, _, ok6 := parseQuestionRequest("PANDA_QUESTION　哪个环境？"); !ok6 || q6 != "哪个环境？" {
 		t.Fatalf("ideographic space parse = %q ok=%v", q6, ok6)
+	}
+
+	// A JSON payload carries bounded options: the plain question stays the
+	// first question's text, and the validated spec rides alongside.
+	specJSON := `PANDA_QUESTION: {"questions":[{"id":"env","header":"环境","question":"部署到哪个环境？","options":[{"label":"staging"},{"label":"prod"}],"recommended":"staging"}]}`
+	q7, spec7, cleaned7, ok7 := parseQuestionRequest("部署前确认\n" + specJSON)
+	if !ok7 || spec7 == nil || q7 != "部署到哪个环境？" {
+		t.Fatalf("structured parse = %q spec=%+v ok=%v", q7, spec7, ok7)
+	}
+	if len(spec7.Questions) != 1 || spec7.Questions[0].Recommended != "staging" {
+		t.Fatalf("spec = %+v", spec7)
+	}
+	if strings.Contains(cleaned7, questionMarker) {
+		t.Fatalf("structured marker not stripped: %q", cleaned7)
+	}
+
+	// Invalid JSON is not a protocol error: it falls back to plain text so the
+	// agent's words still reach the user and the free-text resume path works.
+	q8, spec8, _, ok8 := parseQuestionRequest(`PANDA_QUESTION: {"questions":[]}`)
+	if !ok8 || spec8 != nil || q8 != `{"questions":[]}` {
+		t.Fatalf("invalid JSON fallback = %q spec=%+v ok=%v", q8, spec8, ok8)
 	}
 }

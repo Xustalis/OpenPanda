@@ -230,7 +230,7 @@ func waitForActivity(s *askStream) tea.Cmd {
 // A stage parked inside a plan gets the plan watch chained on its resume —
 // the turn follows the pipeline to the next human gate or verdict instead of
 // closing on the resumed task's receipt.
-func startResume(engine *askengine.Engine, taskID, planID, workDir string) (*askStream, tea.Cmd) {
+func startResume(engine *askengine.Engine, taskID, planID, workDir string, answers ...string) (*askStream, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &askStream{
 		events:  make(chan tea.Msg, 256),
@@ -246,7 +246,7 @@ func startResume(engine *askengine.Engine, taskID, planID, workDir string) (*ask
 		s.send(context.Background(), doneMsg{stream: s, err: errors.New("resume worker panicked (see log)")})
 	}, func() {
 		defer cancel()
-		out := engine.ResumeApproved(ctx, taskID, workDir, cb)
+		out := engine.ResumeApproved(ctx, taskID, workDir, cb, answers...)
 		if planID != "" {
 			if awaited := engine.AwaitPlanOutcome(ctx, planID, cb); awaited != nil {
 				out = awaited

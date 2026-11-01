@@ -30,6 +30,13 @@ type clarifyPrompt struct {
 	other     bool
 	otherText string
 	reply     chan<- []entry.ClarifyAnswer
+	// taskID is set for a question an already-parked task is waiting on. The
+	// answer resumes that task through ResumeApproved instead of releasing a
+	// live ask goroutine; planID lets a parked plan stage re-enter the stage
+	// watch, and workDir pins the re-run to the tree this turn used.
+	taskID  string
+	planID  string
+	workDir string
 }
 
 func newClarifyPrompt(spec entry.ClarifySpec, reply chan<- []entry.ClarifyAnswer) *clarifyPrompt {
@@ -178,12 +185,34 @@ func (m tuiModel) answerClarify(a entry.ClarifyAnswer) (tea.Model, tea.Cmd) {
 	}
 	// Buffered channel: the ask goroutine is already parked on it, and this
 	// send must never block the UI thread.
-	q.reply <- q.answers
+	if q.reply != nil {
+		q.reply <- q.answers
+		m.pendingQuestion = nil
+		m.mode = modeAsking
+		m.ta.SetValue("")
+		m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder.running")
+		m.started = time.Now()
+		return m, nil
+	}
+	// A parked task: the turn is already over, so the answer resumes it
+	// through the approval path with the same text the web and CLI send.
+	if q.taskID != "" && m.engine != nil {
+		text := entry.ClarifyAnswerText(&q.spec, q.answers)
+		m.pendingQuestion = nil
+		m.mode = modeAsking
+		m.started = time.Now()
+		m.lastInterrupt = time.Time{}
+		m.ta.SetValue("")
+		m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder.running")
+		stream, pump := startResume(m.engine, q.taskID, q.planID, q.workDir, text)
+		m.stream = stream
+		if m.r != nil {
+			m.r.setAsking(true)
+		}
+		return m, tea.Batch(m.sp.Tick, pump)
+	}
 	m.pendingQuestion = nil
-	m.mode = modeAsking
-	m.ta.SetValue("")
-	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder.running")
-	m.started = time.Now()
+	m.mode = modeIdle
 	return m, nil
 }
 
@@ -191,15 +220,22 @@ func (m tuiModel) answerClarify(a entry.ClarifyAnswer) (tea.Model, tea.Cmd) {
 // cancelled, which unblocks the engine's question callback), and the
 // transcript records the same quiet interruption note as Esc mid-answer.
 func (m tuiModel) cancelClarify() (tea.Model, tea.Cmd) {
+	q := m.pendingQuestion
 	m.pendingQuestion = nil
 	m.mode = modeIdle
+	m.ta.SetValue("")
+	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder")
+	// A parked task's card has no live turn to abort: dismissing it leaves the
+	// task parked, and the note names the CLI path that can still answer it.
+	if q != nil && q.reply == nil && q.taskID != "" {
+		blk := block{kind: blockNote, body: i18n.Tf(m.loc, "cli.ask.question.hint", "id", q.taskID)}
+		return m.withPending(nil, m.printBlock(blk))
+	}
 	m.resetLive()
 	if m.stream != nil {
 		m.stream.drop()
 		m.stream = nil
 	}
-	m.ta.SetValue("")
-	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder")
 	done := m.turnEnded()
 	blk := block{kind: blockNote, body: i18n.T(m.loc, "repl.interrupted")}
 	return m.withPending(done, m.printBlock(blk))
@@ -241,6 +277,13 @@ func (m tuiModel) clarifyCard() string {
 			mark += "  "
 		}
 		sb.WriteString("\n" + mark + m.th.command.Render(fmt.Sprintf("[%d]", i+1)) + " " + label)
+	}
+	// The focused option's preview, single-select only — the same glance the
+	// web card shows beside its option list.
+	if !cur.MultiSelect && q.sel >= 0 && q.sel < len(cur.Options) {
+		if prev := clarifyPreviewText(cur.Options[q.sel].Preview, 8); prev != "" {
+			sb.WriteString("\n" + m.th.muted.Render(prev))
+		}
 	}
 	hintKey := "tui.clarify.hint"
 	if cur.MultiSelect {

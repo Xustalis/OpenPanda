@@ -1832,12 +1832,24 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// what the re-run folds into the intent. The marker text is stripped
 		// from stdout so the protocol line never reaches the user as prose.
 		if plan.Kind == "agent" && res.OK {
-			q, cleaned, ask := parseQuestionRequest(res.Stdout)
+			q, qspec, cleaned, ask := parseQuestionRequest(res.Stdout)
 			// The structured contract wins when it carries a question: the
 			// schema field is parsed truth, while the marker pass above
 			// still strips any protocol line the agent also printed.
 			if structured != nil && strings.TrimSpace(structured.Question) != "" {
 				q, ask = strings.TrimSpace(structured.Question), true
+			}
+			// The schema's clarify field carries the bounded option set for
+			// schema-capable adapters (Claude Code among them). A malformed
+			// one is ignored: the free-text question still parks the task.
+			if structured != nil && structured.Clarify != nil {
+				if verr := entry.ValidateClarifySpec(structured.Clarify); verr == nil {
+					qspec = structured.Clarify
+					if strings.TrimSpace(q) == "" {
+						q = clarifySpecSummary(qspec)
+					}
+					ask = true
+				}
 			}
 			if ask {
 				res.Stdout = cleaned
@@ -1847,8 +1859,17 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 						lastChanged = c.filterHostDrift(workDir, defense.DropVCSBookkeeping(before.Changed(after)))
 					}
 				}
+				specJSON := ""
+				if qspec != nil {
+					if b, merr := json.Marshal(qspec); merr == nil {
+						specJSON = string(b)
+					}
+				}
 				park := map[string]any{
 					"question": q, "stdout": res.Stdout, "files_changed": lastChanged,
+				}
+				if specJSON != "" {
+					park["question_spec"] = specJSON
 				}
 				if restricted {
 					// The question exists because the session is read-only:
@@ -1874,8 +1895,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
 					ApprovalDisposition: string(ApprovalResumeExecution),
-					Question:            q,
-					OK:                  true, ExitCode: 0, Stdout: res.Stdout,
+					Question:            q, QuestionSpec: specJSON,
+					OK: true, ExitCode: 0, Stdout: res.Stdout,
 					FilesChanged: fc, FilesTruncated: filesTruncated,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}}, nil

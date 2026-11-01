@@ -102,6 +102,7 @@ Rules:
 - Never ask for facts you can read from the workspace map or from files in the tree.
 - At most one clarify per request. The runtime folds the answers into the conversation and classifies again; once the answers are present, emit the task/plan and never ask again.
 - 1-4 questions, 2-4 options each. Options must be concrete and mutually exclusive; put your recommendation first and name it in "recommended".
+- When a choice is visual (a layout, a diagram, a code shape), add a short "preview" markdown sample to each such option (at most ~10 lines). Previews are single-select only; a multi-select question must not carry them.
 - Do not ask open-ended questions; the surface offers a free-text "Other" for answers outside the list.
 - For a large or high-risk task, put a short plan (2-6 lines: what changes, where, and how it will be verified) in "plan", and make the first option a confirmation such as "按此方案执行".
 - Simple, well-specified requests never clarify. Asking a question the user did not need is a failure, not diligence.

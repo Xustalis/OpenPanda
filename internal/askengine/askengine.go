@@ -808,6 +808,10 @@ type Result struct {
 	// review on a PANDA_QUESTION marker (core §4.3): the surface should show
 	// it verbatim — it is the one thing standing between the task and done.
 	Question string
+	// QuestionSpec is the structured option set the agent offered alongside
+	// the question (the same shape the entry model uses before a task). A
+	// surface with a choice card renders it; Question stays the text form.
+	QuestionSpec *entry.ClarifySpec
 	// FilesChanged lists the workdir-relative paths the run touched — the
 	// result's footprint, so a surface can show what moved instead of trusting
 	// the agent's prose.
@@ -3265,7 +3269,7 @@ func numberField(v any) int {
 // by every interactive surface. Accepting reviewed work may run without a
 // scheduler, so this mapping deliberately depends only on storage.
 func resultFromTask(task core.Task, result bus.TaskResultPayload, routeFallback string) *Result {
-	return &Result{
+	out := &Result{
 		Kind:          "task",
 		TaskID:        task.TaskID,
 		TaskTitle:     task.Title,
@@ -3284,6 +3288,13 @@ func resultFromTask(task core.Task, result bus.TaskResultPayload, routeFallback 
 		Question:      result.Question,
 		FilesChanged:  result.FilesChanged,
 	}
+	if strings.TrimSpace(result.QuestionSpec) != "" {
+		var spec entry.ClarifySpec
+		if err := json.Unmarshal([]byte(result.QuestionSpec), &spec); err == nil {
+			out.QuestionSpec = &spec
+		}
+	}
+	return out
 }
 
 // routeFallbackPeer scans the task's audit trail for the newest

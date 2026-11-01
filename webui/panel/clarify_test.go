@@ -3,6 +3,7 @@
 package panel
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +19,25 @@ func clarifyPost(t *testing.T, h *handler, sessionID, body string) *httptest.Res
 	rr := httptest.NewRecorder()
 	h.sessionClarify(rr, req)
 	return rr
+}
+
+func TestParkedQuestionFromResult(t *testing.T) {
+	specJSON := `{"questions":[{"id":"env","header":"环境","question":"哪个环境？","options":[{"label":"staging"},{"label":"prod"}],"recommended":"staging"}]}`
+	outer, _ := json.Marshal(map[string]string{"question": "哪个环境？", "question_spec": specJSON})
+	spec, question := parkedQuestionFromResult(string(outer))
+	if question != "哪个环境？" || spec == nil || len(spec.Questions) != 1 {
+		t.Fatalf("parked = %q spec=%+v", question, spec)
+	}
+	if spec.Questions[0].Recommended != "staging" {
+		t.Fatalf("spec = %+v", spec)
+	}
+	// A plain question still reads; malformed JSON reads as no question.
+	if _, q := parkedQuestionFromResult(`{"question":"which env?"}`); q != "which env?" {
+		t.Fatalf("plain question = %q", q)
+	}
+	if spec, q := parkedQuestionFromResult(`{`); spec != nil || q != "" {
+		t.Fatalf("malformed result = %q spec=%+v", q, spec)
+	}
 }
 
 func TestClarifyWaiterDeliversOnce(t *testing.T) {

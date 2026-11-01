@@ -595,6 +595,42 @@
   gap: 6px;
 }
 
+/* Options and the focused option's preview share a row on a wide screen; the
+   preview stacks under the options on a narrow one. */
+.clarify-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.clarify-body .clarify-options {
+  flex: 1 1 55%;
+  min-width: 0;
+}
+
+.clarify-preview {
+  flex: 1 1 45%;
+  min-width: 0;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: var(--fs-caption);
+}
+
+@media (max-width: 720px) {
+  .clarify-body {
+    flex-direction: column;
+  }
+
+  .clarify-preview {
+    max-height: 30vh;
+    width: 100%;
+  }
+}
+
 .clarify-option {
   display: flex;
   flex-direction: column;
@@ -663,6 +699,25 @@
   align-items: center;
   gap: var(--sp-2);
   flex-wrap: wrap;
+}
+
+/* A parked task's question reuses the clarify card inside the approval box:
+   column layout, and the inner card drops its own frame so the two borders do
+   not nest. */
+.task-approval.is-clarify {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.task-approval.is-clarify .clarify-card {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.clarify-other .clarify-question {
+  flex-basis: 100%;
 }
 
 /* Inline approval gate inside a reply's task card: the decision belongs where

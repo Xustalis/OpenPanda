@@ -48,13 +48,17 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **Die Aufgabenklassifikation sieht das Repository** — ist eine Unterhaltung an einen Workspace gebunden, erhält das Klassifikationsmodell jetzt dieselbe Workspace-Karte wie der Executor. Es kann `spec.scope` auf echte Pfade setzen, große Arbeit als `duration_hint: long` markieren und `max_turns` erhöhen, statt aus dem Anfragetext zu raten. Der Klassifikations-Cache-Schlüssel enthält jetzt die Workspace-Karte und die Akzeptanzliste, sodass zwei Unterhaltungen in verschiedenen Bäumen kein für einen anderen Baum gewähltes Urteil (samt Check-ID) mehr teilen.
 
-- **Strukturierte Rückfrage vor der Ausführung (AskUserQuestion-Stil)** — das Klassifikationsmodell kann jetzt bis zu vier begrenzte Fragen (je zwei bis vier konkrete Optionen, 12-Zeichen-Header, empfohlene Option zuerst) stellen, bevor es eine Aufgabe erstellt, statt bei einer großen oder mehrdeutigen Anfrage zu raten. Antworten werden in denselben Turn eingefügt und das Modell klassifiziert erneut; Freitext-„Anderes", Überspringen einer Frage und Teilantworten werden unterstützt. Der Prompt lehrt, wann nicht gefragt wird: nur wenn die Antwort die Arbeit ändert, nie für Fakten aus dem Workspace, höchstens eine Runde pro Anfrage.
+- **Strukturierte Rückfrage vor der Ausführung (AskUserQuestion-Stil)** — das Klassifikationsmodell kann jetzt bis zu vier begrenzte Fragen (je zwei bis vier konkrete Optionen, 12-Zeichen-Header, empfohlene Option zuerst) stellen, bevor es eine Aufgabe erstellt, statt bei einer großen oder mehrdeutigen Anfrage zu raten. Antworten werden in denselben Turn eingefügt und das Modell klassifiziert erneut; Freitext-„Anderes", Überspringen einer Frage und Teilantworten werden unterstützt. Eine Option kann eine kurze Markdown-Vorschau tragen (nur Einfachauswahl): die TUI zeigt die Vorschau der fokussierten Option unter der Liste, die Web-Konsole rendert sie neben den Optionen, die CLI druckt sie unter der Option. Der Prompt lehrt, wann nicht gefragt wird: nur wenn die Antwort die Arbeit ändert, nie für Fakten aus dem Workspace, höchstens eine Runde pro Anfrage.
 
 - **Eine große Aufgabe fragt vor der Ausführung um Freigabe** — eine klassifizierte Aufgabe mit Komplexität ≥ 0,6 oder hohem/kritischem Risiko pausiert vor dem Versand und zeigt Ziel und Verifikationsvertrag mit drei Optionen: ausführen (empfohlen), Nur-Lese-Analyse (Plan-Modus, keine Änderungen) oder abbrechen. Eine bereits beantwortete Klärungsrunde zählt als Freigabe, sodass eine Anfrage nie zweimal gefragt wird.
+
+- **Ein Agent kann während des Laufs mit Optionen fragen** — die `PANDA_QUESTION`-Markierung akzeptiert jetzt dasselbe begrenzte ClarifySpec-JSON, das das Einstiegsmodell nutzt (1-4 Fragen, 2-4 Optionen, die empfohlene zuerst); ein einfacher Satz funktioniert weiterhin. TUI, Web-Konsole und `panda approve` zeigen die Auswahlkarte und setzen die geparkte Aufgabe mit der zusammengesetzten Antwort fort, statt eine Freitext-Antwort per `-m` zu verlangen.
 
 ### Behoben
 
 - **Eine Frage lässt sich inline beantworten** — die TUI zeigt die Auswahlkarte mit Pfeil-/Zahlennavigation, Mehrfachauswahl, Freitext und Esc; `panda ask` druckt die Optionen und liest eine Zeile pro Frage. Die Web-Konsole zeigt dieselbe Karte über ihrem Composer und setzt den wartenden SSE-Lauf mit der Antwort fort — kein neuer Turn. Nicht-interaktive Oberflächen erhalten `needs_clarification` plus die gerenderten Fragen.
+
+- **Ohne Antwort wird ein Frage-Park nicht fortgesetzt** — der Web-Genehmigungsendpunkt und die nicht-interaktive CLI melden jetzt, dass eine Antwort nötig ist, statt den Agenten erneut auf dieselbe Frage laufen zu lassen.
 
 ### Behoben
 

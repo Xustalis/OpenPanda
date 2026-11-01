@@ -44,6 +44,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/plan"
 	"github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
@@ -1336,6 +1337,47 @@ const agentResultSchema = `{
       "type": "string",
       "description": "When status=question: the single most important question for the user."
     },
+    "clarify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "When status=question: the bounded choice set to show the user (1-4 questions, 2-4 options each; the recommended option first). Omit for a plain free-text question.",
+      "properties": {
+        "plan": {"type": "string", "description": "Optional short plan shown above the questions."},
+        "questions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {"type": "string"},
+              "header": {"type": "string", "description": "Short chip label, at most 12 characters."},
+              "question": {"type": "string"},
+              "options": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 4,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {"type": "string"},
+                    "description": {"type": "string"},
+                    "preview": {"type": "string", "description": "Optional short markdown sample of what this option produces (layout/code shape). Single-select only."}
+                  },
+                  "required": ["label"]
+                }
+              },
+              "multi_select": {"type": "boolean"},
+              "recommended": {"type": "string", "description": "The option label you recommend."}
+            },
+            "required": ["id", "header", "question", "options"]
+          }
+        }
+      },
+      "required": ["questions"]
+    },
     "delegate_requests": {
       "type": "array",
       "maxItems": 8,
@@ -1442,11 +1484,12 @@ func (c *Core) abilityIDs() []string {
 // structuredAgentResult is the parsed form of the schema-validated output a
 // capable adapter returns under Result.Structured.
 type structuredAgentResult struct {
-	Answer    string            `json:"answer"`
-	Status    string            `json:"status"`
-	Question  string            `json:"question"`
-	Delegates []delegateRequest `json:"delegate_requests"`
-	Messages  []msgRequest      `json:"messages"`
+	Answer    string             `json:"answer"`
+	Status    string             `json:"status"`
+	Question  string             `json:"question"`
+	Clarify   *entry.ClarifySpec `json:"clarify"`
+	Delegates []delegateRequest  `json:"delegate_requests"`
+	Messages  []msgRequest       `json:"messages"`
 }
 
 // parseStructuredResult decodes the adapter's structured output. nil when
@@ -1489,25 +1532,67 @@ func cutQuestionMarker(rest string) (payload string, ok bool) {
 
 // parseQuestionRequest extracts the last PANDA_QUESTION line from agent
 // output — the clarification the agent cannot resolve without the user —
-// and returns the output with marker lines removed. Like the delegate
-// marker, an empty payload keeps the line in place rather than eating the
-// agent's words. The marker must end at a word boundary: "PANDA_QUESTIONABLE:"
-// is the agent's own prose, not the protocol.
-func parseQuestionRequest(stdout string) (question, cleaned string, ok bool) {
+// and returns the output with marker lines removed. The payload is either a
+// plain sentence (the original protocol) or a ClarifySpec JSON object with
+// bounded options, the same shape the entry model uses before a task.
+// spec is nil for the plain form. Like the delegate marker, an empty payload
+// keeps the line in place rather than eating the agent's words. The marker
+// must end at a word boundary: "PANDA_QUESTIONABLE:" is the agent's own prose,
+// not the protocol.
+func parseQuestionRequest(stdout string) (question string, spec *entry.ClarifySpec, cleaned string, ok bool) {
 	var kept []string
 	for _, line := range strings.Split(stdout, "\n") {
 		trim := strings.TrimSpace(line)
 		if rest, isMarker := strings.CutPrefix(trim, questionMarker); isMarker {
 			if payload, sep := cutQuestionMarker(rest); sep {
-				if q := strings.TrimSpace(payload); q != "" {
-					question = q
+				if q, s := parseQuestionPayload(payload); q != "" {
+					question, spec = q, s
 					continue
 				}
 			}
 		}
 		kept = append(kept, line)
 	}
-	return question, strings.Join(kept, "\n"), question != ""
+	return question, spec, strings.Join(kept, "\n"), question != ""
+}
+
+// parseQuestionPayload turns one marker payload into the human-readable
+// question plus the structured option set when the agent offered one. A
+// payload that starts with "{" but fails validation keeps its text form: the
+// agent's words are more valuable than a protocol error, and the free-text
+// resume path still answers it.
+func parseQuestionPayload(payload string) (string, *entry.ClarifySpec) {
+	raw := strings.TrimSpace(payload)
+	if raw == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(raw, "{") {
+		var spec entry.ClarifySpec
+		if err := json.Unmarshal([]byte(raw), &spec); err == nil {
+			if err := entry.ValidateClarifySpec(&spec); err == nil {
+				return clarifySpecSummary(&spec), &spec
+			}
+		}
+	}
+	return raw, nil
+}
+
+// clarifySpecSummary is the plain-text form surfaces without a choice card
+// show: the first question, plus the plan's first line when one was given.
+func clarifySpecSummary(spec *entry.ClarifySpec) string {
+	if spec == nil || len(spec.Questions) == 0 {
+		return ""
+	}
+	q := strings.TrimSpace(spec.Questions[0].Question)
+	if plan := strings.TrimSpace(spec.Plan); plan != "" {
+		if i := strings.IndexByte(plan, '\n'); i > 0 {
+			plan = plan[:i]
+		}
+		if plan != "" {
+			q = plan + " — " + q
+		}
+	}
+	return q
 }
 
 // delegateChildren fans the agent's parsed requests out to causal children

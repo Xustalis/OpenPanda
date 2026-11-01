@@ -372,6 +372,12 @@ export interface Task {
    *  resume_execution (parked before running, approve re-runs it), or
    *  needs_changed_input (approve alone cannot help). */
   approval_disposition?: 'accept_work' | 'resume_execution' | 'needs_changed_input'
+  /** Review rows only: the clarification the agent parked on, and the
+   *  bounded option set as a ClarifySpec JSON string when it offered one.
+   *  Computed server-side so the client never parses the whole result JSON
+   *  (which also carries the run's stdout) to find them. */
+  question?: string
+  question_spec?: string
   /** Same-tree parallelism declaration: the project-relative lanes this
    *  task claims (disjoint siblings run simultaneously), or — when isolate
    *  is set — a private copy whose changes merge back on completion. */
@@ -568,6 +574,9 @@ export interface ClarifyQuestion {
 export interface ClarifyOption {
   label: string
   description?: string
+  /** Optional markdown sample of what this option produces; single-select
+   *  only. */
+  preview?: string
 }
 
 /** One question's answer, sent to POST /api/sessions/{id}/clarify. */
@@ -1117,6 +1126,16 @@ export const api = {
 
   approve(id: string, scope?: ApprovalScope): Promise<ApprovalResult> {
     return request('POST', `/api/tasks/${id}/approve`, scope && scope !== 'once' ? { scope } : undefined)
+  },
+
+  /** Resume a task parked on a clarification question with the answer. The
+   *  structured form is composed against the parked spec server-side; the
+   *  text form covers agents that asked in plain prose. */
+  approveWithAnswer(
+    id: string,
+    reply: { answers?: ClarifyAnswer[]; answer?: string },
+  ): Promise<ApprovalResult> {
+    return request('POST', `/api/tasks/${encodeURIComponent(id)}/approve`, reply)
   },
 
   approvalOperation(id: string, operationID: string): Promise<ApprovalOperation> {

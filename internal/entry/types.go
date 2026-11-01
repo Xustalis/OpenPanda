@@ -7,6 +7,8 @@
 package entry
 
 import (
+	"strings"
+
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
@@ -74,10 +76,14 @@ type ClarifyQuestion struct {
 	Recommended string `json:"recommended,omitempty"`
 }
 
-// ClarifyOption is one selectable answer.
+// ClarifyOption is one selectable answer. Preview optionally renders a short
+// markdown sample of what choosing this option produces (a layout sketch, a
+// code shape); it is single-select only, because a multi-select preview has no
+// single result to show.
 type ClarifyOption struct {
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
+	Preview     string `json:"preview,omitempty"`
 }
 
 // ClarifyAnswer is one question's answer: the selected option labels, in the
@@ -87,6 +93,47 @@ type ClarifyAnswer struct {
 	ID       string   `json:"id"`
 	Selected []string `json:"selected,omitempty"`
 	Other    string   `json:"other,omitempty"`
+}
+
+// ClarifyAnswerText renders an answer set as the text a resumed agent receives.
+// It is the one place the CLI, the web console and the TUI agree on the shape,
+// so the model reads the same reply whichever surface asked: one line per
+// question, unanswered questions explicitly deferred to the recommendation.
+func ClarifyAnswerText(spec *ClarifySpec, answers []ClarifyAnswer) string {
+	if spec == nil {
+		return ""
+	}
+	byID := make(map[string]ClarifyAnswer, len(answers))
+	for _, a := range answers {
+		byID[a.ID] = a
+	}
+	var lines []string
+	for _, q := range spec.Questions {
+		var picks []string
+		if a, ok := byID[q.ID]; ok {
+			for _, s := range a.Selected {
+				if s = strings.TrimSpace(s); s != "" {
+					picks = append(picks, s)
+				}
+			}
+			if other := strings.TrimSpace(a.Other); other != "" {
+				picks = append(picks, other)
+			}
+		}
+		if len(picks) == 0 {
+			if q.Recommended != "" {
+				picks = []string{q.Recommended + " (recommended fallback — the user did not choose)"}
+			} else {
+				lines = append(lines, "- "+q.Question+": (not answered)")
+				continue
+			}
+		}
+		lines = append(lines, "- "+q.Question+": "+strings.Join(picks, ", "))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ToolCalls returns every call the model emitted this round. Models emit

@@ -51,6 +51,13 @@ func TestValidateClarifySpec(t *testing.T) {
 		{"duplicate label", func(c *ClarifySpec) { c.Questions[0].Options[1].Label = c.Questions[0].Options[0].Label }},
 		{"empty label", func(c *ClarifySpec) { c.Questions[0].Options[0].Label = " " }},
 		{"recommended names no option", func(c *ClarifySpec) { c.Questions[0].Recommended = "nope" }},
+		{"preview on multi-select", func(c *ClarifySpec) {
+			c.Questions[0].MultiSelect = true
+			c.Questions[0].Options[0].Preview = "```\nlayout\n```"
+		}},
+		{"preview too long", func(c *ClarifySpec) {
+			c.Questions[0].Options[0].Preview = strings.Repeat("x", maxClarifyPreviewBytes+1)
+		}},
 		{"plan too long", func(c *ClarifySpec) { c.Plan = strings.Repeat("x", maxClarifyPlanBytes+1) }},
 	}
 	for _, tc := range cases {
@@ -80,6 +87,39 @@ func TestParseClarifyEnvelope(t *testing.T) {
 	// And it must never be replayed from the classification cache.
 	if classificationCacheable(out) {
 		t.Fatal("clarify output marked cacheable")
+	}
+}
+
+func TestClarifyPreviewAllowedOnSingleSelect(t *testing.T) {
+	spec := validClarify()
+	spec.Questions[0].Options[0].Preview = "```\n┌────┐\n│ A  │\n└────┘\n```"
+	if err := ValidateClarifySpec(spec); err != nil {
+		t.Fatalf("single-select preview rejected: %v", err)
+	}
+}
+
+func TestClarifyAnswerText(t *testing.T) {
+	spec := validClarify()
+	got := ClarifyAnswerText(spec, []ClarifyAnswer{
+		{ID: "scope", Selected: []string{"internal"}},
+		{ID: "verify", Other: "pytest -q"},
+	})
+	for _, want := range []string{"改哪个目录？: internal", "用哪个命令验证？: pytest -q"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("answer text missing %q:\n%s", want, got)
+		}
+	}
+	// No answer at all: the recommendation fills in where one exists, and the
+	// question without one is explicit rather than silently dropped.
+	got = ClarifyAnswerText(spec, nil)
+	if !strings.Contains(got, "internal (recommended fallback") {
+		t.Fatalf("recommendation fallback missing:\n%s", got)
+	}
+	if !strings.Contains(got, "用哪个命令验证？: (not answered)") {
+		t.Fatalf("unanswered question missing:\n%s", got)
+	}
+	if ClarifyAnswerText(nil, nil) != "" {
+		t.Fatal("nil spec produced text")
 	}
 }
 

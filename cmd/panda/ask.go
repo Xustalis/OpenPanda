@@ -248,6 +248,27 @@ func runAsk(args []string) {
 		}
 		out = next
 	}
+	// A task the agent parked on a structured question gets the same choice
+	// card the TUI and web show: one command, no "now go find panda approve".
+	// The answer resumes through the approval path and may park again; the
+	// loop is bounded so a model that keeps asking cannot hold the command.
+	for round := 0; round < 3 && out.Kind == "task" && out.QuestionSpec != nil; round++ {
+		answers, ok := promptClarifyCLI(*out.QuestionSpec, loc)
+		if !ok {
+			break
+		}
+		answer := entry.ClarifyAnswerText(out.QuestionSpec, answers)
+		cb := askengine.StreamCallbacks{
+			OnProgress: func(p askengine.Progress) {
+				fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(loc, p))
+			},
+		}
+		next := engine.ResumeApproved(context.Background(), out.TaskID, cwd, cb, answer)
+		if next == nil {
+			break
+		}
+		out = next
+	}
 	recordConvo(out)
 
 	switch out.Kind {
@@ -696,6 +717,15 @@ func promptClarifyCLI(spec entry.ClarifySpec, loc i18n.Locale) ([]entry.ClarifyA
 				desc = " — " + p.Muted(d)
 			}
 			fmt.Printf("  %d) %s%s%s\n", j+1, o.Label, suffix, desc)
+			// A preview is visual context for a single-select choice; the
+			// terminal has no hover, so it prints under its own option.
+			if !q.MultiSelect {
+				if prev := clarifyPreviewText(o.Preview, 6); prev != "" {
+					for _, line := range strings.Split(prev, "\n") {
+						fmt.Println(p.Muted("     │ " + line))
+					}
+				}
+			}
 		}
 		if q.MultiSelect {
 			fmt.Println("  " + p.Muted(i18n.T(loc, "clarify.multi")))
@@ -708,6 +738,21 @@ func promptClarifyCLI(spec entry.ClarifySpec, loc i18n.Locale) ([]entry.ClarifyA
 		answers = append(answers, parseClarifyLine(q, strings.TrimSpace(line)))
 	}
 	return answers, true
+}
+
+// clarifyPreviewText bounds an option preview to a screen-sized sample: the
+// full text still lives in the spec, but a card or a terminal shows a glance,
+// and the cut says so.
+func clarifyPreviewText(text string, maxLines int) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if maxLines > 0 && len(lines) > maxLines {
+		lines = append(lines[:maxLines], "…")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // parseClarifyLine turns one typed line into an answer. A line of option

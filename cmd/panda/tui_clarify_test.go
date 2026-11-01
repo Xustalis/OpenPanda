@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
@@ -119,6 +120,46 @@ func TestTUIClarifyCancelDropsTheAsk(t *testing.T) {
 	m = step(m, tea.KeyMsg{Type: tea.KeyEsc})
 	if m.pendingQuestion != nil || m.mode != modeIdle {
 		t.Fatalf("pending=%v mode=%v, want the round cancelled", m.pendingQuestion, m.mode)
+	}
+}
+
+// TestTUICommitOpensParkedQuestionCard: a task the agent parked on a
+// structured question opens the choice card instead of leaving the user to
+// find `panda approve` — the TUI twin of the web's review question card.
+func TestTUICommitOpensParkedQuestionCard(t *testing.T) {
+	m := newTestTUI(t)
+	spec := clarifyFixture()
+	res := &askengine.Result{
+		Kind: "task", TaskID: "task-1", TaskState: "review",
+		Question: "改哪个目录？", QuestionSpec: &spec,
+	}
+	next, _ := m.commit(res)
+	nm := next.(tuiModel)
+	if nm.mode != modeClarifying || nm.pendingQuestion == nil {
+		t.Fatalf("mode=%v pending=%v, want the question card", nm.mode, nm.pendingQuestion)
+	}
+	if nm.pendingQuestion.taskID != "task-1" {
+		t.Fatalf("taskID = %q, want task-1", nm.pendingQuestion.taskID)
+	}
+	if len(nm.pendingQuestion.spec.Questions) != 2 {
+		t.Fatalf("questions = %d, want 2", len(nm.pendingQuestion.spec.Questions))
+	}
+}
+
+func TestTUIClarifyCardShowsPreview(t *testing.T) {
+	spec := clarifyFixture()
+	spec.Questions[0].Options[0].Preview = "PREVIEW-LAYOUT"
+	m, _ := newClarifyTUI(t, spec)
+	m.width = 100
+	card := m.clarifyCard()
+	if !strings.Contains(card, "PREVIEW-LAYOUT") {
+		t.Fatalf("focused option preview missing:\n%s", card)
+	}
+	// The second option has no preview; focusing it drops the block.
+	m = step(m, tea.KeyMsg{Type: tea.KeyDown})
+	card = m.clarifyCard()
+	if strings.Contains(card, "PREVIEW-LAYOUT") {
+		t.Fatalf("stale preview after moving focus:\n%s", card)
 	}
 }
 

@@ -240,6 +240,33 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 		m.r.recordOutcome(context.Background(), m.pendingPrompt, out)
 	}
 	blk := resultBlock(out, m.liveAnswerText(), m.loc)
+	// A parked clarification is the one outcome the transcript cannot answer
+	// by being read: carry the question into the block, and — when the agent
+	// offered bounded choices — open the same choice card the running turn
+	// uses. Answering it resumes the task through the approval path.
+	if q := strings.TrimSpace(out.Question); q != "" {
+		if out.QuestionSpec != nil {
+			if blk.body == "" {
+				blk.body = q
+			} else {
+				blk.body += "\n\n" + q
+			}
+			m.pendingQuestion = &clarifyPrompt{
+				spec:    *out.QuestionSpec,
+				taskID:  out.TaskID,
+				planID:  out.PlanID,
+				workDir: m.turnWorkDir,
+			}
+			m.mode = modeClarifying
+		} else {
+			hint := i18n.Tf(m.loc, "cli.ask.question.hint", "id", out.TaskID)
+			if blk.body == "" {
+				blk.body = q + "\n" + hint
+			} else {
+				blk.body += "\n\n" + q + "\n" + hint
+			}
+		}
+	}
 	// A delegated turn carries its card's title and stage trail into the
 	// transcript, so the committed block records the same route/exec/judge
 	// evidence the live card showed rather than just the final output.

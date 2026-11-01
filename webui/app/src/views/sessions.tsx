@@ -3759,15 +3759,21 @@ function ClarifyCard({
 }: {
   spec: ClarifySpec
   onSubmit(answers: ClarifyAnswer[]): void
-  onCancel(): void
+  /** Omitted for a parked task's card: there is no turn to abort, and the
+   *  task's own Reject button is the way to throw the work away. */
+  onCancel?: () => void
 }) {
   const [index, setIndex] = useState(0)
   const [picked, setPicked] = useState<Record<string, boolean>>({})
   const [other, setOther] = useState('')
   const [otherOpen, setOtherOpen] = useState(false)
+  // Which option's preview is on screen. The recommended option is first, so
+  // 0 shows a preview before the user touches anything.
+  const [focused, setFocused] = useState(0)
   const answers = useRef<ClarifyAnswer[]>([])
   const q = spec.questions[index]
   if (!q) return null
+  const preview = q.multi_select ? '' : (q.options[focused]?.preview ?? '').trim()
 
   const advance = (answer: ClarifyAnswer) => {
     const next = [...answers.current, answer]
@@ -3812,27 +3818,36 @@ function ClarifyCard({
       <div class="clarify-question">
         <span class="clarify-header">{q.header}</span> {q.question}
       </div>
-      <div class="clarify-options">
-        {q.options.map((o) => {
-          const on = Boolean(picked[o.label])
-          return (
-            <button
-              type="button"
-              class={`clarify-option${on ? ' is-picked' : ''}`}
-              aria-pressed={q.multi_select ? on : undefined}
-              onClick={() => choose(o.label)}
-            >
-              <span class="clarify-option-label">
-                {q.multi_select && <span class="clarify-check">{on ? '✓' : ''}</span>}
-                {o.label}
-                {o.label === q.recommended && (
-                  <span class="clarify-recommended">{t('clarify.recommended')}</span>
-                )}
-              </span>
-              {o.description && <span class="clarify-option-desc">{o.description}</span>}
-            </button>
-          )
-        })}
+      <div class="clarify-body">
+        <div class="clarify-options">
+          {q.options.map((o, i) => {
+            const on = Boolean(picked[o.label])
+            return (
+              <button
+                type="button"
+                class={`clarify-option${on ? ' is-picked' : ''}`}
+                aria-pressed={q.multi_select ? on : undefined}
+                onMouseEnter={() => setFocused(i)}
+                onFocus={() => setFocused(i)}
+                onClick={() => choose(o.label)}
+              >
+                <span class="clarify-option-label">
+                  {q.multi_select && <span class="clarify-check">{on ? '✓' : ''}</span>}
+                  {o.label}
+                  {o.label === q.recommended && (
+                    <span class="clarify-recommended">{t('clarify.recommended')}</span>
+                  )}
+                </span>
+                {o.description && <span class="clarify-option-desc">{o.description}</span>}
+              </button>
+            )
+          })}
+        </div>
+        {preview && (
+          <div class="clarify-preview">
+            <Markdown text={preview} />
+          </div>
+        )}
       </div>
       {otherOpen && (
         <form class="clarify-other" onSubmit={submitOther}>
@@ -3859,12 +3874,27 @@ function ClarifyCard({
         <button type="button" class="btn small" onClick={() => advance({ id: q.id })}>
           {t('clarify.skip')}
         </button>
-        <button type="button" class="btn small danger" onClick={onCancel}>
-          {t('clarify.cancel')}
-        </button>
+        {onCancel && (
+          <button type="button" class="btn small danger" onClick={onCancel}>
+            {t('clarify.cancel')}
+          </button>
+        )}
       </div>
     </div>
   )
+}
+
+/** parseClarifySpec decodes the server-computed question_spec field (a
+ *  ClarifySpec JSON string). Malformed input reads as no option set — the
+ *  free-text question, when present, is still answerable. */
+function parseClarifySpec(raw?: string): ClarifySpec | null {
+  if (!raw) return null
+  try {
+    const spec = JSON.parse(raw) as ClarifySpec
+    return spec && Array.isArray(spec.questions) && spec.questions.length > 0 ? spec : null
+  } catch {
+    return null
+  }
 }
 
 /** Inline approval gate for a task referenced by a chat bubble.
@@ -3897,6 +3927,8 @@ function TaskApproval({
   const task = hint ?? fetched
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Free-text answer for an agent that asked in prose (no option set).
+  const [answerText, setAnswerText] = useState('')
   // The remember scope: where this answer lands for the gates that come after.
   // The server names its default (the project's configured scope) so the card
   // preselects it; the user can still pick differently per decision.
@@ -3933,6 +3965,59 @@ function TaskApproval({
     } finally {
       setBusy(false)
     }
+  }
+
+  // A task the agent parked on a question is not waiting for a yes/no: it is
+  // waiting for an answer. Show the same choice card the running turn uses,
+  // and resume through the approval endpoint with the answer attached.
+  const parkedSpec = parseClarifySpec(task.question_spec)
+  const parkedQuestionText = (task.question ?? '').trim()
+  if (task.approval_disposition === 'resume_execution' && (parkedQuestionText || parkedSpec)) {
+    return (
+      <div class="task-approval is-clarify" data-testid="chat-task-question">
+        <div class="clarify-head">
+          <span class="badge yellow">{t('state.review')}</span>
+          <span class="dim review-kind">{t('detail.reviewKind.resume_execution')}</span>
+        </div>
+        {parkedSpec ? (
+          <ClarifyCard
+            spec={parkedSpec}
+            onSubmit={(answers) => void act(() => api.approveWithAnswer(task.id, { answers }))}
+          />
+        ) : (
+          <form
+            class="clarify-other"
+            onSubmit={(e) => {
+              e.preventDefault()
+              const text = answerText.trim()
+              if (!text) return
+              void act(() => api.approveWithAnswer(task.id, { answer: text }))
+            }}
+          >
+            <div class="clarify-question">{parkedQuestionText}</div>
+            <input
+              value={answerText}
+              onInput={(e) => setAnswerText(e.currentTarget.value)}
+              placeholder={t('clarify.otherPlaceholder')}
+              disabled={busy}
+            />
+            <button type="submit" class="btn primary small" disabled={busy || !answerText.trim()}>
+              {t('clarify.submit')}
+            </button>
+          </form>
+        )}
+        <div class="clarify-actions">
+          <button
+            class="btn danger small"
+            disabled={busy}
+            onClick={() => void act(() => api.reject(task.id, t('detail.rejectedViaWeb'), scope))}
+          >
+            {t('detail.reject')}
+          </button>
+        </div>
+        {error && <p class="gate-error">{error}</p>}
+      </div>
+    )
   }
 
   return (
