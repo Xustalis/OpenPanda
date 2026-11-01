@@ -180,8 +180,7 @@ func (m tuiModel) sidebarLines(height, width int) []string {
 // and where. Two rows is the trade the rail can afford — one row of a 26-column
 // column holds either a readable title or a readable state, never both.
 func (m tuiModel) sidebarTaskRows(t core.Task, selected bool, inner int) []string {
-	marker := " "
-	style := m.th.muted
+	marker, style := m.th.glyph("✓", "+"), m.th.muted
 	switch t.State {
 	case core.StateRunning:
 		marker, style = m.th.glyph("●", "*"), m.th.success
@@ -193,8 +192,6 @@ func (m tuiModel) sidebarTaskRows(t core.Task, selected bool, inner int) []strin
 		marker, style = m.th.glyph("·", "."), m.th.muted
 	case core.StateFailed:
 		marker, style = m.th.glyph("✗", "x"), m.th.danger
-	default:
-		marker, style = m.th.glyph("✓", "+"), m.th.muted
 	}
 	if selected {
 		marker = m.th.accent.Render(m.th.glyph("▸", ">"))
