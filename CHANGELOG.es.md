@@ -43,6 +43,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 ### Añadido
 
 - **La consola se asienta en un solo armazón** — cada página abre con una línea de título; las tres lentes del centro de tareas comparten un control segmentado; el detalle de tarea son cuatro tarjetas plegables por separado; el registro de modelos es una rejilla agrupada por conexión; los dispositivos tienen una tarjeta de conexión y una lista de marcado. Ajustes pasa a ser un modal, los desplegables comparten un componente y el tema oscuro es una escala de grises. Los enlaces antiguos `#/todos` aterrizan en el tablero de tareas; los datos de tareas pendientes y `panda todo` no cambian. El interruptor de autorización por turno sigue junto al selector de permisos: concede a este turno lo que el modo del hilo no da.
+- **La superficie de comandos del nodo llega a cada agente** — los comandos de primer nivel, las formas de uso de una línea y el vocabulario de autocompletado provienen ahora de un único registro (`internal/nodecli`), de modo que `panda help` cubre `join`, `nodes remove` y `nodes trust`, el autocompletado de los shells se mantiene sincronizado y el prompt del agente lleva el conjunto exacto de comandos locales en lugar de sondear el host. Las lecturas y las acciones sobre la cola que ya cubren las herramientas controladas siguen siendo llamadas de herramienta; solo las operaciones sin herramienta se despachan a un agente.
 
 ### Corregido
 

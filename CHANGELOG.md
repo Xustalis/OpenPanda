@@ -49,6 +49,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 ### Added
 
 - **The console settles on one shell** — every page opens with one header line; the task centre's three lenses share one segmented control; task detail is four independently collapsible cards; the model registry is a connection-grouped grid; devices get one connect card and one dial list. Settings becomes a modal, dropdowns share one component, and the dark theme is a grey scale. Old `#/todos` links land on the task board; the to-do data and `panda todo` are unchanged. The per-turn authorize switch stays beside the permission picker: it grants this turn what the thread's mode alone does not.
+- **The node's command surface reaches every agent** — the CLI's top-level commands, one-line usages and completion vocabulary now come from one registry (`internal/nodecli`), so `panda help` covers `join`, `nodes remove` and `nodes trust`, shell completion stays in step, and the agent prompt carries the exact local command set instead of probing the host. Reads and queue dispositions that controlled tools already cover stay tool calls; only operations with no tool behind them are dispatched to an agent.
 
 ### Fixed
 
