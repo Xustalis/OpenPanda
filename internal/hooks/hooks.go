@@ -12,9 +12,15 @@
 // Every hook runs under the constraints this node applies to any other command
 // it executes: the defense tier decides whether it may run unattended, and the
 // audit log records that it did. The child environment is a whitelist, so a hook
-// never inherits the node's model credentials. And every value substituted into
-// a command is shell-quoted — a task title comes from a model, and a model
-// writing "fix the bug; rm -rf ~" is a sentence, not an instruction.
+// never inherits the node's model credentials.
+//
+// Event values reach the command through that environment, never through the
+// command line. A task title comes from a model, and a model writing
+// "fix the bug; rm -rf ~" is a sentence, not an instruction — but the template
+// author decides where the placeholder sits, and a substitution inside the
+// template's own double quotes defeats shell quoting (the quoted literal is an
+// ordinary character there, and $(...) still expands). Values therefore travel
+// as PANDA_HOOK_* variables that the placeholder references.
 package hooks
 
 import (
@@ -156,7 +162,7 @@ var ErrTier2 = fmt.Errorf("the command is graded irreversible")
 func RunOne(ctx context.Context, h Hook, ev Event, timeout time.Duration) (string, error) {
 	line := Expand(h.Command, ev)
 	shell, flag := userShell()
-	if defense.TierFromCommand(shell, flag, line) != defense.TierReversible {
+	if defense.TierFromCommand("sh", "-c", line) != defense.TierReversible {
 		return "", ErrTier2
 	}
 	if timeout <= 0 {
@@ -165,7 +171,7 @@ func RunOne(ctx context.Context, h Hook, ev Event, timeout time.Duration) (strin
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := executil.CommandContext(runCtx, shell, flag, line)
-	cmd.Env = safeEnv()
+	cmd.Env = append(safeEnv(), hookEnv(ev)...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -174,7 +180,13 @@ func RunOne(ctx context.Context, h Hook, ev Event, timeout time.Duration) (strin
 func (r *Runner) execute(h Hook, ev Event) {
 	line := Expand(h.Command, ev)
 	shell, flag := userShell()
-	tier := defense.TierFromCommand(shell, flag, line)
+	// Grade the payload with a FIXED scanner name. TierFromCommand only walks
+	// the command text when the interpreter is one it recognises, so keying the
+	// scan on the user's $SHELL meant an unrecognised shell (nu, elvish, xonsh)
+	// downgraded every hook — a literal `rm -rf /` included — to tier 1 and ran
+	// it with no one watching. What shell will execute it is a separate question
+	// from what commands it contains.
+	tier := defense.TierFromCommand("sh", "-c", line)
 	if tier != defense.TierReversible && !r.cfg.AllowTier2 {
 		r.logger.Warn("hooks: refused a tier-2 command",
 			"event", ev.Name, "task", ev.TaskID, "tier", tier)
@@ -193,15 +205,18 @@ func (r *Runner) execute(h Hook, ev Event) {
 	defer cancel()
 
 	cmd := executil.CommandContext(ctx, shell, flag, line)
-	cmd.Env = safeEnv()
+	cmd.Env = append(safeEnv(), hookEnv(ev)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		detail := strings.TrimSpace(string(out))
+		// A hook's output is the user's own command text, but a command that
+		// echoes a token (a curl call, a header dump) must not put it in the
+		// daemon log. security owns redaction; route through it.
+		detail := security.Redact(strings.TrimSpace(string(out)))
 		if len(detail) > maxAuditDetail {
 			detail = detail[:maxAuditDetail]
 		}
 		r.logger.Warn("hooks: command failed",
-			"event", ev.Name, "task", ev.TaskID, "err", err, "output", detail)
+			"event", ev.Name, "task", ev.TaskID, "err", security.Redact(err.Error()), "output", detail)
 		r.record(ev, h, "failed", err.Error())
 		return
 	}
@@ -225,33 +240,55 @@ func (r *Runner) record(ev Event, h Hook, result, detail string) {
 	})
 }
 
-// Expand substitutes the event's fields into a command template. Every value is
-// shell-quoted: the values come from task rows, and a task title is model
-// output. A template that wants a value inside its own quoting can use the bare
-// forms ({task}, {event} are identifiers the node owns, not user text).
+// The environment variables a hook command reads the event from. Values travel
+// this way rather than being spliced into the command line: a substitution that
+// lands inside the template's own double quotes is not protected by shell
+// quoting (a single-quoted literal is an ordinary character there, and $(...)
+// still expands), so the only construction that holds for every template is one
+// where the value never enters the shell's parser at all.
+const (
+	EnvTaskID  = "PANDA_HOOK_TASK_ID"
+	EnvTitle   = "PANDA_HOOK_TITLE"
+	EnvState   = "PANDA_HOOK_STATE"
+	EnvProject = "PANDA_HOOK_PROJECT"
+	EnvOwner   = "PANDA_HOOK_OWNER"
+	EnvEvent   = "PANDA_HOOK_EVENT"
+)
+
+// Expand substitutes placeholder tokens with references to those variables.
+// The reference is emitted double-quoted so it is one word whatever the
+// surrounding template does: {title} and "{title}" both end up as a single
+// argument, and the value is expanded by the shell, never parsed by it.
 func Expand(template string, ev Event) string {
+	ref := func(name string) string {
+		if runtime.GOOS == "windows" {
+			// cmd.exe expands %VAR% inside and outside quotes, and the
+			// expanded text is not re-parsed as syntax.
+			return `"%` + name + `%"`
+		}
+		return `"${` + name + `}"`
+	}
 	repl := strings.NewReplacer(
-		"{task_id}", shellQuote(ev.TaskID),
-		"{title}", shellQuote(ev.Title),
-		"{state}", shellQuote(ev.State),
-		"{project}", shellQuote(ev.Project),
-		"{owner}", shellQuote(ev.Owner),
-		"{event}", shellQuote(ev.Name),
+		"{task_id}", ref(EnvTaskID),
+		"{title}", ref(EnvTitle),
+		"{state}", ref(EnvState),
+		"{project}", ref(EnvProject),
+		"{owner}", ref(EnvOwner),
+		"{event}", ref(EnvEvent),
 	)
 	return repl.Replace(template)
 }
 
-// shellQuote wraps a value so a shell reads it as one literal word.
-func shellQuote(s string) string {
-	if runtime.GOOS == "windows" {
-		// cmd.exe has no reliable single-quote form; doubling quotes inside a
-		// quoted word is the closest thing it has to an escape.
-		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+// hookEnv is the event, as the child sees it.
+func hookEnv(ev Event) []string {
+	return []string{
+		EnvTaskID + "=" + ev.TaskID,
+		EnvTitle + "=" + ev.Title,
+		EnvState + "=" + ev.State,
+		EnvProject + "=" + ev.Project,
+		EnvOwner + "=" + ev.Owner,
+		EnvEvent + "=" + ev.Name,
 	}
-	if s == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // safeEnv is the whitelist a hook command inherits. Credentials are absent by

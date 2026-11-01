@@ -1679,6 +1679,11 @@ func (m tuiModel) onConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "y") && (run != nil || yes != "") {
 		m.confirmText, m.confirmYes, m.confirmRun = "", "", nil
 		if run != nil {
+			// Leave the card BEFORE running: the callback is an arbitrary
+			// action whose failure paths do not know about modeConfirm, and a
+			// card left standing with an emptied message swallows the next
+			// keystroke as a decline.
+			m.mode = modeIdle
 			return run(&m)
 		}
 		return m.startExec(yes)

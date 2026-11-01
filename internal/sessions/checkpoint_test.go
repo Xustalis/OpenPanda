@@ -232,3 +232,48 @@ func TestRewindRejectsBadTurn(t *testing.T) {
 		t.Errorf("err = %v, want ErrBadTurn", err)
 	}
 }
+
+// TestRemovingTheWorktreeClearsCheckpoints walks the order every caller uses:
+// remove the worktree, then delete the session row. The snapshots have to be
+// cleared at removal time — once the directory is gone, `git -C <dir>` cannot
+// run and the refs stay pinned forever.
+func TestRemovingTheWorktreeClearsCheckpoints(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newGitRepo(t)
+	w, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(filepath.Join(t.TempDir(), "sessions"))
+	sess, err := store.Create("gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, err := w.Ensure(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetWorktree(sess.ID, wt, Branch(sess.ID)); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, wt, "a.txt", "one")
+	mustAppend(t, store, sess.ID, Turn{Role: "user", Text: "a"})
+	mustAppend(t, store, sess.ID, Turn{Role: "assistant", Text: "b"})
+	if cps, _ := store.Checkpoints(context.Background(), sess.ID); len(cps) == 0 {
+		t.Fatal("no checkpoint was recorded to clean up")
+	}
+
+	if err := w.Remove(context.Background(), sess.ID); err != nil {
+		t.Fatalf("remove worktree: %v", err)
+	}
+	if err := store.Delete(sess.ID); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+
+	out, _ := gitOut(context.Background(), repo, nil, "for-each-ref", checkpointPrefix(sess.ID))
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("checkpoint refs survived the worktree removal: %s", out)
+	}
+}

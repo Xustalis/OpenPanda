@@ -208,7 +208,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ready = true
 		// Clamp to the actual available width; a tiny terminal must shed
 		// decoration rather than creating a component wider than the screen.
-		m.ta.SetWidth(max(1, msg.Width-4))
+		m.ta.SetWidth(max(1, m.textWidth()-4))
 		m.sizeSideInput()
 		if first {
 			m.refreshProject()
@@ -1538,6 +1538,9 @@ func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
 		m.nextNode = ""
 	}
 	m.team = nil
+	// The bare conversation the channel was replaying is gone; so is the
+	// channel.
+	m.dropSide()
 	clearConvo()
 	if m.chatHistory != nil {
 		m.chatHistory.clear()
@@ -1623,6 +1626,9 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 	if sess == nil {
 		return m, nil
 	}
+	// The side channel was opened beside a different thread: its snapshot, its
+	// transcript and its approval bucket all belong to that one.
+	m.dropSide()
 	if m.r != nil {
 		m.r.setSess(sess.ID)
 		// The roster is a property of the thread just opened.

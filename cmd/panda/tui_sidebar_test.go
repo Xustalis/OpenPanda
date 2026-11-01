@@ -201,3 +201,26 @@ func TestSidebarLocateSaysWhenThereIsNoBlock(t *testing.T) {
 		t.Errorf("the view moved to nowhere: offset = %d", m.scrollOffset)
 	}
 }
+
+// TestLocateFindsTheTaskBlock is the positive path the previous matcher never
+// had: it keyed on a block field nothing ever set, so Ctrl+G only ever found
+// tasks whose id happened to appear in the body text.
+func TestLocateFindsTheTaskBlock(t *testing.T) {
+	m := newIsolatedTUI(t)
+	m.sidebar.visible = true
+	m.sidebar.tasks = []core.Task{{TaskID: "task-42", Title: "生成报告", State: core.StateDone}}
+	m.chatHistory.blocks = []block{
+		{kind: blockUser, body: "生成报告"},
+		{kind: blockTask, body: "报告已生成", taskRef: "task-42"},
+	}
+	m.layout = &transcriptLayout{blockStart: []int{0, 5}, content: 60, avail: 20}
+
+	next, cmd := m.locateSelectedTask()
+	m = next.(tuiModel)
+	if cmd != nil {
+		t.Fatalf("locate reported a failure for a block that exists: %v", cmd)
+	}
+	if m.scrollOffset == 0 {
+		t.Error("the viewport did not move to the block")
+	}
+}

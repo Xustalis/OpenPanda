@@ -400,27 +400,34 @@ func (h *handler) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		// The app is fully self-hosted: module scripts and the service
-		// worker come from same origin, styles are inline attributes
-		// ('unsafe-inline' scoped to style-src only), blob: covers the
-		// session-export download. No frames, no objects, no foreign
-		// origins anywhere — so a same-origin default with script-src
-		// pinned to 'self' is a strict CSP, not a placeholder.
+		// The app is fully self-hosted: module scripts and the service worker
+		// come from same origin, styles are inline attributes ('unsafe-inline'
+		// scoped to style-src only), blob: covers the session-export download.
+		// No objects, no foreign origins anywhere — a same-origin default with
+		// script-src pinned to 'self' is a strict CSP, not a placeholder.
+		//
+		// Artifact previews are a second origin on purpose (preview.go). The
+		// console may frame exactly that origin AND show an image from it —
+		// the media branch of the artifact drawer uses <img>, so admitting the
+		// origin to frame-src alone leaves every screenshot unrenderable. The
+		// origin is resolved per request: under a wildcard bind the listener's
+		// own address is unroutable and the host this request arrived on is
+		// what the browser can reach.
+		imgSrc := "'self' data: blob:"
+		frameSrc := ""
+		if h.preview != nil {
+			if origin := h.preview.OriginFor(r.Host); origin != "" {
+				imgSrc += " " + origin
+				frameSrc = "; frame-src " + origin
+			}
+		}
 		csp := "default-src 'self'; script-src 'self'; " +
 			"style-src 'self' 'unsafe-inline'; " +
-			"img-src 'self' data: blob:; connect-src 'self'; " +
+			"img-src " + imgSrc + "; connect-src 'self'; " +
 			"font-src 'self' data:; manifest-src 'self'; " +
 			"worker-src 'self'; object-src 'none'; " +
 			"base-uri 'self'; form-action 'self'; " +
-			"frame-ancestors 'none'"
-		// Artifact previews are a second origin on purpose (preview.go); the
-		// console may frame exactly that one and no other. Without this the
-		// default-src 'self' would block the frame outright.
-		if h.preview != nil {
-			if origin := h.preview.Origin(); origin != "" {
-				csp += "; frame-src " + origin
-			}
-		}
+			"frame-ancestors 'none'" + frameSrc
 		w.Header().Set("Content-Security-Policy", csp)
 		next.ServeHTTP(w, r)
 	})

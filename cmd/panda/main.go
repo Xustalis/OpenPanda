@@ -951,6 +951,7 @@ func printUsage(w *os.File) {
 	h("       --lan", "cli.help.d.web_lan", narrow)
 	h("  voice [--once] [--mute]", "cli.help.d.voice", narrow)
 	h("  read <file> | <file.md>", "cli.help.d.read", narrow)
+	h("  hooks [list | test <event>]", "cli.help.d.hooks", wide)
 	line("")
 	line(t("cli.help.g.sessions"))
 	line("  session list|new|show|rm|ask|diff|merge")

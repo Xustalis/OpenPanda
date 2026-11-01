@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -193,5 +194,53 @@ func TestPickPreviewEntry(t *testing.T) {
 		if got != tc.want || kind != tc.kind {
 			t.Errorf("%s: got (%q, %q), want (%q, %q)", tc.name, got, kind, tc.want, tc.kind)
 		}
+	}
+}
+
+// TestPreviewCSPConfinesTheArtifact keeps the token out of reach: the page URL
+// carries it, so an artifact script must not be able to fetch anything but its
+// own origin.
+func TestPreviewCSPConfinesTheArtifact(t *testing.T) {
+	p, hash := newPreviewForTest(t)
+	resp, _ := fetchPreview(t, p.URL(hash, "index.html"))
+	csp := resp.Header.Get("Content-Security-Policy")
+	for _, want := range []string{"connect-src 'self'", "default-src 'self'", "form-action 'none'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP is missing %q: %s", want, csp)
+		}
+	}
+}
+
+// TestOriginForFollowsTheRequestHost is the LAN case: a wildcard bind gives an
+// origin no browser can load, so the host the console was reached on wins.
+func TestOriginForFollowsTheRequestHost(t *testing.T) {
+	p, _ := newPreviewForTest(t)
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(p.Origin(), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := p.OriginFor("192.168.1.20:7850"), "http://192.168.1.20:"+port; got != want {
+		t.Errorf("LAN origin = %q, want %q", got, want)
+	}
+	if got := p.OriginFor("127.0.0.1:7850"); got != p.Origin() {
+		t.Errorf("loopback origin = %q, want %q", got, p.Origin())
+	}
+	if got := p.OriginFor("0.0.0.0:7850"); got != p.Origin() {
+		t.Errorf("an unspecified host should keep the listener origin, got %q", got)
+	}
+}
+
+// TestInjectPickerHandlesNonASCII: the body-tag search must run on the original
+// bytes. U+0130 lowercases to one byte, so an index taken from a lowercased copy
+// lands inside a tag and splices the script into the markup.
+func TestInjectPickerHandlesNonASCII(t *testing.T) {
+	p, _ := newPreviewForTest(t)
+	page := []byte("<html><body><p>\u0130stanbul</p></body></html>")
+	got := string(p.injectPicker(page))
+	if !strings.Contains(got, "<p>\u0130stanbul</p><script") {
+		t.Errorf("the picker did not land between the paragraph and the body close: %q", got)
+	}
+	if !strings.HasSuffix(got, "</body></html>") {
+		t.Errorf("the closing tags were damaged: %q", got)
 	}
 }

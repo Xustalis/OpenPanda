@@ -38,6 +38,7 @@ var completionVerbs = map[string][]string{
 	"card":     {"show", "rescan", "edit", "set", "native", "agent", "manual", "invoke", "path"},
 	"agents":   {"test", "install"},
 	"auth":     {"login", "logout", "status"},
+	"hooks":    {"list", "test"},
 }
 
 // completionFlags holds the flags worth offering per context — key is the

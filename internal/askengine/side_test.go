@@ -192,7 +192,7 @@ func TestSideToolAllowList(t *testing.T) {
 	allowed := []string{
 		"system_status", "card_list", "card_show", "taskq_list", "taskq_show",
 		"project_list", "memory_read", "skill_list", "skill_show",
-		"skill_search", "skill_discover", "time_now", "weather_get",
+		"skill_search", "time_now", "weather_get",
 		"web_fetch", "web_search", "reminder_list",
 	}
 	for _, name := range allowed {
@@ -209,11 +209,36 @@ func TestSideToolAllowList(t *testing.T) {
 		"card_agent_remove", "card_agent_set", "card_manual_add",
 		"card_manual_remove", "card_rescan",
 		"project_create", "project_enter", "project_exit", "node_remove",
-		"reminder_set", "reminder_delete", "skill_install",
+		"reminder_set", "reminder_delete", "skill_install", "skill_discover",
 	}
 	for _, name := range denied {
 		if sideToolAllowed(name) {
 			t.Errorf("mutating tool %q must not be on the side allow-list", name)
 		}
+	}
+}
+
+// TestSideScopeIsRefusedAtTheCreationPoint calls submitTask directly — the way
+// the round-exhaustion path does after the tool loop gives up — and asserts the
+// guard lives at the creation point rather than only in the per-round
+// classification branch. The per-round branch covered asks that converge on a
+// task; an ask that spends every round on tools reached submitTask unchecked.
+func TestSideScopeIsRefusedAtTheCreationPoint(t *testing.T) {
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		b, _ := json.Marshal(anthropicText("ok"))
+		_, _ = w.Write(b)
+	})
+	spec := &entry.TaskSpec{Title: "改配置", Spec: entry.TaskSpecDetail{Target: "把端口改成 8080"}}
+	res := e.submitTask(context.Background(), spec, "把端口改成 8080", false,
+		AskScope{Side: true}, "", StreamCallbacks{}, false)
+	if res == nil {
+		t.Fatal("side submitTask returned nothing")
+	}
+	if res.TaskID != "" {
+		t.Errorf("a side scope dispatched task %q", res.TaskID)
+	}
+	if res.Kind != "answer" || !strings.Contains(res.Answer, "侧边") {
+		t.Errorf("result = %+v, want the fixed refusal", res)
 	}
 }

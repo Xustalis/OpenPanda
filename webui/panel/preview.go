@@ -16,11 +16,9 @@ package panel
 // no navigation away from the artifact.
 
 import (
-	"archive/tar"
-	"compress/gzip"
+	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -119,6 +117,34 @@ func (p *Preview) URL(hash, entry string) string {
 	return p.origin + "/p/" + p.token + "/" + hash + "/" + escapePath(entry)
 }
 
+// OriginFor is the base URL as the browser behind one particular request can
+// reach it. Under a wildcard bind the listener's own address is 0.0.0.0 or ::,
+// which no browser will load; the console was reached on some host, and the
+// preview listens on the same address family, so that host is the one to hand
+// back. A loopback request yields the loopback origin unchanged.
+func (p *Preview) OriginFor(requestHost string) string {
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(p.origin, "http://"))
+	if err != nil {
+		return p.origin
+	}
+	host, _, err := net.SplitHostPort(requestHost)
+	if err != nil || host == "" {
+		return p.origin
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return p.origin
+	}
+	return "http://" + net.JoinHostPort(host, port)
+}
+
+// URLFor is URL resolved for the host a request arrived on.
+func (p *Preview) URLFor(requestHost, hash, entry string) string {
+	if entry == "" {
+		entry = "index.html"
+	}
+	return p.OriginFor(requestHost) + "/p/" + p.token + "/" + hash + "/" + escapePath(entry)
+}
+
 // Close stops the listener and drops the unpack cache.
 func (p *Preview) Close() error {
 	err := p.srv.Close()
@@ -179,17 +205,27 @@ func (p *Preview) serve(w http.ResponseWriter, r *http.Request) {
 	// storage and no access to anything the console holds. Forms and popups
 	// stay for pages that legitimately use them; navigation of the top frame
 	// does not, so a crafted result cannot steer the console's tab.
+	//
+	// The source directives matter as much as the sandbox: the page URL carries
+	// the preview token, and an artifact script can read location.href. With no
+	// connect-src/img-src restriction, one fetch to an attacker's host hands
+	// that token over. 'self' keeps the artifact able to load its own resources
+	// and go nowhere else.
 	h := w.Header()
-	h.Set("Content-Security-Policy", "sandbox allow-scripts allow-forms allow-popups")
+	policy := "sandbox allow-scripts allow-forms allow-popups; " +
+		"default-src 'self'; script-src 'self' 'unsafe-inline'; " +
+		"style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+		"font-src 'self' data:; connect-src 'self'; " +
+		"form-action 'none'; base-uri 'none'"
+	// frame-ancestors is the one directive that makes the token meaningful:
+	// only the console may put this document in a frame.
+	if p.ancestors != "" {
+		policy += "; frame-ancestors " + p.ancestors
+	}
+	h.Set("Content-Security-Policy", policy)
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("Cache-Control", "no-store")
-	// frame-ancestors is the one header that makes the token meaningful: only
-	// the console may put this document in a frame.
-	if p.ancestors != "" {
-		h.Set("Content-Security-Policy",
-			"sandbox allow-scripts allow-forms allow-popups; frame-ancestors "+p.ancestors)
-	}
 
 	if isHTMLPreview(clean, data) {
 		h.Set("Content-Type", "text/html; charset=utf-8")
@@ -205,14 +241,33 @@ func (p *Preview) serve(w http.ResponseWriter, r *http.Request) {
 // stays byte-for-byte what the task produced (the review binds to its hash, and
 // a modified archive would be a different artifact).
 func (p *Preview) injectPicker(data []byte) []byte {
-	page := string(data)
-	idx := strings.LastIndex(strings.ToLower(page), "</body>")
+	idx := lastIndexFold(data, []byte("</body>"))
 	if idx < 0 {
 		return append(data, []byte(pickerScript)...)
 	}
-	head := page[:idx]
-	tail := page[idx:]
-	return []byte(head + pickerScript + tail)
+	out := make([]byte, 0, len(data)+len(pickerScript))
+	out = append(out, data[:idx]...)
+	out = append(out, []byte(pickerScript)...)
+	out = append(out, data[idx:]...)
+	return out
+}
+
+// lastIndexFold finds needle in haystack case-insensitively without copying it.
+// Lowercasing a copy and using the index on the original is the bug this
+// avoids: simple case mapping changes UTF-8 length for some runes (U+0130 İ is
+// two bytes and lowercases to one, U+212A K is three and lowercases to one), so
+// an index taken from the copy lands inside a tag.
+func lastIndexFold(haystack, needle []byte) int {
+	n := len(needle)
+	if n == 0 || len(haystack) < n {
+		return -1
+	}
+	for i := len(haystack) - n; i >= 0; i-- {
+		if bytes.EqualFold(haystack[i:i+n], needle) {
+			return i
+		}
+	}
+	return -1
 }
 
 // pickerScript reports clicks up to the console. It never renders anything
@@ -296,64 +351,20 @@ func (p *Preview) unpackArchive(hash string) (string, error) {
 	return dir, nil
 }
 
-// extract unpacks the archive into dir. Entries that would escape dir are
-// dropped rather than refused: one malformed member should not cost the reader
-// the rest of the artifact.
+// extract materialises the archive under its cache directory.
+//
+// The unpack is the artifact store's, not a local copy: that version enforces
+// the entry count cap, the total-size ceiling and the free-space floor — the
+// three limits that keep a peer's archive (a few hundred KB of gzip can expand
+// to tens of GB) from filling this node's disk — and it verifies that what it
+// unpacked hashes to the name it was stored under. A second, weaker unpacker
+// here would be the one place an artifact is trusted without those checks.
 func (p *Preview) extract(hash, dir string) error {
-	rc, err := p.arts.Open(hash)
-	if err != nil {
-		return err
-	}
-	defer rc.Close()
-	gz, err := gzip.NewReader(rc)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-
 	tmp := dir + ".partial"
 	_ = os.RemoveAll(tmp)
-	if err := os.MkdirAll(tmp, 0o700); err != nil {
+	if _, err := p.arts.Extract(hash, tmp); err != nil {
+		_ = os.RemoveAll(tmp)
 		return err
-	}
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			_ = os.RemoveAll(tmp)
-			return err
-		}
-		name := strings.TrimPrefix(filepath.ToSlash(hdr.Name), "./")
-		if name == "" || !filepath.IsLocal(filepath.FromSlash(name)) {
-			continue // absolute, traversal or empty: never written
-		}
-		target := filepath.Join(tmp, filepath.FromSlash(name))
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o700); err != nil {
-				_ = os.RemoveAll(tmp)
-				return err
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-				_ = os.RemoveAll(tmp)
-				return err
-			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-			if err != nil {
-				_ = os.RemoveAll(tmp)
-				return err
-			}
-			if _, err := io.Copy(f, io.LimitReader(tr, artifact.MaxBytes)); err != nil {
-				f.Close()
-				_ = os.RemoveAll(tmp)
-				return err
-			}
-			f.Close()
-		}
 	}
 	if err := os.Rename(tmp, dir); err != nil {
 		_ = os.RemoveAll(tmp)
@@ -490,8 +501,8 @@ func (h *handler) previewTaskArtifact(w http.ResponseWriter, r *http.Request) {
 		"hash":   hash,
 		"entry":  entry,
 		"kind":   kind,
-		"url":    h.preview.URL(hash, entry),
-		"origin": h.preview.Origin(),
+		"url":    h.preview.URLFor(r.Host, hash, entry),
+		"origin": h.preview.OriginFor(r.Host),
 		"files":  len(entries),
 		"source": t.OwnerNode,
 	})

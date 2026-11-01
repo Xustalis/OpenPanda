@@ -59,6 +59,11 @@ func (m tuiModel) sidebarWidth() int {
 // that the watch poll keeps it current.
 func (m *tuiModel) toggleSidebar() (tea.Model, tea.Cmd) {
 	m.sidebar.visible = !m.sidebar.visible
+	// The composer renders inside the transcript's column, so its width follows
+	// textWidth — which just changed. Without this the textarea keeps wrapping
+	// at the old, wider measure and lipgloss re-wraps the already-wrapped lines
+	// at the new one, splitting words.
+	m.ta.SetWidth(max(1, m.textWidth()-4))
 	if m.sidebar.visible {
 		m.refreshSidebar()
 	}
@@ -305,18 +310,21 @@ func (m *tuiModel) locateSelectedTask() (tea.Model, tea.Cmd) {
 	return *m, nil
 }
 
-// findTaskBlock finds the committed block that reports this task: a task block
-// carrying its title, or a note naming the task id. Matching the title is what
-// works across turns — the id lives on the row, not on the block.
+// findTaskBlock finds the committed block that reports this task. The exact
+// match is the row id stamped on the block; the body scan behind it covers a
+// transcript rebuilt from stored turns, where the id is only present when the
+// text happens to name it.
 func (m tuiModel) findTaskBlock(task core.Task) (int, bool) {
 	if m.chatHistory == nil {
 		return 0, false
 	}
 	for i, b := range m.chatHistory.blocks {
-		if b.kind == blockTask && (b.title == task.Title || strings.Contains(b.body, task.TaskID)) {
+		if b.kind == blockTask && b.taskRef == task.TaskID {
 			return i, true
 		}
-		if strings.Contains(b.body, task.TaskID) {
+	}
+	for i, b := range m.chatHistory.blocks {
+		if b.taskRef == task.TaskID || strings.Contains(b.body, task.TaskID) {
 			return i, true
 		}
 	}

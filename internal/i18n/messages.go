@@ -8,6 +8,7 @@ package i18n
 
 var messages = map[Locale]map[string]string{
 	English: {
+		"cli.help.d.hooks":                  "task lifecycle hooks — list the bindings, or run one against a sample event",
 		"tui.sidebar.title":                 "Tasks",
 		"tui.sidebar.running":               "{n} running",
 		"tui.sidebar.empty":                 "no tasks yet",
@@ -1246,6 +1247,7 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "The plan cannot run: {err}",
 	},
 	ChineseSimp: {
+		"cli.help.d.hooks":                  "任务生命周期钩子 — 列出绑定，或用样例事件试跑一条",
 		"tui.sidebar.title":                 "任务",
 		"tui.sidebar.running":               "{n} 运行中",
 		"tui.sidebar.empty":                 "还没有任务",
@@ -2475,6 +2477,7 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "计划无法执行：{err}",
 	},
 	Japanese: {
+		"cli.help.d.hooks":                       "タスクライフサイクルフック — 設定の一覧、またはサンプルイベントでの実行",
 		"tui.sidebar.title":                      "タスク",
 		"tui.sidebar.running":                    "{n} 実行中",
 		"tui.sidebar.empty":                      "まだタスクはありません",
@@ -3689,6 +3692,7 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "計画を実行できません：{err}",
 	},
 	Spanish: {
+		"cli.help.d.hooks":                       "hooks del ciclo de vida de tareas — listar los enlaces o ejecutar uno con un evento de ejemplo",
 		"tui.sidebar.title":                      "Tareas",
 		"tui.sidebar.running":                    "{n} en marcha",
 		"tui.sidebar.empty":                      "todavía no hay tareas",
@@ -4903,6 +4907,7 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "El plan no puede ejecutarse: {err}",
 	},
 	German: {
+		"cli.help.d.hooks":                       "Lifecycle-Hooks — Bindungen auflisten oder eine mit einem Beispielereignis ausführen",
 		"tui.sidebar.title":                      "Aufgaben",
 		"tui.sidebar.running":                    "{n} laufen",
 		"tui.sidebar.empty":                      "noch keine Aufgaben",

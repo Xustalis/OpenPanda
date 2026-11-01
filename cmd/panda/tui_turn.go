@@ -258,6 +258,17 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 // liveAnswer is the streamed text already accumulated (used for answers so the
 // committed block matches exactly what streamed).
 func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) block {
+	b := buildResultBlock(out, liveAnswer, loc)
+	// Stamp the row id once here rather than at each of the five construction
+	// sites: every task block is addressable by id, and the rail's locate
+	// action reads exactly that.
+	if b.kind == blockTask && out.TaskID != "" {
+		b.taskRef = out.TaskID
+	}
+	return b
+}
+
+func buildResultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) block {
 	switch out.Kind {
 	case "task":
 		meta := ""

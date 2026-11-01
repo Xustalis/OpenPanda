@@ -35,8 +35,11 @@ func sideToolAllowed(name string) bool {
 		// Memory reading only — memory_add/replace/remove write the user's
 		// persistent memory and belong to the main thread.
 		memory.ToolRead,
-		// Skills and reference lookup.
-		"skill_list", "skill_show", "skill_search", "skill_discover",
+		// Skills and reference lookup. skill_discover is NOT here: it reaches
+		// the Skills Hub and installs what it finds, which is a write to the
+		// node's skill store — the side channel promises the model that no tool
+		// here changes anything.
+		"skill_list", "skill_show", "skill_search",
 		// Ambient facts and web reading.
 		"time_now", "weather_get", "web_fetch", "web_search",
 		// Reminders: reading the schedule is observation; reminder_set and

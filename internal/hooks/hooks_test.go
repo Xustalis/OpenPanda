@@ -12,62 +12,55 @@ import (
 	"time"
 )
 
-// TestExpandQuotesEveryValue is the security property this package exists to
-// hold: a task title is model output, and model output is a sentence, not a
-// script. An unquoted substitution would make every title a command line.
-func TestExpandQuotesEveryValue(t *testing.T) {
+// TestExpandEmitsEnvReferences pins the substitution shape: placeholders become
+// references to the event's environment variables, never the values themselves.
+func TestExpandEmitsEnvReferences(t *testing.T) {
+	want := `echo "${PANDA_HOOK_TASK_ID}" "${PANDA_HOOK_TITLE}"`
 	if runtime.GOOS == "windows" {
-		t.Skip("cmd.exe quoting differs")
+		want = `echo "%PANDA_HOOK_TASK_ID%" "%PANDA_HOOK_TITLE%"`
 	}
-	evil := Event{
-		Name:    EventDone,
-		TaskID:  "t1; rm -rf ~",
-		Title:   "fix $(whoami) the bug `id`",
-		Project: "proj && echo pwned",
-		Owner:   "node|cat /etc/passwd",
+	if got := Expand(`echo {task_id} {title}`, Event{TaskID: "t1", Title: "x"}); got != want {
+		t.Errorf("Expand = %q, want %q", got, want)
 	}
-	got := Expand(`echo {task_id} {title} {project} {owner} {event}`, evil)
+}
 
-	for _, bad := range []string{"rm -rf ~", "$(whoami)", "`id`", "&& echo pwned", "|cat"} {
-		if strings.Contains(got, bad) && !strings.Contains(got, "'"+bad) {
-			// The dangerous text may appear only inside single quotes.
-			idx := strings.Index(got, bad)
-			if !insideSingleQuotes(got, idx) {
-				t.Errorf("%q escaped quoting: %s", bad, got)
+// TestHostileTitleStaysLiteral is the property the whole design rests on: a task
+// title is model output, so it must reach the command as a value however the
+// template quotes the placeholder. An earlier version spliced in single-quoted
+// literals, which a template writing "{title}" inside its own double quotes
+// defeated: the single quotes became ordinary characters there, and $(...)
+// executed.
+func TestHostileTitleStaysLiteral(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell fixtures")
+	}
+	payloads := []string{
+		`$(echo PWNED)`,
+		"`echo PWNED`",
+		`'; echo PWNED; '`,
+		`" ; echo PWNED ; "`,
+		`$HOME`,
+	}
+	templates := []struct {
+		tpl  string
+		want func(v string) string
+	}{
+		{`echo {title}`, func(v string) string { return v }},
+		{`echo "{title}"`, func(v string) string { return v }},
+		{`echo prefix-{title}-suffix`, func(v string) string { return "prefix-" + v + "-suffix" }},
+	}
+	for _, payload := range payloads {
+		for _, tc := range templates {
+			out, err := RunOne(context.Background(), Hook{Command: tc.tpl},
+				Event{Name: EventDone, Title: payload}, 5*time.Second)
+			if err != nil {
+				t.Fatalf("%q with %q: %v", tc.tpl, payload, err)
+			}
+			if got, want := strings.TrimSpace(out), tc.want(payload); got != want {
+				t.Errorf("template %q with title %q printed %q, want %q — the value was executed, not passed",
+					tc.tpl, payload, got, want)
 			}
 		}
-	}
-	if !strings.Contains(got, "'") {
-		t.Errorf("no quoting was applied at all: %s", got)
-	}
-}
-
-// insideSingleQuotes reports whether position i falls inside a single-quoted
-// run, honouring the '\” escape this package emits.
-func insideSingleQuotes(s string, i int) bool {
-	quoted := false
-	for j := 0; j < i && j < len(s); j++ {
-		if s[j] != '\'' {
-			continue
-		}
-		// A closing ' immediately followed by \' is the escape, not a close.
-		if quoted && j+2 < len(s) && s[j+1] == '\\' && s[j+2] == '\'' {
-			continue
-		}
-		quoted = !quoted
-	}
-	return quoted
-}
-
-// TestExpandQuotesASingleQuote keeps the escape correct: an apostrophe inside a
-// title must not end the literal.
-func TestExpandQuotesASingleQuote(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("cmd.exe quoting differs")
-	}
-	got := Expand(`{title}`, Event{Title: "it's broken"})
-	if got != `'it'\''s broken'` {
-		t.Errorf("quoting = %q", got)
 	}
 }
 

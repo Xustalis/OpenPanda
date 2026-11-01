@@ -629,12 +629,15 @@ push:
 #
 # Task lifecycle hooks: your own commands, run at task edges. This is the one
 # place the node runs a command nobody typed into a chat, so it is opt-in and
-# fenced: values substituted into a command are shell-quoted (a task title is
-# model output), the child gets a whitelisted environment with no model
-# credentials, and a command the defense tier grades irreversible is refused
-# unless allow_tier2 says otherwise. Events: task_submitted, task_started,
-# task_done, task_failed, task_review. Placeholders: {task_id} {title} {state}
-# {project} {owner} {event}.
+# fenced: the child gets a whitelisted environment with no model credentials, a
+# command the defense tier grades irreversible is refused unless allow_tier2
+# says otherwise, and every run lands an audit row. Events: task_submitted,
+# task_started, task_done, task_failed, task_review.
+#
+# Placeholders: {task_id} {title} {state} {project} {owner} {event}. Each expands
+# to a reference to the matching PANDA_HOOK_* variable ({title} →
+# "${PANDA_HOOK_TITLE}"), so a task title — which is model output — is expanded
+# by the shell as a value and never parsed by it as syntax.
 # hooks:
 #   enabled: false
 #   timeout_s: 10                 # per-hook default; a binding may override

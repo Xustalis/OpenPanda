@@ -2672,6 +2672,12 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // additionally carry explicit owner consent for this request's whole plan;
 // it still passes through the existing approval policy before rows are created.
 func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, scope AskScope, authorize bool, cb StreamCallbacks) (*Result, error) {
+	// Same rule as submitTask: a side channel dispatches nothing, and this is
+	// the second creation point every plan — including one produced by the
+	// final round-exhaustion classification — passes through.
+	if scope.Side {
+		return &Result{Kind: "answer", Answer: sideRefusalNote(e.Locale())}, nil
+	}
 	sched := e.sched.Load()
 	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
@@ -2751,6 +2757,13 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		targetLoc = loc[0]
 	} else if !explicit && !e.replyASCII && (containsHan(prompt) || containsHan(spec.Title)) {
 		targetLoc = i18n.ChineseSimp
+	}
+	// The creation point is where a side channel's refusal belongs. The prompt
+	// asks the model not to dispatch and the tool face has no dispatch tool, but
+	// neither binds classification — and the round-exhaustion path reaches this
+	// function directly, past the per-round check. Every path shares this one.
+	if scope.Side {
+		return &Result{Kind: "answer", Answer: sideRefusalNote(targetLoc)}
 	}
 	// The composer's explicit node pick fills spec.node only when the model
 	// left routing to the scheduler — a model-emitted pin always wins.
