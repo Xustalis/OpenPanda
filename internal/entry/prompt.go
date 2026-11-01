@@ -296,6 +296,9 @@ type PromptOptions struct {
 	// spec.acceptance; it never invents a command. Empty means "no project
 	// in view" and the task will be reported unverified.
 	AcceptanceCandidates []contract.Candidate
+	// UsageObserver is delivered to the streaming call this prompt is sent
+	// through; see WithStreamUsage. It takes no part in building the prompt.
+	UsageObserver func(Usage)
 }
 
 // ClassifyOption tweaks the system prompt the Classify* entry points build.
@@ -310,6 +313,13 @@ func WithASCIIOnly() ClassifyOption {
 // WithLocale sets the user language preference for prompt construction.
 func WithLocale(loc i18n.Locale) ClassifyOption {
 	return func(p *PromptOptions) { p.UserLocale = loc }
+}
+
+// WithStreamUsage attaches the live token-usage observer to the streaming
+// classification this prompt is used for. Apply it at the ask boundary so a
+// status line can show consumption while the model is still writing.
+func WithStreamUsage(fn func(Usage)) ClassifyOption {
+	return func(p *PromptOptions) { p.UsageObserver = fn }
 }
 
 // WithRequestMode records the slash-prefix mode the user chose for the turn

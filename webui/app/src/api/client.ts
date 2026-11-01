@@ -542,6 +542,8 @@ export interface AskResult {
   report?: string
   /** Chain of thought / reasoning accumulated during the turn. */
   thought?: string
+  /** Billed total (input + output) the entry model consumed for this turn. */
+  tokens?: number
   /** Approval flow: a parked tier-2 task asks for a foreground decision;
    *  denied marks a standing remembered "no" that answered first; a set
    *  consent_scope (session|project) names the remembered scope that supplied
@@ -2167,6 +2169,10 @@ export interface SessionTurn {
    *  Absent on user turns and on transcripts written before the field
    *  existed; the console then has no duration to show. */
   duration_ms?: number
+  /** Billed token total (input + output) the entry model consumed for this
+   *  turn, stamped when the panel files the reply. Absent on user turns and
+   *  on transcripts written before the field existed. */
+  tokens?: number
   /** The entry model that wrote the reply, filed with the turn so the console
    *  can name it beside the copy button — including after a reload, where the
    *  live `result` object no longer exists. Absent on user turns, on task
@@ -2397,6 +2403,10 @@ export interface AskStreamHandlers {
    *  into the answer or the stored turn. */
   onReasoning(text: string): void
   onDelta(text: string): void
+  /** Live token usage for this turn: cumulative across every model call the
+   *  ask made. `estimated` marks the output share as a character-based guess
+   *  rather than the provider's own count. */
+  onUsage?(input: number, output: number, estimated?: boolean): void
   onStatus(text: string, ev?: AskStatusEvent): void
   onOperation(operationID: string): void
   /** A task row this turn dispatched, sent the moment the row exists — well
@@ -2467,6 +2477,8 @@ export async function askSessionStream(
       }
       if (event === 'reasoning') h.onReasoning(payload.text ?? '')
       else if (event === 'delta') h.onDelta(payload.text ?? '')
+      else if (event === 'usage')
+        h.onUsage?.(payload.input ?? 0, payload.output ?? 0, Boolean(payload.estimated))
       else if (event === 'status') h.onStatus(payload.text ?? '', payload as AskStatusEvent)
       else if (event === 'operation') h.onOperation(payload.operation_id ?? '')
       else if (event === 'task') {

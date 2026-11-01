@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 )
@@ -99,29 +100,82 @@ func inBandError(kind, msg string) error {
 	return &statusError{status: status, body: body}
 }
 
+// StreamOption tunes one streaming call without widening its positional
+// signature. Options are per-call: the Client is shared, so nothing here may
+// be stored on it.
+type StreamOption func(*streamOptions)
+
+type streamOptions struct {
+	onUsage func(Usage)
+}
+
+// WithUsageObserver receives the Client's cumulative token usage as the
+// provider reports it, throttled to usageReportInterval. The value covers
+// every successful call since the Client was built PLUS the call in flight,
+// because that is the one arithmetic every surface would otherwise redo:
+// usageIn/usageOut only move when a call succeeds, so a mid-stream reader
+// would see zero until the stream ended. The observer fires once more with
+// force at end-of-stream, before addUsage folds the attempt into the billed
+// counters, so the last value it sees is the attempt's true total and not a
+// double count.
+func WithUsageObserver(fn func(Usage)) StreamOption {
+	return func(o *streamOptions) { o.onUsage = fn }
+}
+
+// usageReportInterval bounds how often a stream forwards provider usage. An
+// Anthropic-compatible endpoint emits a usage-bearing event with nearly every
+// output-token delta; without the cap a status line would be redrawn dozens of
+// times a second to show a number whose last digit nobody reads.
+const usageReportInterval = 150 * time.Millisecond
+
+// usageEmitter throttles usage reports for one streaming call. It is shared
+// across retry attempts so the throttle window does not restart on a replay.
+type usageEmitter struct {
+	fn   func(Usage)
+	last time.Time
+}
+
+// emit reports u unless the throttle window is still open. force delivers the
+// end-of-stream value: a fast answer can finish inside the window, and its
+// final number is the one a closing status line shows.
+func (e *usageEmitter) emit(u Usage, force bool) {
+	if e == nil || e.fn == nil {
+		return
+	}
+	if !force && time.Since(e.last) < usageReportInterval {
+		return
+	}
+	e.last = time.Now()
+	e.fn(u)
+}
+
 // StreamTurnsWithTools runs one call with a conversation history, an optional
 // tool set, and a text-delta callback: answer text is delivered live as the
 // provider streams it, while tool_use blocks and the final Response are
 // accumulated and returned at the end. It is the streaming counterpart of
 // CompleteTurnsWithTools and dispatches on the configured api type.
-func (c *Client) StreamTurnsWithTools(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
+func (c *Client) StreamTurnsWithTools(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string), opts ...StreamOption) (Response, error) {
+	var so streamOptions
+	for _, o := range opts {
+		o(&so)
+	}
 	switch c.apiType {
 	case config.APITypeOpenAI:
-		return c.streamWithRetry(ctx, func(on, onR func(string)) (Response, error) {
-			return c.streamOpenAI(ctx, system, turns, tools, on, onR)
-		}, onDelta, onReasoning)
+		return c.streamWithRetry(ctx, func(on, onR func(string), em *usageEmitter) (Response, error) {
+			return c.streamOpenAI(ctx, system, turns, tools, on, onR, em)
+		}, onDelta, onReasoning, so.onUsage)
 	case config.APITypeResponses:
-		return c.streamWithRetry(ctx, func(on, onR func(string)) (Response, error) {
-			return c.streamResponses(ctx, system, turns, tools, on, onR)
-		}, onDelta, onReasoning)
+		return c.streamWithRetry(ctx, func(on, onR func(string), em *usageEmitter) (Response, error) {
+			return c.streamResponses(ctx, system, turns, tools, on, onR, em)
+		}, onDelta, onReasoning, so.onUsage)
 	case config.APITypeGoogle:
-		return c.streamWithRetry(ctx, func(on, onR func(string)) (Response, error) {
-			return c.streamGoogle(ctx, system, turns, tools, on, onR)
-		}, onDelta, onReasoning)
+		return c.streamWithRetry(ctx, func(on, onR func(string), em *usageEmitter) (Response, error) {
+			return c.streamGoogle(ctx, system, turns, tools, on, onR, em)
+		}, onDelta, onReasoning, so.onUsage)
 	}
-	return c.streamWithRetry(ctx, func(on, onR func(string)) (Response, error) {
-		return c.streamAnthropic(ctx, system, turns, tools, on, onR)
-	}, onDelta, onReasoning)
+	return c.streamWithRetry(ctx, func(on, onR func(string), em *usageEmitter) (Response, error) {
+		return c.streamAnthropic(ctx, system, turns, tools, on, onR, em)
+	}, onDelta, onReasoning, so.onUsage)
 }
 
 // streamWithRetry gives the streaming path the transport resilience the
@@ -131,10 +185,13 @@ func (c *Client) StreamTurnsWithTools(ctx context.Context, system string, turns 
 // duplicate it, so the failure surfaces instead. A caller-cancelled context is
 // never retried. Delivery is judged by the deltaGuard, so a structured output
 // whose deltas were suppressed still counts as unseen and stays retryable.
-func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onReasoning func(string)) (Response, error), onDelta func(string), onReasoning func(string)) (Response, error) {
+func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onReasoning func(string), em *usageEmitter) (Response, error), onDelta func(string), onReasoning func(string), onUsage func(Usage)) (Response, error) {
 	var lastErr error
 	delivered := false
 	noBackoff := false
+	// One emitter for the whole call, not per attempt: a replay must not reopen
+	// the throttle window and flood the observer with a fresh attempt's counts.
+	em := &usageEmitter{fn: onUsage}
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 && !noBackoff {
 			// Announce the backoff before sleeping it: a persistent 429/5xx
@@ -154,7 +211,7 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onRea
 		// at the end. delivered stays outside: what the user has seen is
 		// cumulative across the call.
 		guard := newDeltaGuard(onDelta, onReasoning)
-		resp, err := stream(guard.on, guard.onReason)
+		resp, err := stream(guard.on, guard.onReason, em)
 		if err == nil {
 			// The accumulators join every raw delta — including inlined
 			// reasoning — so the final text must pass the same stripping the
@@ -603,7 +660,7 @@ func (a *anthAccumulator) result() Response {
 	return out
 }
 
-func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
+func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string), em *usageEmitter) (Response, error) {
 	if c.noCredential() {
 		return Response{}, ErrNoKey
 	}
@@ -664,6 +721,10 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 				acc.delta(&ev, onDelta, onReasoning)
 			case "message_start", "message_delta":
 				acc.noteUsage(&ev)
+				// Anthropic reports input on message_start and the running
+				// output count on every message_delta, so this is the one
+				// dialect whose total is live from the first token onward.
+				em.emit(acc.usage(c), false)
 				if ev.Type == "message_delta" && ev.Delta.StopReason == "max_tokens" {
 					acc.truncated = true
 				}
@@ -679,10 +740,20 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 	if err := streamEnded(ctx, scanner.Err()); err != nil {
 		return Response{}, err
 	}
+	// Final usage report before addUsage: the accumulator's counts are still
+	// this attempt's own, so the observer sees the attempt's true total rather
+	// than a value that addUsage is about to fold twice into the client.
+	em.emit(acc.usage(c), true)
 	// Bill this attempt's usage only on success: a failed attempt that got
 	// replaced by a retry must not be counted.
 	c.addUsage(acc.usageIn, acc.usageOut)
 	return acc.result(), nil
+}
+
+// usage is the client's cumulative token total including this attempt's
+// counts, which are folded into the client only once the stream succeeds.
+func (a *anthAccumulator) usage(c *Client) Usage {
+	return Usage{InputTokens: c.usageIn.Load() + a.usageIn, OutputTokens: c.usageOut.Load() + a.usageOut}
 }
 
 // googleErrorKind maps a Gemini error envelope onto the kind names
@@ -833,7 +904,7 @@ func (c *Client) sendAnthropicStream(ctx context.Context, system string, msgs []
 
 // ---- OpenAI Chat Completions SSE streaming ----
 
-func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
+func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string), em *usageEmitter) (Response, error) {
 	if c.noCredential() {
 		return Response{}, ErrNoKey
 	}
@@ -894,13 +965,29 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 				return Response{}, inBandError(chunk.Error.Type, chunk.Error.Message)
 			}
 			acc.feed(&chunk, onDelta, onReasoning)
+			// Chat Completions delivers usage on the final chunk only, when
+			// the provider honours stream_options.include_usage; this keeps
+			// the closing number live for surfaces that read it mid-turn.
+			if chunk.Usage != nil {
+				em.emit(acc.usage(c), false)
+			}
 		}
 	}
 	if err := streamEnded(ctx, scanner.Err()); err != nil {
 		return Response{}, err
 	}
+	// Final usage report before addUsage: the accumulator's counts are still
+	// this attempt's own, so the observer sees the attempt's true total rather
+	// than a value that addUsage is about to fold twice into the client.
+	em.emit(acc.usage(c), true)
 	// Bill this attempt's usage only on success: a failed attempt that got
 	// replaced by a retry must not be counted.
 	c.addUsage(acc.usageIn, acc.usageOut)
 	return acc.result(), nil
+}
+
+// usage is the client's cumulative token total including this attempt's
+// counts, which are folded into the client only once the stream succeeds.
+func (a *oaiAccumulator) usage(c *Client) Usage {
+	return Usage{InputTokens: c.usageIn.Load() + a.usageIn, OutputTokens: c.usageOut.Load() + a.usageOut}
 }

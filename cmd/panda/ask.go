@@ -568,6 +568,12 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 			}
 		},
 		OnProgress: func(p askengine.Progress) {
+			// A usage report is a counter, not a phase: it updates the closing
+			// meta in place and must not push a log line or a note.
+			if p.Kind == askengine.ProgressUsage {
+				st.SetTokens(p.InputTokens + p.OutputTokens)
+				return
+			}
 			note := progressNote(loc, p)
 			// Advance the phase chain so the status line's trailing meta shows
 			// classify → routing → executing (P0 redesign §D3 parity with the
@@ -662,6 +668,11 @@ func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18
 	fmt.Println(p.Success(i18n.T(loc, "repl.approval.approved")))
 	cb := askengine.StreamCallbacks{
 		OnProgress: func(p askengine.Progress) {
+			// Usage reports have no one to update on this path (the resumed run
+			// prints no status line) and must not print an empty bullet.
+			if p.Kind == askengine.ProgressUsage {
+				return
+			}
 			fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(loc, p))
 		},
 	}

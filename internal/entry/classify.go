@@ -224,11 +224,15 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 	if registry != nil {
 		specs = registry.Specs()
 	}
-	resp, err := c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning)
+	var streamOpts []StreamOption
+	if po.UsageObserver != nil {
+		streamOpts = append(streamOpts, WithUsageObserver(po.UsageObserver))
+	}
+	resp, err := c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning, streamOpts...)
 	if err == nil && emptyCompletion(resp) {
 		// Nothing streamed (Text is empty by definition here), so replaying
 		// the call cannot double-display deltas on the user's screen.
-		resp, err = c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning)
+		resp, err = c.StreamTurnsWithTools(ctx, system, turns, specs, onDelta, onReasoning, streamOpts...)
 	}
 	if err != nil {
 		return Output{}, WrapAPIError(err, po.UserLocale)
