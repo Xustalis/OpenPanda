@@ -27,7 +27,6 @@ export function NodePicker(props: {
   /** Empty string = let the scheduler route by capability. */
   value: string
   onPick(v: string): void
-  onManage(): void
   /** Fired when the card opens or closes, so the pane can make room. */
   onOpenChange?(open: boolean): void
   /** Controlled open state. The pane owns it because the node card and the
@@ -119,20 +118,6 @@ export function NodePicker(props: {
             {props.nodes.length === 0 && <p class="node-panel-empty">{t('nodes.empty')}</p>}
           </div>
           <p class="node-panel-hint">{t('sessions.nodePickTip')}</p>
-          <div class="node-panel-foot">
-            <button
-              type="button"
-              class="node-foot-btn"
-              onClick={() => {
-                setOpen(false)
-                props.onManage()
-              }}
-            >
-              <Icon name="network" size={15} />
-              {t('sessions.nodeManage')}
-              <Icon name="chevron-right" size={14} class="node-foot-arrow" />
-            </button>
-          </div>
         </div>
       )}
     </div>

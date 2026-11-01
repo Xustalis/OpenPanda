@@ -11,9 +11,9 @@ import { ControlView } from './views/control'
 import { DetailView } from './views/detail'
 import { SessionsView } from './views/sessions'
 import { SidebarHistory } from './views/sidebar-history'
-import { NodesView } from './views/nodes'
 import { WorkspaceView } from './views/workspace'
-import { TodosView } from './views/todos'
+import { TeamView } from './views/team'
+import { MemoryView } from './views/memory'
 import { ProfileView } from './views/profile'
 import { SettingsView } from './views/settings'
 import { OnboardingBanner } from './views/onboarding'
@@ -47,6 +47,15 @@ export function App() {
   const [gateError, setGateError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const sidebar = useRef<HTMLElement>(null)
+
+  // 设置 is a sheet, not a destination: opening it raises a top-layer dialog
+  // over whatever you were reading and closing it drops you back there. The
+  // hash still carries the route (deep links and the back button keep
+  // working), so the view underneath has to be remembered rather than
+  // re-derived — `#/settings` says nothing about what it was opened from.
+  const lastView = useRef<Route>({ view: 'sessions', id: null })
+  if (route.view !== 'settings') lastView.current = route
+  const base: Route = route.view === 'settings' ? lastView.current : route
 
   useEffect(() => onUnauthorized(() => setAuthed(false)), [])
   // A route change means the reader picked a destination; the mobile panel
@@ -101,13 +110,18 @@ export function App() {
   const reviewCount = useReviewCount()
   const logout = () => {
     setMenuOpen(false)
+    // Disconnecting from inside the settings sheet would otherwise leave the
+    // hash on #/settings: the token gate takes over, and reconnecting would
+    // drop the reader straight back into the sheet they just left. Close it
+    // first, so the gate hands them back the page they were reading.
+    if (route.view === 'settings') navigate(lastView.current)
     clearToken()
     setAuthed(false)
   }
 
   return (
     <div class="shell">
-      <ToastHost />
+      <ToastHost placement={base.view === 'workspace' ? 'top-center' : 'bottom-right'} />
       <ConfirmHost />
       <PaletteHost onLogout={logout} />
       <aside
@@ -174,12 +188,11 @@ export function App() {
             It also carries no working directory. The composer's pick starts
             empty here — a blank sheet, not last project you visited — and the
             history's per-directory "+" is the shortcut that fills it in.
-            The three after it are the machines and the work: 工作空间 is the
-            fleet as a map, 节点网络 is what each node can do, and 队列·任务·项目
-            is the boards that work lands on. That last one is the page that
-            used to be 总控 — it is named after its three tabs now, because
-            "control room" was a metaphor you had to learn and the tabs are
-            what the row actually opens. */}
+            The two after it are the machines and the work: 工作空间 is the
+            fleet as a map, and 队列·任务·项目 is the boards that work lands on.
+            That last one is the page that used to be 总控 — it is named after
+            its three tabs now, because "control room" was a metaphor you had
+            to learn and the tabs are what the row actually opens. */}
         <div class="nav-quick">
           <button
             type="button"
@@ -196,18 +209,6 @@ export function App() {
           >
             <Icon name="devices" />
             <span class="nav-label">{t('nav.workspace')}</span>
-          </a>
-          {/* The tree glyph, not `devices`: 工作空间 already wears the monitor,
-              and this row is about the links between machines rather than any
-              one of them. It is the same topology mark the node picker and the
-              delegation chips draw, which is the point. */}
-          <a
-            href="#/fleet"
-            class={`nav-item${active === 'fleet' ? ' active' : ''}`}
-            aria-current={active === 'fleet' ? 'page' : undefined}
-          >
-            <Icon name="network" />
-            <span class="nav-label">{t('nav.fleet')}</span>
           </a>
           {/* The boards' row, and the one row in the rail that can carry a
               count: the review badge rides at the far end of it. Nested anchors
@@ -244,16 +245,29 @@ export function App() {
               </span>
             )}
           </a>
-          {/* 待办 sits beside the boards, not inside them: 队列·任务·项目 is
-              what the node is doing, this is what the human decided to do.
-              The row is the only way in — the page has no other door. */}
+          {/* 团队 sits beside the boards, not inside them: 队列·任务·项目 is
+              what the node is doing, this is who does it with you. The page is
+              deliberately empty for now — the row is here so the slot exists
+              before the feature does. It is the only way in. */}
           <a
-            href="#/todos"
-            class={`nav-item${active === 'todos' ? ' active' : ''}`}
-            aria-current={active === 'todos' ? 'page' : undefined}
+            href="#/team"
+            class={`nav-item${active === 'team' ? ' active' : ''}`}
+            aria-current={active === 'team' ? 'page' : undefined}
           >
-            <Icon name="list-checks" />
-            <span class="nav-label">{t('nav.todos')}</span>
+            <Icon name="users" />
+            <span class="nav-label">{t('nav.team')}</span>
+          </a>
+          {/* 记忆 closes the block, right under 团队: what the node has learned
+              is something you go and read, not a knob — so it is a destination
+              here rather than a tab buried in 设置. 技能 stayed in the sheet
+              because installing one *is* configuration. */}
+          <a
+            href="#/memory"
+            class={`nav-item${active === 'memory' ? ' active' : ''}`}
+            aria-current={active === 'memory' ? 'page' : undefined}
+          >
+            <Icon name="orbit" />
+            <span class="nav-label">{t('nav.memory')}</span>
           </a>
         </div>
 
@@ -271,25 +285,37 @@ export function App() {
         </nav>
 
         <div class="sidebar-footer">
-          <SidebarNode />
-          <a href="#/settings" class={`nav-item${active === 'settings' ? ' active' : ''}`}>
-            {t('nav.settings')}
-          </a>
-          <button class="nav-item" onClick={logout}>
-            {t('token.logout')}
-          </button>
+          {/* The tail is one row: the node chip, then the gear that opens 设置.
+              设置 lost its label on purpose — a word as long as
+              "Einstellungen" was costing half a row in a 255px rail to say
+              something a gear already says, and the icon matches the head's
+              search button. 断开连接 is not here any more: it is a session
+              verb, and the sheet that describes the session is where it now
+              lives (设置 → 通用 → 连接). */}
+          <div class="sidebar-foot">
+            <SidebarNode />
+            <a
+              href="#/settings"
+              class={`icon-btn sidebar-gear${active === 'settings' ? ' active' : ''}`}
+              title={t('nav.settings')}
+              aria-label={t('nav.settings')}
+              aria-current={active === 'settings' ? 'page' : undefined}
+            >
+              <Icon name="gear" />
+            </a>
+          </div>
         </div>
         </div>
       </aside>
       <main class="main">
         <OnboardingBanner />
         <UpdateBanner />
-        {route.view === 'sessions' && (
+        {base.view === 'sessions' && (
           <SessionsView
-            activeId={route.id}
-            project={route.project ?? null}
-            ws={route.ws ?? null}
-            onOpenSession={(id) => navigate({ view: 'sessions', id: id || null, project: route.project })}
+            activeId={base.id}
+            project={base.project ?? null}
+            ws={base.ws ?? null}
+            onOpenSession={(id) => navigate({ view: 'sessions', id: id || null, project: base.project })}
             onExitProject={() => {
               api.exitProject().catch(() => {})
               navigate({ view: 'sessions', id: null, project: null })
@@ -297,14 +323,18 @@ export function App() {
             onLogout={logout}
           />
         )}
-        {route.view === 'control' && (
+        {base.view === 'control' && (
           <ControlView
-            tab={route.tab ?? 'queue'}
-            project={route.project}
-            focusReview={!!route.review}
+            tab={base.tab ?? 'queue'}
+            project={base.project}
+            focusReview={!!base.review}
             onSelectTab={(tab) => navigate({ view: 'control', tab })}
             onOpen={(id) => navigate({ view: 'detail', id })}
             onOpenSession={(id) => navigate({ view: 'sessions', id })}
+            onNewChat={(project) => {
+              if (project) api.enterProject(project).catch(() => {})
+              navigate({ view: 'sessions', id: null, project })
+            }}
             onOpenProject={(name) => {
               api.enterProject(name).catch(() => {})
               navigate({ view: 'sessions', id: null, project: name })
@@ -312,22 +342,24 @@ export function App() {
             onOpenQueue={(name) => navigate({ view: 'control', tab: 'queue', project: name })}
           />
         )}
-        {route.view === 'detail' && (
+        {base.view === 'detail' && (
           <DetailView
-            id={route.id}
+            id={base.id}
             onBack={() => navigate({ view: 'control', tab: 'queue' })}
             onOpenSession={(sid) => navigate({ view: 'sessions', id: sid })}
             onOpenTask={(tid) => navigate({ view: 'detail', id: tid })}
           />
         )}
-        {route.view === 'todos' && <TodosView onOpenTask={(id) => navigate({ view: 'detail', id })} />}
-        {route.view === 'workspace' && <WorkspaceView />}
-        {route.view === 'fleet' && <NodesView />}
-        {route.view === 'profile' && <ProfileView />}
+        {base.view === 'team' && <TeamView />}
+        {base.view === 'memory' && <MemoryView />}
+        {base.view === 'workspace' && <WorkspaceView />}
+        {base.view === 'profile' && <ProfileView />}
         {route.view === 'settings' && (
           <SettingsView
             initialSection={route.tab ?? undefined}
             onSelectTab={(tab) => navigate({ view: 'settings', tab })}
+            onClose={() => navigate(lastView.current, true)}
+            onLogout={logout}
           />
         )}
       </main>

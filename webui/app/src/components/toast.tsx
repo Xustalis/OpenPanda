@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../i18n'
 
 // Global toast — the one place every view reports outcome feedback through
@@ -32,12 +32,30 @@ export function toastError(e: unknown): void {
 }
 
 /** Mount once in the app shell. */
-export function ToastHost() {
+export function ToastHost({ placement = 'bottom-right' }: { placement?: 'bottom-right' | 'top-center' }) {
   const [items, setItems] = useState<ToastItem[]>([])
+  const hostRef = useRef<HTMLDivElement>(null)
+
+  // Settings is a modal <dialog>, which lives in the browser's top layer —
+  // above every z-index, so a fixed host with z-index: 120 paints underneath
+  // it and an error raised from inside Settings is invisible. The host is a
+  // manual popover so it can join that layer, and every new toast re-shows it:
+  // the most recently shown popover sits above a dialog opened earlier.
+  const raise = () => {
+    const el = hostRef.current
+    if (!el) return
+    try {
+      if (el.matches(':popover-open')) el.hidePopover()
+      el.showPopover()
+    } catch {
+      /* older engines: keep the plain fixed layer */
+    }
+  }
 
   useEffect(() => {
     push = (item) => {
       setItems((cur) => [...cur, item])
+      raise()
       if (item.kind !== 'error') {
         setTimeout(() => {
           setItems((cur) => cur.filter((i) => i.id !== item.id))
@@ -50,7 +68,13 @@ export function ToastHost() {
   }, [])
 
   return (
-    <div class="toast-host" role="status" aria-live="polite">
+    <div
+      ref={hostRef}
+      {...{ popover: 'manual' }}
+      class={`toast-host toast-host-${placement}`}
+      role="status"
+      aria-live="polite"
+    >
       {items.map((item) => (
         <div key={item.id} class={`toast toast-${item.kind}`}>
           <span class="toast-msg">{item.message}</span>

@@ -1,21 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { type JSX } from 'preact'
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { DeviceGlyph, type Form } from '../components/device-glyph'
+import { ContextMenu, type ContextMenuItem } from '../components/context-menu'
 import { agentLogo } from '../format/agent-logo'
 import { agentInitial } from '../format/agent-role'
+import { buildWorkspaceEdges, workspaceLinkLine, type PanelRect } from './workspace-links'
 
 /** 工作空间 — 设备面板视图.
  *
  *  One panel per machine, one tile per agent the machine advertises. This
- *  replaces the topology map: the question this page answers is "what is
- *  running where", and a panel of agent marks says that at a glance, where a
- *  ring of plates said "what is connected to what".
+ *  replaces the always-on topology map: the question this page answers first
+ *  is "what is running where", and a panel of agent marks says that at a
+ *  glance. Selecting a panel then reveals only that machine's live connections,
+ *  so the graph is available without becoming the page's permanent subject.
  *
  *  The panel is the machine (name, OS, load, online), the tile is the agent
  *  (the CLI's own mark, and whether it is working right now). No agent names,
  *  no task text on the tiles: the drawer has all of that.
+ *
+ *  A tile is also the unit the reader acts on. A click picks it (and a second
+ *  click puts it back), several tiles can be picked at once, and a right-click
+ *  opens the card's own menu — pick, test the connection, remove it from the
+ *  view. The menu is a list of items, not bespoke markup, so a new verb is one
+ *  more entry at the call site. The panel keeps its own click: it is the
+ *  machine, and the drawer is where its facts live.
  *
  *  The panda stands on the local machine's panel and does not travel. CSS
  *  places it inside that panel (`.ws-panel.self .ws-panda`), so it never
@@ -66,6 +76,11 @@ export interface PanelDevice {
   os: string
   online: boolean
   local: boolean
+  /** Routing-graph adjacency and this console's own measurement toward the
+   *  peer. Together they describe every connection the canvas may draw. */
+  neighbors: string[]
+  rtt: number
+  transport: string
   tasks: number
   maxTasks: number
   busy: boolean
@@ -82,9 +97,38 @@ export interface WorkspacePanelsProps {
   /** Fallback roster for the local machine when its capability card is bare:
    *  the CLIs this console can actually drive. */
   fallbackAgents?: string[]
+  /** Picked agent tiles, keyed by `tileKey`. */
+  pickedTiles: Set<string>
+  /** Tiles removed from view, keyed the same way. */
+  hiddenTiles: Set<string>
+  /** Tiles with a connectivity test in flight. */
+  testingTiles: Set<string>
+  onTogglePick: (key: string) => void
+  onTest: (device: string, agent: string) => void
+  onHide: (device: string, agent: string) => void
+  /** Put every hidden tile of one machine back. */
+  onShowAll: (device: string) => void
+  /** "已隐藏 2 个智能体" — the note left where a panel's tiles used to be. */
+  hiddenNote: (n: number) => string
+  /** Card menu vocabulary. */
+  menuSelect: string
+  menuDeselect: string
+  menuTest: string
+  menuRemove: string
+  /** The reason a remote tile's connection cannot be tested from here. */
+  menuLocalOnly: string
+  /** Appended to a tile's tooltip: the right-click is the only hint the menu
+   *  gets, and a card that never says so is a card nobody right-clicks. */
+  menuHint: string
   localLabel: string
   onlineLabel: string
   offlineLabel: string
+  meshLabel: string
+  measuredLabel: string
+  /** Names the card an edge has to pass over, `{name}` standing in for the
+   *  machine. The edge is dimmed rather than dropped: "this box and I are not
+   *  connected" is a worse lie than a faint line. */
+  occludedLabel: string
   emptyLabel: string
   idleLabel: string
   runningLabel: string
@@ -94,6 +138,23 @@ export interface WorkspacePanelsProps {
    *  saved arrangement away and re-forms the tidy row: the one guaranteed way
    *  back from a card parked somewhere the reader cannot see. */
   resetSignal?: number
+}
+
+/** One agent tile's identity: an agent lives on a machine, so the machine is
+ *  part of the key. The same CLI on two boxes is two tiles, two picks, and
+ *  two menu targets — a name alone would conflate them. */
+export function tileKey(device: string, agent: string): string {
+  return `${device}/${agent}`
+}
+
+/** The roster a panel shows: what the machine's card declares, or — for this
+ *  machine only — the CLIs the console can actually drive when the card is
+ *  bare. Exported because the page's batch actions have to know the same set
+ *  the panels drew. */
+export function panelAgents(d: PanelDevice, fallback: string[] = []): string[] {
+  const roster = Object.keys(d.agents ?? {})
+  if (roster.length > 0) return roster
+  return d.local ? fallback : []
 }
 
 /** The agent a task's newest event names, if it names one. The ledger stamps
@@ -130,6 +191,21 @@ interface Slot {
   y: number
   w: number
   h: number
+}
+
+interface LinkLayout {
+  rects: Map<string, PanelRect>
+  width: number
+  height: number
+}
+
+function sameLinkLayout(a: LinkLayout, b: LinkLayout): boolean {
+  if (a.width !== b.width || a.height !== b.height || a.rects.size !== b.rects.size) return false
+  for (const [id, r] of b.rects) {
+    const prev = a.rects.get(id)
+    if (!prev || prev.x !== r.x || prev.y !== r.y || prev.w !== r.w || prev.h !== r.h) return false
+  }
+  return true
 }
 
 function readSlots(): Record<string, Slot> {
@@ -230,9 +306,26 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     onPick,
     meta,
     fallbackAgents,
+    pickedTiles,
+    hiddenTiles,
+    testingTiles,
+    onTogglePick,
+    onTest,
+    onHide,
+    onShowAll,
+    hiddenNote,
+    menuSelect,
+    menuDeselect,
+    menuTest,
+    menuRemove,
+    menuLocalOnly,
+    menuHint,
     localLabel,
     onlineLabel,
     offlineLabel,
+    meshLabel,
+    measuredLabel,
+    occludedLabel,
     emptyLabel,
     idleLabel,
     runningLabel,
@@ -241,17 +334,112 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
 
   const [slots, setSlots] = useState<Record<string, Slot>>(readSlots)
   const [drag, setDrag] = useState<Drag | null>(null)
+  /** The card a right-click landed on, and where. Coordinates are viewport
+   *  pixels because the menu is fixed: it must not scroll with the map. */
+  const [menu, setMenu] = useState<{
+    x: number
+    y: number
+    device: PanelDevice
+    agent: string
+  } | null>(null)
   const dragRef = useRef<Drag | null>(null)
   const press = useRef<Press | null>(null)
   /** A press that turned into a drag must not also count as a click. */
   const dragged = useRef(false)
   const els = useRef(new Map<string, HTMLElement>())
   const gridRef = useRef<HTMLDivElement>(null)
+  const ghostRef = useRef<HTMLElement | null>(null)
+  const [linkLayout, setLinkLayout] = useState<LinkLayout>({
+    rects: new Map(),
+    width: 0,
+    height: 0,
+  })
+
+  const edges = useMemo(() => buildWorkspaceEdges(devices), [devices])
+  const visibleEdges = useMemo(
+    () => (selected ? edges.filter((e) => e.a === selected || e.b === selected) : []),
+    [edges, selected],
+  )
+  const linkedIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const e of visibleEdges) {
+      ids.add(e.a)
+      ids.add(e.b)
+    }
+    return ids
+  }, [visibleEdges])
+  const deviceOf = useMemo(() => new Map(devices.map((d) => [d.id, d])), [devices])
+  /** Rect → device id, so an occluded edge can name the card it passes behind.
+   *  Keyed on object identity: the layout hands out one rect object per card
+   *  per measurement and `workspaceLinkLine` reports that same object. */
+  const idByRect = useMemo(() => {
+    const byRect = new Map<PanelRect, string>()
+    for (const [id, r] of linkLayout.rects) byRect.set(r, id)
+    return byRect
+  }, [linkLayout.rects])
 
   const applyDrag = (next: Drag | null) => {
     dragRef.current = next
     setDrag(next)
   }
+
+  /** Measure only the endpoints the current selection can draw. Keeping the
+   *  rectangles in grid coordinates lets the SVG scroll with the cards; the
+   *  floating drag copy is viewport-fixed and is converted into the same
+   *  frame here. */
+  const measureLinks = () => {
+    const grid = gridRef.current
+    const next: LinkLayout = { rects: new Map(), width: 0, height: 0 }
+    if (grid) {
+      const gr = grid.getBoundingClientRect()
+      // Every pane, not just the endpoints of the visible edges: a line can
+      // pass behind a pane the current selection does not connect, and
+      // occlusion is exactly that question. Measuring only the endpoints made
+      // an unconnected pane unable to block anything.
+      const ids = new Set<string>(els.current.keys())
+      for (const e of visibleEdges) {
+        ids.add(e.a)
+        ids.add(e.b)
+      }
+      for (const id of ids) {
+        const el = dragRef.current?.id === id ? ghostRef.current : els.current.get(id)
+        if (!el) continue
+        const r = el.getBoundingClientRect()
+        next.rects.set(id, {
+          x: r.left - gr.left + grid.scrollLeft,
+          y: r.top - gr.top + grid.scrollTop,
+          w: r.width,
+          h: r.height,
+        })
+      }
+      next.width = Math.max(grid.clientWidth, grid.scrollWidth)
+      next.height = Math.max(grid.clientHeight, grid.scrollHeight)
+    }
+    setLinkLayout((prev) => (sameLinkLayout(prev, next) ? prev : next))
+  }
+
+  // Layout changes that do not resize a card still move its endpoints: a
+  // drag, a restored slot, and the first flex-to-absolute pass all land here.
+  useLayoutEffect(() => {
+    measureLinks()
+  })
+
+  useEffect(() => {
+    if (visibleEdges.length === 0) return
+    const grid = gridRef.current
+    if (!grid) return
+    const observer = new ResizeObserver(measureLinks)
+    observer.observe(grid)
+    for (const id of linkedIds) {
+      const el = els.current.get(id)
+      if (el) observer.observe(el)
+    }
+    window.addEventListener('resize', measureLinks)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measureLinks)
+    }
+  }, [visibleEdges, linkedIds])
 
   // The drag is owned by the window, not by the panel: the panel unmounts the
   // moment it becomes the floating copy, and a pointer captured on a detached
@@ -392,12 +580,20 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
 
   if (devices.length === 0) return <p class="dim ws-empty">{emptyLabel}</p>
 
+  // One panda, on one card. `is_local` can name more than one directory row
+  // (the same machine re-registered under a new runtime id, or a row filed
+  // under its hostname beside its node id), and a pet on two cards stops
+  // meaning "this is the machine you are on". The fleet is sorted local-first,
+  // so the first local row is the live one.
+  const pandaId = devices.find((d) => d.local)?.id ?? ''
+
   const bottom = Object.values(slots).reduce((m, s) => Math.max(m, s.y + s.h), 0)
 
   const panel = (d: PanelDevice, ghost?: Drag) => {
     const run = runningOf(d)
-    const roster = Object.keys(d.agents ?? {})
-    const agents = roster.length > 0 ? roster : d.local ? fallbackAgents ?? [] : []
+    const roster = panelAgents(d, fallbackAgents)
+    const agents = roster.filter((cli) => !hiddenTiles.has(tileKey(d.id, cli)))
+    const hiddenHere = roster.length - agents.length
     const working = run.size > 0 || d.busy
     const slot = slots[d.id]
     const style: JSX.CSSProperties | undefined = ghost
@@ -417,13 +613,15 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         key={d.id}
         class={`ws-panel${d.online ? '' : ' off'}${d.local ? ' self' : ''}${
           selected === d.id ? ' sel' : ''
-        }${ghost ? ' dragging' : ''}`}
+        }${linkedIds.has(d.id) ? ' linked' : ''}${ghost ? ' dragging' : ''}`}
         data-form={d.form}
         data-device={d.id}
         style={style}
         ref={
           ghost
-            ? undefined
+            ? (el: HTMLElement | null) => {
+                ghostRef.current = el
+              }
             : (el: HTMLElement | null) => {
                 if (el) els.current.set(d.id, el)
                 else els.current.delete(d.id)
@@ -492,7 +690,7 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
       >
         {/* The pet, standing on this panel's top edge. Decoration: the live
             facts are the tiles and the load readout beside them. */}
-        {d.local && (
+        {d.id === pandaId && (
           <div class={`ws-panda${working ? ' cheer' : ''}`} aria-hidden="true">
             <span class="ws-panda-sp" />
           </div>
@@ -519,26 +717,62 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
 
         <div class={`ws-panel-bays${agents.length === 0 ? ' none' : ''}`}>
           {agents.length === 0 ? (
-            <span class="ws-panel-none">{noneLabel}</span>
+            hiddenHere > 0 ? (
+              // The panel is not empty, it is folded: a machine whose every
+              // tile was removed would otherwise read as "declares no agents",
+              // which is a different — and wrong — statement.
+              <button type="button" class="ws-panel-restore" onClick={() => onShowAll(d.id)}>
+                {hiddenNote(hiddenHere)}
+              </button>
+            ) : (
+              <span class="ws-panel-none">{noneLabel}</span>
+            )
           ) : (
             agents.map((cli) => {
               const on = run.has(cli.toLowerCase())
+              const key = tileKey(d.id, cli)
+              const picked = pickedTiles.has(key)
+              const probing = testingTiles.has(key)
               // The mark carries the plate it is drawn for (`plate` in
               // format/agent-logo): near-black artwork only reads on a light
               // plate, near-white artwork only on a dark one. Same rule as the
               // roster avatars, so an agent looks identical wherever it shows.
               const logo = agentLogo(cli)
+              const state = on ? runningLabel : idleLabel
               return (
                 <button
                   key={cli}
                   type="button"
                   class="ws-tile"
                   data-run={on ? '1' : '0'}
-                  title={`${cli} · ${on ? runningLabel : idleLabel}`}
-                  aria-label={`${cli} · ${on ? runningLabel : idleLabel}`}
+                  data-picked={picked ? '1' : '0'}
+                  data-testing={probing ? '1' : '0'}
+                  title={`${cli} · ${state} · ${menuHint}`}
+                  aria-label={`${cli} · ${state}`}
+                  aria-pressed={picked}
                   onClick={(e) => {
                     e.stopPropagation()
-                    onPick(d.id)
+                    onTogglePick(key)
+                  }}
+                  onKeyDown={(e) => {
+                    // The tile is its own control, so the keys that activate a
+                    // button must do what a click on it does. Without this the
+                    // event bubbles to the panel's own Enter/Space handler,
+                    // which opens the device drawer: the same control then
+                    // behaved one way under the pointer and another under the
+                    // keyboard. Only the keys a button answers to are claimed —
+                    // Escape and the menu's own keys stay with the page.
+                    if (e.key !== 'Enter' && e.key !== ' ') return
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onTogglePick(key)
+                  }}
+                  onContextMenu={(e) => {
+                    // The card's verbs live behind this; the browser's own
+                    // menu would cover them and say nothing about the agent.
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setMenu({ x: e.clientX, y: e.clientY, device: d, agent: cli })
                   }}
                 >
                   <span class={`ws-tile-plate${logo ? ` plate-${logo.plate}` : ''}`}>
@@ -566,6 +800,36 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     )
   }
 
+  const menuItems: ContextMenuItem[] = menu
+    ? [
+        {
+          id: 'pick',
+          label: pickedTiles.has(tileKey(menu.device.id, menu.agent)) ? menuDeselect : menuSelect,
+          icon: pickedTiles.has(tileKey(menu.device.id, menu.agent)) ? 'x' : 'check',
+          onSelect: () => onTogglePick(tileKey(menu.device.id, menu.agent)),
+        },
+        {
+          // A connectivity check is `<cli> --version` on this console's own
+          // machine: a peer's CLI is not ours to spawn, so the verb is there
+          // but greyed with the reason rather than silently testing the wrong
+          // box. New verbs join this array — the menu itself is data.
+          id: 'test',
+          label: menuTest,
+          icon: 'plug',
+          hint: menu.device.local ? '--version' : menuLocalOnly,
+          disabled: !menu.device.local,
+          onSelect: () => onTest(menu.device.id, menu.agent),
+        },
+        {
+          id: 'remove',
+          label: menuRemove,
+          icon: 'trash',
+          danger: true,
+          onSelect: () => onHide(menu.device.id, menu.agent),
+        },
+      ]
+    : []
+
   return (
     <div class={`ws-panels${drag ? ' is-dragging' : ''}`}>
       <div
@@ -573,9 +837,65 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         ref={gridRef}
         style={bottom > 0 ? { minHeight: `${bottom + 26}px` } : undefined}
       >
+        {visibleEdges.length > 0 && linkLayout.width > 0 && linkLayout.height > 0 && (
+          <svg
+            class="ws-panel-links"
+            width={linkLayout.width}
+            height={linkLayout.height}
+            viewBox={`0 0 ${linkLayout.width} ${linkLayout.height}`}
+            aria-hidden="true"
+          >
+            {visibleEdges.map((e) => {
+              const a = linkLayout.rects.get(e.a)
+              const b = linkLayout.rects.get(e.b)
+              if (!a || !b) return null
+              const line = workspaceLinkLine(a, b, linkLayout.rects.values())
+              if (!line) return null
+              // `blockedBy` is a layout object, not an SVG attribute — spread
+              // only the geometry onto the elements.
+              const geometry = { x1: line.x1, y1: line.y1, x2: line.x2, y2: line.y2 }
+              const names = `${deviceOf.get(e.a)?.name ?? e.a} ↔ ${deviceOf.get(e.b)?.name ?? e.b}`
+              const blockerId = line.blockedBy ? idByRect.get(line.blockedBy) : undefined
+              const blockerName = blockerId ? deviceOf.get(blockerId)?.name ?? blockerId : ''
+              const title = [
+                names,
+                e.kind === 'mesh' ? meshLabel : measuredLabel,
+                e.rtt > 0 ? `${e.rtt} ms` : '',
+                e.transport,
+                blockerName ? occludedLabel.replaceAll('{name}', blockerName) : '',
+              ]
+                .filter(Boolean)
+                .join(' · ')
+              return (
+                <g
+                  class={`ws-panel-link-group ${e.kind}${blockerName ? ' occluded' : ''}`}
+                  key={`${e.a}-${e.b}`}
+                >
+                  <line class="ws-panel-link-halo" {...geometry} />
+                  <line class={`ws-panel-link ${e.kind}`} {...geometry} />
+                  <circle class="ws-panel-link-dot" cx={line.x1} cy={line.y1} r={3} />
+                  <circle class="ws-panel-link-dot" cx={line.x2} cy={line.y2} r={3} />
+                  <line class="ws-panel-link-hit" {...geometry}>
+                    <title>{title}</title>
+                  </line>
+                </g>
+              )
+            })}
+          </svg>
+        )}
         {devices.filter((d) => !drag || d.id !== drag.id).map((d) => panel(d))}
       </div>
       {drag && devices.some((d) => d.id === drag.id) && panel(devices.find((d) => d.id === drag.id)!, drag)}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          title={menu.agent}
+          sub={menu.device.name}
+          items={menuItems}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   )
 }

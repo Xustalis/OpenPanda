@@ -59,7 +59,7 @@ export function MemoryView(props: { initialTab?: string }) {
   const reload = () => setTick((v) => v + 1)
 
   return (
-    <section>
+    <section class="memory-page">
       <PageHeader title={t('memory.title')} sub={t('memory.subtitle')} />
 
       <div class="system-head">

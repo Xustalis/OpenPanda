@@ -9,6 +9,7 @@ import { Icon } from '../components/icons'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 import { useModalFocus } from '../components/modal-focus'
+import { Select } from '../components/select'
 
 /** The skills view: every skill with its approval status, plus
  *  quick recommended presets, custom importing and community Skills Hub integration. */
@@ -491,11 +492,16 @@ function ImportSkillModal({
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
             <div class="skill-form-group">
               <label>{t('skills.importScope')}</label>
-              <select value={scope} onChange={(e) => setScope((e.target as HTMLSelectElement).value)}>
-                <option value="global">{t('skills.scopeGlobal')}</option>
-                <option value="project">{t('skills.scopeProject')}</option>
-                <option value="device">{t('skills.scopeDevice')}</option>
-              </select>
+              <Select
+                ariaLabel={t('skills.importScope')}
+                value={scope}
+                options={[
+                  { value: 'global', label: t('skills.scopeGlobal') },
+                  { value: 'project', label: t('skills.scopeProject') },
+                  { value: 'device', label: t('skills.scopeDevice') },
+                ]}
+                onChange={setScope}
+              />
             </div>
             <div class="skill-form-group">
               <label>{t('skills.importName')}</label>

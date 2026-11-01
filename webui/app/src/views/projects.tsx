@@ -9,6 +9,7 @@ import { Icon } from '../components/icons'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 import { DirPicker } from '../components/dir-picker'
+import { Select } from '../components/select'
 
 // The projects view. It used to be a name list with a create box, because a
 // project was a memory file and a name was all there was to show. A project now
@@ -35,6 +36,7 @@ export function ProjectsView({
   const [name, setName] = useState('')
   const [dir, setDir] = useState('')
   const [desc, setDesc] = useState('')
+  const [createOpen, setCreateOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
 
@@ -64,6 +66,7 @@ export function ProjectsView({
       setName('')
       setDir('')
       setDesc('')
+      setCreateOpen(false)
       toast(t('projects.create') + ': ' + trimmed, 'success')
     })
   }
@@ -99,37 +102,56 @@ export function ProjectsView({
     <section>
       {head && <PageHeader title={t('nav.projects')} sub={t('projects.subtitle')} />}
 
-      <form class="card project-create-card" onSubmit={create}>
-        <div class="project-create-row dir-selection">
-          <DirPicker
-            value={dir}
-            onChange={(selected) => setDir(selected)}
-            onSuggestName={(suggested) => {
-              if (!name.trim()) setName(suggested)
-            }}
-            placeholder={t('projects.dirPickerPlaceholder')}
-          />
-        </div>
-        <div class="project-create-row details">
-          <input
-            class="input project-name-input"
-            placeholder={t('projects.namePlaceholder')}
-            value={name}
-            onInput={(e) => setName((e.target as HTMLInputElement).value)}
-            aria-label={t('projects.namePlaceholder')}
-          />
-          <input
-            class="input project-desc-input"
-            placeholder={t('projects.descPlaceholder')}
-            value={desc}
-            onInput={(e) => setDesc((e.target as HTMLInputElement).value)}
-            aria-label={t('projects.descPlaceholder')}
-          />
-          <button class="btn primary" type="submit" disabled={busy || !name.trim()}>
-            + {t('projects.create')}
-          </button>
-        </div>
-      </form>
+      <div class="projects-toolbar">
+        <span class="projects-total">
+          <Icon name="folder" size={15} />
+          {t('projects.total', { n: rows.length })}
+          {data?.active && <span class="projects-active-name">· {data.active}</span>}
+        </span>
+        <button
+          type="button"
+          class={`btn${createOpen ? '' : ' primary'}`}
+          onClick={() => setCreateOpen(!createOpen)}
+        >
+          <Icon name={createOpen ? 'x' : 'plus'} size={14} />
+          {createOpen ? t('common.cancel') : t('projects.new')}
+        </button>
+      </div>
+
+      {createOpen && (
+        <form class="card project-create-card" onSubmit={create}>
+          <div class="project-create-row dir-selection">
+            <DirPicker
+              value={dir}
+              onChange={(selected) => setDir(selected)}
+              onSuggestName={(suggested) => {
+                if (!name.trim()) setName(suggested)
+              }}
+              placeholder={t('projects.dirPickerPlaceholder')}
+            />
+          </div>
+          <div class="project-create-row details">
+            <input
+              class="input project-name-input"
+              placeholder={t('projects.namePlaceholder')}
+              value={name}
+              onInput={(e) => setName((e.target as HTMLInputElement).value)}
+              aria-label={t('projects.namePlaceholder')}
+            />
+            <input
+              class="input project-desc-input"
+              placeholder={t('projects.descPlaceholder')}
+              value={desc}
+              onInput={(e) => setDesc((e.target as HTMLInputElement).value)}
+              aria-label={t('projects.descPlaceholder')}
+            />
+            <button class="btn primary" type="submit" disabled={busy || !name.trim()}>
+              <Icon name="plus" size={14} />
+              {t('projects.create')}
+            </button>
+          </div>
+        </form>
+      )}
 
       {data === null ? (
         <p class="dim">
@@ -245,56 +267,68 @@ function ProjectRow({
     <div class={`card project-item${project.active ? ' project-active' : ''}`}>
       <div class="project-head">
         <button class="project-name-btn" onClick={onOpen} title={t('projects.openChat')}>
-          <Icon name="folder" class="project-name-icon" />
+          <span class="project-name-icon">
+            <Icon name={project.active ? 'folder-open' : 'folder-closed'} size={18} />
+          </span>
           <span class="project-name">{project.name}</span>
         </button>
-        {project.active && <span class="badge">{t('projects.current')}</span>}
+        {project.active && <span class="badge green">{t('projects.current')}</span>}
         <span class="grow" />
-        <button class="btn primary project-chat-btn" onClick={onOpen} disabled={busy} title={t('projects.openChat')}>
-          <Icon name="message" size={13} /> {t('projects.openChat')}
+        <button
+          class="btn small ghost icon-only"
+          onClick={onEdit}
+          disabled={busy}
+          title={editing ? t('common.cancel') : t('projects.edit')}
+          aria-label={editing ? t('common.cancel') : t('projects.edit')}
+        >
+          <Icon name={editing ? 'x' : 'pencil'} size={14} />
         </button>
-        <button class="btn" onClick={onEdit} disabled={busy}>
-          {editing ? t('common.cancel') : t('projects.rename')}
-        </button>
-        <button class="btn danger" onClick={handleDirectRemove} disabled={busy} title={t('projects.remove')}>
-          {t('projects.remove')}
+        <button
+          class="btn small ghost danger icon-only"
+          onClick={handleDirectRemove}
+          disabled={busy}
+          title={t('projects.remove')}
+          aria-label={t('projects.remove')}
+        >
+          <Icon name="trash" size={14} />
         </button>
       </div>
 
-      <div class="project-meta dim">
-        <span class="project-dir-tag">
-          <Icon name="folder" size={13} /> {project.work_dir ? project.work_dir : t('projects.noDir')}
-          {project.work_dir && (
-            <button
-              type="button"
-              class="copy-dir-btn"
-              title={t('projects.copyDir')}
-              onClick={(e) => {
-                e.stopPropagation()
-                navigator.clipboard.writeText(project.work_dir!)
-                toast(t('projects.copiedDir'), 'info')
-              }}
-            >
-              <Icon name="copy" size={12} />
-            </button>
-          )}
-        </span>
-        {project.description && <span> · {project.description}</span>}
-        <span>
-          {' · '}
+      {project.description && <p class="project-description">{project.description}</p>}
+
+      <div class="project-dir-tag" title={project.work_dir || t('projects.noDir')}>
+        <Icon name="folder" size={13} />
+        <span>{project.work_dir || t('projects.noDir')}</span>
+        {project.work_dir && (
+          <button
+            type="button"
+            class="copy-dir-btn"
+            title={t('projects.copyDir')}
+            aria-label={t('projects.copyDir')}
+            onClick={(e) => {
+              e.stopPropagation()
+              navigator.clipboard.writeText(project.work_dir!)
+              toast(t('projects.copiedDir'), 'info')
+            }}
+          >
+            <Icon name="copy" size={12} />
+          </button>
+        )}
+      </div>
+
+      <div class="project-stats">
+        {project.sessions !== undefined && (
+          <span class="project-stat" title={t('projects.sessionsCount', { count: String(project.sessions) })}>
+            <Icon name="message" size={13} />
+            {t('projects.sessionsCount', { count: String(project.sessions) })}
+          </span>
+        )}
+        <span class="project-stat">
+          <Icon name="lightbulb" size={13} />
           {t('projects.memory')
             .replace('{entries}', String(project.memory_entries))
             .replace('{chars}', String(project.memory_chars))}
         </span>
-        {project.sessions !== undefined && (
-          <span>
-            {' · '}
-            {t('projects.sessionsCount', { count: String(project.sessions) })}
-          </span>
-        )}
-        {/* The work summary — what the project exists to group. Clicking lands
-            on the queue already filtered to this project, so the count and the
-            board can never disagree about which tasks belong. */}
         {project.tasks &&
           (() => {
             const open = OPEN_STATES.reduce((n, s) => n + (project.tasks![s] ?? 0), 0)
@@ -303,46 +337,51 @@ function ProjectRow({
             const done = project.tasks['done'] ?? 0
             if (open + review + failed + done === 0) return null
             return (
-              <span>
-                {' · '}
-                <button
-                  type="button"
-                  class="link-btn"
-                  onClick={onOpenQueue}
-                  title={t('projects.viewTasks')}
-                >
-                  {[
-                    open > 0 && t('projects.tasksOpen', { n: String(open) }),
-                    review > 0 && t('projects.tasksReview', { n: String(review) }),
-                    failed > 0 && t('projects.tasksFailed', { n: String(failed) }),
-                    open + review + failed === 0 && done > 0 && t('projects.tasksDone', { n: String(done) }),
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </button>
-              </span>
+              <button type="button" class="project-stat project-task-stat" onClick={onOpenQueue}>
+                <Icon name="activity" size={13} />
+                {[
+                  open > 0 && t('projects.tasksOpen', { n: String(open) }),
+                  review > 0 && t('projects.tasksReview', { n: String(review) }),
+                  failed > 0 && t('projects.tasksFailed', { n: String(failed) }),
+                  open + review + failed === 0 && done > 0 && t('projects.tasksDone', { n: String(done) }),
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </button>
             )
           })()}
-        {project.approval_mode && (
-          <span>
-            {' · '}
-            {t('projects.approvalModeShort')}: {t(`settings.approval.${project.approval_mode}`)}
-          </span>
-        )}
-        {project.approval_decision && (
-          // The standing answer a project-scope remember wrote — every new
-          // session inherits it, so it must be visible (and erasable) here.
-          <span>
-            {' · '}
-            {t('projects.approvalRemembered', {
-              decision: t(`approval.decision.${project.approval_decision}`),
-            })}
-            {' '}
-            <button class="link-btn" type="button" disabled={busy} onClick={onForgetApproval}>
-              {t('projects.approvalForget')}
-            </button>
-          </span>
-        )}
+      </div>
+
+      {(project.approval_mode || project.approval_decision) && (
+        <div class="project-policy">
+          {project.approval_mode && (
+            <span>
+              <Icon name="shield" size={12} />
+              {t('projects.approvalModeShort')}: {t(`settings.approval.${project.approval_mode}`)}
+            </span>
+          )}
+          {project.approval_decision && (
+            <span>
+              {t('projects.approvalRemembered', {
+                decision: t(`approval.decision.${project.approval_decision}`),
+              })}{' '}
+              <button class="link-btn" type="button" disabled={busy} onClick={onForgetApproval}>
+                {t('projects.approvalForget')}
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
+      <div class="project-card-actions">
+        <button class="btn primary project-chat-btn" onClick={onOpen} disabled={busy}>
+          <Icon name="message" size={14} />
+          {t('projects.openChat')}
+        </button>
+        <button class="btn" onClick={onOpenQueue} disabled={busy}>
+          <Icon name="list-checks" size={14} />
+          {t('projects.viewTasks')}
+        </button>
       </div>
 
       {editing && (
@@ -373,28 +412,30 @@ function ProjectRow({
           <div class="project-edit-approval">
             <label class="dim approval-field">
               {t('projects.approvalMode')}
-              <select
-                class="input"
+              <Select
+                ariaLabel={t('projects.approvalMode')}
                 value={approvalMode}
-                onChange={(e) => setApprovalMode((e.target as HTMLSelectElement).value as typeof approvalMode)}
-              >
-                <option value="inherit">{t('projects.approvalInherit')}</option>
-                <option value="never">{t('settings.approval.never')}</option>
-                <option value="on-request">{t('settings.approval.on-request')}</option>
-                <option value="always">{t('settings.approval.always')}</option>
-              </select>
+                options={[
+                  { value: 'inherit', label: t('projects.approvalInherit') },
+                  { value: 'never', label: t('settings.approval.never') },
+                  { value: 'on-request', label: t('settings.approval.on-request') },
+                  { value: 'always', label: t('settings.approval.always') },
+                ]}
+                onChange={(v) => setApprovalMode(v as typeof approvalMode)}
+              />
             </label>
             <label class="dim approval-field">
               {t('projects.approvalScope')}
-              <select
-                class="input"
+              <Select
+                ariaLabel={t('projects.approvalScope')}
                 value={approvalScope}
-                onChange={(e) => setApprovalScope((e.target as HTMLSelectElement).value as ApprovalScope)}
-              >
-                <option value="once">{t('approval.scopeOnce')}</option>
-                <option value="session">{t('approval.scopeSession')}</option>
-                <option value="project">{t('approval.scopeProject')}</option>
-              </select>
+                options={[
+                  { value: 'once', label: t('approval.scopeOnce') },
+                  { value: 'session', label: t('approval.scopeSession') },
+                  { value: 'project', label: t('approval.scopeProject') },
+                ]}
+                onChange={(v) => setApprovalScope(v as ApprovalScope)}
+              />
             </label>
           </div>
           <div class="project-edit-actions">

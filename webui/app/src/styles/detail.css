@@ -1133,6 +1133,239 @@
   opacity: 1;
 }
 
+/* ---- Panels: the four-card body ----------------------------------------- */
+
+/* The four answers this page owes — what came out, how it ran, what it was
+   asked to do, what it is — as cards on one screen. Each was a full-width
+   section as tall as its content before this, so a 2,000-character output
+   pushed the other three below the fold and the page became a scroll. A card
+   keeps a preview on its face and puts the rest behind a fold it owns. */
+.dt-panels {
+  display: grid;
+  /* auto-fit on the container, not a viewport media query: the page is capped
+     at 980px but sits beside a 290px sidebar, so an 820px window leaves the
+     grid 476px wide — two 232px columns were narrower than a file path. */
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  /* start, not stretch: expanding the brief should not leave the facts card
+     beside it standing at the same height with nothing in it. */
+  align-items: start;
+  gap: 12px;
+  margin-top: 16px;
+}
+.dt-body > .dt-panels:first-child {
+  margin-top: 0;
+}
+
+.dp {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 11px 14px 13px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+}
+/* The output and the chain are reading surfaces; the other two are reference
+   and share a row. */
+.dp.is-wide {
+  grid-column: 1 / -1;
+}
+
+.dp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dp-title {
+  flex: none;
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.dp-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dp-rail {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex: none;
+}
+
+/* Head-line controls (copy, raw JSON). Quiet until hovered: they are escape
+   hatches, not content. */
+.dp-action {
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.dp-action:hover {
+  border-color: var(--border-soft);
+  background: var(--bg-chrome);
+  color: var(--text);
+}
+
+.dp-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 4px 0 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.dp-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.dp-toggle svg {
+  transition: transform var(--dur-fast) var(--ease);
+}
+.dp-toggle[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+.dp-lead {
+  margin-top: 9px;
+  min-width: 0;
+}
+.dp-lead > * + * {
+  margin-top: 7px;
+}
+/* File names on the card's face are a sample, not the list: three of them at
+   a capped width, the count carries the rest. A thirty-six file change set
+   otherwise drew eight rows of paths before the markdown started. */
+.dp-lead .result-file-chip {
+  max-width: 48ch;
+}
+.dp-lead .result-file-more {
+  cursor: default;
+  color: var(--text-tertiary);
+}
+
+.dp-body {
+  margin-top: 9px;
+  min-width: 0;
+  font-size: var(--text-md);
+  line-height: 1.62;
+  color: var(--text-secondary);
+}
+
+/* The preview: a height, not a character count. A hard cut lands mid-word and
+   the fade is what says "there is more" without lying about the text. */
+.dp-body.is-clipped {
+  overflow: hidden;
+  max-height: var(--dp-clamp);
+  -webkit-mask-image: linear-gradient(180deg, #000 74%, rgba(0, 0, 0, 0.55) 90%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 74%, rgba(0, 0, 0, 0.55) 90%, transparent 100%);
+}
+
+/* Expanded, the body scrolls inside the card instead of growing the page —
+   the other three cards stay where they were. */
+.dp-body.is-scroll {
+  max-height: var(--dp-max);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.dp-empty {
+  margin: 9px 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+
+/* A named block inside a card: the delegation hops, the children, the log. */
+.dp-sub {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px dashed var(--border-soft);
+}
+.dp .tt-detail + .dp-sub {
+  margin-top: 10px;
+  padding-top: 0;
+  border-top: 0;
+}
+.dp-sub-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* The strip is a card's face, not a plate inside a plate. */
+.dp .tt {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+.dp .tt-row {
+  min-height: 0;
+  padding: 0;
+}
+.dp .tt-detail {
+  margin-top: 10px;
+  padding: 11px 0 0;
+  border-top: 1px dashed var(--border-soft);
+  background: transparent;
+}
+.dp .tt-progress {
+  margin-top: 8px;
+}
+
+/* Two columns of facts inside a half-width card: the 28px gutter was sized for
+   the full page measure. */
+.dp .dt-facts {
+  gap: 10px 20px;
+}
+.dp .dt-board {
+  margin-top: 0;
+}
+.dp .dt-chain,
+.dp .dt-children {
+  margin-top: 0;
+}
+.dp .result-view {
+  gap: 8px;
+}
+.dp .detail-raw {
+  margin: 10px 0 0;
+}
+
 /* ---- Narrow screens ----------------------------------------------------- */
 
 @media (max-width: 720px) {

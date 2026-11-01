@@ -43,6 +43,16 @@ export function shortId(id: string): string {
   return id ? id.slice(0, 8) : '—'
 }
 
+/** Markdown decoration a one-line quote should not carry: a run that opens its
+ *  report with `## 测试结果` should not have the verdict block read out the
+ *  hashes. Also the rule the output card uses to recognise its own opening
+ *  line once the decoration is gone. */
+const MD_DECOR = /^[\s#>*_`~-]+/
+
+export function plainLine(s: string): string {
+  return s.replace(MD_DECOR, '')
+}
+
 export function fmtFull(iso: string): string {
   return iso ? new Date(iso).toLocaleString(locale()) : '—'
 }
@@ -64,6 +74,53 @@ export function fmtShort(iso: string): string {
     }).format(d)
   } catch {
     return '—'
+  }
+}
+
+/** What a spec has to say, before any of it is drawn: the counts a panel head
+ *  quotes, the test that decides whether a fold is worth drawing, and the
+ *  fields the body renders. Split out so the page's 任务简报 card and the card
+ *  itself cannot disagree about whether there is a brief at all. */
+export function briefShape(spec?: string, fallback?: string) {
+  const s = spec ? parseResult(spec) : null
+  const target = text(s?.target) || (fallback ?? '').trim()
+  const success = text(s?.success_definition)
+  const constraints = Array.isArray(s?.constraints)
+    ? s.constraints.filter((c): c is string => typeof c === 'string' && c !== '')
+    : []
+  // Which agents the dispatcher allowed this run to use. It is the one field
+  // that explains a task being run by the "wrong" CLI, and it was only ever
+  // readable in the raw spec blob.
+  const agents = Array.isArray(s?.allow_agents)
+    ? s.allow_agents.filter((a): a is string => typeof a === 'string' && a !== '')
+    : []
+  const scopeFiles = text(s?.scope)
+    .split(/[,;\n]/)
+    .map((f) => f.trim())
+    .filter(Boolean)
+  // The sentence the user actually typed, when the dispatcher wrapped it into
+  // the intent envelope. The brief is the dispatcher's *reading* of it —
+  // target, constraints, the bar — so the original is only worth a block when
+  // it says something those three do not.
+  const raw = rawRequestOf(fallback ?? '', target)
+  return {
+    target,
+    success,
+    constraints,
+    agents,
+    scopeFiles,
+    raw,
+    has: Boolean(
+      target || success || constraints.length > 0 || agents.length > 0 || scopeFiles.length > 0,
+    ),
+    // A brief that is only a target has nothing to unfold — the toggle used to
+    // sit there re-printing the sentence directly above it.
+    more:
+      constraints.length > 0 ||
+      scopeFiles.length > 0 ||
+      agents.length > 0 ||
+      Boolean(success) ||
+      Boolean(raw),
   }
 }
 
@@ -95,39 +152,9 @@ export function SpecCard({
   bare?: boolean
 }) {
   const [open, setOpen] = useState(false)
-  const s = spec ? parseResult(spec) : null
-  const target = text(s?.target) || (fallback ?? '').trim()
-  const success = text(s?.success_definition)
-  const scope = text(s?.scope)
-  const constraints = Array.isArray(s?.constraints)
-    ? s.constraints.filter((c): c is string => typeof c === 'string' && c !== '')
-    : []
-  // Which agents the dispatcher allowed this run to use. It is the one field
-  // that explains a task being run by the "wrong" CLI, and it was only ever
-  // readable in the raw spec blob.
-  const agents = Array.isArray(s?.allow_agents)
-    ? s.allow_agents.filter((a): a is string => typeof a === 'string' && a !== '')
-    : []
-  if (!target && !success && !scope && constraints.length === 0 && agents.length === 0) {
-    return null
-  }
-  const scopeFiles = scope
-    .split(/[,;\n]/)
-    .map((f) => f.trim())
-    .filter(Boolean)
-  // The sentence the user actually typed, when the dispatcher wrapped it into
-  // the intent envelope. The brief above is the dispatcher's *reading* of it —
-  // target, constraints, the bar — so the original is only worth a block when
-  // it says something those three do not.
-  const raw = rawRequestOf(fallback ?? '', target)
-  // A brief that is only a target has nothing to unfold — the toggle used to
-  // sit there re-printing the sentence directly above it.
-  const hasMore =
-    constraints.length > 0 ||
-    scopeFiles.length > 0 ||
-    agents.length > 0 ||
-    Boolean(success) ||
-    Boolean(raw)
+  const shape = briefShape(spec, fallback)
+  const { target, success, constraints, agents, scopeFiles, raw, more: hasMore } = shape
+  if (!shape.has) return null
 
   // The brief's body, drawn the same way wherever it is shown: the panel in the
   // chat card gets exactly what the page's unfolded state shows.

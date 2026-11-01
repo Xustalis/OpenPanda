@@ -6,6 +6,9 @@ import { describe, it } from 'node:test'
 import { splitReportHead } from './report-head.ts'
 import {
   castAgent,
+  castPending,
+  dispatchAgent,
+  pinnedAgent,
   prettyAgent,
   roundStillOpen,
   roundTally,
@@ -268,5 +271,55 @@ describe('castAgent', () => {
     assert.equal(castAgent([{ type: 'exec_agent_start', data: { adapter: 'pi' } }]), 'pi')
     assert.equal(castAgent([{ type: 'progress', data: {} }]), '')
     assert.equal(castAgent(), '')
+  })
+})
+
+describe('dispatchAgent', () => {
+  it('reads the pin when the task never reached an adapter', () => {
+    // The bug: a route failure has no exec_agent_start, so the card named
+    // nobody — while its two siblings in the same round named their employee.
+    assert.equal(dispatchAgent({ traces: [], requires: ['agent:deepseek_harness'] }), 'deepseek_harness')
+  })
+
+  it('lets the trace outrank the pin, because a fallback is who really ran it', () => {
+    const traces = [{ type: 'exec_agent_start', data: { agent: 'codex' } }]
+    assert.equal(dispatchAgent({ traces, requires: ['agent:claude_code'] }), 'codex')
+  })
+
+  it('names nobody when the task neither ran nor pinned an agent', () => {
+    assert.equal(dispatchAgent({ traces: [], requires: ['coding'] }), '')
+    assert.equal(dispatchAgent({}), '')
+  })
+})
+
+describe('pinnedAgent', () => {
+  it('takes the first agent pin and ignores the rest', () => {
+    assert.equal(pinnedAgent(['coding', 'agent:pi', 'agent:codex']), 'pi')
+  })
+
+  it('ignores requirements that only look like a pin', () => {
+    assert.equal(pinnedAgent(['agents:pi', 'agent:', 'agent:   ']), '')
+    assert.equal(pinnedAgent(), '')
+  })
+})
+
+describe('castPending', () => {
+  it('only claims to be picking while the task is still being routed', () => {
+    assert.equal(castPending('submitted'), 'picking')
+  })
+
+  it('waits, instead of claiming to pick, once the row is in the queue', () => {
+    // The chip beside this slot already reads 已入队 / 已派发: "正在挑选员工"
+    // next to it said the task had no employee while its own state said it did.
+    assert.equal(castPending('queued'), 'waiting')
+    assert.equal(castPending('dispatched'), 'waiting')
+  })
+
+  it('says nothing where the state chip is the whole truth', () => {
+    // Running, parked for a person, or settled: a placeholder would either
+    // contradict the chip or invent a fact.
+    for (const state of ['running', 'waiting_context', 'review', 'done', 'failed', 'cancelled', 'expired', '']) {
+      assert.equal(castPending(state), '', state)
+    }
   })
 })

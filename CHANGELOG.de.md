@@ -42,6 +42,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Hinzugefügt
 
+- **Die Konsole ruht auf einer Schale** — jede Seite öffnet mit einer Kopfzeile; die drei Linsen des Aufgabencenters teilen sich ein Segment-Control; die Aufgabendetails sind vier unabhängig einklappbare Karten; die Modell-Registry ist ein nach Verbindung gruppiertes Raster; Geräte bekommen eine Verbindungskarte und eine Wähl-Liste. Einstellungen werden ein Modal, Dropdowns teilen eine Komponente, das dunkle Theme ist eine Graustufen-Skala. Alte `#/todos`-Links landen auf dem Aufgabenboard; die To-do-Daten und `panda todo` bleiben unverändert. Der Autorisierungsschalter pro Runde bleibt neben dem Berechtigungs-Picker: er gewährt dieser Runde, was der Modus allein nicht gibt.
+
 ### Behoben
 
 - **Der Ersteinrichtungs-Assistent merkt sich die Sprache, die du behalten hast** — die Sprach-Chips schrieben ihr Locale beim Klick, aber „weiter“ war der offensichtliche Knopf und schrieb nichts, sodass `ui.locale` bei jeder Installation leer blieb, die die vorausgewählte Sprache übernahm. Diese leere Zeichenkette ist eines der vier Signale, an denen das Gate eine frische Installation erkennt, also öffnete das nächste Re-Onboarding — eine unter der Konsole neu geschriebene Konfiguration, eine veraltete Terms-Revision — wieder beim Sprachschritt, dem einzigen, den der Nutzer längst beantwortet hatte. Weiterzugehen schreibt jetzt das aktive Locale fest.

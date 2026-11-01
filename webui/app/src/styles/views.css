@@ -482,6 +482,14 @@
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-soft);
   vertical-align: top;
+  /* Cells must undo the transcript's `word-break: break-word`. That value is
+     right for prose (a long token wraps instead of stretching the bubble) but
+     it also shrinks a column's *min-content* width to a single character, so
+     auto table layout handed the narrow column ~70px and every file name broke
+     mid-word ("index.ht / ml"). `overflow-wrap` does the same emergency break
+     without touching min-content, which is what keeps the columns honest. */
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 .md-table thead th {
@@ -556,6 +564,16 @@
   background: var(--warn-soft, var(--bg-raised));
 }
 
+/* The sentence under an approval card's buttons. It takes its own row: the
+   buttons and the scope select share the first line, and a reason that wrapped
+   into the middle of them read as one more control. */
+.task-approval .gate-hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+
 /* The remember-scope select riding inside approval cards, kanban actions and
    the detail reject form — caption-sized so it reads as a modifier of the
    buttons next to it, not a separate control row. */
@@ -571,15 +589,6 @@
 
 .scope-select:disabled {
   opacity: 0.6;
-}
-
-/* "approval: always · deny (session) · forget" — the standing gate answer
-   next to the composer's authorize toggle. */
-.approval-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  font-size: var(--fs-caption);
 }
 
 .approval-consent {
@@ -709,32 +718,45 @@
   color: var(--text-dim);
 }
 
+/* Segmented control: a track with a raised thumb, not three joined blocks —
+   the old ink slab read as a button that happened to be three buttons wide.
+   The track uses the alpha ramp so it sits *below* the surface in light and
+   *above* it in dark, which is what "unselected" should look like in both. */
 .segmented {
   display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-md);
   width: fit-content;
 }
 
 .seg {
   border: none;
-  background: var(--bg-inset);
-  color: var(--text-dim);
-  padding: 8px 18px;
-  font-size: 14px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1.45;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
 
-.seg + .seg {
-  border-left: 1px solid var(--border);
+.seg:hover:not(.on) {
+  background: var(--surface-alpha-sm);
+  color: var(--text);
 }
 
 .seg.on {
   background: var(--accent-strong);
   color: var(--accent-ink);
   font-weight: 600;
+  box-shadow: var(--shadow-xs);
 }
 
 .settings-actions {
@@ -1045,7 +1067,7 @@
 
 .skill-form-group input[type="text"],
 .skill-form-group textarea,
-.skill-form-group select {
+.skill-form-group .select-trigger {
   padding: 8px 10px;
   border-radius: 6px;
   border: 1px solid var(--border-soft);
@@ -1053,6 +1075,13 @@
   color: var(--text-primary);
   font-size: 13px;
   box-sizing: border-box;
+}
+
+/* The scope picker (components/select.tsx) fills its grid cell like the text
+   fields beside it. */
+.skill-form-group .select {
+  display: flex;
+  width: 100%;
 }
 
 .skill-modal-actions {
@@ -1322,72 +1351,373 @@
   font-weight: 500;
 }
 
-/* ---- Nodes ---- */
+/* ---- Nodes ---------------------------------------------------------------
+   The page answers four questions in reading order: how is the fleet (head
+   line), which machines are there and what can each do (one card of rows),
+   what work hopped between them (chains), and how do I bring another machine
+   in (connect card). Rows replaced the grid of equal-weight device boxes: a
+   device is a line of facts, so its name, capacity and capabilities line up
+   with the row above instead of tiling into a card whose height depends on
+   how many chips it happens to advertise. */
 
-.node-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 14px;
-}
-
-.node-card {
+.nodes-view {
   display: flex;
   flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* Title left, fleet health right — "is anything down" is the first question
+   this page answers, so it rides on the headline. */
+.nodes-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-6);
+  flex-wrap: wrap;
+}
+
+.nodes-head-text {
+  min-width: 0;
+}
+
+.fleet-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding-bottom: 3px;
+}
+
+.fleet-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.fleet-stat .node-dot {
+  align-self: center;
+}
+
+.fleet-stat-num {
+  font-size: var(--text-lg);
+  font-weight: 650;
+  line-height: 1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.fleet-stat-num.busy {
+  color: var(--warn);
+}
+
+.fleet-stat-num.total {
+  color: var(--text-tertiary);
+  font-size: var(--text-md);
+}
+
+/* Card head: title, count, one action pinned right. */
+.card-head {
+  display: flex;
+  align-items: center;
   gap: 8px;
   min-width: 0;
-  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
-}
-.node-card:hover {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
 }
 
-.node-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-}
-
-.node-id {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-  font-size: 13px;
-}
-
-.node-name {
-  font-weight: 650;
-  font-size: var(--text-lg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
-
-.node-card p {
+.card-head .block-title {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
 }
 
-.node-badges {
+.card-head-action {
+  margin-left: auto;
+}
+
+.card-head-plus {
+  font-size: 14px;
+  line-height: 1;
+  margin-right: -1px;
+}
+
+.block-count {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fleet-loading,
+.fleet-empty {
+  margin: 12px 0 0;
+  font-size: var(--text-md);
+}
+
+/* Rows bleed to the card's edges so the hairlines read as one table rather
+   than a stack of boxes. */
+.fleet-rows {
   display: flex;
+  flex-direction: column;
+  margin: 12px calc(-1 * var(--sp-5)) 0;
+}
+
+.fleet-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 0 10px;
+  min-width: 0;
+  padding: 12px var(--sp-5);
+  border-top: 1px solid var(--border-soft);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* The device tile: identity at a glance (a laptop is not a server), with the
+   status dot pinned to its corner so the row still answers "is it up" first. */
+.fleet-avatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-top: 1px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+}
+
+.fleet-avatar.self {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.fleet-avatar.off {
+  opacity: 0.6;
+}
+
+.fleet-avatar-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--text-disabled);
+  box-shadow: 0 0 0 2px var(--bg-raised);
+}
+
+.fleet-avatar-dot.on {
+  background: var(--good);
+}
+
+.fleet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fleet-row:hover,
+.fleet-row.is-open {
+  background: var(--surface-alpha-xs);
+}
+
+/* This machine: an accent rail down the left edge instead of another badge
+   competing with the status tags. */
+.fleet-row.is-self {
+  box-shadow: inset 2px 0 0 var(--accent-strong);
+  background: var(--surface-alpha-xs);
+}
+
+.fleet-row-title {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fleet-name {
+  max-width: 100%;
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.is-off .fleet-name {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.fleet-id {
+  max-width: 16ch;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status tags are state, capabilities are data: the tags stay quiet and
+   outline-only so the ability chips below keep the tint. */
+.fleet-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.65;
+  white-space: nowrap;
+}
+
+.fleet-tag.self {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.fleet-tag.good {
+  color: var(--good);
+  border-color: var(--semantic-good-border);
+  background: var(--good-soft);
+}
+
+.fleet-tag.mono {
+  font-family: var(--mono);
+}
+
+.fleet-row-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* Trust zone: a select that reads as a chip until you open it. */
+.fleet-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.65;
+  cursor: pointer;
+}
+
+.fleet-trust:hover {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.fleet-trust-label {
+  opacity: 0.8;
+}
+
+.fleet-trust .trust-sel {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.fleet-detail-toggle {
+  gap: 4px;
+  color: var(--text-tertiary);
+}
+
+.fleet-row:hover .fleet-detail-toggle,
+.fleet-row.is-open .fleet-detail-toggle {
+  color: var(--text-secondary);
+}
+
+.fleet-caret {
+  display: inline-block;
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.fleet-caret.up {
+  transform: rotate(180deg);
+}
+
+.fleet-row-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.fleet-chip {
+  max-width: 34ch;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Capacity as slots, not only as "1/4": the bar answers "is it free" at a
+   glance, the numbers answer "how free". Filled slots take the busy tone,
+   because a slot in use is work in flight. */
+.fleet-load {
+  display: inline-flex;
+  align-items: center;
   gap: 5px;
 }
 
-.node-abilities {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 4px;
+.load-slots {
+  display: inline-flex;
+  gap: 2px;
 }
 
-/* Capability chips read differently from status badges: a soft accent tint,
-   monospace-ish sizing, no bold — capabilities are data, not state. */
+.load-slots i {
+  width: 5px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--border);
+}
+
+.load-slots i.on {
+  background: var(--warn);
+}
+
+.fleet-load-num {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.fleet-rtt {
+  font-size: var(--text-xs);
+}
+
+.fleet-last {
+  margin-left: auto;
+  font-size: var(--text-xs);
+}
+
+.fleet-row-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* Capability chips read differently from status tags: a soft accent tint,
+   no bold — capabilities are data, not state. */
 .ability-tag {
   display: inline-flex;
   align-items: center;
@@ -1407,99 +1737,884 @@
   border-color: var(--border-soft);
 }
 
-/* A node's dot is a status claim, so its colour has to be earned: neutral
-   until the status says connected, green (with the glow the workspace rail
-   and the sidebar chip already use) once it is. It used to be `--accent`,
-   which is ink in the light theme — a black dot read as "present" and told
-   you nothing about the connection. */
-.node-dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--text-disabled);
-  box-shadow: none;
-  margin-right: 2px;
+.fleet-detail {
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
 }
 
-.node-dot.on {
-  background: var(--good);
-  box-shadow: 0 0 6px var(--good);
+.fleet-facts {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 7px 12px;
+  margin: 0;
+  font-size: var(--text-sm);
 }
 
-.node-dot.off {
-  background: var(--text-disabled);
-  box-shadow: none;
+.fleet-facts dt {
+  color: var(--text-tertiary);
 }
 
-.mono {
-  font-family: var(--mono);
+.fleet-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-secondary);
 }
 
-/* ---- Reminders ---------------------------------------------------------
-   提醒 is a bell in the rail's head (components/reminders.tsx), and its card
-   hangs off the rail's right edge. The card is `position: fixed` rather than
-   absolute inside the head because the narrow layout turns the rail into a
-   horizontally scrolling strip, and an absolutely positioned card inside a
-   scroll container is clipped by it. */
-
-.reminder-bell {
-  position: relative;
+.fleet-agent-list {
   display: flex;
+  flex-direction: column;
+  gap: 9px;
 }
 
-/* Open, the bell keeps the tinted square the card below extends from: the
-   control has to look pressed while its card is up. */
-.reminder-bell .icon-btn.open {
-  background: var(--bg-hover);
+.fleet-agent {
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.fleet-agent-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fleet-agent-name {
+  font-weight: 600;
   color: var(--text);
 }
 
-/* The count rides the bell's corner as a number, not a dot: "2 pending" and
-   "9 pending" are different reasons to open the card. Amber is the tone the
-   rail's review badge already uses, so the head gains one warm speck and no
-   new colour. */
-.reminder-bell-dot {
-  position: absolute;
-  top: -1px;
-  right: -3px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 3px;
+.fleet-agent p {
+  margin: 2px 0 0;
+  font-size: var(--text-sm);
+}
+
+.fleet-detail-actions {
+  margin-top: 10px;
+}
+
+/* What this machine can drive: a footer well inside the fleet card, so the
+   chips stay next to the rows they describe instead of owning a card. */
+.fleet-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 12px calc(-1 * var(--sp-5)) calc(-1 * var(--sp-4));
+  padding: 10px var(--sp-5);
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--bg-chrome);
+}
+
+.fleet-foot-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.fleet-foot-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ---- Delegation chains ---- */
+
+.chain-empty {
+  margin: 12px 0 0;
+}
+
+.chain-list {
+  display: flex;
+  flex-direction: column;
+  margin: 12px calc(-1 * var(--sp-5)) calc(-1 * var(--sp-4));
+}
+
+.chain-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 9px var(--sp-5);
+  border-top: 1px solid var(--border-soft);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.chain-row:hover {
+  background: var(--surface-alpha-xs);
+}
+
+.chain-hops {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.chain-node {
+  padding: 1px 9px;
   border-radius: var(--radius-pill);
-  background: var(--semantic-warn-soft);
-  color: var(--semantic-warn);
-  font-size: 9.5px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.chain-node.root {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.chain-node.unacked {
+  border-style: dashed;
+  color: var(--text-tertiary);
+}
+
+.chain-arrow {
+  color: var(--text-disabled);
+  font-size: var(--text-xs);
+}
+
+.chain-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chain-time {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Connect card (nodes page aside) ------------------------------------
+   One card, two methods: LAN pairing (compare the code on both screens) and
+   an address written straight into the dial list. They were two boxes with
+   two near-identical host:port inputs; now they are two labelled halves of
+   the same job. */
+
+.connect-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.connect-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.connect-lead {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+/* Two methods, one lane each. Tabs keep the card from growing into a
+   scroll of two forms at 320px; the pending-request count is the only
+   reason the pairing tab ever pulls focus on its own. */
+.connect-tabs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-inset);
+}
+
+.connect-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.connect-tab:hover {
+  background: var(--surface-alpha-xs);
+  color: var(--text);
+}
+
+.connect-tab.active {
+  background: var(--bg-raised);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+
+.connect-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.connect-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.connect-pane-lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.connect-feedback {
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.connect-notice {
+  color: var(--good);
+}
+
+/* Pairing opens with the shape of the job, not an empty list. The hero and
+   the three steps are static; the scan state below them is what changes. */
+.pair-hero {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+}
+
+.pair-hero-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--bg-raised);
+  color: var(--accent);
+  box-shadow: var(--shadow-xs);
+}
+
+.pair-hero-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pair-hero-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
   font-weight: 650;
-  line-height: 15px;
-  text-align: center;
+}
+
+.pair-hero-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.pair-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pair-steps li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.pair-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+/* Narrow column: who (with the action) on top, where and which code below.
+   The code is the one thing the operator has to compare against the other
+   screen, so it gets the accent chip; the address stays quiet. */
+.pair-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pair-group-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+
+.pair-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+/* An inbound request is the one row that is actually blocking a person on
+   the other machine — give it the accent edge instead of another grey box. */
+.pair-item.request {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.pair-request-hint {
+  margin: 2px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.pair-item-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pair-item-top > .badge {
+  flex: none;
+}
+
+.pair-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.pair-item-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pair-addr {
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-code {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  font-variant-numeric: tabular-nums;
+}
+
+.pair-code.lg {
+  padding: 3px 9px;
+  font-size: var(--text-md);
+  letter-spacing: 0.18em;
+}
+
+.pair-wait {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 5px;
+  font-size: var(--text-xs);
+}
+
+.pair-manual {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.pair-manual .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pair-manual .btn {
+  flex: none;
+}
+
+.pair-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px;
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-xs);
+  color: var(--text-tertiary);
+}
+
+.pair-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+}
+
+.pair-empty-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pair-empty-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.pair-empty-copy .dim {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.pair-refresh {
+  align-self: flex-start;
+}
+
+.pair-manual-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.pair-manual-group .hint {
+  margin: 0;
+}
+
+/* ---- Device form + configured dial list ---- */
+
+.device-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.device-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.device-field-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.device-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.device-field-trust {
+  max-width: 112px;
+}
+
+.device-select {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.device-select select {
+  width: 100%;
+  height: 32px;
+  padding: 0 26px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  appearance: none;
+  background: var(--bg-inset);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.device-select select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.device-select > svg {
+  position: absolute;
+  right: 8px;
+  color: var(--text-tertiary);
   pointer-events: none;
 }
 
-.reminder-pop {
-  position: fixed;
-  top: 10px;
-  /* Beside the rail, not over it: the nav stays clickable while the card is
-     up, which is what "glance at what is pending" has to allow for. */
-  left: calc(var(--sidebar-w) + 8px);
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  width: 356px;
-  max-height: calc(100dvh - 20px);
-  background: var(--bg-raised);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
-  animation: reminder-pop-in var(--dur-fast) var(--ease-enter);
+.device-select .trust-sel.open {
+  color: var(--danger);
+  border-color: var(--semantic-danger-border);
 }
 
-@keyframes reminder-pop-in {
-  from {
-    opacity: 0;
-    transform: translateX(-6px);
-  }
+.device-add-btn {
+  height: 32px;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.device-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.device-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.device-list-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.device-list-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.device-list-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.device-list-state .btn {
+  margin-left: auto;
+}
+
+.device-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.device-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-inset);
+}
+
+.device-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.device-row-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-row-addr {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-row-actions {
+  display: flex;
+  gap: 1px;
+  opacity: 0.6;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.device-row:hover .device-row-actions,
+.device-row:focus-within .device-row-actions {
+  opacity: 1;
+}
+
+.device-row-actions .icon-btn {
+  width: 24px;
+  height: 24px;
+}
+
+.device-row-actions .icon-btn.danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.trust-pill {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.trust-pill.guarded {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.trust-pill.open {
+  border-color: var(--semantic-danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.device-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: 9px;
+  background: var(--accent-soft);
+}
+
+.device-edit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.device-edit-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.device-edit-head .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+
+.device-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.device-edit-row .device-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.device-edit-row .btn {
+  flex: none;
+}
+
+.device-result {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--bg-inset);
+}
+
+.device-result-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.device-result-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.device-result-icon.ok {
+  background: var(--good-soft);
+  color: var(--good);
+}
+
+.device-result-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.device-result-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+
+.device-result-sub {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.device-result-ok {
+  margin: 0;
+  color: var(--good);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.device-guide {
+  margin-top: 2px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--border-soft);
+}
+
+.device-guide summary {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.device-guide .join-steps {
+  margin-top: 6px;
+  font-size: var(--text-xs);
+}
+
+/* The console's content column is viewport minus the 280px rail, so a 320px
+   aside leaves ~760px for the fleet at 1440 and ~400 at 1084 — too narrow
+   for a row that carries a name, its tags, capacity and a trust control.
+   Below this the columns stack; the connect card then goes full width and
+   its own container query turns the two methods side by side. */
+@media (max-width: 1240px) {
   to {
     opacity: 1;
     transform: none;
@@ -1785,32 +2900,50 @@
   margin-left: auto;
 }
 
-/* ---- 队列·任务·项目: merged page header --------------------------------- */
+/* ---- 队列·任务·项目: one bar, one quiet row ------------------------------ */
 
-/* Title on the left, tab strip on the right, one row. The strip is NOT
-   stacked under the subtitle on purpose: the board below is height-locked to
-   six cards, and a ~44px row above it would push that block past the fold so
-   the page would scroll behind a board that already scrolls inside each
-   column. */
+/* Same top edge as 工作空间 and a thread: the mark, the page's name, and the
+   lenses at the right, one line tall. This replaced a 26px display title over
+   a one-line description with a rule under it — a headline for a page whose
+   whole job is a board, and a sentence that repeated what the tabs and the
+   four columns already say. */
 .control-head {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--sp-4);
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--sp-4);
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--border-soft);
 }
 
-.control-head-text {
-  flex: 1 1 auto;
+.control-head-icon {
+  flex: none;
+  color: var(--text);
+}
+
+.control-title {
+  flex: none;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+/* The strip owns the right edge: it is the page's only navigation, and it
+   lines up with the board's action row below it. */
+.control-tabs {
+  flex: none;
+  margin-left: auto;
+}
+
+.control-section {
   min-width: 0;
 }
 
-/* Optical nudge, measured: the segmented box is ~36px tall and the title's
-   line box 32.5px, so flush-top alignment leaves the strip reading high.
-   2px down puts the segment labels on the title's optical center. */
-.control-tabs {
-  flex: 0 0 auto;
-  margin-top: 2px;
+.control-tabs .seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 /* ---- Task kanban (queue view, design §11.2) ---- */
@@ -2094,91 +3227,176 @@
   gap: var(--sp-2);
 }
 
-/* Per-card delete (deletable states only), pinned to the card's bottom-right
-   corner and always visible: it is the only way to clear a finished task off
-   the board, and a glyph that only appeared on hover read as "no action
-   here". The meta row reserves exactly the button's footprint (26px from the
-   card edge minus the 12px padding), so the timestamp never runs under it;
-   the reservation is what makes a nearly-full meta line wrap one row earlier,
-   which is the honest trade — overlapping a timestamp is worse. */
-.kanban-del {
+/* The card's edge control: step into the conversation the task runs in.
+   Pinned to the card's right edge at half height — the row's "go on" mark,
+   the way a list row ends in a chevron — and always visible: it is the
+   board's one direct route from "this is running" to "read what it said", so
+   hiding it until hover would hide the card's most useful click. The card
+   reserves the footprint in its own padding (below) instead of per-row
+   insets: a control at half height floats over whichever row happens to be
+   there, and only a gutter the whole card keeps clear can promise it never
+   lands on text. No fill, no bubble — the glyph alone, so it reads as part of
+   the card rather than a button stuck on top of it. */
+.kanban-go {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 24px;
-  height: 24px;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: none;
+  padding: 0;
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: none;
   color: var(--text-tertiary);
-  font-size: var(--fs-body);
   line-height: 1;
   cursor: pointer;
   transition:
-    background var(--dur-fast) var(--ease-standard),
-    color var(--dur-fast) var(--ease-standard);
+    color var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-standard);
 }
 
-.kanban-card.has-del .kanban-meta {
-  padding-right: 18px;
+/* The gutter the arrow lives in. Applied to the card, not to a row: the
+   control is centred, so no single row can own the reservation. */
+.kanban-card.has-go {
+  padding-right: 26px;
 }
 
-.kanban-del:hover:not(:disabled) {
-  background: var(--danger-soft);
-  color: var(--danger);
+.kanban-go:hover:not(:disabled) {
+  color: var(--accent-2);
+  transform: translateY(-50%) translateX(1px);
 }
 
-.kanban-del:focus-visible {
-  outline: 2px solid var(--danger);
+.kanban-go:focus-visible {
+  outline: 2px solid var(--accent-2);
   outline-offset: 1px;
 }
 
-.kanban-del:disabled {
+.kanban-go:disabled {
   cursor: default;
   opacity: 0.4;
 }
 
-/* The header row: "New task" plus the board-level "Clear queue" — the wipe
-   is the destructive sibling, so it sits at the row's end in danger tones. */
-.queue-toolbar {
+/* One line over the board: the two scopes on the left, the live counts and the
+   page's actions on the right. No frame, no second rule, no lens switch — the
+   lens lives in the page head now, and the row reads as a caption for the four
+   columns rather than a control deck above them. */
+.queue-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--sp-3);
-  margin: var(--sp-2) 0 var(--sp-3);
+  margin-bottom: var(--sp-3);
 }
 
-.queue-clear {
+/* The filters keep one line and size to their own labels; the row's remaining
+   width belongs to the action group, which is why this group is the one that
+   can shrink. */
+.queue-bar .queue-filters {
+  flex: 0 1 auto;
+  margin: 0;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.queue-bar-end {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
   flex: none;
 }
 
+/* Clear queue: an icon, not a labelled red button. It is the page's one
+   destructive action and it wipes a whole scope, so it keeps its confirm
+   dialog and gains a danger tint on hover — but it does not get to be the
+   second-loudest thing on a page about reading a board. */
+.queue-clear {
+  flex: none;
+  margin-left: 4px;
+}
+
+.queue-clear:hover:not(:disabled) {
+  color: var(--semantic-danger);
+  background: var(--semantic-danger-soft);
+}
+
+/* The counts are a caption: dim, small, one line, no dots. "1 进行中 · 1
+   审核中" is the same sentence the column heads spell out, kept here for the
+   plans lens (which has no columns) and as the live region for changes. */
+.queue-census {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: var(--sp-3);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.queue-census .review.has-work {
+  color: var(--semantic-warn);
+  font-weight: var(--fw-semibold);
+}
+
+.queue-census span + span::before {
+  content: '·';
+  margin-right: 6px;
+  opacity: 0.6;
+}
+
+.kanban {
+  gap: var(--sp-3);
+}
+
+.kanban-col {
+  padding: var(--sp-3);
+}
+
+.kanban-head {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--fs-sub);
+}
+
+.kanban-list {
+  max-height: calc(100vh - 340px);
+}
+
+@media (max-width: 720px) {
+  /* Narrow: the caption row wraps instead of shrinking the selects, and the
+     actions keep their own line at the right. */
+  .queue-bar {
+    align-items: flex-start;
+  }
+  .queue-bar .queue-filters {
+    flex-wrap: wrap;
+  }
+  .queue-census {
+    margin-right: var(--sp-2);
+  }
+}
+
 /* The parallel-execution strip: one chip per task running right now, with
-   its lane mark. `.active` (2+ running) turns the strip accent — that is
-   the moment the board is genuinely executing agents in parallel. */
+   its lane mark. It is a caption like the counts above it — no frame, no
+   background — so the board still starts after one line of chrome. `.active`
+   (2+ running) moves the accent to the count: that is the moment the board is
+   genuinely executing agents in parallel, and the sentence says so. */
 .parallel-strip {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
   margin-bottom: var(--sp-3);
-  border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  background: var(--bg-inset);
-}
-
-.parallel-strip.active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .parallel-count {
-  font-size: var(--fs-sub);
-  font-weight: var(--fw-semibold);
-  color: var(--text-dim);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
@@ -2258,6 +3476,21 @@
   background: var(--accent-2-soft);
   border-radius: var(--radius-sm);
   border: 1px solid var(--accent-2-border);
+}
+
+/* Origin device chip — names the machine a task CAME FROM (chain[0]) when
+   that isn't this one. Neutral inset tint, deliberately quieter than the
+   project chip: it is metadata you scan for, not the card's headline. */
+.kanban-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: var(--fw-semibold);
+  color: var(--text-secondary);
+  padding: 1px var(--sp-2);
+  background: var(--bg-inset);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
 }
 
 .kanban-actions {
@@ -2390,15 +3623,59 @@
 /* ---- Queue board additions (queue redesign) ---- */
 
 .queue-new {
-  margin: 0 0 var(--sp-3);
+  flex: none;
+  margin: 0;
 }
 
-.queue-form {
+/* The new-task composer floats over the board. It was an inline card in the
+   toolbar row, which meant opening it reflowed the four columns downward —
+   the board moved under the pointer for a form that is not part of the board.
+   Wider than the default `.modal` because the fields come in rows, and the
+   modal's own padding is the frame: no second card inside a card. */
+.queue-modal {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(86vh, 760px);
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  margin: 0 0 var(--sp-4);
-  padding: var(--sp-4);
+  padding: var(--sp-5);
+}
+
+/* Header line: the dialog's name and its ✕, on the same baseline. */
+.queue-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-1);
+}
+
+.queue-modal-head .modal-title {
+  margin: 0;
+}
+
+/* Field groups carry their own bottom margin for the settings pages, which
+   stack them without a gap; in this flex column the gap already spaces them. */
+.queue-modal .field-group {
+  margin-bottom: 0;
+}
+
+.queue-modal .field-row {
+  gap: var(--sp-3);
+}
+
+/* Three selects side by side need room; below that they stack instead of
+   clipping their labels to "自动 — 选…" on a phone-width dialog. */
+.queue-modal .field-row .field-group {
+  min-width: 150px;
+}
+
+.queue-modal textarea.input {
+  resize: vertical;
+  min-height: 72px;
+  font-family: inherit;
+  line-height: var(--leading-normal);
 }
 
 .prio-badge {
@@ -2452,10 +3729,6 @@
   cursor: pointer;
 }
 
-.kanban-session {
-  cursor: pointer;
-}
-
 /* The task card's action row: open the chain, message the employee, jump into
    the task. As three stacked children of the card's column, flex stretched the
    quick-send button to the full width and centred its label — the card read as
@@ -2502,12 +3775,50 @@
   font-size: var(--text-sm);
 }
 
-/* Agent CLI list on the settings page: identity on the left, the live
- * connectivity probe on the right. Two columns so a row reads as "what this
- * is" | "is it reachable" instead of one long stack where the test button
- * drifted to the bottom edge. */
+/* Agent CLI list on the settings page: a face, an identity, and the state the
+ * CLI is in. The face leads because a mark is recognised before an
+ * abbreviation like `dsh` or `agy` is read; the state column is a pill plus
+ * one action instead of a bordered well with its own button, which is what
+ * made every row three nested frames deep. */
 .agents-card {
   margin-top: 16px;
+}
+
+.agents-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agents-head-text {
+  min-width: 0;
+}
+
+.agents-head-text .hint {
+  margin: 4px 0 0;
+}
+
+.agents-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Ten rows of "installed" is a column you have to read; this is the same fact
+   at a glance. */
+.agents-count {
+  flex: none;
+  margin-top: 1px;
+  padding: 2px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .agent-list {
@@ -2516,15 +3827,15 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .agent-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 236px;
-  gap: 16px;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
   align-items: center;
-  padding: 12px 14px;
+  gap: 3px 12px;
+  padding: 10px 12px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
   background: var(--bg-raised);
@@ -2535,370 +3846,1043 @@
   border-color: var(--border);
 }
 
-/* Not installed is still a row you can act on — keep the text at full
-   contrast and let the red badge carry the state. */
+/* Not installed is still a row you can act on — the text keeps full contrast
+   and only the mark goes quiet, so the row reads "not here yet" rather than
+   "disabled". */
 .agent-row.missing {
   background: transparent;
 }
 
-.agent-body {
+.agent-row.missing .agent-face {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+
+/* ---- The face ---- */
+
+.agent-face {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+/* The plate the artwork is drawn for, not a theme preference: near-black
+   marks need a light plate, near-white ones a dark plate. Same two colours the
+   roster avatars and the workspace tiles use, so an agent reads the same in
+   both places and in both themes. */
+.agent-face.plate-light {
+  background: #f4f4f1;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.agent-face.plate-dark {
+  background: #121316;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.agent-face img {
+  display: block;
+  width: 23px;
+  height: 23px;
+  object-fit: contain;
+}
+
+/* A CLI the bundle has no artwork for still gets a face — the initial, in the
+   same mono face as the binary chip. */
+.agent-face.fallback {
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+/* ---- Identity: the name you say, the binary you type, the version ---- */
+
+.agent-id {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
 
 .agent-main {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
 }
 
 .agent-name {
-  font-weight: 700;
   font-size: var(--text-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-bin {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  line-height: 1.6;
 }
 
 .agent-version {
+  flex: none;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .agent-path {
+  min-width: 0;
+  color: var(--text-tertiary);
   font-size: var(--text-xs);
-  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The command and its copy button are one object: a shell snippet that gets
+   pasted, so the chip frames them together instead of leaving an icon adrift
+   at the end of a truncated line. */
 .agent-install {
-  display: flex;
+  align-self: flex-start;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 2px;
-}
-
-/* ---- The probe column: status readout on top, action underneath ---- */
-
-.agent-probe {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
+  gap: 2px;
+  max-width: 100%;
   min-width: 0;
-  padding: 9px 10px;
+  padding: 1px 2px 1px 7px;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: var(--bg-inset);
 }
 
-.agent-probe-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  font-size: var(--text-sm);
-  font-weight: 600;
+.agent-install .agent-path {
   color: var(--text-secondary);
 }
 
-.agent-probe-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.agent-copy {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+/* The chip it sits in is already inset, so the hover lifts to the raised
+   surface instead of trying to sink further. */
+.agent-copy:hover {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+/* ---- State: one pill, one action ---- */
+
+.agent-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.agent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 500;
   white-space: nowrap;
 }
 
-.agent-probe-dot {
+.agent-pill-dot {
   flex: none;
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--text-disabled);
 }
 
-/* A failed run can carry a long stderr — clamp it and keep the full text in
-   the tooltip rather than letting one row grow to fill the viewport. */
-.agent-probe-detail {
-  margin: 0;
-  font-size: var(--text-xs);
-  line-height: 1.45;
-  color: var(--text-tertiary);
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.agent-probe .agent-probe-btn {
-  width: 100%;
-}
-
-/* Nothing to probe yet: the column is just the download action, so it drops
-   the well instead of framing a lone button. */
-.agent-probe.missing {
-  padding: 0;
-  border-color: transparent;
-  background: transparent;
-}
-
-.agent-probe.ok {
+.agent-pill.ok {
   border-color: var(--semantic-good-border);
   background: var(--semantic-good-soft);
-}
-.agent-probe.ok .agent-probe-head,
-.agent-probe.ok .agent-probe-detail {
   color: var(--semantic-good);
 }
-.agent-probe.ok .agent-probe-dot {
+.agent-pill.ok .agent-pill-dot {
   background: var(--semantic-good);
 }
 
-.agent-probe.bad {
+.agent-pill.bad,
+.agent-pill.missing {
   border-color: var(--semantic-danger-border);
   background: var(--semantic-danger-soft);
-}
-.agent-probe.bad .agent-probe-head {
   color: var(--semantic-danger);
 }
-.agent-probe.bad .agent-probe-dot {
+.agent-pill.bad .agent-pill-dot,
+.agent-pill.missing .agent-pill-dot {
   background: var(--semantic-danger);
 }
 
-.agent-probe.testing {
+.agent-pill.testing {
   border-color: var(--semantic-warn-border);
   background: var(--semantic-warn-soft);
-}
-.agent-probe.testing .agent-probe-head {
   color: var(--semantic-warn);
 }
-.agent-probe.testing .agent-probe-dot {
+.agent-pill.testing .agent-pill-dot {
   background: var(--semantic-warn);
   animation: live-dot-pulse 1.6s ease-in-out infinite;
 }
+
 @media (prefers-reduced-motion: reduce) {
-  .agent-probe.testing .agent-probe-dot {
+  .agent-pill.testing .agent-pill-dot {
     animation: none;
   }
 }
 
-/* Narrow: the probe drops under the identity block and goes horizontal, so
-   the status still sits beside the button it belongs to. */
+.agent-test {
+  min-width: 68px;
+}
+
+/* A failed run can carry a long stderr. It gets the row's width instead of a
+   narrow column, and clamps to two lines with the full text in the tooltip
+   rather than letting one row grow to fill the viewport. */
+.agent-detail {
+  grid-column: 2 / -1;
+  margin: 3px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agent-row.bad .agent-detail {
+  color: var(--semantic-danger);
+}
+
+/* Narrow: the state drops under the identity as a full-width footer line,
+   aligned with the name rather than the face, so the pill and the button still
+   sit at opposite ends of the row. */
 @media (max-width: 560px) {
   .agent-row {
-    grid-template-columns: 1fr;
-    gap: 10px;
+    grid-template-columns: 40px minmax(0, 1fr);
   }
-  .agent-probe {
-    flex-direction: row;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
+  .agent-state {
+    grid-column: 2 / -1;
+    justify-content: space-between;
   }
-  .agent-probe-head {
-    flex: 1 1 auto;
-    order: 1;
-  }
-  .agent-probe .agent-probe-btn {
-    width: auto;
-    margin-left: auto;
-    order: 2;
-  }
-  .agent-probe-detail {
-    flex: 1 1 100%;
-    order: 3;
+  .agent-detail {
+    grid-column: 2 / -1;
     -webkit-line-clamp: 2;
   }
 }
 
-/* ---- Settings: grouped layout with a left section rail (C1) ---- */
+/* ---- 设置: a top-layer sheet, not a page ------------------------------- */
 
-.settings-layout {
+/* A native <dialog> opened with showModal(): the browser's top layer, above
+   every z-index in the console, with the page underneath inert. Deliberately
+   no transform / filter / backdrop-filter on the element itself — any of them
+   becomes the containing block for the fixed overlays that open *inside* the
+   sheet (terms reader, model wizard, confirm), and they would stop covering
+   the viewport. */
+.settings-dialog {
+  width: min(1040px, calc(100vw - 40px));
+  height: min(780px, calc(100vh - 48px));
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+}
+.settings-dialog[open] {
+  animation: sheet-in var(--dur-med) var(--ease);
+}
+.settings-dialog::backdrop {
+  background: var(--backdrop-darker);
+  backdrop-filter: blur(6px);
+}
+@keyframes sheet-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.settings-shell {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: 24px;
-  align-items: start;
+  grid-template-columns: 228px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+/* The rail is the modal's chrome — one step below the reading surface, the
+   way the app's own sidebar is. */
+.settings-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 12px 10px 10px;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border-soft);
+}
+
+.settings-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text-tertiary);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.settings-search:focus-within {
+  border-color: var(--border-strong);
+}
+.settings-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.settings-search input::placeholder {
+  color: var(--text-tertiary);
+}
+/* The pill's own border is the focus state; the console-wide ring would draw
+   a second rounded rect inside it. */
+.settings-search input:focus-visible {
+  box-shadow: none;
 }
 
 .settings-nav {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  position: sticky;
-  top: 16px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius);
-  padding: 6px;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 4px;
+}
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.settings-nav-group-title {
+  padding: 0 9px 5px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
+}
+.settings-nav-empty {
+  margin: 0;
+  padding: 4px 9px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
 }
 
 .settings-nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   width: 100%;
-  text-align: left;
-  padding: 8px 12px;
-  border: none;
-  border-radius: var(--radius-lg);
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-dim);
+  color: var(--text-secondary);
   font: inherit;
   font-size: var(--text-md);
+  text-align: left;
   cursor: pointer;
-  text-decoration: none;
-  transition: background var(--dur-fast) var(--ease-standard),
-              color var(--dur-fast) var(--ease-standard);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
-
 .settings-nav-icon {
-  font-size: 14px;
+  flex: none;
+  font-size: 15px;
   line-height: 1;
-  flex-shrink: 0;
+  opacity: 0.85;
 }
-
+.settings-nav-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .settings-nav-item:hover {
-  background: var(--bg-hover);
+  background: var(--surface-alpha-md);
   color: var(--text);
 }
-
 .settings-nav-item.active {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--bg-raised);
+  color: var(--text);
   font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+.settings-nav-item.active .settings-nav-icon {
+  opacity: 1;
 }
 
-.settings-body {
+.settings-pane {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  min-width: 0;
+  min-height: 0;
+}
+.settings-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex: none;
+  padding: 14px 14px 14px 26px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-pane-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+/* The only way out of the sheet: Escape is cancelled, the backdrop has no
+   handler. It sits in the pane's own header rather than floating over the
+   content so it can never be scrolled away from. */
+.settings-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.settings-close:hover {
+  background: var(--surface-alpha-md);
+  color: var(--text);
+}
+.settings-close:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+.settings-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 26px 32px;
+}
+
+/* ---- The pane's contents: groups of rows, not floating cards ----
+   Every section still speaks the card vocabulary it was written in. Inside
+   the sheet a card is a *group*: the frame goes away, the heading becomes a
+   group label, and the hairline between rows does the separating. */
+
+.settings-pane-body .page-title {
+  display: none;
+}
+.settings-pane-body .page-sub {
+  margin: 14px 0 2px;
+  max-width: none;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.settings-dialog .settings-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  max-width: none;
+  gap: 0;
+  padding: 0;
+}
+.settings-dialog .settings-card > .block-title,
+.settings-dialog .agents-head .block-title {
+  padding: 18px 0 2px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+.settings-dialog .settings-card > .hint {
+  margin: 2px 0 0;
+}
+
+/* Content sections (记忆 / 技能 / 系统) keep their cards — they are
+   dashboards, not forms — but the blue "detail block" rule and the uppercase
+   micro-headings belong to the detail page they came from. */
+.settings-dialog .detail-block h2 {
+  margin-bottom: var(--sp-2);
+  padding-bottom: 0;
+  border-bottom: 0;
+  font-size: var(--text-md);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+.settings-dialog .detail-block h2::after {
+  display: none;
+}
+.settings-dialog .settings-pane-body .card + .card {
+  margin-top: var(--sp-3);
+}
+
+/* A field becomes one row: label and its explanation on the left, the control
+   in a fixed column on the right — the shape every settings sheet in this
+   class uses, because it lets the eye scan labels down one edge and states
+   down the other. */
+.settings-dialog .settings-card > .field-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+  align-items: center;
+  column-gap: 32px;
+  margin: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-dialog .settings-card > .field-group > label {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: var(--text-md);
+  font-weight: 400;
+  color: var(--text);
+}
+.settings-dialog .settings-card > .field-group > .hint {
+  grid-column: 1;
+  grid-row: 2;
+  margin: 3px 0 0;
+}
+.settings-dialog .settings-card > .field-group > :not(label):not(.hint) {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  min-width: 0;
+}
+.settings-dialog .settings-card > .field-group > .input {
+  justify-self: stretch;
+}
+/* A field whose control is itself a row of fields (记忆上限) needs the full
+   width; the marker class is set where that structure is, not guessed here. */
+.settings-dialog .settings-card > .field-group.stack {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+.settings-dialog .settings-card > .field-group.stack > label,
+.settings-dialog .settings-card > .field-group.stack > .hint,
+.settings-dialog .settings-card > .field-group.stack > :not(label):not(.hint) {
+  grid-column: 1;
+  grid-row: auto;
+  justify-self: stretch;
+}
+.settings-dialog .settings-card > .field-group.stack > .field-row {
+  margin-top: 10px;
+}
+
+/* The advanced model form keeps its dense multi-column rows, but they wrap
+   into a grid: four columns of 12.5px hints in a 760px pane is a wall. */
+.settings-dialog .settings-card > .field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-4);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-dialog .field-row > .field-group {
+  margin-bottom: 0;
+}
+.settings-dialog .settings-actions {
+  padding: 16px 0 4px;
+}
+
+/* The agent roster and the model registry already read as lists; they only
+   need the card frame gone, which the rule above does. The roster's own rows
+   keep a rounded plate of their own on a page — here the plate goes and the
+   hairline takes over, so ten agents read as one list instead of ten boxes. */
+.settings-dialog .agent-list {
+  gap: 0;
+}
+.settings-dialog .agent-row {
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: 0;
+  background: transparent;
+}
+.settings-dialog .agent-row.missing {
+  background: transparent;
+}
+
+/* One group after another: the hairline is the only divider the sheet needs. */
+.settings-dialog .settings-card + .settings-card {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* ---- 应用策略: four questions, four answers ------------------------------
+   The generic row rules above are tuned for one flat list. This page is not
+   a list — it is four policy groups, one of which is a read-only status
+   panel — so it brings its own frame: a group header per question, rows
+   inside it, and an action bar that closes the form. */
+.policy-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 14px 0 0;
+}
+
+.policy-lead {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+}
+
+.policy-group {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
-.settings-body .page-header {
-  display: none;
-}
-
-@media (max-width: 860px) {
-  .settings-layout {
-    grid-template-columns: 1fr;
-  }
-  .settings-nav {
-    position: static;
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-  .settings-nav-item {
-    width: auto;
-  }
-}
-
-/* ---- Nodes: capability-card details + delegation chains (C3) ---- */
-
-.node-name {
-  font-weight: 600;
-}
-
-.node-actions {
-  margin-top: 6px;
+/* The header is the rule: a tinted glyph, the question, and one line saying
+   what it decides. Everything below it belongs to it, which is what the old
+   column of six equal rows never told you. */
+.policy-group-head {
   display: flex;
-  gap: 8px;
   align-items: center;
-}
-
-.node-actions .node-detail-toggle {
-  margin-top: 0;
-}
-
-.node-remove-error {
-  margin: 6px 0 0;
-  color: var(--danger);
-  font-size: var(--text-sm);
-}
-
-.node-detail {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-soft);
-  display: flex;
-  flex-direction: column;
   gap: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+}
+.policy-group-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 21px;
+  height: 21px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-alpha-md);
+  color: var(--text-secondary);
+}
+.policy-group-title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text);
+}
+.policy-group-note {
+  min-width: 0;
+  overflow: hidden;
   font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.node-detail-row {
+.policy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 28px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.policy-group > :last-child,
+.policy-row:last-child {
+  border-bottom: 0;
+}
+.policy-row-name {
+  font-size: var(--text-md);
+  color: var(--text);
+}
+.policy-row-label > .hint {
+  margin: 3px 0 0;
+  max-width: 68ch;
+}
+.policy-row-control {
+  justify-self: end;
+  min-width: 0;
+}
+.policy-row.wide {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+.policy-row.wide .policy-row-control {
+  justify-self: stretch;
+  margin-top: 10px;
+}
+
+/* 路由偏好: agent names as removable pills inside one field — the value is a
+   set, and a set edited through a comma-separated line loses an entry on
+   every typo. The input rides at the end of the same line so adding a name
+   never means finding a second box. */
+.policy-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 14px;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
-
-.node-detail-label {
-  color: var(--text-dim);
-  min-width: 84px;
+.policy-chips:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
-
-.node-agent {
-  border-left: 2px solid var(--border);
-  padding-left: 10px;
+.policy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 4px 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
 }
-
-.node-agent-name {
-  font-weight: 600;
+.policy-chip-x {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
-
-.self-card {
-  border-color: var(--accent-strong);
+.policy-chip-x:hover {
+  background: var(--surface-alpha-lg);
+  color: var(--text);
 }
-
-.chain-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.policy-chip-input {
+  flex: 1 1 130px;
+  min-width: 110px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
 }
-
-.chain {
+.policy-chip-input::placeholder {
+  color: var(--text-tertiary);
+  font-family: var(--font-ui);
+}
+.policy-chip-input:disabled {
+  cursor: not-allowed;
+}
+.policy-suggest {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 6px 0;
-  font-size: var(--text-sm);
-}
-
-.chain-node {
-  padding: 3px 10px;
-  border-radius: 999px;
-  background: var(--bg-inset);
-  border: 1px solid var(--border-soft);
-  font-size: var(--text-sm);
-}
-
-.chain-node.root {
-  border-color: var(--accent-strong);
-  color: var(--accent);
-}
-
-.chain-node.unacked {
-  border-style: dashed;
+  margin-top: 8px;
+  font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
-
-.chain-arrow {
-  color: var(--text-dim);
+.policy-suggest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.policy-suggest-chip:hover {
+  border-style: solid;
+  border-color: var(--border-strong);
+  background: var(--surface-alpha-sm);
+  color: var(--text);
 }
 
-.chain-title {
-  color: var(--text-dim);
-  font-size: 12px;
-  max-width: 320px;
+/* 记忆上限: three caps side by side, each with its unit inside the field so
+   the number reads as a quantity instead of a bare integer. */
+.policy-limits {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  padding: 12px 0 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.policy-limit {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.policy-limit-name {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-tertiary);
+}
+.policy-num {
+  position: relative;
+  display: block;
+}
+.policy-num .input {
+  padding-right: 46px;
+  font-variant-numeric: tabular-nums;
+}
+/* The platform spinner sits exactly where the unit is; arrows still step. */
+.policy-num .input::-webkit-outer-spin-button,
+.policy-num .input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.policy-num-suffix {
+  position: absolute;
+  top: 50%;
+  right: 11px;
+  transform: translateY(-50%);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.policy-limit.bad .input {
+  border-color: var(--danger);
+}
+.policy-limit.bad .policy-num-suffix {
+  color: var(--danger);
+}
+
+/* 沙箱: a status panel, not a switch. The state is a pill, the mechanism is
+   mono, the path gets its own line instead of wrapping around a sentence. */
+.policy-sandbox {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 12px 0 2px;
+  padding: 11px 13px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+.policy-sandbox-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.policy-sandbox-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.policy-sandbox[data-state='on'] .policy-sandbox-dot {
+  background: var(--good);
+}
+.policy-sandbox[data-state='warn'] .policy-sandbox-dot {
+  background: var(--warn);
+}
+.policy-sandbox-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.policy-sandbox-state {
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-md);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.policy-sandbox[data-state='on'] .policy-sandbox-state {
+  background: var(--good-soft);
+  color: var(--good);
+}
+.policy-sandbox[data-state='warn'] .policy-sandbox-state {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.policy-sandbox-mode {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.policy-sandbox .hint {
+  margin: 0;
+}
+.policy-sandbox-path {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.policy-sandbox-path code {
   overflow: hidden;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The action bar closes the form instead of floating over it: at this size
+   the whole page is one wheel notch from end to end, and a pinned bar would
+   slice whichever control happens to sit under it. The state line on the
+   left is what makes the end of the form worth reaching — it says whether
+   anything is actually pending. */
+.policy-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--border-soft);
+}
+.policy-actions > p {
+  margin: 0;
+}
+.policy-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.policy-actions-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.policy-actions-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.policy-actions-state.dirty {
+  color: var(--text-secondary);
+}
+.policy-actions-state.dirty .policy-actions-dot {
+  background: var(--accent-border);
+}
+.policy-actions-state.bad {
+  color: var(--danger);
+}
+.policy-actions-state.bad .policy-actions-dot {
+  background: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .settings-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .settings-rail {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-soft);
+    overflow-x: auto;
+  }
+  .settings-search {
+    width: 150px;
+  }
+  .settings-nav {
+    flex-direction: row;
+    gap: 4px;
+    padding-bottom: 0;
+  }
+  .settings-nav-group {
+    flex-direction: row;
+    gap: 2px;
+  }
+  .settings-nav-group-title {
+    display: none;
+  }
+  .settings-nav-item {
+    width: auto;
+    white-space: nowrap;
+  }
+  .settings-pane-body {
+    padding: 0 16px 24px;
+  }
+  .settings-dialog .settings-card > .field-group {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+  .settings-dialog .settings-card > .field-group > :not(label):not(.hint) {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: stretch;
+    margin-top: 8px;
+  }
+  /* 应用策略: one column, and the group's one-line gloss has nowhere to go. */
+  .policy-row,
+  .policy-row.wide {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+  .policy-row-control {
+    justify-self: stretch;
+    margin-top: 8px;
+  }
+  .policy-group-note {
+    display: none;
+  }
+  .policy-limits {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
 }
 
 /* ---- Sub-agent tree (detail view) ---- */
@@ -2965,6 +4949,34 @@
   gap: 4px;
 }
 
+/* Title, the one-line write path, and what a save does — on one row, so the
+   path stops competing with the sentence for the same paragraph. */
+.card-editor-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.card-editor-head .block-title,
+.card-editor-head .hint {
+  margin: 0;
+}
+
+.card-path {
+  margin-left: auto;
+  max-width: 52%;
+  padding: 1px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .card-section {
   margin-top: 14px;
   padding-top: 12px;
@@ -2982,9 +4994,67 @@
   letter-spacing: 0.02em;
 }
 
+/* Section head: label, count, and the one action that changes the list. */
+.card-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-section-head .section-title {
+  margin: 0;
+}
+
+.card-add-toggle {
+  margin-left: auto;
+  padding: 2px 8px;
+}
+
+.card-add-toggle svg {
+  opacity: 0.7;
+}
+
+/* The raw-YAML toggle is a disclosure, not a page-wide action: a full-width
+   bordered button at the bottom of the card read as the primary CTA. */
+.card-raw-toggle {
+  align-self: flex-start;
+}
+
 .card-entry {
   border-left: 2px solid var(--border);
   padding-left: 10px;
+}
+
+/* Agents are a set, not a list: the editor spans the full page width, so the
+   entries tile into columns instead of running one per row (six agents used
+   to cost six full-width rows for three words each). */
+.card-entries {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+  gap: 10px 14px;
+}
+
+.card-entries .card-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0 8px 10px;
+  min-width: 0;
+}
+
+.card-entry-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.card-entry-note {
+  min-width: 0;
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card-entry p {
@@ -3008,6 +5078,10 @@
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-xs);
 }
 
 .card-add-row .input {
@@ -3042,10 +5116,6 @@
   line-height: 1.55;
   resize: vertical;
   min-height: 200px;
-}
-
-.add-device-card {
-  margin-top: 14px;
 }
 
 .join-guide {
@@ -5099,6 +7169,208 @@ pre,
   margin-bottom: var(--sp-4);
 }
 
+/* Projects are navigable work containers. A responsive card grid exposes the
+   directory, activity and next action without the old full-width row stack. */
+.projects-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.projects-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sub);
+}
+
+.projects-active-name {
+  color: var(--accent-2);
+  font-weight: var(--fw-semibold);
+}
+
+.project-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+  align-items: stretch;
+  gap: var(--sp-3);
+}
+
+.project-list > li {
+  min-width: 0;
+}
+
+.project-item {
+  height: 100%;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+}
+
+.project-item:hover {
+  border-color: var(--accent-2-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.project-active {
+  border-color: var(--accent-2-border);
+  box-shadow: inset 3px 0 0 var(--accent-2), var(--shadow-xs);
+}
+
+.project-head {
+  flex-wrap: nowrap;
+}
+
+.project-name-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.project-name-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  color: var(--accent-2);
+  background: var(--accent-2-soft);
+  border-radius: var(--radius-md);
+}
+
+.project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-lg);
+  font-weight: var(--fw-semibold);
+}
+
+.project-head .btn.icon-only {
+  flex: none;
+  width: 30px;
+  padding: 0;
+}
+
+.project-description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sub);
+  line-height: 1.55;
+}
+
+.project-dir-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px 9px;
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-caption);
+}
+
+.project-dir-tag > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-dir-tag .copy-dir-btn {
+  flex: none;
+  margin-left: auto;
+}
+
+.project-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.project-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  color: var(--text-secondary);
+  background: var(--surface-alpha-sm);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+  text-align: left;
+}
+
+button.project-stat {
+  cursor: pointer;
+}
+
+button.project-stat:hover {
+  color: var(--accent-2);
+  background: var(--accent-2-soft);
+}
+
+.project-policy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+}
+
+.project-policy > span {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.project-card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding-top: var(--sp-1);
+}
+
+.project-card-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-card-actions .project-chat-btn {
+  margin-right: 0;
+  padding: 6px 12px;
+  font-size: var(--fs-sub);
+}
+
+.project-item .project-edit {
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-3);
+}
+
+@media (max-width: 620px) {
+  .project-create-row.details {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .project-name-input {
+    max-width: none;
+  }
+}
+
 .project-create-row.details {
   display: flex;
   gap: var(--sp-2);
@@ -5218,410 +7490,656 @@ pre,
   flex-direction: column;
   gap: var(--sp-4);
 }
-.model-active-card {
-  border-color: var(--accent-border);
-  background: var(--bg-raised);
+.models-empty {
+  margin: 6px 0 0;
 }
-.model-active-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--sp-4);
-}
-.model-active-name {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  font-size: var(--text-xl);
-  font-weight: 600;
-  margin: var(--sp-1) 0;
-}
-.model-active-sub {
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
-}
-.models-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-}
-.model-rows {
-  display: flex;
-  flex-direction: column;
-  margin-top: var(--sp-3);
-}
-.model-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--sp-4);
-  /* The confirm hint is a full-width flex item; without wrapping it squeezed
-     the identity column to nothing and the buttons landed on the model name. */
-  flex-wrap: wrap;
-  padding: var(--sp-3) 0;
+/* The endpoint form sits under the model it edits, separated by the same
+   hairline every other group in the sheet uses. */
+.settings-dialog .models-section > .model-form {
+  margin-top: 2px;
   border-top: 1px solid var(--border-soft);
 }
-.model-row-main {
-  flex: 1 1 240px;
-  min-width: 0;
-}
-.model-row-top {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
-}
-.model-alias {
-  font-weight: 600;
-  font-size: var(--text-md);
-}
-.model-row-sub {
-  font-size: var(--text-sm);
-  margin-top: 2px;
-  overflow-wrap: anywhere;
-}
-.model-row-actions,
-.conn-actions {
-  display: flex;
-  gap: 6px;
-  flex: none;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-/* Four two-character buttons (switch, test, edit, remove) is the widest row;
-   reserving that width keeps the labels in one column whether or not the row
-   happens to be the live one and therefore has no "switch". Without it every
-   row's buttons sat at a different offset. */
-.model-row-actions {
-  min-width: 210px;
-}
-.model-row-confirm {
-  flex-basis: 100%;
-  font-size: var(--text-xs);
-  text-align: right;
-  margin: 4px 0 0;
-}
-.model-active-actions {
-  display: flex;
-  gap: 6px;
-  flex: none;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-/* The page head doubles as the "add a connection" entry point: the button
-   sits on the same line as the section title so the primary action is where
-   the eye lands after the active-model card. */
-.models-head .block-title {
-  margin-bottom: 2px;
-}
-.models-head {
-  align-items: flex-start;
-}
-
-/* Connection cards — one endpoint + one key (one account), models underneath.
-   The grouping is what makes "one key, several models" visible instead of a
-   flat list where every row re-states the same endpoint. */
-.conn-card {
-  padding-bottom: var(--sp-3);
-}
-.conn-head {
+.model-form-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
-  flex-wrap: wrap;
+  padding: 18px 0 4px;
 }
-.conn-identity {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
-  min-width: 0;
-}
-.conn-provider {
-  font-weight: 600;
-  font-size: var(--text-md);
-}
-.conn-endpoint {
-  font-size: var(--text-xs);
-  margin-top: 2px;
-  overflow-wrap: anywhere;
-}
-.badge.quiet {
-  color: var(--text-tertiary);
-  background: transparent;
-}
-
-/* A configuration that will dial the wrong roster. Amber, not red: the config
-   is saved and the key is fine, only the endpoint label disagrees. */
-.model-warn {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  margin-top: var(--sp-3);
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--semantic-warn-border);
-  background: var(--semantic-warn-soft);
-  color: var(--semantic-warn);
-  font-size: var(--text-sm);
-}
-.model-warn-text {
-  margin: 4px 0 0;
-  font-size: var(--text-xs);
-  color: var(--semantic-warn);
-}
-
-/* The repair offer inside the edit dialog: names the mismatch and does the
-   switch in one click, instead of leaving the user to guess which of the two
-   fields — plan or endpoint — is the wrong one. */
-.fix-suggest {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  margin-bottom: var(--sp-3);
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--semantic-warn-border);
-  border-radius: var(--radius-md);
-  background: var(--semantic-warn-soft);
-  font-size: var(--text-sm);
-}
-
-/* ---- Add/edit dialogs ---- */
-
-/* Two classes deep on purpose: .wizard-modal's own 560px rule is defined
-   further down the sheet and would otherwise win on source order. */
-.wizard-modal.wizard-wide {
-  width: min(760px, calc(100vw - 32px));
-}
-.conn-form {
-  padding: var(--sp-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-raised);
-  margin-bottom: var(--sp-4);
-}
-.conn-form .field-group:last-child {
-  margin-bottom: 0;
-}
-.proto-field {
-  flex: none;
-  width: 132px;
-}
-.models-table-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  flex-wrap: wrap;
-  margin-bottom: var(--sp-2);
-}
-.models-table-actions {
-  display: flex;
-  gap: 6px;
-}
-.models-table {
-  display: flex;
-  flex-direction: column;
-  max-height: 42vh;
-  overflow-y: auto;
-}
-.draft-row {
-  border-top: 1px solid var(--border-soft);
-  padding: var(--sp-3) 0;
-}
-.draft-row:first-child {
-  border-top: none;
-}
-.draft-main {
-  display: flex;
-  gap: var(--sp-3);
-  align-items: flex-start;
-}
-.draft-check {
-  margin-top: 26px;
-  flex: none;
-}
-.draft-fields {
-  flex: 1;
-  min-width: 0;
-}
-.draft-fields-row {
-  display: flex;
-  gap: var(--sp-2);
-  align-items: flex-end;
-  flex-wrap: wrap;
-}
-.draft-fields-row > .field-group {
-  flex: 1;
-  min-width: 112px;
-  margin-bottom: 0;
-}
-/* A model id and its display name are longer than any number field, and a
-   clipped id is the one thing the user must be able to read back verbatim. */
-.draft-fields-row > .field-group:not(.narrow) {
-  flex: 2 1 168px;
-}
-.draft-fields-row > .field-group.narrow {
-  flex: 0 0 116px;
-}
-.draft-fields-row > .field-group > label {
-  font-size: var(--text-xs);
-  color: var(--text-tertiary);
-}
-/* One header for the whole table. The column widths repeat the row's flex
-   weights exactly, so the labels sit over the fields they name. */
-.draft-head {
-  display: flex;
-  gap: var(--sp-3);
-  align-items: flex-end;
-  padding-bottom: 2px;
-}
-/* The checkbox's own margin is part of the row's layout; the spacer has to
-   carry it too or every label below drifts a few pixels left. */
-.draft-head-check {
-  flex: none;
-  width: 13px;
-  margin: 0 3px;
-}
-.draft-head .draft-fields-row {
-  align-items: flex-end;
-}
-.draft-head .draft-fields-row > .field-group {
-  margin-bottom: 0;
-}
-.draft-head-end {
-  flex: none;
-  width: 28px;
-}
-.draft-row.bare .draft-check {
-  margin-top: 9px;
-}
-/* Keep the label for assistive tech, drop it from the visual flow — the
-   header above already says it. */
-.draft-row.bare .draft-fields-row > .field-group > label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
+.settings-dialog .model-form-head .block-title {
   padding: 0;
-  border: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  clip-path: inset(50%);
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
 }
-.draft-advanced-toggle {
-  background: none;
-  border: none;
-  padding: 4px 0;
-  margin-top: 4px;
-  cursor: pointer;
+/* The registry is a wall of vendors, three squares per row — not a table. The
+   mark fills the tile and the alias is its caption, because "which endpoint is
+   this" is a question the eye answers before it reads anything. The verbs live
+   behind a hover so the resting state stays a picture. The first cell is the
+   add door, the same square shape, so the grid never ends in dead space. */
+.model-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3);
+  /* Three ~230px squares: the mark still reads at a glance, and the grid stops
+     short of dominating the sheet. */
+  max-width: 720px;
+}
+/* Two columns keep the mark readable down to the phone width — three squares
+   is too little room for a mark plus its caption. */
+@media (max-width: 860px) {
+  .model-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.model-tile {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: 1;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  overflow: hidden;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.model-tile:hover,
+.model-tile:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+/* Deleting is a two-step: the tile goes red before the check button is armed,
+   so a mis-aimed hover cannot drop a config. */
+.model-tile.confirming {
+  border-color: var(--danger-solid);
+}
+/* The live model is a tile like the rest, lit up rather than restated above
+   the grid: an ink ring, a warm tint, and the word 使用中 so the state is not
+   carried by colour alone. */
+.model-tile.active {
+  border-color: var(--text);
+  background: var(--accent-soft);
+}
+.model-tile.active:hover,
+.model-tile.active:focus-within {
+  border-color: var(--text);
+}
+.model-tile.active .model-tile-name {
+  color: var(--text);
+}
+.model-tile-active {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--bg);
   font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  pointer-events: none;
+}
+.model-tile.busy .model-tile-logo {
+  opacity: 0.45;
+}
+/* The whole tile is the switch button: the mark and the caption are its
+   contents, which keeps one big target instead of a 30px label to hit. */
+.model-tile-use {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 18px 18px 40px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.model-tile-use:disabled {
+  cursor: default;
+}
+/* Percentage, not a px size: the mark has to fill the square at every width
+   the sheet takes, and the SVG scales with its box. */
+.model-tile-logo {
+  display: grid;
+  place-items: center;
+  width: 62%;
+  aspect-ratio: 1;
+  color: var(--text);
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-med) var(--ease);
+}
+.model-tile-logo svg {
+  width: 100%;
+  height: 100%;
+}
+.model-tile:hover .model-tile-logo,
+.model-tile:focus-within .model-tile-logo {
+  transform: scale(0.94);
+  opacity: 0.75;
+}
+.model-tile-name {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.model-tile:hover .model-tile-name,
+.model-tile:focus-within .model-tile-name {
+  opacity: 0;
+  /* Out of the hit test as well as out of sight: an invisible caption must not
+     swallow the click meant for the buttons that just appeared over it. */
+  visibility: hidden;
+}
+/* Hover or keyboard focus, never hover alone: tabbing into a tile has to
+   reveal the same three buttons a mouse would. */
+.model-tile-actions {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.model-tile:hover .model-tile-actions,
+.model-tile:focus-within .model-tile-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+.model-tile-act {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-soft);
+  border-radius: 50%;
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.model-tile-act:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.model-tile-act:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+.model-tile-act:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+}
+.model-tile-act.danger {
+  background: var(--danger-solid);
+  border-color: var(--danger-solid);
+  color: var(--danger-ink);
+}
+.model-tile-act.danger:hover {
+  background: var(--danger-solid-hover);
+  border-color: var(--danger-solid-hover);
+  color: var(--danger-ink);
+}
+/* A dot, not a badge: the picture is the point, and a chip row would take the
+   corner back. It only appears when there is something to say — and what it
+   says is now only "this row cannot dial at all"; a test verdict is a
+   sentence, and a sentence goes in the strip below. */
+.model-tile-dot {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-disabled);
+}
+.model-tile-dot.warn {
+  background: var(--warn);
+}
+.model-tile-dot.ok {
+  background: var(--good);
+}
+.model-tile-dot.bad {
+  background: var(--danger);
+}
+/* A 7px corner dot cannot say "I tested it" or "here is what broke". The
+   verdict is a band on the bottom edge instead: icon, word, and the one
+   detail worth keeping (round trip when it worked, the upstream's own words
+   when it did not). Colour carries the tone, the text carries the fact, and
+   it stays put until the next test — a result that fades is a result nobody
+   can compare against the next one. When the band is there the caption and
+   the verbs step up one notch so nothing is stacked on top of anything. */
+.model-tile.has-result .model-tile-use {
+  padding-bottom: 58px;
+}
+.model-tile.has-result .model-tile-name {
+  bottom: 36px;
+}
+.model-tile.has-result .model-tile-actions {
+  bottom: 34px;
+}
+.model-tile.has-result .model-tile-flag {
+  bottom: 34px;
+}
+.model-tile-result {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  animation: model-tile-result-in var(--dur-fast) var(--ease) both;
+}
+@keyframes model-tile-result-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.model-tile-result.ok {
+  border-top-color: var(--semantic-good-border);
+  background: var(--good-soft);
+  color: var(--good);
+}
+.model-tile-result.bad {
+  border-top-color: var(--semantic-danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.model-tile-result-label {
+  flex: none;
+}
+/* The detail is the part allowed to run out of room: the verdict never does,
+   so a long error still reads as "连接失败 · 401 Unauth…" rather than as a
+   truncated fragment with no subject. */
+.model-tile-result-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+.model-tile-result-spin {
+  animation: spin 0.9s linear infinite;
+}
+/* Add tile: the same square, hollow. The plus is the target, the label says
+   what it opens, the sub-line says what is behind it. */
+.model-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+.model-add-plus {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.model-add-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.model-add-sub {
+  font-size: var(--text-xs);
+}
+.model-add:hover,
+.model-add:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
   color: var(--text-tertiary);
 }
-.draft-advanced-toggle:hover {
-  color: var(--text-primary);
+.model-add:hover .model-add-plus,
+.model-add:focus-visible .model-add-plus {
+  border-color: var(--accent-border);
+  color: var(--text);
+  transform: scale(1.06);
 }
-.draft-advanced {
-  margin-top: var(--sp-3);
-  padding: var(--sp-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-sunken, var(--bg-raised));
+.model-add:hover .model-add-label,
+.model-add:focus-visible .model-add-label {
+  color: var(--text);
 }
-/* A grid, not a wrapping flex row: a hint under one field must not push that
-   field's label out of line with its neighbours. */
-.draft-grid {
-  display: grid;
+.model-add:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+}
+
+/* Below the phone breakpoint a square per vendor is too little room for a
+   mark plus its caption; the tile keeps its column but stops insisting on a
+   square, so nothing is squeezed to a sliver. */
+@media (max-width: 560px) {
+  .model-tile {
+    aspect-ratio: auto;
+    min-height: 180px;
+  }
+  .model-tile-logo {
+    width: 54%;
+  }
+}
+
+/* Touch has no hover to reveal the verbs, so they stand on their own and the
+   caption moves up to make room — a tile you cannot edit is a dead end. */
+@media (hover: none) {
+  .model-tile-use {
+    padding-bottom: 56px;
+  }
+  .model-tile-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+  .model-tile-name,
+  .model-tile:hover .model-tile-name,
+  .model-tile:focus-within .model-tile-name {
+    bottom: 48px;
+    opacity: 1;
+    visibility: visible;
+  }
+  .model-tile-logo {
+    width: 48%;
+  }
+  /* Standing verbs plus a result band is three rows at the bottom edge; each
+     one takes its own, so the band never sits under a button. */
+  .model-tile.has-result .model-tile-use {
+    padding-bottom: 88px;
+  }
+  .model-tile.has-result .model-tile-actions {
+    bottom: 34px;
+  }
+  .model-tile.has-result .model-tile-name,
+  .model-tile.has-result:hover .model-tile-name,
+  .model-tile.has-result:focus-within .model-tile-name {
+    bottom: 72px;
+  }
+}
+
+.settings-advanced {
+  margin-top: var(--sp-4);
+}
+.settings-advanced > summary {
+  font-size: var(--text-md);
+}
+
+/* ---- Add-model wizard ----------------------------------------------------
+   A master–detail sheet: fixed header, provider rail on the left, form pane
+   on the right, action bar that never leaves the viewport. Keeping the
+   catalogue in view means switching vendors is a click, not a back-step; the
+   tuning block stays a disclosure card whose summary carries how much of it
+   is no longer at the provider default. */
+
+.wizard-modal {
+  /* Rail + a comfortable form column, without becoming a page. */
+  width: min(880px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 48px));
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  background: var(--bg-overlay);
+}
+.wizard-head {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
   gap: var(--sp-3);
-  align-items: start;
-  margin-bottom: var(--sp-1);
+  padding: var(--sp-5) var(--sp-6) var(--sp-4);
 }
-.draft-grid.cols-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-.draft-grid.cols-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.draft-grid > .field-group {
-  margin-bottom: 0;
-  min-width: 0;
-}
-/* The number inputs carry their recommendation as a placeholder; Chrome's
-   stepper sits on top of it and reads as a broken glyph. */
-.wizard-modal input[type='number'] {
-  -moz-appearance: textfield;
-}
-.wizard-modal input[type='number']::-webkit-outer-spin-button,
-.wizard-modal input[type='number']::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-.icon-btn {
-  padding: 4px 6px;
-}
-.modal-actions.spread {
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.u-flex-1 {
+.wizard-head-text {
   flex: 1;
   min-width: 0;
 }
-.wizard-modal .field-row > .field-group {
-  margin-bottom: 0;
-  /* A row of labelled fields shares its top edge, not its centre. The third
-     group of the edit form carries a hint under its input, so centring pushed
-     that column's label 21px above the two beside it and the labels no longer
-     named the fields they sat over. */
-  align-self: flex-start;
+.wizard-title {
+  font-size: var(--text-xl);
+  font-weight: 640;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
 }
-
-/* Provider picker inside the add-model wizard. */
-.wizard-modal {
-  width: min(560px, calc(100vw - 32px));
-  /* The edit form is taller than a confirmation; capping it at the shared
-     640px left the endpoint block permanently half-visible. */
-  max-height: min(760px, calc(100vh - 48px));
+.wizard-sub {
+  margin-top: 2px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
 }
-/* A row of labelled fields shares its top edge, not its centre. The third
-   group of the edit form carries a hint under its input, so centring pushed
-   that column's label 21px above the two beside it and the labels no longer
-   named the fields they sat over. */
-.wizard-modal .field-row > .field-group {
-  align-self: flex-start;
+.wizard-close {
+  flex: none;
+  margin-top: 1px;
+  width: 30px;
+  height: 30px;
 }
-/* The form scrolls; the buttons must not scroll away with it. Expanding
-   "endpoint & protocol" made the save button unreachable without first
-   scrolling past everything it had just revealed. */
-.wizard-modal .modal-actions {
-  position: sticky;
-  bottom: calc(-1 * var(--sp-6));
-  margin: var(--sp-3) calc(-1 * var(--sp-6)) calc(-1 * var(--sp-6));
-  padding: var(--sp-3) var(--sp-6) var(--sp-6);
-  background: var(--bg-overlay);
+.wizard-form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.wizard-split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+}
+.wizard-rail {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border-soft);
+}
+.wizard-rail-title {
+  padding: 8px 8px 4px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+.wizard-rail-group + .wizard-rail-group .wizard-rail-title {
+  padding-top: 14px;
+}
+.wizard-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.wizard-rail-item:hover:not(.on) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.wizard-rail-item.on {
+  background: var(--bg-raised);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 550;
+  box-shadow: var(--shadow-xs);
+}
+.wizard-rail-logo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  color: inherit;
+}
+.wizard-rail-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A green dot is the whole "this vendor already has a key" message here —
+   the field-level badge says it again where it matters. */
+.wizard-rail-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--semantic-good);
+}
+.wizard-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-4) var(--sp-6) var(--sp-6);
+}
+/* The selected vendor, stated once at the top of its own form: the header
+   no longer has to carry it. */
+.wizard-provider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+.wizard-provider-logo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-md);
+  color: var(--text);
+}
+.wizard-provider-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.wizard-provider-name {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.wizard-provider-endpoint {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wizard-provider-type {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.wizard-empty {
+  padding: var(--sp-8) var(--sp-6);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--text-md);
+}
+.wizard-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-6);
   border-top: 1px solid var(--border-soft);
+  background: var(--bg-overlay);
 }
-/* The segmented control sizes itself — the fields beside it can share what
-   is left over. */
-.wizard-modal .thinking-field {
-  flex: 0 0 auto;
+.wizard-foot-note {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+/* A faded accent block still reads as a live button, especially on the dark
+   theme where the accent is white. Disabled is a surface, not a dimmed CTA. */
+.wizard-foot .btn.primary:disabled {
+  background: var(--surface-alpha-md);
+  border-color: transparent;
+  color: var(--text-disabled);
+  box-shadow: none;
+  opacity: 1;
 }
 .wizard-region {
-  margin: var(--sp-3) 0 var(--sp-2);
+  margin: var(--sp-4) 0 var(--sp-2);
+}
+.wizard-region:first-of-type {
+  margin-top: 0;
 }
 .provider-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(164px, 1fr));
   gap: var(--sp-2);
 }
 .provider-card {
   display: flex;
+  /* Back to a stack: the mark belongs to the label, so it sits in that row
+     instead of holding a column of its own. */
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
@@ -5635,6 +8153,31 @@ pre,
 .provider-card:hover {
   border-color: var(--accent-border);
   background: var(--accent-soft);
+}
+/* Label row. Top-aligned so a two-line label keeps its mark on the first line;
+   the mark's box is exactly one line tall, which centres it on that line. */
+.provider-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+}
+/* The vendor mark. No chip behind it: a 30px dark tile per card read as a row
+   of holes in dark mode, and the marks carry themselves at 18px. */
+.provider-logo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 20px; /* = the label's line box (13.5px × 1.55) */
+  color: var(--text);
+}
+.provider-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 .provider-name {
   font-weight: 600;
@@ -5656,22 +8199,450 @@ pre,
   max-height: 46vh;
   overflow-y: auto;
 }
-/* Collapsible tuning section in the add-model wizard. */
-.wizard-advanced {
-  margin-top: var(--sp-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 0 var(--sp-3) var(--sp-3);
+
+/* — Fields. A soft fill instead of a second outline: on a white sheet the
+   bordered-white field disappeared, and the focus state is the only border
+   that needs to be loud. */
+.wizard-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  margin-bottom: var(--sp-4);
 }
-.wizard-advanced > summary {
-  padding: var(--sp-2) 0;
-  cursor: pointer;
+.wizard-label,
+.wizard-field > label,
+.wizard-label-row > label {
   font-size: var(--text-sm);
-  color: var(--text-dim);
-  user-select: none;
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
-.wizard-advanced[open] > summary {
-  margin-bottom: var(--sp-2);
+.wizard-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--sp-2);
+  min-height: 20px;
+}
+/* A state badge belongs to the label; the row's own trailing action (fetch)
+   is the only thing that should be pushed to the edge. */
+.wizard-label-row > .wizard-fetch {
+  margin-left: auto;
+}
+/* A control that qualifies the field itself (the keyless waiver) rides the
+   head line, at the far end, instead of owning a row below the input. */
+.wizard-label-end {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.wizard-label-end .checkbox-label {
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+/* The ? that carries the sentence a head line has no room for. */
+.wizard-q {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1;
+  cursor: help;
+}
+.wizard-q:hover,
+.wizard-q:focus-visible {
+  color: var(--text);
+  border-color: var(--text-secondary);
+}
+.wizard-help {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+.wizard-fetch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: -3px -8px -3px 0;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.wizard-fetch:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.wizard-fetch:disabled {
+  opacity: 0.45;
+}
+.wizard-badge {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--semantic-good-border);
+  background: var(--semantic-good-soft);
+  color: var(--semantic-good);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.wizard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: var(--sp-4);
+}
+.wizard-grid.solo {
+  grid-template-columns: minmax(0, 1fr);
+}
+/* No key field to balance the row: keep the alias a field, not a banner. */
+.wizard-grid.solo .wizard-field {
+  max-width: 340px;
+}
+.wizard-modal .input {
+  height: 36px;
+  padding: 0 11px;
+  border-radius: 8px;
+  border-color: var(--border-soft);
+  background: var(--surface-alpha-xs);
+  font-size: var(--text-md);
+}
+.wizard-modal .input:hover:not(:disabled):not(:focus) {
+  border-color: var(--border);
+}
+.wizard-modal .input:focus {
+  border-color: var(--accent);
+  background: var(--bg-raised);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.wizard-modal .input:disabled {
+  background: var(--surface-alpha-xs);
+}
+.wizard-affix {
+  position: relative;
+  display: flex;
+}
+.wizard-affix .input {
+  padding-right: 36px;
+}
+.wizard-affix-btn {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.wizard-affix-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.consent {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* — Advanced tuning. Collapsed it is one line that says what is inside and
+   how much of it you have changed; open, it is four labelled groups instead
+   of a six-row field salad. */
+.tune {
+  margin-top: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-alpha-xs);
+  overflow: hidden;
+}
+.tune-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 14px;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+}
+.tune-head:hover {
+  background: var(--surface-alpha-sm);
+}
+.tune-chevron {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.tune.open .tune-chevron {
+  transform: rotate(90deg);
+}
+.tune-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tune-title {
+  font-size: var(--text-md);
+  font-weight: 560;
+  color: var(--text);
+}
+.tune-desc {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.tune-count {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.tune-count.dirty {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.tune-body {
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.tune-group {
+  padding-top: var(--sp-4);
+}
+.tune-group + .tune-group {
+  margin-top: var(--sp-4);
+  border-top: 1px solid var(--border-soft);
+}
+.tune-group-title {
+  margin-bottom: 10px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+.tune-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px var(--sp-4);
+}
+.tune-grid.solo {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 340px;
+}
+.tune-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.tune-field + .tune-field {
+  margin-top: 0;
+}
+.tune-group .tune-field + .tune-field {
+  margin-top: var(--sp-3);
+}
+.tune-label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.tune-help {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+.tune-grid + .tune-help {
+  margin-top: 8px;
+}
+.tune-json-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.tune-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+.tune-status.ok {
+  color: var(--semantic-good);
+}
+.tune-status.bad {
+  color: var(--semantic-danger);
+}
+.wizard-modal textarea.tune-json {
+  height: auto;
+  min-height: 58px;
+  padding: 8px 11px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.wizard-modal textarea[aria-invalid='true'] {
+  border-color: var(--semantic-danger-border);
+  background: var(--danger-soft);
+}
+.wizard-modal textarea[aria-invalid='true']:focus {
+  border-color: var(--semantic-danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+
+/* — Switch. A checkbox with a track: the "no key" waiver is a mode, and a
+   bare tick beside a paragraph read as an afterthought. */
+.switch-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  cursor: pointer;
+}
+.switch-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.switch-title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.switch-desc {
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+input.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  margin: 1px 0 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+input.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+input.switch:checked {
+  background: var(--accent-strong);
+}
+input.switch:checked::after {
+  transform: translateX(14px);
+  background: var(--accent-ink);
+}
+input.switch:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.form-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: var(--sp-3);
+  padding: 9px 11px;
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  color: var(--semantic-danger);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.form-alert svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* Below the two-pane breakpoint the rail turns into a horizontal chip strip:
+   the catalogue stays one tap away without eating the form's height. */
+@media (max-width: 760px) {
+  .wizard-split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .wizard-rail {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: none;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .wizard-rail-group {
+    display: contents;
+  }
+  .wizard-rail-title {
+    display: none;
+  }
+  .wizard-rail-item {
+    width: auto;
+    flex: none;
+    height: 30px;
+    padding: 0 10px;
+  }
+}
+@media (max-width: 620px) {
+  .wizard-head {
+    padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  }
+  .wizard-pane {
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  }
+  .wizard-foot {
+    padding: var(--sp-3) var(--sp-4);
+  }
+  .wizard-grid,
+  .tune-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wizard-foot-note {
+    display: none;
+  }
 }
 .checkbox-label {
   display: flex;
@@ -5687,15 +8658,18 @@ pre,
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  margin-top: var(--sp-5);
-  max-width: 900px;
+  margin-top: 0;
+  max-width: none;
 }
 .plan-card {
   padding: 0;
   overflow: hidden;
 }
 .plan-card-head {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-5);
   width: 100%;
   padding: var(--sp-4) var(--sp-5);
   text-align: left;
@@ -5718,12 +8692,14 @@ pre,
 }
 .plan-stats {
   display: flex;
+  justify-content: flex-end;
   gap: 6px;
-  margin-top: var(--sp-2);
+  margin-top: 0;
   flex-wrap: wrap;
 }
 .plan-progress {
-  margin-top: var(--sp-3);
+  grid-column: 1 / -1;
+  margin-top: 0;
   height: 4px;
   border-radius: var(--radius-pill);
   background: var(--bg-inset);
@@ -5825,6 +8801,40 @@ pre,
   margin-top: var(--sp-6);
 }
 
+.plan-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  min-height: 180px;
+  padding: var(--sp-6);
+  color: var(--text-tertiary);
+  text-align: center;
+  background: var(--surface-alpha-xs);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.plan-empty p {
+  max-width: 48ch;
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 620px) {
+  .plan-card-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .plan-stats {
+    justify-content: flex-start;
+  }
+  .plan-stage-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
 /* ---- System: doctor / cost / context ---- */
 
 .doctor-head {
@@ -5921,13 +8931,14 @@ pre,
   overflow-wrap: anywhere;
 }
 
-/* ---- Settings page chrome ---- */
+/* ---- 记忆 page: a destination of its own, under 团队 in the rail ---- */
 
-.settings-page {
-  max-width: 1080px;
-}
-.settings-head {
-  margin-bottom: var(--sp-5);
+/* Same container contract as the other pages: full width, capped and
+   centred. The split panes below it size themselves. */
+.memory-page {
+  width: 100%;
+  max-width: 1180px;
+  margin-inline: auto;
 }
 
 /* ---- Chat extras: attachments ---- */
@@ -5951,7 +8962,8 @@ pre,
 /* ---- Onboarding wizard ---- */
 
 .onboarding-modal.wizard {
-  width: min(560px, 92vw);
+  /* Matches .wizard-modal: the catalogue grid is shared with the models page. */
+  width: min(640px, 92vw);
 }
 .wizard-progress {
   display: flex;
@@ -6558,4 +9570,355 @@ main .pipeline-chip {
 .chat .task-card .task-card-actions > a:hover {
   color: var(--text);
   text-decoration: underline;
+}
+
+/* ---- 团队 (views/team.tsx) ----
+   A destination that exists before its features do. The header is the whole
+   page on purpose; the only thing under it is a sentence saying there is
+   nothing here, so nobody goes hunting for a button that was never drawn. */
+
+.tm-page {
+  /* `.main` is a flex row, so a flex item shrinks to its content unless it asks
+     for the full width — without this the whole page collapses to the width of
+     the empty-state sentence and floats in the middle of the pane. */
+  width: 100%;
+  max-width: 1180px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.tm-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Dashed, not a card: a card would read as content that failed to load. The
+   dashed edge says "reserved", which is what this area actually is. Capped in
+   width so an empty page does not paint a 900px frame around nothing — it
+   reads as a placeholder slot, not as a broken panel. */
+.tm-blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  max-width: 560px;
+  min-height: 200px;
+  padding: var(--sp-6);
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-lg);
+  color: var(--text-tertiary);
+  font-size: var(--fs-body);
+}
+
+/* ==== Connection-grouped registry (upstream) ====
+   Kept whole from the upstream registry rewrite: one card per endpoint+key,
+   its models underneath. This branch paints those models as tiles instead of
+   rows, so the row rules here only serve the dialogs that still use them. */
+/* ---- Models registry (settings → models) ---- */
+
+.models-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.model-rows {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--sp-3);
+}
+.model-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  /* The confirm hint is a full-width flex item; without wrapping it squeezed
+     the identity column to nothing and the buttons landed on the model name. */
+  flex-wrap: wrap;
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border-soft);
+}
+.model-row-main {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.model-row-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.model-alias {
+  font-weight: 600;
+  font-size: var(--text-md);
+}
+.model-row-sub {
+  font-size: var(--text-sm);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.model-row-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+/* Four two-character buttons (switch, test, edit, remove) is the widest row;
+   reserving that width keeps the labels in one column whether or not the row
+   happens to be the live one and therefore has no "switch". Without it every
+   row's buttons sat at a different offset. */
+.model-row-actions {
+  min-width: 210px;
+}
+.model-row-confirm {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+  text-align: right;
+  margin: 4px 0 0;
+}
+
+/* The repair offer inside the edit dialog: names the mismatch and does the
+   switch in one click, instead of leaving the user to guess which of the two
+   fields — plan or endpoint — is the wrong one. */
+.fix-suggest {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--semantic-warn-border);
+  border-radius: var(--radius-md);
+  background: var(--semantic-warn-soft);
+  font-size: var(--text-sm);
+}
+
+/* ---- Add/edit dialogs ---- */
+
+/* Two classes deep on purpose: .wizard-modal's own 560px rule is defined
+   further down the sheet and would otherwise win on source order. */
+.wizard-modal.wizard-wide {
+  width: min(760px, calc(100vw - 32px));
+}
+/* The multi-model table needs room for four fields on one line: the rail takes
+   224px of the sheet, and a row squeezed into the remaining 650px wraps its
+   last two fields into a second line that reads as a layout bug. */
+.wizard-modal.wizard-roomy {
+  width: min(1000px, calc(100vw - 32px));
+}
+.conn-form {
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  margin-bottom: var(--sp-4);
+}
+.conn-form .field-group:last-child {
+  margin-bottom: 0;
+}
+.proto-field {
+  flex: none;
+  width: 132px;
+}
+.models-table-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-2);
+}
+.models-table-actions {
+  display: flex;
+  gap: 6px;
+}
+.models-table {
+  display: flex;
+  flex-direction: column;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+/* Inside the sheet the pane is already the scroller: a second one inside it
+   would trap the wheel over the middle of the form. */
+.wizard-pane .models-table {
+  max-height: none;
+  overflow-y: visible;
+}
+.draft-row {
+  border-top: 1px solid var(--border-soft);
+  padding: var(--sp-3) 0;
+}
+.draft-row:first-child {
+  border-top: none;
+}
+.draft-main {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+.draft-check {
+  margin-top: 26px;
+  flex: none;
+}
+.draft-fields {
+  flex: 1;
+  min-width: 0;
+}
+.draft-fields-row {
+  display: grid;
+  /* Fixed trailing columns, elastic leading ones: a row keeps its four fields
+     on one line at the sheet's width, and the header above repeats the exact
+     same template so its labels land over the fields they name. */
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) 116px 116px 28px;
+  gap: var(--sp-2);
+  align-items: end;
+}
+.draft-fields-row > .field-group {
+  min-width: 0;
+  margin-bottom: 0;
+}
+/* A model id and its display name are longer than any number field, and a
+   clipped id is the one thing the user must be able to read back verbatim. */
+.draft-fields-row > .field-group:not(.narrow) {
+  min-width: 0;
+}
+.draft-fields-row > .btn.icon-btn {
+  width: 28px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+  align-self: end;
+}
+.draft-fields-row > .field-group > label {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+/* Below the phone breakpoint four fields stop fitting on one line: two per
+   row keeps the model id readable instead of shaving it to 90px. Declared
+   after the base template so it wins on equal specificity. */
+@media (max-width: 620px) {
+  .draft-fields-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+/* One header for the whole table. The column widths repeat the row's flex
+   weights exactly, so the labels sit over the fields they name. */
+.draft-head {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-end;
+  padding-bottom: 2px;
+}
+/* The checkbox's own margin is part of the row's layout; the spacer has to
+   carry it too or every label below drifts a few pixels left. */
+.draft-head-check {
+  flex: none;
+  width: 13px;
+  margin: 0 3px;
+}
+.draft-head .draft-fields-row {
+  align-items: end;
+}
+.draft-head .draft-fields-row > .field-group {
+  margin-bottom: 0;
+}
+.draft-head-end {
+  flex: none;
+  width: 28px;
+}
+.draft-row.bare .draft-check {
+  margin-top: 9px;
+}
+/* Keep the label for assistive tech, drop it from the visual flow — the
+   header above already says it. */
+.draft-row.bare .draft-fields-row > .field-group > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+.draft-advanced-toggle {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  margin-top: 4px;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.draft-advanced-toggle:hover {
+  color: var(--text-primary);
+}
+.draft-advanced {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken, var(--bg-raised));
+}
+/* A grid, not a wrapping flex row: a hint under one field must not push that
+   field's label out of line with its neighbours. */
+.draft-grid {
+  display: grid;
+  gap: var(--sp-3);
+  align-items: start;
+  margin-bottom: var(--sp-1);
+}
+.draft-grid.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.draft-grid.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.draft-grid > .field-group {
+  margin-bottom: 0;
+  min-width: 0;
+}
+/* The number inputs carry their recommendation as a placeholder; Chrome's
+   stepper sits on top of it and reads as a broken glyph. */
+.wizard-modal input[type='number'] {
+  -moz-appearance: textfield;
+}
+.wizard-modal input[type='number']::-webkit-outer-spin-button,
+.wizard-modal input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.icon-btn {
+  padding: 4px 6px;
+}
+.modal-actions.spread {
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.u-flex-1 {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The "live, unregistered" flag: a corner ribbon would fight the dot, so it
+   sits as a quiet caption line and yields the space to the verbs on hover. */
+.model-tile-flag {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  text-align: center;
+  pointer-events: none;
+}
+.model-tile:hover .model-tile-flag,
+.model-tile:focus-within .model-tile-flag {
+  opacity: 0;
 }
