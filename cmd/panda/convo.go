@@ -79,11 +79,25 @@ func convoPath() string {
 	if cfg != nil {
 		proj, _ = activeProject(cfg)
 	}
-	if strings.TrimSpace(proj) == "" {
-		return defFile
+	return convoPathForProject(proj)
+}
+
+// convoPathForProject resolves one project's bare-conversation file without
+// consulting the config pointer. The REPL knows which project it is in (an
+// in-memory /project switch, or a launch cwd that is not the persisted active
+// project), which can differ from what activeProject resolves — its own reads
+// and writes must follow that binding.
+func convoPathForProject(project string) string {
+	d := cliStateDir()
+	if d == "" {
+		return ""
 	}
-	safe := sanitizeProjectName(strings.TrimSpace(proj))
-	return filepath.Join(convDir, safe+".json")
+	convDir := filepath.Join(d, "conversations")
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return filepath.Join(convDir, "default.json")
+	}
+	return filepath.Join(convDir, sanitizeProjectName(project)+".json")
 }
 
 // renameConvo renames a project's persisted conversation file from oldName to newName.
@@ -120,24 +134,19 @@ func loadConvo() []entry.Turn {
 	if p == "" {
 		return nil
 	}
-	data, err := os.ReadFile(p)
-	if err != nil {
-		return nil
-	}
-	var f struct {
-		Turns []entry.Turn `json:"turns"`
-	}
-	if json.Unmarshal(data, &f) != nil {
-		return nil
-	}
-	return trimConvo(f.Turns, convoBudget(nil))
+	return trimConvo(readConvoFile(p), convoBudget(nil))
 }
 
 // saveConvo persists the conversation (atomic-enough for CLI state: one
 // small write, best-effort — a lost update costs a stale context, never
 // correctness).
 func saveConvo(turns []entry.Turn) {
-	p := convoPath()
+	saveConvoTo(convoPath(), turns)
+}
+
+// saveConvoTo is saveConvo at an explicit path, so an attached REPL can write
+// its own project's shard instead of whatever the config pointer resolves.
+func saveConvoTo(p string, turns []entry.Turn) {
 	if p == "" {
 		return
 	}
@@ -151,9 +160,29 @@ func saveConvo(turns []entry.Turn) {
 	_ = os.WriteFile(p, data, 0o600)
 }
 
-// clearConvo removes the persisted conversation (/new).
-func clearConvo() {
-	if p := convoPath(); p != "" {
+// The attached REPL's own view of the bare-conversation file. Its active
+// project is state in memory (`/project`), which need not match what the
+// global convoPath resolves from the config pointer and cwd.
+
+func (r *repl) convoFile() string {
+	if r == nil {
+		return ""
+	}
+	return convoPathForProject(r.activeProjectName())
+}
+
+func (r *repl) loadConvoNow() []entry.Turn {
+	p := r.convoFile()
+	if p == "" {
+		return nil
+	}
+	return trimConvo(readConvoFile(p), convoBudget(nil))
+}
+
+func (r *repl) saveConvoNow(turns []entry.Turn) { saveConvoTo(r.convoFile(), turns) }
+
+func (r *repl) clearConvoNow() {
+	if p := r.convoFile(); p != "" {
 		_ = os.Remove(p)
 	}
 }
@@ -243,6 +272,15 @@ func compactConvo(turns []entry.Turn, engine *askengine.Engine) []entry.Turn {
 // (the REPL's, so /lang is honoured), not a freshly detected one. When an
 // engine is supplied, overflowing history is compacted instead of dropped.
 func appendConvo(turns []entry.Turn, loc i18n.Locale, text string, out *askengine.Result, engine ...*askengine.Engine) []entry.Turn {
+	turns = appendConvoTurns(turns, loc, text, out, engine...)
+	saveConvo(turns)
+	return turns
+}
+
+// appendConvoTurns grows an in-memory conversation without persisting it. Voice
+// mode keeps its replay window in memory and records the exchange to the
+// session thread separately, so it must not write the bare-conversation file.
+func appendConvoTurns(turns []entry.Turn, loc i18n.Locale, text string, out *askengine.Result, engine ...*askengine.Engine) []entry.Turn {
 	assistant := convoSummaryOf(loc, out)
 	turns = append(turns,
 		entry.Turn{Role: "user", Content: text},
@@ -252,9 +290,7 @@ func appendConvo(turns []entry.Turn, loc i18n.Locale, text string, out *askengin
 	if len(engine) > 0 {
 		eng = engine[0]
 	}
-	turns = compactConvo(turns, eng)
-	saveConvo(turns)
-	return turns
+	return compactConvo(turns, eng)
 }
 
 // summarizeSessionTurns adapts the engine's entry.Turn summarizer to the
@@ -294,7 +330,46 @@ func sessionHistory(ctx context.Context, store *sessions.Store, sess *sessions.S
 	for _, t := range kept {
 		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
 	}
+	// A stored thread can end on a user turn when the previous answer never
+	// landed. Every caller passes the current prompt separately, so replaying
+	// that dangling question would put two user messages in a row — the
+	// Messages API rejects that with a 400, wedging every later turn.
+	for len(history) > 0 && history[len(history)-1].Role == "user" {
+		history = history[:len(history)-1]
+	}
 	return sess, history
+}
+
+// continueTarget resolves what `panda ask --continue` replays: the project's
+// newest thread plus its replay window, or the legacy bare conversation when
+// the store has no thread for that project. The store comes back even when no
+// thread was found, because the caller records the exchange into whichever
+// one it ends up using.
+func continueTarget(ctx context.Context, cfg *config.Config, project string, engine *askengine.Engine) (*sessions.Store, *sessions.Session, []entry.Turn) {
+	store := sessions.NewStore(sessionStoreRoot(cfg))
+	if sess := latestSessionForProject(store, project); sess != nil {
+		_, history := sessionHistory(ctx, store, sess, engine)
+		return store, sess, history
+	}
+	return store, nil, loadConvo()
+}
+
+// continueWorkDir picks where a continued thread runs: its worktree, else the
+// engine's bound work path, else the caller's cwd. A thread with a worktree
+// must keep running there — continuing it in another checkout would edit the
+// wrong tree while replaying the right conversation.
+func continueWorkDir(cwd string, sess *sessions.Session, eng *askengine.Engine) string {
+	if sess != nil {
+		if sess.Worktree != "" {
+			return sess.Worktree
+		}
+		if eng != nil {
+			if wp := eng.WorkPath(); wp != "" {
+				return wp
+			}
+		}
+	}
+	return cwd
 }
 
 // maxConvoAnswerChars bounds one recorded assistant answer. A single

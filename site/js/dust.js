@@ -92,6 +92,9 @@ function setupField(canvas) {
 
   const frame = () => {
     if (!visible || document.hidden) return
+    // Reduced motion: the field was painted once by build()/the observer, and
+    // it stays exactly that — no drift, no repaint, no frame work.
+    if (calm) return
     const now = performance.now()
     const dt = Math.min(48, now - last)
     last = now

@@ -8,38 +8,28 @@ package main
 // runtime probing: a completer must never block the prompt on the network
 // or the store.
 //
-// SYNC WARNING: the tables below are the dispatch switches in main.go and
-// the runXxx verb routers written out as data. subcommandNames() has the
-// same warning for the same reason — add a command in three places, or the
-// new verb silently stops completing.
+// The completion vocabulary (subcommandNames and completionVerbs) comes from
+// internal/nodecli — the same registry the agent reference and `panda help`
+// read. Only the per-context flag lists below are local: which flags are
+// worth offering is completion tuning, not a description of the CLI. The
+// sync tests in completion_test.go fail a flag key whose command or verb the
+// registry does not know.
 
 import (
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/nodecli"
 )
 
-// completionVerbs maps a top-level command to its second-level verbs. Only
-// commands with real subverbs get an entry — single-word commands (ask,
-// queue, init) complete flags and files instead.
-var completionVerbs = map[string][]string{
-	"nodes":    {"add", "disconnect", "invite", "remove", "prune", "verify", "admit", "drain", "trust"},
-	"task":     {"add", "priority", "move", "approve", "reject", "cancel", "delete", "revert", "followup", "continue", "send", "board", "artifact", "logs", "show"},
-	"plan":     {"run", "show", "example"},
-	"session":  {"list", "new", "show", "mv", "rm", "fork", "tree", "ask", "diff", "merge", "revert"},
-	"skill":    {"list", "approve", "reject", "reset", "find", "import", "hub", "install"},
-	"model":    {"status", "list", "add", "remove", "switch", "fetch", "test"},
-	"config":   {"get", "set", "test"},
-	"memory":   {"list", "get", "set", "rm"},
-	"project":  {"list", "new", "show", "enter", "exit", "rename", "rm", "approval"},
-	"reminder": {"list", "add", "rm"},
-	"todo":     {"list", "add", "edit", "show", "done", "reopen", "pause", "running", "rm", "move", "start"},
-	"card":     {"show", "rescan", "edit", "set", "native", "agent", "manual", "invoke", "path"},
-	"agents":   {"test", "install"},
-	"auth":     {"login", "logout", "status"},
-	"hooks":    {"list", "test"},
-}
+// completionVerbs maps a top-level command to its second-level verbs. The
+// vocabulary is owned by internal/nodecli (the same registry the agent
+// reference and `panda help` read): only commands with real subverbs get an
+// entry — single-word commands (ask, queue, init) complete flags and files
+// instead.
+var completionVerbs = nodecli.CompletionVerbs()
 
 // completionFlags holds the flags worth offering per context — key is the
 // command line shape ("task add"), value the flag names. Flag *values* for
@@ -63,7 +53,7 @@ var completionFlags = map[string][]string{
 	"plan run":      {"--dry-run", "--config", "--card"},
 	"status":        {"--config"},
 	"doctor":        {"--config"},
-	"repl":          {"--config", "--card", "--mcp"},
+	"repl":          {"--config", "--card", "--mcp", "--resume", "--new"},
 }
 
 // completionFlagValues maps a flag name to its closed value set — offered
@@ -106,6 +96,9 @@ func completionTopWords() string {
 }
 
 func completionVerbsFor(cmd string) string {
+	if cmd == "todos" {
+		cmd = "todo"
+	}
 	return strings.Join(completionVerbs[cmd], " ")
 }
 
@@ -174,7 +167,7 @@ _panda() {
     fi
     case "$sub" in
 `)
-	for _, cmd := range []string{"nodes", "join", "task", "plan", "session", "sessions", "skill", "model", "models", "config", "memory", "project", "reminder", "todo", "card", "agents", "auth", "completion"} {
+	for _, cmd := range []string{"nodes", "join", "task", "plan", "session", "sessions", "skill", "model", "models", "config", "memory", "project", "reminder", "todo", "todos", "card", "agents", "auth", "completion"} {
 		words := completionVerbsFor(cmd)
 		if cmd == "sessions" {
 			words = completionVerbsFor("session")
@@ -236,7 +229,7 @@ _panda() {
     local -a verbs
     case "${bare[1]}" in
 `)
-	for _, cmd := range []string{"nodes", "join", "task", "plan", "session", "sessions", "skill", "model", "models", "config", "memory", "project", "reminder", "todo", "card", "agents", "auth", "completion"} {
+	for _, cmd := range []string{"nodes", "join", "task", "plan", "session", "sessions", "skill", "model", "models", "config", "memory", "project", "reminder", "todo", "todos", "card", "agents", "auth", "completion"} {
 		words := completionVerbsFor(cmd)
 		switch cmd {
 		case "sessions":
@@ -276,7 +269,7 @@ end
 
 complete -c panda -f -n 'test (__fish_panda_bare_count) -eq 0' -a '` + completionTopWords() + `' -d 'panda command'
 `)
-	for _, cmd := range []string{"nodes", "join", "task", "plan", "session", "sessions", "skill", "model", "models", "config", "memory", "project", "reminder", "todo", "card", "agents", "auth", "completion"} {
+	for _, cmd := range []string{"nodes", "join", "task", "plan", "session", "sessions", "skill", "model", "models", "config", "memory", "project", "reminder", "todo", "todos", "card", "agents", "auth", "completion"} {
 		words := completionVerbsFor(cmd)
 		switch cmd {
 		case "sessions":
@@ -318,8 +311,11 @@ func powershellCompletion() string {
 
 $_pandaCommands = @(` + quote(subcommandNames()) + ")\n")
 	b.WriteString("$_pandaVerbs = @{\n")
-	for _, cmd := range []string{"nodes", "join", "task", "plan", "session", "skill", "model", "config", "memory", "project", "reminder", "todo", "card", "agents", "auth", "completion"} {
+	for _, cmd := range []string{"nodes", "join", "task", "plan", "session", "skill", "model", "config", "memory", "project", "reminder", "todo", "todos", "card", "agents", "auth", "completion"} {
 		words := completionVerbs[cmd]
+		if cmd == "todos" {
+			words = completionVerbs["todo"]
+		}
 		if cmd == "completion" {
 			words = []string{"bash", "zsh", "fish", "powershell"}
 		}

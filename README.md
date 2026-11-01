@@ -1,6 +1,8 @@
 # 🐼 OpenPanda
 
-**The Open-Source, Local-First Multi-Agent Orchestration OS**
+**Run Claude Code, Codex and every other agent CLI you already have as one crew, across all your machines.**
+
+Self-hosted · peer-to-peer · no vendor relay · ~40 MB RSS · macOS / Linux / Windows
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
@@ -9,14 +11,52 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/Memory%20Footprint-~20MB%20RSS-brightgreen)
-![Local First](https://img.shields.io/badge/Cloud%20Dependency-Zero-success)
+![Memory](https://img.shields.io/badge/Memory%20Footprint-~40MB%20RSS-brightgreen)
+![No Vendor Relay](https://img.shields.io/badge/Vendor%20Relay-None-success)
 
 ---
 
-## About
+## 📦 Install
 
-OpenPanda organizes the terminal AI coding agents already on your machines — nine dedicated adapters (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw) plus a configurable generic bridge for any headless CLI, including ZCode — together with your devices into a single execution crew. It is not itself an agent: you issue one instruction; it handles intent classification, task decomposition, dispatch, execution supervision, and result verification — all locally, with zero cloud dependency.
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
+
+# macOS (Homebrew)
+brew install Xustalis/openpanda/openpanda
+```
+
+Windows (PowerShell): `irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex`
+
+Then start a node:
+
+```bash
+panda init      # device name, model providers, capability card
+panda           # the terminal TUI — or `panda web` for the console
+```
+
+From source: `git clone` then `make build` (Go ≥ 1.26.10, no CGO). Already installed: `panda update` upgrades in place and keeps your data.
+
+---
+
+## Why this exists
+
+You already pay for Claude Code, Codex, OpenCode, or one of the other terminal agents. Each of them runs on one machine, in one terminal, on one conversation at a time. The second laptop idles while the first is busy, a long run dies when the lid closes, and nothing coordinates two agents editing the same project.
+
+OpenPanda is the dispatch layer between you and those CLIs. You give one instruction; it classifies the intent, splits multi-stage work into a plan, routes each stage to the node and agent best suited to it, supervises the run, and re-dispatches with the failure reason attached when an executor dies. All of it on your own network. No hosted control plane, no account, no token markup; the only traffic that leaves your nodes is the model calls you configure.
+
+It is not another agent. It drives the ones you already have.
+
+Bundled adapters: Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, ZCode, OpenClaw, plus a generic bridge for any other CLI that speaks stdin/stdout.
+
+Setups people actually run:
+
+- Claude Code on a laptop, Codex on a Linux build box, and a Raspberry Pi that stays on 24/7, all sharing one queue.
+- One prompt fanned out to four agent harnesses in parallel, with a judged verdict instead of four answers to read yourself.
+- A long refactor that keeps running after the laptop sleeps, because the work moved to a node that stays awake.
+- A homelab or SBC fleet where every box has different hardware; the scheduler scores the nodes and picks the right one per task.
+
+### How it fits together
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -25,11 +65,11 @@ OpenPanda organizes the terminal AI coding agents already on your machines — n
 └──────────────────────────────┬──────────────────────────────┘
                                │
                   ┌────────────▼────────────┐
-                  │     🐼 OpenPanda OS     │
+                  │     🐼 OpenPanda        │
                   │   Route, Orchestrate,   │
                   │     Verify & Secure     │
                   └────────────┬────────────┘
-                               │ Direct P2P links (WS + sealed UDP, no cloud relay)
+                               │ Direct P2P links (WS + sealed UDP, no vendor relay)
      ┌─────────────────────────┼─────────────────────────┐
      │                         │                         │
 ┌────▼──────────────┐   ┌──────▼────────────┐   ┌────────▼────────────┐
@@ -38,7 +78,18 @@ OpenPanda organizes the terminal AI coding agents already on your machines — n
 └───────────────────┘   └───────────────────┘   └─────────────────────┘
 ```
 
-The project evolves along two tracks:
+## What it replaces
+
+| | A single agent CLI | `ssh` + `tmux` + cron | A hosted orchestration service | OpenPanda |
+|---|---|---|---|---|
+| Drives the CLIs you already pay for | one at a time | by hand | usually its own stack | ten adapters plus a generic bridge |
+| Uses every machine you own | no | you script it | cloud VMs you rent | your own devices, discovered on the LAN |
+| Survives a node dying mid-task | no | no | yes | yes, re-dispatched with the failure reason |
+| Where your code and prompts live | your machine | your machines | their servers | your machines, over an encrypted mesh |
+| What it costs | subscription | subscription | per-seat or per-token markup | your existing subscriptions |
+| Setup | none | manual | sign-up and a dashboard | one binary, one command |
+
+## Status
 
 | Track | Description | Status |
 |---|---|---|
@@ -95,34 +146,7 @@ The project evolves along two tracks:
 - **Voice entry** (experimental): `panda voice` runs the wake → transcribe → dispatch → speak loop through the bundled `extensions/voice` sidecar scripts (needs its own Python deps).
 - **Scriptable CLI**: `panda ask` drops straight into automation scripts.
 - **Self-updating**: `panda update check|apply` (or `panda upgrade`) probes a staged binary and swaps it in place.
-- **Featherweight**: single static Go binary, ~20MB RSS, no external runtime dependencies.
-
----
-
-## 📦 Installation
-
-**macOS / Linux:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh
-```
-
-**macOS (Homebrew):**
-```bash
-brew install Xustalis/openpanda/openpanda
-```
-
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex
-```
-
-**From source** (Go ≥ 1.26, no CGO — cross-compiles cleanly):
-```bash
-git clone https://github.com/Xustalis/OpenPanda.git && cd OpenPanda
-make build && ./bin/panda init
-```
-
-Already installed? `panda update` upgrades in place; user data is preserved.
+- **Featherweight**: single static Go binary, ~40MB RSS, no external runtime dependencies.
 
 ---
 
@@ -250,6 +274,6 @@ OpenPanda is dual-licensed:
 - **Community** — [GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later)
 - **Commercial** — proprietary terms for closed-source embedding or hosted use; see [COMMERCIAL.md](COMMERCIAL.md)
 
-Releases published before the license change remain available under the MIT License.
+[LICENSING.md](LICENSING.md) holds the trademark notice, the terms that ride alongside the AGPL, and the licensing of earlier releases. Releases published before the license change remain available under the MIT License.
 
 Use of OpenPanda is subject to the [Terms of Use & Disclaimer](TERMS.md) ([中文](TERMS.zh-CN.md) · [日本語](TERMS.ja.md) · [Español](TERMS.es.md) · [Deutsch](TERMS.de.md)).

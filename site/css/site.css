@@ -50,13 +50,13 @@
   --night-2: #090c12;
   --ink: #141413;
   --ink-2: #3e3e38;
-  --ink-3: #77776e;
+  --ink-3: #6c6c63;
   --line: rgba(20, 20, 19, .14);
   --line-strong: rgba(20, 20, 19, .24);
   --line-soft: rgba(20, 20, 19, .08);
   --jade: #0c7a55;
   --jade-bright: #6fc7a1;
-  --jade-soft: rgba(12, 122, 85, .1);
+  --jade-soft: rgba(12, 122, 85, .07);
   --jade-line: rgba(111, 199, 161, .32);
   --warn: #b9871d;
   --danger: #b8493b;
@@ -230,7 +230,7 @@ html.lang-pending body { opacity: 0; }
 .site-nav.solid .lang-toggle { border-color: var(--line); }
 .lang-toggle:hover { border-color: currentColor; }
 .lang-sep { opacity: .32; }
-.lang-en, .lang-zh { opacity: .55; transition: opacity .2s, color .2s; }
+.lang-en, .lang-zh { opacity: .68; transition: opacity .2s, color .2s; }
 html[data-lang='en'] .lang-en,
 html[data-lang='zh'] .lang-zh { opacity: 1; color: var(--jade-bright); }
 html[data-lang='en'] .site-nav.solid .lang-en,
@@ -259,6 +259,9 @@ html[data-lang='zh'] .lang-toggle-menu .lang-zh { color: var(--jade); }
   border-radius: 999px;
   padding: 1px 6px;
   font-size: 9px;
+  /* The star glyph and the count are one token; on a phone the pill is only
+     as wide as the icon, and without this the badge wraps between them. */
+  white-space: nowrap;
 }
 .site-nav.solid .nav-stars { color: var(--jade); background: var(--jade-soft); }
 .menu-toggle {
@@ -343,6 +346,12 @@ html[data-lang='zh'] .lang-toggle-menu .lang-zh { color: var(--jade); }
      identical frame — and visitors without WebGL see the same sky, not a
      differently-composed stock shot. */
   background: #05060a url('../textures/hero-still.jpg') center / cover no-repeat;
+  /* WebP first (about a third smaller, and it is the first paint); the JPEG in
+     the shorthand above stays as the fallback for engines without it. */
+  background-image: image-set(
+    url('../textures/hero-still.webp') type('image/webp'),
+    url('../textures/hero-still.jpg') type('image/jpeg')
+  );
 }
 .hero-canvas {
   position: absolute;
@@ -516,7 +525,7 @@ html[data-lang='en'] .hero-en {
 .hero-index > a:hover { color: var(--paper); }
 .hero-index > a b {
   font: 500 8.5px var(--mono);
-  color: rgba(250, 249, 245, .48);
+  color: rgba(250, 249, 245, .55);
   letter-spacing: .06em;
 }
 .hero-index > a:hover b { color: var(--jade-bright); }
@@ -537,7 +546,9 @@ html[data-lang='en'] .hero-en {
 .hero-meta .mono-label {
   font: inherit;
   letter-spacing: inherit;
-  color: rgba(250, 249, 245, .42);
+  /* .42 on the near-black sky composited to about 3.8:1 — under AA for this
+     8px credit line, which also carries the image licences. */
+  color: rgba(250, 249, 245, .55);
 }
 .hero-scroll {
   display: flex;
@@ -1010,6 +1021,10 @@ html[data-lang='en'] .hero-en {
   inset: 0;
   opacity: .1;
   background: url('../textures/milkyway_2k.jpg') center 30% / cover no-repeat;
+  background: image-set(
+    url('../textures/milkyway_2k.webp') type('image/webp'),
+    url('../textures/milkyway_2k.jpg') type('image/jpeg')
+  ) center 30% / cover no-repeat;
   filter: grayscale(.35) brightness(.8);
 }
 .night-section::after {
@@ -1024,7 +1039,7 @@ html[data-lang='en'] .hero-en {
 .night-section .wrap { position: relative; z-index: 2; }
 .night-section .section-label {
   border-bottom-color: rgba(250, 249, 245, .16);
-  color: rgba(250, 249, 245, .4);
+  color: rgba(250, 249, 245, .56);
 }
 .night-h2 { color: var(--paper); }
 .night-lede {
@@ -1060,7 +1075,7 @@ html[data-lang='en'] .hero-en {
   font: 500 8.5px var(--mono);
   letter-spacing: .1em;
   text-transform: uppercase;
-  color: rgba(250, 249, 245, .44);
+  color: rgba(250, 249, 245, .58);
 }
 .compare-row b { font-weight: 500; color: rgba(250, 249, 245, .86); }
 .compare-row.openpanda { border-bottom-color: rgba(111, 199, 161, .35); }
@@ -1121,7 +1136,7 @@ html[data-lang='en'] .hero-en {
   transform: translateX(-50%);
   font: 400 8.5px var(--mono);
   white-space: nowrap;
-  color: rgba(250, 249, 245, .46);
+  color: rgba(250, 249, 245, .6);
 }
 .ring-inner .ring-name { color: var(--jade-bright); }
 .ring-inner .ring-sub { color: rgba(111, 199, 161, .7); }
@@ -1246,6 +1261,12 @@ html[data-lang='en'] .hero-en {
   background:
     linear-gradient(180deg, rgba(5, 7, 11, .88), rgba(5, 7, 11, .96)),
     url('../textures/milkyway_2k.jpg') center 62%/cover no-repeat;
+  background:
+    linear-gradient(180deg, rgba(5, 7, 11, .88), rgba(5, 7, 11, .96)),
+    image-set(
+      url('../textures/milkyway_2k.webp') type('image/webp'),
+      url('../textures/milkyway_2k.jpg') type('image/jpeg')
+    ) center 62%/cover no-repeat;
   color: var(--paper);
   overflow: hidden;
   isolation: isolate;
@@ -1266,6 +1287,10 @@ html[data-lang='en'] .hero-en {
   height: 720px;
   border-radius: 50%;
   background: url('../textures/earth_night_2k.jpg') center/cover no-repeat;
+  background: image-set(
+    url('../textures/earth_night_2k.webp') type('image/webp'),
+    url('../textures/earth_night_2k.jpg') type('image/jpeg')
+  ) center/cover no-repeat;
   opacity: .34;
   -webkit-mask-image: radial-gradient(circle at 40% 35%, #000 0%, #000 45%, transparent 72%);
   mask-image: radial-gradient(circle at 40% 35%, #000 0%, #000 45%, transparent 72%);
@@ -1274,7 +1299,7 @@ html[data-lang='en'] .hero-en {
 .scales .wrap { position: relative; z-index: 2; }
 .scales .section-label {
   border-bottom-color: rgba(250, 249, 245, .16);
-  color: rgba(250, 249, 245, .4);
+  color: rgba(250, 249, 245, .56);
 }
 .scales-head {
   display: grid;
@@ -1308,7 +1333,7 @@ html[data-lang='en'] .hero-en {
   border: 1px solid rgba(111, 199, 161, .7);
 }
 .scale:first-child::before { left: 0; background: var(--jade-bright); box-shadow: 0 0 12px rgba(111, 199, 161, .5); }
-.scale-num { font: 500 10px var(--mono); color: rgba(250, 249, 245, .38); }
+.scale-num { font: 500 10px var(--mono); color: rgba(250, 249, 245, .55); }
 .scale-time {
   display: block;
   margin-top: 20px;
@@ -1408,7 +1433,7 @@ html[data-lang='en'] .hero-en {
   color: var(--ink-3);
 }
 .mile.current .mile-state { border-color: rgba(12, 122, 85, .28); background: var(--jade-soft); color: var(--jade); }
-.mile:last-child .mile-state { border-style: dashed; color: var(--ink-3); opacity: .8; }
+.mile:last-child .mile-state { border-style: dashed; color: var(--ink-3); }
 /* A rule + tighter gap, so it reads as a footnote to the row above instead of
    a paragraph that lost its column. */
 .roadmap-note {
@@ -1452,6 +1477,10 @@ html[data-lang='en'] .hero-en {
   inset: 0;
   opacity: .12;
   background: url('../textures/milkyway_2k.jpg') center 62% / cover no-repeat;
+  background: image-set(
+    url('../textures/milkyway_2k.webp') type('image/webp'),
+    url('../textures/milkyway_2k.jpg') type('image/jpeg')
+  ) center 62% / cover no-repeat;
   -webkit-mask-image: linear-gradient(to left, #000, transparent 68%);
   mask-image: linear-gradient(to left, #000, transparent 68%);
 }
@@ -1513,7 +1542,7 @@ html[data-lang='en'] .hero-en {
   font: 500 11px var(--mono);
   letter-spacing: .1em;
   text-transform: uppercase;
-  color: rgba(250, 249, 245, .44);
+  color: rgba(250, 249, 245, .58);
   cursor: pointer;
 }
 .install-tab.active { color: var(--paper); border-bottom-color: var(--jade-bright); }
@@ -1540,7 +1569,7 @@ html[data-lang='en'] .hero-en {
 .qs { padding: 22px 26px 0 0; border-right: 1px solid rgba(250, 249, 245, .1); }
 .qs:not(:first-child) { padding-left: 26px; }
 .qs:last-child { border-right: 0; }
-.qs-num { font: 500 10px var(--mono); color: rgba(250, 249, 245, .38); }
+.qs-num { font: 500 10px var(--mono); color: rgba(250, 249, 245, .55); }
 .qs code { display: block; margin: 10px 0 6px; font: 500 12.5px var(--mono); color: var(--paper); }
 .qs p { margin: 0; font-size: 11.5px; line-height: 1.6; color: rgba(250, 249, 245, .56); }
 .install-foot {
@@ -1553,7 +1582,7 @@ html[data-lang='en'] .hero-en {
   border-top: 1px solid rgba(250, 249, 245, .12);
   font: 500 10.5px var(--mono);
   letter-spacing: .04em;
-  color: rgba(250, 249, 245, .46);
+  color: rgba(250, 249, 245, .58);
 }
 .install-foot a {
   color: rgba(250, 249, 245, .62);
@@ -1940,7 +1969,7 @@ section[id], header[id] { scroll-margin-top: 92px; }
   padding-top: 18px;
   border-top: 1px solid rgba(250, 249, 245, .12);
 }
-.install-platforms .mono-label { color: rgba(250, 249, 245, .46); }
+.install-platforms .mono-label { color: rgba(250, 249, 245, .58); }
 .install-platforms p {
   margin: 0;
   font: 400 11.5px var(--mono);
@@ -1973,7 +2002,6 @@ section[id], header[id] { scroll-margin-top: 92px; }
   color: var(--ink-3);
 }
 .footer-version b { font-weight: 600; color: var(--jade); }
-.footer-version span { opacity: .7; }
 
 /* ── brand ──────────────────────────────────────────────────────────── */
 .site-footer .brand { font-size: 16px; }
@@ -2584,6 +2612,12 @@ body.menu-open .menu-toggle { border-color: var(--line); color: var(--ink); }
   font: 400 14px var(--sans);
   outline: none;
 }
+/* The input carries the dialog's focus; outline:none would otherwise hide it. */
+.palette-box:focus-within {
+  border-color: var(--jade-line);
+  outline: 1px solid var(--jade-line);
+  outline-offset: -1px;
+}
 .palette-input::placeholder { color: var(--ink-3); }
 kbd {
   padding: 2px 5px;
@@ -2639,17 +2673,32 @@ kbd {
 body.palette-open { overflow: hidden; }
 
 /* ── responsive: second pass ────────────────────────────────────────── */
-/* English nav labels are longer than the Chinese ones, and between ~820 and
-   ~950px they no longer fit at the default rhythm. Tighten the gap and the
-   type, and drop the ⌘K chip (still reachable by keyboard and from the mobile
-   index) before anything wraps or pushes the GitHub pill off the edge. */
-@media (min-width: 821px) and (max-width: 950px) {
+/* English nav labels are longer than the Chinese ones, and below ~1320px they
+   no longer fit at the default rhythm — at 44px side padding the full bar needs
+   about 1261px, which left no room for a growing star count. Tighten the gap
+   and the type, and drop the ⌘K chip (still reachable by keyboard and from the
+   mobile index) before anything wraps or pushes the GitHub pill off the edge. */
+@media (min-width: 821px) and (max-width: 1320px) {
   .nav-links { gap: 12px; }
   .nav-links a { font-size: 11px; }
   .nav-actions { gap: 8px; }
   .nav-gh { padding: 8px 10px; }
+  .nav-gh span:not(.nav-stars) { display: none; }
   .lang-toggle { padding: 6px 8px; }
   .nav-k { display: none; }
+}
+/* Below 900 even the tightened rhythm leaves the English pill hanging off the
+   edge by a few pixels, and shrinking the type further would look like an
+   apology. The sheet takes the links; the bar keeps the brand, language and
+   GitHub. */
+@media (max-width: 900px) {
+  .nav-links { display: none; }
+  .menu-toggle { display: grid; }
+  .nav-gh span:not(.nav-stars) { display: none; }
+  .nav-gh { padding: 8px 10px; }
+  /* Without the links, nothing carries the auto margin that holds the actions
+     against the right edge; put it on the actions themselves. */
+  .nav-actions { margin-left: auto; }
 }
 @media (max-width: 1100px) {
   .adapter-list { gap: 12px 30px; }
@@ -2687,6 +2736,16 @@ body.palette-open { overflow: hidden; }
   .palette-item .pi-hint { display: none; }
   .nav-k { display: none; }
   .footer-status { font-size: 9px; gap: 8px 12px; }
+}
+/* Up to 420px the bar cannot hold brand, language, menu and GitHub at once —
+   the star pill hangs into the right padding and, on a 320px phone, off the
+   screen. GitHub is one tap away in the hero and the sheet, so the bar drops
+   it and tightens its own frame instead. */
+@media (max-width: 420px) {
+  .nav-gh { display: none; }
+}
+@media (max-width: 360px) {
+  .site-nav { padding: 0 16px; gap: 16px; }
 }
 
 /* ── toast (palette copy feedback) ──────────────────────────────────── */

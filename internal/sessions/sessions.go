@@ -93,6 +93,11 @@ type Turn struct {
 	// turn lives in the browser, so a reloaded thread would otherwise lose
 	// every duration it had.
 	DurationMS int64 `json:"duration_ms,omitempty"`
+	// Tokens is the ask's billed total (input + output) for this reply. Filed
+	// with the turn for the same reason as DurationMS: the live counter lives
+	// in the browser stream, and a reloaded thread would otherwise lose every
+	// figure it had shown.
+	Tokens int64 `json:"tokens,omitempty"`
 	// Model is the entry model that wrote this reply (the ask's classify /
 	// answer calls). Stored with the turn so the console can still say which
 	// model answered after the thread is reloaded — the live result object
@@ -380,24 +385,40 @@ func (s *Store) Stamps() ([]Stamp, error) {
 // arriving without a stamp gets one here, so every transcript written from
 // now on can be placed on the usage calendar.
 func (s *Store) AppendTurn(id string, turn Turn) (*Session, error) {
-	sess, err := s.appendTurn(id, turn)
+	return s.AppendTurns(id, turn)
+}
+
+// AppendTurns appends several turns under one lock and one atomic write, so a
+// caller holding a complete exchange never persists half of it: a question
+// stored without its answer would be replayed back-to-back with the next
+// prompt, which the Messages API rejects, wedging every later turn. Title
+// derivation and timestamps follow AppendTurn.
+//
+// A batch that files a finished answer leaves a rewind point (see
+// checkpoint.go). Best-effort and after the lock is released: the snapshot
+// shells out to git and must not block another surface's append, and a missing
+// snapshot costs one rewind target, not the turn itself. Threads without a
+// worktree cost a file read and return immediately.
+func (s *Store) AppendTurns(id string, turns ...Turn) (*Session, error) {
+	sess, err := s.appendTurns(id, turns...)
 	if err != nil {
 		return nil, err
 	}
-	if turn.Role == "assistant" {
-		// A finished answer is a rewind point (see checkpoint.go). Best-effort
-		// and after the lock is released: the snapshot shells out to git and
-		// must not block another surface's append, and a missing snapshot costs
-		// one rewind target, not the turn itself. Threads without a worktree
-		// cost a file read and return immediately.
-		_ = s.Checkpoint(context.Background(), id)
+	for _, turn := range turns {
+		if turn.Role == "assistant" {
+			_ = s.Checkpoint(context.Background(), id)
+			break
+		}
 	}
 	return sess, nil
 }
 
-// appendTurn is AppendTurn's locked half: the cross-process and in-process
+// appendTurns is AppendTurns' locked half: the cross-process and in-process
 // read-modify-write, with no snapshotting in the middle of it.
-func (s *Store) appendTurn(id string, turn Turn) (*Session, error) {
+func (s *Store) appendTurns(id string, turns ...Turn) (*Session, error) {
+	if len(turns) == 0 {
+		return s.Get(id)
+	}
 	// Cross-process first, then in-process: the CLI and a panel can both be
 	// appending to one thread, and the read-modify-write below would drop one
 	// side's turn without the file lock. Order matters — the file lock is the
@@ -414,14 +435,17 @@ func (s *Store) appendTurn(id string, turn Turn) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	if turn.TS == 0 {
-		turn.TS = time.Now().Unix()
+	now := time.Now()
+	for _, turn := range turns {
+		if turn.TS == 0 {
+			turn.TS = now.Unix()
+		}
+		sess.Turns = append(sess.Turns, turn)
+		if turn.Role == "user" && sess.Title == "" {
+			sess.Title = truncateTitle(turn.Text)
+		}
 	}
-	sess.Turns = append(sess.Turns, turn)
-	if turn.Role == "user" && sess.Title == "" {
-		sess.Title = truncateTitle(turn.Text)
-	}
-	sess.UpdatedAt = time.Now()
+	sess.UpdatedAt = now
 	if err := s.save(sess); err != nil {
 		return nil, err
 	}
@@ -859,10 +883,21 @@ func (s *Store) save(sess *Session) error {
 	return util.WriteFileAtomic(s.path(sess.ID), data, 0o600)
 }
 
-func truncateTitle(s string) string {
-	s = strings.TrimSpace(s)
-	if len([]rune(s)) > 40 {
-		return string([]rune(s)[:40]) + "…"
+// Title derives a thread title from a prompt: one rail row, at most 48 runes.
+// Both the console and the CLI create threads with it, so a conversation has
+// the same label whichever surface opened it.
+func Title(prompt string) string {
+	prompt = strings.Join(strings.Fields(prompt), " ")
+	if prompt == "" {
+		return ""
 	}
-	return s
+	runes := []rune(prompt)
+	if len(runes) > 48 {
+		return string(runes[:48]) + "…"
+	}
+	return prompt
+}
+
+func truncateTitle(s string) string {
+	return Title(s)
 }

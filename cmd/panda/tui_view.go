@@ -966,6 +966,11 @@ func (m tuiModel) streamAnswerText(ans string) string {
 	return out
 }
 
+// thoughtPreviewLines is how many of the newest reasoning lines stay visible
+// while the chain is folded. Three is enough to show the thread of thought
+// without pushing the answer or the input box off a short terminal.
+const thoughtPreviewLines = 3
+
 // thoughtView is the live reasoning preview: a dim moving one-liner while folded,
 // the full running thought while expanded.
 func (m tuiModel) thoughtView() string {
@@ -974,8 +979,29 @@ func (m tuiModel) thoughtView() string {
 	}
 	star := m.th.glyph("✻", "*")
 	if !m.expandThought {
-		return m.th.muted.Render(star+" "+i18n.T(m.loc, "tui.thinking")) +
-			m.th.muted.Render(" · "+truncate(firstNonEmptyTail(m.thought), 60))
+		// The line count is the cheapest honest evidence that reasoning is
+		// accumulating: a single tail sentence reads the same whether the model
+		// wrote three words or three hundred, and "thinking" with nothing moving
+		// is what a stalled turn looks like. The last few lines stay visible
+		// below it, so the turn shows what it is reasoning about rather than
+		// only that it is; Ctrl+O still unfolds the whole chain.
+		meta := i18n.Tf(m.loc, "tui.thought.lines", "n", strconv.Itoa(len(m.thought)))
+		if !m.thoughtStarted.IsZero() {
+			if d := time.Since(m.thoughtStarted); d >= time.Second {
+				meta += " · " + elapsed(d)
+			}
+		}
+		var sb strings.Builder
+		sb.WriteString(m.th.muted.Render(star + " " + i18n.T(m.loc, "tui.thinking")))
+		sb.WriteString(m.th.muted.Render(" · " + meta + " · " + i18n.T(m.loc, "tui.thought.expand")))
+		lines := m.thought
+		if len(lines) > thoughtPreviewLines {
+			lines = lines[len(lines)-thoughtPreviewLines:]
+		}
+		for _, line := range lines {
+			sb.WriteString("\n" + m.th.italic.Render("  "+truncate(line, 100)))
+		}
+		return sb.String()
 	}
 	var sb strings.Builder
 	sb.WriteString(m.th.muted.Render(star + " " + i18n.T(m.loc, "tui.thinking")))
@@ -1001,8 +1027,57 @@ func (m tuiModel) statusLine() string {
 		parts = append(parts, m.th.muted.Render("· "+m.note))
 	}
 	parts = append(parts, m.th.muted.Render(fmt.Sprintf("(%s · %s)",
-		elapsed(time.Since(m.started)), i18n.T(m.loc, "cli.status.interrupt"))))
+		m.statusMeta(time.Now()), i18n.T(m.loc, "cli.status.interrupt"))))
 	return strings.Join(parts, " ")
+}
+
+// How long a turn may stay quiet before the status row says so. Before any
+// event has arrived the wait is the provider's prefill window, which can run
+// to ResponseHeaderTimeout; after activity starts, a gap means a slow model or
+// a stalled link. The two get different wording because they are different
+// problems.
+const (
+	quietAwaitAfter = 3 * time.Second
+	quietIdleAfter  = 5 * time.Second
+)
+
+// statusMeta is the parenthesised tail of the status row: elapsed clock, live
+// token consumption, and how long the turn has been quiet. Token counts come
+// from the engine's ProgressUsage events, so the number moves while the model
+// writes instead of appearing only in the closing result line.
+func (m tuiModel) statusMeta(now time.Time) string {
+	meta := elapsed(now.Sub(m.started))
+	if tok := m.liveInputTokens + m.liveOutputTokens; tok > 0 {
+		label := cliui.HumanCount(tok)
+		if m.liveTokensEst {
+			label = "~" + label
+		}
+		meta += " · " + label + " tokens"
+	}
+	if quiet := m.quietNote(now); quiet != "" {
+		meta += " · " + quiet
+	}
+	return meta
+}
+
+// quietNote phrases the turn's current silence. No event yet reads as "waiting
+// for the model", which is what the prefill gap actually is; silence after
+// activity reads as "quiet for Ns", which is the honest way to show a stream
+// that has stopped without claiming it failed.
+func (m tuiModel) quietNote(now time.Time) string {
+	seen := m.lastActivity.After(m.started)
+	if !seen {
+		idle := now.Sub(m.started)
+		if idle < quietAwaitAfter {
+			return ""
+		}
+		return i18n.Tf(m.loc, "tui.status.awaitModel", "d", elapsed(idle))
+	}
+	idle := now.Sub(m.lastActivity)
+	if idle < quietIdleAfter {
+		return ""
+	}
+	return i18n.Tf(m.loc, "tui.status.idle", "d", elapsed(idle))
 }
 
 // inputView is the rounded input box with one dim status row under it and a blank
@@ -1637,15 +1712,4 @@ func clipRendered(s string, width int) string {
 		lines[i] = ansi.Truncate(lines[i], width, "")
 	}
 	return strings.Join(lines, "\n")
-}
-
-// firstNonEmptyTail returns the last non-empty thought line — the thought still
-// being written — for the folded live preview.
-func firstNonEmptyTail(lines []string) string {
-	for i := len(lines) - 1; i >= 0; i-- {
-		if s := strings.TrimSpace(lines[i]); s != "" {
-			return s
-		}
-	}
-	return ""
 }

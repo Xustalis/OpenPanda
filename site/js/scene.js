@@ -97,12 +97,13 @@ export function initHero(canvas) {
   level.add(skyFrame)
 
   // ── Milky Way plate ────────────────────────────────────────────────────
-  // Mobile takes the 2K cut (345 KB); desktop the 4K plate (2.0 MB). 4K is
-  // already ~1:1 with the sky at 1440 px after the sphere's projection, and
-  // the 6K original only cost VRAM and decode time.
+  // Mobile takes the 2K cut (~260 KB); desktop a 3K plate (~750 KB). Both are
+  // WebP: the plate is a photograph, and at 1440 px the sphere's projection
+  // already stretches the 2K map, so the 4K source only bought decode time and
+  // VRAM. The JPEG originals stay in textures/ as the source of these copies.
   let onPlateReady = () => {}
   const skyTex = loader.load(
-    isMobile ? 'textures/milkyway_2k.jpg' : 'textures/milkyway_4k.jpg',
+    isMobile ? 'textures/milkyway_2k.webp' : 'textures/milkyway_3k.webp',
     () => onPlateReady(),
     undefined,
     // Plate missing → fall back to the CSS star mat rather than a black box.
@@ -371,9 +372,9 @@ export function initHero(canvas) {
   }
 
   // ── Earth ──────────────────────────────────────────────────────────────
-  const dayTex = loader.load('textures/earth_day_2k.jpg')
-  const nightTex = loader.load('textures/earth_night_2k.jpg')
-  const cloudTex = loader.load('textures/clouds_2k.jpg')
+  const dayTex = loader.load('textures/earth_day_2k.webp')
+  const nightTex = loader.load('textures/earth_night_2k.webp')
+  const cloudTex = loader.load('textures/clouds_2k.webp')
   for (const t of [dayTex, nightTex]) {
     t.colorSpace = THREE.SRGBColorSpace
     t.anisotropy = renderer.capabilities.getMaxAnisotropy()
@@ -450,7 +451,9 @@ export function initHero(canvas) {
   const look = { x: 0, y: 0 }
   const fine = matchMedia('(pointer: fine)').matches
 
-  if (fine) {
+  // Pointer parallax is interaction-triggered motion; reduced-motion users
+  // keep the still frame instead.
+  if (fine && !reduced) {
     canvas.addEventListener('pointermove', (e) => {
       const r = canvas.getBoundingClientRect()
       aim.x = ((e.clientX - r.left) / r.width - 0.5) * 0.055
@@ -460,22 +463,32 @@ export function initHero(canvas) {
   }
 
   let visible = true
-  new IntersectionObserver(([e]) => { visible = e.isIntersecting }, { threshold: 0 }).observe(canvas)
+  let needsPaint = true
+  new IntersectionObserver(([e]) => {
+    visible = e.isIntersecting
+    if (visible) needsPaint = true
+  }, { threshold: 0 }).observe(canvas)
   // A background tab gets no frames at all — stop paying for them when hidden.
   let awake = !document.hidden
-  document.addEventListener('visibilitychange', () => { awake = !document.hidden })
+  document.addEventListener('visibilitychange', () => {
+    awake = !document.hidden
+    if (awake) needsPaint = true
+  })
 
   // ── Scroll: the hero is a descent, not a still ─────────────────────────
   // Scrolling dollies the camera forward and tips it down, so the planet grows
-  // and the band slides behind the copy instead of sitting frozen.
+  // and the band slides behind the copy instead of sitting frozen. Like the
+  // pointer parallax, this is motion the reduced-motion setting turns off.
   let scrollTarget = 0
   let scroll = 0
   const readScroll = () => {
     const h = canvas.clientHeight || innerHeight || 1
     scrollTarget = Math.min(Math.max(scrollY / h, 0), 1.15)
   }
-  addEventListener('scroll', readScroll, { passive: true })
-  readScroll()
+  if (!reduced) {
+    addEventListener('scroll', readScroll, { passive: true })
+    readScroll()
+  }
 
   // Portrait frames put the copy straight over the galactic plane; tilt the
   // camera up so the band drops to the bottom of the screen.
@@ -492,6 +505,7 @@ export function initHero(canvas) {
       portraitPitch = camera.aspect < 0.85 ? 0.13 : 0
       renderer.setSize(w, h, false)
       readScroll()
+      needsPaint = true
     }, 120)
   })
 
@@ -504,6 +518,9 @@ export function initHero(canvas) {
   function frame() {
     requestAnimationFrame(frame)
     if (!visible || !awake) return
+    // Under reduced motion the scene is a still: render only when something
+    // actually changed (first paint, resize, tab return), not every vsync.
+    if (reduced && !needsPaint) return
     const dt = Math.min(clock.getDelta(), 0.05)
     if (!reduced) elapsed += dt
     const t = reduced ? 0 : elapsed
@@ -534,6 +551,7 @@ export function initHero(canvas) {
     )
 
     renderer.render(scene, camera)
+    needsPaint = false
 
     // Only reveal the canvas once the plate is actually in the texture — a
     // black frame fading in over the still looks like a bug.
@@ -547,6 +565,10 @@ export function initHero(canvas) {
   // on a black frame and the photograph appears to pop in afterwards.
   let started = false
   const start = () => {
+    // A late plate still has to produce one more frame: under reduced motion
+    // the loop only paints when needsPaint is set, so a start that arrives
+    // after the safety net would otherwise never reveal the canvas.
+    needsPaint = true
     if (started) return
     started = true
     frame()

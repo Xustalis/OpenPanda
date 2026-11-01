@@ -336,6 +336,12 @@ interface ChatMsg extends SessionTurn {
    *  persisted with the turn, so a thread reloaded from disk comes back
    *  without it. */
   thought?: string
+  /** Newest delta/reasoning/usage/status timestamp (epoch ms). The live
+   *  header uses it to tell a quiet turn from a stalled one. */
+  lastActivity?: number
+  /** The token figure is a live estimate, not the provider's count. The
+   *  header prefixes it with "~" until the billed result lands. */
+  tokensEstimated?: boolean
   /** @file paths that were expanded into fenced blocks for this prompt —
    *  shown as attachment chips on the user's bubble. */
   files?: string[]
@@ -440,6 +446,15 @@ function fmtDuration(ms: number): string {
   return `${Math.floor(whole / 3600)}${t('time.unit.h')} ${Math.floor((whole % 3600) / 60)}${t('time.unit.m')}`
 }
 
+/** Token counts in the reply header: exact below a thousand, one decimal in
+ *  the thousands, one decimal in the millions. A live count that printed all
+ *  seven digits would shove the rest of the header row around every update. */
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`
+  return `${(n / 1_000_000).toFixed(1)}m`
+}
+
 /** The reply's timer while the turn is still running: one tick a second, in the
  *  row the finished duration will occupy.
  *
@@ -449,15 +464,41 @@ function fmtDuration(ms: number): string {
  *  felt while scrolling.
  *
  *  It formats through `fmtDuration`, the same function the finished line uses,
- *  so the number does not change shape the moment the turn lands. */
-function LiveElapsed({ from }: { from: number }) {
+ *  so the number does not change shape the moment the turn lands.
+ *
+ *  `last` is the newest delta/reasoning/usage/status timestamp. Once the turn
+ *  has gone quiet past a few seconds, the same one-second tick adds how long,
+ *  so a slow model reads differently from a dead connection. Before any event
+ *  it says the turn is waiting on the model, which is the prefill window. */
+function LiveElapsed({ from, last }: { from: number; last?: number }) {
   const [ms, setMs] = useState(() => Date.now() - from)
+  const [idle, setIdle] = useState(0)
+  // last changes on every delta; a ref keeps it out of the effect's dependency
+  // list so the one-second timer is not torn down and rebuilt constantly.
+  const lastRef = useRef(last)
+  lastRef.current = last
   useEffect(() => {
-    setMs(Date.now() - from)
-    const id = setInterval(() => setMs(Date.now() - from), 1000)
+    const tick = () => {
+      const now = Date.now()
+      setMs(now - from)
+      setIdle(lastRef.current ? now - lastRef.current : now - from)
+    }
+    tick()
+    const id = setInterval(tick, 1000)
     return () => clearInterval(id)
   }, [from])
-  return <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(ms) })}</span>
+  return (
+    <>
+      <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(ms) })}</span>
+      {idle >= 5000 ? (
+        <span class="msg-dur" data-testid="msg-quiet">
+          {last
+            ? t('sessions.quiet', { d: fmtDuration(idle) })
+            : t('sessions.awaiting', { d: fmtDuration(idle) })}
+        </span>
+      ) : null}
+    </>
+  )
 }
 
 /** One line for a prompt-rail tick's tooltip: a question can be a paragraph,
@@ -1506,8 +1547,9 @@ export function SessionsView({
       const thought = pendingThought
       pendingText = ''
       pendingThought = ''
-      if (text) patch((m) => ({ ...m, text: m.text + text }))
-      if (thought) patch((m) => ({ ...m, thought: (m.thought ?? '') + thought }))
+      if (text) patch((m) => ({ ...m, text: m.text + text, lastActivity: Date.now() }))
+      if (thought)
+        patch((m) => ({ ...m, thought: (m.thought ?? '') + thought, lastActivity: Date.now() }))
     }
     const scheduleFlush = () => {
       if (flushFrame) return
@@ -1669,12 +1711,27 @@ export function SessionsView({
             pendingText += text
             scheduleFlush()
           },
-          onStatus: (text, ev) => patch((m) => ({ ...m, status: statusNote(text, ev) })),
+          // Usage is its own event: a counter, not a status note. It lands at
+          // most a few times a second (the engine throttles it), so it can
+          // patch state directly.
+          onUsage: (input, output, estimated) =>
+            patch((m) => ({
+              ...m,
+              tokens: input + output,
+              tokensEstimated: estimated,
+              lastActivity: Date.now(),
+            })),
+          onStatus: (text, ev) =>
+            patch((m) => ({ ...m, status: statusNote(text, ev), lastActivity: Date.now() })),
           // The note typed mid-turn reached a round. This is the upgrade from
           // "queued" to "delivered" — without it the user cannot tell a steer
           // the model read from one the turn ended before reaching.
           onSteer: (_text, round) =>
-            patch((m) => ({ ...m, status: t('sessions.steerDelivered', { n: String(round) }) })),
+            patch((m) => ({
+              ...m,
+              status: t('sessions.steerDelivered', { n: String(round) }),
+              lastActivity: Date.now(),
+            })),
           // The turn ended before a round could read what was queued behind it.
           // The server parked those notes; remember them so the finally below
           // opens the continuation turn instead of letting them evaporate.
@@ -1726,7 +1783,19 @@ export function SessionsView({
                 r.kind === 'plan' && r.plan_id
                   ? ({ kind: 'plan', ref: r.plan_id } as const)
                   : {}
-              return { ...m, ...task, ...plan, result: r, status: undefined, text, liveTask: undefined }
+              return {
+                ...m,
+                ...task,
+                ...plan,
+                result: r,
+                status: undefined,
+                text,
+                liveTask: undefined,
+                // The billed total wins; a stream that ended before any usage
+                // event keeps whatever the live counter last showed.
+                tokens: r.tokens || m.tokens,
+                tokensEstimated: r.tokens ? false : m.tokensEstimated,
+              }
             })
           },
           onError: (message, code, info) => {
@@ -3617,9 +3686,16 @@ function ChatBubble(props: {
               </time>
             ) : null}
             {msg.streaming && liveFrom > 0 ? (
-              <LiveElapsed from={liveFrom} />
+              <LiveElapsed from={liveFrom} last={msg.lastActivity} />
             ) : elapsedMs !== undefined ? (
               <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(elapsedMs) })}</span>
+            ) : null}
+            {msg.tokens ? (
+              <span class="msg-dur" data-testid="msg-tokens">
+                {t('sessions.tokens', {
+                  n: (msg.tokensEstimated ? '~' : '') + fmtTokens(msg.tokens),
+                })}
+              </span>
             ) : null}
           </span>
         </div>
