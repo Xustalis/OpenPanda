@@ -1370,6 +1370,11 @@ const es: Messages = {
   'models.fetchFail': 'No se pudo obtener',
   'models.fetched': '{n} modelos disponibles: abre la flecha del campo de modelo para elegir uno.',
   'models.manualAdd': 'Añadir fila',
+  'models.savedAndAdded': 'Modelo actualizado y {n} modelo(s) nuevo(s).',
+  'models.saveAndAdd': 'Guardar y añadir {n}',
+  'models.moreOnConnHelp':
+    'Se crean con el endpoint y la clave de arriba; se añaden a esta conexión al guardar.',
+  'models.moreOnConn': 'Más modelos en esta conexión',
   'models.col.pick': 'Registrar este modelo',
   'models.col.model': 'Id del modelo',
   'models.col.alias': 'Nombre',

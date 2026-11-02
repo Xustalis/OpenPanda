@@ -1402,6 +1402,11 @@ const en: Messages = {
   'models.fetchFail': 'Fetch failed',
   'models.fetched': '{n} models available — open the caret in the model field to pick one.',
   'models.manualAdd': 'Add row',
+  'models.savedAndAdded': 'Model updated, plus {n} new model(s).',
+  'models.saveAndAdd': 'Save and add {n}',
+  'models.moreOnConnHelp':
+    'Created with the endpoint and key above; they join this connection when you save.',
+  'models.moreOnConn': 'More models on this connection',
   'models.col.pick': 'Register this model',
   'models.col.model': 'Model id',
   'models.col.alias': 'Name',
