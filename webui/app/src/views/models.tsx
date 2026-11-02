@@ -255,7 +255,13 @@ export function ModelsSection() {
           onDone={(r) => {
             setSheet(null)
             if (r.edited) {
-              toast(t('models.saved'), 'success')
+              // The edit always lands first; rows appended to the connection
+              // are reported in the same sentence rather than a second toast
+              // the user has to catch.
+              toast(
+                r.added ? t('models.savedAndAdded', { n: r.added }) : t('models.saved'),
+                'success',
+              )
             } else if (r.switched) {
               toast(t('models.addedSwitched', { n: r.added ?? 0, alias: r.switched }), 'success')
             } else {
@@ -297,6 +303,8 @@ function ModelTile(props: {
   const { entry } = props.m
   const [confirming, setConfirming] = useState(false)
   const k = keyOf(entry)
+  // A row that signs in with a subscription token (the Codex login) has no
+  // api_key on purpose: the dot is for "cannot dial at all", not "no secret".
   const keyOk = entry.no_auth || entry.key_set
   const testing = props.busy === `test:${k}`
   const verdict = props.result ? (props.result.ok ? 'ok' : 'bad') : ''
@@ -572,6 +580,12 @@ function ModelSheet(props: {
     return [newDraft(initial?.default_model ?? '')]
   })
   const [remote, setRemote] = useState<string[] | null>(null)
+  /** Rows to register on this connection *while* editing it. Editing is a
+   *  one-row form by design, but the second thing anyone does to a working
+   *  relay is "same endpoint, same key, one more id" — and that used to mean
+   *  closing the sheet and walking the add flow from the top. These rows are
+   *  the add sheet's own table, appended below the form. */
+  const [extra, setExtra] = useState<Draft[]>([])
   const [useAfter, setUseAfter] = useState(false)
   const [tuneOpen, setTuneOpen] = useState(false)
   const [busy, setBusy] = useState('')
@@ -635,6 +649,21 @@ function ModelSheet(props: {
     setDrafts((cur) => cur.map((x) => (x.id === id ? { ...x, ...p } : x)))
   }
 
+  function patchExtra(id: number, p: Partial<Draft>) {
+    setExtra((cur) => cur.map((x) => (x.id === id ? { ...x, ...p } : x)))
+  }
+
+  /** Append a row and bring it into view. The sheet is already scrolled to the
+   *  form's bottom, so a row added under the fold would otherwise arrive
+   *  invisible — the click would look like it did nothing. */
+  function addExtraRow() {
+    setExtra((cur) => [...cur, newDraft()])
+    requestAnimationFrame(() => {
+      const pane = box.current?.querySelector<HTMLElement>('.wizard-pane')
+      if (pane) pane.scrollTop = pane.scrollHeight
+    })
+  }
+
   function requestFor(draft: Draft): AddModelRequest {
     const p = provider!
     const req: AddModelRequest = {
@@ -666,7 +695,13 @@ function ModelSheet(props: {
     // not "whatever key this provider has", which is the wrong account when
     // the same vendor is registered twice. A vendor picked from the rail is a
     // different account, so the borrow only stands while the vendor does.
-    if (!apiKey.trim() && pre?.keySet && vendorSame) req.reuse_from = pre.members[0]?.entry.alias
+    if (!apiKey.trim() && vendorSame) {
+      if (pre?.keySet) req.reuse_from = pre.members[0]?.entry.alias
+      // A row appended in the edit sheet has no key of its own either: the row
+      // being edited holds it, and borrowing by alias is what makes "one more
+      // model on this account" a one-field job.
+      else if (editing) req.reuse_from = editing.alias
+    }
     const params = parseJSON(draft.params)
     if (params) req.params = params
     const headers = parseJSON(draft.headers)
@@ -769,9 +804,15 @@ function ModelSheet(props: {
     if (!row || !src || !row.model.trim()) return
     let params: Record<string, unknown> | undefined
     let headers: Record<string, string> | undefined
+    let additions: AddModelRequest[] = []
     try {
       params = parseJSON(row.params)
       headers = parseJSON(row.headers) as Record<string, string> | undefined
+      // Same rows, same request builder as the add flow — the only difference
+      // is that these land on a connection that already exists.
+      additions = extra
+        .filter((x) => x.picked && x.model.trim() !== '')
+        .map((x) => requestFor(x))
     } catch {
       setError(t('models.badJSON'))
       return
@@ -809,11 +850,26 @@ function ModelSheet(props: {
       if (params) req.params = params
       if (headers) req.headers = headers
       await api.updateModel(src.alias, req, refOf(src))
-      props.onDone({ edited: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy('')
+      return
     }
+    // The edit is committed; the appended rows are a second write. A failure
+    // there must not be reported as "nothing was saved" — say how many landed.
+    let created = 0
+    try {
+      for (const r of additions) {
+        await api.addModel(r)
+        created++
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(created > 0 ? t('models.addPartial', { n: created, error: msg }) : msg)
+      setBusy('')
+      return
+    }
+    props.onDone({ edited: true, added: created })
   }
 
   // A key already on file — the vendor's, the connection's or the edited
@@ -836,6 +892,10 @@ function ModelSheet(props: {
   const needsKey = provider !== null && !provider.no_auth && !noAuth && !keyOnFile
   const keyReady = !needsKey || apiKey.trim() !== ''
   const pickedCount = drafts.filter((x) => x.picked && x.model.trim() !== '').length
+  /** Appended rows that actually carry a model id — the count the button and
+   *  the toast both speak in. The tick is honoured here too: unticking a row
+   *  means "not this one", which is the only reason the box exists. */
+  const extraCount = extra.filter((x) => x.picked && x.model.trim() !== '').length
   const baseReady = provider !== null && (provider.id !== 'custom' || currentBase() !== '')
   const canSubmit = provider !== null && baseReady && keyReady && (editing ? drafts[0]!.model.trim() !== '' : pickedCount > 0)
 
@@ -1306,6 +1366,39 @@ function ModelSheet(props: {
                       </div>
                     )}
                   </section>
+
+                  {/* The add sheet's table, appended to the edit form: same
+                      endpoint, same key, one more id is the second thing
+                      anyone does to a relay that works, and it used to mean
+                      closing this sheet and walking the add flow from the
+                      top. Rows here are POSTs on save; the row above is the
+                      PUT and keeps its alias. */}
+                  <div class="models-table-head">
+                    <div class="section-title">{t('models.moreOnConn')}</div>
+                    <div class="models-table-actions">
+                      <button type="button" class="btn small" onClick={addExtraRow}>
+                        <Icon name="plus" size={14} />
+                        {t('models.manualAdd')}
+                      </button>
+                    </div>
+                  </div>
+                  {extra.length === 0 ? (
+                    <p class="wizard-help">{t('models.moreOnConnHelp')}</p>
+                  ) : (
+                    <div class="models-table">
+                      {extra.length > 1 && <DraftHead />}
+                      {extra.map((draft) => (
+                        <DraftRow
+                          key={draft.id}
+                          d={draft}
+                          remote={remote}
+                          bare={extra.length > 1}
+                          onPatch={(p) => patchExtra(draft.id, p)}
+                          onDrop={() => setExtra((cur) => cur.filter((x) => x.id !== draft.id))}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </>
               ) : (
                 <>
@@ -1336,30 +1429,7 @@ function ModelSheet(props: {
                   )}
 
                   <div class="models-table">
-                    {drafts.length > 1 && (
-                      <div class="draft-head">
-                        <span class="draft-head-check" />
-                        {/* Same skeleton as a row — same flex weights, same
-                            gaps — so the labels land over the fields they name. */}
-                        <div class="draft-fields">
-                          <div class="draft-fields-row">
-                            <div class="field-group">
-                              <label>{t('models.col.model')}</label>
-                            </div>
-                            <div class="field-group">
-                              <label>{t('models.col.alias')}</label>
-                            </div>
-                            <div class="field-group narrow">
-                              <label>{t('models.col.context')}</label>
-                            </div>
-                            <div class="field-group narrow">
-                              <label>{t('models.col.thinking')}</label>
-                            </div>
-                            <span class="draft-head-end" />
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                    {drafts.length > 1 && <DraftHead />}
                     {drafts.map((draft) => (
                       <DraftRow
                         key={draft.id}
@@ -1410,7 +1480,9 @@ function ModelSheet(props: {
                   ? '…'
                   : t('models.adding')
                 : editing
-                  ? t('common.save')
+                  ? extraCount > 0
+                    ? t('models.saveAndAdd', { n: extraCount })
+                    : t('common.save')
                   : pickedCount > 0
                     ? t('models.addConfirmN', { n: pickedCount })
                     : t('models.addModel')}
@@ -1477,6 +1549,35 @@ function ProviderRail(props: {
           ),
       )}
     </aside>
+  )
+}
+
+/** Column names for a multi-row table. Same skeleton as a row — same flex
+ *  weights, same gaps — so the labels land over the fields they name. One
+ *  header above the table beats a header per row: five fetched models were
+ *  five copies of the same four labels. */
+function DraftHead() {
+  return (
+    <div class="draft-head">
+      <span class="draft-head-check" />
+      <div class="draft-fields">
+        <div class="draft-fields-row">
+          <div class="field-group">
+            <label>{t('models.col.model')}</label>
+          </div>
+          <div class="field-group">
+            <label>{t('models.col.alias')}</label>
+          </div>
+          <div class="field-group narrow">
+            <label>{t('models.col.context')}</label>
+          </div>
+          <div class="field-group narrow">
+            <label>{t('models.col.thinking')}</label>
+          </div>
+          <span class="draft-head-end" />
+        </div>
+      </div>
+    </div>
   )
 }
 

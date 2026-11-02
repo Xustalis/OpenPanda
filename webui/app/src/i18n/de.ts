@@ -1337,6 +1337,11 @@ const de: Messages = {
   'models.fetchFail': 'Abruf fehlgeschlagen',
   'models.fetched': '{n} Modelle verfügbar — im Modellfeld rechts auf das Aufklapp-Symbol klicken.',
   'models.manualAdd': 'Zeile hinzufügen',
+  'models.savedAndAdded': 'Modell aktualisiert, {n} neue(s) Modell(e) hinzugefügt.',
+  'models.saveAndAdd': 'Speichern und {n} hinzufügen',
+  'models.moreOnConnHelp':
+    'Wird mit dem obigen Endpunkt und Schlüssel angelegt und beim Speichern dieser Verbindung hinzugefügt.',
+  'models.moreOnConn': 'Weitere Modelle dieser Verbindung',
   'models.col.pick': 'Dieses Modell registrieren',
   'models.col.model': 'Modell-ID',
   'models.col.alias': 'Anzeigename',
