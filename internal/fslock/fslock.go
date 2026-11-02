@@ -18,9 +18,11 @@ package fslock
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // ErrHeld reports that another holder has the lock and the caller asked not to
@@ -47,7 +49,7 @@ func Acquire(path string, blocking bool) (release func(), err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := openWithRetry(path)
 	if err != nil {
 		return nil, err
 	}
@@ -72,4 +74,67 @@ func Acquire(path string, blocking bool) (release func(), err error) {
 			_ = f.Close()
 		})
 	}, nil
+}
+
+// The lock file is a marker, never data. Existing files are opened read-only:
+// an exclusive open requests write access, and on Windows a concurrent creator
+// (or a filter/AV holding the file) answers that with ERROR_ACCESS_DENIED long
+// before LockFileEx is reached. A read handle is enough for both flock and
+// LockFileEx. Creation uses O_EXCL, so the loser of a create race falls back
+// to the read-only open instead of retrying a write open. A short, Windows-only
+// retry covers the window while another process is creating the same file.
+const (
+	openRetryWindow = time.Second
+	openRetryDelay  = 5 * time.Millisecond
+	openRetryMax    = 100 * time.Millisecond
+)
+
+// Seams kept as variables so tests can exercise the create race and the
+// transient-open retry without a Windows host.
+var openLockFile = os.OpenFile
+var retryableOpen = platformRetryableOpen
+
+func openLock(path string) (*os.File, error) {
+	f, err := openLockFile(path, os.O_RDONLY, 0)
+	if err == nil {
+		fi, statErr := f.Stat()
+		if statErr != nil {
+			_ = f.Close()
+			return nil, statErr
+		}
+		// The old O_RDWR open failed on a directory; O_RDONLY would succeed,
+		// which would silently "lock" something that is not a lock file.
+		if fi.IsDir() {
+			_ = f.Close()
+			return nil, &os.PathError{Op: "open", Path: path, Err: fs.ErrInvalid}
+		}
+		return f, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	f, err = openLockFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err == nil {
+		return f, nil
+	}
+	if errors.Is(err, fs.ErrExist) {
+		return openLockFile(path, os.O_RDONLY, 0)
+	}
+	return nil, err
+}
+
+func openWithRetry(path string) (*os.File, error) {
+	deadline := time.Now().Add(openRetryWindow)
+	delay := openRetryDelay
+	for {
+		f, err := openLock(path)
+		if err == nil || !retryableOpen(err) || !time.Now().Before(deadline) {
+			return f, err
+		}
+		time.Sleep(delay)
+		delay *= 2
+		if delay > openRetryMax {
+			delay = openRetryMax
+		}
+	}
 }

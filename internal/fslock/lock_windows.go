@@ -37,3 +37,12 @@ func tryLock(f *os.File, blocking bool) (held, unsupported bool, err error) {
 func unlock(f *os.File) error {
 	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &windows.Overlapped{})
 }
+
+// platformRetryableOpen reports errors that are transient while another process
+// creates or holds the marker file: a sharing violation (AV/indexer holding it)
+// and an access denial in the narrow create window both clear on a retry.
+// A persistent ACL denial still surfaces after openRetryWindow.
+func platformRetryableOpen(err error) bool {
+	return errors.Is(err, windows.ERROR_SHARING_VIOLATION) ||
+		errors.Is(err, windows.ERROR_ACCESS_DENIED)
+}

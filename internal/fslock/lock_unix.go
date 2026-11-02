@@ -44,3 +44,8 @@ func tryLock(f *os.File, blocking bool) (held, unsupported bool, err error) {
 func unlock(f *os.File) error {
 	return unix.Flock(int(f.Fd()), unix.LOCK_UN)
 }
+
+// platformRetryableOpen is false on POSIX: open contention is a permission
+// error, not a transient sharing state, and retrying it would only delay the
+// caller's diagnosis.
+func platformRetryableOpen(error) bool { return false }
