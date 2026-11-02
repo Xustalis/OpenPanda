@@ -2612,7 +2612,10 @@ rounds:
 			var dispatched []*Result
 			refusedThisRound := 0
 			for i, call := range calls {
-				cb.progress(Progress{Kind: ProgressTool, Name: call.Tool})
+				// Detail is the one-line subject of the call (a path, a search
+				// pattern, a task id): a side channel that shows only the tool
+				// name still leaves the reader guessing what was checked.
+				cb.progress(Progress{Kind: ProgressTool, Name: call.Tool, Detail: toolProgressDetail(call)})
 				if call.Tool == entry.ToolNameTaskSubmit {
 					// A refused dispatch invites a retry: the model raises the
 					// budget and re-sends the batch. Re-sending the whole batch

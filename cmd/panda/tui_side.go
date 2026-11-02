@@ -72,6 +72,9 @@ type sideState struct {
 	thought []string
 	// status is the one-line progress note (routing, retrying, tool calls).
 	status string
+	// tools is what this answer checked, in order, for the note committed
+	// under it. Display only — it never joins the replay history.
+	tools []string
 }
 
 // sideSessionSuffix separates the side channel's approval bucket from the
@@ -231,6 +234,7 @@ func (m *tuiModel) askSide(question string) tea.Cmd {
 	s.ch.blocks = append(s.ch.blocks, block{kind: blockUser, body: question})
 	s.answer = nil
 	s.thought = nil
+	s.tools = nil
 	s.status = i18n.T(m.loc, "tui.side.asking")
 	team := []string(nil)
 	if m.r != nil {
@@ -290,6 +294,13 @@ func (m *tuiModel) onSideDone(msg doneMsg) tea.Cmd {
 	// question in this thread sees what the previous one answered.
 	if text != "" {
 		s.turns = append(s.turns, entry.Turn{Role: "assistant", Content: text})
+	}
+	// What the answer checked stays visible under it: the reader can act on a
+	// task id or a file the model actually read instead of taking prose on
+	// faith. It is a display note, not a turn — the next ask does not replay it.
+	if len(s.tools) > 0 {
+		s.ch.blocks = append(s.ch.blocks, block{kind: blockNote, body: i18n.Tf(m.loc, "tui.side.checked", "tools", strings.Join(s.tools, " · "))})
+		s.tools = nil
 	}
 	return nil
 }

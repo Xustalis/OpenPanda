@@ -29,16 +29,22 @@
 // and the pane's `+` starts a genuinely new one.
 
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { askSideStream, isAbort, type SideTurn } from '../api/client'
+import { askSideStream, isAbort, type AskStatusEvent, type SideTurn } from '../api/client'
 import { t } from '../i18n'
 import { Markdown } from '../md/render'
 import { Icon } from './icons'
+import { MessageCopyButton } from './copy'
 
 interface Line {
   id: number
   role: 'user' | 'assistant'
   text: string
   live?: boolean
+  /** What this answer checked, in order: the tool and its subject. Display
+   *  only — the engine never replays it, so it never enters the prompt. */
+  tools?: string[]
+  /** Billed tokens for the answer, when the provider reported them. */
+  tokens?: number
 }
 
 export interface SideChatProps {
@@ -58,6 +64,36 @@ const SIDE_STORE_CAP = 40
 
 const sideKey = (id: string) => `openpanda.side.${id}`
 
+/** The side channel's one-line progress note. Retry and outage milestones are
+ *  re-phrased here from the same structured fields the main composer reads, so
+ *  two panes in one console do not speak different languages about the same
+ *  provider hiccup. */
+function sideStatusNote(text: string, ev?: AskStatusEvent): string {
+  if (ev?.kind === 'retry') {
+    const reason = ev.http_status ? `HTTP ${ev.http_status}` : t('sessions.retry.transport')
+    return t('sessions.retry', {
+      reason,
+      delay: Math.max(0, Math.round((ev.delay_ms ?? 0) / 1000)),
+      attempt: ev.attempt ?? 0,
+      max: ev.max ?? 0,
+    })
+  }
+  if (ev?.kind === 'offline') {
+    const waited = Math.max(0, Math.round((ev.waited_ms ?? 0) / 1000))
+    return ev.detail === 'resumed'
+      ? t('sessions.offline.resumed', { delay: waited })
+      : t('sessions.offline.waiting')
+  }
+  return text
+}
+
+/** Compact token count for the answer foot: 950, 1.2k, 1.1M. */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
 /** Read the stored conversation for one thread. Anything malformed is
  *  discarded rather than trusted: this is browser storage a page can corrupt,
  *  and a bad row must not take the panel down with it. */
@@ -65,12 +101,14 @@ function loadSide(id: string): Line[] {
   try {
     const raw = localStorage.getItem(sideKey(id))
     if (!raw) return []
-    const rows = JSON.parse(raw) as Array<{ role?: unknown; text?: unknown }>
+    const rows = JSON.parse(raw) as Array<{ role?: unknown; text?: unknown; tools?: unknown; tokens?: unknown }>
     if (!Array.isArray(rows)) return []
     const out: Line[] = []
     for (const row of rows) {
       if (!row || (row.role !== 'user' && row.role !== 'assistant') || typeof row.text !== 'string') continue
-      out.push({ id: ++seq, role: row.role, text: row.text })
+      const tools = Array.isArray(row.tools) ? row.tools.filter((x): x is string => typeof x === 'string') : undefined
+      const tokens = typeof row.tokens === 'number' && row.tokens > 0 ? row.tokens : undefined
+      out.push({ id: ++seq, role: row.role, text: row.text, tools, tokens })
     }
     return out
   } catch {
@@ -85,7 +123,15 @@ function saveSide(id: string, lines: Line[]) {
     const rows = lines
       .filter((l) => !l.live && l.text.trim() !== '')
       .slice(-SIDE_STORE_CAP)
-      .map((l) => ({ role: l.role, text: l.text }))
+      .map((l) => {
+        const row: { role: Line['role']; text: string; tools?: string[]; tokens?: number } = {
+          role: l.role,
+          text: l.text,
+        }
+        if (l.tools && l.tools.length > 0) row.tools = l.tools
+        if (l.tokens) row.tokens = l.tokens
+        return row
+      })
     if (rows.length === 0) localStorage.removeItem(sideKey(id))
     else localStorage.setItem(sideKey(id), JSON.stringify(rows))
   } catch {
@@ -103,6 +149,7 @@ export function SideChat(props: SideChatProps) {
   const live = useRef('')
   const abort = useRef<AbortController | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   // Which ask the visible conversation belongs to. Switching threads (or
   // clearing the pane) bumps it, so callbacks from an aborted ask cannot
   // append their late deltas to the conversation now on screen.
@@ -169,10 +216,32 @@ export function SideChat(props: SideChatProps) {
       return next
     })
 
-  async function send() {
-    const prompt = input.trim()
-    if (!prompt || !props.sessionId || busy) return
-    const history: SideTurn[] = lines.map((l) => ({ role: l.role, content: l.text }))
+  const setLastTokens = (tokens: number) =>
+    setLines((prev) => {
+      const last = prev[prev.length - 1]
+      if (!last || last.role !== 'assistant') return prev
+      const next = prev.slice()
+      next[next.length - 1] = { ...last, tokens }
+      return next
+    })
+
+  // appendTool records one tool call on the answer being streamed. The chip is
+  // added when the call starts, so the reader watches the channel work
+  // (system_status, then workspace_read side.go) instead of a mute spinner.
+  const appendTool = (label: string) =>
+    setLines((prev) => {
+      const last = prev[prev.length - 1]
+      if (!last || last.role !== 'assistant' || !last.live) return prev
+      const tools = last.tools ?? []
+      if (tools.length >= 24 || tools[tools.length - 1] === label) return prev
+      const next = prev.slice()
+      next[next.length - 1] = { ...last, tools: [...tools, label] }
+      return next
+    })
+
+  async function ask(prompt: string, history: SideTurn[]) {
+    const id = props.sessionId
+    if (!id) return
     setInput('')
     setErr('')
     setStatus('')
@@ -189,7 +258,7 @@ export function SideChat(props: SideChatProps) {
     const current = () => run.current === runId
     try {
       await askSideStream(
-        props.sessionId,
+        id,
         prompt,
         history,
         {
@@ -199,12 +268,24 @@ export function SideChat(props: SideChatProps) {
             live.current += d
             patchLast(live.current)
           },
-          onStatus: (text) => {
-            if (current()) setStatus(text)
+          onStatus: (text, ev) => {
+            if (!current()) return
+            // A tool call is progress worth keeping, not a transient note: it
+            // becomes a chip on the answer, and the status line repeats it in
+            // the reader's own language while the call runs.
+            if (ev?.kind === 'tool' && ev.name) {
+              const label = ev.detail ? `${ev.name} ${ev.detail}` : ev.name
+              appendTool(label)
+              setStatus(t('side.tool', { tool: label }))
+              return
+            }
+            setStatus(sideStatusNote(text, ev))
           },
           onOperation: () => {},
           onResult: (r) => {
-            if (current()) patchLast(r.answer || live.current, true)
+            if (!current()) return
+            patchLast(r.answer || live.current, true)
+            if (typeof r.tokens === 'number' && r.tokens > 0) setLastTokens(r.tokens)
           },
           onError: (message) => {
             if (!current()) return
@@ -228,6 +309,32 @@ export function SideChat(props: SideChatProps) {
     }
   }
 
+  function send() {
+    const prompt = input.trim()
+    if (!prompt || !props.sessionId || busy) return
+    const history: SideTurn[] = lines.map((l) => ({ role: l.role, content: l.text }))
+    void ask(prompt, history)
+  }
+
+  // Retry drops the failed exchange and asks the same question again with the
+  // history that preceded it. The question is still on screen, so the reader
+  // does not have to retype it after a provider hiccup.
+  function retry() {
+    if (busy || !props.sessionId) return
+    let idx = -1
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i]!.role === 'user') {
+        idx = i
+        break
+      }
+    }
+    if (idx < 0) return
+    const prompt = lines[idx]!.text
+    const history: SideTurn[] = lines.slice(0, idx).map((l) => ({ role: l.role, content: l.text }))
+    setLines(lines.slice(0, idx))
+    void ask(prompt, history)
+  }
+
   function stop() {
     abort.current?.abort()
     abort.current = null
@@ -245,11 +352,33 @@ export function SideChat(props: SideChatProps) {
                 this panel is missing — say that instead of showing a box the
                 reader can type into and a button that never lights up. */}
             {props.sessionId ? (
-              <p>{t('side.empty')}</p>
+              <>
+                <p>{t('side.empty')}</p>
+                <p class="dim">{t('side.readonly')}</p>
+                <p class="dim">{t('side.context')}</p>
+                {/* The channel is most useful with a question that names what
+                    it can check. These fill the composer rather than sending:
+                    the reader edits them to this thread's own words. */}
+                <div class="side-starters">
+                  <span class="dim">{t('side.starters')}</span>
+                  {(['status', 'summary', 'files'] as const).map((k) => (
+                    <button
+                      type="button"
+                      class="side-starter"
+                      key={k}
+                      onClick={() => {
+                        setInput(t(`side.starter.${k}`))
+                        inputRef.current?.focus()
+                      }}
+                    >
+                      {t(`side.starter.${k}`)}
+                    </button>
+                  ))}
+                </div>
+              </>
             ) : (
               <p>{t('side.noThread')}</p>
             )}
-            <p class="dim">{t('side.readonly')}</p>
           </div>
         )}
 
@@ -265,8 +394,19 @@ export function SideChat(props: SideChatProps) {
                 ) : (
                   <p class="side-typing dim">{t('side.thinking')}</p>
                 )}
+                {l.tools && l.tools.length > 0 && (
+                  <div class="side-tools">
+                    <span class="side-tools-label">{t('side.tools')}</span>
+                    {l.tools.map((tool, k) => (
+                      <span class="side-tool" key={k} title={tool}>
+                        {tool}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {!l.live && l.text && (
                   <div class="side-acts">
+                    <MessageCopyButton text={l.text} markdown />
                     <button type="button" class="link-btn" onClick={() => props.onInsert(l.text)}>
                       {t('side.insert')}
                     </button>
@@ -285,6 +425,9 @@ export function SideChat(props: SideChatProps) {
                     >
                       {t('side.toMain')}
                     </button>
+                    {l.tokens ? (
+                      <span class="side-tokens dim">{formatTokens(l.tokens)} tokens</span>
+                    ) : null}
                   </div>
                 )}
               </>
@@ -293,7 +436,14 @@ export function SideChat(props: SideChatProps) {
         ))}
 
         {status !== '' && <p class="side-status dim">{status}</p>}
-        {err !== '' && <p class="side-err">{err}</p>}
+        {err !== '' && (
+          <div class="side-error">
+            <p class="side-err">{err}</p>
+            <button type="button" class="link-btn" onClick={retry} disabled={busy}>
+              {t('side.retry')}
+            </button>
+          </div>
+        )}
       </div>
 
       <form
@@ -304,6 +454,7 @@ export function SideChat(props: SideChatProps) {
         }}
       >
         <textarea
+          ref={inputRef}
           class="input side-input"
           rows={2}
           value={input}

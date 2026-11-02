@@ -722,6 +722,15 @@ func statusEventOf(p askengine.Progress) map[string]any {
 			ev["reason"] = p.Reason
 		}
 	}
+	if p.Kind == askengine.ProgressTool {
+		// A tool call's subject (workspace_search's pattern, workspace_read's
+		// path) lets the console show what was checked instead of only which
+		// tool ran. Detail is already bounded by the engine.
+		ev["name"] = p.Name
+		if p.Detail != "" {
+			ev["detail"] = p.Detail
+		}
+	}
 	if p.Kind == askengine.ProgressSpawn {
 		// The fan-out milestone carries its subject and mode descriptor so
 		// the console can phrase "spawning sub-agent X (isolated)…" in the
