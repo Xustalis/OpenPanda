@@ -286,19 +286,6 @@ func TaskID(ctx context.Context) string {
 	return ""
 }
 
-// systemPromptKey carries the adapter-level system-prompt rider
-// (--append-system-prompt) without widening the runAdapter seam.
-type systemPromptKey struct{}
-
-// WithSystemPrompt attaches the static protocol/system rider text the
-// adapter passes to the CLI's append-system-prompt flag. Empty is a no-op.
-func WithSystemPrompt(ctx context.Context, text string) context.Context {
-	if text == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, systemPromptKey{}, text)
-}
-
 // resultSchemaKey carries the JSON Schema a run's result validates against.
 type resultSchemaKey struct{}
 
@@ -323,18 +310,6 @@ func WithMCPConfig(ctx context.Context, doc string) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, mcpConfigKey{}, doc)
-}
-
-// effortKey carries the per-task reasoning-effort level to the adapter.
-type effortKey struct{}
-
-// WithEffort attaches a reasoning-effort level (e.g. "high"); adapters
-// without an effort flag ignore it. Empty is a no-op.
-func WithEffort(ctx context.Context, effort string) context.Context {
-	if effort == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, effortKey{}, effort)
 }
 
 // complexityKey carries the task's 0–1 complexity score down to the adapter
@@ -1170,17 +1145,11 @@ func buildAdapterRequest(ctx context.Context, name, prompt, cwd string) (Adapter
 	if cmd, ok := ctx.Value(agentCmdKey{}).(string); ok {
 		req.Cmd = cmd
 	}
-	if sp, ok := ctx.Value(systemPromptKey{}).(string); ok {
-		req.SystemPrompt = sp
-	}
 	if rs, ok := ctx.Value(resultSchemaKey{}).(string); ok {
 		req.ResultSchema = rs
 	}
 	if mc, ok := ctx.Value(mcpConfigKey{}).(string); ok {
 		req.MCPConfig = mc
-	}
-	if ef, ok := ctx.Value(effortKey{}).(string); ok {
-		req.Effort = ef
 	}
 	if cx, ok := ctx.Value(complexityKey{}).(float64); ok && cx > 0 {
 		req.Complexity = cx
