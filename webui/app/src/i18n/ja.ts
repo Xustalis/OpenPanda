@@ -797,6 +797,7 @@ const ja: Messages = {
   'workspace.empty': 'デバイスがありません — このコンソールはまだネットワークに参加していません。',
   'workspace.count': '{devices} 台 · {online} オンライン',
   'workspace.tidy': 'レイアウトを整える',
+  'workspace.zoom.reset': '100% に戻す（ホイールで拡大縮小）',
   'workspace.local': 'このデバイス',
   'workspace.tile.idle': '待機中',
   'workspace.tile.running': '実行中',

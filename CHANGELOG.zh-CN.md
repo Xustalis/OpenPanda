@@ -42,6 +42,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增功能
 
+- **工作空间画布可以缩放** —— 滚轮在 50% 到 200% 之间缩放这张图，指针下的那一点始终留在指针下，八台机器能挤进一屏，一张卡也能占满一屏。缩放不是 100% 时头部会显示倍率，点一下即可复位；「整理布局」也会一并复位。卡片位置仍按 100% 存储，所以缩小状态下拖动的卡片落在它看起来落的地方。
 - **模型注册表会从本机自己长出来** —— `panda model discover` 和控制台的「在本机发现」会读 Codex、Claude Code、OpenCode 的配置以及回环地址上的推理服务，把找到的东西变成注册行。环境变量里的密钥只写*位置*（`key_env: DASHSCOPE_API_KEY`），不抄进 `config.yaml`；本机服务的占位凭据、设置文件里的 token 或 Codex provider 的字面值因为没有环境变量可引用，会写入一次；属于 Bearer 凭据的 token 带 `key_scheme: bearer`，走 `Authorization` 头。配置给不出可拨号端点的模型（只有 CLI 登录的 ChatGPT 计划、没有端点的条目）照样列出来，但不勾选。
 - **ChatGPT 订阅可以充当模型行** —— Codex CLI 自己的登录可以给注册表的一行签名：`auth: codex` 配 `api_type: responses` 走 CLI 的后端，没有 API key 的计划也能用。token 每次调用都从 `~/.codex/auth.json` 读，从不写进存储——复制一份会旋转的 refresh token 会分叉刷新链，静默弄坏 CLI。该端点只接受流式调用，所以这一行走流式。
 
