@@ -413,6 +413,36 @@
   color: var(--text-tertiary);
   font-size: var(--text-xs);
 }
+/* A pane with no page says why, and carries the one action that might fix it.
+   It sits between the chrome and the stage so the explanation is read on the
+   way to the content rather than floated over it. */
+.db-notice {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+}
+.db-notice-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.db-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.db-notice-hint {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
 .db-stage {
   position: relative;
   flex: 1;

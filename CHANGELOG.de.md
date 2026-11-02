@@ -65,6 +65,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
+- **Die Seite eines fertigen Auftrags öffnet sich in der Seitenspalte der Konsole** — der Seitenbrowser hatte keinen Weg vom Ergebnis eines Auftrags zu seinem Rahmen, eine erzeugte Seite blieb also unsichtbar, bis man ihre Artefaktkarte fand, und ein Ladefehler hinterließ eine graue Spalte ohne Erklärung. Ein abgeschlossener Auftrag öffnet seine Seite jetzt von selbst in der Browserlasche (ein erneut geöffneter Thread spielt keine alten Seiten ab, eine Neuerzeugung öffnet wieder), eine Seite, die noch auf ihrem Ausführenden liegt, nennt den Knoten und bietet das Holen an, ein fehlgeschlagener Rahmen nennt den Fehler und bietet Wiederholen an, und die Adressleiste folgt dem Dokument samt Weiterleitungen.
+
 - **Ein injizierter Codex-Schlüssel landet nicht mehr in der Prozessliste** — der Adapter übergab das Provider-Token als `-c`-Überschreibung; `-c`-Werte sind gewöhnliches argv, also in `ps` sichtbar und im eigenen Transkript von Codex festgehalten. Das Token geht jetzt über die Umgebung unter einem Namen, den das CLI liest (`env_key`) — dort liegt die injizierte Credential ohnehin.
 - **Ein Relay, dessen Basis bereits `/v1` enthält, listet seine Modelle** — die Model-Route hängte `/v1` an das, was in der Zeile stand; `http://host/v1` wurde also nach `/v1/v1/models` gefragt und antwortete mit 404, während jeder Nachrichtenaufruf derselben Zeile funktionierte. Das Versionspräfix wird jetzt einmal entschieden, vom selben Normalisierer wie die Nachrichten-Route: ein eingefügtes `/messages`-Ende fällt weg, ein nackter Host bekommt `/v1`, eine Basis, die es schon trägt, behält es.
 

@@ -1745,6 +1745,16 @@ const de: Messages = {
   'dockBrowser.comment': 'Was stimmt daran nicht?',
   'dockBrowser.send': 'In den Entwurf',
   'dockBrowser.draft': 'Auf {url} — Element `{selector}`: {comment}',
+  'dockBrowser.artifactRemote': 'Diese Seite liegt noch auf {source} und wurde nicht auf diesen Knoten geholt.',
+  'dockBrowser.fetch': 'Holen und ansehen',
+  'dockBrowser.fetching': 'Wird geholt…',
+  'dockBrowser.noFetch':
+    'Der ausführende Knoten hat nicht festgehalten, wo die Seite liegt; von hier ist sie nicht abrufbar.',
+  'dockBrowser.noPage': 'Dieser Auftrag hat keine Datei erzeugt, die die Spalte zeigen kann.',
+  'dockBrowser.failed': 'Die Seite konnte nicht geladen werden: {error}',
+  'dockBrowser.unknown': 'die Seite konnte nicht geladen werden',
+  'dockBrowser.retry': 'Erneut versuchen',
+  'dockBrowser.originFailed': 'Die Browserspalte ist noch nicht bereit: {error}',
   'side.empty': 'Frage zu diesem Thread. Hier wird nichts ausgeführt und nichts zurückgeschrieben.',
   'side.noThread': 'Dieser Thread hat noch keinen Verlauf. Schicke ihm eine Nachricht und frage dann hier: Das Seitengespräch liest den Thread, es legt keinen an.',
   'side.readonly':

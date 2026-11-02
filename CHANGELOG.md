@@ -71,6 +71,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **A finished task's page opens in the console's dock** — the side browser had no path from a task's output to its frame, so a generated site stayed invisible until the reader found its artifact card, and a failed load left a grey pane with no explanation. A settled task now opens its page in the browser tab by itself (reopening a thread does not replay old pages; a regenerated site opens again), a page still on its executor names that node and offers to pull it, a failed frame names the error and offers retry, and the address bar follows the document, redirects included.
+
 - **An injected Codex key no longer lands in the process list** — the adapter passed the provider token as a `-c` override, which is visible in `ps` and in Codex's own transcript. The token now goes into the environment under a name the CLI is told to read (`env_key`), where the injected credential already lives.
 - **A relay configured with `/v1` on its base lists its models** — the models route appended `/v1` to whatever the row held, so a base of `http://host/v1` was asked for `/v1/v1/models` and answered 404 while every message call on the same row worked. The version prefix is now decided once, by the same normalizer the messages route uses: a pasted `/messages` tail is dropped, a bare host gains `/v1`, and a base that already carries it keeps it.
 

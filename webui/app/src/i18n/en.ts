@@ -1750,6 +1750,16 @@ const en: Messages = {
   'dockBrowser.comment': 'What is wrong with it?',
   'dockBrowser.send': 'Put in the draft',
   'dockBrowser.draft': 'On {url} — element `{selector}`: {comment}',
+  'dockBrowser.artifactRemote': 'This page is still on {source} and has not been fetched to this node.',
+  'dockBrowser.fetch': 'Fetch and preview',
+  'dockBrowser.fetching': 'Fetching…',
+  'dockBrowser.noFetch':
+    'The node that ran this task did not record where the page lives, so it cannot be fetched from here.',
+  'dockBrowser.noPage': 'This task produced no file the pane can show.',
+  'dockBrowser.failed': 'The page could not be loaded: {error}',
+  'dockBrowser.unknown': 'the page could not be loaded',
+  'dockBrowser.retry': 'Retry',
+  'dockBrowser.originFailed': 'The browser pane is not ready: {error}',
   'side.empty': 'Ask about this thread. Nothing here runs and nothing is written back.',
   'side.noThread': 'This thread has no history yet — send it one message, then ask here. The side conversation reads the thread, it does not start one.',
   'side.readonly':

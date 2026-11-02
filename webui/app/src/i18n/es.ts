@@ -1746,6 +1746,16 @@ const es: Messages = {
   'dockBrowser.comment': '¿Qué falla en él?',
   'dockBrowser.send': 'Poner en el borrador',
   'dockBrowser.draft': 'En {url} — elemento `{selector}`: {comment}',
+  'dockBrowser.artifactRemote': 'Esta página sigue en {source} y aún no se ha traído a este nodo.',
+  'dockBrowser.fetch': 'Traer y ver',
+  'dockBrowser.fetching': 'Trayendo…',
+  'dockBrowser.noFetch':
+    'El nodo que ejecutó la tarea no registró dónde está la página, así que no se puede traer desde aquí.',
+  'dockBrowser.noPage': 'Esta tarea no produjo ningún archivo que el panel pueda mostrar.',
+  'dockBrowser.failed': 'No se pudo cargar la página: {error}',
+  'dockBrowser.unknown': 'no se pudo cargar la página',
+  'dockBrowser.retry': 'Reintentar',
+  'dockBrowser.originFailed': 'El panel del navegador no está listo: {error}',
   'side.empty': 'Pregunta sobre este hilo. Aquí no se ejecuta nada ni se escribe de vuelta.',
   'side.noThread': 'Este hilo aún no tiene historial. Envíale un mensaje y después pregunta aquí: la conversación lateral lee el hilo, no lo crea.',
   'side.readonly':

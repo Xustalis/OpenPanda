@@ -3,11 +3,14 @@
 package panel
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,5 +245,99 @@ func TestInjectPickerHandlesNonASCII(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "</body></html>") {
 		t.Errorf("the closing tags were damaged: %q", got)
+	}
+}
+
+// previewPanel wires a real task row and a real pool to the console, the same
+// arrangement a finished run leaves behind. withArtifact controls whether the
+// bytes landed on this node or are still on the executor.
+func previewPanel(t *testing.T, withArtifact bool) (http.Handler, string) {
+	t.Helper()
+	store := newTestStore(t)
+	pool := artifact.NewStore(t.TempDir())
+	task, err := store.Create(context.Background(), "", "proj", "site", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	hash := strings.Repeat("a", 64)
+	if withArtifact {
+		tree := t.TempDir()
+		if err := os.WriteFile(filepath.Join(tree, "index.html"),
+			[]byte("<!doctype html><html><body><h1>hi</h1></body></html>"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := pool.PackDir(tree)
+		if err != nil {
+			t.Fatalf("pack: %v", err)
+		}
+		hash = m.Hash
+	}
+	if err := store.SetOutputArtifact(context.Background(), task.TaskID, hash); err != nil {
+		t.Fatalf("set artifact: %v", err)
+	}
+	p, err := StartPreview(PreviewDeps{Artifacts: pool, Host: "127.0.0.1", Ancestors: "*"})
+	if err != nil {
+		t.Fatalf("start preview: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	return New(Deps{Store: store, Artifacts: pool, Preview: p, StaticDir: t.TempDir(), Token: testToken}), task.TaskID
+}
+
+type previewMeta struct {
+	State    string `json:"state"`
+	Hash     string `json:"hash"`
+	Entry    string `json:"entry"`
+	Kind     string `json:"kind"`
+	URL      string `json:"url"`
+	Origin   string `json:"origin"`
+	Source   string `json:"source"`
+	CanFetch bool   `json:"can_fetch"`
+}
+
+// The dock's auto-open reads `state`; a ready row must carry everything the
+// pane needs to frame the page without a second request.
+func TestTaskArtifactPreviewReady(t *testing.T) {
+	h, id := previewPanel(t, true)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks/"+id+"/artifact/preview", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rr.Code, rr.Body.String())
+	}
+	var meta previewMeta
+	if err := json.Unmarshal(rr.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if meta.State != "ready" {
+		t.Fatalf("state = %q", meta.State)
+	}
+	if meta.Entry != "index.html" || meta.Kind != "html" {
+		t.Fatalf("entry = %q, kind = %q", meta.Entry, meta.Kind)
+	}
+	if !strings.Contains(meta.URL, "/p/") || !strings.Contains(meta.URL, meta.Hash) {
+		t.Fatalf("url = %q", meta.URL)
+	}
+	if meta.Origin == "" {
+		t.Fatal("ready meta carries no origin")
+	}
+}
+
+// A pool without the archive is not an error about the page: the row still
+// names the node that ran it, which is what the pane's fetch button needs.
+func TestTaskArtifactPreviewRemote(t *testing.T) {
+	h, id := previewPanel(t, false)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks/"+id+"/artifact/preview", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rr.Code, rr.Body.String())
+	}
+	var meta previewMeta
+	if err := json.Unmarshal(rr.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if meta.State != "remote" {
+		t.Fatalf("state = %q", meta.State)
+	}
+	if meta.Source != "node" || !meta.CanFetch {
+		t.Fatalf("source = %q, can_fetch = %v", meta.Source, meta.CanFetch)
 	}
 }

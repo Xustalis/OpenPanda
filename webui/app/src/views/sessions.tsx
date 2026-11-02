@@ -27,7 +27,8 @@ import {
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
 import { Dock, type DockTab } from '../components/dock'
-import { DockBrowser } from '../components/dock-browser'
+import { DockBrowser, type BrowserArtifact } from '../components/dock-browser'
+import { scanArtifacts } from '../components/auto-preview'
 import { DockFiles } from '../components/dock-files'
 import { SideChat } from '../components/side-chat'
 import { TaskRail } from '../components/task-rail'
@@ -653,6 +654,14 @@ export function SessionsView({
     if (dockTab === '') return
     setDockSeen((prev) => (prev.includes(dockTab) ? prev : [...prev, dockTab]))
   }, [dockTab])
+  // Which artifact keys this thread has already shown. `null` means "no poll
+  // has landed yet": the first snapshot is the baseline, so reopening a thread
+  // after the work finished does not pop previews for pages already seen.
+  const autoSeen = useRef<Set<string> | null>(null)
+  // The finished task whose page the dock's browser is asked to show. It is a
+  // request into the panel, not a surface of its own: the panel owns the frame
+  // and the error state, this only names the task.
+  const [pageAsk, setPageAsk] = useState<BrowserArtifact | null>(null)
   // The file the transcript's latest click asked for. It is a request into the
   // dock's file panel, not a surface of its own: the panel owns the tree, this
   // only names the file to open there.
@@ -709,6 +718,12 @@ export function SessionsView({
     setDockOpen(false)
     setDockTab('')
     setFileRef(null)
+    // The panels stay mounted behind a hidden tab, so closing the dock is not
+    // enough: the next thread would reopen to the last thread's page, file or
+    // side question. The epoch is the panels' reset signal.
+    setDockEpoch((n) => n + 1)
+    autoSeen.current = null
+    setPageAsk(null)
     // The queue belongs to the thread it was typed in: a counter carried over
     // from another thread would make the next note look like a removal.
     noteCount.current = 0
@@ -2434,6 +2449,31 @@ export function SessionsView({
   // several dispatch turns was issuing that many extra requests per frame,
   // all competing with the event stream for the browser's six connections.
   const tasksById = new Map((sessionTasks ?? []).map((t) => [t.id, t]))
+  // A finished task's page opens in the dock by itself. The trigger is the
+  // artifact hash that was not in the previous poll (see scanArtifacts): a
+  // page that appears while the thread is being read is the one the reader
+  // wants, and one dock is enough — a round that lands several opens the
+  // newest and marks the rest seen, so none of them reopens later.
+  useEffect(() => {
+    if (!sessionTasks) return
+    const scan = scanArtifacts(autoSeen.current, sessionTasks)
+    autoSeen.current = scan.seen
+    const taskID = scan.next
+    if (!taskID) return
+    const task = sessionTasks.find((t) => t.id === taskID)
+    const hash = task?.plan_meta?.output_artifact
+    if (!hash) return
+    // The dock and the header cards share one lane; asking for a page closes
+    // whichever card was up rather than laying a column over it.
+    setCard('')
+    setDockOpen(true)
+    setDockTab('browser')
+    setPageAsk((prev) => ({
+      taskId: taskID,
+      hash,
+      nonce: (prev?.nonce ?? 0) + 1,
+    }))
+  }, [sessionTasks])
   // What the dock's task tab counts on its badge: the rows that still want
   // something — running, waiting on a human, or queued. Terminal rows are the
   // board's history, not an inbox item.
@@ -3342,7 +3382,7 @@ export function SessionsView({
         )}
         {dockSeen.includes('browser') && (
           <div class="dock-pane" hidden={dockTab !== 'browser'}>
-            <DockBrowser resetSignal={dockEpoch} onInsert={composerInsert} />
+            <DockBrowser resetSignal={dockEpoch} artifact={pageAsk} onInsert={composerInsert} />
           </div>
         )}
         {dockSeen.includes('side') && (

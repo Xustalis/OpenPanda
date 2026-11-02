@@ -65,6 +65,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
+- **La página de una tarea terminada se abre en el panel lateral de la consola** — el navegador lateral no tenía un camino desde el resultado de una tarea hasta su marco, así que un sitio generado quedaba invisible hasta encontrar su tarjeta de artefacto, y un fallo de carga dejaba un panel gris sin explicación. Ahora una tarea terminada abre su página sola en la pestaña del navegador (reabrir el hilo no reproduce páginas antiguas; una regeneración vuelve a abrir), una página que sigue en su ejecutor nombra ese nodo y ofrece traerla, un marco fallido dice el error y ofrece reintentar, y la barra de direcciones sigue al documento, redirecciones incluidas.
+
 - **Una clave de Codex inyectada ya no aparece en la lista de procesos** — el adaptador pasaba el token del proveedor como una opción `-c`, y los valores de `-c` son argv corriente: visibles en `ps` y escritos en la transcripción del propio Codex. El token va ahora en el entorno bajo un nombre que el CLI lee (`env_key`), donde ya vive la credencial inyectada.
 - **Un relay cuya base ya lleva `/v1` lista sus modelos** — la ruta de modelos añadía `/v1` a lo que guardara la fila, así que a `http://host/v1` se le pedía `/v1/v1/models` y respondía 404 mientras todas las llamadas de mensajes de esa fila funcionaban. El prefijo de versión se decide ahora una sola vez, con el mismo normalizador que la ruta de mensajes: una cola `/messages` pegada se descarta, un host desnudo gana `/v1` y una base que ya lo lleva lo conserva.
 

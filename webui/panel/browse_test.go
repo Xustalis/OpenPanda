@@ -245,3 +245,50 @@ func TestSameSecretFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// A failed fetch is served into an iframe the console cannot read, so the
+// document has to report itself: that message is what turns a grey page into
+// the pane's error bar, and the retry button's only trigger.
+func TestBrowseFailReportsItself(t *testing.T) {
+	rec := httptest.NewRecorder()
+	browseFail(rec, http.StatusBadGateway, errors.New(`could not reach "the site"`))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `source:"openpanda-browse-error"`) {
+		t.Fatalf("the error page does not report itself: %q", body)
+	}
+	if !strings.Contains(body, `could not reach \"the site\"`) {
+		t.Fatalf("the error text is not carried as a JS string: %q", body)
+	}
+	if policy := rec.Header().Get("Content-Security-Policy"); !strings.Contains(policy, "allow-scripts") {
+		t.Fatalf("the reporter script is blocked by %q", policy)
+	}
+	if xfo := rec.Header().Get("X-Frame-Options"); xfo != "" {
+		t.Fatalf("X-Frame-Options %q would hide the explanation", xfo)
+	}
+}
+
+// The message is built from a server-side error, which can quote a page's own
+// markup. It may not close the script that carries it.
+func TestBrowseFailEscapesMarkup(t *testing.T) {
+	rec := httptest.NewRecorder()
+	browseFail(rec, http.StatusBadGateway, errors.New(`</script><script>alert(1)</script>`))
+	body := rec.Body.String()
+	if strings.Contains(body, `</script><script>alert(1)`) {
+		t.Fatalf("raw markup escaped the reporter: %q", body)
+	}
+}
+
+// Links inside a browsed page must come back through the pane. A plain
+// navigation would leave the proxy for the site itself — past the address gate
+// and, on most sites, into a frame the site refuses to render.
+func TestBrowsePaneKeepsLinksOnTheProxy(t *testing.T) {
+	if !strings.Contains(browsePickOff, "__openpandaProxied=true") {
+		t.Fatalf("the pane never marks a proxied document: %q", browsePickOff)
+	}
+	if !strings.Contains(pickerScript, `"openpanda-navigate"`) {
+		t.Fatal("the picker script does not report link clicks")
+	}
+}
