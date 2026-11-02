@@ -354,6 +354,17 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     width: 0,
     height: 0,
   })
+  // The card ceiling is measured from the map's viewport, so a window resize
+  // has to re-run the layout pass. The heartbeat's tick also re-renders, but a
+  // resize should not wait seconds to pull a card back inside the block.
+  const [, setResizeTick] = useState(0)
+  useEffect(() => {
+    const view = scrollerOf(gridRef.current)
+    if (!view || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => setResizeTick((v) => v + 1))
+    ro.observe(view)
+    return () => ro.disconnect()
+  }, [devices.length])
 
   const edges = useMemo(() => buildWorkspaceEdges(devices), [devices])
   const visibleEdges = useMemo(
@@ -533,6 +544,13 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
   useLayoutEffect(() => {
     const grid = gridRef.current
     if (!grid || dragRef.current) return
+    // The map is a scroller and owns the padding; a card may not be taller
+    // than the band a reader can actually see. Publishing the ceiling as a
+    // custom property caps the card in CSS (header fixed, tile field scrolls
+    // inside it) instead of letting it run under the composer.
+    const view = scrollerOf(grid)
+    const panelMax = view ? Math.max(160, view.clientHeight - 44 - 30 - 8) : 0
+    if (panelMax > 0) grid.style.setProperty('--ws-panel-max', `${panelMax}px`)
     // A saved arrangement outlives the window it was made in. Pull every
     // stored card back inside the surface that exists now — a narrower
     // window, or a card stored before the band clamp existed, otherwise
@@ -549,8 +567,9 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         continue
       }
       const x = Math.min(Math.max(0, s.x), Math.max(0, maxX - s.w))
-      if (x !== s.x) changed = true
-      repaired[id] = { ...s, x }
+      const h = panelMax > 0 ? Math.min(s.h, panelMax) : s.h
+      if (x !== s.x || h !== s.h) changed = true
+      repaired[id] = { ...s, x, h }
     }
     if (changed) {
       setSlots(repaired)
@@ -570,10 +589,11 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
       const el = els.current.get(d.id)
       if (!el) continue
       const r = el.getBoundingClientRect()
+      const h = panelMax > 0 ? Math.min(r.height, panelMax) : r.height
       next[d.id] = firstPass
-        ? { x: r.left - gr.left, y: r.top - gr.top, w: r.width, h: r.height }
-        : { x: 0, y: floor + 18, w: r.width, h: r.height }
-      floor = Math.max(floor, next[d.id]!.y + r.height)
+        ? { x: r.left - gr.left, y: r.top - gr.top, w: r.width, h }
+        : { x: 0, y: floor + 18, w: r.width, h }
+      floor = Math.max(floor, next[d.id]!.y + h)
     }
     if (Object.keys(next).length !== Object.keys(repaired).length) setSlots(next)
   })

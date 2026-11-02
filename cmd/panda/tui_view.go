@@ -31,6 +31,10 @@ func (m tuiModel) View() string {
 	if m.quitting {
 		return ""
 	}
+	// The side channel replaces the frame while it is open; see tui_side.go.
+	if m.sideShowing() {
+		return m.sideView()
+	}
 	if m.mode == modeExec {
 		var live strings.Builder
 		live.WriteString("\n")
@@ -146,9 +150,15 @@ func (m tuiModel) mainChatView(live string) string {
 	}
 
 	// 2. Committed conversation turns
+	if m.layout != nil {
+		m.layout.blockStart = m.layout.blockStart[:0]
+	}
 	if m.chatHistory != nil && len(m.chatHistory.blocks) > 0 {
 		for i := range m.chatHistory.blocks {
 			contentLines = append(contentLines, "")
+			if m.layout != nil {
+				m.layout.blockStart = append(m.layout.blockStart, len(contentLines))
+			}
 			contentLines = append(contentLines, m.chatHistory.renderedAt(i, m.th, m.textWidth(), m.expandThought, m.expandHints)...)
 		}
 	}
@@ -165,6 +175,12 @@ func (m tuiModel) mainChatView(live string) string {
 	// liveStart is the content-line index where the live region begins; the
 	// branches below translate it into a screen row for the click handlers.
 	liveStart := totalContent - liveLines
+	// The rail and the locate action both need where things landed; the model
+	// shares this through a pointer the same way it shares the scroll ceiling
+	// (View is a value method and can only publish).
+	if m.layout != nil {
+		m.layout.content, m.layout.avail = totalContent, availHeight
+	}
 
 	// 4. Pad blank lines so inputView stays anchored at the bottom of the screen
 	if totalContent <= availHeight {
@@ -184,7 +200,7 @@ func (m tuiModel) mainChatView(live string) string {
 			liveTop = liveStart
 		}
 		m.publishFrameGeom(tuiFrameGeom{rows: len(out), liveTop: liveTop})
-		return clipRendered(strings.Join(out, "\n"), w)
+		return clipRendered(m.withSidebar(out), w)
 	}
 
 	// 5. If content exceeds available height, apply scrollOffset (0 means anchored at bottom)
@@ -206,7 +222,10 @@ func (m tuiModel) mainChatView(live string) string {
 	visibleLines := contentLines[start:end]
 
 	var out []string
-	if w > 10 {
+	// The scrollbar sits on the transcript's own right edge, which is the left
+	// side of the rail when it is open — hence the content width, not the
+	// terminal's.
+	if mw := m.textWidth(); mw > 10 {
 		// Attach a visual vertical scrollbar on the right boundary so users clearly see
 		// that history exists and can gauge their scroll position.
 		thumbHeight := max(1, availHeight*availHeight/totalContent)
@@ -215,7 +234,7 @@ func (m tuiModel) mainChatView(live string) string {
 			thumbTop = (start * (availHeight - thumbHeight)) / maxScroll
 		}
 		thumbBottom := thumbTop + thumbHeight
-		contentWidth := w - 1
+		contentWidth := mw - 1
 		for i, line := range visibleLines {
 			lw := ansi.StringWidth(line)
 			if lw > contentWidth {
@@ -243,7 +262,34 @@ func (m tuiModel) mainChatView(live string) string {
 		liveTop = liveStart - start
 	}
 	m.publishFrameGeom(tuiFrameGeom{rows: len(out), liveTop: liveTop})
-	return clipRendered(strings.Join(out, "\n"), w)
+	return clipRendered(m.withSidebar(out), w)
+}
+
+// withSidebar attaches the task rail to the right of a finished frame. The
+// frame's own lines were already clipped to textWidth, so this only pads them
+// out to the separator and appends the rail's column — the rail never re-lays
+// out the transcript.
+func (m tuiModel) withSidebar(out []string) string {
+	railW := m.sidebarWidth()
+	if railW <= 0 {
+		return strings.Join(out, "\n")
+	}
+	rail := m.sidebarLines(len(out), railW)
+	contentW := m.textWidth()
+	sep := m.th.muted.Render(m.th.glyph("│", "|"))
+	joined := make([]string, len(out))
+	for i, line := range out {
+		pad := contentW - ansi.StringWidth(line)
+		if pad < 0 {
+			pad = 0
+		}
+		row := ""
+		if i < len(rail) {
+			row = rail[i]
+		}
+		joined[i] = line + strings.Repeat(" ", pad) + sep + row
+	}
+	return strings.Join(joined, "\n")
 }
 
 // publishScrollLimit records the largest useful scroll offset for the frame just
@@ -1643,9 +1689,16 @@ func (m tuiModel) welcome() string {
 // textWidth is the terminal-bounded width available to top-level TUI rows. A
 // reported tiny width is authoritative: decoration must shed or clip rather than
 // inventing columns beyond the physical screen.
+//
+// With the task rail open it is the width LEFT of the rail, minus the one column
+// that separates them: the transcript and the composer sit in that column, and a
+// line that ran under the rail would be a line nobody can read.
 func (m tuiModel) textWidth() int {
 	if m.width <= 0 {
 		return 76
+	}
+	if w := m.sidebarWidth(); w > 0 {
+		return max(1, m.width-w-1)
 	}
 	return max(1, m.width)
 }

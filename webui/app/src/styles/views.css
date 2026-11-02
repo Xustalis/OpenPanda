@@ -1261,6 +1261,242 @@
   min-width: 0;
 }
 
+/* ---- Artifact preview (a task's output as a page) ---- */
+
+/* A sheet over the console, not a frame beside it: the artifact is a document
+   the reader is inspecting, and it needs the room. It is an iframe onto the
+   preview origin — nothing here renders task output itself. */
+.art-preview {
+  position: fixed;
+  inset: 4vh 4vw;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28);
+}
+
+.art-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.art-preview-title {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.art-preview-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.art-preview-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.art-preview-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  margin: auto;
+  padding: 12px;
+}
+
+.art-preview-hint {
+  margin: 0;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  border-top: 1px solid var(--border-soft);
+}
+
+.art-preview-remote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px;
+}
+
+.art-preview-annotate {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+}
+
+.art-preview-pick {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.art-preview-comment {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  padding: 8px;
+  color: var(--text-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+
+.art-preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---- Transcript file drawer ---- */
+
+/* The same horizontal slab as the worktree diff drawer, one file instead of
+   all of them: it takes the top of the chat pane while open and gives it back
+   on close. */
+.file-viewer {
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  padding: 10px 24px 12px;
+  max-height: 45%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fv-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--text-md);
+}
+
+.fv-title {
+  display: flex;
+  align-items: baseline;
+  gap: 1px;
+  min-width: 0;
+}
+
+.fv-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fv-line-no {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fv-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.fv-btn {
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fv-btn:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.fv-close {
+  padding: 3px 8px;
+}
+
+.fv-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.fv-code {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.fv-row {
+  display: flex;
+  gap: 12px;
+  white-space: pre;
+}
+
+/* The line the reply pointed at. It keeps its own gutter tint rather than a
+   left border so a selection across it still reads as one block. */
+.fv-row.is-focus {
+  background: var(--accent-2-soft);
+}
+
+.fv-num {
+  min-width: 4ch;
+  text-align: right;
+  color: var(--text-tertiary);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.fv-text {
+  flex: 1;
+}
+
+.fv-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.fv-note.is-error {
+  color: var(--danger);
+}
+
+.fv-foot {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+/* An inline code span that names a workspace file. Underlined only on hover:
+   a transcript full of underlined paths reads as a link farm. */
+code.md-file {
+  cursor: pointer;
+}
+
+code.md-file:hover,
+code.md-file:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}
+
 /* ---- Session worktree diff drawer ---- */
 
 

@@ -594,6 +594,19 @@ func (e *Engine) TaskStore() *core.TaskStore {
 	return core.NewSigningTaskStore(e.db, e.logger)
 }
 
+// FetchArtifact pulls a task's output artifact from the node that ran it into
+// this node's pool. A task report travels back as a hash and the bytes stay
+// where they were made until someone asks — so this is what "bring it here so I
+// can look at it" calls, for the console's preview or a stage that needs the
+// files.
+func (e *Engine) FetchArtifact(ctx context.Context, source, taskID, hash string) (artifact.Manifest, error) {
+	c := e.sched.Load()
+	if c == nil {
+		return artifact.Manifest{}, errors.New("askengine: no scheduler — this node cannot reach the executor")
+	}
+	return c.FetchArtifact(ctx, source, taskID, hash)
+}
+
 // stableNodeID is the runtime identity this engine registers under — the
 // same value initSchedulerLocked computes for the scheduler core. Valid even
 // when the scheduler never came up (card init failure): the owner guard on
@@ -1215,6 +1228,10 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// that leaves tasks stranded when the process exits.
 	sched := core.NewCore(e.db, stableID, card, schedulerTier(e.cfg.Node.ResourceClass), e.logger, e.cfg.Model)
 	sched.SetDelegationLimits(e.cfg.Delegation)
+	// Lifecycle hooks. A daemon sharing this database has already claimed the
+	// one observer (see core.hookOwners), so this is a no-op there and the
+	// only wiring in a bare CLI.
+	sched.SetHooks(e.cfg.Hooks)
 	// Self-evolution merge approvals may land on this engine (panda approve).
 	// oneShot=true: an engine process must never re-exec itself onto the fresh
 	// binary — the swap's install.RestartDaemon already bounces the service.
@@ -1805,6 +1822,23 @@ type AskScope struct {
 	// a model-selected check, bypasses the project shortlist: the user is the
 	// authority on how their own work is judged.
 	Acceptance []contract.Check
+
+	// Side marks a side-channel ask: a multi-turn conversation beside the main
+	// thread whose history is a fork-point snapshot. It narrows this ask on
+	// three axes — the prompt says the history is reference only, the tool face
+	// drops to a read-only subset (no task_submit, no task_budget, no mutation
+	// tools), and a classification that still lands on a task or plan is
+	// answered with a fixed note instead of being executed. None of the three is
+	// sufficient alone: the prompt is a hint the model may disobey, and the tool
+	// face only covers dispatch that goes through tools.
+	Side bool
+
+	// SideTurns is the side channel's own conversation so far. It replays AFTER
+	// the boundary marker, which is what keeps two things apart that would
+	// otherwise read as one: the main thread's history (history above, reference
+	// only) and the question-and-answer the user actually had with this channel.
+	// Only meaningful with Side.
+	SideTurns []entry.Turn
 }
 
 // AskTurns is the backward-compatible session-aware entry point. Callers that
@@ -2047,8 +2081,17 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
 	}()
 
-	turns := make([]entry.Turn, 0, len(history)+1)
+	turns := make([]entry.Turn, 0, len(history)+len(scope.SideTurns)+2)
 	turns = append(turns, history...)
+	if scope.Side {
+		if len(history) > 0 {
+			// The replayed thread ends here. Without this marker the side ask's
+			// own question reads as the next turn of the main conversation, and
+			// the model continues that work instead of answering what was asked.
+			turns = append(turns, sideBoundaryTurn(effectiveLocale))
+		}
+		turns = append(turns, scope.SideTurns...)
+	}
 	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
 
 	var classifyOpts []entry.ClassifyOption
@@ -2063,6 +2106,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	}
 	if scope.Mode != "" {
 		classifyOpts = append(classifyOpts, entry.WithRequestMode(scope.Mode))
+	}
+	if scope.Side {
+		classifyOpts = append(classifyOpts, entry.WithSideMode())
 	}
 	// The thread's roster goes into the prompt as well as into the task spec.
 	// The spec is what the executor enforces; the prompt is what keeps the
@@ -2253,12 +2299,19 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// KindTask directive.
 	var taskCapture taskDispatchCapture
 	if reg != nil {
-		reg = reg.Copy()
-		reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
-		// task_budget sits beside task_submit: the limit is derived (roster
-		// size or defaultTaskBudget), and this is how a model widens it for a
-		// fan-out the user described in prose instead of in the team picker.
-		reg.Register(e.taskBudgetTool(budget, effectiveLocale))
+		if scope.Side {
+			// A side ask gets the read-only subset and neither dispatch tool:
+			// task_submit and task_budget exist to start and resize work, which
+			// is exactly what a side channel may not do.
+			reg = reg.Filter(sideToolAllowed)
+		} else {
+			reg = reg.Copy()
+			reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
+			// task_budget sits beside task_submit: the limit is derived (roster
+			// size or defaultTaskBudget), and this is how a model widens it for a
+			// fan-out the user described in prose instead of in the team picker.
+			reg.Register(e.taskBudgetTool(budget, effectiveLocale))
+		}
 	}
 
 rounds:
@@ -2334,6 +2387,15 @@ rounds:
 			}
 			return budgetAdvisory(&Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}), nil
 		case entry.KindTask:
+			if scope.Side {
+				// A side ask that still lands on a task stops here. The prompt
+				// asked it not to and the tool face has no dispatch, but the
+				// verdict comes from the model, not from either — a concrete
+				// request backed by a snapshot full of prior work classifies as
+				// a task often enough that leaving this to the prompt made /side
+				// a silent way to dispatch work the user believed was parked.
+				return &Result{Kind: "answer", Answer: sideRefusalNote(effectiveLocale), Thought: accumulatedReasoning.String()}, nil
+			}
 			if budget.exhausted() {
 				// Refuse before submitTask: the budget limits actual task
 				// execution, not merely how many outcomes are replayed. The
@@ -2390,6 +2452,11 @@ rounds:
 				entry.Turn{Role: "user", Content: taskObservation(res, effectiveLocale)},
 			)
 		case entry.KindPlan:
+			if scope.Side {
+				// Same rule as KindTask: a plan is dispatch in stages, and a
+				// side channel dispatches nothing.
+				return &Result{Kind: "answer", Answer: sideRefusalNote(effectiveLocale), Thought: accumulatedReasoning.String()}, nil
+			}
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
 			return e.startClassifiedPlan(ctx, out.Plan, scope, authorize, cb)
 		case entry.KindToolCall:
@@ -2757,6 +2824,12 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // additionally carry explicit owner consent for this request's whole plan;
 // it still passes through the existing approval policy before rows are created.
 func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, scope AskScope, authorize bool, cb StreamCallbacks) (*Result, error) {
+	// Same rule as submitTask: a side channel dispatches nothing, and this is
+	// the second creation point every plan — including one produced by the
+	// final round-exhaustion classification — passes through.
+	if scope.Side {
+		return &Result{Kind: "answer", Answer: sideRefusalNote(e.Locale())}, nil
+	}
 	sched := e.sched.Load()
 	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
@@ -2836,6 +2909,13 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		targetLoc = loc[0]
 	} else if !explicit && !e.replyASCII && (containsHan(prompt) || containsHan(spec.Title)) {
 		targetLoc = i18n.ChineseSimp
+	}
+	// The creation point is where a side channel's refusal belongs. The prompt
+	// asks the model not to dispatch and the tool face has no dispatch tool, but
+	// neither binds classification — and the round-exhaustion path reaches this
+	// function directly, past the per-round check. Every path shares this one.
+	if scope.Side {
+		return &Result{Kind: "answer", Answer: sideRefusalNote(targetLoc)}
 	}
 	// The composer's explicit node pick fills spec.node only when the model
 	// left routing to the scheduler — a model-emitted pin always wins.

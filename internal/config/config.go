@@ -61,6 +61,38 @@ type Config struct {
 	// while enabled=false: no
 	// worktree, no queue, no merge proposals.
 	SelfEvolution SelfEvolutionConfig `yaml:"self_evolution"`
+	// Hooks are the operator's own commands bound to task lifecycle points.
+	// Inert while enabled=false, which is the default: this is the one place
+	// the node runs a command nobody typed into a chat.
+	Hooks HooksConfig `yaml:"hooks"`
+}
+
+// HooksConfig binds commands to task lifecycle edges.
+//
+// The list shape (rather than one map entry per event) is what lets a node have
+// two reactions to the same edge — a notification and a log line — without
+// inventing a syntax for it.
+type HooksConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// TimeoutS is the default budget for a hook that does not set its own.
+	TimeoutS int `yaml:"timeout_s,omitempty"`
+	// AllowTier2 lets a hook run commands the defense tier grades irreversible.
+	// Off by default, and it should stay off unless the operator means it: a
+	// hook is unattended by definition, and an irreversible command with no one
+	// watching is exactly the case the tier exists for.
+	AllowTier2 bool        `yaml:"allow_tier2,omitempty"`
+	On         []HookEntry `yaml:"on,omitempty"`
+}
+
+// HookEntry is one binding: an event name and the shell command to run.
+//
+// The command is a template. {task_id}, {title}, {state}, {project}, {owner}
+// and {event} are substituted with shell-quoted values — a title is model
+// output, and model output is a sentence, not a script.
+type HookEntry struct {
+	Event    string `yaml:"event"`
+	Command  string `yaml:"command"`
+	TimeoutS int    `yaml:"timeout_s,omitempty"`
 }
 
 // SelfEvolutionConfig gates the self-modification pipeline. Repo is the

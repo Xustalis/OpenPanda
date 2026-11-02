@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
   ApiError,
@@ -24,6 +24,11 @@ import {
 } from '../api/client'
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
+import { FileViewer } from '../components/file-viewer'
+import { TaskRail } from '../components/task-rail'
+import { ArtifactSection } from '../components/artifact'
+import { FileViewContext, type FileOpener, type FileRef } from '../components/file-link'
+import { ComposerContext } from '../components/composer-context'
 import {
   useAsync,
   useChangeSignal,
@@ -71,7 +76,6 @@ import {
 import { ScopeSelect } from '../components/scope-select'
 import {
   PermissionPicker,
-  authorizeRelevant,
   normalizePermission,
   type PermissionMode,
 } from '../components/permission-picker'
@@ -600,12 +604,14 @@ export function SessionsView({
   const [noteDraft, setNoteDraft] = useState('')
   // True while a file is over the composer, so the box can say so.
   const [dropping, setDropping] = useState(false)
-  // The conversation's permission policy. It decides what the thread may do
-  // turn after turn; the authorize switch below grants THIS turn the right to
-  // run irreversible operations, which is a finer question the mode does not
-  // answer (auto and edits still stop at the tier-2 gate).
+  // The conversation's permission policy. It is the whole consent answer:
+  // auto and edits stop at the tier-2 gate for a one-off approval card, bypass
+  // runs everything, manual asks before every change and plan changes nothing.
+  // A separate per-turn "authorize risky actions" switch used to sit beside the
+  // picker, but it only had meaning in auto/edits, was ignored in manual/plan/
+  // bypass, and duplicated what the bypass mode or the approval card already
+  // says — so the picker is the one control.
   const [permission, setPermission] = useState<PermissionMode>('auto')
-  const [authorize, setAuthorize] = useState(false)
   // The composer's environment pick: empty = let the scheduler route by
   // capability; a node id pins this turn's spawned task to that executor.
   const [nodePref, setNodePref] = useState('')
@@ -622,7 +628,24 @@ export function SessionsView({
   // and the jump arrow left as one block instead of letting the card cover the
   // last reply's line ends. The lane is the same for both cards on purpose:
   // switching from one to the other is a swap in place, not a re-layout.
-  const [panel, setPanel] = useState<'' | 'node' | 'orch'>('')
+  const [panel, setPanel] = useState<'' | 'node' | 'orch' | 'rail'>('')
+  // The file the transcript's latest click asked for. The drawer is the
+  // transcript's own surface — a path in a reply opens here, and switching
+  // threads closes it with the rest of the per-thread panel state.
+  const [fileRef, setFileRef] = useState<FileRef | null>(null)
+  // One stable opener for every inline code span in the transcript: a new
+  // object per render would re-render every clickable mention on each frame.
+  const fileOpener = useMemo<FileOpener>(() => ({ open: (ref) => setFileRef(ref) }), [])
+  // The same text-into-the-composer action for every surface that produces a
+  // reference (the file drawer, the artifact preview): the draft lands at the
+  // caret and is never sent on its own.
+  const composerInsert = useCallback((text: string) => {
+    const el = composer.current
+    if (!el) return
+    insertTextAtCaret(el, text)
+    setInput(editorTextOf(el))
+    el.focus()
+  }, [])
   // The task a transcript link asked for. Held here, not in the card, because
   // the click that asks for it is the transcript's: `{ id }` is rebuilt on
   // every request so a second click on the same 查看任务 still re-opens a pane
@@ -640,6 +663,10 @@ export function SessionsView({
   // parent would outlive the card that asked for it.
   useEffect(() => {
     setPanel('')
+    // The file drawer belongs to the thread it was opened in for the same
+    // reason: its path is relative to that thread's worktree, and carrying it
+    // across would show the next thread a file it never mentioned.
+    setFileRef(null)
     // The queue belongs to the thread it was typed in: a counter carried over
     // from another thread would make the next note look like a removal.
     noteCount.current = 0
@@ -1676,7 +1703,9 @@ export function SessionsView({
       await askSessionStream(
         id,
         prompt,
-        authorize,
+        // No standing grant from this surface: a tier-2 operation parks on the
+        // approval card, and "run everything" is the bypass permission mode.
+        false,
         {
           onReasoning: (text) => {
             pendingThought += text
@@ -2326,6 +2355,20 @@ export function SessionsView({
   // all competing with the event stream for the browser's six connections.
   const tasksById = new Map((sessionTasks ?? []).map((t) => [t.id, t]))
 
+  // The rail's jump: scroll the task's own card into view. A task the thread
+  // has no card for — dispatched from the bench, or older than the loaded
+  // transcript — opens its task page instead, so a row never dead-ends.
+  const jumpToTask = (id: string) => {
+    const el = document.querySelector(`[data-task-id="${id}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.classList.add('task-jump-flash')
+      window.setTimeout(() => el.classList.remove('task-jump-flash'), 1200)
+      return
+    }
+    navigate({ view: 'detail', id })
+  }
+
   // — one round, one bubble. The turns a fan-out files are consecutive and
   // carry the round's clock, so the first one wears the panda's face and holds
   // the rest: a five-agent test reads as one reply with five cards, not five
@@ -2335,10 +2378,12 @@ export function SessionsView({
   const { batchOf, absorbed } = groupDispatches(msgs)
 
   return (
+    <FileViewContext.Provider value={fileOpener}>
+    <ComposerContext.Provider value={composerInsert}>
     <section class="chat">
 
 
-      <div class={`chat-pane${panel ? ' panel-open' : ''}`}>
+      <div class={`chat-pane${panel ? ' panel-open' : ''}${panel === 'rail' ? ' rail-open' : ''}`}>
         {/* The header is unconditional so the drawer toggle is reachable even
             on a brand-new, empty thread — that is exactly when a phone user
             needs to get back to the thread list. */}
@@ -2415,6 +2460,19 @@ export function SessionsView({
               scheduler would pick) in a quarter of the width, and the card is
               what the pane makes room for. */}
           <div class="chat-head-tools">
+            {/* The thread's unfinished work as a side column — the web twin of
+                the TUI's task rail. It sits left of the node pick because it is
+                about the thread, not about where this turn runs. */}
+            <button
+              type="button"
+              class={`icon-btn tip-down${panel === 'rail' ? ' open' : ''}`}
+              data-tip={t('rail.title')}
+              aria-label={t('rail.title')}
+              aria-expanded={panel === 'rail'}
+              onClick={() => setPanel(panel === 'rail' ? '' : 'rail')}
+            >
+              <Icon name="list-checks" size={19} />
+            </button>
             {session && msgs.length > 0 && (
               <button
                 class="icon-btn tip-down"
@@ -2454,6 +2512,27 @@ export function SessionsView({
             />
           </div>
         </header>
+
+        {panel === 'rail' && (
+          <TaskRail
+            tasks={sessionTasks ?? []}
+            onJump={jumpToTask}
+            onClose={() => setPanel('')}
+          />
+        )}
+
+        {/* The transcript's file drawer: a path in a reply opened here, read
+            against this thread's worktree. It sits above the diff drawer
+            because it is about one file, and the diff is about all of them. */}
+        {fileRef && (
+          <FileViewer
+            path={fileRef.path}
+            line={fileRef.line}
+            session={session?.id ?? null}
+            onClose={() => setFileRef(null)}
+            onInsert={composerInsert}
+          />
+        )}
 
         {diffOpen && diff && (
           <div class="diff-drawer">
@@ -3030,23 +3109,6 @@ export function SessionsView({
                 project={session?.project || activeProject || ''}
               />
               <PermissionPicker value={permission} onChange={pickPermission} />
-              {authorizeRelevant(permission) && (
-                <label class="ask-authorize" title={t('approval.stateHint')}>
-                  {/* A switch, not a tick box: this is a mode you leave on, not a
-                      one-off box you tick. The knob rides a <span> rather than a
-                      pseudo-element on the <input> — ::after on an input is not
-                      reliably rendered. */}
-                  <span class="switch">
-                    <input
-                      type="checkbox"
-                      checked={authorize}
-                      onChange={(e) => setAuthorize((e.target as HTMLInputElement).checked)}
-                    />
-                    <span class="switch-track" aria-hidden="true" />
-                  </span>
-                  {t('sessions.authorize')}
-                </label>
-              )}
               {/* The model switch, immediately left of Send — the row's right
                   edge is where you reach for before sending, and "which model"
                   is the one more thing that decision wants asked. WorkBuddy's
@@ -3122,6 +3184,8 @@ export function SessionsView({
         {loadError && <p class="gate-error composer-error">{loadError}</p>}
       </div>
     </section>
+    </ComposerContext.Provider>
+    </FileViewContext.Provider>
   )
 }
 
@@ -3795,7 +3859,7 @@ function DispatchBlock(props: {
   const task = listed ?? fetched
   const text = stripRefId(msg.text ?? '', msg.ref)
   return (
-    <div class="msg-batch-item">
+    <div class="msg-batch-item" data-task-id={msg.ref}>
       {text && <Markdown text={text} class="msg-text" />}
       {task && <TaskCast task={task} />}
       {msg.ref && (
@@ -3827,6 +3891,11 @@ function DispatchBlock(props: {
             </a>
           </div>
           {chainOpen && <TaskChain taskId={msg.ref} />}
+          {/* The task's output, where the result is read: the file list, the
+              downloads, and the page view on the preview origin. It hangs off
+              the card rather than the task page because the moment a user
+              wants to look at what a task produced is the moment it reports. */}
+          {task?.plan_meta?.output_artifact && <ArtifactSection task={task} />}
         </div>
       )}
     </div>

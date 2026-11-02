@@ -678,6 +678,14 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.followUpTask(t)
 			}
 			return m.startExec("/task " + t.TaskID)
+
+		case listRewind:
+			turn, ok := item.Value.(int)
+			if !ok {
+				return m, nil
+			}
+			// A rewind deletes work; it gets a card, not a bare Enter.
+			return m.confirmRewind(turn)
 		}
 	}
 	return m, nil
@@ -1666,12 +1674,21 @@ func (m tuiModel) confirmTasksClear() (tea.Model, tea.Cmd) {
 // anything else — n, Esc, Enter — declines and says so. A destructive action
 // never fires on an ambiguous key.
 func (m tuiModel) onConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	run := m.confirmRun
 	yes := m.confirmYes
-	if msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "y") && yes != "" {
-		m.confirmText, m.confirmYes = "", ""
+	if msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "y") && (run != nil || yes != "") {
+		m.confirmText, m.confirmYes, m.confirmRun = "", "", nil
+		if run != nil {
+			// Leave the card BEFORE running: the callback is an arbitrary
+			// action whose failure paths do not know about modeConfirm, and a
+			// card left standing with an emptied message swallows the next
+			// keystroke as a decline.
+			m.mode = modeIdle
+			return run(&m)
+		}
 		return m.startExec(yes)
 	}
-	m.confirmText, m.confirmYes = "", ""
+	m.confirmText, m.confirmYes, m.confirmRun = "", "", nil
 	m.mode = modeIdle
 	note := block{kind: blockNote, body: i18n.T(m.loc, "tui.confirm.cancelled")}
 	return m, m.printBlock(note)

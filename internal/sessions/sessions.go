@@ -393,7 +393,29 @@ func (s *Store) AppendTurn(id string, turn Turn) (*Session, error) {
 // stored without its answer would be replayed back-to-back with the next
 // prompt, which the Messages API rejects, wedging every later turn. Title
 // derivation and timestamps follow AppendTurn.
+//
+// A batch that files a finished answer leaves a rewind point (see
+// checkpoint.go). Best-effort and after the lock is released: the snapshot
+// shells out to git and must not block another surface's append, and a missing
+// snapshot costs one rewind target, not the turn itself. Threads without a
+// worktree cost a file read and return immediately.
 func (s *Store) AppendTurns(id string, turns ...Turn) (*Session, error) {
+	sess, err := s.appendTurns(id, turns...)
+	if err != nil {
+		return nil, err
+	}
+	for _, turn := range turns {
+		if turn.Role == "assistant" {
+			_ = s.Checkpoint(context.Background(), id)
+			break
+		}
+	}
+	return sess, nil
+}
+
+// appendTurns is AppendTurns' locked half: the cross-process and in-process
+// read-modify-write, with no snapshotting in the middle of it.
+func (s *Store) appendTurns(id string, turns ...Turn) (*Session, error) {
 	if len(turns) == 0 {
 		return s.Get(id)
 	}
@@ -792,7 +814,24 @@ func (s *Store) RenameProject(oldName, newName string) (int, error) {
 }
 
 // Delete removes the session file (worktree cleanup is the caller's job).
+// The thread's rewind snapshots go with it: they live in the worktree's git
+// directory and nothing would name them once the file is gone.
 func (s *Store) Delete(id string) error {
+	var worktree string
+	if sess, err := s.Get(id); err == nil {
+		worktree = sess.Worktree
+	}
+	if err := s.deleteFile(id); err != nil {
+		return err
+	}
+	if worktree != "" {
+		dropCheckpoints(context.Background(), worktree, id)
+	}
+	return nil
+}
+
+// deleteFile is Delete's locked half.
+func (s *Store) deleteFile(id string) error {
 	unlock, err := lockStore(s.root)
 	if err != nil {
 		return fmt.Errorf("sessions: lock: %w", err)

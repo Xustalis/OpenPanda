@@ -191,6 +191,8 @@ var replCommands []replCmd
 func init() {
 	replCommands = []replCmd{
 		{"ask", "chat", "cmd.ask", (*repl).cmdAsk},
+		{"side", "chat", "cmd.side", (*repl).cmdSide},
+		{"btw", "chat", "cmd.side", (*repl).cmdSide},
 		{"goal", "chat", "cmd.goal", (*repl).cmdModeGoal},
 		{"plan", "chat", "cmd.planMode", (*repl).cmdModePlan},
 		{"spec", "chat", "cmd.spec", (*repl).cmdModeSpec},
@@ -203,6 +205,7 @@ func init() {
 		{"session", "chat", "cmd.session", (*repl).cmdSession},
 		{"resume", "chat", "cmd.resume", (*repl).cmdResume},
 		{"fork", "chat", "cmd.fork", (*repl).cmdFork},
+		{"rewind", "chat", "cmd.rewind", (*repl).cmdRewind},
 		{"clear", "chat", "cmd.clear", (*repl).cmdClear},
 		{"team", "chat", "cmd.team", (*repl).cmdTeam},
 		{"node", "system", "cmd.node", (*repl).cmdNode},
@@ -243,6 +246,7 @@ func init() {
 		{"lang", "system", "cmd.lang", (*repl).cmdLang},
 		{"version", "system", "cmd.version", (*repl).cmdVersion},
 		{"read", "system", "cmd.read", (*repl).cmdRead},
+		{"edit", "system", "cmd.edit", (*repl).cmdEdit},
 		{"view", "system", "cmd.read", (*repl).cmdRead},
 		{"cat", "system", "cmd.read", (*repl).cmdRead},
 		{"md", "system", "cmd.read", (*repl).cmdRead},
