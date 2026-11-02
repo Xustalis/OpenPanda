@@ -54,6 +54,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
+- **Eine Rückfrage erreicht jede Terminal-Oberfläche** — `panda repl`, `panda chat` und `panda voice` gaben nichts aus, wenn das Einstiegsmodell vor der Ausführung eine Frage stellte, weil nur Oberflächen mit Auswahlkarte `clarify` behandelten; die Frage wird jetzt ausgegeben (und gesprochen) und als Turn gespeichert statt als „keine Ausgabe“.
+- **Eine Antwort aus `panda ask` behält den Worktree der Aufgabe** — die Wiederaufnahme-Schleife übergab das Prozess-cwd, sodass eine bei einer Rückfrage pausierte Aufgabe in dem Verzeichnis neu lief, aus dem der Befehl gestartet wurde, und ihr gespeichertes work_dir überschrieb; sie setzt jetzt im Arbeitsverzeichnis des Threads fort.
+
 - **Eine Frage lässt sich inline beantworten** — die TUI zeigt die Auswahlkarte mit Pfeil-/Zahlennavigation, Mehrfachauswahl, Freitext und Esc; `panda ask` druckt die Optionen und liest eine Zeile pro Frage. Die Web-Konsole zeigt dieselbe Karte über ihrem Composer und setzt den wartenden SSE-Lauf mit der Antwort fort — kein neuer Turn. Nicht-interaktive Oberflächen erhalten `needs_clarification` plus die gerenderten Fragen.
 - **Ohne Antwort wird ein Frage-Park nicht fortgesetzt** — der Web-Genehmigungsendpunkt und die nicht-interaktive CLI melden jetzt, dass eine Antwort nötig ist, statt den Agenten erneut auf dieselbe Frage laufen zu lassen.
 - **Die empfohlene Option wird nur einmal markiert** — ein Label, das „(Empfohlen)" bereits trägt, bekommt das Abzeichen in TUI, Web und CLI nicht ein zweites Mal.

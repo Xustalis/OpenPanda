@@ -60,6 +60,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **A clarification reaches every terminal surface** — `panda repl`, `panda chat` and `panda voice` printed nothing when the entry model asked a pre-execution question, because only the card-capable surfaces handled `clarify`; the question is now printed (and spoken) and persisted as the turn instead of “no output”.
+- **Answering a question from `panda ask` keeps the task's worktree** — the resume loop passed the process cwd, so a task parked on a mid-run question re-ran in whatever directory the command was started from and rewrote its persisted work_dir; it now resumes in the thread's work dir.
+
 - **A question can be answered inline** — the TUI renders the choice card with arrow/number picking, multi-select, a free-text answer and Esc to cancel; `panda ask` prints the options and reads one line per question. The web console renders the same card above its composer and resumes the parked SSE turn with the answer — not a new ask. Headless surfaces receive `needs_clarification` plus the rendered questions instead of a blocked run.
 - **Resuming a question park without an answer is refused** — the web approval endpoint and the non-interactive CLI now say an answer is required instead of re-running the agent into the same question.
 - **The recommended option is marked once** — a label that already carries the "(Recommended)" wording no longer gets the badge appended a second time on the TUI, web or CLI card.

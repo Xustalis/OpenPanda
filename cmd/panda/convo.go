@@ -389,6 +389,12 @@ func convoSummaryOf(loc i18n.Locale, out *askengine.Result) string {
 		if strings.TrimSpace(out.Answer) != "" {
 			return head(out.Answer, maxConvoAnswerChars)
 		}
+	case "clarify":
+		// The question is the turn's content; persisting "no output" would
+		// erase it from a thread a surface without a choice card reads back.
+		if strings.TrimSpace(out.Answer) != "" {
+			return head(out.Answer, maxConvoAnswerChars)
+		}
 	case "task":
 		// A converged ask carries the model's report over the task fields —
 		// the transcript should remember what the model told the user, with

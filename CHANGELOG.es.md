@@ -54,6 +54,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
+- **Una aclaración llega a todas las superficies de terminal** — `panda repl`, `panda chat` y `panda voice` no imprimían nada cuando el modelo de entrada hacía una pregunta previa a la ejecución, porque solo las superficies con tarjeta manejaban `clarify`; ahora la pregunta se imprime (y se lee en voz alta) y se guarda como el turno en lugar de «sin salida».
+- **Responder una pregunta desde `panda ask` conserva el worktree de la tarea** — el bucle de reanudación pasaba el cwd del proceso, así que una tarea detenida en una pregunta se reejecutaba en el directorio desde el que se lanzó el comando y reescribía su work_dir persistido; ahora reanuda en el directorio de trabajo del hilo.
+
 - **Una pregunta se puede responder en línea** — la TUI muestra la tarjeta de opciones con flechas/números, multiselección, texto libre y Esc para cancelar; `panda ask` imprime las opciones y lee una línea por pregunta. La consola web muestra la misma tarjeta sobre su compositor y reanuda el turno SSE aparcado con la respuesta, no un nuevo turno. Las superficies sin interacción reciben `needs_clarification` y las preguntas ya renderizadas.
 - **Se rechaza reanudar una pregunta aparcada sin respuesta** — el endpoint de aprobación web y la CLI no interactiva ahora indican que se necesita una respuesta, en lugar de reejecutar al agente hacia la misma pregunta.
 - **La opción recomendada se marca una sola vez** — una etiqueta que ya lleva «(Recomendado)» no recibe la insignia por segunda vez en la TUI, la web o la CLI.

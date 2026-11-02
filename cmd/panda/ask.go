@@ -293,7 +293,7 @@ func runAsk(args []string) {
 				fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(loc, p))
 			},
 		}
-		next := engine.ResumeApproved(context.Background(), out.TaskID, cwd, cb, answer)
+		next := engine.ResumeApproved(context.Background(), out.TaskID, workDir, cb, answer)
 		if next == nil {
 			break
 		}
