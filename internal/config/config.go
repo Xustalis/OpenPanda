@@ -1232,6 +1232,13 @@ type ModelConfig struct {
 	APIType  string `yaml:"api_type"`           // "anthropic" | "openai" | "responses" | "google" (default anthropic)
 	BaseURL  string `yaml:"base_url"`           // e.g. https://api.deepseek.com/anthropic
 	APIKey   string `yaml:"api_key"`            // secret; prefer env OPENPANDA_MODEL_API_KEY
+	// KeyEnv names an environment variable to read this row's key from at call
+	// time instead of storing it here. It exists because a registry row is a
+	// copy: importing a model from another tool's config would otherwise copy
+	// that tool's secret into config.yaml, which is exactly what the comment
+	// above tells people not to do. APIKey still wins when both are set, so an
+	// explicit key on the row keeps working.
+	KeyEnv string `yaml:"key_env,omitempty"`
 	// Auth names an OAuth provider from internal/auth ("anthropic"): the
 	// client then authenticates with the stored subscription token instead
 	// of api_key, refreshing it transparently. Experimental — see

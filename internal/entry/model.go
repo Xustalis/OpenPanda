@@ -14,6 +14,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -230,6 +231,12 @@ func ResolveContextWindow(model config.ModelConfig) int {
 // loopback http stays allowed for a local dev model, matching the guard the
 // commander applies to adapter endpoints (D7).
 func NewClient(model config.ModelConfig) (*Client, error) {
+	// A row may name an environment variable instead of carrying the secret.
+	// Resolved here, at construction, so every surface (panel probe, REPL,
+	// daemon, CLI) reads the same way and the value never lands in config.yaml.
+	if model.APIKey == "" && model.KeyEnv != "" {
+		model.APIKey = strings.TrimSpace(os.Getenv(model.KeyEnv))
+	}
 	p, hasProvider := providers.Lookup(model.Provider)
 	name := model.Model
 	if name == "" {
