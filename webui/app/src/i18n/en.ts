@@ -931,8 +931,11 @@ const en: Messages = {
   'memory.title': 'Memory',
   'memory.subtitle':
     "The agent's long-term memory: about you (USER.md), what it learned (MEMORY.md), and its dreams (DREAMS.md).",
+  'memory.usageTip': '{chars} of {limit} characters used',
+  'memory.charsN': '{n} chars',
+  'memory.entriesN': '{n} entries',
+  'memory.headSummary': '{user} about you · {memory} learned · {topics} topics · {daily} diary days',
   'memory.nodeTime': 'Node system time',
-  'memory.refreshedAt': 'Last read',
   'memory.refresh': 'Refresh',
   'memory.user': 'About you',
   'memory.memory': 'What it learned',

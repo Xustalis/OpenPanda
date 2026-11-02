@@ -899,8 +899,11 @@ const es: Messages = {
   'memory.title': 'Memoria',
   'memory.subtitle':
     'La memoria a largo plazo del agente: sobre ti (USER.md), lo que aprendió (MEMORY.md) y sus sueños (DREAMS.md).',
+  'memory.usageTip': '{chars} de {limit} caracteres usados',
+  'memory.charsN': '{n} caracteres',
+  'memory.entriesN': '{n} entradas',
+  'memory.headSummary': '{user} sobre ti · {memory} aprendidos · {topics} temas · {daily} días de diario',
   'memory.nodeTime': 'Hora del sistema del nodo',
-  'memory.refreshedAt': 'Última lectura',
   'memory.refresh': 'Actualizar',
   'memory.user': 'Sobre ti',
   'memory.memory': 'Lo que aprendió',
