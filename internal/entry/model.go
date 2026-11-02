@@ -14,6 +14,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -74,8 +75,11 @@ type Client struct {
 	// tokenFn resolves the full credential for a subscription provider whose
 	// request carries more than a bearer token — the Codex ChatGPT backend
 	// routes by chatgpt-account-id. It supersedes keyFn when set.
-	tokenFn   func(ctx context.Context) (auth.Token, error)
-	oauth     bool
+	tokenFn func(ctx context.Context) (auth.Token, error)
+	oauth   bool
+	// keyScheme overrides the header a static key travels in ("bearer");
+	// empty keeps the dialect default.
+	keyScheme string
 	model     string
 	maxTokens int
 	// maxTokensCap is the provider's hard ceiling on max_tokens (0 when
@@ -234,6 +238,12 @@ func ResolveContextWindow(model config.ModelConfig) int {
 // loopback http stays allowed for a local dev model, matching the guard the
 // commander applies to adapter endpoints (D7).
 func NewClient(model config.ModelConfig) (*Client, error) {
+	// A row may name an environment variable instead of carrying the secret.
+	// Resolved here, at construction, so every surface (panel probe, REPL,
+	// daemon, CLI) reads the same way and the value never lands in config.yaml.
+	if model.APIKey == "" && model.KeyEnv != "" {
+		model.APIKey = strings.TrimSpace(os.Getenv(model.KeyEnv))
+	}
 	p, hasProvider := providers.Lookup(model.Provider)
 	name := model.Model
 	if name == "" {
@@ -387,6 +397,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		apiType:        apiType,
 		baseURL:        strings.TrimRight(base, "/"),
 		apiKey:         model.APIKey,
+		keyScheme:      strings.ToLower(strings.TrimSpace(model.KeyScheme)),
 		model:          name,
 		maxTokens:      maxTokens,
 		maxTokensCap:   maxTokensCap,
@@ -991,6 +1002,12 @@ func (c *Client) applyAuth(ctx context.Context, httpReq *http.Request) error {
 			httpReq.Header.Set("OpenAI-Beta", "responses=experimental")
 			httpReq.Header.Set("originator", "codex_cli_rs")
 		}
+	case c.keyScheme == "bearer":
+		// The row says its credential is an OAuth-style token even though it
+		// is stored (or read from the environment) like a key: Claude Code's
+		// ANTHROPIC_AUTH_TOKEN is one, and the Anthropic default would send it
+		// as x-api-key.
+		httpReq.Header.Set("authorization", "Bearer "+tok)
 	case c.apiType == config.APITypeGoogle:
 		// Google's own API takes the key in x-goog-api-key. OpenCode's
 		// gateway accepts that header too and additionally documents a
