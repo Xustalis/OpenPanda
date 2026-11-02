@@ -395,6 +395,24 @@
   background: var(--bg-inset);
   color: var(--accent, #2f6ca0);
 }
+/* The fetcher answers after a round trip the frame cannot report; the bar is
+   the only sign of life between the click and the document. */
+.db-progress {
+  flex: none;
+  height: 2px;
+  background-image: linear-gradient(90deg, transparent, var(--accent, #2f6ca0), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: db-progress 1.1s ease-in-out infinite;
+}
+@keyframes db-progress {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
 .db-url {
   flex: 1;
   min-width: 0;

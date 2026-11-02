@@ -35,6 +35,7 @@ export type IconName =
   | 'cpu'
   | 'devices'
   | 'download'
+  | 'external'
   | 'eye'
   | 'eye-off'
   | 'folder'
@@ -193,6 +194,15 @@ const paths: Record<IconName, JSX.Element> = {
     </>
   ),
   // The workspace's "removed from view" mark: a card hidden, not deleted —
+  // The out-of-the-pane mark: open this page where the reader's own browser
+  // takes over — its history, extensions and devtools.
+  'external': (
+    <>
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    </>
+  ),
   // the same crossed-out eye a reader already knows from notifications.
   'eye': (
     <>

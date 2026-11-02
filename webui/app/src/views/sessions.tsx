@@ -26,7 +26,7 @@ import {
 } from '../api/client'
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
-import { Dock, type DockTab } from '../components/dock'
+import { Dock, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH, type DockTab } from '../components/dock'
 import { DockBrowser, type BrowserArtifact } from '../components/dock-browser'
 import { scanArtifacts } from '../components/auto-preview'
 import { DockFiles } from '../components/dock-files'
@@ -641,7 +641,27 @@ export function SessionsView({
   // panel reads as "start a fresh one".
   const [dockOpen, setDockOpen] = useState(false)
   const [dockTab, setDockTab] = useState<DockTab>('')
-  const [dockW, setDockW] = useState(380)
+  // The column's width is a preference, not fleet or thread state: it lives in
+  // localStorage and never travels. A stored value outside the drag's bounds
+  // (an older build, a hand-edited entry) falls back to the default.
+  const [dockW, setDockW] = useState(() => {
+    try {
+      const stored = Number(localStorage.getItem('openpanda.dock.width'))
+      if (Number.isFinite(stored) && stored >= DOCK_MIN_WIDTH && stored <= DOCK_MAX_WIDTH) {
+        return stored
+      }
+    } catch {
+      // storage blocked; the default width is fine
+    }
+    return 380
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('openpanda.dock.width', String(dockW))
+    } catch {
+      // storage blocked; the width still works for this session
+    }
+  }, [dockW])
   const [dockEpoch, setDockEpoch] = useState(0)
   // Panels mount the first time their tab is picked and stay mounted after
   // that, hidden rather than dropped: a file tree you scrolled, a page you
@@ -690,6 +710,21 @@ export function SessionsView({
     insertTextAtCaret(el, text)
     setInput(editorTextOf(el))
     el.focus()
+  }, [])
+  // The artifact card's own door to the preview. It makes the same request the
+  // automatic open makes, so a manual re-open lands in the same panel and the
+  // browser's own guard keeps a page that is already there from reloading.
+  const openTaskPreview = useCallback((task: Task) => {
+    const hash = task.plan_meta?.output_artifact
+    if (!hash) return
+    setCard('')
+    setDockOpen(true)
+    setDockTab('browser')
+    setPageAsk((prev) => ({
+      taskId: task.id,
+      hash,
+      nonce: (prev?.nonce ?? 0) + 1,
+    }))
   }, [])
   // The task a transcript link asked for. Held here, not in the card, because
   // the click that asks for it is the transcript's: `{ id }` is rebuilt on
@@ -2458,22 +2493,13 @@ export function SessionsView({
     if (!sessionTasks) return
     const scan = scanArtifacts(autoSeen.current, sessionTasks)
     autoSeen.current = scan.seen
-    const taskID = scan.next
-    if (!taskID) return
-    const task = sessionTasks.find((t) => t.id === taskID)
-    const hash = task?.plan_meta?.output_artifact
-    if (!hash) return
+    if (!scan.next) return
+    const task = sessionTasks.find((t) => t.id === scan.next)
+    if (!task) return
     // The dock and the header cards share one lane; asking for a page closes
     // whichever card was up rather than laying a column over it.
-    setCard('')
-    setDockOpen(true)
-    setDockTab('browser')
-    setPageAsk((prev) => ({
-      taskId: taskID,
-      hash,
-      nonce: (prev?.nonce ?? 0) + 1,
-    }))
-  }, [sessionTasks])
+    openTaskPreview(task)
+  }, [sessionTasks, openTaskPreview])
   // What the dock's task tab counts on its badge: the rows that still want
   // something — running, waiting on a human, or queued. Terminal rows are the
   // board's history, not an inbox item.
@@ -2768,6 +2794,7 @@ export function SessionsView({
                 elapsedMs={turnMs[i] ?? m.duration_ms}
                 liveFrom={liveFrom}
                 onOpenTask={openTaskInPlace}
+                onPreviewTask={openTaskPreview}
               />
             ),
           )}
@@ -3837,6 +3864,8 @@ function MetaRow({ msg }: { msg: ChatMsg }) {
 function ChatBubble(props: {
   msg: ChatMsg
   onOpenTask(id: string): void
+  /** Open a finished task's page in the dock's browser panel. */
+  onPreviewTask?: (task: Task) => void
   /** How long the turn behind this reply took, once it is done. The local
    *  measurement comes from `turnMs` (it is the only one that exists between
    *  the reply landing and the transcript being re-fetched); `duration_ms`
@@ -3856,7 +3885,7 @@ function ChatBubble(props: {
    *  from here instead of fetching a copy on every change frame. */
   tasksById?: Map<string, Task>
 }) {
-  const { msg, onOpenTask, elapsedMs, liveFrom = 0, plan = null, batch = [], tasksById } = props
+  const { msg, onOpenTask, onPreviewTask, elapsedMs, liveFrom = 0, plan = null, batch = [], tasksById } = props
 
   const report = msg.kind === 'error' ? null : splitReportHead(msg.text ?? '')
   const speaker = speakerOf(msg, report)
@@ -3967,9 +3996,20 @@ function ChatBubble(props: {
             // and, for a fanned-out round, the same for every sibling in the
             // bubble below it.
             <>
-              <DispatchBlock msg={msg} onOpenTask={onOpenTask} tasksById={tasksById} />
+              <DispatchBlock
+                msg={msg}
+                onOpenTask={onOpenTask}
+                onPreviewTask={onPreviewTask}
+                tasksById={tasksById}
+              />
               {batch.map((b) => (
-                <DispatchBlock key={b.k} msg={b} onOpenTask={onOpenTask} tasksById={tasksById} />
+                <DispatchBlock
+                  key={b.k}
+                  msg={b}
+                  onOpenTask={onOpenTask}
+                  onPreviewTask={onPreviewTask}
+                  tasksById={tasksById}
+                />
               ))}
             </>
           ) : (
@@ -4059,9 +4099,11 @@ function ChatBubble(props: {
 function DispatchBlock(props: {
   msg: ChatMsg
   onOpenTask(id: string): void
+  /** Open a finished task's page in the dock's browser panel. */
+  onPreviewTask?: (task: Task) => void
   tasksById?: Map<string, Task>
 }) {
-  const { msg, onOpenTask, tasksById } = props
+  const { msg, onOpenTask, onPreviewTask, tasksById } = props
   const [chainOpen, setChainOpen] = useState(false)
   // The thread's list is polled once per frame already; reading this block's
   // row from it keeps a five-card round from issuing five extra requests per
@@ -4107,7 +4149,9 @@ function DispatchBlock(props: {
               downloads, and the page view on the preview origin. It hangs off
               the card rather than the task page because the moment a user
               wants to look at what a task produced is the moment it reports. */}
-          {task?.plan_meta?.output_artifact && <ArtifactSection task={task} />}
+          {task?.plan_meta?.output_artifact && (
+            <ArtifactSection task={task} onPreview={onPreviewTask} />
+          )}
         </div>
       )}
     </div>
@@ -4120,6 +4164,8 @@ function DispatchBlock(props: {
 function ChatTurn(props: {
   msg: ChatMsg
   onOpenTask(id: string): void
+  /** Open a finished task's page in the dock's browser panel. */
+  onPreviewTask?: (task: Task) => void
   elapsedMs?: number
   liveFrom?: number
   batch?: ChatMsg[]

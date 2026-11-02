@@ -111,6 +111,9 @@ export function DockBrowser(props: DockBrowserProps) {
   const [prefixErr, setPrefixErr] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
   const [busy, setBusy] = useState(false)
+  // A proxied page is fetched server-side before the frame has anything to
+  // show; the bar is the only sign of life between the click and the document.
+  const [loading, setLoading] = useState(false)
   const frame = useRef<HTMLIFrameElement>(null)
   /** While the address bar has focus the page may not write over what the
    *  reader is typing; a redirect landing mid-edit must not eat the text. */
@@ -128,7 +131,11 @@ export function DockBrowser(props: DockBrowserProps) {
     api
       .browseOrigin()
       .then((r) => setPrefix(r.prefix))
-      .catch((e: unknown) => setPrefixErr(errText(e)))
+      .catch((e: unknown) => {
+        setPrefixErr(errText(e))
+        // Nothing is going to arrive for the page waiting on this capability.
+        setLoading(false)
+      })
   }, [])
 
   useEffect(() => {
@@ -142,6 +149,7 @@ export function DockBrowser(props: DockBrowserProps) {
     setTitle(ref.title ?? '')
     setLiveUrl(ref.direct ? ref.url : '')
     setDraft(ref.url)
+    setLoading(true)
     pageNonce.current += 1
     setPage({ ...ref, nonce: pageNonce.current })
     if (push) {
@@ -178,6 +186,7 @@ export function DockBrowser(props: DockBrowserProps) {
     // back on screen.
     artifactSeq.current += 1
     setBusy(false)
+    setLoading(false)
     setPage(null)
     setDraft('')
     setTitle('')
@@ -201,6 +210,7 @@ export function DockBrowser(props: DockBrowserProps) {
           setDraft('')
           setTitle('')
           setLiveUrl('')
+          setLoading(false)
           setNotice({ kind: 'empty', taskId, key })
           return
         }
@@ -217,6 +227,7 @@ export function DockBrowser(props: DockBrowserProps) {
           setDraft('')
           setTitle('')
           setLiveUrl('')
+          setLoading(false)
           setNotice({ kind: 'error', taskId, key, error: t('dockBrowser.unknown'), retry: 'artifact' })
           return
         }
@@ -226,6 +237,7 @@ export function DockBrowser(props: DockBrowserProps) {
         setDraft('')
         setTitle('')
         setLiveUrl('')
+        setLoading(false)
         setNotice({
           kind: 'remote',
           taskId,
@@ -239,6 +251,7 @@ export function DockBrowser(props: DockBrowserProps) {
         setDraft('')
         setTitle('')
         setLiveUrl('')
+        setLoading(false)
         setNotice({ kind: 'error', taskId, key, error: errText(e), retry: 'artifact' })
       } finally {
         if (seq === artifactSeq.current) setBusy(false)
@@ -277,6 +290,7 @@ export function DockBrowser(props: DockBrowserProps) {
       if (data.source === 'openpanda-page') {
         // A page that rendered is the end of any earlier failure state.
         setNotice(null)
+        setLoading(false)
         if (data.title) setTitle(data.title)
         if (data.url) {
           setLiveUrl(data.url)
@@ -290,6 +304,7 @@ export function DockBrowser(props: DockBrowserProps) {
       // The fetcher answers a failed page with an HTML explanation. It cannot
       // be read from here (opaque origin), so that document reports itself.
       if (data.source === 'openpanda-browse-error') {
+        setLoading(false)
         setNotice({
           kind: 'error',
           error: data.error || t('dockBrowser.unknown'),
@@ -342,8 +357,19 @@ export function DockBrowser(props: DockBrowserProps) {
 
   const reload = () => {
     setNotice(null)
+    setLoading(true)
     if (page && !page.direct && !prefix) loadPrefix()
     setPage((p) => (p ? { ...p, nonce: p.nonce + 1 } : p))
+  }
+
+  // Hand the page to the reader's own browser. A proxied page opens at the
+  // site itself — that browser has no reason to go through this console's
+  // fetcher — while an artifact page opens on its preview origin, which is
+  // where it actually lives.
+  const openExternal = () => {
+    if (!page) return
+    const url = page.direct ? page.url : liveUrl || page.url
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   const retryNotice = (n: Notice) => {
@@ -437,6 +463,16 @@ export function DockBrowser(props: DockBrowserProps) {
         >
           <Icon name="refresh" size={15} />
         </button>
+        <button
+          type="button"
+          class="icon-btn db-nav"
+          title={t('dockBrowser.external')}
+          aria-label={t('dockBrowser.external')}
+          disabled={!page}
+          onClick={openExternal}
+        >
+          <Icon name="external" size={15} />
+        </button>
         {props.onInsert && (
           <button
             type="button"
@@ -452,6 +488,10 @@ export function DockBrowser(props: DockBrowserProps) {
         )}
       </form>
 
+      {loading && (
+        <div class="db-progress" role="progressbar" aria-label={t('common.loading')} />
+      )}
+
       {page && (title || liveUrl) && (
         <p class="db-title" title={liveUrl || draft}>
           {title || liveUrl || draft}
@@ -462,7 +502,14 @@ export function DockBrowser(props: DockBrowserProps) {
         <div class="db-notice" role="status">
           <p class="db-notice-text">{t('dockBrowser.originFailed', { error: prefixErr })}</p>
           <div class="db-notice-actions">
-            <button type="button" class="btn small" onClick={loadPrefix}>
+            <button
+              type="button"
+              class="btn small"
+              onClick={() => {
+                setLoading(true)
+                loadPrefix()
+              }}
+            >
               {t('dockBrowser.retry')}
             </button>
           </div>
@@ -527,7 +574,12 @@ export function DockBrowser(props: DockBrowserProps) {
               sandbox="allow-scripts allow-forms allow-popups allow-modals"
               referrerpolicy="no-referrer"
               title={t('dockBrowser.frame')}
-              onLoad={tellFrame}
+              onLoad={() => {
+                // A document that arrived is no longer loading, even when it
+                // has no picker script to say so (an image or a PDF artifact).
+                setLoading(false)
+                tellFrame()
+              }}
             />
           ) : (
             <p class="db-empty-hint">{showPrefixWait ? t('common.loading') : ''}</p>

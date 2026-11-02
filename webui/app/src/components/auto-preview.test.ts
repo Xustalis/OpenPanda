@@ -60,3 +60,9 @@ test('a failed row with a partial artifact does not open', () => {
   const scan = scanArtifacts(first.seen, [task('a', 'h1', 'failed')])
   assert.equal(scan.next, null)
 })
+
+test('a row waiting for review opens its page, because the work exists', () => {
+  const first = scanArtifacts(null, [])
+  const scan = scanArtifacts(first.seen, [task('a', 'h1', 'review')])
+  assert.equal(scan.next, 'a')
+})
