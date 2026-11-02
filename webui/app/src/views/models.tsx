@@ -17,6 +17,7 @@ import { useModalFocus } from '../components/modal-focus'
 import { Icon } from '../components/icons'
 import { toast, toastError } from '../components/toast'
 import { ProviderLogo } from '../brand/providers'
+import { DiscoverSheet } from './model-discover'
 import { needsPlaintextConsent } from './model-endpoint'
 import {
   type Conn,
@@ -88,6 +89,9 @@ export function ModelsSection() {
   const [busy, setBusy] = useState('')
   const [results, setResults] = useState<Record<string, TestResult>>({})
   const [sheet, setSheet] = useState<SheetTarget | null>(null)
+  // The discovery sheet is not a SheetTarget: it writes rows the person never
+  // typed, so it owns its own load and its own import call.
+  const [discovering, setDiscovering] = useState(false)
 
   function reload() {
     return api
@@ -215,6 +219,18 @@ export function ModelsSection() {
 
   return (
     <div class="models-section">
+      {/* A caption row, not a header: one action, right-aligned, so the grid
+          still starts with the add door. It sits above the tiles because a
+          registry of seven models pushes a footnote below the fold, and an
+          entry nobody scrolls to is not an entry. */}
+      <div class="model-actions">
+        <button type="button" class="model-discover" onClick={() => setDiscovering(true)}>
+          <Icon name="orbit" size={14} />
+          <span>{t('models.discover.trigger')}</span>
+          <span class="model-discover-hint">{t('models.discover.triggerHint')}</span>
+        </button>
+      </div>
+
       <div class="model-grid">
         <button
           type="button"
@@ -244,6 +260,23 @@ export function ModelsSection() {
       </div>
 
       {error && <p class="gate-error">{error}</p>}
+
+      {discovering && (
+        <DiscoverSheet
+          onClose={() => setDiscovering(false)}
+          onDone={(n, skipped) => {
+            setDiscovering(false)
+            toast(t('models.discover.imported', { n }), 'success')
+            // A row the endpoint refused is the one thing this sheet must not
+            // report as success: it was found in a config, not proven to work.
+            if (skipped?.length) {
+              const reason = skipped[0]!.length > 120 ? `${skipped[0]!.slice(0, 120)}…` : skipped[0]!
+              toastError(t('models.discover.skipped', { n: skipped.length, reason }))
+            }
+            afterWrite()
+          }}
+        />
+      )}
 
       {sheet && (
         <ModelSheet
@@ -311,7 +344,7 @@ function ModelTile(props: {
   const k = keyOf(entry)
   // A row that signs in with a subscription token (the Codex login) has no
   // api_key on purpose: the dot is for "cannot dial at all", not "no secret".
-  const keyOk = entry.no_auth || entry.key_set
+  const keyOk = entry.no_auth || entry.key_set || !!entry.auth
   const testing = props.busy === `test:${k}`
   const verdict = props.result ? (props.result.ok ? 'ok' : 'bad') : ''
   // The corner dot is down to one job: a config that cannot dial at all. A test
@@ -933,9 +966,11 @@ function ModelSheet(props: {
       : t('models.pickProviderShort')
 
   const keyPlaceholder = editing
-    ? keyOnFile
-      ? `${t('models.apiKeySet')} ${editing.key_hint ?? ''}`.trim()
-      : 'sk-…'
+    ? editing.auth
+      ? t('models.authLogin')
+      : keyOnFile
+        ? `${t('models.apiKeySet')} ${editing.key_hint ?? ''}`.trim()
+        : 'sk-…'
     : pre?.keySet && vendorSame
       ? t('models.keyReuseConn')
       : provider?.key_saved
