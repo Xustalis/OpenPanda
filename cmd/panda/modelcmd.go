@@ -87,6 +87,32 @@ func (r *repl) applyModel(mc config.ModelConfig) error {
 	return nil
 }
 
+// clearActiveModel empties `model:` on purpose and drops the engine's client
+// with it — the last-model delete path, shared by `/model remove` and the TUI
+// panel.
+//
+// ClearModelSection is the deliberate clear (it bypasses the downgrade guard
+// that exists to catch an accidental one), and the engine half is what makes
+// the delete real: applyModel is the only other writer of the client slot, and
+// it can never express "no model". Without it the row leaves the config and the
+// engine keeps dialing it, so the next turn answers from a model the user has
+// just deleted — the exact failure a delete is supposed to prevent.
+func (r *repl) clearActiveModel() error {
+	if err := r.mutateConfigErr(func(c *config.Config) error {
+		if err := config.ClearModelSection(configWritePath(r.configPath)); err != nil {
+			return err
+		}
+		c.Model = config.ModelConfig{}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if eng := r.engine.Load(); eng != nil {
+		eng.ClearModel()
+	}
+	return nil
+}
+
 // findProviderKey looks up an API key already configured for providerID,
 // checking the active model first and then the registered models.
 func (r *repl) findProviderKey(providerID string) string {
@@ -172,6 +198,163 @@ func effectiveProvider(m config.ModelConfig) string {
 	return "-"
 }
 
+// modelRowConfigured reports whether a ModelConfig describes a real entry
+// rather than the zero value a missing section leaves behind.
+func modelRowConfigured(m config.ModelConfig) bool {
+	return m.Model != "" || m.Provider != "" || m.BaseURL != ""
+}
+
+// sameModelRow is the identity of one configured model — the row, not the
+// address. Two accounts of one vendor share the provider, the model id and the
+// endpoint, and the alias is the only way a human tells them apart, so alias
+// plus credential are what make two rows the same entry.
+//
+// This replaced an alias-only comparison on every write path. Adding, editing
+// and deleting all keyed off "alias (or model id)", which is exactly the pair
+// two accounts share: the second DeepSeek account overwrote the first on save,
+// and deleting either one took both.
+func sameModelRow(a, b config.ModelConfig) bool {
+	return a.Alias() == b.Alias() &&
+		a.Model == b.Model &&
+		effectiveProvider(a) == effectiveProvider(b) &&
+		sameEndpointURL(a.BaseURL, b.BaseURL) &&
+		a.APIKey == b.APIKey
+}
+
+// sameEndpointURL compares two endpoints ignoring a trailing slash and case in
+// the host — the two spellings a config collects for one address.
+func sameEndpointURL(a, b string) bool {
+	return strings.EqualFold(strings.TrimRight(strings.TrimSpace(a), "/"),
+		strings.TrimRight(strings.TrimSpace(b), "/"))
+}
+
+// freeModelAlias returns want, or want-2 / want-3 …, when another row already
+// answers to it. skip is the row being rewritten, so an edit that keeps its
+// own name is not blocked by itself.
+//
+// A row's name is its primary key, so a save that is *adding* must always land
+// on a free one. The old rule exempted rows that matched on provider, model
+// and endpoint on the grounds that they were "the same entry" — which is
+// precisely what a second account of one vendor looks like, so it never got a
+// name of its own and the upsert replaced the first account instead.
+func freeModelAlias(c *config.Config, want string, skip config.ModelConfig) string {
+	taken := func(name string) bool {
+		if name == "" {
+			return false
+		}
+		if modelRowConfigured(c.Model) && c.Model.Alias() == name && !sameModelRow(c.Model, skip) {
+			return true
+		}
+		for _, m := range c.Models {
+			if modelRowConfigured(m) && m.Alias() == name && !sameModelRow(m, skip) {
+				return true
+			}
+		}
+		return false
+	}
+	name := strings.TrimSpace(want)
+	if name == "" {
+		name = "model"
+	}
+	if !taken(name) {
+		return name
+	}
+	for i := 2; ; i++ {
+		cand := fmt.Sprintf("%s-%d", name, i)
+		if !taken(cand) {
+			return cand
+		}
+	}
+}
+
+// resolveModelRow finds the row a name addresses, and says why when it cannot:
+// several rows answering to one name is a different answer from no row at all.
+//
+// The name is the alias first — the registry, then the live model, which a
+// config written outside the registry still holds — and a model id second, but
+// only when exactly one row serves it. Two accounts of one vendor share the id,
+// and guessing there acts on the wrong account. Switch and remove both use this:
+// before, each carried its own resolution and only one of them refused the
+// ambiguous case, so `/model <alias>` silently took the first of two accounts
+// while `/model remove <alias>` refused the same name.
+func resolveModelRow(c *config.Config, name string) (mc config.ModelConfig, found, ambiguous bool) {
+	if name == "" {
+		return config.ModelConfig{}, false, false
+	}
+	// Alias matches, counting the live row when the registry does not already
+	// hold it: a config written by hand can carry a model: entry no row lists.
+	var hits []config.ModelConfig
+	for _, m := range c.Models {
+		if modelRowConfigured(m) && m.Alias() == name {
+			hits = append(hits, m)
+		}
+	}
+	if modelRowConfigured(c.Model) && c.Model.Alias() == name {
+		listed := false
+		for _, m := range hits {
+			if sameModelRow(m, c.Model) {
+				listed = true
+				break
+			}
+		}
+		if !listed {
+			hits = append(hits, c.Model)
+		}
+	}
+	switch len(hits) {
+	case 1:
+		return hits[0], true, false
+	case 0:
+		// no alias answers — try the model id below
+	default:
+		return config.ModelConfig{}, false, true
+	}
+
+	var idHits []config.ModelConfig
+	for _, m := range c.Models {
+		if m.Model == name {
+			idHits = append(idHits, m)
+		}
+	}
+	// The live row answers to its model id too: a single-model config an older
+	// build wrote has no registry row at all, and `/model test <id>` resolved it
+	// before this became the one resolver — dropping that would have made the
+	// only configured model unaddressable by the id the vendor prints.
+	if modelRowConfigured(c.Model) && c.Model.Model == name {
+		listed := false
+		for _, m := range idHits {
+			if sameModelRow(m, c.Model) {
+				listed = true
+				break
+			}
+		}
+		if !listed {
+			idHits = append(idHits, c.Model)
+		}
+	}
+	switch len(idHits) {
+	case 1:
+		return idHits[0], true, false
+	case 0:
+		return config.ModelConfig{}, false, false
+	}
+	return config.ModelConfig{}, false, true
+}
+
+// maskedKeyTail is the last four characters of a stored key — the one part of a
+// secret the console shows, and the only thing distinguishing two rows that
+// share a name in a config written before names were kept unique.
+func maskedKeyTail(m config.ModelConfig) string {
+	r := []rune(m.APIKey)
+	if len(r) == 0 {
+		return ""
+	}
+	if len(r) > 4 {
+		r = r[len(r)-4:]
+	}
+	return "…" + string(r)
+}
+
 // effectiveContextWindow returns the advertised context size in tokens,
 // falling back to the model's catalogue spec (then provider row) when not
 // explicitly configured.
@@ -233,12 +416,33 @@ func (r *repl) modelStatus() {
 	}
 
 	r.outln(p.Heading(i18n.T(r.loc, "repl.model.head") + ":"))
+	// Two rows can still answer to one name (a config written by an older
+	// build, or by hand). The masked key tail is what tells them apart, so the
+	// repeated names carry it — a table that prints the same line twice names
+	// nothing the user can switch to or remove.
+	repeats := map[string]int{}
+	if modelRowConfigured(active) {
+		repeats[active.Alias()]++
+	}
+	for _, m := range models {
+		repeats[m.Alias()]++
+	}
+	label := func(m config.ModelConfig) string {
+		name := m.Alias()
+		if repeats[name] > 1 {
+			if tail := maskedKeyTail(m); tail != "" {
+				name += " " + tail
+			}
+		}
+		return name
+	}
+
 	aliasW, modelW, provW, ctxW := 12, 16, 12, 7
-	aliasW = max(aliasW, cliui.DisplayWidth(active.Alias()))
+	aliasW = max(aliasW, cliui.DisplayWidth(label(active)))
 	modelW = max(modelW, cliui.DisplayWidth(effectiveModel(active)))
 	provW = max(provW, cliui.DisplayWidth(effectiveProvider(active)))
 	for _, m := range models {
-		aliasW = max(aliasW, cliui.DisplayWidth(m.Alias()))
+		aliasW = max(aliasW, cliui.DisplayWidth(label(m)))
 		modelW = max(modelW, cliui.DisplayWidth(effectiveModel(m)))
 		provW = max(provW, cliui.DisplayWidth(effectiveProvider(m)))
 	}
@@ -263,7 +467,7 @@ func (r *repl) modelStatus() {
 	activeBadge := p.Success("[active]")
 	r.outf("  %s %s  %s  %s  %s  %s  %s\n",
 		mark,
-		p.Accent(cell(active.Alias(), aliasW)),
+		p.Accent(cell(label(active), aliasW)),
 		cell(effectiveModel(active), modelW),
 		p.Muted(cell(effectiveProvider(active), provW)),
 		p.Muted(cell(capStr(active), ctxW)),
@@ -272,11 +476,15 @@ func (r *repl) modelStatus() {
 	)
 
 	for _, m := range models {
-		if m.Alias() == active.Alias() && effectiveModel(m) == effectiveModel(active) && effectiveProvider(m) == effectiveProvider(active) {
-			continue // already displayed as active
+		// Only the live row's own entry is skipped — it is printed above. A
+		// second account shares the name, the model id and the endpoint with
+		// it, so comparing those printed one account and hid the other: a row
+		// nobody can see is a row nobody can switch to or remove.
+		if sameModelRow(m, active) {
+			continue
 		}
 		r.outf("    %s  %s  %s  %s  %s  %s\n",
-			cell(m.Alias(), aliasW),
+			cell(label(m), aliasW),
 			cell(effectiveModel(m), modelW),
 			p.Muted(cell(effectiveProvider(m), provW)),
 			p.Muted(cell(capStr(m), ctxW)),
@@ -292,31 +500,18 @@ func (r *repl) modelStatus() {
 // modelSwitch selects a registered model by alias or model id.
 func (r *repl) modelSwitch(name string) {
 	var active, match config.ModelConfig
-	var found, isActive bool
+	var found, isActive, ambiguous bool
 	r.readConfig(func(c *config.Config) {
 		active = c.Model
-		if c.Model.Alias() == name && (c.Model.Model != "" || c.Model.Provider != "") {
-			match, found, isActive = c.Model, true, true
-			return
-		}
-		// Alias wins over model id: two passes keep the original priority —
-		// a later entry's alias match beats an earlier entry's id match.
-		for _, m := range c.Models {
-			if m.Alias() == name {
-				match, found = m, true
-				return
-			}
-		}
-		for _, m := range c.Models {
-			if m.Model == name {
-				match, found = m, true
-				return
-			}
-		}
-		if c.Model.Model == name && (c.Model.Model != "" || c.Model.Provider != "") {
-			match, found, isActive = c.Model, true, true
+		match, found, ambiguous = resolveModelRow(c, name)
+		if found && sameModelRow(c.Model, match) && modelRowConfigured(c.Model) {
+			isActive = true
 		}
 	})
+	if ambiguous {
+		r.outln(i18n.Tf(r.loc, "repl.model.shared", "alias", name))
+		return
+	}
 	if isActive {
 		r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", active.Alias(), "model", effectiveModel(active)))
 		return
@@ -605,32 +800,19 @@ func (r *repl) modelAdd(args []string) {
 		}
 	}
 
-	if alias == "" {
-		alias = id
-		// If an existing model already uses the provider id as alias but
-		// points to a different endpoint, derive a distinct alias — keep
-		// suffixing until nothing clashes, so a third relay serving the same
-		// model name never silently overwrites the second.
-		collides := func(a string) bool {
-			hit := false
-			r.readConfig(func(c *config.Config) {
-				for _, existing := range c.Models {
-					if existing.Alias() == a &&
-						(existing.Model != mc.Model || existing.BaseURL != mc.BaseURL || existing.Provider != mc.Provider) {
-						hit = true
-						return
-					}
-				}
-			})
-			return hit
-		}
-		if collides(alias) && mc.Model != "" {
-			alias = mc.Model
-		}
-		base := alias
-		for i := 2; collides(alias); i++ {
-			alias = fmt.Sprintf("%s-%d", base, i)
-		}
+	// The row's name. An explicit alias is an address — naming a row that
+	// already exists updates it, which is the only "edit" the CLI has. An
+	// implicit one (the provider id) is derived, so it is always made free:
+	// a second account of the same vendor must not land on the first one's
+	// name, or the upsert below replaces it. That derivation used to exempt
+	// rows matching on provider+model+endpoint — exactly what two accounts
+	// look like — so "add the same model again" silently edited the first.
+	explicitAlias := strings.TrimSpace(alias)
+	if explicitAlias == "" {
+		want := id
+		r.readConfig(func(c *config.Config) {
+			alias = freeModelAlias(c, want, config.ModelConfig{})
+		})
 	}
 	mc.Name = alias
 
@@ -643,10 +825,13 @@ func (r *repl) modelAdd(args []string) {
 		}
 	}
 
-	// Upsert into the registry, then persist.
+	// Upsert into the registry, then persist. Only an explicitly named alias
+	// can arrive here already taken (an implicit one was made free above), so
+	// "replaced" means the user asked for that name — and the message says so
+	// instead of reporting an add that silently rewrote a row.
 	var models []config.ModelConfig
+	var replaced bool
 	if err := r.mutateConfigErr(func(c *config.Config) error {
-		replaced := false
 		for i := range c.Models {
 			if c.Models[i].Alias() == alias {
 				c.Models[i] = mc
@@ -670,6 +855,10 @@ func (r *repl) modelAdd(args []string) {
 	})
 	if noActive {
 		_ = r.applyModel(mc)
+	}
+	if replaced {
+		r.outln(i18n.Tf(r.loc, "repl.model.add.replaced", "alias", alias, "model", mc.Model))
+		return
 	}
 	r.outln(i18n.Tf(r.loc, "repl.model.add.done", "alias", alias, "model", mc.Model))
 }
@@ -780,44 +969,76 @@ func (r *repl) splitProviderArgs(p providers.Provider, args []string) (model, ke
 	return model, key, alias
 }
 
-// modelRemove drops a registered model by alias or model id.
+// modelRemove drops one registry row by alias — or by model id when exactly one
+// row serves it — and keeps the live model pointing at something that exists.
+//
+// Three things the earlier version got wrong. It matched the name against both
+// the alias *and* the model id, so removing a model that two accounts share
+// dropped both. It refused to touch the active row outright, which left a user
+// unable to delete the model they were actually using. And its comparison
+// accepted the first row that answered to the name, so an edit made just before
+// it could be applied to the wrong account. Now the target is resolved once, by
+// identity, and deleting the live model promotes the next one — or clears the
+// section when it was the last, which is the explicit intent of the command.
 func (r *repl) modelRemove(args []string) {
 	if len(args) == 0 {
 		r.outln(i18n.T(r.loc, "repl.model.remove.usage"))
 		return
 	}
 	name := args[0]
-	var found, isActive bool
-	var models []config.ModelConfig
+
+	var target config.ModelConfig
+	var found, ambiguous bool
+	r.readConfig(func(c *config.Config) {
+		target, found, ambiguous = resolveModelRow(c, name)
+	})
+	if ambiguous {
+		r.outln(i18n.Tf(r.loc, "repl.model.shared", "alias", name))
+		return
+	}
+	if !found {
+		r.outln(i18n.Tf(r.loc, "repl.model.remove.none", "alias", name))
+		return
+	}
+
+	var kept []config.ModelConfig
+	var liveHit bool
 	err := r.mutateConfigErr(func(c *config.Config) error {
-		for i, m := range c.Models {
-			if m.Alias() != name && m.Model != name {
-				continue
+		kept = make([]config.ModelConfig, 0, len(c.Models))
+		for _, m := range c.Models {
+			if sameModelRow(m, target) {
+				continue // exactly the addressed row
 			}
-			found = true
-			if m.Alias() == c.Model.Alias() {
-				isActive = true
-				return nil
-			}
-			c.Models = append(c.Models[:i:i], c.Models[i+1:]...)
-			models = slices.Clone(c.Models)
-			return config.UpdateModelsSection(configWritePath(r.configPath), models)
+			kept = append(kept, m)
 		}
-		return nil
+		c.Models = kept
+		liveHit = sameModelRow(c.Model, target)
+		return config.UpdateModelsSection(configWritePath(r.configPath), kept)
 	})
 	if err != nil {
 		r.storeErr(err)
 		return
 	}
-	if isActive {
-		r.outln(i18n.Tf(r.loc, "repl.model.remove.active", "alias", name))
-		return
+
+	switch {
+	case liveHit && len(kept) > 0:
+		// The live row went away: promote the next one rather than leaving
+		// model: pointing at an entry the registry no longer holds.
+		if err := r.applyModel(kept[0]); err != nil {
+			r.storeErr(err)
+			return
+		}
+	case liveHit:
+		// Deleting the last model clears model: on purpose — this is the
+		// deliberate clear ClearModelSection exists for, not a stale write.
+		// The engine's client goes with it, or the next ask would still be
+		// sent to the row that was just removed.
+		if err := r.clearActiveModel(); err != nil {
+			r.storeErr(err)
+			return
+		}
 	}
-	if found {
-		r.outln(i18n.Tf(r.loc, "repl.model.remove.done", "alias", name))
-		return
-	}
-	r.outln(i18n.Tf(r.loc, "repl.model.remove.none", "alias", name))
+	r.outln(i18n.Tf(r.loc, "repl.model.remove.done", "alias", name))
 }
 
 // modelFetch pulls the model catalogue for the active model, a registered
@@ -899,19 +1120,17 @@ func (r *repl) resolveModel(args []string, verb string) (config.ModelConfig, str
 	}
 	name := args[0]
 	var match config.ModelConfig
-	var found bool
+	var found, ambiguous bool
 	r.readConfig(func(c *config.Config) {
-		if (c.Model.Alias() == name || c.Model.Model == name) && (c.Model.Model != "" || c.Model.Provider != "") {
-			match, found = c.Model, true
-			return
-		}
-		for _, m := range c.Models {
-			if m.Alias() == name || m.Model == name {
-				match, found = m, true
-				return
-			}
-		}
+		match, found, ambiguous = resolveModelRow(c, name)
 	})
+	if ambiguous {
+		// Fetching or testing "the first row that answers to this name" would
+		// probe one account and report on another — the same wrong-account
+		// mistake switch and remove already refuse.
+		r.outln(i18n.Tf(r.loc, "repl.model.shared", "alias", name))
+		return config.ModelConfig{}, "", false
+	}
 	if found {
 		return match, match.Alias(), true
 	}
