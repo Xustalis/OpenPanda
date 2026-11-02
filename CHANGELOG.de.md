@@ -56,6 +56,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
+- **Windows-Lifecycle-Hooks führen Aufgabenwerte nicht mehr als Befehle aus** — cmd.exe expandiert `%VAR%` vor dem Parsen der Anführungszeichen, sodass ein Titel mit `"` das Zitat schließen und einen neuen Befehl starten und das Tier-Gate umgehen konnte. Hooks laufen jetzt mit verzögerter Expansion (`cmd /V:ON`) und `!VAR!`-Referenzen, die nach dem Parsen ersetzt werden.
+- **Ein riesiger `line`-Wert bringt die Dateiansicht nicht mehr zum Absturz** — die Fensterarithmetik lief über und schnitt außerhalb der Grenzen, wodurch jede solche Anfrage einen Stacktrace schrieb und die Verbindung abbrach. Die Zeile ist jetzt begrenzt und das Fenster sättigt.
+
 - **Eine abgebrochene Aufgabe zählt nicht mehr als laufend** — die TUI-Seitenleiste maß jede nicht erledigte Zeile ab ihrer Erstellung, sodass eine vor einer Stunde abgebrochene oder abgelaufene Aufgabe wie eine Stunde Arbeit aussah. Erledigte Zeilen zeigen jetzt, wann sie erledigt wurden.
 
 - **Lifecycle-Hooks erreichen jede Aufgabenkante** — der Beobachter feuert innerhalb der Schreibtransaktion, sodass ein dateibasierter Store mit Pool den Stand vor dem Commit las: `task_submitted` fand keine Zeile und ein Ergebnis sah noch laufend aus, beide Kanten gingen still verloren. Der Versand wartet jetzt, bis der Commit sichtbar ist (Obergrenze zwei Sekunden), und `:memory:`-Tests verbergen das Rennen nicht mehr.

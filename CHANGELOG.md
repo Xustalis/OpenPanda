@@ -62,6 +62,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **Windows lifecycle hooks no longer run task values as commands** — cmd.exe expands `%VAR%` before it parses quotes, so a title containing `"` could close the quote and start a new command, bypassing the tier gate. Hooks now run under delayed expansion (`cmd /V:ON`) with `!VAR!` references, which are substituted after parsing.
+- **A huge `line` value no longer crashes the file-view request** — the window arithmetic wrapped and sliced out of bounds, logging a stack trace and dropping the connection on every such request. The line is capped and the window saturates instead.
+
 - **A cancelled task stops counting as running** — the TUI sidebar measured every non-done row from its creation, so a task cancelled or expired an hour ago read as an hour of running work. Settled rows now show when they settled.
 
 - **Lifecycle hooks reach every task edge** — the observer fires inside the writer's transaction, so on a pooled file-backed store the dispatch read the pre-commit snapshot: `task_submitted` found no row and a result still looked running, dropping both edges silently. Dispatch now waits for the commit to become visible (a two-second ceiling), and `:memory:` tests no longer hide the race.

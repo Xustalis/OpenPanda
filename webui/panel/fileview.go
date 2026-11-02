@@ -44,6 +44,13 @@ const viewContextLines = 40
 // the endpoint read a whole gigabyte one "context" at a time.
 const maxViewContext = 4000
 
+// maxViewLine bounds the requested focus line. Without a ceiling, line+count
+// can overflow int (a two's-complement wrap on 32-bit) and leave a negative
+// end that the clamp preserves, which then panics the slice in readFileView.
+// One billion is far past any real source file and leaves room for count on a
+// 32-bit build.
+const maxViewLine = 1 << 30
+
 // binarySniffBytes is how far into the file the NUL check looks. Source files
 // never carry a NUL in their first 8 KiB; a compressed or compiled artifact
 // almost always does.
@@ -113,7 +120,7 @@ func (h *handler) viewFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	line := atoiOr(q.Get("line"), 0)
-	if line < 0 {
+	if line < 0 || line > maxViewLine {
 		line = 0
 	}
 	count := atoiOr(q.Get("count"), 0)
@@ -283,6 +290,11 @@ func readFileView(abs string, size int64, line, count int) (*fileView, error) {
 func viewWindow(total, line, count int) (start, end int) {
 	if line <= 0 {
 		return 1, count
+	}
+	// Saturation, not just the handler's clamp: viewWindow is called from the
+	// streaming path too, and line+count must never wrap.
+	if line > maxViewLine {
+		line = maxViewLine
 	}
 	start = max(1, line-count)
 	end = line + count

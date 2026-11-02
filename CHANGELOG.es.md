@@ -56,6 +56,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
+- **Los hooks de ciclo de vida en Windows ya no ejecutan valores de tarea como comandos** — cmd.exe expande `%VAR%` antes de analizar las comillas, así que un título con `"` podía cerrar la comilla e iniciar un comando nuevo, saltándose el control de nivel. Los hooks ahora usan expansión diferida (`cmd /V:ON`) con referencias `!VAR!`, sustituidas después del análisis.
+- **Un valor `line` enorme ya no rompe la petición del visor de archivos** — la aritmética de la ventana desbordaba y cortaba fuera de rango, registrando una traza y cerrando la conexión en cada petición así. La línea tiene ahora un tope y la ventana satura.
+
 - **Una tarea cancelada deja de contar como en ejecución** — la barra lateral de la TUI medía toda fila no terminada desde su creación, así que una tarea cancelada o expirada hace una hora parecía llevar una hora ejecutándose. Las filas resueltas ahora muestran cuándo se resolvieron.
 
 - **Los hooks de ciclo de vida llegan a cada borde de tarea** — el observador se dispara dentro de la transacción del escritor, así que en un almacén de archivo con pool la lectura veía la instantánea previa al commit: `task_submitted` no encontraba fila y un resultado aún parecía en ejecución, perdiendo ambos bordes en silencio. El despacho ahora espera a que el commit sea visible (tope de dos segundos), y las pruebas `:memory:` ya no ocultan la carrera.

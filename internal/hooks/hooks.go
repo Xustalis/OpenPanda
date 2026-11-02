@@ -161,7 +161,7 @@ var ErrTier2 = fmt.Errorf("the command is graded irreversible")
 // watching the terminal, and wants the output rather than a fire-and-forget.
 func RunOne(ctx context.Context, h Hook, ev Event, timeout time.Duration) (string, error) {
 	line := Expand(h.Command, ev)
-	shell, flag := userShell()
+	shell, shellArgs := userShell()
 	if defense.TierFromCommand("sh", "-c", line) != defense.TierReversible {
 		return "", ErrTier2
 	}
@@ -170,7 +170,7 @@ func RunOne(ctx context.Context, h Hook, ev Event, timeout time.Duration) (strin
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := executil.CommandContext(runCtx, shell, flag, line)
+	cmd := executil.CommandContext(runCtx, shell, append(shellArgs, line)...)
 	cmd.Env = append(safeEnv(), hookEnv(ev)...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -179,7 +179,7 @@ func RunOne(ctx context.Context, h Hook, ev Event, timeout time.Duration) (strin
 // execute runs one binding for real: tier gate, bounded run, audit row.
 func (r *Runner) execute(h Hook, ev Event) {
 	line := Expand(h.Command, ev)
-	shell, flag := userShell()
+	shell, shellArgs := userShell()
 	// Grade the payload with a FIXED scanner name. TierFromCommand only walks
 	// the command text when the interpreter is one it recognises, so keying the
 	// scan on the user's $SHELL meant an unrecognised shell (nu, elvish, xonsh)
@@ -204,7 +204,7 @@ func (r *Runner) execute(h Hook, ev Event) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmd := executil.CommandContext(ctx, shell, flag, line)
+	cmd := executil.CommandContext(ctx, shell, append(shellArgs, line)...)
 	cmd.Env = append(safeEnv(), hookEnv(ev)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -256,15 +256,25 @@ const (
 )
 
 // Expand substitutes placeholder tokens with references to those variables.
-// The reference is emitted double-quoted so it is one word whatever the
-// surrounding template does: {title} and "{title}" both end up as a single
-// argument, and the value is expanded by the shell, never parsed by it.
+// The reference is emitted quoted so it is one word whatever the surrounding
+// template does: {title} and "{title}" both end up as a single argument, and
+// the value is expanded by the shell, never parsed by it.
+//
+// POSIX needs "${VAR}": the shell word-splits and expands before the result is
+// re-parsed, so quotes and `&` in the value stay data. cmd.exe is different —
+// it expands `%VAR%` BEFORE it parses quotes and metacharacters, so a title
+// containing `"` would close the quote and let `&` become a command separator.
+// The Windows form therefore uses delayed expansion (the shell runs with
+// /V:ON, see userShell): `!VAR!` is substituted after parsing, so the value
+// cannot become syntax. `%` in a value is not re-expanded either.
 func Expand(template string, ev Event) string {
+	return expandFor(runtime.GOOS, template)
+}
+
+func expandFor(goos, template string) string {
 	ref := func(name string) string {
-		if runtime.GOOS == "windows" {
-			// cmd.exe expands %VAR% inside and outside quotes, and the
-			// expanded text is not re-parsed as syntax.
-			return `"%` + name + `%"`
+		if goos == "windows" {
+			return `"!` + name + `!"`
 		}
 		return `"${` + name + `}"`
 	}
@@ -313,17 +323,22 @@ func safeEnv() []string {
 
 // userShell is the shell a hook runs under: the user's own, so a hook behaves
 // the way the command would in their terminal.
-func userShell() (shell, flag string) {
+// userShell returns the shell that runs a hook and the arguments that precede
+// the command line. Windows gets /V:ON so Expand's `!VAR!` references use
+// delayed expansion: the value enters after cmd.exe has parsed the command, so
+// quotes and metacharacters in a task title cannot become syntax.
+func userShell() (shell string, args []string) {
 	if runtime.GOOS == "windows" {
-		if sh := os.Getenv("COMSPEC"); sh != "" {
-			return sh, "/c"
+		sh := os.Getenv("COMSPEC")
+		if sh == "" {
+			sh = "cmd.exe"
 		}
-		return "cmd.exe", "/c"
+		return sh, []string{"/V:ON", "/c"}
 	}
 	if sh := os.Getenv("SHELL"); sh != "" {
-		return sh, "-c"
+		return sh, []string{"-c"}
 	}
-	return "/bin/sh", "-c"
+	return "/bin/sh", []string{"-c"}
 }
 
 // ValidEvent reports whether name is a bindable edge.

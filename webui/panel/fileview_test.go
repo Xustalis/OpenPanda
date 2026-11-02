@@ -150,6 +150,27 @@ func TestViewFileWindowAroundLine(t *testing.T) {
 	}
 }
 
+// TestViewFileHugeLineDoesNotOverflow pins the bound on the requested focus
+// line: line+count used to wrap, leave a negative end, and panic the slice
+// (net/http recovers, but every request logged a stack trace).
+func TestViewFileHugeLineDoesNotOverflow(t *testing.T) {
+	h, tmp, _ := newFileViewPanel(t)
+	if err := os.WriteFile(filepath.Join(tmp, "work", "short.txt"), []byte("a\nb\nc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out := doJSON(t, h, authedReq(http.MethodGet,
+		"/api/fs/file?path=short.txt&line=9223372036854775807&count=2", nil))
+	if code != http.StatusOK {
+		t.Fatalf("huge line: %d %v", code, out)
+	}
+	if n := numOf(t, out, "start"); n != 1 {
+		t.Errorf("start = %v, want the head window", n)
+	}
+	if n := numOf(t, out, "end"); n != 2 {
+		t.Errorf("end = %v", n)
+	}
+}
+
 func TestViewFileRefusesOutsideEveryRoot(t *testing.T) {
 	h, _, _ := newFileViewPanel(t)
 

@@ -14,13 +14,25 @@ import (
 
 // TestExpandEmitsEnvReferences pins the substitution shape: placeholders become
 // references to the event's environment variables, never the values themselves.
+// The two shell families get different reference syntax because their parsers
+// expand at different phases: POSIX after parsing (${VAR}), cmd.exe before
+// parsing unless delayed expansion is on (!VAR!, with /V:ON from userShell).
 func TestExpandEmitsEnvReferences(t *testing.T) {
-	want := `echo "${PANDA_HOOK_TASK_ID}" "${PANDA_HOOK_TITLE}"`
-	if runtime.GOOS == "windows" {
-		want = `echo "%PANDA_HOOK_TASK_ID%" "%PANDA_HOOK_TITLE%"`
+	for _, tc := range []struct {
+		goos string
+		want string
+	}{
+		{"linux", `echo "${PANDA_HOOK_TASK_ID}" "${PANDA_HOOK_TITLE}"`},
+		{"windows", `echo "!PANDA_HOOK_TASK_ID!" "!PANDA_HOOK_TITLE!"`},
+	} {
+		if got := expandFor(tc.goos, `echo {task_id} {title}`); got != tc.want {
+			t.Errorf("%s: Expand = %q, want %q", tc.goos, got, tc.want)
+		}
 	}
-	if got := Expand(`echo {task_id} {title}`, Event{TaskID: "t1", Title: "x"}); got != want {
-		t.Errorf("Expand = %q, want %q", got, want)
+	// A `%VAR%` reference is the bug this shape replaced: cmd.exe expands it
+	// before quote parsing, so a title containing a quote can start a command.
+	if got := expandFor("windows", `echo {title}`); strings.Contains(got, "%PANDA_HOOK") {
+		t.Errorf("Windows reference still uses percent expansion: %q", got)
 	}
 }
 
