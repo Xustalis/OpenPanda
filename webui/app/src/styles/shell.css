@@ -304,6 +304,11 @@ a.sidebar-node:hover {
   overflow-y: auto;
   padding: var(--sp-6) var(--sp-8);
 }
+/* Route chunks load on first visit; hold the pane's height so the shell does
+   not jump while the view arrives. */
+.view-loading {
+  min-height: 40vh;
+}
 /* One quiet entrance for every view swap: the pane lands instead of
    snapping. Reduced-motion users get it for free via the global clamp. */
 .main > section {

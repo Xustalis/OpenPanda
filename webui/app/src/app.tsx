@@ -7,16 +7,21 @@ import { onLocaleChange, t } from './i18n'
 import { useAsync, useChangeSignal } from './hooks'
 import { isSelfNodeUp } from './format/node-status'
 import { navigate, parseHash, type Route } from './nav'
-import { ControlView } from './views/control'
-import { DetailView } from './views/detail'
+import { lazy, Suspense } from 'preact/compat'
 import { SessionsView } from './views/sessions'
 import { SidebarHistory } from './views/sidebar-history'
-import { WorkspaceView } from './views/workspace'
-import { TeamView } from './views/team'
-import { MemoryView } from './views/memory'
-import { ProfileView } from './views/profile'
-import { SettingsView } from './views/settings'
 import { OnboardingBanner } from './views/onboarding'
+
+// Only the thread shell is on the first-paint path. The boards, settings and
+// the graph are route-scoped; splitting them keeps the initial bundle from
+// carrying every view a reader may never open.
+const ControlView = lazy(() => import('./views/control').then((m) => ({ default: m.ControlView })))
+const DetailView = lazy(() => import('./views/detail').then((m) => ({ default: m.DetailView })))
+const WorkspaceView = lazy(() => import('./views/workspace').then((m) => ({ default: m.WorkspaceView })))
+const TeamView = lazy(() => import('./views/team').then((m) => ({ default: m.TeamView })))
+const MemoryView = lazy(() => import('./views/memory').then((m) => ({ default: m.MemoryView })))
+const ProfileView = lazy(() => import('./views/profile').then((m) => ({ default: m.ProfileView })))
+const SettingsView = lazy(() => import('./views/settings').then((m) => ({ default: m.SettingsView })))
 import { ToastHost } from './components/toast'
 import { Icon } from './components/icons'
 import { ConfirmHost } from './components/confirm'
@@ -310,6 +315,7 @@ export function App() {
       <main class="main">
         <OnboardingBanner />
         <UpdateBanner />
+        <Suspense fallback={<div class="view-loading" aria-busy="true" />}>
         {base.view === 'sessions' && (
           <SessionsView
             activeId={base.id}
@@ -362,6 +368,7 @@ export function App() {
             onLogout={logout}
           />
         )}
+        </Suspense>
       </main>
     </div>
   )

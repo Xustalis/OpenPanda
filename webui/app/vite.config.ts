@@ -19,12 +19,14 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // One 1 MiB entry chunk re-downloads the whole console on every
-        // change. The framework and the locale tables are the two parts that
-        // move independently of the views, so they get their own cacheable
-        // chunks instead of inflating the app bundle.
+        // change. The framework and the markdown renderer are stable and get
+        // their own cacheable chunks; the locale tables stay dynamic imports
+        // (one chunk per language) so only the reader's language loads.
         manualChunks(id) {
           if (id.includes('node_modules/preact')) return 'preact'
-          if (id.includes('/src/i18n/')) return 'i18n'
+          // Do NOT bucket /src/i18n/: the locale tables are dynamic imports,
+          // and assigning them to one chunk would force all five back into a
+          // single eagerly-fetched file.
           if (id.includes('/src/md/')) return 'markdown'
         },
       },
