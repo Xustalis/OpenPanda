@@ -32,8 +32,9 @@ const ToolNameTaskBudget = "task_budget"
 // produced it. Bump it whenever the key coverage, the cacheability rules or
 // the resident prompt rules change, so rows written under the previous
 // semantics can never be served (they expire by TTL). v3: coreRules gained
-// the "Operating this node" routing guidance.
-const classificationCacheVersion = "v3"
+// the "Operating this node" routing guidance. v4: the key carries the
+// workspace map and the acceptance shortlist. v5: both changes landed.
+const classificationCacheVersion = "v5"
 
 // classificationCacheable reports whether a classified Output may be replayed
 // from the disk cache. Kinds that materialize durable work — a task row, or a
@@ -43,7 +44,10 @@ const classificationCacheVersion = "v3"
 // it are stored live only as well.
 func classificationCacheable(out Output) bool {
 	switch out.Kind {
-	case KindPlan, KindTask:
+	case KindPlan, KindTask, KindClarify:
+		// A clarify round is an interaction, not a verdict: replaying it from
+		// cache would show a stale question (and options) for a sentence whose
+		// workspace may have changed since.
 		return false
 	case KindToolCall:
 		// A text-parsed tool call carries only Tool; the native path fills
@@ -98,6 +102,11 @@ func classifyCacheKey(po PromptOptions, model string, registry *Registry) (k1, k
 	if po.ASCIIOnly {
 		b.WriteString("\nascii")
 	}
+	// A side channel renders a different system prompt for the same turns; its
+	// verdict is not interchangeable with the main thread's.
+	if po.Side {
+		b.WriteString("\nside")
+	}
 	// The team pick is part of the system prompt, so two threads that differ
 	// only in roster must not share a cached classification: one may legally
 	// pin agent:opencode where the other must refuse it.
@@ -119,6 +128,20 @@ func classifyCacheKey(po PromptOptions, model string, registry *Registry) (k1, k
 	}
 	b.WriteString("memory:\n")
 	b.WriteString(po.Memory)
+	// The acceptance shortlist and the workspace map are both prompt content:
+	// two conversations with the same history in DIFFERENT workspaces must
+	// not share a cached classification, or the second one can select a
+	// check id its tree does not have.
+	for _, c := range po.AcceptanceCandidates {
+		b.WriteString("\naccept:")
+		b.WriteString(c.ID)
+		b.WriteByte('=')
+		b.WriteString(c.Run)
+	}
+	if po.WorkspaceMap != "" {
+		b.WriteString("\nworkspace:\n")
+		b.WriteString(po.WorkspaceMap)
+	}
 	if registry != nil {
 		for _, s := range registry.Specs() {
 			b.WriteString("\ntool:")

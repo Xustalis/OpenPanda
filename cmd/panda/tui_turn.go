@@ -256,6 +256,33 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 		m.r.recordOutcome(context.Background(), m.pendingPrompt, out)
 	}
 	blk := resultBlock(out, m.liveAnswerText(), m.loc)
+	// A parked clarification is the one outcome the transcript cannot answer
+	// by being read: carry the question into the block, and — when the agent
+	// offered bounded choices — open the same choice card the running turn
+	// uses. Answering it resumes the task through the approval path.
+	if q := strings.TrimSpace(out.Question); q != "" {
+		if out.QuestionSpec != nil {
+			if blk.body == "" {
+				blk.body = q
+			} else {
+				blk.body += "\n\n" + q
+			}
+			m.pendingQuestion = &clarifyPrompt{
+				spec:    *out.QuestionSpec,
+				taskID:  out.TaskID,
+				planID:  out.PlanID,
+				workDir: m.turnWorkDir,
+			}
+			m.mode = modeClarifying
+		} else {
+			hint := i18n.Tf(m.loc, "cli.ask.question.hint", "id", out.TaskID)
+			if blk.body == "" {
+				blk.body = q + "\n" + hint
+			} else {
+				blk.body += "\n\n" + q + "\n" + hint
+			}
+		}
+	}
 	// A delegated turn carries its card's title and stage trail into the
 	// transcript, so the committed block records the same route/exec/judge
 	// evidence the live card showed rather than just the final output.
@@ -274,6 +301,17 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 // liveAnswer is the streamed text already accumulated (used for answers so the
 // committed block matches exactly what streamed).
 func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) block {
+	b := buildResultBlock(out, liveAnswer, loc)
+	// Stamp the row id once here rather than at each of the five construction
+	// sites: every task block is addressable by id, and the rail's locate
+	// action reads exactly that.
+	if b.kind == blockTask && out.TaskID != "" {
+		b.taskRef = out.TaskID
+	}
+	return b
+}
+
+func buildResultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) block {
 	switch out.Kind {
 	case "task":
 		meta := ""

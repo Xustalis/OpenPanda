@@ -44,6 +44,7 @@ import (
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/scout"
 	"github.com/Xustalis/OpenPanda/internal/self"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -594,6 +595,19 @@ func (e *Engine) TaskStore() *core.TaskStore {
 	return core.NewSigningTaskStore(e.db, e.logger)
 }
 
+// FetchArtifact pulls a task's output artifact from the node that ran it into
+// this node's pool. A task report travels back as a hash and the bytes stay
+// where they were made until someone asks — so this is what "bring it here so I
+// can look at it" calls, for the console's preview or a stage that needs the
+// files.
+func (e *Engine) FetchArtifact(ctx context.Context, source, taskID, hash string) (artifact.Manifest, error) {
+	c := e.sched.Load()
+	if c == nil {
+		return artifact.Manifest{}, errors.New("askengine: no scheduler — this node cannot reach the executor")
+	}
+	return c.FetchArtifact(ctx, source, taskID, hash)
+}
+
 // stableNodeID is the runtime identity this engine registers under — the
 // same value initSchedulerLocked computes for the scheduler core. Valid even
 // when the scheduler never came up (card init failure): the owner guard on
@@ -814,6 +828,10 @@ type Result struct {
 	// review on a PANDA_QUESTION marker (core §4.3): the surface should show
 	// it verbatim — it is the one thing standing between the task and done.
 	Question string
+	// QuestionSpec is the structured option set the agent offered alongside
+	// the question (the same shape the entry model uses before a task). A
+	// surface with a choice card renders it; Question stays the text form.
+	QuestionSpec *entry.ClarifySpec
 	// FilesChanged lists the workdir-relative paths the run touched — the
 	// result's footprint, so a surface can show what moved instead of trusting
 	// the agent's prose.
@@ -866,6 +884,14 @@ type Result struct {
 	// this stays false.
 	NeedsApproval bool
 	Approval      *ApprovalRequest
+
+	// NeedsClarification is set when a pre-execution clarify round could not
+	// be answered inline (no OnQuestion callback, or the model asked twice).
+	// Clarification carries the questions and Answer a human-readable
+	// rendering, so a surface without a choice card can show what is needed
+	// and take the answer as the next user turn.
+	NeedsClarification bool
+	Clarification      *entry.ClarifySpec
 
 	// Denied is set when a remembered "deny" answered the tier-2 gate before
 	// the task existed: nothing was created and no prompt was shown. Kind
@@ -1215,6 +1241,10 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// that leaves tasks stranded when the process exits.
 	sched := core.NewCore(e.db, stableID, card, schedulerTier(e.cfg.Node.ResourceClass), e.logger, e.cfg.Model)
 	sched.SetDelegationLimits(e.cfg.Delegation)
+	// Lifecycle hooks. A daemon sharing this database has already claimed the
+	// one observer (see core.hookOwners), so this is a no-op there and the
+	// only wiring in a bare CLI.
+	sched.SetHooks(e.cfg.Hooks)
 	// Self-evolution merge approvals may land on this engine (panda approve).
 	// oneShot=true: an engine process must never re-exec itself onto the fresh
 	// binary — the swap's install.RestartDaemon already bounces the service.
@@ -1515,6 +1545,12 @@ type StreamCallbacks struct {
 	// caller cannot answer synchronously: the engine returns a NeedsApproval
 	// Result instead, for the caller to handle on its own event loop.
 	OnApproval func(ApprovalRequest) bool
+	// OnQuestion renders a pre-execution clarify round and blocks until the
+	// user answers. ok=false means the user cancelled (the engine returns the
+	// cancelled context). A nil callback means this surface cannot show a
+	// choice card: the engine returns the question as a NeedsClarification
+	// Result for the caller to render and answer in its own event loop.
+	OnQuestion func(entry.ClarifySpec) ([]entry.ClarifyAnswer, bool)
 	// GetSteer is polled at the start of each round to consume user steering ideas
 	// injected at runtime, appending them to conversation turns.
 	GetSteer func() string
@@ -1539,6 +1575,8 @@ const (
 	ProgressTask ProgressKind = "task" // submitting a classified task
 	ProgressPlan ProgressKind = "plan" // starting a multi-stage plan
 	ProgressTool ProgressKind = "tool" // running a tool
+	// ProgressClarify means the ask is waiting on the user's choice card.
+	ProgressClarify ProgressKind = "clarify"
 	// The following are lifecycle milestones bridged from the scheduler core's
 	// trace events while a synchronous Submit blocks — so the CLI shows the run
 	// advancing (routing → executing → judging) instead of a frozen spinner.
@@ -1805,6 +1843,23 @@ type AskScope struct {
 	// a model-selected check, bypasses the project shortlist: the user is the
 	// authority on how their own work is judged.
 	Acceptance []contract.Check
+
+	// Side marks a side-channel ask: a multi-turn conversation beside the main
+	// thread whose history is a fork-point snapshot. It narrows this ask on
+	// three axes — the prompt says the history is reference only, the tool face
+	// drops to a read-only subset (no task_submit, no task_budget, no mutation
+	// tools), and a classification that still lands on a task or plan is
+	// answered with a fixed note instead of being executed. None of the three is
+	// sufficient alone: the prompt is a hint the model may disobey, and the tool
+	// face only covers dispatch that goes through tools.
+	Side bool
+
+	// SideTurns is the side channel's own conversation so far. It replays AFTER
+	// the boundary marker, which is what keeps two things apart that would
+	// otherwise read as one: the main thread's history (history above, reference
+	// only) and the question-and-answer the user actually had with this channel.
+	// Only meaningful with Side.
+	SideTurns []entry.Turn
 }
 
 // AskTurns is the backward-compatible session-aware entry point. Callers that
@@ -2047,8 +2102,17 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
 	}()
 
-	turns := make([]entry.Turn, 0, len(history)+1)
+	turns := make([]entry.Turn, 0, len(history)+len(scope.SideTurns)+2)
 	turns = append(turns, history...)
+	if scope.Side {
+		if len(history) > 0 {
+			// The replayed thread ends here. Without this marker the side ask's
+			// own question reads as the next turn of the main conversation, and
+			// the model continues that work instead of answering what was asked.
+			turns = append(turns, sideBoundaryTurn(effectiveLocale))
+		}
+		turns = append(turns, scope.SideTurns...)
+	}
 	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
 
 	var classifyOpts []entry.ClassifyOption
@@ -2063,6 +2127,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	}
 	if scope.Mode != "" {
 		classifyOpts = append(classifyOpts, entry.WithRequestMode(scope.Mode))
+	}
+	if scope.Side {
+		classifyOpts = append(classifyOpts, entry.WithSideMode())
 	}
 	// The thread's roster goes into the prompt as well as into the task spec.
 	// The spec is what the executor enforces; the prompt is what keeps the
@@ -2081,6 +2148,12 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	if workDir != "" {
 		if cands := contract.Enumerate(workDir); len(cands) > 0 {
 			classifyOpts = append(classifyOpts, entry.WithAcceptanceCandidates(cands))
+		}
+		// Same workspace, broader view: the scout report lets the classifier
+		// set a real scope, a duration hint and a turn cap for a large tree
+		// instead of guessing from the request text alone.
+		if m := scout.Cached(workDir).Render(); m != "" {
+			classifyOpts = append(classifyOpts, entry.WithWorkspaceMap(m))
 		}
 	}
 
@@ -2176,6 +2249,16 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// has: a refusal teaches the model to retry, and retrying the whole batch
 	// must not run the tasks that already went out a second time.
 	dispatchedThisAsk := make(map[string]string)
+	// clarifyRounds bounds the pre-execution question loop: one round is the
+	// contract (ask once, then act on the answers). A model that asks again
+	// gets its question handed back as a NeedsClarification Result instead of
+	// nagging the user through the second round.
+	clarifyRounds := 0
+	// confirmedPlan records that the user already approved the approach for
+	// this ask — from a clarify round or the deterministic plan card below.
+	// One approval per ask is the contract; a fan-out of several tasks from
+	// the same plan must not re-ask for each.
+	confirmedPlan := false
 	// budgetAdvisory rides every exit: a dispatch the budget turned away is a
 	// decision the user must be able to see, not a task that quietly never
 	// existed.
@@ -2253,12 +2336,19 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// KindTask directive.
 	var taskCapture taskDispatchCapture
 	if reg != nil {
-		reg = reg.Copy()
-		reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
-		// task_budget sits beside task_submit: the limit is derived (roster
-		// size or defaultTaskBudget), and this is how a model widens it for a
-		// fan-out the user described in prose instead of in the team picker.
-		reg.Register(e.taskBudgetTool(budget, effectiveLocale))
+		if scope.Side {
+			// A side ask gets the read-only subset and neither dispatch tool:
+			// task_submit and task_budget exist to start and resize work, which
+			// is exactly what a side channel may not do.
+			reg = reg.Filter(sideToolAllowed)
+		} else {
+			reg = reg.Copy()
+			reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
+			// task_budget sits beside task_submit: the limit is derived (roster
+			// size or defaultTaskBudget), and this is how a model widens it for a
+			// fan-out the user described in prose instead of in the team picker.
+			reg.Register(e.taskBudgetTool(budget, effectiveLocale))
+		}
 	}
 
 rounds:
@@ -2334,6 +2424,15 @@ rounds:
 			}
 			return budgetAdvisory(&Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}), nil
 		case entry.KindTask:
+			if scope.Side {
+				// A side ask that still lands on a task stops here. The prompt
+				// asked it not to and the tool face has no dispatch, but the
+				// verdict comes from the model, not from either — a concrete
+				// request backed by a snapshot full of prior work classifies as
+				// a task often enough that leaving this to the prompt made /side
+				// a silent way to dispatch work the user believed was parked.
+				return &Result{Kind: "answer", Answer: sideRefusalNote(effectiveLocale), Thought: accumulatedReasoning.String()}, nil
+			}
 			if budget.exhausted() {
 				// Refuse before submitTask: the budget limits actual task
 				// execution, not merely how many outcomes are replayed. The
@@ -2352,8 +2451,50 @@ rounds:
 			if e.sched.Load() == nil {
 				return nil, fmt.Errorf("task output requires a capability card (scheduler initialization failed)")
 			}
+			// Plan confirmation for a large or high-risk task the model did
+			// not already ask about. This is the ExitPlanMode-shaped gate: the
+			// work is about to become a real run with real side effects, so the
+			// user sees the target and the verification contract and picks
+			// run / read-only / cancel. A clarify round above already put the
+			// user in the loop, so it counts as the approval and the card does
+			// not repeat. A surface with no question callback (headless,
+			// panel) proceeds: it has nobody to ask, and blocking there would
+			// turn a large task into a dead end.
+			// The read-only choice must hold even when the thread has an
+			// explicit permission mode: the user just picked it in the card,
+			// so it outranks the conversation default for this task.
+			submitScope := scope
+			if !confirmedPlan && clarifyRounds > 0 {
+				confirmedPlan = true
+			}
+			if !confirmedPlan && cb.OnQuestion != nil && planConfirmNeeded(out.Task) {
+				confirmedPlan = true
+				spec, execLabel, readOnlyLabel, cancelLabel := planConfirmSpec(out.Task, effectiveLocale)
+				cb.progress(Progress{Kind: ProgressClarify, Name: spec.Questions[0].Header})
+				answers, ok := cb.OnQuestion(spec)
+				if !ok {
+					if ctx.Err() != nil {
+						return nil, ctx.Err()
+					}
+					return budgetAdvisory(&Result{Kind: "answer", Answer: i18n.T(effectiveLocale, "confirm.cancelled")}), nil
+				}
+				choice := clarifyChoice(answers, "go")
+				switch {
+				case choice == cancelLabel:
+					return budgetAdvisory(&Result{Kind: "answer", Answer: i18n.T(effectiveLocale, "confirm.cancelled")}), nil
+				case choice == readOnlyLabel:
+					out.Task.Spec.PermissionMode = defense.ModePlan
+					out.Task.Spec.Constraints = append(out.Task.Spec.Constraints, i18n.T(effectiveLocale, "confirm.readonlyConstraint"))
+					submitScope.PermissionMode = defense.ModePlan
+				case choice != "" && choice != execLabel:
+					// Free-form "Other": the user wants an adjustment. Without a
+					// model round to re-plan, the text rides the task as a
+					// constraint so the executing agent honors it.
+					out.Task.Spec.Constraints = append(out.Task.Spec.Constraints, choice)
+				}
+			}
 			cb.progress(Progress{Kind: ProgressTask, Name: out.Task.Title})
-			res := e.submitTask(ctx, out.Task, prompt, authorize, scope, accumulatedReasoning.String(), cb, e.awaitQueued, effectiveLocale)
+			res := e.submitTask(ctx, out.Task, prompt, authorize, submitScope, accumulatedReasoning.String(), cb, e.awaitQueued, effectiveLocale)
 			if e.queueTasks && !e.awaitQueued {
 				// Receipt mode: the board product. The queued pointer is the
 				// result — the session streams the task's progress and the
@@ -2390,8 +2531,43 @@ rounds:
 				entry.Turn{Role: "user", Content: taskObservation(res, effectiveLocale)},
 			)
 		case entry.KindPlan:
+			if scope.Side {
+				// Same rule as KindTask: a plan is dispatch in stages, and a
+				// side channel dispatches nothing.
+				return &Result{Kind: "answer", Answer: sideRefusalNote(effectiveLocale), Thought: accumulatedReasoning.String()}, nil
+			}
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
 			return e.startClassifiedPlan(ctx, out.Plan, scope, authorize, cb)
+		case entry.KindClarify:
+			if out.Clarify == nil {
+				break rounds
+			}
+			cb.progress(Progress{Kind: ProgressClarify, Name: out.Clarify.Questions[0].Header})
+			// No card on this surface, or the model wants a second round
+			// after the user already answered one: hand the question back.
+			// The caller renders it and takes the answer as the next turn —
+			// asking again inline would be the nagging the one-round contract
+			// exists to prevent.
+			if cb.OnQuestion == nil || clarifyRounds >= 1 {
+				return budgetAdvisory(&Result{
+					Kind:               "clarify",
+					Answer:             renderClarify(out.Clarify, effectiveLocale),
+					NeedsClarification: true,
+					Clarification:      out.Clarify,
+				}), nil
+			}
+			clarifyRounds++
+			answers, ok := cb.OnQuestion(*out.Clarify)
+			if !ok {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return budgetAdvisory(&Result{Kind: "clarify", Answer: renderClarify(out.Clarify, effectiveLocale)}), nil
+			}
+			turns = append(turns,
+				entry.Turn{Role: "assistant", Content: clarifyQuestionTurn(out.Clarify)},
+				entry.Turn{Role: "user", Content: clarifyAnswerTurn(answers, out.Clarify, effectiveLocale)},
+			)
 		case entry.KindToolCall:
 			calls := out.ToolCalls()
 			if len(calls) == 0 {
@@ -2757,6 +2933,12 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // additionally carry explicit owner consent for this request's whole plan;
 // it still passes through the existing approval policy before rows are created.
 func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, scope AskScope, authorize bool, cb StreamCallbacks) (*Result, error) {
+	// Same rule as submitTask: a side channel dispatches nothing, and this is
+	// the second creation point every plan — including one produced by the
+	// final round-exhaustion classification — passes through.
+	if scope.Side {
+		return &Result{Kind: "answer", Answer: sideRefusalNote(e.Locale())}, nil
+	}
 	sched := e.sched.Load()
 	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
@@ -2836,6 +3018,13 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		targetLoc = loc[0]
 	} else if !explicit && !e.replyASCII && (containsHan(prompt) || containsHan(spec.Title)) {
 		targetLoc = i18n.ChineseSimp
+	}
+	// The creation point is where a side channel's refusal belongs. The prompt
+	// asks the model not to dispatch and the tool face has no dispatch tool, but
+	// neither binds classification — and the round-exhaustion path reaches this
+	// function directly, past the per-round check. Every path shares this one.
+	if scope.Side {
+		return &Result{Kind: "answer", Answer: sideRefusalNote(targetLoc)}
 	}
 	// The composer's explicit node pick fills spec.node only when the model
 	// left routing to the scheduler — a model-emitted pin always wins.
@@ -3359,7 +3548,7 @@ func numberField(v any) int {
 // by every interactive surface. Accepting reviewed work may run without a
 // scheduler, so this mapping deliberately depends only on storage.
 func resultFromTask(task core.Task, result bus.TaskResultPayload, routeFallback string) *Result {
-	return &Result{
+	out := &Result{
 		Kind:          "task",
 		TaskID:        task.TaskID,
 		TaskTitle:     task.Title,
@@ -3378,6 +3567,13 @@ func resultFromTask(task core.Task, result bus.TaskResultPayload, routeFallback 
 		Question:      result.Question,
 		FilesChanged:  result.FilesChanged,
 	}
+	if strings.TrimSpace(result.QuestionSpec) != "" {
+		var spec entry.ClarifySpec
+		if err := json.Unmarshal([]byte(result.QuestionSpec), &spec); err == nil {
+			out.QuestionSpec = &spec
+		}
+	}
+	return out
 }
 
 // routeFallbackPeer scans the task's audit trail for the newest

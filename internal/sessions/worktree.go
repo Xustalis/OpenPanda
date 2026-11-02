@@ -489,6 +489,13 @@ func (w *Worktrees) Remove(ctx context.Context, id string) error {
 	if !ValidID(id) {
 		return ErrNotFound
 	}
+	// Rewind snapshots live in the repository's ref namespace and become
+	// unreachable the moment the worktree directory is gone: `git -C <deleted
+	// dir>` cannot run, so a cleanup attempted after this point fails silently
+	// and leaves one whole-tree commit per turn pinned forever. This is the last
+	// moment they can be cleared, and every caller removes the worktree before
+	// deleting the session row.
+	dropCheckpoints(ctx, w.repo, id)
 	path := w.Path(id)
 	if _, err := os.Stat(path); err == nil {
 		cmd := executil.CommandContext(ctx, "git", "-C", w.repo, "worktree", "remove", "--force", path)

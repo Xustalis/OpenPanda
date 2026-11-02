@@ -62,6 +62,7 @@ var helpPage = []HelpSection{
 		{"     --lan", "cli.help.d.web_lan"},
 		{"voice [--once] [--mute]", "cli.help.d.voice"},
 		{"read <file> | <file.md>", "cli.help.d.read"},
+		{"hooks [list | test <event>]", "cli.help.d.hooks"},
 	}},
 	{Group: GroupSessions, Col: helpColWide, Rows: []HelpRow{
 		{"session list|new|show|rm|ask|diff|merge", ""},
@@ -155,6 +156,7 @@ var completionVerbs = map[string][]string{
 	"card":     {"show", "rescan", "edit", "set", "native", "agent", "manual", "invoke", "path"},
 	"agents":   {"test", "install"},
 	"auth":     {"login", "logout", "status"},
+	"hooks":    {"list", "test"},
 }
 
 // CompletionVerbs returns the completion vocabulary. The map is a copy: a

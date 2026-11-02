@@ -45,6 +45,10 @@ type block struct {
 	thoughtLines []string
 	// ok distinguishes a succeeded task (blockTask) from a failed one for tinting.
 	ok bool
+	// taskRef is the row this block reports, when it is a task block. The task
+	// rail scrolls to a block by it: the title is display text a model wrote,
+	// and the id only sometimes appears in the body.
+	taskRef string
 	// Task-block state (kind == blockTask): what was delegated and the lifecycle
 	// trail it went through, so the transcript keeps the evidence the live card showed.
 	title    string

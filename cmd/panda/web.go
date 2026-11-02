@@ -278,13 +278,39 @@ func runWeb(args []string) {
 	// (internal/updater is outside the cmd/panda wiring scope).
 	updateMgr.StartAutoCheck(ctx, 0)
 
+	// The artifact pool is shared by the download endpoints and the preview
+	// origin, and the preview follows the console's reach: a loopback console
+	// gets a loopback preview, and a LAN console gets one the other devices can
+	// frame.
+	arts := artifact.NewStore(cfg.Storage.ArtifactPath, cfg.Storage.ArtifactExtraPaths...)
+	previewHost := "127.0.0.1"
+	if !panel.IsLoopbackAddr(addr) {
+		previewHost = "0.0.0.0"
+	}
+	preview, perr := panel.StartPreview(panel.PreviewDeps{
+		Artifacts: arts,
+		Host:      previewHost,
+		// Any console page may frame a preview. The boundary that matters is
+		// the random path token and the sandboxed document, not who embeds it:
+		// a LAN console is reached by an address this process cannot predict.
+		Ancestors: "*",
+	})
+	if perr != nil {
+		fmt.Fprintln(os.Stderr, i18n.Tf(loc, "web.preview.failed", "err", perr.Error()))
+		preview = nil
+	}
+	if preview != nil {
+		defer preview.Close()
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		Handler: panel.New(panel.Deps{
 			Store:        store,
-			Artifacts:    artifact.NewStore(cfg.Storage.ArtifactPath, cfg.Storage.ArtifactExtraPaths...),
+			Artifacts:    arts,
+			Preview:      preview,
 			EngineHolder: engines,
 			DB:           db,
 			Projects:     memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memoryLimits(cfg)),

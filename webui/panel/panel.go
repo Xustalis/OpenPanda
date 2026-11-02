@@ -25,6 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
@@ -86,6 +87,10 @@ type Deps struct {
 	// console binary — not the panda install target. The daemon and
 	// `panda web` (both running the panda binary) leave this false.
 	Sidecar bool
+	// Preview is the artifact preview origin (see preview.go). nil disables the
+	// preview endpoints, which then answer 503 like any other unconfigured
+	// dependency.
+	Preview *Preview
 }
 
 // New builds the panel HTTP handler: the static web app under StaticDir plus
@@ -124,6 +129,7 @@ func New(d Deps) http.Handler {
 		cardFilePath:       d.CardPath,
 		updater:            d.Updater,
 		sidecar:            d.Sidecar,
+		preview:            d.Preview,
 		activeAsks:         make(map[string]sessionOperation),
 		approvalOperations: make(map[string]approvalOperation),
 		serviceCtx:         context.Background(),
@@ -157,6 +163,10 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/artifact", h.getTaskArtifact)
 	mux.HandleFunc("GET /api/tasks/{id}/artifact/files", h.listTaskArtifact)
 	mux.HandleFunc("GET /api/tasks/{id}/artifact/file", h.getTaskArtifactFile)
+	// The preview origin (preview.go): a second listener renders the artifact
+	// as a page, and these two say where and pull the bytes here first.
+	mux.HandleFunc("GET /api/tasks/{id}/artifact/preview", h.previewTaskArtifact)
+	mux.HandleFunc("POST /api/tasks/{id}/artifact/fetch", h.fetchTaskArtifact)
 	// The plan plane: read-only views over the tasks that already carry a
 	// plan_id. Starting a plan stays on /api/ask, which classifies and returns
 	// the id; these two are how the console follows one afterwards.
@@ -221,6 +231,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/context", h.getContext)
 	mux.HandleFunc("GET /api/cost", h.getCost)
 	mux.HandleFunc("GET /api/fs/read", h.readFile)
+	mux.HandleFunc("GET /api/fs/file", h.viewFile)
 	mux.HandleFunc("GET /api/fs/image", h.getImage)
 	mux.HandleFunc("GET /api/fs/files", h.listFiles)
 	mux.HandleFunc("POST /api/fs/reveal", h.revealPath)
@@ -310,6 +321,7 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("DELETE /api/sessions/{id}/approval", h.clearSessionApproval)
 		mux.HandleFunc("POST /api/sessions/{id}/cancel", h.sessionCancel)
 		mux.HandleFunc("POST /api/sessions/{id}/stop", h.sessionCancel)
+		mux.HandleFunc("POST /api/sessions/{id}/clarify", h.sessionClarify)
 		// Uploads do not need the Worktrees object — without a repository they
 		// fall back to a per-session directory under the work path — so the
 		// route is registered wherever sessions are, not only when isolation
@@ -327,7 +339,7 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("POST /api/push/unsubscribe", h.pushUnsubscribe)
 	}
 	mux.Handle("/", staticHandler(d.StaticDir))
-	return securityHeaders(authMiddleware(d.Token, maxRequestBody(mux)))
+	return h.securityHeaders(authMiddleware(d.Token, maxRequestBody(mux)))
 }
 
 // maxAPIBodyBytes bounds any mutating API request body. Every JSON decoder
@@ -385,25 +397,40 @@ func maxRequestBody(next http.Handler) http.Handler {
 // served by the panel. Even though the panel defaults to loopback binding,
 // these headers protect against MIME sniffing, clickjacking, and referrer
 // leakage if the panel is ever exposed behind a reverse proxy.
-func securityHeaders(next http.Handler) http.Handler {
+func (h *handler) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		// The app is fully self-hosted: module scripts and the service
-		// worker come from same origin, styles are inline attributes
-		// ('unsafe-inline' scoped to style-src only), blob: covers the
-		// session-export download. No frames, no objects, no foreign
-		// origins anywhere — so a same-origin default with script-src
-		// pinned to 'self' is a strict CSP, not a placeholder.
-		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; script-src 'self'; "+
-				"style-src 'self' 'unsafe-inline'; "+
-				"img-src 'self' data: blob:; connect-src 'self'; "+
-				"font-src 'self' data:; manifest-src 'self'; "+
-				"worker-src 'self'; object-src 'none'; "+
-				"base-uri 'self'; form-action 'self'; "+
-				"frame-ancestors 'none'")
+		// The app is fully self-hosted: module scripts and the service worker
+		// come from same origin, styles are inline attributes ('unsafe-inline'
+		// scoped to style-src only), blob: covers the session-export download.
+		// No objects, no foreign origins anywhere — a same-origin default with
+		// script-src pinned to 'self' is a strict CSP, not a placeholder.
+		//
+		// Artifact previews are a second origin on purpose (preview.go). The
+		// console may frame exactly that origin AND show an image from it —
+		// the media branch of the artifact drawer uses <img>, so admitting the
+		// origin to frame-src alone leaves every screenshot unrenderable. The
+		// origin is resolved per request: under a wildcard bind the listener's
+		// own address is unroutable and the host this request arrived on is
+		// what the browser can reach.
+		imgSrc := "'self' data: blob:"
+		frameSrc := ""
+		if h.preview != nil {
+			if origin := h.preview.OriginFor(r.Host); origin != "" {
+				imgSrc += " " + origin
+				frameSrc = "; frame-src " + origin
+			}
+		}
+		csp := "default-src 'self'; script-src 'self'; " +
+			"style-src 'self' 'unsafe-inline'; " +
+			"img-src " + imgSrc + "; connect-src 'self'; " +
+			"font-src 'self' data:; manifest-src 'self'; " +
+			"worker-src 'self'; object-src 'none'; " +
+			"base-uri 'self'; form-action 'self'; " +
+			"frame-ancestors 'none'" + frameSrc
+		w.Header().Set("Content-Security-Policy", csp)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -583,6 +610,9 @@ type handler struct {
 	// sidecar is true in the standalone panda-webui process; a self-merge
 	// approval there would overwrite the console binary.
 	sidecar bool
+	// preview is the artifact preview origin; nil leaves the preview endpoints
+	// answering 503.
+	preview *Preview
 
 	// cfgMu guards h.cfg only when no engine exists to borrow a lock from —
 	// degraded static mode still serves concurrent HTTP handlers. When the
@@ -609,6 +639,12 @@ type handler struct {
 	// memSeq stamps the in-memory notes' keys. Guarded by steerMu; monotonic
 	// per process so a key handed to the browser never names a later note.
 	memSeq int
+
+	// clarifyMu guards clarifyWaiters: one parked pre-execution question per
+	// running operation. The SSE handler blocks on the channel the browser
+	// answers through POST /api/sessions/{id}/clarify.
+	clarifyMu      sync.Mutex
+	clarifyWaiters map[string]clarifyWaiter
 
 	approvalMu         sync.Mutex
 	approvalOperations map[string]approvalOperation
@@ -685,6 +721,12 @@ type taskJSON struct {
 	// accept_work / resume_execution / needs_changed_input — so the board can
 	// label the pending decision instead of a bare "awaiting approval".
 	ApprovalDisposition string `json:"approval_disposition,omitempty"`
+	// Question/QuestionSpec surface a parked clarification without making the
+	// client parse the whole result JSON (which also carries the run's
+	// stdout): Question is the plain text, QuestionSpec the ClarifySpec JSON
+	// when the agent offered bounded choices. Filled only for review rows.
+	Question     string `json:"question,omitempty"`
+	QuestionSpec string `json:"question_spec,omitempty"`
 	// OriginNode is chain[0] — the device that FIRST created this task: self
 	// for locally submitted rows (and for sub-agents, which inherit the
 	// parent's chain), the delegator's id for rows that arrived over the
@@ -842,6 +884,14 @@ func (h *handler) toTaskJSON(t core.Task) taskJSON {
 	}
 	if t.State == core.StateReview {
 		out.ApprovalDisposition = string(t.ApprovalDisposition)
+		if spec, q := parkedQuestionFromResult(t.ResultJSON); q != "" || spec != nil {
+			out.Question = q
+			if spec != nil {
+				if b, err := json.Marshal(spec); err == nil {
+					out.QuestionSpec = string(b)
+				}
+			}
+		}
 	}
 	if t.PlanID != "" || t.StageID != "" || t.OutputArtifact != "" {
 		// StageCount/StageLabels are intentionally NOT derived here: Needs is
@@ -1346,6 +1396,10 @@ type approvalOperation struct {
 	TaskID string `json:"task_id"`
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
+	// answer is the reply to a parked clarification question, composed from
+	// the request's structured answers (or its free text) before the detached
+	// operation starts. Empty for a plain tier-2/accept approval.
+	answer string
 	cancel context.CancelFunc
 }
 
@@ -1359,6 +1413,11 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
 		Scope string `json:"scope"`
+		// Answer is a free-text reply to a parked question; Answers is the
+		// structured form the choice card sends. Answers wins when both are
+		// present — it is composed against the parked spec server-side.
+		Answer  string                `json:"answer"`
+		Answers []entry.ClarifyAnswer `json:"answers"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body) // a bare POST approves once
@@ -1371,6 +1430,20 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
 		return
+	}
+	answer := strings.TrimSpace(body.Answer)
+	if disposition == core.ApprovalResumeExecution {
+		spec, question := h.parkedQuestion(r.Context(), id)
+		if len(body.Answers) > 0 && spec != nil {
+			answer = entry.ClarifyAnswerText(spec, body.Answers)
+		}
+		if question != "" && answer == "" {
+			// Resuming with no answer re-runs the agent into the same
+			// question. Refuse instead of burning a round; the console's card
+			// sends one of the two fields.
+			writeErr(w, http.StatusBadRequest, errors.New("this task is waiting on an answer"))
+			return
+		}
 	}
 	if disposition == core.ApprovalNeedsChangedInput {
 		writeErr(w, http.StatusConflict, core.ErrApprovalNeedsChangedInput)
@@ -1428,7 +1501,7 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		baseCtx = context.Background()
 	}
 	execCtx, cancel := context.WithCancel(baseCtx)
-	op := approvalOperation{ID: operationID, TaskID: id, Status: core.StateRunning, cancel: cancel}
+	op := approvalOperation{ID: operationID, TaskID: id, Status: core.StateRunning, cancel: cancel, answer: answer}
 	h.approvalMu.Lock()
 	if current, exists := h.approvalOperations[id]; exists && current.Status == core.StateRunning {
 		h.approvalMu.Unlock()
@@ -1457,9 +1530,47 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) runApprovalOperation(ctx context.Context, eng *askengine.Engine, op approvalOperation) {
 	defer op.cancel()
-	out := eng.ResumeApproved(ctx, op.TaskID, "", askengine.StreamCallbacks{})
+	out := eng.ResumeApproved(ctx, op.TaskID, "", askengine.StreamCallbacks{}, op.answer)
 	status, message := approvalResultState(out)
 	h.finishApprovalOperation(ctx, op, status, message)
+}
+
+// parkedQuestion reads a reviewed task's parked question: the plain text and,
+// when the agent offered bounded choices, the parsed ClarifySpec. Both empty
+// when the row is not parked on a question.
+func (h *handler) parkedQuestion(ctx context.Context, id string) (*entry.ClarifySpec, string) {
+	if h.store == nil {
+		return nil, ""
+	}
+	task, err := h.store.Get(ctx, id)
+	if err != nil || task.ResultJSON == "" {
+		return nil, ""
+	}
+	return parkedQuestionFromResult(task.ResultJSON)
+}
+
+// parkedQuestionFromResult parses the row's stored result for a parked
+// question. It is pure so the wire-shape contract (question + the serialized
+// spec) is testable without a store.
+func parkedQuestionFromResult(resultJSON string) (*entry.ClarifySpec, string) {
+	if resultJSON == "" {
+		return nil, ""
+	}
+	var payload struct {
+		Question     string `json:"question"`
+		QuestionSpec string `json:"question_spec"`
+	}
+	if json.Unmarshal([]byte(resultJSON), &payload) != nil {
+		return nil, ""
+	}
+	var spec *entry.ClarifySpec
+	if strings.TrimSpace(payload.QuestionSpec) != "" {
+		var s entry.ClarifySpec
+		if json.Unmarshal([]byte(payload.QuestionSpec), &s) == nil {
+			spec = &s
+		}
+	}
+	return spec, strings.TrimSpace(payload.Question)
 }
 
 // continueTask requeues a follow-up-parked task — the supervised "more work

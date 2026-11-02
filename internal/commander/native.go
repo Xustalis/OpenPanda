@@ -62,10 +62,6 @@ func SetNativeTimeout(d time.Duration) {
 	nativeTimeout = d
 }
 
-// NativeTimeout reports the effective process-global native budget; zero when
-// unset (callers fall back to the executor's own timeout).
-func NativeTimeout() time.Duration { return nativeTimeout }
-
 // WithDir sets the working directory for commands.
 func (e *Executor) WithDir(dir string) *Executor { e.dir = dir; return e }
 

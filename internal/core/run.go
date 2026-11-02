@@ -25,6 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
+	"github.com/Xustalis/OpenPanda/internal/scout"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
 
@@ -268,7 +269,8 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		defer prep.negoRelease()
 	}
 	var execCleanup func()
-	execCtx, execCleanup = c.decorateExecCtx(execCtx, ctx, taskID, task, plan)
+	evidence := newExecEvidence()
+	execCtx, execCleanup = c.decorateExecCtx(execCtx, ctx, taskID, task, plan, evidence)
 	defer execCleanup()
 
 	// Delivery contract (P0): run the declared acceptance checks before the
@@ -293,6 +295,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		before: prep.before, beforeOK: prep.beforeOK,
 		shadowConflicts: prep.shadowConflicts,
 		checks:          acceptanceChecks, baseline: acceptanceBaseline,
+		evidence: evidence,
 	}
 	outcome, err := work.executeRounds(ctx)
 	if err != nil {
@@ -1002,7 +1005,7 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 // pool, and the per-task timeout/tools/turn overrides. It returns the
 // decorated context and the pool's cleanup (a no-op when no pool was made)
 // so the caller can hold them for the run's lifetime.
-func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task Task, plan commander.Plan) (context.Context, func()) {
+func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task Task, plan commander.Plan, evidence *execEvidence) (context.Context, func()) {
 	cleanup := func() {}
 	// Live progress (A5) is per-task, not per-round: the throttled progress
 	// sink is built once and reused across supervision rounds. It decorates
@@ -1090,6 +1093,10 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 				})
 				return
 			}
+			// Fold the event into the round's evidence before the transcript
+			// cap: a pathological stream still leaves the judge the tools it
+			// saw, and evidence costs no extra storage.
+			evidence.observe(ev)
 			if n := evCount.Add(1); n > maxAgentTranscriptEvents {
 				if n == maxAgentTranscriptEvents+1 {
 					c.EvTrace(context.WithoutCancel(ctx), taskID, EvAgentEvent, map[string]any{
@@ -1157,7 +1164,15 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 		if taskPermissionMode(task.SpecJSON) == defense.ModePlan {
 			execCtx = commander.WithRestricted(execCtx)
 		}
+		// Execution budget: an operator-configured per-kind timeout wins; a
+		// task that declared itself long (resource_profile.duration_hint) or
+		// scored as high complexity gets a larger budget than the global
+		// default, because the work this orchestrator advertises as needing
+		// an hour is exactly what a 10-minute agent budget truncates. The
+		// derived value never lowers an explicitly configured limit.
 		if d := c.agentTimeoutForKind(plan.Kind); d > 0 {
+			execCtx = commander.WithAgentTimeout(execCtx, d)
+		} else if _, d := derivedAgentBudget(task); d > commander.AgentTimeout() {
 			execCtx = commander.WithAgentTimeout(execCtx, d)
 		}
 		// Per-task tools policy: the entry model can request "extended"
@@ -1169,8 +1184,12 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 			execCtx = commander.WithToolsPolicy(execCtx, tp)
 		}
 		// Per-task turn cap: a task that needs a long build-test loop declares
-		// it in spec.max_turns rather than inheriting the adapter default.
+		// it in spec.max_turns rather than inheriting the adapter default. An
+		// undeclared cap on a long/high-complexity task is derived from the
+		// same shape instead of falling back to the 30-turn default.
 		if mt := taskMaxTurns(task.SpecJSON); mt > 0 {
+			execCtx = commander.WithMaxTurns(execCtx, mt)
+		} else if mt, _ := derivedAgentBudget(task); mt > 0 {
 			execCtx = commander.WithMaxTurns(execCtx, mt)
 		}
 		// The entry classifier's 0–1 score rides to model-selecting adapters
@@ -1179,6 +1198,26 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 		execCtx = commander.WithComplexity(execCtx, task.Complexity)
 	}
 	return execCtx, cleanup
+}
+
+// turnCapFailure reports whether a failed agent run stopped because it hit
+// its CLI turn limit rather than because the work itself failed. The CLIs
+// name it differently (claude's error_max_turns, a "turn cap" sentence, a
+// max_turns terminal reason); every one of them leaves a resumable session,
+// which is what makes a continuation round possible.
+func turnCapFailure(res commander.Result) bool {
+	text := strings.ToLower(res.Stdout + "\n" + res.Stderr)
+	for _, pattern := range []string{
+		"error_max_turns",
+		"turn cap",
+		"max_turns",
+		"max turns",
+	} {
+		if strings.Contains(text, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // roundOutcome is superviseRounds' answer: either a terminal payload a
@@ -1222,6 +1261,10 @@ type runWork struct {
 	// but never "verified".
 	checks   []contract.Check
 	baseline []contract.Result
+	// evidence is what the round's agent actually did with its tools; the
+	// completion judge reads it so "done" is judged against commands and
+	// results, not only the agent's own summary.
+	evidence *execEvidence
 }
 
 // executeRounds is the supervision loop: an agent task under a supervisor
@@ -1242,6 +1285,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	injection := w.injection
 	execCtx := w.execCtx
 	workDir := w.workDir
+	evidence := w.evidence
 	oscKey := w.oscKey
 	scope := w.scope
 	before := w.before
@@ -1379,6 +1423,9 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	boardSeen := msgSeen{}
 	msgsSent := 0
 	for round := 0; round < maxRounds; round++ {
+		// Evidence is per round: the judge of this round must see what THIS
+		// round did, not a pile that includes earlier tries.
+		evidence.reset()
 		// Fold delegate children that resolved since the last round before
 		// the agent runs again: a result that arrived after its wait window
 		// still reaches the prompt, so "the child answered too late" stops
@@ -1801,7 +1848,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// what the re-run folds into the intent. The marker text is stripped
 		// from stdout so the protocol line never reaches the user as prose.
 		if plan.Kind == "agent" && res.OK {
-			q, cleaned, ask := parseQuestionRequest(res.Stdout)
+			q, qspec, cleaned, ask := parseQuestionRequest(res.Stdout)
 			// The structured contract wins when it carries a question: the
 			// schema field is parsed truth, while the marker pass above
 			// still strips any protocol line the agent also printed.
@@ -1812,6 +1859,18 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// Also remove a recognized no-question protocol line when the
 			// successful run continues to completion instead of parking.
 			res.Stdout = cleaned
+			// The schema's clarify field carries the bounded option set for
+			// schema-capable adapters (Claude Code among them). A malformed
+			// one is ignored: the free-text question still parks the task.
+			if structured != nil && structured.Clarify != nil {
+				if verr := entry.ValidateClarifySpec(structured.Clarify); verr == nil {
+					qspec = structured.Clarify
+					if strings.TrimSpace(q) == "" {
+						q = clarifySpecSummary(qspec)
+					}
+					ask = true
+				}
+			}
 			if ask {
 				if beforeOK {
 					if after, serr := defense.SnapshotDir(workDir); serr == nil {
@@ -1819,8 +1878,17 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 						lastChanged = c.filterHostDrift(workDir, defense.DropVCSBookkeeping(before.Changed(after)))
 					}
 				}
+				specJSON := ""
+				if qspec != nil {
+					if b, merr := json.Marshal(qspec); merr == nil {
+						specJSON = string(b)
+					}
+				}
 				park := map[string]any{
 					"question": q, "stdout": res.Stdout, "files_changed": lastChanged,
+				}
+				if specJSON != "" {
+					park["question_spec"] = specJSON
 				}
 				if restricted {
 					// The question exists because the session is read-only:
@@ -1846,8 +1914,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
 					ApprovalDisposition: string(ApprovalResumeExecution),
-					Question:            q,
-					OK:                  true, ExitCode: 0, Stdout: res.Stdout,
+					Question:            q, QuestionSpec: specJSON,
+					OK: true, ExitCode: 0, Stdout: res.Stdout,
 					FilesChanged: fc, FilesTruncated: filesTruncated,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}}, nil
@@ -2047,6 +2115,12 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				// healthy agent's circuit after three timeouts on a long task.
 				c.logger.Debug("breaker: timeout checkpoint is progress, not a failure",
 					"agent", breakerKey, "task", taskID)
+			} else if turnCapFailure(res) {
+				// Hitting a turn cap says the task was bigger than the budget,
+				// not that the agent is unhealthy; the continuation above
+				// resumes it with a higher cap.
+				c.logger.Debug("breaker: turn-cap stop is progress, not a failure",
+					"agent", breakerKey, "task", taskID)
 			} else if c.breaker.RecordFailure(breakerKey) {
 				c.audit(ctx, taskID, "circuit:open", plan.Agent, "failed", "agent failure threshold reached")
 			}
@@ -2141,6 +2215,23 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		}
 
 		if !res.OK {
+			// A run that stopped at its CLI turn cap is interrupted work, not
+			// a failed task. The CLI mints a resumable session before it
+			// stops, so one more round with a higher cap continues the same
+			// conversation instead of losing what the agent already built.
+			// Without this, a long repo task that is simply bigger than the
+			// adapter default fails on the cap and every retry hits the same
+			// wall.
+			if plan.Kind == "agent" && round+1 < maxRounds && sessionID != "" && turnCapFailure(res) {
+				c.EvTrace(execCtx, taskID, "turn_cap_continue", map[string]any{
+					"round": round + 1, "agent": res.Agent, "session": sessionID,
+				})
+				intentNotes = append(intentNotes,
+					"[system] the previous round stopped at its turn cap before finishing. "+
+						"Continue from where you stopped — do not restart completed work — and finish the task.")
+				execCtx = commander.WithMaxTurns(execCtx, turnCapContinuationTurns)
+				continue
+			}
 			// A context-window overflow is deterministic: the same prompt will
 			// not fit on retry. The in-round compact retry above already got
 			// its one shot — surviving here means the intent/manifest alone
@@ -2267,6 +2358,18 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			judgeResult += "\n\n[本轮实际变更的文件] " + strings.Join(shown, ", ")
 		} else if beforeOK {
 			judgeResult += "\n\n[本轮实际变更的文件] （无 —— 工作目录没有任何文件改动）"
+		}
+		// What the agent did with its tools, and whether that includes the
+		// project's own verification entry. The judge otherwise sees only the
+		// agent's summary of itself; a run that edited files and ran nothing
+		// reads exactly like one that built and tested.
+		if block := evidence.render(scout.Cached(workDir).Test); block != "" {
+			judgeResult += "\n\n" + block
+		}
+		// Pre-run contract results: a check that was already red is inherited
+		// debt, not this round's regression.
+		if block := baselineEvidence(w.baseline); block != "" {
+			judgeResult += "\n\n" + block
 		}
 		// Supervise under execCtx, not the handler's ctx: the judge call is part
 		// of this execution, so it must honor the task's cancel (cancelRunning
