@@ -1309,6 +1309,7 @@ const ja: Messages = {
   'models.region.cn': '中国',
   'models.keySaved': 'キー設定済み',
   'models.apiKey': 'API キー',
+  'models.authLogin': 'サブスクリプションログイン・Codex CLI が提供',
   'models.apiKeySet': 'キー設定済み',
   'models.keyReuseHint': '保存済みのキーを再利用します',
   'models.keyReuseHelp': 'このプロバイダーのキーは保存済みです。空欄なら再利用します。',

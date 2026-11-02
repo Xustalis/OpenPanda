@@ -1322,6 +1322,7 @@ const es: Messages = {
   'models.region.cn': 'China',
   'models.keySaved': 'clave guardada',
   'models.apiKey': 'Clave de API',
+  'models.authLogin': 'inicio de sesión de suscripción · lo aporta el Codex CLI',
   'models.apiKeySet': 'clave guardada',
   'models.keyReuseHint': 'se reutiliza la clave guardada',
   'models.keyReuseHelp': 'Ya hay una clave de este proveedor: déjalo vacío para reutilizarla.',

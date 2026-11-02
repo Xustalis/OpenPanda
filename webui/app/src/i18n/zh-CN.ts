@@ -1338,6 +1338,7 @@ const zhCN: Messages = {
   'models.region.cn': '中国',
   'models.keySaved': '已存密钥',
   'models.apiKey': 'API 密钥',
+  'models.authLogin': '订阅登录 · 由 Codex CLI 提供',
   'models.apiKeySet': '已存密钥',
   'models.keyReuseHint': '将复用已保存的密钥',
   'models.keyReuseHelp': '这个服务商已经存过密钥，留空即复用。',
