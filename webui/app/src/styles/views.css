@@ -7611,6 +7611,191 @@ button.project-stat:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+/* The discovery door: one caption line above the grid, right-aligned, so the
+   first tile is still the add door. Above rather than below because a registry
+   of seven models already scrolls — an entry past the fold is not an entry. */
+.model-actions {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 720px;
+  margin-bottom: var(--sp-2);
+}
+.model-discover {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  transition: color var(--dur-fast) var(--ease);
+}
+.model-discover:hover {
+  color: var(--text);
+}
+.model-discover-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+/* The sheet: one block per collector, rows that read as a checklist. */
+.discover-source {
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border-soft);
+}
+.discover-source:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.discover-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.discover-name {
+  flex: none;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.discover-chip {
+  flex: none;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.discover-chip.ok {
+  color: var(--semantic-good);
+  border-color: color-mix(in srgb, var(--semantic-good) 40%, transparent);
+}
+.discover-chip.error {
+  color: var(--semantic-bad);
+  border-color: color-mix(in srgb, var(--semantic-bad) 40%, transparent);
+}
+.discover-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.discover-all {
+  flex: none;
+  padding: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.discover-all:hover {
+  color: var(--text);
+}
+.discover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.discover-row:hover {
+  background: var(--bg-hover);
+}
+.discover-row.off {
+  cursor: default;
+  opacity: 0.55;
+}
+.discover-row.off:hover {
+  background: none;
+}
+.discover-model {
+  flex: none;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+.discover-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.discover-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.discover-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-md);
+}
+/* Unverified is a state, not a warning: the row may well work, the scan just
+   did not ask. Tinted down so it reads as "not checked" rather than "broken". */
+.discover-tag.unchecked {
+  color: var(--text-tertiary);
+  border: 1px dashed var(--border);
+  background: none;
+}
+.discover-ok {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: var(--semantic-good);
+  background: color-mix(in srgb, var(--semantic-good) 14%, transparent);
+}
+.discover-key {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-tertiary);
+}
+/* The sheet's answer to "why can I not tick anything": one sentence above the
+   rows. A greyed checklist with no explanation reads as a bug. */
+.discover-hint {
+  margin: 6px 0 2px 6px;
+  max-width: 78ch;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.discover-none {
+  padding: 4px 6px;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+.discover-more {
+  margin: 4px 0 0 6px;
+  padding: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.discover-more:hover {
+  color: var(--text);
+}
+.discover-error {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 .model-tile {
   position: relative;
   min-width: 0;
