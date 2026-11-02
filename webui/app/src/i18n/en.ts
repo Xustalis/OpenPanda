@@ -834,6 +834,7 @@ const en: Messages = {
   'workspace.empty': 'No devices yet — this console has not joined a network.',
   'workspace.count': '{devices} devices · {online} online',
   'workspace.tidy': 'Tidy layout',
+  'workspace.zoom.reset': 'Reset to 100% (wheel to zoom)',
   'workspace.local': 'this device',
   'workspace.tile.idle': 'idle',
   'workspace.tile.running': 'working',

@@ -7,6 +7,7 @@ import { ContextMenu, type ContextMenuItem } from '../components/context-menu'
 import { agentLogo } from '../format/agent-logo'
 import { agentInitial } from '../format/agent-role'
 import { buildWorkspaceEdges, workspaceLinkLine, type PanelRect } from './workspace-links'
+import { anchorScroll, nextZoom } from './workspace-zoom'
 
 /** 工作空间 — 设备面板视图.
  *
@@ -138,6 +139,10 @@ export interface WorkspacePanelsProps {
    *  saved arrangement away and re-forms the tidy row: the one guaranteed way
    *  back from a card parked somewhere the reader cannot see. */
   resetSignal?: number
+  /** Canvas scale, 1 = the drawing at its own size. The wheel owns it; the
+   *  page header shows the number and offers the way back to 100%. */
+  zoom: number
+  onZoom: (z: number) => void
 }
 
 /** One agent tile's identity: an agent lives on a machine, so the machine is
@@ -257,21 +262,25 @@ function scrollerOf(el: HTMLElement | null): HTMLElement | null {
 /** The box a pointer can actually reach, in the grid's own coordinates: the
  *  scroller's visible window shifted by the current scroll offset. A card
  *  dropped outside it used to be written to localStorage at a y the reader
- *  could not scroll to, which is how a panel vanished for good. */
+ *  could not scroll to, which is how a panel vanished for good. `zoom` divides
+ *  the window back into the drawing's pixels — a card is stored at the size it
+ *  has at 100%, whatever the canvas is scaled to right now. */
 function reachableBand(
   grid: HTMLElement,
   view: HTMLElement | null,
   inset: number,
+  zoom: number,
 ): { x0: number; x1: number; y0: number; y1: number } {
   const gr = grid.getBoundingClientRect()
   const vr = view?.getBoundingClientRect() ?? gr
   const ox = view?.scrollLeft ?? 0
   const oy = view?.scrollTop ?? 0
+  const z = zoom > 0 ? zoom : 1
   return {
-    x0: Math.max(0, vr.left + inset - gr.left + ox),
-    x1: Math.max(0, vr.right - inset - gr.left + ox),
-    y0: Math.max(0, vr.top + inset - gr.top + oy),
-    y1: Math.max(0, vr.bottom - inset - gr.top + oy),
+    x0: Math.max(0, vr.left + inset - gr.left + ox) / z,
+    x1: Math.max(0, vr.right - inset - gr.left + ox) / z,
+    y0: Math.max(0, vr.top + inset - gr.top + oy) / z,
+    y1: Math.max(0, vr.bottom - inset - gr.top + oy) / z,
   }
 }
 
@@ -330,6 +339,8 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     idleLabel,
     runningLabel,
     noneLabel,
+    zoom,
+    onZoom,
   } = props
 
   const [slots, setSlots] = useState<Record<string, Slot>>(readSlots)
@@ -366,6 +377,85 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     return () => ro.disconnect()
   }, [devices.length])
 
+  /** The wheel is bound once, so it reads the live zoom and the live callback
+   *  through refs rather than re-binding a listener on every notch. Assigned
+   *  during render, not in an effect: the measurement passes below are layout
+   *  effects, and they run before effects would have caught up. */
+  const zoomRef = useRef(zoom)
+  const onZoomRef = useRef(onZoom)
+  zoomRef.current = zoom
+  onZoomRef.current = onZoom
+  /** The scroll offset the next frame has to land on. A wheel event computes
+   *  it against the sizes that exist *before* the zoom; the effect below
+   *  applies it once the surface has been re-scaled, because a scroller
+   *  refuses an offset past the extent it had at the time. */
+  const pendingScroll = useRef<{ left: number; top: number } | null>(null)
+
+  // The wheel zooms the canvas. It is the gesture a drawing answers to, and
+  // this surface has nothing else to do with it: the map only scrolls when the
+  // fleet outgrows the pane, while a card's tile field keeps the wheel for
+  // itself whenever it has something of its own to scroll.
+  useEffect(() => {
+    const grid = gridRef.current
+    const view = scrollerOf(grid)
+    if (!grid || !view) return
+    const onWheel = (e: WheelEvent) => {
+      if (dragRef.current) return
+      // A card's tile field is a scroller of its own. It keeps the wheel while
+      // it has room to move in the direction the wheel is going; at either end
+      // the gesture chains back to the canvas, the way nested scrollers do
+      // everywhere else. Without the direction check a field already at its
+      // top would swallow every wheel-up and do nothing with it.
+      const field = (e.target as Element | null)?.closest?.('.ws-panel-bays') as HTMLElement | null
+      if (field && field.scrollHeight > field.clientHeight + 1) {
+        const room = field.scrollHeight - field.clientHeight
+        const atTop = field.scrollTop <= 0
+        const atEnd = field.scrollTop >= room - 1
+        if (!((e.deltaY < 0 && atTop) || (e.deltaY > 0 && atEnd))) return
+      }
+      // deltaMode: 0 is pixels (a notch is 100), 1 lines, 2 pages. A wheel
+      // that reports lines would otherwise move the zoom by 3/100 of a notch.
+      const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1)
+      const from = zoomRef.current
+      const to = nextZoom(from, dy)
+      // The wheel belongs to the drawing even at the ends of the range: a
+      // gesture that silently turns into a page scroll halfway through reads
+      // as a broken zoom, not as a feature.
+      e.preventDefault()
+      if (to === from) return
+      const rect = view.getBoundingClientRect()
+      const g = grid.getBoundingClientRect()
+      const sx = view.scrollLeft
+      const sy = view.scrollTop
+      // Where the surface starts inside the scroller, padding included. Read
+      // from the live boxes rather than hard-coded: the map's padding is the
+      // pet's headroom and has moved once already.
+      pendingScroll.current = {
+        left: anchorScroll(sx, e.clientX - rect.left, g.left - rect.left + sx, from, to),
+        top: anchorScroll(sy, e.clientY - rect.top, g.top - rect.top + sy, from, to),
+      }
+      onZoomRef.current(to)
+    }
+    view.addEventListener('wheel', onWheel, { passive: false })
+    return () => view.removeEventListener('wheel', onWheel)
+    // The grid does not exist on the first render — the fleet arrives from the
+    // directory a beat later, and until it does this component is a sentence
+    // instead of a drawing. Binding on mount alone would leave the wheel
+    // attached to nothing for the life of the page.
+  }, [devices.length])
+
+  // Apply the anchor once the new scale is in the DOM, so the scroller accepts
+  // the offset instead of clamping it to the old (smaller) extent.
+  useLayoutEffect(() => {
+    const p = pendingScroll.current
+    if (!p) return
+    pendingScroll.current = null
+    const view = scrollerOf(gridRef.current)
+    if (!view) return
+    view.scrollLeft = p.left
+    view.scrollTop = p.top
+  }, [zoom])
+
   const edges = useMemo(() => buildWorkspaceEdges(devices), [devices])
   const visibleEdges = useMemo(
     () => (selected ? edges.filter((e) => e.a === selected || e.b === selected) : []),
@@ -397,12 +487,15 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
   /** Measure only the endpoints the current selection can draw. Keeping the
    *  rectangles in grid coordinates lets the SVG scroll with the cards; the
    *  floating drag copy is viewport-fixed and is converted into the same
-   *  frame here. */
+   *  frame here. The grid is scaled by the zoom, so every box the browser
+   *  reports is divided back into the drawing's own pixels — the lines are
+   *  drawn inside the scaled frame and must not be scaled twice. */
   const measureLinks = () => {
     const grid = gridRef.current
     const next: LinkLayout = { rects: new Map(), width: 0, height: 0 }
     if (grid) {
       const gr = grid.getBoundingClientRect()
+      const z = zoom || 1
       // Every pane, not just the endpoints of the visible edges: a line can
       // pass behind a pane the current selection does not connect, and
       // occlusion is exactly that question. Measuring only the endpoints made
@@ -417,10 +510,10 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         if (!el) continue
         const r = el.getBoundingClientRect()
         next.rects.set(id, {
-          x: r.left - gr.left + grid.scrollLeft,
-          y: r.top - gr.top + grid.scrollTop,
-          w: r.width,
-          h: r.height,
+          x: (r.left - gr.left + grid.scrollLeft) / z,
+          y: (r.top - gr.top + grid.scrollTop) / z,
+          w: r.width / z,
+          h: r.height / z,
         })
       }
       next.width = Math.max(grid.clientWidth, grid.scrollWidth)
@@ -450,7 +543,10 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
       observer.disconnect()
       window.removeEventListener('resize', measureLinks)
     }
-  }, [visibleEdges, linkedIds])
+    // `zoom` is a dependency because measureLinks divides every box by it: a
+    // re-subscribed observer that kept the old factor would draw the edges at
+    // the previous scale until the next unrelated re-render.
+  }, [visibleEdges, linkedIds, zoom])
 
   // The drag is owned by the window, not by the panel: the panel unmounts the
   // moment it becomes the floating copy, and a pointer captured on a detached
@@ -484,11 +580,14 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         // Viewport coordinates back into the grid's own frame. The scroll
         // offset comes from the surface, not from the grid (which never
         // scrolls), and the result is pinned to the band the pointer can
-        // reach so a card can never be parked out of sight.
+        // reach so a card can never be parked out of sight. The scale is
+        // undone last: a card is stored at the size it has at 100%, so a drop
+        // made while zoomed out is the same arrangement as one at 100%.
         const gr = grid.getBoundingClientRect()
-        const band = reachableBand(grid, view, 8)
-        const rawX = cur.x - cur.grabX - gr.left + (view?.scrollLeft ?? 0)
-        const rawY = cur.y - cur.grabY - gr.top + (view?.scrollTop ?? 0)
+        const z = zoom > 0 ? zoom : 1
+        const band = reachableBand(grid, view, 8, z)
+        const rawX = (cur.x - cur.grabX - gr.left + (view?.scrollLeft ?? 0)) / z
+        const rawY = (cur.y - cur.grabY - gr.top + (view?.scrollTop ?? 0)) / z
         const x = clampInto(rawX, band.x0, band.x1, cur.w)
         const y = clampInto(rawY, band.y0, band.y1, cur.h)
         setSlots((prev) => {
@@ -544,12 +643,15 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
   useLayoutEffect(() => {
     const grid = gridRef.current
     if (!grid || dragRef.current) return
+    const z = zoom > 0 ? zoom : 1
     // The map is a scroller and owns the padding; a card may not be taller
     // than the band a reader can actually see. Publishing the ceiling as a
     // custom property caps the card in CSS (header fixed, tile field scrolls
-    // inside it) instead of letting it run under the composer.
+    // inside it) instead of letting it run under the composer. The band is
+    // measured in viewport pixels and the cap is a card size, so a zoomed-out
+    // canvas may hold taller cards and a zoomed-in one holds shorter ones.
     const view = scrollerOf(grid)
-    const panelMax = view ? Math.max(160, view.clientHeight - 44 - 30 - 8) : 0
+    const panelMax = view ? Math.max(160, (view.clientHeight - 44 - 30 - 8) / z) : 0
     if (panelMax > 0) grid.style.setProperty('--ws-panel-max', `${panelMax}px`)
     // A saved arrangement outlives the window it was made in. Pull every
     // stored card back inside the surface that exists now — a narrower
@@ -589,10 +691,13 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
       const el = els.current.get(d.id)
       if (!el) continue
       const r = el.getBoundingClientRect()
-      const h = panelMax > 0 ? Math.min(r.height, panelMax) : r.height
+      // Measured on a scaled surface: back into the drawing's own pixels.
+      const rw = r.width / z
+      const rh = r.height / z
+      const h = panelMax > 0 ? Math.min(rh, panelMax) : rh
       next[d.id] = firstPass
-        ? { x: r.left - gr.left, y: r.top - gr.top, w: r.width, h }
-        : { x: 0, y: floor + 18, w: r.width, h }
+        ? { x: (r.left - gr.left) / z, y: (r.top - gr.top) / z, w: rw, h }
+        : { x: 0, y: floor + 18, w: rw, h }
       floor = Math.max(floor, next[d.id]!.y + h)
     }
     if (Object.keys(next).length !== Object.keys(repaired).length) setSlots(next)
@@ -608,6 +713,11 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
   const pandaId = devices.find((d) => d.local)?.id ?? ''
 
   const bottom = Object.values(slots).reduce((m, s) => Math.max(m, s.y + s.h), 0)
+  const right = Object.values(slots).reduce((m, s) => Math.max(m, s.x + s.w), 0)
+  // The surface is scaled, not re-laid-out, so its own box has to be told how
+  // much room the scaled drawing takes: a zoomed-in canvas scrolls, a
+  // zoomed-out one leaves the map as it was.
+  const z = zoom > 0 ? zoom : 1
 
   const panel = (d: PanelDevice, ghost?: Drag) => {
     const run = runningOf(d)
@@ -616,15 +726,11 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     const hiddenHere = roster.length - agents.length
     const working = run.size > 0 || d.busy
     const slot = slots[d.id]
+    // The floating copy is wrapped in its own scale by the caller: it is
+    // positioned in viewport pixels (fixed) and drawn at the card's own size,
+    // so both the box here and the transform stay in one frame each.
     const style: JSX.CSSProperties | undefined = ghost
-      ? {
-          position: 'fixed',
-          left: `${ghost.x - ghost.grabX}px`,
-          top: `${ghost.y - ghost.grabY}px`,
-          width: `${ghost.w}px`,
-          height: `${ghost.h}px`,
-          margin: 0,
-        }
+      ? { position: 'relative', width: `${ghost.w}px`, height: `${ghost.h}px`, margin: 0 }
       : slot
         ? { position: 'absolute', left: `${slot.x}px`, top: `${slot.y}px`, width: `${slot.w}px` }
         : undefined
@@ -664,14 +770,18 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
                 if ((e.target as Element).closest('.ws-tile')) return
                 const el = e.currentTarget as HTMLElement
                 const r = el.getBoundingClientRect()
+                // The grab offset stays in viewport pixels (the floating copy
+                // is placed in them); the size is the card's own, so a drop
+                // writes the arrangement at 100% whatever the canvas is
+                // scaled to.
                 press.current = {
                   id: d.id,
                   x: e.clientX,
                   y: e.clientY,
                   grabX: e.clientX - r.left,
                   grabY: e.clientY - r.top,
-                  w: r.width,
-                  h: r.height,
+                  w: r.width / (zoom > 0 ? zoom : 1),
+                  h: r.height / (zoom > 0 ? zoom : 1),
                 }
                 dragged.current = false
               }
@@ -851,11 +961,29 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     : []
 
   return (
-    <div class={`ws-panels${drag ? ' is-dragging' : ''}`}>
+    <div
+      class={`ws-panels${drag ? ' is-dragging' : ''}`}
+      // The scroll extent of a scaled drawing. `transform` is paint, not
+      // layout, so the map would otherwise think the surface still ends where
+      // it did at 100% and refuse to scroll to a card the zoom pushed out of
+      // reach.
+      style={{
+        minWidth: right > 0 ? `${right * z}px` : undefined,
+        minHeight: bottom > 0 ? `max(100%, ${(bottom + 26) * z}px)` : undefined,
+      }}
+    >
       <div
         class="ws-panels-grid"
         ref={gridRef}
-        style={bottom > 0 ? { minHeight: `${bottom + 26}px` } : undefined}
+        style={{
+          transform: `scale(${z})`,
+          // The wrapping row is measured in the drawing's pixels, so the pane
+          // offers the zoomed-out canvas more of them (and a zoomed-in one
+          // fewer) — a tidy row at 50% should hold more machines, not the
+          // same number at half size.
+          width: `calc(100% / ${z})`,
+          ...(bottom > 0 ? { minHeight: `${bottom + 26}px` } : {}),
+        }}
       >
         {visibleEdges.length > 0 && linkLayout.width > 0 && linkLayout.height > 0 && (
           <svg
@@ -905,7 +1033,20 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         )}
         {devices.filter((d) => !drag || d.id !== drag.id).map((d) => panel(d))}
       </div>
-      {drag && devices.some((d) => d.id === drag.id) && panel(devices.find((d) => d.id === drag.id)!, drag)}
+      {/* The carried card: fixed in viewport pixels so it can leave the map's
+          box, scaled on its own so it is the same size as the card it was
+          lifted from — the copy is outside the zoomed frame and would
+          otherwise snap back to 100%. */}
+      {drag && devices.some((d) => d.id === drag.id) && (
+        <div
+          class="ws-panel-ghost"
+          style={{ left: `${drag.x - drag.grabX}px`, top: `${drag.y - drag.grabY}px` }}
+        >
+          <div style={{ transform: `scale(${z})`, transformOrigin: '0 0' }}>
+            {panel(devices.find((d) => d.id === drag.id)!, drag)}
+          </div>
+        </div>
+      )}
       {menu && (
         <ContextMenu
           x={menu.x}

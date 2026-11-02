@@ -802,6 +802,7 @@ const de: Messages = {
   'workspace.empty': 'Noch keine Geräte — diese Konsole ist keinem Netzwerk beigetreten.',
   'workspace.count': '{devices} Geräte · {online} online',
   'workspace.tidy': 'Layout aufräumen',
+  'workspace.zoom.reset': 'Zurück auf 100 % (Mausrad zum Zoomen)',
   'workspace.local': 'dieses Gerät',
   'workspace.tile.idle': 'Leerlauf',
   'workspace.tile.running': 'arbeitet',

@@ -822,6 +822,7 @@ const zhCN: Messages = {
   'workspace.empty': '还没有设备 —— 这台控制台尚未加入任何网络。',
   'workspace.count': '{devices} 台设备 · {online} 在线',
   'workspace.tidy': '整理布局',
+  'workspace.zoom.reset': '还原到 100%（滚轮缩放）',
   'workspace.local': '本机',
   'workspace.tile.idle': '空闲',
   'workspace.tile.running': '工作中',
