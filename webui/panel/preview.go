@@ -228,11 +228,16 @@ func (p *Preview) serve(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cache-Control", "no-store")
 
 	if isHTMLPreview(clean, data) {
+		data = transcodePage(data, "")
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(p.injectPicker(data))
 		return
 	}
-	h.Set("Content-Type", previewContentType(clean, data))
+	ctype := previewContentType(clean, data)
+	if strings.HasPrefix(ctype, "text/") || ctype == "application/json" {
+		data = transcodePage(data, "")
+	}
+	h.Set("Content-Type", ctype)
 	_, _ = w.Write(data)
 }
 

@@ -148,17 +148,26 @@ func runWeb(args []string) {
 	if token == "" {
 		token = panel.NewToken()
 		ephemeral = true
+		// Persist the minted token: a restart (self-update, service bounce,
+		// reboot) would otherwise mint a new one and strand every open tab at
+		// the gate. The config file is owner-only and UpdateSectionField
+		// round-trips the document, so nothing else moves.
+		if path := resolvedConfigPath(*configPath); path != "" {
+			if err := config.UpdateSectionField(path, []string{"network"}, "panel_token", token); err == nil {
+				ephemeral = false
+			}
+		}
 		// A self-update replaces this process image via exec, which re-reads
-		// config — a fresh ephemeral token would strand every open console at
-		// the token gate. Exporting it through env (config.applyEnv maps
-		// OPENPANDA_PANEL_TOKEN back onto panel_token) keeps the same token
-		// across the restart; the sandboxed adapter/command subprocesses never
-		// see it (security allow-list drops everything else).
+		// config — exporting the token through env (config.applyEnv maps
+		// OPENPANDA_PANEL_TOKEN back onto panel_token) keeps it across the
+		// restart even when the file could not be written.
 		_ = os.Setenv("OPENPANDA_PANEL_TOKEN", token)
-		if !panel.IsLoopbackAddr(addr) {
-			fmt.Println(i18n.T(loc, "web.lan.ephemeral"))
-		} else {
-			fmt.Println(i18n.T(loc, "repl.web.ephemeral"))
+		if ephemeral {
+			if !panel.IsLoopbackAddr(addr) {
+				fmt.Println(i18n.T(loc, "web.lan.ephemeral"))
+			} else {
+				fmt.Println(i18n.T(loc, "repl.web.ephemeral"))
+			}
 		}
 	}
 
@@ -178,6 +187,13 @@ func runWeb(args []string) {
 	}
 	log.Setup(cfg.Log.Level, logWriter)
 	logger := slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{Level: log.ParseLevel(cfg.Log.Level)}))
+
+	// The console can own the node row (MeshNode below), so it performs the
+	// same mesh-secret bootstrap the daemon does. Without it a web-only node
+	// starts with an empty secret, the WS listener refuses every peer, and
+	// the node looks healthy while being permanently unreachable.
+	selfID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+	ensureSharedSecret(cfg, db, selfID, resolvedConfigPath(*configPath), logger)
 
 	// Optional ask engine behind a reloadable holder — same contract as the
 	// REPL: without a model endpoint the console still serves

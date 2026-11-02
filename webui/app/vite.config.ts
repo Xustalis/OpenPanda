@@ -16,6 +16,19 @@ export default defineConfig({
   build: {
     outDir: '../panel/dist/app',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // One 1 MiB entry chunk re-downloads the whole console on every
+        // change. The framework and the locale tables are the two parts that
+        // move independently of the views, so they get their own cacheable
+        // chunks instead of inflating the app bundle.
+        manualChunks(id) {
+          if (id.includes('node_modules/preact')) return 'preact'
+          if (id.includes('/src/i18n/')) return 'i18n'
+          if (id.includes('/src/md/')) return 'markdown'
+        },
+      },
+    },
   },
   server: {
     port: 5273,

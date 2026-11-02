@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -38,6 +39,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/htmlindex"
+	"golang.org/x/text/transform"
 )
 
 const (
@@ -143,6 +148,35 @@ func browseDial(ctx context.Context, network, addr string) (net.Conn, error) {
 		last = derr
 	}
 	return nil, last
+}
+
+// checkProxyTarget closes the gap the dial-time check cannot see when an
+// egress proxy is configured: the socket goes to the proxy, which resolves the
+// target itself. The name is resolved locally and refused if any answer is in
+// a blocked range.
+func checkProxyTarget(ctx context.Context, u *url.URL) error {
+	if proxyAddress() == "" {
+		return nil
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		if blockedIP(ip) {
+			return errBlockedAddress
+		}
+		return nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		// The proxy may have a resolver this host does not; refusing here
+		// would break every proxy-only (split-DNS) deployment.
+		return nil
+	}
+	for _, ip := range ips {
+		if blockedIP(ip.IP) {
+			return errBlockedAddress
+		}
+	}
+	return nil
 }
 
 // proxyAddress is the host:port of the configured egress proxy, in the order
@@ -284,6 +318,16 @@ func serveBrowsed(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), browseTimeout)
 	defer cancel()
 
+	// With an egress proxy, browseDial connects to the proxy and the proxy
+	// resolves the target — the dial-time address check never sees the answer.
+	// Resolve the name here and refuse a private answer before the proxy can
+	// fetch it. A name this host cannot resolve is left to the proxy; a
+	// rebinding between this lookup and the proxy's is the residual gap.
+	if err := checkProxyTarget(ctx, u); err != nil {
+		browseFail(w, http.StatusBadRequest, err)
+		return
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		browseFail(w, http.StatusBadRequest, err)
@@ -316,6 +360,9 @@ func serveBrowsed(w http.ResponseWriter, r *http.Request) {
 			fmt.Errorf("page is larger than %d MiB", browseMaxBytes>>20))
 		return
 	}
+	// The response below always declares UTF-8, so a legacy page must be
+	// converted first — otherwise a GBK/GB18030 site renders as mojibake.
+	body = transcodePage(body, ctype)
 
 	final := resp.Request.URL
 	title := titleOf(body)
@@ -393,6 +440,57 @@ func browseError(err error) error {
 	}
 	return fmt.Errorf("could not reach the site: %s", msg)
 }
+
+// transcodePage converts a declared legacy charset to UTF-8. The HTTP header
+// wins over the document's own meta tag, matching browsers. Unknown labels
+// keep the bytes as they arrived: a wrong guess is worse than mojibake a
+// reader can still recognise.
+func transcodePage(body []byte, contentType string) []byte {
+	label := declaredCharset(contentType, body)
+	if label == "" {
+		if utf8.Valid(body) {
+			return body
+		}
+		// No declaration and the bytes are not UTF-8: GB18030 is the safest
+		// fallback for the pages this pane is most likely to meet.
+		label = "gb18030"
+	}
+	if strings.EqualFold(label, "utf-8") || strings.EqualFold(label, "utf8") {
+		return body
+	}
+	enc, err := htmlindex.Get(label)
+	if err != nil || enc == nil {
+		return body
+	}
+	out, _, err := transform.Bytes(enc.NewDecoder(), body)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// declaredCharset prefers the Content-Type parameter and falls back to the
+// first <meta charset> / <meta http-equiv content="...charset=..."> in the
+// document head.
+func declaredCharset(contentType string, body []byte) string {
+	if _, params, err := mime.ParseMediaType(contentType); err == nil {
+		if cs := strings.TrimSpace(params["charset"]); cs != "" {
+			return cs
+		}
+	}
+	head := body
+	if len(head) > 4096 {
+		head = head[:4096]
+	}
+	if m := metaCharsetRe.FindSubmatch(head); m != nil {
+		return string(m[1])
+	}
+	return ""
+}
+
+// metaCharsetRe covers both spellings: a bare charset attribute and the
+// http-equiv form, where the label sits inside the content attribute.
+var metaCharsetRe = regexp.MustCompile(`(?i)<meta[^>]+charset\s*=\s*["']?\s*([a-z0-9._:-]+)`)
 
 func browsableType(ctype string) bool {
 	if ctype == "" {

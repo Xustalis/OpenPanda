@@ -27,6 +27,8 @@ func dispatchSub(sub string, args []string) {
 		runRepl(args)
 	case "web":
 		runWeb(args)
+	case "service":
+		os.Exit(runService(args))
 	case "voice":
 		runVoice(args)
 	case "install":

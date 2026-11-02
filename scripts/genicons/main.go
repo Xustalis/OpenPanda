@@ -31,25 +31,39 @@ func main() {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		log.Fatalf("mkdir %s: %v", out, err)
 	}
-	render(filepath.Join(out, "icon-192.png"), 192, true)
-	render(filepath.Join(out, "icon-512.png"), 512, true)
-	render(filepath.Join(out, "badge-72.png"), 72, false)
+	// Sizes follow the shipped set: favicons are optically larger on their
+	// rounded tile; launcher icons keep the mark at the designer's ~64%.
+	render(filepath.Join(out, "favicon-16.png"), 16, true, true, 0.95)
+	render(filepath.Join(out, "favicon-32.png"), 32, true, true, 0.94)
+	render(filepath.Join(out, "favicon-48.png"), 48, true, true, 0.86)
+	render(filepath.Join(out, "apple-touch-icon-180.png"), 180, true, false, 0.74)
+	render(filepath.Join(out, "icon-192.png"), 192, true, false, 0.64)
+	render(filepath.Join(out, "icon-512.png"), 512, true, false, 0.64)
+	render(filepath.Join(out, "icon-1024.png"), 1024, true, false, 0.64)
+	render(filepath.Join(out, "avatar-400.png"), 400, true, false, 0.68)
+	render(filepath.Join(out, "badge-72.png"), 72, false, false, 0.82)
+	// The site ships its own copy of the touch icon next to index.html.
+	src := filepath.Join(out, "apple-touch-icon-180.png")
+	if data, err := os.ReadFile(src); err == nil {
+		if err := os.WriteFile(filepath.Join("site", "apple-touch-icon.png"), data, 0o644); err != nil {
+			log.Printf("site touch icon: %v", err)
+		}
+	}
 }
 
 // render draws the mark at size s. withBG fills the night background
-// (installable icon); the notification badge is a transparent mark instead.
-// The app icon keeps the mark at the designer's optical size — about 64% of
-// the canvas — so a launcher tile does not look swollen beside other apps.
-func render(path string, s int, withBG bool) {
+// (installable icon), rounded for the favicon set; the notification badge is a
+// transparent mark instead.
+func render(path string, s int, withBG, rounded bool, scale float64) {
 	const ss = 4 // 4× supersampling: stdlib has no rasteriser, so AA is ours
-	scale := 0.64
-	if !withBG {
-		scale = 0.82 // a notification badge has no tile around it to breathe
-	}
 	n := s * ss
 	img := image.NewRGBA(image.Rect(0, 0, n, n))
 	if withBG {
-		draw.Draw(img, img.Bounds(), &image.Uniform{bg}, image.Point{}, draw.Src)
+		if rounded {
+			fillRoundedRect(img, 0, 0, float64(n), float64(n), 0.22*float64(n), bg)
+		} else {
+			draw.Draw(img, img.Bounds(), &image.Uniform{bg}, image.Point{}, draw.Src)
+		}
 	}
 	drawMark(img, float64(n), scale)
 	out := downsample(img, s, ss)
@@ -60,6 +74,31 @@ func render(path string, s int, withBG bool) {
 	defer f.Close()
 	if err := png.Encode(f, out); err != nil {
 		log.Fatalf("encode %s: %v", path, err)
+	}
+}
+
+// fillRoundedRect paints a rounded rectangle; the caller's image is at 4×, so
+// a binary inside test is enough.
+func fillRoundedRect(img *image.RGBA, x0, y0, x1, y1, r float64, c color.RGBA) {
+	for y := int(y0); y < int(y1); y++ {
+		for x := int(x0); x < int(x1); x++ {
+			cx, cy := float64(x)+0.5, float64(y)+0.5
+			inside := cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1
+			if inside && (cx < x0+r || cx > x1-r) && (cy < y0+r || cy > y1-r) {
+				// In a corner block: inside only when within the corner circle.
+				ccx, ccy := x0+r, y0+r
+				if cx > x1-r {
+					ccx = x1 - r
+				}
+				if cy > y1-r {
+					ccy = y1 - r
+				}
+				inside = math.Hypot(cx-ccx, cy-ccy) <= r
+			}
+			if inside {
+				blend(img, x, y, c, 1)
+			}
+		}
 	}
 }
 
