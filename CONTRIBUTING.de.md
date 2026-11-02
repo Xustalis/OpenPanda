@@ -48,6 +48,7 @@ CI führt dieselben Prüfungen als parallele Jobs aus — `lint` (gofmt + vet), 
 - **`go test -race ./...` muss durchlaufen** — der Kernel ist ein nebenläufiges
   System (Peer-Registry, Task-Store, SSE-Hub); Befunde des Race-Detektors sind
   Release-Blocker, keine Warnungen.
+- **Windows-Entwickler:** `-race` braucht `CGO_ENABLED=1` und eine aktuelle MinGW-w64-Toolchain (mingw-w64 GCC aus MSYS2). Das mit Git-for-Windows gelieferte MinGW 8.x ist zu alt: Das instrumentierte Testbinary beendet sich beim Laden mit `0xc0000139` (STATUS_ENTRYPOINT_NOT_FOUND), bevor ein Test läuft. `make race` setzt `CGO_ENABLED=1`; die Windows-CI-Leg führt normales `go test` aus, nicht `-race`.
 - Kernmodule (`internal/core`, `internal/scheduler`, `internal/storage`)
   sollten nach Möglichkeit oberhalb von **~60 % Testabdeckung** bleiben.
   Bugfixes kommen mit einem Regressionstest, der vor dem Fix fehlschlägt.
