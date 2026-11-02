@@ -414,16 +414,20 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		c.keyFn = func(ctx context.Context) (string, error) { return store.AccessToken(ctx, id) }
 		c.oauth = true
 		// Anthropic OAuth needs the oauth beta flag on every call; merge it
-		// with a caller-supplied beta list rather than clobbering it.
-		const oauthBeta = "oauth-2025-04-20"
-		if c.extraHeaders == nil {
-			c.extraHeaders = map[string]string{}
-		}
-		if cur := c.extraHeaders["anthropic-beta"]; !strings.Contains(cur, oauthBeta) {
-			if cur != "" {
-				c.extraHeaders["anthropic-beta"] = cur + "," + oauthBeta
-			} else {
-				c.extraHeaders["anthropic-beta"] = oauthBeta
+		// with a caller-supplied beta list rather than clobbering it. Other
+		// subscription providers have no such flag, and sending one would put
+		// an Anthropic header on someone else's endpoint.
+		if provider == "anthropic" {
+			const oauthBeta = "oauth-2025-04-20"
+			if c.extraHeaders == nil {
+				c.extraHeaders = map[string]string{}
+			}
+			if cur := c.extraHeaders["anthropic-beta"]; !strings.Contains(cur, oauthBeta) {
+				if cur != "" {
+					c.extraHeaders["anthropic-beta"] = cur + "," + oauthBeta
+				} else {
+					c.extraHeaders["anthropic-beta"] = oauthBeta
+				}
 			}
 		}
 	}

@@ -152,6 +152,17 @@ func (s *Store) Tokens() (map[string]Token, error) {
 // refreshing an expired one when a refresh token exists. ErrNoToken means
 // the user has not logged in.
 func (s *Store) AccessToken(ctx context.Context, provider string) (string, error) {
+	// A provider whose credential belongs to another tool (the Codex login)
+	// is read from that tool's file, never from this store: the store is a
+	// copy, and a copy of a rotating refresh token breaks the tool that owns
+	// it.
+	if p, err := Lookup(provider); err == nil && p.External != nil {
+		tok, err := p.External()
+		if err != nil {
+			return "", err
+		}
+		return tok.AccessToken, nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tokens, err := s.load()

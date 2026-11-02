@@ -297,7 +297,7 @@ function ModelTile(props: {
   const { entry } = props.m
   const [confirming, setConfirming] = useState(false)
   const k = keyOf(entry)
-  const keyOk = entry.no_auth || entry.key_set
+  const keyOk = entry.no_auth || entry.key_set || !!entry.auth
   const testing = props.busy === `test:${k}`
   const verdict = props.result ? (props.result.ok ? 'ok' : 'bad') : ''
   // The corner dot is down to one job: a config that cannot dial at all. A test
@@ -851,9 +851,11 @@ function ModelSheet(props: {
       : t('models.pickProviderShort')
 
   const keyPlaceholder = editing
-    ? keyOnFile
-      ? `${t('models.apiKeySet')} ${editing.key_hint ?? ''}`.trim()
-      : 'sk-…'
+    ? editing.auth
+      ? t('models.authLogin')
+      : keyOnFile
+        ? `${t('models.apiKeySet')} ${editing.key_hint ?? ''}`.trim()
+        : 'sk-…'
     : pre?.keySet && vendorSame
       ? t('models.keyReuseConn')
       : provider?.key_saved

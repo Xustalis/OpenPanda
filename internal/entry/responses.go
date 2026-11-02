@@ -299,6 +299,14 @@ func (c *Client) completeResponses(ctx context.Context, system string, turns []T
 	if c.noCredential() {
 		return Response{}, ErrNoKey
 	}
+	// Codex's ChatGPT backend refuses a non-streamed call outright — 400
+	// "Stream must be set to true" — so the streamed reader is the only way in.
+	// The endpoint is named here rather than flagged per row because a row that
+	// forgot the flag would fail its first turn with a wire error that says
+	// nothing about a flag; the URL is fixed and vendor-owned.
+	if strings.Contains(c.baseURL, "chatgpt.com/backend-api/codex") {
+		return c.streamResponses(ctx, system, turns, tools, nil, nil, nil)
+	}
 	return c.completeWithRetryFn(ctx, func() (Response, error) {
 		return c.completeOnceResponses(ctx, system, turns, tools)
 	}, nil)
