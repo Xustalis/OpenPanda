@@ -72,7 +72,11 @@ type Client struct {
 	// is a Bearer token rather than an API key — Anthropic then takes
 	// `authorization: Bearer` + the oauth beta flag instead of x-api-key.
 	keyFn func(ctx context.Context) (string, error)
-	oauth bool
+	// tokenFn resolves the full credential for a subscription provider whose
+	// request carries more than a bearer token — the Codex ChatGPT backend
+	// routes by chatgpt-account-id. It supersedes keyFn when set.
+	tokenFn func(ctx context.Context) (auth.Token, error)
+	oauth   bool
 	// keyScheme overrides the header a static key travels in ("bearer");
 	// empty keeps the dialect default.
 	keyScheme string
@@ -423,18 +427,23 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		store := auth.OpenStore(auth.DefaultStateDir())
 		id := provider
 		c.keyFn = func(ctx context.Context) (string, error) { return store.AccessToken(ctx, id) }
+		c.tokenFn = func(ctx context.Context) (auth.Token, error) { return store.Token(ctx, id) }
 		c.oauth = true
 		// Anthropic OAuth needs the oauth beta flag on every call; merge it
-		// with a caller-supplied beta list rather than clobbering it.
-		const oauthBeta = "oauth-2025-04-20"
-		if c.extraHeaders == nil {
-			c.extraHeaders = map[string]string{}
-		}
-		if cur := c.extraHeaders["anthropic-beta"]; !strings.Contains(cur, oauthBeta) {
-			if cur != "" {
-				c.extraHeaders["anthropic-beta"] = cur + "," + oauthBeta
-			} else {
-				c.extraHeaders["anthropic-beta"] = oauthBeta
+		// with a caller-supplied beta list rather than clobbering it. Other
+		// subscription providers have no such flag, and sending one would put
+		// an Anthropic header on someone else's endpoint.
+		if provider == "anthropic" {
+			const oauthBeta = "oauth-2025-04-20"
+			if c.extraHeaders == nil {
+				c.extraHeaders = map[string]string{}
+			}
+			if cur := c.extraHeaders["anthropic-beta"]; !strings.Contains(cur, oauthBeta) {
+				if cur != "" {
+					c.extraHeaders["anthropic-beta"] = cur + "," + oauthBeta
+				} else {
+					c.extraHeaders["anthropic-beta"] = oauthBeta
+				}
 			}
 		}
 	}
@@ -943,6 +952,10 @@ var ErrNoKey = errors.New("entry: no model api_key configured")
 // no credential exists (a no-auth endpoint), so callers pair it with the
 // noCredential guard rather than trusting the token's shape.
 func (c *Client) credential(ctx context.Context) (string, error) {
+	if c.tokenFn != nil {
+		tok, err := c.tokenFn(ctx)
+		return tok.AccessToken, err
+	}
 	if c.keyFn != nil {
 		return c.keyFn(ctx)
 	}
@@ -952,7 +965,7 @@ func (c *Client) credential(ctx context.Context) (string, error) {
 // noCredential reports whether the client has no way to authenticate: no
 // static key, no OAuth token source, and the endpoint is not marked no-auth.
 func (c *Client) noCredential() bool {
-	return c.apiKey == "" && c.keyFn == nil && !c.noAuth
+	return c.apiKey == "" && c.keyFn == nil && c.tokenFn == nil && !c.noAuth
 }
 
 // applyAuth sets the authentication header for one request. An OAuth token
@@ -960,9 +973,20 @@ func (c *Client) noCredential() bool {
 // it *instead of* x-api-key — while a static api_key keeps its per-dialect
 // header (Bearer for OpenAI, x-api-key for Anthropic).
 func (c *Client) applyAuth(ctx context.Context, httpReq *http.Request) error {
-	tok, err := c.credential(ctx)
-	if err != nil {
-		return err
+	var meta auth.Token
+	var tok string
+	if c.tokenFn != nil {
+		t, err := c.tokenFn(ctx)
+		if err != nil {
+			return err
+		}
+		tok, meta = t.AccessToken, t
+	} else {
+		var err error
+		tok, err = c.credential(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	if tok == "" {
 		return nil
@@ -971,6 +995,13 @@ func (c *Client) applyAuth(ctx context.Context, httpReq *http.Request) error {
 	case c.oauth:
 		// A subscription token is a Bearer credential on every dialect.
 		httpReq.Header.Set("authorization", "Bearer "+tok)
+		// The Codex ChatGPT backend routes a plan request by account, and
+		// the CLI sends the same pair of protocol headers alongside it.
+		if meta.AccountID != "" {
+			httpReq.Header.Set("chatgpt-account-id", meta.AccountID)
+			httpReq.Header.Set("OpenAI-Beta", "responses=experimental")
+			httpReq.Header.Set("originator", "codex_cli_rs")
+		}
 	case c.keyScheme == "bearer":
 		// The row says its credential is an OAuth-style token even though it
 		// is stored (or read from the environment) like a key: Claude Code's
@@ -1174,19 +1205,34 @@ func openAIURL(base string) string {
 	return base + "/v1/chat/completions"
 }
 
-// anthropicURL normalizes an Anthropic-compatible base URL into the full messages endpoint.
-func anthropicURL(base string) string {
+// anthropicVersionBase normalizes an Anthropic-compatible base URL down to the
+// version root. Trailing slashes are dropped, a bare host gains /v1, and a base
+// that already carries /v1 keeps it — so both routes hanging off it (messages,
+// models) agree on the prefix. Deriving the two separately is how a base of
+// "http://host/v1" once grew a second /v1.
+//
+// A pasted full messages URL names its own version segment: everything before
+// /messages is the root, and no /v1 is appended. Relays that mount the endpoint
+// somewhere other than /v1/messages (a gateway prefix, say) configured that
+// exact URL before this normalizer existed, and the messages route rebuilds it
+// byte-for-byte; only the models route gains the sibling path.
+func anthropicVersionBase(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	if base == "" {
-		return "https://api.deepseek.com/anthropic/v1/messages"
+		return "https://api.deepseek.com/anthropic/v1"
 	}
 	if strings.HasSuffix(base, "/messages") {
-		return base
+		return strings.TrimSuffix(base, "/messages")
 	}
 	if strings.HasSuffix(base, "/v1") {
-		return base + "/messages"
+		return base
 	}
-	return base + "/v1/messages"
+	return base + "/v1"
+}
+
+// anthropicURL normalizes an Anthropic-compatible base URL into the full messages endpoint.
+func anthropicURL(base string) string {
+	return anthropicVersionBase(base) + "/messages"
 }
 
 // passbackRequired reports whether err is the provider's demand for the
@@ -1628,5 +1674,7 @@ func (c *Client) listModelsEndpoint() (string, bool) {
 	if isDeepSeekEndpoint(c.baseURL) {
 		return "https://api.deepseek.com/models", true
 	}
-	return strings.TrimRight(c.baseURL, "/") + "/v1/models", false
+	// Same normalization the messages route uses: a relay configured with the
+	// version already on the base keeps it instead of gaining a second /v1.
+	return anthropicVersionBase(c.baseURL) + "/models", false
 }

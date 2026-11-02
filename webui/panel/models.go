@@ -53,6 +53,11 @@ type modelEntryJSON struct {
 	// instead of an api_key when the row was imported from another tool's
 	// config: the secret stays where it already was.
 	KeyEnv string `json:"key_env,omitempty"`
+	// Auth names a subscription credential (internal/auth) the row signs in
+	// with instead of a key — today only "codex", whose token is the CLI's own
+	// login. The console shows it so a row with no api_key does not read as
+	// "missing a key".
+	Auth string `json:"auth,omitempty"`
 	// KeyFingerprint is a short digest of the stored key. key_hint is the
 	// last four characters, which two accounts of one vendor can share; the
 	// console groups models into connections by this instead, so "extend"
@@ -134,7 +139,8 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 		ThinkingBudget: mc.ThinkingBudget,
 		MaxRetries:     mc.MaxRetries,
 		NoAuth:         mc.NoAuth || (known && p.NoAuth),
-		KeySet:         mc.APIKey != "" || envKeySet(mc),
+		KeySet:         mc.APIKey != "" || envKeySet(mc) || mc.Auth != "",
+		Auth:           mc.Auth,
 		KeyHint:        maskKey(mc.APIKey),
 		KeyEnv:         mc.KeyEnv,
 		KeyFingerprint: keyFingerprint(fingerprintSource(mc)),
