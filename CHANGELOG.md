@@ -70,6 +70,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 ### Fixed
 
 - **An injected Codex key no longer lands in the process list** — the adapter passed the provider token as a `-c` override, which is visible in `ps` and in Codex's own transcript. The token now goes into the environment under a name the CLI is told to read (`env_key`), where the injected credential already lives.
+- **A relay configured with `/v1` on its base lists its models** — the models route appended `/v1` to whatever the row held, so a base of `http://host/v1` was asked for `/v1/v1/models` and answered 404 while every message call on the same row worked. The version prefix is now decided once, by the same normalizer the messages route uses: a pasted `/messages` tail is dropped, a bare host gains `/v1`, and a base that already carries it keeps it.
 
 - **Windows no longer fails to open the lock marker** — every acquisition requested write access, so a concurrent creator or a filter holding the file answered `ERROR_ACCESS_DENIED` before `LockFileEx` was reached, failing memory and session writes. Existing markers open read-only, creation uses `O_EXCL` with a read-only fallback, and transient Windows open errors retry briefly.
 

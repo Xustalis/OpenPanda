@@ -64,6 +64,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 ### Behoben
 
 - **Ein injizierter Codex-Schlüssel landet nicht mehr in der Prozessliste** — der Adapter übergab das Provider-Token als `-c`-Überschreibung; `-c`-Werte sind gewöhnliches argv, also in `ps` sichtbar und im eigenen Transkript von Codex festgehalten. Das Token geht jetzt über die Umgebung unter einem Namen, den das CLI liest (`env_key`) — dort liegt die injizierte Credential ohnehin.
+- **Ein Relay, dessen Basis bereits `/v1` enthält, listet seine Modelle** — die Model-Route hängte `/v1` an das, was in der Zeile stand; `http://host/v1` wurde also nach `/v1/v1/models` gefragt und antwortete mit 404, während jeder Nachrichtenaufruf derselben Zeile funktionierte. Das Versionspräfix wird jetzt einmal entschieden, vom selben Normalisierer wie die Nachrichten-Route: ein eingefügtes `/messages`-Ende fällt weg, ein nackter Host bekommt `/v1`, eine Basis, die es schon trägt, behält es.
 
 - **Windows kann die Lock-Markierungsdatei wieder öffnen** — jede Sperre verlangte Schreibzugriff, sodass ein gleichzeitiger Ersteller oder ein Filter, der die Datei hielt, `ERROR_ACCESS_DENIED` vor `LockFileEx` erhielt und Schreibvorgänge von Memory und Sitzungen scheiterten. Vorhandene Marker werden schreibgeschützt geöffnet, das Anlegen nutzt `O_EXCL` mit schreibgeschütztem Rückfall, und vorübergehende Öffnungsfehler unter Windows werden kurz wiederholt.
 

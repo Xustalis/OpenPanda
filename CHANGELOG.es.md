@@ -64,6 +64,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 ### Corregido
 
 - **Una clave de Codex inyectada ya no aparece en la lista de procesos** — el adaptador pasaba el token del proveedor como una opción `-c`, y los valores de `-c` son argv corriente: visibles en `ps` y escritos en la transcripción del propio Codex. El token va ahora en el entorno bajo un nombre que el CLI lee (`env_key`), donde ya vive la credencial inyectada.
+- **Un relay cuya base ya lleva `/v1` lista sus modelos** — la ruta de modelos añadía `/v1` a lo que guardara la fila, así que a `http://host/v1` se le pedía `/v1/v1/models` y respondía 404 mientras todas las llamadas de mensajes de esa fila funcionaban. El prefijo de versión se decide ahora una sola vez, con el mismo normalizador que la ruta de mensajes: una cola `/messages` pegada se descarta, un host desnudo gana `/v1` y una base que ya lo lleva lo conserva.
 
 - **Windows ya no falla al abrir el marcador de bloqueo** — cada adquisición pedía acceso de escritura, así que un creador concurrente o un filtro que retenía el archivo respondía `ERROR_ACCESS_DENIED` antes de llegar a `LockFileEx`, y fallaban las escrituras de memoria y sesiones. Los marcadores existentes se abren en solo lectura, la creación usa `O_EXCL` con repliegue a solo lectura, y los errores transitorios de apertura en Windows se reintentan brevemente.
 

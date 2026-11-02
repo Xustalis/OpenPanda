@@ -1157,19 +1157,34 @@ func openAIURL(base string) string {
 	return base + "/v1/chat/completions"
 }
 
-// anthropicURL normalizes an Anthropic-compatible base URL into the full messages endpoint.
-func anthropicURL(base string) string {
+// anthropicVersionBase normalizes an Anthropic-compatible base URL down to the
+// version root. Trailing slashes are dropped, a bare host gains /v1, and a base
+// that already carries /v1 keeps it — so both routes hanging off it (messages,
+// models) agree on the prefix. Deriving the two separately is how a base of
+// "http://host/v1" once grew a second /v1.
+//
+// A pasted full messages URL names its own version segment: everything before
+// /messages is the root, and no /v1 is appended. Relays that mount the endpoint
+// somewhere other than /v1/messages (a gateway prefix, say) configured that
+// exact URL before this normalizer existed, and the messages route rebuilds it
+// byte-for-byte; only the models route gains the sibling path.
+func anthropicVersionBase(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	if base == "" {
-		return "https://api.deepseek.com/anthropic/v1/messages"
+		return "https://api.deepseek.com/anthropic/v1"
 	}
 	if strings.HasSuffix(base, "/messages") {
-		return base
+		return strings.TrimSuffix(base, "/messages")
 	}
 	if strings.HasSuffix(base, "/v1") {
-		return base + "/messages"
+		return base
 	}
-	return base + "/v1/messages"
+	return base + "/v1"
+}
+
+// anthropicURL normalizes an Anthropic-compatible base URL into the full messages endpoint.
+func anthropicURL(base string) string {
+	return anthropicVersionBase(base) + "/messages"
 }
 
 // passbackRequired reports whether err is the provider's demand for the
@@ -1611,5 +1626,7 @@ func (c *Client) listModelsEndpoint() (string, bool) {
 	if isDeepSeekEndpoint(c.baseURL) {
 		return "https://api.deepseek.com/models", true
 	}
-	return strings.TrimRight(c.baseURL, "/") + "/v1/models", false
+	// Same normalization the messages route uses: a relay configured with the
+	// version already on the base keeps it instead of gaining a second /v1.
+	return anthropicVersionBase(c.baseURL) + "/models", false
 }
