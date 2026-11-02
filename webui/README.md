@@ -17,8 +17,12 @@ the Go binary via `go:embed`.
 `make web` builds `app/` into `panel/dist/app/`, where `go:embed` folds it
 into every binary that links the panel package:
 
-- the **daemon** serves it at `network.panel_addr` (loopback by default) and
-  the REPL's `/web` command boots it in one click;
+- `panda web` (and the REPL's `/web`) serves it at `network.panel_addr`
+  (loopback by default). The daemon itself is deliberately headless and never
+  mounts an HTTP server;
+- `panda service install` registers that console as a user-level service
+  (LaunchAgent / systemd --user / logon task), so it survives logout and
+  reboot;
 - `make build-webui` produces the standalone `panda-webui` sidecar reading
   the same SQLite store.
 

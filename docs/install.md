@@ -117,8 +117,11 @@ go install github.com/Xustalis/OpenPanda/cmd/panda@latest
 panda init      # 交互式生成 config.yaml 与能力卡
 panda repl      # 进入交互命令行
 panda web       # 打开内嵌 Web 控制台（回环监听、自动登录）
+panda service install   # 把 Web 控制台注册为用户级常驻服务（退出登录/重启后仍在）
 panda doctor    # 自检：二进制 / PATH / 配置 / 适配器 / agent 是否就绪
 ```
+
+> `panda service` 管理的是**控制台**服务（macOS `com.openpanda.web`、Linux `openpanda-web.service`、Windows `OpenPandaWeb`）；daemon 的自启单元仍由安装器注册，两者可以同时存在——daemon 持锁时控制台自动降级为借用引擎，不抢节点。
 
 > 开机自启服务以 `panda daemon` 启动（不带 `--config`/`--card`）：daemon 与交互运行一样自动发现配置——`OPENPANDA_CONFIG_PATH` 环境变量 → 用户级配置（macOS `~/Library/Application Support/openpanda/config.yaml`，Linux `~/.config/openpanda/config.yaml`，即 `panda init` 的写入位置）→ `/etc/openpanda/config.yaml`；能力卡按工作目录与配置同目录查找。因此请先 `panda init` 生成配置，否则 daemon 会以默认配置运行且无能力卡（无法执行任务）。
 
