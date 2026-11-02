@@ -251,7 +251,13 @@ export function ModelsSection() {
           target={sheet}
           providers={data.providers}
           active={active}
-          onClose={() => setSheet(null)}
+          onClose={() => {
+            // A save that landed the edit but failed partway through the
+            // appended rows already changed the store; the cards behind the
+            // sheet must not keep showing the old arrangement.
+            setSheet(null)
+            reload()
+          }}
           onDone={(r) => {
             setSheet(null)
             if (r.edited) {
@@ -643,6 +649,10 @@ function ModelSheet(props: {
     } else {
       setDrafts([newDraft(p.default_model)])
     }
+    // Drafts appended to the previous connection belong to its endpoint and
+    // key; carrying them onto the new vendor would POST model ids nobody
+    // asked for here.
+    setExtra([])
   }
 
   function patch(id: number, p: Partial<Draft>) {
@@ -664,7 +674,7 @@ function ModelSheet(props: {
     })
   }
 
-  function requestFor(draft: Draft): AddModelRequest {
+  function requestFor(draft: Draft, borrowFrom?: string): AddModelRequest {
     const p = provider!
     const req: AddModelRequest = {
       provider: p.id,
@@ -699,8 +709,10 @@ function ModelSheet(props: {
       if (pre?.keySet) req.reuse_from = pre.members[0]?.entry.alias
       // A row appended in the edit sheet has no key of its own either: the row
       // being edited holds it, and borrowing by alias is what makes "one more
-      // model on this account" a one-field job.
-      else if (editing) req.reuse_from = editing.alias
+      // model on this account" a one-field job. Only a connection that has a
+      // key can lend one, and the alias named here is the one in effect after
+      // this save — a rename in the same submit lands before the POSTs.
+      else if (editing && editing.key_set) req.reuse_from = borrowFrom ?? editing.alias
     }
     const params = parseJSON(draft.params)
     if (params) req.params = params
@@ -804,15 +816,15 @@ function ModelSheet(props: {
     if (!row || !src || !row.model.trim()) return
     let params: Record<string, unknown> | undefined
     let headers: Record<string, string> | undefined
-    let additions: AddModelRequest[] = []
+    // The drafts behind the appended rows. The requests are built after the
+    // PUT, because the alias in effect then is what a borrowed key is keyed
+    // by; this pass only validates the overrides before anything is written.
+    let picked: Draft[] = []
     try {
       params = parseJSON(row.params)
       headers = parseJSON(row.headers) as Record<string, string> | undefined
-      // Same rows, same request builder as the add flow — the only difference
-      // is that these land on a connection that already exists.
-      additions = extra
-        .filter((x) => x.picked && x.model.trim() !== '')
-        .map((x) => requestFor(x))
+      picked = extra.filter((x) => x.picked && x.model.trim() !== '')
+      picked.forEach((x) => requestFor(x))
     } catch {
       setError(t('models.badJSON'))
       return
@@ -857,14 +869,24 @@ function ModelSheet(props: {
     }
     // The edit is committed; the appended rows are a second write. A failure
     // there must not be reported as "nothing was saved" — say how many landed.
+    // The alias in effect after the edit is what a borrowed key is keyed by:
+    // a rename in this submit lands before these POSTs.
+    const effectiveAlias = row.alias.trim() || src.alias
     let created = 0
     try {
-      for (const r of additions) {
-        await api.addModel(r)
+      for (const r of picked) {
+        await api.addModel(requestFor(r, effectiveAlias))
         created++
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      // Drop the rows that landed from the drafts: a retry would POST them
+      // again, and the backend allocates a free alias instead of refusing a
+      // duplicate model id.
+      if (created > 0) {
+        const done = new Set(picked.slice(0, created))
+        setExtra((cur) => cur.filter((x) => !done.has(x)))
+      }
       setError(created > 0 ? t('models.addPartial', { n: created, error: msg }) : msg)
       setBusy('')
       return
