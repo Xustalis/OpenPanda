@@ -65,6 +65,56 @@ func TestListModelsAnthropic(t *testing.T) {
 	}
 }
 
+// TestListModelsAnthropicBaseShapes pins the URL normalization: the version
+// prefix is decided once, exactly as the messages route decides it. A relay
+// configured as http://host/v1 used to be asked for /v1/v1/models and answer
+// 404 — the base keeps its version, and a pasted /messages tail is swapped for
+// the models route rather than kept.
+func TestListModelsAnthropicBaseShapes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path = %q, want /v1/models", r.URL.Path)
+		}
+		w.Write([]byte(`{"data":[{"id":"claude-sonnet-4-5"}]}`))
+	}))
+	defer srv.Close()
+
+	for _, base := range []string{srv.URL, srv.URL + "/v1", srv.URL + "/v1/", srv.URL + "/v1/messages"} {
+		c, err := NewClient(config.ModelConfig{APIType: config.APITypeAnthropic, BaseURL: base, APIKey: "sk-test", Model: "m"})
+		if err != nil {
+			t.Fatalf("new client (base %q): %v", base, err)
+		}
+		url, openAIStyle := c.listModelsEndpoint()
+		if openAIStyle {
+			t.Errorf("base %q: want the Anthropic surface, got openai style", base)
+		}
+		if want := srv.URL + "/v1/models"; url != want {
+			t.Errorf("base %q: url = %q, want %q", base, url, want)
+		}
+		if _, err := c.ListModels(context.Background()); err != nil {
+			t.Fatalf("list (base %q): %v", base, err)
+		}
+	}
+
+	// A full messages URL that carries no /v1 is a relay's own mount point.
+	// The messages route keeps it exactly; the models route is its sibling.
+	for _, tc := range []struct{ base, want string }{
+		{srv.URL + "/anthropic/messages", srv.URL + "/anthropic/models"},
+		{srv.URL + "/messages", srv.URL + "/models"},
+	} {
+		c, err := NewClient(config.ModelConfig{APIType: config.APITypeAnthropic, BaseURL: tc.base, APIKey: "sk-test", Model: "m"})
+		if err != nil {
+			t.Fatalf("new client (base %q): %v", tc.base, err)
+		}
+		if url, _ := c.listModelsEndpoint(); url != tc.want {
+			t.Errorf("base %q: url = %q, want %q", tc.base, url, tc.want)
+		}
+		if got := anthropicURL(tc.base); got != tc.base {
+			t.Errorf("anthropicURL(%q) = %q, want it unchanged", tc.base, got)
+		}
+	}
+}
+
 func TestListModelsRequiresKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
