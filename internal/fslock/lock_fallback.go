@@ -14,3 +14,6 @@ func tryLock(*os.File, bool) (held, unsupported bool, err error) {
 }
 
 func unlock(*os.File) error { return nil }
+
+// platformRetryableOpen is false where there is no locking primitive to race.
+func platformRetryableOpen(error) bool { return false }

@@ -35,6 +35,15 @@ func newSuperviseCore(t *testing.T, id string, tier int) *Core {
 	}
 	c := NewCore(db, id, card, 5, testLogger(), config.ModelConfig{})
 	c.router.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	// The hello reply's summary() probes a card agent's real model endpoint
+	// (up to 10 s) and reads the developer's ~/.claude config. A test must not
+	// depend on either: on a machine with a configured, slow endpoint the
+	// handshake missed the peer-registration window and cross-device tests
+	// failed for an environment reason. The WS listener, hello registration and
+	// task-resume loops stay real.
+	c.router.SetEndpointProber(func(commander.ProbeSpec) commander.ProbeVerdict {
+		return commander.ProbeVerdict{OK: true, Detail: "test"}
+	})
 	c.SetWorkDir(t.TempDir())
 	c.SetSharedSecret(testSharedSecret)
 	return c
