@@ -2202,7 +2202,11 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// emptiness: New() always registers the built-in tools, so a registry-based
 	// check would make this path unreachable in every real engine (the tests
 	// that hand-build an Engine are the only place a nil registry ever occurs).
-	if len(history) == 0 {
+	// A side ask never takes the fast path: that path runs with no tools and a
+	// generic system prompt, which would strip the channel's observation and
+	// workspace tools and its boundary rider exactly when the user asked it to
+	// check something. The saved round is not worth an answer from hearsay.
+	if len(history) == 0 && !scope.Side {
 		if triage := entry.FastTriage(prompt, history); triage.IsFastPath {
 			fastSystem := entry.FastPathPrompt(e.replyASCII, effectiveLocale)
 			if conversationMemory != "" {
@@ -2360,8 +2364,12 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		if scope.Side {
 			// A side ask gets the read-only subset and neither dispatch tool:
 			// task_submit and task_budget exist to start and resize work, which
-			// is exactly what a side channel may not do.
+			// is exactly what a side channel may not do. The workspace family
+			// is registered after the filter because it is built from this
+			// ask's own work dir; every name in it is on the allow-list, so the
+			// filter would keep them anyway.
 			reg = reg.Filter(sideToolAllowed)
+			registerWorkspaceTools(reg, workDir)
 		} else {
 			reg = reg.Copy()
 			reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))

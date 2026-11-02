@@ -9,7 +9,8 @@ import (
 )
 
 // The side channel is a read-only conversation beside the user's main thread:
-// the TUI's /side, answered from a snapshot of the thread it was opened on.
+// the TUI's /side and the console's dock, answered from the thread as it stands
+// when each question is asked (the thread's own turns are never written).
 // Its boundaries are enforced here rather than in the front end, because a
 // front end that forgot one of them would leave a live dispatch path behind a
 // prompt that merely asks the model not to use it.
@@ -20,7 +21,9 @@ import (
 // a deny-list would silently admit the next write tool that did not.
 //
 // Reading is what a side channel is for — "what is the queue doing", "which
-// card says that" — so the observation tools stay, and nothing else does.
+// card says that", "what does this function do" — so the observation tools stay,
+// the read-only workspace family (workspace_read/list/search) is added per ask
+// when a work dir is pinned, and nothing else does.
 func sideToolAllowed(name string) bool {
 	switch name {
 	case
@@ -30,6 +33,9 @@ func sideToolAllowed(name string) bool {
 		// priority, move, approve, reject, clear) are not here on purpose:
 		// they change queued work the side channel has no business steering.
 		"taskq_list", "taskq_show",
+		// Workspace reading. These are registered per ask from the ask's own
+		// work dir and cannot write or execute anything.
+		"workspace_read", "workspace_list", "workspace_search",
 		// Project registry observation.
 		"project_list",
 		// Memory reading only — memory_add/replace/remove write the user's
@@ -58,10 +64,10 @@ func sideToolAllowed(name string) bool {
 // usable — the user reads it, returns to the main thread and asks there.
 func sideRefusalNote(loc i18n.Locale) string {
 	if loc == i18n.English {
-		return "This is the side channel. It reads and answers only — nothing here runs, and nothing it says is written into the main thread. " +
+		return "This is the side channel. It can read live state and workspace files, but it cannot execute, edit or dispatch — so this request belongs on the main thread. Nothing said here is written back. " +
 			"Ask again on the main thread and it will be carried out there."
 	}
-	return "这是侧边对话。它只读、只回答，不执行任何操作，回答也不会写回主线程。" +
+	return "这是侧边对话。它能查实时状态、读工作区文件，但不能执行、修改或派发，所以这件事要在主线程做。这里说的话不会写回主线程。" +
 		"回到主线程再问一次，任务会在那里执行。"
 }
 

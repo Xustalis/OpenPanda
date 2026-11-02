@@ -44,7 +44,10 @@ func TestSideAskHasNoDispatchTool(t *testing.T) {
 		_, _ = w.Write(b)
 	})
 
-	res, err := e.AskTurnsScoped(context.Background(), nil, "这个项目是做什么的", AskScope{Side: true}, false, StreamCallbacks{})
+	// The work dir is pinned so the read-only workspace family registers; a
+	// side ask without one is pinned to no tree, which is the CLI's case.
+	workDir := t.TempDir()
+	res, err := e.AskTurnsScoped(context.Background(), nil, "这个项目是做什么的", AskScope{Side: true, WorkDir: workDir}, false, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("side ask: %v", err)
 	}
@@ -73,6 +76,17 @@ func TestSideAskHasNoDispatchTool(t *testing.T) {
 	}
 	if !sawListTool {
 		t.Errorf("side ask kept no observation tool; tools seen: %v", names)
+	}
+	// The channel's whole point is answering questions it can actually check;
+	// without the workspace family it could only guess at code.
+	var sawWorkspace bool
+	for _, name := range names {
+		if name == "workspace_read" {
+			sawWorkspace = true
+		}
+	}
+	if !sawWorkspace {
+		t.Errorf("side ask with a work dir has no workspace_read; tools seen: %v", names)
 	}
 }
 
@@ -149,7 +163,7 @@ func TestSideAskPromptMarksHistoryReferenceOnly(t *testing.T) {
 		t.Fatalf("side ask: %v", err)
 	}
 	c := <-got
-	if !strings.Contains(c.system, "Side Channel (Reference Only)") {
+	if !strings.Contains(c.system, "Side Channel (Isolated)") {
 		t.Errorf("system prompt is missing the side section:\n%s", c.system)
 	}
 	boundary := -1
@@ -186,6 +200,41 @@ func TestSideAskPromptMarksHistoryReferenceOnly(t *testing.T) {
 	}
 }
 
+// TestSideAskNeverTakesFastPath pins the channel's grounding guarantee: a
+// conceptual question that the cheap triage would answer with no tools still
+// runs the full pipeline, so the model always holds system_status and the
+// workspace family. The fast path's generic prompt has no side boundaries and
+// no tool roster; taking it would make "did it finish?" unanswerable.
+func TestSideAskNeverTakesFastPath(t *testing.T) {
+	toolsSeen := make(chan int, 1)
+	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		select {
+		case toolsSeen <- len(req.Tools):
+		default:
+		}
+		w.Header().Set("content-type", "application/json")
+		b, _ := json.Marshal(anthropicText("这个问题可以直接解释。"))
+		_, _ = w.Write(b)
+	})
+	res, err := e.AskTurnsScoped(context.Background(), nil, "什么是依赖注入？", AskScope{Side: true, WorkDir: t.TempDir()}, false, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("side ask: %v", err)
+	}
+	if res == nil || res.Kind != "answer" {
+		t.Fatalf("side ask should answer, got %+v", res)
+	}
+	if n := <-toolsSeen; n == 0 {
+		t.Error("a side ask took the no-tools fast path")
+	}
+}
+
 // TestSideToolAllowList is the allow-list itself: observation stays, every
 // mutation and every dispatch path is out.
 func TestSideToolAllowList(t *testing.T) {
@@ -194,6 +243,7 @@ func TestSideToolAllowList(t *testing.T) {
 		"project_list", "memory_read", "skill_list", "skill_show",
 		"skill_search", "time_now", "weather_get",
 		"web_fetch", "web_search", "reminder_list",
+		"workspace_read", "workspace_list", "workspace_search",
 	}
 	for _, name := range allowed {
 		if !sideToolAllowed(name) {

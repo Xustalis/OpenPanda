@@ -16,8 +16,10 @@ package main
 // thread is just a /fork with extra steps). Three boundaries hold it apart from
 // the main thread:
 //
-//   - Context. The history is a snapshot taken when the channel opened; the
-//     main thread may keep moving and the snapshot does not follow it.
+//   - Context. The history is the parent thread as it stood when the channel
+//     opened, and it is re-read before every side question: the main thread
+//     may keep moving, and a question about the present is answered from the
+//     present thread, not from the opening snapshot.
 //   - Dispatch. The engine's side scope has no task_submit and answers a
 //     classified task or plan with a fixed note (internal/askengine/side.go).
 //   - Rendering. Side blocks go into their own chatHistory, never into
@@ -41,8 +43,9 @@ import (
 // land in the same conversation.
 type sideState struct {
 	// history is the parent thread as it stood when the channel opened. It is
-	// replayed on every side ask so each question is answered with the context
-	// the user had in mind; the snapshot never picks up later main-thread turns.
+	// refreshed from the session before every side ask, so each question reads
+	// the thread the user has in mind rather than the one they left behind;
+	// the channel's own turns are kept separately below the boundary marker.
 	history []entry.Turn
 	// workDir and sessionID mirror the main thread's, so the side ask resolves
 	// files and approvals the same way. sessionID carries a ":side" suffix — a
@@ -209,6 +212,17 @@ func (m *tuiModel) askSide(question string) tea.Cmd {
 		return nil
 	}
 	s := m.side
+	// Re-read the thread before every question. The channel opens with a
+	// snapshot, but the main thread may have moved since: an answer about
+	// "where are we now" built from an hour-old snapshot is exactly the dead
+	// end the channel exists to avoid. The channel's own turns stay below the
+	// boundary marker; only the reference material above it refreshes.
+	if hist, wd := m.sideSnapshot(); len(hist) > 0 || wd != "" {
+		s.history = hist
+		if wd != "" {
+			s.workDir = wd
+		}
+	}
 	// prior is the channel's conversation before this question. It travels to
 	// the engine separately from the main-thread snapshot: the boundary marker
 	// goes between them.

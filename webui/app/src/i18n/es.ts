@@ -1752,15 +1752,16 @@ const es: Messages = {
   'dockBrowser.comment': '¿Qué falla en él?',
   'dockBrowser.send': 'Poner en el borrador',
   'dockBrowser.draft': 'En {url} — elemento `{selector}`: {comment}',
-  'side.empty': 'Pregunta sobre este hilo. Aquí no se ejecuta nada ni se escribe de vuelta.',
+  'side.empty': 'Pregunta sobre este hilo. Puede consultar el estado en vivo y leer archivos del espacio de trabajo; aquí no se ejecuta nada ni se escribe de vuelta.',
   'side.noThread': 'Este hilo aún no tiene historial. Envíale un mensaje y después pregunta aquí: la conversación lateral lee el hilo, no lo crea.',
   'side.readonly':
-    'Solo lectura: sin tareas ni ediciones. El historial es una instantánea del momento en que lo abriste.',
+    'Solo lectura: puede consultar el estado, leer código y buscar archivos; no ejecuta tareas ni modifica archivos.',
   'side.you': 'Tú',
   'side.panda': 'Panda',
   'side.thinking': 'Pensando…',
   'side.insert': 'Insertar en el cuadro de texto',
   'side.toMain': 'Preguntar en el hilo principal',
+  'side.carry': '(Consultado en la conversación lateral; como referencia)',
   'side.placeholder': 'Pregunta algo sobre este hilo…',
   'common.stop': 'Detener',
 }

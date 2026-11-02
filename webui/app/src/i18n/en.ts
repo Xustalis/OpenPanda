@@ -1757,15 +1757,16 @@ const en: Messages = {
   'dockBrowser.comment': 'What is wrong with it?',
   'dockBrowser.send': 'Put in the draft',
   'dockBrowser.draft': 'On {url} — element `{selector}`: {comment}',
-  'side.empty': 'Ask about this thread. Nothing here runs and nothing is written back.',
+  'side.empty': 'Ask about this thread. It can check live status and read workspace files; nothing here runs or is written back.',
   'side.noThread': 'This thread has no history yet — send it one message, then ask here. The side conversation reads the thread, it does not start one.',
   'side.readonly':
-    'Read-only: no tasks, no edits. The history is a snapshot from the moment you opened this.',
+    'Read-only: it can check live status, read code and search files; it cannot run tasks or change files.',
   'side.you': 'You',
   'side.panda': 'Panda',
   'side.thinking': 'Thinking…',
   'side.insert': 'Insert into the composer',
   'side.toMain': 'Ask on the main thread',
+  'side.carry': '(Checked in the side conversation; for reference)',
   'side.placeholder': 'Ask something about this thread…',
   'common.stop': 'Stop',
 }

@@ -11,17 +11,22 @@
 // scope (internal/askengine/side.go), which is what makes the boundaries real
 // rather than advisory:
 //
-//   - Context: the thread's history at the moment the panel opened, replayed as
-//     reference. The thread may move on; the snapshot does not follow.
+//   - Context: the thread's history as it stands when each question is asked,
+//     replayed as reference. The channel's own turns sit below the boundary
+//     marker, so a question about "now" reads the present thread rather than
+//     the one the panel opened on.
 //   - Dispatch: no task_submit in the tool face, and a classification that
 //     still lands on a task is answered with a fixed note instead of running.
+//     Reading is not dispatch: the observation tools and the read-only
+//     workspace family (workspace_read/list/search) stay, which is what makes
+//     a side question about live state or code answerable at all.
 //   - Output: nothing here is written back. The server files no turn, no
 //     operation status — `/api/sessions/{id}/ask` with `side: true` skips every
 //     write the thread's own turns go through.
 //
-// Because nothing is stored, the panel owns the history and replays it on each
-// question, and a reload starts a new conversation. That is the design, not a
-// gap: a persisted side thread would be a /fork with extra steps.
+// The server stores nothing, so the panel owns the conversation. It persists
+// per thread in localStorage: a reload keeps the answers the user just read,
+// and the pane's `+` starts a genuinely new one.
 
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { askSideStream, isAbort, type SideTurn } from '../api/client'
@@ -37,7 +42,7 @@ interface Line {
 }
 
 export interface SideChatProps {
-  /** The thread the snapshot is taken from. */
+  /** The thread this conversation sits beside. */
   sessionId: string | null
   /** Bumped by the panel's `+`: start a fresh conversation. */
   resetSignal?: number
@@ -46,6 +51,48 @@ export interface SideChatProps {
 }
 
 let seq = 0
+
+/** How many completed turns survive a reload. A side conversation is a
+ *  thinking space, not a second archive: the tail is what a reader resumes. */
+const SIDE_STORE_CAP = 40
+
+const sideKey = (id: string) => `openpanda.side.${id}`
+
+/** Read the stored conversation for one thread. Anything malformed is
+ *  discarded rather than trusted: this is browser storage a page can corrupt,
+ *  and a bad row must not take the panel down with it. */
+function loadSide(id: string): Line[] {
+  try {
+    const raw = localStorage.getItem(sideKey(id))
+    if (!raw) return []
+    const rows = JSON.parse(raw) as Array<{ role?: unknown; text?: unknown }>
+    if (!Array.isArray(rows)) return []
+    const out: Line[] = []
+    for (const row of rows) {
+      if (!row || (row.role !== 'user' && row.role !== 'assistant') || typeof row.text !== 'string') continue
+      out.push({ id: ++seq, role: row.role, text: row.text })
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+/** Persist the completed turns. The live row is skipped — a reload mid-answer
+ *  should show the question, not half a sentence frozen as an answer. */
+function saveSide(id: string, lines: Line[]) {
+  try {
+    const rows = lines
+      .filter((l) => !l.live && l.text.trim() !== '')
+      .slice(-SIDE_STORE_CAP)
+      .map((l) => ({ role: l.role, text: l.text }))
+    if (rows.length === 0) localStorage.removeItem(sideKey(id))
+    else localStorage.setItem(sideKey(id), JSON.stringify(rows))
+  } catch {
+    // Storage can be unavailable (private mode, quota). The panel works
+    // without it; only the reload survival is lost.
+  }
+}
 
 export function SideChat(props: SideChatProps) {
   const [lines, setLines] = useState<Line[]>([])
@@ -56,17 +103,53 @@ export function SideChat(props: SideChatProps) {
   const live = useRef('')
   const abort = useRef<AbortController | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
+  // Which ask the visible conversation belongs to. Switching threads (or
+  // clearing the pane) bumps it, so callbacks from an aborted ask cannot
+  // append their late deltas to the conversation now on screen.
+  const run = useRef(0)
 
-  // A new thread, or the `+`, is a new conversation: the old answers were about
-  // a different snapshot and keeping them would be a lie about what they saw.
+  // A new thread loads its own stored conversation; the pane's `+` starts a
+  // new one. The old answers were about a different thread (or a snapshot the
+  // user deliberately cleared), and keeping them would be a lie about what
+  // they saw.
+  const seen = useRef<{ session: string | null; reset?: number }>()
   useEffect(() => {
+    const before = seen.current
+    seen.current = { session: props.sessionId, reset: props.resetSignal }
+    const sameThread = before?.session === props.sessionId
+    const reset = sameThread && before?.reset !== props.resetSignal
+    run.current++
     abort.current?.abort()
-    setLines([])
+    abort.current = null
     setInput('')
     setBusy(false)
     setStatus('')
     setErr('')
+    if (!props.sessionId) {
+      setLines([])
+      return
+    }
+    if (reset) {
+      try {
+        localStorage.removeItem(sideKey(props.sessionId))
+      } catch {
+        // Storage unavailable; there is nothing to clear.
+      }
+      setLines([])
+      return
+    }
+    setLines(loadSide(props.sessionId))
   }, [props.sessionId, props.resetSignal])
+
+  // Persist completed turns so a reload resumes where the reader left off.
+  useEffect(() => {
+    if (props.sessionId) saveSide(props.sessionId, lines)
+  }, [lines, props.sessionId])
+
+  // An in-flight ask does not outlive the panel: the dock stays mounted once
+  // opened, but a session switch or an unmount should not leave a stream
+  // feeding a component that is gone.
+  useEffect(() => () => abort.current?.abort(), [])
 
   // Follow the answer as it arrives; a reader who scrolled up stays where they
   // are (the distance check is the same contract the transcript keeps).
@@ -102,6 +185,8 @@ export function SideChat(props: SideChatProps) {
     ])
     const ctrl = new AbortController()
     abort.current = ctrl
+    const runId = ++run.current
+    const current = () => run.current === runId
     try {
       await askSideStream(
         props.sessionId,
@@ -110,13 +195,19 @@ export function SideChat(props: SideChatProps) {
         {
           onReasoning: () => {},
           onDelta: (d) => {
+            if (!current()) return
             live.current += d
             patchLast(live.current)
           },
-          onStatus: (text) => setStatus(text),
+          onStatus: (text) => {
+            if (current()) setStatus(text)
+          },
           onOperation: () => {},
-          onResult: (r) => patchLast(r.answer || live.current, true),
+          onResult: (r) => {
+            if (current()) patchLast(r.answer || live.current, true)
+          },
           onError: (message) => {
+            if (!current()) return
             setErr(message)
             patchLast(live.current, true)
           },
@@ -124,12 +215,16 @@ export function SideChat(props: SideChatProps) {
         ctrl.signal,
       )
     } catch (e) {
-      if (!isAbort(e)) setErr(e instanceof Error ? e.message : String(e))
-      patchLast(live.current, true)
+      if (current()) {
+        if (!isAbort(e)) setErr(e instanceof Error ? e.message : String(e))
+        patchLast(live.current, true)
+      }
     } finally {
-      setBusy(false)
-      setStatus('')
-      abort.current = null
+      if (current()) {
+        setBusy(false)
+        setStatus('')
+        abort.current = null
+      }
     }
   }
 
@@ -179,10 +274,13 @@ export function SideChat(props: SideChatProps) {
                       type="button"
                       class="link-btn"
                       onClick={() => {
-                        // Retry on the main thread: the question asked here
-                        // may be one it must answer with work.
+                        // Hand the question back, with what this channel already
+                        // found. The main thread would otherwise redo the same
+                        // reading; carrying the answer forward is the explicit
+                        // bridge back that the isolation is supposed to have.
                         const q = lines[i - 1]?.role === 'user' ? lines[i - 1]!.text : ''
-                        if (q) props.onInsert(q)
+                        if (!q) return
+                        props.onInsert(l.text ? `${q}\n\n${t('side.carry')}\n${l.text}` : q)
                       }}
                     >
                       {t('side.toMain')}

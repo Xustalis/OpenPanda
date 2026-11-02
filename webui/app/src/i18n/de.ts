@@ -1751,15 +1751,16 @@ const de: Messages = {
   'dockBrowser.comment': 'Was stimmt daran nicht?',
   'dockBrowser.send': 'In den Entwurf',
   'dockBrowser.draft': 'Auf {url} — Element `{selector}`: {comment}',
-  'side.empty': 'Frage zu diesem Thread. Hier wird nichts ausgeführt und nichts zurückgeschrieben.',
+  'side.empty': 'Frage zu diesem Thread. Live-Status und Dateien im Arbeitsbereich kannst du hier lesen; nichts wird ausgeführt oder zurückgeschrieben.',
   'side.noThread': 'Dieser Thread hat noch keinen Verlauf. Schicke ihm eine Nachricht und frage dann hier: Das Seitengespräch liest den Thread, es legt keinen an.',
   'side.readonly':
-    'Nur lesend: keine Aufgaben, keine Änderungen. Der Verlauf ist eine Momentaufnahme beim Öffnen.',
+    'Nur lesend: Status prüfen, Code lesen und Dateien durchsuchen ist möglich; Aufgaben ausführen oder Dateien ändern nicht.',
   'side.you': 'Du',
   'side.panda': 'Panda',
   'side.thinking': 'Denkt nach…',
   'side.insert': 'In das Eingabefeld einfügen',
   'side.toMain': 'Im Haupt-Thread fragen',
+  'side.carry': '(Im Seitengespräch geprüft; als Referenz)',
   'side.placeholder': 'Frage etwas zu diesem Thread…',
   'common.stop': 'Stoppen',
 }

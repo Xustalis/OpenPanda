@@ -102,7 +102,7 @@ Setups people actually run:
 
 - **Runs start from the workspace** — every agent task carries a compact, deterministic map of its tree (git state, layout, key files, the project's own build/verify commands), and the completion judge sees the commands the agent actually ran before it accepts “done”.
 - **Ask before guessing** — the entry model can ask bounded multiple-choice questions before creating a task, and a running agent can ask the same structured questions; the TUI, console and `panda approve` all answer them.
-- **A side channel and rewind** — `/side` (alias `/btw`) opens a read-only conversation beside the thread, and every finished answer leaves a checkpoint `/rewind` can restore.
+- **A side channel and rewind** — `/side` (alias `/btw`) opens a read-only conversation beside the thread that can check live status and read workspace files without dispatching anything, and every finished answer leaves a checkpoint `/rewind` can restore.
 - **Read what the agent produced** — workspace paths in replies are clickable in the console and `panda read path:line` in the terminal; task artifacts preview on a sandboxed second origin.
 - **The thread's unfinished work at a glance** — a task rail in the TUI (Ctrl+B) and the console header lists running work, what waits on you, and the queue.
 - **Operator hooks, fenced** — `task_submitted` / `task_started` / `task_done` / `task_failed` / `task_review` can run your commands with a filtered environment, a tier gate and an audit row.

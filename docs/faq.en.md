@@ -170,7 +170,7 @@ entry has no `--authorize` — irreversible commands always land in
 
 **What is the side channel?**
 
-`/side` (or `/btw`) opens a read-only channel beside the thread: it sees the main thread's history as reference only, keeps its own turns out of the thread, and cannot dispatch a task or plan — a classification that still lands on one gets a fixed note. Esc returns without discarding; `/side close` discards. It is available in the TUI and CLI; the web console's side column is the task rail.
+`/side` (or `/btw`) opens a read-only conversation beside the thread. It can query live node and task state (`system_status`, `taskq_list`/`taskq_show`) and read workspace files (`workspace_read`/`workspace_list`/`workspace_search`), while the thread's history stays reference-only and its own turns never enter the thread. It cannot run commands, edit files or dispatch a task or plan — a classification that still lands on one gets a fixed note. The channel is available in the TUI, the CLI and the web console's dock; the console keeps each thread's conversation in browser storage, so a reload does not lose it and `+` starts a new one. Esc returns without discarding and `/side close` discards (TUI).
 
 **How do I undo file changes after a finished answer?**
 
