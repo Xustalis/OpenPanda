@@ -277,6 +277,8 @@ func TestAggregatorURLs(t *testing.T) {
 		"https://opencode.ai/inference/openai/v1": "https://opencode.ai/inference/openai/v1/responses",
 		"https://example.com/v1/chat/completions": "https://example.com/v1/responses",
 		"https://example.com/v1/responses":        "https://example.com/v1/responses",
+		// Codex's ChatGPT backend is unversioned: /backend-api/codex/responses.
+		"https://chatgpt.com/backend-api/codex": "https://chatgpt.com/backend-api/codex/responses",
 	}
 	for base, want := range responses {
 		if got := responsesURL(base); got != want {

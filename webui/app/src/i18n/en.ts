@@ -1355,6 +1355,7 @@ const en: Messages = {
   'models.region.cn': 'China',
   'models.keySaved': 'key saved',
   'models.apiKey': 'API key',
+  'models.authLogin': 'subscription login · provided by the Codex CLI',
   'models.apiKeySet': 'key set',
   'models.keyReuseHint': 'the saved key is reused',
   'models.keyReuseHelp': 'A key for this provider is already on file — leave the field empty to reuse it.',

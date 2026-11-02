@@ -1866,6 +1866,9 @@ export interface ModelEntry {
   active: boolean
   key_set: boolean
   key_hint?: string
+  /** Subscription credential this row signs in with instead of an api_key —
+   *  today only "codex", whose token is the CLI's own ChatGPT login. */
+  auth?: string
   /** A short digest of the stored key. key_hint is the last four
    *  characters, which two accounts of one vendor can share; the console
    *  groups connections by this instead, so "extend" cannot borrow the

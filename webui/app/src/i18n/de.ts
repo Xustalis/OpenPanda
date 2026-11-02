@@ -1323,6 +1323,7 @@ const de: Messages = {
   'models.region.cn': 'China',
   'models.keySaved': 'Schlüssel gesetzt',
   'models.apiKey': 'API-Schlüssel',
+  'models.authLogin': 'Abo-Anmeldung · vom Codex-CLI bereitgestellt',
   'models.apiKeySet': 'Schlüssel gesetzt',
   'models.keyReuseHint': 'gespeicherter Schlüssel wird wiederverwendet',
   'models.keyReuseHelp': 'Für diesen Anbieter liegt bereits ein Schlüssel vor — leer lassen, um ihn zu verwenden.',

@@ -64,6 +64,14 @@ model:
   # auth: ""         # 订阅 OAuth provider（experimental）：先 `panda auth login
                      # anthropic`，再设 auth: anthropic 即改用订阅 Bearer token
                      # 认证（自动刷新），此时 api_key 可留空
+  # ChatGPT 套餐（Codex CLI 登录）是外部凭据：`codex login` 把 token 存在
+  # ~/.codex/auth.json，Panda 每次请求现读、从不复制。套餐 token 只能打开
+  # Codex 自己的后端（api.openai.com 会拒绝），因此需要：
+  #   auth: "codex"
+  #   base_url: "https://chatgpt.com/backend-api/codex"
+  #   api_type: "responses"
+  #   model: "gpt-6.1-sol"     # 套餐可用的模型
+  #   # api_key 留空：凭据就是 CLI 的登录
   # 重试预算：模型请求失败（429 / 5xx / 断连）后的重试次数上限。
   # 缺省 5；负数完全关闭重试。退避步长封顶 30s，大预算不会变成忙等。
   # max_retries: 0
