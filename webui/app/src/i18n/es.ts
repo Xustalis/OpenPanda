@@ -930,6 +930,7 @@ const es: Messages = {
   'settings.preferredAgents': 'Agentes preferidos',
   'settings.preferredAgentsHelp': 'Se eligen primero si coinciden varios; vacío = por coste.',
   'settings.memoryLimits': 'Límites de caracteres',
+  'settings.memoryLimitsHelp': 'Límite por archivo para USER.md, MEMORY.md y la memoria de proyectos. 0 significa sin límite.',
   'settings.limit.user': 'USER.md',
   'settings.limit.memory': 'MEMORY.md',
   'settings.limit.project': 'Proyecto',
@@ -938,7 +939,7 @@ const es: Messages = {
   'settings.approval.on-request': 'Bajo petición',
   'settings.approval.never': 'Nunca',
   'settings.sandbox': 'Sandbox',
-  'settings.sandboxDesc': 'Los subprocesos corren dentro de la ruta de trabajo con el entorno filtrado; el aislamiento del SO está desactivado.',
+  'settings.sandboxDesc': 'Los subprocesos corren dentro de la ruta de trabajo con el entorno filtrado; el aislamiento del SO está desactivado. Pon sandbox.mode en standard o strict en config.yaml para activarlo.',
   'settings.sandboxDescOn': 'Los subprocesos solo escriben en la ruta de trabajo y los directorios permitidos.',
   'settings.sandboxDescNoBackend': 'Hay modo de sandbox pero esta plataforma no tiene backend: los subprocesos no están aislados.',
 

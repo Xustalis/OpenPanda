@@ -949,6 +949,7 @@ const zhCN: Messages = {
   'settings.preferredAgents': '优先 Agent',
   'settings.preferredAgentsHelp': '都匹配时优先选它们；留空按性价比打分。',
   'settings.memoryLimits': '字符上限',
+  'settings.memoryLimitsHelp': 'USER.md、MEMORY.md 与项目记忆各自的字符上限；0 表示不限。',
   'settings.limit.user': 'USER.md',
   'settings.limit.memory': 'MEMORY.md',
   'settings.limit.project': '项目记忆',
@@ -957,7 +958,7 @@ const zhCN: Messages = {
   'settings.approval.on-request': '按需',
   'settings.approval.never': '从不',
   'settings.sandbox': '沙箱',
-  'settings.sandboxDesc': '子进程在工作路径内运行，环境变量已过滤；OS 级隔离未开启。',
+  'settings.sandboxDesc': '子进程在工作路径内运行，环境变量已过滤；OS 级隔离未开启。在 config.yaml 中把 sandbox.mode 设为 standard 或 strict 可开启。',
   'settings.sandboxDescOn': '子进程只能写入工作路径与白名单目录。',
   'settings.sandboxDescNoBackend': '本平台没有可用后端，子进程实际未被隔离。',
 

@@ -962,6 +962,7 @@ const en: Messages = {
   'settings.preferredAgents': 'Preferred agents',
   'settings.preferredAgentsHelp': 'Tried first when several agents match; empty falls back to cost.',
   'settings.memoryLimits': 'Character caps',
+  'settings.memoryLimitsHelp': 'Per-file budget for USER.md, MEMORY.md and project memory. 0 means unlimited.',
   'settings.limit.user': 'USER.md',
   'settings.limit.memory': 'MEMORY.md',
   'settings.limit.project': 'Project',
@@ -970,7 +971,7 @@ const en: Messages = {
   'settings.approval.on-request': 'On request',
   'settings.approval.never': 'Never',
   'settings.sandbox': 'Sandbox',
-  'settings.sandboxDesc': 'Subprocesses run inside the work path with a filtered environment; OS-level isolation is off.',
+  'settings.sandboxDesc': 'Subprocesses run inside the work path with a filtered environment; OS-level isolation is off. Set sandbox.mode to standard or strict in config.yaml to turn it on.',
   'settings.sandboxDescOn': 'Subprocesses can only write inside the work path and whitelisted dirs.',
   'settings.sandboxDescNoBackend': 'A sandbox mode is set but this platform has no backend — subprocesses are not confined.',
 

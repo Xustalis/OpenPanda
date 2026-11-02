@@ -435,7 +435,7 @@ function PolicySection() {
       </PolicyGroup>
 
       <PolicyGroup title={t('policy.group.memory')}>
-        <PolicyRow label={t('settings.memoryLimits')} wide>
+        <PolicyRow label={t('settings.memoryLimits')} hint={t('settings.memoryLimitsHelp')} wide>
           <div class="policy-limits">
             {(['user', 'memory', 'project'] as const).map((k) => (
               <label class={`policy-limit${current.memory_limits[k] > 0 ? '' : ' bad'}`} key={k}>
@@ -482,15 +482,20 @@ function PolicySection() {
         {error && <p class="gate-error">{error}</p>}
         {notice && <p class="test-result ok">{notice}</p>}
         <div class="policy-actions-bar">
-          {(dirty || badLimits) && (
-            <span
-              class={`policy-actions-state${badLimits ? ' bad' : ' dirty'}`}
-              role="status"
-            >
-              <span class="policy-actions-dot" aria-hidden="true" />
-              {badLimits ? t('policy.limitsInvalid') : t('policy.unsaved')}
-            </span>
-          )}
+          {/* The live region stays mounted: a screen reader announces changes
+              inside it, and a node inserted with its first text in the same
+              frame is often not announced at all. */}
+          <span
+            class={`policy-actions-state${badLimits ? ' bad' : dirty ? ' dirty' : ''}`}
+            role="status"
+          >
+            {(dirty || badLimits) && (
+              <>
+                <span class="policy-actions-dot" aria-hidden="true" />
+                {badLimits ? t('policy.limitsInvalid') : t('policy.unsaved')}
+              </>
+            )}
+          </span>
           <button
             type="button"
             class="btn ghost"

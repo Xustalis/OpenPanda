@@ -930,6 +930,7 @@ const de: Messages = {
   'settings.preferredAgents': 'Bevorzugte Agents',
   'settings.preferredAgentsHelp': 'Werden zuerst gewählt; leer = nach Kosten.',
   'settings.memoryLimits': 'Zeichenlimits',
+  'settings.memoryLimitsHelp': 'Zeichenlimit je Datei für USER.md, MEMORY.md und Projektgedächtnis. 0 bedeutet unbegrenzt.',
   'settings.limit.user': 'USER.md',
   'settings.limit.memory': 'MEMORY.md',
   'settings.limit.project': 'Projekt',
@@ -938,7 +939,7 @@ const de: Messages = {
   'settings.approval.on-request': 'Auf Anfrage',
   'settings.approval.never': 'Nie',
   'settings.sandbox': 'Sandbox',
-  'settings.sandboxDesc': 'Subprozesse laufen im Arbeitsverzeichnis mit gefilterter Umgebung; OS-Isolation ist aus.',
+  'settings.sandboxDesc': 'Subprozesse laufen im Arbeitsverzeichnis mit gefilterter Umgebung; OS-Isolation ist aus. Setze sandbox.mode in config.yaml auf standard oder strict, um sie einzuschalten.',
   'settings.sandboxDescOn': 'Subprozesse dürfen nur im Arbeitsverzeichnis und in freigegebenen Ordnern schreiben.',
   'settings.sandboxDescNoBackend': 'Sandbox-Modus ist gesetzt, aber diese Plattform hat kein Backend — Subprozesse sind nicht isoliert.',
 

@@ -925,6 +925,7 @@ const ja: Messages = {
   'settings.preferredAgents': '優先エージェント',
   'settings.preferredAgentsHelp': '複数該当時に優先。空ならコスト順。',
   'settings.memoryLimits': '文字数上限',
+  'settings.memoryLimitsHelp': 'USER.md、MEMORY.md、プロジェクトメモリそれぞれの文字数上限。0 は無制限。',
   'settings.limit.user': 'USER.md',
   'settings.limit.memory': 'MEMORY.md',
   'settings.limit.project': 'プロジェクト',
@@ -933,7 +934,7 @@ const ja: Messages = {
   'settings.approval.on-request': '要求時',
   'settings.approval.never': 'しない',
   'settings.sandbox': 'サンドボックス',
-  'settings.sandboxDesc': '子プロセスは作業パス内で環境変数を絞って実行され、OS レベルの隔離は無効です。',
+  'settings.sandboxDesc': '子プロセスは作業パス内で環境変数を絞って実行され、OS レベルの隔離は無効です。config.yaml で sandbox.mode を standard か strict にすると有効になります。',
   'settings.sandboxDescOn': '子プロセスは作業パスと許可ディレクトリにしか書き込めません。',
   'settings.sandboxDescNoBackend': 'サンドボックスは設定済みですが、この環境にバックエンドが無く実際には隔離されていません。',
 
