@@ -123,13 +123,43 @@ func (c *Core) dispatchHook(taskID, typ string) {
 		return // queue, progress, retry and the rest are not lifecycle edges
 	}
 	guard.Go(c.logger, "core: hook dispatch", nil, func() {
-		// The row is read fresh: the event carries no state, and a result's
-		// meaning (done or failed) is exactly the state.
+		// The observer fires inside the writer's transaction, so on a
+		// file-backed store this goroutine's read runs on another pooled
+		// connection and sees the pre-commit snapshot: the new row is absent
+		// and a transitioned row still carries its old state. Waiting for the
+		// commit to become visible is what keeps task_submitted and
+		// task_done/task_failed from being dropped silently. A :memory: store
+		// with one connection blocks here until the writer releases it, so the
+		// same loop costs one immediate read on that path.
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		t, err := c.store.Get(ctx, taskID)
-		if err != nil {
-			return
+		deadline := time.Now().Add(2 * time.Second)
+		var t Task
+		for {
+			got, err := c.store.Get(ctx, taskID)
+			if err == nil {
+				t = got
+				// A result's meaning is its terminal state; anything else is
+				// the old row, not a reason to drop the edge.
+				if typ != EvResult || t.State == StateDone || t.State == StateFailed {
+					break
+				}
+			}
+			if time.Now().After(deadline) || ctx.Err() != nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		// A submit is the one edge whose row did not exist before this
+		// transaction: once it is visible the insert has committed. The
+		// remaining edges read a row that already existed, so take one more
+		// look shortly after it appears — that is the commit, and it is what
+		// fills PANDA_HOOK_STATE with the state the edge names.
+		if typ != EvResult {
+			time.Sleep(10 * time.Millisecond)
+			if got, err := c.store.Get(ctx, taskID); err == nil {
+				t = got
+			}
 		}
 		var name string
 		switch typ {
