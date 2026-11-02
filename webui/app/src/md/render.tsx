@@ -4,6 +4,7 @@ import { useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { parseBlocks, type Align, type Block, type Inline, type ListItem } from './parse'
 import { t } from '../i18n'
+import { parseFileRef, useFileOpener } from '../components/file-link'
 
 // Renderer for the block tree from ./parse. Everything below builds vnodes —
 // there is no `innerHTML` anywhere, so model output can never inject markup
@@ -165,6 +166,38 @@ export function renderInlines(kids: Inline[]): JSX.Element[] {
   return kids.map((k, i) => renderInline(k, i))
 }
 
+/** Inline code, made clickable when it names a workspace file.
+ *
+ *  The mention an agent writes — `internal/bus/route.go:42` — is a place, and
+ *  clicking it is the natural way to look. Anything the recogniser is not sure
+ *  about stays a plain <code>: a link that opens the wrong thing is worse than
+ *  no link at all. */
+function InlineCode({ text }: { text: string }): JSX.Element {
+  const opener = useFileOpener()
+  const ref = opener ? parseFileRef(text) : null
+  if (!ref || !opener) {
+    return <code>{text}</code>
+  }
+  const open = () => opener.open(ref)
+  return (
+    <code
+      class="md-file"
+      role="link"
+      tabIndex={0}
+      title={t('fileView.open')}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          open()
+        }
+      }}
+    >
+      {text}
+    </code>
+  )
+}
+
 function renderInline(k: Inline, key: number): JSX.Element {
   switch (k.t) {
     case 'text':
@@ -172,7 +205,7 @@ function renderInline(k: Inline, key: number): JSX.Element {
       // line break inside a paragraph survives without a <br/> per line.
       return <span key={key}>{k.s}</span>
     case 'code':
-      return <code key={key}>{k.s}</code>
+      return <InlineCode key={key} text={k.s} />
     case 'bold':
       return <strong key={key}>{renderInlines(k.kids)}</strong>
     case 'italic':

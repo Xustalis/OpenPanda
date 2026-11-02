@@ -74,7 +74,10 @@ export function t(key: string, params?: Record<string, string | number> | string
   }
   if (params) {
     for (const [name, value] of Object.entries(params)) {
-      text = text.replaceAll(`{${name}}`, String(value))
+      // split/join, not replaceAll: a string replacement interprets `$&`,
+      // `$1` and friends, so a title or path containing `$&` used to be
+      // mangled by its own interpolation.
+      text = text.split(`{${name}}`).join(String(value))
     }
   }
   return text

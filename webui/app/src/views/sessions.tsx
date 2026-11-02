@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
   ApiError,
@@ -10,6 +10,8 @@ import {
   type ApprovalScope,
   type AskResult,
   type AskStatusEvent,
+  type ClarifyAnswer,
+  type ClarifySpec,
   type FsFileEntry,
   type MCPSettings,
   type NodeInfo,
@@ -24,6 +26,11 @@ import {
 } from '../api/client'
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
+import { FileViewer } from '../components/file-viewer'
+import { TaskRail } from '../components/task-rail'
+import { ArtifactSection } from '../components/artifact'
+import { FileViewContext, type FileOpener, type FileRef } from '../components/file-link'
+import { ComposerContext } from '../components/composer-context'
 import {
   useAsync,
   useChangeSignal,
@@ -71,7 +78,6 @@ import {
 import { ScopeSelect } from '../components/scope-select'
 import {
   PermissionPicker,
-  authorizeRelevant,
   normalizePermission,
   type PermissionMode,
 } from '../components/permission-picker'
@@ -600,12 +606,14 @@ export function SessionsView({
   const [noteDraft, setNoteDraft] = useState('')
   // True while a file is over the composer, so the box can say so.
   const [dropping, setDropping] = useState(false)
-  // The conversation's permission policy. It decides what the thread may do
-  // turn after turn; the authorize switch below grants THIS turn the right to
-  // run irreversible operations, which is a finer question the mode does not
-  // answer (auto and edits still stop at the tier-2 gate).
+  // The conversation's permission policy. It is the whole consent answer:
+  // auto and edits stop at the tier-2 gate for a one-off approval card, bypass
+  // runs everything, manual asks before every change and plan changes nothing.
+  // A separate per-turn "authorize risky actions" switch used to sit beside the
+  // picker, but it only had meaning in auto/edits, was ignored in manual/plan/
+  // bypass, and duplicated what the bypass mode or the approval card already
+  // says — so the picker is the one control.
   const [permission, setPermission] = useState<PermissionMode>('auto')
-  const [authorize, setAuthorize] = useState(false)
   // The composer's environment pick: empty = let the scheduler route by
   // capability; a node id pins this turn's spawned task to that executor.
   const [nodePref, setNodePref] = useState('')
@@ -622,7 +630,24 @@ export function SessionsView({
   // and the jump arrow left as one block instead of letting the card cover the
   // last reply's line ends. The lane is the same for both cards on purpose:
   // switching from one to the other is a swap in place, not a re-layout.
-  const [panel, setPanel] = useState<'' | 'node' | 'orch'>('')
+  const [panel, setPanel] = useState<'' | 'node' | 'orch' | 'rail'>('')
+  // The file the transcript's latest click asked for. The drawer is the
+  // transcript's own surface — a path in a reply opens here, and switching
+  // threads closes it with the rest of the per-thread panel state.
+  const [fileRef, setFileRef] = useState<FileRef | null>(null)
+  // One stable opener for every inline code span in the transcript: a new
+  // object per render would re-render every clickable mention on each frame.
+  const fileOpener = useMemo<FileOpener>(() => ({ open: (ref) => setFileRef(ref) }), [])
+  // The same text-into-the-composer action for every surface that produces a
+  // reference (the file drawer, the artifact preview): the draft lands at the
+  // caret and is never sent on its own.
+  const composerInsert = useCallback((text: string) => {
+    const el = composer.current
+    if (!el) return
+    insertTextAtCaret(el, text)
+    setInput(editorTextOf(el))
+    el.focus()
+  }, [])
   // The task a transcript link asked for. Held here, not in the card, because
   // the click that asks for it is the transcript's: `{ id }` is rebuilt on
   // every request so a second click on the same 查看任务 still re-opens a pane
@@ -640,11 +665,22 @@ export function SessionsView({
   // parent would outlive the card that asked for it.
   useEffect(() => {
     setPanel('')
+    // The file drawer belongs to the thread it was opened in for the same
+    // reason: its path is relative to that thread's worktree, and carrying it
+    // across would show the next thread a file it never mentioned.
+    setFileRef(null)
     // The queue belongs to the thread it was typed in: a counter carried over
     // from another thread would make the next note look like a removal.
     noteCount.current = 0
   }, [activeId])
   const [busy, setBusy] = useState(false)
+  // The pre-execution question the running turn is parked on. Cleared when the
+  // browser answers, when the turn ends, or when the user cancels it.
+  const [clarify, setClarify] = useState<{
+    sessionID: string
+    operationID: string
+    spec: ClarifySpec
+  } | null>(null)
   const [loadError, setLoadError] = useState('')
   // Poll the pending queue only while there is something to watch: a live turn
   // produces notes, and a waiting note disappears the moment a round folds it.
@@ -814,6 +850,30 @@ export function SessionsView({
     // The reply carries the number from here on; a second timer would keep
     // ticking beside it.
     setLiveFrom(0)
+  }
+
+  /** Answer the parked pre-execution question. The same SSE turn resumes, so
+   *  the card clears immediately and the stream carries on. */
+  async function submitClarify(answers: ClarifyAnswer[]): Promise<void> {
+    const pending = clarify
+    if (!pending) return
+    setClarify(null)
+    try {
+      await api.answerSessionClarify(pending.sessionID, pending.operationID, answers)
+    } catch (err) {
+      toastError(err)
+    }
+  }
+
+  /** Cancel the parked turn: the same request the stop button sends, so the
+   *  ask goroutine's question wait is released by the cancelled context. */
+  function cancelClarify(): void {
+    const pending = clarify
+    setClarify(null)
+    if (!pending) return
+    api.cancelSession(pending.sessionID, pending.operationID).catch(() => {
+      /* the stream's own stop path reports a real failure */
+    })
   }
 
   useEffect(() => {
@@ -1676,7 +1736,9 @@ export function SessionsView({
       await askSessionStream(
         id,
         prompt,
-        authorize,
+        // No standing grant from this surface: a tier-2 operation parks on the
+        // approval card, and "run everything" is the bypass permission mode.
+        false,
         {
           onReasoning: (text) => {
             pendingThought += text
@@ -1707,6 +1769,12 @@ export function SessionsView({
               status: t('sessions.steerDelivered', { n: String(round) }),
               lastActivity: Date.now(),
             })),
+          // The entry model asked before it will create the task (or the
+          // runtime's plan-confirm gate fired). The ask goroutine is parked on
+          // this answer; the card below the transcript collects it.
+          onQuestion: (spec, operationID) => {
+            if (live()) setClarify({ sessionID: sid, operationID, spec })
+          },
           // The turn ended before a round could read what was queued behind it.
           // The server parked those notes; remember them so the finally below
           // opens the continuation turn instead of letting them evaporate.
@@ -1898,6 +1966,7 @@ export function SessionsView({
       // (or stop) has nowhere to render. The persisted transcript stands.
     } finally {
       keepAlive.release()
+      setClarify(null)
       if (inflight.current === ctrl) {
         inflight.current = null
         inflightSid.current = null
@@ -2326,6 +2395,20 @@ export function SessionsView({
   // all competing with the event stream for the browser's six connections.
   const tasksById = new Map((sessionTasks ?? []).map((t) => [t.id, t]))
 
+  // The rail's jump: scroll the task's own card into view. A task the thread
+  // has no card for — dispatched from the bench, or older than the loaded
+  // transcript — opens its task page instead, so a row never dead-ends.
+  const jumpToTask = (id: string) => {
+    const el = document.querySelector(`[data-task-id="${id}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.classList.add('task-jump-flash')
+      window.setTimeout(() => el.classList.remove('task-jump-flash'), 1200)
+      return
+    }
+    navigate({ view: 'detail', id })
+  }
+
   // — one round, one bubble. The turns a fan-out files are consecutive and
   // carry the round's clock, so the first one wears the panda's face and holds
   // the rest: a five-agent test reads as one reply with five cards, not five
@@ -2335,10 +2418,12 @@ export function SessionsView({
   const { batchOf, absorbed } = groupDispatches(msgs)
 
   return (
+    <FileViewContext.Provider value={fileOpener}>
+    <ComposerContext.Provider value={composerInsert}>
     <section class="chat">
 
 
-      <div class={`chat-pane${panel ? ' panel-open' : ''}`}>
+      <div class={`chat-pane${panel ? ' panel-open' : ''}${panel === 'rail' ? ' rail-open' : ''}`}>
         {/* The header is unconditional so the drawer toggle is reachable even
             on a brand-new, empty thread — that is exactly when a phone user
             needs to get back to the thread list. */}
@@ -2415,6 +2500,19 @@ export function SessionsView({
               scheduler would pick) in a quarter of the width, and the card is
               what the pane makes room for. */}
           <div class="chat-head-tools">
+            {/* The thread's unfinished work as a side column — the web twin of
+                the TUI's task rail. It sits left of the node pick because it is
+                about the thread, not about where this turn runs. */}
+            <button
+              type="button"
+              class={`icon-btn tip-down${panel === 'rail' ? ' open' : ''}`}
+              data-tip={t('rail.title')}
+              aria-label={t('rail.title')}
+              aria-expanded={panel === 'rail'}
+              onClick={() => setPanel(panel === 'rail' ? '' : 'rail')}
+            >
+              <Icon name="list-checks" size={19} />
+            </button>
             {session && msgs.length > 0 && (
               <button
                 class="icon-btn tip-down"
@@ -2454,6 +2552,27 @@ export function SessionsView({
             />
           </div>
         </header>
+
+        {panel === 'rail' && (
+          <TaskRail
+            tasks={sessionTasks ?? []}
+            onJump={jumpToTask}
+            onClose={() => setPanel('')}
+          />
+        )}
+
+        {/* The transcript's file drawer: a path in a reply opened here, read
+            against this thread's worktree. It sits above the diff drawer
+            because it is about one file, and the diff is about all of them. */}
+        {fileRef && (
+          <FileViewer
+            path={fileRef.path}
+            line={fileRef.line}
+            session={session?.id ?? null}
+            onClose={() => setFileRef(null)}
+            onInsert={composerInsert}
+          />
+        )}
 
         {diffOpen && diff && (
           <div class="diff-drawer">
@@ -2811,6 +2930,14 @@ export function SessionsView({
           </div>
         )}
 
+        {clarify && clarify.sessionID === activeId && (
+          <ClarifyCard
+            spec={clarify.spec}
+            onSubmit={(answers) => void submitClarify(answers)}
+            onCancel={cancelClarify}
+          />
+        )}
+
         {/* Textarea and actions share one bordered box so the composer reads
             as a single control rather than a field with a toolbar loose
             underneath it — the focus ring belongs to the whole thing. */}
@@ -3030,23 +3157,6 @@ export function SessionsView({
                 project={session?.project || activeProject || ''}
               />
               <PermissionPicker value={permission} onChange={pickPermission} />
-              {authorizeRelevant(permission) && (
-                <label class="ask-authorize" title={t('approval.stateHint')}>
-                  {/* A switch, not a tick box: this is a mode you leave on, not a
-                      one-off box you tick. The knob rides a <span> rather than a
-                      pseudo-element on the <input> — ::after on an input is not
-                      reliably rendered. */}
-                  <span class="switch">
-                    <input
-                      type="checkbox"
-                      checked={authorize}
-                      onChange={(e) => setAuthorize((e.target as HTMLInputElement).checked)}
-                    />
-                    <span class="switch-track" aria-hidden="true" />
-                  </span>
-                  {t('sessions.authorize')}
-                </label>
-              )}
               {/* The model switch, immediately left of Send — the row's right
                   edge is where you reach for before sending, and "which model"
                   is the one more thing that decision wants asked. WorkBuddy's
@@ -3122,6 +3232,8 @@ export function SessionsView({
         {loadError && <p class="gate-error composer-error">{loadError}</p>}
       </div>
     </section>
+    </ComposerContext.Provider>
+    </FileViewContext.Provider>
   )
 }
 
@@ -3795,7 +3907,7 @@ function DispatchBlock(props: {
   const task = listed ?? fetched
   const text = stripRefId(msg.text ?? '', msg.ref)
   return (
-    <div class="msg-batch-item">
+    <div class="msg-batch-item" data-task-id={msg.ref}>
       {text && <Markdown text={text} class="msg-text" />}
       {task && <TaskCast task={task} />}
       {msg.ref && (
@@ -3827,6 +3939,11 @@ function DispatchBlock(props: {
             </a>
           </div>
           {chainOpen && <TaskChain taskId={msg.ref} />}
+          {/* The task's output, where the result is read: the file list, the
+              downloads, and the page view on the preview origin. It hangs off
+              the card rather than the task page because the moment a user
+              wants to look at what a task produced is the moment it reports. */}
+          {task?.plan_meta?.output_artifact && <ArtifactSection task={task} />}
         </div>
       )}
     </div>
@@ -3960,6 +4077,173 @@ function RunSummaryRow({ run, onOpenTask }: { run: RunSummary; onOpenTask(id: st
   )
 }
 
+/** labelHasMarker reports whether a label already carries the "(Recommended)"
+ *  wording (any bracket style), so the card does not print it twice when the
+ *  model followed the prompt's own advice. */
+function labelHasMarker(label: string, marker: string): boolean {
+  const bare = marker.replace(/[()（）\s]/g, '')
+  return label.includes(marker) || (bare !== '' && label.includes(bare))
+}
+
+/** Pre-execution question card. The entry model asked (or the runtime's
+ *  plan-confirm gate fired) before it will create the task; the running SSE
+ *  turn is parked on the answer. Questions are answered one at a time so four
+ *  of them stay readable in a narrow chat column. Option labels, the
+ *  recommended marker, multi-select, free text ("Other") and skip mirror the
+ *  CLI's choice card and Claude Code's AskUserQuestion. */
+function ClarifyCard({
+  spec,
+  onSubmit,
+  onCancel,
+}: {
+  spec: ClarifySpec
+  onSubmit(answers: ClarifyAnswer[]): void
+  /** Omitted for a parked task's card: there is no turn to abort, and the
+   *  task's own Reject button is the way to throw the work away. */
+  onCancel?: () => void
+}) {
+  const [index, setIndex] = useState(0)
+  const [picked, setPicked] = useState<Record<string, boolean>>({})
+  const [other, setOther] = useState('')
+  const [otherOpen, setOtherOpen] = useState(false)
+  // Which option's preview is on screen. The recommended option is first, so
+  // 0 shows a preview before the user touches anything.
+  const [focused, setFocused] = useState(0)
+  const answers = useRef<ClarifyAnswer[]>([])
+  const q = spec.questions[index]
+  if (!q) return null
+  const preview = q.multi_select ? '' : (q.options[focused]?.preview ?? '').trim()
+  const recMarker = t('clarify.recommended')
+  // A spec that already offers a Cancel choice (the runtime's plan-confirm
+  // card does) must not render a second Cancel in the action row: the option
+  // is the answer, the action would be a different way to abort the turn.
+  const cancelMarker = t('clarify.cancel')
+  const hasCancelOption = spec.questions.some((question) =>
+    question.options.some((o) => o.label.trim() === cancelMarker),
+  )
+
+  const advance = (answer: ClarifyAnswer) => {
+    const next = [...answers.current, answer]
+    answers.current = next
+    if (index + 1 < spec.questions.length) {
+      setIndex(index + 1)
+      setPicked({})
+      setOther('')
+      setOtherOpen(false)
+      return
+    }
+    onSubmit(next)
+  }
+  const selectedLabels = () => q.options.filter((o) => picked[o.label]).map((o) => o.label)
+  const choose = (label: string) => {
+    if (q.multi_select) {
+      setPicked((p) => ({ ...p, [label]: !p[label] }))
+      return
+    }
+    advance({ id: q.id, selected: [label] })
+  }
+  const submitOther = (e: Event) => {
+    e.preventDefault()
+    const text = other.trim()
+    if (!text) return
+    advance({
+      id: q.id,
+      selected: q.multi_select ? selectedLabels() : undefined,
+      other: text,
+    })
+  }
+
+  return (
+    <div class="clarify-card" data-testid="session-clarify" role="dialog" aria-label={q.question}>
+      <div class="clarify-head">
+        <span class="badge">{t('clarify.title')}</span>
+        <span class="clarify-progress">
+          {t('clarify.progress', { i: String(index + 1), n: String(spec.questions.length) })}
+        </span>
+      </div>
+      {spec.plan && <div class="clarify-plan">{spec.plan}</div>}
+      <div class="clarify-question">
+        <span class="clarify-header">{q.header}</span> {q.question}
+      </div>
+      <div class="clarify-body">
+        <div class="clarify-options">
+          {q.options.map((o, i) => {
+            const on = Boolean(picked[o.label])
+            return (
+              <button
+                type="button"
+                class={`clarify-option${on ? ' is-picked' : ''}`}
+                aria-pressed={q.multi_select ? on : undefined}
+                onMouseEnter={() => setFocused(i)}
+                onFocus={() => setFocused(i)}
+                onClick={() => choose(o.label)}
+              >
+                <span class="clarify-option-label">
+                  {q.multi_select && <span class="clarify-check">{on ? '✓' : ''}</span>}
+                  {o.label}
+                  {o.label === q.recommended && !labelHasMarker(o.label, recMarker) && (
+                    <span class="clarify-recommended">{recMarker}</span>
+                  )}
+                </span>
+                {o.description && <span class="clarify-option-desc">{o.description}</span>}
+              </button>
+            )
+          })}
+        </div>
+        {preview && (
+          <div class="clarify-preview">
+            <Markdown text={preview} />
+          </div>
+        )}
+      </div>
+      {otherOpen && (
+        <form class="clarify-other" onSubmit={submitOther}>
+          <input
+            value={other}
+            onInput={(e) => setOther(e.currentTarget.value)}
+            placeholder={t('clarify.otherPlaceholder')}
+            autofocus
+          />
+          <button type="submit" class="btn primary small">
+            {t('clarify.submit')}
+          </button>
+        </form>
+      )}
+      <div class="clarify-actions">
+        {q.multi_select && (
+          <button type="button" class="btn primary small" onClick={() => advance({ id: q.id, selected: selectedLabels() })}>
+            {t('clarify.confirm')}
+          </button>
+        )}
+        <button type="button" class="btn small" onClick={() => setOtherOpen((v) => !v)}>
+          {t('clarify.other')}
+        </button>
+        <button type="button" class="btn small" onClick={() => advance({ id: q.id })}>
+          {t('clarify.skip')}
+        </button>
+        {onCancel && !hasCancelOption && (
+          <button type="button" class="btn small danger" onClick={onCancel}>
+            {t('clarify.cancel')}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** parseClarifySpec decodes the server-computed question_spec field (a
+ *  ClarifySpec JSON string). Malformed input reads as no option set — the
+ *  free-text question, when present, is still answerable. */
+function parseClarifySpec(raw?: string): ClarifySpec | null {
+  if (!raw) return null
+  try {
+    const spec = JSON.parse(raw) as ClarifySpec
+    return spec && Array.isArray(spec.questions) && spec.questions.length > 0 ? spec : null
+  } catch {
+    return null
+  }
+}
+
 /** Inline approval gate for a task referenced by a chat bubble.
  *
  *  It re-reads the task on every change signal, so a task that parks in review
@@ -3990,6 +4274,8 @@ function TaskApproval({
   const task = hint ?? fetched
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Free-text answer for an agent that asked in prose (no option set).
+  const [answerText, setAnswerText] = useState('')
   // The remember scope: where this answer lands for the gates that come after.
   // The server names its default (the project's configured scope) so the card
   // preselects it; the user can still pick differently per decision.
@@ -4028,6 +4314,58 @@ function TaskApproval({
     }
   }
 
+  // A task the agent parked on a question is not waiting for a yes/no: it is
+  // waiting for an answer. Show the same choice card the running turn uses,
+  // and resume through the approval endpoint with the answer attached.
+  const parkedSpec = parseClarifySpec(task.question_spec)
+  const parkedQuestionText = (task.question ?? '').trim()
+  if (task.approval_disposition === 'resume_execution' && (parkedQuestionText || parkedSpec)) {
+    return (
+      <div class="task-approval is-clarify" data-testid="chat-task-question">
+        <div class="clarify-head">
+          <span class="badge yellow">{t('state.review')}</span>
+          <span class="dim review-kind">{t('detail.reviewKind.resume_execution')}</span>
+        </div>
+        {parkedSpec ? (
+          <ClarifyCard
+            spec={parkedSpec}
+            onSubmit={(answers) => void act(() => api.approveWithAnswer(task.id, { answers }))}
+          />
+        ) : (
+          <form
+            class="clarify-other"
+            onSubmit={(e) => {
+              e.preventDefault()
+              const text = answerText.trim()
+              if (!text) return
+              void act(() => api.approveWithAnswer(task.id, { answer: text }))
+            }}
+          >
+            <div class="clarify-question">{parkedQuestionText}</div>
+            <input
+              value={answerText}
+              onInput={(e) => setAnswerText(e.currentTarget.value)}
+              placeholder={t('clarify.otherPlaceholder')}
+              disabled={busy}
+            />
+            <button type="submit" class="btn primary small" disabled={busy || !answerText.trim()}>
+              {t('clarify.submit')}
+            </button>
+          </form>
+        )}
+        <div class="clarify-actions">
+          <button
+            class="btn danger small"
+            disabled={busy}
+            onClick={() => void act(() => api.reject(task.id, t('detail.rejectedViaWeb'), scope))}
+          >
+            {t('detail.reject')}
+          </button>
+        </div>
+        {error && <p class="gate-error">{error}</p>}
+      </div>
+    )
+  }
   // needs_changed_input is the one disposition where consent is not the
   // missing piece: the task failed in a way that only a different prompt can
   // fix (a deterministic crash, a spent token budget, an overflowed context),

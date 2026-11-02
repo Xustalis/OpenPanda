@@ -166,6 +166,32 @@ handles a single utterance, `--mute` prints without speaking. The voice
 entry has no `--authorize` — irreversible commands always land in
 `review`.
 
+## Sessions and interaction
+
+**What is the side channel?**
+
+`/side` (or `/btw`) opens a read-only channel beside the thread: it sees the main thread's history as reference only, keeps its own turns out of the thread, and cannot dispatch a task or plan — a classification that still lands on one gets a fixed note. Esc returns without discarding; `/side close` discards. It is available in the TUI and CLI; the web console's side column is the task rail.
+
+**How do I undo file changes after a finished answer?**
+
+`/rewind` lists the thread's checkpoints (one per finished answer). Accepting one restores the tracked files from that snapshot, removes untracked files the agent created after it, and truncates the transcript to match. Gitignored build output is left alone. The snapshot is taken synchronously when the answer finishes, so a large worktree adds a short pause; turn numbers can drift after history compaction. Deleting a session clears its checkpoints.
+
+**Can I click a file path in a reply?**
+
+Yes. The console turns a recognisable workspace path into a link that opens a read-only viewer at that line; in the terminal, `panda read path:line` does the same and `/edit path:line` hands it to your editor. Recognition is deliberately conservative — a path with a slash, or a bare name with a known source extension.
+
+**How are task artifacts previewed?**
+
+On a second HTTP origin with a strict CSP and a sandboxed iframe that omits `allow-same-origin`, so scripts inside an artifact cannot reach the console. Clicking an element in the preview reports a CSS selector as a draft bound to the artifact hash.
+
+**What are the workspace map and the pre-execution questions?**
+
+Every agent task starts with a deterministic map of its workspace (git state, layout, language mix, key files, the project's own build/verify commands); the classifier sees the same map, so scope and turn budgets come from the real tree. A large or ambiguous request is preceded by up to four bounded multiple-choice questions, and a large task pauses for run / read-only analysis / cancel. A running agent can ask the same structured questions.
+
+**How do lifecycle hooks work?**
+
+Set `hooks.enabled` and bind an event (`task_submitted`, `task_started`, `task_done`, `task_failed`, `task_review`). The command inherits a whitelisted environment with no model credentials; a command graded tier-2 is refused unless `hooks.allow_tier2` is set, and every run writes an audit row. Task values reach the command through `PANDA_HOOK_*`, never the shell parser — write `{title}` in the template. `panda hooks list|test` inspects and trial-runs a binding.
+
 ## Multiple devices
 
 **How do devices join a network?**

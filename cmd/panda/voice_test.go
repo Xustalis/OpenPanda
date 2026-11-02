@@ -85,3 +85,15 @@ func TestSpokenReplyTruncates(t *testing.T) {
 		t.Error("a long answer was reduced to silence")
 	}
 }
+
+// A clarify result is a question waiting on the user; the speaker must read
+// it, not fall silent.
+func TestSpokenClarifyReadsTheQuestion(t *testing.T) {
+	got := spokenReply(i18n.English, &askengine.Result{
+		Kind:   "clarify",
+		Answer: "Which environment should I deploy to?",
+	})
+	if got != "Which environment should I deploy to?" {
+		t.Errorf("spoken clarify = %q, want the question", got)
+	}
+}

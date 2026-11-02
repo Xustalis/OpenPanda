@@ -36,6 +36,7 @@ const (
 	modeIdle
 	modeAsking
 	modeApproving
+	modeClarifying // pre-execution choice card (entry clarify round)
 	modeExec
 	modeList        // Keyboard navigable list (/sessions, /projects, /resume)
 	modeModelPanel  // Model management panel
@@ -54,6 +55,7 @@ const (
 	listResume
 	listTasks
 	listTeam
+	listRewind
 )
 
 type wizardStep int
@@ -287,6 +289,10 @@ type tuiModel struct {
 	// confirmYes is the slash line the exec pump runs when the user confirms.
 	confirmText string
 	confirmYes  string
+	// confirmRun is the in-loop alternative to confirmYes: an action that has
+	// to run on the Update goroutine (a store write followed by a repaint)
+	// rather than through the exec pump. When set it wins.
+	confirmRun func(*tuiModel) (tea.Model, tea.Cmd)
 
 	// pendingPrompt is the user text of the in-flight ask, kept so the turn can
 	// be recorded into conversation memory when it completes.
@@ -326,6 +332,11 @@ type tuiModel struct {
 	// pending holds a task the engine parked for tier-2 approval.
 	pending *askengine.Result
 
+	// pendingQuestion holds the pre-execution clarify round the engine is
+	// blocked on. It is cleared when the last question is answered (the ask
+	// resumes) or when the user cancels the round.
+	pendingQuestion *clarifyPrompt
+
 	// pendingWorkDir is the tree the pending task resumes in once approved. A
 	// card raised by this turn carries the turn's worktree; a card raised by
 	// the watcher for out-of-band work leaves it empty, so the resume uses the
@@ -342,6 +353,25 @@ type tuiModel struct {
 
 	animTick int
 	quitting bool
+
+	// side is the /side channel's state (see tui_side.go), nil until first
+	// opened and kept across hide/show. sideVisible decides whether the frame
+	// and the keyboard belong to the channel or to the main thread; the two
+	// are independent on purpose, so a side question can be asked, parked, and
+	// returned to while the main turn keeps running.
+	side        *sideState
+	sideVisible bool
+
+	// sidebar is the task rail (see tui_sidebar.go): the thread's work as a
+	// side column. Closed by default — the transcript is the default reading
+	// surface, and the rail is for the moments a fan-out makes it unclear.
+	sidebar sidebarState
+
+	// layout records where the last painted frame put each committed block, so
+	// a click on the rail can scroll the transcript to it. Shared through a
+	// pointer for the same reason scrollLimit is: View is a value method that
+	// can publish but cannot write back.
+	layout *transcriptLayout
 }
 
 // pulseStar is the thinking spinner: a star that swells and shrinks in place
@@ -481,6 +511,7 @@ func newTUIModel(r *repl) tuiModel {
 		activity:    &activityCache{},
 		liveRC:      &liveRenderCache{},
 		welcomeC:    &welcomeCache{},
+		layout:      &transcriptLayout{},
 	}
 }
 

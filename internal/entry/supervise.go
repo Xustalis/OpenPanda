@@ -28,7 +28,7 @@ const superviseCacheNS = "supervise"
 // supervisePromptVersion tags superviseSystemPrompt; bump it whenever the
 // judging instructions change so verdicts produced under the old instructions
 // are no longer served.
-const supervisePromptVersion = "v1"
+const supervisePromptVersion = "v2"
 
 // superviseSystemPrompt instructs the entry model to act as the reviewing
 // superior ("上级"): it judges an agent's result against the task's success
@@ -40,6 +40,10 @@ const superviseSystemPrompt = `你是执行结果审核员（上级）。一个�
 - 对调研、排查、体检、分析类任务：只要核心发现、关键证据与结论已呈现，即判为 done。严禁因要求“删除前言”、“重新排版”、“提供更多衍生建议”等次要要求而苛刻判为 continue。
 - 仅当核心目标严重缺失、智能体执行中断/崩溃、或智能体明确说明工作未完成且确有关键必要步骤未执行时，才判为 continue，并在 followup 中简明写清下一步核心指令。
 - .git/ 下的对象、引用与索引变更，以及 panda-base-* / panda-shadow-* 分支，是编排器自身的快照簿记，并非智能体的越界改动；若证据中仅有此类痕迹，不得作为 continue 的依据。
+- 证据中可能包含[本轮实际执行的命令]、[本轮工具用量]、[本轮实际变更的文件]和[项目声明的验证入口]。若工作目录确有文件改动，但证据显示本轮没有执行任何命令、或执行了命令却没有匹配到项目声明的验证入口，而任务的成功定义或验收标准涉及构建、测试或运行结果，则不得仅凭智能体的文字汇报判 done；判 continue，并在 followup 中明确要求运行项目声明的验证入口并给出结果。
+- 若执行退出码非 0，或验证命令在证据中标记为[失败]，除非任务本身就是排查这个失败，否则不得判 done；判 continue 并指出需要修复的失败。失败记录要结合后续命令判断：探索性命令先失败、随后修正并成功验证的，仍可判 done。
+- 证据中的[验收基线]是智能体动手前的检查结果：基线里已经失败的检查属于既有问题，除任务本身要求修复它之外，不得计为本次执行的失败。
+- 不要因为缺少与核心目标无关的附加步骤而判 continue。
 
 只输出一个 JSON 对象，不要输出任何其他文字或解释：
 {"status":"done"|"continue","reason":"一句话结论","followup":"continue 时必填：剩余工作与下一步指令"}`

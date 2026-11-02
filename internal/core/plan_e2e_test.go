@@ -583,6 +583,12 @@ func TestAgentResultSchemaFor(t *testing.T) {
 	if !strings.Contains(restricted, "READ-ONLY") || !strings.Contains(restricted, "do NOT delegate") {
 		t.Fatalf("restricted schema lacks the ask-instead-of-delegate instruction:\n%s", restricted)
 	}
+	// The clarify field is how a schema-capable adapter offers bounded
+	// options; without it the model cannot emit choices under
+	// additionalProperties=false.
+	if !strings.Contains(plain, `"clarify"`) || !strings.Contains(plain, `"multi_select"`) {
+		t.Fatalf("schema has no clarify block:\n%s", plain)
+	}
 	for _, s := range []string{plain, restricted} {
 		var v any
 		if err := json.Unmarshal([]byte(s), &v); err != nil {

@@ -289,6 +289,9 @@ func runDaemon(args []string) {
 	// Sub-agent orchestration bounds (delegation: section): how wide a task
 	// fans out, how many children run at once, how deep the tree grows.
 	coreNode.SetDelegationLimits(cfg.Delegation)
+	// The operator's own commands, bound to task lifecycle edges. Inert unless
+	// hooks.enabled is set.
+	coreNode.SetHooks(cfg.Hooks)
 	// Extended-policy agent runs expose the node's MCP server to the
 	// delegated agent CLI (work-dir .mcp.json); minimal policy ignores it.
 	coreNode.SetAgentMCPPassthrough(cfg.MCP.Command)

@@ -332,6 +332,20 @@ func runCardEdit(args []string) {
 
 // openEditor runs the user's editor on path, wired to the real terminal.
 func openEditor(path string) error {
+	cmd, err := editorCommand(path, 0)
+	if err != nil {
+		return err
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// editorCommand builds (but does not run) the user's editor on path, positioned
+// at line when one is given. $EDITOR legitimately carries arguments
+// ("code --wait", "emacs -nw"), so it is split rather than treated as a bare
+// binary name, and the jump syntax is the editor's own — there is no portable
+// "+line" that vim, VS Code and nano all accept.
+func editorCommand(path string, line int) (*exec.Cmd, error) {
 	editor := firstNonEmpty(os.Getenv("VISUAL"), os.Getenv("EDITOR"))
 	if editor == "" {
 		if runtime.GOOS == "windows" {
@@ -340,12 +354,29 @@ func openEditor(path string) error {
 			editor = "vi"
 		}
 	}
-	// $EDITOR legitimately carries arguments ("code --wait", "emacs -nw"), so
-	// it is split rather than treated as a bare binary name.
 	fields := strings.Fields(editor)
-	cmd := exec.Command(fields[0], append(fields[1:], path)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd.Run()
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("empty editor command")
+	}
+	args := fields[1:]
+	if line > 0 {
+		switch filepath.Base(fields[0]) {
+		case "code", "code-insiders", "codium", "cursor", "windsurf":
+			args = append(args, "-g", fmt.Sprintf("%s:%d", path, line))
+		case "subl", "sublime_text", "atom", "hx", "helix":
+			args = append(args, fmt.Sprintf("%s:%d", path, line))
+		case "nano":
+			args = append(args, fmt.Sprintf("+%d,1", line), path)
+		case "emacs":
+			args = append(args, fmt.Sprintf("+%d:1", line), path)
+		default:
+			// vim, nvim, vi, and everything else that takes a +command.
+			args = append(args, fmt.Sprintf("+%d", line), path)
+		}
+	} else {
+		args = append(args, path)
+	}
+	return exec.Command(fields[0], args...), nil
 }
 
 // runCardSet edits one field without an editor — the form that works over ssh

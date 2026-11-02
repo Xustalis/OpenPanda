@@ -75,3 +75,17 @@ func (r *Registry) Copy() *Registry {
 	}
 	return out
 }
+
+// Filter returns a new registry holding only the tools keep accepts. It is
+// allow-list shaped on purpose: a caller that narrows the tool face for a
+// restricted request must not inherit a write tool added to the shared
+// registry later, which a deny-list would silently do.
+func (r *Registry) Filter(keep func(name string) bool) *Registry {
+	out := NewRegistry()
+	for name, t := range r.tools {
+		if keep(name) {
+			out.tools[name] = t
+		}
+	}
+	return out
+}

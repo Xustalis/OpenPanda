@@ -781,6 +781,10 @@ func runSessionAsk(args []string) {
 		if tail := answerTail(streamedText, out.Answer); tail != "" {
 			fmt.Println(renderCliMd(tail))
 		}
+	case "clarify":
+		// A non-interactive surface has no choice card; the rendered question
+		// is the reply, and the next turn carries the answer.
+		fmt.Println(renderCliMd(out.Answer))
 	case "task":
 		fmt.Println(i18n.Tf(loc, "cli.session.task", "id", out.TaskID, "state", out.TaskState))
 		// The converged report streamed live; print whatever slice of it

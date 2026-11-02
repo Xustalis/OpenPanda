@@ -52,6 +52,15 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 
 ---
 
+## 🆕 Lo que llega en v0.1.4
+
+- **Las ejecuciones parten del espacio de trabajo** — cada tarea de agente lleva un mapa determinista de su árbol (estado de git, estructura, archivos clave y los comandos de compilación/verificación del propio proyecto), y el juez de finalización ve los comandos que el agente ejecutó antes de aceptar «hecho».
+- **Preguntar antes de adivinar** — el modelo de entrada puede hacer preguntas de opción múltiple acotadas antes de crear una tarea, y un agente en ejecución puede hacer las mismas preguntas estructuradas; la TUI, la consola y `panda approve` las responden.
+- **Canal lateral y rebobinado** — `/side` (alias `/btw`) abre una conversación de solo lectura junto al hilo, y cada respuesta terminada deja un punto de control que `/rewind` puede restaurar.
+- **Leer lo que produjo el agente** — las rutas del espacio de trabajo en las respuestas son clicables en la consola y `panda read path:line` en la terminal; los artefactos de tarea se previsualizan en un segundo origen aislado.
+- **El trabajo pendiente del hilo, de un vistazo** — una barra de tareas en la TUI (Ctrl+B) y la cabecera de la consola listan lo que se ejecuta, lo que te espera y la cola.
+- **Hooks de operador, acotados** — `task_submitted` / `task_started` / `task_done` / `task_failed` / `task_review` pueden ejecutar tus comandos con un entorno filtrado, control de nivel y una fila de auditoría.
+
 ## 🌟 ¿Qué puede hacer OpenPanda?
 
 ### 1. 🌐 Colaboración multidispositivo P2P heterogénea

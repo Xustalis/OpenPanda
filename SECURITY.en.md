@@ -100,6 +100,8 @@ only, participation and signed grants notwithstanding; a trust demotion
 cuts an in-flight transfer immediately rather than waiting out the
 authorization-cache TTL.
 
+Lifecycle hooks are an optional local extension: off by default; the child inherits a whitelisted environment without model credentials or peer tokens; the command is graded first and a tier-2 command is refused unless `hooks.allow_tier2` is set; every run writes an audit row. Task values reach the command only through `PANDA_HOOK_*` environment variables — placeholders such as `{title}` expand to variable references, not literal text — and on Windows they are passed through `cmd /V:ON` delayed expansion, so a value never enters the command parser.
+
 ## Integrity verification
 
 `panda audit verify` (or the panel's `GET /api/audit`) verifies the global

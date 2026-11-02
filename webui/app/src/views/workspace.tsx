@@ -39,7 +39,6 @@ import { agentLogo } from '../format/agent-logo'
 import { agentInitial } from '../format/agent-role'
 import {
   PermissionPicker,
-  authorizeRelevant,
   normalizePermission,
   type PermissionMode,
 } from '../components/permission-picker'
@@ -1202,11 +1201,10 @@ function WorkspaceComposer(props: {
   const [sending, setSending] = useState(false)
   // The permission policy this bench sends under. It is written to whichever
   // thread the send lands in, so a task dispatched from here carries the same
-  // autonomy it was given at the bench. The authorize switch beside it grants
-  // this one send the right to run irreversible operations, which the mode
-  // alone does not (auto and edits still stop at the tier-2 gate).
+  // autonomy it was given at the bench. The five modes are the whole consent
+  // answer: a one-off tier-2 operation parks on the approval card, and "run
+  // everything unattended" is the bypass mode.
   const [permission, setPermission] = useState<PermissionMode>('auto')
-  const [authorize, setAuthorize] = useState(false)
 
   // The chip must show the policy the send will actually use. A picked thread
   // carries its own mode, and a bench that kept showing "auto" while sending
@@ -1279,7 +1277,9 @@ function WorkspaceComposer(props: {
       void askSessionStream(
         target.id,
         prompt,
-        authorize,
+        // No standing grant: the approval card decides a tier-2 operation when
+        // it actually comes up.
+        false,
         {
           onDelta() {},
           onReasoning() {},
@@ -1379,19 +1379,6 @@ function WorkspaceComposer(props: {
         />
         <div class="composer-actions">
           <PermissionPicker value={permission} onChange={pickPermission} disabled={sending} />
-          {authorizeRelevant(permission) && (
-            <label class="ask-authorize" title={t('approval.stateHint')}>
-              <span class="switch">
-                <input
-                  type="checkbox"
-                  checked={authorize}
-                  onChange={(e) => setAuthorize((e.target as HTMLInputElement).checked)}
-                />
-                <span class="switch-track" aria-hidden="true" />
-              </span>
-              {t('sessions.authorize')}
-            </label>
-          )}
           <ModelSelect disabled={sending} />
           <VoiceInput onText={insertDictation} />
           <button class="btn primary" type="submit" disabled={!input.trim() || sending}>
