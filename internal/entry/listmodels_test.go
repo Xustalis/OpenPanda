@@ -95,6 +95,24 @@ func TestListModelsAnthropicBaseShapes(t *testing.T) {
 			t.Fatalf("list (base %q): %v", base, err)
 		}
 	}
+
+	// A full messages URL that carries no /v1 is a relay's own mount point.
+	// The messages route keeps it exactly; the models route is its sibling.
+	for _, tc := range []struct{ base, want string }{
+		{srv.URL + "/anthropic/messages", srv.URL + "/anthropic/models"},
+		{srv.URL + "/messages", srv.URL + "/models"},
+	} {
+		c, err := NewClient(config.ModelConfig{APIType: config.APITypeAnthropic, BaseURL: tc.base, APIKey: "sk-test", Model: "m"})
+		if err != nil {
+			t.Fatalf("new client (base %q): %v", tc.base, err)
+		}
+		if url, _ := c.listModelsEndpoint(); url != tc.want {
+			t.Errorf("base %q: url = %q, want %q", tc.base, url, tc.want)
+		}
+		if got := anthropicURL(tc.base); got != tc.base {
+			t.Errorf("anthropicURL(%q) = %q, want it unchanged", tc.base, got)
+		}
+	}
 }
 
 func TestListModelsRequiresKey(t *testing.T) {

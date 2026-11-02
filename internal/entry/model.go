@@ -1158,16 +1158,24 @@ func openAIURL(base string) string {
 }
 
 // anthropicVersionBase normalizes an Anthropic-compatible base URL down to the
-// version root. Trailing slashes and a pasted /messages tail are dropped, a
-// bare host gains /v1, and a base that already carries /v1 keeps it — so both
-// routes hanging off it (messages, models) agree on the prefix. Deriving the
-// two separately is how a base of "http://host/v1" once grew a second /v1.
+// version root. Trailing slashes are dropped, a bare host gains /v1, and a base
+// that already carries /v1 keeps it — so both routes hanging off it (messages,
+// models) agree on the prefix. Deriving the two separately is how a base of
+// "http://host/v1" once grew a second /v1.
+//
+// A pasted full messages URL names its own version segment: everything before
+// /messages is the root, and no /v1 is appended. Relays that mount the endpoint
+// somewhere other than /v1/messages (a gateway prefix, say) configured that
+// exact URL before this normalizer existed, and the messages route rebuilds it
+// byte-for-byte; only the models route gains the sibling path.
 func anthropicVersionBase(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	if base == "" {
 		return "https://api.deepseek.com/anthropic/v1"
 	}
-	base = strings.TrimSuffix(base, "/messages")
+	if strings.HasSuffix(base, "/messages") {
+		return strings.TrimSuffix(base, "/messages")
+	}
 	if strings.HasSuffix(base, "/v1") {
 		return base
 	}
