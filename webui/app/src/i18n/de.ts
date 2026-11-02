@@ -898,8 +898,11 @@ const de: Messages = {
   'memory.title': 'Gedächtnis',
   'memory.subtitle':
     'Das Langzeitgedächtnis des Agenten: über dich (USER.md), was er gelernt hat (MEMORY.md) und seine Träume (DREAMS.md).',
+  'memory.usageTip': '{chars} von {limit} Zeichen belegt',
+  'memory.charsN': '{n} Zeichen',
+  'memory.entriesN': '{n} Einträge',
+  'memory.headSummary': '{user} über dich · {memory} gelernt · {topics} Themen · {daily} Tagebuchtage',
   'memory.nodeTime': 'Systemzeit des Knotens',
-  'memory.refreshedAt': 'Zuletzt gelesen',
   'memory.refresh': 'Aktualisieren',
   'memory.user': 'Über dich',
   'memory.memory': 'Was er gelernt hat',

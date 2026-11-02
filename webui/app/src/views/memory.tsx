@@ -1,11 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useRef, useState } from 'preact/hooks'
-import { api, type MemoryFiles, type MemoryGraphNode, type ProjectMemory, type TopicFile } from '../api/client'
+import type { ComponentChildren } from 'preact'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import {
+  api,
+  type MemoryFiles,
+  type MemoryGraphNode,
+  type ProjectDetail,
+  type ProjectMemory,
+  type TopicFile,
+} from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { navigate } from '../nav'
-import { ErrorState, LoadingState, PageHeader } from '../components/page'
+import { ErrorState, LoadingState } from '../components/page'
+import { Icon, type IconName } from '../components/icons'
 import { MemoryGraphView } from '../components/memory-graph'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
@@ -14,98 +23,134 @@ type Tab = 'graph' | 'user' | 'memory' | 'dreams' | 'topics' | 'daily' | 'projec
 
 const TABS: Tab[] = ['graph', 'user', 'memory', 'dreams', 'topics', 'daily', 'projects']
 
+/** Real file names, so a card always says which file it is editing. */
+const FILE_NAME: Record<'user' | 'memory', string> = { user: 'USER.md', memory: 'MEMORY.md' }
+
 /** The memory view (C2): every Hermes file is user-managed here. USER.md /
  *  MEMORY.md edit as § entries (entries promoted from the daily logs carry a
  *  [from:…] badge and can be fixed or dropped individually), DREAMS.md is
  *  the Dreamer's diary — open for editing behind a confirm — topics/*.md are
  *  the selective-load memory files (create / edit / delete), daily/*.md is a
  *  read-only browse of the warm-layer diary, and project memory is picked
- *  per project and edited in place. Caps come from the live config values. */
+ *  per project and edited in place. Caps come from the live config values.
+ *
+ *  Layout follows the console's one-line page header: the mark, the name, a
+ *  one-line count summary and the node clock + refresh on the right — the two
+ *  stat cards that used to hold the clock and a bare refresh button are gone.
+ *  The surfaces are a single segmented strip with their entry counts, and
+ *  every editable file is one card whose head carries the file name, the
+ *  budget meter, the filter and the edit verb. */
 export function MemoryView(props: { initialTab?: string }) {
   useLocaleRerender()
   const [tick, setTick] = useState(0)
   const { data, error } = useAsync(() => api.memory(), [], tick)
   const [tab, setTab] = useState<Tab>(
-    TABS.includes(props.initialTab as Tab) ? (props.initialTab as Tab) : 'user',
+    TABS.includes(props.initialTab as Tab) ? (props.initialTab as Tab) : 'graph',
   )
   useEffect(() => {
     if (TABS.includes(props.initialTab as Tab)) setTab(props.initialTab as Tab)
   }, [props.initialTab])
-  const [now, setNow] = useState(() => Date.now())
 
-  // Live clock: anchor on the node's reported time, then tick locally so the
-  // display stays useful between refreshes.
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [])
+  const reload = () => setTick((v) => v + 1)
+
+  // Entries seen so far this session, per file. A refresh then marks only the
+  // entries the agent actually added — the first paint marks none, because
+  // "everything is new" says nothing. The result is memoised per content
+  // snapshot: re-renders of the same data must not consume the highlight.
+  const seenRef = useRef<Map<string, Map<string, number>>>(new Map())
+  const freshRef = useRef<Map<string, { content: string; set: Set<string> }>>(new Map())
+  const freshEntries = (file: string, content: string): Set<string> => {
+    const cached = freshRef.current.get(file)
+    if (cached && cached.content === content) return cached.set
+    const entries = parseEntries(content)
+    const now = Date.now()
+    const fresh = new Set<string>()
+    let seen = seenRef.current.get(file)
+    if (!seen) {
+      seen = new Map(entries.map((e) => [e, now]))
+      seenRef.current.set(file, seen)
+    } else {
+      for (const e of entries) {
+        if (!seen.has(e)) {
+          seen.set(e, now)
+          fresh.add(e)
+        }
+      }
+    }
+    freshRef.current.set(file, { content, set: fresh })
+    return fresh
+  }
 
   if (error) {
     return (
-      <ErrorState
-        title={t('memory.title')}
-        sub={t('memory.subtitle')}
-        error={error}
-        onRetry={() => setTick((v) => v + 1)}
-      />
+      <section class="memory-page">
+        <MemoryHead />
+        <ErrorState head={false} title={t('memory.title')} sub={t('memory.subtitle')} error={error} onRetry={reload} />
+      </section>
     )
   }
-  if (!data) return <LoadingState title={t('memory.title')} sub={t('memory.subtitle')} />
+  if (!data) {
+    return (
+      <section class="memory-page">
+        <MemoryHead />
+        <LoadingState head={false} title={t('memory.title')} sub={t('memory.subtitle')} />
+      </section>
+    )
+  }
 
   // Offset between the browser clock and the node clock, so the ticking
   // display shows node time, not local time.
   const nodeOffset = data.time ? new Date(data.time).getTime() - Date.now() : 0
-  const clock = new Date(now + nodeOffset)
-  const reload = () => setTick((v) => v + 1)
+  const counts = {
+    user: parseEntries(data.user).length,
+    memory: parseEntries(data.memory).length,
+    topics: data.topics.length,
+    daily: data.daily.length,
+  }
+  const summary = t('memory.headSummary', {
+    user: counts.user,
+    memory: counts.memory,
+    topics: counts.topics,
+    daily: counts.daily,
+  })
 
   return (
     <section class="memory-page">
-      <PageHeader title={t('memory.title')} sub={t('memory.subtitle')} />
-
-      <div class="system-head">
-        <div class="card version-card">
-          <span class="dim">{t('memory.nodeTime')}</span>
-          <span class="version-num mono" data-testid="node-clock">
-            {clock.toLocaleString()}
-          </span>
-        </div>
-        <div class="card version-card">
-          <span class="dim">{t('memory.refreshedAt')}</span>
-          <button class="btn" onClick={reload}>
-            {t('memory.refresh')}
-          </button>
-        </div>
-      </div>
+      <MemoryHead summary={summary} nodeOffset={nodeOffset} onRefresh={reload} />
 
       <div class="segmented memory-tabs" role="tablist">
-        {TABS.map((k) => (
-          <button
-            key={k}
-            role="tab"
-            aria-selected={tab === k}
-            class={`seg${tab === k ? ' on' : ''}`}
-            onClick={() => setTab(k)}
-          >
-            {t(`memory.${k}`)}
-          </button>
-        ))}
+        {TABS.map((k) => {
+          const n = tabCount(k, counts)
+          return (
+            <button
+              key={k}
+              role="tab"
+              aria-selected={tab === k}
+              class={`seg${tab === k ? ' on' : ''}`}
+              onClick={() => setTab(k)}
+            >
+              {t(`memory.${k}`)}
+              {n != null && <span class="memory-tab-n mono">{n}</span>}
+            </button>
+          )
+        })}
       </div>
 
       {tab === 'graph' && <GraphTab onOpenTab={setTab} />}
       {tab === 'user' && (
         <MemoryFileView
-          key={`user-${tick}`}
           file="user"
           content={data.user}
+          fresh={freshEntries('user', data.user)}
           limit={data.user_limit}
           reload={reload}
         />
       )}
       {tab === 'memory' && (
         <MemoryFileView
-          key={`memory-${tick}`}
           file="memory"
           content={data.memory}
+          fresh={freshEntries('memory', data.memory)}
           limit={data.mem_limit}
           reload={reload}
         />
@@ -118,47 +163,105 @@ export function MemoryView(props: { initialTab?: string }) {
   )
 }
 
-/** USER.md / MEMORY.md / a topic file as editable § entries. Entries the
- *  Dreamer promoted out of the daily logs carry a `[from:…]` marker: they
- *  render with a badge and get per-entry fix / delete shortcuts so a weak
- *  signal that slipped in can be corrected without rewriting the file. */
+/** Which surfaces get a count in the tab strip. DREAMS.md is free-form prose
+ *  and project memory is loaded lazily, so neither carries one here. */
+function tabCount(k: Tab, counts: { user: number; memory: number; topics: number; daily: number }): number | null {
+  if (k === 'user') return counts.user
+  if (k === 'memory') return counts.memory
+  if (k === 'topics') return counts.topics
+  if (k === 'daily') return counts.daily
+  return null
+}
+
+/** One bar: the mark, the page name, the counts, then the node clock and the
+ *  reload verb. Same shape as 工作空间 and 队列·任务·项目. */
+function MemoryHead({
+  summary,
+  nodeOffset,
+  onRefresh,
+}: {
+  summary?: string
+  nodeOffset?: number
+  onRefresh?(): void
+}) {
+  return (
+    <header class="memory-head">
+      <Icon name="orbit" size={16} class="memory-head-icon" />
+      <h1 class="memory-head-title">{t('memory.title')}</h1>
+      {summary && (
+        <p class="memory-head-meta" title={t('memory.subtitle')}>
+          {summary}
+        </p>
+      )}
+      <div class="memory-head-tools">
+        {nodeOffset != null && <NodeClock offset={nodeOffset} />}
+        {onRefresh && (
+          <button class="icon-btn" title={t('memory.refresh')} aria-label={t('memory.refresh')} onClick={onRefresh}>
+            <Icon name="refresh" />
+          </button>
+        )}
+      </div>
+    </header>
+  )
+}
+
+/** The node's wall clock, ticking on its own. It used to live in the page
+ *  state, which re-rendered — and re-laid-out — the whole graph once a
+ *  second. */
+function NodeClock({ offset }: { offset: number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  return (
+    <span class="memory-clock mono" title={t('memory.nodeTime')} data-testid="node-clock">
+      {new Date(now + offset).toLocaleString()}
+    </span>
+  )
+}
+
+/** The char budget as a thin bar: the counter says how much, the bar says how
+ *  close to the cap — the one thing a bare number hides. */
+function UsageMeter({ chars, limit }: { chars: number; limit: number }) {
+  if (!limit || limit <= 0) return null
+  const pct = Math.min(100, Math.round((chars / limit) * 100))
+  return (
+    <span
+      class={`memory-usage${pct >= 90 ? ' hot' : ''}`}
+      role="img"
+      aria-label={t('memory.usageTip', { chars, limit })}
+      title={t('memory.usageTip', { chars, limit })}
+    >
+      <i style={{ width: `${pct}%` }} />
+    </span>
+  )
+}
+
+/** USER.md / MEMORY.md / a topic file / a project file as editable § entries.
+ *  Entries the Dreamer promoted out of the daily logs carry a `[from:…]`
+ *  marker: the card strips it from the text, shows it as a badge, and gives
+ *  the entry per-row fix / delete shortcuts so a weak signal that slipped in
+ *  can be corrected without rewriting the file. */
 function MemoryFileView({
   file,
   content,
+  fresh,
   limit,
   reload,
-  displayName,
 }: {
   file: 'user' | 'memory'
   content: string
+  /** Entries the agent added since the previous load (see MemoryView). */
+  fresh: Set<string>
   limit: number
   reload(): void
-  /** Topic tab reuses this component; the save route differs. */
-  displayName?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // Highlight: entries that were not present at the previous load glow once
-  // so "what did the agent just learn" is answerable at a glance. The ref
-  // survives re-renders (refreshes produce new props, not a remount).
-  const seenRef = useRef<Map<string, number>>(new Map())
   const entries = parseEntries(content)
-  const seen = seenRef.current
-  const fresh = new Set<string>()
-  const now = Date.now()
-  for (const e of entries) {
-    if (!seen.has(e)) {
-      seen.set(e, now)
-      fresh.add(e)
-    }
-  }
-
-  function startEdit() {
-    setDraft(content)
-    setEditing(true)
-  }
 
   /** Rebuild the whole file from entries and persist (whole-file PUT). */
   async function persistEntries(next: string[]) {
@@ -188,66 +291,113 @@ function MemoryFileView({
     }
   }
 
-  const chars = countChars(draft)
-  const over = editing && limit > 0 && chars > limit
-
   if (editing) {
     return (
-      <div class="card memory-editor">
-        <textarea
-          class="input memory-textarea mono"
-          value={draft}
-          onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
-          rows={Math.min(20, Math.max(8, draft.split('\n').length + 2))}
-          spellcheck={false}
-        />
-        <div class="memory-editor-foot">
-          <span class={`memory-counter mono${over ? ' over' : ''}`}>
-            {chars} / {limit}
-          </span>
-          <span class="hint">{t('memory.editHint')}</span>
-          <span class="memory-editor-actions">
-            <button class="btn" disabled={saving} onClick={() => setEditing(false)}>
-              {t('common.cancel')}
-            </button>
-            <button class="btn primary" disabled={saving || over} onClick={save}>
-              {saving ? t('memory.saving') : t('common.save')}
-            </button>
-          </span>
-        </div>
-      </div>
+      <MemoryEditor
+        name={FILE_NAME[file]}
+        value={draft}
+        onInput={setDraft}
+        chars={countChars(draft)}
+        limit={limit}
+        saving={saving}
+        onCancel={() => setEditing(false)}
+        onSave={save}
+      />
     )
   }
 
   return (
-    <div class="card memory-card">
-      {displayName && <h2 class="block-title file-title">{displayName}</h2>}
-      <EntryList entries={entries} fresh={fresh} persist={persistEntries} />
-      <div class="memory-edit-row">
-        <span class="dim memory-counter mono">
-          {countChars(content)} / {limit}
+    <MemoryFileCard
+      name={FILE_NAME[file]}
+      entries={entries}
+      fresh={fresh}
+      persist={persistEntries}
+      chars={countChars(content)}
+      limit={limit}
+      onEdit={() => {
+        setDraft(content)
+        setEditing(true)
+      }}
+    />
+  )
+}
+
+/** The editor for a whole file: the same head as the read card, a monospace
+ *  well, and the save/cancel pair where the eye expects it. */
+function MemoryEditor({
+  name,
+  value,
+  onInput,
+  chars,
+  limit,
+  hint,
+  saving,
+  onCancel,
+  onSave,
+}: {
+  name: string
+  value: string
+  onInput(v: string): void
+  chars: number
+  limit: number
+  hint?: string
+  saving: boolean
+  onCancel(): void
+  onSave(): void
+}) {
+  const over = limit > 0 && chars > limit
+  return (
+    <div class="card memory-card memory-editor">
+      <div class="memory-card-head">
+        <span class="memory-card-name mono">{name}</span>
+        <UsageMeter chars={chars} limit={limit} />
+        <span class={`memory-counter mono${over ? ' over' : ''}`}>
+          {chars} / {limit}
         </span>
-        <button class="btn" onClick={startEdit}>
-          {t('memory.edit')}
-        </button>
+        <div class="memory-card-tools">
+          <button class="btn small ghost" disabled={saving} onClick={onCancel}>
+            {t('common.cancel')}
+          </button>
+          <button class="btn small primary" disabled={saving || over} onClick={onSave}>
+            {saving ? t('memory.saving') : t('common.save')}
+          </button>
+        </div>
       </div>
+      <textarea
+        class="input memory-textarea mono"
+        value={value}
+        onInput={(e) => onInput((e.target as HTMLTextAreaElement).value)}
+        rows={Math.min(22, Math.max(10, value.split('\n').length + 2))}
+        spellcheck={false}
+      />
+      {hint && <p class="hint memory-editor-hint">{hint}</p>}
     </div>
   )
 }
 
-/** One §-entry list with filter, per-entry edit/delete and a quick-add row —
- *  shared by the USER.md / MEMORY.md / topic / project surfaces so every list
- *  offers the same powers. persist() rewrites the whole file (the backend's
- *  only write shape) and resolves whether the save landed. Entries the
- *  Dreamer promoted out of the daily logs keep their `[from:…]` badge. */
-function EntryList({
+/** One §-entry file as a single card: file name, entry count, budget meter,
+ *  filter and the edit verb share the head; the rows below are the entries
+ *  themselves; the add field closes the card. Shared by USER.md, MEMORY.md,
+ *  topic files and project memory so every list offers the same powers. */
+function MemoryFileCard({
+  name,
   entries,
   fresh,
   persist,
+  chars,
+  limit,
+  onEdit,
+  actions,
 }: {
+  name: string
   entries: string[]
   fresh?: Set<string>
   persist(next: string[]): Promise<boolean>
+  chars: number
+  limit: number
+  onEdit(): void
+  /** Extra head verbs (delete this topic, …). */
+  actions?: ComponentChildren
 }) {
   const [query, setQuery] = useState('')
   const [fixIdx, setFixIdx] = useState<number | null>(null)
@@ -256,9 +406,7 @@ function EntryList({
   const [busy, setBusy] = useState(false)
 
   const q = query.trim().toLowerCase()
-  const visible = entries
-    .map((e, i) => ({ e, i }))
-    .filter(({ e }) => q === '' || e.toLowerCase().includes(q))
+  const visible = entries.map((e, i) => ({ e, i })).filter(({ e }) => q === '' || e.toLowerCase().includes(q))
 
   async function remove(i: number) {
     const ok = await confirmDialog({
@@ -289,75 +437,109 @@ function EntryList({
   }
 
   return (
-    <>
-      {entries.length === 0 ? (
-        <p class="dim">{t('memory.empty')}</p>
-      ) : (
-        <>
-          <input
-            class="input memory-search"
-            type="search"
-            placeholder={t('memory.search')}
-            value={query}
-            onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-          />
-          {visible.length === 0 ? (
-            <p class="dim">{t('memory.noMatches')}</p>
-          ) : (
-            <ul class="memory-entries">
-              {visible.map(({ e, i }) => {
-                const fromLog = fromLogSource(e)
-                return (
-                  <li key={i} class={`memory-entry${fresh?.has(e) ? ' fresh' : ''}`} title={e}>
-                    {fixIdx === i ? (
-                      <>
-                        <textarea
-                          class="input memory-entry-editbox mono"
-                          rows={3}
-                          value={fixDraft}
-                          onInput={(ev) => setFixDraft((ev.target as HTMLTextAreaElement).value)}
-                          spellcheck={false}
-                        />
-                        <span class="memory-entry-actions">
-                          <button class="btn small" onClick={() => setFixIdx(null)}>
-                            {t('common.cancel')}
-                          </button>
-                          <button class="btn small primary" onClick={() => saveFix(i)}>
-                            {t('common.save')}
-                          </button>
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        {e}
-                        {fromLog && (
-                          <span class="badge from-log" title={t('memory.fromLogTip')}>
-                            {t('memory.fromLog')}
-                          </span>
-                        )}
-                        <span class="memory-entry-actions">
-                          <button
-                            class="btn small"
-                            onClick={() => {
-                              setFixIdx(i)
-                              setFixDraft(e)
-                            }}
-                          >
-                            {t('memory.edit')}
-                          </button>
-                          <button class="btn small" onClick={() => remove(i)}>
-                            {t('memory.entryDelete')}
-                          </button>
-                        </span>
-                      </>
-                    )}
-                  </li>
-                )
-              })}
-            </ul>
+    <div class="card memory-card">
+      <div class="memory-card-head">
+        <span class="memory-card-name mono" title={name}>
+          {name}
+        </span>
+        <span class="dim memory-card-count">{t('memory.entriesN', { n: entries.length })}</span>
+        <UsageMeter chars={chars} limit={limit} />
+        {limit > 0 && (
+          <span class="memory-counter mono">
+            {chars} / {limit}
+          </span>
+        )}
+        <div class="memory-card-tools">
+          {entries.length > 0 && (
+            <label class="memory-filter">
+              <Icon name="search" size={13} />
+              <input
+                type="search"
+                placeholder={t('memory.search')}
+                value={query}
+                onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+              />
+            </label>
           )}
-        </>
+          {actions}
+          <button class="btn small" onClick={onEdit}>
+            {t('memory.edit')}
+          </button>
+        </div>
+      </div>
+
+      {entries.length === 0 ? (
+        <p class="dim memory-empty">{t('memory.empty')}</p>
+      ) : visible.length === 0 ? (
+        <p class="dim memory-empty">{t('memory.noMatches')}</p>
+      ) : (
+        <ul class="memory-entries">
+          {visible.map(({ e, i }) => {
+            const fromLog = fromLogSource(e)
+            return (
+              <li key={i} class={`memory-entry${fresh?.has(e) ? ' fresh' : ''}`}>
+                <span class="memory-entry-idx mono" aria-hidden="true">
+                  {String(i + 1).padStart(2, '0')}
+                </span>
+                <div class="memory-entry-main">
+                  {fixIdx === i ? (
+                    <>
+                      <textarea
+                        class="input memory-entry-editbox mono"
+                        rows={3}
+                        value={fixDraft}
+                        onInput={(ev) => setFixDraft((ev.target as HTMLTextAreaElement).value)}
+                        spellcheck={false}
+                      />
+                      <div class="memory-entry-fix">
+                        <button class="btn small ghost" onClick={() => setFixIdx(null)}>
+                          {t('common.cancel')}
+                        </button>
+                        <button class="btn small primary" onClick={() => saveFix(i)}>
+                          {t('common.save')}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <span class="memory-entry-text" title={e}>
+                      {stripFromMarker(e)}
+                    </span>
+                  )}
+                  {fromLog && fixIdx !== i && (
+                    <span class="badge from-log" title={t('memory.fromLogTip')}>
+                      {t('memory.fromLog')}
+                    </span>
+                  )}
+                </div>
+                {fixIdx !== i && (
+                  <span class="memory-entry-actions">
+                    <button
+                      class="icon-btn"
+                      title={t('memory.edit')}
+                      aria-label={t('memory.edit')}
+                      onClick={() => {
+                        setFixIdx(i)
+                        setFixDraft(e)
+                      }}
+                    >
+                      <Icon name="pencil" size={13} />
+                    </button>
+                    <button
+                      class="icon-btn memory-entry-del"
+                      title={t('memory.entryDelete')}
+                      aria-label={t('memory.entryDelete')}
+                      onClick={() => remove(i)}
+                    >
+                      <Icon name="trash" size={13} />
+                    </button>
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
       )}
+
       <div class="memory-add-row">
         <input
           class="input"
@@ -373,7 +555,7 @@ function EntryList({
           {t('memory.add')}
         </button>
       </div>
-    </>
+    </div>
   )
 }
 
@@ -413,49 +595,88 @@ function DreamsView({ content, reload }: { content: string; reload(): void }) {
 
   if (editing) {
     return (
-      <div class="card memory-editor">
-        <textarea
-          class="input memory-textarea mono"
-          value={draft}
-          onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
-          rows={Math.min(24, Math.max(10, draft.split('\n').length + 2))}
-          spellcheck={false}
-        />
-        <div class="memory-editor-foot">
-          <span class="memory-counter mono">{[...draft].length}</span>
-          <span class="hint">{t('memory.dreamsEditHint')}</span>
-          <span class="memory-editor-actions">
-            <button class="btn" disabled={saving} onClick={() => setEditing(false)}>
-              {t('common.cancel')}
-            </button>
-            <button class="btn primary" disabled={saving} onClick={save}>
-              {saving ? t('memory.saving') : t('common.save')}
-            </button>
-          </span>
-        </div>
-      </div>
+      <MemoryEditor
+        name="DREAMS.md"
+        value={draft}
+        onInput={setDraft}
+        chars={[...draft].length}
+        limit={0}
+        hint={t('memory.dreamsEditHint')}
+        saving={saving}
+        onCancel={() => setEditing(false)}
+        onSave={save}
+      />
     )
   }
 
   return (
     <div class="card memory-card">
+      <div class="memory-card-head">
+        <span class="memory-card-name mono">DREAMS.md</span>
+        <span class="dim memory-card-count">{t('memory.charsN', { n: [...content].length })}</span>
+        <div class="memory-card-tools">
+          <button class="btn small" onClick={startEdit}>
+            {t('memory.edit')}
+          </button>
+        </div>
+      </div>
       {content ? (
         <pre class="memory-content mono">{content}</pre>
       ) : (
-        <p class="dim">{t('memory.empty')}</p>
+        <p class="dim memory-empty">{t('memory.empty')}</p>
       )}
-      <div class="memory-edit-row">
-        <span class="dim memory-counter mono">{[...content].length}</span>
-        <button class="btn" onClick={startEdit}>
-          {t('memory.edit')}
-        </button>
-      </div>
     </div>
   )
 }
 
-/** topics/*.md — the selective-load memory files. Pick one on the left to
- *  edit, type a name to create a new one, delete behind a confirm. */
+/** An empty pane: the icon names the surface, the line says what to do next.
+ *  It is not a bare sentence floating in a card. */
+function MemoryPlaceholder({
+  icon,
+  text,
+  children,
+}: {
+  icon: IconName
+  text: string
+  children?: ComponentChildren
+}) {
+  return (
+    <div class="card memory-card memory-placeholder">
+      <Icon name={icon} size={20} />
+      <p class="dim">{text}</p>
+      {children}
+    </div>
+  )
+}
+
+/** The left rail shared by topics / daily / projects: a title with a count, a
+ *  scrollable list, and an optional foot (create a topic, prune the diary). */
+function MemoryRail({
+  title,
+  count,
+  foot,
+  children,
+}: {
+  title: string
+  count?: number
+  foot?: ComponentChildren
+  children: ComponentChildren
+}) {
+  return (
+    <aside class="card memory-rail">
+      <div class="memory-rail-head">
+        <span class="memory-rail-title">{title}</span>
+        {count != null && <span class="mono dim memory-rail-count">{count}</span>}
+      </div>
+      <div class="memory-rail-list">{children}</div>
+      {foot && <div class="memory-rail-foot">{foot}</div>}
+    </aside>
+  )
+}
+
+/** topics/*.md — the selective-load memory files. The rail picks one (the
+ *  first is open by default, like the diary), typing a name creates a new
+ *  one, and the card edits it in place. */
 function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: number; reload(): void }) {
   const [selected, setSelected] = useState<string>('')
   const [newName, setNewName] = useState('')
@@ -463,7 +684,7 @@ function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: num
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
 
-  const current = topics.find((tp) => tp.name === selected) ?? null
+  const current = topics.find((tp) => tp.name === selected) ?? topics[0] ?? null
 
   function open(name: string) {
     setSelected(name)
@@ -532,94 +753,103 @@ function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: num
     }
   }
 
-  const chars = countChars(draft)
-  const over = editing && limit > 0 && chars > limit
+  const createRow = (
+    <div class="memory-empty-form">
+      <input
+        class="input mono"
+        type="text"
+        placeholder={t('memory.topicNewPlaceholder')}
+        value={newName}
+        onInput={(e) => setNewName((e.target as HTMLInputElement).value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') create()
+        }}
+      />
+      <button class="btn small" disabled={!newName.trim() || saving} onClick={create}>
+        {t('memory.topicNew')}
+      </button>
+    </div>
+  )
+
+  // No topics yet: one card that both explains the surface and owns the
+  // create field, instead of an empty rail beside an empty pane.
+  if (topics.length === 0) {
+    return (
+      <MemoryPlaceholder icon="folder" text={t('memory.topicsEmpty')}>
+        {createRow}
+      </MemoryPlaceholder>
+    )
+  }
 
   return (
     <div class="memory-split">
-      <div class="card">
-        <h2 class="block-title">{t('memory.topics')}</h2>
+      <MemoryRail
+        title={t('memory.topics')}
+        count={topics.length}
+        foot={
+          <>
+            <input
+              class="input mono"
+              type="text"
+              placeholder={t('memory.topicNewPlaceholder')}
+              value={newName}
+              onInput={(e) => setNewName((e.target as HTMLInputElement).value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') create()
+              }}
+            />
+            <button class="btn small" disabled={!newName.trim() || saving} onClick={create}>
+              {t('memory.topicNew')}
+            </button>
+          </>
+        }
+      >
         <ul class="memory-file-list">
-          {topics.length === 0 && <li class="dim">{t('memory.topicsEmpty')}</li>}
           {topics.map((tp) => (
             <li key={tp.name}>
               <button
-                class={`memory-file-item${selected === tp.name ? ' active' : ''}`}
+                class={`memory-file-item${current?.name === tp.name ? ' active' : ''}`}
                 onClick={() => open(tp.name)}
               >
-                {tp.name}
+                <span class="memory-file-label">{tp.name}</span>
+                <span class="memory-file-meta mono">{parseEntries(tp.content).length}</span>
               </button>
             </li>
           ))}
         </ul>
-        <div class="memory-topic-foot">
-          <input
-            class="input mono"
-            type="text"
-            placeholder={t('memory.topicNewPlaceholder')}
-            value={newName}
-            onInput={(e) => setNewName((e.target as HTMLInputElement).value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') create()
-            }}
-          />
-          <button class="btn small" disabled={!newName.trim() || saving} onClick={create}>
-            {t('memory.topicNew')}
-          </button>
-        </div>
-      </div>
-
-      <div>
+      </MemoryRail>
+      <div class="memory-pane">
         {!current ? (
-          <div class="card memory-card">
-            <p class="dim">{t('memory.topicPick')}</p>
-          </div>
+          <MemoryPlaceholder icon="folder" text={t('memory.topicPick')} />
         ) : editing ? (
-          <div class="card memory-editor">
-            <textarea
-              class="input memory-textarea mono"
-              value={draft}
-              onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
-              rows={Math.min(20, Math.max(8, draft.split('\n').length + 2))}
-              spellcheck={false}
-            />
-            <div class="memory-editor-foot">
-              <span class={`memory-counter mono${over ? ' over' : ''}`}>
-                {chars} / {limit}
-              </span>
-              <span class="hint">{t('memory.editHint')}</span>
-              <span class="memory-editor-actions">
-                <button class="btn" disabled={saving} onClick={() => setEditing(false)}>
-                  {t('common.cancel')}
-                </button>
-                <button class="btn primary" disabled={saving || over} onClick={save}>
-                  {saving ? t('memory.saving') : t('common.save')}
-                </button>
-              </span>
-            </div>
-          </div>
+          <MemoryEditor
+            name={`topics/${current.name}.md`}
+            value={draft}
+            onInput={setDraft}
+            chars={countChars(draft)}
+            limit={limit}
+            hint={t('memory.editHint')}
+            saving={saving}
+            onCancel={() => setEditing(false)}
+            onSave={save}
+          />
         ) : (
-          <div class="card memory-card">
-            <h2 class="block-title mono file-title">{current.name}</h2>
-            <EntryList entries={parseEntries(current.content)} persist={persistEntries} />
-            <div class="memory-edit-row">
-              <span class="dim memory-counter mono">
-                {countChars(current.content)} / {limit}
-              </span>
-              <button
-                class="btn"
-                onClick={() => {
-                  setDraft(current.content)
-                  setEditing(true)
-                }}
-              >
-                {t('memory.edit')}
-              </button>
-              <button class="btn" onClick={() => remove(current.name)}>
+          <MemoryFileCard
+            name={`topics/${current.name}.md`}
+            entries={parseEntries(current.content)}
+            persist={persistEntries}
+            chars={countChars(current.content)}
+            limit={limit}
+            onEdit={() => {
+              setDraft(current.content)
+              setEditing(true)
+            }}
+            actions={
+              <button class="btn small ghost memory-card-del" onClick={() => remove(current.name)}>
                 {t('memory.topicDelete')}
               </button>
-            </div>
-          </div>
+            }
+          />
         )}
       </div>
     </div>
@@ -671,23 +901,40 @@ function DailyView({ daily, reload }: { daily: TopicFile[]; reload(): void }) {
     }
   }
 
+  if (daily.length === 0) {
+    return (
+      <MemoryPlaceholder icon="list-checks" text={t('memory.dailyEmpty')}>
+        <p class="hint">{t('memory.dailyRetention')}</p>
+      </MemoryPlaceholder>
+    )
+  }
+
   return (
     <div class="memory-split">
-      <div class="card">
-        <h2 class="block-title">{t('memory.daily')}</h2>
-        <p class="hint">{t('memory.dailyHint')}</p>
+      <MemoryRail
+        title={t('memory.daily')}
+        count={daily.length}
+        foot={
+          <>
+            <button class="btn small" disabled={pruning} onClick={prune}>
+              {pruning ? t('memory.dailyPruning') : t('memory.dailyPrune')}
+            </button>
+            <p class="hint memory-rail-hint">{t('memory.dailyRetention')}</p>
+          </>
+        }
+      >
         <ul class="memory-file-list">
-          {daily.length === 0 && <li class="dim">{t('memory.dailyEmpty')}</li>}
           {daily.map((d) => (
             <li key={d.name} class="memory-file-row">
               <button
                 class={`memory-file-item${current?.name === d.name ? ' active' : ''}`}
                 onClick={() => setSelected(d.name)}
               >
-                {d.name}
+                <span class="memory-file-label">{d.name}</span>
+                <span class="memory-file-meta mono">{dayLines(d.content)}</span>
               </button>
               <button
-                class="btn small memory-file-del"
+                class="btn small ghost memory-file-del"
                 title={t('memory.dailyDelete')}
                 aria-label={`${t('memory.dailyDelete')} ${d.name}`}
                 onClick={() => remove(d.name)}
@@ -697,23 +944,24 @@ function DailyView({ daily, reload }: { daily: TopicFile[]; reload(): void }) {
             </li>
           ))}
         </ul>
-        <div class="memory-topic-foot">
-          <button class="btn small" disabled={pruning || daily.length === 0} onClick={prune}>
-            {pruning ? t('memory.dailyPruning') : t('memory.dailyPrune')}
-          </button>
-        </div>
-        <p class="hint">{t('memory.dailyRetention')}</p>
-      </div>
-      <div class="card memory-card">
-        {current ? (
-          current.content ? (
-            <pre class="memory-content mono">{current.content}</pre>
+      </MemoryRail>
+      <div class="memory-pane">
+        <div class="card memory-card">
+          <div class="memory-card-head">
+            <span class="memory-card-name mono">{current ? `daily/${current.name}.md` : 'daily'}</span>
+            {current && <span class="dim memory-card-count">{t('memory.entriesN', { n: dayLines(current.content) })}</span>}
+            <span class="dim memory-card-hint memory-card-tools">{t('memory.dailyHint')}</span>
+          </div>
+          {current ? (
+            current.content ? (
+              <pre class="memory-content mono">{current.content}</pre>
+            ) : (
+              <p class="dim memory-empty">{t('memory.empty')}</p>
+            )
           ) : (
-            <p class="dim">{t('memory.empty')}</p>
-          )
-        ) : (
-          <p class="dim">{t('memory.dailyEmpty')}</p>
-        )}
+            <p class="dim memory-empty">{t('memory.dailyEmpty')}</p>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -722,7 +970,7 @@ function DailyView({ daily, reload }: { daily: TopicFile[]; reload(): void }) {
 /** Per-project MEMORY.md: pick a project, read or rewrite its memory with
  *  the configured project cap. */
 function ProjectsView({ defaultLimit, reload }: { defaultLimit: number; reload(): void }) {
-  const [projects, setProjects] = useState<string[] | null>(null)
+  const [list, setList] = useState<ProjectDetail[] | null>(null)
   const [selected, setSelected] = useState('')
   const [mem, setMem] = useState<ProjectMemory | null>(null)
   const [loadErr, setLoadErr] = useState('')
@@ -733,32 +981,38 @@ function ProjectsView({ defaultLimit, reload }: { defaultLimit: number; reload()
   useEffect(() => {
     api
       .projects()
-      .then((p) => setProjects(p.projects))
+      .then((p) => setList(p.detail?.length ? p.detail : p.projects.map((name) => ({ name }) as ProjectDetail)))
       .catch((e: unknown) => setLoadErr(e instanceof Error ? e.message : String(e)))
   }, [])
 
+  const current = useMemo(
+    () => list?.find((p) => p.name === selected) ?? list?.[0] ?? null,
+    [list, selected],
+  )
+
   useEffect(() => {
-    if (!selected) {
+    const name = current?.name
+    if (!name) {
       setMem(null)
       return
     }
     setMem(null)
     setEditing(false)
     api
-      .projectMemory(selected)
+      .projectMemory(name)
       .then(setMem)
       .catch((e: unknown) => setLoadErr(e instanceof Error ? e.message : String(e)))
-  }, [selected])
+  }, [current?.name])
 
   async function save() {
-    if (saving || !selected) return
+    if (saving || !current) return
     setSaving(true)
     try {
-      await api.saveProjectMemory(selected, draft)
+      await api.saveProjectMemory(current.name, draft)
       toast(t('memory.saved'), 'success')
       setEditing(false)
       reload()
-      const re = await api.projectMemory(selected)
+      const re = await api.projectMemory(current.name)
       setMem(re)
     } catch (e) {
       toastError(e)
@@ -769,11 +1023,11 @@ function ProjectsView({ defaultLimit, reload }: { defaultLimit: number; reload()
 
   /** Per-entry ops write the whole project file back (same route as the editor). */
   async function persistEntries(next: string[]) {
-    if (!selected) return false
+    if (!current) return false
     try {
-      await api.saveProjectMemory(selected, next.join('\n§\n'))
+      await api.saveProjectMemory(current.name, next.join('\n§\n'))
       toast(t('memory.saved'), 'success')
-      const re = await api.projectMemory(selected)
+      const re = await api.projectMemory(current.name)
       setMem(re)
       return true
     } catch (e) {
@@ -783,88 +1037,61 @@ function ProjectsView({ defaultLimit, reload }: { defaultLimit: number; reload()
   }
 
   const limit = mem?.limit ?? defaultLimit
-  const chars = countChars(draft)
-  const over = editing && limit > 0 && chars > limit
+
+  if (loadErr && !list) {
+    return <MemoryPlaceholder icon="layout" text={loadErr} />
+  }
+  if (!list) return <MemoryPlaceholder icon="layout" text={t('common.loading')} />
+  if (list.length === 0) return <MemoryPlaceholder icon="layout" text={t('memory.projectsEmpty')} />
 
   return (
     <div class="memory-split">
-      <div class="card">
-        <h2 class="block-title">{t('memory.projects')}</h2>
-        {loadErr && <p class="gate-error">{loadErr}</p>}
-        {!projects ? (
-          <p class="dim">{t('common.loading')}</p>
-        ) : projects.length === 0 ? (
-          <p class="dim">{t('memory.projectsEmpty')}</p>
-        ) : (
-          <ul class="memory-file-list">
-            {projects.map((p) => (
-              <li key={p}>
-                <button
-                  class={`memory-file-item${selected === p ? ' active' : ''}`}
-                  onClick={() => setSelected(p)}
-                >
-                  {p}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      <MemoryRail title={t('memory.projects')} count={list.length}>
+        <ul class="memory-file-list">
+          {list.map((p) => (
+            <li key={p.name}>
+              <button
+                class={`memory-file-item${current?.name === p.name ? ' active' : ''}`}
+                onClick={() => setSelected(p.name)}
+              >
+                <span class="memory-file-label">{p.name}</span>
+                {p.memory_entries != null && <span class="memory-file-meta mono">{p.memory_entries}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </MemoryRail>
 
-      <div>
-        {!selected ? (
-          <div class="card memory-card">
-            <p class="dim">{t('memory.projectPick')}</p>
-          </div>
+      <div class="memory-pane">
+        {loadErr && <p class="gate-error">{loadErr}</p>}
+        {!current ? (
+          <MemoryPlaceholder icon="layout" text={t('memory.projectPick')} />
+        ) : !mem ? (
+          <MemoryPlaceholder icon="layout" text={t('common.loading')} />
         ) : editing ? (
-          <div class="card memory-editor">
-            <textarea
-              class="input memory-textarea mono"
-              value={draft}
-              onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
-              rows={Math.min(20, Math.max(8, draft.split('\n').length + 2))}
-              spellcheck={false}
-            />
-            <div class="memory-editor-foot">
-              <span class={`memory-counter mono${over ? ' over' : ''}`}>
-                {chars} / {limit}
-              </span>
-              <span class="hint">{t('memory.editHint')}</span>
-              <span class="memory-editor-actions">
-                <button class="btn" disabled={saving} onClick={() => setEditing(false)}>
-                  {t('common.cancel')}
-                </button>
-                <button class="btn primary" disabled={saving || over} onClick={save}>
-                  {saving ? t('memory.saving') : t('common.save')}
-                </button>
-              </span>
-            </div>
-          </div>
+          <MemoryEditor
+            name={current.name}
+            value={draft}
+            onInput={setDraft}
+            chars={countChars(draft)}
+            limit={limit}
+            hint={t('memory.editHint')}
+            saving={saving}
+            onCancel={() => setEditing(false)}
+            onSave={save}
+          />
         ) : (
-          <div class="card memory-card">
-            <h2 class="block-title mono file-title">{selected}</h2>
-            {!mem ? (
-              <p class="dim">{t('common.loading')}</p>
-            ) : (
-              <EntryList entries={parseEntries(mem.content)} persist={persistEntries} />
-            )}
-            {mem && (
-              <div class="memory-edit-row">
-                <span class="dim memory-counter mono">
-                  {countChars(mem.content)} / {limit}
-                </span>
-                <button
-                  class="btn"
-                  onClick={() => {
-                    setDraft(mem.content)
-                    setEditing(true)
-                  }}
-                >
-                  {t('memory.edit')}
-                </button>
-              </div>
-            )}
-          </div>
+          <MemoryFileCard
+            name={current.name}
+            entries={parseEntries(mem.content)}
+            persist={persistEntries}
+            chars={countChars(mem.content)}
+            limit={limit}
+            onEdit={() => {
+              setDraft(mem.content)
+              setEditing(true)
+            }}
+          />
         )}
       </div>
     </div>
@@ -890,8 +1117,8 @@ function GraphTab({ onOpenTab }: { onOpenTab(tab: Tab): void }) {
     else if (n.kind === 'skill') navigate({ view: 'settings', tab: 'skills' })
   }
 
-  if (error) return <ErrorState title={t('memory.graphTitle')} sub="" error={error} onRetry={() => {}} />
-  if (!graph) return <LoadingState title={t('memory.graphTitle')} sub="" />
+  if (error) return <ErrorState head={false} title={t('memory.graphTitle')} sub="" error={error} onRetry={() => {}} />
+  if (!graph) return <LoadingState head={false} title={t('memory.graphTitle')} sub="" />
   if (graph.nodes.length === 0) return <p class="dim">{t('memory.graphEmpty')}</p>
   return <MemoryGraphView graph={graph} onOpen={openNode} />
 }
@@ -901,6 +1128,18 @@ function GraphTab({ onOpenTab }: { onOpenTab(tab: Tab): void }) {
 function fromLogSource(entry: string): string | null {
   const m = entry.match(/\[from:([^\]]+)\]/)
   return m && m[1] ? m[1] : null
+}
+
+/** The marker is provenance, not prose: the row shows it as a badge, so the
+ *  text itself is rendered without it. */
+function stripFromMarker(entry: string): string {
+  return entry.replace(/^\[from:[^\]]+\]\s*/, '')
+}
+
+/** Diary lines: the warm-layer files are bullet lists, so the useful count is
+ *  the number of entries, not the character total. */
+function dayLines(content: string): number {
+  return content.split('\n').filter((l) => l.trim() !== '').length
 }
 
 /** Split a memory file into its §-separated entries — same parse the backend

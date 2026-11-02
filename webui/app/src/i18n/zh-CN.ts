@@ -917,8 +917,11 @@ const zhCN: Messages = {
   // Memory view
   'memory.title': '记忆',
   'memory.subtitle': 'Agent 的长期记忆：关于你（USER.md）、它学到的东西（MEMORY.md）和它的梦境（DREAMS.md）。',
+  'memory.usageTip': '已用 {chars} / {limit} 字符',
+  'memory.charsN': '{n} 字符',
+  'memory.entriesN': '{n} 条',
+  'memory.headSummary': '{user} 条关于你 · {memory} 条记忆 · {topics} 个主题 · {daily} 天日记',
   'memory.nodeTime': '节点系统时间',
-  'memory.refreshedAt': '上次读取',
   'memory.refresh': '刷新',
   'memory.user': '关于你',
   'memory.memory': '学到的东西',
