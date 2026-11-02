@@ -396,7 +396,7 @@ const en: Messages = {
   'sessions.you': 'You',
   'sessions.hello': 'Hi, I’m Panda',
   'sessions.hint':
-    'Each conversation runs in its own git worktree — ask anything, changes stay isolated on a branch.',
+    'Choose a workspace and each conversation runs in its own git worktree — ask anything, changes stay isolated on a branch.',
   'sessions.s1': 'Summarize this repository',
   'sessions.s2': 'Run the test suite and report',
   'sessions.s3': 'Find and fix a small bug',

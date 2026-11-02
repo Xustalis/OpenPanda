@@ -794,7 +794,11 @@ func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
 		return m.startOnboarding()
 	}
 
-	if m.r == nil || m.r.cfg == nil || !configured {
+	// `onboarded` records that the user saw the model step and chose
+	// "Configure Later". Forcing the provider picker again on the next launch
+	// contradicted that choice; the welcome banner carries the reminder
+	// instead, and /model remains one keystroke away.
+	if m.r == nil || m.r.cfg == nil || (!configured && !onboarded) {
 		return m.startModelWizard()
 	}
 

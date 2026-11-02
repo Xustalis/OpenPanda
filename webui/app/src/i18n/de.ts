@@ -394,7 +394,7 @@ const de: Messages = {
   'sessions.you': 'Du',
   'sessions.thoughtTitle': 'Denkprozess (Chain of Thought)',
   'sessions.hello': 'Hi, ich bin Panda',
-  'sessions.hint': 'Jede Unterhaltung läuft in ihrem eigenen git-Worktree — Änderungen bleiben auf einem Branch isoliert.',
+  'sessions.hint': 'Nach der Wahl eines Arbeitsverzeichnisses läuft jede Unterhaltung in ihrem eigenen git-Worktree — Änderungen bleiben auf einem Branch isoliert.',
   'sessions.s1': 'Fasse dieses Repository zusammen',
   'sessions.s2': 'Tests ausführen und berichten',
   'sessions.s3': 'Finde und behebe einen kleinen Bug',

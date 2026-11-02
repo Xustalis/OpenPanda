@@ -85,6 +85,14 @@ func TestTUISplashScreen(t *testing.T) {
 	mOnboarded = nextO.(tuiModel)
 	entModelWiz, _ := mOnboarded.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	mWiz := entModelWiz.(tuiModel)
+	if mWiz.mode != modeIdle {
+		t.Fatalf("a skipped model setup must stay in modeIdle, got %v", mWiz.mode)
+	}
+	if !strings.Contains(mWiz.View(), "尚未配置模型") {
+		t.Fatalf("expected the no-model warning in the welcome banner: %s", mWiz.View())
+	}
+	// /model remains the way back into the provider guide.
+	mWiz, _ = mWiz.startModelWizard()
 	if mWiz.mode != modeModelWizard || mWiz.wizardStep != wizardStepProvider {
 		t.Fatalf("expected transition to modeModelWizard, got %v (step %v)", mWiz.mode, mWiz.wizardStep)
 	}
@@ -904,21 +912,21 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 
 	// Verify Approval Mode view
 	approvalView := m.View()
-	if !strings.Contains(approvalView, "Choose Execution Safety & Approval Mode:") {
+	if !strings.Contains(approvalView, "Choose Task Approval Mode:") {
 		t.Fatalf("expected approval mode title in view: %s", approvalView)
 	}
-	if !strings.Contains(approvalView, "Interactive Approval (Recommended)") {
-		t.Fatalf("expected interactive approval option in view: %s", approvalView)
+	if !strings.Contains(approvalView, "On Request (Recommended)") {
+		t.Fatalf("expected on-request approval option in view: %s", approvalView)
 	}
 
-	// Confirm Interactive Approval (item 0) -> enters onboardingStepModelChoice
+	// Confirm On Request (item 0) -> enters onboardingStepModelChoice
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(tuiModel)
 	if m.onboardingStep != onboardingStepModelChoice {
 		t.Fatalf("expected onboardingStepModelChoice, got %v", m.onboardingStep)
 	}
-	if cfg.Approval.Mode != "prompt" {
-		t.Fatalf("expected approval mode 'prompt', got %v", cfg.Approval.Mode)
+	if cfg.Approval.Mode != config.ApprovalModeOnRequest {
+		t.Fatalf("expected approval mode %q, got %v", config.ApprovalModeOnRequest, cfg.Approval.Mode)
 	}
 
 	// Verify Model Choice view

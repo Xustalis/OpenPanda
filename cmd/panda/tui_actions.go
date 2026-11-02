@@ -1219,10 +1219,19 @@ func (m tuiModel) startOnboarding() (tuiModel, tea.Cmd) {
 	m.termsReconsent = false
 
 	title := "Welcome to OpenPanda · Please select your language / 请选择语言:"
-	sl := NewSelectionList(title, buildLanguageItems())
+	items := buildLanguageItems()
+	sl := NewSelectionList(title, items)
 	sl.Boxed = true
 	sl.FooterHints = i18n.T(m.loc, "tui.onboard.hintsExit")
-	sl.Cursor = 0 // Default English
+	// Preselect the language the process already detected. Hard-coding English
+	// here meant a zh-CN user saw a Chinese splash, pressed Enter on the
+	// obvious default, and got an English UI.
+	for i, item := range items {
+		if item.ID == string(m.loc) {
+			sl.Cursor = i
+			break
+		}
+	}
 	m.selectionList = sl
 	return m, nil
 }
@@ -1234,7 +1243,7 @@ func buildLanguageItems() []SelectionItem {
 			Index:   1,
 			ID:      "en",
 			Title:   "English",
-			Snippet: "Default / System Language",
+			Snippet: "English",
 			Badge:   "[Default]",
 		},
 		{
@@ -1264,27 +1273,32 @@ func buildLanguageItems() []SelectionItem {
 	}
 }
 
-// buildApprovalModeItems returns execution approval safety options.
+// buildApprovalModeItems returns execution approval safety options. The IDs
+// are the canonical approval.mode values, not the legacy prompt/auto/strict
+// aliases: writing "auto" here used to normalize to "never" and turn the
+// middle "read-only auto" option into a blanket auto-consent. The labels and
+// snippets must describe the three real modes, in the same vocabulary the
+// web console uses (always / on-request / never).
 func buildApprovalModeItems(loc i18n.Locale) []SelectionItem {
 	return []SelectionItem{
 		{
 			Index:   1,
-			ID:      "prompt",
-			Title:   i18n.T(loc, "tui.onboard.approve.prompt.title"),
-			Snippet: i18n.T(loc, "tui.onboard.approve.prompt.snippet"),
-			Badge:   i18n.T(loc, "tui.onboard.approve.prompt.badge"),
+			ID:      config.ApprovalModeOnRequest,
+			Title:   i18n.T(loc, "tui.onboard.approve.onRequest.title"),
+			Snippet: i18n.T(loc, "tui.onboard.approve.onRequest.snippet"),
+			Badge:   i18n.T(loc, "tui.onboard.approve.onRequest.badge"),
 		},
 		{
 			Index:   2,
-			ID:      "auto",
-			Title:   i18n.T(loc, "tui.onboard.approve.auto.title"),
-			Snippet: i18n.T(loc, "tui.onboard.approve.auto.snippet"),
+			ID:      config.ApprovalModeAlways,
+			Title:   i18n.T(loc, "tui.onboard.approve.always.title"),
+			Snippet: i18n.T(loc, "tui.onboard.approve.always.snippet"),
 		},
 		{
 			Index:   3,
-			ID:      "strict",
-			Title:   i18n.T(loc, "tui.onboard.approve.strict.title"),
-			Snippet: i18n.T(loc, "tui.onboard.approve.strict.snippet"),
+			ID:      config.ApprovalModeNever,
+			Title:   i18n.T(loc, "tui.onboard.approve.never.title"),
+			Snippet: i18n.T(loc, "tui.onboard.approve.never.snippet"),
 		},
 	}
 }

@@ -390,7 +390,7 @@ const zhCN: Messages = {
   'sessions.thought': '思维链',
   'sessions.you': '你',
   'sessions.hello': '你好，我是 Panda',
-  'sessions.hint': '每个对话都在独立的 git 工作树中运行 — 随便问，改动隔离在专属分支上。',
+  'sessions.hint': '选择工作目录后，对话会在独立的 git 工作树中运行 — 随便问，改动隔离在专属分支上。',
   'sessions.s1': '总结一下这个仓库',
   'sessions.s2': '跑一遍测试并汇报',
   'sessions.s3': '找一个小 bug 并修掉',

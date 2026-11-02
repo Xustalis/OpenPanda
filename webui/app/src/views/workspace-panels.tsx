@@ -6,6 +6,7 @@ import { DeviceGlyph, type Form } from '../components/device-glyph'
 import { ContextMenu, type ContextMenuItem } from '../components/context-menu'
 import { agentLogo } from '../format/agent-logo'
 import { agentInitial } from '../format/agent-role'
+import { t } from '../i18n'
 import { buildWorkspaceEdges, workspaceLinkLine, type PanelRect } from './workspace-links'
 
 /** 工作空间 — 设备面板视图.
@@ -725,7 +726,11 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
           <span class="ws-panel-name">{d.name}</span>
           <span class="ws-panel-meta">{meta(d)}</span>
           {d.local && <span class="ws-panel-tag">{localLabel}</span>}
-          <span class="ws-panel-load mono">
+          <span
+            class="ws-panel-load mono"
+            title={t('nodes.concurrency', { cur: d.tasks, max: d.maxTasks })}
+            aria-label={t('nodes.concurrency', { cur: d.tasks, max: d.maxTasks })}
+          >
             {d.tasks}/{d.maxTasks}
           </span>
           <span

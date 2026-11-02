@@ -66,7 +66,7 @@ OpenPanda 将你机器上已有的终端 AI 编程助手——内置十个专用
 
 - **多模型注册中心与无感故障转移** —— `panda model add|switch|test` 为每个节点管理多个模型供应商并带健康熔断；配额耗尽或凭据失效（401/403）时自动注入备用模型接力执行，任务不中断。
 
-- **多 Harness 并行** —— `panda ask --agents a,b --mode parallel` 把一条指令作为 plan 同时派给多个 Agent 并回收各自结论。
+- **多 Harness 并行** —— `panda task add --agents a,b --mode parallel` 把一条指令作为 plan 同时派给多个 Agent 并回收各自结论。
 
 - **透明执行** —— 每条 Bash 命令、每次文件修改、每次工具调用及其背后的 Agent 与模型，实时流式回传终端与控制台。
 

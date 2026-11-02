@@ -394,7 +394,7 @@ const es: Messages = {
   'sessions.you': 'Tú',
   'sessions.thoughtTitle': 'Proceso de razonamiento (Chain of Thought)',
   'sessions.hello': 'Hola, soy Panda',
-  'sessions.hint': 'Cada conversación corre en su propio worktree de git — los cambios quedan aislados en una rama.',
+  'sessions.hint': 'Al elegir un directorio de trabajo, cada conversación corre en su propio worktree de git — los cambios quedan aislados en una rama.',
   'sessions.s1': 'Resume este repositorio',
   'sessions.s2': 'Ejecuta los tests e informa',
   'sessions.s3': 'Encuentra y arregla un bug pequeño',

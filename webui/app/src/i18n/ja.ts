@@ -393,7 +393,7 @@ const ja: Messages = {
   'sessions.you': 'あなた',
   'sessions.thoughtTitle': '思考プロセス（Chain of Thought）',
   'sessions.hello': 'こんにちは、Panda です',
-  'sessions.hint': '各会話は専用の git ワークツリーで実行されます — 変更は独立したブランチに隔離されます。',
+  'sessions.hint': '作業ディレクトリを選ぶと、各会話は専用の git ワークツリーで実行されます — 変更は独立したブランチに隔離されます。',
   'sessions.s1': 'このリポジトリを要約して',
   'sessions.s2': 'テストを実行して報告して',
   'sessions.s3': '小さなバグを見つけて直して',

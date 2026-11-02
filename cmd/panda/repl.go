@@ -86,6 +86,10 @@ type repl struct {
 	authorize   bool
 	interactive bool
 	quit        bool
+	// modelErr marks a failed `panda model …` subcommand. runModel exits
+	// non-zero on it so scripts can tell a saved model from a rejected one;
+	// the interactive REPL ignores it and keeps the prompt alive.
+	modelErr bool
 	// webMu guards the embedded panel server fields: /web publishes them on
 	// the exec goroutine while the exit paths shut the server down on the
 	// main goroutine.
