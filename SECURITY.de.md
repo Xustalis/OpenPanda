@@ -121,6 +121,8 @@ frei, Teilnahme und signierte Grants ungeachtet; eine Vertrauensstufen-
 Herabstufung unterbricht eine laufende Übertragung sofort, statt die TTL
 des Autorisierungs-Caches abzuwarten.
 
+Lifecycle-Hooks sind eine optionale lokale Erweiterung: standardmäßig aus; das Kind erbt eine freigegebene Umgebung ohne Modell-Anmeldedaten oder Peer-Token; der Befehl wird zuerst bewertet, ein Tier-2-Befehl wird ohne `hooks.allow_tier2` abgelehnt, und jeder Lauf schreibt eine Audit-Zeile. Aufgabenwerte erreichen den Befehl nur über `PANDA_HOOK_*`-Umgebungsvariablen — Platzhalter wie `{title}` werden zu Variablenverweisen, nicht zu wörtlichem Text — und unter Windows über die verzögerte Expansion von `cmd /V:ON` übergeben, sodass ein Wert nie in den Befehls-Parser gelangt.
+
 ## Integritätsverifikation
 
 `panda audit verify` (oder `GET /api/audit` des Panels) verifiziert die

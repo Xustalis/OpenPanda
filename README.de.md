@@ -52,6 +52,15 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 
 ---
 
+## 🆕 Was in v0.1.4 kommt
+
+- **Läufe beginnen am Arbeitsbereich** — jede Agent-Aufgabe trägt eine deterministische Karte ihres Baums (Git-Status, Struktur, Schlüsseldateien und die Build-/Prüfbefehle des Projekts selbst), und der Abschlussrichter sieht die tatsächlich ausgeführten Befehle, bevor er „fertig“ akzeptiert.
+- **Fragen statt raten** — das Einstiegsmodell kann vor dem Anlegen einer Aufgabe begrenzte Multiple-Choice-Fragen stellen, und ein laufender Agent kann dieselben strukturierten Fragen stellen; TUI, Konsole und `panda approve` beantworten sie.
+- **Seitenkanal und Rückspulen** — `/side` (Alias `/btw`) öffnet ein schreibgeschütztes Gespräch neben dem Thread, und jede beendete Antwort hinterlässt einen Prüfpunkt, den `/rewind` wiederherstellt.
+- **Lesen, was der Agent erzeugt hat** — Arbeitsbereichspfade in Antworten sind in der Konsole anklickbar, im Terminal `panda read path:line`; Aufgabenartefakte werden auf einem isolierten zweiten Origin angezeigt.
+- **Die offene Arbeit des Threads auf einen Blick** — eine Aufgabenleiste in der TUI (Strg+B) und der Konsolenkopf listen Laufendes, was auf dich wartet, und die Warteschlange.
+- **Betreiber-Hooks, eingegrenzt** — `task_submitted` / `task_started` / `task_done` / `task_failed` / `task_review` können deine Befehle mit gefilterter Umgebung, Tier-Gate und Audit-Zeile ausführen.
+
 ## 🌟 Was kann OpenPanda?
 
 ### 1. 🌐 Heterogene P2P-Gerätezusammenarbeit
