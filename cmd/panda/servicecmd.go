@@ -83,6 +83,7 @@ func serviceSpec(lan bool) (webServiceSpec, error) {
 	if lan {
 		args = append(args, "-lan")
 	}
+	path = dedupePath(path)
 	logPath := filepath.Join(serviceLogDir(home), webServiceLogStem)
 	return webServiceSpec{
 		Exe: exe, Args: args, Home: home, Path: path, LogPath: logPath,
@@ -97,6 +98,21 @@ func containsPath(list, want string) bool {
 		}
 	}
 	return false
+}
+
+// dedupePath drops repeated entries (the caller's PATH often already contains
+// ~/.local/bin), keeping the first occurrence's order.
+func dedupePath(list string) string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, 8)
+	for _, p := range strings.Split(list, string(os.PathListSeparator)) {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return strings.Join(out, string(os.PathListSeparator))
 }
 
 func serviceLogDir(home string) string {

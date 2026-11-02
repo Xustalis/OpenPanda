@@ -114,3 +114,10 @@ func TestEnsurePanelTokenPersists(t *testing.T) {
 		t.Fatalf("persisted token %q != %q", cfg.Network.PanelToken, first)
 	}
 }
+
+func TestDedupePath(t *testing.T) {
+	got := dedupePath("/a:/b:/a::/c")
+	if got != "/a:/b:/c" {
+		t.Fatalf("dedupePath = %q, want /a:/b:/c", got)
+	}
+}
