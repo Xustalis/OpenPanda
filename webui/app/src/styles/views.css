@@ -3459,16 +3459,22 @@ code.md-file:focus-visible {
 }
 
 .memory-entry.fresh {
-  background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
   /* Only entries the agent added since the previous load flash — the wash is
-     a "this is new" signal, not an entrance animation for the whole list. */
+     a "this is new" signal, not an entrance animation for the whole list. The
+     end keyframe has to clear the wash explicitly: with `forwards` the resting
+     style is the animation's target, and a static background here would keep
+     every new row lit until the content changed. */
   animation: memory-fresh 2.4s ease forwards;
 }
 
 @keyframes memory-fresh {
   from {
     background: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  to {
+    background: transparent;
+    box-shadow: inset 2px 0 0 transparent;
   }
 }
 

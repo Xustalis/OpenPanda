@@ -261,6 +261,18 @@ function MemoryFileView({
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
 
+  // A reload that lands while an edit is open brings the agent's new entries
+  // into `content` but not into `draft`; saving the draft would then write
+  // the file back without them. Close the edit on a content change instead —
+  // the card the reader returns to shows what is actually on disk.
+  const lastContent = useRef(content)
+  useEffect(() => {
+    if (lastContent.current === content) return
+    lastContent.current = content
+    setEditing(false)
+    setDraft('')
+  }, [content])
+
   const entries = parseEntries(content)
 
   /** Rebuild the whole file from entries and persist (whole-file PUT). */
@@ -352,7 +364,7 @@ function MemoryEditor({
         <span class="memory-card-name mono">{name}</span>
         <UsageMeter chars={chars} limit={limit} />
         <span class={`memory-counter mono${over ? ' over' : ''}`}>
-          {chars} / {limit}
+          {limit > 0 ? `${chars} / ${limit}` : t('memory.charsN', { n: chars })}
         </span>
         <div class="memory-card-tools">
           <button class="btn small ghost" disabled={saving} onClick={onCancel}>
