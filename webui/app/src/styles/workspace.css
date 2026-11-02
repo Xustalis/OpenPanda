@@ -975,7 +975,6 @@
   max-height: var(--ws-panel-max, none);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
   padding: 12px 14px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
