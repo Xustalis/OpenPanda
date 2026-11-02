@@ -756,9 +756,12 @@ func wireAPIToType(wire string) string {
 // it names, else the literal bearer token written into the file.
 func (p codexProvider) key(opt Options) (value, ref string) {
 	if p.EnvKey != "" {
-		if v := opt.env(p.EnvKey); v != "" {
-			return v, "env:" + p.EnvKey
-		}
+		// The reference stands even when the variable is not exported in this
+		// process: the row is then written with key_env, which is honest
+		// (the console can show where the key is expected) and lets the user
+		// export it later. Dropping the ref here produced a keyless row that
+		// 401s with nothing pointing at the missing variable.
+		return opt.env(p.EnvKey), "env:" + p.EnvKey
 	}
 	if p.Bearer != "" {
 		return p.Bearer, "codex:" + p.ID

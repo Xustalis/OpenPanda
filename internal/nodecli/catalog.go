@@ -189,7 +189,7 @@ var catalog = []Command{
 
 	// — settings —
 	{Names: []string{"model", "models"},
-		Usage:   "panda model [status|list|add|rm|switch|test]",
+		Usage:   "panda model [status|list|add|rm|switch|test|discover]",
 		HelpKey: "cli.help.d.model", Group: GroupSettings},
 	{Names: []string{"config"},
 		Usage:   "panda config <section> get|set|test",

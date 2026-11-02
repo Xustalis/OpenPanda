@@ -1239,6 +1239,12 @@ type ModelConfig struct {
 	// above tells people not to do. APIKey still wins when both are set, so an
 	// explicit key on the row keeps working.
 	KeyEnv string `yaml:"key_env,omitempty"`
+	// KeyScheme selects the header this row's credential travels in. "" (or
+	// "api_key") keeps the dialect default — Bearer for OpenAI, x-api-key for
+	// Anthropic. "bearer" always sends `Authorization: Bearer`, which is what
+	// an OAuth-style token (Claude Code's ANTHROPIC_AUTH_TOKEN) expects; sent
+	// as x-api-key it would 401 on every call.
+	KeyScheme string `yaml:"key_scheme,omitempty"`
 	// Auth names an OAuth provider from internal/auth ("anthropic"): the
 	// client then authenticates with the stored subscription token instead
 	// of api_key, refreshing it transparently. Experimental — see

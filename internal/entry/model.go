@@ -71,8 +71,11 @@ type Client struct {
 	// When set it supersedes apiKey, and oauth marks that the credential
 	// is a Bearer token rather than an API key — Anthropic then takes
 	// `authorization: Bearer` + the oauth beta flag instead of x-api-key.
-	keyFn     func(ctx context.Context) (string, error)
-	oauth     bool
+	keyFn func(ctx context.Context) (string, error)
+	oauth bool
+	// keyScheme overrides the header a static key travels in ("bearer");
+	// empty keeps the dialect default.
+	keyScheme string
 	model     string
 	maxTokens int
 	// maxTokensCap is the provider's hard ceiling on max_tokens (0 when
@@ -390,6 +393,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		apiType:        apiType,
 		baseURL:        strings.TrimRight(base, "/"),
 		apiKey:         model.APIKey,
+		keyScheme:      strings.ToLower(strings.TrimSpace(model.KeyScheme)),
 		model:          name,
 		maxTokens:      maxTokens,
 		maxTokensCap:   maxTokensCap,
@@ -966,6 +970,12 @@ func (c *Client) applyAuth(ctx context.Context, httpReq *http.Request) error {
 	switch {
 	case c.oauth:
 		// A subscription token is a Bearer credential on every dialect.
+		httpReq.Header.Set("authorization", "Bearer "+tok)
+	case c.keyScheme == "bearer":
+		// The row says its credential is an OAuth-style token even though it
+		// is stored (or read from the environment) like a key: Claude Code's
+		// ANTHROPIC_AUTH_TOKEN is one, and the Anthropic default would send it
+		// as x-api-key.
 		httpReq.Header.Set("authorization", "Bearer "+tok)
 	case c.apiType == config.APITypeGoogle:
 		// Google's own API takes the key in x-goog-api-key. OpenCode's

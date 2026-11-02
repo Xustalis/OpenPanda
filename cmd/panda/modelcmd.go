@@ -1046,7 +1046,10 @@ func (r *repl) modelDiscover(args []string) {
 		case "--all":
 			all = true
 		default:
-			fatalMsg("usage: panda model discover [--json] [--import] [--all]")
+			// This method runs inside the REPL/TUI command loop too: an
+			// os.Exit here would take the whole session down over a typo.
+			r.errf("usage: panda model discover [--json] [--import] [--all]\n")
+			return
 		}
 	}
 
@@ -1055,7 +1058,7 @@ func (r *repl) modelDiscover(args []string) {
 	// someone passes it twice. Honor the global too.
 	jsonOut = jsonOut || jsonOutput
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(r.commandContext(), 90*time.Second)
 	defer cancel()
 	sources := localmodels.Discover(ctx, localmodels.Options{})
 
@@ -1131,8 +1134,17 @@ func (r *repl) modelDiscover(args []string) {
 	// the path the user actually edits is the user-level one `panda web` reads.
 	// Writing to "" here failed the whole import on a machine whose config was
 	// never named on the command line.
-	if err := config.UpdateModelsSection(configWritePath(r.configPath), models); err != nil {
-		fatal("write models", err)
+	//
+	// The write goes through the same mutation path every other `/model`
+	// verb uses: taking the file lock and the in-memory config together is
+	// what keeps a TUI's next save from rewriting the registry without the
+	// rows imported here.
+	if err := r.mutateConfigErr(func(c *config.Config) error {
+		c.Models = models
+		return config.UpdateModelsSection(configWritePath(r.configPath), slices.Clone(c.Models))
+	}); err != nil {
+		r.storeErr(err)
+		return
 	}
 	r.outf("imported %d model(s)\n", len(added))
 	for _, m := range added {

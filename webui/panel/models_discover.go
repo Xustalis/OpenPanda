@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -28,6 +29,11 @@ import (
 // seconds on a cold cache, and the console shows a spinner for the duration, so
 // the ceiling is generous but finite.
 const discoverTimeout = 45 * time.Second
+
+// importVerifyBudget bounds the whole loopback gate of one import. Individual
+// checks are still capped at 12s, but they run concurrently: twenty ticked
+// local rows must finish inside a browser's patience, not twenty times it.
+const importVerifyBudget = 20 * time.Second
 
 // discoverModels serves GET /api/models/discover.
 func (h *handler) discoverModels(w http.ResponseWriter, r *http.Request) {
@@ -125,22 +131,55 @@ func (h *handler) importModels(w http.ResponseWriter, r *http.Request) {
 	opt := localmodels.Options{}
 	var added []config.ModelConfig
 	var skipped []string
+	var pending []struct {
+		mc   config.ModelConfig
+		item modelImportItem
+	}
 	for _, item := range req.Items {
 		mc, err := h.rowFromImport(item, opt)
 		if err != nil {
 			skipped = append(skipped, fmt.Sprintf("%s: %v", item.Model, err))
 			continue
 		}
-		// A loopback row is cheap to check and expensive to get wrong: the
-		// proxy in front of it is the thing that decides which model ids exist,
-		// and "the config names it" is not the same answer. Remote rows are not
-		// checked — fifty catalogue entries would make one import a minute of
-		// network.
-		if err := localmodels.Verify(r.Context(), mc, 12*time.Second); err != nil {
-			skipped = append(skipped, fmt.Sprintf("%s: %v", item.Model, err))
+		pending = append(pending, struct {
+			mc   config.ModelConfig
+			item modelImportItem
+		}{mc, item})
+	}
+	// A loopback row is cheap to check and expensive to get wrong: the proxy in
+	// front of it is the thing that decides which model ids exist, and "the
+	// config names it" is not the same answer. Remote rows are not checked —
+	// fifty catalogue entries would make one import a minute of network — and
+	// the loopback checks run together under one budget, because a server that
+	// hangs must not spend twelve seconds per ticked row.
+	//
+	// A cancelled request imports nothing it could not confirm: the browser
+	// going away is not a verdict, and the user would otherwise see "import
+	// failed" after every row was written.
+	checkCtx, cancel := context.WithTimeout(r.Context(), importVerifyBudget)
+	defer cancel()
+	verdicts := make([]error, len(pending))
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for i := range pending {
+		if !localmodels.IsLoopback(pending[i].mc.BaseURL) {
 			continue
 		}
-		added = append(added, mc)
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			verdicts[i] = localmodels.Verify(checkCtx, pending[i].mc, 12*time.Second)
+		}(i)
+	}
+	wg.Wait()
+	for i, p := range pending {
+		if err := verdicts[i]; err != nil {
+			skipped = append(skipped, fmt.Sprintf("%s: %v", p.item.Model, err))
+			continue
+		}
+		added = append(added, p.mc)
 	}
 	if len(added) == 0 {
 		writeJSON(w, map[string]any{"added": 0, "aliases": []string{}, "skipped": skipped})

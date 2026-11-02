@@ -59,8 +59,17 @@ func Verify(ctx context.Context, mc config.ModelConfig, timeout time.Duration) e
 	if !IsLoopback(mc.BaseURL) {
 		return nil
 	}
-	if err := complete(ctx, mc, timeout); err != nil && definiteRejection(err) {
-		return err
+	if err := complete(ctx, mc, timeout); err != nil {
+		// A caller that went away (browser closed, command cancelled) has not
+		// learned anything about the row: reporting nil would import it as if
+		// the endpoint had answered, so the cancellation is surfaced and the
+		// caller decides to skip.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if definiteRejection(err) {
+			return err
+		}
 	}
 	return nil
 }

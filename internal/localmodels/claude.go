@@ -117,11 +117,16 @@ func collectClaude(ctx context.Context, opt Options) Source {
 	}
 
 	keyRef := ""
+	bearer := false
 	switch {
 	case fileEnv["ANTHROPIC_AUTH_TOKEN"] != "" || fileEnv["ANTHROPIC_API_KEY"] != "":
 		keyRef = "claude:settings"
+		// ResolveKey prefers AUTH_TOKEN when both are present, and that one is
+		// a Bearer credential.
+		bearer = fileEnv["ANTHROPIC_AUTH_TOKEN"] != ""
 	case opt.env("ANTHROPIC_AUTH_TOKEN") != "":
 		keyRef = "env:ANTHROPIC_AUTH_TOKEN"
+		bearer = true
 	case opt.env("ANTHROPIC_API_KEY") != "":
 		keyRef = "env:ANTHROPIC_API_KEY"
 	}
@@ -147,6 +152,7 @@ func collectClaude(ctx context.Context, opt Options) Source {
 			BaseURL:       rowBase,
 			APIType:       "anthropic",
 			KeyRef:        keyRef,
+			Bearer:        bearer,
 			ContextWindow: window,
 			Suggested:     suggested,
 			Importable:    true,
@@ -232,8 +238,18 @@ func ResolveKey(ref string, opt Options) string {
 	switch kind {
 	case "env":
 		return opt.env(name)
+	case "literal":
+		// A local server's placeholder credential ("lm-studio"): not a secret,
+		// but several of them reject a request that carries no Authorization.
+		return name
 	case "codex":
 		home := codexHome(opt)
+		if home == "" {
+			// A relative CODEX_HOME names no file this process can trust; an
+			// empty home must not turn into "./config.toml" under the daemon's
+			// working directory.
+			return ""
+		}
 		text, ok := readText(filepath.Join(home, "config.toml"))
 		if !ok {
 			return ""

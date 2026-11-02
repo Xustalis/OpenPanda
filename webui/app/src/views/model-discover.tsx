@@ -114,6 +114,7 @@ export function DiscoverSheet(props: {
           api_type: c.api_type || undefined,
           key_ref: c.key_ref || undefined,
           no_auth: c.no_auth,
+          auth: c.auth || undefined,
           context_window: c.context_window,
         })
       }

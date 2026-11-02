@@ -525,3 +525,40 @@ func TestRowKeepsLiteralPlaceholder(t *testing.T) {
 		t.Errorf("literal not carried: key=%q env=%q", mc.APIKey, mc.KeyEnv)
 	}
 }
+
+func TestCodexProviderKeyKeepsAnUnexportedEnvReference(t *testing.T) {
+	// A provider that declares env_key but whose variable is not exported in
+	// this process still has a key location. Dropping the reference produced
+	// a keyless row that 401s with nothing naming the missing variable.
+	opt := Options{Getenv: func(string) string { return "" }}
+	value, ref := codexProvider{ID: "relay", EnvKey: "RELAY_KEY"}.key(opt)
+	if value != "" || ref != "env:RELAY_KEY" {
+		t.Fatalf("key() = (%q, %q), want (\"\", \"env:RELAY_KEY\")", value, ref)
+	}
+}
+
+func TestRowSendsABearerTokenAsAuthorization(t *testing.T) {
+	// Claude Code's ANTHROPIC_AUTH_TOKEN is a bearer credential. The Anthropic
+	// route sends api_key as x-api-key; the row has to say "bearer" or every
+	// call answers 401.
+	opt := Options{Getenv: func(k string) string {
+		if k == "ANTHROPIC_AUTH_TOKEN" {
+			return "tok"
+		}
+		return ""
+	}}
+	mc, err := Candidate{
+		Provider: "custom", Model: "m", APIType: "anthropic",
+		BaseURL: "https://relay.example.com", KeyRef: "env:ANTHROPIC_AUTH_TOKEN",
+		Bearer: true, Importable: true,
+	}.Row(opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mc.KeyScheme != "bearer" {
+		t.Errorf("key_scheme = %q, want bearer", mc.KeyScheme)
+	}
+	if mc.APIKey != "" || mc.KeyEnv != "ANTHROPIC_AUTH_TOKEN" {
+		t.Errorf("secret handling changed: key=%q env=%q", mc.APIKey, mc.KeyEnv)
+	}
+}

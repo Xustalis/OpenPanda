@@ -1932,6 +1932,9 @@ export interface DiscoveredModel {
   api_type: string
   key_ref?: string
   no_auth?: boolean
+  /** Subscription credential the row signs in with instead of a key — today
+   *  only "codex", whose token is the CLI's own ChatGPT login. */
+  auth?: string
   context_window?: number
   loaded?: boolean
   /** Default tick: the CLI's configured model, a settings-file alias, a live
@@ -1970,6 +1973,7 @@ export interface ModelImportItem {
   api_type?: string
   key_ref?: string
   no_auth?: boolean
+  auth?: string
   context_window?: number
   alias?: string
 }

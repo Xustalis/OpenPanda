@@ -69,6 +69,14 @@ func (c Candidate) Row(opt Options) (config.ModelConfig, error) {
 			}
 		}
 	}
+	// A bearer credential (Claude Code's ANTHROPIC_AUTH_TOKEN) does not belong
+	// in x-api-key: the Anthropic route sends api_key there, and a relay that
+	// expects `Authorization: Bearer` would answer 401. The scheme is a
+	// property of the row, not a copied header, so an env reference keeps its
+	// secret in the environment.
+	if c.Bearer {
+		mc.KeyScheme = "bearer"
+	}
 	if mc.Model == "" {
 		return config.ModelConfig{}, fmt.Errorf("candidate has no model id")
 	}

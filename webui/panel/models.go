@@ -750,8 +750,9 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 		req.AllowPlaintext = &waiver
 	}
 
+	wantProviderChanged := wantProvider != "" && effectiveProviderID(old) != wantProvider
 	existingKey := old.APIKey
-	if wantProvider != "" && effectiveProviderID(old) != wantProvider {
+	if wantProviderChanged {
 		existingKey = h.keyAcrossVendorSwitch(old, wantProvider)
 	}
 
@@ -767,8 +768,11 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 	// An env-backed row carries no api_key, so the rebuilt entry would come back
 	// keyless and the next call would 401. The reference is part of the row's
 	// identity the form never shows; keep it unless the edit supplied a key.
+	// An env reference belongs to the vendor it was written for, so a vendor
+	// switch drops it for the same reason keyAcrossVendorSwitch drops a stored
+	// key: otherwise the new endpoint is dialed with the old account's token.
 	if strings.TrimSpace(req.APIKey) == "" {
-		if old.KeyEnv != "" {
+		if old.KeyEnv != "" && !wantProviderChanged {
 			mc.KeyEnv = old.KeyEnv
 		}
 	} else {

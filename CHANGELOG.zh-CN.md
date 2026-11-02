@@ -42,7 +42,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增功能
 
-- **模型注册表会从本机自己长出来** —— `panda model discover` 和控制台的「在本机发现」会读 Codex、Claude Code、OpenCode 的配置以及回环地址上的推理服务，把找到的东西变成注册行。这样导入的行只写密钥的*位置*（`key_env: DASHSCOPE_API_KEY`），不把密钥抄进 `config.yaml`；配置给不出可拨号端点的模型（只有 CLI 登录的 ChatGPT 计划、没有端点的条目）照样列出来，但不勾选。
+- **模型注册表会从本机自己长出来** —— `panda model discover` 和控制台的「在本机发现」会读 Codex、Claude Code、OpenCode 的配置以及回环地址上的推理服务，把找到的东西变成注册行。环境变量里的密钥只写*位置*（`key_env: DASHSCOPE_API_KEY`），不抄进 `config.yaml`；本机服务的占位凭据、设置文件里的 token 或 Codex provider 的字面值因为没有环境变量可引用，会写入一次；属于 Bearer 凭据的 token 带 `key_scheme: bearer`，走 `Authorization` 头。配置给不出可拨号端点的模型（只有 CLI 登录的 ChatGPT 计划、没有端点的条目）照样列出来，但不勾选。
 
 - **线程有了任务栏** — 控制台线程头部可以打开一列未完成的工作：先列运行中的任务，再列等待人工处理的任务，最后是队列。点击一行会滚动到该任务在本轮对话中的卡片；线程里没有卡片时打开任务页。
 - **控制台收拢为一个外壳**——每个页面只有一行标题；任务中心的三组镜头共用一个分段控件；任务详情是四张可独立折叠的卡片；模型注册中心是按连接分组的网格；设备区只有一个连接卡和一个拨号列表。设置变成模态框，下拉统一走一个组件，深色主题收敛为灰阶。旧的 `#/todos` 链接落到任务看板；待办数据与 `panda todo` 不变。权限选择器是 composer 唯一的授权控件。

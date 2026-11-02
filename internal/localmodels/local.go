@@ -59,10 +59,20 @@ func collectLocal(ctx context.Context, opt Options) Source {
 
 	for _, h := range hosts {
 		key := h.apiKey
+		keyRef := ""
+		placeholder := false
 		if h.apiKeyEnv != "" {
 			if v := opt.env(h.apiKeyEnv); v != "" {
 				key = v
+				keyRef = "env:" + h.apiKeyEnv
 			}
+		}
+		if key != "" && keyRef == "" {
+			// A built-in placeholder ("lm-studio"): some servers reject a
+			// request with no Authorization at all, so the row carries it. It
+			// is not a secret, and the console marks it as a placeholder.
+			keyRef = "literal:" + key
+			placeholder = true
 		}
 		ids := probeModelIDs(ctx, h.base, key, opt.ProbeTimeout)
 		if len(ids) == 0 {
@@ -83,7 +93,9 @@ func collectLocal(ctx context.Context, opt Options) Source {
 				Label:         id,
 				BaseURL:       strings.TrimRight(h.base, "/"),
 				APIType:       "openai",
-				NoAuth:        true,
+				KeyRef:        keyRef,
+				Placeholder:   placeholder,
+				NoAuth:        key == "",
 				ContextWindow: windows[id],
 				Loaded:        loaded[id],
 				Suggested:     true,

@@ -90,8 +90,12 @@ type Candidate struct {
 	// Auth names a subscription credential from internal/auth instead of a
 	// key: the client reads a live token per call. It is how a Codex login
 	// reaches the registry — the token stays in the CLI's own file.
-	Auth          string `json:"auth,omitempty"`
-	ContextWindow int    `json:"context_window,omitempty"`
+	Auth string `json:"auth,omitempty"`
+	// Bearer marks a KeyRef whose credential is an OAuth-style bearer token
+	// rather than an API key — Claude Code's ANTHROPIC_AUTH_TOKEN. Row puts it
+	// in the Authorization header; sending it as x-api-key would 401.
+	Bearer        bool `json:"-"`
+	ContextWindow int  `json:"context_window,omitempty"`
 	// Loaded marks a local model the server says is resident in memory. It is
 	// a hint, not a filter: an unloaded model is still importable, it just pays
 	// a cold start on the first turn.
