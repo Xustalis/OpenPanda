@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { PandaAscii } from './brand/panda'
+import { PandaLockup } from './brand/panda'
 import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
 import { useAsync, useChangeSignal } from './hooks'
@@ -527,7 +527,7 @@ function TokenGate(props: {
   return (
     <div class="gate">
       <form class="gate-card" onSubmit={submit}>
-        <PandaAscii scale={9} />
+        <PandaLockup width={260} />
         <h1 class="gate-title">{t('token.title')}</h1>
         <p class="gate-lede">{t('token.description')}</p>
         <label for="token">{t('token.label')}</label>

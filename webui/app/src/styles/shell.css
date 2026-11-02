@@ -471,7 +471,7 @@ a.sidebar-node:hover {
   background: var(--bg-raised);
   box-shadow: var(--shadow-lg);
 }
-.gate-card .ascii-mark {
+.gate-card .panda-lockup {
   margin-bottom: var(--sp-2);
 }
 .gate-title {
@@ -499,22 +499,34 @@ a.sidebar-node:hover {
   margin: 0;
 }
 
-/* ASCII/brand marks. */
-.ascii-mark {
+/* Brand lockups. Both cuts stay in the DOM and the theme attribute picks one,
+   so switching appearance swaps the image with no re-render. `auto` removes
+   data-theme, which is why the media query targets the attribute's absence
+   rather than "dark". */
+.panda-lockup {
+  display: inline-block;
+  line-height: 0;
+  max-width: 100%;
+}
+.panda-lockup img {
+  width: 100%;
+  height: auto;
+}
+.panda-lockup-night {
+  display: none;
+}
+[data-theme='dark'] .panda-lockup-paper {
+  display: none;
+}
+[data-theme='dark'] .panda-lockup-night {
   display: inline-block;
 }
-.ascii-mark pre {
-  margin: 0;
-  font-family: var(--font-mono);
-  line-height: 1.15;
-  color: var(--accent);
-}
-.ascii-mark-lo pre {
-  color: var(--text-tertiary);
-}
-@media (max-width: 420px) {
-  .ascii-mark pre {
-    font-size: 8px;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .panda-lockup-paper {
+    display: none;
+  }
+  :root:not([data-theme='light']) .panda-lockup-night {
+    display: inline-block;
   }
 }
 
