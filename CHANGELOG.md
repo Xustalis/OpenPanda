@@ -62,6 +62,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **Lifecycle hooks reach every task edge** — the observer fires inside the writer's transaction, so on a pooled file-backed store the dispatch read the pre-commit snapshot: `task_submitted` found no row and a result still looked running, dropping both edges silently. Dispatch now waits for the commit to become visible (a two-second ceiling), and `:memory:` tests no longer hide the race.
+
 - **A translated value keeps `$&` literal** — the console's interpolation used `String.replaceAll`, whose string replacement reads `$&`, `$1` and friends; a task title or path containing one was mangled by its own interpolation. Values are now spliced literally.
 
 - **A device panel stays inside the map** — the workspace's machine cards were content-sized, so a four-agent panel grew past the map's bottom edge and was clipped by the composer. A card now caps at the map's visible height and scrolls its tile field inside that block.

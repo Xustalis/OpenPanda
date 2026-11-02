@@ -56,6 +56,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
+- **Lifecycle-Hooks erreichen jede Aufgabenkante** — der Beobachter feuert innerhalb der Schreibtransaktion, sodass ein dateibasierter Store mit Pool den Stand vor dem Commit las: `task_submitted` fand keine Zeile und ein Ergebnis sah noch laufend aus, beide Kanten gingen still verloren. Der Versand wartet jetzt, bis der Commit sichtbar ist (Obergrenze zwei Sekunden), und `:memory:`-Tests verbergen das Rennen nicht mehr.
+
 - **Ein übersetzter Wert behält `$&` wörtlich** — die Interpolation der Konsole nutzte `String.replaceAll`, dessen String-Ersetzung `$&`, `$1` und Ähnliches interpretiert; ein Aufgabentitel oder Pfad damit wurde verfälscht. Werte werden jetzt wörtlich eingesetzt.
 
 - **Ein Gerätepanel bleibt im Kartenbereich** — die Maschinenkarten richteten sich nach ihrem Inhalt, sodass ein Panel mit vier Agenten über die Unterkante der Kartenfläche hinauswuchs und vom Composer abgeschnitten wurde. Die Karte ist jetzt auf die sichtbare Höhe der Kartenfläche begrenzt und scrollt ihr Kachelfeld im Block.

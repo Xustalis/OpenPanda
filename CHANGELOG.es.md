@@ -56,6 +56,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
+- **Los hooks de ciclo de vida llegan a cada borde de tarea** — el observador se dispara dentro de la transacción del escritor, así que en un almacén de archivo con pool la lectura veía la instantánea previa al commit: `task_submitted` no encontraba fila y un resultado aún parecía en ejecución, perdiendo ambos bordes en silencio. El despacho ahora espera a que el commit sea visible (tope de dos segundos), y las pruebas `:memory:` ya no ocultan la carrera.
+
 - **Un valor traducido conserva `$&` literal** — la interpolación de la consola usaba `String.replaceAll`, cuyo reemplazo de cadena interpreta `$&`, `$1` y similares; un título o una ruta que los contuviera quedaba alterado. Ahora los valores se concatenan literalmente.
 
 - **Un panel de dispositivo no se sale del mapa** — las tarjetas de máquina se dimensionaban por contenido, así que un panel con cuatro agentes crecía más allá del borde inferior del mapa y quedaba cortado por el compositor. Ahora la tarjeta se limita a la altura visible del mapa y desplaza su campo de fichas dentro del bloque.
