@@ -69,6 +69,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **An injected Codex key no longer lands in the process list** — the adapter passed the provider token as a `-c` override, which is visible in `ps` and in Codex's own transcript. The token now goes into the environment under a name the CLI is told to read (`env_key`), where the injected credential already lives.
+
 - **Windows no longer fails to open the lock marker** — every acquisition requested write access, so a concurrent creator or a filter holding the file answered `ERROR_ACCESS_DENIED` before `LockFileEx` was reached, failing memory and session writes. Existing markers open read-only, creation uses `O_EXCL` with a read-only fallback, and transient Windows open errors retry briefly.
 
 - **A second account of one vendor can be configured beside the first, and either can be deleted** — a row's name was derived from provider + model + endpoint, which is exactly what two accounts of one vendor share, so adding the same model again rewrote the first account and the register painted one row for both. Names are now always allocated free, add / edit / delete each address one row by identity, and `/model remove` drops the model in use (promoting the next one) instead of refusing.

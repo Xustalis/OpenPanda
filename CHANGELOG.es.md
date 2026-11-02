@@ -63,6 +63,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
+- **Una clave de Codex inyectada ya no aparece en la lista de procesos** — el adaptador pasaba el token del proveedor como una opción `-c`, y los valores de `-c` son argv corriente: visibles en `ps` y escritos en la transcripción del propio Codex. El token va ahora en el entorno bajo un nombre que el CLI lee (`env_key`), donde ya vive la credencial inyectada.
+
 - **Windows ya no falla al abrir el marcador de bloqueo** — cada adquisición pedía acceso de escritura, así que un creador concurrente o un filtro que retenía el archivo respondía `ERROR_ACCESS_DENIED` antes de llegar a `LockFileEx`, y fallaban las escrituras de memoria y sesiones. Los marcadores existentes se abren en solo lectura, la creación usa `O_EXCL` con repliegue a solo lectura, y los errores transitorios de apertura en Windows se reintentan brevemente.
 
 - **Una segunda cuenta del mismo proveedor puede convivir con la primera, y ambas se pueden borrar** — el nombre de cada fila se derivaba de proveedor + modelo + endpoint, que es justo lo que comparten dos cuentas de un proveedor: añadir el mismo modelo otra vez reescribía la primera cuenta y el registro pintaba una sola fila para las dos. Ahora los nombres se asignan siempre libres, añadir / editar / borrar actúan sobre una fila por su identidad, y `/model remove` elimina también el modelo en uso (promoviendo el siguiente) en lugar de rechazarlo.
