@@ -894,8 +894,11 @@ const ja: Messages = {
   'memory.title': 'メモリー',
   'memory.subtitle':
     'エージェントの長期記憶：あなたについて（USER.md）、学んだこと（MEMORY.md）、そして夢（DREAMS.md）。',
+  'memory.usageTip': '{limit} 文字中 {chars} 文字使用',
+  'memory.charsN': '{n} 文字',
+  'memory.entriesN': '{n} 件',
+  'memory.headSummary': 'あなたについて {user} 件 · 学習 {memory} 件 · トピック {topics} · 日記 {daily} 日',
   'memory.nodeTime': 'ノードのシステム時刻',
-  'memory.refreshedAt': '最終読み込み',
   'memory.refresh': '更新',
   'memory.user': 'あなたについて',
   'memory.memory': '学んだこと',
