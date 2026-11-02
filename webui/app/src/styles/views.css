@@ -3024,12 +3024,70 @@ code.md-file:focus-visible {
   font-size: var(--text-xs);
 }
 
-/* The console's content column is viewport minus the 280px rail, so a 320px
-   aside leaves ~760px for the fleet at 1440 and ~400 at 1084 — too narrow
-   for a row that carries a name, its tags, capacity and a trust control.
-   Below this the columns stack; the connect card then goes full width and
-   its own container query turns the two methods side by side. */
-@media (max-width: 1240px) {
+/* ---- Reminders ---------------------------------------------------------
+   提醒 is a bell in the rail's head (components/reminders.tsx), and its card
+   hangs off the rail's right edge. The card is `position: fixed` rather than
+   absolute inside the head because the narrow layout turns the rail into a
+   horizontally scrolling strip, and an absolutely positioned card inside a
+   scroll container is clipped by it. */
+
+.reminder-bell {
+  position: relative;
+  display: flex;
+}
+
+/* Open, the bell keeps the tinted square the card below extends from: the
+   control has to look pressed while its card is up. */
+.reminder-bell .icon-btn.open {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* The count rides the bell's corner as a number, not a dot: "2 pending" and
+   "9 pending" are different reasons to open the card. Amber is the tone the
+   rail's review badge already uses, so the head gains one warm speck and no
+   new colour. */
+.reminder-bell-dot {
+  position: absolute;
+  top: -1px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  background: var(--semantic-warn-soft);
+  color: var(--semantic-warn);
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.reminder-pop {
+  position: fixed;
+  top: 10px;
+  /* Beside the rail, not over it: the nav stays clickable while the card is
+     up, which is what "glance at what is pending" has to allow for. */
+  left: calc(var(--sidebar-w) + 8px);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: 356px;
+  max-height: calc(100dvh - 20px);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: reminder-pop-in var(--dur-fast) var(--ease-enter);
+}
+
+@keyframes reminder-pop-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
   to {
     opacity: 1;
     transform: none;
@@ -3075,6 +3133,18 @@ code.md-file:focus-visible {
   min-width: 0;
 }
 
+/* The two ways to name a due time are a choice, not two fields joined by
+   "or": a segmented track hides the inactive form, so nobody has to work out
+   whether the disabled minutes box still counts. */
+.reminder-mode {
+  width: 100%;
+}
+
+.reminder-mode .seg {
+  flex: 1;
+  text-align: center;
+}
+
 .reminder-line {
   display: flex;
   align-items: center;
@@ -3082,19 +3152,37 @@ code.md-file:focus-visible {
 }
 
 .reminder-pop .reminder-minutes {
-  width: 76px;
+  width: 84px;
   flex: none;
 }
 
 .reminder-pop .reminder-at,
 .reminder-pop .reminder-every {
-  width: auto;
-  flex: 1;
+  width: 100%;
   min-width: 0;
 }
 
-.reminder-or {
+.reminder-suffix {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+/* Preview left, submit right: the line answers "when will this fire" while
+   the time is being chosen, so Add is never a leap of faith. */
+.reminder-submit-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reminder-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--text-xs);
+  line-height: 1.45;
 }
 
 .reminder-add {

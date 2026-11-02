@@ -873,8 +873,11 @@ const es: Messages = {
   'reminders.messagePlaceholder': 'Texto del recordatorio, p. ej. reunión en diez minutos',
   'reminders.minutes': 'min',
   'reminders.afterMinutes': 'Recordarme en N minutos',
-  'reminders.or': 'o',
+  'reminders.whenLabel': 'Hora del recordatorio',
+  'reminders.modeRelative': 'En minutos',
+  'reminders.modeAbsolute': 'Elegir hora',
   'reminders.dueAt': 'Hora exacta',
+  'reminders.pastTime': 'Esa hora ya ha pasado.',
   'reminders.add': 'Añadir',
   'reminders.pending': 'Pendientes',
   'reminders.fired': 'Disparados recientemente',
@@ -893,6 +896,9 @@ const es: Messages = {
   'reminders.notifyUnsupported': 'Este navegador no admite notificaciones Web Push.',
   'reminders.notifyDenied': 'Permiso de notificaciones denegado — permítelo en los ajustes del navegador y reintenta.',
   'reminders.notifyError': 'Falló la suscripción push — inténtalo de nuevo más tarde.',
+  'reminders.pushOff': 'Web Push está desactivado en este nodo — los recordatorios siguen apareciendo con la consola abierta.',
+  'reminders.added': 'Recordatorio para {when}.',
+  'reminders.toastFired': 'Recordatorio: {message}',
 
   // Memory view
   'memory.title': 'Memoria',

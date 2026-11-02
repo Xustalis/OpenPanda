@@ -69,6 +69,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **The reminder panel renders and fires in the console again** — a dead-code cleanup matched the whole reminder style block along with the to-do rules, so the bell's card lost its positioning, border and shadow and drew over the page. The styles are back; the composer now offers a "remind me / pick a time" choice with a due-time preview and refuses past times, and a reminder that fires while the console is open raises an in-console notice even when Web Push is off. A node without push configured says so instead of offering a subscription that could never be stored.
 - **Windows lifecycle hooks no longer run task values as commands** — cmd.exe expands `%VAR%` before it parses quotes, so a title containing `"` could close the quote and start a new command, bypassing the tier gate. Hooks now run under delayed expansion (`cmd /V:ON`) with `!VAR!` references, which are substituted after parsing.
 - **A huge `line` value no longer crashes the file-view request** — the window arithmetic wrapped and sliced out of bounds, logging a stack trace and dropping the connection on every such request. The line is capped and the window saturates instead.
 - **A cancelled task stops counting as running** — the TUI sidebar measured every non-done row from its creation, so a task cancelled or expired an hour ago read as an hour of running work. Settled rows now show when they settled.

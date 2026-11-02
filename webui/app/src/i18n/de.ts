@@ -873,8 +873,11 @@ const de: Messages = {
   'reminders.messagePlaceholder': 'Erinnerungstext, z. B. in zehn Minuten Meeting',
   'reminders.minutes': 'Min',
   'reminders.afterMinutes': 'Nach N Minuten erinnern',
-  'reminders.or': 'oder',
+  'reminders.whenLabel': 'Erinnerungszeit',
+  'reminders.modeRelative': 'In Minuten',
+  'reminders.modeAbsolute': 'Uhrzeit wählen',
   'reminders.dueAt': 'Absolute Zeit',
+  'reminders.pastTime': 'Diese Zeit liegt bereits in der Vergangenheit.',
   'reminders.add': 'Hinzufügen',
   'reminders.pending': 'Ausstehend',
   'reminders.fired': 'Kürzlich ausgelöst',
@@ -893,6 +896,9 @@ const de: Messages = {
   'reminders.notifyUnsupported': 'Dieser Browser unterstützt keine Web-Push-Benachrichtigungen.',
   'reminders.notifyDenied': 'Benachrichtigungsberechtigung verweigert — erlaube sie in den Browser-Einstellungen und versuche es erneut.',
   'reminders.notifyError': 'Push-Abo fehlgeschlagen — später erneut versuchen.',
+  'reminders.pushOff': 'Web Push ist auf diesem Knoten aus — bei geöffneter Konsole erscheinen Erinnerungen trotzdem.',
+  'reminders.added': 'Erinnerung für {when} gesetzt.',
+  'reminders.toastFired': 'Erinnerung: {message}',
 
   // Memory view
   'memory.title': 'Gedächtnis',
