@@ -69,6 +69,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **Windows no longer fails to open the lock marker** — every acquisition requested write access, so a concurrent creator or a filter holding the file answered `ERROR_ACCESS_DENIED` before `LockFileEx` was reached, failing memory and session writes. Existing markers open read-only, creation uses `O_EXCL` with a read-only fallback, and transient Windows open errors retry briefly.
+
+- **A second account of one vendor can be configured beside the first, and either can be deleted** — a row's name was derived from provider + model + endpoint, which is exactly what two accounts of one vendor share, so adding the same model again rewrote the first account and the register painted one row for both. Names are now always allocated free, add / edit / delete each address one row by identity, and `/model remove` drops the model in use (promoting the next one) instead of refusing.
 - **Windows lifecycle hooks no longer run task values as commands** — cmd.exe expands `%VAR%` before it parses quotes, so a title containing `"` could close the quote and start a new command, bypassing the tier gate. Hooks now run under delayed expansion (`cmd /V:ON`) with `!VAR!` references, which are substituted after parsing.
 - **A huge `line` value no longer crashes the file-view request** — the window arithmetic wrapped and sliced out of bounds, logging a stack trace and dropping the connection on every such request. The line is capped and the window saturates instead.
 - **A cancelled task stops counting as running** — the TUI sidebar measured every non-done row from its creation, so a task cancelled or expired an hour ago read as an hour of running work. Settled rows now show when they settled.

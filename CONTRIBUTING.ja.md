@@ -41,6 +41,7 @@ cd webui/app && npm run typecheck                # Web コンソール変更時
 CI は同じチェックを並行ジョブとして実行します——`lint`（gofmt + vet）、`test`、`race`（`make race-focused` により並行ホットスポットのパッケージに限定）、`web`（typecheck + node テスト + 埋め込みコンソールのビルド）、アダプタ契約（`tests/adapter_contract_test.py`）、TUI pty チェック、そしてクロスプラットフォームマトリクス。`make gate` / `make gate-all` がローカルの同等物です——どちらもグリーンに保ってください。
 
 - **`go test -race ./...` が必ず通ること**——カーネルは（ピアレジストリ・タスクストア・SSE ハブといった）並行システムです。レースディテクタの指摘は警告ではなく、リリースブロッカーです。
+- **Windows 開発者へ**: `-race` には `CGO_ENABLED=1` と新しい MinGW-w64 ツールチェーン（MSYS2 の mingw-w64 GCC）が必要です。Git-for-Windows 同梱の MinGW 8.x は古すぎ、計測済みテストバイナリはテスト実行前に `0xc0000139`（STATUS_ENTRYPOINT_NOT_FOUND）で終了します。`make race` は `CGO_ENABLED=1` を設定します。Windows の CI は `-race` ではなく通常の `go test` を実行します。
 - コアモジュール（`internal/core`、`internal/scheduler`、`internal/storage`）は、現実的な範囲で**約 60% 以上のテストカバレッジ**を維持してください。バグ修正には、修正前に失敗するリグレッションテストを添えてください。
 - 新しいワイヤープロトコルや委譲動作にはループバックテストを付けてください——パターンは `internal/core/dedup_test.go` と `scripts/smoke-delegate` を参照してください。
 

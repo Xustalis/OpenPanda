@@ -41,6 +41,7 @@ cd webui/app && npm run typecheck                # 改动 Web 控制台时
 CI 以并行任务运行同一套检查——`lint`（gofmt + vet）、`test`、`race`（经 `make race-focused` 限定在并发热点包）、`web`（typecheck + node 测试 + 嵌入控制台构建）、adapter 契约（`tests/adapter_contract_test.py`）、TUI pty 检查以及跨平台矩阵——`make gate` / `make gate-all` 是本地等价物；两者都要保持绿灯。
 
 - **`go test -race ./...` 必须通过**——内核是并发系统（peer 注册、任务存储、SSE 分发）；竞态检测器报出的任何问题都是阻塞性问题，不是警告。
+- **Windows 开发者**：`-race` 需要 `CGO_ENABLED=1` 和较新的 MinGW-w64 工具链（MSYS2 的 mingw-w64 GCC）。Git-for-Windows 自带的 MinGW 8.x 太旧，插桩后的测试二进制会在加载阶段以 `0xc0000139`（STATUS_ENTRYPOINT_NOT_FOUND）退出，测试体不会执行。`make race` 已设置 `CGO_ENABLED=1`；Windows CI 只跑普通 `go test`，不跑 `-race`。
 - 核心模块（`internal/core`、`internal/scheduler`、`internal/storage`）在可行范围内测试覆盖率应保持 **~60% 以上**。Bug 修复请附带回归测试：修复前该测试失败，修复后通过。
 - 新增线协议或委派行为必须提供回环测试——参考 `internal/core/dedup_test.go` 与 `scripts/smoke-delegate` 的模式。
 
