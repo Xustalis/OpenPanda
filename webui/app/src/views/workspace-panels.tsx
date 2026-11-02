@@ -418,11 +418,12 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
       const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1)
       const from = zoomRef.current
       const to = nextZoom(from, dy)
-      // The wheel belongs to the drawing even at the ends of the range: a
-      // gesture that silently turns into a page scroll halfway through reads
-      // as a broken zoom, not as a feature.
-      e.preventDefault()
+      // At either end of the range the wheel no longer belongs to the drawing:
+      // a gesture that keeps being swallowed while the canvas cannot zoom any
+      // further leaves a reader at 200% unable to scroll to the card below.
+      // The scroller takes it instead.
       if (to === from) return
+      e.preventDefault()
       const rect = view.getBoundingClientRect()
       const g = grid.getBoundingClientRect()
       const sx = view.scrollLeft
@@ -657,7 +658,14 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     // stored card back inside the surface that exists now — a narrower
     // window, or a card stored before the band clamp existed, otherwise
     // leaves a panel parked past the right edge with no way back.
-    const maxX = Math.max(0, grid.clientWidth)
+    //
+    // The bound is the drawing's own width, not the box the zoom leaves it:
+    // the grid is laid out at 100%/z and scaled back up, so clientWidth alone
+    // would shrink every stored x by the zoom factor and persist that as the
+    // new arrangement. Height is a viewport measurement too — a card may be
+    // capped visually at any zoom, but only the 100% cap is a real layout
+    // decision.
+    const maxX = Math.max(0, grid.clientWidth * z)
     const repaired: Record<string, Slot> = {}
     let changed = false
     for (const [id, s] of Object.entries(slots)) {
@@ -669,7 +677,7 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         continue
       }
       const x = Math.min(Math.max(0, s.x), Math.max(0, maxX - s.w))
-      const h = panelMax > 0 ? Math.min(s.h, panelMax) : s.h
+      const h = z === 1 && panelMax > 0 ? Math.min(s.h, panelMax) : s.h
       if (x !== s.x || h !== s.h) changed = true
       repaired[id] = { ...s, x, h }
     }
@@ -694,7 +702,7 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
       // Measured on a scaled surface: back into the drawing's own pixels.
       const rw = r.width / z
       const rh = r.height / z
-      const h = panelMax > 0 ? Math.min(rh, panelMax) : rh
+      const h = z === 1 && panelMax > 0 ? Math.min(rh, panelMax) : rh
       next[d.id] = firstPass
         ? { x: (r.left - gr.left) / z, y: (r.top - gr.top) / z, w: rw, h }
         : { x: 0, y: floor + 18, w: rw, h }
@@ -970,6 +978,12 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
       style={{
         minWidth: right > 0 ? `${right * z}px` : undefined,
         minHeight: bottom > 0 ? `max(100%, ${(bottom + 26) * z}px)` : undefined,
+        // The grid's layout box stays at 100% size — scale is paint — so an
+        // auto-height parent would report the unscaled height and leave a
+        // zoomed-out drawing scrolling through empty space below it. Below
+        // 100% the parent takes the scaled height instead; above it the
+        // minHeight already extends the scroll extent.
+        height: bottom > 0 && z < 1 ? `${(bottom + 26) * z}px` : undefined,
       }}
     >
       <div
