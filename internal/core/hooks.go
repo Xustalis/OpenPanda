@@ -64,7 +64,7 @@ func (c *Core) SetHooks(cfg config.HooksConfig) {
 	hookOwners.Lock()
 	if existing := hookOwners.m[c.db]; existing != nil {
 		hookOwners.Unlock()
-		c.hookRunner = existing
+		c.hookRunner.Store(existing)
 		return
 	}
 	runner := hooks.New(hooks.Config{
@@ -79,7 +79,7 @@ func (c *Core) SetHooks(cfg config.HooksConfig) {
 	}
 	hookOwners.m[c.db] = runner
 	hookOwners.Unlock()
-	c.hookRunner = runner
+	c.hookRunner.Store(runner)
 	// The observer outlives this call by design (stores are long-lived per
 	// daemon run); the unsubscribe is kept for tests that build many cores on
 	// one database handle.
@@ -98,15 +98,16 @@ func (c *Core) detachHooks() {
 	hookOwners.Lock()
 	delete(hookOwners.m, c.db)
 	hookOwners.Unlock()
-	c.hookRunner = nil
+	c.hookRunner.Store(nil)
 }
 
 // HookBindings lists what this node has bound, for `panda hooks list`.
 func (c *Core) HookBindings() []hooks.Hook {
-	if c.hookRunner == nil {
+	runner := c.hookRunner.Load()
+	if runner == nil {
 		return nil
 	}
-	return c.hookRunner.Bindings()
+	return runner.Bindings()
 }
 
 // dispatchHook maps one recorded event onto a lifecycle edge and fires it. It
@@ -114,7 +115,8 @@ func (c *Core) HookBindings() []hooks.Hook {
 // read, the template expansion, the process spawn — happens on the goroutine it
 // hands off to.
 func (c *Core) dispatchHook(taskID, typ string) {
-	if c.hookRunner == nil {
+	runner := c.hookRunner.Load()
+	if runner == nil {
 		return
 	}
 	switch typ {
@@ -179,7 +181,7 @@ func (c *Core) dispatchHook(taskID, typ string) {
 				return
 			}
 		}
-		c.hookRunner.Fire(hooks.Event{
+		runner.Fire(hooks.Event{
 			Name:    name,
 			TaskID:  t.TaskID,
 			Title:   t.Title,

@@ -134,7 +134,7 @@ func TestHooksAreNotDoubleWired(t *testing.T) {
 	t.Cleanup(first.detachHooks)
 	second := NewCore(db, "queue-node", card, 5, testLogger(), config.ModelConfig{})
 	second.SetHooks(hooksCfg)
-	if second.hookRunner == nil {
+	if second.hookRunner.Load() == nil {
 		t.Fatal("the second core did not borrow the runner")
 	}
 	if second.hookUnsub != nil {
