@@ -89,11 +89,12 @@ func decodeEnvelope(raw string) (Output, bool, error) {
 		return Output{}, false, nil
 	}
 	var envelope struct {
-		Kind   Kind      `json:"kind"`
-		Answer string    `json:"answer"`
-		Tool   *ToolCall `json:"tool"`
-		Task   *TaskSpec `json:"task"`
-		Plan   *PlanSpec `json:"plan"`
+		Kind    Kind         `json:"kind"`
+		Answer  string       `json:"answer"`
+		Tool    *ToolCall    `json:"tool"`
+		Task    *TaskSpec    `json:"task"`
+		Plan    *PlanSpec    `json:"plan"`
+		Clarify *ClarifySpec `json:"clarify"`
 	}
 	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
 		// A syntax error means raw is not JSON, so the caller may try extraction
@@ -134,6 +135,15 @@ func decodeEnvelope(raw string) (Output, bool, error) {
 			return Output{}, false, err
 		}
 		return Output{Kind: KindPlan, Plan: envelope.Plan}, true, nil
+
+	case KindClarify:
+		if envelope.Clarify == nil {
+			return Output{}, false, fmt.Errorf("entry: clarify missing clarify object")
+		}
+		if err := ValidateClarifySpec(envelope.Clarify); err != nil {
+			return Output{}, false, err
+		}
+		return Output{Kind: KindClarify, Clarify: envelope.Clarify}, true, nil
 
 	case KindAnswer:
 		// A model that wraps its reply as {"kind":"answer","answer":"…"} instead

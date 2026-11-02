@@ -1244,6 +1244,13 @@ func (r *repl) askMode(text, mode string) {
 				r.outln(r.renderMd(tail))
 			}
 		}
+	case "clarify":
+		// No choice card on the line REPL: print the rendered question and
+		// let the next line be the answer, the contract Result.Clarification
+		// gives every surface without a card.
+		if strings.TrimSpace(out.Answer) != "" {
+			r.outln(r.renderMd(out.Answer))
+		}
 	case "task":
 		// Sub-agent round: the converged report is the reply. It streamed
 		// live like an answer's text, so print it only when nothing was

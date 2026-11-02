@@ -36,6 +36,7 @@ const (
 	modeIdle
 	modeAsking
 	modeApproving
+	modeClarifying // pre-execution choice card (entry clarify round)
 	modeExec
 	modeList        // Keyboard navigable list (/sessions, /projects, /resume)
 	modeModelPanel  // Model management panel
@@ -330,6 +331,11 @@ type tuiModel struct {
 
 	// pending holds a task the engine parked for tier-2 approval.
 	pending *askengine.Result
+
+	// pendingQuestion holds the pre-execution clarify round the engine is
+	// blocked on. It is cleared when the last question is answered (the ask
+	// resumes) or when the user cancels the round.
+	pendingQuestion *clarifyPrompt
 
 	// pendingWorkDir is the tree the pending task resumes in once approved. A
 	// card raised by this turn carries the turn's worktree; a card raised by

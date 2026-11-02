@@ -66,6 +66,16 @@ type (
 		stream *askStream
 		taskID string
 	}
+
+	// questionMsg is a pre-execution clarify round the entry model asked
+	// before it will classify a task. The ask goroutine blocks until the UI
+	// sends the answers on reply; a dropped stream cancels its context, which
+	// unblocks the goroutine without an answer.
+	questionMsg struct {
+		stream *askStream
+		spec   entry.ClarifySpec
+		reply  chan []entry.ClarifyAnswer
+	}
 )
 
 // askStream carries one in-flight ask: the channel the callbacks write to, the
@@ -140,6 +150,18 @@ func newAskStream() (*askStream, context.Context, askengine.StreamCallbacks) {
 		OnDelta:     func(text string) { s.send(ctx, deltaMsg{stream: s, text: text}) },
 		OnReasoning: func(text string) { s.send(ctx, reasoningMsg{stream: s, text: text}) },
 		OnProgress:  func(p askengine.Progress) { s.send(ctx, progressMsg{stream: s, progress: p}) },
+		OnQuestion: func(spec entry.ClarifySpec) ([]entry.ClarifyAnswer, bool) {
+			reply := make(chan []entry.ClarifyAnswer, 1)
+			s.send(ctx, questionMsg{stream: s, spec: spec, reply: reply})
+			select {
+			case answers := <-reply:
+				return answers, true
+			case <-ctx.Done():
+				// The user cancelled the card (drop cancels ctx) — the engine
+				// sees a cancelled ask, not an unanswered question.
+				return nil, false
+			}
+		},
 		// GetSteer / OnSteerConsumed stay nil on purpose. Mid-turn input is the
 		// user's NEXT turn, not a late fragment of the one already streaming: a
 		// steer channel let the model read the same words twice (once in the
@@ -248,7 +270,7 @@ func waitForActivity(s *askStream) tea.Cmd {
 // A stage parked inside a plan gets the plan watch chained on its resume —
 // the turn follows the pipeline to the next human gate or verdict instead of
 // closing on the resumed task's receipt.
-func startResume(engine *askengine.Engine, taskID, planID, workDir string) (*askStream, tea.Cmd) {
+func startResume(engine *askengine.Engine, taskID, planID, workDir string, answers ...string) (*askStream, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &askStream{
 		events:  make(chan tea.Msg, 256),
@@ -264,7 +286,7 @@ func startResume(engine *askengine.Engine, taskID, planID, workDir string) (*ask
 		s.send(context.Background(), doneMsg{stream: s, err: errors.New("resume worker panicked (see log)")})
 	}, func() {
 		defer cancel()
-		out := engine.ResumeApproved(ctx, taskID, workDir, cb)
+		out := engine.ResumeApproved(ctx, taskID, workDir, cb, answers...)
 		if planID != "" {
 			if awaited := engine.AwaitPlanOutcome(ctx, planID, cb); awaited != nil {
 				out = awaited

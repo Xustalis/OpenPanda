@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
@@ -73,6 +74,11 @@ type askJSON struct {
 	PlanID   string          `json:"plan_id,omitempty"`
 	PlanGoal string          `json:"plan_goal,omitempty"`
 	Stages   []planStageJSON `json:"stages,omitempty"`
+	// Clarification: the entry model asked before acting and this surface
+	// could not answer inline. A script answers by sending the next ask with
+	// the answers in the prompt; the question set is echoed for it.
+	NeedsClarification bool               `json:"needs_clarification,omitempty"`
+	Clarification      *entry.ClarifySpec `json:"clarification,omitempty"`
 }
 
 func resultToJSON(out *askengine.Result) askJSON {
@@ -83,6 +89,7 @@ func resultToJSON(out *askengine.Result) askJSON {
 		Executor: out.Executor, WorkDir: out.WorkDir, RouteFallback: out.RouteFallback, EntryModel: out.EntryModel,
 		Verification: out.Verification, Verified: out.Verified,
 		PlanID: out.PlanID, PlanGoal: out.PlanGoal,
+		NeedsClarification: out.NeedsClarification, Clarification: out.Clarification,
 	}
 	for _, t := range out.PlanStages {
 		j.Stages = append(j.Stages, planStageJSON{
@@ -271,6 +278,27 @@ func runAsk(args []string) {
 		}
 		out = next
 	}
+	// A task the agent parked on a structured question gets the same choice
+	// card the TUI and web show: one command, no "now go find panda approve".
+	// The answer resumes through the approval path and may park again; the
+	// loop is bounded so a model that keeps asking cannot hold the command.
+	for round := 0; round < 3 && out.Kind == "task" && out.QuestionSpec != nil; round++ {
+		answers, ok := promptClarifyCLI(*out.QuestionSpec, loc)
+		if !ok {
+			break
+		}
+		answer := entry.ClarifyAnswerText(out.QuestionSpec, answers)
+		cb := askengine.StreamCallbacks{
+			OnProgress: func(p askengine.Progress) {
+				fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(loc, p))
+			},
+		}
+		next := engine.ResumeApproved(context.Background(), out.TaskID, workDir, cb, answer)
+		if next == nil {
+			break
+		}
+		out = next
+	}
 	recordConvo(out)
 
 	switch out.Kind {
@@ -362,6 +390,10 @@ func runAsk(args []string) {
 		}
 	case "plan":
 		printAskPlan(loc, out)
+	case "clarify":
+		// A headless ask could not show a choice card; the rendered questions
+		// are the answer. The next ask should carry the choices.
+		fmt.Println(renderCliMd(out.Answer))
 	}
 	printCost(st, out)
 }
@@ -567,6 +599,15 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 				st.Preview(pal().Muted(line))
 			}
 		},
+		OnQuestion: func(spec entry.ClarifySpec) ([]entry.ClarifyAnswer, bool) {
+			// The choice card owns the terminal: stop the spinner so the
+			// options are not painted over, then restart the wait line when
+			// the answers release the classifier.
+			st.Stop()
+			answers, ok := promptClarifyCLI(spec, loc)
+			st.Start(statusVerb(loc))
+			return answers, ok
+		},
 		OnProgress: func(p askengine.Progress) {
 			// A usage report is a counter, not a phase: it updates the closing
 			// meta in place and must not push a log line or a note.
@@ -687,6 +728,117 @@ func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18
 		}
 	}
 	return resumed
+}
+
+// promptClarifyCLI renders a pre-execution question round on the terminal and
+// reads one line per question: option numbers (comma-separated for a
+// multi-select) or free text, which becomes the "Other" answer. It returns
+// ok=false when stdin is not interactive, so the engine hands the question
+// back as a NeedsClarification Result instead of blocking a piped ask.
+func promptClarifyCLI(spec entry.ClarifySpec, loc i18n.Locale) ([]entry.ClarifyAnswer, bool) {
+	if !stdinIsTTY() || !stdoutIsTTY() {
+		return nil, false
+	}
+	p := pal()
+	fmt.Println(p.Warn(p.MarkBullet() + " " + i18n.T(loc, "clarify.title")))
+	if plan := strings.TrimSpace(spec.Plan); plan != "" {
+		fmt.Println(renderCliMd(plan))
+	}
+	reader := bufio.NewReader(os.Stdin)
+	answers := make([]entry.ClarifyAnswer, 0, len(spec.Questions))
+	for i, q := range spec.Questions {
+		fmt.Printf("\n[%s] %s (%d/%d)\n", q.Header, q.Question, i+1, len(spec.Questions))
+		for j, o := range q.Options {
+			suffix := ""
+			if o.Label == q.Recommended {
+				suffix = clarifyRecommendedSuffix(o.Label, loc)
+			}
+			desc := ""
+			if d := strings.TrimSpace(o.Description); d != "" {
+				desc = " — " + p.Muted(d)
+			}
+			fmt.Printf("  %d) %s%s%s\n", j+1, o.Label, suffix, desc)
+			// A preview is visual context for a single-select choice; the
+			// terminal has no hover, so it prints under its own option.
+			if !q.MultiSelect {
+				if prev := clarifyPreviewText(o.Preview, 6); prev != "" {
+					for _, line := range strings.Split(prev, "\n") {
+						fmt.Println(p.Muted("     │ " + line))
+					}
+				}
+			}
+		}
+		if q.MultiSelect {
+			fmt.Println("  " + p.Muted(i18n.T(loc, "clarify.multi")))
+		}
+		fmt.Print("> ")
+		line, err := reader.ReadString('\n')
+		if err != nil && strings.TrimSpace(line) == "" {
+			return nil, false
+		}
+		answers = append(answers, parseClarifyLine(q, strings.TrimSpace(line)))
+	}
+	return answers, true
+}
+
+// clarifyRecommendedSuffix returns the localized recommended marker, or "" when
+// the label already carries it in any bracket style — the model is told to put
+// the recommendation first, and some models also append the wording.
+func clarifyRecommendedSuffix(label string, loc i18n.Locale) string {
+	marker := i18n.T(loc, "clarify.recommended")
+	bare := strings.NewReplacer("（", "", "）", "", "(", "", ")", "", " ", "").Replace(marker)
+	if strings.Contains(label, marker) || (bare != "" && strings.Contains(label, bare)) {
+		return ""
+	}
+	return " " + marker
+}
+
+// clarifyPreviewText bounds an option preview to a screen-sized sample: the
+// full text still lives in the spec, but a card or a terminal shows a glance,
+// and the cut says so.
+func clarifyPreviewText(text string, maxLines int) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if maxLines > 0 && len(lines) > maxLines {
+		lines = append(lines[:maxLines], "…")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// parseClarifyLine turns one typed line into an answer. A line of option
+// numbers selects those labels; anything else is free text ("Other"). An empty
+// line leaves the question unanswered, and the model falls back to its
+// recommendation.
+func parseClarifyLine(q entry.ClarifyQuestion, line string) entry.ClarifyAnswer {
+	a := entry.ClarifyAnswer{ID: q.ID}
+	if line == "" {
+		return a
+	}
+	parts := strings.FieldsFunc(line, func(r rune) bool {
+		return r == ',' || r == '，' || r == ' ' || r == '\t'
+	})
+	var labels []string
+	allIndices := len(parts) > 0
+	for _, part := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || n < 1 || n > len(q.Options) {
+			allIndices = false
+			break
+		}
+		labels = append(labels, q.Options[n-1].Label)
+	}
+	if allIndices {
+		if !q.MultiSelect && len(labels) > 1 {
+			labels = labels[:1]
+		}
+		a.Selected = labels
+		return a
+	}
+	a.Other = line
+	return a
 }
 
 // printCost closes an interactive ask with what it cost: elapsed time, and the

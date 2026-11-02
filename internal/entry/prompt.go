@@ -100,6 +100,20 @@ When emitting a plan, output ONLY a single JSON object with no surrounding text:
 - requires & resource_profile: Specified per stage following the same rules as task. requires alone NEVER expresses device choice — an ability like agent:claude_code exists on several machines; only node pins the device.
 - Keep stage count minimal; prefer 2 stages over 3 where possible. Maximum 64 stages.
 
+═══ Clarify before acting (not after) ═══
+When the request would become a task or plan, and the outcome materially depends on a decision only the user can make — which repository/directory to touch, which approach or technology to use, whether to modify production data, an irreversible direction, or an ambiguous deliverable — ask first instead of guessing. Emit ONLY this JSON:
+{"kind":"clarify","clarify":{"plan":"optional short plan","questions":[{"id":"scope","header":"范围","question":"Which tree should I change?","options":[{"label":"Option A","description":"..."},{"label":"Option B","description":"..."}],"multi_select":false,"recommended":"Option A"}]}}
+
+Rules:
+- Ask only when the answer changes what you will do. If a conventional default exists and the user did not specify, proceed with that default and state the assumption in spec.constraints.
+- Never ask for facts you can read from the workspace map or from files in the tree.
+- At most one clarify per request. The runtime folds the answers into the conversation and classifies again; once the answers are present, emit the task/plan and never ask again.
+- 1-4 questions, 2-4 options each. Options must be concrete and mutually exclusive; put your recommendation first and name it in "recommended".
+- When a choice is visual (a layout, a diagram, a code shape), add a short "preview" markdown sample to each such option (at most ~10 lines). Previews are single-select only; a multi-select question must not carry them.
+- Do not ask open-ended questions; the surface offers a free-text "Other" for answers outside the list.
+- For a large or high-risk task, put a short plan (2-6 lines: what changes, where, and how it will be verified) in "plan", and make the first option a confirmation such as "按此方案执行".
+- Simple, well-specified requests never clarify. Asking a question the user did not need is a failure, not diligence.
+
 The Go core validates kind, tool whitelist, parameter schema, permissions, and node capabilities before execution. Model output is never executed directly as shell commands or hardware signals.
 
 ═══ Live state & self-correction ═══
@@ -302,6 +316,11 @@ type PromptOptions struct {
 	// conversation above and will otherwise resume the plan it finds there,
 	// answering work that belongs to the main thread.
 	Side bool
+	// WorkspaceMap is the scout's rendered report of the workspace this
+	// conversation is pinned to. It grounds the model's scope, duration hint
+	// and turn cap in the real tree instead of a guess from the request text.
+	// Empty means no workspace in view.
+	WorkspaceMap string
 	// UsageObserver is delivered to the streaming call this prompt is sent
 	// through; see WithStreamUsage. It takes no part in building the prompt.
 	UsageObserver func(Usage)
@@ -384,6 +403,19 @@ func WithAcceptanceCandidates(cands []contract.Candidate) ClassifyOption {
 			out = append(out, c)
 		}
 		p.AcceptanceCandidates = out
+	}
+}
+
+// WithWorkspaceMap attaches the scout's workspace report to the classification
+// prompt. The map is already bounded by the scout; the cap here keeps a caller
+// that renders its own text from inflating the system prompt.
+func WithWorkspaceMap(text string) ClassifyOption {
+	return func(p *PromptOptions) {
+		text = strings.TrimSpace(text)
+		if len(text) > 4000 {
+			text = text[:4000]
+		}
+		p.WorkspaceMap = text
 	}
 }
 
@@ -495,6 +527,15 @@ func BuildPrompt(opts PromptOptions) string {
 	if len(opts.AcceptanceCandidates) > 0 {
 		b.WriteString("\n\n═══ Acceptance Candidates ═══\n")
 		b.WriteString(acceptanceCandidatesLine(opts.AcceptanceCandidates))
+	}
+	if opts.WorkspaceMap != "" {
+		b.WriteString("\n\n═══ Workspace ═══\n")
+		b.WriteString("Use this map to ground the task spec in the real tree: set spec.scope to the\n")
+		b.WriteString("relative paths the work will touch (leave empty only when you truly cannot\n")
+		b.WriteString("tell), set resource_profile.duration_hint to \"long\" when the tree or the work\n")
+		b.WriteString("is larger than a single edit, and raise max_turns for multi-step build-test\n")
+		b.WriteString("loops. Do not restate the map in your answer.\n")
+		b.WriteString(opts.WorkspaceMap)
 	}
 	b.WriteString("\n\n═══ Connected Devices ═══\n")
 	b.WriteString(devices)

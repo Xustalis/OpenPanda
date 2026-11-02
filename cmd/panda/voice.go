@@ -213,6 +213,8 @@ func (v *voiceThread) record(ctx context.Context, eng *askengine.Engine, text st
 // sentence a person standing in the room needs.
 func speakBack(ctx context.Context, loc i18n.Locale, out *askengine.Result, mute bool) {
 	switch out.Kind {
+	case "clarify":
+		fmt.Println(renderCliMd(out.Answer))
 	case "answer":
 		fmt.Println(renderCliMd(out.Answer))
 	case "task":
@@ -253,6 +255,8 @@ func speakBack(ctx context.Context, loc i18n.Locale, out *askengine.Result, mute
 // spokenReply is the sentence read aloud for one outcome.
 func spokenReply(loc i18n.Locale, out *askengine.Result) string {
 	switch out.Kind {
+	case "clarify":
+		return head(strings.TrimSpace(out.Answer), maxSpeakChars)
 	case "answer":
 		return head(strings.TrimSpace(out.Answer), maxSpeakChars)
 	case "task":

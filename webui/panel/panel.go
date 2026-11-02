@@ -25,6 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
@@ -320,6 +321,7 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("DELETE /api/sessions/{id}/approval", h.clearSessionApproval)
 		mux.HandleFunc("POST /api/sessions/{id}/cancel", h.sessionCancel)
 		mux.HandleFunc("POST /api/sessions/{id}/stop", h.sessionCancel)
+		mux.HandleFunc("POST /api/sessions/{id}/clarify", h.sessionClarify)
 		// Uploads do not need the Worktrees object — without a repository they
 		// fall back to a per-session directory under the work path — so the
 		// route is registered wherever sessions are, not only when isolation
@@ -638,6 +640,12 @@ type handler struct {
 	// per process so a key handed to the browser never names a later note.
 	memSeq int
 
+	// clarifyMu guards clarifyWaiters: one parked pre-execution question per
+	// running operation. The SSE handler blocks on the channel the browser
+	// answers through POST /api/sessions/{id}/clarify.
+	clarifyMu      sync.Mutex
+	clarifyWaiters map[string]clarifyWaiter
+
 	approvalMu         sync.Mutex
 	approvalOperations map[string]approvalOperation
 	serviceCtx         context.Context
@@ -713,6 +721,12 @@ type taskJSON struct {
 	// accept_work / resume_execution / needs_changed_input — so the board can
 	// label the pending decision instead of a bare "awaiting approval".
 	ApprovalDisposition string `json:"approval_disposition,omitempty"`
+	// Question/QuestionSpec surface a parked clarification without making the
+	// client parse the whole result JSON (which also carries the run's
+	// stdout): Question is the plain text, QuestionSpec the ClarifySpec JSON
+	// when the agent offered bounded choices. Filled only for review rows.
+	Question     string `json:"question,omitempty"`
+	QuestionSpec string `json:"question_spec,omitempty"`
 	// OriginNode is chain[0] — the device that FIRST created this task: self
 	// for locally submitted rows (and for sub-agents, which inherit the
 	// parent's chain), the delegator's id for rows that arrived over the
@@ -870,6 +884,14 @@ func (h *handler) toTaskJSON(t core.Task) taskJSON {
 	}
 	if t.State == core.StateReview {
 		out.ApprovalDisposition = string(t.ApprovalDisposition)
+		if spec, q := parkedQuestionFromResult(t.ResultJSON); q != "" || spec != nil {
+			out.Question = q
+			if spec != nil {
+				if b, err := json.Marshal(spec); err == nil {
+					out.QuestionSpec = string(b)
+				}
+			}
+		}
 	}
 	if t.PlanID != "" || t.StageID != "" || t.OutputArtifact != "" {
 		// StageCount/StageLabels are intentionally NOT derived here: Needs is
@@ -1374,6 +1396,10 @@ type approvalOperation struct {
 	TaskID string `json:"task_id"`
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
+	// answer is the reply to a parked clarification question, composed from
+	// the request's structured answers (or its free text) before the detached
+	// operation starts. Empty for a plain tier-2/accept approval.
+	answer string
 	cancel context.CancelFunc
 }
 
@@ -1387,6 +1413,11 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
 		Scope string `json:"scope"`
+		// Answer is a free-text reply to a parked question; Answers is the
+		// structured form the choice card sends. Answers wins when both are
+		// present — it is composed against the parked spec server-side.
+		Answer  string                `json:"answer"`
+		Answers []entry.ClarifyAnswer `json:"answers"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body) // a bare POST approves once
@@ -1399,6 +1430,20 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
 		return
+	}
+	answer := strings.TrimSpace(body.Answer)
+	if disposition == core.ApprovalResumeExecution {
+		spec, question := h.parkedQuestion(r.Context(), id)
+		if len(body.Answers) > 0 && spec != nil {
+			answer = entry.ClarifyAnswerText(spec, body.Answers)
+		}
+		if question != "" && answer == "" {
+			// Resuming with no answer re-runs the agent into the same
+			// question. Refuse instead of burning a round; the console's card
+			// sends one of the two fields.
+			writeErr(w, http.StatusBadRequest, errors.New("this task is waiting on an answer"))
+			return
+		}
 	}
 	if disposition == core.ApprovalNeedsChangedInput {
 		writeErr(w, http.StatusConflict, core.ErrApprovalNeedsChangedInput)
@@ -1456,7 +1501,7 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		baseCtx = context.Background()
 	}
 	execCtx, cancel := context.WithCancel(baseCtx)
-	op := approvalOperation{ID: operationID, TaskID: id, Status: core.StateRunning, cancel: cancel}
+	op := approvalOperation{ID: operationID, TaskID: id, Status: core.StateRunning, cancel: cancel, answer: answer}
 	h.approvalMu.Lock()
 	if current, exists := h.approvalOperations[id]; exists && current.Status == core.StateRunning {
 		h.approvalMu.Unlock()
@@ -1485,9 +1530,47 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) runApprovalOperation(ctx context.Context, eng *askengine.Engine, op approvalOperation) {
 	defer op.cancel()
-	out := eng.ResumeApproved(ctx, op.TaskID, "", askengine.StreamCallbacks{})
+	out := eng.ResumeApproved(ctx, op.TaskID, "", askengine.StreamCallbacks{}, op.answer)
 	status, message := approvalResultState(out)
 	h.finishApprovalOperation(ctx, op, status, message)
+}
+
+// parkedQuestion reads a reviewed task's parked question: the plain text and,
+// when the agent offered bounded choices, the parsed ClarifySpec. Both empty
+// when the row is not parked on a question.
+func (h *handler) parkedQuestion(ctx context.Context, id string) (*entry.ClarifySpec, string) {
+	if h.store == nil {
+		return nil, ""
+	}
+	task, err := h.store.Get(ctx, id)
+	if err != nil || task.ResultJSON == "" {
+		return nil, ""
+	}
+	return parkedQuestionFromResult(task.ResultJSON)
+}
+
+// parkedQuestionFromResult parses the row's stored result for a parked
+// question. It is pure so the wire-shape contract (question + the serialized
+// spec) is testable without a store.
+func parkedQuestionFromResult(resultJSON string) (*entry.ClarifySpec, string) {
+	if resultJSON == "" {
+		return nil, ""
+	}
+	var payload struct {
+		Question     string `json:"question"`
+		QuestionSpec string `json:"question_spec"`
+	}
+	if json.Unmarshal([]byte(resultJSON), &payload) != nil {
+		return nil, ""
+	}
+	var spec *entry.ClarifySpec
+	if strings.TrimSpace(payload.QuestionSpec) != "" {
+		var s entry.ClarifySpec
+		if json.Unmarshal([]byte(payload.QuestionSpec), &s) == nil {
+			spec = &s
+		}
+	}
+	return spec, strings.TrimSpace(payload.Question)
 }
 
 // continueTask requeues a follow-up-parked task — the supervised "more work

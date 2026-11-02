@@ -17,6 +17,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/nodecli"
+	"github.com/Xustalis/OpenPanda/internal/scout"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
@@ -88,6 +89,81 @@ func taskMaxTurns(specJSON string) int {
 		return 0
 	}
 	return spec.MaxTurns
+}
+
+// taskDurationHint extracts resource_profile.duration_hint from a task's
+// persisted resource JSON. The hint is what the entry model declared when it
+// classified the request ("long" = expected to exceed several minutes), and
+// unlike cpu/ram it also describes the TIME budget the work needs.
+func taskDurationHint(resourceJSON string) string {
+	if resourceJSON == "" {
+		return ""
+	}
+	var res struct {
+		DurationHint string `json:"duration_hint"`
+	}
+	if err := json.Unmarshal([]byte(resourceJSON), &res); err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(res.DurationHint))
+}
+
+// Derived execution budgets. The adapter defaults (30 turns, agent_s=600) are
+// sized for an edit-and-verify task, not for the work the same orchestrator
+// advertises as needing an hour: a full-repo refactor, a build-test-debug
+// loop, a migration. A declared long task or a high complexity score raises
+// the ceiling; it does not force the agent to use it — a run that finishes
+// early still ends early — and the silence/hard watchdogs keep bounding a
+// run that has actually wedged.
+const (
+	derivedLongTurns     = 120
+	derivedHardTurns     = 80
+	derivedMediumTurns   = 60
+	derivedLongTimeout   = 30 * time.Minute
+	derivedHardTimeout   = 25 * time.Minute
+	derivedMediumTimeout = 20 * time.Minute
+	// turnCapContinuationTurns is the cap a run that stopped at its turn
+	// limit is resumed under. It is deliberately generous: the run already
+	// has a live session and unfinished work, and the round budget — not this
+	// number — is what bounds how many continuations a task gets.
+	turnCapContinuationTurns = 200
+)
+
+// derivedAgentBudget derives a per-task turn cap and timeout from the task's
+// own declared shape. Both return zero when the task is ordinary, meaning
+// "keep the adapter/orchestrator default". An explicit spec.max_turns always
+// wins over the derived turn cap; a per-kind timeout configured by the
+// operator (timeouts.agent_by_kind) always wins over the derived timeout.
+func derivedAgentBudget(task Task) (turns int, timeout time.Duration) {
+	if taskDurationHint(task.ResourceJSON) == "long" {
+		return derivedLongTurns, derivedLongTimeout
+	}
+	switch {
+	case task.Complexity >= 0.75:
+		return derivedHardTurns, derivedHardTimeout
+	case task.Complexity >= 0.45:
+		return derivedMediumTurns, derivedMediumTimeout
+	case codingTask(task.Requires):
+		// A task submitted straight from the CLI (or a hand-written plan
+		// stage) carries no classifier score; its declared coding/agent
+		// requirement is the only signal that this is real work rather than a
+		// one-shot lookup, so it gets the medium floor instead of the
+		// adapter's 30-turn default.
+		return derivedMediumTurns, derivedMediumTimeout
+	}
+	return 0, 0
+}
+
+// codingTask reports whether a requirement set marks execution work: the
+// CLI's default "coding" ability, or an explicit agent harness.
+func codingTask(required []string) bool {
+	for _, r := range required {
+		req := strings.ToLower(strings.TrimSpace(r))
+		if req == "coding" || req == "code" || strings.HasPrefix(req, "agent:") {
+			return true
+		}
+	}
+	return false
 }
 
 // taskSpecEnvelope extracts the acceptance side of a task's persisted spec —
@@ -282,6 +358,7 @@ func getAgentOutputRider(locs ...i18n.Locale) string {
 执行约定：
 - 在 workspace 目录内工作；只在确实需要改动代码时才去读相关的源文件与文档（有源码可读就不要去反汇编二进制），不要为了"了解项目"而通读仓库。
 - 宣布完成前必须验证：用该项目自身的构建/测试方式（按其 Makefile、scripts、CI 或包管理器惯例）跑通能证明成功定义的命令；只写"应该可行"不算完成。
+- 工作区地图列出了项目的 build/verify 入口时，运行与你改动相关的那一条或几条，并在回复里给出命令与实际输出；最终回复里没有跑过任何一条，不算完成。
 - 只改动任务范围内（scope）的文件；不要顺手重构或格式化无关代码。
 - 最终回复用%s，直接说明：改了什么、在哪个文件、如何验证（运行的命令及其结果）。有无法满足的验收标准要明确写出，不许含糊带过。
 - 不要使用表情符号，不要寒暄或与任务无关的自我介绍。`, outputLangName(outputLang, true))
@@ -291,6 +368,7 @@ func getAgentOutputRider(locs ...i18n.Locale) string {
 Execution contract:
 - Work inside the workspace; read only the source files and docs the change actually touches — never disassemble a binary whose source is on disk, and do not survey the repository just to "understand the project".
 - Verify before claiming done: run whatever proves the success definition using the project's own build/test convention (its Makefile, scripts, CI, or package manager); reporting what "should" work is not completion.
+- When the workspace map lists the project's build/verify entries, run the one(s) that cover your change and report the command and its actual output. A final reply that never ran one is not completion.
 - Touch only files inside the declared scope; do not refactor or reformat unrelated code.
 - Final reply in %s, stating plainly: what changed, in which files, and how it was verified (the commands run and their outcomes). Name any acceptance criterion you could not verify — do not imply it passed.
 - No emojis, no pleasantries, no meta-commentary about being an AI.`, outputLangName(outputLang, false))
@@ -336,6 +414,15 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, promptBud
 	}
 	if workDir != "" {
 		frame.WriteString("\nworkspace: " + workDir + " (your working directory — resolve relative paths from here)")
+		// Workspace map (scout): on a large repository the agent would
+		// otherwise spend its first turns rediscovering the layout, and a
+		// wrong-scope run is not visible until it writes somewhere it should
+		// not. The map is deterministic orientation — repo identity, size,
+		// layout, key files and the project's declared build/verify commands —
+		// not a substitute for reading the files it names.
+		if m := scout.Cached(workDir).Render(); m != "" {
+			frame.WriteString("\n\n" + m)
+		}
 	}
 
 	manifest := ""

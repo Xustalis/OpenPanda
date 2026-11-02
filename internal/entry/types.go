@@ -7,6 +7,8 @@
 package entry
 
 import (
+	"strings"
+
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
@@ -27,6 +29,13 @@ const (
 	// lives, report back through the device the user is holding", so a request
 	// that needs different machines for different steps becomes this instead.
 	KindPlan Kind = "plan"
+	// KindClarify asks the user a bounded set of choices before a task or plan
+	// is created. It is the pre-execution gate: a large or ambiguous request
+	// whose outcome materially depends on a decision only the user can make
+	// gets one question round instead of a guess. The runtime renders the
+	// questions, folds the answers into the conversation, and asks the model
+	// to classify again.
+	KindClarify Kind = "clarify"
 )
 
 // Output is the parsed result of one entry-model call. Exactly one of
@@ -34,13 +43,97 @@ const (
 // executor does not act on — text emitted alongside a tool call — so callers
 // can surface it rather than drop it.
 type Output struct {
-	Kind   Kind
-	Answer string      // KindAnswer
-	Tool   *ToolCall   // KindToolCall — the first call (kept for simple consumers)
-	Tools  []*ToolCall // KindToolCall — every call the model emitted this round
-	Task   *TaskSpec   // KindTask
-	Plan   *PlanSpec   // KindPlan
-	Note   string      // text emitted alongside the tool call(s) (KindToolCall)
+	Kind    Kind
+	Answer  string       // KindAnswer
+	Tool    *ToolCall    // KindToolCall — the first call (kept for simple consumers)
+	Tools   []*ToolCall  // KindToolCall — every call the model emitted this round
+	Task    *TaskSpec    // KindTask
+	Plan    *PlanSpec    // KindPlan
+	Clarify *ClarifySpec // KindClarify
+	Note    string       // text emitted alongside the tool call(s) (KindToolCall)
+}
+
+// ClarifySpec is the pre-execution question round the model emits for
+// KindClarify. Plan is optional prose shown above the questions — the proposed
+// approach the user is being asked to confirm or redirect.
+type ClarifySpec struct {
+	Plan      string            `json:"plan,omitempty"`
+	Questions []ClarifyQuestion `json:"questions"`
+}
+
+// ClarifyQuestion is one bounded choice. The option set is closed on purpose:
+// a free-text question is the model asking the user to do its job, while a
+// short option list is a decision the user can make in one keystroke. Other
+// free text stays available through the surface's "Other" affordance.
+type ClarifyQuestion struct {
+	ID          string          `json:"id"`
+	Header      string          `json:"header"`
+	Question    string          `json:"question"`
+	Options     []ClarifyOption `json:"options"`
+	MultiSelect bool            `json:"multi_select,omitempty"`
+	// Recommended names the option label the model would pick if the user has
+	// no preference or cannot answer interactively. It must match an option.
+	Recommended string `json:"recommended,omitempty"`
+}
+
+// ClarifyOption is one selectable answer. Preview optionally renders a short
+// markdown sample of what choosing this option produces (a layout sketch, a
+// code shape); it is single-select only, because a multi-select preview has no
+// single result to show.
+type ClarifyOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Preview     string `json:"preview,omitempty"`
+}
+
+// ClarifyAnswer is one question's answer: the selected option labels, in the
+// order the user picked them, plus the free-text value when the user chose
+// "Other". Both may be present for a multi-select question.
+type ClarifyAnswer struct {
+	ID       string   `json:"id"`
+	Selected []string `json:"selected,omitempty"`
+	Other    string   `json:"other,omitempty"`
+}
+
+// ClarifyAnswerText renders an answer set as the text a resumed agent receives.
+// It is the one place the CLI, the web console and the TUI agree on the shape,
+// so the model reads the same reply whichever surface asked: one line per
+// question, unanswered questions explicitly deferred to the recommendation.
+func ClarifyAnswerText(spec *ClarifySpec, answers []ClarifyAnswer) string {
+	if spec == nil {
+		return ""
+	}
+	byID := make(map[string]ClarifyAnswer, len(answers))
+	for _, a := range answers {
+		byID[a.ID] = a
+	}
+	var lines []string
+	for _, q := range spec.Questions {
+		var picks []string
+		if a, ok := byID[q.ID]; ok {
+			for _, s := range a.Selected {
+				if s = strings.TrimSpace(s); s != "" {
+					picks = append(picks, s)
+				}
+			}
+			if other := strings.TrimSpace(a.Other); other != "" {
+				picks = append(picks, other)
+			}
+		}
+		if len(picks) == 0 {
+			if q.Recommended != "" {
+				picks = []string{q.Recommended + " (recommended fallback — the user did not choose)"}
+			} else {
+				lines = append(lines, "- "+q.Question+": (not answered)")
+				continue
+			}
+		}
+		lines = append(lines, "- "+q.Question+": "+strings.Join(picks, ", "))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ToolCalls returns every call the model emitted this round. Models emit

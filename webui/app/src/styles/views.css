@@ -549,6 +549,185 @@
   max-height: 180px;
 }
 
+/* Pre-execution question card above the composer: the running SSE turn is
+   parked on this answer, so the card sits where the next action would be rather
+   than inside a transcript bubble that scrolls away. */
+.clarify-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2);
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+}
+
+.clarify-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.clarify-progress {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+
+.clarify-plan {
+  white-space: pre-wrap;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  max-height: 30vh;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.clarify-question {
+  font-weight: 600;
+}
+
+.clarify-header {
+  color: var(--accent);
+  font-weight: 500;
+  margin-right: 4px;
+}
+
+.clarify-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Options and the focused option's preview share a row on a wide screen; the
+   preview stacks under the options on a narrow one. */
+.clarify-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.clarify-body .clarify-options {
+  flex: 1 1 55%;
+  min-width: 0;
+}
+
+.clarify-preview {
+  flex: 1 1 45%;
+  min-width: 0;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: var(--fs-caption);
+}
+
+@media (max-width: 720px) {
+  .clarify-body {
+    flex-direction: column;
+  }
+
+  .clarify-preview {
+    max-height: 30vh;
+    width: 100%;
+  }
+}
+
+.clarify-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 9px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.clarify-option:hover {
+  border-color: var(--accent);
+}
+
+.clarify-option.is-picked {
+  border-color: var(--accent);
+  background: var(--bg-raised);
+}
+
+.clarify-option-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clarify-check {
+  display: inline-block;
+  width: 1em;
+  color: var(--accent);
+}
+
+.clarify-recommended {
+  font-size: var(--fs-caption);
+  color: var(--accent);
+}
+
+.clarify-option-desc {
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+
+.clarify-other {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.clarify-other input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.clarify-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+/* A parked task's question reuses the clarify card inside the approval box:
+   column layout, and the inner card drops its own frame so the two borders do
+   not nest. */
+.task-approval.is-clarify {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.task-approval.is-clarify .clarify-card {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.clarify-other .clarify-question {
+  flex-basis: 100%;
+}
+
 /* Inline approval gate inside a reply's task card: the decision belongs where
    the user is reading, so it sits above the result with the warning accent
    rather than hiding among the card's other chrome. */
