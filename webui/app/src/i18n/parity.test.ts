@@ -8,6 +8,7 @@ import zhCN from './zh-CN.ts'
 import ja from './ja.ts'
 import es from './es.ts'
 import de from './de.ts'
+import { t } from './index.ts'
 
 // Dictionary parity guard: every locale must carry exactly the English key
 // set — no missing keys (which render as raw key names) and no orphans
@@ -40,5 +41,12 @@ describe('i18n parity', () => {
         assert.ok(typeof v === 'string' && v.length > 0, `${name}.${k}`)
       }
     }
+  })
+
+  it('interpolation keeps replacement patterns in the value literal', () => {
+    // `String.replaceAll` reads `$&`, `$1` and friends in a string
+    // replacement; a task title containing one must come through unchanged.
+    assert.equal(t('queue.more', { n: '$&' }), '$& more…')
+    assert.equal(t('queue.more', { n: "$1 $' $`" }), "$1 $' $` more…")
   })
 })

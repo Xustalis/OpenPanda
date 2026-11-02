@@ -62,6 +62,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **A translated value keeps `$&` literal** — the console's interpolation used `String.replaceAll`, whose string replacement reads `$&`, `$1` and friends; a task title or path containing one was mangled by its own interpolation. Values are now spliced literally.
+
 - **A device panel stays inside the map** — the workspace's machine cards were content-sized, so a four-agent panel grew past the map's bottom edge and was clipped by the composer. A card now caps at the map's visible height and scrolls its tile field inside that block.
 
 - **The first-run wizard remembers the language you kept** — the chips wrote their locale on click, but "next" was the obvious button and wrote nothing, so `ui.locale` stayed empty on every install that accepted the preselected language. That empty string is one of the four signals the gate reads to call an install fresh, so the next re-onboard — a config rewritten under the console, a stale terms revision — opened at the language step again, the one step the user had already answered. Advancing now persists whatever locale is active.

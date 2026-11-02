@@ -56,6 +56,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
+- **Un valor traducido conserva `$&` literal** — la interpolación de la consola usaba `String.replaceAll`, cuyo reemplazo de cadena interpreta `$&`, `$1` y similares; un título o una ruta que los contuviera quedaba alterado. Ahora los valores se concatenan literalmente.
+
 - **Un panel de dispositivo no se sale del mapa** — las tarjetas de máquina se dimensionaban por contenido, así que un panel con cuatro agentes crecía más allá del borde inferior del mapa y quedaba cortado por el compositor. Ahora la tarjeta se limita a la altura visible del mapa y desplaza su campo de fichas dentro del bloque.
 
 - **El asistente inicial recuerda el idioma que conservaste** — los chips escribían su locale al hacer clic, pero «siguiente» era el botón obvio y no escribía nada, así que `ui.locale` quedaba vacío en toda instalación que aceptaba el idioma preseleccionado. Esa cadena vacía es una de las cuatro señales que la puerta lee para considerar una instalación nueva, así que el siguiente re-onboarding —una configuración reescrita bajo la consola, una revisión de términos obsoleta— volvía a abrirse en el paso del idioma, el único que el usuario ya había respondido. Ahora avanzar persiste el locale que esté activo.

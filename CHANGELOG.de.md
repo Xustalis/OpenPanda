@@ -56,6 +56,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
+- **Ein übersetzter Wert behält `$&` wörtlich** — die Interpolation der Konsole nutzte `String.replaceAll`, dessen String-Ersetzung `$&`, `$1` und Ähnliches interpretiert; ein Aufgabentitel oder Pfad damit wurde verfälscht. Werte werden jetzt wörtlich eingesetzt.
+
 - **Ein Gerätepanel bleibt im Kartenbereich** — die Maschinenkarten richteten sich nach ihrem Inhalt, sodass ein Panel mit vier Agenten über die Unterkante der Kartenfläche hinauswuchs und vom Composer abgeschnitten wurde. Die Karte ist jetzt auf die sichtbare Höhe der Kartenfläche begrenzt und scrollt ihr Kachelfeld im Block.
 
 - **Der Ersteinrichtungs-Assistent merkt sich die Sprache, die du behalten hast** — die Sprach-Chips schrieben ihr Locale beim Klick, aber „weiter“ war der offensichtliche Knopf und schrieb nichts, sodass `ui.locale` bei jeder Installation leer blieb, die die vorausgewählte Sprache übernahm. Diese leere Zeichenkette ist eines der vier Signale, an denen das Gate eine frische Installation erkennt, also öffnete das nächste Re-Onboarding — eine unter der Konsole neu geschriebene Konfiguration, eine veraltete Terms-Revision — wieder beim Sprachschritt, dem einzigen, den der Nutzer längst beantwortet hatte. Weiterzugehen schreibt jetzt das aktive Locale fest.
