@@ -65,6 +65,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Changed
 
+- **Settings reads as one row per setting** — the policy section was four groups, each carrying an icon, a caption and a blurb, and then a row label and a paragraph: the same thing said three times over. It is now four blocks named by topic, and inside, one setting per row — a label, the one clause that changes with the current value, and the control. The action bar stays quiet until something is actually edited.
 - **The memory page is a ledger of files** — one header line (the counts are its subtitle), one segmented strip whose tabs carry how many entries sit behind them, and one card per file: the name, the budget meter, the entry count and the edit verb in its head, entries numbered down the left with the pencil and bin appearing on hover. The empty state is a single card that says what the file is for, instead of an empty rail beside an empty pane. The graph keeps a pan/zoom legend on the canvas, where the gesture happens.
 
 - **Five permission modes are the whole consent answer** — the per-composer “authorize risky actions” switch is gone. It only mattered in auto and edits, was ignored in manual, plan and bypass, and restated what either the bypass mode or the approval card already says; a one-off tier-2 operation is decided on the card when it comes up.

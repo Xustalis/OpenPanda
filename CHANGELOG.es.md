@@ -59,6 +59,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Cambiado
 
+- **Los ajustes se leen como una fila por opción** — la sección de política eran cuatro grupos, cada uno con icono, título y explicación, y encima una etiqueta y un párrafo por fila: lo mismo dicho tres veces. Ahora son cuatro bloques nombrados por tema y, dentro, una opción por fila: una etiqueta, la única frase que cambia con el valor actual y el control. La barra de acciones calla mientras no se haya editado nada.
 - **La página de memoria es un libro de archivos** — una línea de cabecera (los recuentos son su subtítulo), una tira segmentada cuyas pestañas llevan cuántas entradas hay detrás, y una tarjeta por archivo: nombre, medidor de presupuesto, recuento y verbo de edición en la cabecera; entradas numeradas a la izquierda con el lápiz y la papelera al pasar el ratón. Un archivo vacío es una sola tarjeta que dice para qué sirve, no un rail vacío junto a un panel vacío. La leyenda de paneo/zoom del grafo pasa de la barra de herramientas al lienzo, donde ocurre el gesto.
 
 - **Los cinco modos de permiso son toda la respuesta de consentimiento** — se elimina el interruptor «Autorizar acciones de riesgo» junto al compositor. Solo importaba en auto y edición, se ignoraba en manual, plan y omisión, y repetía lo que ya dicen el modo de omisión o la tarjeta de aprobación; una operación de nivel 2 puntual se decide en la tarjeta cuando aparece.

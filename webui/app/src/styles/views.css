@@ -5384,22 +5384,23 @@ code.md-file:focus-visible {
   border-top: 1px solid var(--border-soft);
 }
 
-/* ---- 应用策略: four questions, four answers ------------------------------
-   The generic row rules above are tuned for one flat list. This page is not
-   a list — it is four policy groups, one of which is a read-only status
-   panel — so it brings its own frame: a group header per question, rows
-   inside it, and an action bar that closes the form. */
+/* ---- 应用策略: one topic per block, one setting per row ------------------
+   The row anatomy is lifted from the settings sheets this class of tool ships
+   (WorkBuddy's .general-settings-panel, Codex's Settings): a 500-weight label,
+   one clause of grey text under it, and the control pinned to the right edge.
+   What is *not* here is the point — no group icon plate, no caption sentence
+   beside the group title, and no second paragraph per row. Each of those was
+   a voice saying what the label already said, and four of them per screen is
+   what made this page read as a manual instead of a form.
+
+   The frame stays flat and hairline-ruled like the rest of the sheet: this
+   dialog groups by rule, not by nested cards, and a carded page next to 常规
+   would look like a different application. */
+
 .policy-form {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 14px 0 0;
-}
-
-.policy-lead {
-  margin: 0;
-  font-size: var(--text-md);
-  color: var(--text-secondary);
+  padding: 4px 0 0;
 }
 
 .policy-group {
@@ -5407,62 +5408,54 @@ code.md-file:focus-visible {
   flex-direction: column;
   min-width: 0;
 }
+.policy-group + .policy-group {
+  margin-top: 2px;
+}
 
-/* The header is the rule: a tinted glyph, the question, and one line saying
-   what it decides. Everything below it belongs to it, which is what the old
-   column of six equal rows never told you. */
-.policy-group-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-bottom: 7px;
-  border-bottom: 1px solid var(--border);
-}
-.policy-group-icon {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 21px;
-  height: 21px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-alpha-md);
-  color: var(--text-secondary);
-}
+/* A section header, not a row: smaller and greyer than the labels it
+   introduces, with the rule under it starting the block. The rule is what
+   makes it a header — a bare caption above a row just reads as that row's
+   subtitle, which is the hierarchy the old design got wrong in the other
+   direction. */
 .policy-group-title {
   margin: 0;
-  font-size: var(--text-md);
-  font-weight: 600;
-  letter-spacing: 0;
-  color: var(--text);
-}
-.policy-group-note {
-  min-width: 0;
-  overflow: hidden;
+  padding: 18px 0 7px;
+  border-bottom: 1px solid var(--border-soft);
   font-size: var(--text-sm);
-  color: var(--text-tertiary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+}
+.policy-group:first-child .policy-group-title {
+  padding-top: 6px;
+}
+
+.policy-group-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .policy-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 2px 28px;
-  padding: 12px 0;
+  gap: 2px 24px;
+  padding: 13px 0;
   border-bottom: 1px solid var(--border-soft);
 }
-.policy-group > :last-child,
 .policy-row:last-child {
   border-bottom: 0;
 }
 .policy-row-name {
   font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 1.4;
   color: var(--text);
 }
 .policy-row-label > .hint {
   margin: 3px 0 0;
-  max-width: 68ch;
+  max-width: 66ch;
 }
 .policy-row-control {
   justify-self: end;
@@ -5576,13 +5569,12 @@ code.md-file:focus-visible {
 }
 
 /* 记忆上限: three caps side by side, each with its unit inside the field so
-   the number reads as a quantity instead of a bare integer. */
+   the number reads as a quantity instead of a bare integer. The row owns the
+   spacing now that the card has no dividers. */
 .policy-limits {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  padding: 12px 0 14px;
-  border-bottom: 1px solid var(--border-soft);
 }
 .policy-limit {
   display: flex;
@@ -5626,15 +5618,16 @@ code.md-file:focus-visible {
   color: var(--danger);
 }
 
-/* 沙箱: a status panel, not a switch. The state is a pill, the mechanism is
-   mono, the path gets its own line instead of wrapping around a sentence. */
+/* 沙箱: a status panel, not a switch. It sits inside the 安全 card below the
+   approval row, so it is an inset well on a raised surface — the tone change
+   is what separates it, not a border. The state is a pill, the mechanism is
+   mono, and the path gets its own line instead of wrapping around a sentence. */
 .policy-sandbox {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  margin: 12px 0 2px;
+  margin: 12px 0 10px;
   padding: 11px 13px;
-  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--bg-inset);
 }
@@ -5705,14 +5698,14 @@ code.md-file:focus-visible {
 
 /* The action bar closes the form instead of floating over it: at this size
    the whole page is one wheel notch from end to end, and a pinned bar would
-   slice whichever control happens to sit under it. The state line on the
-   left is what makes the end of the form worth reaching — it says whether
-   anything is actually pending. */
+   slice whichever control happens to sit under it. The state line only
+   appears when there is something to say — a form that matches the node does
+   not need a sentence telling you so, and two dead buttons already say it. */
 .policy-actions {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 2px;
   padding: 14px 0 0;
   border-top: 1px solid var(--border-soft);
 }
@@ -5722,6 +5715,7 @@ code.md-file:focus-visible {
 .policy-actions-bar {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
 .policy-actions-state {
@@ -5797,7 +5791,7 @@ code.md-file:focus-visible {
     justify-self: stretch;
     margin-top: 8px;
   }
-  /* 应用策略: one column, and the group's one-line gloss has nowhere to go. */
+  /* 应用策略: one column — the control drops under its label. */
   .policy-row,
   .policy-row.wide {
     grid-template-columns: minmax(0, 1fr);
@@ -5806,9 +5800,6 @@ code.md-file:focus-visible {
   .policy-row-control {
     justify-self: stretch;
     margin-top: 8px;
-  }
-  .policy-group-note {
-    display: none;
   }
   .policy-limits {
     grid-template-columns: minmax(0, 1fr);

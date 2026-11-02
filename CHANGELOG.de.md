@@ -59,6 +59,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Geändert
 
+- **Einstellungen lesen sich als eine Zeile pro Option** — der Richtlinienbereich bestand aus vier Gruppen, jede mit Symbol, Überschrift und Erläuterung, und darin je Zeile noch ein Label und ein Absatz: dasselbe dreimal gesagt. Jetzt sind es vier nach Thema benannte Blöcke, darin eine Einstellung pro Zeile — ein Label, der eine Satz, der sich mit dem aktuellen Wert ändert, und das Bedienelement. Die Aktionsleiste schweigt, solange nichts geändert wurde.
 - **Die Speicherseite ist ein Dateibuch** — eine Kopfzeile (die Zählungen sind ihre Unterzeile), ein Segmentstreifen, dessen Tabs tragen, wie viele Einträge dahinter stehen, und eine Karte pro Datei: Name, Budgetanzeige, Anzahl und Bearbeitungsverb im Kopf, Einträge links durchnummeriert mit Stift und Papierkorb beim Überfahren. Eine leere Datei ist eine einzelne Karte, die sagt, wofür sie da ist — kein leerer Rail neben einer leeren Fläche. Die Pan/Zoom-Legende des Graphen wandert von der Werkzeugleiste auf die Leinwand, dorthin, wo die Geste passiert.
 
 - **Fünf Berechtigungsmodi sind die vollständige Zustimmung** — der Schalter „Risikoreiche Aktionen erlauben“ neben dem Composer ist entfernt. Er zählte nur in Auto und Bearbeiten, wurde in Manuell, Plan und Umgehen ignoriert und wiederholte, was der Umgehen-Modus oder die Freigabekarte ohnehin sagt; eine einmalige Tier-2-Aktion wird auf der Karte entschieden, wenn sie auftritt.
