@@ -1150,6 +1150,10 @@ const ja: Messages = {
   'artifact.downloadArchive': 'アーカイブをダウンロード',
   'artifact.loading': '成果物を読み込み中…',
   'artifact.empty': 'アーカイブは空です',
+  'artifact.remote': '成果物は {source} にあります。取得すると表示できます。',
+  'artifact.pull': '実行ノードから取得',
+  'artifact.pulling': '取得中…',
+  'artifact.noFetch': 'このノードでは成果物を取得できません。{source} でタスクを開いてください。',
 
 
   'ui.update.degraded.title': '更新チェックは一時停止中（ネットワーク制限）',

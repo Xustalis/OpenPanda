@@ -1163,6 +1163,10 @@ const es: Messages = {
   'artifact.downloadArchive': 'Descargar archivo',
   'artifact.loading': 'Leyendo artefacto…',
   'artifact.empty': 'Archivo vacío',
+  'artifact.remote': 'El artefacto está en {source}; descárgalo para verlo.',
+  'artifact.pull': 'Traer del ejecutor',
+  'artifact.pulling': 'Trayendo…',
+  'artifact.noFetch': 'Este nodo no puede traer el artefacto. Abre la tarea en {source}.',
 
 
   'ui.update.degraded.title': 'Comprobaciones de actualización en pausa (red limitada)',

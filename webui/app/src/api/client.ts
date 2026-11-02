@@ -1800,7 +1800,10 @@ export const api = {
 
   /** Pull a task's artifact back from the executor so the preview has bytes. */
   fetchTaskArtifact(id: string): Promise<{ hash: string; files?: number; already?: boolean; source?: string }> {
-    return request('POST', `/api/tasks/${encodeURIComponent(id)}/artifact/fetch`, {})
+    // A cross-node pull can legitimately take minutes on a slow link; the
+    // server bounds it with its own transfer budget, and the request context
+    // is what stops it if the user walks away.
+    return request('POST', `/api/tasks/${encodeURIComponent(id)}/artifact/fetch`, {}, { timeoutMs: 30 * 60_000 })
   },
 
   fsFiles(path?: string): Promise<FsFilesResult> {

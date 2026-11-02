@@ -9066,6 +9066,18 @@ input.switch:focus-visible {
   border-top: 1px solid var(--hairline-sm);
   padding-top: var(--sp-3);
 }
+.artifact-remote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+.artifact-remote p {
+  margin: 0;
+}
 .artifact-list {
   list-style: none;
   margin: 0;

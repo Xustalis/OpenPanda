@@ -1163,6 +1163,10 @@ const de: Messages = {
   'artifact.downloadArchive': 'Archiv herunterladen',
   'artifact.loading': 'Artefakt wird gelesen…',
   'artifact.empty': 'Archiv ist leer',
+  'artifact.remote': 'Das Artefakt liegt noch auf {source}; lade es zum Ansehen herunter.',
+  'artifact.pull': 'Vom Executor holen',
+  'artifact.pulling': 'Wird geholt…',
+  'artifact.noFetch': 'Dieser Knoten kann das Artefakt nicht holen. Öffne die Aufgabe auf {source}.',
 
 
   'ui.update.degraded.title': 'Update-Prüfungen pausiert (Netzwerk begrenzt)',

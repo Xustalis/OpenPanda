@@ -1177,6 +1177,10 @@ const zhCN: Messages = {
   'artifact.downloadArchive': '下载归档',
   'artifact.loading': '读取产物中…',
   'artifact.empty': '归档为空',
+  'artifact.remote': '产物还在 {source} 上，拉取后才能查看。',
+  'artifact.pull': '从执行节点拉取',
+  'artifact.pulling': '正在拉取…',
+  'artifact.noFetch': '本节点无法拉取产物，请在 {source} 上打开任务。',
 
 
   // Update banners — painted by <UpdateBanner/> on every view when the

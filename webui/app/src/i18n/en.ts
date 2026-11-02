@@ -1195,6 +1195,10 @@ const en: Messages = {
   'artifact.downloadArchive': 'Download archive',
   'artifact.loading': 'Reading artifact…',
   'artifact.empty': 'Archive is empty',
+  'artifact.remote': 'The artifact is still on {source}; pull it to view.',
+  'artifact.pull': 'Pull from executor',
+  'artifact.pulling': 'Pulling…',
+  'artifact.noFetch': 'This node cannot pull the artifact. Open the task on {source}.',
 
 
   'ui.update.degraded.title': 'Update checks paused (network limited)',
