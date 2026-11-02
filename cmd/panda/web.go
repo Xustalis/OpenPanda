@@ -99,6 +99,7 @@ func runWeb(args []string) {
 		cmd.Stdout = lf
 		cmd.Stderr = lf
 		cmd.Stdin = nil
+		detachCommand(cmd)
 		if err := cmd.Start(); err != nil {
 			fatal("start background web", err)
 		}
