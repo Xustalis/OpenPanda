@@ -762,8 +762,17 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		},
 		// OnProgress (not OnStatus) so the structured event survives: the
 		// browser re-localizes retry milestones from the fields instead of
-		// scraping the English fallback sentence.
+		// scraping the English fallback sentence. Usage reports ride the same
+		// callback but their own event: they are a counter update, not a
+		// phase, and a status handler that overwrote the one-line note with
+		// "usage" would erase what the turn is doing.
 		OnProgress: func(p askengine.Progress) {
+			if p.Kind == askengine.ProgressUsage {
+				send("usage", map[string]any{
+					"input": p.InputTokens, "output": p.OutputTokens, "estimated": p.Estimated,
+				})
+				return
+			}
 			send("status", statusEventOf(p))
 		},
 		// The task row exists now — name it on the wire immediately. This turn
@@ -915,6 +924,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			Role: "assistant", Text: text, Kind: kind, Code: code,
 			ErrKind: errKind, ErrDetail: errDetail,
 			DurationMS: askDuration,
+			// A stopped turn still consumed tokens up to the cut, and the
+			// reloaded thread should show what it cost.
+			Tokens: out.Tokens(),
 		})
 		return
 	}
@@ -975,7 +987,8 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// The model that answered, filed with the turn: the console prints it
 		// beside the reply's copy button, and `out` only exists for the live
 		// stream — a reloaded thread reads this instead.
-		Model: out.EntryModel,
+		Model:  out.EntryModel,
+		Tokens: out.Tokens(),
 	}
 	switch out.Kind {
 	case "task":

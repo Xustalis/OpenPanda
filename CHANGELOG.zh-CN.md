@@ -43,6 +43,12 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 ### 新增功能
 
 - **控制台收拢为一个外壳**——每个页面只有一行标题；任务中心的三组镜头共用一个分段控件；任务详情是四张可独立折叠的卡片；模型注册中心是按连接分组的网格；设备区只有一个连接卡和一个拨号列表。设置变成模态框，下拉统一走一个组件，深色主题收敛为灰阶。旧的 `#/todos` 链接落到任务看板；待办数据与 `panda todo` 不变。逐轮授权开关仍留在权限选择器旁：它授予本轮运行，而线程模式本身不提供这一粒度。
+- **节点命令面完整交给每个 Agent** —— CLI 的一级命令、一行用法与补全词表现在都来自同一份注册表（`internal/nodecli`），`panda help` 补上 `join`、`nodes remove` 与 `nodes trust`，shell 补全同步，agent 提示词直接带上本机完整命令集而不是先探测主机。已有受控工具覆盖的读取与队列处置仍走工具调用，只有没有工具支撑的操作才派给 agent。
+- **实时 token 用量与回合静默时间进入每个界面** —— 状态行显示进行中的 token 数（provider 上报前按流式字节估算）与回合已静默多久，思考预览折叠为最近三行并带计时，控制台线程头部在刷新后仍保留每轮计数。计数器以 ask 开始时 client 的累计值为基线，长时间运行的进程报告的是本轮而不是此前所有回合。
+
+### 变更
+
+- **终端对话就是会话** —— REPL/TUI 聊天的第一条消息会创建线程，直接出现在 Web 控制台的会话栏；启动时自动接上当前项目最近更新的线程（`--resume ID` 指定，`--new` 开新对话）。终端回合派生的任务会带上线程 id，控制台的任务板可以跳回对话。旧版 `conversations/*.json` 首次启动导入并归档为 `.json.migrated`；`/new` 改为解绑当前线程，而不是在绑定会话时拒绝。
 
 ### 修复
 
@@ -53,6 +59,10 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **审批结果现在能送达智能体 CLI**——因 `claude_code` 拒绝特权命令（`systemctl`、写 `/etc`）而停驻的任务，在用户批准后曾以逐字相同的 argv 重跑，CLI 再次自动拒绝，任务无限回到同一张审批卡。同意现在随请求送到适配器，该次运行的权限姿态提升为 `bypassPermissions`；未获同意的运行仍用 `acceptEdits`，只读受限运行忽略同意。
 - **八个适配器都能用上 panda 的模型，zcode 也加入** —— 每个内置 CLI 现在按它真正读取的位置写入注入的模型，而不是写它根本不读的环境变量：hermes 得到一次性 `HERMES_HOME`，openclaw 重定向 `HOME` 并加 `--config`/`--state-dir`，pi 写 `models.json`（`apiKey` 是环境变量名），zcode 写 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指向的个人 provider 配置（0.17 完全不读 `ZCODE_*`），agy 写一份退出时恢复的 settings，grok 用 `GROK_MODELS_BASE_URL`（不是 `GROK_BASE_URL`）。临时状态挂在 harness 的清理表上，取消的运行不再把带密钥的配置留在磁盘上——信号路径的 `os._exit` 会跳过 `atexit`。`_harness` 还会从种子副本里剔除选择模型的设置键，并在重建 argv 时知道哪些 flag 会吃掉下一个 token。zcode 同时离开 `generic.py`——那个适配器无法兑现清单声称的注入。
 - **grok_build 现在真的能跑** —— 背后是三个独立故障：未登录的措辞匹配不上任何凭据模式（救援注入从未触发）、端点走了一个这个 CLI 不读的变量、`--single` 在答完之后让进程继续挂着。适配器改为读事件流并在终止行收尾，每轮铸一个 UUID 会话，并把终止 `error` 事件当作失败、以错误消息为诊断，而不是把一句前言当成完成的回合。
+
+### 变更
+
+- **接收大 artifact 分块的速度提高约六成** —— 解码时 1 MiB 分块的 base64 内容要在信封与负载两层各走一遍 `encoding/json` 的字符串处理；接收侧现在按字节扫描定位 data 字段、就地 base64 解码，只把小头部交给标准解码器，非规范形态自动回退。1 MiB 分块基准从 12.3 ms 降到 7.7 ms（85 → 136 MB/s），中继节点也不再重复压缩已经紧凑的内层信封。
 
 ## [0.1.3] - 2026-10-30 — "Constellation"
 

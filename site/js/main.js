@@ -64,20 +64,21 @@ const navLinks = [...document.querySelectorAll('.nav-links a')].filter((a) =>
 const linkFor = new Map(navLinks.map((a) => [a.getAttribute('href').slice(1), a]))
 
 if (navLinks.length) {
+  // Observe every section, not just the ones the nav links to: the page runs
+  // longer than the nav (capabilities, proof, scales have no entry), and
+  // watching only the linked sections left the last one lit while the reader
+  // was three sections past it.
+  const sections = [...document.querySelectorAll('main section[id], main header[id]')]
   const spy = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue
       const link = linkFor.get(entry.target.id)
-      if (!link) continue
       for (const other of navLinks) other.classList.remove('on')
-      link.classList.add('on')
+      link?.classList.add('on')
     }
   }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 })
 
-  for (const id of linkFor.keys()) {
-    const section = $(id)
-    if (section) spy.observe(section)
-  }
+  for (const section of sections) spy.observe(section)
 }
 
 /* ── mobile index ──────────────────────────────────────────────────────── */
@@ -85,20 +86,37 @@ if (navLinks.length) {
 const menuBtn = $('menu-toggle')
 const menu = $('mobile-menu')
 
+const menuInertHosts = [document.querySelector('.skip-link'), document.querySelector('main'), document.querySelector('.site-footer')].filter(Boolean)
+
 function setMenu(open) {
   if (!menu || !menuBtn) return
+  const wasOpen = !menu.hidden
+  if (wasOpen === open) return
   menu.hidden = !open
   menuBtn.setAttribute('aria-expanded', String(open))
   document.body.style.overflow = open ? 'hidden' : ''
   // The menu is paper, the nav above it is transparent: without this the nav
   // keeps its white-on-dark colours and disappears into the sheet.
   document.body.classList.toggle('menu-open', open)
+  // The sheet covers the page; keep Tab and screen readers on it. Browsers
+  // without inert simply ignore the attribute. Skipping the no-op case also
+  // keeps a palette-owned inert state intact when resize closes the menu.
+  if (open) {
+    for (const host of menuInertHosts) host.setAttribute('inert', '')
+    menu.querySelector('a')?.focus({ preventScroll: true })
+  } else {
+    for (const host of menuInertHosts) host.removeAttribute('inert')
+    if (menu.contains(document.activeElement)) menuBtn.focus({ preventScroll: true })
+  }
 }
 
 menuBtn?.addEventListener('click', () => setMenu(menu.hidden))
 menu?.querySelectorAll('a').forEach((a) => a.addEventListener('click', () => setMenu(false)))
+// The brand sits above the sheet and still links to #top; a click should put
+// the reader back on the page, not scroll behind an open menu.
+document.querySelector('.site-nav .brand')?.addEventListener('click', () => setMenu(false))
 addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false) })
-matchMedia('(min-width: 821px)').addEventListener('change', (e) => { if (e.matches) setMenu(false) })
+matchMedia('(min-width: 901px)').addEventListener('change', (e) => { if (e.matches) setMenu(false) })
 
 /* ── scroll reveals ────────────────────────────────────────────────────── */
 // .js .reveal starts at opacity:0; anything that enters the viewport gets .in.
@@ -430,6 +448,16 @@ let palItems = []
 let palActive = 0
 let palReturn = null
 
+// The palette's scrim sits above the whole page; keep the chrome behind it
+// out of the tab order and the accessibility tree while it is open.
+const chromeHosts = [document.querySelector('.skip-link'), document.querySelector('.site-nav'), document.querySelector('main'), document.querySelector('.site-footer')].filter(Boolean)
+function setChromeInert(on) {
+  for (const host of chromeHosts) {
+    if (on) host.setAttribute('inert', '')
+    else host.removeAttribute('inert')
+  }
+}
+
 function filterCommands(query) {
   const needle = query.trim().toLowerCase()
   // Empty query: the eleven sections, in reading order. Everything else is one
@@ -509,6 +537,7 @@ function openPalette() {
   palReturn = document.activeElement
   palette.hidden = false
   document.body.classList.add('palette-open')
+  setChromeInert(true)
   if (palInput) palInput.value = ''
   renderPalette('')
   requestAnimationFrame(() => palInput?.focus())
@@ -518,6 +547,7 @@ function closePalette(restoreFocus = true) {
   if (!palette || palette.hidden) return
   palette.hidden = true
   document.body.classList.remove('palette-open')
+  setChromeInert(false)
   if (restoreFocus && palReturn instanceof HTMLElement) palReturn.focus()
   palReturn = null
 }
@@ -533,7 +563,10 @@ async function runCommand(cmd) {
     return
   }
   if (cmd.url) {
-    window.open(cmd.url, '_blank', 'noopener')
+    // mailto: belongs to the same tab; window.open on it lands on a blank tab
+    // in several browsers.
+    if (/^mailto:/i.test(cmd.url)) location.href = cmd.url
+    else window.open(cmd.url, '_blank', 'noopener')
     return
   }
   if (cmd.copy) {
@@ -547,6 +580,11 @@ palInput?.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown') { e.preventDefault(); paintActive(palActive + 1) }
   else if (e.key === 'ArrowUp') { e.preventDefault(); paintActive(palActive - 1) }
   else if (e.key === 'Enter') { e.preventDefault(); runCommand(palItems[palActive]) }
+})
+// The input is the dialog's only focusable control; Tab must not walk into the
+// page behind the overlay.
+palette?.addEventListener('keydown', (e) => {
+  if (e.key === 'Tab' && !palette.hidden) e.preventDefault()
 })
 
 palList?.addEventListener('click', (e) => {

@@ -644,3 +644,37 @@ func TestAppendTurnSerializesAcrossStores(t *testing.T) {
 			len(got.Turns), perStore*len(stores))
 	}
 }
+
+// TestAppendTurnsWritesOnePair pins the atomic pair contract: a caller that
+// holds a complete exchange must never persist half of it, because a question
+// stored without its answer is replayed back-to-back with the next prompt.
+func TestAppendTurnsWritesOnePair(t *testing.T) {
+	st := NewStore(t.TempDir())
+	sess, err := st.Create("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.AppendTurns(sess.ID,
+		Turn{Role: "user", Text: "question"},
+		Turn{Role: "assistant", Text: "answer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Turns) != 2 {
+		t.Fatalf("turns = %+v", got.Turns)
+	}
+	if got.Title != "question" {
+		t.Fatalf("title = %q, want the first user turn", got.Title)
+	}
+	if got.Turns[0].TS == 0 || got.Turns[1].TS != got.Turns[0].TS {
+		t.Fatalf("timestamps = %d, %d", got.Turns[0].TS, got.Turns[1].TS)
+	}
+
+	reloaded, err := st.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Turns) != 2 || reloaded.Turns[1].Text != "answer" {
+		t.Fatalf("reloaded = %+v", reloaded.Turns)
+	}
+}

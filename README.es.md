@@ -11,8 +11,8 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/plataformas-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/Memoria%20RSS-~20MB-brightgreen)
-![Local First](https://img.shields.io/badge/Dependencia%20Cloud-Cero%20(Local--First)-success)
+![Memory](https://img.shields.io/badge/Memoria%20RSS-~40MB-brightgreen)
+![No Cloud Relay](https://img.shields.io/badge/Relay%20Cloud-Ninguno-success)
 
 ---
 
@@ -68,7 +68,7 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 - **Zonas de confianza**: Cada par lleva un nivel fijado por el operador (`panda nodes trust <id> mesh|guarded|open`) que limita lo que una tarea delegada puede exponerle y cómo se admite el trabajo entrante desde él; el contenido de pantalla es exclusivo de mesh de extremo a extremo — degradar la confianza corta una transferencia de pantalla en pleno vuelo.
 
 ### 2. 🤖 Orquestación universal de agentes y failover automático
-- **Adaptadores listos para usar**: Nueve adaptadores dedicados (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi y OpenClaw). Un puente genérico configurable permite usar cualquier CLI sin interfaz, incluido ZCode.
+- **Adaptadores listos para usar**: Diez adaptadores dedicados (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw y ZCode). Un puente genérico configurable permite usar cualquier otro CLI sin interfaz.
 - **Registro multimodelo y failover transparente**: `panda model add|switch|test` gestiona varios proveedores por nodo tras un cortacircuitos de salud; si un agente agota su cuota o fallan sus credenciales (401/403), se inyecta automáticamente un modelo alternativo y la tarea continúa.
 - **Ejecución multiharness**: `panda ask --agents a,b --mode parallel` reparte una instrucción a varios agentes como un plan y recoge los veredictos.
 - **Trazabilidad total en tiempo real**: Visualiza comandos bash, ediciones de archivos y llamadas a herramientas en tu terminal o navegador.
@@ -97,7 +97,7 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 - **`panda rpc`** (experimental): Superficie de incrustación NDJSON sobre stdio (`status`, `ask` en streaming, `session.*`); `scripts/panda_rpc.py` es un cliente de referencia solo-stdlib.
 - **OAuth de suscripción** (experimental): `panda auth login anthropic` inicia sesión en Claude Pro/Max vía PKCE con refresco transparente del token.
 
-### 6. 🪶 Ultraligero (~20MB de memoria)
+### 6. 🪶 Ultraligero (~40MB de memoria en reposo)
 - Binario estático único en Go puro (SQLite en modo WAL).
 - Funciona sin esfuerzo en una SBC de 20 \$ (Raspberry Pi) o en servidores potentes.
 

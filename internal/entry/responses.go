@@ -670,7 +670,7 @@ func (c *Client) sendResponsesStream(ctx context.Context, system string, turns [
 
 // streamResponses runs one streaming Responses call, replaying once without
 // the reasoning field when the provider rejects it before any event.
-func (c *Client) streamResponses(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
+func (c *Client) streamResponses(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string), em *usageEmitter) (Response, error) {
 	if c.noCredential() {
 		return Response{}, ErrNoKey
 	}
@@ -722,6 +722,11 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 		if err := acc.feed(&ev, onDelta, onReasoning); err != nil {
 			return Response{}, err
 		}
+		// The Responses dialect reports usage on the completion envelope, so
+		// this is the earliest point a mid-stream reader can see the total.
+		if ev.Type == "response.completed" || ev.Type == "response.incomplete" {
+			em.emit(acc.usage(c), false)
+		}
 	}
 	if err := streamEnded(ctx, scanner.Err()); err != nil {
 		return Response{}, err
@@ -733,6 +738,10 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 				return Response{}, inBandError(one.Error.Code, one.Error.Message)
 			}
 			if one.Usage != nil {
+				em.emit(Usage{
+					InputTokens:  c.usageIn.Load() + one.Usage.InputTokens,
+					OutputTokens: c.usageOut.Load() + one.Usage.OutputTokens,
+				}, true)
 				c.addUsage(one.Usage.InputTokens, one.Usage.OutputTokens)
 			}
 			return parseResponsesResponse(&one), nil
@@ -747,6 +756,16 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 		return Response{}, fmt.Errorf("entry: stream: function call %q carried arguments but no name "+
 			"(upstream sent no output_item.added)", key)
 	}
+	// Final usage report before addUsage: the accumulator's counts are still
+	// this attempt's own, so the observer sees the attempt's true total rather
+	// than a value that addUsage is about to fold twice into the client.
+	em.emit(acc.usage(c), true)
 	c.addUsage(acc.usageIn, acc.usageOut)
 	return acc.result(), nil
+}
+
+// usage is the client's cumulative token total including this attempt's
+// counts, which are folded into the client only once the stream succeeds.
+func (a *responsesAccumulator) usage(c *Client) Usage {
+	return Usage{InputTokens: c.usageIn.Load() + a.usageIn, OutputTokens: c.usageOut.Load() + a.usageOut}
 }

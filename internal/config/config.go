@@ -270,12 +270,13 @@ type RoutingConfig struct {
 	// servers configured for the work directory are reachable. Widening the
 	// tool face is an explicit operator choice, never a default.
 	ToolsPolicy string `yaml:"tools_policy"`
-	// PandaTools gates the self-management surface agents get under the
-	// extended tools policy: the openpanda MCP server (panda mcp) injected
-	// into MCP-capable CLIs plus the prompt hint pointing shell-capable
-	// agents at the panda binary on PATH. Nil means enabled — the extended
-	// policy already opted into a wider tool face — and an explicit false
-	// keeps extended tools while closing the self-management path.
+	// PandaTools gates the self-management surface agents get: the openpanda
+	// MCP server (panda mcp) materialized for MCP-capable CLIs under the
+	// extended tools policy, plus the command reference pointing
+	// shell-capable agents at the panda binary on PATH. The reference rides
+	// under both policies — minimal's whitelist already includes Bash, so
+	// knowing the CLI exists grants nothing new — while the MCP server stays
+	// extended-only. Nil means enabled; an explicit false closes both paths.
 	PandaTools *bool `yaml:"panda_tools"`
 	// Reputation opts node scoring into a local track-record term
 	// (trust_zones §9): each executor's smoothed success rate out of this
@@ -303,8 +304,10 @@ func (r RoutingConfig) NormalizedToolsPolicy() string {
 }
 
 // NormalizedPandaTools reports whether the self-management tool surface is
-// enabled (routing.panda_tools, default true). The caller still gates it on
-// the extended tools policy — the flag is an opt-out, not an opt-in.
+// enabled (routing.panda_tools, default true). The MCP server still only
+// materializes under the extended tools policy; the prompt command reference
+// rides under either policy, because the minimal whitelist already includes a
+// shell. The flag is an opt-out, not an opt-in.
 func (r RoutingConfig) NormalizedPandaTools() bool {
 	return r.PandaTools == nil || *r.PandaTools
 }

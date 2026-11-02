@@ -39,9 +39,9 @@ func shouldUseTUI(r *repl) bool {
 // scrolling handled via alternate scroll (DECSET 1007). Mouse cell motion is
 // enabled only when mouseScroll is active (via config, PANDA_MOUSE, or ctrl+t).
 func runTUI(r *repl) {
-	if c := loadConvo(); len(c) > 0 {
-		r.setConvo(c)
-	}
+	// The thread this sitting resumes (or the legacy bare conversation, when no
+	// store could be bound) was already prepared by runRepl — see
+	// prepareConversation — so the transcript can be seeded below.
 	// Bubble Tea owns the terminal now: any classic path that still reached the
 	// raw line editor (a y/N confirm, the interrupt watcher, the history list)
 	// would steal keys out from under the input loop and write straight over

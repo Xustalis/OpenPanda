@@ -163,6 +163,10 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
 - **Data & platform**: `storage` (SQLite WAL + migrations), `ctxstore`,
   `sessions`, `projects`, `config`, `log`, `util` (UUIDv7 etc.),
   `version`, `hwinfo`, `install`, `i18n` (EN/ZH/JA/ES/DE), `reminders`,
+  `nodecli` (the `panda` command registry: the agent prompt reference, the
+  `panda help` page's rows and order, and the completion vocabulary all
+  come from here; a test parses dispatch.go and fails a switch case without
+  a catalog row),
   `updater`, `doctor`, `cliui`, `providers`, `pyexec`, `askengine`,
   `artifact`, `mdtext`, `mcp`/`mcpserve`, `agents`, `plan`, `auth`
   (subscription-OAuth token store + PKCE flows), `self` (self-evolution:
@@ -191,5 +195,8 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
 - Top-level docs are localized too — README, CHANGELOG, CONTRIBUTING,
   CLA, CODE_OF_CONDUCT, COMMERCIAL, TERMS and SECURITY each carry
   per-locale variants (`zh-CN`/`ja`/`es`/`de`); keep them in sync.
+- Commits and PR bodies carry no AI attribution: no `Co-Authored-By` bot
+  trailers, no "Generated with" footers, and branch names should name the
+  change. The public history is part of the project's record.
 - Never log secrets; `internal/security` owns redaction — route new
   secret-handling through it rather than reinventing.
