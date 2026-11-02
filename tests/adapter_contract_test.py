@@ -331,6 +331,59 @@ print(json.dumps({"type":"turn.completed","usage":{"input_tokens":4,"output_toke
         self.assertEqual(payload["session_id"], "codex-sess-1")
         self.assertTrue(any("shell: git status" in line for line in progress), progress)
 
+    def test_codex_injected_key_never_rides_argv(self):
+        """The injected provider token reaches codex through the environment.
+
+        `-c` values are ordinary argv: visible in `ps` and persisted in
+        codex's own transcript. The adapter must name the variable through
+        `env_key` instead, and the token must not appear anywhere on the
+        command line.
+        """
+        payload, _, _ = run_adapter(
+            "codex.py", "codex", r'''
+import json, os, sys
+args = sys.argv[1:]
+joined = " ".join(args)
+assert "sk-injected" not in joined, args
+assert "experimental_bearer_token" not in joined, args
+assert 'model_provider="custom"' in args
+assert 'model_providers.custom.base_url="https://relay.example.com/v1"' in args
+assert 'model_providers.custom.env_key="PANDA_CODEX_TOKEN"' in args
+assert 'model="injected-model"' in args
+assert os.environ.get("PANDA_CODEX_TOKEN") == "sk-injected"
+assert args[-1] == "contract prompt"
+print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"injected answer"}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "OPENAI_BASE_URL": "https://relay.example.com/v1",
+                "OPENAI_API_KEY": "sk-injected",
+                "CODEX_MODEL": "injected-model",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "injected answer")
+
+    def test_codex_injected_run_without_key_sets_no_env_key(self):
+        """No key configured means neither the variable nor the override: an
+        empty env_key would point codex at a variable that does not exist."""
+        payload, _, _ = run_adapter(
+            "codex.py", "codex", r'''
+import json, os, sys
+args = sys.argv[1:]
+joined = " ".join(args)
+assert "env_key" not in joined, args
+assert "PANDA_CODEX_TOKEN" not in os.environ
+print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"ok"}}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "OPENAI_BASE_URL": "https://relay.example.com/v1",
+                "CODEX_MODEL": "injected-model",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+
     def test_codex_resume_and_extended_policy_contract(self):
         payload, _, _ = run_adapter(
             "codex.py", "codex", r'''
