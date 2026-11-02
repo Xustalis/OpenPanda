@@ -968,6 +968,14 @@
   z-index: 1;
   flex: 0 0 auto;
   max-width: 100%;
+  /* A machine's tile column is capped to the map's visible height (the
+     component measures it and publishes --ws-panel-max). Without the cap a
+     four-agent panel grew past the map's bottom edge and the card was clipped
+     by the composer instead of fitting the block it belongs to. */
+  max-height: var(--ws-panel-max, none);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 12px 14px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
@@ -1127,6 +1135,13 @@
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 44px;
+  /* The tile field is the part that scrolls when the panel hits its cap; the
+     header keeps its place above it. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: flex-start;
+  overscroll-behavior: contain;
 }
 /* No agents, no shelf: the band exists to give the pet a line to stand on,
    and there is nothing up there to stand on. */
