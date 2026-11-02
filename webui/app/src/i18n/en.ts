@@ -905,8 +905,11 @@ const en: Messages = {
   'reminders.messagePlaceholder': 'Reminder text, e.g. stand-up in ten minutes',
   'reminders.minutes': 'min',
   'reminders.afterMinutes': 'Remind me after N minutes',
-  'reminders.or': 'or',
+  'reminders.whenLabel': 'Reminder time',
+  'reminders.modeRelative': 'In minutes',
+  'reminders.modeAbsolute': 'Pick a time',
   'reminders.dueAt': 'Absolute time',
+  'reminders.pastTime': 'That time has already passed.',
   'reminders.add': 'Add',
   'reminders.pending': 'Pending',
   'reminders.fired': 'Recently fired',
@@ -925,6 +928,9 @@ const en: Messages = {
   'reminders.notifyUnsupported': 'This browser does not support Web Push notifications.',
   'reminders.notifyDenied': 'Notification permission denied — allow it in the browser settings and retry.',
   'reminders.notifyError': 'Push subscription failed — try again later.',
+  'reminders.pushOff': 'Web Push is off on this node — reminders still pop up while the console is open.',
+  'reminders.added': 'Reminder set for {when}.',
+  'reminders.toastFired': 'Reminder: {message}',
 
   // Memory view
   'memory.title': 'Memory',

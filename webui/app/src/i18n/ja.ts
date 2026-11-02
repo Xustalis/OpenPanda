@@ -868,8 +868,11 @@ const ja: Messages = {
   'reminders.messagePlaceholder': 'リマインド内容（例：10分後にミーティング）',
   'reminders.minutes': '分',
   'reminders.afterMinutes': 'N 分後に通知',
-  'reminders.or': 'または',
+  'reminders.whenLabel': '通知時刻',
+  'reminders.modeRelative': '数分後',
+  'reminders.modeAbsolute': '日時指定',
   'reminders.dueAt': '絶対時刻',
+  'reminders.pastTime': 'その時刻はすでに過ぎています。',
   'reminders.add': '追加',
   'reminders.pending': '待機中',
   'reminders.fired': '最近発火したもの',
@@ -888,6 +891,9 @@ const ja: Messages = {
   'reminders.notifyUnsupported': 'このブラウザは Web Push 通知に対応していません。',
   'reminders.notifyDenied': '通知権限が拒否されました — ブラウザ設定で許可して再試行してください。',
   'reminders.notifyError': 'プッシュ購読に失敗しました — しばらくしてから再試行してください。',
+  'reminders.pushOff': 'このノードでは Web Push が無効です — コンソールを開いている間は通知が表示されます。',
+  'reminders.added': '{when} にリマインダーを設定しました。',
+  'reminders.toastFired': 'リマインダー：{message}',
 
   // Memory view
   'memory.title': 'メモリー',

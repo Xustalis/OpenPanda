@@ -893,8 +893,11 @@ const zhCN: Messages = {
   'reminders.messagePlaceholder': '提醒内容，如：十分钟后提醒我开会',
   'reminders.minutes': '分钟',
   'reminders.afterMinutes': '多少分钟后提醒',
-  'reminders.or': '或',
+  'reminders.whenLabel': '提醒时间',
+  'reminders.modeRelative': '稍后提醒',
+  'reminders.modeAbsolute': '指定时间',
   'reminders.dueAt': '绝对时间',
+  'reminders.pastTime': '这个时间已经过去了。',
   'reminders.add': '添加',
   'reminders.pending': '待触发',
   'reminders.fired': '最近已触发',
@@ -913,6 +916,9 @@ const zhCN: Messages = {
   'reminders.notifyUnsupported': '当前浏览器不支持 Web Push 通知。',
   'reminders.notifyDenied': '通知权限被拒绝 — 请在浏览器设置中允许后重试。',
   'reminders.notifyError': '订阅推送失败 — 请稍后重试。',
+  'reminders.pushOff': '节点未启用 Web Push，控制台打开时提醒仍会弹出。',
+  'reminders.added': '已在 {when} 设置提醒。',
+  'reminders.toastFired': '提醒：{message}',
 
   // Memory view
   'memory.title': '记忆',

@@ -73,6 +73,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **The reminder panel renders and fires in the console again** — a dead-code cleanup matched the whole reminder style block along with the to-do rules, so the bell's card lost its positioning, border and shadow and drew over the page. The styles are back; the composer now offers a "remind me / pick a time" choice with a due-time preview and refuses past times, and a reminder that fires while the console is open raises an in-console notice even when Web Push is off. A node without push configured says so instead of offering a subscription that could never be stored.
 - **A web-only node can mesh, and legacy pages render** — `panda web` now mints and persists `network.shared_secret` exactly as the daemon does, instead of starting a node whose WS listener refuses every peer; the browser pane and artifact preview decode GBK/GB18030 text before serving it as UTF-8, and an egress proxy can no longer bypass the private-address check.
 - **Windows no longer fails to open the lock marker** — every acquisition requested write access, so a concurrent creator or a filter holding the file answered `ERROR_ACCESS_DENIED` before `LockFileEx` was reached, failing memory and session writes. Existing markers open read-only, creation uses `O_EXCL` with a read-only fallback, and transient Windows open errors retry briefly.
 
