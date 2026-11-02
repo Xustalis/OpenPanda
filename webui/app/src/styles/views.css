@@ -1546,20 +1546,11 @@
   gap: 8px;
 }
 
-/* ---- Transcript file drawer ---- */
-
-/* The same horizontal slab as the worktree diff drawer, one file instead of
-   all of them: it takes the top of the chat pane while open and gives it back
-   on close. */
-.file-viewer {
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-inset);
-  padding: 10px 24px 12px;
-  max-height: 45%;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+/* ---- File viewer pieces ------------------------------------------------
+   The drawer itself is gone: a file now opens in the dock's file panel
+   (styles/dock.css), beside the transcript rather than across its top. These
+   are the shared pieces that panel still uses — the head, the row, the copy
+   and insert verbs. */
 
 .fv-head {
   display: flex;

@@ -5,10 +5,34 @@
 
 .chat {
   display: grid;
+  /* One column while folded: the dock is a card that appears, not a strip that
+     waits. A 40px rail looked like a column with nothing in it, and the way
+     back is the pane head's side-panel button — one control that opens to
+     whichever panel was last showing. */
   grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
   flex: 1;
   min-height: 0;
   height: 100%;
+  /* The narrow layout drops the dock out of the grid and over the pane; that
+     layer needs this box as its containing block. */
+  position: relative;
+}
+/* The dock is a column, not a layer. Giving it a real grid track means the
+   reading pane narrows to the width it actually has: a layer would leave the
+   transcript padded away from a panel floating above it, so the text would
+   stop at the panel's edge while the composer and the jump arrow kept their
+   old geometry underneath. One layout, not a layout plus a cutout. */
+.chat.dock-open {
+  grid-template-columns: minmax(0, 1fr) var(--dock-w, 380px);
+}
+/* Opening and folding glide; dragging the seam does not — a transition under
+   a live pointer makes the handle feel like it is dragging through syrup. */
+.chat {
+  transition: grid-template-columns var(--dur-fast) var(--ease-enter);
+}
+.chat:has(.dock.is-dragging) {
+  transition: none;
 }
 
 .thread-list {
@@ -468,6 +492,13 @@
   min-width: 0;
   min-height: 0;
   position: relative;
+  /* A card on the canvas, not a full-bleed page: the pane and the dock are two
+     surfaces side by side, so each needs its own edge. Without it the two
+     white areas met at a single hairline and read as one broken page. */
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
   /* The lane a header card takes on the right when one is open: 0 closed, 380px
      of card + header padding when open (see `.panel-open` below). The log, the
      composer and the jump arrow all read this one number, so opening a card

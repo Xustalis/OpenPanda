@@ -1735,7 +1735,10 @@ export const api = {
     return request('PUT', `/api/models/${encodeURIComponent(alias)}${refQuery(ref)}`, req)
   },
 
-  removeModel(alias: string, ref?: ModelRef): Promise<{ removed: string; switched_to?: string }> {
+  removeModel(
+    alias: string,
+    ref?: ModelRef,
+  ): Promise<{ removed: string; switched_to?: string; cleared?: boolean }> {
     return request('DELETE', `/api/models/${encodeURIComponent(alias)}${refQuery(ref)}`)
   },
 
@@ -1792,6 +1795,13 @@ export const api = {
     return request('GET', `/api/tasks/${encodeURIComponent(id)}/artifact/preview`)
   },
 
+  /** The browser pane's frame prefix. An iframe cannot send the Bearer header,
+   *  so the pane frames `<prefix>?url=...` where the prefix carries a
+   *  capability scoped to that one verb — never the console's own token. */
+  browseOrigin(): Promise<{ prefix: string }> {
+    return request('GET', '/api/browse/origin')
+  },
+
   /** Pull a task's artifact back from the executor so the preview has bytes. */
   fetchTaskArtifact(id: string): Promise<{ hash: string; files?: number; already?: boolean; source?: string }> {
     return request('POST', `/api/tasks/${encodeURIComponent(id)}/artifact/fetch`, {})
@@ -1835,10 +1845,12 @@ export const api = {
 // ---- Multi-model registry wire types ----
 
 /** The pair that tells two rows with one alias apart — a legacy config can
- *  hold both, and the address has to say which one is meant. */
+ *  hold both, and the address has to say which one is meant. `key` is the
+ *  key_fingerprint the list returned, not the secret. */
 export interface ModelRef {
   model?: string
   base_url?: string
+  key?: string
 }
 
 function refQuery(ref?: ModelRef): string {
@@ -1846,6 +1858,7 @@ function refQuery(ref?: ModelRef): string {
   const q = new URLSearchParams()
   if (ref.model) q.set('model', ref.model)
   if (ref.base_url) q.set('base_url', ref.base_url)
+  if (ref.key) q.set('key', ref.key)
   const s = q.toString()
   return s ? `?${s}` : ''
 }
@@ -1934,6 +1947,8 @@ export interface AddModelRequest {
    *  plaintext waiver are filled in server-side — the panel never echoes them
    *  back, so a client-side copy would submit an empty credential. */
   copy_from?: string
+  /** The source row's key_fingerprint, when two rows share its alias. */
+  copy_from_key?: string
 }
 
 export interface ModelRefRequest {
@@ -2591,43 +2606,77 @@ export async function askSessionStream(
       resume_queued: resumeQueued || undefined,
     },
     signal,
-    onEvent: (event, data) => {
-      let payload: any
-      try {
-        payload = JSON.parse(data)
-      } catch {
-        return
-      }
-      if (event === 'reasoning') h.onReasoning(payload.text ?? '')
-      else if (event === 'delta') h.onDelta(payload.text ?? '')
-      else if (event === 'usage')
-        h.onUsage?.(payload.input ?? 0, payload.output ?? 0, Boolean(payload.estimated))
-      else if (event === 'status') h.onStatus(payload.text ?? '', payload as AskStatusEvent)
-      else if (event === 'operation') h.onOperation(payload.operation_id ?? '')
-      else if (event === 'task') {
-        const taskID = typeof payload.task_id === 'string' ? payload.task_id : ''
-        if (taskID) h.onTask?.(taskID)
-      }
-      else if (event === 'steer') h.onSteer?.(payload.text ?? '', payload.round ?? 0)
-      else if (event === 'queued_turn') h.onQueuedTurn?.(payload.text ?? '', payload.count ?? 0)
-      else if (event === 'question') {
-        const spec = payload.clarification as ClarifySpec | undefined
-        if (spec && Array.isArray(spec.questions)) {
-          h.onQuestion?.(spec, typeof payload.operation_id === 'string' ? payload.operation_id : '')
-        }
-      }
-      else if (event === 'result') h.onResult(payload as AskResult)
-      else if (event === 'error')
-        h.onError(payload.message ?? 'unknown error', payload.code || undefined, {
-          code: payload.code || undefined,
-          kind: payload.kind || undefined,
-          http_status: payload.http_status,
-          detail: payload.detail || undefined,
-        })
-    },
+    onEvent: (event, data) => dispatchAskEvent(event, data, h),
   })
   // openSSE resolves on abort; the composer's stop button contract is an
   // AbortError, so surface the abort the way fetch would have.
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+}
+
+/** One SSE frame from either ask endpoint. Both streams carry the same event
+ *  vocabulary — a side ask is the same engine with a different scope — so the
+ *  decode lives once, next to neither caller. */
+function dispatchAskEvent(event: string, data: string, h: AskStreamHandlers): void {
+  let payload: any
+  try {
+    payload = JSON.parse(data)
+  } catch {
+    return
+  }
+  if (event === 'reasoning') h.onReasoning(payload.text ?? '')
+  else if (event === 'delta') h.onDelta(payload.text ?? '')
+  else if (event === 'usage')
+    h.onUsage?.(payload.input ?? 0, payload.output ?? 0, Boolean(payload.estimated))
+  else if (event === 'status') h.onStatus(payload.text ?? '', payload as AskStatusEvent)
+  else if (event === 'operation') h.onOperation(payload.operation_id ?? '')
+  else if (event === 'task') {
+    const taskID = typeof payload.task_id === 'string' ? payload.task_id : ''
+    if (taskID) h.onTask?.(taskID)
+  } else if (event === 'steer') h.onSteer?.(payload.text ?? '', payload.round ?? 0)
+  else if (event === 'queued_turn') h.onQueuedTurn?.(payload.text ?? '', payload.count ?? 0)
+  else if (event === 'question') {
+    const spec = payload.clarification as ClarifySpec | undefined
+    if (spec && Array.isArray(spec.questions)) {
+      h.onQuestion?.(spec, typeof payload.operation_id === 'string' ? payload.operation_id : '')
+    }
+  } else if (event === 'result') h.onResult(payload as AskResult)
+  else if (event === 'error')
+    h.onError(payload.message ?? 'unknown error', payload.code || undefined, {
+      code: payload.code || undefined,
+      kind: payload.kind || undefined,
+      http_status: payload.http_status,
+      detail: payload.detail || undefined,
+    })
+}
+
+/** One turn of the side conversation, as the engine replays it. `content` is
+ *  the wire field: entry.Turn has no JSON tags, and Go matches the field name
+ *  case-insensitively. */
+export interface SideTurn {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+/** POST /api/sessions/{id}/ask with `side: true`: a read-only conversation
+ *  beside the thread, answered from a snapshot of it.
+ *
+ *  The server files nothing this ask produces — no user turn, no answer, no
+ *  operation status — so the caller owns the history and replays it on every
+ *  question. A side thread has no server-side storage by design: persisting it
+ *  would just be a /fork with extra steps. */
+export async function askSideStream(
+  id: string,
+  prompt: string,
+  turns: SideTurn[],
+  h: AskStreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
+    method: 'POST',
+    body: { prompt, authorize: false, side: true, side_turns: turns },
+    signal,
+    onEvent: (event, data) => dispatchAskEvent(event, data, h),
+  })
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
 }
 
