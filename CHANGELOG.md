@@ -61,6 +61,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Changed
 
+- **Settings reads as one row per setting** — the policy section was four groups, each carrying an icon, a caption and a blurb, and then a row label and a paragraph: the same thing said three times over. It is now four blocks named by topic, and inside, one setting per row — a label, the one clause that changes with the current value, and the control. The action bar stays quiet until something is actually edited.
+
 - **Five permission modes are the whole consent answer** — the per-composer “authorize risky actions” switch is gone. It only mattered in auto and edits, was ignored in manual, plan and bypass, and restated what either the bypass mode or the approval card already says; a one-off tier-2 operation is decided on the card when it comes up.
 - **The terminal's conversation is a session** — the first prompt of a REPL/TUI chat creates a thread that appears in the web console's rail, and launching resumes the project's most recently updated thread (`--resume ID`, `--new` to start fresh). Tasks spawned from a terminal turn carry the thread id, so the console's board links back to the conversation. Legacy `conversations/*.json` files are imported once and archived as `.json.migrated`; `/new` now detaches instead of refusing while a session is bound.
 - **Long and hard tasks get a budget proportional to their shape** — a task that declared `duration_hint: long` or scored high complexity now runs with up to 120 turns and a 30-minute agent budget instead of the 30-turn/10-minute default; medium tasks and CLI-submitted coding tasks get 60 turns and 20 minutes. An explicit `spec.max_turns` or a configured `timeouts.agent_by_kind` still wins.
