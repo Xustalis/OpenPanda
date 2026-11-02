@@ -173,6 +173,8 @@ export function TaskProgress({ task }: { task: Task }) {
   const recent = steps.slice(-6)
   const started = Date.parse(task.created_at)
   const elapsed = Number.isFinite(started) ? Math.max(0, now - started) : 0
+  const lastTs = steps.length ? steps[steps.length - 1]!.ts * 1000 : Date.parse(task.updated_at)
+  const idle = Number.isFinite(lastTs) ? Math.max(0, now - lastTs) : 0
   const sup = task.supervision
   const speaker: Speaker = agent
     ? { who: 'agent', agent, role: 'report' }
@@ -219,13 +221,112 @@ export function TaskProgress({ task }: { task: Task }) {
           ) : (
             <p class="msg-progress-line">{t('sessions.liveWaiting')}</p>
           )}
-          <a class="task-live-open" href={`#/task/${encodeURIComponent(task.id)}`}>
-            {t('sessions.liveOpen')} →
-          </a>
+          <div class="task-live-foot">
+            <a class="task-live-open" href={`#/task/${encodeURIComponent(task.id)}`}>
+              {t('sessions.liveOpen')} →
+            </a>
+            {idle > 30_000 && (
+              <span class="task-live-idle">{t('sessions.liveIdle', { d: formatDuration(idle) })}</span>
+            )}
+          </div>
         </div>
       </div>
     </div>
   )
+}
+
+/** The detailed process folded under a finished task's report.
+ *
+ *  A running task narrates itself in `TaskProgress`; once it settles that row
+ *  disappears and the report above says what happened. The process itself is
+ *  still valuable — which commands ran, what failed, where the agent turned —
+ *  but it must not push the conversation down. So it lives in a closed
+ *  `<details>`: the summary is one line of facts, and opening it replays the
+ *  same event stream the live row showed, with fuller text. */
+export function TaskProcess({ taskId }: { taskId: string }) {
+  const task = useTaskBrief(taskId)
+  const [open, setOpen] = useState(false)
+  if (!task) return null
+  const files = resultFiles(task)
+  const created = Date.parse(task.created_at)
+  const updated = Date.parse(task.updated_at)
+  const duration = Number.isFinite(created) && Number.isFinite(updated) ? Math.max(0, updated - created) : 0
+  return (
+    <details
+      class="task-run"
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary class="task-run-head">
+        <StateChip state={task.state} />
+        <span class="task-run-title">{t('sessions.processTitle')}</span>
+        <span class="task-run-meta">
+          {duration > 0 ? formatDuration(duration) : ''}
+          {duration > 0 && files > 0 ? ' · ' : ''}
+          {files > 0 ? t('sessions.processFiles', { n: String(files) }) : ''}
+        </span>
+        <span class="task-run-caret" aria-hidden="true">▾</span>
+      </summary>
+      {open && <TaskProcessBody taskId={taskId} task={task} files={files} />}
+    </details>
+  )
+}
+
+/** The process body is a component of its own so a closed fold costs one
+ *  small task read, not a 200-event timeline per report in the thread. */
+function TaskProcessBody({ taskId, task, files }: { taskId: string; task: Task; files: number }) {
+  const change = useChangeSignal()
+  const { events } = useTaskEvents(taskId, change, 200)
+  const steps: LiveStep[] = []
+  for (const ev of mergeLive(events, EMPTY_TRACES)) {
+    const step = liveStepOf(ev, true)
+    if (!step) continue
+    const prev = steps[steps.length - 1]
+    if (prev && prev.label === step.label && prev.summary === step.summary) continue
+    steps.push(step)
+  }
+  const shown = steps.slice(-120)
+  return (
+    <div class="task-run-body">
+      {(task.verification || files > 0) && (
+        <div class="task-run-facts">
+          {task.verification && (
+            <span>{t('sessions.processVerification', { status: task.verification })}</span>
+          )}
+          {files > 0 && <span>{t('sessions.processFiles', { n: String(files) })}</span>}
+        </div>
+      )}
+      {shown.length === 0 ? (
+        <p class="task-run-empty">{t('sessions.processEmpty')}</p>
+      ) : (
+        <ol class="task-run-timeline">
+          {shown.map((step) => (
+            <li key={step.key} class={`task-run-step tone-${step.tone}`}>
+              <span class="task-run-time">{clock(step.ts)}</span>
+              <div class="task-run-main">
+                <span class="task-run-label">{step.label}</span>
+                {step.summary && <div class="task-run-text">{step.summary}</div>}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      <a class="task-run-open" href={`#/task/${encodeURIComponent(taskId)}`}>
+        {t('sessions.liveOpen')} →
+      </a>
+    </div>
+  )
+}
+
+/** How many files the task's own result says it changed. A result without the
+ *  field (a native command, a failed route) counts as zero, not as unknown. */
+function resultFiles(task: Task): number {
+  if (!task.result) return 0
+  try {
+    const parsed = JSON.parse(task.result) as { files_changed?: unknown }
+    return Array.isArray(parsed.files_changed) ? parsed.files_changed.length : 0
+  } catch {
+    return 0
+  }
 }
 
 /** Loads the task behind a dispatch turn. The transcript only stores the id,

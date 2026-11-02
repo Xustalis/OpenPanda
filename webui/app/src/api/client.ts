@@ -355,6 +355,9 @@ export interface Task {
   intent?: string
   spec?: string
   result?: string
+  /** The delivery contract's verdict (verified|failed|partial|skipped), empty
+   *  when the task carried no acceptance checks. The report fold reads it. */
+  verification?: string
   risk?: string
   /** The adapter that ran (or is running) this task, bare of its extension
    *  ("claude_code"). Present on list rows as well as the detail, so a light

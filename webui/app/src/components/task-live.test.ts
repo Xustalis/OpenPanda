@@ -60,6 +60,34 @@ describe('task-live', () => {
     assert.equal(step?.summary, 'scope drift: 5 files outside scope')
   })
 
+  it('detail mode keeps the thinking paragraph and drops watchdog heartbeats', () => {
+    setLocale('en')
+    const thinking = liveStepOf(
+      {
+        key: 'id:1',
+        id: 1,
+        ts: 1,
+        type: 'agent_event',
+        data: { ev: 'thinking', thinking: 'first line\nsecond line\nthird line' },
+      },
+      true,
+    )
+    assert.equal(thinking?.label, 'Thinking')
+    assert.match(thinking?.summary ?? '', /second line/)
+
+    const quiet = liveStepOf(
+      {
+        key: 'id:2',
+        id: 2,
+        ts: 2,
+        type: 'progress',
+        data: { note: 'no output for 30s — agent still running' },
+      },
+      true,
+    )
+    assert.equal(quiet, null)
+  })
+
   it('caps a long tool argument so one row stays one line', () => {
     const step = liveStepOf({
       key: 'id:1',

@@ -1542,14 +1542,142 @@
 .task-live-step.tone-warn .task-live-label {
   color: var(--warn);
 }
+.task-live-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+}
 .task-live-open {
+  display: inline-block;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  text-decoration: none;
+}
+.task-live-open:hover {
+  color: var(--text-secondary);
+}
+.task-live-idle {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* The finished task's process, folded under its report. The report above is
+   the answer; this is the evidence, so it stays closed until asked for. */
+.task-run {
+  margin-top: 10px;
+  border: 1px dashed var(--border-soft);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+}
+.task-run-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.task-run-head::-webkit-details-marker {
+  display: none;
+}
+.task-run-title {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.task-run-meta {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-run-caret {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  transition: transform var(--dur-fast) ease;
+}
+.task-run[open] .task-run-caret {
+  transform: rotate(180deg);
+}
+.task-run-body {
+  max-height: 480px;
+  overflow: auto;
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--border-soft);
+}
+.task-run-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 8px 0 4px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.task-run-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.task-run-step {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-soft);
+}
+.task-run-step:first-child {
+  border-top: 0;
+}
+.task-run-time {
+  flex: none;
+  width: 58px;
+  padding-top: 1px;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+  opacity: 0.75;
+}
+.task-run-main {
+  min-width: 0;
+}
+.task-run-label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.task-run-step.tone-danger .task-run-label {
+  color: var(--danger);
+}
+.task-run-step.tone-warn .task-run-label {
+  color: var(--warn);
+}
+.task-run-text {
+  margin-top: 2px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.task-run-empty {
+  margin: 8px 0;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.task-run-open {
   display: inline-block;
   margin-top: 8px;
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   text-decoration: none;
 }
-.task-live-open:hover {
+.task-run-open:hover {
   color: var(--text-secondary);
 }
 

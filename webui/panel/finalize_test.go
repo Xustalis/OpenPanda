@@ -245,6 +245,9 @@ func TestFinalizerWritesTheOrchestrationLineAndTheConclusion(t *testing.T) {
 	if got.Turns[0].Text != want {
 		t.Fatalf("report = %q, want %q", got.Turns[0].Text, want)
 	}
+	if got.Turns[0].Ref != task.TaskID {
+		t.Fatalf("report ref = %q, want the task id %q", got.Turns[0].Ref, task.TaskID)
+	}
 
 	// A second sweep must not report the same task twice.
 	h.finalizeSessionSweep(ctx)

@@ -681,16 +681,17 @@ type taskJSON struct {
 	// SpawnDepth is the task's generation inside a delegation tree (0 root,
 	// 1 child, 2 grandchild); omitted for standalone rows so the kanban only
 	// badges cards that belong to a sub-agent fan-out.
-	SpawnDepth int    `json:"spawn_depth,omitempty"`
-	Project    string `json:"project"`
-	Title      string `json:"title"`
-	State      string `json:"state"`
-	Owner      string `json:"owner"`
-	AttemptID  string `json:"attempt_id"`
-	Intent     string `json:"intent,omitempty"`
-	Spec       string `json:"spec,omitempty"`
-	Result     string `json:"result,omitempty"`
-	Risk       string `json:"risk,omitempty"`
+	SpawnDepth   int    `json:"spawn_depth,omitempty"`
+	Project      string `json:"project"`
+	Title        string `json:"title"`
+	State        string `json:"state"`
+	Owner        string `json:"owner"`
+	AttemptID    string `json:"attempt_id"`
+	Intent       string `json:"intent,omitempty"`
+	Spec         string `json:"spec,omitempty"`
+	Result       string `json:"result,omitempty"`
+	Verification string `json:"verification,omitempty"`
+	Risk         string `json:"risk,omitempty"`
 	// Agent is the adapter that ran (or is running) this task, bare of its
 	// file extension ("claude_code", not "claude_code.py"). It is the same
 	// affinity key the agent handle is pinned to, and it is what lets the
@@ -854,6 +855,7 @@ func (h *handler) toTaskJSON(t core.Task) taskJSON {
 		Intent:       t.Intent,
 		Spec:         t.SpecJSON,
 		Result:       t.ResultJSON,
+		Verification: t.Verification,
 		Risk:         t.Risk,
 		Agent:        strings.TrimSuffix(t.AgentSessionAdapter, ".py"),
 		Requires:     t.Requires,

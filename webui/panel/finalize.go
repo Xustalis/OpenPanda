@@ -88,8 +88,10 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) {
 			// card all over again — one card for "dispatched", another for
 			// "done", with the digest wedged between them. The dispatch turn
 			// already carries the card and the jump link; this one is just
-			// what happened.
+			// what happened. Ref still travels so the report can fold the
+			// task's own process under it without drawing a second card.
 			Kind:       "answer",
+			Ref:        t.TaskID,
 			Text:       summary,
 			DurationMS: durationMS,
 		}); err != nil {

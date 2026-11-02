@@ -108,11 +108,15 @@ export function clock(ts: number): string {
  *  vocabulary, then lifts what that formatter leaves in structured fields —
  *  a tool call's arguments, a result's first line — because a timeline row has
  *  one line, not a card. */
-export function liveStepOf(e: LiveEvent): LiveStep | null {
+export function liveStepOf(e: LiveEvent, detail = false): LiveStep | null {
   if (!LIVE_TYPES.has(e.type)) return null
   const raw = e.raw ?? (e.data === undefined ? '{}' : JSON.stringify(e.data))
   const f = formatTaskEvent(e.type, raw)
   if (f.quiet) {
+    // A finished run's process log does not need the watchdog's "still
+    // running" heartbeats; the live row keeps the newest one so a quiet
+    // agent never looks frozen.
+    if (detail) return null
     return { key: e.key, ts: e.ts, label: f.label, summary: '', tone: 'dim', quiet: true }
   }
   let label = f.label
@@ -129,17 +133,17 @@ export function liveStepOf(e: LiveEvent): LiveStep | null {
         break
       case 'tool_result':
         label = t('events.agent_tool_result')
-        summary = firstLine(b.content)
+        summary = detail ? (b.content ?? '') : firstLine(b.content)
         tone = b.isError ? 'danger' : 'dim'
         break
       case 'thinking':
         label = t('events.agent_thinking')
-        summary = firstLine(b.thinking)
+        summary = detail ? (b.thinking ?? '') : firstLine(b.thinking)
         tone = 'dim'
         break
       case 'text':
         label = t('events.agent_text')
-        summary = firstLine(b.text)
+        summary = detail ? (b.text ?? '') : firstLine(b.text)
         tone = 'accent'
         break
     }
@@ -156,6 +160,6 @@ export function liveStepOf(e: LiveEvent): LiveStep | null {
   if (!summary) {
     summary = f.tags.map((tag) => tag.value).filter(Boolean).join(' · ')
   }
-  return { key: e.key, ts: e.ts, label, summary: clip(summary), tone }
+  return { key: e.key, ts: e.ts, label, summary: clip(summary, detail ? 800 : 110), tone }
 }
 
