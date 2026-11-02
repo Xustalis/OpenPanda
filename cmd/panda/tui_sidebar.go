@@ -218,7 +218,12 @@ func (m tuiModel) sidebarTaskRows(t core.Task, selected bool, inner int) []strin
 // long it has been going, which is the number a stalled run is spotted by.
 func sidebarAge(t core.Task) string {
 	ts := t.UpdatedAt
-	if t.State != core.StateDone && t.State != core.StateFailed {
+	switch t.State {
+	case core.StateDone, core.StateFailed, core.StateCancelled, core.StateExpired:
+		// Settled rows show when they settled. Cancelled and expired are as
+		// settled as done and failed; leaving them on CreatedAt made a task
+		// cancelled an hour ago read as an hour of running work.
+	default:
 		ts = t.CreatedAt
 	}
 	if ts <= 0 {

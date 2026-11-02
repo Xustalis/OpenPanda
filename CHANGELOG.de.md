@@ -56,6 +56,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
+- **Eine abgebrochene Aufgabe zählt nicht mehr als laufend** — die TUI-Seitenleiste maß jede nicht erledigte Zeile ab ihrer Erstellung, sodass eine vor einer Stunde abgebrochene oder abgelaufene Aufgabe wie eine Stunde Arbeit aussah. Erledigte Zeilen zeigen jetzt, wann sie erledigt wurden.
+
 - **Lifecycle-Hooks erreichen jede Aufgabenkante** — der Beobachter feuert innerhalb der Schreibtransaktion, sodass ein dateibasierter Store mit Pool den Stand vor dem Commit las: `task_submitted` fand keine Zeile und ein Ergebnis sah noch laufend aus, beide Kanten gingen still verloren. Der Versand wartet jetzt, bis der Commit sichtbar ist (Obergrenze zwei Sekunden), und `:memory:`-Tests verbergen das Rennen nicht mehr.
 
 - **Ein übersetzter Wert behält `$&` wörtlich** — die Interpolation der Konsole nutzte `String.replaceAll`, dessen String-Ersetzung `$&`, `$1` und Ähnliches interpretiert; ein Aufgabentitel oder Pfad damit wurde verfälscht. Werte werden jetzt wörtlich eingesetzt.

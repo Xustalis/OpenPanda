@@ -7,6 +7,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -222,5 +223,23 @@ func TestLocateFindsTheTaskBlock(t *testing.T) {
 	}
 	if m.scrollOffset == 0 {
 		t.Error("the viewport did not move to the block")
+	}
+}
+
+// TestSidebarAgeForSettledRows pins which clock a row shows: a moving task
+// counts from when it started, a settled one from when it settled. Cancelled
+// and expired are settled too — they used to keep counting as if still
+// running.
+func TestSidebarAgeForSettledRows(t *testing.T) {
+	now := time.Now()
+	created := now.Add(-time.Hour).Unix()
+	updated := now.Add(-2 * time.Minute).Unix()
+	for _, state := range []string{core.StateDone, core.StateFailed, core.StateCancelled, core.StateExpired} {
+		if got := sidebarAge(core.Task{State: state, CreatedAt: created, UpdatedAt: updated}); got != "2m" {
+			t.Errorf("%s age = %q, want 2m (settled clock)", state, got)
+		}
+	}
+	if got := sidebarAge(core.Task{State: core.StateRunning, CreatedAt: created, UpdatedAt: updated}); got != "1h" {
+		t.Errorf("running age = %q, want 1h (started clock)", got)
 	}
 }

@@ -62,6 +62,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **A cancelled task stops counting as running** — the TUI sidebar measured every non-done row from its creation, so a task cancelled or expired an hour ago read as an hour of running work. Settled rows now show when they settled.
+
 - **Lifecycle hooks reach every task edge** — the observer fires inside the writer's transaction, so on a pooled file-backed store the dispatch read the pre-commit snapshot: `task_submitted` found no row and a result still looked running, dropping both edges silently. Dispatch now waits for the commit to become visible (a two-second ceiling), and `:memory:` tests no longer hide the race.
 
 - **A translated value keeps `$&` literal** — the console's interpolation used `String.replaceAll`, whose string replacement reads `$&`, `$1` and friends; a task title or path containing one was mangled by its own interpolation. Values are now spliced literally.

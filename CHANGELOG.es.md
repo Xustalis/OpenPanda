@@ -56,6 +56,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
+- **Una tarea cancelada deja de contar como en ejecución** — la barra lateral de la TUI medía toda fila no terminada desde su creación, así que una tarea cancelada o expirada hace una hora parecía llevar una hora ejecutándose. Las filas resueltas ahora muestran cuándo se resolvieron.
+
 - **Los hooks de ciclo de vida llegan a cada borde de tarea** — el observador se dispara dentro de la transacción del escritor, así que en un almacén de archivo con pool la lectura veía la instantánea previa al commit: `task_submitted` no encontraba fila y un resultado aún parecía en ejecución, perdiendo ambos bordes en silencio. El despacho ahora espera a que el commit sea visible (tope de dos segundos), y las pruebas `:memory:` ya no ocultan la carrera.
 
 - **Un valor traducido conserva `$&` literal** — la interpolación de la consola usaba `String.replaceAll`, cuyo reemplazo de cadena interpreta `$&`, `$1` y similares; un título o una ruta que los contuviera quedaba alterado. Ahora los valores se concatenan literalmente.
