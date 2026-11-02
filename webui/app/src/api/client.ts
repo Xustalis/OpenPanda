@@ -1213,8 +1213,11 @@ export const api = {
     return request('DELETE', '/api/tasks')
   },
 
-  logs(id: string, after?: number): Promise<{ id: string; events: TaskEvent[] }> {
-    return request('GET', `/api/tasks/${id}/logs${after ? `?after=${after}` : ''}`)
+  logs(id: string, after?: number, tail?: number): Promise<{ id: string; events: TaskEvent[] }> {
+    const q = new URLSearchParams()
+    if (after) q.set('after', String(after))
+    else if (tail) q.set('tail', String(tail))
+    return request('GET', `/api/tasks/${id}/logs${q.size ? `?${q.toString()}` : ''}`)
   },
 
   ask(prompt: string, authorize: boolean): Promise<AskResult> {

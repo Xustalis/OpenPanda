@@ -333,3 +333,41 @@ func TestFinalizerNamesThePinnedAgentWhenTheRunNeverStarted(t *testing.T) {
 		t.Fatalf("report = %q, want %q", got.Turns[0].Text, want)
 	}
 }
+
+// The scope intercept's raw reason is a path dump. The transcript gets the
+// count, the first few paths and the action; the full chain keeps the rest.
+func TestTaskSummaryCompactsScopeDrift(t *testing.T) {
+	task := core.Task{
+		State:    core.StateReview,
+		Title:    "做一个网站",
+		SpecJSON: `{"user_locale":"en"}`,
+		ResultJSON: `{"ok":false,"stderr":"scope drift: agent changed files outside declared scope: ` +
+			`cmd/a.go, cmd/b.go, cmd/c.go, cmd/d.go, cmd/e.go"}`,
+	}
+	want := "[review] @claude_code · 做一个网站\n\n" +
+		"Needs your attention\n\n" +
+		"scope drift: 5 files changed outside the declared scope\n" +
+		"cmd/a.go, cmd/b.go, cmd/c.go …\n" +
+		"Open the task for the full list and approve or reject."
+	if got := summaryText(task, "", "claude_code", "", ""); got != want {
+		t.Fatalf("scope drift summary = %q, want %q", got, want)
+	}
+
+	// A row the supervisor marked done but whose own report says it overstepped
+	// still gets the warning: the state is not proof the work stayed in scope.
+	done := core.Task{
+		State:      core.StateDone,
+		Title:      "做一个网站",
+		SpecJSON:   `{"user_locale":"en"}`,
+		ResultJSON: `{"ok":true,"stdout":"scope drift: agent changed files outside declared scope: a.go, b.go"}`,
+	}
+	if got := summaryText(done, "", "claude_code", "", ""); !strings.HasPrefix(got, "[review] @claude_code · 做一个网站\n\nNeeds your attention") {
+		t.Fatalf("done-with-drift summary lost the warning: %q", got)
+	}
+
+	// A review park with nothing to quote still says what the reader owes it.
+	bare := core.Task{State: core.StateReview, Title: "等一下", SpecJSON: `{"user_locale":"en"}`}
+	if got, want := summaryText(bare, "", "", "", ""), "[review] 等一下\n\nNeeds your attention"; got != want {
+		t.Fatalf("bare review summary = %q, want %q", got, want)
+	}
+}

@@ -1481,6 +1481,78 @@
   word-break: break-word;
 }
 
+/* A running task's live timeline. The row is a state, not a report: six
+   steps is enough to answer "what is it doing now" without turning the
+   transcript into a log; the full chain stays one link away. */
+.task-live-body {
+  max-height: 260px;
+  overflow: auto;
+}
+.task-live-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-live-step {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.task-live-step.is-current {
+  color: var(--text-secondary);
+}
+.task-live-time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.65;
+}
+.task-live-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+.task-live-step.is-current .task-live-dot {
+  background: var(--brand);
+  opacity: 1;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent);
+}
+.task-live-label {
+  flex: none;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.task-live-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-live-step.tone-danger .task-live-label {
+  color: var(--danger);
+}
+.task-live-step.tone-warn .task-live-label {
+  color: var(--warn);
+}
+.task-live-open {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  text-decoration: none;
+}
+.task-live-open:hover {
+  color: var(--text-secondary);
+}
+
 /* — the foot: copy, and the model that wrote the answer. Both are footnotes to
      the message, so both arrive on its hover. */
 .msg-foot {

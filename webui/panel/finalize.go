@@ -5,6 +5,7 @@ package panel
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -165,7 +166,28 @@ func (h *handler) substitutedFrom(ctx context.Context, taskID, agent string) (st
 // prose. One conclusion paragraph is the summary — the sections above it are
 // the evidence behind it.
 func summaryText(t core.Task, reason, agent, substituted, substitutedWhy string) string {
-	head := "[" + t.State + "] "
+	// A failed run's own reason is its conclusion: there is no adapter answer
+	// to take a closing paragraph from, and the reason is what the reader
+	// needs. A done run never shows a stale reason from an earlier attempt.
+	loc := t.GetUserLocale()
+	body := conclusionOf(extractResultText(t.ResultJSON))
+	if body == "" && t.State != core.StateDone {
+		body = conclusionOf(reason)
+	}
+	rawBody := body
+	body = compactScopeDrift(loc, body)
+	// A review always needs a person. A scope drift does too, even when the
+	// row itself says done: the agent's own report is warning that it touched
+	// files outside the task, and the transcript must not bury that under a
+	// green header. The report head carries the verdict the reader should act
+	// on; the task page still shows the row's own state.
+	needsAttention := t.State == core.StateReview || body != rawBody
+	stateLabel := t.State
+	if needsAttention && stateLabel == core.StateDone {
+		stateLabel = core.StateReview
+	}
+
+	head := "[" + stateLabel + "] "
 	if agent != "" {
 		head += "@" + agent + " · "
 	}
@@ -177,24 +199,53 @@ func summaryText(t core.Task, reason, agent, substituted, substitutedWhy string)
 	// CJK locales set the note in full-width brackets and need none.
 	if substituted != "" && agent != "" && substituted != agent {
 		if why := clipSubstitutionWhy(substitutedWhy); why != "" {
-			head += i18n.Tf(t.GetUserLocale(), "web.session.agentSubstitutedWhy",
+			head += i18n.Tf(loc, "web.session.agentSubstitutedWhy",
 				"from", substituted, "to", agent, "why", why)
 		} else {
-			head += i18n.Tf(t.GetUserLocale(), "web.session.agentSubstituted", "from", substituted, "to", agent)
+			head += i18n.Tf(loc, "web.session.agentSubstituted", "from", substituted, "to", agent)
 		}
 	}
 
-	// A failed run's own reason is its conclusion: there is no adapter answer
-	// to take a closing paragraph from, and the reason is what the reader
-	// needs. A done run never shows a stale reason from an earlier attempt.
-	body := conclusionOf(extractResultText(t.ResultJSON))
-	if body == "" && t.State != core.StateDone {
-		body = conclusionOf(reason)
+	if needsAttention {
+		attention := i18n.T(loc, "web.session.reviewNeedsAttention")
+		if body == "" {
+			return head + "\n\n" + attention
+		}
+		return head + "\n\n" + attention + "\n\n" + body
 	}
 	if body == "" {
 		return head
 	}
 	return head + "\n" + body
+}
+
+// compactScopeDrift turns the scope intercept's raw file list into a summary
+// a person can read in a chat bubble. The full list stays on the task's
+// execution chain: the transcript owes the reader the count, the first few
+// paths, and what to do next — not a 700-character path dump.
+func compactScopeDrift(loc i18n.Locale, body string) string {
+	const prefix = "scope drift: agent changed files outside declared scope: "
+	if !strings.HasPrefix(body, prefix) {
+		return body
+	}
+	var paths []string
+	for _, p := range strings.Split(strings.TrimPrefix(body, prefix), ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	if len(paths) == 0 {
+		return body
+	}
+	shown := paths
+	if len(shown) > 3 {
+		shown = shown[:3]
+	}
+	list := strings.Join(shown, ", ")
+	if len(paths) > len(shown) {
+		list += " …"
+	}
+	return i18n.Tf(loc, "web.session.scopeDrift", "n", strconv.Itoa(len(paths)), "paths", list)
 }
 
 // maxSubstitutionWhy bounds the cause printed inside the swap note. The note
