@@ -106,6 +106,7 @@ const ja: Messages = {
   // Queue board (queue redesign)
   'queue.new': '新規タスク',
   'queue.newTitle': 'タイトル',
+  'queue.scratchWorkdirHint': 'プロジェクトを選択しない場合、タスクは専用の一時ディレクトリ（work/.openpanda/tasks/<id>）で実行されます。独自のディレクトリを使うには並列モードで「作業ディレクトリ指定」を選んでください。',
   'queue.newPrompt': 'プロンプト（任意）— タスクの指示になり、連携セッションの最初のメッセージにもなります',
   'queue.newPriority': '優先度',
   'queue.newProject': 'プロジェクト',
@@ -593,12 +594,12 @@ const ja: Messages = {
 
   // Agent CLIs (queue redesign)
   'settings.agents': 'Agent CLI',
-  'settings.agentsHelp': 'このノードが駆動できるコーディング agent。CLI をインストールするとここに表示されます。「テスト」はバイナリを実際に実行して接続を確認します。',
+  'settings.agentsHelp': 'このノードが駆動できるコーディング agent。CLI をインストールするとここに表示されます。「バージョン確認」は `<cli> --version` のみを実行し、ログイン状態とモデルの可用性は最初の実タスクで確認されます。',
   'settings.agentInstalled': 'インストール済み',
   'settings.agentMissing': '未インストール',
-  'settings.agentTest': 'テスト',
-  'settings.agentTesting': 'テスト中…',
-  'settings.agentStatusOk': '正常',
+  'settings.agentTest': 'バージョン確認',
+  'settings.agentTesting': '確認中…',
+  'settings.agentStatusOk': 'バージョン確認済み',
   'settings.agentStatusFail': '失敗',
   'settings.agentUntested': '未テスト',
   'settings.agentDownload': 'ダウンロード',

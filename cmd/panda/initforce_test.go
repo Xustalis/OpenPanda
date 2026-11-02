@@ -100,3 +100,25 @@ func TestMergePreservedConfigBadYAML(t *testing.T) {
 		t.Error("def must be untouched on parse failure")
 	}
 }
+
+// TestRebaseInitStorage: an explicit --config must produce a self-contained
+// instance. The old defaults pointed every path at the user data dir, so two
+// configs shared one database and one node identity.
+func TestRebaseInitStorage(t *testing.T) {
+	def := config.Default()
+	rebaseInitStorage(def, "/tmp/panda-instance")
+	if def.Storage.DBPath != "/tmp/panda-instance/openpanda.db" {
+		t.Errorf("db_path = %q", def.Storage.DBPath)
+	}
+	if def.Storage.WorkPath != "/tmp/panda-instance" {
+		t.Errorf("work_path = %q", def.Storage.WorkPath)
+	}
+	if def.Storage.MemoryPath != "/tmp/panda-instance/memory" ||
+		def.Storage.ProjectsPath != "/tmp/panda-instance/projects" ||
+		def.Storage.SkillsPath != "/tmp/panda-instance/skills" {
+		t.Errorf("storage paths not rebased: %+v", def.Storage)
+	}
+	if def.Storage.ContextPath != "/tmp/panda-instance/data/context" {
+		t.Errorf("context_path = %q", def.Storage.ContextPath)
+	}
+}

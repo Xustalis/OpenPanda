@@ -105,6 +105,7 @@ const zhCN: Messages = {
   // Queue board (queue redesign)
   'queue.new': '新建任务',
   'queue.newTitle': '标题',
+  'queue.scratchWorkdirHint': '未选择项目时，任务在独立的临时工作目录中运行（work/.openpanda/tasks/<id>）。要指定目录，请把并行模式设为「指定工作目录」。',
   'queue.newPrompt': '提示词（可选）— 作为任务指令，也是关联会话的首条消息',
   'queue.newPriority': '优先级',
   'queue.newProject': '项目',
@@ -590,12 +591,12 @@ const zhCN: Messages = {
 
   // Agent CLIs (queue redesign)
   'settings.agents': 'Agent 命令行',
-  'settings.agentsHelp': '本节点可驱动的编码 agent。安装对应 CLI 后会自动出现在这里；「测试」会实际运行一次以检查连通性。',
+  'settings.agentsHelp': '本节点可驱动的编码 agent。安装对应 CLI 后会自动出现在这里；「检查版本」只执行 `<cli> --version`，登录状态与模型可用性由首次真实任务验证。',
   'settings.agentInstalled': '已安装',
   'settings.agentMissing': '未安装',
-  'settings.agentTest': '测试',
-  'settings.agentTesting': '测试中…',
-  'settings.agentStatusOk': '正常',
+  'settings.agentTest': '检查版本',
+  'settings.agentTesting': '检查中…',
+  'settings.agentStatusOk': '版本可用',
   'settings.agentStatusFail': '失败',
   'settings.agentUntested': '未测试',
   'settings.agentDownload': '下载',

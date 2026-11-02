@@ -109,6 +109,8 @@ const en: Messages = {
   // Queue board (queue redesign)
   'queue.new': 'New task',
   'queue.newTitle': 'Title',
+  'queue.scratchWorkdirHint':
+    'With no project selected, the task runs in a private scratch directory (work/.openpanda/tasks/<id>). Choose a work directory in Parallel mode to use your own.',
   'queue.newPrompt': 'Prompt (optional) — becomes the task instruction and the session’s first message',
   'queue.newPriority': 'Priority',
   'queue.newProject': 'Project',
@@ -599,12 +601,12 @@ const en: Messages = {
   // Agent CLIs (queue redesign)
   'settings.agents': 'Agent CLIs',
   'settings.agentsHelp':
-    'Coding agents this node can drive. Install the CLI and it appears here; Test runs the binary to check connectivity.',
+    'Coding agents this node can drive. Install the CLI and it appears here; “Check version” runs `<cli> --version` only — sign-in and model availability are proven by the first real task.',
   'settings.agentInstalled': 'installed',
   'settings.agentMissing': 'not installed',
-  'settings.agentTest': 'Test',
-  'settings.agentTesting': 'Testing…',
-  'settings.agentStatusOk': 'OK',
+  'settings.agentTest': 'Check version',
+  'settings.agentTesting': 'Checking…',
+  'settings.agentStatusOk': 'Version OK',
   'settings.agentStatusFail': 'Failed',
   'settings.agentUntested': 'Not tested',
   'settings.agentDownload': 'Download',

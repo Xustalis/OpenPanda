@@ -150,7 +150,8 @@ func (s *rpcServer) dispatch(req *rpcRequest) {
 			s.replyError(req.ID, err.Error())
 			return
 		}
-		if wt := openWorktreesBestEffort(s.cfg.Storage.WorkPath); wt != nil {
+		wt := openWorktreesForSessionBase(s.cfg, p.Project, projectWorkDir(s.cfg, p.Project))
+		if wt != nil {
 			if path, err := wt.Ensure(context.Background(), sess.ID); err == nil {
 				_ = s.store.SetWorktree(sess.ID, path, sessions.Branch(sess.ID))
 				sess, _ = s.store.Get(sess.ID)
@@ -175,7 +176,7 @@ func (s *rpcServer) dispatch(req *rpcRequest) {
 			s.replyError(req.ID, err.Error())
 			return
 		}
-		if wt := openWorktreesBestEffort(s.cfg.Storage.WorkPath); wt != nil {
+		if wt := openWorktreesForSession(s.cfg, parent); wt != nil {
 			base := "HEAD"
 			if parent.Branch != "" {
 				base = parent.Branch

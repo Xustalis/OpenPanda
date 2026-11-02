@@ -107,6 +107,7 @@ const de: Messages = {
   // Queue board (queue redesign)
   'queue.new': 'Neue Aufgabe',
   'queue.newTitle': 'Titel',
+  'queue.scratchWorkdirHint': 'Ohne Projekt läuft die Aufgabe in einem eigenen temporären Verzeichnis (work/.openpanda/tasks/<id>). Wähle im Parallelmodus ein Arbeitsverzeichnis, um dein eigenes zu nutzen.',
   'queue.newPrompt': 'Prompt (optional) — wird zur Aufgabenanweisung und zur ersten Nachricht der Session',
   'queue.newPriority': 'Priorität',
   'queue.newProject': 'Projekt',
@@ -595,12 +596,12 @@ const de: Messages = {
   // Agent CLIs (queue redesign)
   'settings.agents': 'Agent-CLIs',
   'settings.agentsHelp':
-    'Coding-Agents, die dieser Knoten steuern kann. Installiere die CLI, erscheint sie hier; „Testen“ führt die Binärdatei aus und prüft die Verbindung.',
+    'Coding-Agents, die dieser Knoten steuern kann. Installiere die CLI, erscheint sie hier; „Version prüfen“ führt nur `<cli> --version` aus — Anmeldung und Modellverfügbarkeit zeigen sich beim ersten echten Task.',
   'settings.agentInstalled': 'installiert',
   'settings.agentMissing': 'nicht installiert',
-  'settings.agentTest': 'Testen',
-  'settings.agentTesting': 'Testen…',
-  'settings.agentStatusOk': 'OK',
+  'settings.agentTest': 'Version prüfen',
+  'settings.agentTesting': 'Prüfe…',
+  'settings.agentStatusOk': 'Version OK',
   'settings.agentStatusFail': 'Fehlgeschlagen',
   'settings.agentUntested': 'Nicht getestet',
   'settings.agentDownload': 'Herunterladen',

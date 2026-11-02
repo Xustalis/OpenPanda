@@ -1176,8 +1176,12 @@ function projectOfDir(
  *  - the stream is fired and never awaited. There is no transcript here, so
  *    there is nothing to paint: the turn runs on the server and the header's
  *    task card is where its progress shows up;
- *  - nothing navigates. Not on send, not after it — staying on the map is the
- *    whole point of the surface, and leaving the page must not cancel work. */
+ *  - a dispatched task does not navigate: staying on the map is the whole
+ *    point of the surface, and leaving the page must not cancel work. A
+ *    direct answer is the exception: it has no task row for the header card,
+ *    so the thread is opened as soon as the answer arrives. Without that the
+ *    answer existed only in the sidebar and the bench looked like it ate the
+ *    message. */
 function WorkspaceComposer(props: {
   dir: string
   onDirChange(path: string): void
@@ -1285,7 +1289,12 @@ function WorkspaceComposer(props: {
           onReasoning() {},
           onStatus() {},
           onOperation() {},
-          onResult() {},
+          onResult(r) {
+            // A direct answer has no task row to watch; open its thread so
+            // the reply is visible. A task/plan keeps the dispatch surface
+            // and its task drawer.
+            if (r.kind === 'answer') navigate({ view: 'sessions', id: target.id })
+          },
           // The one handler that has to do something: with no transcript, a
           // turn that failed (no model, dead key, rejected prompt) would
           // otherwise vanish without a trace.

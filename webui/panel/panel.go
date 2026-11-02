@@ -336,11 +336,13 @@ func New(d Deps) http.Handler {
 		// route is registered wherever sessions are, not only when isolation
 		// is available.
 		mux.HandleFunc("POST /api/sessions/{id}/upload", h.uploadSessionFile)
-		if d.Worktrees != nil {
-			mux.HandleFunc("GET /api/sessions/{id}/diff", h.sessionDiff)
-			mux.HandleFunc("POST /api/sessions/{id}/merge", h.sessionMerge)
-			mux.HandleFunc("POST /api/sessions/{id}/revert", h.sessionRevert)
-		}
+		// Worktree routes are registered whenever sessions exist: the
+		// repository is resolved per session (its project's work dir may be
+		// one even when the node's storage.work_path is not), and a session
+		// with no worktree answers a clear 400.
+		mux.HandleFunc("GET /api/sessions/{id}/diff", h.sessionDiff)
+		mux.HandleFunc("POST /api/sessions/{id}/merge", h.sessionMerge)
+		mux.HandleFunc("POST /api/sessions/{id}/revert", h.sessionRevert)
 	}
 	if d.Push != nil {
 		mux.HandleFunc("GET /api/push/key", h.pushKey)
