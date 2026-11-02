@@ -82,8 +82,15 @@ def main():
             cmd += [
                 "-c", 'model_provider="custom"',
                 "-c", f'model_providers.custom.base_url="{base_url}"',
-                "-c", f'model_providers.custom.experimental_bearer_token="{api_key}"',
             ]
+            # The key never rides argv. `-c` values land in the process list
+            # and in codex's own transcript, and a provider token in either is
+            # a leak; env_key names a variable the CLI reads from the
+            # environment it was started with, which is where the injected
+            # credential already lives.
+            if api_key:
+                os.environ["PANDA_CODEX_TOKEN"] = api_key
+                cmd += ["-c", 'model_providers.custom.env_key="PANDA_CODEX_TOKEN"']
         if inj_model:
             cmd += ["-c", f'model="{inj_model}"']
     else:
