@@ -277,6 +277,11 @@ const pickerScript = `<script data-openpanda-picker>
 (function () {
   if (window.__openpandaPicker) return;
   window.__openpandaPicker = true;
+  // Pick mode is on unless something turned it off. The artifact preview wants
+  // it on: pointing at what is wrong is that surface's only verb. The browser
+  // pane loads the same script and sets it to false, then flips it from its own
+  // toolbar — a page being read must not swallow every click.
+  function picking() { return window.__openpandaPick !== false; }
   var last = null;
   function cssPath(el) {
     if (!el || el.nodeType !== 1) return "";
@@ -297,7 +302,14 @@ const pickerScript = `<script data-openpanda-picker>
   function clear() {
     if (last) { last.style.outline = ""; last = null; }
   }
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d || d.source !== "openpanda-pick-mode") return;
+    window.__openpandaPick = !!d.on;
+    if (!window.__openpandaPick) clear();
+  });
   document.addEventListener("mouseover", function (e) {
+    if (!picking()) return;
     clear();
     var el = e.target;
     if (!el || el.nodeType !== 1) return;
@@ -305,6 +317,7 @@ const pickerScript = `<script data-openpanda-picker>
     last = el;
   }, true);
   document.addEventListener("click", function (e) {
+    if (!picking()) return;
     e.preventDefault();
     e.stopPropagation();
     var el = e.target;
@@ -321,6 +334,17 @@ const pickerScript = `<script data-openpanda-picker>
       }, "*");
     } catch (err) {}
   }, true);
+  // The frame's own name, for a panel that has chrome around it. A sandboxed
+  // document has an opaque origin, so the parent cannot read document.title —
+  // this message is the only path. baseURI is the <base> the browser pane
+  // injected, i.e. the page the reader actually asked for.
+  try {
+    parent.postMessage({
+      source: "openpanda-page",
+      title: document.title || "",
+      url: document.baseURI || ""
+    }, "*");
+  } catch (e) {}
 })();
 </script>`
 

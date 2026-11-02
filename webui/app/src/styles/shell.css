@@ -314,13 +314,29 @@ a.sidebar-node:hover {
   to { opacity: 1; transform: none; }
 }
 .main:has(> .chat) {
-  padding: 0;
+  /* The thread sits on a canvas, not on the page: the pane and the dock are
+     two cards with a gutter between them, and that gutter needs a colour to
+     read as a gap rather than as a seam. */
+  padding: 10px;
+  background: var(--bg-chrome);
   display: flex;
   flex-direction: column;
+  /* The dock decides between "second column" and "layer over the pane" from
+     the width it actually has, not from the window's. Those differ by the whole
+     navigation rail (~280px): a 1024px window leaves 720px here, where two
+     cards still fit, while a 780px window leaves 480px, where they do not. A
+     viewport media query cannot tell those apart and got both wrong. */
+  container-type: inline-size;
+  container-name: reading;
 }
 .main:has(> .chat) > .banner,
 .main:has(> .chat) > .onboard-banner {
   margin: var(--sp-3) var(--sp-4) 0;
+}
+/* The banner is the third card on this canvas: same corner as the two below
+   it, or the page reads as a rounded layout capped by a rectangle. */
+.main:has(> .chat) > .onboarding-banner {
+  border-radius: var(--radius-xl);
 }
 
 /* Narrow layout: a compact top bar opens the rail as a disclosure panel.
