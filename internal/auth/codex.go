@@ -65,7 +65,11 @@ func codexLoginToken() (Token, error) {
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return Token{}, fmt.Errorf("auth: %s is not valid JSON: %w", path, err)
 	}
-	if !strings.EqualFold(f.AuthMode, "chatgpt") || strings.TrimSpace(f.Tokens.AccessToken) == "" {
+	// auth_mode has been spelled "chatgpt", "chatgptAuthTokens" and omitted
+	// across CLI releases. The access token is what opens the endpoint; only
+	// an explicit api-key login has nothing to offer here.
+	mode := strings.ToLower(strings.TrimSpace(f.AuthMode))
+	if mode == "apikey" || strings.TrimSpace(f.Tokens.AccessToken) == "" {
 		return Token{}, fmt.Errorf("auth: %s holds no ChatGPT login — run `codex login`", path)
 	}
 	exp := jwtExpiry(f.Tokens.AccessToken)
@@ -73,7 +77,12 @@ func codexLoginToken() (Token, error) {
 		return Token{}, fmt.Errorf("auth: the Codex login expired at %s — run `codex` once to refresh it",
 			exp.Local().Format("2006-01-02 15:04"))
 	}
-	return Token{AccessToken: f.Tokens.AccessToken, RefreshToken: f.Tokens.RefreshToken, ExpiresAt: exp}, nil
+	return Token{
+		AccessToken:  f.Tokens.AccessToken,
+		RefreshToken: f.Tokens.RefreshToken,
+		ExpiresAt:    exp,
+		AccountID:    f.Tokens.AccountID,
+	}, nil
 }
 
 // jwtExpiry reads the exp claim. The signature is not verified: this is the

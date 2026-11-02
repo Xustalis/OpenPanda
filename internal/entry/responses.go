@@ -285,6 +285,11 @@ func responsesURL(base string) string {
 		return base
 	}
 	base = strings.TrimSuffix(base, "/chat/completions")
+	// Codex's ChatGPT backend lives under /backend-api/codex and serves the
+	// Responses endpoint one segment below it — it is not versioned.
+	if strings.HasSuffix(base, "/backend-api/codex") {
+		return base + "/responses"
+	}
 	if strings.HasSuffix(base, "/v1") || strings.HasSuffix(base, "/v2") ||
 		strings.HasSuffix(base, "/v3") || strings.HasSuffix(base, "/v4") {
 		return base + "/responses"
@@ -683,18 +688,29 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 		return Response{}, ErrNoKey
 	}
 	body, err := func() (io.ReadCloser, error) {
-		resp, err := c.sendResponsesStream(ctx, system, turns, tools)
-		if err == nil {
-			return resp.Body, nil
-		}
-		if thinkingRejected(err) && !c.thinkingDenied.Load() {
-			c.thinkingDenied.Store(true)
-			resp, err = c.sendResponsesStream(ctx, system, turns, tools)
+		var lastErr error
+		for attempt := 0; attempt <= c.maxRetry; attempt++ {
+			if attempt > 0 {
+				notifyRetry(ctx, attempt, c.maxRetry, c.retryDelay(attempt), lastErr)
+				if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
+					return nil, err
+				}
+			}
+			resp, err := c.sendResponsesStream(ctx, system, turns, tools)
 			if err == nil {
 				return resp.Body, nil
 			}
+			lastErr = err
+			if thinkingRejected(err) && !c.thinkingDenied.Load() {
+				c.thinkingDenied.Store(true)
+				attempt-- // the correction retries at once, off the transport budget
+				continue
+			}
+			if !retryable(err) {
+				return nil, err
+			}
 		}
-		return nil, err
+		return nil, lastErr
 	}()
 	if err != nil {
 		return Response{}, err

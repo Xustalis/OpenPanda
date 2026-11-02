@@ -70,7 +70,11 @@ type Client struct {
 	// When set it supersedes apiKey, and oauth marks that the credential
 	// is a Bearer token rather than an API key — Anthropic then takes
 	// `authorization: Bearer` + the oauth beta flag instead of x-api-key.
-	keyFn     func(ctx context.Context) (string, error)
+	keyFn func(ctx context.Context) (string, error)
+	// tokenFn resolves the full credential for a subscription provider whose
+	// request carries more than a bearer token — the Codex ChatGPT backend
+	// routes by chatgpt-account-id. It supersedes keyFn when set.
+	tokenFn   func(ctx context.Context) (auth.Token, error)
 	oauth     bool
 	model     string
 	maxTokens int
@@ -412,6 +416,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		store := auth.OpenStore(auth.DefaultStateDir())
 		id := provider
 		c.keyFn = func(ctx context.Context) (string, error) { return store.AccessToken(ctx, id) }
+		c.tokenFn = func(ctx context.Context) (auth.Token, error) { return store.Token(ctx, id) }
 		c.oauth = true
 		// Anthropic OAuth needs the oauth beta flag on every call; merge it
 		// with a caller-supplied beta list rather than clobbering it. Other
@@ -936,6 +941,10 @@ var ErrNoKey = errors.New("entry: no model api_key configured")
 // no credential exists (a no-auth endpoint), so callers pair it with the
 // noCredential guard rather than trusting the token's shape.
 func (c *Client) credential(ctx context.Context) (string, error) {
+	if c.tokenFn != nil {
+		tok, err := c.tokenFn(ctx)
+		return tok.AccessToken, err
+	}
 	if c.keyFn != nil {
 		return c.keyFn(ctx)
 	}
@@ -945,7 +954,7 @@ func (c *Client) credential(ctx context.Context) (string, error) {
 // noCredential reports whether the client has no way to authenticate: no
 // static key, no OAuth token source, and the endpoint is not marked no-auth.
 func (c *Client) noCredential() bool {
-	return c.apiKey == "" && c.keyFn == nil && !c.noAuth
+	return c.apiKey == "" && c.keyFn == nil && c.tokenFn == nil && !c.noAuth
 }
 
 // applyAuth sets the authentication header for one request. An OAuth token
@@ -953,9 +962,20 @@ func (c *Client) noCredential() bool {
 // it *instead of* x-api-key — while a static api_key keeps its per-dialect
 // header (Bearer for OpenAI, x-api-key for Anthropic).
 func (c *Client) applyAuth(ctx context.Context, httpReq *http.Request) error {
-	tok, err := c.credential(ctx)
-	if err != nil {
-		return err
+	var meta auth.Token
+	var tok string
+	if c.tokenFn != nil {
+		t, err := c.tokenFn(ctx)
+		if err != nil {
+			return err
+		}
+		tok, meta = t.AccessToken, t
+	} else {
+		var err error
+		tok, err = c.credential(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	if tok == "" {
 		return nil
@@ -964,6 +984,13 @@ func (c *Client) applyAuth(ctx context.Context, httpReq *http.Request) error {
 	case c.oauth:
 		// A subscription token is a Bearer credential on every dialect.
 		httpReq.Header.Set("authorization", "Bearer "+tok)
+		// The Codex ChatGPT backend routes a plan request by account, and
+		// the CLI sends the same pair of protocol headers alongside it.
+		if meta.AccountID != "" {
+			httpReq.Header.Set("chatgpt-account-id", meta.AccountID)
+			httpReq.Header.Set("OpenAI-Beta", "responses=experimental")
+			httpReq.Header.Set("originator", "codex_cli_rs")
+		}
 	case c.apiType == config.APITypeGoogle:
 		// Google's own API takes the key in x-goog-api-key. OpenCode's
 		// gateway accepts that header too and additionally documents a

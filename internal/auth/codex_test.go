@@ -32,7 +32,7 @@ func writeCodexAuth(t *testing.T, body string) string {
 
 func TestCodexLoginTokenReadsTheCLIsFile(t *testing.T) {
 	exp := time.Now().Add(4 * 24 * time.Hour).Truncate(time.Second)
-	writeCodexAuth(t, `{"auth_mode":"chatgpt","tokens":{"access_token":"`+fakeJWT(exp)+`","refresh_token":"r"}}`)
+	writeCodexAuth(t, `{"auth_mode":"chatgpt","tokens":{"access_token":"`+fakeJWT(exp)+`","refresh_token":"r","account_id":"acct-1"}}`)
 	tok, err := codexLoginToken()
 	if err != nil {
 		t.Fatal(err)
@@ -42,6 +42,19 @@ func TestCodexLoginTokenReadsTheCLIsFile(t *testing.T) {
 	}
 	if !tok.ExpiresAt.Equal(exp) {
 		t.Errorf("expiry = %v, want %v", tok.ExpiresAt, exp)
+	}
+	// The ChatGPT backend routes by account; the id travels with the token.
+	if tok.AccountID != "acct-1" {
+		t.Errorf("account id = %q, want acct-1", tok.AccountID)
+	}
+}
+
+func TestCodexLoginTokenAcceptsAnOmittedAuthMode(t *testing.T) {
+	// Older CLI releases wrote no auth_mode; the access token is what opens
+	// the endpoint, and only an explicit api-key login has nothing to offer.
+	writeCodexAuth(t, `{"tokens":{"access_token":"`+fakeJWT(time.Now().Add(time.Hour))+`"}}`)
+	if _, err := codexLoginToken(); err != nil {
+		t.Fatalf("err = %v", err)
 	}
 }
 
