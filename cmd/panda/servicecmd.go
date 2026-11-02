@@ -290,7 +290,7 @@ func ensurePanelToken() (string, error) {
 }
 
 func runService(args []string) int {
-	if len(args) == 0 {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		fmt.Fprintln(os.Stderr, "usage: panda service install|status|restart|uninstall [--lan] [--dry-run]")
 		return 2
 	}
@@ -300,6 +300,9 @@ func runService(args []string) int {
 	lan := fs.Bool("lan", false, "bind the console to all interfaces")
 	dry := fs.Bool("dry-run", false, "print the unit instead of installing it")
 	if err := fs.Parse(args[1:]); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
 		return 2
 	}
 	spec, err := serviceSpec(*lan)
