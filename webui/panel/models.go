@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -48,6 +49,10 @@ type modelEntryJSON struct {
 	Active         bool   `json:"active"`
 	KeySet         bool   `json:"key_set"`
 	KeyHint        string `json:"key_hint,omitempty"`
+	// KeyEnv names the environment variable this row reads its key from. Set
+	// instead of an api_key when the row was imported from another tool's
+	// config: the secret stays where it already was.
+	KeyEnv string `json:"key_env,omitempty"`
 	// Auth names a subscription credential (internal/auth) the row signs in
 	// with instead of a key — today only "codex", whose token is the CLI's own
 	// login. The console shows it so a row with no api_key does not read as
@@ -92,6 +97,26 @@ type providerJSON struct {
 	Region        string `json:"region"`    // "cn" | "global"
 }
 
+// envKeySet reports whether a row's key_env names a variable that is actually
+// set in this process. A row pointing at a missing variable has no key, and the
+// console must say so instead of showing a green "key stored".
+func envKeySet(mc config.ModelConfig) bool {
+	return mc.KeyEnv != "" && strings.TrimSpace(os.Getenv(mc.KeyEnv)) != ""
+}
+
+// fingerprintSource is what the connection grouping digests. An env-backed row
+// groups by the variable's name, not its value: two rows reading the same
+// variable are one account, and the console never needs the secret to know it.
+func fingerprintSource(mc config.ModelConfig) string {
+	if mc.APIKey != "" {
+		return mc.APIKey
+	}
+	if mc.KeyEnv != "" {
+		return "env:" + mc.KeyEnv
+	}
+	return ""
+}
+
 // modelEntryOf renders a ModelConfig for the wire, resolving the catalogue
 // fallbacks the REPL's table view resolves (default model, base URL,
 // context window, provider label).
@@ -114,10 +139,11 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 		ThinkingBudget: mc.ThinkingBudget,
 		MaxRetries:     mc.MaxRetries,
 		NoAuth:         mc.NoAuth || (known && p.NoAuth),
-		KeySet:         mc.APIKey != "" || mc.Auth != "",
+		KeySet:         mc.APIKey != "" || envKeySet(mc) || mc.Auth != "",
 		Auth:           mc.Auth,
 		KeyHint:        maskKey(mc.APIKey),
-		KeyFingerprint: keyFingerprint(mc.APIKey),
+		KeyEnv:         mc.KeyEnv,
+		KeyFingerprint: keyFingerprint(fingerprintSource(mc)),
 		AllowPlaintext: mc.AllowPlaintext,
 		ContextAuto:    mc.ContextWindow == 0,
 		MaxTokensAuto:  mc.MaxTokens == 0,
@@ -730,8 +756,9 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 		req.AllowPlaintext = &waiver
 	}
 
+	wantProviderChanged := wantProvider != "" && effectiveProviderID(old) != wantProvider
 	existingKey := old.APIKey
-	if wantProvider != "" && effectiveProviderID(old) != wantProvider {
+	if wantProviderChanged {
 		existingKey = h.keyAcrossVendorSwitch(old, wantProvider)
 	}
 
@@ -743,6 +770,22 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 	want := strings.TrimSpace(req.Alias)
 	if want == "" {
 		want = old.Alias()
+	}
+	// An env-backed row carries no api_key, so the rebuilt entry would come back
+	// keyless and the next call would 401. The reference is part of the row's
+	// identity the form never shows; keep it unless the edit supplied a key.
+	// An env reference belongs to the vendor it was written for, so a vendor
+	// switch drops it for the same reason keyAcrossVendorSwitch drops a stored
+	// key: otherwise the new endpoint is dialed with the old account's token.
+	if strings.TrimSpace(req.APIKey) == "" {
+		if old.KeyEnv != "" && !wantProviderChanged {
+			mc.KeyEnv = old.KeyEnv
+		}
+	} else {
+		mc.KeyEnv = ""
+	}
+	if mc.KeyEnv != "" || mc.APIKey != "" {
+		mc.NoAuth = old.NoAuth && mc.APIKey == "" && mc.KeyEnv == ""
 	}
 	mc.Name = want
 	if _, err := entry.NewClient(mc); err != nil {
