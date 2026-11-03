@@ -36,9 +36,10 @@ import { Icon, type IconName } from './icons'
 export type DockTab = 'tasks' | 'files' | 'browser' | 'side' | ''
 
 /** Narrower than this and a line of code wraps on every scroll; wider and the
- *  transcript stops being the page. */
-const MIN_WIDTH = 320
-const MAX_WIDTH = 760
+ *  transcript stops being the page. Exported so the state that owns the width
+ *  can restore a stored value inside the same bounds. */
+export const DOCK_MIN_WIDTH = 320
+export const DOCK_MAX_WIDTH = 760
 
 interface TabSpec {
   key: Exclude<DockTab, ''>
@@ -81,7 +82,7 @@ export function Dock(props: DockProps) {
         return
       }
       const next = Math.round(s.w - (e.clientX - s.x))
-      onWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, next)))
+      onWidth(Math.min(DOCK_MAX_WIDTH, Math.max(DOCK_MIN_WIDTH, next)))
     }
     const end = () => setDragging(false)
     window.addEventListener('pointermove', move)

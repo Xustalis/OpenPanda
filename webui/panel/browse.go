@@ -27,6 +27,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -64,8 +65,10 @@ var errBlockedAddress = errors.New("this address is not reachable from the conso
 
 // browsePickOff precedes the picker in every browsed page: reading is the
 // default state of a browser pane, and a page that eats every click cannot be
-// read at all.
-const browsePickOff = `<script>window.__openpandaPick=false</script>`
+// read at all. `__openpandaProxied` is what tells the script that this document
+// came through the fetcher — links then stay on the proxied route instead of
+// stepping out to the site, which most sites refuse to frame.
+const browsePickOff = `<script>window.__openpandaPick=false;window.__openpandaProxied=true</script>`
 
 // browsePolicy is deliberately not the artifact policy. An artifact may only
 // load its own files; a browsed page must load the site's stylesheets, scripts
@@ -405,6 +408,13 @@ func sameSecret(got, want string) bool {
 // browseFail answers in HTML, not JSON: the caller is an iframe. A JSON error
 // body inside the pane is a page of braces where the explanation should be.
 func browseFail(w http.ResponseWriter, status int, err error) {
+	msg := err.Error()
+	// The pane cannot read this document (its origin is opaque) and cannot
+	// learn the status of a frame load, so the page reports the failure itself.
+	// json.Marshal of a string cannot fail, and it is the JS string literal:
+	// it escapes the quotes, the backslashes and — importantly — the `<`, so
+	// an error naming a tag cannot close the script that carries it.
+	wire, _ := json.Marshal(msg)
 	hdr := w.Header()
 	// The panel's middleware denies framing on every response. These two exist
 	// to be framed, and browsePolicy's frame-ancestors 'self' is the same guard
@@ -413,13 +423,19 @@ func browseFail(w http.ResponseWriter, status int, err error) {
 	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	hdr.Set("Cache-Control", "no-store")
 	hdr.Set("X-Content-Type-Options", "nosniff")
-	hdr.Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")
+	// allow-scripts exists for the one inline script below. The document has
+	// no other source to load from: default-src 'none' keeps a failed fetch
+	// from becoming a second one.
+	hdr.Set("Content-Security-Policy",
+		"sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
 	w.WriteHeader(status)
 	_, _ = fmt.Fprintf(w,
 		`<!doctype html><meta charset="utf-8"><title>Preview unavailable</title>`+
 			`<body style="margin:0;padding:28px;font:14px/1.6 system-ui,-apple-system,sans-serif;color:#3a3a3a;background:#fafafa">`+
-			`<p style="margin:0;color:#a33">%s</p></body>`,
-		html.EscapeString(err.Error()))
+			`<p style="margin:0;color:#a33">%s</p>`+
+			`<script>try{parent.postMessage({source:"openpanda-browse-error",error:%s},"*")}catch(e){}</script>`+
+			`</body>`,
+		html.EscapeString(msg), wire)
 }
 
 // browseError turns a transport failure into a sentence the pane can show. The

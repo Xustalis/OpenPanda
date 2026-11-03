@@ -12,6 +12,7 @@ import {
   type AskStatusEvent,
   type ClarifyAnswer,
   type ClarifySpec,
+  type DevStatus,
   type FsFileEntry,
   type MCPSettings,
   type NodeInfo,
@@ -26,8 +27,9 @@ import {
 } from '../api/client'
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
-import { Dock, type DockTab } from '../components/dock'
-import { DockBrowser } from '../components/dock-browser'
+import { Dock, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH, type DockTab } from '../components/dock'
+import { DockBrowser, type BrowserArtifact, type BrowserPageRequest } from '../components/dock-browser'
+import { scanArtifacts } from '../components/auto-preview'
 import { DockFiles } from '../components/dock-files'
 import { SideChat } from '../components/side-chat'
 import { TaskRail } from '../components/task-rail'
@@ -642,7 +644,27 @@ export function SessionsView({
   // panel reads as "start a fresh one".
   const [dockOpen, setDockOpen] = useState(false)
   const [dockTab, setDockTab] = useState<DockTab>('')
-  const [dockW, setDockW] = useState(380)
+  // The column's width is a preference, not fleet or thread state: it lives in
+  // localStorage and never travels. A stored value outside the drag's bounds
+  // (an older build, a hand-edited entry) falls back to the default.
+  const [dockW, setDockW] = useState(() => {
+    try {
+      const stored = Number(localStorage.getItem('openpanda.dock.width'))
+      if (Number.isFinite(stored) && stored >= DOCK_MIN_WIDTH && stored <= DOCK_MAX_WIDTH) {
+        return stored
+      }
+    } catch {
+      // storage blocked; the default width is fine
+    }
+    return 380
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('openpanda.dock.width', String(dockW))
+    } catch {
+      // storage blocked; the width still works for this session
+    }
+  }, [dockW])
   const [dockEpoch, setDockEpoch] = useState(0)
   // Panels mount the first time their tab is picked and stay mounted after
   // that, hidden rather than dropped: a file tree you scrolled, a page you
@@ -655,6 +677,23 @@ export function SessionsView({
     if (dockTab === '') return
     setDockSeen((prev) => (prev.includes(dockTab) ? prev : [...prev, dockTab]))
   }, [dockTab])
+  // Which artifact keys this thread has already shown. `null` means "no poll
+  // has landed yet": the first snapshot is the baseline, so reopening a thread
+  // after the work finished does not pop previews for pages already seen.
+  const autoSeen = useRef<Set<string> | null>(null)
+  // The finished task whose page the dock's browser is asked to show. It is a
+  // request into the panel, not a surface of its own: the panel owns the frame
+  // and the error state, this only names the task.
+  const [pageAsk, setPageAsk] = useState<BrowserArtifact | null>(null)
+  // A live page (the project's dev server) the thread asked to show. It and
+  // an artifact request are alternatives: opening one clears the other.
+  const [directAsk, setDirectAsk] = useState<BrowserPageRequest | null>(null)
+  // Bumped on thread switch so a dev-status read or start wait that is still
+  // running cannot open a page in the thread the reader has already left.
+  const previewSeq = useRef(0)
+  // Projects with an auto-start already in flight, so a burst of settled tasks
+  // does not launch the same dev command several times.
+  const devStarting = useRef(new Set<string>())
   // The file the transcript's latest click asked for. It is a request into the
   // dock's file panel, not a surface of its own: the panel owns the tree, this
   // only names the file to open there.
@@ -684,6 +723,84 @@ export function SessionsView({
     setInput(editorTextOf(el))
     el.focus()
   }, [])
+  // The artifact card's own door to the preview, and the automatic open after
+  // a task settles. A project that declares a dev server gets that live page;
+  // otherwise the packed artifact is the page. The live server is preferred
+  // because it is what the app actually serves, cookies and HMR included.
+  const openTaskPreview = useCallback((task: Task) => {
+    const hash = task.plan_meta?.output_artifact
+    const seq = previewSeq.current
+    const stillHere = () => seq === previewSeq.current
+    const openArtifact = () => {
+      if (!hash || !stillHere()) return
+      setDirectAsk(null)
+      setPageAsk((prev) => ({
+        taskId: task.id,
+        hash,
+        nonce: (prev?.nonce ?? 0) + 1,
+      }))
+      setCard('')
+      setDockOpen(true)
+      setDockTab('browser')
+    }
+    const openDirect = (url: string) => {
+      if (!stillHere()) return
+      setPageAsk(null)
+      setDirectAsk((prev) => ({
+        url,
+        title: task.title,
+        nonce: (prev?.nonce ?? 0) + 1,
+        sameOrigin: true,
+      }))
+      setCard('')
+      setDockOpen(true)
+      setDockTab('browser')
+    }
+    const project = task.project
+    if (!project) {
+      openArtifact()
+      return
+    }
+    void (async () => {
+      let dev: DevStatus | null = null
+      try {
+        dev = await api.devStatus(project)
+      } catch {
+        dev = null
+      }
+      if (!stillHere()) return
+      if (!dev?.configured) {
+        openArtifact()
+        return
+      }
+      if (dev.state === 'ready' && dev.url) {
+        openDirect(dev.url)
+        return
+      }
+      // A server already starting, or one this project opted into starting,
+      // is waited for; a stopped server without auto_start falls back to the
+      // artifact instead of launching work the user did not ask for.
+      if ((dev.state === 'starting' || dev.auto_start) && !devStarting.current.has(project)) {
+        devStarting.current.add(project)
+        try {
+          if (dev.state !== 'starting') {
+            dev = await api.startDev(project)
+          }
+          const ready = await waitDevReady(project, dev.ready_timeout_s ?? 60, stillHere)
+          if (ready?.url) {
+            openDirect(ready.url)
+            return
+          }
+        } catch (e) {
+          toastError(e instanceof Error ? e.message : String(e))
+        } finally {
+          devStarting.current.delete(project)
+        }
+      }
+      if (!stillHere()) return
+      openArtifact()
+    })()
+  }, [])
   // The task a transcript link asked for. Held here, not in the card, because
   // the click that asks for it is the transcript's: `{ id }` is rebuilt on
   // every request so a second click on the same 查看任务 still re-opens a pane
@@ -711,6 +828,14 @@ export function SessionsView({
     setDockOpen(false)
     setDockTab('')
     setFileRef(null)
+    // The panels stay mounted behind a hidden tab, so closing the dock is not
+    // enough: the next thread would reopen to the last thread's page, file or
+    // side question. The epoch is the panels' reset signal.
+    setDockEpoch((n) => n + 1)
+    autoSeen.current = null
+    previewSeq.current += 1
+    setPageAsk(null)
+    setDirectAsk(null)
     // The queue belongs to the thread it was typed in: a counter carried over
     // from another thread would make the next note look like a removal.
     noteCount.current = 0
@@ -2436,6 +2561,22 @@ export function SessionsView({
   // several dispatch turns was issuing that many extra requests per frame,
   // all competing with the event stream for the browser's six connections.
   const tasksById = new Map((sessionTasks ?? []).map((t) => [t.id, t]))
+  // A finished task's page opens in the dock by itself. The trigger is the
+  // artifact hash that was not in the previous poll (see scanArtifacts): a
+  // page that appears while the thread is being read is the one the reader
+  // wants, and one dock is enough — a round that lands several opens the
+  // newest and marks the rest seen, so none of them reopens later.
+  useEffect(() => {
+    if (!sessionTasks) return
+    const scan = scanArtifacts(autoSeen.current, sessionTasks)
+    autoSeen.current = scan.seen
+    if (!scan.next) return
+    const task = sessionTasks.find((t) => t.id === scan.next)
+    if (!task) return
+    // The dock and the header cards share one lane; asking for a page closes
+    // whichever card was up rather than laying a column over it.
+    openTaskPreview(task)
+  }, [sessionTasks, openTaskPreview])
   const reportRefs = reportFallbackRefs(msgs)
   // What the dock's task tab counts on its badge: the rows that still want
   // something — running, waiting on a human, or queued. Terminal rows are the
@@ -2732,6 +2873,7 @@ export function SessionsView({
                 elapsedMs={turnMs[i] ?? m.duration_ms}
                 liveFrom={liveFrom}
                 onOpenTask={openTaskInPlace}
+                onPreviewTask={openTaskPreview}
               />
             ),
           )}
@@ -3348,7 +3490,13 @@ export function SessionsView({
         )}
         {dockSeen.includes('browser') && (
           <div class="dock-pane" hidden={dockTab !== 'browser'}>
-            <DockBrowser resetSignal={dockEpoch} onInsert={composerInsert} />
+            <DockBrowser
+              resetSignal={dockEpoch}
+              artifact={pageAsk}
+              direct={directAsk}
+              project={session?.project ?? ''}
+              onInsert={composerInsert}
+            />
           </div>
         )}
         {dockSeen.includes('side') && (
@@ -3423,6 +3571,30 @@ function ChatEmpty({
       </div>
     </div>
   )
+}
+
+/** waitDevReady polls a project's dev server until it can be framed, it fails,
+ *  or the declared patience runs out. `alive` lets the caller abandon the wait
+ *  when the reader has moved to another thread. */
+async function waitDevReady(
+  project: string,
+  seconds: number,
+  alive: () => boolean,
+): Promise<DevStatus | null> {
+  const deadline = Date.now() + Math.min(seconds + 5, 120) * 1000
+  while (Date.now() < deadline) {
+    if (!alive()) return null
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    if (!alive()) return null
+    try {
+      const st = await api.devStatus(project)
+      if (st.state === 'ready' && st.url) return st
+      if (st.state === 'failed' || st.state === 'stopped') return null
+    } catch {
+      // A transient read failure is not a verdict; keep waiting.
+    }
+  }
+  return null
 }
 
 /** The composer's "+" menu: attach context to the turn you are about to send.
@@ -3827,6 +3999,8 @@ function reportFallbackRefs(msgs: ChatMsg[]): Map<string, string> {
 function ChatBubble(props: {
   msg: ChatMsg
   onOpenTask(id: string): void
+  /** Open a finished task's page in the dock's browser panel. */
+  onPreviewTask?: (task: Task) => void
   /** How long the turn behind this reply took, once it is done. The local
    *  measurement comes from `turnMs` (it is the only one that exists between
    *  the reply landing and the transcript being re-fetched); `duration_ms`
@@ -3850,7 +4024,7 @@ function ChatBubble(props: {
    *  dispatch in the round is the best evidence for the process fold. */
   fallbackRef?: string
 }) {
-  const { msg, onOpenTask, elapsedMs, liveFrom = 0, plan = null, batch = [], tasksById, fallbackRef } = props
+  const { msg, onOpenTask, onPreviewTask, elapsedMs, liveFrom = 0, plan = null, batch = [], tasksById, fallbackRef } = props
 
   const report = msg.kind === 'error' ? null : splitReportHead(msg.text ?? '')
   const speaker = speakerOf(msg, report)
@@ -3962,9 +4136,20 @@ function ChatBubble(props: {
             // and, for a fanned-out round, the same for every sibling in the
             // bubble below it.
             <>
-              <DispatchBlock msg={msg} onOpenTask={onOpenTask} tasksById={tasksById} />
+              <DispatchBlock
+                msg={msg}
+                onOpenTask={onOpenTask}
+                onPreviewTask={onPreviewTask}
+                tasksById={tasksById}
+              />
               {batch.map((b) => (
-                <DispatchBlock key={b.k} msg={b} onOpenTask={onOpenTask} tasksById={tasksById} />
+                <DispatchBlock
+                  key={b.k}
+                  msg={b}
+                  onOpenTask={onOpenTask}
+                  onPreviewTask={onPreviewTask}
+                  tasksById={tasksById}
+                />
               ))}
             </>
           ) : (
@@ -4054,9 +4239,11 @@ function ChatBubble(props: {
 function DispatchBlock(props: {
   msg: ChatMsg
   onOpenTask(id: string): void
+  /** Open a finished task's page in the dock's browser panel. */
+  onPreviewTask?: (task: Task) => void
   tasksById?: Map<string, Task>
 }) {
-  const { msg, onOpenTask, tasksById } = props
+  const { msg, onOpenTask, onPreviewTask, tasksById } = props
   const [chainOpen, setChainOpen] = useState(false)
   // The thread's list is polled once per frame already; reading this block's
   // row from it keeps a five-card round from issuing five extra requests per
@@ -4102,7 +4289,9 @@ function DispatchBlock(props: {
               downloads, and the page view on the preview origin. It hangs off
               the card rather than the task page because the moment a user
               wants to look at what a task produced is the moment it reports. */}
-          {task?.plan_meta?.output_artifact && <ArtifactSection task={task} />}
+          {task?.plan_meta?.output_artifact && (
+            <ArtifactSection task={task} onPreview={onPreviewTask} />
+          )}
         </div>
       )}
     </div>
@@ -4115,6 +4304,8 @@ function DispatchBlock(props: {
 function ChatTurn(props: {
   msg: ChatMsg
   onOpenTask(id: string): void
+  /** Open a finished task's page in the dock's browser panel. */
+  onPreviewTask?: (task: Task) => void
   elapsedMs?: number
   liveFrom?: number
   batch?: ChatMsg[]
