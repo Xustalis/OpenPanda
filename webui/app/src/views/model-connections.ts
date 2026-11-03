@@ -10,7 +10,9 @@ import type { ModelEntry, ModelsResponse, ProviderInfo } from '../api/client'
 export interface Member {
   entry: ModelEntry
   /** False for the live model when it was configured outside the registry —
-   *  it can be edited and tested, but there is no row to remove. */
+   *  a single-model config an older build wrote. It is still a row: it can be
+   *  tested, edited, and deleted (both homes are addressable), only "copy"
+   *  stays with registry rows because a duplicate needs a row to duplicate. */
   registry: boolean
 }
 
@@ -30,12 +32,20 @@ export interface Conn {
   members: Member[]
 }
 
-export function refOf(e: ModelEntry): { model: string; base_url: string } {
-  return { model: e.model, base_url: e.base_url }
+/** The address of one row on the wire: the alias from the path, narrowed by the
+ *  three fields a legacy config can leave two rows sharing. `key` is the
+ *  fingerprint the list handed out — never the secret — and it is the only one
+ *  of the four that two accounts of a vendor do not share. */
+export function refOf(e: ModelEntry): { model: string; base_url: string; key?: string } {
+  return { model: e.model, base_url: e.base_url, key: e.key_fingerprint }
 }
 
+/** The row's identity in the DOM: React keys and per-row busy flags. Rows can
+ *  share an alias (a config written before names were kept unique), so the key
+ *  digest is part of it — without that, two tiles collided on one key and the
+ *  second one's spinner landed on the first. */
 export function keyOf(e: ModelEntry): string {
-  return `${e.alias}\u0000${e.model}\u0000${e.base_url}`
+  return `${e.alias}\u0000${e.model}\u0000${e.base_url}\u0000${e.key_fingerprint ?? ''}`
 }
 
 export function connIdOf(e: ModelEntry): string {

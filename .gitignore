@@ -211,3 +211,9 @@ zz_*_test.go
 /docs/reports/
 /docs/testing/
 /docs/author/
+
+# Logo design exports arrive as loose folders from the design tool; the working
+# copy lives outside the source tree, so none of these belong in history.
+/panda logo
+/brand/
+/.trae-html-share-packages/

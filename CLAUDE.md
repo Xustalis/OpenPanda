@@ -75,7 +75,8 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
 
 - `cmd/panda/` — the `panda` CLI. Bare invocation drops into the TUI
   REPL; subcommands cover `daemon`/`serve`, `ask`, `repl`/`chat`, `web`,
-  `voice`, `install`/`uninstall`, `update`/`upgrade` (self-updater:
+  `service` (`install`/`status`/`restart`/`uninstall` for the console's
+  user-level auto-start unit), `voice`, `install`/`uninstall`, `update`/`upgrade` (self-updater:
   `update check|apply`), `doctor`, `status`, `nodes`, `pair`, `queue`,
   `task` (incl. `priority`/`move`/`artifact`/`board`/`send`
   — queue vs `--inject` live notes to a task), `plan`

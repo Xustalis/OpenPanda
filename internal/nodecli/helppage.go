@@ -60,6 +60,7 @@ var helpPage = []HelpSection{
 		{"repl", "cli.help.d.repl"},
 		{"web", "cli.help.d.web"},
 		{"     --lan", "cli.help.d.web_lan"},
+		{"service install|status|restart|uninstall", "cli.help.d.service"},
 		{"voice [--once] [--mute]", "cli.help.d.voice"},
 		{"read <file> | <file.md>", "cli.help.d.read"},
 		{"hooks [list | test <event>]", "cli.help.d.hooks"},
@@ -157,6 +158,7 @@ var completionVerbs = map[string][]string{
 	"agents":   {"test", "install"},
 	"auth":     {"login", "logout", "status"},
 	"hooks":    {"list", "test"},
+	"service":  {"install", "status", "restart", "uninstall"},
 }
 
 // CompletionVerbs returns the completion vocabulary. The map is a copy: a

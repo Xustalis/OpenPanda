@@ -78,6 +78,13 @@ func checkMesh(cfg *config.Config) Check {
 
 	k := fmt.Sprintf("%d", cfg.Network.BootstrapEdges)
 	if rendezvous == 0 {
+		// A single node with no peers configured has nowhere to rendezvous
+		// by definition; that is the normal loopback install, not a failed
+		// self-check. Only a node that declared peers but reached none is a
+		// problem worth an exit code.
+		if len(cfg.Network.Peers) == 0 {
+			return pass("doctor.mesh.single", "k", k)
+		}
 		// Honest degradation, reported not hidden: direct and punch paths keep
 		// working, and the mesh is whatever the live connections already are.
 		return fail("doctor.mesh.none",

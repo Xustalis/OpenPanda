@@ -70,14 +70,16 @@ func applyRelease(ctx context.Context, m *Manager, s *stagedRelease) error {
 		m.opts.Logger.Warn("update: voice sidecar install failed", "err", err)
 	}
 
-	// The file swap alone leaves a service-managed `panda daemon` running its
-	// old image: a service restart is what makes "the update applied" true for
-	// the node kernel, not just for this console process. Apply gated on the
-	// shared store being idle, so the bounce cannot interrupt in-flight work.
-	// Best-effort — a hand-run daemon or an unregistered service is normal.
-	// A caller that must finish bookkeeping first (self-evolution) defers it.
+	// The file swap alone leaves a service-managed `panda daemon` and the
+	// console's own unit running the old image: a service restart is what makes
+	// "the update applied" true for the node kernel and for the panel, not just
+	// for this console process. Apply gated on the shared store being idle, so
+	// the bounce cannot interrupt in-flight work. Best-effort — a hand-run
+	// daemon or an unregistered service is normal. A caller that must finish
+	// bookkeeping first (self-evolution) defers it.
 	if !m.opts.SkipDaemonRestart {
 		install.RestartDaemon()
+		install.RestartWebService()
 	}
 
 	// Restart on a slight delay so the HTTP apply response can flush before
@@ -95,6 +97,7 @@ func applyRelease(ctx context.Context, m *Manager, s *stagedRelease) error {
 // image. A hand-run daemon falls through to the delayed self-exec.
 func RestartAfterSwap(logger *slog.Logger, oneShot bool) {
 	install.RestartDaemon()
+	install.RestartWebService()
 	if oneShot {
 		return
 	}

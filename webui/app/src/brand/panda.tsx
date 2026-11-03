@@ -2,22 +2,18 @@
 
 // The OpenPanda brand marks.
 //
-// Two of them, for two different jobs:
-//
-//   PandaMark      a flat geometric tile — a panda silhouette in negative
-//                  space on an accent field. It is a logo, not an
-//                  illustration: no blush, no sparkle, no smile, nothing that
-//                  reads as a sticker at 22px in a chat gutter.
-//   PandaAscii     a block-letter wordmark, drawn in monospace the way the
-//                  CLI draws its splash. This is the brand's loud voice —
-//                  the sign-in screen and the empty chat — and it says
-//                  "developer tool" in a way no round cartoon face can.
-//
-// Both are pure geometry/text: no raster assets, no external fonts, and they
-// take their colours from the theme tokens so light and dark both work.
+//   PandaMark      the North Star & Orbit symbol: a four-point polar star
+//                  inside an open orbit, on the same 64×64 grid as the
+//                  favicon and the shipped lockups. Pure geometry, no raster
+//                  asset, and it takes its colours from the theme tokens.
+//   PandaWordmark  symbol + name, for a header that wants both.
+//   PandaLockup    the official horizontal lockup for the gate screen. The
+//                  artwork is the designer's SVG; paper and night are two
+//                  files, swapped by the theme attribute rather than recoloured
+//                  in code.
 
-/** The tile mark: sidebar wordmark and message avatars. Square, so it can be
- *  dropped into any fixed-size gutter without wrapping its own aspect. */
+/** The symbol: orbit ring, polar star and two nodes. Square, so it drops into
+ *  any fixed-size gutter without wrapping its own aspect. */
 export function PandaMark({ size = 28 }: { size?: number }) {
   return (
     <svg
@@ -28,23 +24,26 @@ export function PandaMark({ size = 28 }: { size?: number }) {
       aria-hidden="true"
       class="panda-mark"
     >
-      {/* The field. `--brand` in both themes — this mark and the wordmark are
-          the only places colour is still allowed. The glyph rides on
-          --brand-ink, which is dark-on-light in light mode and light-on-dark
-          in dark mode, so contrast holds without a second set of tokens. */}
-      <rect width="64" height="64" rx="16" fill="var(--brand)" />
-      <g fill="var(--brand-ink)">
-        {/* ears, then a stadium head that swallows their lower halves */}
-        <circle cx="21" cy="23" r="7.5" />
-        <circle cx="43" cy="23" r="7.5" />
-        <rect x="13" y="26" width="38" height="27" rx="13.5" />
+      {/* The orbit is open on purpose — the gap is the adapter surface, not a
+          missing stroke. pathLength normalises the dash across renderers. */}
+      <g
+        fill="none"
+        stroke="var(--brand)"
+        stroke-width="2.3"
+        stroke-linecap="round"
+        pathLength="100"
+        stroke-dasharray="82 18"
+      >
+        <ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)" />
       </g>
-      {/* Eyes cut back out in the field colour — negative space instead of a
-          third tone keeps the mark readable when it is 22 pixels wide. */}
-      <g fill="var(--brand)">
-        <circle cx="25" cy="38" r="3.4" />
-        <circle cx="39" cy="38" r="3.4" />
-      </g>
+      {/* On paper the star is brand green; on night it is starlight cream.
+          --brand-star carries that second tone so one component serves both. */}
+      <path
+        d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z"
+        fill="var(--brand-star, var(--brand))"
+      />
+      <circle cx="56.1" cy="22.3" r="2.9" fill="var(--brand)" />
+      <circle cx="39.2" cy="20.3" r="1.9" fill="var(--brand)" />
     </svg>
   )
 }
@@ -61,40 +60,27 @@ export function PandaWordmark({ size = 26 }: { size?: number }) {
   )
 }
 
-// Block letters on a 5×5 grid, one space between glyphs. Written out rather
-// than generated: nine letters is less code than a font table, and it stays
-// legible in the diff when someone wants to tweak a stroke.
-const ASCII_OPEN = [
-  '█████ █████ █████ █   █',
-  '█   █ █   █ █     ██  █',
-  '█   █ █████ ████  █ █ █',
-  '█   █ █     █     █  ██',
-  '█████ █     █████ █   █',
-]
-
-const ASCII_PANDA = [
-  '█████ █████ █   █ ████  █████',
-  '█   █ █   █ ██  █ █   █ █   █',
-  '█████ █████ █ █ █ █   █ █████',
-  '█     █   █ █  ██ █   █ █   █',
-  '█     █   █ █   █ ████  █   █',
-]
-
-/** The loud wordmark: two stacked lines of block letters.
- *
- *  It is `aria-hidden` with a real text label beside it, because a screen
- *  reader given the raw block characters would announce a wall of noise. The
- *  `scale` prop is a font-size in px for one cell — the whole mark is sized
- *  off it, so callers pick a size rather than a layout. */
-export function PandaAscii({ scale = 9 }: { scale?: number }) {
+/** The official horizontal lockup (240×54), used where the brand gets to
+ *  speak in its own lettering. Both cuts stay in the DOM and CSS picks one:
+ *  flipping data-theme swaps the image without a re-render. */
+export function PandaLockup({ width = 240 }: { width?: number }) {
+  const height = Math.round((width * 54) / 240.15)
   return (
-    <div class="ascii-mark" role="img" aria-label="OpenPanda">
-      <pre aria-hidden="true" style={{ fontSize: `${scale}px` }}>
-        {ASCII_OPEN.join('\n')}
-      </pre>
-      <pre aria-hidden="true" class="ascii-mark-lo" style={{ fontSize: `${scale}px` }}>
-        {ASCII_PANDA.join('\n')}
-      </pre>
-    </div>
+    <span class="panda-lockup" style={{ width: `${width}px` }}>
+      <img
+        class="panda-lockup-paper"
+        src="/logo/lockup-horizontal-paper.svg"
+        width={width}
+        height={height}
+        alt="OpenPanda"
+      />
+      <img
+        class="panda-lockup-night"
+        src="/logo/lockup-horizontal-night.svg"
+        width={width}
+        height={height}
+        alt="OpenPanda"
+      />
+    </span>
   )
 }

@@ -130,6 +130,7 @@ func New(d Deps) http.Handler {
 		updater:            d.Updater,
 		sidecar:            d.Sidecar,
 		preview:            d.Preview,
+		browseToken:        NewToken(),
 		activeAsks:         make(map[string]sessionOperation),
 		approvalOperations: make(map[string]approvalOperation),
 		serviceCtx:         context.Background(),
@@ -240,6 +241,14 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/fs/image", h.getImage)
 	mux.HandleFunc("GET /api/fs/files", h.listFiles)
 	mux.HandleFunc("POST /api/fs/reveal", h.revealPath)
+	// The console's browser pane: one page fetched server-side and framed under
+	// a sandbox, so the pane can show a URL a browser would refuse to frame.
+	// Two faces of one fetcher: the Bearer route for anything that can send a
+	// header (curl, a test), and the token-in-path route an iframe needs —
+	// same origin, so the console's own `frame-src 'self'` already admits it.
+	mux.HandleFunc("GET /api/browse", h.browsePage)
+	mux.HandleFunc("GET /api/browse/origin", h.browseOrigin)
+	mux.HandleFunc("GET /browse/{token}", h.browseFramed)
 	mux.HandleFunc("GET /api/version", h.getVersion)
 	mux.HandleFunc("GET /api/metrics", h.listMetrics)
 	mux.HandleFunc("GET /api/audit", h.verifyAudit)
@@ -332,11 +341,13 @@ func New(d Deps) http.Handler {
 		// route is registered wherever sessions are, not only when isolation
 		// is available.
 		mux.HandleFunc("POST /api/sessions/{id}/upload", h.uploadSessionFile)
-		if d.Worktrees != nil {
-			mux.HandleFunc("GET /api/sessions/{id}/diff", h.sessionDiff)
-			mux.HandleFunc("POST /api/sessions/{id}/merge", h.sessionMerge)
-			mux.HandleFunc("POST /api/sessions/{id}/revert", h.sessionRevert)
-		}
+		// Worktree routes are registered whenever sessions exist: the
+		// repository is resolved per session (its project's work dir may be
+		// one even when the node's storage.work_path is not), and a session
+		// with no worktree answers a clear 400.
+		mux.HandleFunc("GET /api/sessions/{id}/diff", h.sessionDiff)
+		mux.HandleFunc("POST /api/sessions/{id}/merge", h.sessionMerge)
+		mux.HandleFunc("POST /api/sessions/{id}/revert", h.sessionRevert)
 	}
 	if d.Push != nil {
 		mux.HandleFunc("GET /api/push/key", h.pushKey)
@@ -425,7 +436,11 @@ func (h *handler) securityHeaders(next http.Handler) http.Handler {
 		if h.preview != nil {
 			if origin := h.preview.OriginFor(r.Host); origin != "" {
 				imgSrc += " " + origin
-				frameSrc = "; frame-src " + origin
+				// 'self' is the console's own browser pane (/api/browse). Without
+				// it, configuring an artifact pool would silently make the dock's
+				// browser tab unframeable — the CSP frame-src directive replaces
+				// default-src, it does not add to it.
+				frameSrc = "; frame-src 'self' " + origin
 			}
 		}
 		csp := "default-src 'self'; script-src 'self'; " +
@@ -618,6 +633,12 @@ type handler struct {
 	// preview is the artifact preview origin; nil leaves the preview endpoints
 	// answering 503.
 	preview *Preview
+	// browseToken is the capability in the browser pane's frame URL. An iframe
+	// cannot send the Bearer header, so the pane's document has to carry its
+	// credential in the path — and it must not be the console's own token: a
+	// frame's URL is visible to the framed page (location.href) and to every
+	// devtools pane. Scoped to one verb: fetch a page, with the address gate.
+	browseToken string
 
 	// cfgMu guards h.cfg only when no engine exists to borrow a lock from —
 	// degraded static mode still serves concurrent HTTP handlers. When the

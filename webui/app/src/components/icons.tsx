@@ -47,6 +47,7 @@ export type IconName =
   | 'kanban'
   | 'layout'
   | 'lightbulb'
+  | 'globe'
   | 'list-checks'
   | 'menu'
   | 'message'
@@ -329,6 +330,18 @@ const paths: Record<IconName, JSX.Element> = {
       <circle cx="12" cy="12" r="1" />
       <circle cx="19" cy="12" r="1" />
       <circle cx="5" cy="12" r="1" />
+    </>
+  ),
+  // The dock's browser tab. Deliberately NOT `network`: that glyph is a tree of
+  // boxes on stems, and the pane head already spends two near-identical stemmed
+  // marks on the node pick and the orchestration card — three in one row read as
+  // the same button repeated. A globe says "a page from the web" and shares no
+  // silhouette with anything else in the head.
+  globe: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3.6 9h16.8M3.6 15h16.8" />
+      <ellipse cx="12" cy="12" rx="4" ry="9" />
     </>
   ),
   network: (
