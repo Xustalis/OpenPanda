@@ -35,6 +35,7 @@ import { confirmDialog } from '../components/confirm'
 import { autoGrow, editorClear, editorPlain, editorTextOf, insertTextAtCaret, range_or_append, useBrParagraphSeparator } from './sessions'
 import { DeviceGlyph, type Form as FormKind } from '../components/device-glyph'
 import { WorkspacePanels, panelAgents, tileKey } from './workspace-panels'
+import { clampZoom } from './workspace-zoom'
 import { agentLogo } from '../format/agent-logo'
 import { agentInitial } from '../format/agent-role'
 import {
@@ -362,6 +363,31 @@ const HIDDEN_KEY = 'openpanda.workspace.hidden'
  *  rather than a fresh bench the reader has to set up again. */
 const BENCH_KEY = 'openpanda.workspace.bench'
 
+/** How far the drawing is scaled. A view preference like the arrangement it
+ *  sits on: the same reader wants the same magnification next time they open
+ *  the page, and nothing about it belongs on a node. */
+const ZOOM_KEY = 'openpanda.workspace.zoom'
+
+function readZoom(): number {
+  try {
+    const raw = localStorage.getItem(ZOOM_KEY)
+    if (raw === null) return 1
+    const n = Number(raw)
+    return Number.isFinite(n) ? clampZoom(n) : 1
+  } catch {
+    // A blocked localStorage costs the magnification, not the page.
+    return 1
+  }
+}
+
+function writeZoom(z: number): void {
+  try {
+    localStorage.setItem(ZOOM_KEY, String(z))
+  } catch {
+    /* preference not saved — the zoom still holds for this visit */
+  }
+}
+
 interface BenchPick {
   dir: string
   /** Session id of the picked thread; '' means "mint a new one". */
@@ -464,6 +490,22 @@ export function WorkspaceView() {
   // Bumped by the 整理布局 control; WorkspacePanels throws the saved
   // arrangement away when it changes.
   const [layoutReset, setLayoutReset] = useState(0)
+  /** The canvas scale. A wheel over the drawing sets it (the panels own that
+   *  gesture, because they own the surface); the header shows the number and
+   *  is the way back to 100%. */
+  const [zoom, setZoomState] = useState(readZoom)
+  const setZoom = (z: number) => {
+    const next = clampZoom(z)
+    setZoomState(next)
+    writeZoom(next)
+  }
+  /** 整理布局 is the way home from any arrangement, so it puts the
+   *  magnification back too: a card parked at 40% is just as lost as one
+   *  parked off the surface. */
+  const tidyLayout = () => {
+    setLayoutReset((v) => v + 1)
+    setZoom(1)
+  }
 
   // Heartbeats land on the directory every ~15s; poll at the same cadence so
   // a device that goes quiet fades without a manual reload. SSE covers the
@@ -828,6 +870,22 @@ export function WorkspaceView() {
           })}
         </span>
         <div class="ws-head-tools">
+          {/* The magnification, while it is not 100%. It exists so the wheel
+              has an answer on screen — a canvas that silently changes size
+              and never says by how much is a canvas you cannot trust — and it
+              is the way back that costs one click. At 100% it says nothing,
+              like every other control that only matters when it is on. */}
+          {zoom !== 1 && (
+            <button
+              type="button"
+              class="ws-zoom"
+              title={t('workspace.zoom.reset')}
+              aria-label={t('workspace.zoom.reset')}
+              onClick={() => setZoom(1)}
+            >
+              <span class="mono">{Math.round(zoom * 100)}%</span>
+            </button>
+          )}
           {/* Re-form the tidy row. A panel can be dragged anywhere on the
               surface, and a saved arrangement should never be a one-way door:
               this is the way back that costs one click. */}
@@ -836,7 +894,7 @@ export function WorkspaceView() {
             class="icon-btn ws-tidy"
             title={t('workspace.tidy')}
             aria-label={t('workspace.tidy')}
-            onClick={() => setLayoutReset((v) => v + 1)}
+            onClick={tidyLayout}
           >
             <Icon name="layout" size={15} />
           </button>
@@ -1065,6 +1123,8 @@ export function WorkspaceView() {
               runningLabel={t('workspace.tile.running')}
               noneLabel={t('workspace.detail.agentsEmpty')}
               resetSignal={layoutReset}
+              zoom={zoom}
+              onZoom={setZoom}
             />
           </div>
           {/* The bar floats over the drawing instead of taking a row: picking

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -116,8 +117,11 @@ func TestEnsurePanelTokenPersists(t *testing.T) {
 }
 
 func TestDedupePath(t *testing.T) {
-	got := dedupePath("/a:/b:/a::/c")
-	if got != "/a:/b:/c" {
-		t.Fatalf("dedupePath = %q, want /a:/b:/c", got)
+	// The list separator is platform-owned: a literal ":" is one path on
+	// Windows, so the test would assert the un-deduped string there.
+	sep := string(os.PathListSeparator)
+	got := dedupePath("/a" + sep + "/b" + sep + "/a" + sep + sep + "/c")
+	if want := "/a" + sep + "/b" + sep + "/c"; got != want {
+		t.Fatalf("dedupePath = %q, want %q", got, want)
 	}
 }

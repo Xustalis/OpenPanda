@@ -222,6 +222,11 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("DELETE /api/models/{alias}", h.removeModel)
 	mux.HandleFunc("POST /api/models/fetch", h.fetchModels)
 	mux.HandleFunc("POST /api/models/test", h.testModel)
+	// "What can this machine already serve" — the four local collectors
+	// (Codex, Claude Code, OpenCode, loopback inference) and the batch write
+	// that turns ticked candidates into rows.
+	mux.HandleFunc("GET /api/models/discover", h.discoverModels)
+	mux.HandleFunc("POST /api/models/import", h.importModels)
 	// Dictation: the composer records in the browser and this relays the clip
 	// to an OpenAI-compatible /audio/transcriptions endpoint (see voice.go).
 	mux.HandleFunc("POST /api/voice/transcribe", h.transcribeAudio)

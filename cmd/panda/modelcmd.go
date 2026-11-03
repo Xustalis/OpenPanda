@@ -32,6 +32,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/localmodels"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 )
 
@@ -52,6 +53,8 @@ func (r *repl) cmdModel(arg string) {
 		r.modelFetch(fields[1:])
 	case "test":
 		r.modelTest(fields[1:])
+	case "discover":
+		r.modelDiscover(fields[1:])
 	case "help", "-h", "--help":
 		r.outln(i18n.T(r.loc, "repl.model.usage"))
 	default:
@@ -1236,9 +1239,213 @@ func runModel(args []string) {
 		r.modelFetch(rest[1:])
 	case "test":
 		r.modelTest(rest[1:])
+	case "discover":
+		r.modelDiscover(rest[1:])
 	case "help", "-h", "--help":
 		fmt.Println(i18n.T(loc, "repl.model.usage"))
 	default:
 		r.modelSwitch(rest[0])
 	}
+}
+
+// modelDiscover implements `panda model discover [--json] [--import] [--all]`.
+//
+// The same collection the console's discover sheet runs, exposed as a verb so
+// it can be scripted and so the panel has a non-browser way to answer "what can
+// this machine serve". Without --import it only reports; with it, every
+// suggested candidate that is not already registered becomes a row.
+func (r *repl) modelDiscover(args []string) {
+	var jsonOut, doImport, all bool
+	for _, a := range args {
+		switch a {
+		case "--json":
+			jsonOut = true
+		case "--import":
+			doImport = true
+		case "--all":
+			all = true
+		default:
+			// This method runs inside the REPL/TUI command loop too: an
+			// os.Exit here would take the whole session down over a typo.
+			r.errf("usage: panda model discover [--json] [--import] [--all]\n")
+			return
+		}
+	}
+
+	// --json is a *global* flag: extractGlobalFlags eats it before the
+	// subcommand ever sees the argv, so the switch above only catches it when
+	// someone passes it twice. Honor the global too.
+	jsonOut = jsonOut || jsonOutput
+
+	ctx, cancel := context.WithTimeout(r.commandContext(), 90*time.Second)
+	defer cancel()
+	sources := localmodels.Discover(ctx, localmodels.Options{})
+
+	if jsonOut {
+		// `existing` is the panel's answer, and the CLI has the same config in
+		// hand: leaving it out made `discover --json` claim nothing was
+		// registered while the registry held four of these rows, which is a
+		// trap for any script that reads this output.
+		markExisting(sources, r.cfg)
+		enc := json.NewEncoder(r.commandOutput())
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(map[string]any{"sources": sources})
+	}
+
+	if !doImport {
+		if !jsonOut {
+			r.printDiscovery(sources)
+		}
+		return
+	}
+
+	// What is already registered, keyed the way a duplicate would collide: the
+	// same endpoint serving the same model id is the same row, whatever alias
+	// it was saved under.
+	existing := make(map[string]bool, len(r.cfg.Models))
+	taken := make(map[string]bool, len(r.cfg.Models)+1)
+	for _, m := range r.cfg.Models {
+		existing[discoverKey(m.NormalizedAPIType(), m.BaseURL, m.Model)] = true
+		taken[m.Alias()] = true
+	}
+	if r.cfg.Model.Model != "" {
+		taken[r.cfg.Model.Alias()] = true
+	}
+
+	added := make([]config.ModelConfig, 0, 8)
+	for _, s := range sources {
+		for _, c := range s.Candidates {
+			if !c.Importable || (!all && !c.Suggested) {
+				continue
+			}
+			if existing[discoverKey(c.APIType, c.BaseURL, c.Model)] {
+				r.errf("skip %s: already registered\n", c.Model)
+				continue
+			}
+			mc, err := c.Row(localmodels.Options{})
+			if err != nil {
+				r.errf("skip %s: %v\n", c.Model, err)
+				continue
+			}
+			if _, err := entry.NewClient(mc); err != nil {
+				r.errf("skip %s: %v\n", c.Model, err)
+				continue
+			}
+			// Same check the console's import runs: a loopback row is asked once
+			// whether it serves the model, because a config that names a model is
+			// not proof the endpoint has it.
+			if err := localmodels.Verify(ctx, mc, 12*time.Second); err != nil {
+				r.errf("skip %s: %v\n", c.Model, err)
+				continue
+			}
+			mc.Name = freeDiscoverAlias(taken, mc.Model)
+			taken[mc.Name] = true
+			existing[discoverKey(mc.NormalizedAPIType(), mc.BaseURL, mc.Model)] = true
+			added = append(added, mc)
+		}
+	}
+	if len(added) == 0 {
+		r.outln("nothing new to import")
+		return
+	}
+	models := append(slices.Clone(r.cfg.Models), added...)
+	// configWritePath, not r.configPath: without --config the flag is empty and
+	// the path the user actually edits is the user-level one `panda web` reads.
+	// Writing to "" here failed the whole import on a machine whose config was
+	// never named on the command line.
+	//
+	// The write goes through the same mutation path every other `/model`
+	// verb uses: taking the file lock and the in-memory config together is
+	// what keeps a TUI's next save from rewriting the registry without the
+	// rows imported here.
+	if err := r.mutateConfigErr(func(c *config.Config) error {
+		c.Models = models
+		return config.UpdateModelsSection(configWritePath(r.configPath), slices.Clone(c.Models))
+	}); err != nil {
+		r.storeErr(err)
+		return
+	}
+	r.outf("imported %d model(s)\n", len(added))
+	for _, m := range added {
+		r.outf("  %-28s %s\n", m.Alias(), m.BaseURL)
+	}
+}
+
+// printDiscovery renders the report for a terminal: one block per source, the
+// suggested rows marked with "+" so `--import` has no surprises.
+func (r *repl) printDiscovery(sources []localmodels.Source) {
+	for _, s := range sources {
+		r.outf("%s [%s] %s\n", s.ID, s.Status, s.Detail)
+		for _, c := range s.Candidates {
+			mark := " "
+			switch {
+			case !c.Importable:
+				mark = "-"
+			case c.Suggested:
+				mark = "+"
+			}
+			where := c.BaseURL
+			if where == "" {
+				// No endpoint to print, so the column carries the reason the
+				// row cannot be imported. "catalogue" alone reads as "a model
+				// the vendor publishes", which is not what a login-only row is.
+				switch c.Note {
+				case "cli-login":
+					where = "(CLI login only)"
+				case "no-endpoint":
+					where = "(no endpoint)"
+				default:
+					where = "(catalogue)"
+				}
+			}
+			r.outf("  %s %-30s %-10s %s\n", mark, c.Model, c.Provider, where)
+		}
+	}
+}
+
+// markExisting flags the candidates the registry already holds, using the same
+// identity the import dedupe uses.
+func markExisting(sources []localmodels.Source, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	known := make(map[string]bool, len(cfg.Models)+1)
+	note := func(m config.ModelConfig) {
+		if m.Model != "" {
+			known[discoverKey(m.NormalizedAPIType(), m.BaseURL, m.Model)] = true
+		}
+	}
+	for _, m := range cfg.Models {
+		note(m)
+	}
+	note(cfg.Model)
+	for si := range sources {
+		for ci := range sources[si].Candidates {
+			cand := &sources[si].Candidates[ci]
+			cand.Existing = known[discoverKey(cand.APIType, cand.BaseURL, cand.Model)]
+		}
+	}
+}
+
+// discoverKey is the identity of a row: the triple entry.Client keys on, so a
+// second import of the same endpoint+dialect+model is recognised as the same
+// row instead of being added again under a -2 alias.
+func discoverKey(apiType, base, model string) string {
+	return strings.ToLower(apiType) + "\x00" +
+		strings.ToLower(strings.TrimRight(strings.TrimSpace(base), "/")) + "\x00" + model
+}
+
+// freeDiscoverAlias keeps a model id as the alias, suffixing on collision the
+// way the panel's add does.
+func freeDiscoverAlias(taken map[string]bool, alias string) string {
+	if !taken[alias] {
+		return alias
+	}
+	for n := 2; n < 1000; n++ {
+		candidate := fmt.Sprintf("%s-%d", alias, n)
+		if !taken[candidate] {
+			return candidate
+		}
+	}
+	return alias + "-copy"
 }

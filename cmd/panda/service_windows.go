@@ -9,6 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/install"
 )
 
 // serviceInstall writes the wrapper .cmd and registers a logon task. A task,
@@ -67,6 +70,7 @@ func serviceStatus(spec webServiceSpec) int {
 		fmt.Printf("url   %s\n", consoleURL(token))
 	}
 	fmt.Printf("log   %s\n", spec.LogPath)
+	printNodeRow()
 	return 0
 }
 
@@ -129,4 +133,12 @@ func serviceUninstall(spec webServiceSpec) int {
 	_ = os.Remove(serviceUnitPath(spec))
 	fmt.Printf("removed task %s\n", webServiceTaskName)
 	return 0
+}
+
+// daemonServiceRunning reports whether the node daemon's logon task is active,
+// so `panda service status` can say whether the console owns or borrows the
+// node row.
+func daemonServiceRunning() bool {
+	out, err := exec.Command("schtasks.exe", "/Query", "/TN", install.NodeTaskName, "/FO", "LIST").Output()
+	return err == nil && strings.Contains(string(out), "Running")
 }

@@ -64,6 +64,7 @@ func wizardAddDeepSeek(t *testing.T, m tuiModel, key string) tuiModel {
 func TestWizardAddsASecondAccountOfTheSameModel(t *testing.T) {
 	cfg := isolatedUIConfig(t)
 	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
+	closeWizardEngine(t, r)
 	m := newTUIModel(r)
 	m.width, m.height = 100, 30
 
@@ -95,6 +96,7 @@ func TestPanelPaintsEveryRowEvenUnderOneName(t *testing.T) {
 		{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-second"},
 	}
 	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
+	closeWizardEngine(t, r)
 	m := newTUIModel(r)
 	m.width, m.height = 100, 30
 
@@ -129,6 +131,7 @@ func TestPanelDeleteDropsOnlyTheAddressedRow(t *testing.T) {
 		{Name: "deepseek-chat-2", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-second"},
 	}
 	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
+	closeWizardEngine(t, r)
 	m := newTUIModel(r)
 	m.width, m.height = 100, 30
 
@@ -157,6 +160,7 @@ func TestPanelEditRewritesTheAddressedRow(t *testing.T) {
 		{Name: "deepseek-chat-2", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-second"},
 	}
 	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
+	closeWizardEngine(t, r)
 	m := newTUIModel(r)
 	m.width, m.height = 100, 30
 
@@ -297,6 +301,7 @@ func TestPanelEditOfASpareAccountKeepsTheCurrentOne(t *testing.T) {
 	}
 	cfg.Model = cfg.Models[0]
 	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
+	closeWizardEngine(t, r)
 	m := newTUIModel(r)
 	m.width, m.height = 100, 30
 
@@ -366,6 +371,7 @@ func TestModelSwitchRefusesToGuessBetweenTwoAccounts(t *testing.T) {
 func TestWizardAddOfASpareAccountKeepsTheCurrentOne(t *testing.T) {
 	cfg := isolatedUIConfig(t)
 	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
+	closeWizardEngine(t, r)
 	m := newTUIModel(r)
 	m.width, m.height = 100, 30
 
