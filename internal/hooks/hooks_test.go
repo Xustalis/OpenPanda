@@ -190,3 +190,33 @@ func TestFireIgnoresUnboundEvents(t *testing.T) {
 	}
 	t.Error("the bound hook never ran")
 }
+
+// TestExpandSourcePlaceholders pins the reply-hook vocabulary: an operator can
+// answer back to the thread a request came from without splitting
+// PANDA_HOOK_SOURCE_THREAD in the shell.
+func TestExpandSourcePlaceholders(t *testing.T) {
+	got := expandFor("linux", `gh issue comment {source_number} --repo {source_repo} --body {state}`)
+	want := `gh issue comment "${PANDA_HOOK_SOURCE_NUMBER}" --repo "${PANDA_HOOK_SOURCE_REPO}" --body "${PANDA_HOOK_STATE}"`
+	if got != want {
+		t.Fatalf("Expand = %q, want %q", got, want)
+	}
+}
+
+func TestHookEnvCarriesSourceFacts(t *testing.T) {
+	env := strings.Join(hookEnv(Event{
+		Name: EventDone, TaskID: "t", State: "done",
+		Source: "github", SourceRepo: "acme/widgets", SourceNumber: "42",
+		SourceURL: "https://github.com/acme/widgets/issues/42", SourceThread: "acme/widgets#42",
+	}), "\n")
+	for _, want := range []string{
+		"PANDA_HOOK_SOURCE=github",
+		"PANDA_HOOK_SOURCE_REPO=acme/widgets",
+		"PANDA_HOOK_SOURCE_NUMBER=42",
+		"PANDA_HOOK_SOURCE_URL=https://github.com/acme/widgets/issues/42",
+		"PANDA_HOOK_SOURCE_THREAD=acme/widgets#42",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("env missing %q:\n%s", want, env)
+		}
+	}
+}
