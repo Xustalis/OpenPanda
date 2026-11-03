@@ -152,6 +152,38 @@ type Session struct {
 	// autonomy the user granted it. Empty means "never picked", which reads
 	// as auto.
 	PermissionMode string `json:"permission_mode,omitempty"`
+	// SideTurns is the conversation beside this thread: its own transcript,
+	// which may read, write and dispatch like the thread but never appends to
+	// Turns and never rewrites the thread's summary. It lives on the session
+	// so a side question outlives the pane that asked it — a reload, a second
+	// device, or a panel restart still finds the conversation and the answer.
+	SideTurns []SideTurn `json:"side_turns,omitempty"`
+	// SideOperation is the latest durable side ask, tracked separately from
+	// Operation so a side question never looks like the thread's own turn.
+	SideOperation *Operation `json:"side_operation,omitempty"`
+}
+
+// SideTurn is one message in a session's side conversation. It carries the
+// display-only trace (the tools behind an answer) and the billed tokens, so a
+// reloaded pane shows the same evidence the live stream did. It is never
+// replayed as a thread turn.
+type SideTurn struct {
+	Role string `json:"role"` // "user" | "assistant"
+	Text string `json:"text"`
+	// Tools are the tool calls behind an assistant answer, in order, each as
+	// "name subject" (workspace_read side.go). Display-only.
+	Tools []string `json:"tools,omitempty"`
+	// Tokens is the ask's billed total for this answer.
+	Tokens int64 `json:"tokens,omitempty"`
+	// TaskID is the task this answer dispatched (the last one for a batch), so
+	// a reloaded pane still offers the way into the work.
+	TaskID string `json:"task_id,omitempty"`
+	// DurationMS is how long the answer took.
+	DurationMS int64 `json:"duration_ms,omitempty"`
+	// Error marks a failed answer; the pane renders it as the error note it
+	// was, instead of passing an error string off as prose.
+	Error string `json:"error,omitempty"`
+	TS    int64  `json:"ts,omitempty"`
 }
 
 // Operation is the latest durable ask operation for a session. It lets a
@@ -598,6 +630,176 @@ func (s *Store) StartOperation(id string, op Operation) error {
 	sess.Operation = &op
 	sess.UpdatedAt = op.UpdatedAt
 	return s.save(sess)
+}
+
+// maxSideTurns bounds a stored side conversation. A side thread is a thinking
+// space, not an archive: the newest 200 messages keep the working context
+// without letting one pane grow the session file without bound.
+const maxSideTurns = 200
+
+// AppendSideTurn appends one message to the session's side conversation. It
+// deliberately leaves UpdatedAt alone: side chatter is not thread activity,
+// and letting it reorder the console's rail would make the sidebar jump every
+// time the reader asks a side question.
+func (s *Store) AppendSideTurn(id string, turn SideTurn) (*Session, error) {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return nil, fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if turn.TS == 0 {
+		turn.TS = time.Now().Unix()
+	}
+	sess.SideTurns = append(sess.SideTurns, turn)
+	if excess := len(sess.SideTurns) - maxSideTurns; excess > 0 {
+		// Drop whole exchanges, so the oldest message on screen is never a
+		// question without its answer.
+		if excess%2 == 1 {
+			excess++
+		}
+		sess.SideTurns = append([]SideTurn(nil), sess.SideTurns[excess:]...)
+	}
+	if err := s.save(sess); err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
+// StartSideOperation installs a new side operation generation. Like a side
+// turn, it does not touch the session's UpdatedAt: the thread's recency is its
+// own conversation, not the questions asked beside it.
+func (s *Store) StartSideOperation(id string, op Operation) error {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	op.UpdatedAt = time.Now()
+	sess.SideOperation = &op
+	return s.save(sess)
+}
+
+// SetSideOperation updates the side operation only while the stored side
+// operation still carries op.ID. Unlike SetOperation, a cleared record (the
+// pane's `+`) is not recreated: a late finalizer from a cancelled ask must not
+// resurrect a conversation the user just discarded.
+func (s *Store) SetSideOperation(id string, op Operation) (bool, error) {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return false, fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return false, err
+	}
+	if sess.SideOperation == nil || sess.SideOperation.ID != op.ID {
+		return false, nil
+	}
+	op.UpdatedAt = time.Now()
+	sess.SideOperation = &op
+	if err := s.save(sess); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// FinishSideOperation files an answer and settles the operation in one locked
+// write. A reader must never observe "done" before the answer is on disk, and
+// an answer from an ask the user has already discarded (the pane's `+`, a newer
+// question) must not land in the new transcript.
+func (s *Store) FinishSideOperation(id, operationID string, turn SideTurn, op Operation) (bool, error) {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return false, fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return false, err
+	}
+	if sess.SideOperation == nil || sess.SideOperation.ID != operationID {
+		return false, nil
+	}
+	if turn.TS == 0 {
+		turn.TS = time.Now().Unix()
+	}
+	sess.SideTurns = append(sess.SideTurns, turn)
+	if excess := len(sess.SideTurns) - maxSideTurns; excess > 0 {
+		if excess%2 == 1 {
+			excess++
+		}
+		sess.SideTurns = append([]SideTurn(nil), sess.SideTurns[excess:]...)
+	}
+	op.UpdatedAt = time.Now()
+	sess.SideOperation = &op
+	if err := s.save(sess); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ResetSide clears the side conversation and its operation — the pane's `+`.
+func (s *Store) ResetSide(id string) (*Session, error) {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return nil, fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	sess.SideTurns = nil
+	sess.SideOperation = nil
+	if err := s.save(sess); err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
+// TrimSideTurns returns the tail of a side conversation that fits budget
+// characters, dropping whole exchanges and always keeping the newest one. The
+// stored conversation keeps every message; this only bounds what is replayed
+// to the model on the next question.
+func TrimSideTurns(turns []SideTurn, budget int) []SideTurn {
+	if budget <= 0 || len(turns) == 0 {
+		return append([]SideTurn(nil), turns...)
+	}
+	total := 0
+	for _, t := range turns {
+		total += len(t.Text)
+	}
+	kept := turns
+	for total > budget && len(kept) > 2 {
+		drop := 2
+		if len(kept)%2 == 1 {
+			drop = 1
+		}
+		for i := 0; i < drop && i < len(kept); i++ {
+			total -= len(kept[i].Text)
+		}
+		kept = kept[drop:]
+	}
+	return append([]SideTurn(nil), kept...)
 }
 
 // SetWorktree records the worktree path/branch on a session.

@@ -79,7 +79,7 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 ### 2. 🤖 Universelle Agenten-Orchestrierung & Ausfallsicherung
 - **Vorkonfigurierte Adapter**: Zehn dedizierte Adapter (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw und ZCode). Eine konfigurierbare generische Brücke bindet jede weitere headless CLI ein.
 - **Multi-Modell-Registry & transparentes Failover**: `panda model add|switch|test` verwaltet mehrere Provider pro Knoten hinter einem Health-Breaker; bei aufgebrauchten Kontingenten oder ungültigen Schlüsseln (401/403) wird automatisch ein Ausweichmodell injiziert und die Aufgabe läuft weiter.
-- **Multi-Harness-Läufe**: `panda ask --agents a,b --mode parallel` verteilt eine Anweisung als Plan an mehrere Agenten und sammelt die Urteile ein.
+- **Multi-Harness-Läufe**: `panda task add --agents a,b --mode parallel` verteilt eine Anweisung als Plan an mehrere Agenten und sammelt die Urteile ein.
 - **Vollständige Transparenz**: Verfolge Bash-Befehle, Dateiänderungen und Werkzeugaufrufe live im Terminal oder Browser.
 - **Geschwister-Nachrichtenbrett** (experimentell): Aufgaben unter demselben Plan oder Elternteil tauschen kurze Notizen (eine Statuszeile, ein Befund, ein Verweis auf erzeugte Dateien) über ein begrenztes Slot-Board aus; jeder Agent liest beim nächsten Durchlauf, was seine Peers posteten, statt auf deren Ergebnisse zu blockieren — ein Budget pro Episode verhindert, dass der Kanal zum Geplauder wird.
 

@@ -226,6 +226,7 @@ export function useTraceForTask(
 export function useTaskEvents(
   taskId: string | undefined,
   changeKey: number,
+  tail?: number,
 ): { events: TaskEvent[]; error: string | null } {
   const [events, setEvents] = useState<TaskEvent[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -242,7 +243,7 @@ export function useTaskEvents(
     let alive = true
     const after = cursor.current
     api
-      .logs(taskId, after || undefined)
+      .logs(taskId, after || undefined, after ? undefined : tail)
       .then((d) => {
         if (!alive) return
         setError(null)
@@ -259,7 +260,7 @@ export function useTaskEvents(
     return () => {
       alive = false
     }
-  }, [taskId, changeKey])
+  }, [taskId, changeKey, tail])
 
   return { events, error }
 }

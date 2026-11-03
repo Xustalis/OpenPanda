@@ -50,6 +50,7 @@ import { Markdown } from '../md/render'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 import { MessageCopyButton } from '../components/copy'
+import { ClarifyCard } from '../components/clarify-card'
 import { buildCommands, type Command } from '../components/palette'
 import { rank } from '../components/fuzzy'
 import { mergeTailTurn, patchStreaming, slashQuery } from '../components/chatstate'
@@ -74,6 +75,7 @@ import {
   ChatAvatar,
   PlanCast,
   TaskCast,
+  TaskProcess,
   TaskProgress,
   usePlanBrief,
   useTaskBrief,
@@ -2434,6 +2436,7 @@ export function SessionsView({
   // several dispatch turns was issuing that many extra requests per frame,
   // all competing with the event stream for the browser's six connections.
   const tasksById = new Map((sessionTasks ?? []).map((t) => [t.id, t]))
+  const reportRefs = reportFallbackRefs(msgs)
   // What the dock's task tab counts on its badge: the rows that still want
   // something — running, waiting on a human, or queued. Terminal rows are the
   // board's history, not an inbox item.
@@ -2721,6 +2724,7 @@ export function SessionsView({
                 msg={m}
                 batch={batchOf.get(m.k)}
                 tasksById={tasksById}
+                fallbackRef={reportRefs.get(m.k)}
                 /* The local measurement wins while it is there (it is the only
                    one that exists between the reply landing and the transcript
                    being re-fetched); the panel's `duration_ms` is what survives
@@ -3353,6 +3357,7 @@ export function SessionsView({
               sessionId={session?.id ?? null}
               resetSignal={dockEpoch}
               onInsert={composerInsert}
+              onOpenTask={openTaskInPlace}
             />
           </div>
         )}
@@ -3783,6 +3788,29 @@ function MetaRow({ msg }: { msg: ChatMsg }) {
   )
 }
 
+/** Old finalizer turns predate the ref field. A round with exactly one task
+ *  dispatch is unambiguous: the report below it is that task's report, so the
+ *  process fold can still open. A fan-out has several candidates and gets no
+ *  guess — the wrong process under a summary is worse than none. */
+function reportFallbackRefs(msgs: ChatMsg[]): Map<string, string> {
+  const out = new Map<string, string>()
+  let refs: string[] = []
+  for (const m of msgs) {
+    if (m.role === 'user') {
+      refs = []
+      continue
+    }
+    if (m.kind === 'task' && m.ref) {
+      if (!refs.includes(m.ref)) refs.push(m.ref)
+      continue
+    }
+    if (m.kind === 'answer' && !m.ref && refs.length === 1 && splitReportHead(m.text ?? '')) {
+      out.set(m.k, refs[0]!)
+    }
+  }
+  return out
+}
+
 /** One row of the transcript, drawn the way a group chat draws it.
  *
  *  A thread has more than one voice in it: you ask, the panda works out how to
@@ -3817,8 +3845,12 @@ function ChatBubble(props: {
   /** The thread's task rows, keyed by id — each `DispatchBlock` reads its own
    *  from here instead of fetching a copy on every change frame. */
   tasksById?: Map<string, Task>
+  /** The task a legacy report turn belongs to. Reports written before the
+   *  finalizer stamped `ref` have no id of their own; the closest single
+   *  dispatch in the round is the best evidence for the process fold. */
+  fallbackRef?: string
 }) {
-  const { msg, onOpenTask, elapsedMs, liveFrom = 0, plan = null, batch = [], tasksById } = props
+  const { msg, onOpenTask, elapsedMs, liveFrom = 0, plan = null, batch = [], tasksById, fallbackRef } = props
 
   const report = msg.kind === 'error' ? null : splitReportHead(msg.text ?? '')
   const speaker = speakerOf(msg, report)
@@ -3923,6 +3955,7 @@ function ChatBubble(props: {
             <>
               {report.title && <p class="msg-subject">{report.title}</p>}
               {report.body && <Markdown text={report.body} class="msg-text" />}
+              {(msg.ref || fallbackRef) && <TaskProcess taskId={(msg.ref || fallbackRef)!} />}
             </>
           ) : isTaskKind ? (
             // The orchestration: who got the job, which stage, how it stands —
@@ -4090,6 +4123,7 @@ function ChatTurn(props: {
    *  the list (one delegated elsewhere, or the first paint before the list
    *  lands) falls back to its own read. */
   tasksById?: Map<string, Task>
+  fallbackRef?: string
 }) {
   const { msg } = props
   const plan = usePlanBrief(msg.kind === 'plan' ? msg.ref : undefined)
@@ -4198,273 +4232,6 @@ function RunSummaryRow({ run, onOpenTask }: { run: RunSummary; onOpenTask(id: st
             </a>
           )}
         </div>
-      </div>
-    </div>
-  )
-}
-
-/** labelHasMarker reports whether a label already carries the "(Recommended)"
- *  wording (any bracket style), so the card does not print it twice when the
- *  model followed the prompt's own advice. */
-function labelHasMarker(label: string, marker: string): boolean {
-  const bare = marker.replace(/[()（）\s]/g, '')
-  return label.includes(marker) || (bare !== '' && label.includes(bare))
-}
-
-/** Pre-execution question card. The entry model asked (or the runtime's
- *  plan-confirm gate fired) before it will create the task; the running SSE
- *  turn is parked on the answer. Questions are answered one at a time so four
- *  of them stay readable in a narrow chat column. Option labels, the
- *  recommended marker, multi-select, free text ("Other") and skip mirror the
- *  CLI's choice card and Claude Code's AskUserQuestion. */
-function ClarifyCard({
-  spec,
-  onSubmit,
-  onCancel,
-}: {
-  spec: ClarifySpec
-  onSubmit(answers: ClarifyAnswer[]): void
-  /** Omitted for a parked task's card: there is no turn to abort, and the
-   *  task's own Reject button is the way to throw the work away. */
-  onCancel?: () => void
-}) {
-  const [index, setIndex] = useState(0)
-  const [picked, setPicked] = useState<Record<string, boolean>>({})
-  const [other, setOther] = useState('')
-  const [otherOpen, setOtherOpen] = useState(false)
-  // Which option's preview is on screen. The recommended option is first, so
-  // 0 shows a preview before the user touches anything.
-  const [focused, setFocused] = useState(0)
-  const answers = useRef<ClarifyAnswer[]>([])
-  const cardRef = useRef<HTMLDivElement>(null)
-  const planRef = useRef<HTMLDivElement>(null)
-  const [planOpen, setPlanOpen] = useState(false)
-  const [planClipped, setPlanClipped] = useState(false)
-  // The running turn is parked on this answer, so the keyboard belongs here
-  // rather than in the composer behind the card. Re-focus on every question:
-  // answering one rebuilds the option buttons, and the focused button going
-  // away would hand the keyboard back to the page mid-round.
-  useEffect(() => {
-    cardRef.current?.focus({ preventScroll: true })
-  }, [index])
-  // A plan longer than the collapsed three lines gets a toggle. The question is
-  // what the card exists for; a task description can otherwise push the
-  // options off a laptop screen.
-  useEffect(() => {
-    const el = planRef.current
-    if (!el) return
-    const line = parseFloat(getComputedStyle(el).lineHeight) || 20
-    // Half a line of slack: a paragraph that merely rounds past three lines
-    // should render whole, not hide its last words behind a toggle.
-    setPlanClipped(el.scrollHeight > line * 3.4 + 2)
-  }, [spec.plan])
-  const q = spec.questions[index]
-  if (!q) return null
-  const preview = q.multi_select ? '' : (q.options[focused]?.preview ?? '').trim()
-  const recMarker = t('clarify.recommended')
-  // A spec that already offers a Cancel choice (the runtime's plan-confirm
-  // card does) must not render a second Cancel in the action row: the option
-  // is the answer, the action would be a different way to abort the turn.
-  const cancelMarker = t('clarify.cancel')
-  const hasCancelOption = spec.questions.some((question) =>
-    question.options.some((o) => o.label.trim() === cancelMarker),
-  )
-
-  const advance = (answer: ClarifyAnswer) => {
-    const next = [...answers.current, answer]
-    answers.current = next
-    if (index + 1 < spec.questions.length) {
-      setIndex(index + 1)
-      setPicked({})
-      setOther('')
-      setOtherOpen(false)
-      return
-    }
-    onSubmit(next)
-  }
-  const selectedLabels = () => q.options.filter((o) => picked[o.label]).map((o) => o.label)
-  // Back reopens the previous question with the answer it already carried:
-  // people revise a choice far more often than they abort the whole round.
-  const back = () => {
-    if (index === 0) return
-    const prev = index - 1
-    const prevAnswer = answers.current[prev]
-    answers.current = answers.current.slice(0, prev)
-    setIndex(prev)
-    setFocused(0)
-    const restored: Record<string, boolean> = {}
-    for (const label of prevAnswer?.selected ?? []) restored[label] = true
-    setPicked(restored)
-    const text = prevAnswer?.other ?? ''
-    setOther(text)
-    setOtherOpen(text !== '')
-  }
-  const choose = (label: string) => {
-    if (q.multi_select) {
-      setPicked((p) => ({ ...p, [label]: !p[label] }))
-      return
-    }
-    advance({ id: q.id, selected: [label] })
-  }
-  const submitOther = (e: Event) => {
-    e.preventDefault()
-    const text = other.trim()
-    if (!text) return
-    advance({
-      id: q.id,
-      selected: q.multi_select ? selectedLabels() : undefined,
-      other: text,
-    })
-  }
-  // Number keys pick an option, Escape backs out — the same two gestures the
-  // CLI's choice card answers to. Typing inside "Other" keeps its own keys.
-  const onKeyDown = (e: KeyboardEvent) => {
-    const tag = (e.target as HTMLElement | null)?.tagName
-    if (tag === 'INPUT' || tag === 'TEXTAREA') {
-      // Inside "Other" Escape closes the field first; the round itself stays
-      // open, so one keypress cannot throw away the answer being typed.
-      if (e.key === 'Escape' && otherOpen) {
-        e.preventDefault()
-        setOtherOpen(false)
-      }
-      return
-    }
-    if (e.key === 'Escape') {
-      if (onCancel) {
-        e.preventDefault()
-        onCancel()
-      }
-      return
-    }
-    const n = Number(e.key)
-    const pick = q.options[n - 1]
-    if (!Number.isInteger(n) || n < 1 || !pick) return
-    e.preventDefault()
-    choose(pick.label)
-  }
-
-  return (
-    <div
-      class="clarify-card"
-      data-testid="session-clarify"
-      role="dialog"
-      aria-label={q.question}
-      ref={cardRef}
-      tabIndex={-1}
-      onKeyDown={onKeyDown}
-    >
-      <div class="clarify-head">
-        <span class="badge">{t('clarify.title')}</span>
-        <span class="clarify-steps" aria-hidden="true">
-          {spec.questions.map((_, i) => (
-            <span class={`clarify-step${i === index ? ' is-on' : i < index ? ' is-done' : ''}`} />
-          ))}
-        </span>
-        <span class="clarify-progress">
-          {t('clarify.progress', { i: String(index + 1), n: String(spec.questions.length) })}
-        </span>
-      </div>
-      {spec.plan && (
-        <>
-          <div
-            ref={planRef}
-            class={`clarify-plan${planOpen ? ' is-open' : ''}${planClipped ? ' is-clipped' : ''}`}
-          >
-            {spec.plan}
-          </div>
-          {planClipped && (
-            <button
-              type="button"
-              class="clarify-plan-toggle"
-              aria-expanded={planOpen}
-              onClick={() => setPlanOpen((v) => !v)}
-            >
-              {t(planOpen ? 'clarify.collapse' : 'clarify.expand')}
-            </button>
-          )}
-        </>
-      )}
-      <div class="clarify-question">
-        <span class="clarify-header">{q.header}</span> {q.question}
-      </div>
-      <div class="clarify-body">
-        <div class="clarify-options">
-          {q.options.map((o, i) => {
-            const on = Boolean(picked[o.label])
-            const recommended = o.label === q.recommended
-            return (
-              <button
-                type="button"
-                class={`clarify-option${on ? ' is-picked' : ''}${recommended ? ' is-recommended' : ''}`}
-                aria-pressed={q.multi_select ? on : undefined}
-                onMouseEnter={() => setFocused(i)}
-                onFocus={() => setFocused(i)}
-                onClick={() => choose(o.label)}
-              >
-                <span class="clarify-option-key" aria-hidden="true">{i + 1}</span>
-                <span class="clarify-option-label">
-                  {q.multi_select && <span class="clarify-check">{on ? '✓' : ''}</span>}
-                  {o.label}
-                  {recommended && !labelHasMarker(o.label, recMarker) && (
-                    <span class="clarify-recommended">{recMarker}</span>
-                  )}
-                </span>
-                {o.description && <span class="clarify-option-desc">{o.description}</span>}
-              </button>
-            )
-          })}
-        </div>
-        {preview && (
-          <div class="clarify-preview">
-            <Markdown text={preview} />
-          </div>
-        )}
-      </div>
-      {otherOpen && (
-        <form class="clarify-other" onSubmit={submitOther}>
-          <input
-            value={other}
-            onInput={(e) => setOther(e.currentTarget.value)}
-            placeholder={t('clarify.otherPlaceholder')}
-            autofocus
-          />
-          <button type="submit" class="btn primary small">
-            {t('clarify.submit')}
-          </button>
-        </form>
-      )}
-      <div class="clarify-actions">
-        {index > 0 && (
-          <button type="button" class="btn small ghost" onClick={back}>
-            {t('clarify.back')}
-          </button>
-        )}
-        {q.multi_select && (
-          <button
-            type="button"
-            class="btn primary small"
-            disabled={selectedLabels().length === 0}
-            onClick={() => advance({ id: q.id, selected: selectedLabels() })}
-          >
-            {t('clarify.confirm')}
-          </button>
-        )}
-        <button
-          type="button"
-          class="btn small ghost"
-          aria-expanded={otherOpen}
-          onClick={() => setOtherOpen((v) => !v)}
-        >
-          {t('clarify.other')}
-        </button>
-        <button type="button" class="btn small ghost" onClick={() => advance({ id: q.id })}>
-          {t('clarify.skip')}
-        </button>
-        {onCancel && !hasCancelOption && (
-          <button type="button" class="btn small danger" onClick={onCancel}>
-            {t('clarify.cancel')}
-          </button>
-        )}
       </div>
     </div>
   )

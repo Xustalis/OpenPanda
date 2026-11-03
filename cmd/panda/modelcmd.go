@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -521,12 +522,14 @@ func (r *repl) modelSwitch(name string) {
 	}
 	if found {
 		if err := r.applyModel(match); err != nil {
+			r.modelErr = true
 			r.storeErr(err)
 			return
 		}
 		r.outln(i18n.Tf(r.loc, "repl.model.set", "alias", match.Alias(), "model", effectiveModel(match)))
 		return
 	}
+	r.modelErr = true
 	r.outln(i18n.Tf(r.loc, "repl.model.switch.none", "name", name))
 }
 
@@ -683,13 +686,21 @@ func isBaseURL(s string) bool {
 func (r *repl) modelAdd(args []string) {
 	pa := parseModelAddArgs(args)
 	args = pa.positional
-	if len(args) == 0 {
+	if len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
 		r.outln(i18n.T(r.loc, "repl.model.add.usage"))
+		r.outln(i18n.T(r.loc, "repl.model.add.flags"))
+		return
+	}
+	if len(args) == 0 {
+		r.modelErr = true
+		r.outln(i18n.T(r.loc, "repl.model.add.usage"))
+		r.outln(i18n.T(r.loc, "repl.model.add.flags"))
 		return
 	}
 	id := args[0]
 	p, ok := providers.Lookup(id)
 	if !ok {
+		r.modelErr = true
 		r.outln(i18n.Tf(r.loc, "repl.model.add.badprovider", "provider", id))
 		return
 	}
@@ -705,6 +716,7 @@ func (r *repl) modelAdd(args []string) {
 			rest = rest[1:]
 		}
 		if base == "" {
+			r.modelErr = true
 			r.outln(i18n.T(r.loc, "repl.model.add.nourl"))
 			return
 		}
@@ -722,6 +734,7 @@ func (r *repl) modelAdd(args []string) {
 	} else {
 		model, key, alias = r.splitProviderArgs(p, rest)
 		if key == "" && !p.NoAuth {
+			r.modelErr = true
 			r.outln(i18n.Tf(r.loc, "repl.model.add.nokey", "provider", id))
 			return
 		}
@@ -737,6 +750,7 @@ func (r *repl) modelAdd(args []string) {
 		switch pa.apiType {
 		case config.APITypeOpenAI, config.APITypeAnthropic, config.APITypeResponses, config.APITypeGoogle:
 		default:
+			r.modelErr = true
 			r.outln(i18n.Tf(r.loc, "repl.model.add.badtype", "type", pa.apiType))
 			return
 		}
@@ -772,6 +786,7 @@ func (r *repl) modelAdd(args []string) {
 			// an explicit reasoning request instead.
 			mc.Thinking = ""
 		default:
+			r.modelErr = true
 			r.outln(i18n.Tf(r.loc, "repl.model.add.badthinking", "value", pa.thinking))
 			return
 		}
@@ -787,6 +802,7 @@ func (r *repl) modelAdd(args []string) {
 	mc.Params = pa.params
 	mc.Headers = pa.headers
 	if mc.Model == "" {
+		r.modelErr = true
 		r.outln(i18n.T(r.loc, "repl.model.add.nomodel"))
 		return
 	}
@@ -848,6 +864,7 @@ func (r *repl) modelAdd(args []string) {
 		models = slices.Clone(c.Models)
 		return config.UpdateModelsSection(configWritePath(r.configPath), models)
 	}); err != nil {
+		r.modelErr = true
 		r.storeErr(err)
 		return
 	}
@@ -872,6 +889,7 @@ func (r *repl) modelAdd(args []string) {
 func (r *repl) verifyModel(mc config.ModelConfig) bool {
 	client, err := entry.NewClient(mc)
 	if err != nil {
+		r.modelErr = true
 		r.outln(i18n.Tf(r.loc, "repl.model.add.verifyfail", "err", err.Error()))
 		return false
 	}
@@ -879,6 +897,7 @@ func (r *repl) verifyModel(mc config.ModelConfig) bool {
 	defer cancel()
 	_, err = client.Complete(ctx, "You are a connectivity test.", "Reply with exactly: OK")
 	if err != nil {
+		r.modelErr = true
 		r.outln(i18n.Tf(r.loc, "repl.model.add.verifyfail", "err", err.Error()))
 		r.outln(i18n.T(r.loc, "repl.model.add.verifyhint"))
 		return false
@@ -985,6 +1004,7 @@ func (r *repl) splitProviderArgs(p providers.Provider, args []string) (model, ke
 // section when it was the last, which is the explicit intent of the command.
 func (r *repl) modelRemove(args []string) {
 	if len(args) == 0 {
+		r.modelErr = true
 		r.outln(i18n.T(r.loc, "repl.model.remove.usage"))
 		return
 	}
@@ -1019,6 +1039,7 @@ func (r *repl) modelRemove(args []string) {
 		return config.UpdateModelsSection(configWritePath(r.configPath), kept)
 	})
 	if err != nil {
+		r.modelErr = true
 		r.storeErr(err)
 		return
 	}
@@ -1053,6 +1074,7 @@ func (r *repl) modelFetch(args []string) {
 	}
 	client, err := entry.NewClient(mc)
 	if err != nil {
+		r.modelErr = true
 		r.outln(i18n.Tf(r.loc, "repl.model.fetch.err", "err", err.Error()))
 		return
 	}
@@ -1060,10 +1082,12 @@ func (r *repl) modelFetch(args []string) {
 	defer cancel()
 	models, err := client.ListModels(ctx)
 	if err != nil {
+		r.modelErr = true
 		r.outln(i18n.Tf(r.loc, "repl.model.fetch.err", "err", err.Error()))
 		return
 	}
 	if len(models) == 0 {
+		r.modelErr = true
 		r.outln(i18n.T(r.loc, "repl.model.fetch.empty"))
 		return
 	}
@@ -1082,6 +1106,7 @@ func (r *repl) modelTest(args []string) {
 	}
 	client, err := entry.NewClient(mc)
 	if err != nil {
+		r.modelErr = true
 		r.outln(i18n.Tf(r.loc, "repl.model.test.fail", "err", err.Error()))
 		return
 	}
@@ -1093,18 +1118,21 @@ func (r *repl) modelTest(args []string) {
 		// something real instead of submitting an empty model field.
 		models, lerr := client.ListModels(ctx)
 		if lerr != nil || len(models) == 0 {
+			r.modelErr = true
 			r.outln(i18n.Tf(r.loc, "repl.model.test.fail", "err", i18n.T(r.loc, "repl.model.add.nomodel")))
 			return
 		}
 		mc.Model = models[0].ID
 		client, err = entry.NewClient(mc)
 		if err != nil {
+			r.modelErr = true
 			r.outln(i18n.Tf(r.loc, "repl.model.test.fail", "err", err.Error()))
 			return
 		}
 	}
 	answer, err := client.Complete(ctx, "You are a connectivity test.", "Reply with exactly: OK")
 	if err != nil {
+		r.modelErr = true
 		r.outln(i18n.Tf(r.loc, "repl.model.test.fail", "err", err.Error()))
 		return
 	}
@@ -1139,6 +1167,7 @@ func (r *repl) resolveModel(args []string, verb string) (config.ModelConfig, str
 	}
 	p, ok := providers.Lookup(name)
 	if !ok {
+		r.modelErr = true
 		r.outln(i18n.Tf(r.loc, "repl.model.switch.none", "name", name))
 		return config.ModelConfig{}, "", false
 	}
@@ -1245,6 +1274,9 @@ func runModel(args []string) {
 		fmt.Println(i18n.T(loc, "repl.model.usage"))
 	default:
 		r.modelSwitch(rest[0])
+	}
+	if r.modelErr {
+		os.Exit(1)
 	}
 }
 

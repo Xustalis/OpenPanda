@@ -16,6 +16,7 @@ package main
 //	panda init --config ./config.yaml --card ./capabilities.yaml
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -23,10 +24,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/term"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/providers"
@@ -469,5 +472,35 @@ func interactiveModelSetup(in *bufio.Reader, def *config.Config, loc i18n.Locale
 	if mt := sel.AutoMaxTokens(modelName); mt > 0 {
 		def.Model.MaxTokens = mt
 	}
+
+	// Prove the key before declaring the node ready. init used to write any
+	// pasted string and print "You're ready"; a typo surfaced on the first
+	// ask, sometimes days later. The catalogue path is interactive, so a
+	// failed probe asks instead of silently saving.
+	if !sel.NoAuth && apiKey != "" {
+		fmt.Println(i18n.T(loc, "init.model.testing"))
+		reply, err := probeModelEndpoint(def.Model)
+		if err != nil {
+			fmt.Println(i18n.Tf(loc, "init.model.testFail", "err", err.Error()))
+			if !askYes(in, i18n.T(loc, "init.model.saveAnyway")) {
+				return false
+			}
+		} else {
+			fmt.Println(i18n.Tf(loc, "init.model.testOk", "reply", strings.TrimSpace(reply)))
+		}
+	}
 	return true
+}
+
+// probeModelEndpoint runs the same one-word completion the runtime uses to
+// prove a model entry. A short timeout keeps init usable on a flaky network;
+// the caller decides whether to save despite the failure.
+func probeModelEndpoint(mc config.ModelConfig) (string, error) {
+	client, err := entry.NewClient(mc)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return client.Complete(ctx, "You are a connectivity test.", "Reply with exactly: OK")
 }
