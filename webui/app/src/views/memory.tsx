@@ -560,7 +560,7 @@ function MemoryFileCard({
           value={newEntry}
           onInput={(e) => setNewEntry((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') add()
+            if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) add()
           }}
         />
         <button class="btn small" disabled={!newEntry.trim() || busy} onClick={add}>
@@ -774,7 +774,7 @@ function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: num
         value={newName}
         onInput={(e) => setNewName((e.target as HTMLInputElement).value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') create()
+          if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) create()
         }}
       />
       <button class="btn small" disabled={!newName.trim() || saving} onClick={create}>
@@ -807,7 +807,7 @@ function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: num
               value={newName}
               onInput={(e) => setNewName((e.target as HTMLInputElement).value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') create()
+                if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) create()
               }}
             />
             <button class="btn small" disabled={!newName.trim() || saving} onClick={create}>
