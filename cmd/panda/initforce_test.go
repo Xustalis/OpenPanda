@@ -3,6 +3,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -98,5 +99,30 @@ func TestMergePreservedConfigBadYAML(t *testing.T) {
 	}
 	if def.Node.Name != "h" {
 		t.Error("def must be untouched on parse failure")
+	}
+}
+
+// TestRebaseInitStorage: an explicit --config must produce a self-contained
+// instance. The old defaults pointed every path at the user data dir, so two
+// configs shared one database and one node identity.
+func TestRebaseInitStorage(t *testing.T) {
+	def := config.Default()
+	// filepath.Join normalizes the separator per platform: the test asserts the
+	// layout, not that Windows prints forward slashes.
+	base := filepath.Join("tmp", "panda-instance")
+	rebaseInitStorage(def, base)
+	if want := filepath.Join(base, "openpanda.db"); def.Storage.DBPath != want {
+		t.Errorf("db_path = %q, want %q", def.Storage.DBPath, want)
+	}
+	if def.Storage.WorkPath != base {
+		t.Errorf("work_path = %q, want %q", def.Storage.WorkPath, base)
+	}
+	if def.Storage.MemoryPath != filepath.Join(base, "memory") ||
+		def.Storage.ProjectsPath != filepath.Join(base, "projects") ||
+		def.Storage.SkillsPath != filepath.Join(base, "skills") {
+		t.Errorf("storage paths not rebased: %+v", def.Storage)
+	}
+	if want := filepath.Join(base, "data", "context"); def.Storage.ContextPath != want {
+		t.Errorf("context_path = %q, want %q", def.Storage.ContextPath, want)
 	}
 }

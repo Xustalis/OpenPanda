@@ -2167,7 +2167,7 @@ func (r *repl) printEvents(id string) {
 		r.outln(i18n.Tf(r.loc, "repl.logs.none", "id", id))
 		return
 	}
-	printEventTimelineTo(r.commandOutput(), events, "  ")
+	printEventTimelineTo(r.commandOutput(), events, "  ", false)
 }
 
 // cmdSessions lists chat sessions (the web console's session rail). A
@@ -2272,12 +2272,12 @@ func (r *repl) cmdFork(arg string) {
 		r.storeErr(err)
 		return
 	}
-	if r.worktrees != nil {
+	if wt := openWorktreesForSession(r.cfg, sess); wt != nil {
 		base := "HEAD"
 		if sess.Branch != "" {
 			base = sess.Branch
 		}
-		if path, err := r.worktrees.EnsureFrom(context.Background(), child.ID, base); err == nil {
+		if path, err := wt.EnsureFrom(context.Background(), child.ID, base); err == nil {
 			_ = r.sessionsSt.SetWorktree(child.ID, path, sessions.Branch(child.ID))
 		}
 	}

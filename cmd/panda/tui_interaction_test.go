@@ -912,7 +912,7 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 
 	// Verify Approval Mode view
 	approvalView := m.View()
-	if !strings.Contains(approvalView, "Choose Task Approval Mode:") {
+	if !strings.Contains(approvalView, "Choose Execution Safety & Approval Mode:") {
 		t.Fatalf("expected approval mode title in view: %s", approvalView)
 	}
 	if !strings.Contains(approvalView, "On Request (Recommended)") {

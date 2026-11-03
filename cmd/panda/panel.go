@@ -1260,6 +1260,7 @@ func runReject(args []string) {
 func runLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	full := fs.Bool("full", false, "print raw event payloads without terminal truncation")
 	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
@@ -1289,7 +1290,7 @@ func runLogs(args []string) {
 		fmt.Println(i18n.Tf(i18n.Detect(), "cli.logs.none", "id", id))
 		return
 	}
-	printEventTimeline(events, "")
+	printEventTimelineFull(events, "", *full)
 }
 
 // orDash renders an empty string as "-" for aligned fields.

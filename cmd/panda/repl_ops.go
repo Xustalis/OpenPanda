@@ -406,8 +406,9 @@ func (r *repl) cmdSessionNew(ctx context.Context, fields []string) {
 		r.storeErr(err)
 		return
 	}
-	if r.worktrees != nil {
-		if path, err := r.worktrees.Ensure(ctx, sess.ID); err == nil {
+	wt := openWorktreesForSessionBase(r.cfg, project, projectWorkDir(r.cfg, project))
+	if wt != nil {
+		if path, err := wt.Ensure(ctx, sess.ID); err == nil {
 			_ = r.sessionsSt.SetWorktree(sess.ID, path, sessions.Branch(sess.ID))
 			sess, _ = r.sessionsSt.Get(sess.ID)
 		}
@@ -517,8 +518,10 @@ func (r *repl) cmdSessionRm(ctx context.Context, rest []string) {
 			r.outln(i18n.Tf(r.loc, "repl.session.rmActive", "id", id))
 			continue
 		}
-		if r.worktrees != nil {
-			_ = r.worktrees.Remove(ctx, id)
+		if sess, gerr := r.sessionsSt.Get(id); gerr == nil {
+			if wt := openWorktreesForSession(r.cfg, sess); wt != nil {
+				_ = wt.Remove(ctx, id)
+			}
 		}
 		if err := r.sessionsSt.Delete(id); err != nil {
 			if errors.Is(err, sessions.ErrNotFound) {
@@ -560,7 +563,23 @@ func (r *repl) cmdSessionDiff(ctx context.Context, rest []string) {
 		r.outln("usage: /session diff <id> [--stat]")
 		return
 	}
-	if st, err := r.worktrees.Stat(ctx, id); err == nil {
+	rid, rerr := resolveSessionRef(r.sessionsSt, id)
+	if rerr != nil {
+		r.storeErr(rerr)
+		return
+	}
+	id = rid
+	sess, serr := r.sessionsSt.Get(id)
+	if serr != nil {
+		r.storeErr(serr)
+		return
+	}
+	wt := openWorktreesForSession(r.cfg, sess)
+	if wt == nil {
+		r.outln(i18n.T(r.loc, "repl.session.notRepo"))
+		return
+	}
+	if st, err := wt.Stat(ctx, id); err == nil {
 		r.printDiffStat(st)
 	} else {
 		r.storeErr(err)
@@ -569,12 +588,12 @@ func (r *repl) cmdSessionDiff(ctx context.Context, rest []string) {
 	if statOnly {
 		return
 	}
-	changes, err := r.worktrees.Status(ctx, id)
+	changes, err := wt.Status(ctx, id)
 	if err != nil {
 		r.storeErr(err)
 		return
 	}
-	patch, err := r.worktrees.Diff(ctx, id)
+	patch, err := wt.Diff(ctx, id)
 	if err != nil {
 		r.storeErr(err)
 		return
@@ -620,6 +639,22 @@ func (r *repl) cmdSessionMerge(ctx context.Context, rest []string) {
 		return
 	}
 	id := rest[0]
+	rid, rerr := resolveSessionRef(r.sessionsSt, id)
+	if rerr != nil {
+		r.storeErr(rerr)
+		return
+	}
+	id = rid
+	sess, serr := r.sessionsSt.Get(id)
+	if serr != nil {
+		r.storeErr(serr)
+		return
+	}
+	wt := openWorktreesForSession(r.cfg, sess)
+	if wt == nil {
+		r.outln(i18n.T(r.loc, "repl.session.notRepo"))
+		return
+	}
 	message := ""
 	for i := 1; i < len(rest); i++ {
 		if (rest[i] == "--message" || rest[i] == "-m") && i+1 < len(rest) {
@@ -629,10 +664,10 @@ func (r *repl) cmdSessionMerge(ctx context.Context, rest []string) {
 	}
 	// Same preview the CLI prints: what lands, and whether any of it is
 	// credential-shaped, before it lands.
-	if st, serr := r.worktrees.Stat(ctx, id); serr == nil {
+	if st, serr := wt.Stat(ctx, id); serr == nil {
 		r.printDiffStat(st)
 	}
-	subject, err := r.worktrees.Merge(ctx, id, message)
+	subject, err := wt.Merge(ctx, id, message)
 	if err != nil {
 		if errors.Is(err, sessions.ErrMergeConflict) {
 			r.errf("panda: %v\n", err)
@@ -651,12 +686,24 @@ func (r *repl) cmdSessionRevert(ctx context.Context, rest []string) {
 		r.outln("usage: /session revert <id>")
 		return
 	}
-	if r.worktrees == nil {
+	id := rest[0]
+	rid, rerr := resolveSessionRef(r.sessionsSt, id)
+	if rerr != nil {
+		r.storeErr(rerr)
+		return
+	}
+	id = rid
+	sess, serr := r.sessionsSt.Get(id)
+	if serr != nil {
+		r.storeErr(serr)
+		return
+	}
+	wt := openWorktreesForSession(r.cfg, sess)
+	if wt == nil {
 		r.outln(i18n.T(r.loc, "repl.session.notRepo"))
 		return
 	}
-	id := rest[0]
-	subject, err := r.worktrees.Revert(ctx, id)
+	subject, err := wt.Revert(ctx, id)
 	if err != nil {
 		switch {
 		case errors.Is(err, sessions.ErrNothingToRevert):

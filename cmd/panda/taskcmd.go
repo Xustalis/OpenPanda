@@ -120,6 +120,7 @@ func runTaskShow(args []string) {
 	fs := flag.NewFlagSet("task", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 	trace := fs.Bool("trace", false, "show the hop-by-hop delegation trace instead of the task record")
+	full := fs.Bool("full", false, "print raw event payloads without terminal truncation")
 	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
@@ -285,7 +286,7 @@ func runTaskShow(args []string) {
 
 	if len(events) > 0 {
 		fmt.Println(pal().Heading("events:"))
-		printEventTimeline(events, "  ")
+		printEventTimelineFull(events, "  ", *full)
 	}
 	// The hint prints the command the user must type next, so it spells the
 	// task by the same short ref the board shows — a full UUID invites a
@@ -314,7 +315,13 @@ func runTaskShow(args []string) {
 func taskNextStepHint(loc i18n.Locale, cfg *config.Config, t core.Task, ref string) string {
 	switch t.State {
 	case core.StateReview:
-		return taskReviewHint(loc, t, ref)
+		// A failure-parked review carries needs_changed_input, and the store
+		// refuses approve for it. Telling the user to approve was a dead end;
+		// name the only path that works.
+		if t.ApprovalDisposition == core.ApprovalNeedsChangedInput {
+			return i18n.Tf(loc, "cli.task.wait.resubmit", "id", ref)
+		}
+		return i18n.Tf(loc, "cli.task.wait.review", "id", ref)
 	case core.StateWaitingCtx:
 		return i18n.Tf(loc, "cli.ask.question.hint", "id", ref)
 	case core.StateQueued, core.StateSubmitted:
@@ -644,6 +651,16 @@ type taskChildJSON struct {
 	Title string `json:"title,omitempty"`
 }
 
+// taskEventJSON is one audit row in the task's --json payload. It is what
+// makes a failed task diagnosable without a second command or a database
+// query: the terminal timeline clips long reasons, this does not.
+type taskEventJSON struct {
+	ID   int64           `json:"id"`
+	TS   int64           `json:"ts"`
+	Type string          `json:"type"`
+	Data json.RawMessage `json:"data,omitempty"`
+}
+
 type taskJSON struct {
 	ID       string `json:"id"`
 	ParentID string `json:"parent_id,omitempty"`
@@ -692,6 +709,10 @@ type taskJSON struct {
 	Result              string `json:"result,omitempty"`
 	Created             string `json:"created_at"`
 	Updated             string `json:"updated_at"`
+	// Events is the full audit trail, newest last. The same payload the
+	// timeline clips for the terminal is kept intact here for scripts and for
+	// reading the real failure reason.
+	Events []taskEventJSON `json:"events,omitempty"`
 }
 
 func taskToJSON(t core.Task) taskJSON {
@@ -759,6 +780,16 @@ func taskToJSONWithStore(store *core.TaskStore, t core.Task) taskJSON {
 		if len(kids) > 0 || t.SpawnDepth > 0 {
 			d := t.SpawnDepth
 			j.SpawnDepth = &d
+		}
+	}
+	if events, err := store.Events(context.Background(), t.TaskID); err == nil {
+		j.Events = make([]taskEventJSON, 0, len(events))
+		for _, e := range events {
+			ev := taskEventJSON{ID: e.ID, TS: e.TS, Type: e.Type}
+			if raw := strings.TrimSpace(e.DataJSON); raw != "" && raw != "null" {
+				ev.Data = json.RawMessage(raw)
+			}
+			j.Events = append(j.Events, ev)
 		}
 	}
 	return j
@@ -1259,8 +1290,12 @@ func runTaskAdd(args []string) {
 }
 
 // waitTask polls a task row until it settles or ctx ends. "Settled" is
-// broader than core.Terminal: a failed row can be retried and a review row
-// resumed, but for --wait both are answers to "what happened to my task?".
+// broader than core.Terminal: a review row is an answer to "what happened to
+// my task?". A failed row is only settled when nothing is going to retry it:
+// the supervisor leaves the row in StateFailed for the backoff window before
+// RequeueForRetry, and returning there reported "failed" for work that was
+// still running. failedAwaitingRetry distinguishes that transient shape from
+// a pre-dispatch failure (a bad actuator spec) that is already final.
 func waitTask(ctx context.Context, store *core.TaskStore, taskID string) (core.Task, error) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -1276,7 +1311,10 @@ func waitTask(ctx context.Context, store *core.TaskStore, taskID string) (core.T
 			return last, err
 		}
 		last = t
-		if core.Terminal(t.State) || t.State == core.StateFailed || t.State == core.StateReview {
+		if core.Terminal(t.State) || t.State == core.StateReview {
+			return t, nil
+		}
+		if t.State == core.StateFailed && !failedAwaitingRetry(ctx, store, taskID) {
 			return t, nil
 		}
 		select {
@@ -1285,6 +1323,40 @@ func waitTask(ctx context.Context, store *core.TaskStore, taskID string) (core.T
 		case <-tick.C:
 		}
 	}
+}
+
+// failedAwaitingRetry reports whether the row's newest failure came from an
+// agent round, which the supervisor retries after a backoff (or parks in
+// review when the budget is spent). A failure with no exec/supervision event
+// since the last submit/retry never started work and has no retry behind it.
+// A rejected or expired review is final by definition. A store read error
+// fails safe: keep watching rather than declaring a live task dead.
+func failedAwaitingRetry(ctx context.Context, store *core.TaskStore, taskID string) bool {
+	events, err := store.Events(ctx, taskID)
+	if err != nil {
+		return true
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		switch events[i].Type {
+		case core.EvReview, core.EvExpire, core.EvCancel:
+			return false
+		case core.EvResult:
+			start := 0
+			for j := i - 1; j >= 0; j-- {
+				if events[j].Type == core.EvSubmit || events[j].Type == core.EvRetry {
+					start = j + 1
+					break
+				}
+			}
+			for j := start; j < i; j++ {
+				if events[j].Type == core.EvExecAgentStart || events[j].Type == core.EvSupervisionRound {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return false
 }
 
 // waitForTaskAdd is the --wait half of `task add`: the row is already
@@ -1301,6 +1373,20 @@ func waitForTaskAdd(loc i18n.Locale, cfg *config.Config, taskID string, timeout 
 	defer cancel()
 	wctx, wcancel := context.WithTimeout(ctx, timeout)
 	defer wcancel()
+	// Nothing is draining the queue: waiting out the full timeout hides the
+	// fix behind a 30-minute silence. Say it now and exit. A settled row is
+	// still reported normally — the consumer may have finished it before
+	// this check.
+	if cur, gerr := store.Get(ctx, taskID); gerr == nil &&
+		!core.Terminal(cur.State) && cur.State != core.StateReview &&
+		!queueConsumerAlive(cfg) {
+		if jsonOutput {
+			emitJSON(map[string]string{"task_id": taskID, "state": cur.State, "outcome": "no_consumer"})
+		} else {
+			fmt.Println(i18n.Tf(loc, "cli.task.wait.noConsumer", "id", taskID))
+		}
+		os.Exit(1)
+	}
 	if !jsonOutput {
 		fmt.Println(i18n.Tf(loc, "cli.task.waiting", "id", taskID))
 	}
@@ -1340,7 +1426,9 @@ func waitForTaskAdd(loc i18n.Locale, cfg *config.Config, taskID string, timeout 
 						fmt.Println(i18n.T(loc, "cli.task.review.reason") + ": " + reason)
 					}
 				}
-				fmt.Println(taskReviewHint(loc, final, final.TaskID))
+				if hint := taskNextStepHint(loc, cfg, final, final.TaskID); hint != "" {
+					fmt.Println(hint)
+				}
 			} else if final.ResultJSON != "" {
 				printTaskResult(final.ResultJSON)
 			}

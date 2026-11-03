@@ -31,7 +31,7 @@ Windows (PowerShell): `irm https://raw.githubusercontent.com/Xustalis/OpenPanda/
 Then start a node:
 
 ```bash
-panda init      # device name, model providers, capability card
+panda init      # auto-detects hardware; the one prompt is about the model
 panda           # the terminal TUI — or `panda web` for the console
 ```
 
@@ -161,7 +161,7 @@ Setups people actually run:
 
 ## 🚀 Quick Start
 
-Initialize your node (interactive setup for device name, model providers, and the local capability card):
+Initialize your node (device name, resource class, and capability card are auto-detected; the one prompt asks whether to configure a model now):
 
 ```bash
 panda init

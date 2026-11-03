@@ -1632,12 +1632,12 @@ func (m tuiModel) forkSession(arg string) (tea.Model, tea.Cmd) {
 	if err != nil {
 		return m, m.printBlock(block{kind: blockError, body: err.Error()})
 	}
-	if m.r.worktrees != nil {
+	if wt := openWorktreesForSession(m.r.cfg, parent); wt != nil {
 		base := "HEAD"
 		if parent.Branch != "" {
 			base = parent.Branch
 		}
-		if path, err := m.r.worktrees.EnsureFrom(context.Background(), child.ID, base); err == nil {
+		if path, err := wt.EnsureFrom(context.Background(), child.ID, base); err == nil {
 			_ = m.r.sessionsSt.SetWorktree(child.ID, path, sessions.Branch(child.ID))
 			child, _ = m.r.sessionsSt.Get(child.ID)
 		}

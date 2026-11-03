@@ -100,6 +100,7 @@ var migrations = []Migration{
 	// claiming 63 for hello bindings, so they move behind it.
 	{Version: 64, Name: "add_task_checks_and_verification", Apply: migrateV64},
 	{Version: 65, Name: "index_tasks_by_session", Apply: migrateV65},
+	{Version: 66, Name: "add_intake_seen", Apply: migrateV66},
 }
 
 // migrateV62 adds employee_cache.dir_signer: the Ed25519 key that SIGNED a
@@ -1579,5 +1580,23 @@ func migrateV65(tx MigrationExec) error {
 		return err
 	}
 	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`)
+	return err
+}
+
+// migrateV66 adds intake_seen: the idempotence ledger for inbound source
+// events. A source retries a delivery when a webhook answers slowly or not at
+// all, and a replay must not open a second task for the same comment. The row
+// is keyed by (source, delivery id); seen_at lets a later claim drop keys past
+// the retention window without a second table.
+func migrateV66(tx MigrationExec) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS intake_seen (
+		source TEXT NOT NULL,
+		key TEXT NOT NULL,
+		seen_at INTEGER NOT NULL,
+		PRIMARY KEY (source, key)
+	)`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_intake_seen_at ON intake_seen(seen_at)`)
 	return err
 }

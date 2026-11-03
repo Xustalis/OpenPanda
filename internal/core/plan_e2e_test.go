@@ -39,7 +39,11 @@ const trainScript = "import torch\nprint(1)\n"
 // happened, and a stage that ran on an empty tree fails on the spot instead of
 // reporting a cheerful nothing.
 func TestPlanThreeStagesThreeNodes(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// Shared-CPU CI runners (and a laptop under load) can stall the loopback
+	// handshakes and the three-node relay well past a minute. The assertions
+	// still fail on a wrong result; the budget only stops a slow host from
+	// being reported as a wrong one.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	pi := newCoreWithNative(t, "pi", ledger.NativeAbility{
