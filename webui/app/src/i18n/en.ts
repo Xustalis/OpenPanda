@@ -647,6 +647,45 @@ const en: Messages = {
   'onboarding.saved': 'Model configured — chat is ready to go.',
   'onboarding.skip': 'Not now',
 
+  // First-run tour (after the terms step, before the model step)
+  'onboarding.guide.title': 'A three-minute look around',
+  'onboarding.guide.sub':
+    'The console does three things: you say something, it gets done, you stay in charge. Here is the map, the panda in the corner, and how a model gets wired up.',
+  'onboarding.guide.nav': 'The left rail',
+  'onboarding.guide.nav.newChat':
+    'Starts a thread. The session appears when the first message leaves the box.',
+  'onboarding.guide.nav.workspace':
+    'Devices and agents on one map. Wheel zooms, a click shows the edges.',
+  'onboarding.guide.nav.control': 'Queue, plans and projects — three boards over the same tasks.',
+  'onboarding.guide.nav.team': 'Who works on this thread — the same card the panda opens.',
+  'onboarding.guide.nav.memory': 'What this node has learned. Read, edit, delete.',
+  'onboarding.guide.nav.settings': 'Models, policies, agents, MCP, skills, system.',
+  'onboarding.guide.panda': 'The panda in the corner',
+  'onboarding.guide.panda.pose': 'Standing = idle · hopping = answering · lying = off duty',
+  'onboarding.guide.panda.click': 'One click',
+  'onboarding.guide.panda.clickDesc': 'Opens the team card — pick who works on this thread.',
+  'onboarding.guide.panda.working': 'Mid-answer',
+  'onboarding.guide.panda.workingDesc':
+    'Opens at once, no squish — the roster stays live during a turn.',
+  'onboarding.guide.panda.double': 'Double click',
+  'onboarding.guide.panda.doubleDesc': 'Squashes it. A toy — nothing is counted or remembered.',
+  'onboarding.guide.panda.burst': 'Keep tapping',
+  'onboarding.guide.panda.burstDesc': 'It stops offering the card and just takes the pokes.',
+  'onboarding.guide.panda.night': '20:00–08:00',
+  'onboarding.guide.panda.nightDesc': 'It lies down. Tasks keep running; the pose is decoration.',
+  'onboarding.guide.model': 'Wiring up a model',
+  'onboarding.guide.model.one': 'Settings → Models → Add connection',
+  'onboarding.guide.model.oneDesc':
+    'Pick a provider, paste the endpoint and key. One card is one account.',
+  'onboarding.guide.model.two': 'Add models to the card',
+  'onboarding.guide.model.twoDesc': 'Click a row to switch. Name the alias however you like.',
+  'onboarding.guide.model.three': 'Press Test connection',
+  'onboarding.guide.model.threeDesc': 'A ✓ and a latency means it answers.',
+  'onboarding.guide.modelNote':
+    'The next step walks you through it once — and it stays editable in Settings.',
+  'onboarding.guide.cta': 'Continue',
+  'onboarding.guide.skip': 'Skip the tour',
+
   // Skills view
   'skills.title': 'Skills',
   'skills.subtitle':
