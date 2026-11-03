@@ -125,10 +125,10 @@ test('withAttachments output is recognised by expandFileRefs', async () => {
   assert.deepEqual(attached, ['up/1-notes.md'])
 })
 
-test('exportMarkdown renders roles and thought details', () => {
+test('exportMarkdown renders roles and thought details', async () => {
   // Role names come from the i18n dictionary — pin English so the export
   // does not depend on the machine locale the test happens to run under.
-  setLocale('en')
+  await setLocale('en')
   const md = exportMarkdown(
     [
       { role: 'user', text: 'hi' },

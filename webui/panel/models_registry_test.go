@@ -237,20 +237,83 @@ func TestRemoveModelPromotesASuccessorWhenItIsLive(t *testing.T) {
 	}
 }
 
-func TestRemoveModelRefusesToLeaveNoModelAtAll(t *testing.T) {
+// A model written only to `model:` — an older single-model config, or one a
+// user edited by hand — is the row the page paints as "in use". It had no
+// delete path on any surface: the console skipped the button for an
+// unregistered row and the handler only searched the registry. Removing it now
+// clears the section's owner and promotes a registered row.
+func TestRemoveModelClearsTheLiveRowOutsideTheRegistry(t *testing.T) {
+	stale := config.ModelConfig{
+		Name: "stale", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://stale.example/v1", Model: "m", APIKey: "k1",
+	}
+	spare := config.ModelConfig{
+		Name: "spare", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://spare.example/v1", Model: "m", APIKey: "k2",
+	}
+	h, path := newModelPanel(t, func(c *config.Config) {
+		c.Model = stale
+		c.Models = []config.ModelConfig{spare}
+	})
+
+	code, out := doJSON(t, h, authedReq(http.MethodDelete,
+		entryURL("stale", "m", "https://stale.example/v1"), nil))
+	if code != http.StatusOK {
+		t.Fatalf("delete the unregistered live row = %d %v", code, out)
+	}
+	if out["switched_to"] != "spare" {
+		t.Fatalf("switched_to = %v, want spare", out["switched_to"])
+	}
+	cfg := readConfig(t, path)
+	if cfg.Model.Alias() != "spare" {
+		t.Fatalf("live model = %q, want the promoted spare", cfg.Model.Alias())
+	}
+	if len(cfg.Models) != 1 || cfg.Models[0].Alias() != "spare" {
+		t.Fatalf("registry after the delete = %+v, want spare untouched", cfg.Models)
+	}
+}
+
+// Removing the last model is the request a user makes when the only model
+// they configured is wrong. It used to be refused with "add another one
+// first" — which is the very complaint the report started from, just moved one
+// step later. The section is cleared deliberately instead, the same way
+// `/model remove` and the TUI panel already did it.
+func TestRemoveModelClearsTheLastModel(t *testing.T) {
 	only := config.ModelConfig{
 		Name: "only", Provider: "custom", APIType: config.APITypeOpenAI,
 		BaseURL: "https://only.example/v1", Model: "only", APIKey: "k",
 	}
-	h, _ := newModelPanel(t, func(c *config.Config) {
+	h, path := newModelPanel(t, func(c *config.Config) {
 		c.Model = only
 		c.Models = []config.ModelConfig{only}
 	})
 
 	code, out := doJSON(t, h, authedReq(http.MethodDelete,
 		entryURL("only", "only", "https://only.example/v1"), nil))
-	if code != http.StatusConflict {
-		t.Fatalf("delete last = %d %v, want 409", code, out)
+	if code != http.StatusOK {
+		t.Fatalf("delete last = %d %v, want the row gone", code, out)
+	}
+	if out["cleared"] != true {
+		t.Fatalf("response = %v, want cleared:true so the console can say why it is empty", out)
+	}
+	cfg := readConfig(t, path)
+	if len(cfg.Models) != 0 {
+		t.Fatalf("registry after deleting the last model = %+v", cfg.Models)
+	}
+	if cfg.Model.Model != "" || cfg.Model.Provider != "" || cfg.Model.BaseURL != "" {
+		t.Fatalf("model: still names the deleted entry: %+v", cfg.Model)
+	}
+	// The in-memory config agrees with the file, so the list does not paint a
+	// row that no longer exists.
+	code, list := doJSON(t, h, authedReq(http.MethodGet, "/api/models", nil))
+	if code != http.StatusOK {
+		t.Fatalf("list after the clear = %d", code)
+	}
+	if rows, _ := list["models"].([]any); len(rows) != 0 {
+		t.Fatalf("rows after the clear = %v", rows)
+	}
+	if active, _ := list["active"].(map[string]any); active["alias"] != "" {
+		t.Fatalf("a cleared config still reports an active model: %v", active)
 	}
 }
 
@@ -592,6 +655,32 @@ func TestRemoveModelKeepsADuplicateNameAmbiguous(t *testing.T) {
 
 // Two accounts of one vendor are told apart in the list by the hint, so the
 // hint has to carry more than the last four characters.
+// "Copy this account" is a per-row operation, so it needs the row. Resolved by
+// alias alone it duplicated whichever account came first — and the copy then
+// carried a credential that belongs to the other one, which never
+// authenticates and looks exactly like a bad key.
+func TestAddModelCopiesTheAddressedAccount(t *testing.T) {
+	first := config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-first"}
+	second := config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-second"}
+	h, path := newModelPanel(t, func(c *config.Config) {
+		c.Model = first
+		c.Models = []config.ModelConfig{first, second}
+	})
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/models",
+		`{"provider":"deepseek","model":"deepseek-chat","alias":"work","copy_from":"ds","copy_from_key":"`+keyFingerprint("sk-second")+`"}`))
+	if code != http.StatusOK {
+		t.Fatalf("copy the second account = %d %v", code, out)
+	}
+	cfg := readConfig(t, path)
+	if len(cfg.Models) != 3 {
+		t.Fatalf("rows = %d, want the source pair plus the copy", len(cfg.Models))
+	}
+	if cfg.Models[2].APIKey != "sk-second" {
+		t.Fatalf("the copy borrowed the other account's key: %+v", cfg.Models[2])
+	}
+}
+
 func TestMaskKeyDistinguishesTwoAccounts(t *testing.T) {
 	a, b := maskKey("sk-work-aaaaac992"), maskKey("sk-home-aaaaac992")
 	if a == b {
@@ -605,5 +694,147 @@ func TestMaskKeyDistinguishesTwoAccounts(t *testing.T) {
 	}
 	if maskKey("short") != "••••" {
 		t.Fatalf("a short key must not be reconstructable: %q", maskKey("short"))
+	}
+}
+
+// ---- addressing one account when two share every visible field ----
+
+// A config written before names were kept unique can hold two rows under one
+// alias with the same model id and endpoint; the credential is the only thing
+// telling them apart, and key_fingerprint is how the console learns which one
+// a click meant. Nothing consumed it, so the delete addressed the first row
+// named "ds" — the other account, and the one still in use.
+func TestRemoveModelAddressesTheAccountByKeyDigest(t *testing.T) {
+	first := config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-first"}
+	second := config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-second"}
+	h, path := newModelPanel(t, func(c *config.Config) {
+		c.Model = first
+		c.Models = []config.ModelConfig{first, second}
+	})
+
+	code, out := doJSON(t, h, authedReq(http.MethodDelete,
+		entryURL("ds", "deepseek-chat", "")+"&key="+keyFingerprint("sk-second"), nil))
+	if code != http.StatusOK {
+		t.Fatalf("delete the second account = %d %v", code, out)
+	}
+	cfg := readConfig(t, path)
+	if len(cfg.Models) != 1 || cfg.Models[0].APIKey != "sk-first" {
+		t.Fatalf("deleted the wrong account: %+v", cfg.Models)
+	}
+	if cfg.Model.APIKey != "sk-first" {
+		t.Fatalf("the delete moved the live model: %+v", cfg.Model)
+	}
+}
+
+// The same address is what an edit needs: rewriting "the first row named ds"
+// rotated the other account's credential and left the addressed one alone.
+func TestUpdateModelAddressesTheAccountByKeyDigest(t *testing.T) {
+	first := config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-first"}
+	second := config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-second"}
+	h, path := newModelPanel(t, func(c *config.Config) {
+		c.Model = first
+		c.Models = []config.ModelConfig{first, second}
+	})
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPut,
+		entryURL("ds", "deepseek-chat", "")+"&key="+keyFingerprint("sk-second"),
+		`{"max_tokens":1234}`))
+	if code != http.StatusOK {
+		t.Fatalf("update the second account = %d %v", code, out)
+	}
+	cfg := readConfig(t, path)
+	if len(cfg.Models) != 2 {
+		t.Fatalf("rows = %d, want both kept", len(cfg.Models))
+	}
+	if cfg.Models[0].MaxTokens == 1234 {
+		t.Fatalf("the edit landed on the first account: %+v", cfg.Models)
+	}
+	if cfg.Models[1].MaxTokens != 1234 {
+		t.Fatalf("the addressed account was not edited: %+v", cfg.Models)
+	}
+	if cfg.Model.APIKey != "sk-first" {
+		t.Fatalf("editing a spare account took the live slot: %+v", cfg.Model)
+	}
+}
+
+// Only the row the engine is actually dialing is "in use". Identity that
+// stopped at alias+model+endpoint lit both accounts, so the page claimed two
+// live models and its one-click switch refused both tiles as already current.
+func TestListModelsMarksOnlyTheLiveAccount(t *testing.T) {
+	first := config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-first"}
+	second := config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", APIKey: "sk-second"}
+	h, _ := newModelPanel(t, func(c *config.Config) {
+		c.Model = second
+		c.Models = []config.ModelConfig{first, second}
+	})
+
+	code, out := doJSON(t, h, authedReq(http.MethodGet, "/api/models", nil))
+	if code != http.StatusOK {
+		t.Fatalf("list = %d", code)
+	}
+	rows, _ := out["models"].([]any)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	live := 0
+	for _, raw := range rows {
+		m, _ := raw.(map[string]any)
+		if m["active"] == true {
+			live++
+			if m["key_fingerprint"] != keyFingerprint("sk-second") {
+				t.Fatalf("wrong account marked live: %v", m)
+			}
+		}
+	}
+	if live != 1 {
+		t.Fatalf("live rows = %d, want exactly the one in use", live)
+	}
+}
+
+// A row's endpoint is one address even when the config spells it two ways. The
+// console gets its base_url from the renderer, which reports the form the
+// client will dial, so a stored "https://x/v1/" and an addressed
+// "https://x/v1" are the same row — strict equality answered "no such model"
+// and left the operator with a row the page could not delete.
+func TestSameEntryTreatsOneEndpointSpelledTwoWaysAsOneRow(t *testing.T) {
+	a := config.ModelConfig{Name: "x", BaseURL: "https://api.example/v1/", Model: "m", APIKey: "k"}
+	b := config.ModelConfig{Name: "x", BaseURL: "https://api.example/v1", Model: "m", APIKey: "k"}
+	if !sameEntry(a, b) {
+		t.Fatal("an endpoint with and without a trailing slash is one row")
+	}
+	// The credential is what keeps two accounts apart, and it must still be
+	// part of the identity — tolerating the endpoint must not merge them.
+	c := b
+	c.APIKey = "other"
+	if sameEntry(a, c) {
+		t.Fatal("two accounts that share the endpoint are still two rows")
+	}
+}
+
+func TestRemoveModelAddressesAnEndpointSpelledWithATrailingSlash(t *testing.T) {
+	stale := config.ModelConfig{
+		Name: "stale", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://stale.example/v1/", Model: "m", APIKey: "k1",
+	}
+	spare := config.ModelConfig{
+		Name: "spare", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://spare.example/v1", Model: "m", APIKey: "k2",
+	}
+	h, path := newModelPanel(t, func(c *config.Config) {
+		c.Model = stale
+		c.Models = []config.ModelConfig{spare}
+	})
+
+	code, out := doJSON(t, h, authedReq(http.MethodDelete,
+		entryURL("stale", "m", "https://stale.example/v1"), nil))
+	if code != http.StatusOK {
+		t.Fatalf("delete a live row whose endpoint carries a trailing slash = %d %v", code, out)
+	}
+	if out["switched_to"] != "spare" {
+		t.Fatalf("switched_to = %v, want the promoted spare", out["switched_to"])
+	}
+	cfg := readConfig(t, path)
+	if cfg.Model.Alias() != "spare" {
+		t.Fatalf("live model = %q, want spare", cfg.Model.Alias())
 	}
 }

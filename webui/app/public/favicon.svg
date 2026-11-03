@@ -1,6 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect width="64" height="64" rx="16" fill="#173227"/>
-  <path d="M39.5 15.5H29a16.5 16.5 0 1 0 16.3 19" stroke="#f7f6f0" stroke-width="6" stroke-linecap="round"/>
-  <path d="M27 32h21" stroke="#55c895" stroke-width="6" stroke-linecap="round"/>
-  <circle cx="48" cy="32" r="5" fill="#55c895"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="OpenPanda">
+  <rect width="64" height="64" rx="14" fill="#05070b"/>
+  <g>
+    <ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)" fill="none" stroke="#6fc7a1" stroke-width="2.3" pathLength="100" stroke-dasharray="82 18" stroke-linecap="round"/>
+    <path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="#f2e8cf"/>
+    <circle cx="56.1" cy="22.3" r="2.9" fill="#6fc7a1"/>
+    <circle cx="39.2" cy="20.3" r="1.9" fill="#6fc7a1"/>
+  </g>
 </svg>

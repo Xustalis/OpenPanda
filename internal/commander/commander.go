@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
@@ -82,7 +83,30 @@ type Router struct {
 	// already knows is failing without maintaining a second record. Nil means
 	// "no breaker here" and never demotes.
 	agentBlocked func(name string) bool
+
+	// cooldown is the router's own short-memory of dispatch failures. The
+	// static availability probe cannot see a CLI that is installed but not
+	// logged in (dsh) or whose background service will not start (opencode);
+	// the first real failure can. Recording it here keeps a supervisor retry
+	// or the next task from handing the same broken CLI another attempt while
+	// a healthy candidate exists. Cleared by a successful run. Pointer-held so
+	// WithAgents' struct copy shares one state instead of copying a lock.
+	cooldown *agentCooldown
 }
+
+// agentCooldown holds the per-agent dispatch-failure cooldown. The mutex lives
+// in the pointed-to state, not in Router, so the roster clone in WithAgents
+// shares the record without copying a lock.
+type agentCooldown struct {
+	mu     sync.Mutex
+	until  map[string]time.Time
+	reason map[string]string
+}
+
+// dispatchFailureCooldown is how long a real dispatch failure keeps an agent
+// out of the candidate pool. Long enough to cover a supervisor retry ladder,
+// short enough that fixing credentials does not require a daemon restart.
+const dispatchFailureCooldown = 5 * time.Minute
 
 // NewRouter builds a router from this node's capability card. The model
 // config is injected into agent adapter subprocesses only as the injection
@@ -99,6 +123,7 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 		pandaTools:      routing.NormalizedPandaTools(),
 		preferred:       routing.PreferredAgents,
 		agentModels:     routing.AgentModels,
+		cooldown:        &agentCooldown{},
 	}
 	r.runAdapter = r.runAdapterDefault
 	r.runProcess = runAdapterProcess
@@ -473,6 +498,13 @@ func (r *Router) RankAgents(required []string) []AgentCandidate {
 		if r.agentBlocked != nil && r.agentBlocked(name) {
 			score *= agentBlockedPenalty
 		}
+		// The same demotion for an agent whose last run never got off the
+		// ground (missing credential, dead background service). The static
+		// probe cannot see that state; the runtime just did. Demoted rather
+		// than dropped so a node with only one capable agent stays routable.
+		if _, _, cooling := r.agentCooldown(name); cooling {
+			score *= agentBlockedPenalty
+		}
 		out = append(out, AgentCandidate{Name: name, Agent: ag, Score: score})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -738,7 +770,7 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 				name+" ("+defense.ErrNotAuthorized.Error()+": adapter has no restricted mode; authorize the task to run it)")
 			continue
 		}
-		if !r.probeAgent(name, ag) {
+		if !r.agentDispatchable(name, ag) {
 			// Explain the skip in dispatch terms — "no model configured",
 			// "endpoint unreachable", "cli not found" — not a bare
 			// "unavailable", so the failure that eventually surfaces names
@@ -855,6 +887,9 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 
 		// If execution succeeded, or if user explicitly cancelled, return immediately.
 		if ar.OK || ctx.Err() != nil {
+			if ar.OK {
+				r.clearAgentDispatchFailure(name)
+			}
 			return res
 		}
 
@@ -879,6 +914,10 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		if !agentFallbackEligible(ar) {
 			return res
 		}
+		// This run never got off the ground. Remember it so a supervisor
+		// retry or the next task does not hand the same locked-out CLI
+		// another 2.5-minute attempt.
+		r.markAgentDispatchFailure(name, describeAgentFailure(ar))
 		unavailable = append(unavailable, fmt.Sprintf("%s (exec failed: %s)", name, describeAgentFailure(ar)))
 		// If this was the last attempt, return the failure result
 		if i == len(attempts)-1 {
@@ -924,6 +963,11 @@ var agentDispatchFailurePatterns = []string{
 	"unauthorized", "authentication failed", "authentication error",
 	"invalid api key", "invalid_api_key", "incorrect api key",
 	"no api key", "missing api key", "missing credentials", "no credentials",
+	// dsh and its harness family word the same condition as
+	// "MISSING_CREDENTIAL: … no credential for provider …": the underscore
+	// and the singular noun escaped every pattern above, so a task stayed on
+	// a CLI that could never run instead of falling through to another one.
+	"missing_credential", "missing credential", "no credential",
 	"insufficient", "quota exceeded", "insufficient_quota", "out of credits",
 	"billing", "account funds",
 	"model not found", "unknown model", "invalid model", "unrecognized_model",
@@ -931,6 +975,12 @@ var agentDispatchFailurePatterns = []string{
 	"certificate", "tls handshake", "ssl", "x509",
 	"rate limit", "rate_limit", "429", "overloaded",
 	"bad gateway", "service unavailable", "upstream request failed",
+	// A CLI that installs and prints a version but cannot bring up its own
+	// background service (opencode) fails before doing any work; retrying it
+	// in place is the same dead end.
+	"timed out waiting for the background service",
+	"background service to start",
+	"could not run", "failed to start", "unable to start",
 	"adapter output not json",
 }
 
@@ -1326,6 +1376,72 @@ func (r *Router) AgentViable(name string, ag ledger.Agent) bool {
 	return modelConfigured(m) && m.APIKey != "" && supportsModelInjection(name, ag.Adapter, m)
 }
 
+// cooldownState returns the shared record, lazily creating it for a Router
+// assembled outside NewRouter (tests). Production always constructs one with
+// the field set.
+func (r *Router) cooldownState() *agentCooldown {
+	if r.cooldown == nil {
+		r.cooldown = &agentCooldown{}
+	}
+	return r.cooldown
+}
+
+// markAgentDispatchFailure records that an agent could not even start its
+// run (missing credential, dead provider account, background service that
+// will not come up). The next routing pass skips it until the cooldown
+// expires or a run on it succeeds.
+func (r *Router) markAgentDispatchFailure(name, reason string) {
+	if name == "" {
+		return
+	}
+	c := r.cooldownState()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.until == nil {
+		c.until = make(map[string]time.Time)
+		c.reason = make(map[string]string)
+	}
+	c.until[name] = time.Now().Add(dispatchFailureCooldown)
+	c.reason[name] = strings.TrimSpace(reason)
+}
+
+// clearAgentDispatchFailure re-admits an agent after a successful run.
+func (r *Router) clearAgentDispatchFailure(name string) {
+	c := r.cooldownState()
+	c.mu.Lock()
+	delete(c.until, name)
+	delete(c.reason, name)
+	c.mu.Unlock()
+}
+
+// agentCooldown reports the remaining cooldown and its recorded reason.
+func (r *Router) agentCooldown(name string) (time.Duration, string, bool) {
+	c := r.cooldownState()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	until, ok := c.until[name]
+	if !ok {
+		return 0, "", false
+	}
+	left := time.Until(until)
+	if left <= 0 {
+		delete(c.until, name)
+		delete(c.reason, name)
+		return 0, "", false
+	}
+	return left, c.reason[name], true
+}
+
+// agentDispatchable is the routing gate: the static probe plus this router's
+// recent-failure memory. execAgent and Route both go through it so a test
+// prober cannot accidentally bypass a cooldown the last run just recorded.
+func (r *Router) agentDispatchable(name string, ag ledger.Agent) bool {
+	if _, _, cooling := r.agentCooldown(name); cooling {
+		return false
+	}
+	return r.probeAgent(name, ag)
+}
+
 // AgentDispatchable reports whether an agent is ready to receive a task right
 // now: statically viable (AgentViable) AND able to reach the model endpoint
 // its run would actually use. The second check is what catches the
@@ -1348,6 +1464,12 @@ func (r *Router) AgentUsableReason(name string, ag ledger.Agent) (bool, string) 
 // list intentionally mirrors AgentViable's order — runtime/runtime, binary,
 // credentials/injection — then appends the live endpoint probe.
 func (r *Router) agentUsable(name string, ag ledger.Agent) (usable bool, reason string) {
+	if left, why, cooling := r.agentCooldown(name); cooling {
+		if why == "" {
+			why = "recent dispatch failure"
+		}
+		return false, fmt.Sprintf("recent dispatch failure (%s, %s left)", why, left.Round(time.Second))
+	}
 	// Same interpreter exemption as AgentViable: adapter "generic" (no .py)
 	// is implemented natively.
 	if ag.Adapter != agents.GenericNativeAdapter && !pyexec.Available() {
@@ -1516,7 +1638,7 @@ func (r *Router) PlanUsable(p Plan) bool {
 		if name == "" {
 			continue
 		}
-		if ag, ok := r.card.Agents[name]; ok && r.probeAgent(name, ag) {
+		if ag, ok := r.card.Agents[name]; ok && r.agentDispatchable(name, ag) {
 			return true
 		}
 	}
@@ -1543,7 +1665,7 @@ func (r *Router) PlanUnusableReason(p Plan) string {
 			parts = append(parts, name+": not in the capability card")
 			continue
 		}
-		if r.probeAgent(name, ag) {
+		if r.agentDispatchable(name, ag) {
 			return ""
 		}
 		_, reason := r.AgentUsableReason(name, ag)

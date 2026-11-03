@@ -182,8 +182,15 @@ go install github.com/Xustalis/OpenPanda/cmd/panda@latest
 panda init      # interactively generate config.yaml and the capability card
 panda repl      # enter the interactive command line
 panda web       # open the embedded Web console (loopback listener, auto login)
+panda service install   # register the console as a user service (survives logout/reboot)
 panda doctor    # self-check: binary / PATH / config / adapters / agents ready
 ```
+
+> `panda service` manages the **console** service (`com.openpanda.web` on
+> macOS, `openpanda-web.service` on Linux, `OpenPandaWeb` on Windows). The
+> daemon's own auto-start unit is still registered by the installer; both can
+> coexist — when the daemon holds the identity lock the console becomes a
+> borrowed engine instead of claiming the node.
 
 > The auto-start service launches `panda daemon` (without
 > `--config`/`--card`): the daemon discovers configuration the same way

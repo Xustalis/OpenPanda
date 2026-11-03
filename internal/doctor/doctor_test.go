@@ -257,3 +257,29 @@ func TestMissingEndpointCheckTracksTheResolver(t *testing.T) {
 		}
 	}
 }
+
+// TestDatabaseDirWritable pins the fresh-install distinction: a missing file
+// in a writable directory is "not initialized yet", while a missing parent
+// directory is a real failure the user has to fix.
+func TestDatabaseDirWritable(t *testing.T) {
+	dir := t.TempDir()
+	if !databaseDirWritable(filepath.Join(dir, "openpanda.db")) {
+		t.Fatal("a missing DB in a writable directory must read as uninitialized")
+	}
+	if databaseDirWritable(filepath.Join(dir, "missing", "openpanda.db")) {
+		t.Fatal("a missing parent directory must not read as uninitialized")
+	}
+}
+
+// TestMeshSingleNodePasses: no configured peers means there is nowhere to
+// rendezvous by definition. The loopback install must not fail its self-check.
+func TestMeshSingleNodePasses(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DBPath = newTestDB(t)
+	cfg.Network.Peers = nil
+	cfg.Network.BootstrapEdges = 2
+	c := checkMesh(cfg)
+	if c.Key != "doctor.mesh.single" || !c.OK {
+		t.Fatalf("mesh check = %+v, want a passing single-node result", c)
+	}
+}

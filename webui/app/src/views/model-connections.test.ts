@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ModelEntry, ModelsResponse } from '../api/client.ts'
-import { connIdOf, copyAlias, groupConnections, hostOf, keyOf } from './model-connections.ts'
+import { connIdOf, copyAlias, groupConnections, hostOf, keyOf, refOf } from './model-connections.ts'
 
 /** A wire entry with only the fields these tests care about; the rest of the
  *  payload is the panel's and is not read here. */
@@ -78,6 +78,25 @@ test('copyAlias walks past the suffixes already taken', () => {
 
 test('keyOf distinguishes rows that differ only by model', () => {
   assert.notEqual(keyOf(entry({ model: 'a' })), keyOf(entry({ model: 'b' })))
+})
+
+test('keyOf distinguishes two accounts that share every visible field', () => {
+  // The alias, the model id and the endpoint are what two accounts of one
+  // vendor share; the key digest is the one thing that tells them apart, so it
+  // is part of the React key and of the per-row busy flag.
+  const work = entry({ key_fingerprint: 'aaaa1111' })
+  const home = entry({ key_fingerprint: 'bbbb2222' })
+  assert.notEqual(keyOf(work), keyOf(home))
+})
+
+test('refOf carries the key digest so one account can be addressed', () => {
+  const ref = refOf(entry({ key_fingerprint: 'aaaa1111' }))
+  assert.equal(ref.key, 'aaaa1111')
+  assert.equal(ref.model, 'm-1')
+  // A row with no key must not send an empty narrowing parameter: the server
+  // would treat "key=" as no key at all, which is right, but the query string
+  // should stay clean.
+  assert.equal(refOf(entry({ key_fingerprint: undefined })).key, undefined)
 })
 
 test('hostOf prints an unparsable address as typed', () => {

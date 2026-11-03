@@ -1,0 +1,604 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- The side dock -------------------------------------------------------
+   One column on the right of a thread: the thread's work, its files, a page
+   being read, a conversation beside it.
+
+   The dock is the second track of `.chat`'s grid (see chat.css). That is the
+   difference that matters visually: a column that owns a track narrows the
+   reading pane, so the two surfaces sit side by side as two cards with a
+   gutter between them. The earlier version was absolutely positioned with a
+   single hairline for a border, and against a white pane it read as one large
+   white area with a scratch down the middle.
+
+   Geometry is the same promise the header cards keep — the pane reserves a
+   lane (`--panel-lane`) and the reading block slides left as one piece — but
+   the dock no longer needs that mechanism: it takes real width, so the pane
+   reflows instead of being padded away. */
+
+.dock {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+}
+/* Folded, the dock is gone: a card with nothing in it is not a resting state,
+   it is a piece of furniture in the way. The pane head owns the way back. */
+.dock:not(.is-open) {
+  display: none;
+}
+
+/* The width handle: a hairline that widens on hover. It lives just inside the
+   card's left edge rather than straddling the gutter — the dock clips its own
+   content (rounded corner), so a handle hung outside it would be cut off and
+   dead. A 12px band on the seam is where a pointer lands anyway. */
+.dock-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 12px;
+  cursor: col-resize;
+  z-index: 3;
+}
+.dock-grip::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: transparent;
+  transition: background var(--dur-fast);
+}
+.dock-grip:hover::after,
+.dock.is-dragging .dock-grip::after {
+  background: var(--accent, var(--border-strong));
+}
+
+/* The one head line: `+`, the tabs, the fold. 56px is the pane head's height —
+   two cards whose first rows end at different heights make the eye read the
+   seam first and the content second. */
+.dock-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  height: 56px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.dock-new,
+.dock-fold {
+  flex: none;
+}
+/* `+` is the odd one out in this row — the tabs are places, this one makes
+   something — so it gets a wider gap after it than the tabs have between them. */
+.dock-new {
+  margin-right: 6px;
+}
+.dock-fold {
+  margin-left: auto;
+}
+
+.dock-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dock-tab {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.dock-tab:hover {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+}
+.dock-tab.on {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+}
+.dock-badge {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent, #2f6ca0);
+  color: #fff;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.dock-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: dock-in var(--dur-fast) var(--ease-enter);
+}
+
+/* One wrapper per panel: the four surfaces stay mounted and take turns being
+   visible, so a tab switch keeps the file you had open, the page you were
+   reading and the question you were typing. display:flex would otherwise win
+   over the user agent's [hidden] rule — same specificity, class declared
+   later — and every panel would paint at once. */
+.dock-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.dock-pane[hidden],
+.dock-body[hidden] {
+  display: none;
+}
+@keyframes dock-in {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- Start state ---------------------------------------------------------
+   The column is open and nothing is picked. Three rows, each one a surface the
+   dock can become — the same three the tabs offer, spelled out because a bare
+   icon row does not say what a first-time reader should do.
+
+   Hung from the top edge. A block centred in a tall empty card reads as a
+   layout still waiting for its content; the same block under the head reads as
+   a list that happens to be short, which is what it is. */
+
+.dock-start {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 12px 16px;
+  overflow-y: auto;
+}
+.dock-start-title {
+  margin: 0 0 6px;
+  padding: 0 10px;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+.dock-start-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 10px;
+  border: 0;
+  border-radius: var(--radius-md, 8px);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.dock-start-row:hover {
+  background: var(--bg-inset);
+}
+.dock-start-row svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+.dock-start-name {
+  flex: none;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.dock-start-hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+/* The task rail was built as an absolute column of its own. Inside the dock it
+   is one panel among four, so it gives up its geometry and keeps its body. */
+.dock-body .task-rail {
+  position: static;
+  width: 100%;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  border-left: 0;
+  box-shadow: none;
+  animation: none;
+  flex: 1;
+  min-height: 0;
+}
+/* Its head is a second title bar saying what the dock head already says: the
+   tab that is lit is the task list, and the count rides that tab as a badge.
+   Leaving it in put a "任务栏 ✕" row under a row that had the same word and a
+   fold control of its own — the clearest case of a control drawn twice. */
+.dock-body .task-rail-head {
+  display: none;
+}
+.dock-body .task-rail-body {
+  padding-top: 10px;
+}
+
+/* ---- Files ---------------------------------------------------------------
+   A directory to walk on top, the file you stopped on filling the rest. The
+   list and the file view share the head row (up/back, the path, the actions),
+   so moving between them does not jump the eye. */
+
+.dock-files,
+.dock-file,
+.dock-browser,
+.side-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.df-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  min-height: 40px;
+}
+.df-up {
+  flex: none;
+}
+.df-cwd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  direction: rtl;
+  text-align: left;
+}
+.df-line-no {
+  color: var(--text-tertiary);
+}
+.df-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 6px 12px;
+}
+.df-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.df-row:hover {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+}
+.df-row svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.df-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+.df-size {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.df-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.df-code {
+  margin: 0;
+  padding: 8px 0 16px;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+.df-line {
+  display: flex;
+  gap: 10px;
+  padding: 0 12px;
+  white-space: pre;
+}
+.df-line.is-focus {
+  background: var(--bg-inset);
+  box-shadow: inset 2px 0 0 var(--accent, #2f6ca0);
+}
+.df-num {
+  flex: none;
+  width: 3.2em;
+  text-align: right;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.df-text {
+  flex: 1;
+  min-width: 0;
+}
+.df-note {
+  margin: 10px 14px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.df-note.is-error {
+  color: var(--danger, #b3261e);
+}
+.df-foot {
+  flex: none;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+/* ---- Browser -------------------------------------------------------------
+   Chrome on top, the frame below it. The frame is sandboxed by both the
+   iframe attribute and the response's CSP; nothing here reads into it. */
+
+.db-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.db-nav {
+  flex: none;
+  width: 26px;
+  height: 26px;
+}
+.db-nav.on {
+  background: var(--bg-inset);
+  color: var(--accent, #2f6ca0);
+}
+.db-url {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  font-size: var(--text-sm);
+}
+.db-title {
+  flex: none;
+  margin: 0;
+  padding: 4px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.db-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+}
+.db-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+.db-pick-hint {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm, 6px);
+  background: rgba(20, 20, 20, 0.82);
+  color: #fff;
+  font-size: var(--text-xs);
+  pointer-events: none;
+}
+.db-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  color: var(--text-tertiary);
+}
+.db-empty-hint {
+  margin: 0;
+  max-width: 24em;
+  text-align: center;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+.db-annotate {
+  flex: none;
+  border-top: 1px solid var(--border-soft);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-raised);
+}
+.db-pick {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+.db-comment {
+  width: 100%;
+  resize: vertical;
+  font-size: var(--text-sm);
+}
+.db-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---- Side conversation ---------------------------------------------------
+   A read-only conversation beside the thread. No task cards, no dispatch
+   affordances: the only crossing back is "insert into the composer", which
+   makes the reader the one who decides what the thread should do about it. */
+
+.side-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.side-empty {
+  margin: auto 0;
+  padding: 8px 4px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.side-empty svg {
+  color: var(--text-tertiary);
+}
+.side-empty p {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+.side-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.side-who {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.side-q {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-inset);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.side-md {
+  font-size: var(--text-sm);
+}
+.side-typing {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+.side-acts {
+  display: flex;
+  gap: 12px;
+  padding-top: 2px;
+}
+.side-status,
+.side-err {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+.side-err {
+  color: var(--danger, #b3261e);
+}
+.side-compose {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border-soft);
+}
+.side-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+/* Below this the two cards can no longer both be cards: under ~710px of canvas
+   (the `.main` content box — container queries measure that, so the 20px of
+   padding is already out) the reading pane drops below 320px once a 380px dock
+   and the gutter are taken out, and a 90px column of Chinese text wraps to one
+   character per line. The dock gives up its track and becomes a layer instead.
+
+   Measured against the canvas, not the window (see shell.css): the navigation
+   rail takes ~280px before the pane even starts, so the same window width
+   means very different amounts of room here. */
+@container reading (max-width: 709px) {
+  .chat,
+  .chat.dock-open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dock.is-open {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    bottom: 10px;
+    width: min(var(--dock-w, 380px), calc(100% - 20px));
+    z-index: 30;
+    /* A layer needs an edge: without the shadow the page behind reads as a
+       broken layout rather than a panel on top of it. */
+    box-shadow: -18px 0 40px -18px rgb(0 0 0 / 28%), var(--shadow-xl);
+  }
+  /* And the page behind has to recede, or "on top" is indistinguishable from
+     "next to" — the same two white cards, now with their corners crossing. */
+  .chat.dock-open::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 29;
+    border-radius: var(--radius-xl);
+    background: rgb(12 14 16 / 14%);
+    pointer-events: none;
+  }
+}

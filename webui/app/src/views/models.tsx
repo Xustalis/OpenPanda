@@ -187,6 +187,7 @@ export function ModelsSection() {
         api_type: e.api_type,
         alias,
         copy_from: e.alias,
+        copy_from_key: e.key_fingerprint,
       })
       // Report the row that was created, not the source: the toast is how the
       // user learns which alias to look for.
@@ -204,9 +205,11 @@ export function ModelsSection() {
     try {
       const r = await api.removeModel(m.entry.alias, refOf(m.entry))
       toast(
-        r.switched_to
-          ? t('models.removedSwitched', { alias: m.entry.alias, next: r.switched_to })
-          : t('models.removed', { alias: m.entry.alias }),
+        r.cleared
+          ? t('models.removedLast', { alias: m.entry.alias })
+          : r.switched_to
+            ? t('models.removedSwitched', { alias: m.entry.alias, next: r.switched_to })
+            : t('models.removed', { alias: m.entry.alias }),
         'success',
       )
       afterWrite()
@@ -467,9 +470,10 @@ function ModelTile(props: {
             >
               <Icon name="pencil" size={15} />
             </button>
-            {/* Copy exists because the same account often serves one more id
-                than the config lists: duplicating the row carries the key and
-                the overrides the form can never echo back. */}
+            {/* The row in use is a configuration like any other, registered
+                or not: hiding its delete button is how a model got stuck in a
+                config for good. Copy stays with the registry rows, because a
+                duplicate is a row a later delete can address. */}
             {props.m.registry && (
               <button
                 type="button"
@@ -482,18 +486,16 @@ function ModelTile(props: {
                 <Icon name="copy" size={15} />
               </button>
             )}
-            {props.m.registry && (
-              <button
-                type="button"
-                class="model-tile-act"
-                title={t('models.remove')}
-                aria-label={t('models.remove')}
-                disabled={props.busy !== ''}
-                onClick={() => setConfirming(true)}
-              >
-                <Icon name="trash" size={15} />
-              </button>
-            )}
+            <button
+              type="button"
+              class="model-tile-act"
+              title={t('models.remove')}
+              aria-label={t('models.remove')}
+              disabled={props.busy !== ''}
+              onClick={() => setConfirming(true)}
+            >
+              <Icon name="trash" size={15} />
+            </button>
           </>
         )}
       </div>

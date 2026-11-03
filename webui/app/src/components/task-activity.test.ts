@@ -10,8 +10,8 @@ const trace = (type: TraceEvent['type'], data: Record<string, unknown>, ts = 1):
   ({ id: 1, ts, type, data }) as TraceEvent
 
 describe('task-activity', () => {
-  it('renders the executing agent from exec_agent_start', () => {
-    setLocale('en')
+  it('renders the executing agent from exec_agent_start', async () => {
+    await setLocale('en')
     const line = latestActivity(
       [trace('exec_agent_start', { agent: 'codex', adapter: 'codex.py' })],
       { state: 'running' },
@@ -19,8 +19,8 @@ describe('task-activity', () => {
     assert.equal(line, 'Running codex')
   })
 
-  it('shows the supervision round', () => {
-    setLocale('en')
+  it('shows the supervision round', async () => {
+    await setLocale('en')
     const line = latestActivity(
       [trace('supervision_round', { round: 2, verdict_status: 'continue' })],
       { state: 'running' },
@@ -28,29 +28,29 @@ describe('task-activity', () => {
     assert.equal(line, 'Supervision round 2')
   })
 
-  it('falls back to a waiting line for queued tasks with no traces', () => {
-    setLocale('en')
+  it('falls back to a waiting line for queued tasks with no traces', async () => {
+    await setLocale('en')
     assert.equal(latestActivity([], { state: 'queued' }), 'Waiting to be picked up…')
     assert.equal(latestActivity([], { state: 'done' }), '')
   })
 
-  it('shows elapsed time for a running task with no traces', () => {
-    setLocale('en')
+  it('shows elapsed time for a running task with no traces', async () => {
+    await setLocale('en')
     const now = Date.now()
     const updated = new Date(now - 3 * 60_000).toISOString()
     const line = latestActivity([], { state: 'running', updated_at: updated }, now)
     assert.equal(line, 'Running for 3m')
   })
 
-  it('handles string data payloads on trace frames', () => {
-    setLocale('en')
+  it('handles string data payloads on trace frames', async () => {
+    await setLocale('en')
     const ev = trace('exec_agent_start', {})
     ;(ev as { data: unknown }).data = '{"agent":"claude"}'
     const line = latestActivity([ev], { state: 'running' })
     assert.equal(line, 'Running claude')
   })
 
-  it('marks only moving states as active', () => {
+  it('marks only moving states as active', async () => {
     assert.equal(isActiveState('running'), true)
     assert.equal(isActiveState('queued'), true)
     assert.equal(isActiveState('done'), false)
@@ -58,8 +58,8 @@ describe('task-activity', () => {
     assert.equal(isActiveState(undefined), false)
   })
 
-  it('formats elapsed durations compactly', () => {
-    setLocale('en')
+  it('formats elapsed durations compactly', async () => {
+    await setLocale('en')
     const now = Date.now()
     assert.equal(fmtElapsed(new Date(now - 30_000).toISOString(), now), '30s')
     assert.equal(fmtElapsed(new Date(now - 5 * 60_000).toISOString(), now), '5m')
@@ -68,8 +68,8 @@ describe('task-activity', () => {
   })
 
   // — Agent-activity stream: the board narrates what the run is doing.
-  it('narrates a tool call with its primary argument', () => {
-    setLocale('en')
+  it('narrates a tool call with its primary argument', async () => {
+    await setLocale('en')
     const line = latestActivity(
       [trace('agent_event', { ev: 'tool_use', name: 'bash', input: { command: 'ls -la' } })],
       { state: 'running' },
@@ -77,8 +77,8 @@ describe('task-activity', () => {
     assert.equal(line, 'bash · ls -la')
   })
 
-  it('names the tool when the input has no readable argument', () => {
-    setLocale('en')
+  it('names the tool when the input has no readable argument', async () => {
+    await setLocale('en')
     const line = latestActivity(
       [trace('agent_event', { ev: 'tool_use', name: 'dsh', input: { argc: 3 } })],
       { state: 'running' },
@@ -86,8 +86,8 @@ describe('task-activity', () => {
     assert.equal(line, 'dsh · 3 args')
   })
 
-  it('shows thinking and streamed text', () => {
-    setLocale('en')
+  it('shows thinking and streamed text', async () => {
+    await setLocale('en')
     assert.equal(
       latestActivity([trace('agent_event', { ev: 'thinking' })], { state: 'running' }),
       'Thinking…',
@@ -99,8 +99,8 @@ describe('task-activity', () => {
     assert.equal(line, 'Writing snake.py with curses')
   })
 
-  it('re-words the adapter silence note instead of pasting the wire string', () => {
-    setLocale('en')
+  it('re-words the adapter silence note instead of pasting the wire string', async () => {
+    await setLocale('en')
     const line = latestActivity(
       [trace('progress', { note: 'no output for 56s — agent still running' })],
       { state: 'running' },
@@ -108,8 +108,8 @@ describe('task-activity', () => {
     assert.equal(line, 'No output for 56s — still running')
   })
 
-  it('sums all token fields on usage events', () => {
-    setLocale('en')
+  it('sums all token fields on usage events', async () => {
+    await setLocale('en')
     const line = latestActivity(
       [
         trace('agent_usage', {
@@ -123,8 +123,8 @@ describe('task-activity', () => {
     assert.equal(line, '12.7k tokens used')
   })
 
-  it('reads the last_event stamp like a stream frame', () => {
-    setLocale('en')
+  it('reads the last_event stamp like a stream frame', async () => {
+    await setLocale('en')
     const lastEvent = {
       id: 9,
       ts: 1,
@@ -135,7 +135,7 @@ describe('task-activity', () => {
     assert.equal(line, 'write · snake.py')
   })
 
-  it('lists the jobs still running, in dispatch order', () => {
+  it('lists the jobs still running, in dispatch order', async () => {
     // A batch: two colleagues are home, one is still working. Only the live
     // one gets a row, and it is the row the thread draws last.
     const rows = [
@@ -146,7 +146,7 @@ describe('task-activity', () => {
     assert.deepEqual(liveTaskIds(rows), ['c'])
   })
 
-  it('keeps dispatch order when several jobs run at once', () => {
+  it('keeps dispatch order when several jobs run at once', async () => {
     const rows = [
       { id: 'late', state: 'running', created_at: '2026-10-23T21:12:00+08:00' },
       { id: 'early', state: 'queued', created_at: '2026-10-23T21:11:58+08:00' },
@@ -154,7 +154,7 @@ describe('task-activity', () => {
     assert.deepEqual(liveTaskIds(rows), ['early', 'late'])
   })
 
-  it('gives a spawned sub-agent no row of its own', () => {
+  it('gives a spawned sub-agent no row of its own', async () => {
     const rows = [
       { id: 'root', state: 'running', created_at: '2026-10-23T21:11:58+08:00' },
       { id: 'child', state: 'running', created_at: '2026-10-23T21:11:59+08:00', spawn_depth: 1 },

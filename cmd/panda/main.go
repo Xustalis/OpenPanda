@@ -412,43 +412,9 @@ func runDaemon(args []string) {
 			logger.Info("subprocess sandbox enabled", "mode", mode, "backend", backend)
 		}
 	}
-	// A secret-less node cannot mesh at all: the WS listener refuses to
-	// start and discovery stays listen-only. Rather than booting a node
-	// that is silently unreachable, mint one here and persist it into the
-	// config so the next start (and any `panda nodes`/pair output) sees the
-	// same material. The secret creates a standalone mesh domain — a node
-	// joining an existing mesh later adopts the inviter's secret via pair.
-	if cfg.Network.SharedSecret == "" {
-		// Silent rekey guard: a node that HAS a mesh — configured peers, or
-		// registered remote nodes in the directory — but no secret almost
-		// certainly lost its credential (OPENPANDA_SHARED_SECRET not passed
-		// this start, or the file's field was cleared). Minting a fresh
-		// secret anyway exiles the node permanently: every configured peer
-		// rejects its hello until the ORIGINAL secret is restored. Scream
-		// about it, and keep the wrong value off disk — a persisted mismatch
-		// would exile the node on every future env-less start too.
-		meshed := len(cfg.Network.Peers) > 0 || hasMeshHistory(db, runtimeNodeID)
-		if secret, serr := generateSharedSecret(); serr == nil {
-			cfg.Network.SharedSecret = secret
-			switch {
-			case meshed:
-				logger.Error("network.shared_secret is empty on a node that has meshed before — "+
-					"a fresh in-memory secret was minted and configured peers WILL REJECT it. "+
-					"If this node previously joined a mesh via OPENPANDA_SHARED_SECRET or `panda pair`, "+
-					"stop it and restore the original secret; pairing again also re-adopts the mesh secret",
-					"configured_peers", len(cfg.Network.Peers))
-			default:
-				if werr := config.UpdateNetworkSection(*configPath,
-					config.NetworkConfig{SharedSecret: secret}); werr != nil {
-					logger.Warn("generated shared secret could not be persisted (in-memory only)", "err", werr)
-				} else {
-					logger.Info("generated and saved shared secret", "config", *configPath)
-				}
-			}
-		} else {
-			logger.Warn("could not generate shared secret", "err", serr)
-		}
-	}
+	// Whichever process owns the node row needs a mesh secret; the bootstrap
+	// (and its lost-credential guard) is shared with `panda web`.
+	ensureSharedSecret(cfg, db, runtimeNodeID, *configPath, logger)
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 	coreNode.SetAllowCleartext(cfg.Network.AllowCleartext)
 	coreNode.SetCleartextAllowlist(cfg.Network.AllowCleartextFor)
