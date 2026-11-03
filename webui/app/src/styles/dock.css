@@ -374,6 +374,71 @@
   font-size: var(--text-xs);
 }
 
+/* The dev strip: the project's live server, above the address bar. It is
+   chrome, not a page, so start/stop stays reachable after navigating away. */
+.db-dev {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  font-size: var(--text-xs);
+}
+.db-dev-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.db-dev-dot.is-ready {
+  background: var(--accent, #2f6ca0);
+}
+.db-dev-dot.is-starting {
+  background: var(--accent, #2f6ca0);
+  animation: db-dev-pulse 1.2s ease-in-out infinite;
+}
+.db-dev-dot.is-failed {
+  background: var(--danger, #b3261e);
+}
+.db-dev-label {
+  flex: none;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.db-dev-target {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+}
+.db-dev-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.db-dev-error {
+  flex: none;
+  margin: 0;
+  padding: 6px 10px;
+  max-height: 84px;
+  overflow: auto;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--danger, #b3261e);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+@keyframes db-dev-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* ---- Browser -------------------------------------------------------------
    Chrome on top, the frame below it. The frame is sandboxed by both the
    iframe attribute and the response's CSP; nothing here reads into it. */

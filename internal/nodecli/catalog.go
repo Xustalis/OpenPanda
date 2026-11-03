@@ -229,6 +229,9 @@ var catalog = []Command{
 	{Names: []string{"audit"},
 		Usage:   "panda audit verify|entries [--task ID]",
 		HelpKey: "cli.help.d.audit_verify", Group: GroupObservability},
+	{Names: []string{"browser"},
+		Usage:   "panda browser open <url> | snapshot | click <sel> | type <sel> <text> | screenshot",
+		HelpKey: "cli.help.d.browser", Group: GroupObservability},
 
 	// — setup —
 	{Names: []string{"install", "uninstall"},

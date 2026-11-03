@@ -42,6 +42,8 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增功能
 
+- **项目开发服务器可以实时预览** —— 项目用 `.panda/dev.json` 声明（`command`、`url`，可选 `auto_start`、`ready_timeout_s`）。控制台负责启动命令、等待端口响应，并用独立 origin 上的反向代理加每次启动的 token 承载：请求方法/请求体、cookie、重定向、流式响应和开发服务器自己的 WebSocket（HMR）全部透传，预览的是正在运行的应用而不是快照。任务落定且项目开启自动启动时会自动打开，侧栏同时提供启动/停止条。
+- **Agent 可以驱动真实浏览器** —— 节点通过 `panda browser` 和 `panda_browser_*` MCP 工具运行无头 Chrome：打开页面、快照（正文、带 CSS 选择器的可交互控件、无障碍树）、点击、输入、按键、滚动、执行 JS、读取 console 与 network、切换视口（mobile/tablet/desktop 或 WxH）、截图和关闭。每个节点一个浏览器 host，跨调用保留同一个标签页；Chrome 自动探测，也可用 `OPENPANDA_CHROME` 指定。执行约定现在要求：任务产出网页时，回复前用浏览器验证。
 - **ChatGPT 订阅可以充当模型行** —— Codex CLI 自己的登录可以给注册表的一行签名：`auth: codex` 配 `api_type: responses` 走 CLI 的后端，没有 API key 的计划也能用。token 每次调用都从 `~/.codex/auth.json` 读，从不写进存储——复制一份会旋转的 refresh token 会分叉刷新链，静默弄坏 CLI。该端点只接受流式调用，所以这一行走流式。
 
 - **线程有了任务栏** — 控制台线程头部可以打开一列未完成的工作：先列运行中的任务，再列等待人工处理的任务，最后是队列。点击一行会滚动到该任务在本轮对话中的卡片；线程里没有卡片时打开任务页。

@@ -26,7 +26,7 @@
 // pull a remote artifact over before showing it.
 
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
-import { api } from '../api/client'
+import { api, type DevStatus } from '../api/client'
 import { t } from '../i18n'
 import { Icon } from './icons'
 
@@ -43,6 +43,11 @@ interface PageRef {
   url: string
   direct?: boolean
   title?: string
+  /** The page needs its own origin's cookies and storage to work: a live dev
+   *  server logs in, remembers, and hydrates exactly as in a tab. Safe because
+   *  the dev listener is a different origin from the console, so the frame
+   *  still cannot reach the console's storage. Artifact pages stay opaque. */
+  sameOrigin?: boolean
 }
 
 /** A page as it is on screen: the history entry plus a reload counter, which
@@ -57,6 +62,16 @@ export interface BrowserArtifact {
   taskId: string
   hash: string
   nonce: number
+}
+
+/** A page the thread asks the pane to show directly — a project's live dev
+ *  server, which already owns its own origin. */
+export interface BrowserPageRequest {
+  url: string
+  title?: string
+  nonce: number
+  /** Live dev servers need their own cookies/storage; artifacts do not. */
+  sameOrigin?: boolean
 }
 
 /** What the pane says when it has no page to show. The artifact cases carry
@@ -74,6 +89,10 @@ export interface DockBrowserProps {
   resetSignal?: number
   /** A finished task's page, already resolved by the thread. */
   artifact?: BrowserArtifact | null
+  /** A live page (the project's dev server) to show directly. */
+  direct?: BrowserPageRequest | null
+  /** The thread's project; its .panda/dev.json drives the dev-server strip. */
+  project?: string
   /** Put the draft into the composer; absent leaves the annotate action out. */
   onInsert?: (text: string) => void
 }
@@ -88,6 +107,19 @@ function normalise(raw: string): string {
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
+}
+
+function devStateLabel(state: DevStatus['state']): string {
+  switch (state) {
+    case 'ready':
+      return t('dockBrowser.devReady')
+    case 'starting':
+      return t('dockBrowser.devStarting')
+    case 'failed':
+      return t('dockBrowser.devFailed')
+    default:
+      return t('dockBrowser.devStopped')
+  }
 }
 
 export function DockBrowser(props: DockBrowserProps) {
@@ -111,6 +143,11 @@ export function DockBrowser(props: DockBrowserProps) {
   const [prefixErr, setPrefixErr] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
   const [busy, setBusy] = useState(false)
+  // The thread's dev server: declared in .panda/dev.json, owned by the node.
+  // It is shown as a strip rather than a page so start/stop stays available
+  // even after the reader navigates elsewhere.
+  const [dev, setDev] = useState<DevStatus | null>(null)
+  const [devBusy, setDevBusy] = useState(false)
   // A proxied page is fetched server-side before the frame has anything to
   // show; the bar is the only sign of life between the click and the document.
   const [loading, setLoading] = useState(false)
@@ -272,6 +309,70 @@ export function DockBrowser(props: DockBrowserProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.artifact?.taskId, props.artifact?.hash, props.artifact?.nonce])
 
+  // The dev strip follows the thread's project. One small status read every
+  // few seconds is the only way a start/stop transition becomes visible
+  // without a subscription per pane.
+  useEffect(() => {
+    const project = props.project
+    if (!project) {
+      setDev(null)
+      return
+    }
+    let alive = true
+    const load = () => {
+      api
+        .devStatus(project)
+        .then((d) => alive && setDev(d))
+        .catch(() => alive && setDev(null))
+    }
+    load()
+    const timer = setInterval(load, 3000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [props.project])
+
+  const startDevServer = async () => {
+    if (!props.project) return
+    setDevBusy(true)
+    try {
+      setDev(await api.startDev(props.project))
+    } catch (e) {
+      setDev((prev) => (prev ? { ...prev, state: 'failed', error: errText(e) } : prev))
+    } finally {
+      setDevBusy(false)
+    }
+  }
+
+  const stopDevServer = async () => {
+    if (!props.project) return
+    setDevBusy(true)
+    try {
+      setDev(await api.stopDev(props.project))
+    } catch (e) {
+      setDev((prev) => (prev ? { ...prev, state: 'failed', error: errText(e) } : prev))
+    } finally {
+      setDevBusy(false)
+    }
+  }
+
+  const openDev = () => {
+    if (!dev?.url) return
+    showPage({ url: dev.url, direct: true, sameOrigin: true, title: dev.target ?? 'dev' }, true)
+  }
+
+  // A direct page (the live dev server) arrives already resolved: it owns its
+  // origin and its cookies, so it is framed as-is rather than fetched.
+  useEffect(() => {
+    const d = props.direct
+    if (!d) return
+    artifactSeq.current += 1
+    setBusy(false)
+    showPage({ url: d.url, direct: true, sameOrigin: d.sameOrigin, title: d.title }, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.direct?.nonce])
+
   useEffect(() => {
     function onMessage(e: MessageEvent) {
       if (!frame.current || e.source !== frame.current.contentWindow) return
@@ -409,6 +510,50 @@ export function DockBrowser(props: DockBrowserProps) {
 
   return (
     <div class="dock-browser">
+      {dev?.configured && (
+        <div class="db-dev" data-state={dev.state}>
+          <span class={`db-dev-dot is-${dev.state}`} aria-hidden="true" />
+          <span class="db-dev-label">{devStateLabel(dev.state)}</span>
+          {dev.target && (
+            <span class="db-dev-target mono" title={dev.target}>
+              {dev.target}
+            </span>
+          )}
+          <span class="db-dev-actions">
+            {dev.state === 'ready' && (
+              <button type="button" class="btn small primary" onClick={openDev}>
+                {t('dockBrowser.devOpen')}
+              </button>
+            )}
+            {dev.state === 'starting' ? (
+              <span class="dim">{t('dockBrowser.devStarting')}</span>
+            ) : dev.state === 'ready' ? (
+              <button
+                type="button"
+                class="btn small"
+                disabled={devBusy}
+                onClick={() => void stopDevServer()}
+              >
+                {t('dockBrowser.devStop')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                class="btn small"
+                disabled={devBusy}
+                onClick={() => void startDevServer()}
+              >
+                {t('dockBrowser.devStart')}
+              </button>
+            )}
+          </span>
+        </div>
+      )}
+      {dev?.state === 'failed' && dev.error && (
+        <p class="db-dev-error" title={dev.log || dev.error}>
+          {dev.error}
+        </p>
+      )}
       <form
         class="db-bar"
         onSubmit={(e) => {
@@ -571,7 +716,11 @@ export function DockBrowser(props: DockBrowserProps) {
               ref={frame}
               class="db-frame"
               src={page.direct ? page.url : `${prefix}?url=${encodeURIComponent(page.url)}`}
-              sandbox="allow-scripts allow-forms allow-popups allow-modals"
+              sandbox={
+                page.sameOrigin
+                  ? 'allow-scripts allow-forms allow-popups allow-modals allow-same-origin'
+                  : 'allow-scripts allow-forms allow-popups allow-modals'
+              }
               referrerpolicy="no-referrer"
               title={t('dockBrowser.frame')}
               onLoad={() => {

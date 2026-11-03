@@ -12,6 +12,7 @@ import {
   type AskStatusEvent,
   type ClarifyAnswer,
   type ClarifySpec,
+  type DevStatus,
   type FsFileEntry,
   type MCPSettings,
   type NodeInfo,
@@ -27,7 +28,7 @@ import {
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
 import { Dock, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH, type DockTab } from '../components/dock'
-import { DockBrowser, type BrowserArtifact } from '../components/dock-browser'
+import { DockBrowser, type BrowserArtifact, type BrowserPageRequest } from '../components/dock-browser'
 import { scanArtifacts } from '../components/auto-preview'
 import { DockFiles } from '../components/dock-files'
 import { SideChat } from '../components/side-chat'
@@ -682,6 +683,15 @@ export function SessionsView({
   // request into the panel, not a surface of its own: the panel owns the frame
   // and the error state, this only names the task.
   const [pageAsk, setPageAsk] = useState<BrowserArtifact | null>(null)
+  // A live page (the project's dev server) the thread asked to show. It and
+  // an artifact request are alternatives: opening one clears the other.
+  const [directAsk, setDirectAsk] = useState<BrowserPageRequest | null>(null)
+  // Bumped on thread switch so a dev-status read or start wait that is still
+  // running cannot open a page in the thread the reader has already left.
+  const previewSeq = useRef(0)
+  // Projects with an auto-start already in flight, so a burst of settled tasks
+  // does not launch the same dev command several times.
+  const devStarting = useRef(new Set<string>())
   // The file the transcript's latest click asked for. It is a request into the
   // dock's file panel, not a surface of its own: the panel owns the tree, this
   // only names the file to open there.
@@ -711,20 +721,83 @@ export function SessionsView({
     setInput(editorTextOf(el))
     el.focus()
   }, [])
-  // The artifact card's own door to the preview. It makes the same request the
-  // automatic open makes, so a manual re-open lands in the same panel and the
-  // browser's own guard keeps a page that is already there from reloading.
+  // The artifact card's own door to the preview, and the automatic open after
+  // a task settles. A project that declares a dev server gets that live page;
+  // otherwise the packed artifact is the page. The live server is preferred
+  // because it is what the app actually serves, cookies and HMR included.
   const openTaskPreview = useCallback((task: Task) => {
     const hash = task.plan_meta?.output_artifact
-    if (!hash) return
-    setCard('')
-    setDockOpen(true)
-    setDockTab('browser')
-    setPageAsk((prev) => ({
-      taskId: task.id,
-      hash,
-      nonce: (prev?.nonce ?? 0) + 1,
-    }))
+    const seq = previewSeq.current
+    const stillHere = () => seq === previewSeq.current
+    const openArtifact = () => {
+      if (!hash || !stillHere()) return
+      setDirectAsk(null)
+      setPageAsk((prev) => ({
+        taskId: task.id,
+        hash,
+        nonce: (prev?.nonce ?? 0) + 1,
+      }))
+      setCard('')
+      setDockOpen(true)
+      setDockTab('browser')
+    }
+    const openDirect = (url: string) => {
+      if (!stillHere()) return
+      setPageAsk(null)
+      setDirectAsk((prev) => ({
+        url,
+        title: task.title,
+        nonce: (prev?.nonce ?? 0) + 1,
+        sameOrigin: true,
+      }))
+      setCard('')
+      setDockOpen(true)
+      setDockTab('browser')
+    }
+    const project = task.project
+    if (!project) {
+      openArtifact()
+      return
+    }
+    void (async () => {
+      let dev: DevStatus | null = null
+      try {
+        dev = await api.devStatus(project)
+      } catch {
+        dev = null
+      }
+      if (!stillHere()) return
+      if (!dev?.configured) {
+        openArtifact()
+        return
+      }
+      if (dev.state === 'ready' && dev.url) {
+        openDirect(dev.url)
+        return
+      }
+      // A server already starting, or one this project opted into starting,
+      // is waited for; a stopped server without auto_start falls back to the
+      // artifact instead of launching work the user did not ask for.
+      if ((dev.state === 'starting' || dev.auto_start) && !devStarting.current.has(project)) {
+        devStarting.current.add(project)
+        try {
+          if (dev.state !== 'starting') {
+            dev = await api.startDev(project)
+          }
+          const ready = await waitDevReady(project, dev.ready_timeout_s ?? 60, stillHere)
+          if (ready?.url) {
+            openDirect(ready.url)
+            return
+          }
+        } catch (e) {
+          toastError(e instanceof Error ? e.message : String(e))
+        } finally {
+          devStarting.current.delete(project)
+        }
+      }
+      if (!stillHere()) return
+      openArtifact()
+    })()
   }, [])
   // The task a transcript link asked for. Held here, not in the card, because
   // the click that asks for it is the transcript's: `{ id }` is rebuilt on
@@ -758,7 +831,9 @@ export function SessionsView({
     // side question. The epoch is the panels' reset signal.
     setDockEpoch((n) => n + 1)
     autoSeen.current = null
+    previewSeq.current += 1
     setPageAsk(null)
+    setDirectAsk(null)
     // The queue belongs to the thread it was typed in: a counter carried over
     // from another thread would make the next note look like a removal.
     noteCount.current = 0
@@ -3409,7 +3484,13 @@ export function SessionsView({
         )}
         {dockSeen.includes('browser') && (
           <div class="dock-pane" hidden={dockTab !== 'browser'}>
-            <DockBrowser resetSignal={dockEpoch} artifact={pageAsk} onInsert={composerInsert} />
+            <DockBrowser
+              resetSignal={dockEpoch}
+              artifact={pageAsk}
+              direct={directAsk}
+              project={session?.project ?? ''}
+              onInsert={composerInsert}
+            />
           </div>
         )}
         {dockSeen.includes('side') && (
@@ -3483,6 +3564,30 @@ function ChatEmpty({
       </div>
     </div>
   )
+}
+
+/** waitDevReady polls a project's dev server until it can be framed, it fails,
+ *  or the declared patience runs out. `alive` lets the caller abandon the wait
+ *  when the reader has moved to another thread. */
+async function waitDevReady(
+  project: string,
+  seconds: number,
+  alive: () => boolean,
+): Promise<DevStatus | null> {
+  const deadline = Date.now() + Math.min(seconds + 5, 120) * 1000
+  while (Date.now() < deadline) {
+    if (!alive()) return null
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    if (!alive()) return null
+    try {
+      const st = await api.devStatus(project)
+      if (st.state === 'ready' && st.url) return st
+      if (st.state === 'failed' || st.state === 'stopped') return null
+    } catch {
+      // A transient read failure is not a verdict; keep waiting.
+    }
+  }
+  return null
 }
 
 /** The composer's "+" menu: attach context to the turn you are about to send.

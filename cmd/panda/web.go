@@ -32,6 +32,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/devserver"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/log"
@@ -303,6 +304,24 @@ func runWeb(args []string) {
 		defer preview.Close()
 	}
 
+	// Live dev-server preview: the console can start a project's declared dev
+	// command and frame it through a reverse proxy that speaks HTTP, cookies
+	// and WebSockets. It follows the console's reach like the artifact origin.
+	projectStore := projectstore.NewStore(db)
+	devMgr := devserver.Start(devserver.Options{
+		Host: previewHost,
+		Resolve: func(name string) (string, bool) {
+			p, err := projectStore.Get(name)
+			if err != nil {
+				return "", false
+			}
+			dir := p.UsableWorkDir()
+			return dir, dir != ""
+		},
+		Logger: logger,
+	})
+	defer devMgr.Close()
+
 	srv := &http.Server{
 		Addr:              addr,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -311,10 +330,11 @@ func runWeb(args []string) {
 			Store:        store,
 			Artifacts:    arts,
 			Preview:      preview,
+			Dev:          devMgr,
 			EngineHolder: engines,
 			DB:           db,
 			Projects:     memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memoryLimits(cfg)),
-			ProjectStore: projectstore.NewStore(db),
+			ProjectStore: projectStore,
 			Sessions:     sessions.NewStore(filepath.Join(filepath.Dir(cfg.Storage.DBPath), "sessions")),
 			Worktrees:    openWorktreesBestEffort(cfg.Storage.WorkPath),
 			SkillStore: func() *skills.Store {

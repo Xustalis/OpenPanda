@@ -70,6 +70,8 @@ func dispatchSub(sub string, args []string) {
 		runSkill(args)
 	case "mcp":
 		runMCP(args)
+	case "browser":
+		runBrowser(args)
 	case "auth":
 		runAuth(args)
 	case "rpc":

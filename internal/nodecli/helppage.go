@@ -62,6 +62,7 @@ var helpPage = []HelpSection{
 		{"     --lan", "cli.help.d.web_lan"},
 		{"voice [--once] [--mute]", "cli.help.d.voice"},
 		{"read <file> | <file.md>", "cli.help.d.read"},
+		{"browser open|snapshot|click|type|screenshot", "cli.help.d.browser"},
 		{"hooks [list | test <event>]", "cli.help.d.hooks"},
 	}},
 	{Group: GroupSessions, Col: helpColWide, Rows: []HelpRow{
