@@ -1520,6 +1520,18 @@ export const api = {
     return request('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`, { operation_id: operationID })
   },
 
+  /** The server-owned side conversation beside a thread: its stored turns and
+   *  the latest side operation. This is the reconnect surface — a pane that
+   *  reloads mid-answer reads it instead of starting over. */
+  sideConversation(id: string): Promise<SideConversation> {
+    return request('GET', `/api/sessions/${encodeURIComponent(id)}/side`)
+  },
+
+  /** Discard the side conversation and cancel any running side ask. */
+  resetSideConversation(id: string): Promise<SideConversation> {
+    return request('DELETE', `/api/sessions/${encodeURIComponent(id)}/side`)
+  },
+
   /** Answer the pre-execution question a running session turn is parked on.
    *  The same SSE turn resumes; this is not a new ask. */
   answerSessionClarify(
@@ -2736,31 +2748,49 @@ function dispatchAskEvent(event: string, data: string, h: AskStreamHandlers): vo
     })
 }
 
-/** One turn of the side conversation, as the engine replays it. `content` is
- *  the wire field: entry.Turn has no JSON tags, and Go matches the field name
- *  case-insensitively. */
-export interface SideTurn {
+/** One stored message in a session's server-side side conversation. It
+ *  carries the display-only evidence (tools, tokens) so a reloaded pane shows
+ *  what the live stream showed. */
+export interface StoredSideTurn {
   role: 'user' | 'assistant'
-  content: string
+  text: string
+  tools?: string[]
+  tokens?: number
+  /** The task this answer dispatched, when it started work. */
+  task_id?: string
+  duration_ms?: number
+  error?: string
+  ts?: number
 }
 
-/** POST /api/sessions/{id}/ask with `side: true`: a read-only conversation
- *  beside the thread, answered from a snapshot of it.
- *
- *  The server files nothing this ask produces — no user turn, no answer, no
- *  operation status — so the caller owns the history and replays it on every
- *  question. A side thread has no server-side storage by design: persisting it
- *  would just be a /fork with extra steps. */
+/** GET/DELETE /api/sessions/{id}/side. The operation is the latest side ask:
+ *  `running` means the answer is still being produced server-side, so the pane
+ *  should keep following it instead of offering a new question. */
+export interface SideConversation {
+  turns: StoredSideTurn[]
+  operation?: {
+    id: string
+    status: string
+    task_id?: string
+    error?: string
+    updated_at?: string
+  } | null
+}
+
+/** POST /api/sessions/{id}/ask with `side: true`: the full conversation beside
+ *  the thread. The server owns the transcript (Session.SideTurns), files the
+ *  question before the model runs, and keeps producing the answer after this
+ *  stream closes — so the caller sends only the prompt and reads the result
+ *  back through GET /api/sessions/{id}/side. */
 export async function askSideStream(
   id: string,
   prompt: string,
-  turns: SideTurn[],
   h: AskStreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
   await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
     method: 'POST',
-    body: { prompt, authorize: false, side: true, side_turns: turns },
+    body: { prompt, authorize: false, side: true },
     signal,
     onEvent: (event, data) => dispatchAskEvent(event, data, h),
   })
