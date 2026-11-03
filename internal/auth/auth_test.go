@@ -191,6 +191,15 @@ func TestLookupRegistry(t *testing.T) {
 			t.Errorf("Lookup(%q) from ProviderIDs: %v", id, err)
 			continue
 		}
+		// A provider whose credential belongs to another tool has no OAuth
+		// endpoints of its own — the login lives there. It still has to be
+		// complete in the way that matters: a label and a token source.
+		if p.External != nil {
+			if p.Label == "" {
+				t.Errorf("external provider %q has no label", id)
+			}
+			continue
+		}
 		if p.AuthorizeURL == "" || p.TokenURL == "" || p.ClientID == "" {
 			t.Errorf("provider %q descriptor incomplete: %+v", id, p)
 		}

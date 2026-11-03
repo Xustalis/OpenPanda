@@ -338,6 +338,18 @@ log:
 #                               # loopback/LAN (a local model) are exempt.
 #   max_retries: 5              # transport retries on 429/5xx, past the first
 #                               # attempt. Negative disables them.
+#
+# A ChatGPT plan (Codex CLI login) is an external credential: `codex login`
+# stores it in ~/.codex/auth.json, Panda reads it per request and never copies
+# it. The plan token only opens Codex's own backend — api.openai.com rejects
+# it — so the row names that backend and the Responses dialect:
+#
+# model:
+#   auth: "codex"
+#   base_url: "https://chatgpt.com/backend-api/codex"
+#   api_type: "responses"
+#   model: "gpt-6.1-sol"        # a model the plan serves
+#   # api_key stays empty: the credential is the CLI's login.
 
 # Multi-model registry: named models the REPL switches between with /model.
 # Each entry is a full model config; name is the alias `/model <name>` uses.

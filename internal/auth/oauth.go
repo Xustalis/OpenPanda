@@ -41,6 +41,12 @@ type Provider struct {
 	ClientID     string
 	RedirectURI  string
 	Scope        string
+	// External marks a credential this package does not own: another tool
+	// holds it and refreshes it, so the token is read from that tool's file on
+	// every call instead of being copied into the store. Such a provider has
+	// no browser flow of its own — the login belongs to the tool that owns the
+	// file (see codex.go).
+	External func() (Token, error)
 }
 
 // providers is the registry. Anthropic's public client id is the one the
@@ -55,6 +61,16 @@ var providers = map[string]Provider{
 		ClientID:     "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
 		RedirectURI:  "https://console.anthropic.com/oauth/code/callback",
 		Scope:        "org:create_api_key user:profile user:inference",
+	},
+	// Codex's ChatGPT login: the token is the CLI's, read from its own file on
+	// every call. The endpoint it opens is Codex's Responses backend, which is
+	// why a model row using it is `api_type: responses` with this provider's
+	// base_url — the CLI's own route, not api.openai.com (a plan token carries
+	// no api.responses.write scope, so /v1/responses rejects it).
+	"codex": {
+		ID:       "codex",
+		Label:    "ChatGPT plan (Codex CLI login)",
+		External: codexLoginToken,
 	},
 }
 

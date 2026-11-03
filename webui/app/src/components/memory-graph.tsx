@@ -90,7 +90,7 @@ export function MemoryGraphView({
     if (!el) return
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect()
-      if (r.width > 0) setSize({ w: r.width, h: Math.max(460, Math.min(720, r.width * 0.66)) })
+      if (r.width > 0) setSize({ w: r.width, h: Math.max(520, Math.min(780, r.width * 0.7)) })
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -261,7 +261,6 @@ export function MemoryGraphView({
           {t('memory.graph.edgesN', { n: filtered.edges.length })}
         </span>
         <div class="mg-toolbar-right">
-          <span class="dim mg-hint-t">{t('memory.graph.hint')}</span>
           <button type="button" class="btn small" aria-label={t('memory.graph.zoomOut')} onClick={() => zoomAt(size.w / 2, size.h / 2, 1 / 1.3)}>
             −
           </button>
@@ -600,6 +599,9 @@ export function MemoryGraphView({
           {/* Vignette pinned to the viewport (outside the zoom group). */}
           <rect class="mg-vig" width={size.w} height={size.h} fill="url(#mg-vig)" pointer-events="none" />
           </svg>
+          {/* Pan/zoom hint lives on the canvas, bottom-left: it is a gesture
+              legend for the drawing, not a control in the toolbar. */}
+          <span class="mg-hint-chip">{t('memory.graph.hint')}</span>
           {sel && (
             <div class={`mg-detail card mg-detail-${sel.kind}`}>
               <div class="mg-detail-head">

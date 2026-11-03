@@ -147,7 +147,7 @@ var completionVerbs = map[string][]string{
 	"plan":     {"run", "show", "example"},
 	"session":  {"list", "new", "show", "mv", "rm", "fork", "tree", "ask", "diff", "merge", "revert"},
 	"skill":    {"list", "approve", "reject", "reset", "find", "import", "hub", "install"},
-	"model":    {"status", "list", "add", "remove", "switch", "fetch", "test"},
+	"model":    {"status", "list", "add", "remove", "switch", "fetch", "test", "discover"},
 	"config":   {"get", "set", "test"},
 	"memory":   {"list", "get", "set", "rm"},
 	"project":  {"list", "new", "show", "enter", "exit", "rename", "rm", "approval"},
