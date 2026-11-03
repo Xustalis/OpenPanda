@@ -317,8 +317,17 @@ func printNodeRow() {
 }
 
 func runService(args []string) int {
-	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+	usage := func() {
 		fmt.Fprintln(os.Stderr, "usage: panda service install|status|restart|uninstall [--lan] [--dry-run]")
+	}
+	// A help request is a success; only a bare invocation is a usage error.
+	// Scripts under `set -e` treat `--help` as a probe, not a failure.
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
+		usage()
+		return 0
+	}
+	if len(args) == 0 {
+		usage()
 		return 2
 	}
 	sub := args[0]

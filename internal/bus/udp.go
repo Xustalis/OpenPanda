@@ -400,6 +400,20 @@ func (u *UDPConn) ReadLoop(ctx context.Context) {
 					"selector", peer, "from", env.From)
 				continue
 			}
+			// A mesh-key frame proves membership, not which member: any holder
+			// of the shared key can name any From. The source-address gate above
+			// only knows addresses already learned — and a member can add one by
+			// offering candidates. So when the claimed name belongs to a peer
+			// that publishes an identity key and can seal to its pair, the frame
+			// must be a pair frame; a mesh-key claim on that identity is exactly
+			// the impersonation this plane refuses.
+			if peer == "" && u.keys != nil {
+				if _, hasPair := u.keys.PairKey(env.From); hasPair {
+					u.logger.Warn("udp: mesh-key frame claims a pair-capable peer",
+						"peer", env.From, "addr", src)
+					continue
+				}
+			}
 			if u.OnEnvelope != nil {
 				u.OnEnvelope(env, src)
 			}

@@ -195,6 +195,15 @@ var CriticalPathPrefixes = []string{
 	// manifest checks, or the swap guard is exactly the change a human must
 	// look at.
 	"internal/self/",
+	// Executable payloads that leave this project's Go build: the Python
+	// adapters, voice sidecars and hardware drivers are installed next to the
+	// binary and run on every task, tests/ is executed by the gate itself,
+	// and cmd/ becomes the swapped binary.
+	"adapters/",
+	"extensions/",
+	"drivers/",
+	"tests/",
+	"cmd/",
 	"Makefile",
 	"go.mod", "go.sum",
 	".github/",

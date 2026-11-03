@@ -112,7 +112,7 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
     }
     if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) return step(1)
     if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) return step(-1)
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault()
       runAt(cursor)
       return

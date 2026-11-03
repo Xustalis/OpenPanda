@@ -5,6 +5,7 @@ package memory
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -89,8 +90,8 @@ func themeLine(themes map[string]int) string {
 // dirOf returns the directory part of a path (the DREAMS.md file lives in the
 // memory root, which may not exist yet on first run).
 func dirOf(p string) string {
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		return p[:i]
-	}
-	return "."
+	// filepath.Dir, not a '/' scan: the path is built with filepath.Join, so a
+	// Windows build hands this backslashes and the scan returned "." — the
+	// diary then failed on its first write when the directory did not exist.
+	return filepath.Dir(p)
 }

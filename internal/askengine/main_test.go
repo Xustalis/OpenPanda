@@ -37,6 +37,10 @@ func TestMain(m *testing.M) {
 	os.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	os.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	os.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	// Tests run against the checkout's adapters/ even though the test binary
+	// lives in a temp build dir: production resolution only trusts a cwd
+	// directory that belongs to the running binary's install tree.
+	os.Setenv("OPENPANDA_DEV_ADAPTERS", "1")
 
 	code := m.Run()
 	os.RemoveAll(home)

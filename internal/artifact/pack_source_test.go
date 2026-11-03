@@ -66,8 +66,10 @@ func TestSourcePackPrivacyBaseline(t *testing.T) {
 	}
 	_ = em
 
-	// The same tree through the OUTPUT pack path ships everything — an
-	// executor's product is returned verbatim, privacy filter or not.
+	// The output pack keeps git-ignored deliverables (dist/, *.out) but not
+	// credential-shaped files: an output tree can be the node's own checkout
+	// or the user's working directory, and a task must not mail .env or
+	// id_rsa back to whoever asked for the result.
 	om, err := s.PackDirExceptPaths(root, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("output pack: %v", err)
@@ -76,9 +78,14 @@ func TestSourcePackPrivacyBaseline(t *testing.T) {
 	if _, err := s.Extract(om.Hash, out2); err != nil {
 		t.Fatalf("extract output: %v", err)
 	}
-	for _, keep := range []string{".env", ".ssh/id_ed25519", ".aws/credentials"} {
-		if _, err := os.Stat(filepath.Join(out2, keep)); err != nil {
-			t.Fatalf("output pack withheld %s — outputs must round-trip verbatim", keep)
+	for _, keep := range []string{"app/main.go", "secrets/keep.txt"} {
+		if _, err := os.Stat(filepath.Join(out2, filepath.FromSlash(keep))); err != nil {
+			t.Fatalf("output pack dropped ordinary content %s: %v", keep, err)
+		}
+	}
+	for _, gone := range []string{".env", ".env.local", ".ssh/id_ed25519", ".aws/credentials", "id_rsa"} {
+		if _, err := os.Stat(filepath.Join(out2, filepath.FromSlash(gone))); !os.IsNotExist(err) {
+			t.Fatalf("output pack shipped credential file %s", gone)
 		}
 	}
 }

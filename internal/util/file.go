@@ -40,5 +40,13 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("rename temp file: %w", err)
 	}
+	// Durability of the rename itself needs the directory entry fsynced. Without
+	// it a power loss may resurrect the old file (or leave none) even though the
+	// data blocks were synced. Best effort: Windows cannot open a directory, and
+	// a failure here does not undo a write that already landed.
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	return nil
 }

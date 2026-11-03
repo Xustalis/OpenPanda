@@ -168,6 +168,14 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("base_url must not be empty"))
 		return
 	}
+	// A save that changes the endpoint host while keeping the stored key would
+	// hand that key to the new host on the next turn. Require the key that
+	// belongs to the new endpoint.
+	if cur.APIKey != "" && strings.TrimSpace(req.APIKey) == "" && !sameEndpointHost(mc.BaseURL, cur.BaseURL) {
+		writeErr(w, http.StatusBadRequest, errors.New(
+			"changing the endpoint host requires its own API key; the stored key is only sent to "+endpointHost(cur.BaseURL)))
+		return
+	}
 
 	// Build a client first: invalid base URLs fail here without touching the
 	// stored config.
@@ -223,6 +231,10 @@ func (h *handler) testModelSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	cur := h.engineModel()
 	mc := modelSettingsToConfig(req, cur)
+	if cur.APIKey != "" && strings.TrimSpace(req.APIKey) == "" && !sameEndpointHost(mc.BaseURL, cur.BaseURL) {
+		writeJSON(w, map[string]any{"ok": false, "error": "changing the endpoint host requires its own API key; the stored key is only sent to " + endpointHost(cur.BaseURL)})
+		return
+	}
 
 	client, err := entry.NewClient(mc)
 	if err != nil {

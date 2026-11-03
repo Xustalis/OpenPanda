@@ -166,7 +166,7 @@ func escapePath(rel string) string {
 func (p *Preview) serve(w http.ResponseWriter, r *http.Request) {
 	// The token is compared first: an unauthenticated caller learns nothing,
 	// not even whether the hash exists.
-	if r.PathValue("token") != p.token {
+	if !sameSecret(r.PathValue("token"), p.token) {
 		http.NotFound(w, r)
 		return
 	}

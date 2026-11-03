@@ -126,6 +126,12 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **八个适配器都能用上 panda 的模型，zcode 也加入** —— 每个内置 CLI 现在按它真正读取的位置写入注入的模型，而不是写它根本不读的环境变量：hermes 得到一次性 `HERMES_HOME`，openclaw 重定向 `HOME` 并加 `--config`/`--state-dir`，pi 写 `models.json`（`apiKey` 是环境变量名），zcode 写 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指向的个人 provider 配置（0.17 完全不读 `ZCODE_*`），agy 写一份退出时恢复的 settings，grok 用 `GROK_MODELS_BASE_URL`（不是 `GROK_BASE_URL`）。临时状态挂在 harness 的清理表上，取消的运行不再把带密钥的配置留在磁盘上——信号路径的 `os._exit` 会跳过 `atexit`。`_harness` 还会从种子副本里剔除选择模型的设置键，并在重建 argv 时知道哪些 flag 会吃掉下一个 token。zcode 同时离开 `generic.py`——那个适配器无法兑现清单声称的注入。
 - **grok_build 现在真的能跑** —— 背后是三个独立故障：未登录的措辞匹配不上任何凭据模式（救援注入从未触发）、端点走了一个这个 CLI 不读的变量、`--single` 在答完之后让进程继续挂着。适配器改为读事件流并在终止行收尾，每轮铸一个 UUID 会话，并把终止 `error` 事件当作失败、以错误消息为诊断，而不是把一句前言当成完成的回合。
 
+- **线路输入与凭据被约束在各自的信任边界内** —— 对端提供的 task id 先校验再落成路径（shadow merge 曾可 `RemoveAll` 任意目录），`.cmd` shim 回退对 cmd.exe 不安全参数加引号并拒绝，tier-2 分类器归一化绝对路径动词，mesh 密钥不能再冒充可配对节点的身份，凭据文件与配置快照不再进入输出 artifact，摘要写入 daily log 前先脱敏，工作目录不再能冒充可信的 adapter 或 voice 目录，Codex 探测只读取 provider key 环境变量。
+- **记忆与技能工具被限定在当前项目内** —— ask 的项目身份通过 context 传递，模型不能靠点名读写别的项目的记忆，日常观察在落盘前先脱敏。会话 id 保留完整 UUIDv7 十六进制并检查文件是否已存在，项目名拒绝大小写折叠后的重名，会话保存校验 id，原子写对目录执行 fsync，待办搜索转义 LIKE 通配符。
+- **已存储的密钥不会跟着表单换到别的主机** —— 模型导入只接受发现结果中同一主机报告的凭据引用，settings、test、`reuse_from` 与编辑路径拒绝把已存储的密钥带到别的主机。浏览器的 SSRF 防护同时拦截 CGNAT（云元数据）地址，预览 token 校验改为常量时间。
+- **CLI 在该报错的地方不再静默** —— TUI panic 或异常终止以非零码退出，`session rm` 在丢弃未提交的 worktree 前先确认，接受 `--output-format text`，未知子命令的错误完整进入 JSON envelope，`service --help` 正常成功，`queue` 拒绝多余参数而不是忽略。
+- **输入法组合与慢响应不再劫持控制台** —— CJK 组合输入期间按 Enter 不会在七处输入框里发送、拒绝或执行命令；transcript、便签与会话列表的回答按落地时当前的线程与项目校验，慢响应不会把一段对话画到另一段下面。
+
 ## [0.1.3] - 2026-10-30 — "Constellation"
 
 **让控制台保持连接、让长任务不再被误杀的补丁** —— 代号 **Constellation**：无论是跨过休眠的笔记本、穿过反向代理，还是盯着一个忙节点，控制台都不再冻住，看一轮运行也不再比它看的工作更贵。长时间不输出、只是在思考的 agent 运行不会再被当成卡死杀掉，首次输出前的宽限窗口也终于真正生效。配置与存储兼容，schema 只多一条纯索引迁移（v65），自动执行。

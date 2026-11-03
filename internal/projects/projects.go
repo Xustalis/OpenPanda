@@ -264,6 +264,7 @@ var systemTrees = []string{
 // disturb it — and a failure to create is reported rather than stored as a
 // project that cannot run.
 func (s *Store) Create(name, workDir, description string) (Project, error) {
+	name = strings.TrimSpace(name)
 	if err := ValidateName(name); err != nil {
 		return Project{}, err
 	}
@@ -276,6 +277,23 @@ func (s *Store) Create(name, workDir, description string) (Project, error) {
 			return Project{}, err
 		}
 		workDir = abs
+	}
+	// Project memory and skills live under projects/<name>/ on this disk, and
+	// APFS and NTFS fold case: "Foo" and "foo" are two rows in SQLite but one
+	// directory, so the two projects would share (and overwrite) each other's
+	// memory. Refuse the case-folded duplicate here; the BINARY primary key
+	// alone cannot see it. This runs after the work-dir validation so a
+	// re-create that names a refused directory reports that reason, not a
+	// name clash.
+	var clash string
+	switch err := s.db.QueryRow(
+		`SELECT name FROM projects WHERE name = ? COLLATE NOCASE LIMIT 1`, name).Scan(&clash); {
+	case err == nil:
+		return Project{}, fmt.Errorf("%w: %s", ErrExists, clash)
+	case !errors.Is(err, sql.ErrNoRows):
+		return Project{}, err
+	}
+	if workDir != "" {
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
 			return Project{}, fmt.Errorf("projects: create work dir %s: %w", workDir, err)
 		}
@@ -329,8 +347,10 @@ func (s *Store) Get(name string) (Project, error) {
 // row). Both spell the same tree; the registry answers with the canonical
 // stored name so locks, approval policy and the task row agree on one.
 func (s *Store) GetFold(name string) (Project, error) {
+	// LIMIT 1 is not decorative: an older build could create "Foo" and "foo"
+	// as separate rows, and without an order the answer varied between calls.
 	p, err := scanProject(s.db.QueryRow(
-		`SELECT `+projectColumns+` FROM projects WHERE name = ? COLLATE NOCASE`, name))
+		`SELECT `+projectColumns+` FROM projects WHERE name = ? COLLATE NOCASE ORDER BY name LIMIT 1`, name))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Project{}, fmt.Errorf("%w: %s", ErrNotFound, name)
 	}

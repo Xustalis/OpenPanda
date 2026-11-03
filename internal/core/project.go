@@ -171,15 +171,34 @@ func (c *Core) hostStatePrune(root string) []string {
 	abs = filepath.Clean(abs)
 	var out []string
 	for _, h := range slices.Concat(c.hostState(), c.packProtectedPaths) {
-		if h == abs {
-			continue
-		}
-		if rel, rerr := filepath.Rel(abs, h); rerr == nil && rel != ".." &&
-			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			out = append(out, h)
+		for _, match := range expandHostPath(h) {
+			if match == abs {
+				continue
+			}
+			if rel, rerr := filepath.Rel(abs, match); rerr == nil && rel != ".." &&
+				!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				out = append(out, match)
+			}
 		}
 	}
 	return out
+}
+
+// expandHostPath resolves a protected path that carries a glob. Config
+// snapshots are written next to the config file with a timestamp suffix
+// (config.yaml.snap-<ts>) and carry the mesh secret and provider keys, so the
+// protection has to cover files that did not exist when the daemon started.
+// A pattern with no matches protects nothing, which is correct: the file it
+// would name does not exist yet.
+func expandHostPath(p string) []string {
+	if !strings.ContainsAny(p, "*?[") {
+		return []string{p}
+	}
+	matches, err := filepath.Glob(p)
+	if err != nil {
+		return nil
+	}
+	return matches
 }
 
 // extractSkipSet returns the skip set for adopting a peer's tree into dst:
@@ -203,12 +222,14 @@ func (c *Core) extractSkipSet(dst string) map[string]bool {
 		skip[k] = true
 	}
 	for _, h := range slices.Concat(c.hostState(), c.packProtectedPaths) {
-		if h == abs {
-			continue // a state path equal to dst cannot prune the whole tree
-		}
-		if rel, rerr := filepath.Rel(abs, h); rerr == nil && rel != ".." &&
-			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			skip[filepath.ToSlash(rel)] = true
+		for _, match := range expandHostPath(h) {
+			if match == abs {
+				continue // a state path equal to dst cannot prune the whole tree
+			}
+			if rel, rerr := filepath.Rel(abs, match); rerr == nil && rel != ".." &&
+				!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				skip[filepath.ToSlash(rel)] = true
+			}
 		}
 	}
 	return skip

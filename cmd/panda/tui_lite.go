@@ -17,7 +17,7 @@ import (
 // line loop; runTUI exists only so repl.go's call site compiles.
 func shouldUseTUI(r *repl) bool { return false }
 
-func runTUI(r *repl) {}
+func runTUI(r *repl) error { return nil }
 
 // printBanner is the lite greeting: no figlet/lipgloss theme, just the facts
 // the banner carried. Node name is deliberately omitted — on a fresh install

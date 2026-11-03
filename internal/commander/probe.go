@@ -20,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // Pre-dispatch model probing. AgentViable proves an agent is locally
@@ -178,6 +179,18 @@ func modelProbe(spec ProbeSpec) ProbeVerdict {
 	return v
 }
 
+// probeEnvKeyAllowed reports whether an agent's config file may name this
+// environment variable as its credential. Provider keys are conventionally
+// *_API_KEY; the daemon's own secrets (OPENPANDA_*, cloud *_SECRET_*,
+// GITHUB_TOKEN, AWS keys) are not, and a probe must never read them just
+// because an agent-writable file asked.
+func probeEnvKeyAllowed(name string) bool {
+	if name == "" || name != strings.ToUpper(name) {
+		return false
+	}
+	return strings.HasSuffix(name, "_API_KEY") || strings.HasSuffix(name, "_AUTH_TOKEN")
+}
+
 // probeModelOnce performs the actual request: a minimal model completion
 // (1 token, "ping") against the URL the provider SDK the harness wraps would
 // derive. POST — not a bare GET on the host — so the answer proves the API
@@ -186,6 +199,12 @@ func probeModelOnce(spec ProbeSpec) ProbeVerdict {
 	u := modelAPIURL(spec.Endpoint, spec.APIType)
 	if u == "" {
 		return ProbeVerdict{Detail: "bad endpoint url"}
+	}
+	// The endpoint comes from an agent-writable config file. Enforce the same
+	// transport rule the model paths do: https (loopback excepted) — a
+	// plaintext endpoint is an API key on the wire.
+	if err := security.CheckModelEndpoint(spec.Endpoint, false); err != nil {
+		return ProbeVerdict{Detail: err.Error()}
 	}
 	body, headers := minimalModelRequest(spec)
 	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(body))
@@ -505,6 +524,15 @@ func agentConfiguredTarget(adapter string) configuredTarget {
 	case "codex.py":
 		var envKey, bearer, wire string
 		t.Endpoint, envKey, bearer, wire, t.Model = codexConfigTarget(home)
+		// ~/.codex/config.toml is writable by the codex agent itself, and
+		// env_key names any variable in the daemon's environment. Reading
+		// whatever name the file supplies would turn "agent can edit its own
+		// config" into "agent can make the daemon ship OPENPANDA_SHARED_SECRET
+		// or GITHUB_TOKEN to an endpoint it chose". Only provider-key shaped
+		// names are honoured; anything else is treated as no env credential.
+		if !probeEnvKeyAllowed(envKey) {
+			envKey = ""
+		}
 		t.APIKey, t.KeyDef = firstCred(
 			credPair{os.Getenv(envKey), envKey != ""},
 			credPair{bearer, true},

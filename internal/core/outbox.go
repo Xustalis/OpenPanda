@@ -464,6 +464,7 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 					continue
 				}
 				c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
+				c.restampParkedLease(flushCtx, e.taskID)
 				c.logger.Info("outbox: redelivered forward task", "task", e.taskID, "peer", peer)
 				continue
 			}
@@ -479,6 +480,7 @@ func (c *Core) outboxFlush(ctx context.Context, peer string) {
 				continue
 			}
 			c.taskOutboxDropKey(flushCtx, e.peer, e.taskID)
+			c.restampParkedLease(flushCtx, e.taskID)
 			c.logger.Info("outbox: redelivered forward task", "task", e.taskID, "peer", peer)
 		}
 		// §8.3 chunked push rides the same custody model as the parked
@@ -1007,6 +1009,17 @@ func (c *Core) deliverTask(ctx context.Context, peer string, p bus.TaskDelegateP
 		return false
 	}
 	return true
+}
+
+// restampParkedLease gives a just-redelivered task a fresh executor lease.
+// The lease was cleared when the copy was parked (custody and a lease are
+// mutually exclusive), so without this the delegator would never notice an
+// executor that accepted the bundle and then died — the absolute deadline
+// would be the only bound, and the row would sit dispatched until it passed.
+func (c *Core) restampParkedLease(ctx context.Context, taskID string) {
+	if err := c.store.SetLease(ctx, taskID, c.lease().Milliseconds()); err != nil {
+		c.logger.Warn("outbox: restamp lease after redelivery", "task", taskID, "err", err)
+	}
 }
 
 // deliverBundle places a dtn_bundle envelope carrying a verbatim signed CBOR

@@ -49,6 +49,7 @@ func TestResolveVoiceDirAncestorWalk(t *testing.T) {
 	old := voiceDir
 	voiceDir = "extensions/voice"
 	defer func() { voiceDir = old }()
+	t.Setenv("OPENPANDA_DEV_ADAPTERS", "1")
 	// Canonicalize both sides: macOS temp dirs sit under /var → /private/var,
 	// and Windows runners hand t.TempDir() an 8.3 short name (RUNNER~1) that
 	// filepath.Abs keeps verbatim while EvalSymlinks expands — the same
@@ -102,9 +103,13 @@ func TestResolveVoiceDirFallback(t *testing.T) {
 	old := voiceDir
 	voiceDir = "extensions/voice-nonexistent"
 	defer func() { voiceDir = old }()
+	t.Setenv("OPENPANDA_DEV_ADAPTERS", "")
 	got := canonPath(resolveVoiceDir())
+	if !filepath.IsAbs(got) {
+		t.Fatalf("resolveVoiceDir = %q, want an absolute install path", got)
+	}
 	want := canonPath(filepath.Join(dir, "extensions", "voice-nonexistent"))
-	if got != want {
-		t.Fatalf("resolveVoiceDir = %q, want cwd-absolute fallback %q", got, want)
+	if got == want {
+		t.Fatalf("resolveVoiceDir = %q, want an install path, not the cwd", got)
 	}
 }

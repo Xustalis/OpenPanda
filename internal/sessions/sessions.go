@@ -236,16 +236,16 @@ func (s *Store) Create(title string, project ...string) (*Session, error) {
 	// session root created by an older build keeps its looser mode no longer.
 	_ = os.Chmod(s.root, 0o700)
 	now := time.Now()
-	id, err := util.UUIDv7()
+	id, err := s.newIDLocked()
 	if err != nil {
-		return nil, fmt.Errorf("sessions: id: %w", err)
+		return nil, err
 	}
 	var proj string
 	if len(project) > 0 {
 		proj = strings.TrimSpace(project[0])
 	}
 	sess := &Session{
-		ID:        strings.ReplaceAll(id, "-", "")[:16],
+		ID:        id,
 		Title:     title,
 		Project:   proj,
 		CreatedAt: now,
@@ -279,12 +279,12 @@ func (s *Store) Fork(id string, atTurn int) (*Session, error) {
 	}
 	_ = os.Chmod(s.root, 0o700)
 	now := time.Now()
-	uid, err := util.UUIDv7()
+	uid, err := s.newIDLocked()
 	if err != nil {
-		return nil, fmt.Errorf("sessions: id: %w", err)
+		return nil, err
 	}
 	child := &Session{
-		ID:        strings.ReplaceAll(uid, "-", "")[:16],
+		ID:        uid,
 		Title:     parent.Title,
 		Project:   parent.Project,
 		ParentID:  parent.ID,
@@ -1055,6 +1055,30 @@ func (s *Store) deleteFile(id string) error {
 
 func (s *Store) path(id string) string { return filepath.Join(s.root, id+".json") }
 
+// newIDLocked allocates a session id that no file currently uses. It keeps
+// the full UUIDv7 hex (128 bits, timestamp first) rather than a truncation:
+// an earlier build cut it to 16 hex characters, of which only 12 were
+// random, and two sessions created in the same millisecond then collided
+// with probability 1/4096 — save() overwrote the first transcript while both
+// callers reported success. The existence check also covers an id supplied
+// by a clock that moved backwards.
+func (s *Store) newIDLocked() (string, error) {
+	for i := 0; i < 8; i++ {
+		uid, err := util.UUIDv7()
+		if err != nil {
+			return "", fmt.Errorf("sessions: id: %w", err)
+		}
+		id := strings.ReplaceAll(uid, "-", "")
+		switch _, err := os.Stat(s.path(id)); {
+		case os.IsNotExist(err):
+			return id, nil
+		case err != nil:
+			return "", fmt.Errorf("sessions: id check: %w", err)
+		}
+	}
+	return "", errors.New("sessions: could not allocate a unique id")
+}
+
 func (s *Store) load(id string) (*Session, error) {
 	if !ValidID(id) {
 		return nil, ErrNotFound
@@ -1074,6 +1098,12 @@ func (s *Store) load(id string) (*Session, error) {
 }
 
 func (s *Store) save(sess *Session) error {
+	// load validates the id; save must too, because the id becomes a file
+	// name. A session object written by an importer or hand-edited on disk
+	// with "../x" would otherwise put the transcript outside the root.
+	if !ValidID(sess.ID) {
+		return fmt.Errorf("sessions: invalid session id %q", sess.ID)
+	}
 	data, err := json.MarshalIndent(sess, "", "  ")
 	if err != nil {
 		return err

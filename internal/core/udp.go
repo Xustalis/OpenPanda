@@ -693,7 +693,15 @@ func (c *Core) handlePunchOffer(ctx context.Context, env bus.Envelope) {
 	if origin == "" || origin == c.nodeID {
 		return
 	}
-	c.learnPeerUDP(origin, 0, p.Hosts, "")
+	// A relayed offer names the coordinator in Src while env.From is the last
+	// hop, so a mismatch is legitimate. What is not legitimate is loading the
+	// offer's host list for an origin that did not send it: Hosts is attacker
+	// text, and learnPeerUDP would make this node spray punch frames at
+	// addresses of the sender's choosing (a UDP reflector). Only a direct
+	// offer may teach us the origin's candidates.
+	if p.Src == "" || p.Src == env.From {
+		c.learnPeerUDP(origin, 0, p.Hosts, "")
+	}
 	c.startPunchSession(p.Nonce, origin, c.knownCandidates(origin))
 
 	reply := bus.PunchReadyPayload{

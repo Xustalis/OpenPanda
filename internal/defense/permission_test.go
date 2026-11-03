@@ -102,6 +102,13 @@ func TestTierFromCommandUnwrapsInterpreters(t *testing.T) {
 		{"python", []string{"-c", "import subprocess; subprocess.run(['rm','-rf','/'])"}, TierIrreversible},
 		{"node", []string{"-e", "require('child_process').exec('rm -rf /')"}, TierIrreversible},
 		{"perl", []string{"-e", "system('rm -rf /')"}, TierIrreversible},
+		// Absolute paths inside interpreter code are the everyday spelling;
+		// the verb table is keyed on basenames, so the token must be
+		// normalized the same way the top-level command is.
+		{"bash", []string{"-c", "/bin/rm -rf /"}, TierIrreversible},
+		{"sh", []string{"-c", "/usr/bin/dd if=/dev/zero of=/dev/sda"}, TierIrreversible},
+		{"python3", []string{"-c", "import subprocess; subprocess.call(['/usr/bin/sudo','id'])"}, TierIrreversible},
+		{"bash", []string{"-c", "/bin/echo hello"}, TierReversible},
 		// Benign interpreter code stays Tier 1.
 		{"python3", []string{"-c", "print(2 + 2)"}, TierReversible},
 		{"bash", []string{"-c", "echo hello"}, TierReversible},

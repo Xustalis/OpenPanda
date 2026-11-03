@@ -75,9 +75,14 @@ func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, er
 	// reads the row, and a narrowed key claim must never pair with the
 	// un-narrowed behavior.
 	if err := c.store.SetQueueMeta(ctx, t.TaskID, q.Priority, q.SessionID, q.WorkDir, q.ResourceKeys); err != nil {
+		// The row exists in submitted state; leaving it there means the
+		// stale-submitted rescue would pick it up and run work the caller was
+		// told had failed. Cancel it before returning.
+		_ = c.store.Cancel(ctx, t.TaskID)
 		return Task{}, fmt.Errorf("set queue meta: %w", err)
 	}
 	if err := c.store.Queue(ctx, t.TaskID, c.nodeID); err != nil {
+		_ = c.store.Cancel(ctx, t.TaskID)
 		return Task{}, fmt.Errorf("queue task: %w", err)
 	}
 	t.Priority = q.Priority

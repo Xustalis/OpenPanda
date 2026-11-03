@@ -388,6 +388,23 @@ func runSessionRm(args []string) {
 		if len(refs) == 0 {
 			fail(2, "usage: panda session rm <id> [id …] | --project P | --older-than D | --all [--yes]")
 		}
+		// The filtered forms always confirmed; the by-id form used to delete
+		// without asking, discarding an uncommitted worktree in the same
+		// keystroke. Same contract for both: confirm on a TTY, require --yes
+		// otherwise.
+		if !*yes {
+			if !stdinIsTTY() {
+				fail(2, "panda session rm: "+i18n.T(loc, "cli.session.rm.nonTTY"))
+			}
+			fmt.Print(i18n.Tf(loc, "cli.session.rm.confirm", "n", strconv.Itoa(len(refs))))
+			var ans string
+			if _, err := fmt.Scanln(&ans); err != nil && ans == "" {
+				return // empty line = the default "no"
+			}
+			if a := strings.ToLower(strings.TrimSpace(ans)); a != "y" && a != "yes" {
+				return
+			}
+		}
 		deleted, failed := 0, 0
 		for _, ref := range refs {
 			id, err := rmOneSession(ctx, cfg, store, ref)
