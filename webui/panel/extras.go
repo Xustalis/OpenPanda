@@ -52,20 +52,7 @@ func (h *handler) allowedReadRoot(abs string) bool {
 	if h.cfg == nil {
 		return false
 	}
-	var roots []string
-	h.readCfg(func(c *config.Config) {
-		roots = []string{c.Storage.WorkPath, c.Storage.MemoryPath, c.Storage.ProjectsPath}
-	})
-	if h.projectStore != nil {
-		if list, err := h.projectStore.List(); err == nil {
-			for _, p := range list {
-				if safeReadRoot(p.WorkDir) {
-					roots = append(roots, p.WorkDir)
-				}
-			}
-		}
-	}
-	for _, root := range roots {
+	for _, root := range h.readRoots() {
 		if underRoot(root, abs) {
 			return true
 		}
@@ -119,20 +106,6 @@ func underRoot(root, abs string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-// allowedImageRoot is allowedReadRoot widened by the OS temp tree.
-//
-// Agents park screenshots in a scratch directory — a verification run writes
-// `%TEMP%/panda_verify/t2-eating.png` and then `Read`s it — and those are
-// exactly the images a transcript wants to show. The extra root is scoped to
-// this endpoint (images only, extension-gated, size-capped): /api/fs/read
-// keeps its stricter list.
-func (h *handler) allowedImageRoot(abs string) bool {
-	if h.allowedReadRoot(abs) {
-		return true
-	}
-	return underRoot(os.TempDir(), abs)
 }
 
 // resolveFsPath normalizes a request path for the fs endpoints: ~ expands,
@@ -195,15 +168,22 @@ func (h *handler) listFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	// Listing follows the same root boundary as reading: the menu exists to
 	// pick files /api/fs/read can actually attach, so browsing outside the
-	// owned roots only advertises paths that will fail on send.
+	// owned roots only advertises paths that will fail on send. The open
+	// handle is the boundary, not the resolved string.
 	if real, err := filepath.EvalSymlinks(absPath); err == nil {
 		absPath = real
 	}
-	if !h.allowedReadRoot(absPath) {
-		writeErr(w, http.StatusForbidden, errors.New("path is outside the workspace and memory roots"))
+	dir, _, err := h.openReadDir(absPath)
+	if err != nil {
+		if errors.Is(err, errOutsideReadRoots) {
+			writeErr(w, http.StatusForbidden, errors.New("path is outside the workspace and memory roots"))
+			return
+		}
+		writeJSON(w, map[string]any{"current": absPath, "entries": []fsFileEntry{}})
 		return
 	}
-	entries, err := os.ReadDir(absPath)
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
 	if err != nil {
 		writeJSON(w, map[string]any{"current": absPath, "entries": []fsFileEntry{}})
 		return
@@ -255,26 +235,22 @@ func (h *handler) readFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid path"))
 		return
 	}
-	// Resolve symlinks before the root check so a link inside the workspace
-	// cannot point outside it.
+	// Resolve the path first so an absolute symlink whose target is inside
+	// the tree still works. The Root below is what actually enforces the
+	// boundary, including a link swapped in after this resolution.
 	if real, err := filepath.EvalSymlinks(absPath); err == nil {
 		absPath = real
 	}
-	if !h.allowedReadRoot(absPath) {
-		writeErr(w, http.StatusForbidden, errors.New("path is outside the workspace and memory roots"))
-		return
-	}
-	st, err := os.Stat(absPath)
-	if err != nil || st.IsDir() {
-		writeErr(w, http.StatusNotFound, errors.New("no such file"))
-		return
-	}
-	f, err := os.Open(absPath)
+	f, st, err := h.openReadPath(absPath)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("read failed"))
+		writeReadError(w, err)
 		return
 	}
 	defer f.Close()
+	if st.IsDir() {
+		writeErr(w, http.StatusNotFound, errors.New("no such file"))
+		return
+	}
 	// One byte past the cap is the truncation signal — a multi-GB file must
 	// not land in memory just to be cut down to 32 KiB.
 	data, err := io.ReadAll(io.LimitReader(f, maxReadBytes+1))
@@ -332,7 +308,8 @@ func (h *handler) getImage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid path"))
 		return
 	}
-	// Resolve symlinks before the root check so a link cannot point outside.
+	// Resolve first so the extension check sees the target and an absolute
+	// symlink inside the tree still works; the Root below closes the race.
 	if real, err := filepath.EvalSymlinks(absPath); err == nil {
 		absPath = real
 	}
@@ -341,22 +318,19 @@ func (h *handler) getImage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnsupportedMediaType, errors.New("not a previewable image type"))
 		return
 	}
-	if !h.allowedImageRoot(absPath) {
-		writeErr(w, http.StatusForbidden, errors.New("path is outside the workspace, memory and temp roots"))
+	f, st, err := h.openReadPath(absPath, os.TempDir())
+	if err != nil {
+		writeReadError(w, err)
 		return
 	}
-	st, err := os.Stat(absPath)
-	if err != nil || st.IsDir() {
+	if st.IsDir() {
+		_ = f.Close()
 		writeErr(w, http.StatusNotFound, errors.New("no such file"))
 		return
 	}
 	if st.Size() > maxImageBytes {
+		_ = f.Close()
 		writeErr(w, http.StatusRequestEntityTooLarge, errors.New("image is too large to preview"))
-		return
-	}
-	f, err := os.Open(absPath)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("read failed"))
 		return
 	}
 	defer f.Close()

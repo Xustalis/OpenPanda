@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -201,7 +202,15 @@ func runDaemon(args []string) {
 	fs.Parse(reorderFlags(fs, args))
 	rejectExtraArgs(fs, "usage: panda daemon [--config F] [--card F] [--debug-addr HOST:PORT]")
 
-	cfg, err := config.Load(*configPath)
+	// Resolve the config path once, before anything persists through it. The
+	// daemon is normally started without --config (that is how the auto-start
+	// service runs it), and Load only resolves the path internally: the
+	// shared-secret writer below still saw "", wrote its temp file into the
+	// process working directory and failed the rename. The secret then lived
+	// in memory only and changed on every restart.
+	resolvedConfigPath := config.ResolvePath(*configPath)
+	*configPath = resolvedConfigPath
+	cfg, err := config.Load(resolvedConfigPath)
 	if err != nil {
 		fatal("load config", err)
 	}
@@ -250,6 +259,9 @@ func runDaemon(args []string) {
 	if *cardPath != "" {
 		card, err = ledger.LoadCard(*cardPath)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				fatal("load capabilities", fmt.Errorf("%w — run `panda init` to create %s", err, *cardPath))
+			}
 			fatal("load capabilities", err)
 		}
 		// A card copied from another machine can declare commands this host
