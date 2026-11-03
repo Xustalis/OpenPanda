@@ -446,6 +446,27 @@ func (e *Engine) buildFallbacks(primary config.ModelConfig, db *sql.DB) []*entry
 	return fallbacks
 }
 
+// ClearModel drops the live client and the fallbacks, leaving the engine in the
+// model-less state New builds for a node that carries no key: the task surface
+// (enqueue/cancel/plan) keeps working and only the ask path reports ErrNoModel.
+//
+// SetModel cannot express this — NewClient refuses an unconfigured entry — so
+// deleting the last model would otherwise leave the removed credential in the
+// client slot and every following ask would still be dialed against the row the
+// user just deleted. Config, engine and UI would disagree in the worst way: the
+// page says nothing is configured while turns keep reaching the old endpoint.
+func (e *Engine) ClearModel() {
+	e.client.Store(nil)
+	e.cfgMu.Lock()
+	if e.cfg != nil {
+		e.cfg.Model = config.ModelConfig{}
+	}
+	e.fallbacksMu.Lock()
+	e.fallbacks = nil
+	e.fallbacksMu.Unlock()
+	e.cfgMu.Unlock()
+}
+
 // SetModel hot-swaps the entry model client at runtime (the settings page):
 // a failed build leaves the previous client serving.
 func (e *Engine) SetModel(mc config.ModelConfig) error {

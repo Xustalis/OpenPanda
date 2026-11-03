@@ -715,6 +715,9 @@ function NewTaskForm({
             />
           </div>
         </div>
+        {!project && parallel !== 'workdir' && (
+          <p class="hint">{t('queue.scratchWorkdirHint')}</p>
+        )}
         <div class="field-group">
           <label for="nt-prompt">{t('queue.newPrompt')}</label>
           <textarea

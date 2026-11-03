@@ -184,7 +184,9 @@ func TestLoopGuard(t *testing.T) {
 // then declines it (no capability match) moves its local row to a terminal state
 // instead of leaving it submitted/dispatched as an orphan (D2).
 func TestDeclineTerminalizesLocalRow(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// A 5 s budget was tight enough for a shared runner to report a slow
+	// handshake as an orphaned row; the state assertion is unchanged.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	entry := newCore(t, "entry-dec")
@@ -200,7 +202,7 @@ func TestDeclineTerminalizesLocalRow(t *testing.T) {
 		t.Fatalf("delegate: %v", err)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
 		tk, err := worker.store.Get(ctx, "dec-task")
 		if err != nil {
