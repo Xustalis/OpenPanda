@@ -367,8 +367,14 @@ func (h *handler) modelFromRequest(req addModelRequest, existingKey string) (con
 		// "Extend this connection" applies to custom relays too: the form
 		// prefills the saved row and submits without a key, so without this the
 		// entry persisted keyless (NoAuth: true) and the user lost the key that
-		// was already on file.
+		// was already on file. The key is bound to its host, though: reusing
+		// it on another host would ship it to whoever owns that host.
 		if key == "" && req.ReuseFrom != "" {
+			if src, ok := h.modelByRef(req.ReuseFrom, ""); ok && !sameEndpointHost(base, src.BaseURL) {
+				return config.ModelConfig{}, fmt.Errorf(
+					"reuse_from %q belongs to %s; a key cannot be reused on %s",
+					req.ReuseFrom, endpointHost(src.BaseURL), endpointHost(base))
+			}
 			key = h.keyForAlias(req.ReuseFrom)
 		}
 		mc = config.ModelConfig{
@@ -392,8 +398,15 @@ func (h *handler) modelFromRequest(req addModelRequest, existingKey string) (con
 		}
 		// An explicit "extend this connection" beats the provider-wide guess:
 		// two accounts of one vendor share both id and endpoint, so only the
-		// named row says which key this model belongs to.
+		// named row says which key this model belongs to. If the request also
+		// names a different endpoint, the borrowed key would be sent there —
+		// same host rule as the custom branch above.
 		if key == "" && req.ReuseFrom != "" {
+			if src, ok := h.modelByRef(req.ReuseFrom, ""); ok && base != "" && !sameEndpointHost(base, src.BaseURL) {
+				return config.ModelConfig{}, fmt.Errorf(
+					"reuse_from %q belongs to %s; a key cannot be reused on %s",
+					req.ReuseFrom, endpointHost(src.BaseURL), endpointHost(base))
+			}
 			key = h.keyForAlias(req.ReuseFrom)
 		}
 		if key == "" {
@@ -799,6 +812,19 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 	existingKey := old.APIKey
 	if wantProviderChanged {
 		existingKey = h.keyAcrossVendorSwitch(old, wantProvider)
+	}
+	// The edit form carries the stored key forward when the request omits one.
+	// A base_url change to another host must not ride that carry-over: the key
+	// would be sent to the new host on the next turn. A vendor switch is
+	// different — its key comes from the new vendor's own row (see
+	// keyAcrossVendorSwitch), not from the endpoint being left behind.
+	if strings.TrimSpace(req.APIKey) == "" && existingKey != "" && !wantProviderChanged &&
+		strings.TrimSpace(req.BaseURL) != strings.TrimSpace(old.BaseURL) &&
+		!sameEndpointHost(req.BaseURL, old.BaseURL) {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf(
+			"changing the endpoint host requires its own API key; the stored key is only sent to %s",
+			endpointHost(old.BaseURL)))
+		return
 	}
 
 	mc, err := h.modelFromRequest(req, existingKey)

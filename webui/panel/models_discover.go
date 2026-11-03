@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -129,6 +130,14 @@ func (h *handler) importModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opt := localmodels.Options{}
+	// KeyRef is a capability — "env:ANY_VAR", "claude:settings",
+	// "codex:<provider>" — not a label the client gets to invent. The import
+	// body is client-supplied, so accept only references that discovery
+	// actually reported for the same host; otherwise a panel session could
+	// name OPENPANDA_SHARED_SECRET and pair it with an attacker endpoint.
+	refCtx, refCancel := context.WithTimeout(r.Context(), discoverTimeout)
+	allowedRefs := discoveredKeyRefs(localmodels.Discover(refCtx, opt))
+	refCancel()
 	var added []config.ModelConfig
 	var skipped []string
 	var pending []struct {
@@ -136,6 +145,10 @@ func (h *handler) importModels(w http.ResponseWriter, r *http.Request) {
 		item modelImportItem
 	}
 	for _, item := range req.Items {
+		if err := checkImportKeyRef(item, allowedRefs); err != nil {
+			skipped = append(skipped, fmt.Sprintf("%s: %v", item.Model, err))
+			continue
+		}
 		mc, err := h.rowFromImport(item, opt)
 		if err != nil {
 			skipped = append(skipped, fmt.Sprintf("%s: %v", item.Model, err))
@@ -240,6 +253,46 @@ func (h *handler) importModels(w http.ResponseWriter, r *http.Request) {
 		aliases = append(aliases, m.Alias())
 	}
 	writeJSON(w, map[string]any{"added": len(stored), "aliases": aliases, "skipped": skipped})
+}
+
+// discoveredKeyRefs indexes the credential references discovery reported,
+// keyed by (reference, host). The host half is what keeps a legitimate
+// reference from being paired with an endpoint the caller chose.
+func discoveredKeyRefs(sources []localmodels.Source) map[string]bool {
+	out := make(map[string]bool)
+	for _, s := range sources {
+		for _, c := range s.Candidates {
+			if c.KeyRef == "" {
+				continue
+			}
+			out[strings.ToLower(c.KeyRef)+"\x00"+urlHost(c.BaseURL)] = true
+		}
+	}
+	return out
+}
+
+// checkImportKeyRef refuses a credential reference the client invented, or one
+// paired with a host other than the one discovery reported it for. A row with
+// no reference reads no secret, and a row with no base_url dials its provider's
+// catalogue endpoint, so neither needs the host half.
+func checkImportKeyRef(item modelImportItem, allowed map[string]bool) error {
+	ref := strings.ToLower(strings.TrimSpace(item.KeyRef))
+	if ref == "" || strings.TrimSpace(item.BaseURL) == "" {
+		return nil
+	}
+	host := urlHost(item.BaseURL)
+	if !allowed[ref+"\x00"+host] {
+		return fmt.Errorf("credential reference %q was not discovered for %s", item.KeyRef, host)
+	}
+	return nil
+}
+
+func urlHost(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
 }
 
 // rowFromImport validates one item and builds the config row.
