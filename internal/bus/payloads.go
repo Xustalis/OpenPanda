@@ -728,6 +728,10 @@ type TaskResultPayload struct {
 	// the review state travels with it so the origin's task display can show
 	// what the executor is asking, and a task_resume.answer replies to it.
 	Question string `json:"question,omitempty"`
+	// QuestionSpec is the structured form of a parked question (an
+	// entry.ClarifySpec document) when the agent offered bounded options.
+	// Question stays the plain-text summary for surfaces without a card.
+	QuestionSpec string `json:"question_spec,omitempty"`
 	// Structured attribution so the origin can consume a cross-device result
 	// like an ordinary sub-agent's: who ran it (Executor — the node, stable
 	// across relay hops where env.From is only the last hop), which agent

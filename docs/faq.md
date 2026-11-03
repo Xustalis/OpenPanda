@@ -90,6 +90,32 @@ OpenPanda 自己不执行长程任务，而是委派给设备上安装的 agent 
 
 `panda voice` 是免手入口（桌宠 / 移动场景）：唤醒词 → 转写 → 走和 `panda ask` 完全相同的路径 → 打印并朗读回答，与 REPL / `ask --continue` 共用同一条持久会话（在一台设备上说，回终端接着问）。需要本地语音依赖：`pip install openwakeword faster-whisper SpeechRecognition pyaudio numpy`（默认后端不需要密钥）；缺依赖时会直接打印原因并退出。`--once` 只处理一句，`--mute` 只打印不朗读。语音入口没有 `--authorize`，不可逆命令一律进 `review`。
 
+## 会话与交互
+
+**侧边对话是什么？**
+
+`/side`（或 `/btw`）在线程旁开一个只读通道：它看到主线程的历史，但只当作参考，自己的问答不会写回主线程；不能派任务或计划，模型若仍分类成任务会得到一句固定说明。Esc 返回主线程且不丢弃，`/side close` 丢弃。目前 TUI 与 CLI 可用；Web 控制台提供的是任务栏。
+
+**回答完一轮后想撤销文件改动？**
+
+`/rewind` 列出该会话的检查点（每个完成的回答一个），选中后恢复快照里的跟踪文件、删除快照之后 agent 新建的未跟踪文件，并把 transcript 截断到对应轮次。被 `.gitignore` 的构建产物不会被删除；快照在回答完成时同步生成，大工作树上会有一点延迟，压缩过历史后轮次编号可能漂移。会话删除时检查点一并清理。
+
+**回复里的文件路径能点吗？**
+
+能。控制台把可识别的工作区路径渲染成链接，点击在旁侧打开只读查看器并滚到行；终端里 `panda read path:line` 同样查看，`/edit path:line` 交给编辑器。识别是保守的：带斜杠的路径，或已知源码扩展名的裸文件名。
+
+**任务产物怎么预览？**
+
+控制台在第二个 HTTP origin 上渲染，带严格 CSP 且 iframe 不带 `allow-same-origin`，所以产物里的脚本碰不到控制台。点击产物里的元素会生成一个 CSS 选择器草稿，绑定到产物哈希后带回输入框。
+
+**工作区地图和执行前提问是什么？**
+
+每个 agent 任务开始前会拿到一份工作区地图（git 状态、目录结构、语言分布、关键文件、项目自己的构建/验证命令），分类模型也看同一份，所以 scope 与轮次预算从真实仓库出发。请求大而模糊时，入口模型会先问最多四个有界选择题；大任务执行前会停在「执行 / 只读分析 / 取消」。运行中的 agent 也可以提同样结构的问题。
+
+**生命周期 hooks 怎么用？**
+
+在配置里打开 `hooks.enabled` 并绑定事件（`task_submitted`、`task_started`、`task_done`、`task_failed`、`task_review`）。命令只拿到白名单环境（没有模型凭据），被判为 tier-2 的命令默认拒绝（`hooks.allow_tier2` 显式放行），每次执行写审计行。任务值通过 `PANDA_HOOK_*` 传入，不进入 shell 解析器；模板里写 `{title}` 即可。`panda hooks list|test` 查看与试跑。
+
 ## 多设备
 
 **多台设备怎么组网？**
@@ -130,4 +156,4 @@ OpenPanda 自己不执行长程任务，而是委派给设备上安装的 agent 
 
 **REPL 里会话上下文能存多久？**
 
-按项目分片持久化在 `~/.local/state/openpanda/conversations/<项目>.json`（项目外为 `default.json`，旧的 `conversation.json` 首次访问自动迁移）；24k 字符预算超出时优先把溢出的历史折叠成模型写的 running digest（自动压缩），模型不可达才退化为直接裁剪最旧内容。`/new` 清空，`/history` 查看，`panda ask --continue` 接续；长线程还可用 `panda session fork` 在任意轮次分叉。
+终端对话和 Web 控制台是同一套会话：按线程保存在 `<data>/sessions/`，启动时自动接上当前项目最近更新的那条（`panda --resume <id>` 指定、`--new` 开新对话）；24k 字符预算超出时优先把溢出的历史折叠成模型写的 running digest（自动压缩），模型不可达才退化为直接裁剪最旧内容。`/new` 开始新对话（旧线程保留），`/history` 查看，`/sessions` 切换，`panda ask --continue` 接续；长线程还可用 `panda session fork` 在任意轮次分叉。旧版 `~/.local/state/openpanda/conversations/*.json` 在首次启动时导入成会话并改名为 `.json.migrated`，原文件保留。

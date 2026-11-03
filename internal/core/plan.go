@@ -44,6 +44,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/plan"
 	"github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
@@ -273,6 +274,10 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			Intent:       st.Intent,
 			Requires:     st.Requires,
 			ResourceJSON: string(resourceJSON),
+			// Stages inherit the plan's conversation: the whole plan is one
+			// lane, and its stages still parallelize among themselves through
+			// their declared scope paths (disjoint leaves under that lane).
+			SessionID: q.SessionID,
 			// The stage's hard pin travels into spec.node so every hop of the
 			// pinned route re-checks it — the queue scheduler, the claim, and
 			// the receiving node all see the same destination.
@@ -960,6 +965,12 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 	if err != nil {
 		return Task{}, fmt.Errorf("load parent task %s: %w", parentID, err)
 	}
+	// A spawned child belongs to its parent's conversation and must claim the
+	// same lane: with no session it would take the project root — an ancestor
+	// of the parent's own key — and queue behind the task waiting on it.
+	if in.SessionID == "" {
+		in.SessionID = parent.SessionID
+	}
 	// An operator-disabled node refuses minting outright — the run loop's
 	// canSpawn gate normally keeps this unreachable, but SpawnChildTask is
 	// also the protocol's last line of defense for markers a hinted agent
@@ -1149,7 +1160,7 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 	// inside the queue meta writer: a scoped claim becomes leaf keys so
 	// disjoint siblings run in parallel, an unscoped one falls back to the
 	// project serialization.
-	if err := c.store.SetQueueMeta(ctx, child.TaskID, PriorityNormal, "", "", childResourceKeys(child.TaskID, in)); err != nil {
+	if err := c.store.SetQueueMeta(ctx, child.TaskID, PriorityNormal, in.SessionID, "", childResourceKeys(child.TaskID, in)); err != nil {
 		return fmt.Errorf("queue meta for child: %w", err)
 	}
 	if err := c.store.Queue(ctx, child.TaskID, c.nodeID); err != nil {
@@ -1336,6 +1347,47 @@ const agentResultSchema = `{
       "type": "string",
       "description": "When status=question: the single most important question for the user."
     },
+    "clarify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "When status=question: the bounded choice set to show the user (1-4 questions, 2-4 options each; the recommended option first). Omit for a plain free-text question.",
+      "properties": {
+        "plan": {"type": "string", "description": "Optional short plan shown above the questions."},
+        "questions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {"type": "string"},
+              "header": {"type": "string", "description": "Short chip label, at most 12 characters."},
+              "question": {"type": "string"},
+              "options": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 4,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {"type": "string"},
+                    "description": {"type": "string"},
+                    "preview": {"type": "string", "description": "Optional short markdown sample of what this option produces (layout/code shape). Single-select only."}
+                  },
+                  "required": ["label"]
+                }
+              },
+              "multi_select": {"type": "boolean"},
+              "recommended": {"type": "string", "description": "The option label you recommend."}
+            },
+            "required": ["id", "header", "question", "options"]
+          }
+        }
+      },
+      "required": ["questions"]
+    },
     "delegate_requests": {
       "type": "array",
       "maxItems": 8,
@@ -1442,11 +1494,12 @@ func (c *Core) abilityIDs() []string {
 // structuredAgentResult is the parsed form of the schema-validated output a
 // capable adapter returns under Result.Structured.
 type structuredAgentResult struct {
-	Answer    string            `json:"answer"`
-	Status    string            `json:"status"`
-	Question  string            `json:"question"`
-	Delegates []delegateRequest `json:"delegate_requests"`
-	Messages  []msgRequest      `json:"messages"`
+	Answer    string             `json:"answer"`
+	Status    string             `json:"status"`
+	Question  string             `json:"question"`
+	Clarify   *entry.ClarifySpec `json:"clarify"`
+	Delegates []delegateRequest  `json:"delegate_requests"`
+	Messages  []msgRequest       `json:"messages"`
 }
 
 // parseStructuredResult decodes the adapter's structured output. nil when
@@ -1463,6 +1516,31 @@ func parseStructuredResult(raw json.RawMessage) *structuredAgentResult {
 }
 
 const questionMarker = "PANDA_QUESTION"
+
+// sentinelPunct folds the punctuation Chinese prose uses onto the ASCII form
+// the canonical sentence is written in. The separators — full-width, half-width
+// and the enumeration comma — all collapse to a comma, because an agent that
+// reaches for "；" or "：" between clauses is writing the same sentence as one
+// that uses "，". Sentence enders keep their ASCII twin and are trimmed below.
+var sentinelPunct = strings.NewReplacer(
+	"，", ",", "；", ",", "：", ",", "、", ",",
+	";", ",", ":", ",",
+	"。", ".", "．", ".", "！", "!", "？", "?",
+)
+
+// isNoQuestionSentinel recognizes only the complete no-question sentence
+// observed in an unattended run. Completion words or a leading "无" alone
+// must never dismiss a real question, including requests for authorization.
+// The payload drifts in punctuation — half-width commas, a full-width period,
+// a trailing ellipsis or an exclamation mark — so punctuation and spacing are
+// normalized before the exact sentence is matched. A real question always
+// carries words after this sentence, and those survive the trim.
+func isNoQuestionSentinel(question string) bool {
+	s := sentinelPunct.Replace(strings.TrimSpace(question))
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.TrimRight(s, ".,!?;:~…—-")
+	return s == "无,任务已完成,无需用户补充信息"
+}
 
 // cutQuestionMarker splits the separator between the marker and its payload.
 // The protocol is written with an ASCII colon, but an agent composing in
@@ -1489,25 +1567,74 @@ func cutQuestionMarker(rest string) (payload string, ok bool) {
 
 // parseQuestionRequest extracts the last PANDA_QUESTION line from agent
 // output — the clarification the agent cannot resolve without the user —
-// and returns the output with marker lines removed. Like the delegate
+// and returns the output with marker lines removed. The payload is either a
+// plain sentence (the original protocol) or a ClarifySpec JSON object with
+// bounded options, the same shape the entry model uses before a task.
+// spec is nil for the plain form. A recognized no-question sentinel is
+// removed without erasing an earlier real question. Like the delegate
 // marker, an empty payload keeps the line in place rather than eating the
 // agent's words. The marker must end at a word boundary: "PANDA_QUESTIONABLE:"
 // is the agent's own prose, not the protocol.
-func parseQuestionRequest(stdout string) (question, cleaned string, ok bool) {
+func parseQuestionRequest(stdout string) (question string, spec *entry.ClarifySpec, cleaned string, ok bool) {
 	var kept []string
 	for _, line := range strings.Split(stdout, "\n") {
 		trim := strings.TrimSpace(line)
+		// The separator is either colon or whitespace (cutQuestionMarker), and a
+		// bare marker is a marker with an empty payload. A payload that is only
+		// the no-question sentinel is dropped without erasing an earlier real
+		// question — but the line still leaves the prose either way.
 		if rest, isMarker := strings.CutPrefix(trim, questionMarker); isMarker {
 			if payload, sep := cutQuestionMarker(rest); sep {
-				if q := strings.TrimSpace(payload); q != "" {
-					question = q
+				if q, s := parseQuestionPayload(payload); q != "" {
+					if !isNoQuestionSentinel(q) {
+						question, spec = q, s
+					}
 					continue
 				}
 			}
 		}
 		kept = append(kept, line)
 	}
-	return question, strings.Join(kept, "\n"), question != ""
+	return question, spec, strings.Join(kept, "\n"), question != ""
+}
+
+// parseQuestionPayload turns one marker payload into the human-readable
+// question plus the structured option set when the agent offered one. A
+// payload that starts with "{" but fails validation keeps its text form: the
+// agent's words are more valuable than a protocol error, and the free-text
+// resume path still answers it.
+func parseQuestionPayload(payload string) (string, *entry.ClarifySpec) {
+	raw := strings.TrimSpace(payload)
+	if raw == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(raw, "{") {
+		var spec entry.ClarifySpec
+		if err := json.Unmarshal([]byte(raw), &spec); err == nil {
+			if err := entry.ValidateClarifySpec(&spec); err == nil {
+				return clarifySpecSummary(&spec), &spec
+			}
+		}
+	}
+	return raw, nil
+}
+
+// clarifySpecSummary is the plain-text form surfaces without a choice card
+// show: the first question, plus the plan's first line when one was given.
+func clarifySpecSummary(spec *entry.ClarifySpec) string {
+	if spec == nil || len(spec.Questions) == 0 {
+		return ""
+	}
+	q := strings.TrimSpace(spec.Questions[0].Question)
+	if plan := strings.TrimSpace(spec.Plan); plan != "" {
+		if i := strings.IndexByte(plan, '\n'); i > 0 {
+			plan = plan[:i]
+		}
+		if plan != "" {
+			q = plan + " — " + q
+		}
+	}
+	return q
 }
 
 // delegateChildren fans the agent's parsed requests out to causal children
@@ -1634,13 +1761,18 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 	// it parks in review and the user decides in the foreground — so an agent
 	// cannot launder consent (or a fresh AuthHops budget) through PANDA_DELEGATE.
 	in := TaskInput{
-		Title:        dr.Title,
-		Intent:       dr.Intent,
-		Requires:     dr.Requires,
-		Paths:        dr.Paths,
-		Isolate:      dr.Isolate,
-		TargetNode:   dr.Node,
-		Project:      parent.Project,
+		Title:      dr.Title,
+		Intent:     dr.Intent,
+		Requires:   dr.Requires,
+		Paths:      dr.Paths,
+		Isolate:    dr.Isolate,
+		TargetNode: dr.Node,
+		Project:    parent.Project,
+		// A child works inside its parent's conversation, so it must claim the
+		// parent's lane. Inheriting nothing would hand it the project root —
+		// an ancestor of the parent's own key — and the child would queue
+		// behind the task that is waiting for it to finish.
+		SessionID:    parent.SessionID,
 		Transport:    parent.Transport,
 		DeadlineUnix: parent.DeadlineUnix,
 		UserLocale:   parent.GetUserLocale(),

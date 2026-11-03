@@ -39,7 +39,11 @@ const trainScript = "import torch\nprint(1)\n"
 // happened, and a stage that ran on an empty tree fails on the spot instead of
 // reporting a cheerful nothing.
 func TestPlanThreeStagesThreeNodes(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// Shared-CPU CI runners (and a laptop under load) can stall the loopback
+	// handshakes and the three-node relay well past a minute. The assertions
+	// still fail on a wrong result; the budget only stops a slow host from
+	// being reported as a wrong one.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	pi := newCoreWithNative(t, "pi", ledger.NativeAbility{
@@ -582,6 +586,12 @@ func TestAgentResultSchemaFor(t *testing.T) {
 	restricted := agentResultSchemaFor([]string{"git"}, true, 0)
 	if !strings.Contains(restricted, "READ-ONLY") || !strings.Contains(restricted, "do NOT delegate") {
 		t.Fatalf("restricted schema lacks the ask-instead-of-delegate instruction:\n%s", restricted)
+	}
+	// The clarify field is how a schema-capable adapter offers bounded
+	// options; without it the model cannot emit choices under
+	// additionalProperties=false.
+	if !strings.Contains(plain, `"clarify"`) || !strings.Contains(plain, `"multi_select"`) {
+		t.Fatalf("schema has no clarify block:\n%s", plain)
 	}
 	for _, s := range []string{plain, restricted} {
 		var v any

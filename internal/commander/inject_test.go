@@ -1187,3 +1187,162 @@ func TestInjectionDialectIsTheResolvedSurface(t *testing.T) {
 		t.Errorf("dsh dialect = %q, want the registry's anthropic pin", got)
 	}
 }
+
+// The injected endpoint variable has to be the one the CLI reads. grok takes a
+// custom OpenAI-compatible endpoint from GROK_MODELS_BASE_URL (it fetches
+// {base}/models and sends completions there); GROK_BASE_URL is not a variable
+// this CLI knows, so injecting it left the run pointed at api.x.ai while
+// handing it another provider's key — a 401 that read as "the model failed".
+func TestGrokInjectionNamesTheEndpointVariableGrokReads(t *testing.T) {
+	model := config.ModelConfig{
+		APIType:  "openai",
+		BaseURL:  "https://open.bigmodel.cn/api/paas/v4",
+		APIKey:   "sk-zhipu-test",
+		Model:    "glm-5.3-flash",
+		Provider: "zhipu",
+	}
+	env := modelEnvForAdapter(model, "grok_build", "grok_build.py")
+	assertEnv(t, env, map[string]string{
+		"GROK_MODELS_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
+		"XAI_API_KEY":          "sk-zhipu-test",
+		"GROK_MODEL":           "glm-5.3-flash",
+	})
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GROK_BASE_URL=") {
+			t.Fatalf("GROK_BASE_URL is not read by the CLI: %v", env)
+		}
+	}
+}
+
+// TestGrokConfigFileNeedsAProviderToCountAsCredentials: grok writes
+// ~/.grok/config.toml on first launch, before any login — the file is a shell
+// with a [marketplace] section and nothing else. Treating its mere existence
+// as "the agent has its own credentials" made `injection.model: auto` skip the
+// first attempt, which then died in one second with "Error: Not signed in",
+// and the round that finally answered belonged to the fallback agent rather
+// than to grok. Only a provider key / endpoint / auth helper inside the file
+// counts; ~/.grok/auth.json needs no field check because `grok login` is the
+// only thing that writes it.
+func TestGrokConfigFileNeedsAProviderToCountAsCredentials(t *testing.T) {
+	home := cleanCredentialEnv(t)
+	dir := filepath.Join(home, ".grok")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cfg := filepath.Join(dir, "config.toml")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+	}
+
+	write("[marketplace]\ndefault_skills_installs_purged = true\n")
+	if found, src := probeAgentCredentials("grok_build", "grok_build.py"); found {
+		t.Fatalf("a config.toml with no provider counted as credentials (%s)", src)
+	}
+
+	write("[model.glm]\napi_key = \"\"\n")
+	if found, src := probeAgentCredentials("grok_build", "grok_build.py"); found {
+		t.Fatalf("an empty api_key counted as credentials (%s)", src)
+	}
+
+	write("[model.glm]\napi_key = \"xai-real-key\"\n")
+	if found, src := probeAgentCredentials("grok_build", "grok_build.py"); !found {
+		t.Fatal("a provider key in config.toml must count as credentials")
+	} else if !strings.Contains(src, ".grok/config.toml") {
+		t.Fatalf("source = %q, want the config file named", src)
+	}
+
+	write("[marketplace]\ndefault_skills_installs_purged = true\n")
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"),
+		[]byte(`{"https://accounts.x.ai/sign-in":{"key":"session-token"}}`), 0o644); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+	if found, src := probeAgentCredentials("grok_build", "grok_build.py"); !found {
+		t.Fatal("auth.json from `grok login` must count as credentials")
+	} else if !strings.Contains(src, ".grok/auth.json") {
+		t.Fatalf("source = %q, want auth.json named", src)
+	}
+}
+
+// TestInjectionPerAgentModelInheritsTheEndpoint: a pin that flips only the
+// dialect must keep the node's endpoint.
+//
+// The route refusal for a dialect mismatch tells the operator to set
+// injection.agents.<agent>.api_type — and following that advice used to land
+// on a second, unrelated failure ("model has no endpoint: base_url is empty"),
+// because the pin did not inherit base_url. One fact, one line of config.
+// TestInjectionPerAgentModelInheritsThePlaintextWaiver pins the other half of
+// the endpoint inheritance: a pin that only changes the dialect must keep the
+// node's plaintext consent, or the documented fix ("set
+// injection.agents.<name>.api_type") lands on a guard refusal that reads as a
+// different problem entirely.
+func TestInjectionPerAgentModelInheritsThePlaintextWaiver(t *testing.T) {
+	cleanCredentialEnv(t)
+
+	node := config.ModelConfig{
+		APIType:        config.APITypeOpenAI,
+		Provider:       "custom",
+		BaseURL:        "http://10.0.0.5:8080/v1",
+		APIKey:         "sk-node-test",
+		Model:          "relay-model",
+		AllowPlaintext: true,
+	}
+	r := NewRouter(testCard(), NewExecutor(), node, config.InjectionConfig{
+		Model: config.InjectionModelAuto,
+		Agents: map[string]config.ModelConfig{
+			"deepseek_harness": {APIType: config.APITypeAnthropic},
+		},
+	}, config.RoutingConfig{})
+
+	got := r.injectionModelFor("deepseek_harness", "deepseek_harness.py")
+	if !got.AllowPlaintext {
+		t.Fatal("a dialect-only pin dropped the node's plaintext waiver")
+	}
+	if got.BaseURL != "http://10.0.0.5:8080/v1" {
+		t.Fatalf("base url = %q, want the node model's", got.BaseURL)
+	}
+}
+
+func TestInjectionPerAgentModelInheritsTheEndpoint(t *testing.T) {
+	cleanCredentialEnv(t)
+
+	node := config.ModelConfig{
+		APIType:  config.APITypeOpenAI,
+		Provider: "custom",
+		BaseURL:  "http://127.0.0.1:3065/v1",
+		APIKey:   "sk-node-test",
+		Model:    "sn-deepseek-v4-1-flash-1017",
+	}
+	r := NewRouter(testCard(), NewExecutor(), node, config.InjectionConfig{
+		Model: config.InjectionModelAuto,
+		Agents: map[string]config.ModelConfig{
+			"deepseek_harness": {APIType: config.APITypeAnthropic},
+		},
+	}, config.RoutingConfig{})
+
+	d := r.InjectionDecision("deepseek_harness", "deepseek_harness.py")
+	if !d.Inject {
+		t.Fatalf("a dialect-only pin must still be injectable: %+v", d)
+	}
+	if d.BaseURL != "http://127.0.0.1:3065/v1" {
+		t.Fatalf("dsh endpoint = %q, want the node model's", d.BaseURL)
+	}
+	if d.Model != "sn-deepseek-v4-1-flash-1017" {
+		t.Fatalf("dsh model = %q, want the node model's", d.Model)
+	}
+	// The endpoint is shared; the dialect is not. The adapter has to be told
+	// Anthropic or it posts Chat Completions at a Messages surface.
+	assertEnv(t, modelEnvForAdapter(r.injectionModelFor("deepseek_harness", "deepseek_harness.py"),
+		"deepseek_harness", "deepseek_harness.py"), map[string]string{
+		"DEEPSEEK_BASE_URL": "http://127.0.0.1:3065/v1",
+		"DEEPSEEK_API_KEY":  "sk-node-test",
+		"DEEPSEEK_MODEL":    "sn-deepseek-v4-1-flash-1017",
+	})
+
+	// An unpinned agent keeps the node dialect.
+	if cx := r.InjectionDecision("codex", "codex.py"); !cx.Inject {
+		t.Fatalf("codex must stay injectable: %+v", cx)
+	}
+}

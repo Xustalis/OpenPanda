@@ -21,13 +21,17 @@
  */
 
 import { api, type PlanDetail, type Task, type TraceEvent } from '../api/client'
-import { useAsync, useChangeSignal } from '../hooks'
+import { useAsync, useChangeSignal, useTraceForTask } from '../hooks'
 import { isActiveState } from './task-activity'
 import { formatTaskEvent } from './event-parser'
 import { AgentFace } from './team-picker'
-import { castAgent, prettyAgent, type Speaker } from './chat-speaker'
+import { castPending, dispatchAgent, prettyAgent, type Speaker } from './chat-speaker'
 import { Icon } from './icons'
 import { t } from '../i18n'
+
+/** One shared empty list: `task.traces` is absent until the row has started,
+ *  and a fresh `[]` on every render would re-run the merge effect each time. */
+const EMPTY_TRACES: TraceEvent[] = []
 
 /** The face at the head of a chat row. Your own row has none: the side of the
  *  column already says who is talking, and a face there was only ever a
@@ -57,7 +61,14 @@ export function ChatAvatar({ speaker }: { speaker: Speaker }) {
  *  where it stands. Rendered inside the panda's own bubble, above the task
  *  card — the card is the paperwork, this is the sentence. */
 export function TaskCast({ task }: { task: Task }) {
-  const agent = castAgent(task.traces) || task.agent || ''
+  // The employee is named by a trace, not by the row: `exec_agent_start` does
+  // not move the task's state, so the change signal (which fingerprints
+  // id:state:updated) never fires for it. Reading `task.traces` alone left a
+  // row that had already started saying "picking an employee" until something
+  // unrelated re-fetched the task — the trace stream is the one that lands.
+  const traces = useTraceForTask(task.id, task.traces ?? EMPTY_TRACES)
+  const agent = dispatchAgent({ traces, agent: task.agent, requires: task.requires })
+  const pending = agent ? '' : castPending(task.state)
   const stage = task.plan_meta?.stage_id
   const count = task.plan_meta?.stage_count
   return (
@@ -67,14 +78,16 @@ export function TaskCast({ task }: { task: Task }) {
           <AgentFace name={agent} label={prettyAgent(agent)} mini />
           {prettyAgent(agent)}
         </span>
-      ) : (
-        <span class="msg-cast-agent">
+      ) : pending ? (
+        // A placeholder, not a name: it wears the quiet weight so it cannot
+        // read as one (see `castPending`).
+        <span class="msg-cast-agent is-pending">
           <span class="msg-cast-bot" aria-hidden="true">
             <Icon name="bot" size={11} />
           </span>
-          {t('sessions.castPicking')}
+          {pending === 'picking' ? t('sessions.castPicking') : t('sessions.castPending')}
         </span>
-      )}
+      ) : null}
       {stage && (
         <span class="msg-cast-meta mono">
           {count && count > 1
@@ -130,7 +143,8 @@ export function StateChip({ state }: { state: string }) {
  *  handed the job out, and a row that appears only once the agent starts is a
  *  row the user stares at nothing for. */
 export function TaskProgress({ task }: { task: Task }) {
-  const agent = castAgent(task.traces) || task.agent || ''
+  const traces = useTraceForTask(task.id, task.traces ?? EMPTY_TRACES)
+  const agent = dispatchAgent({ traces, agent: task.agent, requires: task.requires })
   if (!isActiveState(task.state)) return null
   const line = activityLine(task.last_event)
   const speaker: Speaker = agent

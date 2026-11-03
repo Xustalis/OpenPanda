@@ -3,10 +3,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,6 +27,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/cliui"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
@@ -1026,6 +1029,24 @@ func runCancel(args []string) {
 	fmt.Println(i18n.Tf(i18n.Detect(), "cli.cancel.done", "n", fmt.Sprint(len(ids))))
 }
 
+// parkedQuestion reads a parked task's question payload: the plain text and,
+// when the agent offered choices, the ClarifySpec JSON. ok is false for a row
+// that is not parked on a question.
+func parkedQuestion(store *core.TaskStore, id string) (bus.TaskResultPayload, bool) {
+	task, err := store.Get(context.Background(), id)
+	if err != nil || task.ResultJSON == "" {
+		return bus.TaskResultPayload{}, false
+	}
+	var payload bus.TaskResultPayload
+	if json.Unmarshal([]byte(task.ResultJSON), &payload) != nil {
+		return bus.TaskResultPayload{}, false
+	}
+	if strings.TrimSpace(payload.Question) == "" {
+		return bus.TaskResultPayload{}, false
+	}
+	return payload, true
+}
+
 // runApprove implements `panda approve <id>` — accepts completed reviewed work
 // or resumes a task that parked before execution. -m/--answer carries the
 // reply to an agent's clarification question (PANDA_QUESTION park): the text
@@ -1058,6 +1079,41 @@ func runApprove(args []string) {
 	}
 	if disposition == core.ApprovalNeedsChangedInput {
 		fatal("approve", core.ErrApprovalNeedsChangedInput)
+	}
+	// A resume without -m used to re-run the agent with no answer at all — the
+	// task parks again on the same question. Read the parked question from the
+	// row and ask it here: bounded options when the agent offered them, one
+	// free-text line otherwise. A non-interactive stdin leaves the answer
+	// empty, which is the old behaviour and still resumes.
+	if strings.TrimSpace(*answer) == "" && disposition == core.ApprovalResumeExecution {
+		if parked, ok := parkedQuestion(store, id); ok {
+			loc := i18n.Detect()
+			var spec *entry.ClarifySpec
+			if strings.TrimSpace(parked.QuestionSpec) != "" {
+				var s entry.ClarifySpec
+				if json.Unmarshal([]byte(parked.QuestionSpec), &s) == nil {
+					spec = &s
+				}
+			}
+			if spec != nil {
+				if answers, answered := promptClarifyCLI(*spec, loc); answered {
+					*answer = entry.ClarifyAnswerText(spec, answers)
+				}
+			} else if stdinIsTTY() {
+				fmt.Println(pal().Heading(i18n.T(loc, "cli.ask.question")) + " " + parked.Question)
+				fmt.Print("> ")
+				line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				*answer = strings.TrimSpace(line)
+			}
+		}
+	}
+	// A question park cannot be resumed without an answer: the agent would
+	// re-ask and the round is wasted. Non-interactive callers get told to pass
+	// -m instead of silently re-parking.
+	if disposition == core.ApprovalResumeExecution && strings.TrimSpace(*answer) == "" {
+		if _, parked := parkedQuestion(store, id); parked {
+			fatal("approve", errors.New("this task is waiting on an answer — pass -m \"<answer>\" or run interactively"))
+		}
 	}
 
 	// The engine carries the approval through the scheduler core: for an
@@ -1204,6 +1260,7 @@ func runReject(args []string) {
 func runLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	full := fs.Bool("full", false, "print raw event payloads without terminal truncation")
 	fs.Parse(reorderFlags(fs, args))
 	id := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if id == "" {
@@ -1233,7 +1290,7 @@ func runLogs(args []string) {
 		fmt.Println(i18n.Tf(i18n.Detect(), "cli.logs.none", "id", id))
 		return
 	}
-	printEventTimeline(events, "")
+	printEventTimelineFull(events, "", *full)
 }
 
 // orDash renders an empty string as "-" for aligned fields.

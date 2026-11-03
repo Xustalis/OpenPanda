@@ -2,7 +2,7 @@
 
 **Run Claude Code, Codex and every other agent CLI you already have as one crew, across all your machines.**
 
-Self-hosted · peer-to-peer · no cloud relay · ~20 MB RSS · macOS / Linux / Windows
+Self-hosted · peer-to-peer · no vendor relay · ~40 MB RSS · macOS / Linux / Windows
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
@@ -11,8 +11,8 @@ Self-hosted · peer-to-peer · no cloud relay · ~20 MB RSS · macOS / Linux / W
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/Memory%20Footprint-~20MB%20RSS-brightgreen)
-![Local First](https://img.shields.io/badge/Cloud%20Dependency-Zero-success)
+![Memory](https://img.shields.io/badge/Memory%20Footprint-~40MB%20RSS-brightgreen)
+![No Vendor Relay](https://img.shields.io/badge/Vendor%20Relay-None-success)
 
 <!-- Demo slot: record with vhs (a scripted terminal recording) and put the GIF here,
      above the install block. The two scenes that convert: a task finishing on a second
@@ -35,11 +35,11 @@ Windows (PowerShell): `irm https://raw.githubusercontent.com/Xustalis/OpenPanda/
 Then start a node:
 
 ```bash
-panda init      # device name, model providers, capability card
+panda init      # auto-detects hardware; the one prompt is about the model
 panda           # the terminal TUI — or `panda web` for the console
 ```
 
-From source: `git clone` then `make build` (Go ≥ 1.26, no CGO). Already installed: `panda update` upgrades in place and keeps your data.
+From source: `git clone` then `make build` (Go ≥ 1.26.10, no CGO). Already installed: `panda update` upgrades in place and keeps your data.
 
 ---
 
@@ -47,7 +47,7 @@ From source: `git clone` then `make build` (Go ≥ 1.26, no CGO). Already instal
 
 You already pay for Claude Code, Codex, OpenCode, or one of the other terminal agents. Each of them runs on one machine, in one terminal, on one conversation at a time. The second laptop idles while the first is busy, a long run dies when the lid closes, and nothing coordinates two agents editing the same project.
 
-OpenPanda is the dispatch layer between you and those CLIs. You give one instruction; it classifies the intent, splits multi-stage work into a plan, routes each stage to the node and agent best suited to it, supervises the run, and re-dispatches with the failure reason attached when an executor dies. All of it on your own network. No hosted control plane, no account, no token markup, no traffic leaving the mesh.
+OpenPanda is the dispatch layer between you and those CLIs. You give one instruction; it classifies the intent, splits multi-stage work into a plan, routes each stage to the node and agent best suited to it, supervises the run, and re-dispatches with the failure reason attached when an executor dies. All of it on your own network. No hosted control plane, no account, no token markup; the only traffic that leaves your nodes is the model calls you configure.
 
 It is not another agent. It drives the ones you already have.
 
@@ -73,7 +73,7 @@ Setups people actually run:
                   │   Route, Orchestrate,   │
                   │     Verify & Secure     │
                   └────────────┬────────────┘
-                               │ Direct P2P links (WS + sealed UDP, no cloud relay)
+                               │ Direct P2P links (WS + sealed UDP, no vendor relay)
      ┌─────────────────────────┼─────────────────────────┐
      │                         │                         │
 ┌────▼──────────────┐   ┌──────▼────────────┐   ┌────────▼────────────┐
@@ -98,9 +98,18 @@ Setups people actually run:
 | Track | Description | Status |
 |---|---|---|
 | **Multi-Agent orchestration** | Hire and command multiple terminal agents: dispatch, supervision, failover, approval | ✅ Current focus |
-| **Multi-device collaboration** | Cross-node task routing and scheduling over a P2P mesh | ✅ Shipped in v0.0.10; v0.0.11 adds per-session AEAD, Bluetooth-style pairing, trust tiers, multi-hop relays; v0.0.12 adds same-project parallel execution via path-scoped lanes and isolated worktrees |
+| **Multi-device collaboration** | Cross-node task routing and scheduling over a P2P mesh | ✅ Shipped through v0.1.3: per-session AEAD, Bluetooth-style pairing, trust tiers, multi-hop relays, and same-project parallel execution via path-scoped lanes and isolated worktrees |
 
 ---
+
+## 🆕 Coming in v0.1.4
+
+- **Runs start from the workspace** — every agent task carries a compact, deterministic map of its tree (git state, layout, key files, the project's own build/verify commands), and the completion judge sees the commands the agent actually ran before it accepts “done”.
+- **Ask before guessing** — the entry model can ask bounded multiple-choice questions before creating a task, and a running agent can ask the same structured questions; the TUI, console and `panda approve` all answer them.
+- **A side channel and rewind** — `/side` (alias `/btw`) opens a read-only conversation beside the thread, and every finished answer leaves a checkpoint `/rewind` can restore.
+- **Read what the agent produced** — workspace paths in replies are clickable in the console and `panda read path:line` in the terminal; task artifacts preview on a sandboxed second origin.
+- **The thread's unfinished work at a glance** — a task rail in the TUI (Ctrl+B) and the console header lists running work, what waits on you, and the queue.
+- **Operator hooks, fenced** — `task_submitted` / `task_started` / `task_done` / `task_failed` / `task_review` can run your commands with a filtered environment, a tier gate and an audit row.
 
 ## ✨ Features
 
@@ -150,13 +159,13 @@ Setups people actually run:
 - **Voice entry** (experimental): `panda voice` runs the wake → transcribe → dispatch → speak loop through the bundled `extensions/voice` sidecar scripts (needs its own Python deps).
 - **Scriptable CLI**: `panda ask` drops straight into automation scripts.
 - **Self-updating**: `panda update check|apply` (or `panda upgrade`) probes a staged binary and swaps it in place.
-- **Featherweight**: single static Go binary, ~20MB RSS, no external runtime dependencies.
+- **Featherweight**: single static Go binary, ~40MB RSS, no external runtime dependencies.
 
 ---
 
 ## 🚀 Quick Start
 
-Initialize your node (interactive setup for device name, model providers, and the local capability card):
+Initialize your node (device name, resource class, and capability card are auto-detected; the one prompt asks whether to configure a model now):
 
 ```bash
 panda init

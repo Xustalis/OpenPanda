@@ -28,6 +28,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
 // maxSpeakChars caps what gets read aloud. A long answer spoken in full is worse
@@ -87,10 +88,22 @@ func runVoice(args []string) {
 	}
 	defer engine.Close()
 
-	// Voice shares the persisted thread with the REPL and `panda ask --continue`:
-	// you speak a task at the Pi and follow it up from a terminal on another
-	// machine, which is the point of a mobile entry surface.
-	history := loadConvo()
+	// Voice shares the console's thread model: it continues the project's most
+	// recently updated session and records each spoken exchange back, so a task
+	// spoken at the Pi is the same conversation a terminal or the web console
+	// opens next. The bare-conversation file is the pre-session fallback.
+	voiceProj, _ := activeProject(cfg)
+	vt := &voiceThread{
+		store:   sessions.NewStore(sessionStoreRoot(cfg)),
+		project: voiceProj,
+	}
+	var history []entry.Turn
+	if sess := latestSessionForProject(vt.store, voiceProj); sess != nil {
+		vt.sess = sess
+		_, history = sessionHistory(ctx, vt.store, sess, engine)
+	} else {
+		history = loadConvo()
+	}
 
 	if *cardPath == "" {
 		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.voice.noCard"))
@@ -126,19 +139,72 @@ func runVoice(args []string) {
 		}
 		fmt.Println("\n" + i18n.Tf(loc, "cli.voice.heard", "text", text))
 
-		out, err := engine.AskTurns(ctx, history, text, "", false, askengine.StreamCallbacks{})
+		// The thread exists before the ask, so a remembered approval and the
+		// console's live view bind to it from the first spoken turn.
+		vt.ensure(text)
+		workDir := continueWorkDir("", vt.sess, engine)
+		out, err := engine.AskTurnsSession(ctx, history, text, workDir, "", vt.sessionID(), false, askengine.StreamCallbacks{})
 		if err != nil {
+			vt.discardEmpty()
 			fmt.Fprintf(os.Stderr, "panda: %v\n", err)
 			if *once {
 				os.Exit(1)
 			}
 			continue
 		}
-		history = appendConvo(history, loc, text, out, engine)
+		history = appendConvoTurns(history, loc, text, out, engine)
+		vt.record(ctx, engine, text, out, loc)
 		speakBack(ctx, loc, out, *mute)
 		if *once {
 			return
 		}
+	}
+}
+
+// voiceThread is the spoken conversation's session binding: the thread the
+// utterances accumulate into, created on the first utterance so approval
+// decisions and the console's view bind to it before the ask returns.
+type voiceThread struct {
+	store   *sessions.Store
+	project string
+	sess    *sessions.Session
+}
+
+func (v *voiceThread) sessionID() string {
+	if v == nil || v.sess == nil {
+		return ""
+	}
+	return v.sess.ID
+}
+
+func (v *voiceThread) ensure(title string) {
+	if v == nil || v.store == nil || v.sess != nil {
+		return
+	}
+	if sess, err := v.store.Create(sessions.Title(title), v.project); err == nil {
+		v.sess = sess
+	}
+}
+
+// discardEmpty drops a thread created for an ask that produced no turn, so a
+// failed first utterance does not leave a blank row in the console's rail.
+func (v *voiceThread) discardEmpty() {
+	if v == nil || v.store == nil || v.sess == nil {
+		return
+	}
+	if cur, err := v.store.Get(v.sess.ID); err == nil && len(cur.Turns) == 0 {
+		_ = v.store.Delete(v.sess.ID)
+		v.sess = nil
+	}
+}
+
+func (v *voiceThread) record(ctx context.Context, eng *askengine.Engine, text string, out *askengine.Result, loc i18n.Locale) {
+	if v == nil || v.sess == nil || out == nil {
+		return
+	}
+	appendExchangeToSession(v.store, v.sess.ID, text, out, loc)
+	if out.Kind == "task" {
+		bindTaskToSession(ctx, eng, out.TaskID, v.sess.ID)
 	}
 }
 
@@ -147,6 +213,8 @@ func runVoice(args []string) {
 // sentence a person standing in the room needs.
 func speakBack(ctx context.Context, loc i18n.Locale, out *askengine.Result, mute bool) {
 	switch out.Kind {
+	case "clarify":
+		fmt.Println(renderCliMd(out.Answer))
 	case "answer":
 		fmt.Println(renderCliMd(out.Answer))
 	case "task":
@@ -187,6 +255,8 @@ func speakBack(ctx context.Context, loc i18n.Locale, out *askengine.Result, mute
 // spokenReply is the sentence read aloud for one outcome.
 func spokenReply(loc i18n.Locale, out *askengine.Result) string {
 	switch out.Kind {
+	case "clarify":
+		return head(strings.TrimSpace(out.Answer), maxSpeakChars)
 	case "answer":
 		return head(strings.TrimSpace(out.Answer), maxSpeakChars)
 	case "task":

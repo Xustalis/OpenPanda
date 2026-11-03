@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
@@ -19,6 +20,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/mdtext"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
 // askValueFlags enumerates `panda ask`'s value-carrying flags for the
@@ -72,6 +74,11 @@ type askJSON struct {
 	PlanID   string          `json:"plan_id,omitempty"`
 	PlanGoal string          `json:"plan_goal,omitempty"`
 	Stages   []planStageJSON `json:"stages,omitempty"`
+	// Clarification: the entry model asked before acting and this surface
+	// could not answer inline. A script answers by sending the next ask with
+	// the answers in the prompt; the question set is echoed for it.
+	NeedsClarification bool               `json:"needs_clarification,omitempty"`
+	Clarification      *entry.ClarifySpec `json:"clarification,omitempty"`
 }
 
 func resultToJSON(out *askengine.Result) askJSON {
@@ -82,6 +89,7 @@ func resultToJSON(out *askengine.Result) askJSON {
 		Executor: out.Executor, WorkDir: out.WorkDir, RouteFallback: out.RouteFallback, EntryModel: out.EntryModel,
 		Verification: out.Verification, Verified: out.Verified,
 		PlanID: out.PlanID, PlanGoal: out.PlanGoal,
+		NeedsClarification: out.NeedsClarification, Clarification: out.Clarification,
 	}
 	for _, t := range out.PlanStages {
 		j.Stages = append(j.Stages, planStageJSON{
@@ -167,16 +175,33 @@ func runAsk(args []string) {
 
 	// --continue: replay the persisted conversation (the REPL's thread)
 	// as history, and record this exchange back into it — a one-shot ask
-	// that behaves like the next turn of the sitting.
-	var history []entry.Turn
-	if *continueConvo {
-		history = loadConvo()
+	// that behaves like the next turn of the sitting. The thread is a session
+	// now, so "the REPL's thread" means the project's newest one; the bare
+	// conversation file is the fallback for a node that never migrated.
+	proj := strings.TrimSpace(*project)
+	if proj == "" {
+		proj, _ = activeProject(cfg)
 	}
-	// The roster: an explicit --team wins; --continue inherits the bare
-	// conversation's persisted pick, so a team chosen in the TUI keeps binding
-	// the same thread from scripts. A one-shot ask with neither stays
-	// unrestricted (the scheduler chooses).
-	agents, err := resolveAskTeam(*team, *continueConvo)
+	var contStore *sessions.Store
+	var contSess *sessions.Session
+	var history []entry.Turn
+	var inheritTeam []string
+	if *continueConvo {
+		contStore, contSess, history = continueTarget(context.Background(), cfg, proj, engine)
+		if contSess != nil {
+			inheritTeam = contSess.Team
+		} else {
+			inheritTeam = loadBareTeam()
+		}
+	}
+	sessID := ""
+	if contSess != nil {
+		sessID = contSess.ID
+	}
+	// The roster: an explicit --team wins; --continue inherits the thread's
+	// persisted pick, so a team chosen in the TUI keeps binding the same thread
+	// from scripts. A one-shot ask with neither stays unrestricted.
+	agents, err := resolveAskTeamWith(*team, inheritTeam)
 	if err != nil {
 		fail(2, "panda: "+err.Error())
 	}
@@ -186,15 +211,27 @@ func runAsk(args []string) {
 		}
 	}
 	recordConvo := func(out *askengine.Result) {
-		if *continueConvo {
-			appendConvo(history, loc, prompt, out, engine)
+		if !*continueConvo {
+			return
 		}
+		if contSess != nil {
+			appendExchangeToSession(contStore, contSess.ID, prompt, out, loc)
+			if out.Kind == "task" {
+				bindTaskToSession(context.Background(), engine, out.TaskID, contSess.ID)
+			}
+			return
+		}
+		appendConvo(history, loc, prompt, out, engine)
 	}
 
 	cwd, _ := os.Getwd()
+	// Continuing a thread runs where the thread lives: its worktree when it has
+	// one, else the engine's bound work path. A one-shot ask keeps the caller's
+	// cwd — the TUI's askContext makes the same choice for a bound session.
+	workDir := continueWorkDir(cwd, contSess, engine)
 	var acceptChecks []contract.Check
 	if len(accept) > 0 {
-		checks, cerr := buildAcceptanceChecks(accept, cwd)
+		checks, cerr := buildAcceptanceChecks(accept, workDir)
 		if cerr != nil {
 			fail(2, i18n.Tf(loc, "cli.task.add.badAccept", "err", cerr.Error()))
 		}
@@ -203,8 +240,8 @@ func runAsk(args []string) {
 	switch *outputFormat {
 	case "json":
 		out, err := engine.AskTurnsScoped(context.Background(), history, prompt, askengine.AskScope{
-			WorkDir: cwd, Agents: agents, Node: strings.TrimSpace(*node), AmbientProject: true,
-			Acceptance: acceptChecks,
+			WorkDir: workDir, Agents: agents, Node: strings.TrimSpace(*node), AmbientProject: true,
+			SessionID: sessID, Acceptance: acceptChecks,
 		}, *authorize, askengine.StreamCallbacks{})
 		if err != nil {
 			emitJSON(map[string]string{"error": err.Error()})
@@ -217,11 +254,11 @@ func runAsk(args []string) {
 		}
 		return
 	case "stream-json":
-		runAskStreamJSON(engine, history, prompt, cwd, agents, strings.TrimSpace(*node), *authorize, acceptChecks, recordConvo)
+		runAskStreamJSON(engine, history, prompt, workDir, agents, strings.TrimSpace(*node), *authorize, acceptChecks, sessID, recordConvo)
 		return
 	}
 
-	out, streamedText, st, err := askStreaming(engine, history, prompt, cwd, agents, strings.TrimSpace(*node), *authorize, acceptChecks, loc)
+	out, streamedText, st, err := askStreaming(engine, history, prompt, workDir, agents, strings.TrimSpace(*node), *authorize, acceptChecks, sessID, loc)
 	if err != nil {
 		fail(1, "panda: "+err.Error())
 	}
@@ -237,6 +274,27 @@ func runAsk(args []string) {
 		next := confirmApprovalCLI(engine, out, loc, "")
 		if next == out || (next.NeedsApproval && next.Approval != nil && next.Approval.TaskID == out.Approval.TaskID) {
 			out = next
+			break
+		}
+		out = next
+	}
+	// A task the agent parked on a structured question gets the same choice
+	// card the TUI and web show: one command, no "now go find panda approve".
+	// The answer resumes through the approval path and may park again; the
+	// loop is bounded so a model that keeps asking cannot hold the command.
+	for round := 0; round < 3 && out.Kind == "task" && out.QuestionSpec != nil; round++ {
+		answers, ok := promptClarifyCLI(*out.QuestionSpec, loc)
+		if !ok {
+			break
+		}
+		answer := entry.ClarifyAnswerText(out.QuestionSpec, answers)
+		cb := askengine.StreamCallbacks{
+			OnProgress: func(p askengine.Progress) {
+				fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(loc, p))
+			},
+		}
+		next := engine.ResumeApproved(context.Background(), out.TaskID, workDir, cb, answer)
+		if next == nil {
 			break
 		}
 		out = next
@@ -332,6 +390,10 @@ func runAsk(args []string) {
 		}
 	case "plan":
 		printAskPlan(loc, out)
+	case "clarify":
+		// A headless ask could not show a choice card; the rendered questions
+		// are the answer. The next ask should carry the choices.
+		fmt.Println(renderCliMd(out.Answer))
 	}
 	printCost(st, out)
 }
@@ -459,7 +521,7 @@ func answerTail(streamed, answer string) string {
 
 // runAskStreamJSON is the headless streaming mode: one NDJSON event per line
 // (status / delta / result / error), consumable by scripts and other tools.
-func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, record func(*askengine.Result)) {
+func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, sessionID string, record func(*askengine.Result)) {
 	write := func(v map[string]any) {
 		line, err := json.Marshal(v)
 		if err != nil {
@@ -473,7 +535,7 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, wo
 		OnStatus:    func(text string) { write(map[string]any{"type": "status", "text": text}) },
 	}
 	out, err := engine.AskTurnsScoped(context.Background(), history, prompt, askengine.AskScope{
-		WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept,
+		WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept, SessionID: sessionID,
 	}, authorize, cb)
 	if err != nil {
 		write(map[string]any{"type": "error", "message": err.Error()})
@@ -500,8 +562,8 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, wo
 // attached, nothing is animated, and the full answer prints once at the end.
 // The streamed marker tells the caller to skip the duplicate final print; the
 // returned status line carries the run's numbers for a closing cost line.
-func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, loc i18n.Locale) (*askengine.Result, string, *cliui.Status, error) {
-	scope := askengine.AskScope{WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept}
+func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, sessionID string, loc i18n.Locale) (*askengine.Result, string, *cliui.Status, error) {
+	scope := askengine.AskScope{WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept, SessionID: sessionID}
 	st := newStatusLine(loc)
 	if !stdoutIsTTY() {
 		out, err := engine.AskTurnsScoped(context.Background(), history, prompt, scope, authorize, askengine.StreamCallbacks{})
@@ -537,7 +599,22 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 				st.Preview(pal().Muted(line))
 			}
 		},
+		OnQuestion: func(spec entry.ClarifySpec) ([]entry.ClarifyAnswer, bool) {
+			// The choice card owns the terminal: stop the spinner so the
+			// options are not painted over, then restart the wait line when
+			// the answers release the classifier.
+			st.Stop()
+			answers, ok := promptClarifyCLI(spec, loc)
+			st.Start(statusVerb(loc))
+			return answers, ok
+		},
 		OnProgress: func(p askengine.Progress) {
+			// A usage report is a counter, not a phase: it updates the closing
+			// meta in place and must not push a log line or a note.
+			if p.Kind == askengine.ProgressUsage {
+				st.SetTokens(p.InputTokens + p.OutputTokens)
+				return
+			}
 			note := progressNote(loc, p)
 			// Advance the phase chain so the status line's trailing meta shows
 			// classify → routing → executing (P0 redesign §D3 parity with the
@@ -632,6 +709,11 @@ func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18
 	fmt.Println(p.Success(i18n.T(loc, "repl.approval.approved")))
 	cb := askengine.StreamCallbacks{
 		OnProgress: func(p askengine.Progress) {
+			// Usage reports have no one to update on this path (the resumed run
+			// prints no status line) and must not print an empty bullet.
+			if p.Kind == askengine.ProgressUsage {
+				return
+			}
 			fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(loc, p))
 		},
 	}
@@ -646,6 +728,117 @@ func confirmApprovalCLI(engine *askengine.Engine, out *askengine.Result, loc i18
 		}
 	}
 	return resumed
+}
+
+// promptClarifyCLI renders a pre-execution question round on the terminal and
+// reads one line per question: option numbers (comma-separated for a
+// multi-select) or free text, which becomes the "Other" answer. It returns
+// ok=false when stdin is not interactive, so the engine hands the question
+// back as a NeedsClarification Result instead of blocking a piped ask.
+func promptClarifyCLI(spec entry.ClarifySpec, loc i18n.Locale) ([]entry.ClarifyAnswer, bool) {
+	if !stdinIsTTY() || !stdoutIsTTY() {
+		return nil, false
+	}
+	p := pal()
+	fmt.Println(p.Warn(p.MarkBullet() + " " + i18n.T(loc, "clarify.title")))
+	if plan := strings.TrimSpace(spec.Plan); plan != "" {
+		fmt.Println(renderCliMd(plan))
+	}
+	reader := bufio.NewReader(os.Stdin)
+	answers := make([]entry.ClarifyAnswer, 0, len(spec.Questions))
+	for i, q := range spec.Questions {
+		fmt.Printf("\n[%s] %s (%d/%d)\n", q.Header, q.Question, i+1, len(spec.Questions))
+		for j, o := range q.Options {
+			suffix := ""
+			if o.Label == q.Recommended {
+				suffix = clarifyRecommendedSuffix(o.Label, loc)
+			}
+			desc := ""
+			if d := strings.TrimSpace(o.Description); d != "" {
+				desc = " — " + p.Muted(d)
+			}
+			fmt.Printf("  %d) %s%s%s\n", j+1, o.Label, suffix, desc)
+			// A preview is visual context for a single-select choice; the
+			// terminal has no hover, so it prints under its own option.
+			if !q.MultiSelect {
+				if prev := clarifyPreviewText(o.Preview, 6); prev != "" {
+					for _, line := range strings.Split(prev, "\n") {
+						fmt.Println(p.Muted("     │ " + line))
+					}
+				}
+			}
+		}
+		if q.MultiSelect {
+			fmt.Println("  " + p.Muted(i18n.T(loc, "clarify.multi")))
+		}
+		fmt.Print("> ")
+		line, err := reader.ReadString('\n')
+		if err != nil && strings.TrimSpace(line) == "" {
+			return nil, false
+		}
+		answers = append(answers, parseClarifyLine(q, strings.TrimSpace(line)))
+	}
+	return answers, true
+}
+
+// clarifyRecommendedSuffix returns the localized recommended marker, or "" when
+// the label already carries it in any bracket style — the model is told to put
+// the recommendation first, and some models also append the wording.
+func clarifyRecommendedSuffix(label string, loc i18n.Locale) string {
+	marker := i18n.T(loc, "clarify.recommended")
+	bare := strings.NewReplacer("（", "", "）", "", "(", "", ")", "", " ", "").Replace(marker)
+	if strings.Contains(label, marker) || (bare != "" && strings.Contains(label, bare)) {
+		return ""
+	}
+	return " " + marker
+}
+
+// clarifyPreviewText bounds an option preview to a screen-sized sample: the
+// full text still lives in the spec, but a card or a terminal shows a glance,
+// and the cut says so.
+func clarifyPreviewText(text string, maxLines int) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if maxLines > 0 && len(lines) > maxLines {
+		lines = append(lines[:maxLines], "…")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// parseClarifyLine turns one typed line into an answer. A line of option
+// numbers selects those labels; anything else is free text ("Other"). An empty
+// line leaves the question unanswered, and the model falls back to its
+// recommendation.
+func parseClarifyLine(q entry.ClarifyQuestion, line string) entry.ClarifyAnswer {
+	a := entry.ClarifyAnswer{ID: q.ID}
+	if line == "" {
+		return a
+	}
+	parts := strings.FieldsFunc(line, func(r rune) bool {
+		return r == ',' || r == '，' || r == ' ' || r == '\t'
+	})
+	var labels []string
+	allIndices := len(parts) > 0
+	for _, part := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || n < 1 || n > len(q.Options) {
+			allIndices = false
+			break
+		}
+		labels = append(labels, q.Options[n-1].Label)
+	}
+	if allIndices {
+		if !q.MultiSelect && len(labels) > 1 {
+			labels = labels[:1]
+		}
+		a.Selected = labels
+		return a
+	}
+	a.Other = line
+	return a
 }
 
 // printCost closes an interactive ask with what it cost: elapsed time, and the

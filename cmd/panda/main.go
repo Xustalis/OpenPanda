@@ -34,6 +34,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/nodecli"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
@@ -108,20 +109,13 @@ func main() {
 }
 
 // subcommandNames lists every accepted subcommand for typo suggestions and
-// shell completion. It is dispatchSub's switch written out once more,
-// deliberately: the switch is the dispatcher and must stay a switch (aliases
-// share a case), while this is the vocabulary, and a name missing here costs
-// a suggestion, not a command.
+// shell completion. The vocabulary itself lives in internal/nodecli — the one
+// registry shared with the agent-facing command reference and with
+// `panda help` — so a new subcommand is named once, not once per consumer.
+// dispatch.go's switch stays the dispatcher (aliases share a case); a test
+// parses it and fails a case the catalog does not cover.
 func subcommandNames() []string {
-	return []string{
-		"daemon", "serve", "ask", "repl", "chat", "web", "voice",
-		"install", "uninstall", "update", "upgrade", "doctor", "status", "nodes", "pair", "join", "queue",
-		"task", "plan", "cancel", "approve", "reject", "logs", "skill", "mcp",
-		"reminder", "todo", "detect", "card", "init", "metrics", "heatmap", "audit", "session",
-		"sessions", "memory", "config", "model", "models", "agents", "project",
-		"auth", "rpc",
-		"read", "view", "cat", "md", "markdown", "version", "help", "completion", "self",
-	}
+	return nodecli.Names()
 }
 
 // looksLikeSubcommand reports whether a bare argv word could plausibly be a
@@ -173,12 +167,24 @@ func bareInputIsAsk(sub string, rest []string) bool {
 // of argv. Global flags are already gone — extractGlobalFlags lifted them —
 // so any leading dash tokens belong to the subcommand (`panda --watch
 // queue`) and forward to its FlagSet, which either accepts them or errors,
-// instead of being silently dropped here. A value flag before the
-// subcommand can't be resolved (its table belongs to the subcommand), so its
-// value would read as the subcommand — an ambiguity no dispatcher can lift.
+// instead of being silently dropped here. A value flag before the subcommand
+// cannot generally be resolved (its table belongs to the subcommand), so the
+// REPL's own table is consulted — one definition, shared with runRepl.
 func parseSubcommand(args []string) (string, []string) {
-	for i, a := range args {
+	var valueFlags map[string]bool
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if strings.HasPrefix(a, "-") && a != "-" {
+			if valueFlags == nil {
+				// Built on first use: constructing the REPL flag set evaluates
+				// its defaults (card discovery), which a flagless command need
+				// not pay for.
+				valueFlags = replValueFlagNames()
+			}
+			name := strings.TrimLeft(a, "-")
+			if !strings.Contains(name, "=") && valueFlags[name] && i+1 < len(args) {
+				i++ // the next token is this flag's value, not a subcommand
+			}
 			continue // flag token: belongs to the subcommand (or "--")
 		}
 		rest := append(append([]string{}, args[:i]...), args[i+1:]...)
@@ -283,6 +289,9 @@ func runDaemon(args []string) {
 	// Sub-agent orchestration bounds (delegation: section): how wide a task
 	// fans out, how many children run at once, how deep the tree grows.
 	coreNode.SetDelegationLimits(cfg.Delegation)
+	// The operator's own commands, bound to task lifecycle edges. Inert unless
+	// hooks.enabled is set.
+	coreNode.SetHooks(cfg.Hooks)
 	// Extended-policy agent runs expose the node's MCP server to the
 	// delegated agent CLI (work-dir .mcp.json); minimal policy ignores it.
 	coreNode.SetAgentMCPPassthrough(cfg.MCP.Command)
@@ -403,43 +412,9 @@ func runDaemon(args []string) {
 			logger.Info("subprocess sandbox enabled", "mode", mode, "backend", backend)
 		}
 	}
-	// A secret-less node cannot mesh at all: the WS listener refuses to
-	// start and discovery stays listen-only. Rather than booting a node
-	// that is silently unreachable, mint one here and persist it into the
-	// config so the next start (and any `panda nodes`/pair output) sees the
-	// same material. The secret creates a standalone mesh domain — a node
-	// joining an existing mesh later adopts the inviter's secret via pair.
-	if cfg.Network.SharedSecret == "" {
-		// Silent rekey guard: a node that HAS a mesh — configured peers, or
-		// registered remote nodes in the directory — but no secret almost
-		// certainly lost its credential (OPENPANDA_SHARED_SECRET not passed
-		// this start, or the file's field was cleared). Minting a fresh
-		// secret anyway exiles the node permanently: every configured peer
-		// rejects its hello until the ORIGINAL secret is restored. Scream
-		// about it, and keep the wrong value off disk — a persisted mismatch
-		// would exile the node on every future env-less start too.
-		meshed := len(cfg.Network.Peers) > 0 || hasMeshHistory(db, runtimeNodeID)
-		if secret, serr := generateSharedSecret(); serr == nil {
-			cfg.Network.SharedSecret = secret
-			switch {
-			case meshed:
-				logger.Error("network.shared_secret is empty on a node that has meshed before — "+
-					"a fresh in-memory secret was minted and configured peers WILL REJECT it. "+
-					"If this node previously joined a mesh via OPENPANDA_SHARED_SECRET or `panda pair`, "+
-					"stop it and restore the original secret; pairing again also re-adopts the mesh secret",
-					"configured_peers", len(cfg.Network.Peers))
-			default:
-				if werr := config.UpdateNetworkSection(*configPath,
-					config.NetworkConfig{SharedSecret: secret}); werr != nil {
-					logger.Warn("generated shared secret could not be persisted (in-memory only)", "err", werr)
-				} else {
-					logger.Info("generated and saved shared secret", "config", *configPath)
-				}
-			}
-		} else {
-			logger.Warn("could not generate shared secret", "err", serr)
-		}
-	}
+	// Whichever process owns the node row needs a mesh secret; the bootstrap
+	// (and its lost-credential guard) is shared with `panda web`.
+	ensureSharedSecret(cfg, db, runtimeNodeID, *configPath, logger)
 	coreNode.SetSharedSecret(cfg.Network.SharedSecret)
 	coreNode.SetAllowCleartext(cfg.Network.AllowCleartext)
 	coreNode.SetCleartextAllowlist(cfg.Network.AllowCleartextFor)
@@ -541,6 +516,11 @@ func runDaemon(args []string) {
 	// Task recovery FIRST, then the queue scheduler: the order is
 	// load-bearing (see recoverThenStartQueue).
 	recoverThenStartQueue(ctx, logger, coreNode)
+
+	// Inbound events (intake.*): the webhook listener starts after the queue,
+	// because an admitted event is immediately queued and must not wait for a
+	// scheduler that is still recovering. Inert unless enabled.
+	startIntake(ctx, logger, coreNode, cfg.Intake)
 
 	// Dreaming (design §17.3): consolidate the daily logs into long-term memory
 	// in the background — only while the node is idle, at most once per day.
@@ -922,89 +902,26 @@ func printUsage(w *os.File) {
 			}
 		}
 	}
-	const (
-		narrow = 25 // runtime entries' description column
-		wide   = 44 // entries whose command spellings are longer
-	)
-
 	line(t("cli.help.title"))
-	line("")
-	line(t("cli.help.g.runtime"))
-	h("  (no subcommand)", "cli.help.d.nosub", narrow)
-	h("  daemon", "cli.help.d.daemon", narrow)
-	h("  nodes", "cli.help.d.nodes", narrow)
-	h("  nodes add <host:port>", "cli.help.d.nodes_add", narrow)
-	h("  nodes invite", "cli.help.d.nodes_invite", narrow)
-	h("  nodes admit <id>", "cli.help.d.nodes_admit", narrow)
-	h("  nodes verify <id>", "cli.help.d.nodes_verify", narrow)
-	h("  nodes drain [id]", "cli.help.d.nodes_drain", narrow)
-	h("  nodes prune", "cli.help.d.nodes_prune", narrow)
-	h("  nodes disconnect <a>", "cli.help.d.nodes_disconnect", narrow)
-	line("  pair --secret S --peer <host:port>")
-	h("", "cli.help.d.pair", narrow)
-	h("  ask <text>", "cli.help.d.ask", narrow)
-	h("  repl", "cli.help.d.repl", narrow)
-	h("  web", "cli.help.d.web", narrow)
-	h("       --lan", "cli.help.d.web_lan", narrow)
-	h("  voice [--once] [--mute]", "cli.help.d.voice", narrow)
-	h("  read <file> | <file.md>", "cli.help.d.read", narrow)
-	line("")
-	line(t("cli.help.g.sessions"))
-	line("  session list|new|show|rm|ask|diff|merge")
-	h("          |fork|tree", "cli.help.d.session", wide)
-	line("")
-	line(t("cli.help.g.tasks"))
-	h("  queue [--state s] [--project p] [--watch]", "cli.help.d.queue", wide)
-	h("  task <id>", "cli.help.d.task", wide)
-	line("  task add --title T [--prompt P] [--priority low|medium|normal|high|critical]")
-	h("           [--project p] [--authorize]", "cli.help.d.task_add", wide)
-	h("           [--wait [--wait-timeout 30m]]", "cli.help.d.task_wait", wide)
-	line("           [--agents a,b] [--mode parallel|serial]")
-	h("", "cli.help.d.task_agents", wide)
-	h("  task priority <id> <level>", "cli.help.d.task_priority", wide)
-	h("  task move <id> <seq>", "cli.help.d.task_move", wide)
-	h("  task artifact <id> [--list|--file|--out]", "cli.help.d.task_artifact", wide)
-	h("  task board <id>", "cli.help.d.task_board", wide)
-	h("  task send [--inject] <id> <text>", "cli.help.d.task_send", wide)
-	h("  cancel|approve|reject|logs <id>", "cli.help.d.task_verbs", wide)
-	h("  plan run <file.yaml> [--dry-run]", "cli.help.d.plan_run", wide)
-	h("  plan show <plan-id>", "cli.help.d.plan_show", wide)
-	h("  project list|create", "cli.help.d.project", wide)
-	line("")
-	line(t("cli.help.g.memory"))
-	h("  memory list|get|set|rm [name]", "cli.help.d.memory", wide)
-	line("")
-	line(t("cli.help.g.settings"))
-	h("  model [status|list|add|rm|switch|test]", "cli.help.d.model", wide)
-	line("  config model|mcp|limits|routing|injection|approval get|set|test")
-	h("", "cli.help.d.config", wide)
-	h("  agents [test <name>]", "cli.help.d.agents", wide)
-	h("  reminder list|add|rm", "cli.help.d.reminder", wide)
-	h("  todo <list|add|edit|done|rm|move|start>", "cli.help.d.todo", wide)
-	h("  skill list|find|hub|add|reset", "cli.help.d.skill", wide)
-	h("  mcp", "cli.help.d.mcp", wide)
-	h("  rpc", "cli.help.d.rpc", wide)
-	h("  auth login|status|logout <provider>", "cli.help.d.auth", wide)
-	line("  self status|queue|doctor|mint|propose|rebase|rollback|reset")
-	h("", "cli.help.d.self", wide)
-	line("")
-	line(t("cli.help.g.observability"))
-	h("  status", "cli.help.d.status", wide)
-	h("  metrics [--csv|--runtime]", "cli.help.d.metrics", wide)
-	h("  heatmap [--weeks N]", "cli.help.d.heatmap", wide)
-	h("  audit verify [--task id]", "cli.help.d.audit_verify", wide)
-	h("  audit entries [--task id]", "cli.help.d.audit_entries", wide)
-	line("")
-	line(t("cli.help.g.setup"))
-	h("  install|uninstall", "cli.help.d.install", wide)
-	h("  update [check|apply] | upgrade", "cli.help.d.update", wide)
-	h("  init [--defaults|--non-interactive]", "cli.help.d.init", wide)
-	h("  doctor", "cli.help.d.doctor", wide)
-	h("  detect", "cli.help.d.detect", wide)
-	h("  card show|rescan|edit|set", "cli.help.d.card", wide)
-	h("  card native|agent|manual add|remove|set", "cli.help.d.card_struct", wide)
-	h("  version|help", "cli.help.d.version", wide)
-	h("  completion bash|zsh|fish|powershell", "cli.help.d.completion", wide)
+	// The rows are data (internal/nodecli): the registry that feeds the agent
+	// reference and shell completion also owns this page, so a command cannot
+	// exist in one surface and be missing from another. This function keeps
+	// only the two layout rules — the description column and the continuation
+	// rows the page uses for long spellings.
+	for _, sec := range nodecli.HelpPage() {
+		line("")
+		line(t(nodecli.GroupHeadingKey(sec.Group)))
+		for _, row := range sec.Rows {
+			switch {
+			case row.Cmd == "":
+				h("", row.HelpKey, sec.Col)
+			case row.HelpKey == "":
+				line("  " + row.Cmd)
+			default:
+				h("  "+row.Cmd, row.HelpKey, sec.Col)
+			}
+		}
+	}
 	line("")
 	line(t("cli.help.globalflags"))
 	line("              " + t("cli.help.globalflags2"))

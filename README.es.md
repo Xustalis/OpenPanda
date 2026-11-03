@@ -11,8 +11,8 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/plataformas-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/Memoria%20RSS-~20MB-brightgreen)
-![Local First](https://img.shields.io/badge/Dependencia%20Cloud-Cero%20(Local--First)-success)
+![Memory](https://img.shields.io/badge/Memoria%20RSS-~40MB-brightgreen)
+![No Cloud Relay](https://img.shields.io/badge/Relay%20Cloud-Ninguno-success)
 
 ---
 
@@ -52,9 +52,19 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 
 ---
 
+## 🆕 Lo que llega en v0.1.4
+
+- **Las ejecuciones parten del espacio de trabajo** — cada tarea de agente lleva un mapa determinista de su árbol (estado de git, estructura, archivos clave y los comandos de compilación/verificación del propio proyecto), y el juez de finalización ve los comandos que el agente ejecutó antes de aceptar «hecho».
+- **Preguntar antes de adivinar** — el modelo de entrada puede hacer preguntas de opción múltiple acotadas antes de crear una tarea, y un agente en ejecución puede hacer las mismas preguntas estructuradas; la TUI, la consola y `panda approve` las responden.
+- **Canal lateral y rebobinado** — `/side` (alias `/btw`) abre una conversación de solo lectura junto al hilo, y cada respuesta terminada deja un punto de control que `/rewind` puede restaurar.
+- **Leer lo que produjo el agente** — las rutas del espacio de trabajo en las respuestas son clicables en la consola y `panda read path:line` en la terminal; los artefactos de tarea se previsualizan en un segundo origen aislado.
+- **El trabajo pendiente del hilo, de un vistazo** — una barra de tareas en la TUI (Ctrl+B) y la cabecera de la consola listan lo que se ejecuta, lo que te espera y la cola.
+- **Hooks de operador, acotados** — `task_submitted` / `task_started` / `task_done` / `task_failed` / `task_review` pueden ejecutar tus comandos con un entorno filtrado, control de nivel y una fila de auditoría.
+
 ## 🌟 ¿Qué puede hacer OpenPanda?
 
 ### 1. 🌐 Colaboración multidispositivo P2P heterogénea
+- **Estado multidispositivo (publicado hasta v0.1.3)**: AEAD por sesión, emparejamiento estilo Bluetooth, niveles de confianza, retransmisión multisalto y ejecución paralela en el mismo proyecto mediante ámbitos de ruta y worktrees aislados.
 - **Descubrimiento LAN + emparejamiento estilo Bluetooth**: Los nodos se encuentran en la LAN con admisión confirmada por huella; `panda pair` incorpora un dispositivo con un código corto confirmado en ambos extremos, y `panda nodes verify` fija la clave Ed25519 de cada par.
 - **Tarjetas de capacidad dinámicas**: Cada nodo declara su perfil de hardware (CPU, GPU, RAM, SO) y herramientas disponibles.
 - **Enrutamiento inteligente de tareas**: Asigna compilaciones pesadas a servidores potentes y tareas de sensores a placas de bajo consumo según capacidad medida; `panda nodes drain` retira un nodo para mantenimiento.
@@ -67,7 +77,7 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 - **Zonas de confianza**: Cada par lleva un nivel fijado por el operador (`panda nodes trust <id> mesh|guarded|open`) que limita lo que una tarea delegada puede exponerle y cómo se admite el trabajo entrante desde él; el contenido de pantalla es exclusivo de mesh de extremo a extremo — degradar la confianza corta una transferencia de pantalla en pleno vuelo.
 
 ### 2. 🤖 Orquestación universal de agentes y failover automático
-- **Adaptadores listos para usar**: Diez adaptadores incluidos (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, ZCode, OpenClaw), un puente generic para todo lo demás y comandos de shell.
+- **Adaptadores listos para usar**: Diez adaptadores dedicados (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw y ZCode). Un puente genérico configurable permite usar cualquier otro CLI sin interfaz.
 - **Registro multimodelo y failover transparente**: `panda model add|switch|test` gestiona varios proveedores por nodo tras un cortacircuitos de salud; si un agente agota su cuota o fallan sus credenciales (401/403), se inyecta automáticamente un modelo alternativo y la tarea continúa.
 - **Ejecución multiharness**: `panda ask --agents a,b --mode parallel` reparte una instrucción a varios agentes como un plan y recoge los veredictos.
 - **Trazabilidad total en tiempo real**: Visualiza comandos bash, ediciones de archivos y llamadas a herramientas en tu terminal o navegador.
@@ -96,7 +106,7 @@ Das una instrucción desde **cualquier** dispositivo. OpenPanda analiza la tarea
 - **`panda rpc`** (experimental): Superficie de incrustación NDJSON sobre stdio (`status`, `ask` en streaming, `session.*`); `scripts/panda_rpc.py` es un cliente de referencia solo-stdlib.
 - **OAuth de suscripción** (experimental): `panda auth login anthropic` inicia sesión en Claude Pro/Max vía PKCE con refresco transparente del token.
 
-### 6. 🪶 Ultraligero (~20MB de memoria)
+### 6. 🪶 Ultraligero (~40MB de memoria en reposo)
 - Binario estático único en Go puro (SQLite en modo WAL).
 - Funciona sin esfuerzo en una SBC de 20 \$ (Raspberry Pi) o en servidores potentes.
 

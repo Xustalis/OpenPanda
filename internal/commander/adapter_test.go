@@ -398,8 +398,55 @@ func TestAdapterSilenceKill(t *testing.T) {
 	}
 }
 
-// TestAdapterStartupGraceKill covers the pre-first-output window: a CLI whose
-// first model call legitimately emits nothing for a while must not be killed
+// toolThenSilentAdapter speaks one raw line (closing the startup grace),
+// announces a tool call, then goes silent for longer than the silence limit
+// before reporting the result — a build or test suite that produces no output
+// while it runs.
+const toolThenSilentAdapter = `#!/usr/bin/env python3
+import json, sys, time
+req = json.loads(sys.stdin.read())
+print("cli started", file=sys.stderr, flush=True)
+print(json.dumps({"type": "event", "ev": "tool_use", "id": "t1", "name": "Bash"}), file=sys.stderr, flush=True)
+time.sleep(0.6)
+print(json.dumps({"type": "event", "ev": "tool_result", "tool_use_id": "t1"}), file=sys.stderr, flush=True)
+print(json.dumps({"ok": True, "result": "built", "exit_code": 0}))
+`
+
+// TestAdapterToolInFlightSurvivesSilence pins the long-task case: silence
+// while a tool call is in flight is the tool's own runtime, not a wedge. A
+// full-repo build or test suite emits nothing for minutes; killing it at the
+// silence limit truncated exactly the long-horizon work the orchestrator is
+// for. The hard timeout still bounds the run.
+func TestAdapterToolInFlightSurvivesSilence(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "toolsilent.py"), []byte(toolThenSilentAdapter), 0o755); err != nil {
+		t.Fatalf("write adapter: %v", err)
+	}
+	oldDir := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = oldDir }()
+	oldSilence := silenceTimeout
+	silenceTimeout = 200 * time.Millisecond
+	defer func() { silenceTimeout = oldSilence }()
+	oldHB := silenceHeartbeat
+	silenceHeartbeat = 100 * time.Millisecond
+	defer func() { silenceHeartbeat = oldHB }()
+
+	start := time.Now()
+	res := runAdapterProcess(context.Background(), "toolsilent.py", "x", "", nil)
+	elapsed := time.Since(start)
+	if !res.OK {
+		t.Fatalf("res = %+v, want success: a tool in flight must not be killed as stalled", res)
+	}
+	if res.Result != "built" {
+		t.Fatalf("result = %q, want built", res.Result)
+	}
+	if elapsed < 550*time.Millisecond {
+		t.Fatalf("run finished in %v, before the simulated tool returned", elapsed)
+	}
+}
+
+// TestAdapterStartupGraceKill covers the pre-first-output window: a CLI whose// first model call legitimately emits nothing for a while must not be killed
 // at the silence limit — that just respawns into the same wait — but a
 // process that never produces anything still dies, bounded by the startup
 // grace rather than the full hard timeout.
@@ -862,5 +909,25 @@ func TestResumeAdapterAffinity(t *testing.T) {
 	req, _, refusal = buildAdapterRequest(WithResume(context.Background(), "sess-old", ""), "claude_code.py", "p", "")
 	if refusal != nil || req.Resume != "sess-old" {
 		t.Fatalf("legacy resume = %q refusal %v, want sess-old", req.Resume, refusal)
+	}
+}
+
+// TestBuildAdapterRequestCarriesConsent: the operator's tier-2 consent must
+// reach the adapter subprocess, or a CLI that gates its own tool calls keeps
+// auto-denying what a human just approved (issue #165). Restricted is the
+// narrower promise and outranks consent.
+func TestBuildAdapterRequestCarriesConsent(t *testing.T) {
+	req, _, refusal := buildAdapterRequest(WithAuthorized(context.Background()), "claude_code.py", "p", "")
+	if refusal != nil || !req.Authorized {
+		t.Fatalf("consented request: authorized=%v refusal=%v, want true", req.Authorized, refusal)
+	}
+	req, _, refusal = buildAdapterRequest(context.Background(), "claude_code.py", "p", "")
+	if refusal != nil || req.Authorized {
+		t.Fatalf("unconsented request: authorized=%v refusal=%v, want false", req.Authorized, refusal)
+	}
+	req, _, refusal = buildAdapterRequest(WithAuthorized(WithRestricted(context.Background())), "claude_code.py", "p", "")
+	if refusal != nil || !req.Restricted || req.Authorized {
+		t.Fatalf("restricted consent: restricted=%v authorized=%v refusal=%v, want restricted only",
+			req.Restricted, req.Authorized, refusal)
 	}
 }

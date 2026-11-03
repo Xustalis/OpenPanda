@@ -9,14 +9,14 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/%E5%86%85%E5%AD%98%E5%B8%B8%E9%A9%BB-~20MB%20RSS-brightgreen)
-![Local First](https://img.shields.io/badge/%E4%BA%91%E7%AB%AF%E4%BE%9D%E8%B5%96-%E9%9B%B6%E4%BE%9D%E8%B5%96-success)
+![Memory](https://img.shields.io/badge/%E5%86%85%E5%AD%98%E5%B8%B8%E9%A9%BB-~40MB%20RSS-brightgreen)
+![无厂商中转](https://img.shields.io/badge/%E5%8E%82%E5%95%86%E4%B8%AD%E8%BD%AC-%E6%97%A0-success)
 
 ***
 
 ## 简介
 
-OpenPanda 将你机器上已有的终端 AI 编程助手——内置十个适配器（Claude Code、OpenAI Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、ZCode、OpenClaw），外加一个兜底其余一切的 generic 桥——与你的设备组织为一支统一的执行队伍。它本身不是 Agent：你发出一条指令，它负责意图理解、任务拆解、调度派发、执行监督与结果校验——全程本地运行，不依赖任何云端服务。
+OpenPanda 将你机器上已有的终端 AI 编程助手——内置十个专用适配器（Claude Code、OpenAI Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、OpenClaw、ZCode），另有可配置的通用桥接器，可接入任意其他无头 CLI——与你的设备组织为一支统一的执行队伍。它本身不是 Agent：你发出一条指令，它负责意图理解、任务拆解、调度派发、执行监督与结果校验——全程本地运行，没有厂商运营的中转服务，中继跳点都是你自己的节点。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -43,9 +43,18 @@ OpenPanda 将你机器上已有的终端 AI 编程助手——内置十个适配
 | 主线               | 说明                              | 状态                        |
 | ---------------- | ------------------------------- | ------------------------- |
 | **多 Agent 协同控制** | 雇佣并统一指挥多个终端 Agent：派发、监督、故障转移、审批 | ✅ 当前工作重点                  |
-| **多设备协同控制**      | P2P 网络内跨节点任务路由与调度               | ✅ v0.0.10 已发布；v0.0.11 追加逐连接 AEAD、蓝牙式配对、信任分档与多跳中继；v0.0.12 追加同项目并行执行（路径作用域泳道与隔离 worktree） |
+| **多设备协同控制**      | P2P 网络内跨节点任务路由与调度               | ✅ 支持已发布至 v0.1.3：逐会话 AEAD、蓝牙式配对、信任分档、多跳中继，以及通过路径作用域泳道和隔离 worktree 实现的同项目并行执行 |
 
 ***
+
+## 🆕 v0.1.4 即将到来
+
+- **运行从工作区开始** —— 每个 agent 任务都带着一份确定性的工作区地图（git 状态、目录结构、关键文件、项目自己的构建/验证命令），完成判定在看到实际执行的命令后才接受「完成」。
+- **先问再做** —— 入口模型在创建任务前可以提有界的选择题，运行中的 agent 也能用同样的结构化提问；TUI、控制台与 `panda approve` 都能作答。
+- **侧边对话与回滚** —— `/side`（别名 `/btw`）在线程旁开一个只读对话；每轮完成的回答留下检查点，`/rewind` 可以恢复。
+- **读得到 agent 的产出** —— 回复里的工作区路径在控制台可点，终端里用 `panda read path:line`；任务产物在隔离的第二个 origin 上预览。
+- **线程未完成的工作一目了然** —— TUI 的 Ctrl+B 与控制台头部的任务栏按运行中、等待你处理、排队列出。
+- **可控的生命周期钩子** —— `task_submitted` / `task_started` / `task_done` / `task_failed` / `task_review` 可以运行你自己的命令，环境经过白名单、命令过 tier 门、每次执行写审计。
 
 ## ✨ 核心特性
 
@@ -121,7 +130,7 @@ OpenPanda 将你机器上已有的终端 AI 编程助手——内置十个适配
 
 - **自更新**：`panda update check|apply`（或 `panda upgrade`）先探测暂存的新二进制再原地替换。
 
-- **极致轻量**：纯 Go 单静态二进制，常驻内存约 20MB，无外部运行时依赖。
+- **极致轻量**：纯 Go 单静态二进制，空闲常驻内存约 40MB，无外部运行时依赖。
 
 ***
 
@@ -158,7 +167,7 @@ make build && ./bin/panda init
 
 ## 🚀 快速开始
 
-初始化节点（交互式配置设备名、模型提供商与本机能力卡）：
+初始化节点（自动探测设备名、资源档与能力卡；交互式只询问是否现在配置模型）：
 
 ```bash
 panda init

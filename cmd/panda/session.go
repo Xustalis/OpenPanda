@@ -32,6 +32,71 @@ func sessionStoreRoot(cfg *config.Config) string {
 	return filepath.Join(filepath.Dir(cfg.Storage.DBPath), "sessions")
 }
 
+// openWorktreesForSessionBase picks the repository a new session's worktree
+// belongs to. A project's own work dir wins over the node's storage.work_path:
+// a thread attached to a repository must isolate inside that repository, which
+// is what the console promises. The current directory is the next candidate,
+// so `panda session new` inside a checkout behaves like the web console. The
+// storage path is the last resort (and is usually not a repository, which
+// degrades to a plain thread exactly as before).
+func openWorktreesForSessionBase(cfg *config.Config, project, projectDir string) *sessions.Worktrees {
+	if projectDir != "" {
+		if wt, err := sessions.OpenWorktrees(projectDir); err == nil {
+			return wt
+		}
+	}
+	if project != "" {
+		if dir := projectWorkDir(cfg, project); dir != "" {
+			if wt, err := sessions.OpenWorktrees(dir); err == nil {
+				return wt
+			}
+		}
+		// A named project that is not a repository must not silently adopt
+		// whatever checkout the command happened to run from.
+		return openWorktreesBestEffort(cfg.Storage.WorkPath)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if wt, err := sessions.OpenWorktrees(cwd); err == nil {
+			return wt
+		}
+	}
+	return openWorktreesBestEffort(cfg.Storage.WorkPath)
+}
+
+// openWorktreesForSession resolves the repository for an existing session.
+// The session's recorded worktree path is authoritative (it survives project
+// reassignment); falling back to the project's work dir keeps older sessions
+// without a worktree usable after this fix.
+func openWorktreesForSession(cfg *config.Config, sess *sessions.Session) *sessions.Worktrees {
+	if sess == nil {
+		return nil
+	}
+	if sess.Worktree != "" {
+		// worktreeDir layout is <repo>/.openpanda/worktrees/<id>.
+		repo := filepath.Dir(filepath.Dir(filepath.Dir(sess.Worktree)))
+		if wt, err := sessions.OpenWorktrees(repo); err == nil {
+			return wt
+		}
+	}
+	// An older session has no recorded worktree. Resolve its project (or the
+	// storage path) only when a worktree for this id actually exists there;
+	// otherwise the caller should report "no git worktree" instead of
+	// operating on a repository that was never this session's.
+	for _, base := range []string{projectWorkDir(cfg, sess.Project), cfg.Storage.WorkPath} {
+		if base == "" {
+			continue
+		}
+		wt, err := sessions.OpenWorktrees(base)
+		if err != nil {
+			continue
+		}
+		if _, statErr := os.Stat(wt.Path(sess.ID)); statErr == nil {
+			return wt
+		}
+	}
+	return nil
+}
+
 // runSession dispatches `panda session <verb>`: list | new | show | rm |
 // ask | diff | merge.
 func runSession(args []string) {
@@ -169,15 +234,18 @@ func runSessionNew(args []string) {
 		fatal("load config", err)
 	}
 	proj := strings.TrimSpace(*projectName)
+	projDir := ""
 	if proj == "" {
-		proj, _ = activeProject(cfg)
+		proj, projDir = activeProject(cfg)
+	} else {
+		projDir = projectWorkDir(cfg, proj)
 	}
 	store := sessions.NewStore(sessionStoreRoot(cfg))
 	sess, err := store.Create(strings.TrimSpace(*title), proj)
 	if err != nil {
 		fatal("create session", err)
 	}
-	wt := openWorktreesBestEffort(cfg.Storage.WorkPath)
+	wt := openWorktreesForSessionBase(cfg, proj, projDir)
 	if wt != nil {
 		if path, err := wt.Ensure(context.Background(), sess.ID); err == nil {
 			_ = store.SetWorktree(sess.ID, path, sessions.Branch(sess.ID))
@@ -313,7 +381,6 @@ func runSessionRm(args []string) {
 	store := sessions.NewStore(sessionStoreRoot(cfg))
 	loc := i18n.Detect()
 	ctx := context.Background()
-	wt := openWorktreesBestEffort(cfg.Storage.WorkPath)
 
 	filtered := *all || *projectName != "" || *olderThan != ""
 	if !filtered {
@@ -323,7 +390,7 @@ func runSessionRm(args []string) {
 		}
 		deleted, failed := 0, 0
 		for _, ref := range refs {
-			id, err := rmOneSession(ctx, store, wt, ref)
+			id, err := rmOneSession(ctx, cfg, store, ref)
 			if err != nil {
 				failed++
 				printSessionRmErr(loc, ref, err)
@@ -390,7 +457,7 @@ func runSessionRm(args []string) {
 	deleted, failed := 0, 0
 	failures := make([]map[string]string, 0)
 	for _, s := range candidates {
-		if _, err := rmOneSession(ctx, store, wt, s.ID); err != nil {
+		if _, err := rmOneSession(ctx, cfg, store, s.ID); err != nil {
 			failed++
 			failures = append(failures, map[string]string{"id": s.ID, "error": err.Error()})
 			if !jsonOutput {
@@ -416,13 +483,17 @@ func runSessionRm(args []string) {
 // rmOneSession resolves ref (exact id or unique prefix), removes its worktree
 // best-effort, then deletes the session file. The returned string is the
 // resolved full id for reporting.
-func rmOneSession(ctx context.Context, store *sessions.Store, wt *sessions.Worktrees, ref string) (string, error) {
+func rmOneSession(ctx context.Context, cfg *config.Config, store *sessions.Store, ref string) (string, error) {
 	id, err := resolveSessionRef(store, ref)
 	if err != nil {
 		return "", err
 	}
-	if wt != nil {
-		_ = wt.Remove(ctx, id)
+	// Each session may live in a different repository: derive its worktrees
+	// from the recorded path instead of assuming the node's storage path.
+	if sess, gerr := store.Get(id); gerr == nil {
+		if wt := openWorktreesForSession(cfg, sess); wt != nil {
+			_ = wt.Remove(ctx, id)
+		}
 	}
 	if err := store.Delete(id); err != nil {
 		return id, err
@@ -533,7 +604,7 @@ func runSessionFork(args []string) {
 	}
 	// Repo sessions get a worktree rooted at the parent's branch when it has
 	// one (inherit the code state), else at HEAD like `session new`.
-	if wt := openWorktreesBestEffort(cfg.Storage.WorkPath); wt != nil {
+	if wt := openWorktreesForSession(cfg, parent); wt != nil {
 		base := "HEAD"
 		if parent.Branch != "" {
 			base = parent.Branch
@@ -781,6 +852,10 @@ func runSessionAsk(args []string) {
 		if tail := answerTail(streamedText, out.Answer); tail != "" {
 			fmt.Println(renderCliMd(tail))
 		}
+	case "clarify":
+		// A non-interactive surface has no choice card; the rendered question
+		// is the reply, and the next turn carries the answer.
+		fmt.Println(renderCliMd(out.Answer))
 	case "task":
 		fmt.Println(i18n.Tf(loc, "cli.session.task", "id", out.TaskID, "state", out.TaskState))
 		// The converged report streamed live; print whatever slice of it
@@ -836,6 +911,11 @@ func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, wor
 			lr.delta(chunk)
 		},
 		OnProgress: func(p askengine.Progress) {
+			// A usage counter is not a milestone: printing it here would emit a
+			// bare bullet for every report.
+			if p.Kind == askengine.ProgressUsage {
+				return
+			}
 			if !lr.printed {
 				fmt.Printf("%s %s\n", pal().MarkBullet(), progressNote(i18n.Detect(), p))
 			}
@@ -859,9 +939,18 @@ func runSessionDiff(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
-	wt := openWorktreesBestEffort(cfg.Storage.WorkPath)
+	store := sessions.NewStore(sessionStoreRoot(cfg))
+	id, err = resolveSessionRef(store, id)
+	if err != nil {
+		fatal("session diff", err)
+	}
+	sess, err := store.Get(id)
+	if err != nil {
+		fatal("session diff", err)
+	}
+	wt := openWorktreesForSession(cfg, sess)
 	if wt == nil {
-		fatal("session diff", errors.New("work path is not a git repository"))
+		fatal("session diff", errors.New("session has no git worktree"))
 	}
 	ctx := context.Background()
 	st, err := wt.Stat(ctx, id)
@@ -934,9 +1023,18 @@ func runSessionMerge(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
-	wt := openWorktreesBestEffort(cfg.Storage.WorkPath)
+	store := sessions.NewStore(sessionStoreRoot(cfg))
+	id, err = resolveSessionRef(store, id)
+	if err != nil {
+		fatal("session merge", err)
+	}
+	sess, err := store.Get(id)
+	if err != nil {
+		fatal("session merge", err)
+	}
+	wt := openWorktreesForSession(cfg, sess)
 	if wt == nil {
-		fatal("session merge", errors.New("work path is not a git repository"))
+		fatal("session merge", errors.New("session has no git worktree"))
 	}
 	ctx := context.Background()
 	// Merge is the point of no return (until revert): show the roll-up — what
@@ -970,9 +1068,18 @@ func runSessionRevert(args []string) {
 	if err != nil {
 		fatal("load config", err)
 	}
-	wt := openWorktreesBestEffort(cfg.Storage.WorkPath)
+	store := sessions.NewStore(sessionStoreRoot(cfg))
+	id, err = resolveSessionRef(store, id)
+	if err != nil {
+		fatal("session revert", err)
+	}
+	sess, err := store.Get(id)
+	if err != nil {
+		fatal("session revert", err)
+	}
+	wt := openWorktreesForSession(cfg, sess)
 	if wt == nil {
-		fatal("session revert", errors.New("work path is not a git repository"))
+		fatal("session revert", errors.New("session has no git worktree"))
 	}
 	subject, err := wt.Revert(context.Background(), id)
 	if err != nil {

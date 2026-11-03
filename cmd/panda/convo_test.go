@@ -30,3 +30,12 @@ func TestConvoSummaryKeepsNormalAnswer(t *testing.T) {
 		t.Fatalf("recorded answer = %q", got)
 	}
 }
+
+// A clarify turn is the question the model asked, not "no output": a surface
+// without a choice card reads the persisted thread back and must see it.
+func TestConvoSummaryRecordsClarifyQuestion(t *testing.T) {
+	out := &askengine.Result{Kind: "clarify", Answer: "Which environment should I deploy to?"}
+	if got := convoSummaryOf(i18n.English, out); got != out.Answer {
+		t.Fatalf("recorded clarify = %q, want the question", got)
+	}
+}

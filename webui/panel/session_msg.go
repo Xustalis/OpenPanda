@@ -107,46 +107,55 @@ func (h *handler) drainSteer(id string) (text, key string) {
 	return text, key
 }
 
-// listSteer snapshots the session's waiting notes, oldest first.
+// listSteer snapshots everything still owed to the session, oldest first: the
+// live queue a streaming turn drains, then the carry a finished turn parked. A
+// carried note is not "lost" — it opens the next turn — so the strip has to
+// show it, or a reload reads as the message having vanished.
 func (h *handler) listSteer(id string) []pendingNote {
 	h.steerMu.Lock()
 	defer h.steerMu.Unlock()
-	q := h.steers[id]
-	out := make([]pendingNote, len(q))
-	copy(out, q)
+	live, carried := h.steers[id], h.carry[id]
+	out := make([]pendingNote, 0, len(live)+len(carried))
+	out = append(out, live...)
+	out = append(out, carried...)
 	return out
 }
 
 // editSteer rewrites one in-memory note's text. Reports whether the key named
-// a waiting note.
+// a waiting note. Both lists are searched: a note the turn already parked is
+// still the user's to fix before the next turn opens with it.
 func (h *handler) editSteer(id, key, text string) bool {
 	h.steerMu.Lock()
 	defer h.steerMu.Unlock()
-	q := h.steers[id]
-	for i := range q {
-		if q[i].key == key {
-			q[i].text = text
-			h.steers[id] = q
-			return true
+	for _, m := range []map[string][]pendingNote{h.steers, h.carry} {
+		q := m[id]
+		for i := range q {
+			if q[i].key == key {
+				q[i].text = text
+				m[id] = q
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// deleteSteer drops one in-memory note.
+// deleteSteer drops one in-memory note, from whichever list holds it.
 func (h *handler) deleteSteer(id, key string) bool {
 	h.steerMu.Lock()
 	defer h.steerMu.Unlock()
-	q := h.steers[id]
-	for i := range q {
-		if q[i].key == key {
-			q = append(q[:i], q[i+1:]...)
-			if len(q) == 0 {
-				delete(h.steers, id)
-			} else {
-				h.steers[id] = q
+	for _, m := range []map[string][]pendingNote{h.steers, h.carry} {
+		q := m[id]
+		for i := range q {
+			if q[i].key == key {
+				q = append(q[:i], q[i+1:]...)
+				if len(q) == 0 {
+					delete(m, id)
+				} else {
+					m[id] = q
+				}
+				return true
 			}
-			return true
 		}
 	}
 	return false
@@ -159,24 +168,108 @@ func (h *handler) deleteSteer(id, key string) bool {
 func (h *handler) promoteSteer(id, key string) bool {
 	h.steerMu.Lock()
 	defer h.steerMu.Unlock()
-	q := h.steers[id]
-	for i := range q {
-		if q[i].key == key {
-			q[i].inject = true
-			h.steers[id] = q
-			return true
+	for _, m := range []map[string][]pendingNote{h.steers, h.carry} {
+		q := m[id]
+		for i := range q {
+			if q[i].key == key {
+				q[i].inject = true
+				m[id] = q
+				return true
+			}
 		}
 	}
 	return false
 }
 
+// takeSteer removes and returns every waiting note for a session. A turn ends
+// by calling this: notes no round read are not garbage, they are the next
+// turn's input, so the caller parks them in the carry (see carryNotes).
+func (h *handler) takeSteer(id string) []pendingNote {
+	h.steerMu.Lock()
+	defer h.steerMu.Unlock()
+	q := h.steers[id]
+	if len(q) == 0 {
+		return nil
+	}
+	delete(h.steers, id)
+	return q
+}
+
+// carryNotes parks leftover notes for the turn that follows. Appending rather
+// than replacing keeps two turns' leftovers in the order they were typed: a
+// turn that ends with one unread note, resumed and ending with another, must
+// not lose the first.
+func (h *handler) carryNotes(id string, notes []pendingNote) {
+	if len(notes) == 0 {
+		return
+	}
+	h.steerMu.Lock()
+	defer h.steerMu.Unlock()
+	if h.carry == nil {
+		h.carry = map[string][]pendingNote{}
+	}
+	h.carry[id] = append(h.carry[id], notes...)
+}
+
+// takeCarry drains the parked notes: the resumed turn opens with them, and a
+// prompt the user sends first absorbs them.
+// hasCarry reports whether a session has notes parked for its next turn,
+// without taking them. sessionAsk refuses an empty prompt before any of the
+// checks that can also fail — a refusal must not drain the carry.
+func (h *handler) hasCarry(id string) bool {
+	h.steerMu.Lock()
+	defer h.steerMu.Unlock()
+	return len(h.carry[id]) > 0
+}
+
+func (h *handler) takeCarry(id string) []pendingNote {
+	h.steerMu.Lock()
+	defer h.steerMu.Unlock()
+	q := h.carry[id]
+	if len(q) == 0 {
+		return nil
+	}
+	delete(h.carry, id)
+	return q
+}
+
+// carryText joins parked notes into the single prompt a turn opens with. The
+// notes were separate messages typed seconds apart; one paragraph break keeps
+// them readable to the model without inventing structure the user did not type.
+func carryText(notes []pendingNote) string {
+	parts := make([]string, 0, len(notes))
+	for _, n := range notes {
+		if text := strings.TrimSpace(n.text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// parkLeftovers moves whatever a finished turn never read into the carry and
+// tells the console to open the next turn with it. Split out of sessionAsk's
+// defer so the behaviour is testable without a live model: the drop this
+// replaces was invisible precisely because nothing could exercise the end of a
+// turn on its own.
+func (h *handler) parkLeftovers(sessID string, announce func(text string, count int)) {
+	left := h.takeSteer(sessID)
+	if len(left) == 0 {
+		return
+	}
+	h.carryNotes(sessID, left)
+	if announce != nil {
+		announce(carryText(left), len(left))
+	}
+}
+
 // dropSteer releases the session's queue when its ask ends. Notes still sitting
-// in it are dropped: their turn is over, and the transcript already persisted
-// the text as part of the user's side (see sessions.AppendTurn), so
-// re-delivering them to the next turn would read as a duplicate.
+// in it are parked in the carry by the turn that owns them (see takeSteer) —
+// this is the last-resort release for paths that never reach that point (a
+// deleted thread, a cancelled setup), where nothing is left to resume.
 func (h *handler) dropSteer(id string) {
 	h.steerMu.Lock()
 	delete(h.steers, id)
+	delete(h.carry, id)
 	h.steerMu.Unlock()
 }
 

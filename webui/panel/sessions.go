@@ -22,11 +22,66 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
+	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // ---- Session CRUD ----
+
+// sessionWorktrees resolves the repository a session's worktree belongs to.
+// The recorded worktree path is authoritative; a session created before this
+// fix (or one whose project changed) falls back to its project's work dir.
+// The handler-level Worktrees remains the last resort for a node whose
+// storage.work_path is itself a repository.
+func (h *handler) sessionWorktrees(sess *sessions.Session) *sessions.Worktrees {
+	if sess == nil {
+		return nil
+	}
+	if sess.Worktree != "" {
+		// worktreeDir layout: <repo>/.openpanda/worktrees/<id>.
+		repo := filepath.Dir(filepath.Dir(filepath.Dir(sess.Worktree)))
+		if wt, err := sessions.OpenWorktrees(repo); err == nil {
+			return wt
+		}
+	}
+	// An older session has no recorded worktree. Only resolve a repository
+	// when this id's worktree directory actually exists there; otherwise the
+	// handler answers "no git worktree" instead of guessing.
+	if sess.Project != "" && h.projectStore != nil {
+		if p, err := h.projectStore.Get(sess.Project); err == nil {
+			if dir := p.UsableWorkDir(); dir != "" {
+				if wt, err := sessions.OpenWorktrees(dir); err == nil {
+					if _, statErr := os.Stat(wt.Path(sess.ID)); statErr == nil {
+						return wt
+					}
+				}
+			}
+		}
+	}
+	if h.worktrees != nil {
+		if _, statErr := os.Stat(h.worktrees.Path(sess.ID)); statErr == nil {
+			return h.worktrees
+		}
+	}
+	return nil
+}
+
+// newSessionWorktrees picks the base for a session about to be created: the
+// project's own work dir when it is a repository, otherwise the handler's
+// configured fallback.
+func (h *handler) newSessionWorktrees(project string) *sessions.Worktrees {
+	if project != "" && h.projectStore != nil {
+		if p, err := h.projectStore.Get(project); err == nil {
+			if dir := p.UsableWorkDir(); dir != "" {
+				if wt, err := sessions.OpenWorktrees(dir); err == nil {
+					return wt
+				}
+			}
+		}
+	}
+	return h.worktrees
+}
 
 // cleanTeam trims, dedupes and validates a roster off the wire. The rule
 // (including the 16-agent ceiling) lives in sessions.CleanTeam so the console,
@@ -95,8 +150,8 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 			sess, _ = h.sessions.Get(sess.ID)
 		}
 	}
-	if h.worktrees != nil {
-		if path, err := h.worktrees.Ensure(r.Context(), sess.ID); err == nil {
+	if wt := h.newSessionWorktrees(project); wt != nil {
+		if path, err := wt.Ensure(r.Context(), sess.ID); err == nil {
 			_ = h.sessions.SetWorktree(sess.ID, path, sessions.Branch(sess.ID))
 			sess, _ = h.sessions.Get(sess.ID)
 		}
@@ -128,12 +183,12 @@ func (h *handler) forkSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if h.worktrees != nil {
+	if wt := h.sessionWorktrees(parent); wt != nil {
 		base := "HEAD"
 		if parent.Branch != "" {
 			base = parent.Branch
 		}
-		if path, err := h.worktrees.EnsureFrom(r.Context(), child.ID, base); err == nil {
+		if path, err := wt.EnsureFrom(r.Context(), child.ID, base); err == nil {
 			_ = h.sessions.SetWorktree(child.ID, path, sessions.Branch(child.ID))
 			child, _ = h.sessions.Get(child.ID)
 		}
@@ -155,8 +210,14 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 // its branch) plus the stored thread.
 func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if h.worktrees != nil {
-		_ = h.worktrees.Remove(r.Context(), id)
+	// The thread is going away: its waiting notes and any parked carry have no
+	// turn left to open, so release them with it instead of leaking a map entry
+	// per deleted thread.
+	h.dropSteer(id)
+	if sess, gerr := h.sessions.Get(id); gerr == nil {
+		if wt := h.sessionWorktrees(sess); wt != nil {
+			_ = wt.Remove(r.Context(), id)
+		}
 	}
 	h.removeSessionUploads(id)
 	if err := h.sessions.Delete(id); err != nil {
@@ -281,8 +342,10 @@ func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seen[id] = true
-		if h.worktrees != nil {
-			_ = h.worktrees.Remove(r.Context(), id)
+		if sess, gerr := h.sessions.Get(id); gerr == nil {
+			if wt := h.sessionWorktrees(sess); wt != nil {
+				_ = wt.Remove(r.Context(), id)
+			}
 		}
 		h.removeSessionUploads(id)
 		if err := h.sessions.Delete(id); err != nil {
@@ -305,12 +368,22 @@ func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
 // so the web can show "what did this session do" before deciding to merge.
 func (h *handler) sessionDiff(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	changes, err := h.worktrees.Status(r.Context(), id)
+	sess, err := h.sessions.Get(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	wt := h.sessionWorktrees(sess)
+	if wt == nil {
+		writeErr(w, http.StatusBadRequest, errors.New("session has no git worktree"))
+		return
+	}
+	changes, err := wt.Status(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	patch, err := h.worktrees.Diff(r.Context(), id)
+	patch, err := wt.Diff(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -320,7 +393,7 @@ func (h *handler) sessionDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	// Stat is best-effort alongside the patch it summarizes — a stat failure
 	// should not blind the whole diff view.
-	stat, _ := h.worktrees.Stat(r.Context(), id)
+	stat, _ := wt.Stat(r.Context(), id)
 	writeJSON(w, map[string]any{
 		"id":      id,
 		"branch":  sessions.Branch(id),
@@ -336,7 +409,17 @@ func (h *handler) sessionDiff(w http.ResponseWriter, r *http.Request) {
 // session with no recorded merge answers 400.
 func (h *handler) sessionRevert(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	subject, err := h.worktrees.Revert(r.Context(), id)
+	sess, serr := h.sessions.Get(id)
+	if serr != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	wt := h.sessionWorktrees(sess)
+	if wt == nil {
+		writeErr(w, http.StatusBadRequest, errors.New("session has no git worktree"))
+		return
+	}
+	subject, err := wt.Revert(r.Context(), id)
 	if err != nil {
 		switch {
 		case errors.Is(err, sessions.ErrRevertDirty):
@@ -363,11 +446,21 @@ type sessionMergeRequest struct {
 // current HEAD. Conflicts abort cleanly and surface as 409.
 func (h *handler) sessionMerge(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	sess, serr := h.sessions.Get(id)
+	if serr != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	wt := h.sessionWorktrees(sess)
+	if wt == nil {
+		writeErr(w, http.StatusBadRequest, errors.New("session has no git worktree"))
+		return
+	}
 	var req sessionMergeRequest
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req) // empty body = default message
 	}
-	subject, err := h.worktrees.Merge(r.Context(), id, req.Message)
+	subject, err := wt.Merge(r.Context(), id, req.Message)
 	if err != nil {
 		if errors.Is(err, sessions.ErrMergeConflict) {
 			writeErr(w, http.StatusConflict, err)
@@ -430,6 +523,76 @@ func (h *handler) cancelSessionAsk(id, operationID string) bool {
 		return true
 	}
 	return false
+}
+
+// clarifyWaiter parks one running ask on the browser's answer. The session id
+// rides along so an operation id from another thread cannot answer this one.
+type clarifyWaiter struct {
+	sessionID string
+	ch        chan []entry.ClarifyAnswer
+}
+
+// setClarifyWaiter registers the channel a question event will be answered on.
+func (h *handler) setClarifyWaiter(sessionID, operationID string, ch chan []entry.ClarifyAnswer) {
+	h.clarifyMu.Lock()
+	defer h.clarifyMu.Unlock()
+	if h.clarifyWaiters == nil {
+		h.clarifyWaiters = make(map[string]clarifyWaiter)
+	}
+	h.clarifyWaiters[operationID] = clarifyWaiter{sessionID: sessionID, ch: ch}
+}
+
+func (h *handler) clearClarifyWaiter(operationID string) {
+	h.clarifyMu.Lock()
+	delete(h.clarifyWaiters, operationID)
+	h.clarifyMu.Unlock()
+}
+
+// answerClarify delivers one answer set to the parked ask. The waiter is
+// consumed on delivery: a second POST for the same operation is a conflict,
+// not a second answer.
+func (h *handler) answerClarify(sessionID, operationID string, answers []entry.ClarifyAnswer) bool {
+	h.clarifyMu.Lock()
+	w, ok := h.clarifyWaiters[operationID]
+	if !ok || w.sessionID != sessionID {
+		h.clarifyMu.Unlock()
+		return false
+	}
+	delete(h.clarifyWaiters, operationID)
+	h.clarifyMu.Unlock()
+	select {
+	case w.ch <- answers:
+		return true
+	default:
+		return false
+	}
+}
+
+// sessionClarify serves POST /api/sessions/{id}/clarify — the browser's answer
+// to a pre-execution question the running SSE turn is parked on. The same
+// AskTurnsScoped call resumes with the answers; this is not a new turn.
+func (h *handler) sessionClarify(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		OperationID string                `json:"operation_id"`
+		Answers     []entry.ClarifyAnswer `json:"answers"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+			return
+		}
+	}
+	req.OperationID = strings.TrimSpace(req.OperationID)
+	if req.OperationID == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("operation_id is required"))
+		return
+	}
+	if !h.answerClarify(id, req.OperationID, req.Answers) {
+		writeErr(w, http.StatusConflict, errors.New("no pending question for this operation"))
+		return
+	}
+	writeJSON(w, map[string]any{"id": id, "operation_id": req.OperationID, "answered": true})
 }
 
 // sessionCancel serves POST /api/sessions/{id}/cancel and /stop.
@@ -497,6 +660,13 @@ func (h *handler) clearSessionApproval(w http.ResponseWriter, r *http.Request) {
 
 // ---- Streaming session ask ----
 
+// sideOperationSuffix keys the side channel apart from the thread it sits
+// beside, for two things that are per-id: the active-ask slot (one per key, and
+// registering cancels the previous holder) and the remembered-approval bucket.
+// The TUI spells the same suffix on its side session, so one conversation has
+// one name on both surfaces.
+const sideOperationSuffix = ":side"
+
 // sessionAskRequest is the body of POST /api/sessions/{id}/ask.
 type sessionAskRequest struct {
 	Prompt    string `json:"prompt"`
@@ -515,6 +685,23 @@ type sessionAskRequest struct {
 	// normally PATCHes the session when the user flips the switch, so a
 	// resumed thread on another device keeps the same answer.
 	PermissionMode string `json:"permission_mode"`
+	// ResumeQueued marks the console's automatic continuation of notes a
+	// finished turn never read. The prompt may repeat their text for display,
+	// but the parked notes are the authority: the server drains them as this
+	// turn's input so the words reach the model exactly once.
+	ResumeQueued bool `json:"resume_queued"`
+	// Side marks a side-channel ask: a read-only conversation beside the
+	// thread, asked from the console's dock. The history replayed below is
+	// still the thread as it stands — it is the snapshot the channel opened
+	// on — but nothing this ask produces is written back: no user turn, no
+	// answer, no operation status. The engine narrows the ask itself (no
+	// dispatch, read-only tool face); this struct only says where the bytes
+	// go.
+	Side bool `json:"side"`
+	// SideTurns is the side channel's own conversation so far, replayed after
+	// the boundary marker the engine inserts. The console owns it: a side
+	// thread is deliberately not persisted, so a reload starts a new one.
+	SideTurns []entry.Turn `json:"side_turns"`
 }
 
 // statusEventOf is the JSON one progress event becomes on the SSE stream.
@@ -579,8 +766,13 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
 		return
 	}
+	sessID := r.PathValue("id")
 	req.Prompt = strings.TrimSpace(req.Prompt)
-	if req.Prompt == "" {
+	// An empty prompt is a client bug unless a parked note is about to become
+	// one. Checking it here keeps the 400 ahead of the engine/session checks
+	// (the same order the endpoint always had) while still leaving the carry
+	// untouched until everything else has passed.
+	if req.Prompt == "" && !req.ResumeQueued && !h.hasCarry(sessID) {
 		writeErr(w, http.StatusBadRequest, errors.New("prompt must not be empty"))
 		return
 	}
@@ -589,11 +781,14 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("ask engine not configured (configure the model in Settings)"))
 		return
 	}
-	sess, err := h.sessions.Get(r.PathValue("id"))
+	sess, err := h.sessions.Get(sessID)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, errors.New("no such session"))
 		return
 	}
+	// A side ask is a parallel conversation, not a turn of this thread: it
+	// shares the thread's snapshot and work dir, and nothing else.
+	side := req.Side
 	// Who may take this turn's work. The composer sends what is on screen;
 	// a client that knows nothing about rosters (or a resumed thread) gets
 	// the session's own team, so the pick survives a reload and a second
@@ -618,6 +813,34 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		permission = req.PermissionMode
+	}
+
+	// Only now take the notes a finished turn parked: every check above can
+	// still refuse the request, and a refusal must not swallow text the user
+	// typed. An empty carry cannot lose anything here — it only leaves the
+	// prompt empty, which the check below rejects. A side ask never drains
+	// them: those words belong to the thread's next turn, and a question asked
+	// beside the thread must not eat what the thread was about to say.
+	if !side {
+		if carried := h.takeCarry(sessID); len(carried) > 0 {
+			switch {
+			case req.ResumeQueued, req.Prompt == "":
+				req.Prompt = carryText(carried)
+			default:
+				req.Prompt = carryText(carried) + "\n\n" + req.Prompt
+			}
+		}
+	}
+	if req.Prompt == "" {
+		// A continuation request with nothing parked has nothing to resume;
+		// falling through to the display prompt would execute it as a new
+		// message.
+		if req.ResumeQueued {
+			writeErr(w, http.StatusConflict, errors.New("nothing queued to resume"))
+			return
+		}
+		writeErr(w, http.StatusBadRequest, errors.New("prompt must not be empty"))
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -684,15 +907,21 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// messages — a 400 from strict providers.
 	var history []entry.Turn
 	budget := sessions.ReplayBudget(eng.ContextWindow())
-	if updated, err := h.sessions.CompactHistory(r.Context(), sess.ID, budget,
-		func(ctx context.Context, evicted []sessions.Turn) (string, error) {
-			turns := make([]entry.Turn, 0, len(evicted))
-			for _, t := range evicted {
-				turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
-			}
-			return eng.SummarizeTurns(ctx, turns)
-		}); err == nil {
-		sess = updated
+	// Compaction rewrites the stored thread, so a side ask leaves it alone: its
+	// replay is a snapshot, and a snapshot must not change what it copies. A
+	// thread long enough to need compaction still replays its budget-bounded
+	// tail below.
+	if !side {
+		if updated, err := h.sessions.CompactHistory(r.Context(), sess.ID, budget,
+			func(ctx context.Context, evicted []sessions.Turn) (string, error) {
+				turns := make([]entry.Turn, 0, len(evicted))
+				for _, t := range evicted {
+					turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
+				}
+				return eng.SummarizeTurns(ctx, turns)
+			}); err == nil {
+			sess = updated
+		}
 	}
 	if sess.Summary != "" {
 		history = append(history, entry.Turn{Role: "user", Content: sessions.SummaryMarker + "\n" + sess.Summary})
@@ -704,9 +933,11 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	for _, t := range kept {
 		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
 	}
-	if _, err := h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: req.Prompt}); err != nil {
-		send("error", map[string]string{"message": "save turn failed"})
-		return
+	if !side {
+		if _, err := h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: req.Prompt}); err != nil {
+			send("error", map[string]string{"message": "save turn failed"})
+			return
+		}
 	}
 
 	var streamed strings.Builder
@@ -723,8 +954,17 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		},
 		// OnProgress (not OnStatus) so the structured event survives: the
 		// browser re-localizes retry milestones from the fields instead of
-		// scraping the English fallback sentence.
+		// scraping the English fallback sentence. Usage reports ride the same
+		// callback but their own event: they are a counter update, not a
+		// phase, and a status handler that overwrote the one-line note with
+		// "usage" would erase what the turn is doing.
 		OnProgress: func(p askengine.Progress) {
+			if p.Kind == askengine.ProgressUsage {
+				send("usage", map[string]any{
+					"input": p.InputTokens, "output": p.OutputTokens, "estimated": p.Estimated,
+				})
+				return
+			}
 			send("status", statusEventOf(p))
 		},
 		// The task row exists now — name it on the wire immediately. This turn
@@ -776,38 +1016,92 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	execCtx, cancel := context.WithCancel(baseCtx)
 	defer cancel()
-	op, err := h.registerSessionAsk(sess.ID, cancel)
+	// The operation key separates the side channel from the thread it sits
+	// beside. registerSessionAsk is one slot per key and cancels the previous
+	// holder, so a side ask filed under the thread's own id would stop the
+	// turn the user is watching. The suffix mirrors the TUI's
+	// sideSessionSuffix: the same conversation has one name on both surfaces.
+	opKey := sess.ID
+	if side {
+		opKey = sess.ID + sideOperationSuffix
+	}
+	op, err := h.registerSessionAsk(opKey, cancel)
 	if err != nil {
 		send("error", map[string]string{"message": "create operation failed"})
 		return
 	}
-	defer h.unregisterSessionAsk(sess.ID, op)
+	defer h.unregisterSessionAsk(opKey, op)
 	// The steer queue lives exactly as long as the turn that drains it. Notes
-	// still in it are dropped with it — the turn is over, and the text is
-	// already on record as part of the user's side of the conversation.
-	defer h.dropSteer(sess.ID)
+	// still in it when the turn ends are not dropped: a note typed into the
+	// last round has no later boundary to land on, and throwing it away made
+	// the composer's "queued" a promise nothing kept. They are parked in the
+	// carry and announced on the stream, so the console opens the next turn
+	// with them — and a console that never hears the frame (tab closed
+	// mid-answer) leaves them for whatever prompt comes next. A side ask owns
+	// no queue: its bytes never reach the thread.
+	if !side {
+		defer h.parkLeftovers(sess.ID, func(text string, count int) {
+			send("queued_turn", map[string]any{"text": text, "count": count})
+		})
+	}
 	if !send("operation", map[string]string{"operation_id": op.operationID}) {
 		// The operation remains detached from the failed response writer and
 		// continues to persist its final task/session result.
 	}
-	if err := h.sessions.StartOperation(sess.ID, sessions.Operation{
-		ID: op.operationID, Status: core.StateRunning,
-	}); err != nil {
-		send("error", map[string]string{"message": "save operation failed"})
-		return
+	if !side {
+		if err := h.sessions.StartOperation(sess.ID, sessions.Operation{
+			ID: op.operationID, Status: core.StateRunning,
+		}); err != nil {
+			send("error", map[string]string{"message": "save operation failed"})
+			return
+		}
+	}
+
+	// Pre-execution questions (entry clarify + the large-task plan card) park
+	// this turn on the browser: the question rides the same SSE stream, the
+	// answer comes back through POST /api/sessions/{id}/clarify, and the same
+	// AskTurnsScoped call continues with it. A closed stream, a cancelled
+	// operation or the request context ending releases the wait; the engine
+	// then treats the turn as interrupted instead of holding a goroutine.
+	cb.OnQuestion = func(spec entry.ClarifySpec) ([]entry.ClarifyAnswer, bool) {
+		ch := make(chan []entry.ClarifyAnswer, 1)
+		h.setClarifyWaiter(sess.ID, op.operationID, ch)
+		defer h.clearClarifyWaiter(op.operationID)
+		if !send("question", map[string]any{
+			"operation_id":  op.operationID,
+			"clarification": spec,
+		}) {
+			return nil, false
+		}
+		select {
+		case answers := <-ch:
+			return answers, true
+		case <-execCtx.Done():
+			return nil, false
+		case <-r.Context().Done():
+			return nil, false
+		}
 	}
 
 	// The clock starts here rather than at the top of the handler: setup above
 	// (history replay, compaction) is not the turn, and a duration that
 	// included it would overstate a fast reply.
 	askStarted := time.Now()
+	// A side ask binds remembered approvals to its own bucket: a "session"
+	// grant given beside the thread must not silently answer for the thread.
+	approvalSession := sess.ID
+	if side {
+		approvalSession = sess.ID + sideOperationSuffix
+	}
 	out, err := eng.AskTurnsScoped(execCtx, history, req.Prompt, askengine.AskScope{
 		Project:        sess.Project,
 		WorkDir:        workDir,
-		SessionID:      sess.ID,
+		SessionID:      approvalSession,
 		Node:           req.Node,
 		Agents:         team,
 		PermissionMode: permission,
+		Side:           side,
+		SideTurns:      req.SideTurns,
 	}, req.Authorize, cb)
 	askDuration := time.Since(askStarted).Milliseconds()
 	if err != nil {
@@ -845,9 +1139,11 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		if errDetail != "" {
 			errPayload["detail"] = errDetail
 		}
-		_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
-			ID: op.operationID, Status: status, Error: msg,
-		})
+		if !side {
+			_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
+				ID: op.operationID, Status: status, Error: msg,
+			})
+		}
 		send("error", errPayload)
 		// The failed turn carries its duration too: "it died after 40 seconds"
 		// is the first thing you want to know about a timeout.
@@ -866,11 +1162,16 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 				text = msg
 			}
 		}
-		_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{
-			Role: "assistant", Text: text, Kind: kind, Code: code,
-			ErrKind: errKind, ErrDetail: errDetail,
-			DurationMS: askDuration,
-		})
+		if !side {
+			_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{
+				Role: "assistant", Text: text, Kind: kind, Code: code,
+				ErrKind: errKind, ErrDetail: errDetail,
+				DurationMS: askDuration,
+				// A stopped turn still consumed tokens up to the cut, and the
+				// reloaded thread should show what it cost.
+				Tokens: out.Tokens(),
+			})
+		}
 		return
 	}
 
@@ -879,16 +1180,51 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	if out.Kind == "task" && out.TaskState != "" {
 		operationStatus = out.TaskState
 	}
-	_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
-		ID: op.operationID, Status: operationStatus, TaskID: out.TaskID, Error: out.Stderr,
-	})
+	if !side {
+		_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
+			ID: op.operationID, Status: operationStatus, TaskID: out.TaskID, Error: out.Stderr,
+		})
+	}
 	send("result", res)
 
 	// Queue redesign: bind a spawned task back to this session so the board
-	// card can jump into it and the session streams the task's progress.
-	if out.Kind == "task" && out.TaskID != "" {
+	// card can jump into it and the session streams the task's progress. A
+	// side ask dispatches nothing, so it has nothing to bind.
+	if !side && out.Kind == "task" && out.TaskID != "" {
 		// Bookkeeping only; the result already streamed to the client.
 		_ = h.store.SetSessionID(context.WithoutCancel(r.Context()), out.TaskID, sess.ID)
+	}
+
+	// A round can dispatch a batch: the model emits several `task_submit`
+	// calls and the engine enqueues every one, but the Result only carries the
+	// last receipt. Filing one turn from that receipt left the thread showing
+	// a single card while the task board showed all three rows — "two agents
+	// running" above a board of three. One turn per dispatch puts the
+	// transcript back in step with the board, and gives each card its own
+	// link. The model's own answer, when it wrote one, keeps the single-turn
+	// path: prose plus a batch of receipts has no place in one bubble.
+	if !side && out.Kind == "task" && len(out.Dispatched) > 1 && out.Answer == "" {
+		for i, d := range out.Dispatched {
+			batch := sessions.Turn{
+				Role: "assistant",
+				Kind: "task",
+				Text: i18n.Tf(h.locale(), "web.session.dispatched", "title", d.TaskTitle, "id", d.TaskID),
+				Ref:  d.TaskID,
+			}
+			// The clock belongs to the ask, not to each row: only the last
+			// receipt carries it, so the thread does not print the same
+			// duration three times.
+			if i == len(out.Dispatched)-1 {
+				batch.DurationMS = askDuration
+				batch.Model = out.EntryModel
+			}
+			if _, err := h.sessions.AppendTurn(sess.ID, batch); err != nil {
+				// The reply already streamed; a failed bookkeeping write is
+				// not worth killing the stream over.
+				_ = err
+			}
+		}
+		return
 	}
 
 	turn := sessions.Turn{
@@ -898,7 +1234,8 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// The model that answered, filed with the turn: the console prints it
 		// beside the reply's copy button, and `out` only exists for the live
 		// stream — a reloaded thread reads this instead.
-		Model: out.EntryModel,
+		Model:  out.EntryModel,
+		Tokens: out.Tokens(),
 	}
 	switch out.Kind {
 	case "task":
@@ -932,10 +1269,12 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	default:
 		turn.Text = out.Answer
 	}
-	if _, err := h.sessions.AppendTurn(sess.ID, turn); err != nil {
-		// The reply already streamed; a failed bookkeeping write is not worth
-		// killing the stream over.
-		_ = err
+	if !side {
+		if _, err := h.sessions.AppendTurn(sess.ID, turn); err != nil {
+			// The reply already streamed; a failed bookkeeping write is not worth
+			// killing the stream over.
+			_ = err
+		}
 	}
 }
 

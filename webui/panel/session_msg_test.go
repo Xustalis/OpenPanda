@@ -368,6 +368,149 @@ func TestSessionNotesPromoteInPlace(t *testing.T) {
 	}
 }
 
+// TestLeftoverSteerNotesBecomeTheNextTurn pins the fix for the silent drop: a
+// note typed into a turn's last round has no later boundary to land on, and the
+// queue used to be thrown away with the turn — the composer printed "queued"
+// and the words never reached the model. They are parked instead, and the turn
+// that follows opens with them exactly once.
+func TestLeftoverSteerNotesBecomeTheNextTurn(t *testing.T) {
+	sessStore := sessions.NewStore(t.TempDir())
+	h, _ := newSessionMsgHandler(newTestStore(t), nil, sessStore)
+	const sid = "leftover-thread"
+
+	if _, ok := h.pushSteer(sid, "check the tests", false); !ok {
+		t.Fatal("first note refused")
+	}
+	if _, ok := h.pushSteer(sid, "  and the docs  ", true); !ok {
+		t.Fatal("second note refused")
+	}
+
+	// What sessionAsk's defer does when the turn ends with notes unread.
+	left := h.takeSteer(sid)
+	if len(left) != 2 {
+		t.Fatalf("takeSteer = %d notes, want 2", len(left))
+	}
+	h.carryNotes(sid, left)
+	if got, _ := h.drainSteer(sid); got != "" {
+		t.Fatalf("queue still delivers %q after the turn ended", got)
+	}
+
+	// The continuation turn opens with both, in the order they were typed, and
+	// the parked copy is consumed — a second drain would deliver the same words
+	// to the model twice.
+	carried := h.takeCarry(sid)
+	if got := carryText(carried); got != "check the tests\n\nand the docs" {
+		t.Fatalf("carryText = %q", got)
+	}
+	if again := h.takeCarry(sid); len(again) != 0 {
+		t.Fatalf("carry replayed %+v", again)
+	}
+}
+
+// TestDropSteerReleasesTheCarry covers the thread going away: a deleted session
+// has no turn left to open, so its waiting notes and its parked leftovers go
+// with it instead of leaking a map entry per deleted thread.
+func TestDropSteerReleasesTheCarry(t *testing.T) {
+	sessStore := sessions.NewStore(t.TempDir())
+	h, _ := newSessionMsgHandler(newTestStore(t), nil, sessStore)
+	const sid = "deleted-thread"
+
+	h.pushSteer(sid, "waiting", false)
+	h.carryNotes(sid, h.takeSteer(sid))
+	h.dropSteer(sid)
+
+	if got := h.listSteer(sid); len(got) != 0 {
+		t.Fatalf("steer queue survived the drop: %+v", got)
+	}
+	if got := h.takeCarry(sid); len(got) != 0 {
+		t.Fatalf("carry survived the drop: %+v", got)
+	}
+}
+
+// TestSessionAskOpensWithCarriedNotes covers the server half of the
+// continuation: a turn that starts with parked notes takes them as its prompt
+// even when the console's request carries no text of its own (resume_queued),
+// and the parked copy is consumed — the words must not reach the model twice.
+func TestSessionAskOpensWithCarriedNotes(t *testing.T) {
+	engine, _ := newApprovalQueueEngine(t)
+	store := engine.TaskStore()
+	sessStore := sessions.NewStore(t.TempDir())
+	// Built directly rather than through New: the carry is process-local state
+	// on the handler, and New only hands back the routed http.Handler. The
+	// fields mirror what New seeds for the same reason newSessionMsgHandler
+	// does — this suite drives one route, not the console.
+	h := &handler{
+		store: store, engine: engine, sessions: sessStore,
+		cfgMu:      &sync.RWMutex{},
+		serviceCtx: context.Background(),
+		activeAsks: map[string]sessionOperation{},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/sessions/{id}/ask", h.sessionAsk)
+	sess, err := sessStore.Create("continuation")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	// What the previous turn's defer leaves behind when its last round never
+	// reached the queue.
+	h.carryNotes(sess.ID, []pendingNote{
+		{key: memNotePrefix + "0", text: "check the tests", at: time.Now().Unix()},
+		{key: memNotePrefix + "1", text: "and the docs", at: time.Now().Unix()},
+	})
+
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, authedReq(http.MethodPost, "/api/sessions/"+sess.ID+"/ask",
+		strings.NewReader(`{"prompt":"","resume_queued":true}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ask: %d %s", rr.Code, rr.Body.String())
+	}
+
+	// The user turn on record is the parked text, not the empty prompt: the
+	// continuation replayed what the user actually typed.
+	got, err := sessStore.Get(sess.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if len(got.Turns) == 0 || got.Turns[0].Text != "check the tests\n\nand the docs" {
+		t.Fatalf("first turn = %+v, want the carried notes", got.Turns)
+	}
+	if left := h.takeCarry(sess.ID); len(left) != 0 {
+		t.Fatalf("carry replayed %+v", left)
+	}
+}
+
+// TestParkLeftoversAnnouncesTheContinuation is the whole bug in one test: a
+// note typed into a turn whose rounds are already past their steer poll used to
+// be dropped when the turn ended — "queued" on screen, never read, gone. The
+// turn's defer parks it and announces it, which is what the console turns into
+// the continuation turn.
+func TestParkLeftoversAnnouncesTheContinuation(t *testing.T) {
+	h, _ := newSessionMsgHandler(newTestStore(t), nil, sessions.NewStore(t.TempDir()))
+	const sid = "leftover-thread"
+
+	h.pushSteer(sid, "check the tests", false)
+	h.pushSteer(sid, "  and the docs  ", true)
+
+	var gotText string
+	var gotCount int
+	h.parkLeftovers(sid, func(text string, count int) {
+		gotText, gotCount = text, count
+	})
+	if gotCount != 2 || gotText != "check the tests\n\nand the docs" {
+		t.Fatalf("announce = %q (%d notes), want both in arrival order", gotText, gotCount)
+	}
+	if left := h.takeCarry(sid); len(left) != 2 {
+		t.Fatalf("carry = %+v, want the unread notes parked", left)
+	}
+	if got, _ := h.drainSteer(sid); got != "" {
+		t.Fatalf("leftover stayed in the live queue: %q", got)
+	}
+
+	// An empty turn announces nothing: the console must not be told to open a
+	// continuation that has no words in it.
+	h.parkLeftovers(sid, func(string, int) { t.Fatal("announced an empty turn") })
+}
+
 // TestSessionNotesSteerQueueCRUD covers the process-local queue a task-less
 // answer turn uses: the same strip, the same three verbs, no board row behind
 // it. Promote cannot abort anything here, and says so.

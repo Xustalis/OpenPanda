@@ -44,6 +44,7 @@ import (
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/scout"
 	"github.com/Xustalis/OpenPanda/internal/self"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -445,6 +446,27 @@ func (e *Engine) buildFallbacks(primary config.ModelConfig, db *sql.DB) []*entry
 	return fallbacks
 }
 
+// ClearModel drops the live client and the fallbacks, leaving the engine in the
+// model-less state New builds for a node that carries no key: the task surface
+// (enqueue/cancel/plan) keeps working and only the ask path reports ErrNoModel.
+//
+// SetModel cannot express this — NewClient refuses an unconfigured entry — so
+// deleting the last model would otherwise leave the removed credential in the
+// client slot and every following ask would still be dialed against the row the
+// user just deleted. Config, engine and UI would disagree in the worst way: the
+// page says nothing is configured while turns keep reaching the old endpoint.
+func (e *Engine) ClearModel() {
+	e.client.Store(nil)
+	e.cfgMu.Lock()
+	if e.cfg != nil {
+		e.cfg.Model = config.ModelConfig{}
+	}
+	e.fallbacksMu.Lock()
+	e.fallbacks = nil
+	e.fallbacksMu.Unlock()
+	e.cfgMu.Unlock()
+}
+
 // SetModel hot-swaps the entry model client at runtime (the settings page):
 // a failed build leaves the previous client serving.
 func (e *Engine) SetModel(mc config.ModelConfig) error {
@@ -592,6 +614,19 @@ func (e *Engine) RejectTask(ctx context.Context, taskID, reason string) error {
 // need read-level access (reference resolution) without a scheduler core.
 func (e *Engine) TaskStore() *core.TaskStore {
 	return core.NewSigningTaskStore(e.db, e.logger)
+}
+
+// FetchArtifact pulls a task's output artifact from the node that ran it into
+// this node's pool. A task report travels back as a hash and the bytes stay
+// where they were made until someone asks — so this is what "bring it here so I
+// can look at it" calls, for the console's preview or a stage that needs the
+// files.
+func (e *Engine) FetchArtifact(ctx context.Context, source, taskID, hash string) (artifact.Manifest, error) {
+	c := e.sched.Load()
+	if c == nil {
+		return artifact.Manifest{}, errors.New("askengine: no scheduler — this node cannot reach the executor")
+	}
+	return c.FetchArtifact(ctx, source, taskID, hash)
 }
 
 // stableNodeID is the runtime identity this engine registers under — the
@@ -781,6 +816,13 @@ type Result struct {
 	Stdout    string
 	Stderr    string
 	ExitCode  int
+	// Dispatched names every task this ask enqueued, in dispatch order, when a
+	// single round fanned out several `task_submit` calls. The task fields
+	// above still describe the last one — the receipt this Result has always
+	// carried — so a surface that draws one card keeps working unchanged. A
+	// round that dispatched exactly one task leaves this empty: the receipt
+	// already says everything there is to say.
+	Dispatched []DispatchedTask
 	// Deferred marks a parked-for-delivery outcome: the approval was
 	// accepted into an outbox because the executor's link is down, so the
 	// correct rendering is "queued for delivery" with exit 0 — not a
@@ -807,6 +849,10 @@ type Result struct {
 	// review on a PANDA_QUESTION marker (core §4.3): the surface should show
 	// it verbatim — it is the one thing standing between the task and done.
 	Question string
+	// QuestionSpec is the structured option set the agent offered alongside
+	// the question (the same shape the entry model uses before a task). A
+	// surface with a choice card renders it; Question stays the text form.
+	QuestionSpec *entry.ClarifySpec
 	// FilesChanged lists the workdir-relative paths the run touched — the
 	// result's footprint, so a surface can show what moved instead of trusting
 	// the agent's prose.
@@ -860,6 +906,14 @@ type Result struct {
 	NeedsApproval bool
 	Approval      *ApprovalRequest
 
+	// NeedsClarification is set when a pre-execution clarify round could not
+	// be answered inline (no OnQuestion callback, or the model asked twice).
+	// Clarification carries the questions and Answer a human-readable
+	// rendering, so a surface without a choice card can show what is needed
+	// and take the answer as the next user turn.
+	NeedsClarification bool
+	Clarification      *entry.ClarifySpec
+
 	// Denied is set when a remembered "deny" answered the tier-2 gate before
 	// the task existed: nothing was created and no prompt was shown. Kind
 	// stays "task" so the refusal renders where a task card would have been.
@@ -868,6 +922,38 @@ type Result struct {
 	// one did ("session" or "project"), so surfaces can show the task ran on
 	// a standing answer rather than a fresh prompt.
 	ConsentSource string
+}
+
+// DispatchedTask is one row of a fan-out: a task this ask enqueued, named the
+// way the transcript names it. It carries only what a surface needs to draw a
+// receipt — the row itself is read back through the task API, which is where
+// state, traces and the employee's face live.
+type DispatchedTask struct {
+	TaskID    string `json:"task_id"`
+	TaskTitle string `json:"title,omitempty"`
+	TaskState string `json:"state,omitempty"`
+}
+
+// dispatchedBriefs names every task a round handed out, in dispatch order.
+//
+// The receipt the Result carries is the last dispatch only, because that is
+// what a one-card surface can draw. A batch — the model emitting several
+// `task_submit` calls in one round — is invisible from that single receipt:
+// the conversation shows one card while the board shows every row. Rows
+// without an id (a submission that failed before a row existed) are skipped,
+// and a batch of one returns nil so callers keep their old single-card path.
+func dispatchedBriefs(ds []*Result) []DispatchedTask {
+	var out []DispatchedTask
+	for _, d := range ds {
+		if d == nil || d.TaskID == "" {
+			continue
+		}
+		out = append(out, DispatchedTask{TaskID: d.TaskID, TaskTitle: d.TaskTitle, TaskState: d.TaskState})
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
 }
 
 // ApprovalRequest describes a tier-2 (irreversible) action awaiting the user's
@@ -1176,6 +1262,10 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// that leaves tasks stranded when the process exits.
 	sched := core.NewCore(e.db, stableID, card, schedulerTier(e.cfg.Node.ResourceClass), e.logger, e.cfg.Model)
 	sched.SetDelegationLimits(e.cfg.Delegation)
+	// Lifecycle hooks. A daemon sharing this database has already claimed the
+	// one observer (see core.hookOwners), so this is a no-op there and the
+	// only wiring in a bare CLI.
+	sched.SetHooks(e.cfg.Hooks)
 	// Self-evolution merge approvals may land on this engine (panda approve).
 	// oneShot=true: an engine process must never re-exec itself onto the fresh
 	// binary — the swap's install.RestartDaemon already bounces the service.
@@ -1476,6 +1566,12 @@ type StreamCallbacks struct {
 	// caller cannot answer synchronously: the engine returns a NeedsApproval
 	// Result instead, for the caller to handle on its own event loop.
 	OnApproval func(ApprovalRequest) bool
+	// OnQuestion renders a pre-execution clarify round and blocks until the
+	// user answers. ok=false means the user cancelled (the engine returns the
+	// cancelled context). A nil callback means this surface cannot show a
+	// choice card: the engine returns the question as a NeedsClarification
+	// Result for the caller to render and answer in its own event loop.
+	OnQuestion func(entry.ClarifySpec) ([]entry.ClarifyAnswer, bool)
 	// GetSteer is polled at the start of each round to consume user steering ideas
 	// injected at runtime, appending them to conversation turns.
 	GetSteer func() string
@@ -1500,6 +1596,8 @@ const (
 	ProgressTask ProgressKind = "task" // submitting a classified task
 	ProgressPlan ProgressKind = "plan" // starting a multi-stage plan
 	ProgressTool ProgressKind = "tool" // running a tool
+	// ProgressClarify means the ask is waiting on the user's choice card.
+	ProgressClarify ProgressKind = "clarify"
 	// The following are lifecycle milestones bridged from the scheduler core's
 	// trace events while a synchronous Submit blocks — so the CLI shows the run
 	// advancing (routing → executing → judging) instead of a frozen spinner.
@@ -1537,6 +1635,13 @@ const (
 	// material, not a lifecycle milestone: a task that runs for twenty
 	// minutes must show the work happening, not a frozen spinner.
 	ProgressAgentText ProgressKind = "agent_text"
+	// ProgressUsage reports the ask's cumulative token consumption while it
+	// runs: InputTokens/OutputTokens are the totals so far across every model
+	// call this ask made. Output may be a character-based estimate on
+	// dialects that report usage only at end-of-stream; the final event of a
+	// turn always carries the provider's real numbers. Surfaces render it next
+	// to the clock instead of waiting for the closing result line.
+	ProgressUsage ProgressKind = "usage"
 )
 
 // Progress is one structured progress event: the action, and the name of what
@@ -1569,6 +1674,13 @@ type Progress struct {
 	Delay      time.Duration
 	Status     int
 	Reason     string
+	// InputTokens/OutputTokens are the ask's cumulative token counts, valid
+	// when Kind == ProgressUsage. Estimated marks OutputTokens as a
+	// character-based estimate rather than the provider's own count: surfaces
+	// render it with a "~" so a live guess is never mistaken for the bill.
+	InputTokens  int64
+	OutputTokens int64
+	Estimated    bool
 }
 
 // roundNote phrases the loop position for the English status fallback; "" for
@@ -1590,6 +1702,13 @@ func (cb StreamCallbacks) progress(p Progress) {
 		return
 	}
 	if cb.OnStatus == nil {
+		return
+	}
+	// A usage counter has no one-line phrasing, and the text channel carries
+	// only milestones: a caller that wants the number binds OnProgress (the
+	// panel's SSE stream and the TUI do). Without this, every report became an
+	// empty status line on the --json stream.
+	if p.Kind == ProgressUsage {
 		return
 	}
 	cb.OnStatus(StatusText(p))
@@ -1745,6 +1864,23 @@ type AskScope struct {
 	// a model-selected check, bypasses the project shortlist: the user is the
 	// authority on how their own work is judged.
 	Acceptance []contract.Check
+
+	// Side marks a side-channel ask: a multi-turn conversation beside the main
+	// thread whose history is a fork-point snapshot. It narrows this ask on
+	// three axes — the prompt says the history is reference only, the tool face
+	// drops to a read-only subset (no task_submit, no task_budget, no mutation
+	// tools), and a classification that still lands on a task or plan is
+	// answered with a fixed note instead of being executed. None of the three is
+	// sufficient alone: the prompt is a hint the model may disobey, and the tool
+	// face only covers dispatch that goes through tools.
+	Side bool
+
+	// SideTurns is the side channel's own conversation so far. It replays AFTER
+	// the boundary marker, which is what keeps two things apart that would
+	// otherwise read as one: the main thread's history (history above, reference
+	// only) and the question-and-answer the user actually had with this channel.
+	// Only meaningful with Side.
+	SideTurns []entry.Turn
 }
 
 // AskTurns is the backward-compatible session-aware entry point. Callers that
@@ -1757,6 +1893,111 @@ func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, wor
 // approval binds to. "" degrades to the session-less bucket.
 func (e *Engine) AskTurnsSession(ctx context.Context, history []entry.Turn, prompt, workDir, mode, sessionID string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
 	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, Mode: mode, SessionID: sessionID, AmbientProject: true}, authorize, cb)
+}
+
+// usagePublishInterval bounds how often the ask republishes its running token
+// totals. Provider usage is already throttled inside entry; this gate covers
+// the character estimate, which changes on every delta.
+const usagePublishInterval = 200 * time.Millisecond
+
+// usageTracker aggregates one ask's token consumption for live display.
+//
+// Two sources feed it. The provider reports real counts through the streaming
+// call's usage observer, but only Anthropic-compatible endpoints report them
+// mid-stream; Chat Completions and Gemini often report once at the end. Streamed
+// answer bytes therefore feed a character estimate, so a surface always has a
+// number that moves. The estimate is deliberately crude (about three bytes per
+// token, which is close for CJK and high for English) and the end-of-turn
+// publish replaces it with the billed totals.
+type usageTracker struct {
+	report   func(Progress)
+	last     entry.Usage
+	total    entry.Usage
+	chars    int64
+	reported time.Time
+}
+
+// newUsageTracker starts from the client's cumulative count at the ask's
+// beginning. Provider snapshots carry everything the client has billed since
+// construction, so a zero baseline would fold every earlier ask in a
+// long-lived process into this turn's live figure.
+func newUsageTracker(report func(Progress), before entry.Usage) *usageTracker {
+	return &usageTracker{report: report, last: before}
+}
+
+// observe folds one provider usage snapshot in. The snapshot is the client's
+// cumulative count including the call in flight, so consecutive snapshots
+// differ by exactly the new tokens. A snapshot below the last one means a
+// fallback client took over and restarted its own counters; the step is
+// dropped and the baseline moves, rather than reporting negative usage.
+func (t *usageTracker) observe(u entry.Usage) {
+	if t == nil {
+		return
+	}
+	if u.Total() >= t.last.Total() {
+		d := u.Sub(t.last)
+		t.total.InputTokens += d.InputTokens
+		t.total.OutputTokens += d.OutputTokens
+	}
+	t.last = u
+	t.publish(false)
+}
+
+// addOutput counts streamed answer or reasoning bytes for the estimate used
+// before the provider reports real usage.
+func (t *usageTracker) addOutput(n int) {
+	if t == nil || n <= 0 {
+		return
+	}
+	t.chars += int64(n)
+	t.publish(false)
+}
+
+// publish sends the current totals at most once per interval. Output prefers
+// the provider's number and falls back to the estimate, so the figure does not
+// move backwards when real usage overtakes the estimate mid-stream.
+func (t *usageTracker) publish(force bool) {
+	if t == nil || t.report == nil {
+		return
+	}
+	out := t.total.OutputTokens
+	estimated := false
+	if est := t.chars / 3; est > out {
+		out = est
+		estimated = true
+	}
+	if t.total.InputTokens == 0 && out == 0 {
+		return
+	}
+	if !force && time.Since(t.reported) < usagePublishInterval {
+		return
+	}
+	t.reported = time.Now()
+	t.report(Progress{
+		Kind: ProgressUsage, InputTokens: t.total.InputTokens,
+		OutputTokens: out, Estimated: estimated,
+	})
+}
+
+// final publishes the billed totals at the end of the ask, replacing any
+// estimate. A nil Result (a failure before anything was billed) still flushes
+// whatever the tracker has, so the last number on screen matches the call that
+// was actually made.
+func (t *usageTracker) final(in, out int64) {
+	if t == nil || t.report == nil {
+		return
+	}
+	// A fallback client's billed total can be lower than what the tracker
+	// accumulated across both clients. The status line must not walk backwards
+	// at the moment the turn ends, so the larger total stands; the Result still
+	// carries the provider's own numbers for billing and the closing line.
+	if in+out >= t.total.Total() {
+		t.total = entry.Usage{InputTokens: in, OutputTokens: out}
+		// The billed numbers replace the estimate: a CJK answer estimates high
+		// by design, and the closing figure must not be the high one.
+		t.chars = 0
+	}
+	t.publish(true)
 }
 
 // AskTurnsScoped is the session-aware ask with request-scoped project/workspace.
@@ -1829,6 +2070,24 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// delegations. The record survives the ask's context via WithoutCancel.
 	usageBefore := client.Usage()
 	askStart := time.Now()
+	// Live token accounting for the status line. Provider snapshots arrive
+	// through entry.WithStreamUsage on every streaming call below; streamed
+	// bytes cover dialects that report usage only at end-of-stream.
+	tracker := newUsageTracker(cb.progress, usageBefore)
+	if cb.OnDelta != nil {
+		onDelta := cb.OnDelta
+		cb.OnDelta = func(text string) {
+			tracker.addOutput(len(text))
+			onDelta(text)
+		}
+	}
+	if cb.OnReasoning != nil {
+		onReasoning := cb.OnReasoning
+		cb.OnReasoning = func(text string) {
+			tracker.addOutput(len(text))
+			onReasoning(text)
+		}
+	}
 	defer func() {
 		// Catch-all for model-call failures that escaped unwrapped (a raw
 		// statusError/retryableError reads as provider JSON soup to a user).
@@ -1846,6 +2105,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			res.Latency = time.Since(askStart)
 			res.Cost = client.EstimateCost(d.InputTokens, d.OutputTokens)
 			res.EntryModel = client.ModelName()
+			tracker.final(res.InputTokens, res.OutputTokens)
 			if fallbackUsed != "" && res.Note == "" {
 				loc, _ := e.localeNow()
 				res.Note = i18n.Tf(loc, "entry.note.fallback", "name", fallbackUsed)
@@ -1855,15 +2115,31 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			// conversation history and the panel, even if a future provider
 			// path forgets the per-parse removal.
 			res.Answer = entry.StripThinking(res.Answer)
+		} else {
+			// Nothing was billed (the ask failed before a call completed), but
+			// the estimate from streamed bytes is still the honest last state.
+			tracker.publish(true)
 		}
 		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
 	}()
 
-	turns := make([]entry.Turn, 0, len(history)+1)
+	turns := make([]entry.Turn, 0, len(history)+len(scope.SideTurns)+2)
 	turns = append(turns, history...)
+	if scope.Side {
+		if len(history) > 0 {
+			// The replayed thread ends here. Without this marker the side ask's
+			// own question reads as the next turn of the main conversation, and
+			// the model continues that work instead of answering what was asked.
+			turns = append(turns, sideBoundaryTurn(effectiveLocale))
+		}
+		turns = append(turns, scope.SideTurns...)
+	}
 	turns = append(turns, entry.Turn{Role: "user", Content: prompt})
 
 	var classifyOpts []entry.ClassifyOption
+	// Live usage rides the classify options: the streaming entry point reads
+	// it, the non-streaming one ignores it.
+	classifyOpts = append(classifyOpts, entry.WithStreamUsage(tracker.observe))
 	if e.replyASCII {
 		classifyOpts = append(classifyOpts, entry.WithASCIIOnly())
 	}
@@ -1872,6 +2148,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	}
 	if scope.Mode != "" {
 		classifyOpts = append(classifyOpts, entry.WithRequestMode(scope.Mode))
+	}
+	if scope.Side {
+		classifyOpts = append(classifyOpts, entry.WithSideMode())
 	}
 	// The thread's roster goes into the prompt as well as into the task spec.
 	// The spec is what the executor enforces; the prompt is what keeps the
@@ -1890,6 +2169,12 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	if workDir != "" {
 		if cands := contract.Enumerate(workDir); len(cands) > 0 {
 			classifyOpts = append(classifyOpts, entry.WithAcceptanceCandidates(cands))
+		}
+		// Same workspace, broader view: the scout report lets the classifier
+		// set a real scope, a duration hint and a turn cap for a large tree
+		// instead of guessing from the request text alone.
+		if m := scout.Cached(workDir).Render(); m != "" {
+			classifyOpts = append(classifyOpts, entry.WithWorkspaceMap(m))
 		}
 	}
 
@@ -1935,7 +2220,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 				}
 			}
 			if cb.OnDelta != nil || cb.OnReasoning != nil {
-				resp, rerr = client.StreamTurnsWithTools(ctx, fastSystem, turns, nil, wrapDelta, cb.OnReasoning)
+				resp, rerr = client.StreamTurnsWithTools(ctx, fastSystem, turns, nil, wrapDelta, cb.OnReasoning, entry.WithUsageObserver(tracker.observe))
 			} else {
 				resp, rerr = client.CompleteTurnsWithTools(ctx, fastSystem, turns, nil)
 			}
@@ -1985,6 +2270,16 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// has: a refusal teaches the model to retry, and retrying the whole batch
 	// must not run the tasks that already went out a second time.
 	dispatchedThisAsk := make(map[string]string)
+	// clarifyRounds bounds the pre-execution question loop: one round is the
+	// contract (ask once, then act on the answers). A model that asks again
+	// gets its question handed back as a NeedsClarification Result instead of
+	// nagging the user through the second round.
+	clarifyRounds := 0
+	// confirmedPlan records that the user already approved the approach for
+	// this ask — from a clarify round or the deterministic plan card below.
+	// One approval per ask is the contract; a fan-out of several tasks from
+	// the same plan must not re-ask for each.
+	confirmedPlan := false
 	// budgetAdvisory rides every exit: a dispatch the budget turned away is a
 	// decision the user must be able to see, not a task that quietly never
 	// existed.
@@ -2062,12 +2357,19 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// KindTask directive.
 	var taskCapture taskDispatchCapture
 	if reg != nil {
-		reg = reg.Copy()
-		reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
-		// task_budget sits beside task_submit: the limit is derived (roster
-		// size or defaultTaskBudget), and this is how a model widens it for a
-		// fan-out the user described in prose instead of in the team picker.
-		reg.Register(e.taskBudgetTool(budget, effectiveLocale))
+		if scope.Side {
+			// A side ask gets the read-only subset and neither dispatch tool:
+			// task_submit and task_budget exist to start and resize work, which
+			// is exactly what a side channel may not do.
+			reg = reg.Filter(sideToolAllowed)
+		} else {
+			reg = reg.Copy()
+			reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
+			// task_budget sits beside task_submit: the limit is derived (roster
+			// size or defaultTaskBudget), and this is how a model widens it for a
+			// fan-out the user described in prose instead of in the team picker.
+			reg.Register(e.taskBudgetTool(budget, effectiveLocale))
+		}
 	}
 
 rounds:
@@ -2143,6 +2445,15 @@ rounds:
 			}
 			return budgetAdvisory(&Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}), nil
 		case entry.KindTask:
+			if scope.Side {
+				// A side ask that still lands on a task stops here. The prompt
+				// asked it not to and the tool face has no dispatch, but the
+				// verdict comes from the model, not from either — a concrete
+				// request backed by a snapshot full of prior work classifies as
+				// a task often enough that leaving this to the prompt made /side
+				// a silent way to dispatch work the user believed was parked.
+				return &Result{Kind: "answer", Answer: sideRefusalNote(effectiveLocale), Thought: accumulatedReasoning.String()}, nil
+			}
 			if budget.exhausted() {
 				// Refuse before submitTask: the budget limits actual task
 				// execution, not merely how many outcomes are replayed. The
@@ -2161,8 +2472,50 @@ rounds:
 			if e.sched.Load() == nil {
 				return nil, fmt.Errorf("task output requires a capability card (scheduler initialization failed)")
 			}
+			// Plan confirmation for a large or high-risk task the model did
+			// not already ask about. This is the ExitPlanMode-shaped gate: the
+			// work is about to become a real run with real side effects, so the
+			// user sees the target and the verification contract and picks
+			// run / read-only / cancel. A clarify round above already put the
+			// user in the loop, so it counts as the approval and the card does
+			// not repeat. A surface with no question callback (headless,
+			// panel) proceeds: it has nobody to ask, and blocking there would
+			// turn a large task into a dead end.
+			// The read-only choice must hold even when the thread has an
+			// explicit permission mode: the user just picked it in the card,
+			// so it outranks the conversation default for this task.
+			submitScope := scope
+			if !confirmedPlan && clarifyRounds > 0 {
+				confirmedPlan = true
+			}
+			if !confirmedPlan && cb.OnQuestion != nil && planConfirmNeeded(out.Task) {
+				confirmedPlan = true
+				spec, execLabel, readOnlyLabel, cancelLabel := planConfirmSpec(out.Task, effectiveLocale)
+				cb.progress(Progress{Kind: ProgressClarify, Name: spec.Questions[0].Header})
+				answers, ok := cb.OnQuestion(spec)
+				if !ok {
+					if ctx.Err() != nil {
+						return nil, ctx.Err()
+					}
+					return budgetAdvisory(&Result{Kind: "answer", Answer: i18n.T(effectiveLocale, "confirm.cancelled")}), nil
+				}
+				choice := clarifyChoice(answers, "go")
+				switch {
+				case choice == cancelLabel:
+					return budgetAdvisory(&Result{Kind: "answer", Answer: i18n.T(effectiveLocale, "confirm.cancelled")}), nil
+				case choice == readOnlyLabel:
+					out.Task.Spec.PermissionMode = defense.ModePlan
+					out.Task.Spec.Constraints = append(out.Task.Spec.Constraints, i18n.T(effectiveLocale, "confirm.readonlyConstraint"))
+					submitScope.PermissionMode = defense.ModePlan
+				case choice != "" && choice != execLabel:
+					// Free-form "Other": the user wants an adjustment. Without a
+					// model round to re-plan, the text rides the task as a
+					// constraint so the executing agent honors it.
+					out.Task.Spec.Constraints = append(out.Task.Spec.Constraints, choice)
+				}
+			}
 			cb.progress(Progress{Kind: ProgressTask, Name: out.Task.Title})
-			res := e.submitTask(ctx, out.Task, prompt, authorize, scope, accumulatedReasoning.String(), cb, e.awaitQueued, effectiveLocale)
+			res := e.submitTask(ctx, out.Task, prompt, authorize, submitScope, accumulatedReasoning.String(), cb, e.awaitQueued, effectiveLocale)
 			if e.queueTasks && !e.awaitQueued {
 				// Receipt mode: the board product. The queued pointer is the
 				// result — the session streams the task's progress and the
@@ -2199,8 +2552,43 @@ rounds:
 				entry.Turn{Role: "user", Content: taskObservation(res, effectiveLocale)},
 			)
 		case entry.KindPlan:
+			if scope.Side {
+				// Same rule as KindTask: a plan is dispatch in stages, and a
+				// side channel dispatches nothing.
+				return &Result{Kind: "answer", Answer: sideRefusalNote(effectiveLocale), Thought: accumulatedReasoning.String()}, nil
+			}
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
 			return e.startClassifiedPlan(ctx, out.Plan, scope, authorize, cb)
+		case entry.KindClarify:
+			if out.Clarify == nil {
+				break rounds
+			}
+			cb.progress(Progress{Kind: ProgressClarify, Name: out.Clarify.Questions[0].Header})
+			// No card on this surface, or the model wants a second round
+			// after the user already answered one: hand the question back.
+			// The caller renders it and takes the answer as the next turn —
+			// asking again inline would be the nagging the one-round contract
+			// exists to prevent.
+			if cb.OnQuestion == nil || clarifyRounds >= 1 {
+				return budgetAdvisory(&Result{
+					Kind:               "clarify",
+					Answer:             renderClarify(out.Clarify, effectiveLocale),
+					NeedsClarification: true,
+					Clarification:      out.Clarify,
+				}), nil
+			}
+			clarifyRounds++
+			answers, ok := cb.OnQuestion(*out.Clarify)
+			if !ok {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return budgetAdvisory(&Result{Kind: "clarify", Answer: renderClarify(out.Clarify, effectiveLocale)}), nil
+			}
+			turns = append(turns,
+				entry.Turn{Role: "assistant", Content: clarifyQuestionTurn(out.Clarify)},
+				entry.Turn{Role: "user", Content: clarifyAnswerTurn(answers, out.Clarify, effectiveLocale)},
+			)
 		case entry.KindToolCall:
 			calls := out.ToolCalls()
 			if len(calls) == 0 {
@@ -2293,6 +2681,7 @@ rounds:
 				}
 			}
 			if queuedReceipt != nil {
+				queuedReceipt.Dispatched = dispatchedBriefs(dispatched)
 				if refusedThisRound == 0 {
 					return budgetAdvisory(queuedReceipt), nil
 				}
@@ -2561,11 +2950,16 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // the case the project exists for, since the point of a plan is not having to
 // visit three machines yourself.
 //
-// The plan's `authorize` flag is deliberately ignored: a stage never carries
-// tier-2 consent (core.StartPlan), so an irreversible stage parks in review for
-// a person instead of inheriting a blanket approval given to the whole sentence.
-// Consent for one shell command is not consent for a three-machine pipeline.
-func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, scope AskScope, _ bool, cb StreamCallbacks) (*Result, error) {
+// Ordinary asks retain per-stage consent. The authenticated hardware entry can
+// additionally carry explicit owner consent for this request's whole plan;
+// it still passes through the existing approval policy before rows are created.
+func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, scope AskScope, authorize bool, cb StreamCallbacks) (*Result, error) {
+	// Same rule as submitTask: a side channel dispatches nothing, and this is
+	// the second creation point every plan — including one produced by the
+	// final round-exhaustion classification — passes through.
+	if scope.Side {
+		return &Result{Kind: "answer", Answer: sideRefusalNote(e.Locale())}, nil
+	}
 	sched := e.sched.Load()
 	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
@@ -2578,6 +2972,14 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 		return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error())}, nil
 	}
 	q := core.DefaultQueueSpec()
+	if hardwarePlanConsent(ctx) && authorize {
+		project, _ := e.scopeProject(scope)
+		authorized, denied := e.approvalFor(scope.SessionID, project).gate(authorize)
+		if denied {
+			return &Result{Kind: "plan", PlanGoal: p.Goal, Denied: true, Stderr: ErrApprovalDenied.Error(), ExitCode: 1}, nil
+		}
+		q.Authorized = authorized
+	}
 	// No work dir, for the same reason `panda plan run` sets none: a path on this
 	// machine means nothing on the machine that runs the stage.
 	q.WorkDir = ""
@@ -2637,6 +3039,13 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		targetLoc = loc[0]
 	} else if !explicit && !e.replyASCII && (containsHan(prompt) || containsHan(spec.Title)) {
 		targetLoc = i18n.ChineseSimp
+	}
+	// The creation point is where a side channel's refusal belongs. The prompt
+	// asks the model not to dispatch and the tool face has no dispatch tool, but
+	// neither binds classification — and the round-exhaustion path reaches this
+	// function directly, past the per-round check. Every path shares this one.
+	if scope.Side {
+		return &Result{Kind: "answer", Answer: sideRefusalNote(targetLoc)}
 	}
 	// The composer's explicit node pick fills spec.node only when the model
 	// left routing to the scheduler — a model-emitted pin always wins.
@@ -3160,7 +3569,7 @@ func numberField(v any) int {
 // by every interactive surface. Accepting reviewed work may run without a
 // scheduler, so this mapping deliberately depends only on storage.
 func resultFromTask(task core.Task, result bus.TaskResultPayload, routeFallback string) *Result {
-	return &Result{
+	out := &Result{
 		Kind:          "task",
 		TaskID:        task.TaskID,
 		TaskTitle:     task.Title,
@@ -3179,6 +3588,13 @@ func resultFromTask(task core.Task, result bus.TaskResultPayload, routeFallback 
 		Question:      result.Question,
 		FilesChanged:  result.FilesChanged,
 	}
+	if strings.TrimSpace(result.QuestionSpec) != "" {
+		var spec entry.ClarifySpec
+		if err := json.Unmarshal([]byte(result.QuestionSpec), &spec); err == nil {
+			out.QuestionSpec = &spec
+		}
+	}
+	return out
 }
 
 // routeFallbackPeer scans the task's audit trail for the newest

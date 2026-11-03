@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
   ApiError,
@@ -10,11 +10,13 @@ import {
   type ApprovalScope,
   type AskResult,
   type AskStatusEvent,
+  type ClarifyAnswer,
+  type ClarifySpec,
   type FsFileEntry,
   type MCPSettings,
-  type SessionApprovalState,
   type NodeInfo,
   type PlanDetail,
+  type ProjectDetail,
   type Session,
   type SessionDiff,
   type SessionNote,
@@ -24,6 +26,14 @@ import {
 } from '../api/client'
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
+import { Dock, type DockTab } from '../components/dock'
+import { DockBrowser } from '../components/dock-browser'
+import { DockFiles } from '../components/dock-files'
+import { SideChat } from '../components/side-chat'
+import { TaskRail } from '../components/task-rail'
+import { ArtifactSection } from '../components/artifact'
+import { FileViewContext, type FileOpener, type FileRef } from '../components/file-link'
+import { ComposerContext } from '../components/composer-context'
 import {
   useAsync,
   useChangeSignal,
@@ -48,6 +58,7 @@ import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
 import { splitReportHead } from '../components/report-head'
 import { liveTaskIds } from '../components/task-activity'
+import { groupDispatches } from './chat-batch.ts'
 import {
   prettyAgent,
   roundStillOpen,
@@ -70,7 +81,6 @@ import {
 import { ScopeSelect } from '../components/scope-select'
 import {
   PermissionPicker,
-  authorizeRelevant,
   normalizePermission,
   type PermissionMode,
 } from '../components/permission-picker'
@@ -331,6 +341,12 @@ interface ChatMsg extends SessionTurn {
    *  persisted with the turn, so a thread reloaded from disk comes back
    *  without it. */
   thought?: string
+  /** Newest delta/reasoning/usage/status timestamp (epoch ms). The live
+   *  header uses it to tell a quiet turn from a stalled one. */
+  lastActivity?: number
+  /** The token figure is a live estimate, not the provider's count. The
+   *  header prefixes it with "~" until the billed result lands. */
+  tokensEstimated?: boolean
   /** @file paths that were expanded into fenced blocks for this prompt —
    *  shown as attachment chips on the user's bubble. */
   files?: string[]
@@ -435,6 +451,15 @@ function fmtDuration(ms: number): string {
   return `${Math.floor(whole / 3600)}${t('time.unit.h')} ${Math.floor((whole % 3600) / 60)}${t('time.unit.m')}`
 }
 
+/** Token counts in the reply header: exact below a thousand, one decimal in
+ *  the thousands, one decimal in the millions. A live count that printed all
+ *  seven digits would shove the rest of the header row around every update. */
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`
+  return `${(n / 1_000_000).toFixed(1)}m`
+}
+
 /** The reply's timer while the turn is still running: one tick a second, in the
  *  row the finished duration will occupy.
  *
@@ -444,15 +469,41 @@ function fmtDuration(ms: number): string {
  *  felt while scrolling.
  *
  *  It formats through `fmtDuration`, the same function the finished line uses,
- *  so the number does not change shape the moment the turn lands. */
-function LiveElapsed({ from }: { from: number }) {
+ *  so the number does not change shape the moment the turn lands.
+ *
+ *  `last` is the newest delta/reasoning/usage/status timestamp. Once the turn
+ *  has gone quiet past a few seconds, the same one-second tick adds how long,
+ *  so a slow model reads differently from a dead connection. Before any event
+ *  it says the turn is waiting on the model, which is the prefill window. */
+function LiveElapsed({ from, last }: { from: number; last?: number }) {
   const [ms, setMs] = useState(() => Date.now() - from)
+  const [idle, setIdle] = useState(0)
+  // last changes on every delta; a ref keeps it out of the effect's dependency
+  // list so the one-second timer is not torn down and rebuilt constantly.
+  const lastRef = useRef(last)
+  lastRef.current = last
   useEffect(() => {
-    setMs(Date.now() - from)
-    const id = setInterval(() => setMs(Date.now() - from), 1000)
+    const tick = () => {
+      const now = Date.now()
+      setMs(now - from)
+      setIdle(lastRef.current ? now - lastRef.current : now - from)
+    }
+    tick()
+    const id = setInterval(tick, 1000)
     return () => clearInterval(id)
   }, [from])
-  return <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(ms) })}</span>
+  return (
+    <>
+      <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(ms) })}</span>
+      {idle >= 5000 ? (
+        <span class="msg-dur" data-testid="msg-quiet">
+          {last
+            ? t('sessions.quiet', { d: fmtDuration(idle) })
+            : t('sessions.awaiting', { d: fmtDuration(idle) })}
+        </span>
+      ) : null}
+    </>
+  )
 }
 
 /** One line for a prompt-rail tick's tooltip: a question can be a paragraph,
@@ -531,18 +582,26 @@ export function SessionsView({
   const [input, setInput] = useState('')
   // Files pasted, dropped or uploaded into the composer, waiting for send.
   const [pending, setPending] = useState<PendingAttachment[]>([])
-  // Notes typed mid-turn that no round has folded yet — the strip above the
-  // composer. A queue with no list is a queue the user cannot see, correct, or
-  // take back.
+  // Notes typed mid-turn that no round has folded yet — the bubbles on the
+  // pet's cheek. A queue with no list is a queue the user cannot see, correct,
+  // or take back, so hovering the bubbles opens the list.
   const [notes, setNotes] = useState<SessionNote[]>([])
-  // The strip's scroll box, and whether rows are cut off above / below it. The
-  // list is capped at four rows, so the edges that still hold notes fade — a
-  // queue that silently dropped its fifth note off the bottom read as "only
-  // four were queued".
+  // Whether that list is showing. It is a hover/focus disclosure, not a mode:
+  // the queue is invisible until the pointer (or the caret) asks for it.
+  const [notesOpen, setNotesOpen] = useState(false)
+  // How tall the popover may grow, measured on open. A fixed cap runs off the
+  // top of a short window — over the page header — and the queue is exactly
+  // the kind of thing you hover in a window that is already tight.
+  const noteBubbles = useRef<HTMLDivElement>(null)
+  const [noteRoom, setNoteRoom] = useState(0)
+  // The list's scroll box, and whether rows are cut off above / below it. The
+  // popover caps its height, so the edges that still hold notes fade — a queue
+  // that silently dropped its fifth note off the bottom read as "only four
+  // were queued".
   const noteList = useRef<HTMLDivElement>(null)
   const noteCount = useRef(0)
   const [noteEdges, setNoteEdges] = useState({ above: false, below: false })
-  // The note being edited in the strip. Editing happens in place rather than
+  // The note being edited in the list. Editing happens in place rather than
   // by pulling the text back into the composer: a pull-back would drop the row
   // first (or the text would be sent twice) and the re-send would silently
   // demote an inject back to a queue entry.
@@ -550,10 +609,13 @@ export function SessionsView({
   const [noteDraft, setNoteDraft] = useState('')
   // True while a file is over the composer, so the box can say so.
   const [dropping, setDropping] = useState(false)
-  const [authorize, setAuthorize] = useState(false)
-  // The conversation's permission policy. It outranks the authorize switch:
-  // bypass consents to everything, manual and plan to nothing, so the switch
-  // only shows in the modes where an explicit per-turn grant still matters.
+  // The conversation's permission policy. It is the whole consent answer:
+  // auto and edits stop at the tier-2 gate for a one-off approval card, bypass
+  // runs everything, manual asks before every change and plan changes nothing.
+  // A separate per-turn "authorize risky actions" switch used to sit beside the
+  // picker, but it only had meaning in auto/edits, was ignored in manual/plan/
+  // bypass, and duplicated what the bypass mode or the approval card already
+  // says — so the picker is the one control.
   const [permission, setPermission] = useState<PermissionMode>('auto')
   // The composer's environment pick: empty = let the scheduler route by
   // capability; a node id pins this turn's spawned task to that executor.
@@ -571,7 +633,55 @@ export function SessionsView({
   // and the jump arrow left as one block instead of letting the card cover the
   // last reply's line ends. The lane is the same for both cards on purpose:
   // switching from one to the other is a swap in place, not a re-layout.
-  const [panel, setPanel] = useState<'' | 'node' | 'orch'>('')
+  const [card, setCard] = useState<'' | 'node' | 'orch'>('')
+  // The side dock: one column holding the thread's work, its files, a page being
+  // read, and a conversation beside it. `tab` survives a collapse so reopening
+  // returns to the surface you left; `epoch` is the head's `+`, which every
+  // panel reads as "start a fresh one".
+  const [dockOpen, setDockOpen] = useState(false)
+  const [dockTab, setDockTab] = useState<DockTab>('')
+  const [dockW, setDockW] = useState(380)
+  const [dockEpoch, setDockEpoch] = useState(0)
+  // Panels mount the first time their tab is picked and stay mounted after
+  // that, hidden rather than dropped: a file tree you scrolled, a page you
+  // were reading and a half-typed side question are all the reader's place,
+  // and a tab switch or a fold is not a reason to lose it. Lazy on first use
+  // so an unopened dock costs nothing — the file tree and the task rail both
+  // fetch on mount.
+  const [dockSeen, setDockSeen] = useState<DockTab[]>([])
+  useEffect(() => {
+    if (dockTab === '') return
+    setDockSeen((prev) => (prev.includes(dockTab) ? prev : [...prev, dockTab]))
+  }, [dockTab])
+  // The file the transcript's latest click asked for. It is a request into the
+  // dock's file panel, not a surface of its own: the panel owns the tree, this
+  // only names the file to open there.
+  const [fileRef, setFileRef] = useState<FileRef | null>(null)
+  // One stable opener for every inline code span in the transcript: a new
+  // object per render would re-render every clickable mention on each frame.
+  // A click on a path is also the dock's file tab being asked for — the reader
+  // asked to see a file, so the column that shows files comes up.
+  const fileOpener = useMemo<FileOpener>(
+    () => ({
+      open: (ref) => {
+        setCard('')
+        setDockTab('files')
+        setDockOpen(true)
+        setFileRef(ref)
+      },
+    }),
+    [],
+  )
+  // The same text-into-the-composer action for every surface that produces a
+  // reference (the file drawer, the artifact preview): the draft lands at the
+  // caret and is never sent on its own.
+  const composerInsert = useCallback((text: string) => {
+    const el = composer.current
+    if (!el) return
+    insertTextAtCaret(el, text)
+    setInput(editorTextOf(el))
+    el.focus()
+  }, [])
   // The task a transcript link asked for. Held here, not in the card, because
   // the click that asks for it is the transcript's: `{ id }` is rebuilt on
   // every request so a second click on the same 查看任务 still re-opens a pane
@@ -581,26 +691,44 @@ export function SessionsView({
    *  that task picked, the thread's list beside it. Leaving for the task page
    *  used to cost the conversation: its scroll, its draft, its place. */
   function openTaskInPlace(id: string) {
-    setPanel('orch')
+    // The card is a popover over the thread; the dock is a column beside it.
+    // One lane, so only one of them is up at a time.
+    setDockOpen(false)
+    setCard('orch')
     setFocusTask({ id })
   }
   // A card belongs to the thread it was opened in. Switching threads closes
   // it: the cards are remounted per session, so a lane kept reserved by the
   // parent would outlive the card that asked for it.
   useEffect(() => {
-    setPanel('')
+    setCard('')
+    // The dock's panels are thread-scoped in the same way: a file path resolves
+    // against this thread's worktree, a page is what this thread was talking
+    // about, and a side conversation is a snapshot of it. Carrying any of them
+    // across would show the next thread something it never mentioned.
+    setDockOpen(false)
+    setDockTab('')
+    setFileRef(null)
     // The queue belongs to the thread it was typed in: a counter carried over
     // from another thread would make the next note look like a removal.
     noteCount.current = 0
   }, [activeId])
   const [busy, setBusy] = useState(false)
+  // The pre-execution question the running turn is parked on. Cleared when the
+  // browser answers, when the turn ends, or when the user cancels it.
+  const [clarify, setClarify] = useState<{
+    sessionID: string
+    operationID: string
+    spec: ClarifySpec
+  } | null>(null)
   const [loadError, setLoadError] = useState('')
-  // Poll the pending strip only while there is something to watch: a live turn
+  // Poll the pending queue only while there is something to watch: a live turn
   // produces notes, and a waiting note disappears the moment a round folds it.
-  // An idle thread with an empty strip costs nothing.
+  // An idle thread with an empty queue costs nothing.
   useEffect(() => {
     if (!activeId) {
       setNotes([])
+      setNotesOpen(false)
       return
     }
     void refreshNotes()
@@ -608,10 +736,31 @@ export function SessionsView({
     const id = setInterval(() => void refreshNotes(), 4000)
     return () => clearInterval(id)
   }, [activeId, busy, notes.length])
-  // Keep the strip's scroll box honest: follow a note the user just added
+  // A queue that empties takes its popover with it: leaving `notesOpen` true
+  // would pop the list open again the next time a note is queued, without the
+  // pointer ever coming near the bubbles.
+  useEffect(() => {
+    if (notes.length === 0) setNotesOpen(false)
+  }, [notes.length])
+  // How much room the popover has, measured from the bubbles up to the top of
+  // the pane (not the window — the header is not a place to draw over). The
+  // list scrolls past whatever does not fit; 240 is the cap a tall window
+  // gets, because the queue is a preview and not a second transcript.
+  useEffect(() => {
+    if (!notesOpen) return
+    const el = noteBubbles.current
+    if (!el) return
+    const top = el.getBoundingClientRect().top
+    const pane = el.closest('.chat-pane')?.getBoundingClientRect().top ?? 0
+    // 8 of gap above the bubbles, 10 of card border + the popover's own air.
+    const room = top - Math.max(pane, 0) - 26
+    setNoteRoom(Math.max(72, Math.min(240, Math.round(room))))
+  }, [notesOpen, notes.length])
+  // Keep the list's scroll box honest: follow a note the user just added
   // (it lands at the end of the queue), leave the list alone when a round
   // folded one away or the user dropped one, and re-measure the edges whenever
-  // the queue or its height changes.
+  // the queue, its height or its visibility changes — the box does not exist
+  // until the popover is open, so opening has to be one of the triggers.
   useEffect(() => {
     const el = noteList.current
     if (!el) return
@@ -630,7 +779,7 @@ export function SessionsView({
       el.removeEventListener('scroll', measure)
       ro?.disconnect()
     }
-  }, [notes.length])
+  }, [notes.length, notesOpen])
   const [selectedProject, setSelectedProject] = useState(project || '')
   // The directory a brand-new thread will run in, as the composer's footer
   // shows it. It starts as the scope's own work dir and only becomes a real
@@ -663,6 +812,11 @@ export function SessionsView({
   // Exact server-issued operation identity for the current ask. Stop is scoped
   // to this id; it never scans old transcript task references.
   const inflightOperation = useRef<string | null>(null)
+  // Notes the finished turn never read, as the server reported them. They are
+  // parked server-side, so this is only the trigger to open the continuation
+  // turn — the text itself is drained by the server, which is what keeps a
+  // reload or a second tab from delivering the same words twice.
+  const queuedTurn = useRef('')
   // Mirror of the activeId prop for send()'s async callbacks: a reply's
   // deltas may only write to the thread that started them. Kept in sync by
   // the effect below; send() fast-forwards it through the create flow.
@@ -738,6 +892,30 @@ export function SessionsView({
     setLiveFrom(0)
   }
 
+  /** Answer the parked pre-execution question. The same SSE turn resumes, so
+   *  the card clears immediately and the stream carries on. */
+  async function submitClarify(answers: ClarifyAnswer[]): Promise<void> {
+    const pending = clarify
+    if (!pending) return
+    setClarify(null)
+    try {
+      await api.answerSessionClarify(pending.sessionID, pending.operationID, answers)
+    } catch (err) {
+      toastError(err)
+    }
+  }
+
+  /** Cancel the parked turn: the same request the stop button sends, so the
+   *  ask goroutine's question wait is released by the cancelled context. */
+  function cancelClarify(): void {
+    const pending = clarify
+    setClarify(null)
+    if (!pending) return
+    api.cancelSession(pending.sessionID, pending.operationID).catch(() => {
+      /* the stream's own stop path reports a real failure */
+    })
+  }
+
   useEffect(() => {
     onOpenSessionRef.current = onOpenSession
   }, [onOpenSession])
@@ -755,6 +933,18 @@ export function SessionsView({
       })
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
   }, [activeId, activeProject])
+
+  // The projects table, once: the composer foot's read-only directory pill
+  // resolves the open thread's project row to the directory it runs in. The
+  // row rarely changes mid-visit, and a stale path is corrected on the next
+  // mount — this fetch exists for geometry and orientation, not live state.
+  const [threadProjects, setThreadProjects] = useState<ProjectDetail[]>([])
+  useEffect(() => {
+    api
+      .projects()
+      .then((pl) => setThreadProjects(pl.detail ?? []))
+      .catch(() => {})
+  }, [])
 
   // Live rail: the panel pushes a 'sessions' fingerprint slot on the change
   // feed, so a thread created/pinned/deleted on another tab, device, or the
@@ -865,35 +1055,6 @@ export function SessionsView({
   // the directory is not a routing candidate, so it must not suppress the
   // "add a second device" CTA.
   const onlineNodeCount = nodes.filter((n) => isNodeConnected(n.status)).length
-
-  // The approval policy this thread's next tier-2 gate will apply — resolved
-  // mode plus any standing remembered answer — so the composer can say what a
-  // send will do before it is sent. nodeTick refetches it: an approve/reject
-  // POST bumps the task fingerprint, which is exactly the change signal.
-  const [approval, setApproval] = useState<SessionApprovalState | null>(null)
-  useEffect(() => {
-    if (!session?.id) {
-      setApproval(null)
-      return
-    }
-    let live = true
-    api
-      .sessionApproval(session.id)
-      .then((s) => {
-        if (live) setApproval(s)
-      })
-      .catch(() => {
-        if (live) setApproval(null)
-      })
-    return () => {
-      live = false
-    }
-  }, [session?.id, session?.project, nodeTick])
-
-  function forgetApproval() {
-    if (!session?.id) return
-    api.clearSessionApproval(session.id).then(setApproval).catch(toastError)
-  }
 
   // Keep the async guard's mirror in step with the prop.
   useEffect(() => {
@@ -1403,23 +1564,34 @@ export function SessionsView({
     }
   }
 
-  async function send(e?: Event) {
+  async function send(e?: Event, queued?: string) {
     e?.preventDefault()
-    const raw = input.trim()
+    // A continuation turn carries its own prompt: the words came from the
+    // notes the last turn never read, not from the composer. The draft and the
+    // tray on screen belong to whatever the user types next, so they are left
+    // untouched — clearing them here would eat text typed while the answer was
+    // still streaming.
+    const raw = (queued ?? input).trim()
     // The tray mirrors the pills still in the editor: anything whose pill is
     // gone (Backspace, a selection-delete) stays behind instead of uploading
     // with the send.
     const el0 = composer.current
-    const tray = el0 ? pending.filter((p) => livePillKeys(el0).has(p.key)) : pending
+    const tray =
+      queued !== undefined ? [] : el0 ? pending.filter((p) => livePillKeys(el0).has(p.key)) : pending
     // A tray-only send is a real send: dropping a screenshot and hitting Enter
     // is the whole point, and the prompt then carries nothing but the file.
     if (!raw && tray.length === 0) return
-    if (busy || inflight.current) {
+    // A continuation is never a mid-turn note: it starts the turn the previous
+    // one ended without, so the busy guard (and its "type an addition" path)
+    // does not apply — `busy` is still true in this closure's finally.
+    if (queued === undefined && (busy || inflight.current)) {
       void sendIntoRunningTurn(raw, tray)
       return
     }
-    // A slash line is a command, never a prompt — the REPL's rule.
-    if (raw.startsWith('/') && dispatchSlash(raw)) {
+    // A slash line is a command, never a prompt — the REPL's rule. A
+    // continuation is exempt: the words are what the user already queued, and
+    // running a command they typed mid-answer would execute it out of order.
+    if (queued === undefined && raw.startsWith('/') && dispatchSlash(raw)) {
       setInput('')
       editorClear(composer.current)
       setCompleteDismissed('')
@@ -1450,8 +1622,9 @@ export function SessionsView({
       const thought = pendingThought
       pendingText = ''
       pendingThought = ''
-      if (text) patch((m) => ({ ...m, text: m.text + text }))
-      if (thought) patch((m) => ({ ...m, thought: (m.thought ?? '') + thought }))
+      if (text) patch((m) => ({ ...m, text: m.text + text, lastActivity: Date.now() }))
+      if (thought)
+        patch((m) => ({ ...m, thought: (m.thought ?? '') + thought, lastActivity: Date.now() }))
     }
     const scheduleFlush = () => {
       if (flushFrame) return
@@ -1559,8 +1732,13 @@ export function SessionsView({
       const live = () => isLiveSession(sid, activeIdRef.current)
       setBusy(true)
       if (live()) {
-        setInput('')
-        clearPending()
+        // A continuation has no composer draft behind it: the text came from
+        // the parked notes, and whatever is in the editor now was typed after
+        // this turn started — it must survive.
+        if (queued === undefined) {
+          setInput('')
+          clearPending()
+        }
         // Sending is an explicit "show me the answer", so re-pin the view.
         pinned.current = true
         setIsPinned(true)
@@ -1598,7 +1776,9 @@ export function SessionsView({
       await askSessionStream(
         id,
         prompt,
-        authorize,
+        // No standing grant from this surface: a tier-2 operation parks on the
+        // approval card, and "run everything" is the bypass permission mode.
+        false,
         {
           onReasoning: (text) => {
             pendingThought += text
@@ -1608,12 +1788,39 @@ export function SessionsView({
             pendingText += text
             scheduleFlush()
           },
-          onStatus: (text, ev) => patch((m) => ({ ...m, status: statusNote(text, ev) })),
+          // Usage is its own event: a counter, not a status note. It lands at
+          // most a few times a second (the engine throttles it), so it can
+          // patch state directly.
+          onUsage: (input, output, estimated) =>
+            patch((m) => ({
+              ...m,
+              tokens: input + output,
+              tokensEstimated: estimated,
+              lastActivity: Date.now(),
+            })),
+          onStatus: (text, ev) =>
+            patch((m) => ({ ...m, status: statusNote(text, ev), lastActivity: Date.now() })),
           // The note typed mid-turn reached a round. This is the upgrade from
           // "queued" to "delivered" — without it the user cannot tell a steer
           // the model read from one the turn ended before reaching.
           onSteer: (_text, round) =>
-            patch((m) => ({ ...m, status: t('sessions.steerDelivered', { n: String(round) }) })),
+            patch((m) => ({
+              ...m,
+              status: t('sessions.steerDelivered', { n: String(round) }),
+              lastActivity: Date.now(),
+            })),
+          // The entry model asked before it will create the task (or the
+          // runtime's plan-confirm gate fired). The ask goroutine is parked on
+          // this answer; the card below the transcript collects it.
+          onQuestion: (spec, operationID) => {
+            if (live()) setClarify({ sessionID: sid, operationID, spec })
+          },
+          // The turn ended before a round could read what was queued behind it.
+          // The server parked those notes; remember them so the finally below
+          // opens the continuation turn instead of letting them evaporate.
+          onQueuedTurn: (text) => {
+            queuedTurn.current = text
+          },
           onOperation: (operationID) => {
             if (inflight.current === ctrl && inflightSid.current === sid) {
               inflightOperation.current = operationID
@@ -1659,7 +1866,19 @@ export function SessionsView({
                 r.kind === 'plan' && r.plan_id
                   ? ({ kind: 'plan', ref: r.plan_id } as const)
                   : {}
-              return { ...m, ...task, ...plan, result: r, status: undefined, text, liveTask: undefined }
+              return {
+                ...m,
+                ...task,
+                ...plan,
+                result: r,
+                status: undefined,
+                text,
+                liveTask: undefined,
+                // The billed total wins; a stream that ended before any usage
+                // event keeps whatever the live counter last showed.
+                tokens: r.tokens || m.tokens,
+                tokensEstimated: r.tokens ? false : m.tokensEstimated,
+              }
             })
           },
           onError: (message, code, info) => {
@@ -1688,6 +1907,9 @@ export function SessionsView({
         // keeps it across reloads; sending it here keeps this turn honest
         // even if the patch has not landed yet.
         permission,
+        // A continuation: the server drains its parked notes as this turn's
+        // input, so the prompt above is display only and cannot double-post.
+        queued !== undefined,
       )
       flushStream()
       patch((m) => ({ ...m, streaming: false, status: undefined }))
@@ -1784,6 +2006,7 @@ export function SessionsView({
       // (or stop) has nowhere to render. The persisted transcript stands.
     } finally {
       keepAlive.release()
+      setClarify(null)
       if (inflight.current === ctrl) {
         inflight.current = null
         inflightSid.current = null
@@ -1802,9 +2025,30 @@ export function SessionsView({
             // while the ask was in flight (it must not paint over a live
             // stream) and its fingerprint is already spent, so this refetch
             // is the only chance to pick up a turn the wire under-reported.
-            setMsgs((ms) => mergeTailTurn(ms, s.turns ?? []))
+            // A fanned-out round is under-reported by design — one result
+            // frame, one turn per task — so the surplus rows are adopted here
+            // rather than waiting for a reload.
+            setMsgs((ms) =>
+              mergeTailTurn(ms, s.turns ?? [], (turn) => ({ ...turn, k: localMsgId() }) as ChatMsg),
+            )
           }
         }).catch(() => {})
+      }
+      // What the turn owed: notes it ended without any round reading. The
+      // server parked them, and this is the turn that opens with them — the
+      // composer used to print "queued" and then let them vanish at the end of
+      // the answer. A stopped turn is the one exception: the user asked for
+      // quiet, so the notes stay parked for the next thing they send.
+      const owed = queuedTurn.current
+      queuedTurn.current = ''
+      if (
+        owed &&
+        !ctrl.signal.aborted &&
+        !inflight.current &&
+        id &&
+        isLiveSession(id, activeIdRef.current)
+      ) {
+        void send(undefined, owed)
       }
     }
   }
@@ -2148,6 +2392,20 @@ export function SessionsView({
   // that exists already knows where it runs, and the legend has been read.
   const newChatPage = !activeId && msgs.length === 0 && !loading
 
+  // The open thread's directory, read-only: the foot row under the box keeps
+  // its place on every surface — 新对话 picks a directory there, 工作空间
+  // picks one, and a thread shows where it runs — so moving between them does
+  // not bounce the composer up and down. The pill is display, not a control:
+  // a thread's directory is fixed by its project row and cannot be re-picked
+  // mid-thread. A project with no dir yet falls back to its name, which is
+  // what the rail calls it anyway.
+  const threadDir = (() => {
+    const name = session?.project || activeProject || ''
+    if (!name) return ''
+    const hit = threadProjects.find((d) => d.name === name)
+    return hit?.work_dir || name
+  })()
+
   // The panda closes a round once it is over: it dispatched, the employees
   // reported, and nothing has been said since. Derived from the turns already
   // on screen (see `trailingRunSummary`) — nothing new is written to the
@@ -2176,12 +2434,45 @@ export function SessionsView({
   // several dispatch turns was issuing that many extra requests per frame,
   // all competing with the event stream for the browser's six connections.
   const tasksById = new Map((sessionTasks ?? []).map((t) => [t.id, t]))
+  // What the dock's task tab counts on its badge: the rows that still want
+  // something — running, waiting on a human, or queued. Terminal rows are the
+  // board's history, not an inbox item.
+  const openTaskCount = (sessionTasks ?? []).filter(
+    (t) => !['done', 'failed', 'cancelled', 'expired'].includes(t.state),
+  ).length
+
+  // The rail's jump: scroll the task's own card into view. A task the thread
+  // has no card for — dispatched from the bench, or older than the loaded
+  // transcript — opens its task page instead, so a row never dead-ends.
+  const jumpToTask = (id: string) => {
+    const el = document.querySelector(`[data-task-id="${id}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.classList.add('task-jump-flash')
+      window.setTimeout(() => el.classList.remove('task-jump-flash'), 1200)
+      return
+    }
+    navigate({ view: 'detail', id })
+  }
+
+  // — one round, one bubble. The turns a fan-out files are consecutive and
+  // carry the round's clock, so the first one wears the panda's face and holds
+  // the rest: a five-agent test reads as one reply with five cards, not five
+  // replies with one each. Nothing is lost — every card keeps its own line,
+  // cast row and link, and the transcript on disk is untouched (the model's
+  // history still lists every dispatch).
+  const { batchOf, absorbed } = groupDispatches(msgs)
 
   return (
-    <section class="chat">
+    <FileViewContext.Provider value={fileOpener}>
+    <ComposerContext.Provider value={composerInsert}>
+    <section
+      class={`chat${dockOpen ? ' dock-open' : ''}`}
+      style={dockOpen ? `--dock-w:${dockW}px` : undefined}
+    >
 
 
-      <div class={`chat-pane${panel ? ' panel-open' : ''}`}>
+      <div class={`chat-pane${card ? ' panel-open' : ''}`}>
         {/* The header is unconditional so the drawer toggle is reachable even
             on a brand-new, empty thread — that is exactly when a phone user
             needs to get back to the thread list. */}
@@ -2258,6 +2549,30 @@ export function SessionsView({
               scheduler would pick) in a quarter of the width, and the card is
               what the pane makes room for. */}
           <div class="chat-head-tools">
+            {/* The thread's unfinished work as a side column — the web twin of
+                the TUI's task rail. It sits left of the node pick because it is
+                about the thread, not about where this turn runs.
+
+                Only while the column is folded. Open, the same task list is one
+                click away as the dock's first tab, and two `list-checks` glyphs
+                a gutter apart read as one control drawn twice — the reader ends
+                up clicking the copy that does not fold. */}
+            {!dockOpen && (
+              <button
+                type="button"
+                class="icon-btn tip-down"
+                data-tip={t('rail.title')}
+                aria-label={t('rail.title')}
+                aria-expanded={false}
+                onClick={() => {
+                  setCard('')
+                  setDockTab('tasks')
+                  setDockOpen(true)
+                }}
+              >
+                <Icon name="list-checks" size={19} />
+              </button>
+            )}
             {session && msgs.length > 0 && (
               <button
                 class="icon-btn tip-down"
@@ -2279,9 +2594,11 @@ export function SessionsView({
               nodes={nodes}
               value={nodePref}
               onPick={setNodePref}
-              onManage={() => navigateView('fleet')}
-              open={panel === 'node'}
-              onOpenChange={(open) => setPanel(open ? 'node' : '')}
+              open={card === 'node'}
+              onOpenChange={(open) => {
+                setDockOpen(false)
+                setCard(open ? 'node' : '')
+              }}
             />
             {/* Orchestration, to the right of the node pick: the node answers
                 *where* a turn runs, this one answers *what the thread has
@@ -2290,12 +2607,31 @@ export function SessionsView({
             <OrchestrateCard
               key={`orch-${session?.id ?? 'none'}`}
               sessionId={session?.id ?? null}
-              open={panel === 'orch'}
-              onOpenChange={(open) => setPanel(open ? 'orch' : '')}
+              open={card === 'orch'}
+              onOpenChange={(open) => {
+                setDockOpen(false)
+                setCard(open ? 'orch' : '')
+              }}
               onlineNodeCount={onlineNodeCount}
               selfNodeId={selfNodeId}
               focusTask={focusTask}
             />
+            {/* The dock's own door — and only a door. Open, the column carries
+                the fold control in its own head, so this one steps aside: two
+                `panel-right` glyphs on the same row, one in each card's corner,
+                was the other half of "the same button twice". */}
+            {!dockOpen && (
+              <button
+                type="button"
+                class="icon-btn tip-down"
+                data-tip={t('dock.expand')}
+                aria-label={t('dock.expand')}
+                aria-expanded={false}
+                onClick={() => setDockOpen(true)}
+              >
+                <Icon name="panel-right" size={19} />
+              </button>
+            )}
           </div>
         </header>
 
@@ -2378,22 +2714,25 @@ export function SessionsView({
               hasDraft={input.trim() !== '' || pending.length > 0}
             />
           )}
-          {msgs.map((m, i) => (
-            <ChatTurn
-              key={m.k}
-              msg={m}
-              /* The local measurement wins while it is there (it is the only
-                 one that exists between the reply landing and the transcript
-                 being re-fetched); the panel's `duration_ms` is what survives
-                 a reload. */
-              elapsedMs={turnMs[i] ?? m.duration_ms}
-              liveFrom={liveFrom}
-              listTask={m.kind === 'task' && m.ref ? tasksById.get(m.ref) : undefined}
-              onOpenTask={openTaskInPlace}
-            />
-          ))}
+          {msgs.map((m, i) =>
+            absorbed.has(m.k) ? null : (
+              <ChatTurn
+                key={m.k}
+                msg={m}
+                batch={batchOf.get(m.k)}
+                tasksById={tasksById}
+                /* The local measurement wins while it is there (it is the only
+                   one that exists between the reply landing and the transcript
+                   being re-fetched); the panel's `duration_ms` is what survives
+                   a reload. */
+                elapsedMs={turnMs[i] ?? m.duration_ms}
+                liveFrom={liveFrom}
+                onOpenTask={openTaskInPlace}
+              />
+            ),
+          )}
           {liveIds.map((id) => {
-            const task = sessionTasks?.find((t) => t.id === id)
+            const task = tasksById.get(id)
             return task ? <TaskProgress key={id} task={task} /> : null
           })}
           {runSummary && <RunSummaryRow run={runSummary} onOpenTask={openTaskInPlace} />}
@@ -2479,121 +2818,185 @@ export function SessionsView({
           </div>
         )}
 
-        {/* Notes typed into the running turn, before the box that types into it.
-            They live here rather than in the transcript because they have not
-            been delivered yet: the agent has not read them, so the user can
-            still send one ahead of the round, edit it, or drop it.
-            The tray is the reading column's width and the rows are numbered:
-            delivery order is oldest-first, and a stack of identical cards never
-            said which note a round would read next. */}
+        {/* Notes typed into the running turn, worn by the pet instead of
+            listed above it. They live here rather than in the transcript
+            because they have not been delivered yet: the agent has not read
+            them, so the user can still send one ahead of the round, edit it,
+            or drop it.
+
+            The strip is a zero-height row: what the eye gets is a trail of
+            small round bubbles above the panda's head — the pet thinking — and
+            the queue itself is behind a hover, so a waiting note no longer
+            costs a shelf between the transcript and the composer. One bubble
+            per note, four at most, and none of them numbered: a bubble is a
+            thought, not a badge, and the list behind the hover is where the
+            order and the count live. */}
         {notes.length > 0 && (
           <div class="note-strip" data-testid="note-strip">
-            <div class="note-tray">
+            <div class="note-rail">
               <div
-                class="note-list"
-                ref={noteList}
-                role="list"
-                data-above={noteEdges.above ? 'true' : 'false'}
-                data-below={noteEdges.below ? 'true' : 'false'}
+                class="note-bubbles"
+                ref={noteBubbles}
+                onMouseEnter={() => setNotesOpen(true)}
+                onMouseLeave={() => setNotesOpen(false)}
+                onFocusOut={(e) => {
+                  // Focus moving into the popover's verbs is still inside;
+                  // leaving the whole cluster is what closes it.
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                    setNotesOpen(false)
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Escape' || !notesOpen) return
+                  e.stopPropagation()
+                  setNotesOpen(false)
+                  ;(e.currentTarget.querySelector('.note-dots') as HTMLElement | null)?.focus()
+                }}
               >
-                {notes.map((n, i) => (
-                  <div class="note-row" key={n.key} role="listitem" data-mode={n.mode}>
-                    <span class="note-index" aria-hidden="true">
-                      {i + 1}
-                    </span>
-                    <span class={`note-mode ${n.mode === 'inject' ? 'inject' : ''}`}>
-                      {n.mode === 'inject' ? t('sessions.noteModeInject') : t('sessions.noteModeQueue')}
-                    </span>
-                    {editingNote === n.key ? (
-                      // Editing in place: the row stays where it is in the queue,
-                      // so a note already queued ahead of an inject keeps both its
-                      // position and its mode.
-                      <input
-                        class="note-edit"
-                        value={noteDraft}
-                        autoFocus
-                        aria-label={t('sessions.noteEdit')}
-                        onInput={(e) => setNoteDraft(e.currentTarget.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault()
-                            void saveEditNote(n)
-                          } else if (e.key === 'Escape') {
-                            e.preventDefault()
-                            cancelEditNote()
-                          }
-                        }}
-                      />
-                    ) : (
-                      <span class="note-text" title={n.text} onDblClick={() => beginEditNote(n)}>
-                        {n.text}
-                      </span>
-                    )}
-                    {n.attachments && n.attachments.length > 0 && (
-                      <span class="note-files" title={n.attachments.join('\n')}>
-                        <Icon name="paperclip" size={11} />
-                        {n.attachments.length}
-                      </span>
-                    )}
-                    <span class="note-actions">
-                      {editingNote === n.key ? (
-                        <>
-                          <button
-                            type="button"
-                            class="note-act"
-                            title={t('sessions.noteSave')}
-                            aria-label={t('sessions.noteSave')}
-                            onClick={() => void saveEditNote(n)}
-                          >
-                            <Icon name="check" size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            class="note-act"
-                            title={t('sessions.noteCancel')}
-                            aria-label={t('sessions.noteCancel')}
-                            onClick={cancelEditNote}
-                          >
-                            <Icon name="x" size={13} />
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            class="note-act"
-                            title={t('sessions.notePromote')}
-                            aria-label={t('sessions.notePromote')}
-                            onClick={() => void promoteNote(n)}
-                          >
-                            <Icon name="send" size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            class="note-act"
-                            title={t('sessions.noteEdit')}
-                            aria-label={t('sessions.noteEdit')}
-                            onClick={() => beginEditNote(n)}
-                          >
-                            <Icon name="pencil" size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            class="note-act danger"
-                            title={t('sessions.noteDrop')}
-                            aria-label={t('sessions.noteDrop')}
-                            onClick={() => void dropNote(n)}
-                          >
-                            <Icon name="trash" size={13} />
-                          </button>
-                        </>
-                      )}
-                    </span>
+                <button
+                  type="button"
+                  class="note-dots"
+                  aria-haspopup="true"
+                  aria-expanded={notesOpen ? 'true' : 'false'}
+                  aria-label={`${t('sessions.noteModeQueue')} · ${notes.length}`}
+                  title={`${t('sessions.noteModeQueue')} · ${notes.length}`}
+                  onClick={() => setNotesOpen((v) => !v)}
+                >
+                  {/* Three circles, always: the trail is the idiom, not a
+                      tally — one queued note used to draw one dot, which read
+                      as a speck rather than as the panda thinking. The count
+                      lives in the label and in the list behind the hover. */}
+                  {[0, 1, 2].map((i) => (
+                    <span class="note-dot" key={i} aria-hidden="true" />
+                  ))}
+                </button>
+                {notesOpen && (
+                  <div class="note-pop">
+                    <div class="note-pop-card">
+                      <div
+                        class="note-list"
+                        ref={noteList}
+                        role="list"
+                        style={noteRoom ? { maxHeight: `${noteRoom}px` } : undefined}
+                        data-above={noteEdges.above ? 'true' : 'false'}
+                        data-below={noteEdges.below ? 'true' : 'false'}
+                      >
+                        {notes.map((n, i) => (
+                          <div class="note-row" key={n.key} role="listitem" data-mode={n.mode}>
+                            <span class="note-index" aria-hidden="true">
+                              {i + 1}
+                            </span>
+                            <span class={`note-mode ${n.mode === 'inject' ? 'inject' : ''}`}>
+                              {n.mode === 'inject'
+                                ? t('sessions.noteModeInject')
+                                : t('sessions.noteModeQueue')}
+                            </span>
+                            {editingNote === n.key ? (
+                              // Editing in place: the row stays where it is in
+                              // the queue, so a note already queued ahead of an
+                              // inject keeps both its position and its mode.
+                              <input
+                                class="note-edit"
+                                value={noteDraft}
+                                autoFocus
+                                aria-label={t('sessions.noteEdit')}
+                                onInput={(e) => setNoteDraft(e.currentTarget.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault()
+                                    void saveEditNote(n)
+                                  } else if (e.key === 'Escape') {
+                                    e.preventDefault()
+                                    cancelEditNote()
+                                  }
+                                }}
+                              />
+                            ) : (
+                              <span
+                                class="note-text"
+                                title={n.text}
+                                onDblClick={() => beginEditNote(n)}
+                              >
+                                {n.text}
+                              </span>
+                            )}
+                            {n.attachments && n.attachments.length > 0 && (
+                              <span class="note-files" title={n.attachments.join('\n')}>
+                                <Icon name="paperclip" size={11} />
+                                {n.attachments.length}
+                              </span>
+                            )}
+                            <span class="note-actions">
+                              {editingNote === n.key ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    class="note-act"
+                                    title={t('sessions.noteSave')}
+                                    aria-label={t('sessions.noteSave')}
+                                    onClick={() => void saveEditNote(n)}
+                                  >
+                                    <Icon name="check" size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="note-act"
+                                    title={t('sessions.noteCancel')}
+                                    aria-label={t('sessions.noteCancel')}
+                                    onClick={cancelEditNote}
+                                  >
+                                    <Icon name="x" size={13} />
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    class="note-act"
+                                    title={t('sessions.notePromote')}
+                                    aria-label={t('sessions.notePromote')}
+                                    onClick={() => void promoteNote(n)}
+                                  >
+                                    <Icon name="send" size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="note-act"
+                                    title={t('sessions.noteEdit')}
+                                    aria-label={t('sessions.noteEdit')}
+                                    onClick={() => beginEditNote(n)}
+                                  >
+                                    <Icon name="pencil" size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="note-act danger"
+                                    title={t('sessions.noteDrop')}
+                                    aria-label={t('sessions.noteDrop')}
+                                    onClick={() => void dropNote(n)}
+                                  >
+                                    <Icon name="trash" size={13} />
+                                  </button>
+                                </>
+                              )}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                ))}
+                )}
               </div>
             </div>
           </div>
+        )}
+
+        {clarify && clarify.sessionID === activeId && (
+          <ClarifyCard
+            spec={clarify.spec}
+            onSubmit={(answers) => void submitClarify(answers)}
+            onCancel={cancelClarify}
+          />
         )}
 
         {/* Textarea and actions share one bordered box so the composer reads
@@ -2815,44 +3218,6 @@ export function SessionsView({
                 project={session?.project || activeProject || ''}
               />
               <PermissionPicker value={permission} onChange={pickPermission} />
-              {authorizeRelevant(permission) && (
-                <label class="ask-authorize" title={t('approval.stateHint')}>
-                  {/* A switch, not a tick box: this is a mode you leave on, not a
-                      one-off box you tick. The knob rides a <span> rather than a
-                      pseudo-element on the <input> — ::after on an input is not
-                      reliably rendered. */}
-                  <span class="switch">
-                    <input
-                      type="checkbox"
-                      checked={authorize}
-                      onChange={(e) => setAuthorize((e.target as HTMLInputElement).checked)}
-                    />
-                    <span class="switch-track" aria-hidden="true" />
-                  </span>
-                  {t('sessions.authorize')}
-                </label>
-              )}
-              {approval && (approval.mode !== 'on-request' || approval.decision) && (
-                // The standing answer a remember left behind — or a mode that
-                // is not the usual on-request — is the thing a composer must
-                // not hide: a remembered deny would refuse the next tier-2
-                // gate silently otherwise.
-                <span class="approval-chip dim" title={t('approval.stateHint')}>
-                  {t('approval.stateLabel')}&nbsp;
-                  {t(`settings.approval.${approval.mode}`)}
-                  {approval.decision && (
-                    <>
-                      {' · '}
-                      {t(`approval.decision.${approval.decision}`)}
-                      {approval.decision_scope ? ` (${approval.decision_scope})` : ''}
-                      {' · '}
-                      <button class="link-btn" type="button" onClick={forgetApproval}>
-                        {t('approval.forget')}
-                      </button>
-                    </>
-                  )}
-                </span>
-              )}
               {/* The model switch, immediately left of Send — the row's right
                   edge is where you reach for before sending, and "which model"
                   is the one more thing that decision wants asked. WorkBuddy's
@@ -2891,11 +3256,12 @@ export function SessionsView({
           </div>
           {/* Below the box, on one line: where the thread will run, then the
               keyboard legend. The roster used to sit here too; it now hangs
-              off the pet (composer-pet.tsx), so this row is new-chat furniture
-              only — a thread that exists already knows where it runs, and its
-              team is worn beside the panda rather than repeated in small
-              print. A thread with a directory but no legend keeps the row;
-              a thread with neither has no footer at all. */}
+              off the pet (composer-pet.tsx), so this row is footer furniture
+              on every surface — a thread that exists shows its directory
+              read-only, which keeps the box above it on the same line as
+              新对话 and 工作空间 instead of letting it drop a row height when
+              the reader opens history. A thread with a directory but no legend
+              keeps the row; a thread with neither has no footer at all. */}
           {newChatPage ? (
             <div class="composer-foot">
               <DirButton
@@ -2909,11 +3275,89 @@ export function SessionsView({
               />
               <p class="composer-shortcut-hint">{t('sessions.sendShortcut')}</p>
             </div>
-          ) : null}
+          ) : (
+            <div class="composer-foot">
+              {/* Display, not a control: a thread's directory is fixed by its
+                  project row, so the pick is disabled and shows where this
+                  conversation runs — the same slot 新对话 uses to choose. */}
+              <DirButton
+                value={threadDir}
+                onChange={() => {}}
+                label={t('sessions.threadDir')}
+                disabled
+              />
+              <p class="composer-shortcut-hint">{t('sessions.sendShortcut')}</p>
+            </div>
+          )}
         </form>
         {loadError && <p class="gate-error composer-error">{loadError}</p>}
       </div>
+
+      {/* The side dock: a sibling of the pane, not a layer over it. It is the
+          second column of `.chat`'s grid, so opening it narrows the reading
+          pane the way a flex split does — the transcript, the composer and the
+          jump arrow reflow to the width they actually have, instead of being
+          padded away from a panel that floats on top of them.
+
+          The panels stay mounted once visited, so switching tabs returns to
+          the same file, the same page, the same side conversation. */}
+      <Dock
+        open={dockOpen}
+        tab={dockTab}
+        width={dockW}
+        badges={{ tasks: openTaskCount }}
+        onWidth={setDockW}
+        onTab={(next) => {
+          setCard('')
+          setDockTab(next)
+          setDockOpen(true)
+        }}
+        onToggle={() => setDockOpen((v) => !v)}
+        onNew={() => {
+          // `+` means "a fresh one of whatever is showing". The task panel
+          // has nothing to clear — it is the thread's own work — so it keeps
+          // the button inert rather than inventing a verb.
+          if (dockTab === 'files') setFileRef(null)
+          if (dockTab !== 'tasks') setDockEpoch((n) => n + 1)
+        }}
+      >
+        {dockSeen.includes('tasks') && (
+          <div class="dock-pane" hidden={dockTab !== 'tasks'}>
+            <TaskRail
+              tasks={sessionTasks ?? []}
+              onJump={jumpToTask}
+              onClose={() => setDockOpen(false)}
+            />
+          </div>
+        )}
+        {dockSeen.includes('files') && (
+          <div class="dock-pane" hidden={dockTab !== 'files'}>
+            <DockFiles
+              session={session?.id ?? null}
+              request={fileRef}
+              resetSignal={dockEpoch}
+              onInsert={composerInsert}
+            />
+          </div>
+        )}
+        {dockSeen.includes('browser') && (
+          <div class="dock-pane" hidden={dockTab !== 'browser'}>
+            <DockBrowser resetSignal={dockEpoch} onInsert={composerInsert} />
+          </div>
+        )}
+        {dockSeen.includes('side') && (
+          <div class="dock-pane" hidden={dockTab !== 'side'}>
+            <SideChat
+              sessionId={session?.id ?? null}
+              resetSignal={dockEpoch}
+              onInsert={composerInsert}
+            />
+          </div>
+        )}
+      </Dock>
     </section>
+    </ComposerContext.Provider>
+    </FileViewContext.Provider>
   )
 }
 
@@ -3307,6 +3751,36 @@ function inPlaceTaskClick(e: MouseEvent, id: string, open: (id: string) => void)
   open(id)
 }
 
+/** The receipt a turn came back with, when it is not the task's own card.
+ *
+ *  A parked tier-2 task must still render its decision in the same breath it
+ *  parked in, and a remembered answer must say so where the user can see it.
+ *  The turn that carries this is not always the head of a fanned-out round —
+ *  the live result lands on whichever bubble was streaming — so the bubble
+ *  asks every member of its group instead of only itself.
+ *
+ *  `needs_approval` is skipped for a turn with a task ref: that task's card
+ *  already draws the approval gate (see `DispatchBlock`), and drawing it twice
+ *  would ask the same question twice. */
+function MetaRow({ msg }: { msg: ChatMsg }) {
+  const res = msg.result
+  if (!res?.needs_approval && !res?.denied && !res?.consent_scope && !res?.warning) return null
+  return (
+    <div class="bubble-slot-row slot-meta">
+      {res.needs_approval && res.approval && !msg.ref && (
+        <TaskApproval taskId={res.approval.task_id} preselect={res.approval.scope} />
+      )}
+      {res.denied && <span class="badge red">{t('approval.deniedRemembered')}</span>}
+      {res.consent_scope && (
+        <span class="dim approval-consent">{t(`approval.consent.${res.consent_scope}`)}</span>
+      )}
+      {/* Engine advisory — e.g. the dispatch went to a queue nothing drains.
+          The string arrives server-localized. */}
+      {res.warning && <span class="badge yellow">{res.warning}</span>}
+    </div>
+  )
+}
+
 /** One row of the transcript, drawn the way a group chat draws it.
  *
  *  A thread has more than one voice in it: you ask, the panda works out how to
@@ -3332,14 +3806,17 @@ function ChatBubble(props: {
    *  bubble is the streaming one, the timer runs here instead of printing a
    *  fixed number. */
   liveFrom?: number
-  /** The task a dispatch turn handed out, read from the task row itself — the
-   *  only place that names the employee and the stage. */
-  task?: Task | null
   /** The plan a plan turn started. */
   plan?: PlanDetail | null
+  /** The rest of a fanned-out round: the sibling dispatch turns this reply
+   *  absorbed (see `groupDispatches`). Drawn under this one's card, in the same
+   *  bubble, so the round reads as one statement. */
+  batch?: ChatMsg[]
+  /** The thread's task rows, keyed by id — each `DispatchBlock` reads its own
+   *  from here instead of fetching a copy on every change frame. */
+  tasksById?: Map<string, Task>
 }) {
-  const { msg, onOpenTask, elapsedMs, liveFrom = 0, task = null, plan = null } = props
-  const [chainOpen, setChainOpen] = useState(false)
+  const { msg, onOpenTask, elapsedMs, liveFrom = 0, plan = null, batch = [], tasksById } = props
 
   const report = msg.kind === 'error' ? null : splitReportHead(msg.text ?? '')
   const speaker = speakerOf(msg, report)
@@ -3354,11 +3831,12 @@ function ChatBubble(props: {
   // Which model wrote this reply. The live stream carries it on the result;
   // the stored turn carries it after a reload (see `Turn.Model`).
   const replyModel = msg.result?.entry_model || msg.model || ''
-  const hasMeta =
-    Boolean(msg.result?.needs_approval) ||
-    Boolean(msg.result?.denied) ||
-    Boolean(msg.result?.consent_scope) ||
-    Boolean(msg.result?.warning)
+  // The round's own display-only state lands on whichever bubble was streaming
+  // when it finished — for a fan-out that is the last absorbed sibling, not
+  // the head (see `isBareDispatch`). Read it from the whole group so the fold
+  // and the meta row do not vanish with the bubble that used to own them.
+  const group = [msg, ...batch]
+  const thought = group.find((m) => m.thought)?.thought ?? ''
 
   const name =
     speaker.who === 'agent'
@@ -3402,9 +3880,16 @@ function ChatBubble(props: {
               </time>
             ) : null}
             {msg.streaming && liveFrom > 0 ? (
-              <LiveElapsed from={liveFrom} />
+              <LiveElapsed from={liveFrom} last={msg.lastActivity} />
             ) : elapsedMs !== undefined ? (
               <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(elapsedMs) })}</span>
+            ) : null}
+            {msg.tokens ? (
+              <span class="msg-dur" data-testid="msg-tokens">
+                {t('sessions.tokens', {
+                  n: (msg.tokensEstimated ? '~' : '') + fmtTokens(msg.tokens),
+                })}
+              </span>
             ) : null}
           </span>
         </div>
@@ -3419,10 +3904,10 @@ function ChatBubble(props: {
                 wants to know why the job was cut up the way it was gets to
                 look. Open while it is still arriving, folded once the reply
                 lands, because by then the answer is what matters. */}
-          {msg.thought && (
+          {thought && (
             <details class="msg-think" open={Boolean(msg.streaming)}>
               <summary>{t('sessions.thought')}</summary>
-              <p class="msg-think-text">{msg.thought}</p>
+              <p class="msg-think-text">{thought}</p>
             </details>
           )}
 
@@ -3437,78 +3922,40 @@ function ChatBubble(props: {
               {report.title && <p class="msg-subject">{report.title}</p>}
               {report.body && <Markdown text={report.body} class="msg-text" />}
             </>
+          ) : isTaskKind ? (
+            // The orchestration: who got the job, which stage, how it stands —
+            // and, for a fanned-out round, the same for every sibling in the
+            // bubble below it.
+            <>
+              <DispatchBlock msg={msg} onOpenTask={onOpenTask} tasksById={tasksById} />
+              {batch.map((b) => (
+                <DispatchBlock key={b.k} msg={b} onOpenTask={onOpenTask} tasksById={tasksById} />
+              ))}
+            </>
           ) : (
             <>
               {text && <Markdown text={text} class="msg-text" streaming={msg.streaming} />}
-              {/* The orchestration: who got the job, which stage, how it stands.
-                  For a plan, the stages the panda cut it into. */}
-              {isTaskKind && task && <TaskCast task={task} />}
               {isPlanKind && plan && <PlanCast plan={plan} />}
             </>
           )}
 
-          {/* — the task card: consent, the chain, the jump into the task. The
-                state badge and the executor line that used to head it are the
-                cast line's job now, one row up. */}
-          {isTaskKind && msg.ref && (
-            <div class="task-card u-flex-1 u-min-w-0">
-              {/* A task that needs consent must be decidable where the user is
-                  looking. Without this the conversation only said "review" and
-                  the decision lived on another page — so it waited, or worse,
-                  was never seen. Nothing else may answer it on the user's
-                  behalf: this is the web twin of the TUI's approval card. */}
-              <TaskApproval taskId={msg.ref} hint={task} />
-              {msg.result?.report && <Markdown text={msg.result.report} class="task-report" />}
-              {msg.result?.stdout && <TaskOutput text={msg.result.stdout} />}
-              {/* One quiet row of controls: open the chain, talk to the
-                  employee, jump into the task. As three stacked children of
-                  the card's column they read as a form — a chip-shaped toggle
-                  above a full-width centred button — instead of what they
-                  are, three links about the same job. */}
-              <div class="task-card-actions">
-                <button class="chain-toggle" onClick={() => setChainOpen((v) => !v)}>
-                  {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
-                </button>
-                <TaskQuickSend taskId={msg.ref} hint={task} />
-                <a
-                  class="task-card-open"
-                  href={`#/task/${encodeURIComponent(msg.ref)}`}
-                  onClick={(e) => inPlaceTaskClick(e, msg.ref!, onOpenTask)}
-                >
-                  {t('sessions.viewTask')} →
-                </a>
-              </div>
-              {chainOpen && <TaskChain taskId={msg.ref} />}
-            </div>
-          )}
+          {/* The task card lives inside `DispatchBlock` — it is part of the
+                per-task block, so a round that handed out five jobs draws five
+                of them in this one bubble. */}
 
           {/* The live ask path carries its approval state on the result, not
               through a persisted turn ref — a parked tier-2 task must still
               render its decision card in the same breath it parked in, and a
               remembered answer must say so where the user can see it. */}
-          {hasMeta && (
-            <div class="bubble-slot-row slot-meta">
-              {msg.result?.needs_approval && msg.result.approval && !msg.ref && (
-                <TaskApproval
-                  taskId={msg.result.approval.task_id}
-                  preselect={msg.result.approval.scope}
-                />
-              )}
-              {msg.result?.denied && (
-                <span class="badge red">{t('approval.deniedRemembered')}</span>
-              )}
-              {msg.result?.consent_scope && (
-                <span class="dim approval-consent">
-                  {t(`approval.consent.${msg.result.consent_scope}`)}
-                </span>
-              )}
-              {/* Engine advisory — e.g. the dispatch went to a queue nothing
-                  drains. The string arrives server-localized. */}
-              {msg.result?.warning && (
-                <span class="badge yellow">{msg.result.warning}</span>
-              )}
-            </div>
-          )}
+          {/* One row per group member that has something to say: the round's
+              receipt can sit on any of the absorbed turns (see
+              `isBareDispatch`), and dropping the row because the head is empty
+              would swallow an approval or an advisory. `MetaRow` renders
+              nothing for a member with no meta, so the common case is one
+              empty fragment. */}
+          {group.map((m) => (
+            <MetaRow key={`meta-${m.k}`} msg={m} />
+          ))}
 
           {/* — slot-hints: troubleshooting fold under a classified model error.
               err_kind is also persisted on the turn, so a reloaded thread
@@ -3561,6 +4008,72 @@ function ChatBubble(props: {
   )
 }
 
+/** One dispatched task inside a reply: its dispatch line, the cast row naming
+ *  the employee and the stage, and the card that opens it.
+ *
+ *  It is a block rather than part of `ChatBubble` because a single reply can
+ *  carry several: a round that fanned out is filed as one turn per task and
+ *  drawn as one bubble, so the bubble holds one of these per job. The task row
+ *  is read here, per block — the only place that knows who is actually running
+ *  it. */
+function DispatchBlock(props: {
+  msg: ChatMsg
+  onOpenTask(id: string): void
+  tasksById?: Map<string, Task>
+}) {
+  const { msg, onOpenTask, tasksById } = props
+  const [chainOpen, setChainOpen] = useState(false)
+  // The thread's list is polled once per frame already; reading this block's
+  // row from it keeps a five-card round from issuing five extra requests per
+  // frame. The own read is only for a task outside the list.
+  const listed = msg.ref ? tasksById?.get(msg.ref) : undefined
+  const fetched = useTaskBrief(listed ? undefined : msg.kind === 'task' ? msg.ref : undefined)
+  const task = listed ?? fetched
+  const text = stripRefId(msg.text ?? '', msg.ref)
+  return (
+    <div class="msg-batch-item" data-task-id={msg.ref}>
+      {text && <Markdown text={text} class="msg-text" />}
+      {task && <TaskCast task={task} />}
+      {msg.ref && (
+        <div class="task-card u-flex-1 u-min-w-0">
+          {/* A task that needs consent must be decidable where the user is
+              looking. Without this the conversation only said "review" and the
+              decision lived on another page — so it waited, or worse, was never
+              seen. Nothing else may answer it on the user's behalf: this is the
+              web twin of the TUI's approval card. */}
+          <TaskApproval taskId={msg.ref} hint={task} />
+          {msg.result?.report && <Markdown text={msg.result.report} class="task-report" />}
+          {msg.result?.stdout && <TaskOutput text={msg.result.stdout} />}
+          {/* One quiet row of controls: open the chain, talk to the employee,
+              jump into the task. As three stacked children of the card's column
+              they read as a form — a chip-shaped toggle above a full-width
+              centred button — instead of what they are, three links about the
+              same job. */}
+          <div class="task-card-actions">
+            <button class="chain-toggle" onClick={() => setChainOpen((v) => !v)}>
+              {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
+            </button>
+            <TaskQuickSend taskId={msg.ref} hint={task} />
+            <a
+              class="task-card-open"
+              href={`#/task/${encodeURIComponent(msg.ref)}`}
+              onClick={(e) => inPlaceTaskClick(e, msg.ref!, onOpenTask)}
+            >
+              {t('sessions.viewTask')} →
+            </a>
+          </div>
+          {chainOpen && <TaskChain taskId={msg.ref} />}
+          {/* The task's output, where the result is read: the file list, the
+              downloads, and the page view on the preview origin. It hangs off
+              the card rather than the task page because the moment a user
+              wants to look at what a task produced is the moment it reports. */}
+          {task?.plan_meta?.output_artifact && <ArtifactSection task={task} />}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** A chat row. The employee's own progress row does *not* hang off it any
  *  more: a still-running job belongs at the foot of the thread, not under the
  *  bubble that dispatched it (see `liveTaskIds` / `TaskProgress`). */
@@ -3569,26 +4082,16 @@ function ChatTurn(props: {
   onOpenTask(id: string): void
   elapsedMs?: number
   liveFrom?: number
-  /** The session's own row for this bubble's task, when the thread's list
-   *  carries one. It is fresher than a fetch and costs no request; the fetch
-   *  is the fallback for a task outside the list (one delegated elsewhere, or
-   *  the first paint before the list lands). */
-  listTask?: Task | null
+  batch?: ChatMsg[]
+  /** The session's own rows for this thread's tasks, keyed by id. It is
+   *  fresher than a fetch and costs no request; a block whose task is not in
+   *  the list (one delegated elsewhere, or the first paint before the list
+   *  lands) falls back to its own read. */
+  tasksById?: Map<string, Task>
 }) {
-  const { msg, onOpenTask, elapsedMs, liveFrom, listTask } = props
-  const fetched = useTaskBrief(listTask ? undefined : msg.kind === 'task' ? msg.ref : undefined)
-  const task = listTask ?? fetched
+  const { msg } = props
   const plan = usePlanBrief(msg.kind === 'plan' ? msg.ref : undefined)
-  return (
-    <ChatBubble
-      msg={msg}
-      onOpenTask={onOpenTask}
-      elapsedMs={elapsedMs}
-      liveFrom={liveFrom}
-      task={task}
-      plan={plan}
-    />
-  )
+  return <ChatBubble {...props} plan={plan} />
 }
 
 /** Whether the thread's round still has work in flight.
@@ -3698,6 +4201,173 @@ function RunSummaryRow({ run, onOpenTask }: { run: RunSummary; onOpenTask(id: st
   )
 }
 
+/** labelHasMarker reports whether a label already carries the "(Recommended)"
+ *  wording (any bracket style), so the card does not print it twice when the
+ *  model followed the prompt's own advice. */
+function labelHasMarker(label: string, marker: string): boolean {
+  const bare = marker.replace(/[()（）\s]/g, '')
+  return label.includes(marker) || (bare !== '' && label.includes(bare))
+}
+
+/** Pre-execution question card. The entry model asked (or the runtime's
+ *  plan-confirm gate fired) before it will create the task; the running SSE
+ *  turn is parked on the answer. Questions are answered one at a time so four
+ *  of them stay readable in a narrow chat column. Option labels, the
+ *  recommended marker, multi-select, free text ("Other") and skip mirror the
+ *  CLI's choice card and Claude Code's AskUserQuestion. */
+function ClarifyCard({
+  spec,
+  onSubmit,
+  onCancel,
+}: {
+  spec: ClarifySpec
+  onSubmit(answers: ClarifyAnswer[]): void
+  /** Omitted for a parked task's card: there is no turn to abort, and the
+   *  task's own Reject button is the way to throw the work away. */
+  onCancel?: () => void
+}) {
+  const [index, setIndex] = useState(0)
+  const [picked, setPicked] = useState<Record<string, boolean>>({})
+  const [other, setOther] = useState('')
+  const [otherOpen, setOtherOpen] = useState(false)
+  // Which option's preview is on screen. The recommended option is first, so
+  // 0 shows a preview before the user touches anything.
+  const [focused, setFocused] = useState(0)
+  const answers = useRef<ClarifyAnswer[]>([])
+  const q = spec.questions[index]
+  if (!q) return null
+  const preview = q.multi_select ? '' : (q.options[focused]?.preview ?? '').trim()
+  const recMarker = t('clarify.recommended')
+  // A spec that already offers a Cancel choice (the runtime's plan-confirm
+  // card does) must not render a second Cancel in the action row: the option
+  // is the answer, the action would be a different way to abort the turn.
+  const cancelMarker = t('clarify.cancel')
+  const hasCancelOption = spec.questions.some((question) =>
+    question.options.some((o) => o.label.trim() === cancelMarker),
+  )
+
+  const advance = (answer: ClarifyAnswer) => {
+    const next = [...answers.current, answer]
+    answers.current = next
+    if (index + 1 < spec.questions.length) {
+      setIndex(index + 1)
+      setPicked({})
+      setOther('')
+      setOtherOpen(false)
+      return
+    }
+    onSubmit(next)
+  }
+  const selectedLabels = () => q.options.filter((o) => picked[o.label]).map((o) => o.label)
+  const choose = (label: string) => {
+    if (q.multi_select) {
+      setPicked((p) => ({ ...p, [label]: !p[label] }))
+      return
+    }
+    advance({ id: q.id, selected: [label] })
+  }
+  const submitOther = (e: Event) => {
+    e.preventDefault()
+    const text = other.trim()
+    if (!text) return
+    advance({
+      id: q.id,
+      selected: q.multi_select ? selectedLabels() : undefined,
+      other: text,
+    })
+  }
+
+  return (
+    <div class="clarify-card" data-testid="session-clarify" role="dialog" aria-label={q.question}>
+      <div class="clarify-head">
+        <span class="badge">{t('clarify.title')}</span>
+        <span class="clarify-progress">
+          {t('clarify.progress', { i: String(index + 1), n: String(spec.questions.length) })}
+        </span>
+      </div>
+      {spec.plan && <div class="clarify-plan">{spec.plan}</div>}
+      <div class="clarify-question">
+        <span class="clarify-header">{q.header}</span> {q.question}
+      </div>
+      <div class="clarify-body">
+        <div class="clarify-options">
+          {q.options.map((o, i) => {
+            const on = Boolean(picked[o.label])
+            return (
+              <button
+                type="button"
+                class={`clarify-option${on ? ' is-picked' : ''}`}
+                aria-pressed={q.multi_select ? on : undefined}
+                onMouseEnter={() => setFocused(i)}
+                onFocus={() => setFocused(i)}
+                onClick={() => choose(o.label)}
+              >
+                <span class="clarify-option-label">
+                  {q.multi_select && <span class="clarify-check">{on ? '✓' : ''}</span>}
+                  {o.label}
+                  {o.label === q.recommended && !labelHasMarker(o.label, recMarker) && (
+                    <span class="clarify-recommended">{recMarker}</span>
+                  )}
+                </span>
+                {o.description && <span class="clarify-option-desc">{o.description}</span>}
+              </button>
+            )
+          })}
+        </div>
+        {preview && (
+          <div class="clarify-preview">
+            <Markdown text={preview} />
+          </div>
+        )}
+      </div>
+      {otherOpen && (
+        <form class="clarify-other" onSubmit={submitOther}>
+          <input
+            value={other}
+            onInput={(e) => setOther(e.currentTarget.value)}
+            placeholder={t('clarify.otherPlaceholder')}
+            autofocus
+          />
+          <button type="submit" class="btn primary small">
+            {t('clarify.submit')}
+          </button>
+        </form>
+      )}
+      <div class="clarify-actions">
+        {q.multi_select && (
+          <button type="button" class="btn primary small" onClick={() => advance({ id: q.id, selected: selectedLabels() })}>
+            {t('clarify.confirm')}
+          </button>
+        )}
+        <button type="button" class="btn small" onClick={() => setOtherOpen((v) => !v)}>
+          {t('clarify.other')}
+        </button>
+        <button type="button" class="btn small" onClick={() => advance({ id: q.id })}>
+          {t('clarify.skip')}
+        </button>
+        {onCancel && !hasCancelOption && (
+          <button type="button" class="btn small danger" onClick={onCancel}>
+            {t('clarify.cancel')}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** parseClarifySpec decodes the server-computed question_spec field (a
+ *  ClarifySpec JSON string). Malformed input reads as no option set — the
+ *  free-text question, when present, is still answerable. */
+function parseClarifySpec(raw?: string): ClarifySpec | null {
+  if (!raw) return null
+  try {
+    const spec = JSON.parse(raw) as ClarifySpec
+    return spec && Array.isArray(spec.questions) && spec.questions.length > 0 ? spec : null
+  } catch {
+    return null
+  }
+}
+
 /** Inline approval gate for a task referenced by a chat bubble.
  *
  *  It re-reads the task on every change signal, so a task that parks in review
@@ -3728,6 +4398,8 @@ function TaskApproval({
   const task = hint ?? fetched
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Free-text answer for an agent that asked in prose (no option set).
+  const [answerText, setAnswerText] = useState('')
   // The remember scope: where this answer lands for the gates that come after.
   // The server names its default (the project's configured scope) so the card
   // preselects it; the user can still pick differently per decision.
@@ -3766,6 +4438,66 @@ function TaskApproval({
     }
   }
 
+  // A task the agent parked on a question is not waiting for a yes/no: it is
+  // waiting for an answer. Show the same choice card the running turn uses,
+  // and resume through the approval endpoint with the answer attached.
+  const parkedSpec = parseClarifySpec(task.question_spec)
+  const parkedQuestionText = (task.question ?? '').trim()
+  if (task.approval_disposition === 'resume_execution' && (parkedQuestionText || parkedSpec)) {
+    return (
+      <div class="task-approval is-clarify" data-testid="chat-task-question">
+        <div class="clarify-head">
+          <span class="badge yellow">{t('state.review')}</span>
+          <span class="dim review-kind">{t('detail.reviewKind.resume_execution')}</span>
+        </div>
+        {parkedSpec ? (
+          <ClarifyCard
+            spec={parkedSpec}
+            onSubmit={(answers) => void act(() => api.approveWithAnswer(task.id, { answers }))}
+          />
+        ) : (
+          <form
+            class="clarify-other"
+            onSubmit={(e) => {
+              e.preventDefault()
+              const text = answerText.trim()
+              if (!text) return
+              void act(() => api.approveWithAnswer(task.id, { answer: text }))
+            }}
+          >
+            <div class="clarify-question">{parkedQuestionText}</div>
+            <input
+              value={answerText}
+              onInput={(e) => setAnswerText(e.currentTarget.value)}
+              placeholder={t('clarify.otherPlaceholder')}
+              disabled={busy}
+            />
+            <button type="submit" class="btn primary small" disabled={busy || !answerText.trim()}>
+              {t('clarify.submit')}
+            </button>
+          </form>
+        )}
+        <div class="clarify-actions">
+          <button
+            class="btn danger small"
+            disabled={busy}
+            onClick={() => void act(() => api.reject(task.id, t('detail.rejectedViaWeb'), scope))}
+          >
+            {t('detail.reject')}
+          </button>
+        </div>
+        {error && <p class="gate-error">{error}</p>}
+      </div>
+    )
+  }
+  // needs_changed_input is the one disposition where consent is not the
+  // missing piece: the task failed in a way that only a different prompt can
+  // fix (a deterministic crash, a spent token budget, an overflowed context),
+  // so Approve is disabled — and a disabled button that says nothing is the
+  // "it won't let me approve" report this card kept generating. The line below
+  // the buttons says why, and what the two working exits are.
+  const blocked = task.approval_disposition === 'needs_changed_input'
+
   return (
     <div class="task-approval" data-testid="chat-task-approval">
       <span class="badge yellow">{t('state.review')}</span>
@@ -3777,7 +4509,7 @@ function TaskApproval({
       <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
       <button
         class="btn primary small"
-        disabled={busy || task.approval_disposition === 'needs_changed_input'}
+        disabled={busy || blocked}
         onClick={() => void act(() => api.approve(task.id, scope))}
       >
         {t('detail.approve')}
@@ -3789,6 +4521,7 @@ function TaskApproval({
       >
         {t('detail.reject')}
       </button>
+      {blocked && <p class="gate-hint">{t('detail.approveBlocked')}</p>}
       {error && <p class="gate-error">{error}</p>}
     </div>
   )

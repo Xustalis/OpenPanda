@@ -44,6 +44,56 @@ func ScopeRootKey(project string) string {
 	return scopeKeyPrefix + lockFold(project)
 }
 
+// sessionScopeSegment is the level a conversation's claim sits at, directly
+// under the project's own root scope. It rides INSIDE the scope namespace on
+// purpose: the ancestor rule in ScopeKeysConflict then does all the work —
+// "scope:p" (a caller with no conversation) still conflicts with every
+// conversation's lane, while two conversations are siblings under that root
+// and never conflict with each other. A separator that escaped the namespace
+// would have made whole-project work invisible to conversations, which is the
+// opposite of what a shared worktree needs.
+const sessionScopeSegment = "@session"
+
+// SessionScopeKey returns the scope root one conversation's tasks claim.
+// An empty sessionID keeps the project's own root: a submitter with no
+// conversation (CLI `task add`, a plan stage, an inbound delegate frame) is a
+// whole-project writer and must keep excluding everyone, including every
+// conversation. Only the panel/chat path — where a task arrives carrying the
+// session that asked for it — gets a lane of its own, so two conversations
+// against one checkout stop queueing behind each other while each stays
+// serial against itself.
+func SessionScopeKey(project, sessionID string) string {
+	if sessionID == "" {
+		return ScopeRootKey(project)
+	}
+	return ScopeRootKey(project) + "/" + sessionScopeSegment + "/" + lockFold(sessionID)
+}
+
+// SessionProjectKey is the legacy project key under the same lane rule. The
+// scope key already carries the exclusion (a root claim is an ancestor of
+// every lane), so this exists to keep the pair consistent rather than to add
+// a second barrier.
+func SessionProjectKey(project, sessionID string) string {
+	if sessionID == "" {
+		return ProjectKey(project)
+	}
+	return ProjectKey(project) + "/" + sessionScopeSegment + "/" + lockFold(sessionID)
+}
+
+// SessionScopeLeafKey is the scoped-path leaf under a conversation's lane:
+// "scope:p/@session/<sid>/<path>". Two siblings inside ONE conversation keep
+// the same overlap rules as before, and the lane stays an ancestor-descendant
+// of the project root, so a whole-project claim still excludes it.
+func SessionScopeLeafKey(project, sessionID, path string) string {
+	if sessionID == "" {
+		return ScopeLeafKey(project, path)
+	}
+	if path == "" {
+		return SessionScopeKey(project, sessionID)
+	}
+	return SessionScopeKey(project, sessionID) + "/" + lockFold(path)
+}
+
 // ScopeLeafKey returns the scope key for one declared project-relative path.
 // An empty path names the root itself.
 func ScopeLeafKey(project, path string) string {

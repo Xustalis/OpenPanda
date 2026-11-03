@@ -14,7 +14,12 @@
 }
 
 /* Toolbar: layer segmented control + live node/edge counts on the left,
-   zoom controls and the pan/zoom hint on the right. */
+   zoom controls on the right. The layer chips are one step smaller than the
+   page tabs above them: they filter this drawing, they do not pick a page. */
+.mg-layers .seg {
+  padding: 3px 11px;
+  font-size: var(--text-sm);
+}
 .mg-toolbar {
   display: flex;
   align-items: center;
@@ -32,9 +37,20 @@
   align-items: center;
   gap: 4px;
 }
-.mg-hint-t {
+/* Gesture legend pinned to the canvas corner — a caption for the drawing,
+   not a toolbar item competing with the filters and the zoom. */
+.mg-hint-chip {
+  position: absolute;
+  left: var(--sp-3);
+  bottom: var(--sp-3);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg-raised) 78%, transparent);
+  border: 1px solid var(--border-soft);
+  color: var(--text-tertiary);
   font-size: var(--text-xs);
-  margin-right: var(--sp-2);
+  pointer-events: none;
+  opacity: 0.9;
 }
 .mg-toolbar-right .btn {
   padding: 2px 10px;

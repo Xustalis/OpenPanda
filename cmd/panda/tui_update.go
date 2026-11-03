@@ -22,7 +22,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
@@ -207,7 +209,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ready = true
 		// Clamp to the actual available width; a tiny terminal must shed
 		// decoration rather than creating a component wider than the screen.
-		m.ta.SetWidth(max(1, msg.Width-4))
+		m.ta.SetWidth(max(1, m.textWidth()-4))
+		m.sizeSideInput()
 		if first {
 			m.refreshProject()
 		}
@@ -242,7 +245,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.animTick++
 		// Outside a turn the spinner still has work to do while a model
 		// probe or catalogue fetch is in flight in the config surfaces.
-		if m.mode != modeAsking && !m.formTesting && !m.formFetching && !m.panelTesting {
+		if m.mode != modeAsking && !m.formTesting && !m.formFetching && !m.panelTesting &&
+			(m.side == nil || m.side.stream == nil) {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -250,17 +254,35 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case deltaMsg:
+		if m.side != nil && m.side.stream != nil && msg.stream == m.side.stream {
+			return m, m.onSideDelta(msg.text)
+		}
 		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
 			return m, nil
 		}
 		return m.onDelta(msg)
 	case reasoningMsg:
+		if m.side != nil && m.side.stream != nil && msg.stream == m.side.stream {
+			m.side.thought = appendReasoning(m.side.thought, msg.text)
+			return m, waitForActivity(msg.stream)
+		}
 		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
 			return m, nil
 		}
 		m.thought = appendReasoning(m.thought, msg.text)
+		if m.thoughtStarted.IsZero() {
+			m.thoughtStarted = time.Now()
+		}
+		m.lastActivity = time.Now()
 		return m, waitForActivity(msg.stream)
 	case progressMsg:
+		// The side channel has no task of its own, but routing and retry notes
+		// still arrive; they belong on its status line, not on the main
+		// turn's — the two streams run at once when a turn is in flight.
+		if m.side != nil && m.side.stream != nil && msg.stream == m.side.stream {
+			m.side.status = askengine.StatusText(msg.progress)
+			return m, waitForActivity(msg.stream)
+		}
 		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
 			return m, nil
 		}
@@ -274,7 +296,21 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// would leave those commands targeting whatever the picker last opened.
 		m.streamTask = msg.taskID
 		return m, waitForActivity(msg.stream)
+	case questionMsg:
+		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
+			return m, nil
+		}
+		// The ask goroutine is parked on msg.reply; the card owns the keyboard
+		// until the last question is answered or the round is cancelled.
+		m.pendingQuestion = newClarifyPrompt(msg.spec, msg.reply)
+		m.mode = modeClarifying
+		m.ta.Reset()
+		m.ta.SetHeight(1)
+		return m, waitForActivity(msg.stream)
 	case doneMsg:
+		if m.side != nil && msg.stream == m.side.stream {
+			return m, m.onSideDone(msg)
+		}
 		return m.onDone(msg)
 	case resumedMsg:
 		return m.onResumed(msg)
@@ -347,6 +383,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// submits exactly as if the user had waited for the prompt.
 		next, drain := m.drainPending()
 		return next, drain
+	case editDoneMsg:
+		// The editor came back. Its failure is worth a line in the transcript
+		// (a mistyped $EDITOR is otherwise silent); a clean exit needs nothing.
+		if msg.err != nil {
+			return m, m.printBlock(block{kind: blockError, body: msg.err.Error()})
+		}
+		return m, nil
 	case blockCommitMsg:
 		return m, nil
 	case droppedMsg:
@@ -516,6 +559,23 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if isMouseToggleKey(msg) {
 		return m.toggleMouse()
 	}
+	// The side channel owns the whole keyboard while it is on screen. Its own
+	// handler runs before any mode branch: the main thread's bindings (Esc to
+	// interrupt, Ctrl+C to quit) would otherwise fire on the turn the user is
+	// not looking at.
+	if m.sideShowing() {
+		return m.onSideKey(msg)
+	}
+	// The task rail answers Ctrl+B (and, once open, Alt+arrows and Ctrl+G) in
+	// every mode that has a transcript in front of it — the point of the rail
+	// is watching a fan-out while it runs, which is exactly when the input is
+	// busy or a card is up.
+	switch m.mode {
+	case modeIdle, modeAsking, modeExec, modeApproving:
+		if handled, next, cmd := m.sidebarKey(msg); handled {
+			return next, cmd
+		}
+	}
 	if m.mode == modeExec {
 		if lines, ok := m.arrowScrollLines(msg); ok && strings.TrimSpace(m.ta.Value()) == "" {
 			// Arrow scroll only wins while the draft is empty — once the user
@@ -669,6 +729,8 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case modeApproving:
 		return m.onApprovalKey(msg)
+	case modeClarifying:
+		return m.onClarifyKey(msg)
 	default:
 		return m.onIdleKey(msg)
 	}
@@ -700,7 +762,7 @@ func (m tuiModel) onSplashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // startFromSplash transitions from splash to the model onboarding guide or main idle chat.
 func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
-	var onboarded, configured, termsCurrent bool
+	var onboarded, configured, termsCurrent, localeSet bool
 	if m.r != nil {
 		m.r.readConfig(func(c *config.Config) {
 			if c == nil {
@@ -709,6 +771,7 @@ func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
 			onboarded = c.UI.Onboarded
 			configured = modelConfigured(c)
 			termsCurrent = c.UI.TermsCurrent()
+			localeSet = strings.TrimSpace(c.UI.Locale) != ""
 		})
 	}
 	// Consent is the gate, not wizard completion. `onboarded` is written by
@@ -719,7 +782,13 @@ func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
 	// nothing to ask that the model guide cannot; a stale one re-opens the
 	// license step alone for someone who has signed before.
 	if m.r != nil && m.r.cfg != nil && !termsCurrent {
-		if onboarded {
+		// Any answer the wizard already recorded means it must not start from
+		// the top again: the flags are written by its last step, but the
+		// language choice is its first, and a model configured outside the
+		// wizard says the same. Without this, someone who closed the wizard
+		// halfway is walked through language → terms → approval on every
+		// launch — the complaint this gate exists to answer.
+		if onboarded || configured || localeSet {
 			return m.startTermsReconsent()
 		}
 		return m.startOnboarding()
@@ -1221,6 +1290,11 @@ func (m tuiModel) submitDuringTurn(text string) (tea.Model, tea.Cmd) {
 	case "quit", "exit":
 		m.quitting = true
 		return m, tea.Quit
+	case "side", "btw":
+		// Unlike a picker or a turn-spawning command, the side channel does
+		// not need the foreground: it is a second ask worker beside this one,
+		// which is exactly what a user wants while a turn is still streaming.
+		return m, m.openSide(arg)
 	case "clear", "cls", "claer":
 		// Visual clear only — safe mid-turn; it never touches the stream.
 		if m.chatHistory != nil {
@@ -1246,7 +1320,7 @@ func (m tuiModel) submitDuringTurn(text string) (tea.Model, tea.Cmd) {
 func (m tuiModel) turnNeedsForeground(name, arg string) bool {
 	switch name {
 	case "new", "resume", "fork", "authorize", "project",
-		"ask", "goal", "plan", "spec":
+		"ask", "goal", "plan", "spec", "rewind", "edit":
 		return true
 	case "sessions", "projects", "model":
 		return arg == "" // bare opens a picker; an argument prints text
@@ -1305,6 +1379,24 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 	case "quit", "exit":
 		m.quitting = true
 		return m, tea.Quit
+	case "side", "btw":
+		// /side opens the read-only channel beside this thread; /btw is the
+		// Claude Code spelling, kept as an alias. It is deliberately available
+		// mid-turn — asking a question the main thread should not carry is the
+		// whole reason it exists.
+		return m, m.openSide(arg)
+	case "edit":
+		// The editor takes the terminal, so this hands off through ExecProcess
+		// rather than running an exec pump.
+		return m.editFile(arg)
+	case "rewind":
+		// Bare opens the picker; "/rewind <turn>" skips straight to the card.
+		// Both end at the same confirmation — the argument changes how many
+		// keystrokes a rewind costs, never whether it asks.
+		if n, err := strconv.Atoi(strings.TrimSpace(arg)); err == nil && n > 0 {
+			return m.confirmRewind(n)
+		}
+		return m.openRewindList()
 	case "clear", "cls", "claer":
 		// Visual clear only — the conversation survives (/new is the wipe).
 		// Blocks vanish from the next frame; ClearScreen forces a repaint so
@@ -1445,30 +1537,37 @@ func (m tuiModel) startExec(text string) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// newChat is "/new": wipe the bare-mode conversation — memory AND the
-// persisted file — and clear the screen. A bound session refuses, exactly as
-// the classic handler spells it.
+// newChat is "/new": detach from the current thread, clear the pane and the
+// legacy bare-conversation file, and let the next prompt open a fresh session
+// — the same blank sheet the classic handler spells.
 func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
-	if m.r != nil && m.r.sessID() != "" {
-		note := block{kind: blockNote, body: i18n.T(m.loc, "repl.new.session")}
+	// Switching threads mid-turn would route the outcome into the new
+	// conversation (recordOutcome reads the binding at commit time), so the
+	// turn has to settle first.
+	if m.mode == modeAsking {
+		note := block{kind: blockNote, body: i18n.T(m.loc, "repl.ask.busy")}
 		return m, m.printBlock(note)
 	}
-	n := 0
 	if m.r != nil {
-		n = m.r.convoLen()
+		// Detach, don't clear: the thread keeps its history and stays in the
+		// console's rail; the next prompt lazily opens a new one.
+		m.r.setSess("")
 		m.r.setConvo(nil)
-		// A new bare conversation starts with no roster and no pending pin —
+		// A new conversation starts with no roster and no pending pin —
 		// the same blank sheet the console's 新对话 opens.
 		_ = m.r.setTeam(nil)
 		m.r.setNextNode("")
 		m.nextNode = ""
+		m.r.clearConvoNow()
 	}
 	m.team = nil
-	clearConvo()
+	// The side channel belonged to the conversation this pane just detached
+	// from; it goes with it.
+	m.dropSide()
 	if m.chatHistory != nil {
 		m.chatHistory.clear()
 	}
-	note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.new.cleared", "n", fmt.Sprint(n/2))}
+	note := block{kind: blockNote, body: i18n.T(m.loc, "repl.new.fresh")}
 	return m, tea.Batch(tea.ClearScreen, m.printBlock(note))
 }
 
@@ -1529,12 +1628,12 @@ func (m tuiModel) forkSession(arg string) (tea.Model, tea.Cmd) {
 	if err != nil {
 		return m, m.printBlock(block{kind: blockError, body: err.Error()})
 	}
-	if m.r.worktrees != nil {
+	if wt := openWorktreesForSession(m.r.cfg, parent); wt != nil {
 		base := "HEAD"
 		if parent.Branch != "" {
 			base = parent.Branch
 		}
-		if path, err := m.r.worktrees.EnsureFrom(context.Background(), child.ID, base); err == nil {
+		if path, err := wt.EnsureFrom(context.Background(), child.ID, base); err == nil {
 			_ = m.r.sessionsSt.SetWorktree(child.ID, path, sessions.Branch(child.ID))
 			child, _ = m.r.sessionsSt.Get(child.ID)
 		}
@@ -1549,6 +1648,9 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 	if sess == nil {
 		return m, nil
 	}
+	// The side channel was opened beside a different thread: its snapshot, its
+	// transcript and its approval bucket all belong to that one.
+	m.dropSide()
 	if m.r != nil {
 		m.r.setSess(sess.ID)
 		// The roster is a property of the thread just opened.
@@ -1556,23 +1658,66 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 		m.nextNode = m.r.nextNodeNow()
 	}
 	m.mode = modeIdle
-	if m.chatHistory != nil {
-		m.chatHistory.clear()
-		for _, t := range sess.Turns {
-			switch t.Role {
-			case "user":
-				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Text})
-			case "assistant":
-				m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Text})
-			}
-		}
-	}
+	m.seedTranscriptFromSession(sess)
 	title := sess.Title
 	if title == "" {
 		title = shortID(sess.ID)
 	}
 	note := block{kind: blockNote, body: i18n.Tf(m.loc, "tui.resume.ok", "id", shortID(sess.ID), "title", title)}
 	return m, m.printBlock(note)
+}
+
+// seedTranscriptFromSession repaints the scrollback from a thread's turns. A
+// nil session clears it — the project switch with nothing to resume opens a
+// blank sheet rather than leaving the previous project's conversation on
+// screen while the next ask runs somewhere else.
+func (m tuiModel) seedTranscriptFromSession(sess *sessions.Session) {
+	m.seedTranscript(sessionTurnEntries(sess))
+}
+
+// sessionTurnEntries adapts a thread to the transcript's turn type. Both the
+// launch replay and /resume paint through it, so the two cannot drift.
+func sessionTurnEntries(sess *sessions.Session) []entry.Turn {
+	if sess == nil {
+		return nil
+	}
+	turns := make([]entry.Turn, 0, len(sess.Turns))
+	for _, t := range sess.Turns {
+		turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
+	}
+	return turns
+}
+
+// seedTranscript repaints the scrollback from one conversation's turns. An
+// empty slice clears it; the store-less fallback passes the legacy bare
+// conversation so the pane still shows what the next ask will replay.
+func (m tuiModel) seedTranscript(turns []entry.Turn) {
+	if m.chatHistory == nil {
+		return
+	}
+	m.chatHistory.clear()
+	for _, t := range turns {
+		switch t.Role {
+		case "user":
+			m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: t.Content})
+		case "assistant":
+			m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockAnswer, body: t.Content})
+		}
+	}
+}
+
+// reseedProjectConversation rebinds after a project switch and repaints the
+// pane from whatever the next ask will actually replay: the new project's
+// newest thread, or the legacy bare conversation when there is none.
+func (m tuiModel) reseedProjectConversation() {
+	if m.r == nil {
+		return
+	}
+	if sess := m.r.rebindProjectConversation(); sess != nil {
+		m.seedTranscriptFromSession(sess)
+		return
+	}
+	m.seedTranscript(m.r.convoNow())
 }
 
 // enterProject implements "/project <name>" inline: validate, create-then-
@@ -1595,7 +1740,7 @@ func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
 		}
 		r.setProject("")
 		r.bindProject()
-		r.setConvo(loadConvo())
+		m.reseedProjectConversation()
 		m.team = r.teamNow()
 		m.refreshProject()
 		note := block{kind: blockNote, body: i18n.T(m.loc, "cli.project.noActive")}
@@ -1630,7 +1775,7 @@ func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
 		}
 	}
 	r.bindProject()
-	r.setConvo(loadConvo())
+	m.reseedProjectConversation()
 	m.team = r.teamNow()
 	m.refreshProject()
 	body := ""
@@ -1752,11 +1897,14 @@ func (m tuiModel) askTurn(text, mode string) (tea.Model, tea.Cmd) {
 	m.ta.SetHeight(1)
 	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder.running")
 	m.started = time.Now()
+	m.liveInputTokens, m.liveOutputTokens = 0, 0
+	m.lastActivity = time.Time{}
 	m.lastInterrupt = time.Time{} // each turn gets a fresh double-tap window
 	m.liveAnswerChunks = nil
 	m.liveAnswerBytes = 0
 	m.thought = nil
 	m.thoughtDone = false
+	m.thoughtStarted = time.Time{}
 	m.note = ""
 	// The turn reports its own outcome, so the out-of-band watcher holds its
 	// tongue until it commits (mirrors the classic loop's setAsking).

@@ -48,6 +48,7 @@ CI ejecuta las mismas comprobaciones como trabajos en paralelo — `lint` (gofmt
 - **`go test -race ./...` debe pasar** — el kernel es un sistema concurrente
   (registro de pares, almacén de tareas, hub SSE); cualquier hallazgo del
   detector de carreras es bloqueador de release, no un simple aviso.
+- **Desarrolladores en Windows:** `-race` requiere `CGO_ENABLED=1` y una cadena MinGW-w64 actual (mingw-w64 GCC de MSYS2). El MinGW 8.x incluido en Git-for-Windows es demasiado antiguo: el binario instrumentado sale al cargar con `0xc0000139` (STATUS_ENTRYPOINT_NOT_FOUND) antes de ejecutar ninguna prueba. `make race` activa `CGO_ENABLED=1`; la leg de CI en Windows ejecuta `go test` normal, no `-race`.
 - Los módulos centrales (`internal/core`, `internal/scheduler`, `internal/storage`)
   deben mantenerse por encima de **~60 % de cobertura** cuando sea viable.
   Las correcciones de errores van acompañadas de un test de regresión que

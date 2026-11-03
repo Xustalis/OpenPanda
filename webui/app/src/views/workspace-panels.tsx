@@ -1,21 +1,32 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { type JSX } from 'preact'
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { DeviceGlyph, type Form } from '../components/device-glyph'
+import { ContextMenu, type ContextMenuItem } from '../components/context-menu'
 import { agentLogo } from '../format/agent-logo'
 import { agentInitial } from '../format/agent-role'
+import { buildWorkspaceEdges, workspaceLinkLine, type PanelRect } from './workspace-links'
+import { anchorScroll, nextZoom } from './workspace-zoom'
 
 /** 工作空间 — 设备面板视图.
  *
  *  One panel per machine, one tile per agent the machine advertises. This
- *  replaces the topology map: the question this page answers is "what is
- *  running where", and a panel of agent marks says that at a glance, where a
- *  ring of plates said "what is connected to what".
+ *  replaces the always-on topology map: the question this page answers first
+ *  is "what is running where", and a panel of agent marks says that at a
+ *  glance. Selecting a panel then reveals only that machine's live connections,
+ *  so the graph is available without becoming the page's permanent subject.
  *
  *  The panel is the machine (name, OS, load, online), the tile is the agent
  *  (the CLI's own mark, and whether it is working right now). No agent names,
  *  no task text on the tiles: the drawer has all of that.
+ *
+ *  A tile is also the unit the reader acts on. A click picks it (and a second
+ *  click puts it back), several tiles can be picked at once, and a right-click
+ *  opens the card's own menu — pick, test the connection, remove it from the
+ *  view. The menu is a list of items, not bespoke markup, so a new verb is one
+ *  more entry at the call site. The panel keeps its own click: it is the
+ *  machine, and the drawer is where its facts live.
  *
  *  The panda stands on the local machine's panel and does not travel. CSS
  *  places it inside that panel (`.ws-panel.self .ws-panda`), so it never
@@ -66,6 +77,11 @@ export interface PanelDevice {
   os: string
   online: boolean
   local: boolean
+  /** Routing-graph adjacency and this console's own measurement toward the
+   *  peer. Together they describe every connection the canvas may draw. */
+  neighbors: string[]
+  rtt: number
+  transport: string
   tasks: number
   maxTasks: number
   busy: boolean
@@ -82,9 +98,38 @@ export interface WorkspacePanelsProps {
   /** Fallback roster for the local machine when its capability card is bare:
    *  the CLIs this console can actually drive. */
   fallbackAgents?: string[]
+  /** Picked agent tiles, keyed by `tileKey`. */
+  pickedTiles: Set<string>
+  /** Tiles removed from view, keyed the same way. */
+  hiddenTiles: Set<string>
+  /** Tiles with a connectivity test in flight. */
+  testingTiles: Set<string>
+  onTogglePick: (key: string) => void
+  onTest: (device: string, agent: string) => void
+  onHide: (device: string, agent: string) => void
+  /** Put every hidden tile of one machine back. */
+  onShowAll: (device: string) => void
+  /** "已隐藏 2 个智能体" — the note left where a panel's tiles used to be. */
+  hiddenNote: (n: number) => string
+  /** Card menu vocabulary. */
+  menuSelect: string
+  menuDeselect: string
+  menuTest: string
+  menuRemove: string
+  /** The reason a remote tile's connection cannot be tested from here. */
+  menuLocalOnly: string
+  /** Appended to a tile's tooltip: the right-click is the only hint the menu
+   *  gets, and a card that never says so is a card nobody right-clicks. */
+  menuHint: string
   localLabel: string
   onlineLabel: string
   offlineLabel: string
+  meshLabel: string
+  measuredLabel: string
+  /** Names the card an edge has to pass over, `{name}` standing in for the
+   *  machine. The edge is dimmed rather than dropped: "this box and I are not
+   *  connected" is a worse lie than a faint line. */
+  occludedLabel: string
   emptyLabel: string
   idleLabel: string
   runningLabel: string
@@ -94,6 +139,27 @@ export interface WorkspacePanelsProps {
    *  saved arrangement away and re-forms the tidy row: the one guaranteed way
    *  back from a card parked somewhere the reader cannot see. */
   resetSignal?: number
+  /** Canvas scale, 1 = the drawing at its own size. The wheel owns it; the
+   *  page header shows the number and offers the way back to 100%. */
+  zoom: number
+  onZoom: (z: number) => void
+}
+
+/** One agent tile's identity: an agent lives on a machine, so the machine is
+ *  part of the key. The same CLI on two boxes is two tiles, two picks, and
+ *  two menu targets — a name alone would conflate them. */
+export function tileKey(device: string, agent: string): string {
+  return `${device}/${agent}`
+}
+
+/** The roster a panel shows: what the machine's card declares, or — for this
+ *  machine only — the CLIs the console can actually drive when the card is
+ *  bare. Exported because the page's batch actions have to know the same set
+ *  the panels drew. */
+export function panelAgents(d: PanelDevice, fallback: string[] = []): string[] {
+  const roster = Object.keys(d.agents ?? {})
+  if (roster.length > 0) return roster
+  return d.local ? fallback : []
 }
 
 /** The agent a task's newest event names, if it names one. The ledger stamps
@@ -130,6 +196,21 @@ interface Slot {
   y: number
   w: number
   h: number
+}
+
+interface LinkLayout {
+  rects: Map<string, PanelRect>
+  width: number
+  height: number
+}
+
+function sameLinkLayout(a: LinkLayout, b: LinkLayout): boolean {
+  if (a.width !== b.width || a.height !== b.height || a.rects.size !== b.rects.size) return false
+  for (const [id, r] of b.rects) {
+    const prev = a.rects.get(id)
+    if (!prev || prev.x !== r.x || prev.y !== r.y || prev.w !== r.w || prev.h !== r.h) return false
+  }
+  return true
 }
 
 function readSlots(): Record<string, Slot> {
@@ -181,21 +262,25 @@ function scrollerOf(el: HTMLElement | null): HTMLElement | null {
 /** The box a pointer can actually reach, in the grid's own coordinates: the
  *  scroller's visible window shifted by the current scroll offset. A card
  *  dropped outside it used to be written to localStorage at a y the reader
- *  could not scroll to, which is how a panel vanished for good. */
+ *  could not scroll to, which is how a panel vanished for good. `zoom` divides
+ *  the window back into the drawing's pixels — a card is stored at the size it
+ *  has at 100%, whatever the canvas is scaled to right now. */
 function reachableBand(
   grid: HTMLElement,
   view: HTMLElement | null,
   inset: number,
+  zoom: number,
 ): { x0: number; x1: number; y0: number; y1: number } {
   const gr = grid.getBoundingClientRect()
   const vr = view?.getBoundingClientRect() ?? gr
   const ox = view?.scrollLeft ?? 0
   const oy = view?.scrollTop ?? 0
+  const z = zoom > 0 ? zoom : 1
   return {
-    x0: Math.max(0, vr.left + inset - gr.left + ox),
-    x1: Math.max(0, vr.right - inset - gr.left + ox),
-    y0: Math.max(0, vr.top + inset - gr.top + oy),
-    y1: Math.max(0, vr.bottom - inset - gr.top + oy),
+    x0: Math.max(0, vr.left + inset - gr.left + ox) / z,
+    x1: Math.max(0, vr.right - inset - gr.left + ox) / z,
+    y0: Math.max(0, vr.top + inset - gr.top + oy) / z,
+    y1: Math.max(0, vr.bottom - inset - gr.top + oy) / z,
   }
 }
 
@@ -230,28 +315,239 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     onPick,
     meta,
     fallbackAgents,
+    pickedTiles,
+    hiddenTiles,
+    testingTiles,
+    onTogglePick,
+    onTest,
+    onHide,
+    onShowAll,
+    hiddenNote,
+    menuSelect,
+    menuDeselect,
+    menuTest,
+    menuRemove,
+    menuLocalOnly,
+    menuHint,
     localLabel,
     onlineLabel,
     offlineLabel,
+    meshLabel,
+    measuredLabel,
+    occludedLabel,
     emptyLabel,
     idleLabel,
     runningLabel,
     noneLabel,
+    zoom,
+    onZoom,
   } = props
 
   const [slots, setSlots] = useState<Record<string, Slot>>(readSlots)
   const [drag, setDrag] = useState<Drag | null>(null)
+  /** The card a right-click landed on, and where. Coordinates are viewport
+   *  pixels because the menu is fixed: it must not scroll with the map. */
+  const [menu, setMenu] = useState<{
+    x: number
+    y: number
+    device: PanelDevice
+    agent: string
+  } | null>(null)
   const dragRef = useRef<Drag | null>(null)
   const press = useRef<Press | null>(null)
   /** A press that turned into a drag must not also count as a click. */
   const dragged = useRef(false)
   const els = useRef(new Map<string, HTMLElement>())
   const gridRef = useRef<HTMLDivElement>(null)
+  const ghostRef = useRef<HTMLElement | null>(null)
+  const [linkLayout, setLinkLayout] = useState<LinkLayout>({
+    rects: new Map(),
+    width: 0,
+    height: 0,
+  })
+  // The card ceiling is measured from the map's viewport, so a window resize
+  // has to re-run the layout pass. The heartbeat's tick also re-renders, but a
+  // resize should not wait seconds to pull a card back inside the block.
+  const [, setResizeTick] = useState(0)
+  useEffect(() => {
+    const view = scrollerOf(gridRef.current)
+    if (!view || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => setResizeTick((v) => v + 1))
+    ro.observe(view)
+    return () => ro.disconnect()
+  }, [devices.length])
+
+  /** The wheel is bound once, so it reads the live zoom and the live callback
+   *  through refs rather than re-binding a listener on every notch. Assigned
+   *  during render, not in an effect: the measurement passes below are layout
+   *  effects, and they run before effects would have caught up. */
+  const zoomRef = useRef(zoom)
+  const onZoomRef = useRef(onZoom)
+  zoomRef.current = zoom
+  onZoomRef.current = onZoom
+  /** The scroll offset the next frame has to land on. A wheel event computes
+   *  it against the sizes that exist *before* the zoom; the effect below
+   *  applies it once the surface has been re-scaled, because a scroller
+   *  refuses an offset past the extent it had at the time. */
+  const pendingScroll = useRef<{ left: number; top: number } | null>(null)
+
+  // The wheel zooms the canvas. It is the gesture a drawing answers to, and
+  // this surface has nothing else to do with it: the map only scrolls when the
+  // fleet outgrows the pane, while a card's tile field keeps the wheel for
+  // itself whenever it has something of its own to scroll.
+  useEffect(() => {
+    const grid = gridRef.current
+    const view = scrollerOf(grid)
+    if (!grid || !view) return
+    const onWheel = (e: WheelEvent) => {
+      if (dragRef.current) return
+      // A card's tile field is a scroller of its own. It keeps the wheel while
+      // it has room to move in the direction the wheel is going; at either end
+      // the gesture chains back to the canvas, the way nested scrollers do
+      // everywhere else. Without the direction check a field already at its
+      // top would swallow every wheel-up and do nothing with it.
+      const field = (e.target as Element | null)?.closest?.('.ws-panel-bays') as HTMLElement | null
+      if (field && field.scrollHeight > field.clientHeight + 1) {
+        const room = field.scrollHeight - field.clientHeight
+        const atTop = field.scrollTop <= 0
+        const atEnd = field.scrollTop >= room - 1
+        if (!((e.deltaY < 0 && atTop) || (e.deltaY > 0 && atEnd))) return
+      }
+      // deltaMode: 0 is pixels (a notch is 100), 1 lines, 2 pages. A wheel
+      // that reports lines would otherwise move the zoom by 3/100 of a notch.
+      const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1)
+      const from = zoomRef.current
+      const to = nextZoom(from, dy)
+      // At either end of the range the wheel no longer belongs to the drawing:
+      // a gesture that keeps being swallowed while the canvas cannot zoom any
+      // further leaves a reader at 200% unable to scroll to the card below.
+      // The scroller takes it instead.
+      if (to === from) return
+      e.preventDefault()
+      const rect = view.getBoundingClientRect()
+      const g = grid.getBoundingClientRect()
+      const sx = view.scrollLeft
+      const sy = view.scrollTop
+      // Where the surface starts inside the scroller, padding included. Read
+      // from the live boxes rather than hard-coded: the map's padding is the
+      // pet's headroom and has moved once already.
+      pendingScroll.current = {
+        left: anchorScroll(sx, e.clientX - rect.left, g.left - rect.left + sx, from, to),
+        top: anchorScroll(sy, e.clientY - rect.top, g.top - rect.top + sy, from, to),
+      }
+      onZoomRef.current(to)
+    }
+    view.addEventListener('wheel', onWheel, { passive: false })
+    return () => view.removeEventListener('wheel', onWheel)
+    // The grid does not exist on the first render — the fleet arrives from the
+    // directory a beat later, and until it does this component is a sentence
+    // instead of a drawing. Binding on mount alone would leave the wheel
+    // attached to nothing for the life of the page.
+  }, [devices.length])
+
+  // Apply the anchor once the new scale is in the DOM, so the scroller accepts
+  // the offset instead of clamping it to the old (smaller) extent.
+  useLayoutEffect(() => {
+    const p = pendingScroll.current
+    if (!p) return
+    pendingScroll.current = null
+    const view = scrollerOf(gridRef.current)
+    if (!view) return
+    view.scrollLeft = p.left
+    view.scrollTop = p.top
+  }, [zoom])
+
+  const edges = useMemo(() => buildWorkspaceEdges(devices), [devices])
+  const visibleEdges = useMemo(
+    () => (selected ? edges.filter((e) => e.a === selected || e.b === selected) : []),
+    [edges, selected],
+  )
+  const linkedIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const e of visibleEdges) {
+      ids.add(e.a)
+      ids.add(e.b)
+    }
+    return ids
+  }, [visibleEdges])
+  const deviceOf = useMemo(() => new Map(devices.map((d) => [d.id, d])), [devices])
+  /** Rect → device id, so an occluded edge can name the card it passes behind.
+   *  Keyed on object identity: the layout hands out one rect object per card
+   *  per measurement and `workspaceLinkLine` reports that same object. */
+  const idByRect = useMemo(() => {
+    const byRect = new Map<PanelRect, string>()
+    for (const [id, r] of linkLayout.rects) byRect.set(r, id)
+    return byRect
+  }, [linkLayout.rects])
 
   const applyDrag = (next: Drag | null) => {
     dragRef.current = next
     setDrag(next)
   }
+
+  /** Measure only the endpoints the current selection can draw. Keeping the
+   *  rectangles in grid coordinates lets the SVG scroll with the cards; the
+   *  floating drag copy is viewport-fixed and is converted into the same
+   *  frame here. The grid is scaled by the zoom, so every box the browser
+   *  reports is divided back into the drawing's own pixels — the lines are
+   *  drawn inside the scaled frame and must not be scaled twice. */
+  const measureLinks = () => {
+    const grid = gridRef.current
+    const next: LinkLayout = { rects: new Map(), width: 0, height: 0 }
+    if (grid) {
+      const gr = grid.getBoundingClientRect()
+      const z = zoom || 1
+      // Every pane, not just the endpoints of the visible edges: a line can
+      // pass behind a pane the current selection does not connect, and
+      // occlusion is exactly that question. Measuring only the endpoints made
+      // an unconnected pane unable to block anything.
+      const ids = new Set<string>(els.current.keys())
+      for (const e of visibleEdges) {
+        ids.add(e.a)
+        ids.add(e.b)
+      }
+      for (const id of ids) {
+        const el = dragRef.current?.id === id ? ghostRef.current : els.current.get(id)
+        if (!el) continue
+        const r = el.getBoundingClientRect()
+        next.rects.set(id, {
+          x: (r.left - gr.left + grid.scrollLeft) / z,
+          y: (r.top - gr.top + grid.scrollTop) / z,
+          w: r.width / z,
+          h: r.height / z,
+        })
+      }
+      next.width = Math.max(grid.clientWidth, grid.scrollWidth)
+      next.height = Math.max(grid.clientHeight, grid.scrollHeight)
+    }
+    setLinkLayout((prev) => (sameLinkLayout(prev, next) ? prev : next))
+  }
+
+  // Layout changes that do not resize a card still move its endpoints: a
+  // drag, a restored slot, and the first flex-to-absolute pass all land here.
+  useLayoutEffect(() => {
+    measureLinks()
+  })
+
+  useEffect(() => {
+    if (visibleEdges.length === 0) return
+    const grid = gridRef.current
+    if (!grid) return
+    const observer = new ResizeObserver(measureLinks)
+    observer.observe(grid)
+    for (const id of linkedIds) {
+      const el = els.current.get(id)
+      if (el) observer.observe(el)
+    }
+    window.addEventListener('resize', measureLinks)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measureLinks)
+    }
+    // `zoom` is a dependency because measureLinks divides every box by it: a
+    // re-subscribed observer that kept the old factor would draw the edges at
+    // the previous scale until the next unrelated re-render.
+  }, [visibleEdges, linkedIds, zoom])
 
   // The drag is owned by the window, not by the panel: the panel unmounts the
   // moment it becomes the floating copy, and a pointer captured on a detached
@@ -285,11 +581,14 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         // Viewport coordinates back into the grid's own frame. The scroll
         // offset comes from the surface, not from the grid (which never
         // scrolls), and the result is pinned to the band the pointer can
-        // reach so a card can never be parked out of sight.
+        // reach so a card can never be parked out of sight. The scale is
+        // undone last: a card is stored at the size it has at 100%, so a drop
+        // made while zoomed out is the same arrangement as one at 100%.
         const gr = grid.getBoundingClientRect()
-        const band = reachableBand(grid, view, 8)
-        const rawX = cur.x - cur.grabX - gr.left + (view?.scrollLeft ?? 0)
-        const rawY = cur.y - cur.grabY - gr.top + (view?.scrollTop ?? 0)
+        const z = zoom > 0 ? zoom : 1
+        const band = reachableBand(grid, view, 8, z)
+        const rawX = (cur.x - cur.grabX - gr.left + (view?.scrollLeft ?? 0)) / z
+        const rawY = (cur.y - cur.grabY - gr.top + (view?.scrollTop ?? 0)) / z
         const x = clampInto(rawX, band.x0, band.x1, cur.w)
         const y = clampInto(rawY, band.y0, band.y1, cur.h)
         setSlots((prev) => {
@@ -345,11 +644,28 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
   useLayoutEffect(() => {
     const grid = gridRef.current
     if (!grid || dragRef.current) return
+    const z = zoom > 0 ? zoom : 1
+    // The map is a scroller and owns the padding; a card may not be taller
+    // than the band a reader can actually see. Publishing the ceiling as a
+    // custom property caps the card in CSS (header fixed, tile field scrolls
+    // inside it) instead of letting it run under the composer. The band is
+    // measured in viewport pixels and the cap is a card size, so a zoomed-out
+    // canvas may hold taller cards and a zoomed-in one holds shorter ones.
+    const view = scrollerOf(grid)
+    const panelMax = view ? Math.max(160, (view.clientHeight - 44 - 30 - 8) / z) : 0
+    if (panelMax > 0) grid.style.setProperty('--ws-panel-max', `${panelMax}px`)
     // A saved arrangement outlives the window it was made in. Pull every
     // stored card back inside the surface that exists now — a narrower
     // window, or a card stored before the band clamp existed, otherwise
     // leaves a panel parked past the right edge with no way back.
-    const maxX = Math.max(0, grid.clientWidth)
+    //
+    // The bound is the drawing's own width, not the box the zoom leaves it:
+    // the grid is laid out at 100%/z and scaled back up, so clientWidth alone
+    // would shrink every stored x by the zoom factor and persist that as the
+    // new arrangement. Height is a viewport measurement too — a card may be
+    // capped visually at any zoom, but only the 100% cap is a real layout
+    // decision.
+    const maxX = Math.max(0, grid.clientWidth * z)
     const repaired: Record<string, Slot> = {}
     let changed = false
     for (const [id, s] of Object.entries(slots)) {
@@ -361,8 +677,9 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         continue
       }
       const x = Math.min(Math.max(0, s.x), Math.max(0, maxX - s.w))
-      if (x !== s.x) changed = true
-      repaired[id] = { ...s, x }
+      const h = z === 1 && panelMax > 0 ? Math.min(s.h, panelMax) : s.h
+      if (x !== s.x || h !== s.h) changed = true
+      repaired[id] = { ...s, x, h }
     }
     if (changed) {
       setSlots(repaired)
@@ -382,33 +699,46 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
       const el = els.current.get(d.id)
       if (!el) continue
       const r = el.getBoundingClientRect()
+      // Measured on a scaled surface: back into the drawing's own pixels.
+      const rw = r.width / z
+      const rh = r.height / z
+      const h = z === 1 && panelMax > 0 ? Math.min(rh, panelMax) : rh
       next[d.id] = firstPass
-        ? { x: r.left - gr.left, y: r.top - gr.top, w: r.width, h: r.height }
-        : { x: 0, y: floor + 18, w: r.width, h: r.height }
-      floor = Math.max(floor, next[d.id]!.y + r.height)
+        ? { x: (r.left - gr.left) / z, y: (r.top - gr.top) / z, w: rw, h }
+        : { x: 0, y: floor + 18, w: rw, h }
+      floor = Math.max(floor, next[d.id]!.y + h)
     }
     if (Object.keys(next).length !== Object.keys(repaired).length) setSlots(next)
   })
 
   if (devices.length === 0) return <p class="dim ws-empty">{emptyLabel}</p>
 
+  // One panda, on one card. `is_local` can name more than one directory row
+  // (the same machine re-registered under a new runtime id, or a row filed
+  // under its hostname beside its node id), and a pet on two cards stops
+  // meaning "this is the machine you are on". The fleet is sorted local-first,
+  // so the first local row is the live one.
+  const pandaId = devices.find((d) => d.local)?.id ?? ''
+
   const bottom = Object.values(slots).reduce((m, s) => Math.max(m, s.y + s.h), 0)
+  const right = Object.values(slots).reduce((m, s) => Math.max(m, s.x + s.w), 0)
+  // The surface is scaled, not re-laid-out, so its own box has to be told how
+  // much room the scaled drawing takes: a zoomed-in canvas scrolls, a
+  // zoomed-out one leaves the map as it was.
+  const z = zoom > 0 ? zoom : 1
 
   const panel = (d: PanelDevice, ghost?: Drag) => {
     const run = runningOf(d)
-    const roster = Object.keys(d.agents ?? {})
-    const agents = roster.length > 0 ? roster : d.local ? fallbackAgents ?? [] : []
+    const roster = panelAgents(d, fallbackAgents)
+    const agents = roster.filter((cli) => !hiddenTiles.has(tileKey(d.id, cli)))
+    const hiddenHere = roster.length - agents.length
     const working = run.size > 0 || d.busy
     const slot = slots[d.id]
+    // The floating copy is wrapped in its own scale by the caller: it is
+    // positioned in viewport pixels (fixed) and drawn at the card's own size,
+    // so both the box here and the transform stay in one frame each.
     const style: JSX.CSSProperties | undefined = ghost
-      ? {
-          position: 'fixed',
-          left: `${ghost.x - ghost.grabX}px`,
-          top: `${ghost.y - ghost.grabY}px`,
-          width: `${ghost.w}px`,
-          height: `${ghost.h}px`,
-          margin: 0,
-        }
+      ? { position: 'relative', width: `${ghost.w}px`, height: `${ghost.h}px`, margin: 0 }
       : slot
         ? { position: 'absolute', left: `${slot.x}px`, top: `${slot.y}px`, width: `${slot.w}px` }
         : undefined
@@ -417,13 +747,15 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         key={d.id}
         class={`ws-panel${d.online ? '' : ' off'}${d.local ? ' self' : ''}${
           selected === d.id ? ' sel' : ''
-        }${ghost ? ' dragging' : ''}`}
+        }${linkedIds.has(d.id) ? ' linked' : ''}${ghost ? ' dragging' : ''}`}
         data-form={d.form}
         data-device={d.id}
         style={style}
         ref={
           ghost
-            ? undefined
+            ? (el: HTMLElement | null) => {
+                ghostRef.current = el
+              }
             : (el: HTMLElement | null) => {
                 if (el) els.current.set(d.id, el)
                 else els.current.delete(d.id)
@@ -446,14 +778,18 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
                 if ((e.target as Element).closest('.ws-tile')) return
                 const el = e.currentTarget as HTMLElement
                 const r = el.getBoundingClientRect()
+                // The grab offset stays in viewport pixels (the floating copy
+                // is placed in them); the size is the card's own, so a drop
+                // writes the arrangement at 100% whatever the canvas is
+                // scaled to.
                 press.current = {
                   id: d.id,
                   x: e.clientX,
                   y: e.clientY,
                   grabX: e.clientX - r.left,
                   grabY: e.clientY - r.top,
-                  w: r.width,
-                  h: r.height,
+                  w: r.width / (zoom > 0 ? zoom : 1),
+                  h: r.height / (zoom > 0 ? zoom : 1),
                 }
                 dragged.current = false
               }
@@ -492,7 +828,7 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
       >
         {/* The pet, standing on this panel's top edge. Decoration: the live
             facts are the tiles and the load readout beside them. */}
-        {d.local && (
+        {d.id === pandaId && (
           <div class={`ws-panda${working ? ' cheer' : ''}`} aria-hidden="true">
             <span class="ws-panda-sp" />
           </div>
@@ -519,26 +855,62 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
 
         <div class={`ws-panel-bays${agents.length === 0 ? ' none' : ''}`}>
           {agents.length === 0 ? (
-            <span class="ws-panel-none">{noneLabel}</span>
+            hiddenHere > 0 ? (
+              // The panel is not empty, it is folded: a machine whose every
+              // tile was removed would otherwise read as "declares no agents",
+              // which is a different — and wrong — statement.
+              <button type="button" class="ws-panel-restore" onClick={() => onShowAll(d.id)}>
+                {hiddenNote(hiddenHere)}
+              </button>
+            ) : (
+              <span class="ws-panel-none">{noneLabel}</span>
+            )
           ) : (
             agents.map((cli) => {
               const on = run.has(cli.toLowerCase())
+              const key = tileKey(d.id, cli)
+              const picked = pickedTiles.has(key)
+              const probing = testingTiles.has(key)
               // The mark carries the plate it is drawn for (`plate` in
               // format/agent-logo): near-black artwork only reads on a light
               // plate, near-white artwork only on a dark one. Same rule as the
               // roster avatars, so an agent looks identical wherever it shows.
               const logo = agentLogo(cli)
+              const state = on ? runningLabel : idleLabel
               return (
                 <button
                   key={cli}
                   type="button"
                   class="ws-tile"
                   data-run={on ? '1' : '0'}
-                  title={`${cli} · ${on ? runningLabel : idleLabel}`}
-                  aria-label={`${cli} · ${on ? runningLabel : idleLabel}`}
+                  data-picked={picked ? '1' : '0'}
+                  data-testing={probing ? '1' : '0'}
+                  title={`${cli} · ${state} · ${menuHint}`}
+                  aria-label={`${cli} · ${state}`}
+                  aria-pressed={picked}
                   onClick={(e) => {
                     e.stopPropagation()
-                    onPick(d.id)
+                    onTogglePick(key)
+                  }}
+                  onKeyDown={(e) => {
+                    // The tile is its own control, so the keys that activate a
+                    // button must do what a click on it does. Without this the
+                    // event bubbles to the panel's own Enter/Space handler,
+                    // which opens the device drawer: the same control then
+                    // behaved one way under the pointer and another under the
+                    // keyboard. Only the keys a button answers to are claimed —
+                    // Escape and the menu's own keys stay with the page.
+                    if (e.key !== 'Enter' && e.key !== ' ') return
+                    e.preventDefault()
+                    e.stopPropagation()
+                    onTogglePick(key)
+                  }}
+                  onContextMenu={(e) => {
+                    // The card's verbs live behind this; the browser's own
+                    // menu would cover them and say nothing about the agent.
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setMenu({ x: e.clientX, y: e.clientY, device: d, agent: cli })
                   }}
                 >
                   <span class={`ws-tile-plate${logo ? ` plate-${logo.plate}` : ''}`}>
@@ -566,16 +938,139 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     )
   }
 
+  const menuItems: ContextMenuItem[] = menu
+    ? [
+        {
+          id: 'pick',
+          label: pickedTiles.has(tileKey(menu.device.id, menu.agent)) ? menuDeselect : menuSelect,
+          icon: pickedTiles.has(tileKey(menu.device.id, menu.agent)) ? 'x' : 'check',
+          onSelect: () => onTogglePick(tileKey(menu.device.id, menu.agent)),
+        },
+        {
+          // A connectivity check is `<cli> --version` on this console's own
+          // machine: a peer's CLI is not ours to spawn, so the verb is there
+          // but greyed with the reason rather than silently testing the wrong
+          // box. New verbs join this array — the menu itself is data.
+          id: 'test',
+          label: menuTest,
+          icon: 'plug',
+          hint: menu.device.local ? '--version' : menuLocalOnly,
+          disabled: !menu.device.local,
+          onSelect: () => onTest(menu.device.id, menu.agent),
+        },
+        {
+          id: 'remove',
+          label: menuRemove,
+          icon: 'trash',
+          danger: true,
+          onSelect: () => onHide(menu.device.id, menu.agent),
+        },
+      ]
+    : []
+
   return (
-    <div class={`ws-panels${drag ? ' is-dragging' : ''}`}>
+    <div
+      class={`ws-panels${drag ? ' is-dragging' : ''}`}
+      // The scroll extent of a scaled drawing. `transform` is paint, not
+      // layout, so the map would otherwise think the surface still ends where
+      // it did at 100% and refuse to scroll to a card the zoom pushed out of
+      // reach.
+      style={{
+        minWidth: right > 0 ? `${right * z}px` : undefined,
+        minHeight: bottom > 0 ? `max(100%, ${(bottom + 26) * z}px)` : undefined,
+        // The grid's layout box stays at 100% size — scale is paint — so an
+        // auto-height parent would report the unscaled height and leave a
+        // zoomed-out drawing scrolling through empty space below it. Below
+        // 100% the parent takes the scaled height instead; above it the
+        // minHeight already extends the scroll extent.
+        height: bottom > 0 && z < 1 ? `${(bottom + 26) * z}px` : undefined,
+      }}
+    >
       <div
         class="ws-panels-grid"
         ref={gridRef}
-        style={bottom > 0 ? { minHeight: `${bottom + 26}px` } : undefined}
+        style={{
+          transform: `scale(${z})`,
+          // The wrapping row is measured in the drawing's pixels, so the pane
+          // offers the zoomed-out canvas more of them (and a zoomed-in one
+          // fewer) — a tidy row at 50% should hold more machines, not the
+          // same number at half size.
+          width: `calc(100% / ${z})`,
+          ...(bottom > 0 ? { minHeight: `${bottom + 26}px` } : {}),
+        }}
       >
+        {visibleEdges.length > 0 && linkLayout.width > 0 && linkLayout.height > 0 && (
+          <svg
+            class="ws-panel-links"
+            width={linkLayout.width}
+            height={linkLayout.height}
+            viewBox={`0 0 ${linkLayout.width} ${linkLayout.height}`}
+            aria-hidden="true"
+          >
+            {visibleEdges.map((e) => {
+              const a = linkLayout.rects.get(e.a)
+              const b = linkLayout.rects.get(e.b)
+              if (!a || !b) return null
+              const line = workspaceLinkLine(a, b, linkLayout.rects.values())
+              if (!line) return null
+              // `blockedBy` is a layout object, not an SVG attribute — spread
+              // only the geometry onto the elements.
+              const geometry = { x1: line.x1, y1: line.y1, x2: line.x2, y2: line.y2 }
+              const names = `${deviceOf.get(e.a)?.name ?? e.a} ↔ ${deviceOf.get(e.b)?.name ?? e.b}`
+              const blockerId = line.blockedBy ? idByRect.get(line.blockedBy) : undefined
+              const blockerName = blockerId ? deviceOf.get(blockerId)?.name ?? blockerId : ''
+              const title = [
+                names,
+                e.kind === 'mesh' ? meshLabel : measuredLabel,
+                e.rtt > 0 ? `${e.rtt} ms` : '',
+                e.transport,
+                blockerName ? occludedLabel.replaceAll('{name}', blockerName) : '',
+              ]
+                .filter(Boolean)
+                .join(' · ')
+              return (
+                <g
+                  class={`ws-panel-link-group ${e.kind}${blockerName ? ' occluded' : ''}`}
+                  key={`${e.a}-${e.b}`}
+                >
+                  <line class="ws-panel-link-halo" {...geometry} />
+                  <line class={`ws-panel-link ${e.kind}`} {...geometry} />
+                  <circle class="ws-panel-link-dot" cx={line.x1} cy={line.y1} r={3} />
+                  <circle class="ws-panel-link-dot" cx={line.x2} cy={line.y2} r={3} />
+                  <line class="ws-panel-link-hit" {...geometry}>
+                    <title>{title}</title>
+                  </line>
+                </g>
+              )
+            })}
+          </svg>
+        )}
         {devices.filter((d) => !drag || d.id !== drag.id).map((d) => panel(d))}
       </div>
-      {drag && devices.some((d) => d.id === drag.id) && panel(devices.find((d) => d.id === drag.id)!, drag)}
+      {/* The carried card: fixed in viewport pixels so it can leave the map's
+          box, scaled on its own so it is the same size as the card it was
+          lifted from — the copy is outside the zoomed frame and would
+          otherwise snap back to 100%. */}
+      {drag && devices.some((d) => d.id === drag.id) && (
+        <div
+          class="ws-panel-ghost"
+          style={{ left: `${drag.x - drag.grabX}px`, top: `${drag.y - drag.grabY}px` }}
+        >
+          <div style={{ transform: `scale(${z})`, transformOrigin: '0 0' }}>
+            {panel(devices.find((d) => d.id === drag.id)!, drag)}
+          </div>
+        </div>
+      )}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          title={menu.agent}
+          sub={menu.device.name}
+          items={menuItems}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   )
 }

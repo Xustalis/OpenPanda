@@ -23,6 +23,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -36,6 +37,7 @@ const (
 	modeIdle
 	modeAsking
 	modeApproving
+	modeClarifying // pre-execution choice card (entry clarify round)
 	modeExec
 	modeList        // Keyboard navigable list (/sessions, /projects, /resume)
 	modeModelPanel  // Model management panel
@@ -54,6 +56,7 @@ const (
 	listResume
 	listTasks
 	listTeam
+	listRewind
 )
 
 type wizardStep int
@@ -105,11 +108,23 @@ type tuiModel struct {
 	// tui_mouse.go.
 	x10Payload int
 
-	stream      *askStream
-	exec        *commandExec
-	execGen     uint64
-	started     time.Time
-	chatHistory *chatHistory
+	stream  *askStream
+	exec    *commandExec
+	execGen uint64
+	started time.Time
+	// liveInputTokens/liveOutputTokens mirror the engine's ProgressUsage
+	// events: the ask's cumulative consumption while it runs. Zero before the
+	// first event and reset at every turn start.
+	liveInputTokens  int64
+	liveOutputTokens int64
+	// liveTokensEst is set while the output share of the total is a
+	// character-based estimate; the status row prefixes it with "~".
+	liveTokensEst bool
+	// lastActivity is the newest delta, reasoning or progress timestamp. The
+	// status row reports the quiet time from it, so a working turn reads
+	// differently from a stalled one.
+	lastActivity time.Time
+	chatHistory  *chatHistory
 
 	// team mirrors the active conversation's roster for the status row; the
 	// source of truth stays in the session (or the bare conversation's file)
@@ -228,15 +243,23 @@ type tuiModel struct {
 	wizardHeaders   string // extra request headers as a JSON object, raw text
 	wizardAlias     string // display name in the register
 	wizardEditAlias string // alias being edited ("" = adding a new entry)
+	// wizardEditOrigin is the row the editor opened on. It is the row a save
+	// replaces — by identity, not by name — because a config can hold two
+	// accounts under one name and "the row called ds" would be a coin flip.
+	wizardEditOrigin config.ModelConfig
 
-	form         []mfield // the single-screen editor's rows
-	formFocus    int      // focused row
-	formErr      string   // validation error shown under the form
-	formTesting  bool     // connectivity probe in flight
-	formTestErr  string   // non-empty once the probe failed
-	formFetching bool     // /models catalogue fetch in flight
-	formFetchErr string   // fetch failure shown under the form
-	formPicking  bool     // fetched-models picker overlay is up
+	form      []mfield // the single-screen editor's rows
+	formFocus int      // focused row
+	formErr   string   // validation error shown under the form
+	// panelNotice carries a one-off failure from a panel action (deleting the
+	// last model) into the panel title, so the error is visible instead of
+	// being dropped by a discarded error return.
+	panelNotice  string
+	formTesting  bool   // connectivity probe in flight
+	formTestErr  string // non-empty once the probe failed
+	formFetching bool   // /models catalogue fetch in flight
+	formFetchErr string // fetch failure shown under the form
+	formPicking  bool   // fetched-models picker overlay is up
 
 	// Panel state: the inline connectivity probe on the highlighted entry.
 	panelTesting       bool
@@ -245,7 +268,10 @@ type tuiModel struct {
 	panelTestErr       string
 	panelTestDur       time.Duration
 	confirmDeleteModel bool
-	pendingDeleteModel string
+	// pendingDeleteModel is the row awaiting confirmation — the row itself,
+	// not its name: two accounts of one vendor share every field a name is
+	// derived from, so the name cannot say which one to drop.
+	pendingDeleteModel config.ModelConfig
 
 	// lastInterrupt timestamps the previous Esc/Ctrl-C of a turn.
 	lastInterrupt time.Time
@@ -271,6 +297,10 @@ type tuiModel struct {
 	// confirmYes is the slash line the exec pump runs when the user confirms.
 	confirmText string
 	confirmYes  string
+	// confirmRun is the in-loop alternative to confirmYes: an action that has
+	// to run on the Update goroutine (a store write followed by a repaint)
+	// rather than through the exec pump. When set it wins.
+	confirmRun func(*tuiModel) (tea.Model, tea.Cmd)
 
 	// pendingPrompt is the user text of the in-flight ask, kept so the turn can
 	// be recorded into conversation memory when it completes.
@@ -286,6 +316,10 @@ type tuiModel struct {
 	thought          []string
 	thoughtDone      bool
 	expandThought    bool
+	// thoughtStarted is when the first reasoning chunk arrived. The folded
+	// thought line reports it so "thinking" carries a clock, the way a tool
+	// call carries its own elapsed time.
+	thoughtStarted time.Time
 	// expandHints unfolds the troubleshooting tail on committed error blocks
 	// (Ctrl+E). Like expandThought it is one flag for every block — AltScreen
 	// repaints the transcript, so a toggle redraws what is already committed.
@@ -306,6 +340,11 @@ type tuiModel struct {
 	// pending holds a task the engine parked for tier-2 approval.
 	pending *askengine.Result
 
+	// pendingQuestion holds the pre-execution clarify round the engine is
+	// blocked on. It is cleared when the last question is answered (the ask
+	// resumes) or when the user cancels the round.
+	pendingQuestion *clarifyPrompt
+
 	// pendingWorkDir is the tree the pending task resumes in once approved. A
 	// card raised by this turn carries the turn's worktree; a card raised by
 	// the watcher for out-of-band work leaves it empty, so the resume uses the
@@ -322,6 +361,25 @@ type tuiModel struct {
 
 	animTick int
 	quitting bool
+
+	// side is the /side channel's state (see tui_side.go), nil until first
+	// opened and kept across hide/show. sideVisible decides whether the frame
+	// and the keyboard belong to the channel or to the main thread; the two
+	// are independent on purpose, so a side question can be asked, parked, and
+	// returned to while the main turn keeps running.
+	side        *sideState
+	sideVisible bool
+
+	// sidebar is the task rail (see tui_sidebar.go): the thread's work as a
+	// side column. Closed by default — the transcript is the default reading
+	// surface, and the rail is for the moments a fan-out makes it unclear.
+	sidebar sidebarState
+
+	// layout records where the last painted frame put each committed block, so
+	// a click on the rail can scroll the transcript to it. Shared through a
+	// pointer for the same reason scrollLimit is: View is a value method that
+	// can publish but cannot write back.
+	layout *transcriptLayout
 }
 
 // pulseStar is the thinking spinner: a star that swells and shrinks in place
@@ -414,8 +472,16 @@ func newTUIModel(r *repl) tuiModel {
 	sp.Style = th.accent
 
 	cHist := &chatHistory{}
-	if r.convoLen() > 0 {
-		turns := r.convoNow()
+	// The sitting's conversation is the bound thread (auto-resumed at launch or
+	// /resume-d); the bare conversation is the store-less fallback. Both replay
+	// through the same folding so a long thread opens on its tail.
+	var turns []entry.Turn
+	if sess := r.boundSession(); sess != nil && len(sess.Turns) > 0 {
+		turns = sessionTurnEntries(sess)
+	} else if r.convoLen() > 0 {
+		turns = r.convoNow()
+	}
+	if len(turns) > 0 {
 		const maxTurns = 10
 		if len(turns)/2 > maxTurns {
 			cHist.blocks = append(cHist.blocks, block{
@@ -453,6 +519,7 @@ func newTUIModel(r *repl) tuiModel {
 		activity:    &activityCache{},
 		liveRC:      &liveRenderCache{},
 		welcomeC:    &welcomeCache{},
+		layout:      &transcriptLayout{},
 	}
 }
 

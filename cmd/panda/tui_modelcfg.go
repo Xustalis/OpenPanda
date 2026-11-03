@@ -836,9 +836,9 @@ func (m tuiModel) modelPanelView() string {
 	// replaces it while a removal is being confirmed.
 	lines = append(lines, "")
 	lines = append(lines, "  "+m.th.muted.Render(strings.Repeat(m.th.glyph("─", "-"), min(w-4, 72))))
-	if m.confirmDeleteModel && m.pendingDeleteModel != "" {
+	if m.confirmDeleteModel && modelRowConfigured(m.pendingDeleteModel) {
 		lines = append(lines, "  "+m.th.warn.Bold(true).Render(
-			m.th.glyph("⚠", "!")+" "+i18n.Tf(m.loc, "tui.model.deleteConfirm", "alias", m.pendingDeleteModel)))
+			m.th.glyph("⚠", "!")+" "+i18n.Tf(m.loc, "tui.model.deleteConfirm", "alias", modelRowName(m.pendingDeleteModel))))
 		lines = append(lines, "  "+m.th.muted.Render(i18n.T(m.loc, "tui.mpanel.confirmHints")))
 	} else if it, ok := m.selectionList.Selected(); ok {
 		if mc, ok2 := it.Value.(config.ModelConfig); ok2 {

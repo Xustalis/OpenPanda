@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/Xustalis/OpenPanda/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -174,7 +173,7 @@ func loadDocForUpdate(path string) (root *yaml.Node, top *yaml.Node, err error) 
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, nil, err
 		}
-		if werr := util.WriteFileAtomic(path, out, 0o600); werr != nil {
+		if werr := writeConfigFile(path, out); werr != nil {
 			return nil, nil, werr
 		}
 		root = &yaml.Node{}
@@ -197,7 +196,7 @@ func writeDoc(path string, root *yaml.Node) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
+	if err := writeConfigFile(path, out); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)

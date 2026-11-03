@@ -11,7 +11,7 @@
 @import './styles/profile.css';
 @import './styles/shell.css';
 @import './styles/chat.css';
+@import './styles/dock.css';
 @import './styles/graph.css';
 @import './styles/workspace.css';
 @import './styles/detail.css';
-@import './styles/todos.css';

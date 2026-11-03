@@ -38,7 +38,7 @@ export const EN = {
   'meta.desc':
     'OpenPanda is a local-first graph orchestration kernel. It does not replace Claude Code or Codex — it wires the agents already on your machines into one network, with intent, decomposition, routing, supervision and acceptance all kept local.',
   'meta.ogDesc':
-    'A local-first graph orchestration kernel: Claude Code, Codex and every device you own, wired into one network that schedules, supervises and accepts its own work. Zero cloud relay.',
+    'A local-first graph orchestration kernel: Claude Code, Codex and every device you own, wired into one network that schedules, supervises and accepts its own work. No vendor relay.',
   'meta.ogAlt': 'OpenPanda — the project title over deep space and the limb of Earth',
 
   skip: 'Skip to content',
@@ -55,7 +55,9 @@ export const EN = {
   'nav.why': 'Four Walls',
   'nav.palette': 'Quick jump (⌘K)',
   'nav.menu': 'Open menu',
+  'nav.primary': 'Primary navigation',
   'menu.label': 'INDEX',
+  'menu.aria': 'Navigation',
 
   /* ── hero ──────────────────────────────────────────────────────────── */
   'hero.kicker': 'LOCAL-FIRST ORCHESTRATION KERNEL',
@@ -133,7 +135,7 @@ export const EN = {
   's3.term.classify': 'classify intent → <b>task.graph</b>',
   's3.term.replan': 'artifact missing → re-dispatched with cause',
   's3.caption':
-    'Two views of the same run: the console shows state and approvals, the terminal shows routing and acceptance. Try switching.',
+    'An interface sketch: the console shows state and approvals, the terminal shows routing and acceptance. Both views describe the same run.',
   's3.flow1.t': 'Read the intent',
   's3.flow1.d':
     'First decide whether this is chat, a lookup, or real work. Only the third goes further.',
@@ -206,7 +208,7 @@ export const EN = {
   's6.stat2': 'agent adapters',
   's6.stat3': 'automated tests',
   's6.stat4': 'resident memory',
-  's6.stat5': 'cloud relay',
+  's6.stat5': 'vendor relay',
   's6.stat6': 'release targets',
   's6.bound.label': 'KNOWN BOUNDARIES',
   's6.boundaries':
@@ -251,7 +253,7 @@ export const EN = {
     'Desktop shell (tray residency, global hotkeys, self-update), dense mesh layer, honest status reporting.',
   's8.m4.state': 'Planned',
   's8.note':
-    'The one-liner resolves the latest stable (v0.1.3); to install a specific version, add --version.',
+    'The one-liner resolves the latest stable (v0.1.3); to install a specific version, add --version to the installer script (or -Version on Windows).',
 
   /* ── 09 · licensing ────────────────────────────────────────────────── */
   'lic.title': 'Open source,<br>with the price in plain sight.',
@@ -260,7 +262,7 @@ export const EN = {
   'lic.c1.flag': 'Default path',
   'lic.c1.desc': 'Personal use, study, internal tools, further development.',
   'lic.c1.l1': 'All source and prebuilt artifacts',
-  'lic.c1.l2': '10 agent adapters, growing',
+  'lic.c1.l2': '11 agent adapters, growing',
   'lic.c1.l3': 'Modify freely; distribute changes under the same licence',
   'lic.c1.l4': 'GitHub Issues support',
   'lic.c1.cta': 'Start installing <span aria-hidden="true">→</span>',
@@ -294,16 +296,16 @@ export const EN = {
     'Those are orchestration frameworks; they freeze how to think — how nodes, edges and state machines are written. OpenPanda freezes relational facts: identity, authorisation, boundary, lifecycle. It does not write agents for you, it wires the agents you already installed into a network that can be routed, supervised and accepted.',
   'faq.q2.q': 'Does it need a GPU or extra model quota?',
   'faq.q2.a':
-    'No GPU. Routing, supervision and acceptance all use the model provider you already configured — local model or API, either works. The daemon sits at about 20MB resident and is nearly idle on CPU.',
+    'No GPU. Routing, supervision and acceptance all use the model provider you already configured — local model or API, either works. The daemon sits at about 40MB resident when idle and barely touches the CPU.',
   'faq.q3.q': 'Does my data pass through your servers?',
   'faq.q3.a':
     'No, and there are no “our servers”. Nodes connect peer to peer, session content is AEAD-encrypted and clamped hop by hop against the three trust tiers. When the link drops, DTN store-and-forward carries it until the link returns.',
   'faq.q4.q': 'Which platforms and agents are supported?',
   'faq.q4.a':
-    'Six release targets: macOS, Linux and Windows × amd64 / arm64, plus a lite-linux variant. Ten adapters today — Claude Code, Codex, Antigravity, OpenCode, Grok Build, Hermes, OpenClaw, Pi, DeepSeek Harness, and a generic one that takes any headless CLI.',
+    'Six release targets: macOS, Linux and Windows × amd64 / arm64, plus a lite-linux variant. Eleven adapters today — Claude Code, Codex, Antigravity, OpenCode, Grok Build, Hermes, OpenClaw, Pi, DeepSeek Harness, ZCode, and a generic one that takes any other headless CLI.',
   'faq.q5.q': 'Can I use it in production?',
   'faq.q5.a':
-    'v0.1.3 “Constellation” is the current cut of the release-grade line (that line went release-grade at v0.1.0) and holds up day to day. A single machine, a three-machine mesh, and a real cross-network multi-hop (Mac → relay → cloud host, 3 MiB project tree hash identical) all run; self-use and internal tooling are fine, but exposing it to the public is not advised yet. What is unfinished is listed item by item in <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a>: UPnP/NAT-PMP port mapping, source-signature convergence for punch and directory frames, and cross-node hello replay (protocol-level, still open).',
+    'v0.1.3 “Constellation” is the current cut of the release-grade line (that line went release-grade at v0.1.0) and holds up day to day. A single machine, a three-machine mesh, and a real cross-network multi-hop (Mac → relay → cloud host, 3 MiB project tree hash identical) all run; self-use and internal tooling are fine, but exposing it to the public is not advised yet. What is unfinished is listed item by item in <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a>: UPnP/NAT-PMP port mapping, source-signature convergence for punch and directory frames, and the daemon→panel mesh-metrics IPC.',
   'faq.q6.q': 'Is it free? How does licensing work?',
   'faq.q6.a':
     'Personal, study and internal company use cost nothing. Only when you distribute or host a modified version does <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL</a> require you to open your changes; if you would rather not, that is when a commercial licence comes in — just <a href="mailto:fing2024@outlook.com">email</a>.',
@@ -318,13 +320,14 @@ export const EN = {
   's9.label': 'LIFTOFF',
   's9.title': 'One command,<br>ignition.',
   's9.note':
-    'The installer picks the artifact for your platform and architecture, verifies <span class="nowrap">SHA-256</span>, unpacks it and writes it into PATH. Then run <b>panda init</b> once. It installs the latest stable by default; add <b>--version</b> to pin a specific one.',
+    'The installer picks the artifact for your platform and architecture, verifies <span class="nowrap">SHA-256</span>, unpacks it and writes it into PATH. Then run <b>panda init</b> once. It installs the latest stable by default; pin a version with <b>--version</b> on macOS / Linux, or <b>-Version</b> on Windows.',
   's9.tab.unix': 'macOS / Linux',
   's9.copy': 'Copy',
   's9.s1': 'Initialise the node, model provider and capability card.',
   's9.s2': 'Enter the interactive TUI console.',
   's9.s3': 'One-shot: answer, tool call, or dispatch.',
-  's9.license': 'AGPL-3.0-or-later · commercial licence · terms of use',
+  's9.license':
+    '<a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0-or-later</a> · <a href="https://github.com/Xustalis/OpenPanda/blob/main/COMMERCIAL.md" target="_blank" rel="noopener">Commercial licence</a> · <a href="https://github.com/Xustalis/OpenPanda/blob/main/TERMS.md" target="_blank" rel="noopener">Terms of use</a>',
   's9.star': 'View / star on GitHub ↗',
   's9.all': 'All archives and checksums ↗',
 

@@ -4,20 +4,21 @@
 
 Two regressions this guards, both invisible to unit tests:
 
-  1. A failed bare-mode turn must persist its user+error pair into the convo
-     file (tui_turn.go onDone captures pendingPrompt before resetLive wipes
+  1. A failed turn must persist its user+error pair. A sitting binds an
+     implicit session on its first prompt, so the pair lands in the sessions
+     store (tui_turn.go onDone captures pendingPrompt before resetLive wipes
      it — the order was once reversed and the pair silently vanished, leaving
      /history and the next launch with no trace of the attempt).
   2. Exiting the alternate screen must not leave the user guessing where the
-     conversation went: a bare chat prints a "saved / reloads next time"
-     note, a bound session prints its id with the /resume hint — and the
-     terminal is left clean (1049l restore, kitty flags popped, 1007 off).
+     conversation went: the note names the bound session with its /resume
+     hint and is printed after the screen is restored — and the terminal is
+     left clean (1049l restore, kitty flags popped, 1007 off).
 
 The model endpoint is deliberately unreachable (127.0.0.1:1, retries off), so
 every submitted turn fails fast and lands in the error path — exactly the
-turn whose persistence this checks. All state (db, convo, history) goes into
-a throwaway temp dir via --config and XDG_STATE_HOME; the developer's real
-CLI state is never touched.
+turn whose persistence this checks. All state (db, sessions, history) goes
+into a throwaway temp dir via --config and XDG_STATE_HOME; the developer's
+real CLI state is never touched.
 
 Usage: PANDA_BIN=/path/to/panda scripts/tui-exit-pty-check.py
 Exit code 0 = every check holds.
@@ -167,11 +168,20 @@ def run(cfg, tmp):
     return b"".join(out), rc
 
 
-def convo_files(tmp):
-    d = os.path.join(tmp, "openpanda", "conversations")
-    if not os.path.isdir(d):
-        return []
-    return [os.path.join(d, n) for n in os.listdir(d) if n.endswith(".json")]
+def persisted_files(tmp):
+    """Every conversation record the run could have written.
+
+    The sitting binds an implicit session on its first prompt, so turns land
+    in the sessions store; the legacy bare-convo directory only holds a
+    pre-session sitting or the import of one.
+    """
+    files = []
+    for rel in (("sessions",), ("openpanda", "conversations")):
+        d = os.path.join(tmp, *rel)
+        if os.path.isdir(d):
+            files += [os.path.join(d, n) for n in sorted(os.listdir(d))
+                      if n.endswith(".json")]
+    return files
 
 
 def report(title, checks, failures):
@@ -194,19 +204,28 @@ def main():
     blob, rc = run(cfg, tmp)
     text = ANSI_RE.sub(b"", blob).decode("utf-8", "replace")
 
-    files = convo_files(tmp)
-    convo = ""
-    for f in files:
+    persisted = ""
+    for f in persisted_files(tmp):
         with open(f, encoding="utf-8") as fh:
-            convo += fh.read()
+            persisted += fh.read()
+
+    # The note belongs to the shell that gets the terminal back: printed before
+    # the last 1049l it would be erased with the alternate screen.
+    restored_at = blob.rfind(b"\x1b[?1049l")
+    after_exit = ""
+    if restored_at >= 0:
+        after_exit = ANSI_RE.sub(b"", blob[restored_at:]).decode("utf-8", "replace")
 
     report("exit visibility and failed-turn persistence", [
         ("TUI entered the alternate screen (1049h)", b"\x1b[?1049h" in blob),
-        ("alt screen restored on exit (1049l)", b"\x1b[?1049l" in blob),
-        ("failed turn persisted the user prompt into convo", "ping turn" in convo),
-        ("failed turn persisted the marked error side", "\\u26a0" in convo or "⚠" in convo),
+        ("alt screen restored on exit (1049l)", restored_at >= 0),
+        ("failed turn persisted the user prompt into the session store",
+         "ping turn" in persisted),
+        ("failed turn persisted the marked error side",
+         "\\u26a0" in persisted or "⚠" in persisted),
         ("model error rendered in the configured locale (en)", "cannot reach the model service" in text),
-        ("exit note printed on the normal screen ('chat saved')", "chat saved" in text),
+        ("exit note names the saved session on the normal screen",
+         " saved" in after_exit and "/resume" in after_exit),
         ("kitty keyboard flags popped on exit", b"\x1b[<u" in blob),
         ("process exited cleanly (rc=%s)" % rc, rc == 0),
     ], failures)

@@ -401,9 +401,19 @@ func splitTeamNames(raw string) []string {
 // wins; --continue inherits the bare conversation's persisted pick, so a team
 // chosen in the terminal keeps binding the same thread from scripts.
 func resolveAskTeam(flag string, inherit bool) ([]string, error) {
+	var team []string
+	if inherit {
+		team = loadBareTeam()
+	}
+	return resolveAskTeamWith(flag, team)
+}
+
+// resolveAskTeamWith is resolveAskTeam for callers that already resolved the
+// inherited roster — a session thread's Team, rather than the bare file.
+func resolveAskTeamWith(flag string, inheritTeam []string) ([]string, error) {
 	names := splitTeamNames(flag)
-	if len(names) == 0 && inherit {
-		names = loadBareTeam()
+	if len(names) == 0 {
+		names = inheritTeam
 	}
 	if len(names) == 0 {
 		return nil, nil

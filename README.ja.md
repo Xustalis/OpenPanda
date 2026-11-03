@@ -11,8 +11,8 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/プラットフォーム-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/常駐メモリ-~20MB%20RSS-brightgreen)
-![Local First](https://img.shields.io/badge/クラウド依存-ゼロ%20(完全ローカル)-success)
+![Memory](https://img.shields.io/badge/常駐メモリ-~40MB%20RSS-brightgreen)
+![No Cloud Relay](https://img.shields.io/badge/クラウド中継-なし-success)
 
 ---
 
@@ -52,9 +52,19 @@
 
 ---
 
+## 🆕 v0.1.4 で入るもの
+
+- **実行はワークスペースから始まる** — すべての agent タスクに、そのツリーの決定論的な地図（git の状態、構成、主要ファイル、プロジェクト自身のビルド/検証コマンド）が付き、完了判定は実際に実行されたコマンドを見てから「完了」を受け入れます。
+- **推測する前に聞く** — 入口モデルはタスク作成前に上限付きの選択式質問を出せ、実行中の agent も同じ構造化質問を使えます。TUI、コンソール、`panda approve` のいずれでも回答できます。
+- **サイドチャネルと巻き戻し** — `/side`（別名 `/btw`）はスレッドの横に読み取り専用の会話を開きます。完了した回答ごとにチェックポイントが残り、`/rewind` で復元できます。
+- **agent の成果を読む** — 返信内のワークスペースパスはコンソールでクリックでき、ターミナルでは `panda read path:line`。タスク成果物は分離された第二の origin でプレビューされます。
+- **スレッドの未完了作業を一望** — TUI の Ctrl+B とコンソールヘッダーのタスクレールが、実行中、あなたの対応待ち、キューを並べます。
+- **統制されたライフサイクルフック** — `task_submitted` / `task_started` / `task_done` / `task_failed` / `task_review` で自分のコマンドを実行できます。環境は許可制、コマンドは tier ゲートを通り、実行ごとに監査行が残ります。
+
 ## 🌟 主な機能と特徴
 
 ### 1. 🌐 異種マルチデバイスの P2P 協調
+- **マルチデバイス対応（v0.1.3 まで提供済み）**: セッションごとの AEAD、Bluetooth 式ペアリング、信頼ティア、マルチホップ中継、パス範囲付きレーンと隔離ワークツリーによる同一プロジェクトの並列実行。
 - **LAN 自動発見 + Bluetooth 式ペアリング**: ノードは LAN 上で互いを発見し、フィンガープリント確認で准入。`panda pair` は両端で照合する短いコードでデバイスを加入させ、`panda nodes verify` が各ピアの Ed25519 鍵を記録。
 - **動的能力カード**: 各ノードのハードウェア仕様（CPU、GPU、RAM、OS）と利用可能なツールを自律検知。
 - **インテリジェントなタスク配分**: 実測容量にもとづき、重いビルドは強力なサーバーへ、センサー操作はエッジボードへ自動ルーティング。`panda nodes drain` でメンテナンス退避も可能。
@@ -67,7 +77,7 @@
 - **トラストゾーン**: 各ピアはオペレーター設定の信頼ティア（`panda nodes trust <id> mesh|guarded|open`）を持ち、委譲タスクがそのピアへ公開してよい範囲と、そのピア発の受入タスクの准入を制限します。表示コンテンツはエンドツーエンドで mesh 限定——信頼を降格すると転送中の画面送信も遮断されます。
 
 ### 2. 🤖 あらゆるエージェントの統括 ＆ 自動フォールバック
-- **主要エージェント対応**: 十種のアダプターを同梱（Claude Code、OpenAI Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、ZCode、OpenClaw）に加え、それ以外を受け止める generic ブリッジとローカルシェルに対応。
+- **主要エージェント対応**: 専用アダプターは10種類（Claude Code、OpenAI Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、OpenClaw、ZCode）。その他の任意のヘッドレス CLI は設定可能な generic ブリッジで接続できます。
 - **マルチモデルレジストリと自動フォールバック**: `panda model add|switch|test` がヘルスブレーカー付きで複数プロバイダーを管理。API 残高不足や 401/403 の資格情報失効時、設定済みの代替モデルを自動注入してタスクを完遂。
 - **マルチハーネス実行**: `panda ask --agents a,b --mode parallel` が一つの指示を plan として複数エージェントに送り、それぞれの結果を回収。
 - **完全透明な実行トレース**: Bash コマンド、ファイル編集、ツール呼び出しをリアルタイムにターミナルやブラウザへ表示。
@@ -96,7 +106,7 @@
 - **`panda rpc`**（実験的）: `status`・ストリーミング `ask`・`session.*` を提供する NDJSON-over-stdio 埋め込み面。`scripts/panda_rpc.py` が最小の参照クライアント。
 - **サブスクリプション OAuth**（実験的）: `panda auth login anthropic` が PKCE で Claude Pro/Max をサインインし、トークンを透過リフレッシュ。
 
-### 6. 🪶 超軽量（常駐メモリ約 20MB）
+### 6. 🪶 超軽量（アイドル時常駐メモリ約 40MB）
 - 単一の純 Go 静的バイナリ（Pure Go SQLite WAL モード）。
 - 20 ドルの SBC（Raspberry Pi）からハイエンドサーバーまで軽快に常駐動作。
 

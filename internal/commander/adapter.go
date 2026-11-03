@@ -180,6 +180,27 @@ func Restricted(ctx context.Context) bool {
 	return v
 }
 
+// authorizedKey carries the operator's tier-2 consent into the adapter
+// request. It is set on the run context, not the request the caller writes,
+// so the runAdapter test seam's signature stays unchanged.
+type authorizedKey struct{}
+
+// WithAuthorized tells the adapter that a human consented to this run's
+// irreversible operations. An adapter that gates its own tool calls (claude
+// --permission-prompts none auto-denies anything its permission mode does not
+// allow) lifts that posture only when this is set — otherwise an approval
+// from OpenPanda can never reach the CLI, and the task parks in review again
+// with the same question (issue #165).
+func WithAuthorized(ctx context.Context) context.Context {
+	return context.WithValue(ctx, authorizedKey{}, true)
+}
+
+// Authorized reports whether a human consented to this run's operations.
+func Authorized(ctx context.Context) bool {
+	v, _ := ctx.Value(authorizedKey{}).(bool)
+	return v
+}
+
 // AdapterSupportsRestricted reports whether the named adapter can honor a
 // read-only run. The answer comes from the agent registry's capability
 // declaration (Capabilities.SupportsRestricted), not a local table, so the
@@ -265,19 +286,6 @@ func TaskID(ctx context.Context) string {
 	return ""
 }
 
-// systemPromptKey carries the adapter-level system-prompt rider
-// (--append-system-prompt) without widening the runAdapter seam.
-type systemPromptKey struct{}
-
-// WithSystemPrompt attaches the static protocol/system rider text the
-// adapter passes to the CLI's append-system-prompt flag. Empty is a no-op.
-func WithSystemPrompt(ctx context.Context, text string) context.Context {
-	if text == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, systemPromptKey{}, text)
-}
-
 // resultSchemaKey carries the JSON Schema a run's result validates against.
 type resultSchemaKey struct{}
 
@@ -302,18 +310,6 @@ func WithMCPConfig(ctx context.Context, doc string) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, mcpConfigKey{}, doc)
-}
-
-// effortKey carries the per-task reasoning-effort level to the adapter.
-type effortKey struct{}
-
-// WithEffort attaches a reasoning-effort level (e.g. "high"); adapters
-// without an effort flag ignore it. Empty is a no-op.
-func WithEffort(ctx context.Context, effort string) context.Context {
-	if effort == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, effortKey{}, effort)
 }
 
 // complexityKey carries the task's 0–1 complexity score down to the adapter
@@ -426,6 +422,44 @@ func AgentEvents(ctx context.Context) AgentEventFunc {
 	return nil
 }
 
+// toolCounter tracks tool calls that have started but whose result has not
+// arrived yet. An agent inside a tool call is opaque by design — a build, a
+// test suite, a package install or a long shell command can legitimately
+// produce no output for far longer than the silence limit — so the silence
+// watchdogs treat "a tool is in flight" as activity to wait on, bounded by
+// the hard timeout, rather than as a wedge to kill. The counter is shared
+// between the stderr parser (which sees the events) and the watchdog (which
+// reads it).
+type toolCounter struct{ inFlight atomic.Int64 }
+
+func (c *toolCounter) started() {
+	if c != nil {
+		c.inFlight.Add(1)
+	}
+}
+
+// finished decrements without going negative: adapters may emit a tool_result
+// without a matching tool_use (a resumed session, a dropped event), and a
+// stuck negative counter would re-enable the silence kill on the next call.
+func (c *toolCounter) finished() {
+	if c == nil {
+		return
+	}
+	for {
+		n := c.inFlight.Load()
+		if n <= 0 {
+			return
+		}
+		if c.inFlight.CompareAndSwap(n, n-1) {
+			return
+		}
+	}
+}
+
+func (c *toolCounter) active() bool {
+	return c != nil && c.inFlight.Load() > 0
+}
+
 // progressWriter splits an adapter's stderr stream: {"type":"progress",…}
 // lines go to the compact-note sink (if any), {"type":"event",…} lines go
 // to the structured transcript sink; everything else is retained for
@@ -436,7 +470,8 @@ type progressWriter struct {
 	capture    executil.Capture
 	sink       ProgressFunc
 	evSink     AgentEventFunc
-	onActivity func() // set before Start; read-only afterwards
+	tools      *toolCounter // nil when the caller does not need tool tracking
+	onActivity func()       // set before Start; read-only afterwards
 	// onOutput fires only when the CLI itself speaks — a non-protocol stderr
 	// line or a real agent event. The adapter's own spawn bookkeeping and
 	// silence heartbeats prove the process is alive (onActivity) but not that
@@ -576,6 +611,19 @@ func (w *progressWriter) event(b []byte) {
 	}
 	if err := json.Unmarshal(b, &ev); err != nil || ev.Ev == "" {
 		return
+	}
+	// Tool tracking drives the silence watchdogs: a real tool call is opaque
+	// work whose silence must not be mistaken for a wedge. The adapter's
+	// {"phase":"spawn"} bookkeeping also travels as a tool_use event, but it
+	// announces the task hand-off, not a tool that will ever return — counting
+	// it would suppress the silence kill for the whole run.
+	if ev.Phase != "spawn" {
+		switch ev.Ev {
+		case "tool_use":
+			w.tools.started()
+		case "tool_result":
+			w.tools.finished()
+		}
 	}
 	// "session" is the adapter announcing the conversation id it minted (or
 	// is resuming under). Latch it regardless of whether a transcript sink
@@ -808,6 +856,12 @@ type AdapterRequest struct {
 	// extended still gets no shell. Only adapters whose registry entry
 	// declares Capabilities.SupportsRestricted ever see it set.
 	Restricted bool `json:"restricted,omitempty"`
+	// Authorized carries the operator's tier-2 consent (a foreground
+	// approval, --authorize, or a bypass session) to the adapter. Adapters
+	// that gate their own tool calls use it to lift that posture for this
+	// run; adapters without such a gate ignore it. Never set together with
+	// Restricted — consent is what removes the read-only face.
+	Authorized bool `json:"authorized,omitempty"`
 	// TaskID carries the OpenPanda task ID that this process executes for.
 	// Used for causal subagent tree linkage and subtask dispatch.
 	TaskID string `json:"task_id,omitempty"`
@@ -1041,10 +1095,16 @@ func SetSilenceTimeout(d time.Duration) {
 // work that is still legitimately running — see core.Core.SetTimeouts.
 func AgentHardTimeout() time.Duration { return adapterHardTimeout }
 
+// AgentTimeout reports the advertised per-execution budget (before the
+// wind-down grace). The orchestration layer reads it to decide whether a
+// task's own declared shape warrants a longer budget than the global one.
+func AgentTimeout() time.Duration { return time.Duration(adapterTimeoutS) * time.Second }
+
 // buildAdapterRequest maps the execution context onto the wire request:
 // the prompt/timeout/cwd basics plus every opt-in field an adapter may
-// understand (resume, tools policy, restricted, turn cap, cmd template,
-// system prompt, result schema, MCP config, effort). The Session flag is
+// understand (resume, tools policy, restricted, consent, turn cap, cmd
+// template, system prompt, result schema, MCP config, effort). The Session
+// flag is
 // decided by the caller — it depends on the pool existing and the adapter
 // declaring the capability, which are per-run facts, not request fields.
 // A non-nil refusal result means the request must not be sent at all
@@ -1074,23 +1134,22 @@ func buildAdapterRequest(ctx context.Context, name, prompt, cwd string) (Adapter
 		}
 		req.Restricted = true
 	}
+	// Restricted wins if both are somehow set: the read-only face is the
+	// narrower promise, and consent never widens a run that was pinned to it.
+	if Authorized(ctx) && !req.Restricted {
+		req.Authorized = true
+	}
 	if mt, ok := ctx.Value(maxTurnsKey{}).(int); ok && mt > 0 {
 		req.MaxTurns = mt
 	}
 	if cmd, ok := ctx.Value(agentCmdKey{}).(string); ok {
 		req.Cmd = cmd
 	}
-	if sp, ok := ctx.Value(systemPromptKey{}).(string); ok {
-		req.SystemPrompt = sp
-	}
 	if rs, ok := ctx.Value(resultSchemaKey{}).(string); ok {
 		req.ResultSchema = rs
 	}
 	if mc, ok := ctx.Value(mcpConfigKey{}).(string); ok {
 		req.MCPConfig = mc
-	}
-	if ef, ok := ctx.Value(effortKey{}).(string); ok {
-		req.Effort = ef
 	}
 	if cx, ok := ctx.Value(complexityKey{}).(float64); ok && cx > 0 {
 		req.Complexity = cx
@@ -1228,6 +1287,9 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	// goroutine can publish silence heartbeats into the same channel the
 	// adapter's own notes use.
 	progressSink, _ := ctx.Value(progressKey{}).(ProgressFunc)
+	// tools is fed by the stderr parser and read by the watchdog below: a
+	// run inside a tool call is silent by nature, not wedged.
+	tools := &toolCounter{}
 
 	// The watchdog runs even with no silence limit configured: the kill is
 	// opt-in, but the heartbeat notes are not — a hung adapter produces zero
@@ -1271,7 +1333,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 					if !started && startupGrace > limit {
 						limit = startupGrace
 					}
-					if limit > 0 && silentFor >= limit {
+					if limit > 0 && silentFor >= limit && !tools.active() {
 						actMu.Lock()
 						stalled = true
 						startupStall = !started
@@ -1305,6 +1367,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	var stdout activityWriter
 	stdout.onActivity = touch
 	var stderr progressWriter
+	stderr.tools = tools
 	stderr.onActivity = alive
 	stderr.onOutput = touch
 	stderr.sink = progressSink
@@ -1733,7 +1796,7 @@ func startAgentSession(spawnCtx, turnCtx context.Context, name string, req Adapt
 		cancel()
 		return nil, err
 	}
-	stderr := &progressWriter{adapterName: name}
+	stderr := &progressWriter{adapterName: name, tools: &toolCounter{}}
 	if sink, ok := turnCtx.Value(progressKey{}).(ProgressFunc); ok {
 		stderr.sink = sink
 	}
@@ -1828,7 +1891,7 @@ func (s *agentSession) watchSilence(ctx context.Context, limit, heartbeat, start
 			if !s.turnSeen.Load() && startupGrace > lim {
 				lim = startupGrace
 			}
-			if lim > 0 && silentFor >= lim {
+			if lim > 0 && silentFor >= lim && !s.stderr.tools.active() {
 				s.kill()
 				return
 			}

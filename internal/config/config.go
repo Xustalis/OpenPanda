@@ -21,7 +21,6 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
 	"github.com/Xustalis/OpenPanda/internal/trust"
-	"github.com/Xustalis/OpenPanda/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -62,6 +61,121 @@ type Config struct {
 	// while enabled=false: no
 	// worktree, no queue, no merge proposals.
 	SelfEvolution SelfEvolutionConfig `yaml:"self_evolution"`
+	// Hooks are the operator's own commands bound to task lifecycle points.
+	// Inert while enabled=false, which is the default: this is the one place
+	// the node runs a command nobody typed into a chat.
+	Hooks HooksConfig `yaml:"hooks"`
+	// Intake is the inbound half of the same loop: a webhook listener that
+	// turns a source event into queued work. Inert while enabled=false, which
+	// is the default — a port that accepts the internet is opt-in.
+	Intake IntakeConfig `yaml:"intake"`
+}
+
+// IntakeConfig configures the inbound webhook listener.
+//
+// The listener is the one surface where somebody other than the operator can
+// create work on this node, so every field is a requirement rather than a
+// preference: an enabled listener with no secret, no repository or no actor
+// list refuses every delivery instead of defaulting open.
+type IntakeConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Listen is the bind address. Loopback by default; the body is
+	// authenticated by the source's HMAC, but the port carries no TLS, so a
+	// reverse proxy terminates it before any wider exposure.
+	Listen string             `yaml:"listen,omitempty"`
+	GitHub GitHubIntakeConfig `yaml:"github,omitempty"`
+}
+
+// GitHubIntakeConfig is the admission policy for GitHub deliveries.
+type GitHubIntakeConfig struct {
+	// Secret is the webhook HMAC key. Required when enabled; prefer
+	// OPENPANDA_INTAKE_SECRET so it stays out of the config file.
+	Secret string `yaml:"secret,omitempty"`
+	// Repos are "owner/name" entries. Empty refuses every delivery.
+	Repos []string `yaml:"repos,omitempty"`
+	// Actors are the logins allowed to originate work. Empty refuses every
+	// delivery.
+	Actors []string `yaml:"actors,omitempty"`
+	// Mention is the handle a request must address, with or without the "@".
+	// Empty disables the check.
+	Mention string `yaml:"mention,omitempty"`
+	// Self is this node's own login on the source. Its messages are dropped so
+	// an agent cannot read its own answer back as a new request.
+	Self string `yaml:"self,omitempty"`
+	// RequireMention demands the handle in the text. Unset means true; only a
+	// source that already delivers addressed events should turn it off.
+	RequireMention *bool `yaml:"require_mention,omitempty"`
+	// Project is the OpenPanda project the task belongs to. Empty runs it in
+	// the node's work path.
+	Project string `yaml:"project,omitempty"`
+	// Priority places inbound work on the queue board: high, normal or low.
+	Priority string `yaml:"priority,omitempty"`
+}
+
+// WantsMention reports the addressing requirement, defaulting to true.
+func (g GitHubIntakeConfig) WantsMention() bool {
+	if g.RequireMention == nil {
+		return true
+	}
+	return *g.RequireMention
+}
+
+// Validate refuses a listener that would be reachable but not gate-able.
+func (c IntakeConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+		return fmt.Errorf("config: intake.listen %q is not host:port: %w", c.Listen, err)
+	}
+	if strings.TrimSpace(c.GitHub.Secret) == "" {
+		return fmt.Errorf("config: intake.github.secret is required when intake.enabled is true")
+	}
+	if len(c.GitHub.Repos) == 0 {
+		return fmt.Errorf("config: intake.github.repos is empty — an enabled listener with no repository refuses every delivery")
+	}
+	for i, repo := range c.GitHub.Repos {
+		if !strings.Contains(repo, "/") {
+			return fmt.Errorf("config: intake.github.repos[%d] %q is not owner/name", i, repo)
+		}
+	}
+	if len(c.GitHub.Actors) == 0 {
+		return fmt.Errorf("config: intake.github.actors is empty — an enabled listener with no allowed actor refuses every delivery")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.GitHub.Priority)) {
+	case "", "high", "normal", "low":
+	default:
+		return fmt.Errorf("config: intake.github.priority %q is invalid (want high, normal, or low)", c.GitHub.Priority)
+	}
+	return nil
+}
+
+// HooksConfig binds commands to task lifecycle edges.
+//
+// The list shape (rather than one map entry per event) is what lets a node have
+// two reactions to the same edge — a notification and a log line — without
+// inventing a syntax for it.
+type HooksConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// TimeoutS is the default budget for a hook that does not set its own.
+	TimeoutS int `yaml:"timeout_s,omitempty"`
+	// AllowTier2 lets a hook run commands the defense tier grades irreversible.
+	// Off by default, and it should stay off unless the operator means it: a
+	// hook is unattended by definition, and an irreversible command with no one
+	// watching is exactly the case the tier exists for.
+	AllowTier2 bool        `yaml:"allow_tier2,omitempty"`
+	On         []HookEntry `yaml:"on,omitempty"`
+}
+
+// HookEntry is one binding: an event name and the shell command to run.
+//
+// The command is a template. {task_id}, {title}, {state}, {project}, {owner}
+// and {event} are substituted with shell-quoted values — a title is model
+// output, and model output is a sentence, not a script.
+type HookEntry struct {
+	Event    string `yaml:"event"`
+	Command  string `yaml:"command"`
+	TimeoutS int    `yaml:"timeout_s,omitempty"`
 }
 
 // SelfEvolutionConfig gates the self-modification pipeline. Repo is the
@@ -271,12 +385,13 @@ type RoutingConfig struct {
 	// servers configured for the work directory are reachable. Widening the
 	// tool face is an explicit operator choice, never a default.
 	ToolsPolicy string `yaml:"tools_policy"`
-	// PandaTools gates the self-management surface agents get under the
-	// extended tools policy: the openpanda MCP server (panda mcp) injected
-	// into MCP-capable CLIs plus the prompt hint pointing shell-capable
-	// agents at the panda binary on PATH. Nil means enabled — the extended
-	// policy already opted into a wider tool face — and an explicit false
-	// keeps extended tools while closing the self-management path.
+	// PandaTools gates the self-management surface agents get: the openpanda
+	// MCP server (panda mcp) materialized for MCP-capable CLIs under the
+	// extended tools policy, plus the command reference pointing
+	// shell-capable agents at the panda binary on PATH. The reference rides
+	// under both policies — minimal's whitelist already includes Bash, so
+	// knowing the CLI exists grants nothing new — while the MCP server stays
+	// extended-only. Nil means enabled; an explicit false closes both paths.
 	PandaTools *bool `yaml:"panda_tools"`
 	// Reputation opts node scoring into a local track-record term
 	// (trust_zones §9): each executor's smoothed success rate out of this
@@ -304,8 +419,10 @@ func (r RoutingConfig) NormalizedToolsPolicy() string {
 }
 
 // NormalizedPandaTools reports whether the self-management tool surface is
-// enabled (routing.panda_tools, default true). The caller still gates it on
-// the extended tools policy — the flag is an opt-out, not an opt-in.
+// enabled (routing.panda_tools, default true). The MCP server still only
+// materializes under the extended tools policy; the prompt command reference
+// rides under either policy, because the minimal whitelist already includes a
+// shell. The flag is an opt-out, not an opt-in.
 func (r RoutingConfig) NormalizedPandaTools() bool {
 	return r.PandaTools == nil || *r.PandaTools
 }
@@ -1198,6 +1315,19 @@ type ModelConfig struct {
 	APIType  string `yaml:"api_type"`           // "anthropic" | "openai" | "responses" | "google" (default anthropic)
 	BaseURL  string `yaml:"base_url"`           // e.g. https://api.deepseek.com/anthropic
 	APIKey   string `yaml:"api_key"`            // secret; prefer env OPENPANDA_MODEL_API_KEY
+	// KeyEnv names an environment variable to read this row's key from at call
+	// time instead of storing it here. It exists because a registry row is a
+	// copy: importing a model from another tool's config would otherwise copy
+	// that tool's secret into config.yaml, which is exactly what the comment
+	// above tells people not to do. APIKey still wins when both are set, so an
+	// explicit key on the row keeps working.
+	KeyEnv string `yaml:"key_env,omitempty"`
+	// KeyScheme selects the header this row's credential travels in. "" (or
+	// "api_key") keeps the dialect default — Bearer for OpenAI, x-api-key for
+	// Anthropic. "bearer" always sends `Authorization: Bearer`, which is what
+	// an OAuth-style token (Claude Code's ANTHROPIC_AUTH_TOKEN) expects; sent
+	// as x-api-key it would 401 on every call.
+	KeyScheme string `yaml:"key_scheme,omitempty"`
 	// Auth names an OAuth provider from internal/auth ("anthropic"): the
 	// client then authenticates with the stored subscription token instead
 	// of api_key, refreshing it transparently. Experimental — see
@@ -1207,6 +1337,13 @@ type ModelConfig struct {
 	MaxTokens     int    `yaml:"max_tokens"`               // completion cap; 0 = provider/entry default
 	ContextWindow int    `yaml:"context_window,omitempty"` // advertised context length; 0 = unknown
 	NoAuth        bool   `yaml:"no_auth,omitempty"`        // true for local models that need no API key
+	// AllowPlaintext lets this one endpoint speak http. The network guard
+	// requires https so the API key never travels cleartext, and exempts only
+	// loopback; a relay reached over plain http on any other address has to
+	// say so here, per model, because the key is exactly what the rule is
+	// protecting. Spelled "plaintext" for the same reason
+	// network.allow_cleartext is: opting out should never read as a good idea.
+	AllowPlaintext bool `yaml:"allow_plaintext,omitempty"`
 	// Thinking selects the reasoning mode: "on" requests the provider's
 	// thinking/reasoning pass, "off" suppresses it, and "" or "auto" leaves
 	// the provider default (no thinking field is sent at all). The wire shape
@@ -1486,6 +1623,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.SelfEvolution.Validate(); err != nil {
+		return err
+	}
+	if err := c.Intake.Validate(); err != nil {
 		return err
 	}
 	for i, entry := range c.Network.AllowCleartextFor {
@@ -1810,6 +1950,12 @@ func Default() *Config {
 			SuperviseRounds: DefaultSuperviseRoundsCf,
 			TaskTokenBudget: DefaultTaskTokenBudget,
 		},
+		// Loopback until the operator says otherwise: the signature check
+		// authenticates the body, not the port, and a listener bound wide is
+		// reachable by anything on the LAN.
+		Intake: IntakeConfig{
+			Listen: "127.0.0.1:7788",
+		},
 	}
 }
 
@@ -2126,6 +2272,12 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("OPENPANDA_SHARED_SECRET"); v != "" {
 		c.Network.SharedSecret = v
 	}
+	// The webhook secret is the one credential here that a third party
+	// (GitHub) also holds; passing it through the environment keeps it out of
+	// the config file that gets copied between machines.
+	if v := os.Getenv("OPENPANDA_INTAKE_SECRET"); v != "" {
+		c.Intake.GitHub.Secret = v
+	}
 	if v := os.Getenv("OPENPANDA_UDP_LISTEN"); v != "" {
 		c.Network.UDPListen = v
 	}
@@ -2209,6 +2361,20 @@ func (c *Config) applyEnv() {
 // edit byte-for-byte; only the model mapping's values are replaced. Fields mc
 // leaves empty-string are dropped from the file so defaults apply again.
 func UpdateModelSection(path string, mc ModelConfig) error {
+	return updateModelSection(path, mc, false)
+}
+
+// ClearModelSection writes an empty `model:` section on purpose. It is the
+// delete-the-last-model path: the caller has removed every entry from the
+// registry and asked the active model to go with them. guardModelDowngrade
+// exists to refuse the *accidental* clear (a writer working from a stale
+// document); this is the deliberate one, so it skips that guard and nothing
+// else.
+func ClearModelSection(path string) error {
+	return updateModelSection(path, ModelConfig{}, true)
+}
+
+func updateModelSection(path string, mc ModelConfig, allowClear bool) error {
 	var root yaml.Node
 	data, err := os.ReadFile(path)
 	switch {
@@ -2229,7 +2395,7 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		return util.WriteFileAtomic(path, out, 0o600)
+		return writeConfigFile(path, out)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -2276,7 +2442,12 @@ func UpdateModelSection(path string, mc ModelConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
+	if allowClear {
+		err = writeConfigFileAllowingClear(path, out)
+	} else {
+		err = writeConfigFile(path, out)
+	}
+	if err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -2310,7 +2481,7 @@ func UpdateModelsSection(path string, models []ModelConfig) error {
 		if err != nil {
 			return err
 		}
-		return util.WriteFileAtomic(path, out, 0o600)
+		return writeConfigFile(path, out)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -2340,7 +2511,7 @@ func UpdateModelsSection(path string, models []ModelConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
+	if err := writeConfigFile(path, out); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -2394,7 +2565,7 @@ func UpdateMCPSection(path string, command string) error {
 		if err != nil {
 			return err
 		}
-		return util.WriteFileAtomic(path, out, 0o600)
+		return writeConfigFile(path, out)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -2418,7 +2589,7 @@ func UpdateMCPSection(path string, command string) error {
 	if err != nil {
 		return err
 	}
-	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
+	if err := writeConfigFile(path, out); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)
@@ -2463,7 +2634,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		return util.WriteFileAtomic(path, out, 0o600)
+		return writeConfigFile(path, out)
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -2490,7 +2661,7 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := util.WriteFileAtomic(path, out, 0o600); err != nil {
+	if err := writeConfigFile(path, out); err != nil {
 		return err
 	}
 	hardenSecretPerms(path, out)

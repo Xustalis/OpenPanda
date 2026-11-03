@@ -18,14 +18,17 @@ import (
 	agentreg "github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"gopkg.in/yaml.v3"
+	"log/slog"
 )
 
 // ---- shared helpers ----
@@ -344,6 +347,57 @@ func newPanelGitRepo(t *testing.T) string {
 	return dir
 }
 
+// TestSessionProjectRepoGetsWorktree pins the project-base fix: a session
+// attached to a project whose work dir is a repository must carve its worktree
+// in THAT repository, even when the handler's storage-path Worktrees is nil.
+// Before the fix it read storage.work_path, found no repository, and returned
+// a plain thread with branch ""; diff then failed with "not a git repository".
+func TestSessionProjectRepoGetsWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newPanelGitRepo(t)
+	db := newMigratedDB(t)
+	ps := projectstore.NewStore(db)
+	if _, err := ps.Create("repo-demo", repo, ""); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	h := New(Deps{
+		Store:        core.NewTaskStore(db, slog.New(slog.DiscardHandler)),
+		DB:           db,
+		ProjectStore: ps,
+		Sessions:     sessions.NewStore(t.TempDir()),
+		StaticDir:    t.TempDir(),
+		Token:        testToken,
+	})
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions", `{"title":"project repo","project":"repo-demo"}`))
+	if code != http.StatusOK {
+		t.Fatalf("create status = %d, body %v", code, out)
+	}
+	id, _ := out["id"].(string)
+	worktree, _ := out["worktree"].(string)
+	if id == "" || worktree == "" || out["branch"] != sessions.Branch(id) {
+		t.Fatalf("session not worktree-backed: %v", out)
+	}
+	if !strings.HasPrefix(worktree, repo+string(os.PathSeparator)) {
+		t.Fatalf("worktree %q is not under the project repo %q", worktree, repo)
+	}
+
+	// The diff path must resolve the same repository from the session alone;
+	// this handler has no fallback Worktrees configured.
+	if err := os.WriteFile(filepath.Join(worktree, "new.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out = doJSON(t, h, authedReq(http.MethodGet, "/api/sessions/"+id+"/diff", nil))
+	if code != http.StatusOK {
+		t.Fatalf("diff status = %d", code)
+	}
+	if changes, _ := out["changes"].([]any); len(changes) != 1 {
+		t.Fatalf("changes = %v, want the one new file", out["changes"])
+	}
+}
+
 // TestSessionWorktreeDiffAndMerge drives the highest-stakes session flow end
 // to end over HTTP: a session in a git repo carves a worktree, edits show up
 // in the diff, and merging lands the work in the main checkout.
@@ -375,12 +429,12 @@ func TestSessionWorktreeDiffAndMerge(t *testing.T) {
 		t.Fatalf("session not worktree-backed: %v", out)
 	}
 
-	// Unknown ids on diff/merge are client errors, not 500s.
-	if code, _ := doJSON(t, h, authedReq(http.MethodGet, "/api/sessions/nope/diff", nil)); code != http.StatusBadRequest {
-		t.Fatalf("diff unknown status = %d, want 400", code)
+	// Unknown ids on diff/merge are 404s (the session does not exist), not 500s.
+	if code, _ := doJSON(t, h, authedReq(http.MethodGet, "/api/sessions/nope/diff", nil)); code != http.StatusNotFound {
+		t.Fatalf("diff unknown status = %d, want 404", code)
 	}
-	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/nope/merge", `{}`)); code != http.StatusBadRequest {
-		t.Fatalf("merge unknown status = %d, want 400", code)
+	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/nope/merge", `{}`)); code != http.StatusNotFound {
+		t.Fatalf("merge unknown status = %d, want 404", code)
 	}
 
 	// Session work: a new file in the worktree shows up in Status and Diff.
@@ -744,6 +798,68 @@ func TestAddModelAdvancedFields(t *testing.T) {
 	}
 	if mmx == nil || mmx["thinking"] != "on" || mmx["context_window"] != 1000000.0 {
 		t.Fatalf("listed row missing advanced fields: %v", mmx)
+	}
+}
+
+// TestAddModelKeepsCustomKeyOnEdit pins the upsert contract the registry's
+// edit action leans on: re-submitting an existing alias without a key keeps
+// the credential on file, so fixing a model id cannot silently turn a keyed
+// relay into a keyless one. An explicit 免密钥 is a decision and still wins.
+func TestAddModelKeepsCustomKeyOnEdit(t *testing.T) {
+	h, _, _ := newEnginePanel(t)
+	base := `{"provider":"custom","api_type":"openai","base_url":"http://127.0.0.1:9/v1"`
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/models",
+		base+`,"model":"relay-a","api_key":"sk-keep","alias":"relay"}`))
+	if code != http.StatusOK || out["key_set"] != true {
+		t.Fatalf("add = %d %v", code, out)
+	}
+
+	// Same alias, new model id, key left blank: the key survives. Editing is
+	// PUT now — POST always appends another account, so a repeated alias is a
+	// second row, not an update of the first.
+	code, out = doJSON(t, h, jsonReq(http.MethodPut, "/api/models/relay",
+		base+`,"model":"relay-b","alias":"relay"}`))
+	if code != http.StatusOK {
+		t.Fatalf("edit = %d %v", code, out)
+	}
+	if out["model"] != "relay-b" || out["key_set"] != true || out["no_auth"] != nil {
+		t.Fatalf("edit dropped the stored key: %v", out)
+	}
+
+	// Ticking 免密钥 clears it instead of inheriting.
+	code, out = doJSON(t, h, jsonReq(http.MethodPut, "/api/models/relay",
+		base+`,"model":"relay-b","alias":"relay","no_auth":true}`))
+	if code != http.StatusOK || out["no_auth"] != true || out["key_set"] == true {
+		t.Fatalf("explicit no_auth ignored: %d %v", code, out)
+	}
+}
+
+// TestAddModelPlaintextEndpoint covers the escape hatch for a relay that only
+// speaks http: the network guard refuses a non-loopback plaintext endpoint
+// unless the request says so, and the consent is what persists — the endpoint
+// has to keep working after a restart, not just in the request that added it.
+func TestAddModelPlaintextEndpoint(t *testing.T) {
+	h, _, configPath := newEnginePanel(t)
+	const relay = `{"provider":"custom","api_type":"openai","base_url":"http://106.53.40.245:8080","model":"relay-m","api_key":"sk-x","alias":"relay"}`
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, jsonReq(http.MethodPost, "/api/models", relay))
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "allow_plaintext") {
+		t.Fatalf("plaintext endpoint without consent = %d %q", rr.Code, rr.Body.String())
+	}
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/models",
+		strings.Replace(relay, `"alias":"relay"`, `"alias":"relay","allow_plaintext":true`, 1)))
+	if code != http.StatusOK {
+		t.Fatalf("add with consent = %d %v", code, out)
+	}
+	saved, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(saved), "allow_plaintext: true") {
+		t.Fatalf("consent not persisted:\n%s", saved)
 	}
 }
 
@@ -1154,6 +1270,57 @@ func TestAgentProbeAndTest(t *testing.T) {
 	if code, _ := doJSON(t, h, authedReq(http.MethodPost, "/api/agents/ghost/test", nil)); code != http.StatusNotFound {
 		t.Fatalf("unknown agent status = %d, want 404", code)
 	}
+}
+
+func TestAgentListCache(t *testing.T) {
+	t.Run("reuses fresh results and honors expiry and force refresh", func(t *testing.T) {
+		var cache agentListCache
+		calls := 0
+		probe := func() []agentJSON {
+			calls++
+			return []agentJSON{{Name: "agent", Version: strings.Repeat("v", calls)}}
+		}
+		if got := cache.get(false, probe); got[0].Version != "v" {
+			t.Fatalf("first probe = %+v", got)
+		}
+		if got := cache.get(false, probe); got[0].Version != "v" || calls != 1 {
+			t.Fatalf("cached probe = %+v, calls = %d", got, calls)
+		}
+		if got := cache.get(true, probe); got[0].Version != "vv" || calls != 2 {
+			t.Fatalf("forced probe = %+v, calls = %d", got, calls)
+		}
+		cache.expires = cache.expires.Add(-agentListCacheTTL)
+		if got := cache.get(false, probe); got[0].Version != "vvv" || calls != 3 {
+			t.Fatalf("expired probe = %+v, calls = %d", got, calls)
+		}
+	})
+
+	t.Run("coalesces concurrent cold reads", func(t *testing.T) {
+		var cache agentListCache
+		calls := 0
+		started := make(chan struct{})
+		release := make(chan struct{})
+		probe := func() []agentJSON {
+			calls++
+			close(started)
+			<-release
+			return []agentJSON{{Name: "agent"}}
+		}
+		results := make(chan []agentJSON, 8)
+		for range 8 {
+			go func() { results <- cache.get(false, probe) }()
+		}
+		<-started
+		close(release)
+		for range 8 {
+			if got := <-results; len(got) != 1 || got[0].Name != "agent" {
+				t.Fatalf("concurrent result = %+v", got)
+			}
+		}
+		if calls != 1 {
+			t.Fatalf("probe calls = %d, want 1", calls)
+		}
+	})
 }
 
 // TestRemoveNode covers DELETE /api/nodes/{id}: a stale offline remote is

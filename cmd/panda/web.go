@@ -99,6 +99,7 @@ func runWeb(args []string) {
 		cmd.Stdout = lf
 		cmd.Stderr = lf
 		cmd.Stdin = nil
+		detachCommand(cmd)
 		if err := cmd.Start(); err != nil {
 			fatal("start background web", err)
 		}
@@ -148,17 +149,26 @@ func runWeb(args []string) {
 	if token == "" {
 		token = panel.NewToken()
 		ephemeral = true
+		// Persist the minted token: a restart (self-update, service bounce,
+		// reboot) would otherwise mint a new one and strand every open tab at
+		// the gate. The config file is owner-only and UpdateSectionField
+		// round-trips the document, so nothing else moves.
+		if path := resolvedConfigPath(*configPath); path != "" {
+			if err := config.UpdateSectionField(path, []string{"network"}, "panel_token", token); err == nil {
+				ephemeral = false
+			}
+		}
 		// A self-update replaces this process image via exec, which re-reads
-		// config — a fresh ephemeral token would strand every open console at
-		// the token gate. Exporting it through env (config.applyEnv maps
-		// OPENPANDA_PANEL_TOKEN back onto panel_token) keeps the same token
-		// across the restart; the sandboxed adapter/command subprocesses never
-		// see it (security allow-list drops everything else).
+		// config — exporting the token through env (config.applyEnv maps
+		// OPENPANDA_PANEL_TOKEN back onto panel_token) keeps it across the
+		// restart even when the file could not be written.
 		_ = os.Setenv("OPENPANDA_PANEL_TOKEN", token)
-		if !panel.IsLoopbackAddr(addr) {
-			fmt.Println(i18n.T(loc, "web.lan.ephemeral"))
-		} else {
-			fmt.Println(i18n.T(loc, "repl.web.ephemeral"))
+		if ephemeral {
+			if !panel.IsLoopbackAddr(addr) {
+				fmt.Println(i18n.T(loc, "web.lan.ephemeral"))
+			} else {
+				fmt.Println(i18n.T(loc, "repl.web.ephemeral"))
+			}
 		}
 	}
 
@@ -178,6 +188,13 @@ func runWeb(args []string) {
 	}
 	log.Setup(cfg.Log.Level, logWriter)
 	logger := slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{Level: log.ParseLevel(cfg.Log.Level)}))
+
+	// The console can own the node row (MeshNode below), so it performs the
+	// same mesh-secret bootstrap the daemon does. Without it a web-only node
+	// starts with an empty secret, the WS listener refuses every peer, and
+	// the node looks healthy while being permanently unreachable.
+	selfID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+	ensureSharedSecret(cfg, db, selfID, resolvedConfigPath(*configPath), logger)
 
 	// Optional ask engine behind a reloadable holder — same contract as the
 	// REPL: without a model endpoint the console still serves
@@ -278,13 +295,39 @@ func runWeb(args []string) {
 	// (internal/updater is outside the cmd/panda wiring scope).
 	updateMgr.StartAutoCheck(ctx, 0)
 
+	// The artifact pool is shared by the download endpoints and the preview
+	// origin, and the preview follows the console's reach: a loopback console
+	// gets a loopback preview, and a LAN console gets one the other devices can
+	// frame.
+	arts := artifact.NewStore(cfg.Storage.ArtifactPath, cfg.Storage.ArtifactExtraPaths...)
+	previewHost := "127.0.0.1"
+	if !panel.IsLoopbackAddr(addr) {
+		previewHost = "0.0.0.0"
+	}
+	preview, perr := panel.StartPreview(panel.PreviewDeps{
+		Artifacts: arts,
+		Host:      previewHost,
+		// Any console page may frame a preview. The boundary that matters is
+		// the random path token and the sandboxed document, not who embeds it:
+		// a LAN console is reached by an address this process cannot predict.
+		Ancestors: "*",
+	})
+	if perr != nil {
+		fmt.Fprintln(os.Stderr, i18n.Tf(loc, "web.preview.failed", "err", perr.Error()))
+		preview = nil
+	}
+	if preview != nil {
+		defer preview.Close()
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		Handler: panel.New(panel.Deps{
 			Store:        store,
-			Artifacts:    artifact.NewStore(cfg.Storage.ArtifactPath, cfg.Storage.ArtifactExtraPaths...),
+			Artifacts:    arts,
+			Preview:      preview,
 			EngineHolder: engines,
 			DB:           db,
 			Projects:     memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memoryLimits(cfg)),

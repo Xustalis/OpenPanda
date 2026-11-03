@@ -50,6 +50,10 @@ func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, er
 	if q.Priority < PriorityHigh || q.Priority > PriorityLow {
 		return Task{}, fmt.Errorf("queue priority %d out of range", q.Priority)
 	}
+	// The conversation owns the lock lane, so it has to be on the input before
+	// any key is derived — resourceKeysFor runs below, and childResourceKeys
+	// re-derives for scoped/isolated children from the same field.
+	in.SessionID = q.SessionID
 	autoKeys := len(q.ResourceKeys) == 0
 	if autoKeys {
 		q.ResourceKeys = c.resourceKeysFor(in)
@@ -114,7 +118,7 @@ func (c *Core) resourceKeysFor(in TaskInput) []string {
 			// Real paths, not the identities: the identity is case-folded and
 			// cannot be resolved back to a tree (see relUnderDir).
 			if rel, ok := relUnderDir(pdir, in.WorkDir); ok {
-				return mergeActuatorKeys(scopeLeafKeys(in.Project, []string{rel}), in.Requires, in.SpecJSON)
+				return mergeActuatorKeys(scopeLeafKeys(in.Project, in.SessionID, []string{rel}), in.Requires, in.SpecJSON)
 			}
 		}
 	}
@@ -136,7 +140,17 @@ func deriveResourceKeys(in TaskInput) []string {
 		// queue.ProjectKey folds the name's case — ask-emitted spec.project
 		// arrives in the model's casing while --project is verbatim, and
 		// the two spellings of one tree must collide, not parallel-write.
-		keys = append(keys, queue.ProjectKey(in.Project), queue.ScopeRootKey(in.Project))
+		//
+		// A task that names its conversation claims a lane one level under
+		// that root instead. Two conversations then hold sibling keys and run
+		// in parallel, while the root claim (no conversation: CLI submit, plan
+		// stage, inbound delegate) stays an ancestor of every lane and still
+		// excludes all of them. What the lock protects is the checkout, not
+		// the thread: a conversation may write while another reads, and only
+		// same-lane work is forced to serialize.
+		keys = append(keys,
+			queue.SessionProjectKey(in.Project, in.SessionID),
+			queue.SessionScopeKey(in.Project, in.SessionID))
 	} else {
 		if in.TargetNode != "" {
 			keys = append(keys, "node:"+in.TargetNode)

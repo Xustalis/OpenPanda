@@ -285,6 +285,11 @@ func responsesURL(base string) string {
 		return base
 	}
 	base = strings.TrimSuffix(base, "/chat/completions")
+	// Codex's ChatGPT backend lives under /backend-api/codex and serves the
+	// Responses endpoint one segment below it — it is not versioned.
+	if strings.HasSuffix(base, "/backend-api/codex") {
+		return base + "/responses"
+	}
 	if strings.HasSuffix(base, "/v1") || strings.HasSuffix(base, "/v2") ||
 		strings.HasSuffix(base, "/v3") || strings.HasSuffix(base, "/v4") {
 		return base + "/responses"
@@ -298,6 +303,14 @@ func responsesURL(base string) string {
 func (c *Client) completeResponses(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
 	if c.noCredential() {
 		return Response{}, ErrNoKey
+	}
+	// Codex's ChatGPT backend refuses a non-streamed call outright — 400
+	// "Stream must be set to true" — so the streamed reader is the only way in.
+	// The endpoint is named here rather than flagged per row because a row that
+	// forgot the flag would fail its first turn with a wire error that says
+	// nothing about a flag; the URL is fixed and vendor-owned.
+	if strings.Contains(c.baseURL, "chatgpt.com/backend-api/codex") {
+		return c.streamResponses(ctx, system, turns, tools, nil, nil, nil)
 	}
 	return c.completeWithRetryFn(ctx, func() (Response, error) {
 		return c.completeOnceResponses(ctx, system, turns, tools)
@@ -670,23 +683,34 @@ func (c *Client) sendResponsesStream(ctx context.Context, system string, turns [
 
 // streamResponses runs one streaming Responses call, replaying once without
 // the reasoning field when the provider rejects it before any event.
-func (c *Client) streamResponses(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string)) (Response, error) {
+func (c *Client) streamResponses(ctx context.Context, system string, turns []Turn, tools []ToolSpec, onDelta func(string), onReasoning func(string), em *usageEmitter) (Response, error) {
 	if c.noCredential() {
 		return Response{}, ErrNoKey
 	}
 	body, err := func() (io.ReadCloser, error) {
-		resp, err := c.sendResponsesStream(ctx, system, turns, tools)
-		if err == nil {
-			return resp.Body, nil
-		}
-		if thinkingRejected(err) && !c.thinkingDenied.Load() {
-			c.thinkingDenied.Store(true)
-			resp, err = c.sendResponsesStream(ctx, system, turns, tools)
+		var lastErr error
+		for attempt := 0; attempt <= c.maxRetry; attempt++ {
+			if attempt > 0 {
+				notifyRetry(ctx, attempt, c.maxRetry, c.retryDelay(attempt), lastErr)
+				if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
+					return nil, err
+				}
+			}
+			resp, err := c.sendResponsesStream(ctx, system, turns, tools)
 			if err == nil {
 				return resp.Body, nil
 			}
+			lastErr = err
+			if thinkingRejected(err) && !c.thinkingDenied.Load() {
+				c.thinkingDenied.Store(true)
+				attempt-- // the correction retries at once, off the transport budget
+				continue
+			}
+			if !retryable(err) {
+				return nil, err
+			}
 		}
-		return nil, err
+		return nil, lastErr
 	}()
 	if err != nil {
 		return Response{}, err
@@ -722,6 +746,11 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 		if err := acc.feed(&ev, onDelta, onReasoning); err != nil {
 			return Response{}, err
 		}
+		// The Responses dialect reports usage on the completion envelope, so
+		// this is the earliest point a mid-stream reader can see the total.
+		if ev.Type == "response.completed" || ev.Type == "response.incomplete" {
+			em.emit(acc.usage(c), false)
+		}
 	}
 	if err := streamEnded(ctx, scanner.Err()); err != nil {
 		return Response{}, err
@@ -733,6 +762,10 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 				return Response{}, inBandError(one.Error.Code, one.Error.Message)
 			}
 			if one.Usage != nil {
+				em.emit(Usage{
+					InputTokens:  c.usageIn.Load() + one.Usage.InputTokens,
+					OutputTokens: c.usageOut.Load() + one.Usage.OutputTokens,
+				}, true)
 				c.addUsage(one.Usage.InputTokens, one.Usage.OutputTokens)
 			}
 			return parseResponsesResponse(&one), nil
@@ -747,6 +780,16 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 		return Response{}, fmt.Errorf("entry: stream: function call %q carried arguments but no name "+
 			"(upstream sent no output_item.added)", key)
 	}
+	// Final usage report before addUsage: the accumulator's counts are still
+	// this attempt's own, so the observer sees the attempt's true total rather
+	// than a value that addUsage is about to fold twice into the client.
+	em.emit(acc.usage(c), true)
 	c.addUsage(acc.usageIn, acc.usageOut)
 	return acc.result(), nil
+}
+
+// usage is the client's cumulative token total including this attempt's
+// counts, which are folded into the client only once the stream succeeds.
+func (a *responsesAccumulator) usage(c *Client) Usage {
+	return Usage{InputTokens: c.usageIn.Load() + a.usageIn, OutputTokens: c.usageOut.Load() + a.usageOut}
 }

@@ -31,6 +31,10 @@ func (m tuiModel) View() string {
 	if m.quitting {
 		return ""
 	}
+	// The side channel replaces the frame while it is open; see tui_side.go.
+	if m.sideShowing() {
+		return m.sideView()
+	}
 	if m.mode == modeExec {
 		var live strings.Builder
 		live.WriteString("\n")
@@ -100,6 +104,8 @@ func (m tuiModel) View() string {
 		return m.mainChatView(live)
 	case modeApproving:
 		return m.mainChatView("\n" + m.approvalCard())
+	case modeClarifying:
+		return m.mainChatView("\n" + m.clarifyCard())
 	case modeConfirm:
 		return m.mainChatView("\n" + m.confirmCard())
 	default:
@@ -146,9 +152,15 @@ func (m tuiModel) mainChatView(live string) string {
 	}
 
 	// 2. Committed conversation turns
+	if m.layout != nil {
+		m.layout.blockStart = m.layout.blockStart[:0]
+	}
 	if m.chatHistory != nil && len(m.chatHistory.blocks) > 0 {
 		for i := range m.chatHistory.blocks {
 			contentLines = append(contentLines, "")
+			if m.layout != nil {
+				m.layout.blockStart = append(m.layout.blockStart, len(contentLines))
+			}
 			contentLines = append(contentLines, m.chatHistory.renderedAt(i, m.th, m.textWidth(), m.expandThought, m.expandHints)...)
 		}
 	}
@@ -165,6 +177,12 @@ func (m tuiModel) mainChatView(live string) string {
 	// liveStart is the content-line index where the live region begins; the
 	// branches below translate it into a screen row for the click handlers.
 	liveStart := totalContent - liveLines
+	// The rail and the locate action both need where things landed; the model
+	// shares this through a pointer the same way it shares the scroll ceiling
+	// (View is a value method and can only publish).
+	if m.layout != nil {
+		m.layout.content, m.layout.avail = totalContent, availHeight
+	}
 
 	// 4. Pad blank lines so inputView stays anchored at the bottom of the screen
 	if totalContent <= availHeight {
@@ -184,7 +202,7 @@ func (m tuiModel) mainChatView(live string) string {
 			liveTop = liveStart
 		}
 		m.publishFrameGeom(tuiFrameGeom{rows: len(out), liveTop: liveTop})
-		return clipRendered(strings.Join(out, "\n"), w)
+		return clipRendered(m.withSidebar(out), w)
 	}
 
 	// 5. If content exceeds available height, apply scrollOffset (0 means anchored at bottom)
@@ -206,7 +224,10 @@ func (m tuiModel) mainChatView(live string) string {
 	visibleLines := contentLines[start:end]
 
 	var out []string
-	if w > 10 {
+	// The scrollbar sits on the transcript's own right edge, which is the left
+	// side of the rail when it is open — hence the content width, not the
+	// terminal's.
+	if mw := m.textWidth(); mw > 10 {
 		// Attach a visual vertical scrollbar on the right boundary so users clearly see
 		// that history exists and can gauge their scroll position.
 		thumbHeight := max(1, availHeight*availHeight/totalContent)
@@ -215,7 +236,7 @@ func (m tuiModel) mainChatView(live string) string {
 			thumbTop = (start * (availHeight - thumbHeight)) / maxScroll
 		}
 		thumbBottom := thumbTop + thumbHeight
-		contentWidth := w - 1
+		contentWidth := mw - 1
 		for i, line := range visibleLines {
 			lw := ansi.StringWidth(line)
 			if lw > contentWidth {
@@ -243,7 +264,34 @@ func (m tuiModel) mainChatView(live string) string {
 		liveTop = liveStart - start
 	}
 	m.publishFrameGeom(tuiFrameGeom{rows: len(out), liveTop: liveTop})
-	return clipRendered(strings.Join(out, "\n"), w)
+	return clipRendered(m.withSidebar(out), w)
+}
+
+// withSidebar attaches the task rail to the right of a finished frame. The
+// frame's own lines were already clipped to textWidth, so this only pads them
+// out to the separator and appends the rail's column — the rail never re-lays
+// out the transcript.
+func (m tuiModel) withSidebar(out []string) string {
+	railW := m.sidebarWidth()
+	if railW <= 0 {
+		return strings.Join(out, "\n")
+	}
+	rail := m.sidebarLines(len(out), railW)
+	contentW := m.textWidth()
+	sep := m.th.muted.Render(m.th.glyph("│", "|"))
+	joined := make([]string, len(out))
+	for i, line := range out {
+		pad := contentW - ansi.StringWidth(line)
+		if pad < 0 {
+			pad = 0
+		}
+		row := ""
+		if i < len(rail) {
+			row = rail[i]
+		}
+		joined[i] = line + strings.Repeat(" ", pad) + sep + row
+	}
+	return strings.Join(joined, "\n")
 }
 
 // publishScrollLimit records the largest useful scroll offset for the frame just
@@ -920,6 +968,11 @@ func (m tuiModel) streamAnswerText(ans string) string {
 	return out
 }
 
+// thoughtPreviewLines is how many of the newest reasoning lines stay visible
+// while the chain is folded. Three is enough to show the thread of thought
+// without pushing the answer or the input box off a short terminal.
+const thoughtPreviewLines = 3
+
 // thoughtView is the live reasoning preview: a dim moving one-liner while folded,
 // the full running thought while expanded.
 func (m tuiModel) thoughtView() string {
@@ -928,8 +981,29 @@ func (m tuiModel) thoughtView() string {
 	}
 	star := m.th.glyph("✻", "*")
 	if !m.expandThought {
-		return m.th.muted.Render(star+" "+i18n.T(m.loc, "tui.thinking")) +
-			m.th.muted.Render(" · "+truncate(firstNonEmptyTail(m.thought), 60))
+		// The line count is the cheapest honest evidence that reasoning is
+		// accumulating: a single tail sentence reads the same whether the model
+		// wrote three words or three hundred, and "thinking" with nothing moving
+		// is what a stalled turn looks like. The last few lines stay visible
+		// below it, so the turn shows what it is reasoning about rather than
+		// only that it is; Ctrl+O still unfolds the whole chain.
+		meta := i18n.Tf(m.loc, "tui.thought.lines", "n", strconv.Itoa(len(m.thought)))
+		if !m.thoughtStarted.IsZero() {
+			if d := time.Since(m.thoughtStarted); d >= time.Second {
+				meta += " · " + elapsed(d)
+			}
+		}
+		var sb strings.Builder
+		sb.WriteString(m.th.muted.Render(star + " " + i18n.T(m.loc, "tui.thinking")))
+		sb.WriteString(m.th.muted.Render(" · " + meta + " · " + i18n.T(m.loc, "tui.thought.expand")))
+		lines := m.thought
+		if len(lines) > thoughtPreviewLines {
+			lines = lines[len(lines)-thoughtPreviewLines:]
+		}
+		for _, line := range lines {
+			sb.WriteString("\n" + m.th.italic.Render("  "+truncate(line, 100)))
+		}
+		return sb.String()
 	}
 	var sb strings.Builder
 	sb.WriteString(m.th.muted.Render(star + " " + i18n.T(m.loc, "tui.thinking")))
@@ -955,8 +1029,57 @@ func (m tuiModel) statusLine() string {
 		parts = append(parts, m.th.muted.Render("· "+m.note))
 	}
 	parts = append(parts, m.th.muted.Render(fmt.Sprintf("(%s · %s)",
-		elapsed(time.Since(m.started)), i18n.T(m.loc, "cli.status.interrupt"))))
+		m.statusMeta(time.Now()), i18n.T(m.loc, "cli.status.interrupt"))))
 	return strings.Join(parts, " ")
+}
+
+// How long a turn may stay quiet before the status row says so. Before any
+// event has arrived the wait is the provider's prefill window, which can run
+// to ResponseHeaderTimeout; after activity starts, a gap means a slow model or
+// a stalled link. The two get different wording because they are different
+// problems.
+const (
+	quietAwaitAfter = 3 * time.Second
+	quietIdleAfter  = 5 * time.Second
+)
+
+// statusMeta is the parenthesised tail of the status row: elapsed clock, live
+// token consumption, and how long the turn has been quiet. Token counts come
+// from the engine's ProgressUsage events, so the number moves while the model
+// writes instead of appearing only in the closing result line.
+func (m tuiModel) statusMeta(now time.Time) string {
+	meta := elapsed(now.Sub(m.started))
+	if tok := m.liveInputTokens + m.liveOutputTokens; tok > 0 {
+		label := cliui.HumanCount(tok)
+		if m.liveTokensEst {
+			label = "~" + label
+		}
+		meta += " · " + label + " tokens"
+	}
+	if quiet := m.quietNote(now); quiet != "" {
+		meta += " · " + quiet
+	}
+	return meta
+}
+
+// quietNote phrases the turn's current silence. No event yet reads as "waiting
+// for the model", which is what the prefill gap actually is; silence after
+// activity reads as "quiet for Ns", which is the honest way to show a stream
+// that has stopped without claiming it failed.
+func (m tuiModel) quietNote(now time.Time) string {
+	seen := m.lastActivity.After(m.started)
+	if !seen {
+		idle := now.Sub(m.started)
+		if idle < quietAwaitAfter {
+			return ""
+		}
+		return i18n.Tf(m.loc, "tui.status.awaitModel", "d", elapsed(idle))
+	}
+	idle := now.Sub(m.lastActivity)
+	if idle < quietIdleAfter {
+		return ""
+	}
+	return i18n.Tf(m.loc, "tui.status.idle", "d", elapsed(idle))
 }
 
 // inputView is the rounded input box with one dim status row under it and a blank
@@ -1568,9 +1691,16 @@ func (m tuiModel) welcome() string {
 // textWidth is the terminal-bounded width available to top-level TUI rows. A
 // reported tiny width is authoritative: decoration must shed or clip rather than
 // inventing columns beyond the physical screen.
+//
+// With the task rail open it is the width LEFT of the rail, minus the one column
+// that separates them: the transcript and the composer sit in that column, and a
+// line that ran under the rail would be a line nobody can read.
 func (m tuiModel) textWidth() int {
 	if m.width <= 0 {
 		return 76
+	}
+	if w := m.sidebarWidth(); w > 0 {
+		return max(1, m.width-w-1)
 	}
 	return max(1, m.width)
 }
@@ -1584,15 +1714,4 @@ func clipRendered(s string, width int) string {
 		lines[i] = ansi.Truncate(lines[i], width, "")
 	}
 	return strings.Join(lines, "\n")
-}
-
-// firstNonEmptyTail returns the last non-empty thought line — the thought still
-// being written — for the folded live preview.
-func firstNonEmptyTail(lines []string) string {
-	for i := len(lines) - 1; i >= 0; i-- {
-		if s := strings.TrimSpace(lines[i]); s != "" {
-			return s
-		}
-	}
-	return ""
 }

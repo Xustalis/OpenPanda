@@ -5,6 +5,7 @@ package entry
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -112,6 +113,99 @@ func ValidateToolCall(tc *ToolCall) error {
 	}
 	if tc.Arguments == nil {
 		return fmt.Errorf("entry: tool.arguments is required")
+	}
+	return nil
+}
+
+// Clarify limits. The shape mirrors the interaction a person can actually
+// answer in one sitting: up to four questions, each with two to four concrete
+// options. A longer list is a menu, not a decision, and an open-ended question
+// belongs in the answer stream, not in a choice card.
+const (
+	maxClarifyQuestions     = 4
+	minClarifyOptions       = 2
+	maxClarifyOptions       = 4
+	maxClarifyHeaderRunes   = 12
+	maxClarifyQuestionRunes = 500
+	maxClarifyLabelRunes    = 60
+	maxClarifyDescRunes     = 200
+	// maxClarifyPreviewBytes bounds one option's preview: it is prompt space
+	// and UI space, not a document attachment.
+	maxClarifyPreviewBytes = 4000
+	maxClarifyPlanBytes    = 4000
+)
+
+// ValidateClarifySpec checks the shape of a model-emitted question round.
+// The failures it catches are the ones a model actually makes: a question with
+// no options (nothing to select), duplicate labels (the answer becomes
+// ambiguous), and a "recommended" that names no option (the non-interactive
+// fallback would have no default).
+func ValidateClarifySpec(c *ClarifySpec) error {
+	if c == nil {
+		return fmt.Errorf("entry: clarify is nil")
+	}
+	if len(c.Plan) > maxClarifyPlanBytes {
+		return fmt.Errorf("entry: clarify.plan is too long (%d bytes, limit %d)", len(c.Plan), maxClarifyPlanBytes)
+	}
+	if len(c.Questions) == 0 {
+		return fmt.Errorf("entry: clarify.questions is required")
+	}
+	if len(c.Questions) > maxClarifyQuestions {
+		return fmt.Errorf("entry: clarify has %d questions, limit is %d", len(c.Questions), maxClarifyQuestions)
+	}
+	seen := make(map[string]bool, len(c.Questions))
+	for i, q := range c.Questions {
+		if strings.TrimSpace(q.ID) == "" {
+			return fmt.Errorf("entry: clarify.questions[%d].id is required", i)
+		}
+		if seen[q.ID] {
+			return fmt.Errorf("entry: clarify has two questions with id %q", q.ID)
+		}
+		seen[q.ID] = true
+		header := strings.TrimSpace(q.Header)
+		if header == "" {
+			return fmt.Errorf("entry: clarify.questions[%d] (%s) has no header", i, q.ID)
+		}
+		if utf8.RuneCountInString(header) > maxClarifyHeaderRunes {
+			return fmt.Errorf("entry: clarify.questions[%d] header is longer than %d characters", i, maxClarifyHeaderRunes)
+		}
+		question := strings.TrimSpace(q.Question)
+		if question == "" {
+			return fmt.Errorf("entry: clarify.questions[%d] (%s) has no question text", i, q.ID)
+		}
+		if utf8.RuneCountInString(question) > maxClarifyQuestionRunes {
+			return fmt.Errorf("entry: clarify.questions[%d] question is longer than %d characters", i, maxClarifyQuestionRunes)
+		}
+		if len(q.Options) < minClarifyOptions || len(q.Options) > maxClarifyOptions {
+			return fmt.Errorf("entry: clarify.questions[%d] has %d options, want %d-%d",
+				i, len(q.Options), minClarifyOptions, maxClarifyOptions)
+		}
+		labels := make(map[string]bool, len(q.Options))
+		for j, o := range q.Options {
+			label := strings.TrimSpace(o.Label)
+			if label == "" {
+				return fmt.Errorf("entry: clarify.questions[%d].options[%d] has no label", i, j)
+			}
+			if utf8.RuneCountInString(label) > maxClarifyLabelRunes {
+				return fmt.Errorf("entry: clarify.questions[%d].options[%d] label is longer than %d characters", i, j, maxClarifyLabelRunes)
+			}
+			if labels[label] {
+				return fmt.Errorf("entry: clarify.questions[%d] has two options labelled %q", i, label)
+			}
+			labels[label] = true
+			if utf8.RuneCountInString(o.Description) > maxClarifyDescRunes {
+				return fmt.Errorf("entry: clarify.questions[%d].options[%d] description is longer than %d characters", i, j, maxClarifyDescRunes)
+			}
+			if len(o.Preview) > maxClarifyPreviewBytes {
+				return fmt.Errorf("entry: clarify.questions[%d].options[%d] preview is too long (%d bytes, limit %d)", i, j, len(o.Preview), maxClarifyPreviewBytes)
+			}
+			if q.MultiSelect && strings.TrimSpace(o.Preview) != "" {
+				return fmt.Errorf("entry: clarify.questions[%d] is multi-select and cannot carry option previews", i)
+			}
+		}
+		if rec := strings.TrimSpace(q.Recommended); rec != "" && !labels[rec] {
+			return fmt.Errorf("entry: clarify.questions[%d].recommended %q names no option", i, rec)
+		}
 	}
 	return nil
 }

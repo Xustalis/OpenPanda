@@ -114,6 +114,8 @@ participación y a los grants firmados; una degradación de confianza corta
 una transferencia en curso de inmediato en lugar de aguardar el TTL de la
 caché de autorización.
 
+Los hooks de ciclo de vida son una extensión local opcional: desactivados por defecto; el hijo hereda un entorno permitido sin credenciales de modelo ni tokens de pares; el comando se evalúa primero y uno de nivel 2 se rechaza salvo que `hooks.allow_tier2` esté activo; cada ejecución escribe una fila de auditoría. Los valores de la tarea llegan al comando solo por variables `PANDA_HOOK_*` — los marcadores como `{title}` se expanden a referencias de variable, no a texto literal — y en Windows se pasan mediante la expansión diferida de `cmd /V:ON`, de modo que un valor nunca entra en el analizador de comandos.
+
 ## Verificación de integridad
 
 `panda audit verify` (o el `GET /api/audit` del panel) verifica la cadena

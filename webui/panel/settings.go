@@ -67,6 +67,10 @@ func modelSettingsToConfig(req modelSettingsJSON, cur config.ModelConfig) config
 		// untouched — a save must not silently re-arm a knob the user turned
 		// off in the YAML.
 		OfflineWait: cur.OfflineWait,
+		// Same for the plaintext waiver: it is part of the endpoint's
+		// identity, and dropping it turns a save of an untouched plaintext
+		// relay into either a guard refusal or a silently revoked consent.
+		AllowPlaintext: cur.AllowPlaintext,
 	}
 	if req.MaxTokens != nil {
 		mc.MaxTokens = *req.MaxTokens

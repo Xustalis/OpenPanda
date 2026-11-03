@@ -102,7 +102,26 @@ func (m tuiModel) buildProjectItems() []SelectionItem {
 	return items
 }
 
-// buildModelItems extracts human-readable model entries.
+// modelRowName is the name a row is painted and addressed by: its alias, or
+// the model id when a config written by hand left the name out.
+func modelRowName(m config.ModelConfig) string {
+	if a := m.Alias(); a != "" {
+		return a
+	}
+	return effectiveModel(m)
+}
+
+// buildModelItems renders one row per configured model, each carrying the row
+// itself as its value. The panel's switch, edit and delete act on that value —
+// never on a name, because a name is exactly what two accounts of one vendor
+// can share.
+//
+// The registry is what the panel can edit and delete, so it is painted first;
+// the live model is appended only when it was configured outside the registry
+// (an older single-model config), and then it is the row a delete clears
+// model: for. Rows are never collapsed by name: a row that is not painted is a
+// row that cannot be edited or deleted, which is how a second account sharing
+// an alias became invisible and unremovable.
 func (m tuiModel) buildModelItems() []SelectionItem {
 	if m.r == nil || m.r.cfg == nil {
 		return nil
@@ -113,37 +132,46 @@ func (m tuiModel) buildModelItems() []SelectionItem {
 		active = c.Model
 		models = slices.Clone(c.Models)
 	})
-	var items []SelectionItem
 
-	seen := make(map[string]bool)
-	if active.Alias() != "" || active.Model != "" || active.BaseURL != "" {
-		alias := active.Alias()
-		if alias == "" {
-			alias = effectiveModel(active)
-		}
-		seen[alias] = true
-		items = append(items, SelectionItem{
-			ID:    alias,
-			Title: alias,
-			Badge: i18n.T(m.loc, "tui.badge.current"),
-			Value: active,
-		})
-	}
-
+	rows := make([]config.ModelConfig, 0, len(models)+1)
+	activeListed := false
 	for _, mod := range models {
-		alias := mod.Alias()
-		if alias == "" {
-			alias = effectiveModel(mod)
-		}
-		if seen[alias] {
+		if !modelRowConfigured(mod) {
 			continue
 		}
-		seen[alias] = true
-		items = append(items, SelectionItem{
-			ID:    alias,
-			Title: alias,
-			Value: mod,
-		})
+		if sameModelRow(mod, active) {
+			activeListed = true
+		}
+		rows = append(rows, mod)
+	}
+	if !activeListed && modelRowConfigured(active) {
+		rows = append(rows, active)
+	}
+
+	// Two rows can still share a name (a config written by an older build, or
+	// by hand). The masked key tail is the one field that tells them apart, so
+	// the rows that repeat say which account they are.
+	names := make([]string, len(rows))
+	repeats := make(map[string]int, len(rows))
+	for i, mod := range rows {
+		names[i] = modelRowName(mod)
+		repeats[names[i]]++
+	}
+
+	current := i18n.T(m.loc, "tui.badge.current")
+	items := make([]SelectionItem, 0, len(rows))
+	for i, mod := range rows {
+		label := names[i]
+		if repeats[label] > 1 {
+			if tail := maskedKeyTail(mod); tail != "" {
+				label += " " + tail
+			}
+		}
+		item := SelectionItem{ID: label, Title: label, Value: mod}
+		if sameModelRow(mod, active) {
+			item.Badge = current
+		}
+		items = append(items, item)
 	}
 	return items
 }
@@ -519,7 +547,12 @@ func (m tuiModel) openModelPanel() (tuiModel, tea.Cmd) {
 	}
 
 	items := m.buildModelItems()
-	sl := NewSelectionList(i18n.T(m.loc, "tui.model.panelTitle"), items)
+	title := i18n.T(m.loc, "tui.model.panelTitle")
+	if m.panelNotice != "" {
+		title += " — " + m.panelNotice
+		m.panelNotice = ""
+	}
+	sl := NewSelectionList(title, items)
 	// Reopens (after add/edit/delete) keep the highlight where it was instead
 	// of snapping back to the first row.
 	if prev := m.selectionList.Cursor; len(items) > 0 {
@@ -559,6 +592,7 @@ func (m tuiModel) startModelWizard() (tuiModel, tea.Cmd) {
 	m.wizardHeaders = ""
 	m.wizardAlias = ""
 	m.wizardEditAlias = ""
+	m.wizardEditOrigin = config.ModelConfig{}
 	m.form = nil
 	m.formFocus = 0
 	m.formErr = ""
@@ -673,6 +707,14 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.followUpTask(t)
 			}
 			return m.startExec("/task " + t.TaskID)
+
+		case listRewind:
+			turn, ok := item.Value.(int)
+			if !ok {
+				return m, nil
+			}
+			// A rewind deletes work; it gets a card, not a bare Enter.
+			return m.confirmRewind(turn)
 		}
 	}
 	return m, nil
@@ -684,18 +726,18 @@ func (m tuiModel) handleModelPanelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case tea.KeyEsc:
 			m.confirmDeleteModel = false
-			m.pendingDeleteModel = ""
+			m.pendingDeleteModel = config.ModelConfig{}
 			return m.openModelPanel()
 		case tea.KeyRunes:
 			switch string(msg.Runes) {
 			case "y", "Y":
-				alias := m.pendingDeleteModel
+				target := m.pendingDeleteModel
 				m.confirmDeleteModel = false
-				m.pendingDeleteModel = ""
-				return m.executeDeleteModel(alias)
+				m.pendingDeleteModel = config.ModelConfig{}
+				return m.executeDeleteModel(target)
 			case "n", "N":
 				m.confirmDeleteModel = false
-				m.pendingDeleteModel = ""
+				m.pendingDeleteModel = config.ModelConfig{}
 				return m.openModelPanel()
 			}
 		}
@@ -745,42 +787,29 @@ func (m tuiModel) handleModelPanelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// switchSelectedModel switches active model to the chosen entry.
+// switchSelectedModel switches the active model to the highlighted row. The
+// row is taken from the list item itself: re-resolving it by name picks the
+// first row that answers to the name, which for two accounts of one vendor is
+// the wrong account.
 func (m tuiModel) switchSelectedModel() (tuiModel, tea.Cmd) {
 	item, ok := m.selectionList.Selected()
 	if !ok || m.r == nil {
 		m.mode = modeIdle
 		return m, nil
 	}
-
-	name := item.ID
-	var targetMC config.ModelConfig
-	var found bool
-	m.r.readConfig(func(c *config.Config) {
-		if c.Model.Alias() == name {
-			targetMC, found = c.Model, true
-			return
-		}
-		for _, mod := range c.Models {
-			if mod.Alias() == name || mod.Model == name {
-				targetMC, found = mod, true
-				return
-			}
-		}
-	})
-
-	if found {
-		_ = m.r.applyModel(targetMC)
+	target, ok := item.Value.(config.ModelConfig)
+	if !ok || !modelRowConfigured(target) {
 		m.mode = modeIdle
-		note := block{
-			kind: blockNote,
-			body: i18n.Tf(m.loc, "tui.model.switched", "alias", targetMC.Alias(), "model", effectiveModel(targetMC)),
-		}
-		return m, m.printBlock(note)
+		return m, nil
 	}
 
+	_ = m.r.applyModel(target)
 	m.mode = modeIdle
-	return m, nil
+	note := block{
+		kind: blockNote,
+		body: i18n.Tf(m.loc, "tui.model.switched", "alias", target.Alias(), "model", effectiveModel(target)),
+	}
+	return m, m.printBlock(note)
 }
 
 // deleteSelectedModel prompts for confirmation before removing the model.
@@ -789,43 +818,60 @@ func (m tuiModel) deleteSelectedModel() (tuiModel, tea.Cmd) {
 	if !ok || m.r == nil || m.r.cfg == nil {
 		return m, nil
 	}
+	target, ok := item.Value.(config.ModelConfig)
+	if !ok || !modelRowConfigured(target) {
+		return m, nil
+	}
 
 	m.confirmDeleteModel = true
-	m.pendingDeleteModel = item.ID
+	m.pendingDeleteModel = target
 	return m.openModelPanel()
 }
 
-// executeDeleteModel removes the highlighted model after confirmation.
-func (m tuiModel) executeDeleteModel(alias string) (tuiModel, tea.Cmd) {
+// executeDeleteModel removes the confirmed row — that row, by identity, and
+// nothing else. Matching on alias-or-model-id dropped every account that
+// shared the model id, so deleting one of two DeepSeek entries deleted both.
+func (m tuiModel) executeDeleteModel(target config.ModelConfig) (tuiModel, tea.Cmd) {
 	if m.r == nil || m.r.cfg == nil {
 		return m, nil
 	}
 
-	newModels := make([]config.ModelConfig, 0)
+	// No capacity hint from m.r.cfg: the registry is read under the config
+	// lock only, and a bare len() outside it is a race with a concurrent save.
+	kept := make([]config.ModelConfig, 0)
 	var activeHit bool
 	_ = m.r.mutateConfigErr(func(c *config.Config) error {
 		for _, mod := range c.Models {
-			if mod.Alias() != alias && mod.Model != alias {
-				newModels = append(newModels, mod)
+			if sameModelRow(mod, target) {
+				continue
 			}
+			kept = append(kept, mod)
 		}
-		c.Models = newModels
-		activeHit = c.Model.Alias() == alias || c.Model.Model == alias
-		return config.UpdateModelsSection(configWritePath(m.r.configPath), newModels)
+		c.Models = kept
+		activeHit = sameModelRow(c.Model, target)
+		return config.UpdateModelsSection(configWritePath(m.r.configPath), kept)
 	})
 
-	// If active model was deleted, switch to first remaining or clear
+	// If active model was deleted, switch to the first remaining one, or clear
+	// the section deliberately when the registry is now empty. That clear is
+	// the one write the downgrade guard must let through — the operator asked
+	// for it, it is not a stale document — so it goes through
+	// ClearModelSection. A failure leaves the in-memory model untouched (file
+	// and engine stay in agreement) and is shown on the panel instead of being
+	// dropped.
 	if activeHit {
-		if len(newModels) > 0 {
-			_ = m.r.applyModel(newModels[0])
-		} else {
-			_ = m.r.mutateConfigErr(func(c *config.Config) error {
-				if err := config.UpdateModelSection(configWritePath(m.r.configPath), config.ModelConfig{}); err != nil {
-					return err
-				}
-				c.Model = config.ModelConfig{}
-				return nil
-			})
+		if len(kept) > 0 {
+			// A refusal here is the panel's one chance to explain itself: the
+			// row is already gone from the file, so a silent failure leaves
+			// model: naming a model the list no longer shows.
+			if err := m.r.applyModel(kept[0]); err != nil {
+				m.panelNotice = err.Error()
+			}
+		} else if err := m.r.clearActiveModel(); err != nil {
+			// Same contract as the promote branch: the file is already in the
+			// state the operator asked for, so the failure goes on the panel
+			// rather than disappearing.
+			m.panelNotice = err.Error()
 		}
 	}
 
@@ -839,25 +885,8 @@ func (m tuiModel) editSelectedModel() (tuiModel, tea.Cmd) {
 		return m, nil
 	}
 
-	alias := item.ID
-	var curMC config.ModelConfig
-	found := false
-	m.r.readConfig(func(c *config.Config) {
-		if c.Model.Alias() == alias || c.Model.Model == alias {
-			curMC = c.Model
-			found = true
-			return
-		}
-		for _, mod := range c.Models {
-			if mod.Alias() == alias || mod.Model == alias {
-				curMC = mod
-				found = true
-				return
-			}
-		}
-	})
-
-	if !found {
+	curMC, ok := item.Value.(config.ModelConfig)
+	if !ok || !modelRowConfigured(curMC) {
 		return m, nil
 	}
 
@@ -915,6 +944,10 @@ func (m tuiModel) editSelectedModel() (tuiModel, tea.Cmd) {
 	}
 	m.wizardAlias = curMC.Alias()
 	m.wizardEditAlias = curMC.Alias()
+	// The row this edit opened on — its identity, not its name, is what the
+	// save replaces. A config can hold two rows under one name, and a save
+	// that rewrote "the first row named ds" would edit the other account.
+	m.wizardEditOrigin = curMC
 	m.wizardStep = wizardStepForm
 	m.buildModelForm()
 	return m, nil
@@ -1084,62 +1117,49 @@ func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 	case m.wizardModel != "" && m.wizardModel != alias:
 		alias = m.wizardModel
 	}
-	// A collision on a different config needs a distinct alias rather than a
-	// silent overwrite: two providers can legitimately serve the same model
-	// name (e.g. a relay and OpenAI both offering "gpt-4o"), so keep
-	// deriving a fresh alias until it no longer clashes. An edit that renamed
-	// the entry dedupes too — only the untouched original alias replaces in
-	// place.
-	if m.wizardEditAlias == "" || alias != m.wizardEditAlias {
-		collides := func(a string) bool {
-			hit := false
-			m.r.readConfig(func(c *config.Config) {
-				for _, existing := range c.Models {
-					if existing.Alias() == a && existing.Alias() != m.wizardEditAlias &&
-						(existing.Model != mc.Model || existing.BaseURL != mc.BaseURL || existing.Provider != mc.Provider) {
-						hit = true
-						return
-					}
-				}
-			})
-			return hit
-		}
-		for i := 2; collides(alias); i++ {
-			alias = fmt.Sprintf("%s-%d", mc.Model, i)
-		}
-	}
 	mc.Name = alias
 
-	// Upsert into cfg.Models. When editing, drop the stale alias first so a
-	// renamed endpoint cannot leave two rows behind. The surgery runs under
-	// the engine's config lock: the registry is shared memory e.cfg aliases.
-	editAlias := m.wizardEditAlias
+	// What this save replaces: the row the edit opened on, and nothing else.
+	// The old test skipped rows matching on provider+model+endpoint because
+	// they looked like "the same entry" — which is exactly what a second
+	// account of one vendor looks like, so adding the same model again
+	// rewrote the first account instead of registering a second one.
+	origin := m.wizardEditOrigin
+	editing := origin.Alias() != ""
+	// An edit only takes the live slot when it was already there. Editing a
+	// spare account used to activate it: rotating a second vendor's key pulled
+	// the next turn off the model the user was talking to, which the console
+	// and `/model add <alias>` both leave alone.
+	wasLive := false
 	var models []config.ModelConfig
+	stored := mc // overwritten with the allocated name below; a failed write keeps it usable
 	_ = m.r.mutateConfigErr(func(c *config.Config) error {
-		if editAlias != "" && editAlias != alias {
-			kept := c.Models[:0]
-			for _, e := range c.Models {
-				if e.Alias() != editAlias {
-					kept = append(kept, e)
-				}
+		kept := make([]config.ModelConfig, 0, len(c.Models)+1)
+		for _, e := range c.Models {
+			if editing && sameModelRow(e, origin) {
+				continue
 			}
-			c.Models = kept
+			kept = append(kept, e)
 		}
-		replaced := false
-		for i := range c.Models {
-			if c.Models[i].Alias() == alias {
-				c.Models[i] = mc
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			c.Models = append(c.Models, mc)
-		}
+		// A name is the row's address, so the save must land on a free one.
+		// An edit that keeps its name is not blocked by itself: the row it
+		// replaces is already out of the list above.
+		mc.Name = freeModelAlias(c, alias, origin)
+		stored = mc
+		c.Models = append(kept, mc)
 		models = slices.Clone(c.Models)
+		// A save takes the live slot when there is none to keep, or when the row
+		// it rewrote was the live one. An *add* used to activate unconditionally,
+		// so registering a second account pulled the next turn onto it — the
+		// console and `/model add <alias>` both leave a configured model alone,
+		// and choosing one is a click (or Enter in this panel), not a side effect.
+		wasLive = !modelRowConfigured(c.Model) || (editing && sameModelRow(c.Model, origin))
 		return config.UpdateModelsSection(configWritePath(m.r.configPath), models)
 	})
-	_ = m.r.applyModel(mc)
+	mc = stored
+	if wasLive {
+		_ = m.r.applyModel(mc)
+	}
 
 	// Ensure engine is active. Construction reads cfg fields (fallback model
 	// list, card path), so it runs under the config read lock — a concurrent
@@ -1184,9 +1204,20 @@ func (m tuiModel) finalizeWizard() (tuiModel, tea.Cmd) {
 	}
 
 	m.mode = modeIdle
+	// An edit is reported as an edit. Both used to say "added", which is how a
+	// save that rewrote an existing account read on screen as a new one. A
+	// spare account's edit says nothing about activation, because it did not
+	// touch the live model.
+	key := "tui.model.added"
+	switch {
+	case editing && wasLive:
+		key = "tui.model.saved"
+	case editing:
+		key = "tui.model.updated"
+	}
 	note := block{
 		kind: blockNote,
-		body: i18n.Tf(m.loc, "tui.model.added", "alias", alias, "model", mc.Model),
+		body: i18n.Tf(m.loc, key, "alias", mc.Alias(), "model", mc.Model),
 	}
 	return m, m.printBlock(note)
 }
@@ -1655,12 +1686,21 @@ func (m tuiModel) confirmTasksClear() (tea.Model, tea.Cmd) {
 // anything else — n, Esc, Enter — declines and says so. A destructive action
 // never fires on an ambiguous key.
 func (m tuiModel) onConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	run := m.confirmRun
 	yes := m.confirmYes
-	if msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "y") && yes != "" {
-		m.confirmText, m.confirmYes = "", ""
+	if msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "y") && (run != nil || yes != "") {
+		m.confirmText, m.confirmYes, m.confirmRun = "", "", nil
+		if run != nil {
+			// Leave the card BEFORE running: the callback is an arbitrary
+			// action whose failure paths do not know about modeConfirm, and a
+			// card left standing with an emptied message swallows the next
+			// keystroke as a decline.
+			m.mode = modeIdle
+			return run(&m)
+		}
 		return m.startExec(yes)
 	}
-	m.confirmText, m.confirmYes = "", ""
+	m.confirmText, m.confirmYes, m.confirmRun = "", "", nil
 	m.mode = modeIdle
 	note := block{kind: blockNote, body: i18n.T(m.loc, "tui.confirm.cancelled")}
 	return m, m.printBlock(note)

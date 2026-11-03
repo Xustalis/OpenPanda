@@ -3,6 +3,7 @@
 package bus
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 )
@@ -26,6 +27,14 @@ import (
 // Wire shape is unchanged: same fields, same quoting — peers on the stock
 // codec interoperate, and any code path still calling json.Marshal directly
 // produces a decodable frame, just slower.
+//
+// The decoding side gets the same treatment. A stock json.Unmarshal walks the
+// base64 string rune by rune, copies it into a string for base64.DecodeString,
+// and pays that twice (Envelope.Payload, then PayloadInto). unmarshalWire finds
+// the data member with a byte scan, base64-decodes it in place, and hands only
+// the small header to the stock decoder. Anything the fast path cannot prove
+// canonical — escapes, duplicate keys, whitespace, malformed base64 — falls
+// back to the stock decoder, so acceptance is identical to encoding/json's.
 
 // envelopeHead is Envelope minus Payload, in wire order.
 type envelopeHead struct {
@@ -55,6 +64,14 @@ func marshalEnvelope(env Envelope) ([]byte, error) {
 	}
 	out = append(out, '}')
 	return out, nil
+}
+
+// MarshalEnvelope is marshalEnvelope for callers outside this package that
+// put a frame on the wire themselves — transit seals the inner envelope's
+// bytes, and an artifact chunk is the one payload big enough that the stock
+// marshal's second compact pass shows up in transfer time.
+func MarshalEnvelope(env Envelope) ([]byte, error) {
+	return marshalEnvelope(env)
 }
 
 // marshalPayload is json.Marshal with the bulk-carrier types routed to their
@@ -133,4 +150,191 @@ func appendB64Field(head []byte, name string, data []byte) []byte {
 		out = append(out, '"')
 	}
 	return append(out, '}')
+}
+
+// dataMember is the member the fast decoder lifts out of a bulk payload.
+// Both bulk-carrier types name it "data" and encode it as a base64 string.
+var (
+	dataMember = []byte(`"data":"`)
+	dataKey    = []byte("data")
+)
+
+// splitDataMember returns the payload's header object with the data member
+// removed, plus the raw base64 text of that member. ok is false whenever the
+// payload is not in the canonical shape this scan can prove it understands;
+// callers then use the stock decoder and keep its exact acceptance.
+//
+// Canonical shape means: the root is an object; the member is a top-level key
+// written exactly "data": with no whitespace and appears once under any
+// spelling; it sits at a member boundary (a '{' or ',' before the key, a ','
+// or '}' after the value); and its base64 uses no escapes, so the value ends at
+// the first unescaped quote.
+//
+// The header left behind still goes through encoding/json, which validates
+// every other member, and the value is base64-checked, so the only malformed
+// shapes this scan could otherwise hide are seam errors around the removed
+// member: a missing separator or a trailing comma. Both are rejected below
+// rather than repaired.
+func splitDataMember(raw []byte) (head, value []byte, ok bool) {
+	if len(raw) == 0 || raw[0] != '{' {
+		return nil, nil, false
+	}
+	at, ok := dataKeyOffset(raw)
+	if !ok || !bytes.HasPrefix(raw[at:], dataMember) {
+		return nil, nil, false
+	}
+	start := at + len(dataMember)
+	rel := bytes.IndexByte(raw[start:], '"')
+	if rel < 0 {
+		return nil, nil, false
+	}
+	end := start + rel
+	value = raw[start:end]
+	// base64.StdEncoding ignores CR and LF, so a raw control character in the
+	// value would decode here while encoding/json rejects it as an invalid
+	// string literal. Escapes are refused for the same reason: the value must
+	// end at the first unescaped quote.
+	if bytes.IndexByte(value, '\\') >= 0 ||
+		bytes.IndexByte(value, '\r') >= 0 ||
+		bytes.IndexByte(value, '\n') >= 0 {
+		return nil, nil, false
+	}
+	pre, post := raw[:at], raw[end+1:]
+	if last := pre[len(pre)-1]; last != '{' && last != ',' {
+		return nil, nil, false
+	}
+	if len(post) == 0 || (post[0] != ',' && post[0] != '}') {
+		return nil, nil, false
+	}
+	switch {
+	case post[0] == ',':
+		// A comma whose next significant byte closes the object is a trailing
+		// comma: encoding/json rejects the frame, and dropping the comma would
+		// hide that.
+		if rest := bytes.TrimLeft(post[1:], " \t\r\n"); len(rest) == 0 || rest[0] == '}' {
+			return nil, nil, false
+		}
+		post = post[1:]
+	case pre[len(pre)-1] == ',':
+		pre = pre[:len(pre)-1]
+		// A comma opening the object ({,"data":...}) is not a separator; it
+		// would vanish with the member and leave a valid empty header.
+		if len(pre) == 0 || pre[len(pre)-1] == '{' {
+			return nil, nil, false
+		}
+	}
+	head = make([]byte, 0, len(pre)+len(post))
+	head = append(head, pre...)
+	head = append(head, post...)
+	return head, value, true
+}
+
+// dataKeyOffset reports where the outer object's "data" member starts. ok is
+// false when the key is absent, appears more than once under any spelling (the
+// stock decoder's last-wins rule would then disagree with taking the first),
+// sits under an escaped spelling, or any top-level key carries an escape this
+// scan cannot compare without decoding.
+func dataKeyOffset(raw []byte) (at int, ok bool) {
+	at = -1
+	seen := 0
+	depth := 0
+	for i := 0; i < len(raw); i++ {
+		switch raw[i] {
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+		case '"':
+			j := i + 1
+			for j < len(raw) && raw[j] != '"' {
+				if raw[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if depth != 1 {
+				i = j
+				continue
+			}
+			k := j + 1
+			for k < len(raw) && isJSONSpace(raw[k]) {
+				k++
+			}
+			if k < len(raw) && raw[k] == ':' {
+				key := raw[i+1 : j]
+				if bytes.IndexByte(key, '\\') >= 0 {
+					return 0, false
+				}
+				if bytes.EqualFold(key, dataKey) {
+					seen++
+					if seen > 1 {
+						return 0, false
+					}
+					at = i
+				}
+			}
+			i = j
+		}
+	}
+	if seen != 1 {
+		return 0, false
+	}
+	return at, true
+}
+
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+// decodeB64 decodes the base64 text the fast path found. It allocates exactly
+// once — the destination slice the payload keeps.
+func decodeB64(value []byte) ([]byte, bool) {
+	buf := make([]byte, base64.StdEncoding.DecodedLen(len(value)))
+	n, err := base64.StdEncoding.Decode(buf, value)
+	if err != nil {
+		return nil, false
+	}
+	return buf[:n], true
+}
+
+// unmarshalWire mirrors marshalWire. The data field never passes through the
+// stock decoder's string handling; every other field does, from the same
+// bytes minus that member.
+func (p *ArtifactChunkPayload) unmarshalWire(raw []byte) error {
+	head, value, ok := splitDataMember(raw)
+	if !ok {
+		return json.Unmarshal(raw, p)
+	}
+	var h artifactChunkHead
+	if err := json.Unmarshal(head, &h); err != nil {
+		return json.Unmarshal(raw, p)
+	}
+	data, ok := decodeB64(value)
+	if !ok {
+		return json.Unmarshal(raw, p)
+	}
+	*p = ArtifactChunkPayload{
+		TaskID: h.TaskID, Hash: h.Hash, Offset: h.Offset, Data: data,
+		Total: h.Total, EOF: h.EOF, OK: h.OK, Reason: h.Reason,
+	}
+	return nil
+}
+
+func (p *ArtifactPushPayload) unmarshalWire(raw []byte) error {
+	head, value, ok := splitDataMember(raw)
+	if !ok {
+		return json.Unmarshal(raw, p)
+	}
+	var h artifactPushHead
+	if err := json.Unmarshal(head, &h); err != nil {
+		return json.Unmarshal(raw, p)
+	}
+	data, ok := decodeB64(value)
+	if !ok {
+		return json.Unmarshal(raw, p)
+	}
+	*p = ArtifactPushPayload{
+		TaskID: h.TaskID, Hash: h.Hash, Offset: h.Offset, Data: data, Total: h.Total,
+	}
+	return nil
 }

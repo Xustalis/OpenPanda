@@ -52,6 +52,10 @@ type askResult struct {
 	// human-readable summary instead of raw stdout/stderr.
 	Report  string `json:"report,omitempty"`
 	Thought string `json:"thought,omitempty"`
+	// Tokens is the ask's billed total (input + output) across the entry
+	// model's calls. The live figures stream on `usage` events; this is what
+	// a reloaded thread and the result card show.
+	Tokens int64 `json:"tokens,omitempty"`
 	// Plan fields (kind == "plan"): a multi-stage pipeline has no single task id
 	// and no result yet — its stages are queued and run on other machines — so the
 	// client follows it by plan id and shows the stage ids it was decomposed into.
@@ -66,6 +70,11 @@ type askResult struct {
 	Approval      *approvalPayload `json:"approval,omitempty"`
 	Denied        bool             `json:"denied,omitempty"`
 	ConsentScope  string           `json:"consent_scope,omitempty"`
+	// Clarification: the entry model asked before acting and the console's ask
+	// path cannot answer inline (yet). The rendered questions are also in
+	// Answer; the structured set lets a card render the options.
+	NeedsClarification bool               `json:"needs_clarification,omitempty"`
+	Clarification      *entry.ClarifySpec `json:"clarification,omitempty"`
 	// Warning is a non-fatal advisory the surface should show alongside the
 	// result — currently the "queued work with no consumer to drain this
 	// store" notice, which distinguishes parked work from dispatched work.
@@ -86,27 +95,30 @@ type approvalPayload struct {
 // session-ask handlers cannot drift on which fields a plan carries.
 func planResultOf(out *askengine.Result) askResult {
 	res := askResult{
-		Kind:         out.Kind,
-		Answer:       out.Answer,
-		Thought:      out.Thought,
-		TaskID:       out.TaskID,
-		TaskState:    out.TaskState,
-		OK:           out.OK,
-		Stdout:       out.Stdout,
-		Stderr:       out.Stderr,
-		ExitCode:     out.ExitCode,
-		Agent:        out.Agent,
-		Model:        out.Model,
-		Injected:     out.Injected,
-		Executor:     out.Executor,
-		WorkDir:      out.WorkDir,
-		EntryModel:   out.EntryModel,
-		Report:       out.Report,
-		PlanID:       out.PlanID,
-		PlanGoal:     out.PlanGoal,
-		Denied:       out.Denied,
-		ConsentScope: out.ConsentSource,
-		Warning:      out.Warning,
+		Kind:               out.Kind,
+		Answer:             out.Answer,
+		Thought:            out.Thought,
+		TaskID:             out.TaskID,
+		TaskState:          out.TaskState,
+		OK:                 out.OK,
+		Stdout:             out.Stdout,
+		Stderr:             out.Stderr,
+		ExitCode:           out.ExitCode,
+		Agent:              out.Agent,
+		Model:              out.Model,
+		Injected:           out.Injected,
+		Executor:           out.Executor,
+		WorkDir:            out.WorkDir,
+		EntryModel:         out.EntryModel,
+		Report:             out.Report,
+		Tokens:             out.Tokens(),
+		PlanID:             out.PlanID,
+		PlanGoal:           out.PlanGoal,
+		Denied:             out.Denied,
+		ConsentScope:       out.ConsentSource,
+		Warning:            out.Warning,
+		NeedsClarification: out.NeedsClarification,
+		Clarification:      out.Clarification,
 	}
 	if out.NeedsApproval && out.Approval != nil {
 		res.NeedsApproval = true
@@ -122,6 +134,13 @@ func planResultOf(out *askengine.Result) askResult {
 		res.PlanStages = append(res.PlanStages, t.StageID)
 	}
 	return res
+}
+
+// askHardware is an internal gateway entry protected by the panel's normal
+// Bearer authentication. Only this route adds request-local plan consent;
+// the public device gateway rebuilds its payload from its owner policy.
+func (h *handler) askHardware(w http.ResponseWriter, r *http.Request) {
+	h.ask(w, r.WithContext(askengine.WithHardwarePlanConsent(r.Context())))
 }
 
 // ask serves POST /api/ask — the unified entry: one prompt in, answer or task

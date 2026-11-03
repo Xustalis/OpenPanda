@@ -11,8 +11,8 @@
 ![Go](https://img.shields.io/badge/Go-%E2%89%A51.26-00ADD8)
 ![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB)
 ![Platforms](https://img.shields.io/badge/Plattformen-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Memory](https://img.shields.io/badge/Speicherbedarf-~20MB%20RSS-brightgreen)
-![Local First](https://img.shields.io/badge/Cloud--Abh%C3%A4ngigkeit-Keine%20(Local--First)-success)
+![Memory](https://img.shields.io/badge/Speicherbedarf-~40MB%20RSS-brightgreen)
+![No Cloud Relay](https://img.shields.io/badge/Cloud--Relay-Keiner-success)
 
 ---
 
@@ -52,9 +52,19 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 
 ---
 
+## 🆕 Was in v0.1.4 kommt
+
+- **Läufe beginnen am Arbeitsbereich** — jede Agent-Aufgabe trägt eine deterministische Karte ihres Baums (Git-Status, Struktur, Schlüsseldateien und die Build-/Prüfbefehle des Projekts selbst), und der Abschlussrichter sieht die tatsächlich ausgeführten Befehle, bevor er „fertig“ akzeptiert.
+- **Fragen statt raten** — das Einstiegsmodell kann vor dem Anlegen einer Aufgabe begrenzte Multiple-Choice-Fragen stellen, und ein laufender Agent kann dieselben strukturierten Fragen stellen; TUI, Konsole und `panda approve` beantworten sie.
+- **Seitenkanal und Rückspulen** — `/side` (Alias `/btw`) öffnet ein schreibgeschütztes Gespräch neben dem Thread, und jede beendete Antwort hinterlässt einen Prüfpunkt, den `/rewind` wiederherstellt.
+- **Lesen, was der Agent erzeugt hat** — Arbeitsbereichspfade in Antworten sind in der Konsole anklickbar, im Terminal `panda read path:line`; Aufgabenartefakte werden auf einem isolierten zweiten Origin angezeigt.
+- **Die offene Arbeit des Threads auf einen Blick** — eine Aufgabenleiste in der TUI (Strg+B) und der Konsolenkopf listen Laufendes, was auf dich wartet, und die Warteschlange.
+- **Betreiber-Hooks, eingegrenzt** — `task_submitted` / `task_started` / `task_done` / `task_failed` / `task_review` können deine Befehle mit gefilterter Umgebung, Tier-Gate und Audit-Zeile ausführen.
+
 ## 🌟 Was kann OpenPanda?
 
 ### 1. 🌐 Heterogene P2P-Gerätezusammenarbeit
+- **Geräteübergreifender Status (bis v0.1.3 ausgeliefert)**: AEAD pro Sitzung, Bluetooth-artige Kopplung, Vertrauensstufen, Multi-Hop-Relays und parallele Ausführung im selben Projekt über pfadbezogene Lanes und isolierte Worktrees.
 - **LAN-Discovery + Bluetooth-artige Kopplung**: Knoten finden sich im LAN mit fingerprint-bestätigter Aufnahme; `panda pair` fügt ein Gerät über einen auf beiden Seiten bestätigten Kurzcode hinzu, und `panda nodes verify` pinnt den Ed25519-Schlüssel jedes Peers.
 - **Dynamische Fähigkeitskarten**: Jeder Knoten erfasst automatisch sein Hardwareprofil (CPU, RAM, OS) und verfügbare Agenten.
 - **Intelligente Aufgabenverteilung**: Routet nach gemessener Kapazität — schwere Kompiliervorgänge an leistungsstarke Server, Sensoraufgaben an Edge-Knoten; `panda nodes drain` entfernt einen Knoten für Wartung.
@@ -67,7 +77,7 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 - **Trust-Zonen**: Jeder Peer trägt eine vom Betreiber gesetzte Stufe (`panda nodes trust <id> mesh|guarded|open`), die begrenzt, was eine delegierte Aufgabe ihm offenlegen darf und wie eingehende Arbeit von ihm zugelassen wird; Bildschirminhalte sind durchgehend mesh-exklusiv — eine Abstufung des Vertrauens kappt eine laufende Screen-Übertragung mitten im Flug.
 
 ### 2. 🤖 Universelle Agenten-Orchestrierung & Ausfallsicherung
-- **Vorkonfigurierte Adapter**: Zehn mitgelieferte Adapter (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, ZCode, OpenClaw), eine generic-Brücke für alles Übrige und Shell-Befehle.
+- **Vorkonfigurierte Adapter**: Zehn dedizierte Adapter (Claude Code, OpenAI Codex, OpenCode, Grok Build, DeepSeek Harness, Antigravity, Hermes, Pi, OpenClaw und ZCode). Eine konfigurierbare generische Brücke bindet jede weitere headless CLI ein.
 - **Multi-Modell-Registry & transparentes Failover**: `panda model add|switch|test` verwaltet mehrere Provider pro Knoten hinter einem Health-Breaker; bei aufgebrauchten Kontingenten oder ungültigen Schlüsseln (401/403) wird automatisch ein Ausweichmodell injiziert und die Aufgabe läuft weiter.
 - **Multi-Harness-Läufe**: `panda ask --agents a,b --mode parallel` verteilt eine Anweisung als Plan an mehrere Agenten und sammelt die Urteile ein.
 - **Vollständige Transparenz**: Verfolge Bash-Befehle, Dateiänderungen und Werkzeugaufrufe live im Terminal oder Browser.
@@ -96,7 +106,7 @@ Du gibst eine Anweisung von **irgendeinem** Gerät aus. OpenPanda analysiert die
 - **`panda rpc`** (experimentell): NDJSON-over-stdio-Einbettungsoberfläche (`status`, Streaming-`ask`, `session.*`); `scripts/panda_rpc.py` ist ein stdlib-Referenzclient.
 - **Abo-OAuth** (experimentell): `panda auth login anthropic` meldet Claude Pro/Max per PKCE an und erneuert Token transparent.
 
-### 6. 🪶 Extrem leichtgewichtig (~20MB Speicher)
+### 6. 🪶 Extrem leichtgewichtig (~40MB Speicher im Leerlauf)
 - Einzelne statische Go-Binärdatei ohne externe Laufzeitabhängigkeiten (reines Go SQLite im WAL-Modus).
 - Läuft mühelos auf 20\$-Einplatinencomputern bis hin zu großen Clustern.
 

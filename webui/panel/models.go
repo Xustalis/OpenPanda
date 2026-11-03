@@ -12,12 +12,15 @@ package panel
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -46,6 +49,25 @@ type modelEntryJSON struct {
 	Active         bool   `json:"active"`
 	KeySet         bool   `json:"key_set"`
 	KeyHint        string `json:"key_hint,omitempty"`
+	// KeyEnv names the environment variable this row reads its key from. Set
+	// instead of an api_key when the row was imported from another tool's
+	// config: the secret stays where it already was.
+	KeyEnv string `json:"key_env,omitempty"`
+	// Auth names a subscription credential (internal/auth) the row signs in
+	// with instead of a key — today only "codex", whose token is the CLI's own
+	// login. The console shows it so a row with no api_key does not read as
+	// "missing a key".
+	Auth string `json:"auth,omitempty"`
+	// KeyFingerprint is a short digest of the stored key. key_hint is the
+	// last four characters, which two accounts of one vendor can share; the
+	// console groups models into connections by this instead, so "extend"
+	// cannot borrow the other account's key. Not the secret, and not
+	// reversible.
+	KeyFingerprint string `json:"key_fingerprint,omitempty"`
+	// AllowPlaintext is the stored waiver for a plain-http endpoint. It is
+	// reported so the edit form can show the box already ticked instead of
+	// asking again (or, worse, revoking it by submitting an unticked box).
+	AllowPlaintext bool `json:"allow_plaintext,omitempty"`
 	// LimitsAuto says the stored value is unset and the numbers below are the
 	// catalogue's — the console shows them as placeholders ("auto · 1.0M") so a
 	// user can tell what they chose from what the resolver picked.
@@ -75,6 +97,26 @@ type providerJSON struct {
 	Region        string `json:"region"`    // "cn" | "global"
 }
 
+// envKeySet reports whether a row's key_env names a variable that is actually
+// set in this process. A row pointing at a missing variable has no key, and the
+// console must say so instead of showing a green "key stored".
+func envKeySet(mc config.ModelConfig) bool {
+	return mc.KeyEnv != "" && strings.TrimSpace(os.Getenv(mc.KeyEnv)) != ""
+}
+
+// fingerprintSource is what the connection grouping digests. An env-backed row
+// groups by the variable's name, not its value: two rows reading the same
+// variable are one account, and the console never needs the secret to know it.
+func fingerprintSource(mc config.ModelConfig) string {
+	if mc.APIKey != "" {
+		return mc.APIKey
+	}
+	if mc.KeyEnv != "" {
+		return "env:" + mc.KeyEnv
+	}
+	return ""
+}
+
 // modelEntryOf renders a ModelConfig for the wire, resolving the catalogue
 // fallbacks the REPL's table view resolves (default model, base URL,
 // context window, provider label).
@@ -97,8 +139,12 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 		ThinkingBudget: mc.ThinkingBudget,
 		MaxRetries:     mc.MaxRetries,
 		NoAuth:         mc.NoAuth || (known && p.NoAuth),
-		KeySet:         mc.APIKey != "",
+		KeySet:         mc.APIKey != "" || envKeySet(mc) || mc.Auth != "",
+		Auth:           mc.Auth,
 		KeyHint:        maskKey(mc.APIKey),
+		KeyEnv:         mc.KeyEnv,
+		KeyFingerprint: keyFingerprint(fingerprintSource(mc)),
+		AllowPlaintext: mc.AllowPlaintext,
 		ContextAuto:    mc.ContextWindow == 0,
 		MaxTokensAuto:  mc.MaxTokens == 0,
 		WarningCode:    "",
@@ -141,9 +187,10 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 			e.MaxTokens = ceil
 		}
 	}
-	e.Active = mc.Alias() == active.Alias() &&
-		mc.Model == active.Model &&
-		mc.BaseURL == active.BaseURL
+	// "In use" is the row the engine is dialing, credential included: two
+	// accounts of one vendor match on every other field, and marking both lit
+	// the page as if two models were live at once.
+	e.Active = sameEntry(mc, active)
 	return e
 }
 
@@ -250,6 +297,50 @@ type addModelRequest struct {
 	NoAuth              *bool             `json:"no_auth,omitempty"`
 	Params              map[string]any    `json:"params,omitempty"`
 	Headers             map[string]string `json:"headers,omitempty"`
+	// AllowPlaintext is the caller's explicit consent to reach this endpoint
+	// over http. The network guard refuses a plaintext dial otherwise, and the
+	// consent has to live on the entry: the daemon dials it long after this
+	// request is gone. A pointer, not a bool — an edit that does not mention
+	// the field must keep the stored waiver instead of silently revoking it.
+	AllowPlaintext *bool `json:"allow_plaintext,omitempty"`
+	// CopyFrom names an existing alias to duplicate. The panel never echoes a
+	// key back, and params/headers are not part of the entry JSON, so a "copy
+	// this model" that only re-sent the visible fields would hand the user an
+	// empty credential — the source's secret and raw overrides travel here
+	// instead, and every field the request does carry still wins.
+	CopyFrom string `json:"copy_from,omitempty"`
+	// CopyFromKey narrows CopyFrom when two rows share its alias: the list
+	// hands out a key_fingerprint per row, and a copy of the second account
+	// must carry that account's credential, not the first one's.
+	CopyFromKey string `json:"copy_from_key,omitempty"`
+}
+
+// modelByRef resolves a saved entry by alias, falling back to the live model:
+// the registry paints the active one at the head of the page, so "copy this"
+// has to work on it even though it lives in `model:`, not `models:`. The key
+// fingerprint narrows the match when two rows share a name (a config written
+// before names were kept unique), and "copy this account" that resolved the
+// first match duplicated the other one's credential — the copy then could not
+// authenticate. An empty key keeps the old first-match behaviour, which is
+// what an older console sends.
+func (h *handler) modelByRef(alias, key string) (config.ModelConfig, bool) {
+	var out config.ModelConfig
+	found := false
+	match := func(m config.ModelConfig) bool {
+		return m.Alias() == alias && (key == "" || keyFingerprint(m.APIKey) == key)
+	}
+	h.readCfg(func(c *config.Config) {
+		for _, m := range c.Models {
+			if match(m) {
+				out, found = m, true
+				return
+			}
+		}
+		if (c.Model.Model != "" || c.Model.Provider != "") && match(c.Model) {
+			out, found = c.Model, true
+		}
+	})
+	return out, found
 }
 
 // modelFromRequest builds the ModelConfig a request describes. existingKey is
@@ -273,6 +364,13 @@ func (h *handler) modelFromRequest(req addModelRequest, existingKey string) (con
 		if err := checkCustomBaseURL(base); err != nil {
 			return config.ModelConfig{}, err
 		}
+		// "Extend this connection" applies to custom relays too: the form
+		// prefills the saved row and submits without a key, so without this the
+		// entry persisted keyless (NoAuth: true) and the user lost the key that
+		// was already on file.
+		if key == "" && req.ReuseFrom != "" {
+			key = h.keyForAlias(req.ReuseFrom)
+		}
 		mc = config.ModelConfig{
 			Provider:  "custom",
 			APIType:   normalizeAPIType(req.APIType),
@@ -283,6 +381,9 @@ func (h *handler) modelFromRequest(req addModelRequest, existingKey string) (con
 			// A keyless relay is a local-style endpoint — the CLI's
 			// `model add custom` marks it no-auth for the same reason.
 			NoAuth: key == "",
+			// The endpoint's own plaintext opt-in travels with the entry: it is
+			// the caller who knows whether this relay speaks https.
+			AllowPlaintext: req.AllowPlaintext != nil && *req.AllowPlaintext,
 		}
 	} else {
 		p, ok := providers.Lookup(provider)
@@ -375,6 +476,12 @@ func (h *handler) modelFromRequest(req addModelRequest, existingKey string) (con
 	}
 	if req.NoAuth != nil {
 		mc.NoAuth = *req.NoAuth
+		// 免密钥 is a statement that this endpoint takes none: keeping the
+		// stored secret would leave a credential the user just said is unused,
+		// and the badge would keep claiming one is set.
+		if *req.NoAuth && strings.TrimSpace(req.APIKey) == "" {
+			mc.APIKey = ""
+		}
 	}
 	if req.Params != nil {
 		mc.Params = req.Params
@@ -431,25 +538,51 @@ func freeAliasIn(c *config.Config, want string, skip config.ModelConfig) string 
 	}
 }
 
-// sameEntry is the identity the console paints as one row: alias, model id
-// and endpoint together. Comparing the alias alone is what made a second
-// entry under the same name — a second account, or the Zen/Go pair — look
-// like the live model and refuse deletion.
+// sameEntry is the identity the console paints as one row: alias, model id,
+// endpoint and credential together.
+//
+// Comparing the alias alone made a second entry under the same name — a second
+// account, or the Zen/Go pair — look like the live model. Stopping at
+// alias+model+endpoint then made two accounts of one vendor look like one row,
+// because those three fields are exactly what they share: both tiles were lit
+// as "in use", and a delete removed whichever row happened to come first. The
+// stored key is the only field the two never share, so it is part of the
+// identity — a config written before names were kept unique is still readable
+// row by row.
 func sameEntry(a, b config.ModelConfig) bool {
-	return a.Alias() == b.Alias() && a.Model == b.Model && a.BaseURL == b.BaseURL
+	return a.Alias() == b.Alias() &&
+		a.Model == b.Model &&
+		effectiveProviderID(a) == effectiveProviderID(b) &&
+		sameEndpoint(a.BaseURL, b.BaseURL) &&
+		a.APIKey == b.APIKey
+}
+
+// sameEndpoint compares two endpoints ignoring trailing slashes and case — one
+// address collects both spellings in a hand-edited config, and the renderer
+// reports the form the client will dial rather than the string that is stored.
+// Strict equality split that one row in two on the console side: a delete that
+// addressed the live row did not recognise it as live, so `model:` kept naming
+// the row it had just removed. The CLI compares it this way already.
+func sameEndpoint(a, b string) bool {
+	return strings.EqualFold(strings.TrimRight(strings.TrimSpace(a), "/"),
+		strings.TrimRight(strings.TrimSpace(b), "/"))
 }
 
 // entryMatches answers "is this the row the request addressed": the alias from
-// the path, narrowed by the optional ?model= and ?base_url= disambiguators a
-// legacy config with two rows under one name needs.
-func entryMatches(m config.ModelConfig, alias, model, base string) bool {
+// the path, narrowed by the optional ?model=, ?base_url= and ?key=
+// disambiguators a legacy config with two rows under one name needs. key is the
+// fingerprint the list handed out (key_fingerprint), never the secret itself.
+func entryMatches(m config.ModelConfig, alias, model, base, key string) bool {
 	if m.Alias() != alias {
 		return false
 	}
 	if model != "" && m.Model != model {
 		return false
 	}
-	if base != "" && m.BaseURL != base {
+	if base != "" && !sameEndpoint(m.BaseURL, base) {
+		return false
+	}
+	if key != "" && keyFingerprint(m.APIKey) != key {
 		return false
 	}
 	return true
@@ -495,10 +628,42 @@ func (h *handler) addModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A copy starts from the source entry's invisible half: the credential,
+	// the raw params/headers, the plaintext waiver, and the OAuth binding.
+	// Anything the request states explicitly still overrides — this only
+	// fills what the client could not have sent.
+	var copied *config.ModelConfig
+	if src := strings.TrimSpace(req.CopyFrom); src != "" {
+		from, ok := h.modelByRef(src, req.CopyFromKey)
+		if !ok {
+			writeErr(w, http.StatusNotFound, fmt.Errorf("no model named %q to copy", src))
+			return
+		}
+		copied = &from
+		if strings.TrimSpace(req.APIKey) == "" {
+			req.APIKey = from.APIKey
+		}
+		if req.Params == nil {
+			req.Params = from.Params
+		}
+		if req.Headers == nil {
+			req.Headers = from.Headers
+		}
+		if req.AllowPlaintext == nil && from.AllowPlaintext {
+			waiver := true
+			req.AllowPlaintext = &waiver
+		}
+	}
+
 	mc, err := h.modelFromRequest(req, "")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
+	}
+	// The OAuth binding has no request field: without it a copied
+	// subscription-backed entry would silently become a keyless one.
+	if copied != nil && mc.Auth == "" {
+		mc.Auth = copied.Auth
 	}
 	alias := strings.TrimSpace(req.Alias)
 	if alias == "" {
@@ -550,6 +715,7 @@ func (h *handler) addModel(w http.ResponseWriter, r *http.Request) {
 func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("alias")
 	modelQ, baseQ := r.URL.Query().Get("model"), r.URL.Query().Get("base_url")
+	keyQ := r.URL.Query().Get("key")
 	var req addModelRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
@@ -569,7 +735,7 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 	found, inRegistry := false, false
 	h.readCfg(func(c *config.Config) {
 		for _, m := range c.Models {
-			if entryMatches(m, name, modelQ, baseQ) {
+			if entryMatches(m, name, modelQ, baseQ, keyQ) {
 				old, found, inRegistry = m, true, true
 				return
 			}
@@ -580,7 +746,7 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 	if found {
 		wasActive = sameEntry(old, active)
 	}
-	if !found && entryMatches(active, name, modelQ, baseQ) {
+	if !found && entryMatches(active, name, modelQ, baseQ, keyQ) {
 		old, found, wasActive = active, true, true
 	}
 	if !found {
@@ -622,9 +788,16 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = old.Model
 	}
+	// The waiver is not part of the visible form for a provider row, so an
+	// edit that omits it means "unchanged", not "revoke".
+	if req.AllowPlaintext == nil && old.AllowPlaintext {
+		waiver := true
+		req.AllowPlaintext = &waiver
+	}
 
+	wantProviderChanged := wantProvider != "" && effectiveProviderID(old) != wantProvider
 	existingKey := old.APIKey
-	if wantProvider != "" && effectiveProviderID(old) != wantProvider {
+	if wantProviderChanged {
 		existingKey = h.keyAcrossVendorSwitch(old, wantProvider)
 	}
 
@@ -636,6 +809,22 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 	want := strings.TrimSpace(req.Alias)
 	if want == "" {
 		want = old.Alias()
+	}
+	// An env-backed row carries no api_key, so the rebuilt entry would come back
+	// keyless and the next call would 401. The reference is part of the row's
+	// identity the form never shows; keep it unless the edit supplied a key.
+	// An env reference belongs to the vendor it was written for, so a vendor
+	// switch drops it for the same reason keyAcrossVendorSwitch drops a stored
+	// key: otherwise the new endpoint is dialed with the old account's token.
+	if strings.TrimSpace(req.APIKey) == "" {
+		if old.KeyEnv != "" && !wantProviderChanged {
+			mc.KeyEnv = old.KeyEnv
+		}
+	} else {
+		mc.KeyEnv = ""
+	}
+	if mc.KeyEnv != "" || mc.APIKey != "" {
+		mc.NoAuth = old.NoAuth && mc.APIKey == "" && mc.KeyEnv == ""
 	}
 	mc.Name = want
 	if _, err := entry.NewClient(mc); err != nil {
@@ -690,6 +879,7 @@ func (h *handler) updateModel(w http.ResponseWriter, r *http.Request) {
 func (h *handler) useModel(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("alias")
 	modelQ, baseQ := r.URL.Query().Get("model"), r.URL.Query().Get("base_url")
+	keyQ := r.URL.Query().Get("key")
 	if h.cfg == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
 		return
@@ -699,19 +889,21 @@ func (h *handler) useModel(w http.ResponseWriter, r *http.Request) {
 	h.readCfg(func(c *config.Config) {
 		active = c.Model
 		if (c.Model.Model != "" || c.Model.Provider != "") &&
-			entryMatches(c.Model, name, modelQ, baseQ) {
+			entryMatches(c.Model, name, modelQ, baseQ, keyQ) {
 			match = c.Model
 			isActive = true
 			return
 		}
 		for _, m := range c.Models {
-			if entryMatches(m, name, modelQ, baseQ) {
+			if entryMatches(m, name, modelQ, baseQ, keyQ) {
 				match = m
 				return
 			}
 			// A bare model id still addresses the one row that serves it, but
-			// only when the caller did not narrow the search itself.
-			if modelQ == "" && baseQ == "" && m.Model == name {
+			// only when the caller did not narrow the search itself — a key
+			// digest names an account, and falling back to "the row serving
+			// this id" would switch to the other account that shares it.
+			if modelQ == "" && baseQ == "" && keyQ == "" && m.Model == name {
 				match = m
 				return
 			}
@@ -739,38 +931,52 @@ func (h *handler) useModel(w http.ResponseWriter, r *http.Request) {
 	writeErr(w, http.StatusNotFound, errors.New("no such model"))
 }
 
-// removeModel serves DELETE /api/models/{alias} — drops one registry row.
+// removeModel serves DELETE /api/models/{alias} — drops one registry row, or
+// clears a live model that was configured outside the registry.
 //
-// Two things the earlier version got wrong. It called a row "active" on the
-// alias alone, so a second entry that merely shared the name (another account,
-// or the Zen row beside the Go row) could never be deleted. And it treated the
-// live row as undeletable, which stranded a user who wanted to drop the model
-// they were using. Now the identity is alias+model+endpoint, and deleting the
-// live row promotes the next remaining one — refusing only when it is the last
-// model there is, because that would leave the node with nothing to ask.
+// Three things the earlier versions got wrong. They called a row "active" on
+// the alias alone, so a second entry that merely shared the name (another
+// account, or the Zen row beside the Go row) could never be deleted. They
+// treated the live row as undeletable, which stranded a user who wanted to drop
+// the model they were using. And they could only address the registry, so a
+// model written to `model:` by an older build or by hand — the row the page
+// paints at the head of the list — had no delete path at all, on this side or
+// on any other. Now the identity is alias+model+endpoint, both homes are
+// addressable, and deleting the live row promotes the next remaining one —
+// refusing only when it is the last model there is, because that would leave
+// the node with nothing to ask.
 func (h *handler) removeModel(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("alias")
 	modelQ, baseQ := r.URL.Query().Get("model"), r.URL.Query().Get("base_url")
+	keyQ := r.URL.Query().Get("key")
 	if h.cfg == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
 		return
 	}
 	active := h.engineModel()
 	var target, successor config.ModelConfig
+	var inRegistry bool
 	found, hasSuccessor := false, false
 	h.readCfg(func(c *config.Config) {
 		for _, m := range c.Models {
-			if entryMatches(m, name, modelQ, baseQ) {
-				target, found = m, true
+			if entryMatches(m, name, modelQ, baseQ, keyQ) {
+				target, found, inRegistry = m, true, true
 				break
 			}
 		}
 		if !found {
-			only, ok := onlyByAlias(c.Models, name)
-			if !ok {
-				return
+			if only, ok := onlyByAlias(c.Models, name); ok {
+				target, found, inRegistry = only, true, true
 			}
-			target, found = only, true
+		}
+		// A live model configured outside the registry is a row too — the one
+		// the page paints as "in use" with no row behind it.
+		if !found && (c.Model.Model != "" || c.Model.Provider != "") &&
+			entryMatches(c.Model, name, modelQ, baseQ, keyQ) {
+			target, found = c.Model, true
+		}
+		if !found {
+			return
 		}
 		// The survivor is the first *other* row by identity, not by address:
 		// a same-named row on another endpoint is a legitimate successor, and
@@ -787,10 +993,18 @@ func (h *handler) removeModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("no such model"))
 		return
 	}
-	wasActive := sameEntry(target, active)
-	if wasActive && !hasSuccessor {
-		writeErr(w, http.StatusConflict, errors.New("this is the only model — add another one before removing it"))
-		return
+	// A live-only target is the live row by construction, whatever the engine
+	// happens to hold: it is the row `model:` carries, so dropping it has to
+	// rewrite that section too.
+	wasActive := sameEntry(target, active) || !inRegistry
+	// The successor has to be buildable *before* the row disappears: deleting
+	// first and discovering the survivor cannot dial leaves the node with a
+	// model: section that names nothing and no way back but the file.
+	if wasActive && hasSuccessor {
+		if _, err := entry.NewClient(successor); err != nil {
+			writeErr(w, http.StatusConflict, fmt.Errorf("%s cannot take over: %w", successor.Alias(), err))
+			return
+		}
 	}
 	err := h.mutateCfgErr(func(c *config.Config) error {
 		for i, m := range c.Models {
@@ -811,14 +1025,30 @@ func (h *handler) removeModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	// The row the engine was dialing is gone: hand the slot to a survivor, or
+	// clear it when there is none. Removing the last model is the request a
+	// user makes when the one they configured is wrong, and refusing it left
+	// the config editable only in the file — the TUI and `/model remove` both
+	// clear the section for that case, so the console does too.
 	if wasActive {
-		if err := h.applyModelConfig(successor); err != nil {
+		if hasSuccessor {
+			if err := h.applyModelConfig(successor); err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		} else if err := h.clearModelConfig(); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
 	}
 	out := map[string]any{"removed": name}
-	if wasActive {
+	if !inRegistry {
+		out["live"] = true
+	}
+	if wasActive && !hasSuccessor {
+		out["cleared"] = true
+	}
+	if wasActive && hasSuccessor {
 		out["switched_to"] = successor.Alias()
 	}
 	writeJSON(w, out)
@@ -837,6 +1067,17 @@ type modelRefRequest struct {
 	// shape inline rather than resolving it from config.
 	APIType string `json:"api_type,omitempty"`
 	BaseURL string `json:"base_url,omitempty"`
+	// AllowPlaintext carries the form's http consent into fetch/test, so a
+	// relay that has not been saved yet can still be probed over plain http.
+	AllowPlaintext bool `json:"allow_plaintext,omitempty"`
+	// CopyFrom names the entry a draft was duplicated from. A copy has no key
+	// of its own yet — the console never receives one — so "fetch the model
+	// list" on the copy sheet would otherwise dial the endpoint keyless. The
+	// source's credential (and its plaintext waiver) fill the gap; an explicit
+	// api_key in the same request still wins.
+	CopyFrom string `json:"copy_from,omitempty"`
+	// CopyFromKey narrows CopyFrom the same way the console addresses a row.
+	CopyFromKey string `json:"copy_from_key,omitempty"`
 }
 
 // resolveModelRefErr maps the request onto a ModelConfig, mirroring the REPL's
@@ -845,6 +1086,19 @@ type modelRefRequest struct {
 // named must not be dialed" — the second is a security refusal and deserves
 // its own message.
 func (h *handler) resolveModelRefErr(req modelRefRequest) (config.ModelConfig, error) {
+	// A copy borrows its source's credential until it has one of its own: the
+	// form cannot show the key, so a fetch/test on a not-yet-saved duplicate
+	// arrives keyless. Explicit fields still win over the borrowed ones.
+	if strings.TrimSpace(req.APIKey) == "" {
+		if src := strings.TrimSpace(req.CopyFrom); src != "" {
+			if from, ok := h.modelByRef(src, req.CopyFromKey); ok {
+				req.APIKey = from.APIKey
+				if !req.AllowPlaintext {
+					req.AllowPlaintext = from.AllowPlaintext
+				}
+			}
+		}
+	}
 	if req.Alias == "" && req.Provider == "" {
 		return h.engineModel(), nil
 	}
@@ -893,12 +1147,24 @@ func (h *handler) resolveModelRefErr(req modelRefRequest) (config.ModelConfig, e
 		if err := checkCustomBaseURL(base); err != nil {
 			return config.ModelConfig{}, err
 		}
+		key := strings.TrimSpace(req.APIKey)
+		if key == "" {
+			// A relay that is already on file already has its key on file, and
+			// the form can never show it — so "fetch the model list" on a saved
+			// endpoint arrives keyless and fails before it dials. Borrow the
+			// stored credential, matched on the endpoint itself: the key belongs
+			// to the host that issued it, so it never crosses to another base.
+			key = h.keyForEndpoint(base)
+		}
 		return config.ModelConfig{
 			Provider: "custom",
 			APIType:  normalizeAPIType(req.APIType),
 			BaseURL:  base,
 			Model:    strings.TrimSpace(req.Model),
-			APIKey:   strings.TrimSpace(req.APIKey),
+			APIKey:   key,
+			// A probe carries the form's consent too: the model is not saved
+			// yet, so nothing on disk can answer for it.
+			AllowPlaintext: req.AllowPlaintext,
 		}, nil
 	}
 	p, ok := providers.Lookup(pid)
@@ -1034,6 +1300,32 @@ func (h *handler) keyForAlias(alias string) string {
 	return key
 }
 
+// keyForEndpoint returns the key stored on an entry that dials exactly this
+// endpoint — the live model first, then the registry. The form can never show
+// a saved secret, so a fetch/test against an endpoint that is already on file
+// would otherwise arrive keyless and fail before it dials. Matching the base
+// URL rather than the provider id is deliberate: the credential belongs to the
+// host that issued it, so it is never handed to a different base.
+func (h *handler) keyForEndpoint(base string) string {
+	want := strings.TrimRight(strings.TrimSpace(base), "/")
+	if want == "" {
+		return ""
+	}
+	key := ""
+	h.readCfg(func(c *config.Config) {
+		for _, m := range append([]config.ModelConfig{c.Model}, c.Models...) {
+			if m.APIKey == "" {
+				continue
+			}
+			if strings.EqualFold(strings.TrimRight(strings.TrimSpace(m.BaseURL), "/"), want) {
+				key = m.APIKey
+				return
+			}
+		}
+	})
+	return key
+}
+
 func (h *handler) findProviderKey(providerID string) string {
 	key := ""
 	h.readCfg(func(c *config.Config) {
@@ -1139,4 +1431,46 @@ func (h *handler) applyModelConfig(mc config.ModelConfig) error {
 		return h.engines.Reload()
 	}
 	return nil
+}
+
+// clearModelConfig empties `model:` on purpose and drops the engine's client
+// with it — the last-model delete path.
+//
+// ClearModelSection is the deliberate clear (it bypasses the downgrade guard
+// that exists to catch an accidental one), and ClearModel is what stops the
+// deleted credential from still being dialed: SetModel cannot express "no
+// model", but the engine's model-less state is a supported one — tasks stay
+// live, asks degrade with ErrNoModel until the console configures another.
+// With no engine loaded there is nothing to clear, so Reload builds the
+// model-less one the next request will use.
+func (h *handler) clearModelConfig() error {
+	if err := h.mutateCfgErr(func(c *config.Config) error {
+		if h.configPath != "" {
+			if err := config.ClearModelSection(h.configPath); err != nil {
+				return err
+			}
+		}
+		c.Model = config.ModelConfig{}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if eng := h.currentEngine(); eng != nil {
+		eng.ClearModel()
+	} else if h.engines != nil {
+		_ = h.engines.Reload()
+	}
+	return nil
+}
+
+// keyFingerprint is a stable, non-reversible digest of a stored key. It exists
+// so the console can tell two accounts of one vendor apart: key_hint (the last
+// four characters) collides, and a merged connection makes "extend this
+// connection" hand the new row the other account's key.
+func keyFingerprint(key string) string {
+	if key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:4])
 }
