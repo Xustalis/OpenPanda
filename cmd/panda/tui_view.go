@@ -810,7 +810,7 @@ func termsCardText(loc i18n.Locale) termsText {
 			prevails: "本卡为摘要；权威文本为随附 LICENSE 与 TERMS.zh-CN.md 文件，如有出入以二者为准。",
 			agree:    "[Y] 同意并继续 (Agree and Continue)",
 			decline:  "[N] 拒绝并退出 (Decline and Exit)",
-			hints:    "Y 同意 · N/Esc 拒绝 · ↑↓/←→ 选择 · Enter 确认",
+			hints:    "Y 同意 · N/Esc 拒绝 · PgUp/PgDn 翻页 · ↑↓/←→ 选择 · Enter 确认",
 		}
 	case i18n.Japanese:
 		return termsText{
@@ -830,7 +830,7 @@ func termsCardText(loc i18n.Locale) termsText {
 			prevails: "本カードは要約です。正式文書は LICENSE と TERMS.md にあり、食い違いはそちらが優先されます。",
 			agree:    "[Y] 同意して続行",
 			decline:  "[N] 拒否して終了",
-			hints:    "Y 同意 · N/Esc 拒否 · ↑↓/←→ 選択 · Enter 確定",
+			hints:    "Y 同意 · N/Esc 拒否 · PgUp/PgDn スクロール · ↑↓/←→ 選択 · Enter 確定",
 		}
 	case i18n.Spanish:
 		return termsText{
@@ -850,7 +850,7 @@ func termsCardText(loc i18n.Locale) termsText {
 			prevails: "Esta tarjeta es un resumen; los textos completos y vinculantes son LICENSE y TERMS.md, que prevalecen ante cualquier discrepancia.",
 			agree:    "[Y] Aceptar y continuar",
 			decline:  "[N] Rechazar y salir",
-			hints:    "Y aceptar · N/Esc rechazar · ↑↓/←→ elegir · Enter confirmar",
+			hints:    "Y aceptar · N/Esc rechazar · PgUp/PgDn desplazar · ↑↓/←→ elegir · Enter confirmar",
 		}
 	case i18n.German:
 		return termsText{
@@ -870,7 +870,7 @@ func termsCardText(loc i18n.Locale) termsText {
 			prevails: "Diese Karte ist eine Zusammenfassung; maßgeblich sind die vollständigen Texte in den Dateien LICENSE und TERMS.md.",
 			agree:    "[Y] Zustimmen und fortfahren",
 			decline:  "[N] Ablehnen und beenden",
-			hints:    "Y zustimmen · N/Esc ablehnen · ↑↓/←→ wählen · Enter bestätigen",
+			hints:    "Y zustimmen · N/Esc ablehnen · PgUp/PgDn blättern · ↑↓/←→ wählen · Enter bestätigen",
 		}
 	default:
 		return termsText{
@@ -890,7 +890,7 @@ func termsCardText(loc i18n.Locale) termsText {
 			prevails: "This card is a summary; the authoritative texts ship in the LICENSE and TERMS.md files and prevail over it.",
 			agree:    "[Y] Agree and Continue",
 			decline:  "[N] Decline and Exit",
-			hints:    "Y Agree · N/Esc Decline · ↑↓/←→ Select · Enter Confirm",
+			hints:    "Y Agree · N/Esc Decline · PgUp/PgDn Scroll · ↑↓/←→ Select · Enter Confirm",
 		}
 	}
 }
@@ -1623,6 +1623,12 @@ func renderWelcomeBanner(cfg *config.Config, loc i18n.Locale, width int, th them
 		if held, err := nodeidentity.Held(cfg.Node.Kind, cfg.Node.EffectiveIdentity()); err == nil && !held {
 			sb.WriteString("\n" + th.warn.Render(cliui.Truncate("  "+i18n.T(loc, "repl.banner.noDaemon"), contentWidth, uni)))
 		}
+	}
+	// A skipped model setup is a valid state now, but chat and model-backed
+	// tasks cannot run without one. Keep the reminder on the empty screen
+	// instead of re-opening the wizard on every launch.
+	if cfg != nil && !modelConfigured(cfg) {
+		sb.WriteString("\n" + th.warn.Render(cliui.Truncate("  "+i18n.T(loc, "tui.welcome.noModel"), contentWidth, uni)))
 	}
 
 	if activity != nil {

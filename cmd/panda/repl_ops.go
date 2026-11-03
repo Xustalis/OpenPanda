@@ -1419,7 +1419,12 @@ func (r *repl) cmdTaskAdd(fields []string) {
 		default:
 			r.outln(i18n.Tf(r.loc, "cli.task.wait.state", "id", final.TaskID, "state", final.State))
 			if final.State == core.StateReview {
-				r.outln(i18n.Tf(r.loc, "cli.task.wait.review", "id", final.TaskID))
+				if events, eerr := r.store.Events(ctx, final.TaskID); eerr == nil {
+					if reason := latestReviewReason(events); reason != "" {
+						r.outln(i18n.T(r.loc, "cli.task.review.reason") + ": " + reason)
+					}
+				}
+				r.outln(taskReviewHint(r.loc, final, final.TaskID))
 			}
 		}
 	}
