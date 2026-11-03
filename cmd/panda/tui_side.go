@@ -4,24 +4,23 @@
 
 package main
 
-// The side channel: a read-only conversation beside the main thread, opened
-// with /side and dismissed with Esc. It exists because the everyday interruption
-// is a question, not a task — "what does this function do", "which card claims
-// that", "did the plan mention X" — and until now the only way to ask one was
-// to type it into the main thread, where it either steered the running turn or
-// became the next turn of a thread it had nothing to do with.
+// The side channel: a full conversation beside the main thread, opened with
+// /side and dismissed with Esc. It exists because the everyday interruption is
+// a question or a small piece of work that does not belong in the thread —
+// "what does this function do", "which card claims that", "bump this config" —
+// and typing it into the main thread would either steer the running turn or
+// become the next turn of a conversation it had nothing to do with.
 //
-// The state lives here and nowhere else: no session file, no turn written to
-// the parent. Process exit discards it, which is the design (a persisted side
-// thread is just a /fork with extra steps). Three boundaries hold it apart from
-// the main thread:
+// The channel holds the thread's full tool face, dispatch included: work it
+// starts is real and passes the same scheduler and approval gates. What stays
+// separate is the transcript — the parent's turns are reference material, and
+// the channel's own turns are stored on the session (Session.SideTurns) and
+// never appended to the parent. Two boundaries hold it apart:
 //
 //   - Context. The history is the parent thread as it stood when the channel
 //     opened, and it is re-read before every side question: the main thread
 //     may keep moving, and a question about the present is answered from the
 //     present thread, not from the opening snapshot.
-//   - Dispatch. The engine's side scope has no task_submit and answers a
-//     classified task or plan with a fixed note (internal/askengine/side.go).
 //   - Rendering. Side blocks go into their own chatHistory, never into
 //     m.chatHistory, so returning to the main thread shows it unchanged.
 
@@ -36,6 +35,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
 // sideState is everything the channel owns. It is allocated on first /side and
@@ -113,6 +113,27 @@ func (m *tuiModel) openSide(arg string) tea.Cmd {
 			ch:        &chatHistory{},
 			ta:        ta,
 		}
+		// The conversation is server-owned now: a channel reopened after a
+		// restart (or one opened here after the console asked) starts from the
+		// stored turns instead of an empty room.
+		if id := m.mainSessionID(); id != "" && m.r.sessionsSt != nil {
+			if sess, err := m.r.sessionsSt.Get(id); err == nil {
+				for _, t := range sess.SideTurns {
+					turn := entry.Turn{Role: t.Role, Content: t.Text}
+					m.side.turns = append(m.side.turns, turn)
+					if t.Role == "user" {
+						m.side.ch.blocks = append(m.side.ch.blocks, block{kind: blockUser, body: t.Text})
+						continue
+					}
+					if t.Text != "" {
+						m.side.ch.blocks = append(m.side.ch.blocks, block{kind: blockAnswer, body: t.Text})
+					}
+					if t.Error != "" {
+						m.side.ch.blocks = append(m.side.ch.blocks, block{kind: blockError, body: t.Error})
+					}
+				}
+			}
+		}
 	}
 	m.sideVisible = true
 	m.ta.Blur()
@@ -139,8 +160,14 @@ func (m *tuiModel) closeSide() tea.Cmd {
 }
 
 // dropSide discards the channel entirely (the explicit close). A running ask is
-// cancelled: the user asked for the whole thing to go away.
-func (m *tuiModel) dropSide() {
+// cancelled: the user asked for the whole thing to go away. reset also clears
+// the stored conversation — `/side close` means discard, not just hide.
+func (m *tuiModel) dropSide(reset bool) {
+	if reset {
+		if id := m.mainSessionID(); id != "" && m.r.sessionsSt != nil {
+			_, _ = m.r.sessionsSt.ResetSide(id)
+		}
+	}
 	if m.side != nil && m.side.stream != nil {
 		m.side.stream.drop()
 	}
@@ -160,6 +187,14 @@ func (m *tuiModel) sizeSideInput() {
 		w = 80
 	}
 	m.side.ta.SetWidth(max(1, w-6))
+}
+
+// mainSessionID is the thread the channel sits beside, "" in a bare REPL.
+func (m tuiModel) mainSessionID() string {
+	if m.r == nil {
+		return ""
+	}
+	return m.r.sessID()
 }
 
 // sideSessionID derives the approval bucket for this channel from the main
@@ -232,6 +267,11 @@ func (m *tuiModel) askSide(question string) tea.Cmd {
 	prior := s.turns
 	s.turns = append(s.turns, entry.Turn{Role: "user", Content: question})
 	s.ch.blocks = append(s.ch.blocks, block{kind: blockUser, body: question})
+	// File the question server-side before it runs: a channel reopened after a
+	// restart still shows what was asked, even if the answer never landed.
+	if id := m.mainSessionID(); id != "" && m.r.sessionsSt != nil {
+		_, _ = m.r.sessionsSt.AppendSideTurn(id, sessions.SideTurn{Role: "user", Text: question})
+	}
 	s.answer = nil
 	s.thought = nil
 	s.tools = nil
@@ -287,13 +327,40 @@ func (m *tuiModel) onSideDone(msg doneMsg) tea.Cmd {
 	case msg.out != nil && msg.out.Answer != "":
 		text = msg.out.Answer
 		s.ch.blocks = append(s.ch.blocks, block{kind: blockAnswer, body: text})
+	case msg.out != nil && (msg.out.TaskID != "" || msg.out.PlanID != ""):
+		// A dispatch has no prose of its own; the note below names the work.
 	default:
 		s.ch.blocks = append(s.ch.blocks, block{kind: blockNote, body: i18n.T(m.loc, "tui.side.empty")})
+	}
+	// The side channel is a full conversation now: a question may have started
+	// real work. Name the row it created so the user can open it — the id is
+	// the only handle the channel's own text gives them.
+	if msg.out != nil {
+		switch {
+		case msg.out.TaskID != "":
+			s.ch.blocks = append(s.ch.blocks, block{kind: blockNote, body: i18n.Tf(m.loc, "tui.side.task", "id", msg.out.TaskID)})
+		case msg.out.PlanID != "":
+			s.ch.blocks = append(s.ch.blocks, block{kind: blockNote, body: i18n.Tf(m.loc, "tui.side.plan", "goal", msg.out.PlanGoal, "id", msg.out.PlanID)})
+		}
 	}
 	// The committed answer is part of the channel's own history, so the next
 	// question in this thread sees what the previous one answered.
 	if text != "" {
 		s.turns = append(s.turns, entry.Turn{Role: "assistant", Content: text})
+	}
+	// Persist the answer beside the stored question, with the evidence trail
+	// and any task it started, so a reopened channel reads the same room the
+	// live one showed.
+	if id := m.mainSessionID(); id != "" && m.r.sessionsSt != nil {
+		st := sessions.SideTurn{Role: "assistant", Text: text, Tools: s.tools}
+		st.Tokens = msg.out.Tokens()
+		if msg.out != nil {
+			st.TaskID = msg.out.TaskID
+		}
+		if msg.err != nil {
+			st.Error = msg.err.Error()
+		}
+		_, _ = m.r.sessionsSt.AppendSideTurn(id, st)
 	}
 	// What the answer checked stays visible under it: the reader can act on a
 	// task id or a file the model actually read instead of taking prose on
@@ -341,7 +408,7 @@ func (m tuiModel) onSideKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			s.ta.SetHeight(1)
 			return m, nil
 		}
-		m.dropSide()
+		m.dropSide(true)
 		return m, nil
 	case tea.KeyEnter:
 		text := strings.TrimSpace(s.ta.Value())
@@ -365,7 +432,7 @@ func (m tuiModel) onSideKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) sideCommand(arg string) tea.Cmd {
 	switch arg {
 	case "close", "exit", "q":
-		m.dropSide()
+		m.dropSide(true)
 		return nil
 	case "copy", "insert", "draft":
 		// Put the last answer into the main composer as a draft. Nothing is

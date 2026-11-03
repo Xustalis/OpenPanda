@@ -611,6 +611,39 @@
   margin-left: auto;
   font-size: var(--text-xs);
 }
+/* A side answer that dispatched work: the way into the task, kept with the
+   answer and after a reload. */
+.side-task-row {
+  display: flex;
+  padding-top: 2px;
+}
+.side-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  cursor: default;
+}
+button.side-task:hover {
+  background: var(--bg-inset);
+}
+.side-task-id {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+/* The running turn's question card sits above the composer, pinned: an
+   invisible card is a parked turn, and the pane must not scroll it away. */
+.side-clarify {
+  flex: none;
+  max-height: 48%;
+  overflow: auto;
+  padding: 0 10px 10px;
+}
 .side-status,
 .side-err {
   margin: 0;

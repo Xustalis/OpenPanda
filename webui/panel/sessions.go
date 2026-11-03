@@ -612,7 +612,78 @@ func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cancelled := h.cancelSessionAsk(id, req.OperationID)
+	if !cancelled {
+		// The side ask lives under its own slot; the pane's Stop names the same
+		// operation id it was handed on the stream.
+		cancelled = h.cancelSessionAsk(id+sideOperationSuffix, req.OperationID)
+	}
+	if !cancelled {
+		// A stored side operation whose ask died with a previous panel process
+		// has no live cancel to call. Stop still ends it on the record, so a
+		// reopened pane does not sit on a spinner that can never finish.
+		if sess, err := h.sessions.Get(id); err == nil && sess.SideOperation != nil &&
+			sess.SideOperation.ID == req.OperationID && sess.SideOperation.Status == core.StateRunning {
+			if ok, _ := h.sessions.SetSideOperation(id, sessions.Operation{
+				ID: req.OperationID, Status: core.StateCancelled, Error: "cancelled",
+			}); ok {
+				cancelled = true
+			}
+		}
+	}
 	writeJSON(w, map[string]any{"id": id, "operation_id": req.OperationID, "cancelled": cancelled})
+}
+
+// hasActiveAsk reports whether an ask currently holds one operation slot. The
+// side conversation uses it to tell a live background answer from a record a
+// previous panel process left behind.
+func (h *handler) hasActiveAsk(key string) bool {
+	h.askMu.Lock()
+	defer h.askMu.Unlock()
+	_, ok := h.activeAsks[key]
+	return ok
+}
+
+// sessionSide serves the side conversation: GET returns its stored turns and
+// latest operation; DELETE clears both (the pane's `+`).
+//
+// The GET is the reconnect surface. A pane that reloads, reopens on another
+// device, or comes back after a background answer reads the conversation from
+// here instead of starting over — and a running operation tells it to keep
+// polling until the answer lands.
+func (h *handler) sessionSide(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sess, err := h.sessions.Get(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	if r.Method == http.MethodDelete {
+		if sess.SideOperation != nil && sess.SideOperation.Status == core.StateRunning {
+			// Stop owns the live ask; the reset owns the record. Cancelling
+			// first keeps the late finalizer from appending into a transcript
+			// the user just discarded (AppendSideTurnIfCurrent would drop it
+			// anyway, but the goroutine should stop too).
+			h.cancelSessionAsk(id+sideOperationSuffix, sess.SideOperation.ID)
+		}
+		cleared, err := h.sessions.ResetSide(id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("reset side conversation failed"))
+			return
+		}
+		writeJSON(w, map[string]any{"turns": cleared.SideTurns, "operation": nil})
+		return
+	}
+
+	op := sess.SideOperation
+	if op != nil && op.Status == core.StateRunning && !h.hasActiveAsk(id+sideOperationSuffix) {
+		updated := *op
+		updated.Status = core.StateFailed
+		updated.Error = "interrupted"
+		if ok, _ := h.sessions.SetSideOperation(id, updated); ok {
+			op = &updated
+		}
+	}
+	writeJSON(w, map[string]any{"turns": sess.SideTurns, "operation": op})
 }
 
 // ---- Session approval state ----
@@ -690,17 +761,17 @@ type sessionAskRequest struct {
 	// but the parked notes are the authority: the server drains them as this
 	// turn's input so the words reach the model exactly once.
 	ResumeQueued bool `json:"resume_queued"`
-	// Side marks a side-channel ask: a read-only conversation beside the
-	// thread, asked from the console's dock. The history replayed below is
-	// still the thread as it stands — it is the snapshot the channel opened
-	// on — but nothing this ask produces is written back: no user turn, no
-	// answer, no operation status. The engine narrows the ask itself (no
-	// dispatch, read-only tool face); this struct only says where the bytes
-	// go.
+	// Side marks a side-channel ask: a separate conversation beside the
+	// thread, asked from the console's dock. It gets the thread's full tool
+	// face (dispatch included) and its own transcript on the session; the
+	// thread's turns are replayed as reference and nothing this ask produces
+	// is appended to them. The question and answer are filed in SideTurns, so
+	// the ask can outlive the pane that started it.
 	Side bool `json:"side"`
-	// SideTurns is the side channel's own conversation so far, replayed after
-	// the boundary marker the engine inserts. The console owns it: a side
-	// thread is deliberately not persisted, so a reload starts a new one.
+	// SideTurns is deprecated and ignored: the server owns the side
+	// conversation (Session.SideTurns), so a side question outlives the pane
+	// and a second device sees the same history. The field stays on the wire
+	// so an older console does not fail to decode its own request.
 	SideTurns []entry.Turn `json:"side_turns"`
 }
 
@@ -795,8 +866,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("no such session"))
 		return
 	}
-	// A side ask is a parallel conversation, not a turn of this thread: it
-	// shares the thread's snapshot and work dir, and nothing else.
+	// A side ask is a parallel conversation with its own stored transcript:
+	// it shares the thread's history snapshot, work dir and permission
+	// policy, and nothing else.
 	side := req.Side
 	// Who may take this turn's work. The composer sends what is on screen;
 	// a client that knows nothing about rosters (or a resumed thread) gets
@@ -850,6 +922,29 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, http.StatusBadRequest, errors.New("prompt must not be empty"))
 		return
+	}
+
+	// A side ask owns a server-side transcript from here on. The question is
+	// filed before the model runs — a crash or a closed tab must not lose it —
+	// and the replay the model sees is the conversation as it stood before this
+	// question. The pane no longer sends its own copy: the session file is the
+	// truth, so the conversation survives a reload, a second device and a panel
+	// restart, and the answer keeps arriving after the pane is gone.
+	var sideReplay []entry.Turn
+	if side {
+		budget := sessions.ReplayBudget(eng.ContextWindow()) / 2
+		if budget < 4000 {
+			budget = 4000
+		}
+		stored := sessions.TrimSideTurns(sess.SideTurns, budget)
+		sideReplay = make([]entry.Turn, 0, len(stored))
+		for _, t := range stored {
+			sideReplay = append(sideReplay, entry.Turn{Role: t.Role, Content: t.Text})
+		}
+		if _, err := h.sessions.AppendSideTurn(sess.ID, sessions.SideTurn{Role: "user", Text: req.Prompt}); err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("save side turn failed"))
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -950,6 +1045,10 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var streamed strings.Builder
+	// The answer's evidence trail: a side turn keeps the tool calls behind it,
+	// so a reloaded pane shows what was checked, not only what was said. It is
+	// display-only and never replayed to the model.
+	var sideTrace []string
 	cb := askengine.StreamCallbacks{
 		OnReasoning: func(text string) { send("reasoning", map[string]string{"text": text}) },
 		OnDelta: func(text string) {
@@ -968,6 +1067,15 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// phase, and a status handler that overwrote the one-line note with
 		// "usage" would erase what the turn is doing.
 		OnProgress: func(p askengine.Progress) {
+			if side && p.Kind == askengine.ProgressTool {
+				label := p.Name
+				if p.Detail != "" {
+					label += " " + p.Detail
+				}
+				if len(sideTrace) < 50 && (len(sideTrace) == 0 || sideTrace[len(sideTrace)-1] != label) {
+					sideTrace = append(sideTrace, label)
+				}
+			}
 			if p.Kind == askengine.ProgressUsage {
 				send("usage", map[string]any{
 					"input": p.InputTokens, "output": p.OutputTokens, "estimated": p.Estimated,
@@ -1057,7 +1165,14 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// The operation remains detached from the failed response writer and
 		// continues to persist its final task/session result.
 	}
-	if !side {
+	if side {
+		if err := h.sessions.StartSideOperation(sess.ID, sessions.Operation{
+			ID: op.operationID, Status: core.StateRunning,
+		}); err != nil {
+			send("error", map[string]string{"message": "save side operation failed"})
+			return
+		}
+	} else {
 		if err := h.sessions.StartOperation(sess.ID, sessions.Operation{
 			ID: op.operationID, Status: core.StateRunning,
 		}); err != nil {
@@ -1110,7 +1225,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		Agents:         team,
 		PermissionMode: permission,
 		Side:           side,
-		SideTurns:      req.SideTurns,
+		SideTurns:      sideReplay,
 	}, req.Authorize, cb)
 	askDuration := time.Since(askStarted).Milliseconds()
 	if err != nil {
@@ -1148,6 +1263,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		if errDetail != "" {
 			errPayload["detail"] = errDetail
 		}
+		// A side operation settles together with its answer in
+		// FinishSideOperation below, so a reader never sees "done" before the
+		// turn is on disk. The main thread keeps its own two-step order.
 		if !side {
 			_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
 				ID: op.operationID, Status: status, Error: msg,
@@ -1171,7 +1289,12 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 				text = msg
 			}
 		}
-		if !side {
+		if side {
+			_, _ = h.sessions.FinishSideOperation(sess.ID, op.operationID, sessions.SideTurn{
+				Role: "assistant", Text: text, Tools: sideTrace, Tokens: out.Tokens(),
+				DurationMS: askDuration, Error: msg,
+			}, sessions.Operation{ID: op.operationID, Status: status, Error: msg})
+		} else {
 			_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{
 				Role: "assistant", Text: text, Kind: kind, Code: code,
 				ErrKind: errKind, ErrDetail: errDetail,
@@ -1189,6 +1312,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	if out.Kind == "task" && out.TaskState != "" {
 		operationStatus = out.TaskState
 	}
+	// A side operation settles together with its answer in
+	// FinishSideOperation below: a poller that sees "done" can read the turn in
+	// the same breath.
 	if !side {
 		_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
 			ID: op.operationID, Status: operationStatus, TaskID: out.TaskID, Error: out.Stderr,
@@ -1198,8 +1324,8 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 
 	// Queue redesign: bind a spawned task back to this session so the board
 	// card can jump into it and the session streams the task's progress. A
-	// side ask dispatches nothing, so it has nothing to bind.
-	if !side && out.Kind == "task" && out.TaskID != "" {
+	// side ask dispatches real work too, so it binds the same way.
+	if out.Kind == "task" && out.TaskID != "" {
 		// Bookkeeping only; the result already streamed to the client.
 		_ = h.store.SetSessionID(context.WithoutCancel(r.Context()), out.TaskID, sess.ID)
 	}
@@ -1254,6 +1380,18 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// meaningless noise when the next ask replays the history to the
 		// model.
 		turn.Text = "已派发任务：" + out.TaskTitle + "（" + out.TaskID + "）"
+		if side {
+			turn.Text = i18n.Tf(h.locale(), "web.session.dispatched", "title", out.TaskTitle, "id", out.TaskID)
+			// A side turn has no per-task cards; a batch reads as one list of
+			// receipts, each naming its own id.
+			if len(out.Dispatched) > 1 && out.Answer == "" {
+				lines := make([]string, 0, len(out.Dispatched))
+				for _, d := range out.Dispatched {
+					lines = append(lines, i18n.Tf(h.locale(), "web.session.dispatched", "title", d.TaskTitle, "id", d.TaskID))
+				}
+				turn.Text = strings.Join(lines, "\n")
+			}
+		}
 		if out.TaskID == "" {
 			// Submission failed before a row existed — the id/title are
 			// empty and the bare template above renders as "已派发任务：（）",
@@ -1278,7 +1416,21 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	default:
 		turn.Text = out.Answer
 	}
-	if !side {
+	if side {
+		errText := ""
+		if turn.Kind == "error" {
+			errText = strings.TrimPrefix(turn.Text, "⚠ ")
+		}
+		_, _ = h.sessions.FinishSideOperation(sess.ID, op.operationID, sessions.SideTurn{
+			Role: "assistant", Text: turn.Text, Tools: sideTrace, TaskID: out.TaskID,
+			Tokens: turn.Tokens, DurationMS: turn.DurationMS, Error: errText,
+		}, sessions.Operation{
+			// The side operation tracks the ask, not the work it dispatched: the
+			// answer is filed, so the ask is done even if the task is still
+			// queued or running.
+			ID: op.operationID, Status: core.StateDone, TaskID: out.TaskID, Error: out.Stderr,
+		})
+	} else {
 		if _, err := h.sessions.AppendTurn(sess.ID, turn); err != nil {
 			// The reply already streamed; a failed bookkeeping write is not worth
 			// killing the stream over.

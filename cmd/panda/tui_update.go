@@ -1580,7 +1580,7 @@ func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
 	m.team = nil
 	// The side channel belonged to the conversation this pane just detached
 	// from; it goes with it.
-	m.dropSide()
+	m.dropSide(false)
 	if m.chatHistory != nil {
 		m.chatHistory.clear()
 	}
@@ -1667,7 +1667,7 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 	}
 	// The side channel was opened beside a different thread: its snapshot, its
 	// transcript and its approval bucket all belong to that one.
-	m.dropSide()
+	m.dropSide(false)
 	if m.r != nil {
 		m.r.setSess(sess.ID)
 		// The roster is a property of the thread just opened.

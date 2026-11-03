@@ -197,6 +197,28 @@ func submitSideLine(m tuiModel, line string) (tea.Model, tea.Cmd) {
 	return m.onSideKey(tea.KeyMsg{Type: tea.KeyEnter})
 }
 
+// TestSideTaskReceiptNamesTheWork: once the side channel can dispatch, a task
+// result must name the row it created — the id is the only handle the
+// channel's text gives the user, and an empty answer must not read as "no
+// answer came back".
+func TestSideTaskReceiptNamesTheWork(t *testing.T) {
+	m := newSideTestModel(t)
+	stream := &askStream{events: make(chan tea.Msg, 8)}
+	m.side.stream = stream
+	next, _ := m.Update(doneMsg{stream: stream, out: &askengine.Result{Kind: "task", TaskID: "01a1task"}})
+	m = next.(tuiModel)
+
+	var note string
+	for _, b := range m.side.ch.blocks {
+		if b.kind == blockNote && strings.Contains(b.body, "01a1task") {
+			note = b.body
+		}
+	}
+	if note == "" {
+		t.Fatalf("task receipt is missing: %+v", m.side.ch.blocks)
+	}
+}
+
 // TestSideViewRenders checks the frame draws the channel's own content and
 // nothing from the main transcript — the visual half of the same invariant.
 func TestSideViewRenders(t *testing.T) {

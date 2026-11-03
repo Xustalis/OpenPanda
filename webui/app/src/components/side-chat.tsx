@@ -1,39 +1,45 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The dock's side conversation: a place to ask about the thread without
+// The dock's side conversation: a full conversation beside the thread without
 // becoming part of it.
 //
-// The everyday interruption is a question, not a task — "what does this
-// function do", "which card claims that", "did the plan mention X". Typed into
-// the thread, that question either steers a running turn or becomes a turn of a
-// thread it had nothing to do with. The TUI has answered this with /side since
-// v0.1.4; this is the same conversation on the web, backed by the same engine
-// scope (internal/askengine/side.go), which is what makes the boundaries real
-// rather than advisory:
+// The everyday interruption is a question or a small piece of work that does
+// not belong in the thread. Typed into the thread, it either steers a running
+// turn or becomes a turn of a thread it had nothing to do with. This pane is
+// the same engine on a separate transcript, modelled on Claude Code's side
+// sessions:
 //
-//   - Context: the thread's history as it stands when each question is asked,
-//     replayed as reference. The channel's own turns sit below the boundary
-//     marker, so a question about "now" reads the present thread rather than
-//     the one the panel opened on.
-//   - Dispatch: no task_submit in the tool face, and a classification that
-//     still lands on a task is answered with a fixed note instead of running.
-//     Reading is not dispatch: the observation tools and the read-only
-//     workspace family (workspace_read/list/search) stay, which is what makes
-//     a side question about live state or code answerable at all.
-//   - Output: nothing here is written back. The server files no turn, no
-//     operation status — `/api/sessions/{id}/ask` with `side: true` skips every
-//     write the thread's own turns go through.
+//   - Capability: the same tool face as the thread, dispatch included. The
+//     channel may read the workspace, query live state, write and submit
+//     tasks or plans; every action passes the same permission and approval
+//     gates. Isolation is the transcript, not a crippled tool set.
+//   - Transcript: the thread's history is replayed above a boundary marker as
+//     reference; the channel's own turns live in the session record
+//     (Session.SideTurns) and never enter the thread's turns or summary.
+//   - Background: the ask runs under the panel's lifetime, and the question
+//     and answer are filed server-side. The pane can close, reload, or open on
+//     another device and still find the conversation; GET /api/sessions/{id}/side
+//     is the reconnect surface, and a running operation is followed by polling
+//     until the answer lands.
 //
-// The server stores nothing, so the panel owns the conversation. It persists
-// per thread in localStorage: a reload keeps the answers the user just read,
-// and the pane's `+` starts a genuinely new one.
+// The pane's `+` clears the server-side conversation and cancels a running
+// side ask.
 
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { askSideStream, isAbort, type AskStatusEvent, type SideTurn } from '../api/client'
+import {
+  api,
+  askSideStream,
+  isAbort,
+  type AskStatusEvent,
+  type ClarifyAnswer,
+  type ClarifySpec,
+  type SideConversation,
+} from '../api/client'
 import { t } from '../i18n'
 import { Markdown } from '../md/render'
 import { Icon } from './icons'
 import { MessageCopyButton } from './copy'
+import { ClarifyCard } from './clarify-card'
 
 interface Line {
   id: number
@@ -45,6 +51,11 @@ interface Line {
   tools?: string[]
   /** Billed tokens for the answer, when the provider reported them. */
   tokens?: number
+  /** The task this answer dispatched, when it started work. */
+  taskId?: string
+  /** A failed answer's error. The text may carry the partial prose already
+   *  streamed before the failure. */
+  error?: string
 }
 
 export interface SideChatProps {
@@ -54,15 +65,11 @@ export interface SideChatProps {
   resetSignal?: number
   /** Put a reply into the composer — the one crossing back into the thread. */
   onInsert(text: string): void
+  /** Open a task the side answer dispatched. */
+  onOpenTask?(id: string): void
 }
 
 let seq = 0
-
-/** How many completed turns survive a reload. A side conversation is a
- *  thinking space, not a second archive: the tail is what a reader resumes. */
-const SIDE_STORE_CAP = 40
-
-const sideKey = (id: string) => `openpanda.side.${id}`
 
 /** The side channel's one-line progress note. Retry and outage milestones are
  *  re-phrased here from the same structured fields the main composer reads, so
@@ -94,58 +101,23 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-/** Read the stored conversation for one thread. Anything malformed is
- *  discarded rather than trusted: this is browser storage a page can corrupt,
- *  and a bad row must not take the panel down with it. */
-function loadSide(id: string): Line[] {
-  try {
-    const raw = localStorage.getItem(sideKey(id))
-    if (!raw) return []
-    const rows = JSON.parse(raw) as Array<{ role?: unknown; text?: unknown; tools?: unknown; tokens?: unknown }>
-    if (!Array.isArray(rows)) return []
-    const out: Line[] = []
-    for (const row of rows) {
-      if (!row || (row.role !== 'user' && row.role !== 'assistant') || typeof row.text !== 'string') continue
-      const tools = Array.isArray(row.tools) ? row.tools.filter((x): x is string => typeof x === 'string') : undefined
-      const tokens = typeof row.tokens === 'number' && row.tokens > 0 ? row.tokens : undefined
-      out.push({ id: ++seq, role: row.role, text: row.text, tools, tokens })
-    }
-    return out
-  } catch {
-    return []
-  }
-}
-
-/** Persist the completed turns. The live row is skipped — a reload mid-answer
- *  should show the question, not half a sentence frozen as an answer. */
-function saveSide(id: string, lines: Line[]) {
-  try {
-    const rows = lines
-      .filter((l) => !l.live && l.text.trim() !== '')
-      .slice(-SIDE_STORE_CAP)
-      .map((l) => {
-        const row: { role: Line['role']; text: string; tools?: string[]; tokens?: number } = {
-          role: l.role,
-          text: l.text,
-        }
-        if (l.tools && l.tools.length > 0) row.tools = l.tools
-        if (l.tokens) row.tokens = l.tokens
-        return row
-      })
-    if (rows.length === 0) localStorage.removeItem(sideKey(id))
-    else localStorage.setItem(sideKey(id), JSON.stringify(rows))
-  } catch {
-    // Storage can be unavailable (private mode, quota). The panel works
-    // without it; only the reload survival is lost.
-  }
+/** Task ids are UUIDv7 strings; the first segment is enough to recognize one
+ *  in a chip, and the full id stays in the title. */
+function shortId(id: string): string {
+  return id.length > 12 ? id.slice(0, 8) : id
 }
 
 export function SideChat(props: SideChatProps) {
   const [lines, setLines] = useState<Line[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  // attached: this pane holds the live SSE stream. When false and busy is
+  // true, the answer is being produced in the background and the pane polls.
+  const [attached, setAttached] = useState(false)
+  const [loaded, setLoaded] = useState(false)
   const [status, setStatus] = useState('')
   const [err, setErr] = useState('')
+  const [clarify, setClarify] = useState<{ spec: ClarifySpec; operationID: string } | null>(null)
   const live = useRef('')
   const abort = useRef<AbortController | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
@@ -154,11 +126,48 @@ export function SideChat(props: SideChatProps) {
   // clearing the pane) bumps it, so callbacks from an aborted ask cannot
   // append their late deltas to the conversation now on screen.
   const run = useRef(0)
+  // The side operation this pane is following, from the live stream or from the
+  // stored operation on load. Stop names it to the cancel endpoint.
+  const opID = useRef('')
 
-  // A new thread loads its own stored conversation; the pane's `+` starts a
-  // new one. The old answers were about a different thread (or a snapshot the
-  // user deliberately cleared), and keeping them would be a lie about what
-  // they saw.
+  const applyConversation = (conv: SideConversation) => {
+    setLines((conv.turns ?? []).map((turn) => ({
+      id: ++seq,
+      role: turn.role,
+      text: turn.text,
+      tools: turn.tools,
+      tokens: turn.tokens,
+      taskId: turn.task_id,
+      error: turn.error,
+    })))
+    const op = conv.operation
+    opID.current = op?.status === 'running' ? op.id : ''
+    if (op?.status === 'running') {
+      setBusy(true)
+      setAttached(false)
+      setStatus(t('side.background'))
+    } else {
+      setBusy(false)
+      setAttached(false)
+      setStatus('')
+      setErr(op && (op.status === 'failed' || op.status === 'cancelled') ? (op.error ?? '') : '')
+    }
+    setLoaded(true)
+  }
+
+  const loadSide = async (id: string) => {
+    try {
+      applyConversation(await api.sideConversation(id))
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+      setLoaded(true)
+    }
+  }
+
+  // A new thread loads its own stored conversation; the pane's `+` clears the
+  // server-side one. The old answers were about a different thread (or a
+  // conversation the user deliberately cleared), and keeping them would be a
+  // lie about what they saw.
   const seen = useRef<{ session: string | null; reset?: number }>()
   useEffect(() => {
     const before = seen.current
@@ -168,34 +177,45 @@ export function SideChat(props: SideChatProps) {
     run.current++
     abort.current?.abort()
     abort.current = null
+    opID.current = ''
     setInput('')
     setBusy(false)
+    setAttached(false)
     setStatus('')
     setErr('')
+    setClarify(null)
     if (!props.sessionId) {
       setLines([])
+      setLoaded(true)
       return
     }
     if (reset) {
-      try {
-        localStorage.removeItem(sideKey(props.sessionId))
-      } catch {
-        // Storage unavailable; there is nothing to clear.
-      }
       setLines([])
+      setLoaded(true)
+      void api.resetSideConversation(props.sessionId)
+        .then(applyConversation)
+        .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
       return
     }
-    setLines(loadSide(props.sessionId))
+    setLoaded(false)
+    void loadSide(props.sessionId)
   }, [props.sessionId, props.resetSignal])
 
-  // Persist completed turns so a reload resumes where the reader left off.
+  // A background answer: the pane is not holding the stream, so follow the
+  // stored operation until it settles and the conversation comes back whole.
   useEffect(() => {
-    if (props.sessionId) saveSide(props.sessionId, lines)
-  }, [lines, props.sessionId])
+    if (!props.sessionId || !busy || attached) return
+    const id = props.sessionId
+    const timer = window.setInterval(() => {
+      void loadSide(id)
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [props.sessionId, busy, attached])
 
   // An in-flight ask does not outlive the panel: the dock stays mounted once
   // opened, but a session switch or an unmount should not leave a stream
-  // feeding a component that is gone.
+  // feeding a component that is gone. The server keeps the ask (it runs under
+  // the panel's lifetime), so the answer is waiting on the next load.
   useEffect(() => () => abort.current?.abort(), [])
 
   // Follow the answer as it arrives; a reader who scrolled up stays where they
@@ -225,6 +245,15 @@ export function SideChat(props: SideChatProps) {
       return next
     })
 
+  const setLastTask = (taskId: string) =>
+    setLines((prev) => {
+      const last = prev[prev.length - 1]
+      if (!last || last.role !== 'assistant') return prev
+      const next = prev.slice()
+      next[next.length - 1] = { ...last, taskId }
+      return next
+    })
+
   // appendTool records one tool call on the answer being streamed. The chip is
   // added when the call starts, so the reader watches the channel work
   // (system_status, then workspace_read side.go) instead of a mute spinner.
@@ -239,14 +268,16 @@ export function SideChat(props: SideChatProps) {
       return next
     })
 
-  async function ask(prompt: string, history: SideTurn[]) {
+  async function ask(prompt: string) {
     const id = props.sessionId
     if (!id) return
     setInput('')
     setErr('')
     setStatus('')
+    setClarify(null)
     live.current = ''
     setBusy(true)
+    setAttached(true)
     setLines((prev) => [
       ...prev,
       { id: ++seq, role: 'user', text: prompt },
@@ -260,7 +291,6 @@ export function SideChat(props: SideChatProps) {
       await askSideStream(
         id,
         prompt,
-        history,
         {
           onReasoning: () => {},
           onDelta: (d) => {
@@ -281,11 +311,29 @@ export function SideChat(props: SideChatProps) {
             }
             setStatus(sideStatusNote(text, ev))
           },
-          onOperation: () => {},
+          onOperation: (operationID) => {
+            if (current()) opID.current = operationID
+          },
+          onTask: (taskID) => {
+            if (current()) setLastTask(taskID)
+          },
+          onQuestion: (spec, operationID) => {
+            if (!current()) return
+            setClarify({ spec, operationID })
+            setStatus('')
+          },
           onResult: (r) => {
             if (!current()) return
-            patchLast(r.answer || live.current, true)
+            const text = r.answer || live.current
+            // A dispatch or plan has no prose answer of its own; name what it
+            // started so the live turn is not an empty bubble.
+            if (!text && r.plan_id) {
+              patchLast(t('side.planStarted', { goal: r.plan_goal ?? '' }), true)
+            } else {
+              patchLast(text, true)
+            }
             if (typeof r.tokens === 'number' && r.tokens > 0) setLastTokens(r.tokens)
+            if (r.task_id) setLastTask(r.task_id)
           },
           onError: (message) => {
             if (!current()) return
@@ -303,6 +351,7 @@ export function SideChat(props: SideChatProps) {
     } finally {
       if (current()) {
         setBusy(false)
+        setAttached(false)
         setStatus('')
         abort.current = null
       }
@@ -312,45 +361,55 @@ export function SideChat(props: SideChatProps) {
   function send() {
     const prompt = input.trim()
     if (!prompt || !props.sessionId || busy) return
-    const history: SideTurn[] = lines.map((l) => ({ role: l.role, content: l.text }))
-    void ask(prompt, history)
+    void ask(prompt)
   }
 
-  // Retry drops the failed exchange and asks the same question again with the
-  // history that preceded it. The question is still on screen, so the reader
-  // does not have to retype it after a provider hiccup.
+  // Retry asks the same question again. The failed attempt stays in the
+  // transcript (the server owns it); the retry is a new turn, which is the
+  // honest record of what happened.
   function retry() {
     if (busy || !props.sessionId) return
-    let idx = -1
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i]!.role === 'user') {
-        idx = i
-        break
+        void ask(lines[i]!.text)
+        return
       }
     }
-    if (idx < 0) return
-    const prompt = lines[idx]!.text
-    const history: SideTurn[] = lines.slice(0, idx).map((l) => ({ role: l.role, content: l.text }))
-    setLines(lines.slice(0, idx))
-    void ask(prompt, history)
   }
 
   function stop() {
+    const id = props.sessionId
+    if (id && opID.current) {
+      void api.cancelSession(id, opID.current).catch(() => {})
+    }
     abort.current?.abort()
     abort.current = null
+    opID.current = ''
     setBusy(false)
+    setAttached(false)
+    setClarify(null)
     setStatus('')
+  }
+
+  function answerClarify(answers: ClarifyAnswer[]) {
+    const pending = clarify
+    if (!pending || !props.sessionId) return
+    // Keep the card until the answer lands: a failed POST must not leave the
+    // turn parked behind a card the pane already threw away.
+    void api.answerSessionClarify(props.sessionId, pending.operationID, answers)
+      .then(() => setClarify(null))
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
   }
 
   return (
     <div class="side-chat">
       <div class="side-scroll" ref={logRef}>
-        {lines.length === 0 && !busy && (
+        {loaded && lines.length === 0 && !busy && (
           <div class="side-empty">
             <Icon name="message" size={20} />
-            {/* A brand-new thread has nothing to read, so the whole point of
-                this panel is missing — say that instead of showing a box the
-                reader can type into and a button that never lights up. */}
+            {/* A thread with no id has nothing to attach to, so the pane is
+                missing its anchor — say that instead of offering a box whose
+                send button never lights up. */}
             {props.sessionId ? (
               <>
                 <p>{t('side.empty')}</p>
@@ -389,10 +448,29 @@ export function SideChat(props: SideChatProps) {
               <p class="side-q">{l.text}</p>
             ) : (
               <>
-                {l.text ? (
+                {l.text && !(l.error && l.text.startsWith('⚠')) ? (
                   <Markdown text={l.text} class="side-md" streaming={Boolean(l.live)} />
-                ) : (
+                ) : !l.live && !l.error && !l.taskId ? (
                   <p class="side-typing dim">{t('side.thinking')}</p>
+                ) : null}
+                {l.error && <p class="side-err">{l.error}</p>}
+                {l.taskId && (
+                  <div class="side-task-row">
+                    {props.onOpenTask ? (
+                      <button
+                        type="button"
+                        class="side-task"
+                        title={l.taskId}
+                        onClick={() => props.onOpenTask?.(l.taskId!)}
+                      >
+                        {t('side.task')} <span class="side-task-id">{shortId(l.taskId)}</span>
+                      </button>
+                    ) : (
+                      <span class="side-task" title={l.taskId}>
+                        {t('side.task')} <span class="side-task-id">{shortId(l.taskId)}</span>
+                      </span>
+                    )}
+                  </div>
                 )}
                 {l.tools && l.tools.length > 0 && (
                   <div class="side-tools">
@@ -445,6 +523,12 @@ export function SideChat(props: SideChatProps) {
           </div>
         )}
       </div>
+
+      {clarify && (
+        <div class="side-clarify">
+          <ClarifyCard spec={clarify.spec} onSubmit={answerClarify} onCancel={stop} />
+        </div>
+      )}
 
       <form
         class="side-compose"
