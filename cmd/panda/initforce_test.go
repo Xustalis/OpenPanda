@@ -3,6 +3,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -106,19 +107,22 @@ func TestMergePreservedConfigBadYAML(t *testing.T) {
 // configs shared one database and one node identity.
 func TestRebaseInitStorage(t *testing.T) {
 	def := config.Default()
-	rebaseInitStorage(def, "/tmp/panda-instance")
-	if def.Storage.DBPath != "/tmp/panda-instance/openpanda.db" {
-		t.Errorf("db_path = %q", def.Storage.DBPath)
+	// filepath.Join normalizes the separator per platform: the test asserts the
+	// layout, not that Windows prints forward slashes.
+	base := filepath.Join("tmp", "panda-instance")
+	rebaseInitStorage(def, base)
+	if want := filepath.Join(base, "openpanda.db"); def.Storage.DBPath != want {
+		t.Errorf("db_path = %q, want %q", def.Storage.DBPath, want)
 	}
-	if def.Storage.WorkPath != "/tmp/panda-instance" {
-		t.Errorf("work_path = %q", def.Storage.WorkPath)
+	if def.Storage.WorkPath != base {
+		t.Errorf("work_path = %q, want %q", def.Storage.WorkPath, base)
 	}
-	if def.Storage.MemoryPath != "/tmp/panda-instance/memory" ||
-		def.Storage.ProjectsPath != "/tmp/panda-instance/projects" ||
-		def.Storage.SkillsPath != "/tmp/panda-instance/skills" {
+	if def.Storage.MemoryPath != filepath.Join(base, "memory") ||
+		def.Storage.ProjectsPath != filepath.Join(base, "projects") ||
+		def.Storage.SkillsPath != filepath.Join(base, "skills") {
 		t.Errorf("storage paths not rebased: %+v", def.Storage)
 	}
-	if def.Storage.ContextPath != "/tmp/panda-instance/data/context" {
-		t.Errorf("context_path = %q", def.Storage.ContextPath)
+	if want := filepath.Join(base, "data", "context"); def.Storage.ContextPath != want {
+		t.Errorf("context_path = %q, want %q", def.Storage.ContextPath, want)
 	}
 }
