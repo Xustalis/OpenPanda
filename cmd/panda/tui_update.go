@@ -280,7 +280,24 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// still arrive; they belong on its status line, not on the main
 		// turn's — the two streams run at once when a turn is in flight.
 		if m.side != nil && m.side.stream != nil && msg.stream == m.side.stream {
-			m.side.status = askengine.StatusText(msg.progress)
+			// A tool call is the channel working, not a routing note: name the
+			// tool and its subject so the status line says what is being
+			// checked instead of only that something is.
+			if msg.progress.Kind == askengine.ProgressTool {
+				label := msg.progress.Name
+				if msg.progress.Detail != "" {
+					label += " " + msg.progress.Detail
+				}
+				m.side.status = i18n.Tf(m.loc, "tui.side.tool", "tool", label)
+				// Keep the trace for the note under the answer; dedupe only
+				// against the immediately previous call so two reads of the
+				// same file in one round still show once.
+				if len(m.side.tools) < 24 && (len(m.side.tools) == 0 || m.side.tools[len(m.side.tools)-1] != label) {
+					m.side.tools = append(m.side.tools, label)
+				}
+			} else {
+				m.side.status = askengine.StatusText(msg.progress)
+			}
 			return m, waitForActivity(msg.stream)
 		}
 		if msg.stream == nil || msg.stream != m.stream || msg.stream.detached {
@@ -794,7 +811,11 @@ func (m tuiModel) startFromSplash() (tea.Model, tea.Cmd) {
 		return m.startOnboarding()
 	}
 
-	if m.r == nil || m.r.cfg == nil || !configured {
+	// `onboarded` records that the user saw the model step and chose
+	// "Configure Later". Forcing the provider picker again on the next launch
+	// contradicted that choice; the welcome banner carries the reminder
+	// instead, and /model remains one keystroke away.
+	if m.r == nil || m.r.cfg == nil || (!configured && !onboarded) {
 		return m.startModelWizard()
 	}
 
@@ -1563,7 +1584,7 @@ func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
 	m.team = nil
 	// The side channel belonged to the conversation this pane just detached
 	// from; it goes with it.
-	m.dropSide()
+	m.dropSide(false)
 	if m.chatHistory != nil {
 		m.chatHistory.clear()
 	}
@@ -1650,7 +1671,7 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 	}
 	// The side channel was opened beside a different thread: its snapshot, its
 	// transcript and its approval bucket all belong to that one.
-	m.dropSide()
+	m.dropSide(false)
 	if m.r != nil {
 		m.r.setSess(sess.ID)
 		// The roster is a property of the thread just opened.

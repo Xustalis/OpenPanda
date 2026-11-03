@@ -551,17 +551,58 @@
 
 /* Pre-execution question card above the composer: the running SSE turn is
    parked on this answer, so the card sits where the next action would be rather
-   than inside a transcript bubble that scrolls away. */
+   than inside a transcript bubble that scrolls away. It takes the transcript's
+   900px reading column so the card, the reply above it and the composer under
+   it share one edge. */
+@keyframes clarify-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Shares the transcript's and the composer's lane (`.chat-log` / `.composer`)
+   so the card's edges land on the reading column's at every width, including
+   when the node card has pushed that column left. */
+.clarify-dock {
+  flex: none;
+  padding: 0 calc(52px + var(--panel-lane)) 0 var(--sp-6);
+  transition: padding-right var(--dur-med) var(--ease-standard);
+}
+
 .clarify-card {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
-  margin: 0 0 var(--sp-2);
-  padding: 10px 12px;
+  gap: 6px;
+  max-width: 900px;
+  /* A long question with four long options must not push the transcript out
+     of the pane; the card scrolls on its own instead. */
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0 auto var(--sp-2);
+  padding: 8px 10px;
   border: 1px solid var(--border-soft);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--bg-raised);
+  animation: clarify-in var(--dur-med) var(--ease-standard);
+}
+
+/* Focus is moved here on mount for the number/Escape keys, not to ring the
+   whole card; the option buttons keep their own focus treatment. */
+.clarify-card:focus {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clarify-card {
+    animation: none;
+  }
 }
 
 .clarify-head {
@@ -571,24 +612,90 @@
   flex-wrap: wrap;
 }
 
+/* One tick per question, the current one in ink: the counter alone reads as
+   metadata, the ticks show how much of the round is left. */
+.clarify-steps {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.clarify-step {
+  display: block;
+  width: 16px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.clarify-step.is-done {
+  background: var(--border-strong);
+}
+
+.clarify-step.is-on {
+  background: var(--accent);
+}
+
 .clarify-progress {
+  margin-left: auto;
   font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
 }
 
+/* The proposed plan reads as a quotation of the task, not a second card:
+   a hairline rail and no well, so the question below stays the loudest line. */
 .clarify-plan {
   white-space: pre-wrap;
   font-size: var(--fs-caption);
+  line-height: 1.45;
   color: var(--text-secondary);
+  /* Three full lines plus a little: a paragraph that merely rounds past the
+     third line renders whole instead of losing its last words. */
+  max-height: calc(1.45em * 3.4);
+  overflow: hidden;
+  padding: 1px 0 1px 8px;
+  border-left: 2px solid var(--border);
+  transition: max-height var(--dur-med) var(--ease-standard);
+}
+
+/* Only a genuinely clipped plan fades: the fade is the "there is more" cue,
+   and showing it over text that already fits would read as damage. The
+   -webkit- twin is for the macOS WebView, which does not take the unprefixed
+   property. */
+.clarify-plan.is-clipped:not(.is-open) {
+  -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent);
+  mask-image: linear-gradient(to bottom, #000 72%, transparent);
+}
+
+.clarify-plan.is-open {
   max-height: 30vh;
   overflow: auto;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  background: var(--bg);
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.clarify-plan-toggle {
+  align-self: flex-start;
+  margin-top: -3px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-caption);
+  cursor: pointer;
+}
+
+.clarify-plan-toggle:hover {
+  color: var(--text);
+  text-decoration: underline;
 }
 
 .clarify-question {
   font-weight: 600;
+  line-height: 1.4;
 }
 
 .clarify-header {
@@ -600,7 +707,7 @@
 .clarify-options {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 /* Options and the focused option's preview share a row on a wide screen; the
@@ -616,10 +723,16 @@
   min-width: 0;
 }
 
+/* Without a preview pane the options own the whole row; the preview only takes
+   its 45% when the model actually supplied something to put in it. */
+.clarify-body:not(:has(.clarify-preview)) .clarify-options {
+  flex-basis: 100%;
+}
+
 .clarify-preview {
   flex: 1 1 45%;
   min-width: 0;
-  max-height: 40vh;
+  max-height: 26vh;
   overflow: auto;
   padding: 6px 8px;
   border: 1px solid var(--border-soft);
@@ -640,12 +753,13 @@
 }
 
 .clarify-option {
+  position: relative;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  flex-flow: row wrap;
+  align-items: baseline;
+  gap: 2px 8px;
   width: 100%;
-  padding: 7px 9px;
+  padding: 5px 8px;
   text-align: left;
   font: inherit;
   color: inherit;
@@ -653,21 +767,52 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
 }
 
 .clarify-option:hover {
-  border-color: var(--accent);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
 }
 
 .clarify-option.is-picked {
-  border-color: var(--accent);
-  background: var(--bg-raised);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+/* The recommended option carries a short ink rail rather than a filled badge:
+   it marks the default without competing with the selected state. */
+.clarify-option.is-recommended::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+/* Number-key hint. Hidden on narrow screens, where options stack and the
+   keyboard is not the primary input anyway. */
+.clarify-option-key {
+  min-width: 14px;
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+
+.clarify-option:hover .clarify-option-key,
+.clarify-option.is-picked .clarify-option-key {
+  color: var(--text-secondary);
 }
 
 .clarify-option-label {
   display: flex;
   align-items: center;
   gap: 6px;
+  font-weight: 500;
 }
 
 .clarify-check {
@@ -683,7 +828,26 @@
 
 .clarify-option-desc {
   font-size: var(--fs-caption);
+  line-height: 1.4;
   color: var(--text-secondary);
+}
+
+/* Narrow screens cannot fit a label and its description on one line; stacking
+   them keeps each option readable instead of wrapping mid-sentence. This sits
+   after the base rule on purpose: same specificity, so source order decides. */
+@media (max-width: 720px) {
+  .clarify-option {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    /* A finger needs a bigger target than a pointer: the compact desktop row
+       is 33px, below what a touch screen should ask the user to hit. */
+    padding: 8px 10px;
+  }
+
+  .clarify-option-key {
+    display: none;
+  }
 }
 
 .clarify-other {
@@ -705,8 +869,14 @@
 .clarify-actions {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 6px;
   flex-wrap: wrap;
+}
+
+/* Cancel is the way out, not a peer of the answer: it sits at the far right,
+   away from the option buttons that were just pressed. */
+.clarify-actions .btn.danger {
+  margin-left: auto;
 }
 
 /* A parked task's question reuses the clarify card inside the approval box:
@@ -722,6 +892,9 @@
   padding: 0;
   border: none;
   background: transparent;
+  animation: none;
+  max-height: none;
+  overflow: visible;
 }
 
 .clarify-other .clarify-question {
@@ -9604,6 +9777,18 @@ input.switch:focus-visible {
   margin-top: var(--sp-3);
   border-top: 1px solid var(--hairline-sm);
   padding-top: var(--sp-3);
+}
+.artifact-remote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+.artifact-remote p {
+  margin: 0;
 }
 .artifact-list {
   list-style: none;

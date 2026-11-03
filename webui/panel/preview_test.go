@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
+	"github.com/Xustalis/OpenPanda/internal/askengine"
 )
 
 // newPreviewForTest packs a small static site into a fresh pool and brings the
@@ -280,7 +281,10 @@ func previewPanel(t *testing.T, withArtifact bool) (http.Handler, string) {
 		t.Fatalf("start preview: %v", err)
 	}
 	t.Cleanup(func() { _ = p.Close() })
-	return New(Deps{Store: store, Artifacts: pool, Preview: p, StaticDir: t.TempDir(), Token: testToken}), task.TaskID
+	// The remote case reports can_fetch only when a live engine can do the
+	// pull; a zero engine is enough for the handler's presence check.
+	engineFn := func() *askengine.Engine { return &askengine.Engine{} }
+	return New(Deps{Store: store, Artifacts: pool, Preview: p, EngineFn: engineFn, StaticDir: t.TempDir(), Token: testToken}), task.TaskID
 }
 
 type previewMeta struct {

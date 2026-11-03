@@ -420,6 +420,7 @@ func TestTUIWelcomeFitsItsTerminal(t *testing.T) {
 		m := newTestTUI(t)
 		m.r.cfg.Node.Name = "XenithdeMacBook-Pro.local"
 		m.r.cfg.Storage.WorkPath = "/Users/xenith/Library/Application Support/openpanda"
+		m.r.cfg.Model.Provider = "deepseek"
 		m.r.cfg.Model.Model = "deepseek-v4-flash"
 		m = step(m, tea.WindowSizeMsg{Width: width, Height: 30})
 		lines := strings.Split(m.welcome(), "\n")

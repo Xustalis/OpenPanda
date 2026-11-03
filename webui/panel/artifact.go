@@ -3,6 +3,8 @@
 package panel
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
+	"github.com/Xustalis/OpenPanda/internal/core"
 )
 
 // taskArtifact resolves the task's output artifact to (hash, archive) or
@@ -143,6 +146,36 @@ func (h *handler) getTaskArtifactFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = io.Copy(w, rc)
+}
+
+// artifactSource names the node a local pool should ask for a task artifact.
+// The origin's own row keeps owner_node pointing at itself after a delegation;
+// the latest delegate target is the executor (or the first hop toward it), and
+// a delegated result carries the executor explicitly. Asking the origin itself
+// was the old dead end: the bytes were never there.
+func artifactSource(ctx context.Context, store *core.TaskStore, t core.Task) string {
+	if target, err := store.DispatchTarget(ctx, t.TaskID); err == nil &&
+		target != "" && target != t.OwnerNode {
+		return target
+	}
+	if exec := resultExecutor(t.ResultJSON); exec != "" && exec != t.OwnerNode {
+		return exec
+	}
+	return t.OwnerNode
+}
+
+// resultExecutor reads the executor a delegated result payload recorded.
+func resultExecutor(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var payload struct {
+		Executor string `json:"executor"`
+	}
+	if json.Unmarshal([]byte(raw), &payload) != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Executor)
 }
 
 // shortHash renders a content hash the way the UI does — first 12 hex chars

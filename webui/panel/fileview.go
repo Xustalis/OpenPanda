@@ -104,17 +104,19 @@ func (h *handler) viewFile(w http.ResponseWriter, r *http.Request) {
 			base = real
 		}
 	}
-	// Resolve symlinks before the root check, so a link inside the workspace
-	// cannot point outside it.
+	// Resolve first so an absolute symlink whose target is inside the tree
+	// still opens; the Root below is the boundary, including a link swapped
+	// in after this resolution.
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
 	}
-	if !h.allowedViewPath(abs, workDir) {
-		writeErr(w, http.StatusForbidden, errors.New("path is outside the workspace and memory roots"))
+	f, st, err := h.openReadPath(abs, workDir)
+	if err != nil {
+		writeReadError(w, err)
 		return
 	}
-	st, err := os.Stat(abs)
-	if err != nil || st.IsDir() {
+	defer f.Close()
+	if st.IsDir() {
 		writeErr(w, http.StatusNotFound, errors.New("no such file"))
 		return
 	}
@@ -129,7 +131,7 @@ func (h *handler) viewFile(w http.ResponseWriter, r *http.Request) {
 	}
 	count = min(count, maxViewContext)
 
-	view, err := readFileView(abs, st.Size(), line, count)
+	view, err := readFileView(abs, f, st.Size(), line, count)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("read failed"))
 		return
@@ -186,25 +188,10 @@ func (h *handler) resolveViewPath(reqPath, workDir string) (abs, base string, er
 	return abs, base, err
 }
 
-// allowedViewPath is allowedReadRoot widened by the session's own worktree.
-//
-// The widening is what makes "the file this thread's agent just touched" open
-// at all: a worktree lives inside the repository, and a repository the user
-// runs a session in is not necessarily one they registered as a project. The
-// worktree still has to pass the same breadth rule a project work dir does
-// (safeReadRoot), so a corrupted or hand-edited session cannot turn this into a
-// whole-disk reader.
-func (h *handler) allowedViewPath(abs, workDir string) bool {
-	if h.allowedReadRoot(abs) {
-		return true
-	}
-	return workDir != "" && underRoot(workDir, abs)
-}
-
 // readFileView reads the requested window. A file that fits the cap is read
 // whole — that is what lets the response carry real line numbers and a total —
 // while a larger one is streamed just far enough to fill the window.
-func readFileView(abs string, size int64, line, count int) (*fileView, error) {
+func readFileView(abs string, f *os.File, size int64, line, count int) (*fileView, error) {
 	view := &fileView{
 		Path:       abs,
 		Line:       line,
@@ -213,12 +200,6 @@ func readFileView(abs string, size int64, line, count int) (*fileView, error) {
 		Size:       size,
 		Ext:        strings.ToLower(strings.TrimPrefix(filepath.Ext(abs), ".")),
 	}
-	f, err := os.Open(abs)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
 	if binarySniff(f) {
 		view.Binary = true
 		return view, nil

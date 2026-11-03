@@ -41,6 +41,8 @@ export function ArtifactSection(props: { task: Task; onPreview?: (task: Task) =>
   const [list, setList] = useState<ArtifactFileList | null>(null)
   const [err, setErr] = useState('')
   const [preview, setPreview] = useState<{ path: string; kind: 'image' | 'text'; url?: string; text?: string } | null>(null)
+  const [remote, setRemote] = useState<{ source?: string; canFetch: boolean } | null>(null)
+  const [pulling, setPulling] = useState(false)
   const previewURL = useRef('')
 
   useEffect(
@@ -76,9 +78,40 @@ export function ArtifactSection(props: { task: Task; onPreview?: (task: Task) =>
     try {
       setList(await api.taskArtifactFiles(taskID))
     } catch (e) {
+      // The archive is still on the executor. Ask the preview endpoint where
+      // it lives and whether this node can pull it, instead of showing a raw
+      // 404 that reads like the task produced nothing.
+      if (await detectRemote()) return
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function detectRemote(): Promise<boolean> {
+    try {
+      const meta = await api.previewTaskArtifact(taskID)
+      if (meta.state === 'remote') {
+        setRemote({ source: meta.source, canFetch: Boolean(meta.can_fetch) })
+        return true
+      }
+    } catch {
+      // The preview endpoint may be off; keep the original error.
+    }
+    return false
+  }
+
+  async function pull() {
+    setPulling(true)
+    setErr('')
+    try {
+      await api.fetchTaskArtifact(taskID)
+      setRemote(null)
+      setList(await api.taskArtifactFiles(taskID))
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPulling(false)
     }
   }
 
@@ -107,9 +140,17 @@ export function ArtifactSection(props: { task: Task; onPreview?: (task: Task) =>
   async function downloadArchive() {
     setErr('')
     try {
+      if (remote) {
+        await api.fetchTaskArtifact(taskID)
+        setRemote(null)
+      }
       const blob = await fetchBlob(`/api/tasks/${encodeURIComponent(taskID)}/artifact`)
       saveBlob(blob, `task-${taskID}-${hash.slice(0, 12)}.tar.gz`)
     } catch (e) {
+      if (await detectRemote()) {
+        setOpen(true)
+        return
+      }
       setErr(e instanceof Error ? e.message : String(e))
     }
   }
@@ -137,6 +178,18 @@ export function ArtifactSection(props: { task: Task; onPreview?: (task: Task) =>
         <div class="artifact-body">
           {loading && <div class="muted">{t('artifact.loading')}</div>}
           {err && <div class="artifact-error">{err}</div>}
+          {remote && (
+            <div class="artifact-remote">
+              <p>{t('artifact.remote', { source: remote.source ?? '?' })}</p>
+              {remote.canFetch ? (
+                <button type="button" class="orbit-action-btn" disabled={pulling} onClick={pull}>
+                  {pulling ? t('artifact.pulling') : t('artifact.pull')}
+                </button>
+              ) : (
+                <p class="muted">{t('artifact.noFetch', { source: remote.source ?? '?' })}</p>
+              )}
+            </div>
+          )}
           {list && (list.entries ?? []).length === 0 && <div class="muted">{t('artifact.empty')}</div>}
           {list && (list.entries ?? []).length > 0 && (
             <ul class="artifact-list">
