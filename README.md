@@ -14,6 +14,10 @@ Self-hosted · peer-to-peer · no vendor relay · ~40 MB RSS · macOS / Linux / 
 ![Memory](https://img.shields.io/badge/Memory%20Footprint-~40MB%20RSS-brightgreen)
 ![No Vendor Relay](https://img.shields.io/badge/Vendor%20Relay-None-success)
 
+<!-- Demo slot: record with vhs (a scripted terminal recording) and put the GIF here,
+     above the install block. The two scenes that convert: a task finishing on a second
+     node after the first is killed mid-run, and one prompt fanned out to four harnesses. -->
+
 ---
 
 ## 📦 Install
