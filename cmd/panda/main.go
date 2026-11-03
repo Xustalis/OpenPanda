@@ -517,6 +517,11 @@ func runDaemon(args []string) {
 	// load-bearing (see recoverThenStartQueue).
 	recoverThenStartQueue(ctx, logger, coreNode)
 
+	// Inbound events (intake.*): the webhook listener starts after the queue,
+	// because an admitted event is immediately queued and must not wait for a
+	// scheduler that is still recovering. Inert unless enabled.
+	startIntake(ctx, logger, coreNode, cfg.Intake)
+
 	// Dreaming (design §17.3): consolidate the daily logs into long-term memory
 	// in the background — only while the node is idle, at most once per day.
 	// The same tick also enforces the daily-log retention windows (A4: the
