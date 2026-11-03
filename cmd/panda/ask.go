@@ -133,7 +133,10 @@ func runAsk(args []string) {
 		fail(2, i18n.T(loc, "cli.ask.usage"))
 	}
 	switch *outputFormat {
-	case "", "json", "stream-json":
+	// "text" is the documented default; accepting it explicitly keeps the
+	// error message ("one of: text, json, stream-json") from recommending a
+	// value the parser then rejects.
+	case "", "text", "json", "stream-json":
 	default:
 		fail(2, i18n.Tf(loc, "cli.ask.badFormat", "format", *outputFormat))
 	}

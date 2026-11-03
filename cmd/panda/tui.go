@@ -38,7 +38,7 @@ func shouldUseTUI(r *repl) bool {
 // drag-select, double-click, and terminal copy work out of the box, with wheel
 // scrolling handled via alternate scroll (DECSET 1007). Mouse cell motion is
 // enabled only when mouseScroll is active (via config, PANDA_MOUSE, or ctrl+t).
-func runTUI(r *repl) {
+func runTUI(r *repl) error {
 	// The thread this sitting resumes (or the legacy bare conversation, when no
 	// store could be bound) was already prepared by runRepl — see
 	// prepareConversation — so the transcript can be seeded below.
@@ -74,6 +74,13 @@ func runTUI(r *repl) {
 	}()
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "panda: "+err.Error())
+		// A panic or an abnormal kill is not a clean quit. Exiting 0 here made
+		// a crashed TUI look successful to a shell, a supervisor, or a script
+		// that had just run `panda`.
+		if sid := r.sessID(); sid != "" {
+			fmt.Println(pal().Muted(i18n.Tf(r.locale(), "tui.exit.session", "id", sid)))
+		}
+		return err
 	}
 	// Restoring the main screen makes the conversation look lost, so say where
 	// it went: a bound session persists in the store (resume by id), a bare
@@ -83,4 +90,5 @@ func runTUI(r *repl) {
 	} else if r.convoLen() > 0 {
 		fmt.Println(pal().Muted(i18n.T(r.locale(), "tui.exit.bare")))
 	}
+	return nil
 }

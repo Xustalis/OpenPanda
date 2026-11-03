@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
@@ -148,13 +149,18 @@ func dispatchSub(sub string, args []string) {
 		// manual. One line naming `panda help` keeps the reference one
 		// keystroke away without making every typo cost sixty lines.
 		loc := i18n.Detect()
-		p := palFor(os.Stderr)
-		fmt.Fprintf(os.Stderr, "panda: %s %s\n", i18n.T(loc, "cli.unknownSub"), p.Command(sub))
+		// One message, one exit: printing the first lines directly and handing
+		// only the last to fail meant --json emitted prose on stderr and an
+		// envelope whose message was just the "see panda help" line — the
+		// actual error and the suggestion were lost.
+		lines := []string{fmt.Sprintf("panda: %s %s", i18n.T(loc, "cli.unknownSub"), sub)}
 		if s := suggest(sub, subcommandNames()); s != "" {
-			fmt.Fprintf(os.Stderr, "  %s\n", i18n.Tf(loc, "repl.didyoumean", "cmd", p.Command(s)))
+			lines = append(lines, "  "+i18n.Tf(loc, "repl.didyoumean", "cmd", s))
 		}
-		fmt.Fprintf(os.Stderr, "  %s\n", p.Muted(i18n.T(loc, "cli.unknownSub.askHint")))
-		failf(2, "  %s\n", p.Muted(i18n.T(loc, "cli.help.more")))
+		lines = append(lines,
+			"  "+i18n.T(loc, "cli.unknownSub.askHint"),
+			"  "+i18n.T(loc, "cli.help.more"))
+		fail(2, strings.Join(lines, "\n"))
 	}
 }
 
