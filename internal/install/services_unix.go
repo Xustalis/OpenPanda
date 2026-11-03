@@ -8,18 +8,24 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 // StopServices best-effort stops a user-level daemon if one is registered
 // (LaunchAgent on macOS, user systemd unit on Linux — the units ship in
-// scripts/ and deploy/). Failures are ignored: an unregistered service, a
+// scripts/ and deploy/). The console's own unit, written by `panda service
+// install`, is stopped and removed as well: it is this binary's artifact, and
+// leaving it registered would relaunch a binary that uninstall is about to
+// delete at every login. Failures are ignored: an unregistered service, a
 // different init system, or no daemon running are all normal states during
-// uninstall, and the unit files themselves belong to the OS packaging, not
-// to this binary.
+// uninstall, and the daemon's unit files belong to the OS packaging, not to
+// this binary.
 func StopServices() {
-	_ = exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/com.openpanda.node", os.Getuid())).Run()
-	_ = exec.Command("systemctl", "--user", "disable", "--now", "openpanda").Run()
+	_ = exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", os.Getuid(), NodeServiceLabel)).Run()
+	_ = exec.Command("systemctl", "--user", "disable", "--now", NodeServiceUnitName).Run()
+	stopWebService()
 }
 
 // RestartDaemon best-effort bounces a registered node daemon so it picks up a
@@ -33,12 +39,50 @@ func StopServices() {
 // service to bounce — so the update surfaces the restart hint instead.
 // Failures are ignored for the same reason as StopServices.
 func RestartDaemon() {
-	svc := fmt.Sprintf("gui/%d/com.openpanda.node", os.Getuid())
+	svc := fmt.Sprintf("gui/%d/%s", os.Getuid(), NodeServiceLabel)
 	if out, err := exec.Command("launchctl", "print", svc).Output(); err == nil &&
 		strings.Contains(string(out), "state = running") {
 		_ = exec.Command("launchctl", "kickstart", "-k", svc).Run()
 	}
 	if _, err := exec.LookPath("systemctl"); err == nil {
-		_ = exec.Command("systemctl", "--user", "try-restart", "openpanda.service").Run()
+		_ = exec.Command("systemctl", "--user", "try-restart", NodeServiceUnitName).Run()
+	}
+}
+
+// RestartWebService bounces the console's own unit after a binary swap. Without
+// it an updated install keeps serving the old image from the panel process,
+// and the version that answers the browser is not the version on disk. Same
+// running-only contract as RestartDaemon.
+func RestartWebService() {
+	svc := fmt.Sprintf("gui/%d/%s", os.Getuid(), WebServiceLabel)
+	if out, err := exec.Command("launchctl", "print", svc).Output(); err == nil &&
+		strings.Contains(string(out), "state = running") {
+		_ = exec.Command("launchctl", "kickstart", "-k", svc).Run()
+	}
+	if _, err := exec.LookPath("systemctl"); err == nil {
+		_ = exec.Command("systemctl", "--user", "try-restart", WebServiceUnitName).Run()
+	}
+}
+
+// webServiceUnitPath mirrors the path `panda service install` writes. The two
+// must agree or StopServices removes nothing and the unit survives the binary.
+func webServiceUnitPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(home, "Library", "LaunchAgents", WebServiceLabel+".plist")
+	}
+	return filepath.Join(home, ".config", "systemd", "user", WebServiceUnitName)
+}
+
+func stopWebService() {
+	_ = exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", os.Getuid(), WebServiceLabel)).Run()
+	_ = exec.Command("systemctl", "--user", "disable", "--now", WebServiceUnitName).Run()
+	if path := webServiceUnitPath(); path != "" {
+		if err := os.Remove(path); err == nil && runtime.GOOS != "darwin" {
+			_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+		}
 	}
 }

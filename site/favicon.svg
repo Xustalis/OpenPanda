@@ -1,13 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="OpenPanda">
-  <mask id="panda">
-    <rect width="64" height="64" fill="#000"/>
-    <circle cx="32" cy="35" r="18.6" fill="#fff"/>
-    <circle cx="19.4" cy="17.1" r="7.5" fill="#fff"/>
-    <circle cx="44.6" cy="17.1" r="7.5" fill="#fff"/>
-    <ellipse cx="24.3" cy="32.2" rx="3.9" ry="4.9" transform="rotate(-16 24.3 32.2)" fill="#000"/>
-    <ellipse cx="39.7" cy="32.2" rx="3.9" ry="4.9" transform="rotate(16 39.7 32.2)" fill="#000"/>
-    <ellipse cx="32" cy="42.2" rx="2.5" ry="1.85" fill="#000"/>
-  </mask>
-  <rect width="64" height="64" rx="14" fill="#0c7a55"/>
-  <rect width="64" height="64" rx="14" fill="#eafff6" mask="url(#panda)"/>
+  <rect width="64" height="64" rx="14" fill="#05070b"/>
+  <g>
+    <ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)" fill="none" stroke="#6fc7a1" stroke-width="2.3" pathLength="100" stroke-dasharray="82 18" stroke-linecap="round"/>
+    <path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="#f2e8cf"/>
+    <circle cx="56.1" cy="22.3" r="2.9" fill="#6fc7a1"/>
+    <circle cx="39.2" cy="20.3" r="1.9" fill="#6fc7a1"/>
+  </g>
 </svg>

@@ -59,6 +59,14 @@ type Event struct {
 	State   string
 	Project string
 	Owner   string
+	// The source facts are set only for a task that an inbound event created
+	// (intake). Empty on every other task, which is what lets a reply hook
+	// run its command unconditionally and post nothing for local work.
+	Source       string
+	SourceRepo   string
+	SourceNumber string
+	SourceURL    string
+	SourceThread string
 }
 
 // Hook is one configured binding.
@@ -253,6 +261,12 @@ const (
 	EnvProject = "PANDA_HOOK_PROJECT"
 	EnvOwner   = "PANDA_HOOK_OWNER"
 	EnvEvent   = "PANDA_HOOK_EVENT"
+	// Inbound-task provenance. Empty for locally created work.
+	EnvSource       = "PANDA_HOOK_SOURCE"
+	EnvSourceRepo   = "PANDA_HOOK_SOURCE_REPO"
+	EnvSourceNumber = "PANDA_HOOK_SOURCE_NUMBER"
+	EnvSourceURL    = "PANDA_HOOK_SOURCE_URL"
+	EnvSourceThread = "PANDA_HOOK_SOURCE_THREAD"
 )
 
 // Expand substitutes placeholder tokens with references to those variables.
@@ -285,6 +299,11 @@ func expandFor(goos, template string) string {
 		"{project}", ref(EnvProject),
 		"{owner}", ref(EnvOwner),
 		"{event}", ref(EnvEvent),
+		"{source}", ref(EnvSource),
+		"{source_repo}", ref(EnvSourceRepo),
+		"{source_number}", ref(EnvSourceNumber),
+		"{source_url}", ref(EnvSourceURL),
+		"{source_thread}", ref(EnvSourceThread),
 	)
 	return repl.Replace(template)
 }
@@ -298,6 +317,11 @@ func hookEnv(ev Event) []string {
 		EnvProject + "=" + ev.Project,
 		EnvOwner + "=" + ev.Owner,
 		EnvEvent + "=" + ev.Name,
+		EnvSource + "=" + ev.Source,
+		EnvSourceRepo + "=" + ev.SourceRepo,
+		EnvSourceNumber + "=" + ev.SourceNumber,
+		EnvSourceURL + "=" + ev.SourceURL,
+		EnvSourceThread + "=" + ev.SourceThread,
 	}
 }
 

@@ -182,12 +182,15 @@ func trimFloat(f float64) string {
 	return fmt.Sprintf("%.2f", f)
 }
 
-// printEventTimeline writes a task's events under an indent, newest last.
-func printEventTimeline(events []core.Event, indent string) {
-	printEventTimelineTo(os.Stdout, events, indent)
+// printEventTimelineFull writes a task's events under an indent, newest last.
+// full replaces the terminal-bound row with the event's raw payload, so a
+// failure reason the timeline clipped can be read in one command instead of a
+// database query.
+func printEventTimelineFull(events []core.Event, indent string, full bool) {
+	printEventTimelineTo(os.Stdout, events, indent, full)
 }
 
-func printEventTimelineTo(out io.Writer, events []core.Event, indent string) {
+func printEventTimelineTo(out io.Writer, events []core.Event, indent string, full bool) {
 	// depths maps a tool_use id to its tree depth so agent_event rows whose
 	// payload carries parent=<id> render nested beneath the call that
 	// spawned them — the harness sub-agent tree (Claude Task) shows as a
@@ -195,6 +198,15 @@ func printEventTimelineTo(out io.Writer, events []core.Event, indent string) {
 	// still nests one level rather than pretending to be top-level work.
 	depths := map[string]int{}
 	for _, e := range events {
+		if full {
+			head := indent + time.Unix(e.TS, 0).Format("01-02 15:04:05") + "  " + cell(e.Type, eventTypeWidth)
+			if data := strings.TrimSpace(e.DataJSON); data != "" && data != "null" {
+				_, _ = fmt.Fprintln(out, head+"  "+data)
+			} else {
+				_, _ = fmt.Fprintln(out, strings.TrimRight(head, " "))
+			}
+			continue
+		}
 		if e.Type == core.EvAgentEvent {
 			_, _ = fmt.Fprintln(out, agentEventLine(e, indent, depths))
 			continue

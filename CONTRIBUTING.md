@@ -53,6 +53,7 @@ equivalents — keep them green.
 - **`go test -race ./...`** must pass — the kernel is a concurrent system
   (peer registry, task store, SSE hub); race detector findings are release
   blockers, not warnings.
+- **Windows developers:** `-race` needs `CGO_ENABLED=1` and a current MinGW-w64 toolchain (MSYS2's mingw-w64 GCC). Git-for-Windows' bundled MinGW 8.x is too old — the instrumented test binary exits at load with `0xc0000139` (STATUS_ENTRYPOINT_NOT_FOUND) before any test runs. `make race` sets `CGO_ENABLED=1`; the Windows CI leg runs plain `go test`, not `-race`.
 - Core modules (`internal/core`, `internal/scheduler`, `internal/storage`)
   should stay above **~60% test coverage** where practical. Bug fixes come
   with a regression test that fails before the fix.

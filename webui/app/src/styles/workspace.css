@@ -113,6 +113,29 @@
   height: 19px;
 }
 
+/* The magnification readout. A pill rather than a square: it carries a number,
+   and the header's other controls carry marks. It appears only while the
+   drawing is scaled, so the header of a page at 100% stays as it was. */
+.ws-zoom {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.ws-zoom:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
 /* The page's only other control: fold the device rail in or out. */
 .ws-rail-picker {
   display: flex;
@@ -853,13 +876,29 @@
    card than one with two, the way the drawing on paper was. The flex row is
    only the *first* layout — the component measures it and then pins every
    card to absolute coordinates, so this box is also the frame those
-   coordinates are relative to. */
+   coordinates are relative to.
+
+   The wheel scales this box (the transform is written inline, because it is
+   the live zoom). The origin has to be the top-left corner: the cards' stored
+   coordinates are measured from there, so scaling around the centre would
+   slide every card by half the growth and the pointer-anchored zoom would
+   chase its own tail. */
 .ws-panels-grid {
   position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 18px;
   align-items: flex-start;
+  transform-origin: 0 0;
+}
+
+/* The card under the pointer while it is being carried. Fixed, so it rides the
+   pointer instead of the map; pointer-transparent, so the press that started
+   it keeps landing on the window. Its own scale is written inline. */
+.ws-panel-ghost {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
 }
 
 /* Only the selected machine's edges are mounted. The SVG lives in the same
@@ -964,10 +1003,25 @@
 /* — A panel is a machine. The tint is the form factor, the same six classes
    the glyphs name; a peer that never said what it is stays neutral. */
 .ws-panel {
+  /* The tile geometry lives on the card so its width cap and the tiles
+     themselves can never drift apart. */
+  --ws-tile: 86px;
+  --ws-tile-gap: 10px;
   position: relative;
   z-index: 1;
   flex: 0 0 auto;
-  max-width: 100%;
+  /* Content-sized, but never a strip: four tiles is as wide as a card gets
+     and the rest wrap under. The cap is what makes the tidy row stable — a
+     card that grew with its roster was eight agents on one 788px line, while
+     the same machine read as two rows whenever its width came from a pinned
+     slot, so 整理布局 (which throws the arrangement away and re-forms the
+     row) visibly stretched the card. 32px is the card's own chrome: 14px
+     padding ×2, 1px border ×2, and 2px of slack so sub-pixel rounding cannot
+     drop the fourth column. */
+  max-width: min(
+    100%,
+    calc(var(--ws-tile) * 4 + var(--ws-tile-gap) * 3 + 32px)
+  );
   /* A machine's tile column is capped to the map's visible height (the
      component measures it and publishes --ws-panel-max). Without the cap a
      four-agent panel grew past the map's bottom edge and the card was clipped
@@ -1127,13 +1181,15 @@
   color: var(--text-secondary);
 }
 
-/* The shelf: the band between the header and the tiles is the line the pet
-   stands on. 44px is one panda tall. */
+/* The tile field sits one gutter under the header. It used to leave a 44px
+   band here for the pet to stand on, but she stands on the card's top edge
+   now (`top: -36px`), and `.ws-map` already pays for that headroom — the
+   band was pure dead space between the machine's name and its agents. */
 .ws-panel-bays {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 44px;
+  gap: var(--ws-tile-gap);
+  margin-top: 12px;
   /* The tile field is the part that scrolls when the panel hits its cap; the
      header keeps its place above it. */
   flex: 1 1 auto;
@@ -1141,11 +1197,6 @@
   overflow-y: auto;
   align-content: flex-start;
   overscroll-behavior: contain;
-}
-/* No agents, no shelf: the band exists to give the pet a line to stand on,
-   and there is nothing up there to stand on. */
-.ws-panel-bays.none {
-  margin-top: 12px;
 }
 .ws-panel-none {
   font-size: 11px;
@@ -1155,8 +1206,8 @@
 /* — A tile is an agent: the CLI's own mark, and whether it is working. */
 .ws-tile {
   position: relative;
-  width: 86px;
-  height: 86px;
+  width: var(--ws-tile);
+  height: var(--ws-tile);
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);

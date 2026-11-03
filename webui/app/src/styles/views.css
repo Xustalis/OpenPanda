@@ -1546,20 +1546,11 @@
   gap: 8px;
 }
 
-/* ---- Transcript file drawer ---- */
-
-/* The same horizontal slab as the worktree diff drawer, one file instead of
-   all of them: it takes the top of the chat pane while open and gives it back
-   on close. */
-.file-viewer {
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-inset);
-  padding: 10px 24px 12px;
-  max-height: 45%;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+/* ---- File viewer pieces ------------------------------------------------
+   The drawer itself is gone: a file now opens in the dock's file panel
+   (styles/dock.css), beside the transcript rather than across its top. These
+   are the shared pieces that panel still uses — the head, the row, the copy
+   and insert verbs. */
 
 .fv-head {
   display: flex;
@@ -3302,28 +3293,223 @@ code.md-file:focus-visible {
   }
 }
 
-/* ---- Memory ---- */
+/* ---- Memory: one page bar, one strip, one card per file ---------------- */
+
+/* The page is a reader for the agent's files, so the chrome stays out of the
+   way: a single bar names the page and reports what is in it, one strip picks
+   the surface, and every editable file is one card whose head carries its
+   name, budget, filter and verbs. */
+
+.memory-page {
+  width: 100%;
+  max-width: 1180px;
+  margin-inline: auto;
+}
+
+/* One-line page bar — the same top edge as 工作空间 and 队列·任务·项目. The
+   old head was a 26px title over a two-line description, and the clock and a
+   bare refresh button lived in two cards of their own below it. */
+.memory-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--sp-4);
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.memory-head-icon {
+  flex: none;
+  color: var(--text);
+}
+
+.memory-head-title {
+  flex: none;
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 1.3;
+}
+
+/* The counts are the real subtitle: what is in the files right now, not a
+   sentence explaining what memory is (that lives in the title tooltip). */
+.memory-head-meta {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memory-head-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.memory-head-tools .icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+
+.memory-clock {
+  padding-right: 6px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 .memory-tabs {
-  margin-bottom: 14px;
+  margin-bottom: var(--sp-4);
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 
+/* Entry counts ride the tabs so the strip says where the content is, not
+   only which surface you are on. */
+.memory-tab-n {
+  margin-left: 6px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-tabs .seg.on .memory-tab-n {
+  color: var(--text-secondary);
+}
+
+/* One card per file. The head bleeds to the card edges, so the card itself
+   carries no padding. */
 .memory-card {
-  overflow: auto;
+  padding: 0;
+  overflow: hidden;
 }
 
-.memory-content {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 13px;
-  line-height: 1.6;
-  max-height: 60vh;
+.memory-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px var(--sp-5);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.memory-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.memory-card-count {
+  flex: none;
+  font-size: var(--text-xs);
+}
+
+.memory-card-hint {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.memory-card-tools .memory-card-del:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.memory-card-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* Budget: a 4px track next to the counter. The number says how much is used,
+   the bar says how close to the cap — which is the only thing a bare
+   "320 / 5000" hides. */
+.memory-usage {
+  flex: none;
+  width: 60px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  overflow: hidden;
+}
+
+.memory-usage i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.memory-usage.hot i {
+  background: var(--danger);
+  opacity: 1;
+}
+
+.memory-counter {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-counter.over {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+/* Filter: an inline field in the card head, not a full-width input above the
+   list — it is a secondary verb, not the first thing to read. */
+.memory-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.memory-filter:focus-within {
+  border-color: var(--accent-border);
+  background: var(--bg-raised);
+}
+
+.memory-filter input {
+  width: 146px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.memory-filter input::placeholder {
+  color: var(--text-tertiary);
 }
 
 /* Productized memory rendering (P1): each §-separated entry is its own row.
-   A "fresh" entry — one the agent added since the previous load — carries an
-   accent bar and a soft glow that fades out. */
+   A "fresh" entry — one the agent added since the previous load — carries a
+   soft accent wash that fades out. */
 .memory-entries {
   list-style: none;
   margin: 0;
@@ -3334,73 +3520,394 @@ code.md-file:focus-visible {
 
 .memory-entry {
   position: relative;
-  padding: 9px 12px;
-  border-left: 3px solid var(--border-soft);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px var(--sp-5) 9px var(--sp-4);
+  border-bottom: 1px solid var(--border-soft);
   font-size: var(--text-md);
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-  animation: memory-fresh 2.4s ease forwards;
+  line-height: 1.6;
 }
 
-.memory-entry + .memory-entry {
-  border-top: 1px solid var(--border-soft);
+.memory-entry:last-child {
+  border-bottom: none;
+}
+
+.memory-entry:hover {
+  background: var(--surface-alpha-xs);
 }
 
 .memory-entry.fresh {
-  border-left-color: var(--accent);
-  background: var(--accent-soft);
+  /* Only entries the agent added since the previous load flash — the wash is
+     a "this is new" signal, not an entrance animation for the whole list. The
+     end keyframe has to clear the wash explicitly: with `forwards` the resting
+     style is the animation's target, and a static background here would keep
+     every new row lit until the content changed. */
+  animation: memory-fresh 2.4s ease forwards;
 }
 
 @keyframes memory-fresh {
   from {
     background: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  to {
+    background: transparent;
+    box-shadow: inset 2px 0 0 transparent;
   }
 }
 
-.memory-edit-row {
+/* The gutter index is the entry's position in the file — a ledger line, not
+   decoration: it is what "the 7th entry" means when a row is being fixed. */
+.memory-entry-idx {
+  flex: none;
+  width: 18px;
+  padding-top: 2px;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  opacity: 0.72;
+  text-align: right;
+  user-select: none;
+}
+
+.memory-entry-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.memory-entry-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Row verbs are icon-sized and only paint on hover / keyboard focus — a list
+   of memory atoms should read as text, not as fourteen buttons. Their slot is
+   always reserved so hovering never reflows the paragraph. */
+.memory-entry-actions {
+  flex: none;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 10px;
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-soft);
+  gap: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease);
 }
 
-.memory-counter {
-  font-size: 12px;
+.memory-entry:hover .memory-entry-actions,
+.memory-entry:focus-within .memory-entry-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
-.memory-counter.over {
+.memory-entry-actions .icon-btn {
+  width: 24px;
+  height: 24px;
+  color: var(--text-tertiary);
+}
+
+.memory-entry-actions .icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.memory-entry-actions .memory-entry-del:hover {
   color: var(--danger);
-  font-weight: 700;
+  background: var(--danger-soft);
 }
 
+.memory-entry-fix {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.memory-entry-editbox {
+  width: 100%;
+}
+
+/* Add field closes the card: the list grows downward from a fixed head and
+   a new atom is appended from the bottom, where the list ends. */
+.memory-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px var(--sp-5);
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface-alpha-xs);
+}
+
+.memory-add-row .input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  font-size: var(--text-sm);
+}
+
+.memory-empty {
+  margin: 0;
+  padding: var(--sp-5);
+}
+
+.memory-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 220px;
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+.memory-placeholder p {
+  margin: 0;
+}
+
+.memory-placeholder svg {
+  opacity: 0.5;
+}
+
+/* The create field an empty surface still needs (new topic). */
+.memory-empty-form {
+  display: flex;
+  gap: 8px;
+  width: min(420px, 100%);
+  margin-top: 4px;
+}
+
+.memory-empty-form .input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  font-size: var(--text-sm);
+}
+
+.memory-content {
+  margin: 0;
+  padding: var(--sp-4) var(--sp-5);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+/* The editor reuses the card head and turns the body into one big well: no
+   inner border, no rounded input floating inside a rounded card. */
 .memory-editor {
   display: flex;
   flex-direction: column;
-  gap: 10px;
 }
 
-.memory-textarea {
+.memory-card .memory-textarea {
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  padding: var(--sp-4) var(--sp-5);
+  border: none;
+  border-radius: 0;
+  background: var(--bg-raised);
   resize: vertical;
-  min-height: 180px;
-  line-height: 1.6;
-  font-size: 13px;
+  font-size: 12.5px;
+  line-height: 1.65;
 }
 
-.memory-editor-foot {
+.memory-card .memory-textarea:focus {
+  outline: none;
+  border: none;
+  box-shadow: none;
+}
+
+.memory-editor-hint {
+  margin: 0;
+  padding: 0 var(--sp-5) var(--sp-3);
+}
+
+/* ---- Memory: topics / daily / projects rails (C2) ---- */
+
+/* A 236px rail plus the pane. The rail scrolls on its own, so a long topic
+   list never stretches the page past the card it belongs to. */
+.memory-split {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .memory-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.memory-pane {
+  min-width: 0;
+}
+
+.memory-rail {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.memory-rail-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px var(--sp-4);
+  border-bottom: 1px solid var(--border-soft);
 }
 
-.memory-editor-actions {
-  display: flex;
-  gap: 8px;
+.memory-rail-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.memory-rail-count {
   margin-left: auto;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-rail-list {
+  max-height: min(58vh, 520px);
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.memory-rail-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 9px var(--sp-4);
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface-alpha-xs);
+}
+
+.memory-rail-foot .input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  font-size: var(--text-sm);
+}
+
+.memory-rail-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.memory-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.memory-file-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px 6px 11px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.memory-file-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-file-meta {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-disabled);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-file-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.memory-file-item.active {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Active item is marked by a 2px accent tab in the gutter, not only by a
+   tinted background — at 12.5px the tint alone is easy to miss. */
+.memory-file-item.active::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  width: 2px;
+  height: 14px;
+  margin-top: -7px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.memory-file-item.active .memory-file-meta {
+  color: var(--text-tertiary);
+}
+
+/* A rail row with a trailing delete affordance (daily diary). */
+.memory-file-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.memory-file-row .memory-file-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.memory-file-del {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  color: var(--text-tertiary);
+}
+
+.memory-file-row:hover .memory-file-del,
+.memory-file-del:focus-visible {
+  opacity: 1;
+}
+
+.memory-file-del:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* Badge for entries promoted out of the daily logs ([from:...] marker). */
+.badge.from-log {
+  background: var(--semantic-warn-strong-soft);
+  color: var(--warn);
+  border-color: transparent;
+  vertical-align: 1px;
 }
 
 /* ---- 队列·任务·项目: one bar, one quiet row ------------------------------ */
@@ -4956,22 +5463,23 @@ code.md-file:focus-visible {
   border-top: 1px solid var(--border-soft);
 }
 
-/* ---- 应用策略: four questions, four answers ------------------------------
-   The generic row rules above are tuned for one flat list. This page is not
-   a list — it is four policy groups, one of which is a read-only status
-   panel — so it brings its own frame: a group header per question, rows
-   inside it, and an action bar that closes the form. */
+/* ---- 应用策略: one topic per block, one setting per row ------------------
+   The row anatomy is lifted from the settings sheets this class of tool ships
+   (WorkBuddy's .general-settings-panel, Codex's Settings): a 500-weight label,
+   one clause of grey text under it, and the control pinned to the right edge.
+   What is *not* here is the point — no group icon plate, no caption sentence
+   beside the group title, and no second paragraph per row. Each of those was
+   a voice saying what the label already said, and four of them per screen is
+   what made this page read as a manual instead of a form.
+
+   The frame stays flat and hairline-ruled like the rest of the sheet: this
+   dialog groups by rule, not by nested cards, and a carded page next to 常规
+   would look like a different application. */
+
 .policy-form {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 14px 0 0;
-}
-
-.policy-lead {
-  margin: 0;
-  font-size: var(--text-md);
-  color: var(--text-secondary);
+  padding: 4px 0 0;
 }
 
 .policy-group {
@@ -4979,62 +5487,54 @@ code.md-file:focus-visible {
   flex-direction: column;
   min-width: 0;
 }
+.policy-group + .policy-group {
+  margin-top: 2px;
+}
 
-/* The header is the rule: a tinted glyph, the question, and one line saying
-   what it decides. Everything below it belongs to it, which is what the old
-   column of six equal rows never told you. */
-.policy-group-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-bottom: 7px;
-  border-bottom: 1px solid var(--border);
-}
-.policy-group-icon {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 21px;
-  height: 21px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-alpha-md);
-  color: var(--text-secondary);
-}
+/* A section header, not a row: smaller and greyer than the labels it
+   introduces, with the rule under it starting the block. The rule is what
+   makes it a header — a bare caption above a row just reads as that row's
+   subtitle, which is the hierarchy the old design got wrong in the other
+   direction. */
 .policy-group-title {
   margin: 0;
-  font-size: var(--text-md);
-  font-weight: 600;
-  letter-spacing: 0;
-  color: var(--text);
-}
-.policy-group-note {
-  min-width: 0;
-  overflow: hidden;
+  padding: 18px 0 7px;
+  border-bottom: 1px solid var(--border-soft);
   font-size: var(--text-sm);
-  color: var(--text-tertiary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+}
+.policy-group:first-child .policy-group-title {
+  padding-top: 6px;
+}
+
+.policy-group-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .policy-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 2px 28px;
-  padding: 12px 0;
+  gap: 2px 24px;
+  padding: 13px 0;
   border-bottom: 1px solid var(--border-soft);
 }
-.policy-group > :last-child,
 .policy-row:last-child {
   border-bottom: 0;
 }
 .policy-row-name {
   font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 1.4;
   color: var(--text);
 }
 .policy-row-label > .hint {
   margin: 3px 0 0;
-  max-width: 68ch;
+  max-width: 66ch;
 }
 .policy-row-control {
   justify-self: end;
@@ -5148,13 +5648,12 @@ code.md-file:focus-visible {
 }
 
 /* 记忆上限: three caps side by side, each with its unit inside the field so
-   the number reads as a quantity instead of a bare integer. */
+   the number reads as a quantity instead of a bare integer. The row owns the
+   spacing now that the card has no dividers. */
 .policy-limits {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  padding: 12px 0 14px;
-  border-bottom: 1px solid var(--border-soft);
 }
 .policy-limit {
   display: flex;
@@ -5198,15 +5697,16 @@ code.md-file:focus-visible {
   color: var(--danger);
 }
 
-/* 沙箱: a status panel, not a switch. The state is a pill, the mechanism is
-   mono, the path gets its own line instead of wrapping around a sentence. */
+/* 沙箱: a status panel, not a switch. It sits inside the 安全 card below the
+   approval row, so it is an inset well on a raised surface — the tone change
+   is what separates it, not a border. The state is a pill, the mechanism is
+   mono, and the path gets its own line instead of wrapping around a sentence. */
 .policy-sandbox {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  margin: 12px 0 2px;
+  margin: 12px 0 10px;
   padding: 11px 13px;
-  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--bg-inset);
 }
@@ -5277,14 +5777,14 @@ code.md-file:focus-visible {
 
 /* The action bar closes the form instead of floating over it: at this size
    the whole page is one wheel notch from end to end, and a pinned bar would
-   slice whichever control happens to sit under it. The state line on the
-   left is what makes the end of the form worth reaching — it says whether
-   anything is actually pending. */
+   slice whichever control happens to sit under it. The state line only
+   appears when there is something to say — a form that matches the node does
+   not need a sentence telling you so, and two dead buttons already say it. */
 .policy-actions {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 2px;
   padding: 14px 0 0;
   border-top: 1px solid var(--border-soft);
 }
@@ -5294,6 +5794,7 @@ code.md-file:focus-visible {
 .policy-actions-bar {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
 .policy-actions-state {
@@ -5369,7 +5870,7 @@ code.md-file:focus-visible {
     justify-self: stretch;
     margin-top: 8px;
   }
-  /* 应用策略: one column, and the group's one-line gloss has nowhere to go. */
+  /* 应用策略: one column — the control drops under its label. */
   .policy-row,
   .policy-row.wide {
     grid-template-columns: minmax(0, 1fr);
@@ -5378,9 +5879,6 @@ code.md-file:focus-visible {
   .policy-row-control {
     justify-self: stretch;
     margin-top: 8px;
-  }
-  .policy-group-note {
-    display: none;
   }
   .policy-limits {
     grid-template-columns: minmax(0, 1fr);
@@ -5651,122 +6149,6 @@ code.md-file:focus-visible {
   word-break: break-all;
 }
 
-
-/* ---- Memory: topics / daily / projects panes (C2) ---- */
-
-.memory-split {
-  display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
-}
-
-@media (max-width: 860px) {
-  .memory-split {
-    grid-template-columns: 1fr;
-  }
-}
-
-.memory-file-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.memory-file-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 7px 10px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-dim);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memory-file-item:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.memory-file-item.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.memory-topic-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-
-.memory-search {
-  margin-bottom: 10px;
-}
-
-.memory-add-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.memory-add-row .input {
-  flex: 1;
-}
-
-/* A file-list row with a trailing delete affordance (daily diary). */
-.memory-file-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.memory-file-row .memory-file-item {
-  flex: 1;
-  min-width: 0;
-}
-
-.memory-file-del {
-  padding: 2px 8px;
-  line-height: 1;
-  color: var(--text-dim);
-}
-
-.memory-file-del:hover {
-  color: var(--danger);
-}
-
-/* Badge for entries promoted out of the daily logs ([from:...] marker). */
-.badge.from-log {
-  background: var(--semantic-warn-strong-soft);
-  color: var(--warn);
-  border-color: transparent;
-}
-
-.memory-entry-actions {
-  display: inline-flex;
-  gap: 4px;
-  margin-left: 8px;
-  vertical-align: middle;
-}
-
-.memory-entry-editbox {
-  width: 100%;
-  margin-top: 6px;
-}
 
 /* ---- Onboarding banner (first-run model setup) ---- */
 
@@ -7299,6 +7681,191 @@ button.project-stat:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+/* The discovery door: one caption line above the grid, right-aligned, so the
+   first tile is still the add door. Above rather than below because a registry
+   of seven models already scrolls — an entry past the fold is not an entry. */
+.model-actions {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 720px;
+  margin-bottom: var(--sp-2);
+}
+.model-discover {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  transition: color var(--dur-fast) var(--ease);
+}
+.model-discover:hover {
+  color: var(--text);
+}
+.model-discover-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+/* The sheet: one block per collector, rows that read as a checklist. */
+.discover-source {
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border-soft);
+}
+.discover-source:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.discover-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.discover-name {
+  flex: none;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.discover-chip {
+  flex: none;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.discover-chip.ok {
+  color: var(--semantic-good);
+  border-color: color-mix(in srgb, var(--semantic-good) 40%, transparent);
+}
+.discover-chip.error {
+  color: var(--semantic-bad);
+  border-color: color-mix(in srgb, var(--semantic-bad) 40%, transparent);
+}
+.discover-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.discover-all {
+  flex: none;
+  padding: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.discover-all:hover {
+  color: var(--text);
+}
+.discover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.discover-row:hover {
+  background: var(--bg-hover);
+}
+.discover-row.off {
+  cursor: default;
+  opacity: 0.55;
+}
+.discover-row.off:hover {
+  background: none;
+}
+.discover-model {
+  flex: none;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+.discover-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.discover-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.discover-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-md);
+}
+/* Unverified is a state, not a warning: the row may well work, the scan just
+   did not ask. Tinted down so it reads as "not checked" rather than "broken". */
+.discover-tag.unchecked {
+  color: var(--text-tertiary);
+  border: 1px dashed var(--border);
+  background: none;
+}
+.discover-ok {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: var(--semantic-good);
+  background: color-mix(in srgb, var(--semantic-good) 14%, transparent);
+}
+.discover-key {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-tertiary);
+}
+/* The sheet's answer to "why can I not tick anything": one sentence above the
+   rows. A greyed checklist with no explanation reads as a bug. */
+.discover-hint {
+  margin: 6px 0 2px 6px;
+  max-width: 78ch;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.discover-none {
+  padding: 4px 6px;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+.discover-more {
+  margin: 4px 0 0 6px;
+  padding: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.discover-more:hover {
+  color: var(--text);
+}
+.discover-error {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 .model-tile {
   position: relative;
   min-width: 0;
@@ -8696,16 +9263,6 @@ input.switch:focus-visible {
   overflow-wrap: anywhere;
 }
 
-/* ---- 记忆 page: a destination of its own, under 团队 in the rail ---- */
-
-/* Same container contract as the other pages: full width, capped and
-   centred. The split panes below it size themselves. */
-.memory-page {
-  width: 100%;
-  max-width: 1180px;
-  margin-inline: auto;
-}
-
 /* ---- Chat extras: attachments ---- */
 
 .msg-files {
@@ -9424,6 +9981,12 @@ main .pipeline-chip {
   display: flex;
   gap: 6px;
 }
+/* The head follows the last field of the form above it — and in the edit
+   sheet it follows the tuning box, where touching it would read as part of
+   it. One gap says "new topic" without a rule. */
+.wizard-pane > .models-table-head {
+  margin-top: var(--sp-4);
+}
 .models-table {
   display: flex;
   flex-direction: column;
@@ -9485,11 +10048,19 @@ main .pipeline-chip {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
+/* The edit sheet keeps the narrow modal (no .wizard-roomy), so its pane is
+   ~200px tighter than the add sheet's: the model id — the one field that has
+   to be read back verbatim — takes the width the two numeric columns can
+   spare. Declared after the base template so it wins on equal specificity. */
+.wizard-modal:not(.wizard-roomy) .draft-fields-row {
+  grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.1fr) 96px 104px 28px;
+}
 /* Below the phone breakpoint four fields stop fitting on one line: two per
    row keeps the model id readable instead of shaving it to 90px. Declared
    after the base template so it wins on equal specificity. */
 @media (max-width: 620px) {
-  .draft-fields-row {
+  .draft-fields-row,
+  .wizard-modal:not(.wizard-roomy) .draft-fields-row {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 }
