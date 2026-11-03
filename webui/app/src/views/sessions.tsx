@@ -2996,11 +2996,13 @@ export function SessionsView({
         )}
 
         {clarify && clarify.sessionID === activeId && (
-          <ClarifyCard
-            spec={clarify.spec}
-            onSubmit={(answers) => void submitClarify(answers)}
-            onCancel={cancelClarify}
-          />
+          <div class="clarify-dock">
+            <ClarifyCard
+              spec={clarify.spec}
+              onSubmit={(answers) => void submitClarify(answers)}
+              onCancel={cancelClarify}
+            />
+          </div>
         )}
 
         {/* Textarea and actions share one bordered box so the composer reads
