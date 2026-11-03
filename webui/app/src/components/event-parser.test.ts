@@ -7,32 +7,32 @@ import { buildRows } from './event-rows.ts'
 import { setLocale } from '../i18n/index.ts'
 
 describe('event-parser', () => {
-  it('extracts thought from json string or object', () => {
+  it('extracts thought from json string or object', async () => {
     assert.equal(extractThought('{"thought":"thinking about step 1"}'), 'thinking about step 1')
     assert.equal(extractThought({ thought: 'thinking about step 2' }), 'thinking about step 2')
     assert.equal(extractThought('raw thought text'), 'raw thought text')
     assert.equal(extractThought(null), '')
   })
 
-  it('formats reasoning event as human-readable model thought with i18n support', () => {
-    setLocale('en')
+  it('formats reasoning event as human-readable model thought with i18n support', async () => {
+    await setLocale('en')
     const formattedEn = formatTaskEvent('reasoning', JSON.stringify({ thought: 'First analyze dependencies, then run tests.' }))
     assert.equal(formattedEn.type, 'reasoning')
     assert.equal(formattedEn.label, 'Model Reasoning')
     assert.equal(formattedEn.badgeClass, 'accent')
     assert.equal(formattedEn.thought, 'First analyze dependencies, then run tests.')
 
-    setLocale('zh-CN')
+    await setLocale('zh-CN')
     const formattedZh = formatTaskEvent('reasoning', JSON.stringify({ thought: 'First analyze dependencies, then run tests.' }))
     assert.equal(formattedZh.label, '模型思考过程')
 
-    setLocale('ja')
+    await setLocale('ja')
     const formattedJa = formatTaskEvent('reasoning', JSON.stringify({ thought: 'First analyze dependencies, then run tests.' }))
     assert.equal(formattedJa.label, 'モデル思考プロセス')
   })
 
-  it('formats model_injection with the agent, model and endpoint it really used', () => {
-    setLocale('en')
+  it('formats model_injection with the agent, model and endpoint it really used', async () => {
+    await setLocale('en')
     const formatted = formatTaskEvent(
       'model_injection',
       JSON.stringify({
@@ -52,24 +52,24 @@ describe('event-parser', () => {
     // The endpoint is the readable part of the summary — no scheme.
     assert.equal(formatted.summary, 'open.bigmodel.cn/api/paas/v4')
 
-    setLocale('zh-CN')
+    await setLocale('zh-CN')
     assert.equal(formatTaskEvent('model_injection', '{"agent":"opencode"}').label, '模型注入')
   })
 
-  it('formats classify_result event into clear tags and note', () => {
-    setLocale('en')
+  it('formats classify_result event into clear tags and note', async () => {
+    await setLocale('en')
     const formatted = formatTaskEvent('classify_result', JSON.stringify({ kind: 'task', note: 'execute build' }))
     assert.equal(formatted.label, 'Intent Classification')
     assert.equal(formatted.summary, 'execute build')
     assert.deepEqual(formatted.tags, [{ key: 'Type', value: 'task' }])
 
-    setLocale('zh-CN')
+    await setLocale('zh-CN')
     const formattedZh = formatTaskEvent('classify_result', JSON.stringify({ kind: 'task', note: 'execute build' }))
     assert.equal(formattedZh.label, '意图识别')
     assert.deepEqual(formattedZh.tags, [{ key: '类型', value: 'task' }])
   })
 
-  it('drops noise keys like candidates and score_breakdown in fallback events', () => {
+  it('drops noise keys like candidates and score_breakdown in fallback events', async () => {
     const formatted = formatTaskEvent('custom_event', JSON.stringify({
       candidates: ['node1', 'node2'],
       score_breakdown: [0.9, 0.8],
@@ -78,8 +78,8 @@ describe('event-parser', () => {
     assert.deepEqual(formatted.tags, [{ key: 'target', value: 'node1' }])
   })
 
-  it('parses agent_event blocks into typed transcript rows', () => {
-    setLocale('en')
+  it('parses agent_event blocks into typed transcript rows', async () => {
+    await setLocale('en')
     const toolUse = formatTaskEvent('agent_event', JSON.stringify({
       ev: 'tool_use', id: 'tu_1', name: 'Bash',
       input: { command: 'ls -la', timeout: 30 },
@@ -108,7 +108,7 @@ describe('event-parser', () => {
     assert.equal(text.agent?.text, 'done')
   })
 
-  it('nests sub-agent blocks under their parent tool_use', () => {
+  it('nests sub-agent blocks under their parent tool_use', async () => {
     const depths = new Map<string, number>()
     const task: AgentBlock = { ev: 'tool_use', id: 'task_1', name: 'Task' }
     assert.equal(blockDepth(task, depths), 0)
@@ -129,8 +129,8 @@ describe('event-parser', () => {
 
 
 describe('lifecycle & result event formatting', () => {
-  it('marks dispatch plumbing events for pipeline grouping', () => {
-    setLocale('en')
+  it('marks dispatch plumbing events for pipeline grouping', async () => {
+    await setLocale('en')
     const submit = formatTaskEvent('submit', JSON.stringify({ owner: 'mac-1', parent: '' }))
     assert.equal(submit.lifecycle?.step, 'submitted')
     assert.equal(submit.lifecycle?.node, 'mac-1')
@@ -143,8 +143,8 @@ describe('lifecycle & result event formatting', () => {
     assert.equal(decline.lifecycle?.failed, true)
   })
 
-  it('renders a result event as a result card, not tags', () => {
-    setLocale('en')
+  it('renders a result event as a result card, not tags', async () => {
+    await setLocale('en')
     const r = formatTaskEvent('result', JSON.stringify({
       ok: true, exit_code: 0, stdout: 'wrote hello.py\n\nAll done.',
       files_changed: ['hello.py'],
@@ -158,8 +158,8 @@ describe('lifecycle & result event formatting', () => {
     assert.equal(r.tags.length, 0)
   })
 
-  it('reads the wrapped result payload used by reconciliation', () => {
-    setLocale('en')
+  it('reads the wrapped result payload used by reconciliation', async () => {
+    await setLocale('en')
     const r = formatTaskEvent('result', JSON.stringify({
       reconciled: 'running→done',
       result: { ok: true, exit_code: 0, stdout: 'done text' },
@@ -168,15 +168,15 @@ describe('lifecycle & result event formatting', () => {
     assert.equal(r.result?.stdout, 'done text')
   })
 
-  it('demotes session_summary to a quiet line', () => {
-    setLocale('en')
+  it('demotes session_summary to a quiet line', async () => {
+    await setLocale('en')
     const f = formatTaskEvent('session_summary', JSON.stringify({ session_id: 'abc', state: 'done' }))
     assert.equal(f.quiet, true)
     assert.equal(f.tags.length, 0)
   })
 
-  it('maps supervise verdicts with their reason as the summary', () => {
-    setLocale('en')
+  it('maps supervise verdicts with their reason as the summary', async () => {
+    await setLocale('en')
     const f = formatTaskEvent('supervise', JSON.stringify({
       round: 2, status: 'done', reason: 'all acceptance criteria met', followup: '',
     }))
@@ -189,8 +189,8 @@ describe('lifecycle & result event formatting', () => {
     ])
   })
 
-  it('caps unknown-event tags at three short hints', () => {
-    setLocale('en')
+  it('caps unknown-event tags at three short hints', async () => {
+    await setLocale('en')
     const f = formatTaskEvent('custom_unknown', JSON.stringify({
       a: '1', b: '2', c: '3', d: '4', e: '5',
     }))
@@ -199,7 +199,7 @@ describe('lifecycle & result event formatting', () => {
 })
 
 describe('buildRows pipeline grouping', () => {
-  it('folds consecutive lifecycle events into one pipeline row', () => {
+  it('folds consecutive lifecycle events into one pipeline row', async () => {
     const events = [
       { ts: 1, type: 'submit', data: '{"owner":"mac"}' },
       { ts: 2, type: 'queue', data: 'null' },
@@ -222,7 +222,7 @@ describe('buildRows pipeline grouping', () => {
     if (ev?.kind === 'event') assert.equal(ev.event.type, 'exec_agent_start')
   })
 
-  it('splits a pipeline around a non-lifecycle event', () => {
+  it('splits a pipeline around a non-lifecycle event', async () => {
     const events = [
       { ts: 1, type: 'submit', data: '{}' },
       { ts: 2, type: 'exec_agent_start', data: '{}' },
@@ -232,7 +232,7 @@ describe('buildRows pipeline grouping', () => {
     assert.deepEqual(rows.map((r) => r.kind), ['pipeline', 'event', 'pipeline'])
   })
 
-  it('folds a run of silence heartbeats into one counted quiet row', () => {
+  it('folds a run of silence heartbeats into one counted quiet row', async () => {
     const events = [
       { ts: 1, type: 'agent_event', data: '{"ev":"tool_use","name":"dsh"}' },
       { ts: 2, type: 'progress', data: '{"note":"no output for 56s — agent still running"}' },
@@ -252,7 +252,7 @@ describe('buildRows pipeline grouping', () => {
     }
   })
 
-  it('keeps non-silence progress notes as normal rows', () => {
+  it('keeps non-silence progress notes as normal rows', async () => {
     const events = [
       { ts: 1, type: 'progress', data: '{"note":"bash: Inspect working directory"}' },
       { ts: 2, type: 'progress', data: '{"note":"write: plans/snake.py"}' },
@@ -263,7 +263,7 @@ describe('buildRows pipeline grouping', () => {
     if (r?.kind === 'event') assert.ok(!r.formatted.quiet)
   })
 
-  it('folds a retry storm into one counted row, keeping the newest note', () => {
+  it('folds a retry storm into one counted row, keeping the newest note', async () => {
     const events = [
       { ts: 1, type: 'progress', data: '{"note":"Claude: API retry 1 (429)…"}' },
       { ts: 2, type: 'progress', data: '{"note":"Claude: API retry 2 (429)…"}' },
@@ -282,7 +282,7 @@ describe('buildRows pipeline grouping', () => {
     }
   })
 
-  it('does not fold a retry across a pipeline run it actually follows', () => {
+  it('does not fold a retry across a pipeline run it actually follows', async () => {
     // retry 1 → lifecycle strip → retry 2: folding retry 2 into the first
     // row would render a newer event before the pipeline it postdates.
     const events = [
@@ -300,11 +300,11 @@ describe('buildRows pipeline grouping', () => {
     if (rows[2]?.kind === 'event') assert.match(rows[2].formatted.summary ?? '', /retry 2/)
   })
 
-  it('renders a user message with its mode instead of the bare event name', () => {
+  it('renders a user message with its mode instead of the bare event name', async () => {
     // Before this case existed, once and inject landed on the unknown-event
     // fallback and the timeline printed the literal string "user_msg" — the
     // one place a user looks for their own note showed nothing readable.
-    setLocale('en')
+    await setLocale('en')
     const queued = formatTaskEvent('user_msg', JSON.stringify({ mode: 'queue', text: 'also update the README' }))
     assert.equal(queued.label, 'user message')
     assert.equal(queued.summary, 'also update the README')
@@ -320,7 +320,7 @@ describe('buildRows pipeline grouping', () => {
     assert.equal(read.badgeClass, 'accent')
   })
 
-  it('finds the picture a Read row is about', () => {
+  it('finds the picture a Read row is about', async () => {
     // The adapter drops the image bytes, so the input path is the only
     // handle the transcript has on the screenshot.
     const shot = imageRefOf({
@@ -342,7 +342,7 @@ describe('buildRows pipeline grouping', () => {
     )
   })
 
-  it('finds a picture named only by the tool result', () => {
+  it('finds a picture named only by the tool result', async () => {
     // A capture tool answers "saved to …" with no path in its call.
     assert.equal(
       imageRefOf({ ev: 'tool_result', content: 'screenshot saved to /tmp/panda/shot.png' })?.path,
@@ -358,7 +358,7 @@ describe('buildRows pipeline grouping', () => {
     assert.equal(imageRefOf({ ev: 'tool_result', content: 'File created successfully at: D:\\x\\a.png' })?.path, 'D:\\x\\a.png')
   })
 
-  it('unwraps an inlined data URL instead of printing base64', () => {
+  it('unwraps an inlined data URL instead of printing base64', async () => {
     const b64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg' + '\n' + 'AAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8'
     const ref = imageRefOf({ ev: 'tool_result', content: '  ' + b64 + '  ' })
     assert.ok(ref?.dataUrl?.startsWith('data:image/png;base64,iVBORw0KGgo'))

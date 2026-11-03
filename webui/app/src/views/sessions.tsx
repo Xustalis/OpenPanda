@@ -26,7 +26,10 @@ import {
 } from '../api/client'
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
-import { FileViewer } from '../components/file-viewer'
+import { Dock, type DockTab } from '../components/dock'
+import { DockBrowser } from '../components/dock-browser'
+import { DockFiles } from '../components/dock-files'
+import { SideChat } from '../components/side-chat'
 import { TaskRail } from '../components/task-rail'
 import { ArtifactSection } from '../components/artifact'
 import { FileViewContext, type FileOpener, type FileRef } from '../components/file-link'
@@ -630,14 +633,45 @@ export function SessionsView({
   // and the jump arrow left as one block instead of letting the card cover the
   // last reply's line ends. The lane is the same for both cards on purpose:
   // switching from one to the other is a swap in place, not a re-layout.
-  const [panel, setPanel] = useState<'' | 'node' | 'orch' | 'rail'>('')
-  // The file the transcript's latest click asked for. The drawer is the
-  // transcript's own surface — a path in a reply opens here, and switching
-  // threads closes it with the rest of the per-thread panel state.
+  const [card, setCard] = useState<'' | 'node' | 'orch'>('')
+  // The side dock: one column holding the thread's work, its files, a page being
+  // read, and a conversation beside it. `tab` survives a collapse so reopening
+  // returns to the surface you left; `epoch` is the head's `+`, which every
+  // panel reads as "start a fresh one".
+  const [dockOpen, setDockOpen] = useState(false)
+  const [dockTab, setDockTab] = useState<DockTab>('')
+  const [dockW, setDockW] = useState(380)
+  const [dockEpoch, setDockEpoch] = useState(0)
+  // Panels mount the first time their tab is picked and stay mounted after
+  // that, hidden rather than dropped: a file tree you scrolled, a page you
+  // were reading and a half-typed side question are all the reader's place,
+  // and a tab switch or a fold is not a reason to lose it. Lazy on first use
+  // so an unopened dock costs nothing — the file tree and the task rail both
+  // fetch on mount.
+  const [dockSeen, setDockSeen] = useState<DockTab[]>([])
+  useEffect(() => {
+    if (dockTab === '') return
+    setDockSeen((prev) => (prev.includes(dockTab) ? prev : [...prev, dockTab]))
+  }, [dockTab])
+  // The file the transcript's latest click asked for. It is a request into the
+  // dock's file panel, not a surface of its own: the panel owns the tree, this
+  // only names the file to open there.
   const [fileRef, setFileRef] = useState<FileRef | null>(null)
   // One stable opener for every inline code span in the transcript: a new
   // object per render would re-render every clickable mention on each frame.
-  const fileOpener = useMemo<FileOpener>(() => ({ open: (ref) => setFileRef(ref) }), [])
+  // A click on a path is also the dock's file tab being asked for — the reader
+  // asked to see a file, so the column that shows files comes up.
+  const fileOpener = useMemo<FileOpener>(
+    () => ({
+      open: (ref) => {
+        setCard('')
+        setDockTab('files')
+        setDockOpen(true)
+        setFileRef(ref)
+      },
+    }),
+    [],
+  )
   // The same text-into-the-composer action for every surface that produces a
   // reference (the file drawer, the artifact preview): the draft lands at the
   // caret and is never sent on its own.
@@ -657,17 +691,23 @@ export function SessionsView({
    *  that task picked, the thread's list beside it. Leaving for the task page
    *  used to cost the conversation: its scroll, its draft, its place. */
   function openTaskInPlace(id: string) {
-    setPanel('orch')
+    // The card is a popover over the thread; the dock is a column beside it.
+    // One lane, so only one of them is up at a time.
+    setDockOpen(false)
+    setCard('orch')
     setFocusTask({ id })
   }
   // A card belongs to the thread it was opened in. Switching threads closes
   // it: the cards are remounted per session, so a lane kept reserved by the
   // parent would outlive the card that asked for it.
   useEffect(() => {
-    setPanel('')
-    // The file drawer belongs to the thread it was opened in for the same
-    // reason: its path is relative to that thread's worktree, and carrying it
-    // across would show the next thread a file it never mentioned.
+    setCard('')
+    // The dock's panels are thread-scoped in the same way: a file path resolves
+    // against this thread's worktree, a page is what this thread was talking
+    // about, and a side conversation is a snapshot of it. Carrying any of them
+    // across would show the next thread something it never mentioned.
+    setDockOpen(false)
+    setDockTab('')
     setFileRef(null)
     // The queue belongs to the thread it was typed in: a counter carried over
     // from another thread would make the next note look like a removal.
@@ -2394,6 +2434,12 @@ export function SessionsView({
   // several dispatch turns was issuing that many extra requests per frame,
   // all competing with the event stream for the browser's six connections.
   const tasksById = new Map((sessionTasks ?? []).map((t) => [t.id, t]))
+  // What the dock's task tab counts on its badge: the rows that still want
+  // something — running, waiting on a human, or queued. Terminal rows are the
+  // board's history, not an inbox item.
+  const openTaskCount = (sessionTasks ?? []).filter(
+    (t) => !['done', 'failed', 'cancelled', 'expired'].includes(t.state),
+  ).length
 
   // The rail's jump: scroll the task's own card into view. A task the thread
   // has no card for — dispatched from the bench, or older than the loaded
@@ -2420,10 +2466,13 @@ export function SessionsView({
   return (
     <FileViewContext.Provider value={fileOpener}>
     <ComposerContext.Provider value={composerInsert}>
-    <section class="chat">
+    <section
+      class={`chat${dockOpen ? ' dock-open' : ''}`}
+      style={dockOpen ? `--dock-w:${dockW}px` : undefined}
+    >
 
 
-      <div class={`chat-pane${panel ? ' panel-open' : ''}${panel === 'rail' ? ' rail-open' : ''}`}>
+      <div class={`chat-pane${card ? ' panel-open' : ''}`}>
         {/* The header is unconditional so the drawer toggle is reachable even
             on a brand-new, empty thread — that is exactly when a phone user
             needs to get back to the thread list. */}
@@ -2502,17 +2551,28 @@ export function SessionsView({
           <div class="chat-head-tools">
             {/* The thread's unfinished work as a side column — the web twin of
                 the TUI's task rail. It sits left of the node pick because it is
-                about the thread, not about where this turn runs. */}
-            <button
-              type="button"
-              class={`icon-btn tip-down${panel === 'rail' ? ' open' : ''}`}
-              data-tip={t('rail.title')}
-              aria-label={t('rail.title')}
-              aria-expanded={panel === 'rail'}
-              onClick={() => setPanel(panel === 'rail' ? '' : 'rail')}
-            >
-              <Icon name="list-checks" size={19} />
-            </button>
+                about the thread, not about where this turn runs.
+
+                Only while the column is folded. Open, the same task list is one
+                click away as the dock's first tab, and two `list-checks` glyphs
+                a gutter apart read as one control drawn twice — the reader ends
+                up clicking the copy that does not fold. */}
+            {!dockOpen && (
+              <button
+                type="button"
+                class="icon-btn tip-down"
+                data-tip={t('rail.title')}
+                aria-label={t('rail.title')}
+                aria-expanded={false}
+                onClick={() => {
+                  setCard('')
+                  setDockTab('tasks')
+                  setDockOpen(true)
+                }}
+              >
+                <Icon name="list-checks" size={19} />
+              </button>
+            )}
             {session && msgs.length > 0 && (
               <button
                 class="icon-btn tip-down"
@@ -2534,8 +2594,11 @@ export function SessionsView({
               nodes={nodes}
               value={nodePref}
               onPick={setNodePref}
-              open={panel === 'node'}
-              onOpenChange={(open) => setPanel(open ? 'node' : '')}
+              open={card === 'node'}
+              onOpenChange={(open) => {
+                setDockOpen(false)
+                setCard(open ? 'node' : '')
+              }}
             />
             {/* Orchestration, to the right of the node pick: the node answers
                 *where* a turn runs, this one answers *what the thread has
@@ -2544,35 +2607,33 @@ export function SessionsView({
             <OrchestrateCard
               key={`orch-${session?.id ?? 'none'}`}
               sessionId={session?.id ?? null}
-              open={panel === 'orch'}
-              onOpenChange={(open) => setPanel(open ? 'orch' : '')}
+              open={card === 'orch'}
+              onOpenChange={(open) => {
+                setDockOpen(false)
+                setCard(open ? 'orch' : '')
+              }}
               onlineNodeCount={onlineNodeCount}
               selfNodeId={selfNodeId}
               focusTask={focusTask}
             />
+            {/* The dock's own door — and only a door. Open, the column carries
+                the fold control in its own head, so this one steps aside: two
+                `panel-right` glyphs on the same row, one in each card's corner,
+                was the other half of "the same button twice". */}
+            {!dockOpen && (
+              <button
+                type="button"
+                class="icon-btn tip-down"
+                data-tip={t('dock.expand')}
+                aria-label={t('dock.expand')}
+                aria-expanded={false}
+                onClick={() => setDockOpen(true)}
+              >
+                <Icon name="panel-right" size={19} />
+              </button>
+            )}
           </div>
         </header>
-
-        {panel === 'rail' && (
-          <TaskRail
-            tasks={sessionTasks ?? []}
-            onJump={jumpToTask}
-            onClose={() => setPanel('')}
-          />
-        )}
-
-        {/* The transcript's file drawer: a path in a reply opened here, read
-            against this thread's worktree. It sits above the diff drawer
-            because it is about one file, and the diff is about all of them. */}
-        {fileRef && (
-          <FileViewer
-            path={fileRef.path}
-            line={fileRef.line}
-            session={session?.id ?? null}
-            onClose={() => setFileRef(null)}
-            onInsert={composerInsert}
-          />
-        )}
 
         {diffOpen && diff && (
           <div class="diff-drawer">
@@ -3233,6 +3294,69 @@ export function SessionsView({
         </form>
         {loadError && <p class="gate-error composer-error">{loadError}</p>}
       </div>
+
+      {/* The side dock: a sibling of the pane, not a layer over it. It is the
+          second column of `.chat`'s grid, so opening it narrows the reading
+          pane the way a flex split does — the transcript, the composer and the
+          jump arrow reflow to the width they actually have, instead of being
+          padded away from a panel that floats on top of them.
+
+          The panels stay mounted once visited, so switching tabs returns to
+          the same file, the same page, the same side conversation. */}
+      <Dock
+        open={dockOpen}
+        tab={dockTab}
+        width={dockW}
+        badges={{ tasks: openTaskCount }}
+        onWidth={setDockW}
+        onTab={(next) => {
+          setCard('')
+          setDockTab(next)
+          setDockOpen(true)
+        }}
+        onToggle={() => setDockOpen((v) => !v)}
+        onNew={() => {
+          // `+` means "a fresh one of whatever is showing". The task panel
+          // has nothing to clear — it is the thread's own work — so it keeps
+          // the button inert rather than inventing a verb.
+          if (dockTab === 'files') setFileRef(null)
+          if (dockTab !== 'tasks') setDockEpoch((n) => n + 1)
+        }}
+      >
+        {dockSeen.includes('tasks') && (
+          <div class="dock-pane" hidden={dockTab !== 'tasks'}>
+            <TaskRail
+              tasks={sessionTasks ?? []}
+              onJump={jumpToTask}
+              onClose={() => setDockOpen(false)}
+            />
+          </div>
+        )}
+        {dockSeen.includes('files') && (
+          <div class="dock-pane" hidden={dockTab !== 'files'}>
+            <DockFiles
+              session={session?.id ?? null}
+              request={fileRef}
+              resetSignal={dockEpoch}
+              onInsert={composerInsert}
+            />
+          </div>
+        )}
+        {dockSeen.includes('browser') && (
+          <div class="dock-pane" hidden={dockTab !== 'browser'}>
+            <DockBrowser resetSignal={dockEpoch} onInsert={composerInsert} />
+          </div>
+        )}
+        {dockSeen.includes('side') && (
+          <div class="dock-pane" hidden={dockTab !== 'side'}>
+            <SideChat
+              sessionId={session?.id ?? null}
+              resetSignal={dockEpoch}
+              onInsert={composerInsert}
+            />
+          </div>
+        )}
+      </Dock>
     </section>
     </ComposerContext.Provider>
     </FileViewContext.Provider>

@@ -60,6 +60,7 @@ var helpPage = []HelpSection{
 		{"repl", "cli.help.d.repl"},
 		{"web", "cli.help.d.web"},
 		{"     --lan", "cli.help.d.web_lan"},
+		{"service install|status|restart|uninstall", "cli.help.d.service"},
 		{"voice [--once] [--mute]", "cli.help.d.voice"},
 		{"read <file> | <file.md>", "cli.help.d.read"},
 		{"hooks [list | test <event>]", "cli.help.d.hooks"},
@@ -147,7 +148,7 @@ var completionVerbs = map[string][]string{
 	"plan":     {"run", "show", "example"},
 	"session":  {"list", "new", "show", "mv", "rm", "fork", "tree", "ask", "diff", "merge", "revert"},
 	"skill":    {"list", "approve", "reject", "reset", "find", "import", "hub", "install"},
-	"model":    {"status", "list", "add", "remove", "switch", "fetch", "test"},
+	"model":    {"status", "list", "add", "remove", "switch", "fetch", "test", "discover"},
 	"config":   {"get", "set", "test"},
 	"memory":   {"list", "get", "set", "rm"},
 	"project":  {"list", "new", "show", "enter", "exit", "rename", "rm", "approval"},
@@ -157,6 +158,7 @@ var completionVerbs = map[string][]string{
 	"agents":   {"test", "install"},
 	"auth":     {"login", "logout", "status"},
 	"hooks":    {"list", "test"},
+	"service":  {"install", "status", "restart", "uninstall"},
 }
 
 // CompletionVerbs returns the completion vocabulary. The map is a copy: a

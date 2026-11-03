@@ -18,14 +18,17 @@ import (
 	agentreg "github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"gopkg.in/yaml.v3"
+	"log/slog"
 )
 
 // ---- shared helpers ----
@@ -344,6 +347,57 @@ func newPanelGitRepo(t *testing.T) string {
 	return dir
 }
 
+// TestSessionProjectRepoGetsWorktree pins the project-base fix: a session
+// attached to a project whose work dir is a repository must carve its worktree
+// in THAT repository, even when the handler's storage-path Worktrees is nil.
+// Before the fix it read storage.work_path, found no repository, and returned
+// a plain thread with branch ""; diff then failed with "not a git repository".
+func TestSessionProjectRepoGetsWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newPanelGitRepo(t)
+	db := newMigratedDB(t)
+	ps := projectstore.NewStore(db)
+	if _, err := ps.Create("repo-demo", repo, ""); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	h := New(Deps{
+		Store:        core.NewTaskStore(db, slog.New(slog.DiscardHandler)),
+		DB:           db,
+		ProjectStore: ps,
+		Sessions:     sessions.NewStore(t.TempDir()),
+		StaticDir:    t.TempDir(),
+		Token:        testToken,
+	})
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions", `{"title":"project repo","project":"repo-demo"}`))
+	if code != http.StatusOK {
+		t.Fatalf("create status = %d, body %v", code, out)
+	}
+	id, _ := out["id"].(string)
+	worktree, _ := out["worktree"].(string)
+	if id == "" || worktree == "" || out["branch"] != sessions.Branch(id) {
+		t.Fatalf("session not worktree-backed: %v", out)
+	}
+	if !strings.HasPrefix(worktree, repo+string(os.PathSeparator)) {
+		t.Fatalf("worktree %q is not under the project repo %q", worktree, repo)
+	}
+
+	// The diff path must resolve the same repository from the session alone;
+	// this handler has no fallback Worktrees configured.
+	if err := os.WriteFile(filepath.Join(worktree, "new.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out = doJSON(t, h, authedReq(http.MethodGet, "/api/sessions/"+id+"/diff", nil))
+	if code != http.StatusOK {
+		t.Fatalf("diff status = %d", code)
+	}
+	if changes, _ := out["changes"].([]any); len(changes) != 1 {
+		t.Fatalf("changes = %v, want the one new file", out["changes"])
+	}
+}
+
 // TestSessionWorktreeDiffAndMerge drives the highest-stakes session flow end
 // to end over HTTP: a session in a git repo carves a worktree, edits show up
 // in the diff, and merging lands the work in the main checkout.
@@ -375,12 +429,12 @@ func TestSessionWorktreeDiffAndMerge(t *testing.T) {
 		t.Fatalf("session not worktree-backed: %v", out)
 	}
 
-	// Unknown ids on diff/merge are client errors, not 500s.
-	if code, _ := doJSON(t, h, authedReq(http.MethodGet, "/api/sessions/nope/diff", nil)); code != http.StatusBadRequest {
-		t.Fatalf("diff unknown status = %d, want 400", code)
+	// Unknown ids on diff/merge are 404s (the session does not exist), not 500s.
+	if code, _ := doJSON(t, h, authedReq(http.MethodGet, "/api/sessions/nope/diff", nil)); code != http.StatusNotFound {
+		t.Fatalf("diff unknown status = %d, want 404", code)
 	}
-	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/nope/merge", `{}`)); code != http.StatusBadRequest {
-		t.Fatalf("merge unknown status = %d, want 400", code)
+	if code, _ := doJSON(t, h, jsonReq(http.MethodPost, "/api/sessions/nope/merge", `{}`)); code != http.StatusNotFound {
+		t.Fatalf("merge unknown status = %d, want 404", code)
 	}
 
 	// Session work: a new file in the worktree shows up in Status and Diff.

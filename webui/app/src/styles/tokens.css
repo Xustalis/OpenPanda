@@ -42,9 +42,12 @@
   --text-disabled: #c3c3c9;
   --text-dim: var(--text-secondary);
 
-  /* — Brand: the only hue left. Green is reserved for the panda mark, the
-     "Panda" in the wordmark, and the gate-screen letters — nothing else. */
+  /* — Brand: the only hue left. Green is reserved for the brand mark, the
+     "Panda" in the wordmark, and the gate-screen lockup — nothing else.
+     --brand-star is the polar star's fill: brand green on paper, starlight
+     cream on night, mirroring the two shipped symbol cuts. */
   --brand: #0c7a55;
+  --brand-star: #0c7a55;
   --brand-ink: #ffffff;
 
   /* — Accent: ink, not a hue. A primary button is a dark block, a focused
@@ -207,6 +210,7 @@
   --text-disabled: #6b6b6b;
 
   --brand: #5fd0a0;
+  --brand-star: #f2e8cf;
   --brand-ink: #06231a;
   --accent: #ededed;
   --accent-strong: #ffffff;
@@ -286,6 +290,7 @@
     --text-tertiary: #9d9d9d;
     --text-disabled: #6b6b6b;
     --brand: #5fd0a0;
+    --brand-star: #f2e8cf;
     --brand-ink: #06231a;
     --accent: #ededed;
     --accent-strong: #ffffff;

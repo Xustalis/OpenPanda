@@ -87,6 +87,9 @@ var catalog = []Command{
 	{Names: []string{"web"},
 		Usage:   "panda web [--daemon] [--lan] [--no-browser]",
 		HelpKey: "cli.help.d.web", Group: GroupRuntime},
+	{Names: []string{"service"},
+		Usage:   "panda service install|status|restart|uninstall [--lan]",
+		HelpKey: "cli.help.d.service", Group: GroupRuntime},
 	{Names: []string{"ask"},
 		Usage:   "panda ask <text>",
 		HelpKey: "cli.help.d.ask", Group: GroupRuntime},
@@ -189,7 +192,7 @@ var catalog = []Command{
 
 	// — settings —
 	{Names: []string{"model", "models"},
-		Usage:   "panda model [status|list|add|rm|switch|test]",
+		Usage:   "panda model [status|list|add|rm|switch|test|discover]",
 		HelpKey: "cli.help.d.model", Group: GroupSettings},
 	{Names: []string{"config"},
 		Usage:   "panda config <section> get|set|test",

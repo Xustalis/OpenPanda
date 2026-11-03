@@ -16,6 +16,21 @@ export default defineConfig({
   build: {
     outDir: '../panel/dist/app',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // One 1 MiB entry chunk re-downloads the whole console on every
+        // change. The framework and the markdown renderer are stable and get
+        // their own cacheable chunks; the locale tables stay dynamic imports
+        // (one chunk per language) so only the reader's language loads.
+        manualChunks(id) {
+          if (id.includes('node_modules/preact')) return 'preact'
+          // Do NOT bucket /src/i18n/: the locale tables are dynamic imports,
+          // and assigning them to one chunk would force all five back into a
+          // single eagerly-fetched file.
+          if (id.includes('/src/md/')) return 'markdown'
+        },
+      },
+    },
   },
   server: {
     port: 5273,

@@ -285,6 +285,11 @@ func responsesURL(base string) string {
 		return base
 	}
 	base = strings.TrimSuffix(base, "/chat/completions")
+	// Codex's ChatGPT backend lives under /backend-api/codex and serves the
+	// Responses endpoint one segment below it — it is not versioned.
+	if strings.HasSuffix(base, "/backend-api/codex") {
+		return base + "/responses"
+	}
 	if strings.HasSuffix(base, "/v1") || strings.HasSuffix(base, "/v2") ||
 		strings.HasSuffix(base, "/v3") || strings.HasSuffix(base, "/v4") {
 		return base + "/responses"
@@ -298,6 +303,14 @@ func responsesURL(base string) string {
 func (c *Client) completeResponses(ctx context.Context, system string, turns []Turn, tools []ToolSpec) (Response, error) {
 	if c.noCredential() {
 		return Response{}, ErrNoKey
+	}
+	// Codex's ChatGPT backend refuses a non-streamed call outright — 400
+	// "Stream must be set to true" — so the streamed reader is the only way in.
+	// The endpoint is named here rather than flagged per row because a row that
+	// forgot the flag would fail its first turn with a wire error that says
+	// nothing about a flag; the URL is fixed and vendor-owned.
+	if strings.Contains(c.baseURL, "chatgpt.com/backend-api/codex") {
+		return c.streamResponses(ctx, system, turns, tools, nil, nil, nil)
 	}
 	return c.completeWithRetryFn(ctx, func() (Response, error) {
 		return c.completeOnceResponses(ctx, system, turns, tools)
@@ -675,18 +688,29 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 		return Response{}, ErrNoKey
 	}
 	body, err := func() (io.ReadCloser, error) {
-		resp, err := c.sendResponsesStream(ctx, system, turns, tools)
-		if err == nil {
-			return resp.Body, nil
-		}
-		if thinkingRejected(err) && !c.thinkingDenied.Load() {
-			c.thinkingDenied.Store(true)
-			resp, err = c.sendResponsesStream(ctx, system, turns, tools)
+		var lastErr error
+		for attempt := 0; attempt <= c.maxRetry; attempt++ {
+			if attempt > 0 {
+				notifyRetry(ctx, attempt, c.maxRetry, c.retryDelay(attempt), lastErr)
+				if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
+					return nil, err
+				}
+			}
+			resp, err := c.sendResponsesStream(ctx, system, turns, tools)
 			if err == nil {
 				return resp.Body, nil
 			}
+			lastErr = err
+			if thinkingRejected(err) && !c.thinkingDenied.Load() {
+				c.thinkingDenied.Store(true)
+				attempt-- // the correction retries at once, off the transport budget
+				continue
+			}
+			if !retryable(err) {
+				return nil, err
+			}
 		}
-		return nil, err
+		return nil, lastErr
 	}()
 	if err != nil {
 		return Response{}, err

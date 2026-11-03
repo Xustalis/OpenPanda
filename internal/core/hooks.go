@@ -18,6 +18,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -181,13 +182,42 @@ func (c *Core) dispatchHook(taskID, typ string) {
 				return
 			}
 		}
+		facts := sourceFactsOf(t)
 		runner.Fire(hooks.Event{
-			Name:    name,
-			TaskID:  t.TaskID,
-			Title:   t.Title,
-			State:   t.State,
-			Project: t.Project,
-			Owner:   t.OwnerNode,
+			Name:         name,
+			TaskID:       t.TaskID,
+			Title:        t.Title,
+			State:        t.State,
+			Project:      t.Project,
+			Owner:        t.OwnerNode,
+			Source:       facts.Source,
+			SourceRepo:   facts.Repo,
+			SourceNumber: facts.Number,
+			SourceURL:    facts.URL,
+			SourceThread: facts.Thread,
 		})
 	})
+}
+
+// hookSourceFacts is the provenance an intake task carries in its spec. A task
+// created from the CLI or a conversation has none, so every field stays empty
+// and a reply hook can tell "answer the thread this came from" apart from
+// "answer nothing".
+type hookSourceFacts struct {
+	Source string `json:"source"`
+	Repo   string `json:"source_repo"`
+	Number string `json:"source_number"`
+	URL    string `json:"source_url"`
+	Thread string `json:"source_thread"`
+}
+
+func sourceFactsOf(t Task) hookSourceFacts {
+	if t.SpecJSON == "" {
+		return hookSourceFacts{}
+	}
+	var f hookSourceFacts
+	if err := json.Unmarshal([]byte(t.SpecJSON), &f); err != nil {
+		return hookSourceFacts{}
+	}
+	return f
 }

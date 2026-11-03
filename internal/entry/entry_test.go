@@ -1464,6 +1464,10 @@ func TestURLNormalizers(t *testing.T) {
 		{"https://api.anthropic.com/v1/messages", "https://api.anthropic.com/v1/messages"},
 		{"https://api.deepseek.com/anthropic", "https://api.deepseek.com/anthropic/v1/messages"},
 		{"https://api.deepseek.com/anthropic/v1", "https://api.deepseek.com/anthropic/v1/messages"},
+		// A full messages URL with no /v1 segment is a relay's own mount point:
+		// it keeps its exact path, as it did before the base was normalized.
+		{"https://relay.example.com/anthropic/messages", "https://relay.example.com/anthropic/messages"},
+		{"https://relay.example.com/messages", "https://relay.example.com/messages"},
 	}
 	for _, tt := range testsAnth {
 		if got := anthropicURL(tt.in); got != tt.want {

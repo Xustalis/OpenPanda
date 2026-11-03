@@ -65,12 +65,19 @@ func runAuthLogin(args []string) {
 	if err != nil {
 		fail(2, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamedOpts", "kind", "provider", "name", provider, "opts", strings.Join(auth.ProviderIDs(), ", ")))
 	}
+	loc := i18n.Detect()
+	// A provider the CLI does not own has no browser flow here: its login is
+	// the owning tool's command, and pretending otherwise sends the user to an
+	// empty consent URL.
+	if p.External != nil {
+		fmt.Println(i18n.Tf(loc, "cli.auth.external", "provider", provider, "command", provider+" login"))
+		return
+	}
 	verifier, challenge, state, err := auth.NewPKCE()
 	if err != nil {
 		fatal("pkce", err)
 	}
 	url := p.AuthorizeURLFor(challenge, state)
-	loc := i18n.Detect()
 	fmt.Println(i18n.Tf(loc, "cli.auth.open", "label", p.Label))
 	fmt.Println()
 	fmt.Println("  " + url)
