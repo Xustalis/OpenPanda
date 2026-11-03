@@ -44,7 +44,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
-## [Unreleased]
+## [0.1.4] - 2026-11-03 — "Constellation"
 
 ### Added
 

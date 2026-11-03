@@ -10,9 +10,9 @@ package version
 // Version is the semantic version of this build, and the default for a build
 // that does not go through release packaging.
 //
-// 0.1.4 is an internal test version: it is ahead of the newest tag on main
-// (v0.1.3) without a release cut behind it, so ad-hoc builds identify the
-// branch's latest lineage while the release process stays untouched.
+// It tracks the newest tag on main — currently v0.1.4, the patch that made an
+// agent run verifiable and the console one place to work — so ad-hoc builds
+// identify themselves with the branch's latest published lineage.
 var Version = "0.1.4"
 
 // Codename is the release line's thematic name — "Constellation": the fleet
@@ -22,9 +22,10 @@ var Version = "0.1.4"
 // consolidates into the single place that constellation is commanded from.
 // v0.1.0 opened this line and the patches keep it: the same shape, with the
 // entry dialects, the terminal roster, the atomic store, the work-dir breadth
-// rule, the conversation permission modes, the acceptance contracts and now a
-// console that stays live and cheap, added on top. Surfaced by `panda version`
-// and /api/version; not part of the semver itself.
+// rule, the conversation permission modes, the acceptance contracts, a console
+// that stays live and cheap, and now the workspace map, the evidence-based
+// completion judge, the clarification cards and the thread dock, added on top.
+// Surfaced by `panda version` and /api/version; not part of the semver itself.
 var Codename = "Constellation"
 
 // ReleaseDate is the day this release line shipped, "2006-01-02". It is the
@@ -33,7 +34,7 @@ var Codename = "Constellation"
 // Version and Codename when a release is cut, and left empty for ad-hoc
 // builds that never had a release day. The console's profile page prints it
 // as "发布于 …" and falls back to omitting the line when it is empty.
-var ReleaseDate = ""
+var ReleaseDate = "2026-11-03"
 
 // Build provenance classes — which channel produced a binary. They ride the
 // wire as hello/heartbeat `prov`. The unset default normalizes to

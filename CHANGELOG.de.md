@@ -38,7 +38,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Dieses Changelog ist kuratiert: einige interne Refaktorierungen und Adapter sind hier nicht gelistet.
 - Die englische Datei ist maßgeblich. Die Übersetzungen zh-CN / ja / es / de spiegeln sie und können um ein Release kurz verzögert sein.
 
-## [Unreleased]
+## [0.1.4] - 2026-11-03 — "Constellation"
 
 ### Hinzugefügt
 

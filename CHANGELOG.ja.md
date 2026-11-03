@@ -38,7 +38,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - この changelog はキュレーションされている：一部の内部リファクタとアダプタは記載していない。
 - 英語版（CHANGELOG.md）が正。zh-CN / ja / es / de の翻訳はそのミラーで、リリース前後は一時的に遅れることがある。
 
-## [Unreleased]
+## [0.1.4] - 2026-11-03 — "Constellation"
 
 ### 追加
 

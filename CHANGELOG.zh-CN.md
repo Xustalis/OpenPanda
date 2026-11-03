@@ -38,7 +38,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 本 changelog 为策展式记录：部分内部重构与 adapter 未在此列出。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
-## [Unreleased]
+## [0.1.4] - 2026-11-03 — "Constellation"
 
 ### 新增功能
 
