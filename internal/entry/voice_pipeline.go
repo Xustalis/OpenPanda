@@ -50,33 +50,30 @@ func resolveVoiceDir() string {
 		return voiceDir
 	}
 	if abs, err := filepath.Abs(voiceDir); err == nil {
-		if st, err := os.Stat(abs); err == nil && st.IsDir() {
+		if st, err := os.Stat(abs); err == nil && st.IsDir() && voiceDevAllowed(abs) {
 			return abs
 		}
 		// Walk up from the cwd: `panda` started anywhere inside a repo
-		// checkout still finds the repo's extensions/voice.
+		// checkout still finds the repo's extensions/voice — but only for a
+		// checkout that contains the running binary, or with the dev opt-in.
+		// A voice sidecar is Python run with the user's privileges, so a cwd
+		// directory must never be trusted just because it exists.
 		for dir := filepath.Dir(abs); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
 			cand := filepath.Join(dir, "extensions", "voice")
-			if st, err := os.Stat(cand); err == nil && st.IsDir() {
+			if st, err := os.Stat(cand); err == nil && st.IsDir() && voiceDevAllowed(cand) {
 				return cand
 			}
 		}
 	}
 	if exe, err := os.Executable(); err == nil {
-		real := exe
-		if r, err := filepath.EvalSymlinks(exe); err == nil {
-			real = r
-		}
-		for _, base := range []string{exe, real} {
-			for _, cand := range []string{
-				filepath.Join(filepath.Dir(base), "extensions", "voice"),
-				filepath.Join(filepath.Dir(base), "..", "extensions", "voice"),
-				filepath.Join(filepath.Dir(base), "..", "share", "openpanda", "extensions", "voice"),
-			} {
-				if st, err := os.Stat(cand); err == nil && st.IsDir() {
-					return cand
-				}
+		cands := voiceCandidateDirs(exe)
+		for _, cand := range cands {
+			if st, err := os.Stat(cand); err == nil && st.IsDir() {
+				return cand
 			}
+		}
+		if len(cands) > 0 {
+			return cands[0]
 		}
 	}
 	if ucd, err := os.UserConfigDir(); err == nil && ucd != "" {
@@ -89,6 +86,72 @@ func resolveVoiceDir() string {
 		return abs
 	}
 	return voiceDir
+}
+
+// voiceCandidates lists the extensions/voice directories that belong to the
+// running binary's install tree. VoiceDir resolution trusts these, and only
+// these, without the dev opt-in.
+func voiceCandidateDirs(exe string) []string {
+	if exe == "" {
+		return nil
+	}
+	real := exe
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		real = r
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, base := range []string{exe, real} {
+		for _, cand := range []string{
+			filepath.Join(filepath.Dir(base), "extensions", "voice"),
+			filepath.Join(filepath.Dir(base), "..", "extensions", "voice"),
+			filepath.Join(filepath.Dir(base), "..", "share", "openpanda", "extensions", "voice"),
+		} {
+			cand = filepath.Clean(cand)
+			if !seen[cand] {
+				seen[cand] = true
+				out = append(out, cand)
+			}
+		}
+	}
+	return out
+}
+
+// voiceDevAllowed gates cwd-relative voice resolution. It mirrors
+// commander.devAdaptersAllowed (the two packages cannot import each other
+// without a cycle): the binary's own checkout, or an explicit opt-in.
+func voiceDevAllowed(cand string) bool {
+	if os.Getenv("OPENPANDA_DEV_ADAPTERS") == "1" {
+		return true
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	for _, trusted := range voiceCandidateDirs(exe) {
+		if sameVoicePath(trusted, cand) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameVoicePath(a, b string) bool {
+	aa, err := filepath.Abs(a)
+	if err != nil {
+		return false
+	}
+	bb, err := filepath.Abs(b)
+	if err != nil {
+		return false
+	}
+	if r, err := filepath.EvalSymlinks(aa); err == nil {
+		aa = r
+	}
+	if r, err := filepath.EvalSymlinks(bb); err == nil {
+		bb = r
+	}
+	return filepath.Clean(aa) == filepath.Clean(bb)
 }
 
 // Transcript is one captured utterance: the wake word fired and the speech that

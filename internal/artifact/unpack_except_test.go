@@ -82,7 +82,7 @@ func TestExtractExceptPathPrefixes(t *testing.T) {
 		".github/dependabot.yml":      "version: 2\n",
 		".vscode/tasks.json":          `{"runOn":"folderOpen"}`,
 		".vscode/settings.json":       `{"editor.tabSize":2}`,
-		".envrc":                      "export X=1",
+		"protected.txt":               "hold this back\n",
 		"Jenkinsfile":                 "pipeline {}",
 		"sub/Jenkinsfile":             "nested content stays",
 		"vendor/x/.vscode/tasks.json": "nested content stays",
@@ -91,7 +91,7 @@ func TestExtractExceptPathPrefixes(t *testing.T) {
 		".github/workflows":   true,
 		".vscode/tasks.json":  true,
 		".vscode/launch.json": true,
-		".envrc":              true,
+		"protected.txt":       true,
 		"Jenkinsfile":         true,
 	}
 	m, err := s.PackDirExcept(root, nil, 0)
@@ -118,7 +118,7 @@ func TestExtractExceptPathPrefixes(t *testing.T) {
 	for _, held := range []string{
 		".github/workflows/ci.yml",
 		".vscode/tasks.json",
-		".envrc",
+		"protected.txt",
 		"Jenkinsfile",
 	} {
 		if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(held))); !os.IsNotExist(err) {
@@ -134,7 +134,7 @@ func TestExtractExceptPathPrefixes(t *testing.T) {
 	for _, p := range em.SkippedPaths {
 		seen[filepath.ToSlash(p)] = true
 	}
-	for _, want := range []string{".github/workflows/ci.yml", ".vscode/tasks.json", ".envrc", "Jenkinsfile"} {
+	for _, want := range []string{".github/workflows/ci.yml", ".vscode/tasks.json", "protected.txt", "Jenkinsfile"} {
 		if !seen[want] {
 			t.Fatalf("SkippedPaths missing %s (have %v)", want, em.SkippedPaths)
 		}

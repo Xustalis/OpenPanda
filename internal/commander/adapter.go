@@ -762,32 +762,90 @@ func resolveAdapterDir() string {
 		return adapterDir
 	}
 	if abs, err := filepath.Abs(adapterDir); err == nil {
-		if st, err := os.Stat(abs); err == nil && st.IsDir() {
+		if st, err := os.Stat(abs); err == nil && st.IsDir() && devAdaptersAllowed(abs) {
 			return abs
 		}
 		// Walk up from the cwd: `panda` started anywhere inside a repo checkout
-		// (e.g. webui/) still finds the repo's adapters/ without the env var.
+		// (e.g. webui/) still finds the repo's adapters/ — but only for a
+		// checkout that contains the binary being run, or when the developer
+		// opted in. Otherwise a user who cd's into an untrusted repository and
+		// runs their installed panda would execute that repository's adapter
+		// scripts, which is arbitrary code execution outside every tier gate.
 		for dir := filepath.Dir(abs); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
 			cand := filepath.Join(dir, "adapters")
-			if st, err := os.Stat(cand); err == nil && st.IsDir() {
+			if st, err := os.Stat(cand); err == nil && st.IsDir() && devAdaptersAllowed(cand) {
 				return cand
 			}
 		}
 	}
 	if exe, err := os.Executable(); err == nil {
-		for _, cand := range adapterCandidateDirs(exe) {
+		cands := adapterCandidateDirs(exe)
+		for _, cand := range cands {
 			if st, err := os.Stat(cand); err == nil && st.IsDir() {
 				return cand
 			}
 		}
+		// Nothing installed and nothing trusted in the cwd. Name the install
+		// location the spawn will be looking for, NOT the cwd: returning the
+		// cwd here is how an untrusted checkout's adapters/ would get executed
+		// after every trusted lookup failed.
+		if len(cands) > 0 {
+			return cands[0]
+		}
 	}
-	// No adapters/ found anywhere: keep the cwd-absolute path so the spawn
-	// error names a stable location instead of one re-resolved against the
-	// sandbox's task directory (which would mislead diagnosis).
+	// No executable location known at all (an embedded/test harness): keep the
+	// cwd-absolute path so the spawn error names a stable location instead of
+	// one re-resolved against the sandbox's task directory.
 	if abs, err := filepath.Abs(adapterDir); err == nil {
 		return abs
 	}
 	return adapterDir
+}
+
+// devAdaptersEnv opts a binary into cwd-relative adapter resolution that is
+// not backed by its own install tree — how `go run ./cmd/panda` (whose
+// executable lives in a temp build dir) finds the checkout's adapters.
+const devAdaptersEnv = "OPENPANDA_DEV_ADAPTERS"
+
+// devAdaptersAllowed reports whether a cwd/ancestor adapters directory may be
+// trusted. A checkout that contains the running binary (bin/panda → repo/
+// adapters) answers yes by layout; any other cwd requires the explicit dev
+// opt-in. See resolveAdapterDir for why this gate exists.
+func devAdaptersAllowed(cand string) bool {
+	if os.Getenv(devAdaptersEnv) == "1" {
+		return true
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	for _, trusted := range adapterCandidateDirs(exe) {
+		if samePath(trusted, cand) {
+			return true
+		}
+	}
+	return false
+}
+
+// samePath compares two paths after absolutizing and resolving symlinks, so
+// an install whose binary is reached through a link still matches its real
+// adapter directory.
+func samePath(a, b string) bool {
+	aa, err := filepath.Abs(a)
+	if err != nil {
+		return false
+	}
+	bb, err := filepath.Abs(b)
+	if err != nil {
+		return false
+	}
+	if r, err := filepath.EvalSymlinks(aa); err == nil {
+		aa = r
+	}
+	if r, err := filepath.EvalSymlinks(bb); err == nil {
+		bb = r
+	}
+	return filepath.Clean(aa) == filepath.Clean(bb)
 }
 
 // adapterCandidateDirs lists the adapters/ directories to probe for a given

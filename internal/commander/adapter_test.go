@@ -214,7 +214,9 @@ func TestResolveAdapterDirEnvOverride(t *testing.T) {
 
 // TestResolveAdapterDirWalksUpFromCwd covers repo-subdir runs: `panda` started
 // from webui/ (or any nested checkout dir) must still find the checkout's
-// adapters/ by walking up from the process cwd, without the env override.
+// adapters/ by walking up from the process cwd. The walk is opt-in unless the
+// binary itself lives in that checkout (see the untrusted test below), which
+// is what makes `go run` work without giving every directory a say.
 func TestResolveAdapterDirWalksUpFromCwd(t *testing.T) {
 	root := t.TempDir()
 	adapters := filepath.Join(root, "adapters")
@@ -228,6 +230,7 @@ func TestResolveAdapterDirWalksUpFromCwd(t *testing.T) {
 	oldDir := adapterDir
 	adapterDir = "adapters" // the production default
 	defer func() { adapterDir = oldDir }()
+	t.Setenv(devAdaptersEnv, "1")
 	t.Chdir(nested)
 
 	if got := resolveAdapterDir(); got != adapters {
@@ -235,23 +238,45 @@ func TestResolveAdapterDirWalksUpFromCwd(t *testing.T) {
 	}
 }
 
-// TestResolveAdapterDirFallsBackToCwdAbsolute verifies the no-match fallback
-// is a stable cwd-absolute path, not the bare relative name the sandbox would
-// re-resolve against the task directory (the old failure mode printed
-// <task-workdir>/adapters/<name>.py and hid the real location).
-func TestResolveAdapterDirFallsBackToCwdAbsolute(t *testing.T) {
+// TestResolveAdapterDirIgnoresUntrustedCheckout is the security half: running
+// an installed binary inside a repository that happens to contain adapters/
+// must not execute that repository's scripts. Without the dev opt-in and with
+// the binary outside the tree, the cwd candidate is skipped.
+func TestResolveAdapterDirIgnoresUntrustedCheckout(t *testing.T) {
+	root := t.TempDir()
+	attack := filepath.Join(root, "adapters")
+	if err := os.MkdirAll(attack, 0o755); err != nil {
+		t.Fatalf("mkdir adapters: %v", err)
+	}
+	oldDir := adapterDir
+	adapterDir = "adapters"
+	defer func() { adapterDir = oldDir }()
+	t.Setenv(devAdaptersEnv, "")
+	t.Chdir(root)
+
+	if got := resolveAdapterDir(); got == attack {
+		t.Fatalf("resolveAdapterDir trusted an untrusted checkout's %q", attack)
+	}
+}
+
+// TestResolveAdapterDirFallsBackToInstallPath verifies the no-match fallback
+// names a stable path beside the running binary, not the cwd: the cwd fallback
+// is how an untrusted checkout's adapters/ would have been executed after
+// every trusted lookup failed.
+func TestResolveAdapterDirFallsBackToInstallPath(t *testing.T) {
 	empty := t.TempDir()
 	oldDir := adapterDir
 	adapterDir = "adapters"
 	defer func() { adapterDir = oldDir }()
+	t.Setenv(devAdaptersEnv, "")
 	t.Chdir(empty)
 
 	got := resolveAdapterDir()
 	if !filepath.IsAbs(got) {
 		t.Fatalf("resolveAdapterDir fallback = %q, want absolute", got)
 	}
-	if want := filepath.Join(empty, "adapters"); got != want {
-		t.Fatalf("resolveAdapterDir fallback = %q, want %q", got, want)
+	if want := filepath.Join(empty, "adapters"); got == want {
+		t.Fatalf("resolveAdapterDir fallback = %q, want an install path, not the cwd", got)
 	}
 }
 

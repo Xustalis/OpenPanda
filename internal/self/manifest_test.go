@@ -224,12 +224,16 @@ index 1..2 100644
 		"internal/bus/payloads.go", "internal/storage/migrations.go",
 		"Makefile", "go.mod", "go.sum", ".github/workflows/ci.yml",
 		"scripts/package.sh", "scripts/sign-release.sh",
+		// Payloads that leave the Go build or run in the gate itself.
+		"adapters/claude_code.py", "extensions/voice/tts.py",
+		"drivers/panda-input", "tests/adapter_contract_test.py",
+		"cmd/panda/main.go",
 	} {
 		if !IsCriticalPath(p) {
 			t.Fatalf("%s must be critical", p)
 		}
 	}
-	for _, p := range []string{"internal/core/x.go", "webui/app/src/x.tsx", "docs/x.md", "adapters/claude_code.py"} {
+	for _, p := range []string{"internal/core/x.go", "webui/app/src/x.tsx", "docs/x.md"} {
 		if IsCriticalPath(p) {
 			t.Fatalf("%s must NOT be critical", p)
 		}

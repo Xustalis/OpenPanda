@@ -321,7 +321,7 @@ dev: build
 	./bin/panda web --config config.yaml
 
 run:
-	$(GO) run ./cmd/panda daemon --config config.yaml
+	OPENPANDA_DEV_ADAPTERS=1 $(GO) run ./cmd/panda daemon --config config.yaml
 
 # Start the daemon + webui sidecar locally with one command (see scripts/run-local.sh).
 run-local:

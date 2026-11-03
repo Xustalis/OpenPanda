@@ -402,8 +402,14 @@ func runDaemon(args []string) {
 	// The node's own config and card are never artifact content: a tree that
 	// happens to contain them (a project rooted at the daemon dir, a dev node
 	// running work_path="." in its checkout) must not ship the mesh secret
-	// or the card to whoever asked for the pack.
-	coreNode.SetPackProtectedPaths([]string{*configPath, *cardPath})
+	// or the card to whoever asked for the pack. Config snapshots sit beside
+	// the file and carry the same secrets; the glob covers the ones written
+	// after this call.
+	coreNode.SetPackProtectedPaths([]string{
+		*configPath,
+		*configPath + config.ConfigSnapshotMark + "*",
+		*cardPath,
+	})
 	// OS sandbox (sandbox.*): the environment filter always applies; when a
 	// mode is configured, every spawned native command and adapter runs under
 	// the platform's deny-default confinement on top. The node's own

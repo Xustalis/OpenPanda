@@ -285,6 +285,12 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	if err := security.CheckModelEndpoint(base, model.AllowPlaintext); err != nil {
 		return nil, err
 	}
+	// With an egress proxy the dial guard sees the proxy, not the target. A
+	// config that names a metadata service (directly or via DNS) would carry
+	// the API key through the proxy to that service's answer page.
+	if security.ProxyTargetMetadata(base) {
+		return nil, fmt.Errorf("endpoint %s resolves to a cloud metadata address through the configured proxy", security.EndpointHost(base))
+	}
 	// tuning carries the catalogue row of the vendor actually behind the
 	// endpoint: a "custom" entry (or no provider at all) holds none, so the
 	// resolved endpoint/model pair gets one Detect pass — a hand-written

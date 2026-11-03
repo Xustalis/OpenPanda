@@ -38,6 +38,17 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 		c.logger.Warn("task_delegate missing task_id", "from", env.From)
 		return
 	}
+	// The task id becomes a path segment under the task/shadow/work dirs, and
+	// this is the first place a peer hands us one. Whitelist it at the wire
+	// boundary: filepath.Join cleans "..", so an id like
+	// "../../victim" would aim a later RemoveAll at an arbitrary directory.
+	if !plan.ValidID(p.TaskID) {
+		c.logger.Warn("task_delegate with unsafe task id", "task", p.TaskID, "from", env.From)
+		c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{
+			TaskID: "", AttemptID: p.AttemptID, Reason: "invalid task id",
+		})
+		return
+	}
 
 	// plan_id and stage_id become path segments of this node's stage work dir
 	// (stageWorkDir), so they are whitelisted at the wire boundary — a peer
@@ -1142,14 +1153,19 @@ func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p b
 		} else if awaitRevival {
 			kind = "revive"
 		}
-		if (pinned || awaitRevival) && !dtn {
-			// A pinned/revival copy holds no executor for the whole wait, so
-			// no lease may burn down against it: either the link died between
-			// the sendable check and the send (the lease stamped above comes
-			// back off) or the row still carries the previous dispensation's.
-			// Custody's deadline, not a verdict, bounds the wait.
+		if !dtn {
+			// Custody and a running lease are mutually exclusive. The row is
+			// now parked in task_outbox, so a lease left stamped here would
+			// expire 20 minutes later and requeue the task locally — the
+			// parked bundle could then be delivered on the peer's next hello
+			// and the same work would run twice, once on each node. Drop the
+			// lease and bound the parked copy with the custody deadline
+			// instead; flush re-stamps a lease when the bundle is handed over.
 			if cerr := c.store.ClearLease(ctx, taskID); cerr != nil {
 				c.logger.Warn("clear lease for parked task", "task", taskID, "err", cerr)
+			}
+			if derr := c.store.SetDeadlineIfUnset(ctx, taskID, pushDeadline); derr != nil {
+				c.logger.Warn("delegate: stamp custody deadline", "task", taskID, "err", derr)
 			}
 		}
 		// A parked cancel for this pair stood down the task's PREVIOUS
