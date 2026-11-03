@@ -10,6 +10,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
 
@@ -247,7 +248,22 @@ func (e *Engine) toolSkillList(ctx context.Context) (string, error) {
 		Description string `json:"description"`
 	}
 	summaries := make([]skillSummary, 0, len(index))
+	scopeProj, pinned := memory.ScopeProject(ctx)
 	for _, entry := range index {
+		// A skill index covers every project on this node. The model must see
+		// only what this conversation may use: global and device skills, plus
+		// the pinned project's own. Otherwise a project conversation reads
+		// another project's procedures (and the task titles in their
+		// descriptions) just by listing.
+		switch entry.Scope {
+		case skills.ScopeProject:
+			if !pinned || scopeProj == "" || !strings.EqualFold(entry.Key, scopeProj) {
+				continue
+			}
+		case skills.ScopeGlobal, skills.ScopeDevice:
+		default:
+			continue
+		}
 		summaries = append(summaries, skillSummary{
 			Name:        entry.Name,
 			Scope:       string(entry.Scope),
@@ -274,9 +290,22 @@ func (e *Engine) toolSkillShow(ctx context.Context, name string) (string, error)
 	}
 	if sk == nil {
 		index, _ := st.Index()
-		for _, e := range index {
-			if strings.EqualFold(e.Name, name) {
-				sk, _ = st.Load(e.Scope, e.Key, e.Name)
+		scopeProj, pinned := memory.ScopeProject(ctx)
+		for _, entry := range index {
+			if !strings.EqualFold(entry.Name, name) {
+				continue
+			}
+			switch entry.Scope {
+			case skills.ScopeGlobal, skills.ScopeDevice:
+				sk, _ = st.Load(entry.Scope, entry.Key, entry.Name)
+			case skills.ScopeProject:
+				// Same boundary as skill_list: another project's procedure is
+				// not this conversation's to load.
+				if pinned && scopeProj != "" && strings.EqualFold(entry.Key, scopeProj) {
+					sk, _ = st.Load(entry.Scope, entry.Key, entry.Name)
+				}
+			}
+			if sk != nil {
 				break
 			}
 		}

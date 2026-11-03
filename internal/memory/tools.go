@@ -3,6 +3,7 @@
 package memory
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -45,26 +46,66 @@ func NewTool(hermes *Hermes, projects *Projects) *Tool {
 
 // Execute runs one tool call and returns a short, user-facing result. name must
 // be a Tool* constant; args is the model-supplied argument map, validated here
-// rather than trusted verbatim.
+// rather than trusted verbatim. Callers that know which project the turn runs
+// in must use ExecuteCtx; this entry point exists for tests and for callers
+// with no project context.
 func (t *Tool) Execute(name string, args map[string]any) (string, error) {
+	return t.ExecuteCtx(context.Background(), name, args)
+}
+
+// ExecuteCtx is Execute with the turn's project scope. A pinned project makes
+// target=project default to it and refuses any other name: the model supplies
+// the argument, so without the pin a project conversation could read or edit
+// another project's memory by naming it.
+func (t *Tool) ExecuteCtx(ctx context.Context, name string, args map[string]any) (string, error) {
 	switch name {
 	case ToolRead:
-		return t.read(args)
+		return t.read(ctx, args)
 	case ToolAdd:
-		return t.add(args)
+		return t.add(ctx, args)
 	case ToolReplace:
-		return t.replace(args)
+		return t.replace(ctx, args)
 	case ToolRemove:
-		return t.remove(args)
+		return t.remove(ctx, args)
 	default:
 		return "", fmt.Errorf("memory: unknown tool %q", name)
 	}
 }
 
+// projectFor resolves the project a target=project call acts on, enforcing the
+// turn's pinned scope. An unpinned caller (tests, non-conversation tools) may
+// still name a project explicitly.
+func (t *Tool) projectFor(ctx context.Context, args map[string]any) (string, error) {
+	requested := ""
+	if v, ok := args["project"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			return "", fmt.Errorf("memory: argument %q must be a string", "project")
+		}
+		requested = strings.TrimSpace(s)
+	}
+	if pinned, ok := ScopeProject(ctx); ok {
+		if requested == "" {
+			if pinned == "" {
+				return "", errors.New("memory: this conversation is not scoped to a project, so project memory is unavailable")
+			}
+			return pinned, nil
+		}
+		if !strings.EqualFold(requested, pinned) {
+			return "", fmt.Errorf("memory: project %q is outside this conversation's project %q", requested, pinned)
+		}
+		return pinned, nil
+	}
+	if requested == "" {
+		return "", fmt.Errorf("memory: argument %q is required", "project")
+	}
+	return requested, nil
+}
+
 // read lists current entries so the agent can consolidate before an add that
 // would exceed a limit — the Hermes merge workflow. With no target it lists
 // both personal layers; target=project lists one project.
-func (t *Tool) read(args map[string]any) (string, error) {
+func (t *Tool) read(ctx context.Context, args map[string]any) (string, error) {
 	target := ""
 	if v, ok := args["target"]; ok {
 		s, ok := v.(string)
@@ -83,17 +124,17 @@ func (t *Tool) read(args map[string]any) (string, error) {
 		if t.hermes == nil {
 			return "", ErrNoStore
 		}
-		m, err := t.load(target, args)
+		m, err := t.load(target, "")
 		if err != nil {
 			return "", err
 		}
 		return formatEntries(target, m), nil
 	case targetProject:
-		project, err := argString(args, "project")
+		project, err := t.projectFor(ctx, args)
 		if err != nil {
 			return "", err
 		}
-		m, err := t.load(target, args)
+		m, err := t.load(target, project)
 		if err != nil {
 			return "", err
 		}
@@ -121,12 +162,12 @@ func (t *Tool) readPersonal() (string, error) {
 }
 
 // add appends one entry to a layer, enforcing that layer's character cap.
-func (t *Tool) add(args map[string]any) (string, error) {
+func (t *Tool) add(ctx context.Context, args map[string]any) (string, error) {
 	target, entry, err := targetEntry(args)
 	if err != nil {
 		return "", err
 	}
-	if err := t.mutate(target, args, func(m *MemFile) error { return m.Add(entry) }); err != nil {
+	if err := t.mutate(ctx, target, args, func(m *MemFile) error { return m.Add(entry) }); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("已记住（%s）：%s", target, entry), nil
@@ -134,7 +175,7 @@ func (t *Tool) add(args map[string]any) (string, error) {
 
 // replace swaps an entry identified by a unique substring match (Hermes
 // semantics; ambiguous matches are rejected).
-func (t *Tool) replace(args map[string]any) (string, error) {
+func (t *Tool) replace(ctx context.Context, args map[string]any) (string, error) {
 	target, err := argString(args, "target")
 	if err != nil {
 		return "", err
@@ -147,14 +188,14 @@ func (t *Tool) replace(args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := t.mutate(target, args, func(m *MemFile) error { return m.Replace(old, new) }); err != nil {
+	if err := t.mutate(ctx, target, args, func(m *MemFile) error { return m.Replace(old, new) }); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("已更新（%s）：%s", target, new), nil
 }
 
 // remove deletes an entry identified by a unique substring match.
-func (t *Tool) remove(args map[string]any) (string, error) {
+func (t *Tool) remove(ctx context.Context, args map[string]any) (string, error) {
 	target, err := argString(args, "target")
 	if err != nil {
 		return "", err
@@ -163,15 +204,15 @@ func (t *Tool) remove(args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := t.mutate(target, args, func(m *MemFile) error { return m.Remove(old) }); err != nil {
+	if err := t.mutate(ctx, target, args, func(m *MemFile) error { return m.Remove(old) }); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("已删除（%s）：%s", target, old), nil
 }
 
-// load loads the MemFile for a target. Project targets read their name from the
-// "project" argument.
-func (t *Tool) load(target string, args map[string]any) (MemFile, error) {
+// load loads the MemFile for a target. project names the project for a
+// target=project read and is ignored otherwise.
+func (t *Tool) load(target, project string) (MemFile, error) {
 	switch target {
 	case targetUser:
 		if t.hermes == nil {
@@ -187,10 +228,6 @@ func (t *Tool) load(target string, args map[string]any) (MemFile, error) {
 		if t.projects == nil {
 			return MemFile{}, ErrNoStore
 		}
-		project, err := argString(args, "project")
-		if err != nil {
-			return MemFile{}, err
-		}
 		return t.projects.Load(project)
 	default:
 		return MemFile{}, fmt.Errorf("memory: unknown target %q", target)
@@ -201,7 +238,7 @@ func (t *Tool) load(target string, args map[string]any) (MemFile, error) {
 // read-modify-write lock held, then writes the result back. The whole cycle is
 // one critical section: load and save as two steps let a second writer slip
 // between them and vanish one of the two changes with both reporting success.
-func (t *Tool) mutate(target string, args map[string]any, fn func(*MemFile) error) error {
+func (t *Tool) mutate(ctx context.Context, target string, args map[string]any, fn func(*MemFile) error) error {
 	switch target {
 	case targetUser:
 		if t.hermes == nil {
@@ -217,7 +254,7 @@ func (t *Tool) mutate(target string, args map[string]any, fn func(*MemFile) erro
 		if t.projects == nil {
 			return ErrNoStore
 		}
-		project, err := argString(args, "project")
+		project, err := t.projectFor(ctx, args)
 		if err != nil {
 			return err
 		}

@@ -173,6 +173,16 @@ type Filter struct {
 	Query   string // case-insensitive substring over title + description + tags
 }
 
+// escapeLike neutralizes LIKE's wildcards so a search term is matched
+// literally. The escape character is a backslash, matching the ESCAPE clause
+// in List.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
 // List returns the board, ordered the way the lanes read it: manual seq first
 // (untouched rows last), then priority, then due date (undated last), then
 // creation order. Sorting here rather than in SQL keeps the "0 means unset"
@@ -189,8 +199,11 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Todo, error) {
 		args = append(args, f.Project)
 	}
 	if q2 := strings.TrimSpace(f.Query); q2 != "" {
-		q += ` AND (title LIKE ? OR description LIKE ? OR tags LIKE ?)`
-		like := "%" + q2 + "%"
+		// A user searching for "%" or "_" means those characters, not LIKE
+		// wildcards. Escape them (and the escape character itself) so the
+		// query matches the text that was typed.
+		q += ` AND (title LIKE ? ESCAPE '\' OR description LIKE ? ESCAPE '\' OR tags LIKE ? ESCAPE '\')`
+		like := "%" + escapeLike(q2) + "%"
 		args = append(args, like, like, like)
 	}
 	q += ` LIMIT 2000`

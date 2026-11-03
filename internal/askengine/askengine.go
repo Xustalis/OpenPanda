@@ -45,6 +45,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 	"github.com/Xustalis/OpenPanda/internal/scout"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/self"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -2259,6 +2260,13 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// withholds consent no matter the grant — every tier-2 operation is
 	// decided per-action in the foreground.
 	scopeProj, _ := e.scopeProject(scope)
+	// Pin the turn's project on the context before any tool runs. The memory
+	// and skill tools receive the model's "project" argument, and without this
+	// pin a project conversation could name another project and read or edit
+	// its memory (or load its skills). An empty pin is intentional: a
+	// project-free conversation must refuse project-targeted calls, not fall
+	// back to whatever name the model supplied.
+	ctx = memory.WithScopeProject(ctx, scopeProj)
 	verdict := e.approvalFor(scope.SessionID, scopeProj).withPermission(scope.PermissionMode)
 	toolAuthorized, toolDenied := verdict.gate(authorize)
 	approvalMode := verdict.mode
@@ -3782,6 +3790,11 @@ func (e *Engine) noteDailyObservation(text string) {
 	if e.daily == nil || strings.TrimSpace(text) == "" {
 		return
 	}
+	// The daily log is durable and feeds Dreaming, so a credential echoed by
+	// a task must not ride into it. SummarizeResult already redacts; this is
+	// the last gate before persistence, covering callers that build a digest
+	// by another route.
+	text = security.Redact(text)
 	if err := e.daily.Append(time.Now(), text); err != nil && e.logger != nil {
 		e.logger.Warn("append daily observation", "err", err)
 	}
