@@ -24,13 +24,17 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/install"
+	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
 	"github.com/Xustalis/OpenPanda/webui/panel"
 )
 
 const (
-	webServiceLabel    = "com.openpanda.web"
-	webServiceUnitName = "openpanda-web.service"
-	webServiceTaskName = "OpenPandaWeb"
+	// The unit's names are shared with the updater and the uninstaller, which
+	// must bounce and remove the same unit this command registers.
+	webServiceLabel    = install.WebServiceLabel
+	webServiceUnitName = install.WebServiceUnitName
+	webServiceTaskName = install.WebServiceTaskName
 	webServiceWrapper  = "panda-web.cmd"
 	webServiceLogStem  = "web.log"
 	defaultServicePath = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -287,6 +291,29 @@ func ensurePanelToken() (string, error) {
 		return "", err
 	}
 	return token, nil
+}
+
+// printNodeRow reports who owns the local node row. The identity lock says
+// whether anything holds it; the daemon's unit says whether the holder is the
+// daemon (the panel then borrows the row) or the console itself.
+func printNodeRow() {
+	cfg, err := config.Load(config.ResolvePath(cliConfigPath))
+	if err != nil {
+		return
+	}
+	held, err := nodeidentity.Held(cfg.Node.Kind, cfg.Node.EffectiveIdentity())
+	if err != nil {
+		fmt.Printf("node  unknown (%v)\n", err)
+		return
+	}
+	switch {
+	case !held:
+		fmt.Println("node  no owner (the console takes the row at its next start)")
+	case daemonServiceRunning():
+		fmt.Println("node  borrowed (the daemon holds it)")
+	default:
+		fmt.Println("node  owned (the console holds it)")
+	}
 }
 
 func runService(args []string) int {

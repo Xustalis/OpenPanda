@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/install"
 )
 
 // serviceInstall writes the unit and asks the platform's user service manager
@@ -95,6 +97,7 @@ func serviceStatus(spec webServiceSpec) int {
 		fmt.Printf("url   %s\n", consoleURL(token))
 	}
 	fmt.Printf("log   %s\n", spec.LogPath)
+	printNodeRow()
 	return 0
 }
 
@@ -140,4 +143,20 @@ func serviceUninstall(spec webServiceSpec) int {
 	}
 	fmt.Printf("removed %s\n", path)
 	return 0
+}
+
+// daemonServiceRunning reports whether the node daemon's own unit is active.
+// It distinguishes "the console owns the node row" from "the console borrows
+// it from a daemon" in `panda service status`.
+func daemonServiceRunning() bool {
+	svc := fmt.Sprintf("gui/%d/%s", os.Getuid(), install.NodeServiceLabel)
+	if out, err := exec.Command("launchctl", "print", svc).Output(); err == nil &&
+		strings.Contains(string(out), "state = running") {
+		return true
+	}
+	if out, err := exec.Command("systemctl", "--user", "is-active", install.NodeServiceUnitName).Output(); err == nil &&
+		strings.TrimSpace(string(out)) == "active" {
+		return true
+	}
+	return false
 }

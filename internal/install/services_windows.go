@@ -4,7 +4,11 @@
 
 package install
 
-import "os/exec"
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+)
 
 // nodeTaskName is the scheduled task scripts/install.ps1 registers, and the
 // name its own closing instructions tell the user to remove by hand.
@@ -15,7 +19,7 @@ import "os/exec"
 // The value is a var rather than a const so the windows test can point
 // StopServices at a scratch task instead of the real one — a test that deleted
 // a developer's actual logon task would be worse than no test.
-var nodeTaskName = "OpenPandaNode"
+var nodeTaskName = NodeTaskName
 
 // StopServices best-effort removes the logon task that scripts/install.ps1
 // registers, so `panda uninstall` leaves no auto-start behind.
@@ -33,6 +37,7 @@ var nodeTaskName = "OpenPandaNode"
 // itself belongs to whoever created it.
 func StopServices() {
 	_ = exec.Command("schtasks.exe", "/Delete", "/TN", nodeTaskName, "/F").Run()
+	stopWebService()
 }
 
 // RestartDaemon best-effort restarts the registered logon task so it picks up
@@ -46,4 +51,31 @@ func RestartDaemon() {
 		return
 	}
 	_ = exec.Command("schtasks.exe", "/Run", "/TN", nodeTaskName).Run()
+}
+
+// RestartWebService restarts the console's logon task so the panel answers from
+// the binary on disk rather than the image it started with. Same running-only
+// contract as the daemon: /End succeeds only for a live task.
+func RestartWebService() {
+	if err := exec.Command("schtasks.exe", "/End", "/TN", WebServiceTaskName).Run(); err != nil {
+		return
+	}
+	_ = exec.Command("schtasks.exe", "/Run", "/TN", WebServiceTaskName).Run()
+}
+
+// webServiceWrapperPath mirrors the wrapper `panda service install` writes
+// under the per-user data directory (the install prefix may be read-only).
+func webServiceWrapperPath() string {
+	if dir := os.Getenv("LOCALAPPDATA"); dir != "" {
+		return filepath.Join(dir, "openpanda-data", "panda-web.cmd")
+	}
+	return ""
+}
+
+func stopWebService() {
+	_ = exec.Command("schtasks.exe", "/End", "/TN", WebServiceTaskName).Run()
+	_ = exec.Command("schtasks.exe", "/Delete", "/TN", WebServiceTaskName, "/F").Run()
+	if path := webServiceWrapperPath(); path != "" {
+		_ = os.Remove(path)
+	}
 }
