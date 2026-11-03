@@ -14,6 +14,10 @@ Self-hosted · peer-to-peer · no vendor relay · ~40 MB RSS · macOS / Linux / 
 ![Memory](https://img.shields.io/badge/Memory%20Footprint-~40MB%20RSS-brightgreen)
 ![No Vendor Relay](https://img.shields.io/badge/Vendor%20Relay-None-success)
 
+<!-- Demo slot: record with vhs (a scripted terminal recording) and put the GIF here,
+     above the install block. The two scenes that convert: a task finishing on a second
+     node after the first is killed mid-run, and one prompt fanned out to four harnesses. -->
+
 ---
 
 ## 📦 Install
@@ -102,7 +106,7 @@ Setups people actually run:
 
 - **Runs start from the workspace** — every agent task carries a compact, deterministic map of its tree (git state, layout, key files, the project's own build/verify commands), and the completion judge sees the commands the agent actually ran before it accepts “done”.
 - **Ask before guessing** — the entry model can ask bounded multiple-choice questions before creating a task, and a running agent can ask the same structured questions; the TUI, console and `panda approve` all answer them.
-- **A side channel and rewind** — `/side` (alias `/btw`) opens a read-only conversation beside the thread, and every finished answer leaves a checkpoint `/rewind` can restore.
+- **A side channel and rewind** — `/side` (alias `/btw`) opens a separate conversation beside the thread with the thread's full tools and approval gates, while its transcript stays out of the thread and survives reloads; every finished answer leaves a checkpoint `/rewind` can restore.
 - **Read what the agent produced** — workspace paths in replies are clickable in the console and `panda read path:line` in the terminal; task artifacts preview on a sandboxed second origin.
 - **The thread's unfinished work at a glance** — a task rail in the TUI (Ctrl+B) and the console header lists running work, what waits on you, and the queue.
 - **Operator hooks, fenced** — `task_submitted` / `task_started` / `task_done` / `task_failed` / `task_review` can run your commands with a filtered environment, a tier gate and an audit row.
@@ -114,7 +118,7 @@ Setups people actually run:
 - **Intent classification & task decomposition** — the engine distinguishes chat, management queries, and executable tasks; multi-stage work is first split into a plan with artifact wiring between stages.
 - **Supervision loop** — the entry model continuously judges task completion and re-dispatches with the failure reason attached, until done or the round budget (5 rounds by default) is spent.
 - **Multi-model registry & transparent failover** — `panda model add|switch|test` manages several providers per node behind a health breaker; quota exhaustion or dead credentials (401/403) trigger automatic fallback-model injection, and the task continues instead of dying halfway.
-- **Multi-harness runs** — `panda ask --agents a,b --mode parallel` fans one instruction out to several agents as a plan and collects the verdicts.
+- **Multi-harness runs** — `panda task add --agents a,b --mode parallel` fans one instruction out to several agents as a plan and collects the verdicts.
 - **Transparent execution** — every Bash command, file edit, and tool call, along with the responsible agent and underlying model, streams live to your terminal and console.
 - **Tiered approval** — reversible operations run autonomously; irreversible actions (`git push`, production database changes) suspend for explicit human confirmation.
 - **Circuit breakers** — loop detection and retry breakers stop runaway agents from burning tokens.

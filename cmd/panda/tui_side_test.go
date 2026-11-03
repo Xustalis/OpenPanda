@@ -144,6 +144,36 @@ func TestSideAnswerStaysOutOfMainTranscript(t *testing.T) {
 	}
 }
 
+// TestSideAnswerKeepsToolTrace pins the display note under an answer: what the
+// channel checked stays on screen, and it stays out of the replay history — a
+// note about a tool call is not something the next question should carry.
+func TestSideAnswerKeepsToolTrace(t *testing.T) {
+	m := newSideTestModel(t)
+	stream := &askStream{events: make(chan tea.Msg, 8)}
+	m.side.stream = stream
+	next, _ := m.Update(progressMsg{stream: stream, progress: askengine.Progress{
+		Kind: askengine.ProgressTool, Name: "workspace_read", Detail: "internal/askengine/side.go",
+	}})
+	m = next.(tuiModel)
+	next, _ = m.Update(doneMsg{stream: stream, out: &askengine.Result{Kind: "answer", Answer: "读完了"}})
+	m = next.(tuiModel)
+
+	var trace string
+	for _, b := range m.side.ch.blocks {
+		if b.kind == blockNote && strings.Contains(b.body, "workspace_read") {
+			trace = b.body
+		}
+	}
+	if !strings.Contains(trace, "internal/askengine/side.go") {
+		t.Errorf("the answer's tool trace is missing: %+v", m.side.ch.blocks)
+	}
+	for _, turn := range m.side.turns {
+		if strings.Contains(turn.Content, "workspace_read") {
+			t.Errorf("the trace leaked into the replay history: %+v", m.side.turns)
+		}
+	}
+}
+
 // TestSideLineDoesNotRecordWithoutEngine guards the no-model case: a question
 // typed with no engine to ask must not leave a dangling user turn in the
 // channel's replay history.
@@ -165,6 +195,28 @@ func TestSideLineDoesNotRecordWithoutEngine(t *testing.T) {
 func submitSideLine(m tuiModel, line string) (tea.Model, tea.Cmd) {
 	m.side.ta.SetValue(line)
 	return m.onSideKey(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+// TestSideTaskReceiptNamesTheWork: once the side channel can dispatch, a task
+// result must name the row it created — the id is the only handle the
+// channel's text gives the user, and an empty answer must not read as "no
+// answer came back".
+func TestSideTaskReceiptNamesTheWork(t *testing.T) {
+	m := newSideTestModel(t)
+	stream := &askStream{events: make(chan tea.Msg, 8)}
+	m.side.stream = stream
+	next, _ := m.Update(doneMsg{stream: stream, out: &askengine.Result{Kind: "task", TaskID: "01a1task"}})
+	m = next.(tuiModel)
+
+	var note string
+	for _, b := range m.side.ch.blocks {
+		if b.kind == blockNote && strings.Contains(b.body, "01a1task") {
+			note = b.body
+		}
+	}
+	if note == "" {
+		t.Fatalf("task receipt is missing: %+v", m.side.ch.blocks)
+	}
 }
 
 // TestSideViewRenders checks the frame draws the channel's own content and

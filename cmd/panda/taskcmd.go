@@ -292,6 +292,11 @@ func runTaskShow(args []string) {
 	// task by the same short ref the board shows — a full UUID invites a
 	// copy-failure when the prefix would have resolved anyway.
 	ref := refOr(taskRefsFor(context.Background(), store, []core.Task{t}), t.TaskID)
+	if t.State == core.StateReview {
+		if reason := latestReviewReason(events); reason != "" {
+			fmt.Println(pal().Heading(i18n.T(i18n.Detect(), "cli.task.review.reason")+":") + " " + reason)
+		}
+	}
 	if hint := taskNextStepHint(i18n.Detect(), cfg, t, ref); hint != "" {
 		fmt.Println(pal().Muted(hint))
 	}
@@ -322,6 +327,38 @@ func taskNextStepHint(loc i18n.Locale, cfg *config.Config, t core.Task, ref stri
 	case core.StateQueued, core.StateSubmitted:
 		if cfg != nil && !queueConsumerAlive(cfg) {
 			return i18n.T(loc, "cli.queue.noConsumer")
+		}
+	}
+	return ""
+}
+
+// taskReviewHint names the command that can actually move a review row.
+// A "needs changed input" park refuses `panda approve` by design — telling
+// the user to approve it sent them into a dead end. The resubmit path is
+// `panda task continue`, which carries the corrected note back into the run.
+func taskReviewHint(loc i18n.Locale, t core.Task, ref string) string {
+	if t.ApprovalDisposition == core.ApprovalNeedsChangedInput {
+		return i18n.Tf(loc, "cli.task.review.needsInput", "id", ref)
+	}
+	return i18n.Tf(loc, "cli.task.wait.review", "id", ref)
+}
+
+// latestReviewReason returns the full reason carried by the newest review
+// event. Event values in the timeline are width-truncated; the reason a task
+// parked is the one line a user must be able to read whole.
+func latestReviewReason(events []core.Event) string {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != core.EvReview {
+			continue
+		}
+		var data map[string]any
+		if json.Unmarshal([]byte(events[i].DataJSON), &data) != nil {
+			continue
+		}
+		for _, key := range []string{"reason", "failed", "stderr", "question"} {
+			if v, ok := data[key].(string); ok && strings.TrimSpace(v) != "" {
+				return v
+			}
 		}
 	}
 	return ""
@@ -662,33 +699,43 @@ type taskJSON struct {
 	// partial|skipped), empty when the task carried no contract. It is a
 	// property of the outcome, not a state: done+unverified stays visible.
 	Verification string `json:"verification,omitempty"`
+	// ApprovalDisposition names why a review row is parked (accept_work,
+	// resume_execution, needs_changed_input, ...). ReviewReason is the full
+	// last review reason; Result is the raw result payload. The human view
+	// truncates event values, so scripts need these two to diagnose a park
+	// without reading SQLite.
+	ApprovalDisposition string `json:"approval_disposition,omitempty"`
+	ReviewReason        string `json:"review_reason,omitempty"`
+	Result              string `json:"result,omitempty"`
+	Created             string `json:"created_at"`
+	Updated             string `json:"updated_at"`
 	// Events is the full audit trail, newest last. The same payload the
 	// timeline clips for the terminal is kept intact here for scripts and for
 	// reading the real failure reason.
-	Events  []taskEventJSON `json:"events,omitempty"`
-	Created string          `json:"created_at"`
-	Updated string          `json:"updated_at"`
+	Events []taskEventJSON `json:"events,omitempty"`
 }
 
 func taskToJSON(t core.Task) taskJSON {
 	j := taskJSON{
-		ID:           t.TaskID,
-		Verification: t.Verification,
-		ParentID:     t.ParentID,
-		Project:      t.Project,
-		Title:        t.Title,
-		State:        t.State,
-		Priority:     priorityName(t.Priority),
-		Owner:        t.OwnerNode,
-		Pinned:       core.PinnedNode(t),
-		Session:      t.SessionID,
-		Intent:       t.Intent,
-		WorkDir:      t.WorkDir,
-		ExecWorkDir:  t.ExecWorkDir,
-		ScopePaths:   t.ScopePaths,
-		Isolate:      t.Isolate,
-		Created:      ts(t.CreatedAt),
-		Updated:      ts(t.UpdatedAt),
+		ID:                  t.TaskID,
+		Verification:        t.Verification,
+		ApprovalDisposition: string(t.ApprovalDisposition),
+		Result:              t.ResultJSON,
+		ParentID:            t.ParentID,
+		Project:             t.Project,
+		Title:               t.Title,
+		State:               t.State,
+		Priority:            priorityName(t.Priority),
+		Owner:               t.OwnerNode,
+		Pinned:              core.PinnedNode(t),
+		Session:             t.SessionID,
+		Intent:              t.Intent,
+		WorkDir:             t.WorkDir,
+		ExecWorkDir:         t.ExecWorkDir,
+		ScopePaths:          t.ScopePaths,
+		Isolate:             t.Isolate,
+		Created:             ts(t.CreatedAt),
+		Updated:             ts(t.UpdatedAt),
 	}
 	return j
 }
@@ -721,6 +768,11 @@ func taskToJSONWithStore(store *core.TaskStore, t core.Task) taskJSON {
 	j.WaitingLink = t.State == core.StateDispatched &&
 		store.TaskOutboxPending(context.Background(), t.TaskID)
 	j.RouteFallback = store.RouteFallbackPeer(context.Background(), t.TaskID)
+	if t.State == core.StateReview {
+		if events, err := store.Events(context.Background(), t.TaskID); err == nil {
+			j.ReviewReason = latestReviewReason(events)
+		}
+	}
 	if kids, err := store.Children(context.Background(), t.TaskID); err == nil {
 		for _, k := range kids {
 			j.Children = append(j.Children, taskChildJSON{ID: k.TaskID, State: k.State, Title: k.Title})
@@ -1369,6 +1421,11 @@ func waitForTaskAdd(loc i18n.Locale, cfg *config.Config, taskID string, timeout 
 				fmt.Println(i18n.Tf(loc, "tui.task.verification", "status", final.Verification))
 			}
 			if final.State == core.StateReview {
+				if events, eerr := store.Events(context.Background(), final.TaskID); eerr == nil {
+					if reason := latestReviewReason(events); reason != "" {
+						fmt.Println(i18n.T(loc, "cli.task.review.reason") + ": " + reason)
+					}
+				}
 				if hint := taskNextStepHint(loc, cfg, final, final.TaskID); hint != "" {
 					fmt.Println(hint)
 				}

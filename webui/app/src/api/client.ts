@@ -355,6 +355,9 @@ export interface Task {
   intent?: string
   spec?: string
   result?: string
+  /** The delivery contract's verdict (verified|failed|partial|skipped), empty
+   *  when the task carried no acceptance checks. The report fold reads it. */
+  verification?: string
   risk?: string
   /** The adapter that ran (or is running) this task, bare of its extension
    *  ("claude_code"). Present on list rows as well as the detail, so a light
@@ -1213,8 +1216,11 @@ export const api = {
     return request('DELETE', '/api/tasks')
   },
 
-  logs(id: string, after?: number): Promise<{ id: string; events: TaskEvent[] }> {
-    return request('GET', `/api/tasks/${id}/logs${after ? `?after=${after}` : ''}`)
+  logs(id: string, after?: number, tail?: number): Promise<{ id: string; events: TaskEvent[] }> {
+    const q = new URLSearchParams()
+    if (after) q.set('after', String(after))
+    else if (tail) q.set('tail', String(tail))
+    return request('GET', `/api/tasks/${id}/logs${q.size ? `?${q.toString()}` : ''}`)
   },
 
   ask(prompt: string, authorize: boolean): Promise<AskResult> {
@@ -1512,6 +1518,18 @@ export const api = {
 
   cancelSession(id: string, operationID: string): Promise<{ id: string; operation_id: string; cancelled: boolean }> {
     return request('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`, { operation_id: operationID })
+  },
+
+  /** The server-owned side conversation beside a thread: its stored turns and
+   *  the latest side operation. This is the reconnect surface — a pane that
+   *  reloads mid-answer reads it instead of starting over. */
+  sideConversation(id: string): Promise<SideConversation> {
+    return request('GET', `/api/sessions/${encodeURIComponent(id)}/side`)
+  },
+
+  /** Discard the side conversation and cancel any running side ask. */
+  resetSideConversation(id: string): Promise<SideConversation> {
+    return request('DELETE', `/api/sessions/${encodeURIComponent(id)}/side`)
   },
 
   /** Answer the pre-execution question a running session turn is parked on.
@@ -1819,7 +1837,10 @@ export const api = {
 
   /** Pull a task's artifact back from the executor so the preview has bytes. */
   fetchTaskArtifact(id: string): Promise<{ hash: string; files?: number; already?: boolean; source?: string }> {
-    return request('POST', `/api/tasks/${encodeURIComponent(id)}/artifact/fetch`, {})
+    // A cross-node pull can legitimately take minutes on a slow link; the
+    // server bounds it with its own transfer budget, and the request context
+    // is what stops it if the user walks away.
+    return request('POST', `/api/tasks/${encodeURIComponent(id)}/artifact/fetch`, {}, { timeoutMs: 30 * 60_000 })
   },
 
   fsFiles(path?: string): Promise<FsFilesResult> {
@@ -2727,31 +2748,49 @@ function dispatchAskEvent(event: string, data: string, h: AskStreamHandlers): vo
     })
 }
 
-/** One turn of the side conversation, as the engine replays it. `content` is
- *  the wire field: entry.Turn has no JSON tags, and Go matches the field name
- *  case-insensitively. */
-export interface SideTurn {
+/** One stored message in a session's server-side side conversation. It
+ *  carries the display-only evidence (tools, tokens) so a reloaded pane shows
+ *  what the live stream showed. */
+export interface StoredSideTurn {
   role: 'user' | 'assistant'
-  content: string
+  text: string
+  tools?: string[]
+  tokens?: number
+  /** The task this answer dispatched, when it started work. */
+  task_id?: string
+  duration_ms?: number
+  error?: string
+  ts?: number
 }
 
-/** POST /api/sessions/{id}/ask with `side: true`: a read-only conversation
- *  beside the thread, answered from a snapshot of it.
- *
- *  The server files nothing this ask produces — no user turn, no answer, no
- *  operation status — so the caller owns the history and replays it on every
- *  question. A side thread has no server-side storage by design: persisting it
- *  would just be a /fork with extra steps. */
+/** GET/DELETE /api/sessions/{id}/side. The operation is the latest side ask:
+ *  `running` means the answer is still being produced server-side, so the pane
+ *  should keep following it instead of offering a new question. */
+export interface SideConversation {
+  turns: StoredSideTurn[]
+  operation?: {
+    id: string
+    status: string
+    task_id?: string
+    error?: string
+    updated_at?: string
+  } | null
+}
+
+/** POST /api/sessions/{id}/ask with `side: true`: the full conversation beside
+ *  the thread. The server owns the transcript (Session.SideTurns), files the
+ *  question before the model runs, and keeps producing the answer after this
+ *  stream closes — so the caller sends only the prompt and reads the result
+ *  back through GET /api/sessions/{id}/side. */
 export async function askSideStream(
   id: string,
   prompt: string,
-  turns: SideTurn[],
   h: AskStreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
   await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
     method: 'POST',
-    body: { prompt, authorize: false, side: true, side_turns: turns },
+    body: { prompt, authorize: false, side: true },
     signal,
     onEvent: (event, data) => dispatchAskEvent(event, data, h),
   })

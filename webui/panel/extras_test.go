@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -409,5 +410,85 @@ func TestFsRevealOpensAllowedDir(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("refused reveal still opened %q", got)
+	}
+}
+
+// The old endpoints resolved a symlink, checked the allow-list, and then
+// opened the path again. A symlink swapped in between could redirect that
+// open outside every root. The Rooted open is the enforcement: a path that
+// is already resolved to an inside file, then replaced by a symlink to an
+// outside file, must not be followed.
+func TestFsReadRefusesSymlinkSwappedAfterResolution(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := config.Default()
+	cfg.Storage.WorkPath = tmp
+	hh := &handler{cfg: cfg, cfgMu: &sync.RWMutex{}}
+	inside := filepath.Join(tmp, "real.txt")
+	if err := os.WriteFile(inside, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// abs is what the handler would have resolved before opening.
+	abs := inside
+	if err := os.Remove(inside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, inside); err != nil {
+		t.Fatal(err)
+	}
+	f, _, err := hh.openReadPath(abs)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("rooted open followed a swapped symlink outside the workspace")
+	}
+}
+
+// A symlink whose target is inside the workspace stays readable. Closing the
+// window must not break legitimate links.
+func TestFsReadAllowsSymlinkInsideRoot(t *testing.T) {
+	h, tmp, _ := newFsPanel(t)
+	inside := filepath.Join(tmp, "target.txt")
+	if err := os.WriteFile(inside, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmp, "link.txt")
+	if err := os.Symlink(inside, link); err != nil {
+		t.Fatal(err)
+	}
+	code, out := doJSON(t, h, authedReq(http.MethodGet, "/api/fs/read?path="+link, nil))
+	if code != http.StatusOK || out["content"] != "inside" {
+		t.Fatalf("inside symlink read: %d %v", code, out)
+	}
+}
+
+func TestFsReadRefusesSymlinkOutsideRoot(t *testing.T) {
+	h, tmp, _ := newFsPanel(t)
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmp, "link.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := doJSON(t, h, authedReq(http.MethodGet, "/api/fs/read?path="+link, nil))
+	if code != http.StatusForbidden {
+		t.Fatalf("outside symlink read status = %d", code)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dirLink := filepath.Join(tmp, "linkdir")
+	if err := os.Symlink(dir, dirLink); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = doJSON(t, h, authedReq(http.MethodGet, "/api/fs/files?path="+dirLink, nil))
+	if code != http.StatusForbidden {
+		t.Fatalf("outside symlink listing status = %d", code)
 	}
 }
