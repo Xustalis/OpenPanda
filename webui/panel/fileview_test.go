@@ -280,3 +280,35 @@ func TestViewFileRejectsSessionWorktreeOutsideBreadthRule(t *testing.T) {
 		t.Error("a worktree at the filesystem root was admitted")
 	}
 }
+
+// The viewer shares the rooted open: a symlink inside the work tree may point
+// outside, but swapping it after the check must not be followed.
+func TestViewFileRefusesSymlinkOutsideRoot(t *testing.T) {
+	h, tmp, _ := newFileViewPanel(t)
+	work := filepath.Join(tmp, "work")
+	target := filepath.Join(work, "target.txt")
+	if err := os.WriteFile(target, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(work, "alias.txt")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	code, out := doJSON(t, h, authedReq(http.MethodGet, "/api/fs/file?path=alias.txt", nil))
+	if code != http.StatusOK || out["content"] != "inside" {
+		t.Fatalf("inside symlink view: %d %v", code, out)
+	}
+
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	escape := filepath.Join(work, "escape.txt")
+	if err := os.Symlink(outside, escape); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = doJSON(t, h, authedReq(http.MethodGet, "/api/fs/file?path=escape.txt", nil))
+	if code != http.StatusForbidden {
+		t.Fatalf("outside symlink view status = %d", code)
+	}
+}

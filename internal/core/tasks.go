@@ -3740,6 +3740,38 @@ func (s *TaskStore) EventsSince(ctx context.Context, taskID string, afterID int6
 	return out, rows.Err()
 }
 
+// RecentEvents returns the newest limit rows for taskID in chronological
+// order. The live chat row needs the tail of a long run, not its whole
+// history: a 28-minute agent can write thousands of rows, and the full chain
+// stays one click away on the task page.
+func (s *TaskStore) RecentEvents(ctx context.Context, taskID string, limit int) ([]Event, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, task_id, ts, type, data_json, COALESCE(prev_hash, ''), COALESCE(sig, ''), COALESCE(sig_pub, '') FROM task_events
+		 WHERE task_id = ? ORDER BY id DESC LIMIT ?`, taskID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.ID, &e.TaskID, &e.TS, &e.Type, &e.DataJSON, &e.PrevHash, &e.Sig, &e.SigPub); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}
+
 // VerifyTaskEventChain verifies the per-task hash chain for taskID: every
 // row's prev_hash links correctly, every signature verifies under the key
 // this verifier trusts, and no unsigned row follows a signed one. It returns

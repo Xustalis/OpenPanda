@@ -7,7 +7,7 @@
 **装好之后第一步做什么？**
 
 ```bash
-panda init      # 交互式引导：节点命名、模型配置（生成 config.yaml + 能力卡）
+panda init      # 交互式生成 config.yaml 与能力卡（节点名自动取主机名，只询问是否现在配置模型）
 panda repl      # 交互式命令行（裸 `panda` 也可以）
 panda web       # 或者打开 Web 控制台（自动登录）
 ```
@@ -16,7 +16,7 @@ panda web       # 或者打开 Web 控制台（自动登录）
 
 **`panda` 和 `panda daemon` 什么关系？**
 
-裸 `panda` / `panda repl` 是交互式使用；`panda daemon` 是后台常驻进程，负责任务调度、节点心跳与提醒。日常单机问答用 REPL/web 即可；要接收远程委派任务或跑提醒，需要 daemon（可注册开机自启，见 [`install.md`](install.md#开机自启-手动控制)）。
+裸 `panda` / `panda repl` 是交互式使用；`panda daemon` 是后台常驻进程，负责任务调度、节点心跳与提醒。日常单机问答用 REPL/web 即可；要接收远程委派任务或跑提醒，需要 daemon（可注册开机自启，见 [`install.md`](install.md#开机自启-手动控制)）。注意 `panda web` 自己也会启动一个完整节点并占用 WS 与 UDP 发现端口，同一台机器上再起 `panda daemon` 会让两者争抢 7836/7837。日常选一个入口即可，daemon 更适合无头常驻和远程委派。
 
 ## 模型配置
 
