@@ -10,6 +10,10 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/htmlindex"
+	"golang.org/x/text/transform"
 )
 
 // The gate is the whole feature: a browser pane that can be pointed at the
@@ -290,5 +294,55 @@ func TestBrowsePaneKeepsLinksOnTheProxy(t *testing.T) {
 	}
 	if !strings.Contains(pickerScript, `"openpanda-navigate"`) {
 		t.Fatal("the picker script does not report link clicks")
+	}
+}
+func gb18030(t *testing.T, s string) []byte {
+	t.Helper()
+	enc, err := htmlindex.Get("gb18030")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := transform.Bytes(enc.NewEncoder(), []byte(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// A page that declares a legacy charset must be converted before it is served
+// under the UTF-8 header, or every non-ASCII character renders as mojibake.
+func TestTranscodePageHonoursHeaderCharset(t *testing.T) {
+	raw := gb18030(t, "你好，世界")
+	out := transcodePage(raw, "text/html; charset=gbk")
+	if got := string(out); got != "你好，世界" {
+		t.Fatalf("transcoded = %q, want 你好，世界", got)
+	}
+}
+
+func TestTranscodePageHonoursMetaCharset(t *testing.T) {
+	src := `<html><head><meta charset="gbk"></head><body>你好</body></html>`
+	out := transcodePage(gb18030(t, src), "")
+	if !utf8.Valid(out) {
+		t.Fatal("transcoded page is not valid UTF-8")
+	}
+	if !strings.Contains(string(out), "你好") {
+		t.Fatalf("transcoded page lost its text: %q", string(out))
+	}
+}
+
+func TestTranscodePageKeepsUTF8(t *testing.T) {
+	src := []byte("<p>你好</p>")
+	if out := transcodePage(src, "text/html; charset=utf-8"); string(out) != string(src) {
+		t.Fatalf("UTF-8 page was rewritten: %q", out)
+	}
+}
+
+func TestDeclaredCharsetPrefersHeader(t *testing.T) {
+	body := []byte(`<meta charset="gbk">`)
+	if got := declaredCharset("text/html; charset=shift_jis", body); got != "shift_jis" {
+		t.Fatalf("declaredCharset = %q, want shift_jis", got)
+	}
+	if got := declaredCharset("text/html", body); got != "gbk" {
+		t.Fatalf("declaredCharset = %q, want gbk", got)
 	}
 }

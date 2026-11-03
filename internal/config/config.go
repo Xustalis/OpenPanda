@@ -65,6 +65,89 @@ type Config struct {
 	// Inert while enabled=false, which is the default: this is the one place
 	// the node runs a command nobody typed into a chat.
 	Hooks HooksConfig `yaml:"hooks"`
+	// Intake is the inbound half of the same loop: a webhook listener that
+	// turns a source event into queued work. Inert while enabled=false, which
+	// is the default — a port that accepts the internet is opt-in.
+	Intake IntakeConfig `yaml:"intake"`
+}
+
+// IntakeConfig configures the inbound webhook listener.
+//
+// The listener is the one surface where somebody other than the operator can
+// create work on this node, so every field is a requirement rather than a
+// preference: an enabled listener with no secret, no repository or no actor
+// list refuses every delivery instead of defaulting open.
+type IntakeConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Listen is the bind address. Loopback by default; the body is
+	// authenticated by the source's HMAC, but the port carries no TLS, so a
+	// reverse proxy terminates it before any wider exposure.
+	Listen string             `yaml:"listen,omitempty"`
+	GitHub GitHubIntakeConfig `yaml:"github,omitempty"`
+}
+
+// GitHubIntakeConfig is the admission policy for GitHub deliveries.
+type GitHubIntakeConfig struct {
+	// Secret is the webhook HMAC key. Required when enabled; prefer
+	// OPENPANDA_INTAKE_SECRET so it stays out of the config file.
+	Secret string `yaml:"secret,omitempty"`
+	// Repos are "owner/name" entries. Empty refuses every delivery.
+	Repos []string `yaml:"repos,omitempty"`
+	// Actors are the logins allowed to originate work. Empty refuses every
+	// delivery.
+	Actors []string `yaml:"actors,omitempty"`
+	// Mention is the handle a request must address, with or without the "@".
+	// Empty disables the check.
+	Mention string `yaml:"mention,omitempty"`
+	// Self is this node's own login on the source. Its messages are dropped so
+	// an agent cannot read its own answer back as a new request.
+	Self string `yaml:"self,omitempty"`
+	// RequireMention demands the handle in the text. Unset means true; only a
+	// source that already delivers addressed events should turn it off.
+	RequireMention *bool `yaml:"require_mention,omitempty"`
+	// Project is the OpenPanda project the task belongs to. Empty runs it in
+	// the node's work path.
+	Project string `yaml:"project,omitempty"`
+	// Priority places inbound work on the queue board: high, normal or low.
+	Priority string `yaml:"priority,omitempty"`
+}
+
+// WantsMention reports the addressing requirement, defaulting to true.
+func (g GitHubIntakeConfig) WantsMention() bool {
+	if g.RequireMention == nil {
+		return true
+	}
+	return *g.RequireMention
+}
+
+// Validate refuses a listener that would be reachable but not gate-able.
+func (c IntakeConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+		return fmt.Errorf("config: intake.listen %q is not host:port: %w", c.Listen, err)
+	}
+	if strings.TrimSpace(c.GitHub.Secret) == "" {
+		return fmt.Errorf("config: intake.github.secret is required when intake.enabled is true")
+	}
+	if len(c.GitHub.Repos) == 0 {
+		return fmt.Errorf("config: intake.github.repos is empty — an enabled listener with no repository refuses every delivery")
+	}
+	for i, repo := range c.GitHub.Repos {
+		if !strings.Contains(repo, "/") {
+			return fmt.Errorf("config: intake.github.repos[%d] %q is not owner/name", i, repo)
+		}
+	}
+	if len(c.GitHub.Actors) == 0 {
+		return fmt.Errorf("config: intake.github.actors is empty — an enabled listener with no allowed actor refuses every delivery")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.GitHub.Priority)) {
+	case "", "high", "normal", "low":
+	default:
+		return fmt.Errorf("config: intake.github.priority %q is invalid (want high, normal, or low)", c.GitHub.Priority)
+	}
+	return nil
 }
 
 // HooksConfig binds commands to task lifecycle edges.
@@ -1232,6 +1315,19 @@ type ModelConfig struct {
 	APIType  string `yaml:"api_type"`           // "anthropic" | "openai" | "responses" | "google" (default anthropic)
 	BaseURL  string `yaml:"base_url"`           // e.g. https://api.deepseek.com/anthropic
 	APIKey   string `yaml:"api_key"`            // secret; prefer env OPENPANDA_MODEL_API_KEY
+	// KeyEnv names an environment variable to read this row's key from at call
+	// time instead of storing it here. It exists because a registry row is a
+	// copy: importing a model from another tool's config would otherwise copy
+	// that tool's secret into config.yaml, which is exactly what the comment
+	// above tells people not to do. APIKey still wins when both are set, so an
+	// explicit key on the row keeps working.
+	KeyEnv string `yaml:"key_env,omitempty"`
+	// KeyScheme selects the header this row's credential travels in. "" (or
+	// "api_key") keeps the dialect default — Bearer for OpenAI, x-api-key for
+	// Anthropic. "bearer" always sends `Authorization: Bearer`, which is what
+	// an OAuth-style token (Claude Code's ANTHROPIC_AUTH_TOKEN) expects; sent
+	// as x-api-key it would 401 on every call.
+	KeyScheme string `yaml:"key_scheme,omitempty"`
 	// Auth names an OAuth provider from internal/auth ("anthropic"): the
 	// client then authenticates with the stored subscription token instead
 	// of api_key, refreshing it transparently. Experimental — see
@@ -1527,6 +1623,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.SelfEvolution.Validate(); err != nil {
+		return err
+	}
+	if err := c.Intake.Validate(); err != nil {
 		return err
 	}
 	for i, entry := range c.Network.AllowCleartextFor {
@@ -1851,6 +1950,12 @@ func Default() *Config {
 			SuperviseRounds: DefaultSuperviseRoundsCf,
 			TaskTokenBudget: DefaultTaskTokenBudget,
 		},
+		// Loopback until the operator says otherwise: the signature check
+		// authenticates the body, not the port, and a listener bound wide is
+		// reachable by anything on the LAN.
+		Intake: IntakeConfig{
+			Listen: "127.0.0.1:7788",
+		},
 	}
 }
 
@@ -2166,6 +2271,12 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("OPENPANDA_SHARED_SECRET"); v != "" {
 		c.Network.SharedSecret = v
+	}
+	// The webhook secret is the one credential here that a third party
+	// (GitHub) also holds; passing it through the environment keeps it out of
+	// the config file that gets copied between machines.
+	if v := os.Getenv("OPENPANDA_INTAKE_SECRET"); v != "" {
+		c.Intake.GitHub.Secret = v
 	}
 	if v := os.Getenv("OPENPANDA_UDP_LISTEN"); v != "" {
 		c.Network.UDPListen = v

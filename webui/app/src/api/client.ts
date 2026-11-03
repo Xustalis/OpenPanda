@@ -1750,6 +1750,21 @@ export const api = {
     return request('POST', '/api/models/test', req)
   },
 
+  /** What this machine can already serve: the Codex / Claude Code / OpenCode
+   *  configs plus any inference server answering on loopback. Read-only — the
+   *  panel probes, it does not write. The scan runs the OpenCode CLI, so the
+   *  deadline is longer than a normal call's. */
+  discoverModels(): Promise<{ sources: DiscoverSource[] }> {
+    return request('GET', '/api/models/discover', undefined, { timeoutMs: 90_000 })
+  },
+
+  /** Register the ticked candidates in one write. Items carry a credential
+   *  *reference* (`env:NAME`, `codex:<provider>`), never a key: the server
+   *  resolves it, so a console session never sees a secret. */
+  importModels(items: ModelImportItem[]): Promise<{ added: number; aliases: string[]; skipped?: string[] }> {
+    return request('POST', '/api/models/import', { items })
+  },
+
   // ---- Plans (TUI /plans parity) ----
 
   plans(): Promise<PlanSummary[]> {
@@ -1934,6 +1949,66 @@ export interface ModelsResponse {
   active: ModelEntry
   models: ModelEntry[]
   providers: ProviderInfo[]
+}
+
+/** One model a collector found on this machine, shaped like a registry row.
+ *  `key_ref` names where the credential lives — an env var, the Codex config,
+ *  the Claude settings file — and never carries the secret itself. */
+export interface DiscoveredModel {
+  id: string
+  source: string
+  provider: string
+  provider_label?: string
+  model: string
+  label?: string
+  base_url: string
+  api_type: string
+  key_ref?: string
+  no_auth?: boolean
+  /** Subscription credential the row signs in with instead of a key — today
+   *  only "codex", whose token is the CLI's own ChatGPT login. */
+  auth?: string
+  context_window?: number
+  loaded?: boolean
+  /** Default tick: the CLI's configured model, a settings-file alias, a live
+   *  local server. A vendor's built-in catalogue is listed but unticked. */
+  suggested?: boolean
+  /** False for a model with no endpoint this build can dial — shown greyed. */
+  importable: boolean
+  note?: string
+  /** The endpoint answered for this model during the scan. Only loopback rows
+   *  are checked — a remote catalogue of forty rows is not worth a minute of
+   *  network — so false means "not checked", never "broken". */
+  verified?: boolean
+  /** The endpoint's own words when a loopback row failed to answer. */
+  check?: string
+  /** The credential is a literal from a config file that is not shaped like a
+   *  secret (a local proxy's "PROXY_MANAGED"). The row still sends it; the
+   *  console just must not present it as a key. */
+  placeholder?: boolean
+  /** Already in `models:`; importing again would only suffix an alias. */
+  existing?: boolean
+}
+
+export interface DiscoverSource {
+  id: string
+  label: string
+  /** ok | empty | missing | error */
+  status: string
+  detail?: string
+  candidates: DiscoveredModel[]
+}
+
+export interface ModelImportItem {
+  provider: string
+  model: string
+  base_url?: string
+  api_type?: string
+  key_ref?: string
+  no_auth?: boolean
+  auth?: string
+  context_window?: number
+  alias?: string
 }
 
 export interface AddModelRequest {

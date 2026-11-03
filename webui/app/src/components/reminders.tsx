@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { api, type Reminder } from '../api/client'
+import { ApiError, api, type Reminder } from '../api/client'
 import { formatDuration } from '../format/time'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { Icon } from './icons'
-import { toastError } from './toast'
+import { toast, toastError } from './toast'
 import { confirmDialog } from './confirm'
 import { layerAboveOwnsEscape } from './card-dismiss'
 
@@ -40,6 +40,12 @@ function isPending(r: Reminder): boolean {
   return r.fired_at === 0 || r.repeat_seconds > 0
 }
 
+/** Web Push is a property of this browser *and* of the node it talks to: with
+ *  `push.enabled: false` there is no VAPID key to subscribe with. `off` is the
+ *  node's answer, kept apart from a failed subscription (`error`) because the
+ *  footer says different things — one is configuration, the other a retry. */
+type PushState = 'checking' | 'idle' | 'on' | 'off' | 'unsupported' | 'denied' | 'error'
+
 export function ReminderBell() {
   useLocaleRerender()
   const [open, setOpen] = useState(false)
@@ -47,6 +53,7 @@ export function ReminderBell() {
   // Countdowns are painted from a clock, so they go stale while the card sits
   // open. A 30s beat re-renders them without re-fetching the list.
   const [now, setNow] = useState(() => Date.now())
+  const [push, setPush] = useState<PushState>('checking')
   const root = useRef<HTMLDivElement>(null)
   const change = useChangeSignal()
   const { data, error } = useAsync(() => api.reminders(), [], change + reload)
@@ -59,10 +66,87 @@ export function ReminderBell() {
     }
   }, [])
 
+  // The switch is a statement about *this* browser on *this* node, so it
+  // starts from what the two of them say rather than from an idle "enable it"
+  // button. The node is asked first: a 404 here means push is not configured,
+  // and offering a subscription that can never be stored would be a lie the
+  // first click exposes.
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.serviceWorker || !('PushManager' in window)) {
+      setPush('unsupported')
+      return
+    }
+    if (typeof Notification === 'undefined' || !window.isSecureContext) {
+      // Push needs a secure context, and so does the permission prompt.
+      setPush('unsupported')
+      return
+    }
+    let alive = true
+    api
+      .pushKey()
+      .then(() => navigator.serviceWorker.ready)
+      .then((reg) => reg.pushManager.getSubscription())
+      .then((sub) => {
+        if (alive) setPush(sub ? 'on' : 'idle')
+      })
+      .catch((e: unknown) => {
+        if (!alive) return
+        // A missing route is the node saying `push.enabled: false`; anything
+        // else is a transient read, and the footer should still offer the
+        // switch rather than claim the node is misconfigured.
+        setPush(e instanceof ApiError && e.status === 404 ? 'off' : 'idle')
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  // The console can tell the user a reminder fired even without a push
+  // subscription: the change feed already refetches the list when a row
+  // fires, so diff each snapshot against the last one and speak up here. The
+  // first snapshot only sets the baseline — reminders that fired before the
+  // tab opened are history, not news. A recurring row bumps `fired_at` on
+  // every occurrence, so it announces each one.
+  const seenFired = useRef<Map<number, number> | null>(null)
+  useEffect(() => {
+    if (!data) return
+    const seen = seenFired.current
+    if (seen) {
+      for (const r of data) {
+        if (r.fired_at <= (seen.get(r.id) ?? 0)) continue
+        toast(t('reminders.toastFired', { message: r.message }), 'success')
+        // A hidden tab shows no toast, and with Web Push off there is no
+        // service-worker notification either; fall back to the page's own
+        // Notification so a backgrounded console still alerts.
+        if (
+          push !== 'on' &&
+          typeof Notification !== 'undefined' &&
+          Notification.permission === 'granted' &&
+          document.hidden
+        ) {
+          try {
+            new Notification(t('reminders.title'), { body: r.message, tag: `reminder-${r.id}` })
+          } catch {
+            /* some platforms refuse page-level notifications; the toast stands */
+          }
+        }
+      }
+    }
+    const next = new Map<number, number>()
+    for (const r of data) if (r.fired_at > 0) next.set(r.id, r.fired_at)
+    seenFired.current = next
+  }, [data, push])
+
   useEffect(() => {
     if (!open) return
     setNow(Date.now())
     const id = setInterval(() => setNow(Date.now()), 30_000)
+    // Typing into the composer is what opening the card is for; on a phone
+    // the focus would summon the keyboard and cover the queue, so only a
+    // pointer-sized viewport gets the cursor for free.
+    if (window.matchMedia('(min-width: 721px)').matches) {
+      requestAnimationFrame(() => root.current?.querySelector<HTMLInputElement>('.reminder-message')?.focus())
+    }
     return () => clearInterval(id)
   }, [open])
 
@@ -116,7 +200,10 @@ export function ReminderBell() {
             reminders={data}
             error={error}
             now={now}
+            push={push}
+            onPush={setPush}
             onRetry={() => setReload((v) => v + 1)}
+            onAdded={() => setReload((v) => v + 1)}
             onClose={() => setOpen(false)}
           />
         </div>
@@ -125,71 +212,63 @@ export function ReminderBell() {
   )
 }
 
+/** How the composer names a due time: a wait, or a wall clock. Only one form
+ *  is on screen at a time — two fields joined by "or" read as two questions
+ *  that both want an answer. */
+type WhenMode = 'relative' | 'absolute'
+
 /** The card's body: compose, then the pending queue, then what just fired. */
 function RemindersCard(props: {
   reminders: Reminder[] | null
   error: string | null
   now: number
+  push: PushState
+  onPush(s: PushState): void
   onRetry(): void
+  onAdded(): void
   onClose(): void
 }) {
   const [message, setMessage] = useState('')
-  const [minutes, setMinutes] = useState('')
+  const [mode, setMode] = useState<WhenMode>('relative')
+  const [minutes, setMinutes] = useState('10')
   const [dueAt, setDueAt] = useState('')
   const [everyMin, setEveryMin] = useState('')
   const [adding, setAdding] = useState(false)
-  const [notify, setNotify] = useState<'checking' | 'idle' | 'on' | 'unsupported' | 'denied' | 'error'>('checking')
 
-  // The switch is a statement about *this* browser, so it starts from what the
-  // browser says rather than from an idle "enable it" button: a live push
-  // subscription means the line is already on, and re-offering it would be a
-  // lie the first click would expose. While that check is in flight the
-  // footer draws nothing — an "enable" button that swaps for "already on"
-  // a beat later reads as a flicker, not as two states.
-  useEffect(() => {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      setNotify('unsupported')
-      return
+  // Resolve the form into a date now, so the preview and the submit path read
+  // the same value. An absolute time in the past is refused rather than
+  // stored — the scanner would fire it on the next tick, which reads as the
+  // form ignoring the input.
+  let due: Date | null = null
+  if (mode === 'absolute') {
+    if (dueAt) {
+      const at = new Date(dueAt)
+      if (!Number.isNaN(at.getTime())) due = at
     }
-    let alive = true
-    navigator.serviceWorker.ready
-      .then((reg) => reg.pushManager.getSubscription())
-      .then((sub) => {
-        if (alive) setNotify(sub ? 'on' : 'idle')
-      })
-      .catch(() => {
-        if (alive) setNotify('idle')
-      })
-    return () => {
-      alive = false
-    }
-  }, [])
+  } else {
+    const n = Number(minutes)
+    if (n > 0) due = new Date(Date.now() + n * 60_000)
+  }
+  const past = mode === 'absolute' && due !== null && due.getTime() <= Date.now()
+  const canAdd = !adding && message.trim().length > 0 && due !== null && !past
+  const repeat = Number(everyMin)
+  const repeatSeconds = repeat > 0 ? Math.round(repeat * 60) : undefined
 
   async function add(e: Event) {
     e.preventDefault()
-    if (adding || !message.trim()) return
+    if (!canAdd || !due) return
     setAdding(true)
     try {
-      // repeat_seconds rides along whichever due-time form was used.
-      const rep = Number(everyMin)
-      const repeat_seconds = rep > 0 ? Math.round(rep * 60) : undefined
-      if (dueAt) {
-        // datetime-local has no timezone; interpret it in the browser's zone.
-        await api.createReminder({
-          message: message.trim(),
-          due_at: new Date(dueAt).toISOString(),
-          repeat_seconds,
-        })
-      } else {
-        const n = Number(minutes)
-        await api.createReminder({
-          message: message.trim(),
-          after_minutes: n > 0 ? n : 1,
-          repeat_seconds,
-        })
-      }
+      await api.createReminder({
+        message: message.trim(),
+        ...(mode === 'absolute' ? { due_at: due.toISOString() } : { after_minutes: Number(minutes) }),
+        repeat_seconds: repeatSeconds,
+      })
+      toast(t('reminders.added', { when: stamp(due) }), 'success')
+      // The change feed usually lands first, but a dropped SSE link must not
+      // leave the new row invisible until the card is reopened.
+      props.onAdded()
       setMessage('')
-      setMinutes('')
       setDueAt('')
       setEveryMin('')
     } catch (err) {
@@ -217,26 +296,23 @@ function RemindersCard(props: {
   /** Ask for notification permission and subscribe this browser to the node's
    *  Web Push service so reminders fire as OS notifications. */
   async function enableNotifications() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      setNotify('unsupported')
-      return
-    }
     try {
+      // The key comes first: without it there is nothing to subscribe to.
+      const { key } = await api.pushKey()
       const perm = await Notification.requestPermission()
       if (perm !== 'granted') {
-        setNotify('denied')
+        props.onPush('denied')
         return
       }
-      const { key } = await api.pushKey()
       const reg = await navigator.serviceWorker.ready
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToBytes(key),
       })
       await api.pushSubscribe(sub.toJSON())
-      setNotify('on')
+      props.onPush('on')
     } catch (e) {
-      setNotify('error')
+      props.onPush(e instanceof ApiError && e.status === 404 ? 'off' : 'error')
       console.warn('push subscribe', e)
     }
   }
@@ -268,39 +344,74 @@ function RemindersCard(props: {
           onInput={(e) => setMessage((e.target as HTMLInputElement).value)}
           required
         />
-        <div class="reminder-line">
-          <input
-            class="input reminder-minutes"
-            type="number"
-            min={1}
-            step={1}
-            placeholder={t('reminders.minutes')}
-            title={t('reminders.afterMinutes')}
-            value={minutes}
-            onInput={(e) => setMinutes((e.target as HTMLInputElement).value)}
-            disabled={!!dueAt}
-          />
-          <span class="dim reminder-or">{t('reminders.or')}</span>
+        <div class="segmented reminder-mode" role="radiogroup" aria-label={t('reminders.whenLabel')}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === 'relative'}
+            class={`seg${mode === 'relative' ? ' on' : ''}`}
+            onClick={() => setMode('relative')}
+          >
+            {t('reminders.modeRelative')}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === 'absolute'}
+            class={`seg${mode === 'absolute' ? ' on' : ''}`}
+            onClick={() => setMode('absolute')}
+          >
+            {t('reminders.modeAbsolute')}
+          </button>
+        </div>
+        {mode === 'relative' ? (
+          <div class="reminder-line">
+            <input
+              class="input reminder-minutes"
+              type="number"
+              min={1}
+              step={1}
+              inputMode="numeric"
+              placeholder="10"
+              title={t('reminders.afterMinutes')}
+              value={minutes}
+              onInput={(e) => setMinutes((e.target as HTMLInputElement).value)}
+            />
+            <span class="reminder-suffix">{t('reminders.minutes')}</span>
+          </div>
+        ) : (
           <input
             class="input reminder-at"
             type="datetime-local"
+            min={localStamp(new Date(Date.now() + 60_000))}
+            aria-label={t('reminders.dueAt')}
             title={t('reminders.dueAt')}
             value={dueAt}
             onInput={(e) => setDueAt((e.target as HTMLInputElement).value)}
           />
-        </div>
-        <div class="reminder-line">
-          <input
-            class="input reminder-every"
-            type="number"
-            min={1}
-            step={1}
-            placeholder={t('reminders.everyMin')}
-            title={t('reminders.everyMinTitle')}
-            value={everyMin}
-            onInput={(e) => setEveryMin((e.target as HTMLInputElement).value)}
-          />
-          <button class="btn primary reminder-add" type="submit" disabled={adding || !message.trim()}>
+        )}
+        <input
+          class="input reminder-every"
+          type="number"
+          min={1}
+          step={1}
+          inputMode="numeric"
+          placeholder={t('reminders.everyMin')}
+          title={t('reminders.everyMinTitle')}
+          value={everyMin}
+          onInput={(e) => setEveryMin((e.target as HTMLInputElement).value)}
+        />
+        <div class="reminder-submit-line">
+          {past ? (
+            <span class="reminder-preview gate-error">{t('reminders.pastTime')}</span>
+          ) : due ? (
+            <span class="reminder-preview dim">
+              {stamp(due)} · {t('reminders.dueIn', { d: formatDuration(due.getTime() - Date.now()) })}
+            </span>
+          ) : (
+            <span class="reminder-preview dim" />
+          )}
+          <button class="btn primary reminder-add" type="submit" disabled={!canAdd}>
             {t('reminders.add')}
           </button>
         </div>
@@ -336,15 +447,16 @@ function RemindersCard(props: {
       </div>
 
       <div class="reminder-pop-foot">
-        {notify === 'idle' && (
+        {props.push === 'idle' && (
           <button type="button" class="link-btn reminder-notify" onClick={enableNotifications}>
             {t('reminders.notify')}
           </button>
         )}
-        {notify === 'on' && <span class="dim">{t('reminders.notifyOn')}</span>}
-        {notify === 'unsupported' && <span class="dim">{t('reminders.notifyUnsupported')}</span>}
-        {notify === 'denied' && <span class="gate-error">{t('reminders.notifyDenied')}</span>}
-        {notify === 'error' && <span class="gate-error">{t('reminders.notifyError')}</span>}
+        {props.push === 'on' && <span class="dim">{t('reminders.notifyOn')}</span>}
+        {props.push === 'off' && <span class="dim">{t('reminders.pushOff')}</span>}
+        {props.push === 'unsupported' && <span class="dim">{t('reminders.notifyUnsupported')}</span>}
+        {props.push === 'denied' && <span class="gate-error">{t('reminders.notifyDenied')}</span>}
+        {props.push === 'error' && <span class="gate-error">{t('reminders.notifyError')}</span>}
       </div>
     </>
   )
@@ -357,7 +469,7 @@ function ReminderRow({ r, now, onDelete }: { r: Reminder; now: number; onDelete(
     ? left <= 0
       ? t('reminders.overdue')
       : t('reminders.dueIn', { d: formatDuration(left) })
-    : new Date(r.fired_at * 1000).toLocaleString()
+    : stamp(new Date(r.fired_at * 1000))
   const repeat =
     r.repeat_seconds > 0
       ? ' · ' + t('reminders.repeats', { d: formatDuration(r.repeat_seconds * 1000) })
@@ -367,7 +479,7 @@ function ReminderRow({ r, now, onDelete }: { r: Reminder; now: number; onDelete(
       <div class="reminder-info">
         <span class="reminder-msg">{r.message}</span>
         <span class="reminder-meta dim">
-          {pending ? new Date(r.due_at * 1000).toLocaleString() : t('reminders.firedAt') + ' ' + when}
+          {pending ? stamp(new Date(r.due_at * 1000)) : t('reminders.firedAt') + ' ' + when}
           {repeat} · {r.source}
         </span>
       </div>
@@ -387,6 +499,23 @@ function ReminderRow({ r, now, onDelete }: { r: Reminder; now: number; onDelete(
       </div>
     </div>
   )
+}
+
+/** A wall-clock stamp without seconds: reminders fire on the minute, and the
+ *  seconds field only competes with the message for width. */
+function stamp(d: Date): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(d)
+  } catch {
+    return d.toLocaleString()
+  }
+}
+
+/** `datetime-local` speaks the browser's wall clock, not ISO; the `min`
+ *  attribute has to be the same dialect or Chrome ignores it. */
+function localStamp(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 /** VAPID keys arrive URL-base64 encoded; PushManager wants raw bytes. */

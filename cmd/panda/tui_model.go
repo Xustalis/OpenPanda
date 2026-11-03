@@ -23,6 +23,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -242,6 +243,10 @@ type tuiModel struct {
 	wizardHeaders   string // extra request headers as a JSON object, raw text
 	wizardAlias     string // display name in the register
 	wizardEditAlias string // alias being edited ("" = adding a new entry)
+	// wizardEditOrigin is the row the editor opened on. It is the row a save
+	// replaces — by identity, not by name — because a config can hold two
+	// accounts under one name and "the row called ds" would be a coin flip.
+	wizardEditOrigin config.ModelConfig
 
 	form      []mfield // the single-screen editor's rows
 	formFocus int      // focused row
@@ -263,7 +268,10 @@ type tuiModel struct {
 	panelTestErr       string
 	panelTestDur       time.Duration
 	confirmDeleteModel bool
-	pendingDeleteModel string
+	// pendingDeleteModel is the row awaiting confirmation — the row itself,
+	// not its name: two accounts of one vendor share every field a name is
+	// derived from, so the name cannot say which one to drop.
+	pendingDeleteModel config.ModelConfig
 
 	// lastInterrupt timestamps the previous Esc/Ctrl-C of a turn.
 	lastInterrupt time.Time

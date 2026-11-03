@@ -29,6 +29,60 @@ import (
 
 // ---- Session CRUD ----
 
+// sessionWorktrees resolves the repository a session's worktree belongs to.
+// The recorded worktree path is authoritative; a session created before this
+// fix (or one whose project changed) falls back to its project's work dir.
+// The handler-level Worktrees remains the last resort for a node whose
+// storage.work_path is itself a repository.
+func (h *handler) sessionWorktrees(sess *sessions.Session) *sessions.Worktrees {
+	if sess == nil {
+		return nil
+	}
+	if sess.Worktree != "" {
+		// worktreeDir layout: <repo>/.openpanda/worktrees/<id>.
+		repo := filepath.Dir(filepath.Dir(filepath.Dir(sess.Worktree)))
+		if wt, err := sessions.OpenWorktrees(repo); err == nil {
+			return wt
+		}
+	}
+	// An older session has no recorded worktree. Only resolve a repository
+	// when this id's worktree directory actually exists there; otherwise the
+	// handler answers "no git worktree" instead of guessing.
+	if sess.Project != "" && h.projectStore != nil {
+		if p, err := h.projectStore.Get(sess.Project); err == nil {
+			if dir := p.UsableWorkDir(); dir != "" {
+				if wt, err := sessions.OpenWorktrees(dir); err == nil {
+					if _, statErr := os.Stat(wt.Path(sess.ID)); statErr == nil {
+						return wt
+					}
+				}
+			}
+		}
+	}
+	if h.worktrees != nil {
+		if _, statErr := os.Stat(h.worktrees.Path(sess.ID)); statErr == nil {
+			return h.worktrees
+		}
+	}
+	return nil
+}
+
+// newSessionWorktrees picks the base for a session about to be created: the
+// project's own work dir when it is a repository, otherwise the handler's
+// configured fallback.
+func (h *handler) newSessionWorktrees(project string) *sessions.Worktrees {
+	if project != "" && h.projectStore != nil {
+		if p, err := h.projectStore.Get(project); err == nil {
+			if dir := p.UsableWorkDir(); dir != "" {
+				if wt, err := sessions.OpenWorktrees(dir); err == nil {
+					return wt
+				}
+			}
+		}
+	}
+	return h.worktrees
+}
+
 // cleanTeam trims, dedupes and validates a roster off the wire. The rule
 // (including the 16-agent ceiling) lives in sessions.CleanTeam so the console,
 // the REPL/TUI /team command and the bare conversation's roster file all
@@ -96,8 +150,8 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 			sess, _ = h.sessions.Get(sess.ID)
 		}
 	}
-	if h.worktrees != nil {
-		if path, err := h.worktrees.Ensure(r.Context(), sess.ID); err == nil {
+	if wt := h.newSessionWorktrees(project); wt != nil {
+		if path, err := wt.Ensure(r.Context(), sess.ID); err == nil {
 			_ = h.sessions.SetWorktree(sess.ID, path, sessions.Branch(sess.ID))
 			sess, _ = h.sessions.Get(sess.ID)
 		}
@@ -129,12 +183,12 @@ func (h *handler) forkSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if h.worktrees != nil {
+	if wt := h.sessionWorktrees(parent); wt != nil {
 		base := "HEAD"
 		if parent.Branch != "" {
 			base = parent.Branch
 		}
-		if path, err := h.worktrees.EnsureFrom(r.Context(), child.ID, base); err == nil {
+		if path, err := wt.EnsureFrom(r.Context(), child.ID, base); err == nil {
 			_ = h.sessions.SetWorktree(child.ID, path, sessions.Branch(child.ID))
 			child, _ = h.sessions.Get(child.ID)
 		}
@@ -160,8 +214,10 @@ func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	// turn left to open, so release them with it instead of leaking a map entry
 	// per deleted thread.
 	h.dropSteer(id)
-	if h.worktrees != nil {
-		_ = h.worktrees.Remove(r.Context(), id)
+	if sess, gerr := h.sessions.Get(id); gerr == nil {
+		if wt := h.sessionWorktrees(sess); wt != nil {
+			_ = wt.Remove(r.Context(), id)
+		}
 	}
 	h.removeSessionUploads(id)
 	if err := h.sessions.Delete(id); err != nil {
@@ -286,8 +342,10 @@ func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seen[id] = true
-		if h.worktrees != nil {
-			_ = h.worktrees.Remove(r.Context(), id)
+		if sess, gerr := h.sessions.Get(id); gerr == nil {
+			if wt := h.sessionWorktrees(sess); wt != nil {
+				_ = wt.Remove(r.Context(), id)
+			}
 		}
 		h.removeSessionUploads(id)
 		if err := h.sessions.Delete(id); err != nil {
@@ -310,12 +368,22 @@ func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
 // so the web can show "what did this session do" before deciding to merge.
 func (h *handler) sessionDiff(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	changes, err := h.worktrees.Status(r.Context(), id)
+	sess, err := h.sessions.Get(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	wt := h.sessionWorktrees(sess)
+	if wt == nil {
+		writeErr(w, http.StatusBadRequest, errors.New("session has no git worktree"))
+		return
+	}
+	changes, err := wt.Status(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	patch, err := h.worktrees.Diff(r.Context(), id)
+	patch, err := wt.Diff(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -325,7 +393,7 @@ func (h *handler) sessionDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	// Stat is best-effort alongside the patch it summarizes — a stat failure
 	// should not blind the whole diff view.
-	stat, _ := h.worktrees.Stat(r.Context(), id)
+	stat, _ := wt.Stat(r.Context(), id)
 	writeJSON(w, map[string]any{
 		"id":      id,
 		"branch":  sessions.Branch(id),
@@ -341,7 +409,17 @@ func (h *handler) sessionDiff(w http.ResponseWriter, r *http.Request) {
 // session with no recorded merge answers 400.
 func (h *handler) sessionRevert(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	subject, err := h.worktrees.Revert(r.Context(), id)
+	sess, serr := h.sessions.Get(id)
+	if serr != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	wt := h.sessionWorktrees(sess)
+	if wt == nil {
+		writeErr(w, http.StatusBadRequest, errors.New("session has no git worktree"))
+		return
+	}
+	subject, err := wt.Revert(r.Context(), id)
 	if err != nil {
 		switch {
 		case errors.Is(err, sessions.ErrRevertDirty):
@@ -368,11 +446,21 @@ type sessionMergeRequest struct {
 // current HEAD. Conflicts abort cleanly and surface as 409.
 func (h *handler) sessionMerge(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	sess, serr := h.sessions.Get(id)
+	if serr != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
+	wt := h.sessionWorktrees(sess)
+	if wt == nil {
+		writeErr(w, http.StatusBadRequest, errors.New("session has no git worktree"))
+		return
+	}
 	var req sessionMergeRequest
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req) // empty body = default message
 	}
-	subject, err := h.worktrees.Merge(r.Context(), id, req.Message)
+	subject, err := wt.Merge(r.Context(), id, req.Message)
 	if err != nil {
 		if errors.Is(err, sessions.ErrMergeConflict) {
 			writeErr(w, http.StatusConflict, err)
