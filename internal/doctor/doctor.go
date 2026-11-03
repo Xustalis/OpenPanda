@@ -109,7 +109,15 @@ func Run(configPath string) []Check {
 				add(c)
 			}
 		} else {
-			add(fail("doctor.db.no", "path", cfg.Storage.DBPath))
+			// A missing database on a writable path is the state every fresh
+			// `panda init` leaves behind: the daemon creates it on first run.
+			// Calling that a failed self-check made a healthy install look
+			// broken; an unwritable path is still a real failure.
+			if databaseDirWritable(cfg.Storage.DBPath) {
+				add(pass("doctor.db.uninitialized", "path", cfg.Storage.DBPath))
+			} else {
+				add(fail("doctor.db.no", "path", cfg.Storage.DBPath))
+			}
 		}
 		p, ok := providers.Lookup(cfg.Model.Provider)
 		noAuth := cfg.Model.NoAuth || (ok && p.NoAuth)
@@ -417,6 +425,24 @@ func checkDBGrowth(cfg *config.Config) Check {
 	return pass("doctor.db.growth.ok",
 		"tasks", fmt.Sprintf("%d", tasks), "settled", fmt.Sprintf("%d", settled),
 		"audit", fmt.Sprintf("%d", audits))
+}
+
+// databaseDirWritable reports whether the DB's parent directory exists and
+// accepts a file. A missing DB there is "not initialized yet", not a fault.
+func databaseDirWritable(dbPath string) bool {
+	parent := filepath.Dir(dbPath)
+	st, err := os.Stat(parent)
+	if err != nil || !st.IsDir() {
+		return false
+	}
+	f, err := os.CreateTemp(parent, ".panda-doctor-check-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
 }
 
 // escapeURIPath keeps a database path inside a file: URI intact — the same

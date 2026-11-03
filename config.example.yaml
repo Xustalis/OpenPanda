@@ -338,6 +338,18 @@ log:
 #                               # loopback/LAN (a local model) are exempt.
 #   max_retries: 5              # transport retries on 429/5xx, past the first
 #                               # attempt. Negative disables them.
+#
+# A ChatGPT plan (Codex CLI login) is an external credential: `codex login`
+# stores it in ~/.codex/auth.json, Panda reads it per request and never copies
+# it. The plan token only opens Codex's own backend — api.openai.com rejects
+# it — so the row names that backend and the Responses dialect:
+#
+# model:
+#   auth: "codex"
+#   base_url: "https://chatgpt.com/backend-api/codex"
+#   api_type: "responses"
+#   model: "gpt-6.1-sol"        # a model the plan serves
+#   # api_key stays empty: the credential is the CLI's login.
 
 # Multi-model registry: named models the REPL switches between with /model.
 # Each entry is a full model config; name is the alias `/model <name>` uses.
@@ -627,6 +639,46 @@ push:
 #                                 # onto it; a conflict marks the set and the
 #                                 # node stays on the release binary.
 #
+# Inbound events: a webhook listener that turns a source event into queued work.
+# This is the inbound half of the hooks loop below — an external system asks for
+# work instead of you typing into a terminal. Off by default, and every delivery
+# has to pass a deterministic gate (repository, actor, addressed handle) before
+# it becomes a task: nothing calls a model to decide whether to accept, so a
+# stranger cannot spend this node's tokens by mentioning it.
+#
+# GitHub setup: repository Settings -> Webhooks -> Add webhook
+#   Payload URL    http://<this host>:7788/hooks/github   (put a TLS reverse
+#                                                        proxy in front before
+#                                                        exposing the port)
+#   Content type   application/json
+#   Secret         the same value as github.secret / OPENPANDA_INTAKE_SECRET
+#   Events         Issues, Issue comments, Pull request review comments
+#
+# Flow: webhook -> intake gate -> queue -> agent -> hooks (reply)
+# A request must address `mention` from an actor in `actors`, on a repository in
+# `repos`. Everything else is answered 200 and ignored, with a reason code
+# (not_addressed, actor_not_allowed, repo_not_allowed, self_actor, duplicate)
+# in the log and the response body.
+#
+# Reply-back is a hook, not a built-in. Bind task_done / task_failed and use the
+# source placeholders, e.g.
+#   - event: task_done
+#     command: 'gh issue comment {source_number} --repo {source_repo} --body "{state}: {title}"'
+# The source_* values are empty for locally created work, so a node-wide reply
+# hook should guard itself: '[ -n "${PANDA_HOOK_SOURCE_REPO}" ] && gh ...'
+# intake:
+#   enabled: false
+#   listen: "127.0.0.1:7788"       # loopback; the body is HMAC-checked, the port is not TLS
+#   github:
+#     secret: ""                   # REQUIRED when enabled; prefer OPENPANDA_INTAKE_SECRET
+#     repos: ["acme/widgets"]      # REQUIRED; empty refuses every delivery
+#     actors: ["alice"]            # REQUIRED; logins allowed to open work
+#     mention: "@panda-bot"        # required addressing; empty disables the check
+#     self: "panda-bot"            # the node's own login; its messages are dropped
+#     require_mention: true        # false only for a source that pre-addresses
+#     project: ""                  # OpenPanda project the task joins; empty = work path
+#     priority: "normal"           # high | normal | low
+#
 # Task lifecycle hooks: your own commands, run at task edges. This is the one
 # place the node runs a command nobody typed into a chat, so it is opt-in and
 # fenced: the child gets a whitelisted environment with no model credentials, a
@@ -634,7 +686,9 @@ push:
 # says otherwise, and every run lands an audit row. Events: task_submitted,
 # task_started, task_done, task_failed, task_review.
 #
-# Placeholders: {task_id} {title} {state} {project} {owner} {event}. Each expands
+# Placeholders: {task_id} {title} {state} {project} {owner} {event}, plus
+# {source} {source_repo} {source_number} {source_url} {source_thread} for a task
+# an inbound webhook created (empty otherwise). Each expands
 # to a reference to the matching PANDA_HOOK_* variable ({title} →
 # "${PANDA_HOOK_TITLE}"), so a task title — which is model output — is expanded
 # by the shell as a value and never parsed by it as syntax.

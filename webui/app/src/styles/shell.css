@@ -304,6 +304,11 @@ a.sidebar-node:hover {
   overflow-y: auto;
   padding: var(--sp-6) var(--sp-8);
 }
+/* Route chunks load on first visit; hold the pane's height so the shell does
+   not jump while the view arrives. */
+.view-loading {
+  min-height: 40vh;
+}
 /* One quiet entrance for every view swap: the pane lands instead of
    snapping. Reduced-motion users get it for free via the global clamp. */
 .main > section {
@@ -314,13 +319,29 @@ a.sidebar-node:hover {
   to { opacity: 1; transform: none; }
 }
 .main:has(> .chat) {
-  padding: 0;
+  /* The thread sits on a canvas, not on the page: the pane and the dock are
+     two cards with a gutter between them, and that gutter needs a colour to
+     read as a gap rather than as a seam. */
+  padding: 10px;
+  background: var(--bg-chrome);
   display: flex;
   flex-direction: column;
+  /* The dock decides between "second column" and "layer over the pane" from
+     the width it actually has, not from the window's. Those differ by the whole
+     navigation rail (~280px): a 1024px window leaves 720px here, where two
+     cards still fit, while a 780px window leaves 480px, where they do not. A
+     viewport media query cannot tell those apart and got both wrong. */
+  container-type: inline-size;
+  container-name: reading;
 }
 .main:has(> .chat) > .banner,
 .main:has(> .chat) > .onboard-banner {
   margin: var(--sp-3) var(--sp-4) 0;
+}
+/* The banner is the third card on this canvas: same corner as the two below
+   it, or the page reads as a rounded layout capped by a rectangle. */
+.main:has(> .chat) > .onboarding-banner {
+  border-radius: var(--radius-xl);
 }
 
 /* Narrow layout: a compact top bar opens the rail as a disclosure panel.
@@ -455,7 +476,7 @@ a.sidebar-node:hover {
   background: var(--bg-raised);
   box-shadow: var(--shadow-lg);
 }
-.gate-card .ascii-mark {
+.gate-card .panda-lockup {
   margin-bottom: var(--sp-2);
 }
 .gate-title {
@@ -483,22 +504,34 @@ a.sidebar-node:hover {
   margin: 0;
 }
 
-/* ASCII/brand marks. */
-.ascii-mark {
+/* Brand lockups. Both cuts stay in the DOM and the theme attribute picks one,
+   so switching appearance swaps the image with no re-render. `auto` removes
+   data-theme, which is why the media query targets the attribute's absence
+   rather than "dark". */
+.panda-lockup {
+  display: inline-block;
+  line-height: 0;
+  max-width: 100%;
+}
+.panda-lockup img {
+  width: 100%;
+  height: auto;
+}
+.panda-lockup-night {
+  display: none;
+}
+[data-theme='dark'] .panda-lockup-paper {
+  display: none;
+}
+[data-theme='dark'] .panda-lockup-night {
   display: inline-block;
 }
-.ascii-mark pre {
-  margin: 0;
-  font-family: var(--font-mono);
-  line-height: 1.15;
-  color: var(--accent);
-}
-.ascii-mark-lo pre {
-  color: var(--text-tertiary);
-}
-@media (max-width: 420px) {
-  .ascii-mark pre {
-    font-size: 8px;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .panda-lockup-paper {
+    display: none;
+  }
+  :root:not([data-theme='light']) .panda-lockup-night {
+    display: inline-block;
   }
 }
 

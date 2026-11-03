@@ -574,9 +574,8 @@ func runProjectRemove(args []string) {
 		if list, err := sessStore.ListByProject(name); err == nil && len(list) > 0 {
 			if *deleteSessions {
 				sessionsDeleted = len(list)
-				wt := openWorktreesBestEffort(cfg.Storage.WorkPath)
 				for _, s := range list {
-					if wt != nil {
+					if wt := openWorktreesForSession(cfg, s); wt != nil {
 						_ = wt.Remove(context.Background(), s.ID)
 					}
 					_ = sessStore.Delete(s.ID)
@@ -618,6 +617,26 @@ func runProjectRemove(args []string) {
 	if sessionsKept > 0 {
 		fmt.Println(pal().Muted("  " + i18n.Tf(loc, "cli.project.sessionsKept", "n", fmt.Sprint(sessionsKept))))
 	}
+}
+
+// projectWorkDir returns the project's usable work directory, or "" when the
+// project is unknown or its directory no longer validates. Session worktrees
+// use this as their base: a thread attached to a project belongs in that
+// project's repository, not in the node's storage.work_path.
+func projectWorkDir(cfg *config.Config, name string) string {
+	if name == "" {
+		return ""
+	}
+	db, _, err := panelStore(cfg)
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+	p, err := projects.NewStore(db).Get(name)
+	if err != nil {
+		return ""
+	}
+	return p.UsableWorkDir()
 }
 
 // activeProject reports the project this machine is currently in, and its work

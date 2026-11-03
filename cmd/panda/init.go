@@ -48,6 +48,12 @@ func runInit(args []string) {
 
 	loc := i18n.Detect()
 	target := resolveInitConfigPath(*configPath)
+	// An explicit --config is a self-contained instance request. The default
+	// storage paths point at the user data dir, so two such configs silently
+	// shared one database (and one node identity). Colocate the data with the
+	// config instead; the --force merge below still lets a preserved custom
+	// storage section win.
+	explicitConfig := strings.TrimSpace(*configPath) != ""
 
 	// --force snapshots the old file before anything else runs: whatever the
 	// rest of init does, the user's previous settings survive on disk.
@@ -74,6 +80,10 @@ func runInit(args []string) {
 	if detectVM() {
 		def.Node.Kind = config.NodeKindVM
 		def.Node.Identity = autoVMIdentity()
+	}
+	if explicitConfig {
+		rebaseInitStorage(def, filepath.Dir(target))
+		fmt.Println(i18n.Tf(loc, "init.data.local", "path", filepath.Dir(target)))
 	}
 	fmt.Println(i18n.Tf(loc, "init.node.summary", "name", def.Node.Name,
 		"class", def.Node.ResourceClass, "kind", def.Node.Kind))
@@ -181,6 +191,23 @@ func runInit(args []string) {
 	fmt.Println(i18n.Tf(loc, "init.card.written", "path", cardOut))
 
 	fmt.Println(i18n.T(loc, "init.next"))
+}
+
+// rebaseInitStorage points every default storage path at dir, so an explicit
+// --config produces a self-contained instance instead of a second config file
+// sharing the user data directory's database and node identity. A --force
+// merge applies the old file afterwards; a storage section the user spelled
+// out there still wins.
+func rebaseInitStorage(def *config.Config, dir string) {
+	def.Storage.DBPath = filepath.Join(dir, "openpanda.db")
+	def.Storage.ContextPath = filepath.Join(dir, "data", "context")
+	def.Storage.MemoryPath = filepath.Join(dir, "memory")
+	def.Storage.ProjectsPath = filepath.Join(dir, "projects")
+	def.Storage.SkillsPath = filepath.Join(dir, "skills")
+	def.Storage.WorkPath = dir
+	if def.Storage.ArtifactPath != "" {
+		def.Storage.ArtifactPath = filepath.Join(dir, "artifacts")
+	}
 }
 
 // mergePreservedConfig folds a previous config file into the freshly-built

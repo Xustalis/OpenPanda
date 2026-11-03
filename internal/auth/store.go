@@ -22,6 +22,10 @@ type Token struct {
 	RefreshToken string    `json:"refresh_token,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at,omitempty"`
 	Scope        string    `json:"scope,omitempty"`
+	// AccountID is the provider-side account a subscription token belongs to.
+	// The Codex ChatGPT backend routes requests by it (chatgpt-account-id);
+	// other providers leave it empty.
+	AccountID string `json:"account_id,omitempty"`
 }
 
 // expirySkew refreshes early so an in-flight request never races the
@@ -152,36 +156,55 @@ func (s *Store) Tokens() (map[string]Token, error) {
 // refreshing an expired one when a refresh token exists. ErrNoToken means
 // the user has not logged in.
 func (s *Store) AccessToken(ctx context.Context, provider string) (string, error) {
+	tok, err := s.Token(ctx, provider)
+	if err != nil {
+		return "", err
+	}
+	return tok.AccessToken, nil
+}
+
+// Token returns the live credential for the provider, including the metadata
+// a provider-specific header needs (the Codex account id). External providers
+// are read from their owner's file on every call; stored ones refresh
+// transparently when a refresh token exists.
+func (s *Store) Token(ctx context.Context, provider string) (Token, error) {
+	// A provider whose credential belongs to another tool (the Codex login)
+	// is read from that tool's file, never from this store: the store is a
+	// copy, and a copy of a rotating refresh token breaks the tool that owns
+	// it.
+	if p, err := Lookup(provider); err == nil && p.External != nil {
+		return p.External()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tokens, err := s.load()
 	if err != nil {
-		return "", err
+		return Token{}, err
 	}
 	tok, ok := tokens[provider]
 	if !ok || strings.TrimSpace(tok.AccessToken) == "" {
-		return "", ErrNoToken
+		return Token{}, ErrNoToken
 	}
 	if !tok.Expired(time.Now()) {
-		return tok.AccessToken, nil
+		return tok, nil
 	}
 	if tok.RefreshToken == "" {
-		return "", errors.New("auth: token expired and no refresh token — run `panda auth login " + provider + "`")
+		return Token{}, errors.New("auth: token expired and no refresh token — run `panda auth login " + provider + "`")
 	}
 	p, err := Lookup(provider)
 	if err != nil {
-		return "", err
+		return Token{}, err
 	}
 	fresh, err := p.Refresh(ctx, tok.RefreshToken)
 	if err != nil {
-		return "", err
+		return Token{}, err
 	}
 	if fresh.RefreshToken == "" {
 		fresh.RefreshToken = tok.RefreshToken // providers may omit rotation
 	}
 	tokens[provider] = *fresh
 	if err := s.save(tokens); err != nil {
-		return "", err
+		return Token{}, err
 	}
-	return fresh.AccessToken, nil
+	return *fresh, nil
 }

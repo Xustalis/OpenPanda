@@ -163,6 +163,24 @@ func TestTaskNextStepHint(t *testing.T) {
 		t.Fatalf("review hint should carry only the short ref, got %q", hint)
 	}
 
+	// A failure-parked review cannot be approved; telling the user to run
+	// approve was a dead end (the store answers needs_changed_input).
+	failedReview := core.Task{
+		TaskID: "abc", State: core.StateReview,
+		ApprovalDisposition: core.ApprovalNeedsChangedInput,
+	}
+	if hint := taskNextStepHint(loc, nil, failedReview, "abc"); !strings.Contains(hint, "resubmit") || strings.Contains(hint, "`panda approve") {
+		t.Fatalf("needs_changed_input hint = %q, want a resubmit instruction and no approve command", hint)
+	}
+	// An authorization park does resume on approve, and must keep saying so.
+	authReview := core.Task{
+		TaskID: "abc", State: core.StateReview,
+		ApprovalDisposition: core.ApprovalResumeExecution,
+	}
+	if hint := taskNextStepHint(loc, nil, authReview, "abc"); !strings.Contains(hint, "approve") {
+		t.Fatalf("resume_execution hint = %q, want approve", hint)
+	}
+
 	waiting := core.Task{TaskID: "abc", State: core.StateWaitingCtx}
 	if hint := taskNextStepHint(loc, nil, waiting, "abc"); hint == "" {
 		t.Fatalf("waiting_context hint empty")

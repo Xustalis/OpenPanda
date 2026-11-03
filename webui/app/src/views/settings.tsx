@@ -312,17 +312,18 @@ function GeneralSection(props: { onLogout(): void }) {
  *  The sandbox row is GET-only — it describes the confinement every agent
  *  subprocess already runs under, it is not a switch.
  *
- *  The page reads as four questions with answers — 模型注入 / 路由偏好 /
- *  记忆上限 / 安全. They used to be six equal rows in one column, with the
- *  read-only sandbox status sitting between two switches as if it were a
- *  third one; nothing said which rows belonged together. A group header per
- *  question costs one line each and buys that hierarchy.
+ *  The page is four blocks, one topic each: 模型注入 / 路由 / 记忆 / 安全. A
+ *  header names the topic, and inside, one setting per row — a label, one
+ *  clause that changes with the value, and the control. That is the shape
+ *  WorkBuddy and Codex use for the same job, and the reason is density: a
+ *  group caption *and* a group blurb *and* a row label *and* a row paragraph
+ *  said the same thing three times over.
  *
- *  The other half is the hints: each option explains itself once it is
- *  picked, instead of one paragraph describing all three at once. The action
- *  bar closes the form and carries the only two actions; 保存 stays dead
- *  until something actually differs from what the node holds, so "did that
- *  save?" has an answer that is not a toast you may have missed. */
+ *  What is left is the one sentence a reader actually needs — what the
+ *  *current* choice does — plus the action bar, which closes the form and
+ *  carries the only two verbs. 保存 stays dead until something differs from
+ *  what the node holds, so "did that save?" has an answer that is not a
+ *  toast you may have missed. */
 function PolicySection() {
   const [form, setForm] = useState<AppSettings | null>(null)
   /** What the node holds, to tell "edited" from "saved" — and to undo. */
@@ -394,9 +395,7 @@ function PolicySection() {
 
   return (
     <form class="policy-form" onSubmit={save}>
-      <p class="policy-lead">{t('settings.policyHelp')}</p>
-
-      <PolicyGroup icon="cpu" title={t('policy.group.inject')} note={t('policy.group.injectNote')}>
+      <PolicyGroup title={t('policy.group.inject')}>
         <PolicyRow
           label={t('settings.injection')}
           hint={t(`policy.hint.injection.${current.injection_model}`)}
@@ -425,12 +424,8 @@ function PolicySection() {
         </PolicyRow>
       </PolicyGroup>
 
-      <PolicyGroup icon="route" title={t('policy.group.route')} note={t('policy.group.routeNote')}>
-        <PolicyRow
-          label={t('settings.preferredAgents')}
-          hint={t('settings.preferredAgentsHelp')}
-          wide
-        >
+      <PolicyGroup title={t('policy.group.route')}>
+        <PolicyRow label={t('settings.preferredAgents')} hint={t('settings.preferredAgentsHelp')} wide>
           <AgentChips
             value={current.preferred_agents}
             roster={roster}
@@ -439,39 +434,33 @@ function PolicySection() {
         </PolicyRow>
       </PolicyGroup>
 
-      <PolicyGroup
-        icon="orbit"
-        title={t('settings.memoryLimits')}
-        note={t('settings.memoryLimitsHelp')}
-      >
-        <div class="policy-limits">
-          {(['user', 'memory', 'project'] as const).map((k) => (
-            <label class={`policy-limit${current.memory_limits[k] > 0 ? '' : ' bad'}`} key={k}>
-              <span class="policy-limit-name">{t(`settings.limit.${k}`)}</span>
-              <span class="policy-num">
-                <input
-                  class="input"
-                  type="number"
-                  min={1}
-                  step={1}
-                  inputMode="numeric"
-                  value={current.memory_limits[k] || ''}
-                  aria-label={t(`settings.limit.${k}`)}
-                  aria-invalid={current.memory_limits[k] <= 0}
-                  onInput={(e) => setLimit(k, (e.target as HTMLInputElement).value)}
-                />
-                <span class="policy-num-suffix">{t('policy.chars')}</span>
-              </span>
-            </label>
-          ))}
-        </div>
+      <PolicyGroup title={t('policy.group.memory')}>
+        <PolicyRow label={t('settings.memoryLimits')} hint={t('settings.memoryLimitsHelp')} wide>
+          <div class="policy-limits">
+            {(['user', 'memory', 'project'] as const).map((k) => (
+              <label class={`policy-limit${current.memory_limits[k] > 0 ? '' : ' bad'}`} key={k}>
+                <span class="policy-limit-name">{t(`settings.limit.${k}`)}</span>
+                <span class="policy-num">
+                  <input
+                    class="input"
+                    type="number"
+                    min={1}
+                    step={1}
+                    inputMode="numeric"
+                    value={current.memory_limits[k] || ''}
+                    aria-label={t(`settings.limit.${k}`)}
+                    aria-invalid={current.memory_limits[k] <= 0}
+                    onInput={(e) => setLimit(k, (e.target as HTMLInputElement).value)}
+                  />
+                  <span class="policy-num-suffix">{t('policy.chars')}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </PolicyRow>
       </PolicyGroup>
 
-      <PolicyGroup
-        icon="shield"
-        title={t('policy.group.safety')}
-        note={t('policy.group.safetyNote')}
-      >
+      <PolicyGroup title={t('policy.group.safety')}>
         <PolicyRow
           label={t('settings.approval')}
           hint={t(`policy.hint.approval.${current.approval_mode}`)}
@@ -493,16 +482,19 @@ function PolicySection() {
         {error && <p class="gate-error">{error}</p>}
         {notice && <p class="test-result ok">{notice}</p>}
         <div class="policy-actions-bar">
+          {/* The live region stays mounted: a screen reader announces changes
+              inside it, and a node inserted with its first text in the same
+              frame is often not announced at all. */}
           <span
             class={`policy-actions-state${badLimits ? ' bad' : dirty ? ' dirty' : ''}`}
             role="status"
           >
-            <span class="policy-actions-dot" aria-hidden="true" />
-            {badLimits
-              ? t('policy.limitsInvalid')
-              : dirty
-                ? t('policy.unsaved')
-                : t('policy.inSync')}
+            {(dirty || badLimits) && (
+              <>
+                <span class="policy-actions-dot" aria-hidden="true" />
+                {badLimits ? t('policy.limitsInvalid') : t('policy.unsaved')}
+              </>
+            )}
           </span>
           <button
             type="button"
@@ -539,25 +531,15 @@ function samePolicy(a: AppSettings, b: AppSettings) {
   )
 }
 
-/** One policy group: an icon, the question it answers, and the rows that
- *  answer it. The heading is what turns a column of switches into four
- *  decisions you can find without reading every label. */
-function PolicyGroup(props: {
-  icon: IconName
-  title: string
-  note: string
-  children: ComponentChildren
-}) {
+/** One topic: a header, and the rows that answer it under it. The header is
+ *  set smaller and greyer than the row labels it introduces, with the rule
+ *  under it starting the block — a header, not another row. There is no icon
+ *  and no caption sentence: both were saying what the row labels already say. */
+function PolicyGroup(props: { title: string; children: ComponentChildren }) {
   return (
     <section class="policy-group">
-      <header class="policy-group-head">
-        <span class="policy-group-icon" aria-hidden="true">
-          <Icon name={props.icon} size={13} />
-        </span>
-        <h3 class="policy-group-title">{props.title}</h3>
-        <span class="policy-group-note">{props.note}</span>
-      </header>
-      {props.children}
+      <h3 class="policy-group-title">{props.title}</h3>
+      <div class="policy-group-body">{props.children}</div>
     </section>
   )
 }
