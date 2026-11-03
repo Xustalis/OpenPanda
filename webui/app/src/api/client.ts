@@ -355,6 +355,9 @@ export interface Task {
   intent?: string
   spec?: string
   result?: string
+  /** The delivery contract's verdict (verified|failed|partial|skipped), empty
+   *  when the task carried no acceptance checks. The report fold reads it. */
+  verification?: string
   risk?: string
   /** The adapter that ran (or is running) this task, bare of its extension
    *  ("claude_code"). Present on list rows as well as the detail, so a light
@@ -1213,8 +1216,11 @@ export const api = {
     return request('DELETE', '/api/tasks')
   },
 
-  logs(id: string, after?: number): Promise<{ id: string; events: TaskEvent[] }> {
-    return request('GET', `/api/tasks/${id}/logs${after ? `?after=${after}` : ''}`)
+  logs(id: string, after?: number, tail?: number): Promise<{ id: string; events: TaskEvent[] }> {
+    const q = new URLSearchParams()
+    if (after) q.set('after', String(after))
+    else if (tail) q.set('tail', String(tail))
+    return request('GET', `/api/tasks/${id}/logs${q.size ? `?${q.toString()}` : ''}`)
   },
 
   ask(prompt: string, authorize: boolean): Promise<AskResult> {
@@ -1831,7 +1837,10 @@ export const api = {
 
   /** Pull a task's artifact back from the executor so the preview has bytes. */
   fetchTaskArtifact(id: string): Promise<{ hash: string; files?: number; already?: boolean; source?: string }> {
-    return request('POST', `/api/tasks/${encodeURIComponent(id)}/artifact/fetch`, {})
+    // A cross-node pull can legitimately take minutes on a slow link; the
+    // server bounds it with its own transfer budget, and the request context
+    // is what stops it if the user walks away.
+    return request('POST', `/api/tasks/${encodeURIComponent(id)}/artifact/fetch`, {}, { timeoutMs: 30 * 60_000 })
   },
 
   fsFiles(path?: string): Promise<FsFilesResult> {

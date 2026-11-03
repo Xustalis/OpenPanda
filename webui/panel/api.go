@@ -8,9 +8,11 @@ import (
 	"errors"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -213,7 +215,17 @@ func (h *handler) cancelTask(w http.ResponseWriter, r *http.Request) {
 // re-reading the whole history on every poll.
 func (h *handler) taskLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	events, err := h.store.EventsSince(r.Context(), id, afterCursor(r))
+	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
+	if tail > 500 {
+		tail = 500
+	}
+	var events []core.Event
+	var err error
+	if tail > 0 && afterCursor(r) == 0 {
+		events, err = h.store.RecentEvents(r.Context(), id, tail)
+	} else {
+		events, err = h.store.EventsSince(r.Context(), id, afterCursor(r))
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("load events failed"))
 		return

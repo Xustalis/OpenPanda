@@ -11,7 +11,7 @@ high-frequency questions by usage scenario.
 **What's the first step after installing?**
 
 ```bash
-panda init      # interactive walkthrough: node naming, model setup (writes config.yaml + capability card)
+panda init      # writes config.yaml + the capability card (node name comes from the hostname; the only prompt is whether to set up a model now)
 panda repl      # interactive command line (bare `panda` works too)
 panda web       # or open the Web console (auto login)
 ```
@@ -26,7 +26,11 @@ resident background process responsible for task scheduling, node
 heartbeats, and reminders. Day-to-day single-machine Q&A needs only the
 REPL/web; receiving remote delegated tasks or running reminders needs
 the daemon (it can be registered for auto-start — see
-[`install.md`](install.en.md#auto-start-manual-control)).
+[`install.md`](install.en.md#auto-start-manual-control)). Note that `panda web`
+runs a full node of its own and binds the WS and UDP discovery ports; running
+`panda daemon` on the same machine at the same time makes the two compete for
+7836/7837. Pick one entry point for everyday use; the daemon is the headless,
+remote-delegation shape.
 
 ## Model configuration
 

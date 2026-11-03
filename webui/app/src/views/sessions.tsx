@@ -75,6 +75,7 @@ import {
   ChatAvatar,
   PlanCast,
   TaskCast,
+  TaskProcess,
   TaskProgress,
   usePlanBrief,
   useTaskBrief,
@@ -2435,6 +2436,7 @@ export function SessionsView({
   // several dispatch turns was issuing that many extra requests per frame,
   // all competing with the event stream for the browser's six connections.
   const tasksById = new Map((sessionTasks ?? []).map((t) => [t.id, t]))
+  const reportRefs = reportFallbackRefs(msgs)
   // What the dock's task tab counts on its badge: the rows that still want
   // something — running, waiting on a human, or queued. Terminal rows are the
   // board's history, not an inbox item.
@@ -2722,6 +2724,7 @@ export function SessionsView({
                 msg={m}
                 batch={batchOf.get(m.k)}
                 tasksById={tasksById}
+                fallbackRef={reportRefs.get(m.k)}
                 /* The local measurement wins while it is there (it is the only
                    one that exists between the reply landing and the transcript
                    being re-fetched); the panel's `duration_ms` is what survives
@@ -3783,6 +3786,29 @@ function MetaRow({ msg }: { msg: ChatMsg }) {
   )
 }
 
+/** Old finalizer turns predate the ref field. A round with exactly one task
+ *  dispatch is unambiguous: the report below it is that task's report, so the
+ *  process fold can still open. A fan-out has several candidates and gets no
+ *  guess — the wrong process under a summary is worse than none. */
+function reportFallbackRefs(msgs: ChatMsg[]): Map<string, string> {
+  const out = new Map<string, string>()
+  let refs: string[] = []
+  for (const m of msgs) {
+    if (m.role === 'user') {
+      refs = []
+      continue
+    }
+    if (m.kind === 'task' && m.ref) {
+      if (!refs.includes(m.ref)) refs.push(m.ref)
+      continue
+    }
+    if (m.kind === 'answer' && !m.ref && refs.length === 1 && splitReportHead(m.text ?? '')) {
+      out.set(m.k, refs[0]!)
+    }
+  }
+  return out
+}
+
 /** One row of the transcript, drawn the way a group chat draws it.
  *
  *  A thread has more than one voice in it: you ask, the panda works out how to
@@ -3817,8 +3843,12 @@ function ChatBubble(props: {
   /** The thread's task rows, keyed by id — each `DispatchBlock` reads its own
    *  from here instead of fetching a copy on every change frame. */
   tasksById?: Map<string, Task>
+  /** The task a legacy report turn belongs to. Reports written before the
+   *  finalizer stamped `ref` have no id of their own; the closest single
+   *  dispatch in the round is the best evidence for the process fold. */
+  fallbackRef?: string
 }) {
-  const { msg, onOpenTask, elapsedMs, liveFrom = 0, plan = null, batch = [], tasksById } = props
+  const { msg, onOpenTask, elapsedMs, liveFrom = 0, plan = null, batch = [], tasksById, fallbackRef } = props
 
   const report = msg.kind === 'error' ? null : splitReportHead(msg.text ?? '')
   const speaker = speakerOf(msg, report)
@@ -3923,6 +3953,7 @@ function ChatBubble(props: {
             <>
               {report.title && <p class="msg-subject">{report.title}</p>}
               {report.body && <Markdown text={report.body} class="msg-text" />}
+              {(msg.ref || fallbackRef) && <TaskProcess taskId={(msg.ref || fallbackRef)!} />}
             </>
           ) : isTaskKind ? (
             // The orchestration: who got the job, which stage, how it stands —
@@ -4090,6 +4121,7 @@ function ChatTurn(props: {
    *  the list (one delegated elsewhere, or the first paint before the list
    *  lands) falls back to its own read. */
   tasksById?: Map<string, Task>
+  fallbackRef?: string
 }) {
   const { msg } = props
   const plan = usePlanBrief(msg.kind === 'plan' ? msg.ref : undefined)
