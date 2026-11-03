@@ -2202,7 +2202,11 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// emptiness: New() always registers the built-in tools, so a registry-based
 	// check would make this path unreachable in every real engine (the tests
 	// that hand-build an Engine are the only place a nil registry ever occurs).
-	if len(history) == 0 {
+	// A side ask never takes the fast path: that path runs with no tools and a
+	// generic system prompt, which would strip the channel's observation and
+	// workspace tools and its boundary rider exactly when the user asked it to
+	// check something. The saved round is not worth an answer from hearsay.
+	if len(history) == 0 && !scope.Side {
 		if triage := entry.FastTriage(prompt, history); triage.IsFastPath {
 			fastSystem := entry.FastPathPrompt(e.replyASCII, effectiveLocale)
 			if conversationMemory != "" {
@@ -2357,19 +2361,18 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// KindTask directive.
 	var taskCapture taskDispatchCapture
 	if reg != nil {
-		if scope.Side {
-			// A side ask gets the read-only subset and neither dispatch tool:
-			// task_submit and task_budget exist to start and resize work, which
-			// is exactly what a side channel may not do.
-			reg = reg.Filter(sideToolAllowed)
-		} else {
-			reg = reg.Copy()
-			reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
-			// task_budget sits beside task_submit: the limit is derived (roster
-			// size or defaultTaskBudget), and this is how a model widens it for a
-			// fan-out the user described in prose instead of in the team picker.
-			reg.Register(e.taskBudgetTool(budget, effectiveLocale))
-		}
+		// The side channel is a full conversation, not a read-only lens: it
+		// gets the same tool face as the thread (dispatch included) and the
+		// same workspace family. Isolation lives in the transcript and the
+		// prompt, not in a crippled tool set — a side ask that can only look
+		// cannot finish the small piece of work the user asked for.
+		reg = reg.Copy()
+		reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
+		// task_budget sits beside task_submit: the limit is derived (roster
+		// size or defaultTaskBudget), and this is how a model widens it for a
+		// fan-out the user described in prose instead of in the team picker.
+		reg.Register(e.taskBudgetTool(budget, effectiveLocale))
+		registerWorkspaceTools(reg, workDir)
 	}
 
 rounds:
@@ -2445,15 +2448,6 @@ rounds:
 			}
 			return budgetAdvisory(&Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}), nil
 		case entry.KindTask:
-			if scope.Side {
-				// A side ask that still lands on a task stops here. The prompt
-				// asked it not to and the tool face has no dispatch, but the
-				// verdict comes from the model, not from either — a concrete
-				// request backed by a snapshot full of prior work classifies as
-				// a task often enough that leaving this to the prompt made /side
-				// a silent way to dispatch work the user believed was parked.
-				return &Result{Kind: "answer", Answer: sideRefusalNote(effectiveLocale), Thought: accumulatedReasoning.String()}, nil
-			}
 			if budget.exhausted() {
 				// Refuse before submitTask: the budget limits actual task
 				// execution, not merely how many outcomes are replayed. The
@@ -2552,11 +2546,6 @@ rounds:
 				entry.Turn{Role: "user", Content: taskObservation(res, effectiveLocale)},
 			)
 		case entry.KindPlan:
-			if scope.Side {
-				// Same rule as KindTask: a plan is dispatch in stages, and a
-				// side channel dispatches nothing.
-				return &Result{Kind: "answer", Answer: sideRefusalNote(effectiveLocale), Thought: accumulatedReasoning.String()}, nil
-			}
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
 			return e.startClassifiedPlan(ctx, out.Plan, scope, authorize, cb)
 		case entry.KindClarify:
@@ -2604,7 +2593,10 @@ rounds:
 			var dispatched []*Result
 			refusedThisRound := 0
 			for i, call := range calls {
-				cb.progress(Progress{Kind: ProgressTool, Name: call.Tool})
+				// Detail is the one-line subject of the call (a path, a search
+				// pattern, a task id): a side channel that shows only the tool
+				// name still leaves the reader guessing what was checked.
+				cb.progress(Progress{Kind: ProgressTool, Name: call.Tool, Detail: toolProgressDetail(call)})
 				if call.Tool == entry.ToolNameTaskSubmit {
 					// A refused dispatch invites a retry: the model raises the
 					// budget and re-sends the batch. Re-sending the whole batch
@@ -2954,12 +2946,6 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // additionally carry explicit owner consent for this request's whole plan;
 // it still passes through the existing approval policy before rows are created.
 func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, scope AskScope, authorize bool, cb StreamCallbacks) (*Result, error) {
-	// Same rule as submitTask: a side channel dispatches nothing, and this is
-	// the second creation point every plan — including one produced by the
-	// final round-exhaustion classification — passes through.
-	if scope.Side {
-		return &Result{Kind: "answer", Answer: sideRefusalNote(e.Locale())}, nil
-	}
 	sched := e.sched.Load()
 	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
@@ -3040,13 +3026,9 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	} else if !explicit && !e.replyASCII && (containsHan(prompt) || containsHan(spec.Title)) {
 		targetLoc = i18n.ChineseSimp
 	}
-	// The creation point is where a side channel's refusal belongs. The prompt
-	// asks the model not to dispatch and the tool face has no dispatch tool, but
-	// neither binds classification — and the round-exhaustion path reaches this
-	// function directly, past the per-round check. Every path shares this one.
-	if scope.Side {
-		return &Result{Kind: "answer", Answer: sideRefusalNote(targetLoc)}
-	}
+	// The creation point is shared by every path: the per-round classification
+	// and the round-exhaustion fallback both arrive here. A side ask dispatches
+	// like any other — its isolation is the transcript, not a dispatch veto.
 	// The composer's explicit node pick fills spec.node only when the model
 	// left routing to the scheduler — a model-emitted pin always wins.
 	if scope.Node != "" && spec.Spec.Node == "" {

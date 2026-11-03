@@ -63,6 +63,7 @@ var helpPage = []HelpSection{
 		{"service install|status|restart|uninstall", "cli.help.d.service"},
 		{"voice [--once] [--mute]", "cli.help.d.voice"},
 		{"read <file> | <file.md>", "cli.help.d.read"},
+		{"browser open|snapshot|click|type|screenshot", "cli.help.d.browser"},
 		{"hooks [list | test <event>]", "cli.help.d.hooks"},
 	}},
 	{Group: GroupSessions, Col: helpColWide, Rows: []HelpRow{

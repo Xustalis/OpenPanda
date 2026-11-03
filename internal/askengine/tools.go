@@ -268,6 +268,32 @@ func reminderDueTime(args map[string]any) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("无法解析时间 %q，请用 RFC3339（如 2026-08-18T15:00:00+08:00）或 \"2006-01-02 15:04\"", atRaw)
 }
 
+// toolProgressDetail names the subject of one tool call for a progress line:
+// the path it reads, the pattern it searches, the task it inspects. Full
+// arguments can be large or carry text that belongs nowhere near a status
+// line (a memory body, a note), so one short subject is all a progress note
+// gets.
+func toolProgressDetail(call *entry.ToolCall) string {
+	if call == nil {
+		return ""
+	}
+	for _, key := range []string{"pattern", "path", "task_id", "query", "project", "target", "name"} {
+		v, ok := call.Arguments[key].(string)
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if r := []rune(v); len(r) > 80 {
+			v = string(r[:80]) + "…"
+		}
+		return v
+	}
+	return ""
+}
+
 // executeTool runs a tool call through the registry and returns a user-facing
 // result (a tool failure is folded into the result, not a hard exit, so the
 // model can consolidate and retry). authorized is the ask's effective tier-2

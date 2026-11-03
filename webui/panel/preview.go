@@ -339,17 +339,45 @@ const pickerScript = `<script data-openpanda-picker>
       }, "*");
     } catch (err) {}
   }, true);
-  // The frame's own name, for a panel that has chrome around it. A sandboxed
-  // document has an opaque origin, so the parent cannot read document.title —
-  // this message is the only path. baseURI is the <base> the browser pane
-  // injected, i.e. the page the reader actually asked for.
-  try {
-    parent.postMessage({
-      source: "openpanda-page",
-      title: document.title || "",
-      url: document.baseURI || ""
-    }, "*");
-  } catch (e) {}
+  // Reading mode, proxied page: a link is a new document the pane must fetch
+  // through the same route. A plain navigation would step out to the site
+  // itself (and past the address gate), and most sites then refuse the frame.
+  // The parent owns the fetch and the history, so it is the one that navigates.
+  document.addEventListener("click", function (e) {
+    if (picking() || !window.__openpandaProxied) return;
+    if (e.defaultPrevented || e.button !== 0) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var el = e.target;
+    var a = el && el.closest ? el.closest("a[href]") : null;
+    if (!a || a.hasAttribute("download")) return;
+    if (a.target && a.target !== "" && a.target !== "_self") return;
+    var href = a.href;
+    if (!href || !/^https?:/i.test(href)) return;
+    e.preventDefault();
+    try {
+      parent.postMessage({ source: "openpanda-navigate", url: href }, "*");
+    } catch (err) {}
+  }, true);
+  // The frame's own name and address, for a panel that has chrome around it.
+  // A sandboxed document has an opaque origin, so the parent cannot read
+  // document.title or location — these messages are the only path. baseURI is
+  // the <base> the browser pane injected, i.e. the page the reader actually
+  // asked for, including any redirect the fetcher followed. Reported on load
+  // and on same-document navigation, so the address bar does not stay on the
+  // URL that started the trip.
+  function report() {
+    try {
+      parent.postMessage({
+        source: "openpanda-page",
+        title: document.title || "",
+        url: document.baseURI || ""
+      }, "*");
+    } catch (e) {}
+  }
+  report();
+  window.addEventListener("load", report);
+  window.addEventListener("popstate", report);
+  window.addEventListener("hashchange", report);
 })();
 </script>`
 
@@ -509,12 +537,15 @@ func (h *handler) previewTaskArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := h.artifacts.Has(hash); !ok {
 		// Not an error about the task: the bytes are still on the node that ran
-		// it. The console reads `state` and offers to pull them.
+		// it. The console reads `state` and offers to pull them. The row's
+		// owner is the origin after a delegation, so the source comes from the
+		// dispatch target / result executor instead.
+		source := artifactSource(r.Context(), h.store, t)
 		writeJSON(w, map[string]any{
 			"state":     "remote",
 			"hash":      hash,
-			"source":    t.OwnerNode,
-			"can_fetch": t.OwnerNode != "",
+			"source":    source,
+			"can_fetch": source != "" && h.currentEngine() != nil,
 		})
 		return
 	}
@@ -558,7 +589,8 @@ func (h *handler) fetchTaskArtifact(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"hash": hash, "already": true})
 		return
 	}
-	if t.OwnerNode == "" {
+	source := artifactSource(r.Context(), h.store, t)
+	if source == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("this task does not record the node that ran it"))
 		return
 	}
@@ -569,12 +601,12 @@ func (h *handler) fetchTaskArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	// The transfer is bounded by the request context so a client that walks
 	// away does not leave a pull running against a slow peer.
-	m, err := eng.FetchArtifact(r.Context(), t.OwnerNode, t.TaskID, hash)
+	m, err := eng.FetchArtifact(r.Context(), source, t.TaskID, hash)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, map[string]any{"hash": hash, "files": len(m.Entries), "source": t.OwnerNode})
+	writeJSON(w, map[string]any{"hash": hash, "files": len(m.Entries), "source": source})
 }
 
 // pickPreviewEntry chooses what the frame opens on. index.html is the site's

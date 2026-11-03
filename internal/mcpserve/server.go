@@ -274,6 +274,16 @@ func IntProp(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
 }
 
+// NumberProp is the {"type":"number","description":…} property shorthand.
+func NumberProp(desc string) map[string]any {
+	return map[string]any{"type": "number", "description": desc}
+}
+
+// BooleanProp is the {"type":"boolean","description":…} property shorthand.
+func BooleanProp(desc string) map[string]any {
+	return map[string]any{"type": "boolean", "description": desc}
+}
+
 // StringArrayProp is the {"type":"array","items":{"type":"string"}} shorthand.
 func StringArrayProp(desc string) map[string]any {
 	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}

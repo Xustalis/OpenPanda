@@ -11,7 +11,7 @@ high-frequency questions by usage scenario.
 **What's the first step after installing?**
 
 ```bash
-panda init      # interactive walkthrough: node naming, model setup (writes config.yaml + capability card)
+panda init      # writes config.yaml + the capability card (node name comes from the hostname; the only prompt is whether to set up a model now)
 panda repl      # interactive command line (bare `panda` works too)
 panda web       # or open the Web console (auto login)
 ```
@@ -26,7 +26,11 @@ resident background process responsible for task scheduling, node
 heartbeats, and reminders. Day-to-day single-machine Q&A needs only the
 REPL/web; receiving remote delegated tasks or running reminders needs
 the daemon (it can be registered for auto-start — see
-[`install.md`](install.en.md#auto-start-manual-control)).
+[`install.md`](install.en.md#auto-start-manual-control)). Note that `panda web`
+runs a full node of its own and binds the WS and UDP discovery ports; running
+`panda daemon` on the same machine at the same time makes the two compete for
+7836/7837. Pick one entry point for everyday use; the daemon is the headless,
+remote-delegation shape.
 
 ## Model configuration
 
@@ -170,7 +174,7 @@ entry has no `--authorize` — irreversible commands always land in
 
 **What is the side channel?**
 
-`/side` (or `/btw`) opens a read-only channel beside the thread: it sees the main thread's history as reference only, keeps its own turns out of the thread, and cannot dispatch a task or plan — a classification that still lands on one gets a fixed note. Esc returns without discarding; `/side close` discards. It is available in the TUI and CLI; the web console's side column is the task rail.
+`/side` (or `/btw`) opens a separate conversation beside the thread. It holds the same tool face as the thread (read the workspace, query live state, write memory/cards, dispatch tasks or plans); actions pass the same permission and approval gates, but the transcript is its own — the thread's history is reference only, and the side turns never enter it. The conversation is stored on the node, so it survives a reload, a second device and a panel restart; a question keeps running in the background after the pane closes and its answer is filed. Available in the TUI, the CLI and the console's dock; `+` or the TUI's `/side close` discards the whole side conversation, while Esc only returns to the thread.
 
 **How do I undo file changes after a finished answer?**
 

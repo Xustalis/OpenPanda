@@ -369,11 +369,9 @@ func runNodesInvite(args []string) {
 // shared secret is still never printed — the pairing ceremony carries it.
 func printJoinURI(w io.Writer, configPath string, cfg *config.Config) {
 	loc := i18n.Detect()
-	addr := cfg.Network.ListenAddr
-	if host, port, err := net.SplitHostPort(addr); err == nil && (host == "" || isLoopbackHost(host)) {
-		// A wildcard or loopback bind is not dialable from elsewhere; leave
-		// the host for the operator rather than printing an unusable URI.
-		addr = "<this-machine>:" + port
+	addr, _ := joinDialAddr(cfg.Network.ListenAddr, firstLANHost())
+	if host, port, err := net.SplitHostPort(cfg.Network.ListenAddr); err == nil && isLoopbackHost(host) {
+		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.loopback", "port", port))
 	}
 	spec := &core.JoinSpec{Bootstraps: []string{addr}}
 	if db, _, err := panelStore(cfg); err == nil {
@@ -485,16 +483,16 @@ func printJoinGuide(loc i18n.Locale, cfg *config.Config) {
 // route it through commandOutput so the guide lands in the TUI transcript
 // instead of escaping to the host terminal behind the alt screen.
 func printJoinGuideTo(w io.Writer, loc i18n.Locale, cfg *config.Config) {
-	listen := cfg.Network.ListenAddr
-	if host, port, err := net.SplitHostPort(listen); err == nil && host == "" {
-		listen = "<this-machine>" + port
-	} else if err == nil && isLoopbackHost(host) {
+	listen, replaced := joinDialAddr(cfg.Network.ListenAddr, firstLANHost())
+	if host, port, err := net.SplitHostPort(cfg.Network.ListenAddr); err == nil && isLoopbackHost(host) {
 		// A loopback listener is reachable only from this machine — a peer
 		// elsewhere cannot dial 127.0.0.1. Point the operator at a routable
 		// (or overlay) listen_addr before the join can work.
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.loopback", "port", port))
-		listen = "<this-machine>" + port
+	} else if replaced && err == nil && !isLoopbackHost(host) {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.wildcard", "addr", listen))
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, i18n.T(loc, "cli.nodes.invite.head"))
@@ -503,14 +501,66 @@ func printJoinGuideTo(w io.Writer, loc i18n.Locale, cfg *config.Config) {
 	fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.step2", "path", configWritePath("")))
 	fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.invite.step3", "listen", listen))
 	fmt.Fprintln(w, i18n.T(loc, "cli.nodes.invite.step4"))
-	// The joining side will dial ws://<listen>: when this machine's listen
+	// The joining side will dial ws://<listen>: when this machine's dial
 	// address is a literal host outside the cleartext gate's safe set, the
 	// join dead-ends in the joiner's keepalive log unless we say so here.
-	if host, _, err := net.SplitHostPort(cfg.Network.ListenAddr); err == nil && host != "" {
+	if host, _, err := net.SplitHostPort(listen); err == nil && host != "" && !strings.HasPrefix(host, "<") {
 		if core.CleartextDialError("ws://"+host, cfg.Network.AllowCleartext, cfg.Network.AllowCleartextFor) != nil {
-			fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", "ws://"+cfg.Network.ListenAddr))
+			fmt.Fprintln(w, i18n.Tf(loc, "cli.nodes.cleartext.hint", "addr", "ws://"+listen))
 		}
 	}
+}
+
+// joinDialAddr turns a configured listen address into one a peer can actually
+// dial. A wildcard bind ("0.0.0.0", "::", "") and a loopback bind are not
+// dialable from another machine; substitute the first routable interface
+// address when one exists, otherwise leave a clearly editable placeholder.
+// The second return value reports that substitution happened.
+func joinDialAddr(configured, lanHost string) (string, bool) {
+	host, port, err := net.SplitHostPort(configured)
+	if err != nil || port == "" {
+		return configured, false
+	}
+	ip := net.ParseIP(host)
+	unroutable := host == "" || (ip != nil && (ip.IsUnspecified() || ip.IsLoopback())) || isLoopbackHost(host)
+	if !unroutable {
+		return configured, false
+	}
+	if lanHost == "" {
+		return "<this-machine>:" + port, true
+	}
+	return net.JoinHostPort(lanHost, port), true
+}
+
+// firstLANHost returns a routable interface address for the join guide:
+// a private IPv4 first, then any non-loopback IPv4/IPv6. Empty means no
+// usable address was found (headless container, only loopback up).
+func firstLANHost() string {
+	ifaces, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	fallback := ""
+	for _, ia := range ifaces {
+		ipnet, ok := ia.(*net.IPNet)
+		if !ok || ipnet.IP == nil || ipnet.IP.IsLoopback() ||
+			ipnet.IP.IsLinkLocalUnicast() || ipnet.IP.IsLinkLocalMulticast() {
+			continue
+		}
+		if v4 := ipnet.IP.To4(); v4 != nil {
+			if v4.IsPrivate() {
+				return v4.String()
+			}
+			if fallback == "" {
+				fallback = v4.String()
+			}
+			continue
+		}
+		if fallback == "" {
+			fallback = ipnet.IP.String()
+		}
+	}
+	return fallback
 }
 
 // isLoopbackHost reports whether host names a loopback address (127.0.0.1,

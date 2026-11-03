@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
+	"github.com/Xustalis/OpenPanda/internal/core"
 )
 
 // artifactPanel builds a handler wired to a real task row whose
@@ -162,4 +163,77 @@ func TestTaskArtifactNoPoolIs503(t *testing.T) {
 	}
 	// And downloads stay bounded: the body read path must not hang.
 	_, _ = io.Copy(io.Discard, rr.Body)
+}
+
+// The origin's row keeps owner_node pointing at itself after a delegation.
+// The source must be the dispatch target (or the result's executor), or the
+// pull asks the wrong machine and finds nothing.
+func TestArtifactSourcePrefersTheExecutor(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	task, err := store.Create(ctx, "", "proj", "delegated", "origin", []string{"origin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := artifactSource(ctx, store, task); got != "origin" {
+		t.Fatalf("local source = %q, want the owner", got)
+	}
+	if err := store.RecordEvent(ctx, task.TaskID, core.EvDelegate, map[string]any{"target": "peer"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := artifactSource(ctx, store, task); got != "peer" {
+		t.Fatalf("delegated source = %q, want the dispatch target", got)
+	}
+
+	other, err := store.Create(ctx, "", "proj", "result-attributed", "origin", []string{"origin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.ResultJSON = `{"executor":"peer-2"}`
+	if got := artifactSource(ctx, store, other); got != "peer-2" {
+		t.Fatalf("result source = %q, want the result executor", got)
+	}
+}
+
+// A delegated task's row is owned by the origin; the preview must name the
+// executor as the source, and say whether this node can pull it.
+func TestPreviewReportsTheExecutorAsRemoteSource(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	pool := artifact.NewStore(t.TempDir())
+	task, err := store.Create(ctx, "", "proj", "remote artifact", "origin", []string{"origin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetOutputArtifact(ctx, task.TaskID, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordEvent(ctx, task.TaskID, core.EvDelegate, map[string]any{"target": "peer"}); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := StartPreview(PreviewDeps{Artifacts: pool, Host: "127.0.0.1", Ancestors: "*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer preview.Close()
+	h := New(Deps{Store: store, Artifacts: pool, Preview: preview, StaticDir: t.TempDir(), Token: testToken})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks/"+task.TaskID+"/artifact/preview", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		State    string `json:"state"`
+		Source   string `json:"source"`
+		CanFetch bool   `json:"can_fetch"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "remote" || got.Source != "peer" {
+		t.Fatalf("preview = %+v, want remote from peer", got)
+	}
+	if got.CanFetch {
+		t.Fatal("can_fetch must be false when no engine is wired")
+	}
 }

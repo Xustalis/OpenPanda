@@ -350,3 +350,31 @@ func TestExecuteTool_MultiLanguage(t *testing.T) {
 		t.Errorf("expected Chinese unknown tool error, got: %s", unknownZh)
 	}
 }
+
+// TestToolProgressDetail pins the one-line subject a progress note carries: a
+// search's pattern wins over its path, a read's path is named, unrelated
+// arguments are ignored, and a huge subject is truncated so the status line
+// stays a line.
+func TestToolProgressDetail(t *testing.T) {
+	cases := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"no arguments", nil, ""},
+		{"pattern wins over path", map[string]any{"pattern": "TODO", "path": "internal"}, "TODO"},
+		{"path", map[string]any{"path": "internal/askengine/side.go"}, "internal/askengine/side.go"},
+		{"task id", map[string]any{"task_id": "01a1"}, "01a1"},
+		{"unrelated argument", map[string]any{"entry": "secret"}, ""},
+		{"truncated", map[string]any{"pattern": strings.Repeat("x", 100)}, strings.Repeat("x", 80) + "…"},
+	}
+	for _, c := range cases {
+		got := toolProgressDetail(&entry.ToolCall{Tool: "t", Arguments: c.args})
+		if got != c.want {
+			t.Errorf("%s: toolProgressDetail = %q, want %q", c.name, got, c.want)
+		}
+	}
+	if got := toolProgressDetail(nil); got != "" {
+		t.Errorf("nil call = %q, want empty", got)
+	}
+}

@@ -19,15 +19,18 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/browser"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -74,6 +77,8 @@ func runMCP(args []string) {
 	if exe, err := os.Executable(); err == nil {
 		self.exe = exe
 	}
+	self.browser = browser.NewClient(
+		browser.StateDirFor(filepath.Dir(cfg.Storage.DBPath)), self.exe)
 	srv := mcpserve.New("openpanda", version, selfTools(&self))
 	// Stdout is the JSON-RPC channel: anything that writes to it corrupts the
 	// stream, so this command never logs to stdout and fatal() stays on
@@ -90,6 +95,7 @@ type selfToolsDeps struct {
 	tasks      *core.TaskStore
 	skills     *skills.Store
 	exe        string
+	browser    *browser.Client
 	submits    atomic.Int64
 }
 
@@ -100,7 +106,7 @@ type selfToolsDeps struct {
 // submission (which rides the normal queue → route → tier pipeline, so a
 // tier-2 child still asks for authorization).
 func selfTools(d *selfToolsDeps) []mcpserve.Tool {
-	return []mcpserve.Tool{
+	tools := []mcpserve.Tool{
 		{
 			Name:        "panda_status",
 			Description: "OpenPanda node status: version, node identity, and task counts by state.",
@@ -193,6 +199,213 @@ func selfTools(d *selfToolsDeps) []mcpserve.Tool {
 			Handle:      d.toolCard,
 		},
 	}
+	return append(tools, browserTools(d)...)
+}
+
+// browserTools is the node's observation surface: a page an agent just built
+// can be opened, read, clicked, screenshotted and checked for console errors
+// and failed requests before the agent claims it works. The descriptions
+// carry that habit — the rest of the prompt cannot enforce it.
+func browserTools(d *selfToolsDeps) []mcpserve.Tool {
+	handle := func(op string) func(context.Context, map[string]any) (string, error) {
+		return func(ctx context.Context, args map[string]any) (string, error) {
+			return d.browserTool(ctx, op, args)
+		}
+	}
+	return []mcpserve.Tool{
+		{
+			Name:        "panda_browser_open",
+			Description: "Open a page in the node's headless browser. Use it after starting a dev server or building a static site to see what actually rendered. Returns the final URL and title; follow with panda_browser_snapshot to read the page.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"url":      mcpserve.StringProp("http(s) or file URL"),
+				"viewport": mcpserve.StringProp("optional: mobile, tablet, desktop or WIDTHxHEIGHT"),
+			}, "url"),
+			Handle: handle("open"),
+		},
+		{
+			Name:        "panda_browser_snapshot",
+			Description: "Read the open page: visible text, interactive controls with CSS selectors, and an accessibility outline. Use the selectors here for click and type.",
+			InputSchema: mcpserve.SchemaObject(nil),
+			Handle:      handle("snapshot"),
+		},
+		{
+			Name:        "panda_browser_screenshot",
+			Description: "Capture the open page as PNG and return the file path (and pixel size). Attach or inspect it as visual evidence of what the page looks like.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"full": mcpserve.BooleanProp("capture the whole page instead of the viewport"),
+			}),
+			Handle: handle("screenshot"),
+		},
+		{
+			Name:        "panda_browser_click",
+			Description: "Click an element selected by CSS selector (preferred), or a viewport coordinate. The element is scrolled into view first.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"selector": mcpserve.StringProp("CSS selector from panda_browser_snapshot"),
+				"x":        mcpserve.NumberProp("viewport x, when no selector is given"),
+				"y":        mcpserve.NumberProp("viewport y, when no selector is given"),
+			}),
+			Handle: handle("click"),
+		},
+		{
+			Name:        "panda_browser_type",
+			Description: "Type text into a selector (or the focused element). Set clear to replace an existing value; submit presses Enter afterwards.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"selector": mcpserve.StringProp("CSS selector; omit to type into the focused element"),
+				"text":     mcpserve.StringProp("text to enter (required)"),
+				"clear":    mcpserve.BooleanProp("replace the field's current value first"),
+				"submit":   mcpserve.BooleanProp("press Enter after typing"),
+			}, "text"),
+			Handle: handle("type"),
+		},
+		{
+			Name:        "panda_browser_press",
+			Description: "Press one named key on the focused element: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"key": mcpserve.StringProp("key name"),
+			}, "key"),
+			Handle: handle("press"),
+		},
+		{
+			Name:        "panda_browser_scroll",
+			Description: "Scroll the page with a wheel event at its centre. dy 600 scrolls about one screen down; negative scrolls up.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"dx": mcpserve.NumberProp("horizontal delta in CSS pixels"),
+				"dy": mcpserve.NumberProp("vertical delta in CSS pixels"),
+			}),
+			Handle: handle("scroll"),
+		},
+		{
+			Name:        "panda_browser_eval",
+			Description: "Evaluate a JavaScript expression in the page and return its JSON value. Use it for facts the snapshot does not expose, not for driving the UI (prefer click/type).",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"expression": mcpserve.StringProp("JavaScript expression; promises are awaited"),
+			}, "expression"),
+			Handle: handle("eval"),
+		},
+		{
+			Name:        "panda_browser_console",
+			Description: "Read the page's console: console API calls, uncaught exceptions and browser log entries, oldest first. Check it before calling a page done.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"limit": mcpserve.IntProp("newest N entries (default all buffered)"),
+			}),
+			Handle: handle("console"),
+		},
+		{
+			Name:        "panda_browser_network",
+			Description: "Read the page's network activity: method, URL, status, MIME type, failures and duration. A 404 or failed request here is a defect the screenshot may hide.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"limit": mcpserve.IntProp("newest N requests (default all buffered)"),
+			}),
+			Handle: handle("network"),
+		},
+		{
+			Name:        "panda_browser_viewport",
+			Description: "Emulate a viewport so a layout can be checked at another size: mobile, tablet, desktop, or WIDTHxHEIGHT.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"viewport": mcpserve.StringProp("mobile, tablet, desktop or WIDTHxHEIGHT"),
+			}, "viewport"),
+			Handle: handle("viewport"),
+		},
+		{
+			Name:        "panda_browser_close",
+			Description: "Close the headless browser and its host process when the verification is finished.",
+			InputSchema: mcpserve.SchemaObject(nil),
+			Handle:      handle("close"),
+		},
+	}
+}
+
+func (d *selfToolsDeps) browserTool(ctx context.Context, op string, args map[string]any) (string, error) {
+	if d.browser == nil {
+		return "", errors.New("browser tools are not available on this node")
+	}
+	res, err := d.browser.Do(ctx, op, args)
+	if err != nil {
+		return "", err
+	}
+	return formatBrowserResult(res), nil
+}
+
+// formatBrowserResult renders one result for an agent's context. It is text on
+// purpose: MCP text results are what every adapter in the tier can read, and a
+// screenshot becomes a path the agent can attach or inspect with an image tool.
+func formatBrowserResult(r browser.Result) string {
+	var b strings.Builder
+	if r.Message != "" {
+		b.WriteString(r.Message + "\n")
+	}
+	if r.URL != "" {
+		b.WriteString("url: " + r.URL + "\n")
+	}
+	if r.Title != "" {
+		b.WriteString("title: " + r.Title + "\n")
+	}
+	if r.Text != "" {
+		b.WriteString("\n" + r.Text + "\n")
+	}
+	if r.Tree != "" {
+		b.WriteString("\naccessibility:\n" + r.Tree + "\n")
+	}
+	if len(r.Controls) > 0 {
+		b.WriteString("\ncontrols:\n")
+		for _, c := range r.Controls {
+			fmt.Fprintf(&b, "- %s %q [%s]", c.Role, c.Name, c.Selector)
+			if c.Value != "" {
+				fmt.Fprintf(&b, " value=%q", c.Value)
+			}
+			if c.Disabled {
+				b.WriteString(" (disabled)")
+			}
+			b.WriteString("\n")
+		}
+	}
+	if r.Screenshot != "" {
+		fmt.Fprintf(&b, "\nscreenshot: %s (%dx%d)\n", r.Screenshot, r.Width, r.Height)
+	}
+	if len(r.Console) > 0 {
+		b.WriteString("\nconsole:\n")
+		for _, e := range r.Console {
+			fmt.Fprintf(&b, "- [%s] %s", e.Type, e.Text)
+			if e.URL != "" {
+				fmt.Fprintf(&b, " (%s:%d)", e.URL, e.Line)
+			}
+			b.WriteString("\n")
+		}
+	}
+	if len(r.Network) > 0 {
+		b.WriteString("\nnetwork:\n")
+		for _, e := range r.Network {
+			fmt.Fprintf(&b, "- %s %s", e.Method, e.URL)
+			if e.Status > 0 {
+				fmt.Fprintf(&b, " -> %d", e.Status)
+			}
+			if e.Failed != "" {
+				fmt.Fprintf(&b, " FAILED %s", e.Failed)
+			}
+			if e.DurationMS > 0 {
+				fmt.Fprintf(&b, " (%dms)", e.DurationMS)
+			}
+			b.WriteString("\n")
+		}
+	}
+	if r.Value != nil {
+		b.WriteString("\nvalue: ")
+		switch v := r.Value.(type) {
+		case json.RawMessage:
+			b.Write(v)
+		case []byte:
+			b.Write(v)
+		default:
+			raw, _ := json.Marshal(v)
+			b.Write(raw)
+		}
+		b.WriteString("\n")
+	}
+	out := strings.TrimSpace(b.String())
+	if len(out) > maxSelfToolOut {
+		out = out[:maxSelfToolOut] + "\n… (truncated)"
+	}
+	return out
 }
 
 func (d *selfToolsDeps) toolStatus(ctx context.Context, _ map[string]any) (string, error) {

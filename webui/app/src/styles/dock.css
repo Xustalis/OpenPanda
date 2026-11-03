@@ -374,6 +374,71 @@
   font-size: var(--text-xs);
 }
 
+/* The dev strip: the project's live server, above the address bar. It is
+   chrome, not a page, so start/stop stays reachable after navigating away. */
+.db-dev {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  font-size: var(--text-xs);
+}
+.db-dev-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.db-dev-dot.is-ready {
+  background: var(--accent, #2f6ca0);
+}
+.db-dev-dot.is-starting {
+  background: var(--accent, #2f6ca0);
+  animation: db-dev-pulse 1.2s ease-in-out infinite;
+}
+.db-dev-dot.is-failed {
+  background: var(--danger, #b3261e);
+}
+.db-dev-label {
+  flex: none;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.db-dev-target {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+}
+.db-dev-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.db-dev-error {
+  flex: none;
+  margin: 0;
+  padding: 6px 10px;
+  max-height: 84px;
+  overflow: auto;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--danger, #b3261e);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+@keyframes db-dev-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* ---- Browser -------------------------------------------------------------
    Chrome on top, the frame below it. The frame is sandboxed by both the
    iframe attribute and the response's CSP; nothing here reads into it. */
@@ -395,6 +460,24 @@
   background: var(--bg-inset);
   color: var(--accent, #2f6ca0);
 }
+/* The fetcher answers after a round trip the frame cannot report; the bar is
+   the only sign of life between the click and the document. */
+.db-progress {
+  flex: none;
+  height: 2px;
+  background-image: linear-gradient(90deg, transparent, var(--accent, #2f6ca0), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: db-progress 1.1s ease-in-out infinite;
+}
+@keyframes db-progress {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
 .db-url {
   flex: 1;
   min-width: 0;
@@ -412,6 +495,36 @@
   border-bottom: 1px solid var(--border-soft);
   color: var(--text-tertiary);
   font-size: var(--text-xs);
+}
+/* A pane with no page says why, and carries the one action that might fix it.
+   It sits between the chrome and the stage so the explanation is read on the
+   way to the content rather than floated over it. */
+.db-notice {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+}
+.db-notice-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.db-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.db-notice-hint {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 .db-stage {
   position: relative;
@@ -538,8 +651,111 @@
 }
 .side-acts {
   display: flex;
+  align-items: center;
   gap: 12px;
   padding-top: 2px;
+}
+/* The transcript's copy icon fades in on message hover; a side answer has no
+   `.msg` row to hover, so its copy control is simply always visible. */
+.side-acts .msg-copy {
+  opacity: 1;
+}
+/* What the answer checked: one chip per tool call, the call's subject after
+   the tool name. It is the evidence trail behind a side answer, and it stays
+   with the answer (persisted the same way) rather than fading with the status
+   line. */
+.side-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+.side-tools-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+.side-tool {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.side-starters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+.side-starters > span {
+  font-size: var(--text-xs);
+}
+.side-starter {
+  text-align: left;
+  padding: 7px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  cursor: pointer;
+}
+.side-starter:hover {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+}
+.side-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.side-error .side-err {
+  flex: 1;
+  min-width: 0;
+}
+.side-tokens {
+  margin-left: auto;
+  font-size: var(--text-xs);
+}
+/* A side answer that dispatched work: the way into the task, kept with the
+   answer and after a reload. */
+.side-task-row {
+  display: flex;
+  padding-top: 2px;
+}
+.side-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  cursor: default;
+}
+button.side-task:hover {
+  background: var(--bg-inset);
+}
+.side-task-id {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+/* The running turn's question card sits above the composer, pinned: an
+   invisible card is a parked turn, and the pane must not scroll it away. */
+.side-clarify {
+  flex: none;
+  max-height: 48%;
+  overflow: auto;
+  padding: 0 10px 10px;
 }
 .side-status,
 .side-err {

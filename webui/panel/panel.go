@@ -25,6 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/devserver"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -91,6 +92,9 @@ type Deps struct {
 	// preview endpoints, which then answer 503 like any other unconfigured
 	// dependency.
 	Preview *Preview
+	// Dev runs project-declared development servers and exposes them through a
+	// reverse proxy (internal/devserver). nil disables /api/dev.
+	Dev *devserver.Manager
 }
 
 // New builds the panel HTTP handler: the static web app under StaticDir plus
@@ -130,6 +134,7 @@ func New(d Deps) http.Handler {
 		updater:            d.Updater,
 		sidecar:            d.Sidecar,
 		preview:            d.Preview,
+		dev:                d.Dev,
 		browseToken:        NewToken(),
 		activeAsks:         make(map[string]sessionOperation),
 		approvalOperations: make(map[string]approvalOperation),
@@ -248,6 +253,11 @@ func New(d Deps) http.Handler {
 	// same origin, so the console's own `frame-src 'self'` already admits it.
 	mux.HandleFunc("GET /api/browse", h.browsePage)
 	mux.HandleFunc("GET /api/browse/origin", h.browseOrigin)
+	// Project dev servers: the live-preview counterpart to the artifact
+	// preview origin. A project opts in with .panda/dev.json.
+	mux.HandleFunc("GET /api/dev/{project}", h.devStatus)
+	mux.HandleFunc("POST /api/dev/{project}/start", h.startDev)
+	mux.HandleFunc("POST /api/dev/{project}/stop", h.stopDev)
 	mux.HandleFunc("GET /browse/{token}", h.browseFramed)
 	mux.HandleFunc("GET /api/version", h.getVersion)
 	mux.HandleFunc("GET /api/metrics", h.listMetrics)
@@ -322,6 +332,11 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("DELETE /api/sessions/{id}", h.deleteSession)
 		mux.HandleFunc("POST /api/sessions/{id}/fork", h.forkSession)
 		mux.HandleFunc("POST /api/sessions/{id}/ask", h.sessionAsk)
+		// The side conversation is server-owned so a question outlives the
+		// pane: GET returns its turns and latest operation (the reconnect
+		// surface), DELETE is the pane's `+`.
+		mux.HandleFunc("GET /api/sessions/{id}/side", h.sessionSide)
+		mux.HandleFunc("DELETE /api/sessions/{id}/side", h.sessionSide)
 		// Type into the thread while the agent works — the queue/inject pair
 		// the composer promises (see session_msg.go). The notes routes are the
 		// same contract's read/edit/drop/promote half: a queued note the user
@@ -432,17 +447,29 @@ func (h *handler) securityHeaders(next http.Handler) http.Handler {
 		// own address is unroutable and the host this request arrived on is
 		// what the browser can reach.
 		imgSrc := "'self' data: blob:"
-		frameSrc := ""
+		// 'self' is the console's own browser pane (/api/browse). Without it,
+		// configuring an artifact pool would silently make the dock's browser
+		// tab unframeable — the CSP frame-src directive replaces default-src,
+		// it does not add to it.
+		frameOrigins := []string{"'self'"}
 		if h.preview != nil {
 			if origin := h.preview.OriginFor(r.Host); origin != "" {
 				imgSrc += " " + origin
-				// 'self' is the console's own browser pane (/api/browse). Without
-				// it, configuring an artifact pool would silently make the dock's
-				// browser tab unframeable — the CSP frame-src directive replaces
-				// default-src, it does not add to it.
-				frameSrc = "; frame-src 'self' " + origin
+				frameOrigins = append(frameOrigins, origin)
 			}
 		}
+		// Project dev servers listen on ephemeral ports, one per running
+		// project. Their origin is not known when the console document is
+		// loaded, so the frame policy admits any port on the host the console
+		// was reached on; the console itself decides which URL to frame, and
+		// script-src 'self' leaves no injection path to another one.
+		if h.dev != nil {
+			frameOrigins = append(frameOrigins, h.dev.Origins(r.Host)...)
+			if host, _, err := net.SplitHostPort(r.Host); err == nil && host != "" {
+				frameOrigins = append(frameOrigins, "http://"+net.JoinHostPort(host, "*"))
+			}
+		}
+		frameSrc := "; frame-src " + strings.Join(frameOrigins, " ")
 		csp := "default-src 'self'; script-src 'self'; " +
 			"style-src 'self' 'unsafe-inline'; " +
 			"img-src " + imgSrc + "; connect-src 'self'; " +
@@ -633,6 +660,8 @@ type handler struct {
 	// preview is the artifact preview origin; nil leaves the preview endpoints
 	// answering 503.
 	preview *Preview
+	// dev is the project dev-server manager; nil leaves /api/dev answering 503.
+	dev *devserver.Manager
 	// browseToken is the capability in the browser pane's frame URL. An iframe
 	// cannot send the Bearer header, so the pane's document has to carry its
 	// credential in the path — and it must not be the console's own token: a
@@ -707,16 +736,17 @@ type taskJSON struct {
 	// SpawnDepth is the task's generation inside a delegation tree (0 root,
 	// 1 child, 2 grandchild); omitted for standalone rows so the kanban only
 	// badges cards that belong to a sub-agent fan-out.
-	SpawnDepth int    `json:"spawn_depth,omitempty"`
-	Project    string `json:"project"`
-	Title      string `json:"title"`
-	State      string `json:"state"`
-	Owner      string `json:"owner"`
-	AttemptID  string `json:"attempt_id"`
-	Intent     string `json:"intent,omitempty"`
-	Spec       string `json:"spec,omitempty"`
-	Result     string `json:"result,omitempty"`
-	Risk       string `json:"risk,omitempty"`
+	SpawnDepth   int    `json:"spawn_depth,omitempty"`
+	Project      string `json:"project"`
+	Title        string `json:"title"`
+	State        string `json:"state"`
+	Owner        string `json:"owner"`
+	AttemptID    string `json:"attempt_id"`
+	Intent       string `json:"intent,omitempty"`
+	Spec         string `json:"spec,omitempty"`
+	Result       string `json:"result,omitempty"`
+	Verification string `json:"verification,omitempty"`
+	Risk         string `json:"risk,omitempty"`
 	// Agent is the adapter that ran (or is running) this task, bare of its
 	// file extension ("claude_code", not "claude_code.py"). It is the same
 	// affinity key the agent handle is pinned to, and it is what lets the
@@ -880,6 +910,7 @@ func (h *handler) toTaskJSON(t core.Task) taskJSON {
 		Intent:       t.Intent,
 		Spec:         t.SpecJSON,
 		Result:       t.ResultJSON,
+		Verification: t.Verification,
 		Risk:         t.Risk,
 		Agent:        strings.TrimSuffix(t.AgentSessionAdapter, ".py"),
 		Requires:     t.Requires,
