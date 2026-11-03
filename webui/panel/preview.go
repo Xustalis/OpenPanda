@@ -339,17 +339,45 @@ const pickerScript = `<script data-openpanda-picker>
       }, "*");
     } catch (err) {}
   }, true);
-  // The frame's own name, for a panel that has chrome around it. A sandboxed
-  // document has an opaque origin, so the parent cannot read document.title —
-  // this message is the only path. baseURI is the <base> the browser pane
-  // injected, i.e. the page the reader actually asked for.
-  try {
-    parent.postMessage({
-      source: "openpanda-page",
-      title: document.title || "",
-      url: document.baseURI || ""
-    }, "*");
-  } catch (e) {}
+  // Reading mode, proxied page: a link is a new document the pane must fetch
+  // through the same route. A plain navigation would step out to the site
+  // itself (and past the address gate), and most sites then refuse the frame.
+  // The parent owns the fetch and the history, so it is the one that navigates.
+  document.addEventListener("click", function (e) {
+    if (picking() || !window.__openpandaProxied) return;
+    if (e.defaultPrevented || e.button !== 0) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var el = e.target;
+    var a = el && el.closest ? el.closest("a[href]") : null;
+    if (!a || a.hasAttribute("download")) return;
+    if (a.target && a.target !== "" && a.target !== "_self") return;
+    var href = a.href;
+    if (!href || !/^https?:/i.test(href)) return;
+    e.preventDefault();
+    try {
+      parent.postMessage({ source: "openpanda-navigate", url: href }, "*");
+    } catch (err) {}
+  }, true);
+  // The frame's own name and address, for a panel that has chrome around it.
+  // A sandboxed document has an opaque origin, so the parent cannot read
+  // document.title or location — these messages are the only path. baseURI is
+  // the <base> the browser pane injected, i.e. the page the reader actually
+  // asked for, including any redirect the fetcher followed. Reported on load
+  // and on same-document navigation, so the address bar does not stay on the
+  // URL that started the trip.
+  function report() {
+    try {
+      parent.postMessage({
+        source: "openpanda-page",
+        title: document.title || "",
+        url: document.baseURI || ""
+      }, "*");
+    } catch (e) {}
+  }
+  report();
+  window.addEventListener("load", report);
+  window.addEventListener("popstate", report);
+  window.addEventListener("hashchange", report);
 })();
 </script>`
 

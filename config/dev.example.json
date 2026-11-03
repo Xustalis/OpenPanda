@@ -1,0 +1,6 @@
+{
+  "command": "npm run dev",
+  "url": "http://127.0.0.1:5173",
+  "auto_start": true,
+  "ready_timeout_s": 60
+}

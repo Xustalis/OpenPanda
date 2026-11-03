@@ -1835,6 +1835,23 @@ export const api = {
     return request('GET', '/api/browse/origin')
   },
 
+  /** A project's dev server, as .panda/dev.json declares it. `url` is the
+   *  tokenized entry link, present only once the server answers. */
+  devStatus(project: string): Promise<DevStatus> {
+    return request('GET', `/api/dev/${encodeURIComponent(project)}`)
+  },
+
+  /** Start the project's declared dev command. Returns before the server is
+   *  ready; poll devStatus for the transition. */
+  startDev(project: string): Promise<DevStatus> {
+    return request('POST', `/api/dev/${encodeURIComponent(project)}/start`, {})
+  },
+
+  /** Stop the project's dev server and close its preview listener. */
+  stopDev(project: string): Promise<DevStatus> {
+    return request('POST', `/api/dev/${encodeURIComponent(project)}/stop`, {})
+  },
+
   /** Pull a task's artifact back from the executor so the preview has bytes. */
   fetchTaskArtifact(id: string): Promise<{ hash: string; files?: number; already?: boolean; source?: string }> {
     // A cross-node pull can legitimately take minutes on a slow link; the
@@ -2222,6 +2239,22 @@ export interface ArtifactPreviewMeta {
   files?: number
   source?: string
   can_fetch?: boolean
+}
+
+/** /api/dev/{project}: a project's declared dev server. `url` is the
+ *  tokenized entry link and exists only in `ready`. */
+export interface DevStatus {
+  project: string
+  configured: boolean
+  state: 'stopped' | 'starting' | 'ready' | 'failed'
+  command?: string
+  target?: string
+  url?: string
+  auto_start?: boolean
+  ready_timeout_s?: number
+  error?: string
+  log?: string
+  since?: number
 }
 
 export interface SessionDiffStat {

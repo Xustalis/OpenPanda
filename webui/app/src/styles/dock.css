@@ -374,6 +374,71 @@
   font-size: var(--text-xs);
 }
 
+/* The dev strip: the project's live server, above the address bar. It is
+   chrome, not a page, so start/stop stays reachable after navigating away. */
+.db-dev {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  font-size: var(--text-xs);
+}
+.db-dev-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.db-dev-dot.is-ready {
+  background: var(--accent, #2f6ca0);
+}
+.db-dev-dot.is-starting {
+  background: var(--accent, #2f6ca0);
+  animation: db-dev-pulse 1.2s ease-in-out infinite;
+}
+.db-dev-dot.is-failed {
+  background: var(--danger, #b3261e);
+}
+.db-dev-label {
+  flex: none;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.db-dev-target {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+}
+.db-dev-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.db-dev-error {
+  flex: none;
+  margin: 0;
+  padding: 6px 10px;
+  max-height: 84px;
+  overflow: auto;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--danger, #b3261e);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+@keyframes db-dev-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* ---- Browser -------------------------------------------------------------
    Chrome on top, the frame below it. The frame is sandboxed by both the
    iframe attribute and the response's CSP; nothing here reads into it. */
@@ -395,6 +460,24 @@
   background: var(--bg-inset);
   color: var(--accent, #2f6ca0);
 }
+/* The fetcher answers after a round trip the frame cannot report; the bar is
+   the only sign of life between the click and the document. */
+.db-progress {
+  flex: none;
+  height: 2px;
+  background-image: linear-gradient(90deg, transparent, var(--accent, #2f6ca0), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: db-progress 1.1s ease-in-out infinite;
+}
+@keyframes db-progress {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
 .db-url {
   flex: 1;
   min-width: 0;
@@ -412,6 +495,36 @@
   border-bottom: 1px solid var(--border-soft);
   color: var(--text-tertiary);
   font-size: var(--text-xs);
+}
+/* A pane with no page says why, and carries the one action that might fix it.
+   It sits between the chrome and the stage so the explanation is read on the
+   way to the content rather than floated over it. */
+.db-notice {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+}
+.db-notice-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.db-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.db-notice-hint {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 .db-stage {
   position: relative;
