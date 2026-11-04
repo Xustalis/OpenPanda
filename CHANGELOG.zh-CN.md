@@ -38,6 +38,12 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 本 changelog 为策展式记录：部分内部重构与 adapter 未在此列出。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
+## [Unreleased]
+
+### Fixed
+
+- **GitHub 卡住时 Windows 安装器不再无限挂起** —— 下载从头到尾都有了时限（curl 是总时限加 1 KB/s 速度下限，.NET 兜底是读取超时），连接建立后收不到字节的情况会在一分钟左右以映射后的原因结束，而不是永远停在 `Installing …`。脚本还会把 Windows「Internet 选项」里的系统代理交给 curl——curl 只读 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，这正是 `irm` 能拉到脚本、压缩包却只能直连并卡死的原因。
+
 ## [0.1.4] - 2026-11-03 — "Constellation"
 
 ### 新增功能

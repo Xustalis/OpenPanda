@@ -44,6 +44,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - This English file is canonical. The zh-CN / ja / es / de translations mirror it and may lag briefly around a release.
 
+## [Unreleased]
+
+### Fixed
+
+- **The Windows installer stops hanging when GitHub stalls** — every download is bounded end to end (a total time limit and a 1 KB/s floor for curl, a read timeout on the .NET fallback), so a connection that opens and then delivers nothing ends within about a minute with curl's mapped cause instead of sitting at `Installing …` forever. The script also hands curl the Windows "Internet Options" system proxy; curl reads only the `HTTP_PROXY`/`HTTPS_PROXY` environment variables, which is how `irm` could fetch the script while the archive download went direct and stalled.
+
 ## [0.1.4] - 2026-11-03 — "Constellation"
 
 ### Added
