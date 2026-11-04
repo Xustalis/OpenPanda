@@ -38,6 +38,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Este changelog es curado: algunas refactorizaciones internas y adaptadores no se listan aquí.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
+## [Unreleased]
+
+### Fixed
+
+- **El instalador de Windows deja de colgarse cuando GitHub se atasca** — ahora cada descarga está acotada de extremo a extremo (un límite de tiempo total y un suelo de 1 KB/s para curl, un tiempo de espera de lectura en el respaldo .NET), así que una conexión que se abre y no entrega nada termina en torno a un minuto con la causa mapeada de curl en lugar de quedarse en `Installing …` para siempre. El script también entrega a curl el proxy del sistema de «Opciones de Internet»; curl solo lee las variables de entorno `HTTP_PROXY`/`HTTPS_PROXY`, y por eso `irm` podía descargar el script mientras la descarga del archivo conectaba directamente y se bloqueaba.
+
 ## [0.1.4] - 2026-11-03 — "Constellation"
 
 ### Añadido
