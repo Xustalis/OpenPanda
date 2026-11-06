@@ -1,0 +1,343 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title data-i18n-content="meta.dl.title">下载 — OpenPanda v0.1.4</title>
+<meta name="description" data-i18n-content="meta.dl.desc" content="OpenPanda v0.1.4 预编译产物：macOS、Linux、Windows × amd64/arm64，另有 lite-linux；附 SHA-256 校验与 Ed25519 发布签名。" />
+<meta name="author" content="Xustalis" />
+<link rel="canonical" href="https://xustalis.github.io/OpenPanda/download.html" />
+<!-- One canonical Chinese document per page. English is a client-side swap
+     from js/i18n.js; there is deliberately no hreflang or alternate locale. -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="OpenPanda" />
+<meta property="og:locale" content="zh_CN" />
+<meta property="og:url" content="https://xustalis.github.io/OpenPanda/download.html" />
+<meta property="og:title" data-i18n-content="meta.dl.title" content="下载 — OpenPanda v0.1.4" />
+<meta property="og:description" data-i18n-content="meta.dl.desc" content="OpenPanda v0.1.4 预编译产物：macOS、Linux、Windows × amd64/arm64，另有 lite-linux；附 SHA-256 校验与 Ed25519 发布签名。" />
+<meta property="og:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" data-i18n-content="meta.dl.title" content="下载 — OpenPanda v0.1.4" />
+<meta name="twitter:description" data-i18n-content="meta.dl.desc" content="OpenPanda v0.1.4 预编译产物：macOS、Linux、Windows × amd64/arm64，另有 lite-linux；附 SHA-256 校验与 Ed25519 发布签名。" />
+<meta name="twitter:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
+<meta name="theme-color" content="#faf9f5" />
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="stylesheet" href="css/site.css" />
+<!-- Language bootstrap. Runs before the body parses so <html lang>, the toggle
+     state and the "hold the paint" guard are right on the first frame; the
+     dictionary itself is applied by js/i18n.js once the module loads. Order of
+     preference: ?lang= → saved choice → browser language (zh* → 中文, else EN). -->
+<script>
+(function () {
+  var KEY = 'openpanda.site.lang'
+  var q = new URLSearchParams(location.search).get('lang')
+  var lang = q === 'en' || q === 'zh' ? q : null
+  if (!lang) { try { var s = localStorage.getItem(KEY); if (s === 'en' || s === 'zh') lang = s } catch (e) {} }
+  if (!lang) lang = /^zh/i.test(navigator.language || '') ? 'zh' : 'en'
+  var root = document.documentElement
+  root.setAttribute('data-lang', lang)
+  root.setAttribute('lang', lang === 'zh' ? 'zh-CN' : 'en')
+  // English copy lives in the dictionary, not the markup: hide the Chinese
+  // paint for the few milliseconds until i18n.js swaps it in. The timer is the
+  // guard — a broken module must never leave a blank page.
+  if (lang === 'en') {
+    root.classList.add('lang-pending')
+    setTimeout(function () { root.classList.remove('lang-pending') }, 1200)
+  }
+})()
+</script>
+<noscript><style>html.lang-pending body { opacity: 1 !important; }</style></noscript>
+<script>document.documentElement.classList.add('js')</script>
+</head>
+<body class="subpage">
+<a class="skip-link" href="#main" data-i18n="skip">跳到正文</a>
+
+<nav class="site-nav solid" id="site-nav" aria-label="主导航" data-i18n-aria="nav.primary">
+  <a class="brand" href="index.html" aria-label="OpenPanda">
+    <svg class="brand-mark" width="27" height="27" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
+    <span>Open<b>Panda</b></span>
+  </a>
+  <!-- Site-level navigation, shared verbatim by every page. The eleven
+       chapters remain reachable through the hero index and ⌘K on this page;
+       a site is not one long scroll. -->
+  <div class="nav-links">
+    <a href="index.html" data-i18n="nav.overview">概览</a>
+    <a href="features.html" data-i18n="nav.features">能力</a>
+    <a href="docs.html" data-i18n="nav.docs">文档</a>
+    <a href="download.html" aria-current="page" data-i18n="nav.download">下载</a>
+    <a href="changelog.html" data-i18n="nav.changelog">更新日志</a>
+    <a href="status.html" data-i18n="nav.status">项目现状</a>
+    <a href="faq.html" data-i18n="nav.faq">常见问题</a>
+  </div>
+  <div class="nav-actions">
+    <button class="lang-toggle" type="button" data-lang-toggle aria-label="切换语言" data-i18n-aria="lang.switch" title="中文 / English">
+      <span class="lang-zh" lang="zh-CN">中文</span><span class="lang-sep" aria-hidden="true">/</span><span class="lang-en" lang="en">EN</span>
+    </button>
+    <a class="nav-gh" href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span>GitHub</span>
+      <span class="nav-stars" id="gh-stars" hidden></span>
+    </a>
+  </div>
+</nav>
+<main id="main" tabindex="-1">
+  <header class="pg-hero">
+    <div class="wrap">
+      <p class="mono-label pg-kicker">DOWNLOADS</p>
+      <h1 class="pg-title" data-i18n="dl.h1">下载 OpenPanda</h1>
+      <p class="pg-lede" data-i18n="dl.lede">v0.1.4「Constellation」，2026-11-03 发布。六个预编译目标、一个 lite 变体，每个归档都有签名校验文件。</p>
+      <p class="pg-meta">STABLE · v0.1.4 · 2026-11-03 · 6 TARGETS</p>
+    </div>
+  </header>
+  <div class="wrap pg-layout">
+      <aside class="pg-toc">
+        <p class="mono-label" data-i18n="pg.toc.on">ON THIS PAGE</p>
+        <nav aria-label="本页目录" data-i18n-aria="pg.toc.aria">
+        <a href="#one-line" data-i18n="dl.s1.t">一键安装</a>
+        <a href="#artifacts" data-i18n="dl.s2.t">平台产物</a>
+        <a href="#verify" data-i18n="dl.s3.t">校验与信任</a>
+        <a href="#upgrade" data-i18n="dl.s4.t">升级与卸载</a>
+        <a href="#older" data-i18n="dl.s5.t">指定版本</a>
+
+        <a href="#requirements" data-i18n="toc.requirements">系统要求</a>
+        <a href="#params" data-i18n="toc.params">安装参数</a>
+        <a href="#manual" data-i18n="toc.manual">离线与手动安装</a>
+        <a href="#after" data-i18n="toc.after">安装后验证</a>
+        </nav>
+        <div class="pg-toc-foot">
+          <span class="mono-label">STABLE</span>
+          <b>v0.1.4</b>
+          <a href="download.html" data-i18n="pg.toc.dl">下载 →</a>
+        </div>
+      </aside>
+    <div class="pg-content">
+      <section class="pg-section" id="one-line">
+        <h2 data-i18n="dl.s1.t">一键安装</h2>
+        <p class="pg-lead" data-i18n="dl.s1.d">安装器会自己解析平台对应的产物，多数人只需要这三条命令中的一条。</p>
+      <div class="cmd-block">
+        <div class="cmd-head"><span>macOS / Linux</span><span data-i18n="dl.s1.unix">默认最新稳定版</span></div>
+        <div class="cmd-row"><span class="prompt">$</span><code id="dl-unix">curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh</code>
+          <button class="copy-btn" data-copy-target="dl-unix" data-i18n-aria="pg.copy" aria-label="复制命令"><svg class="ic-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="ic-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button>
+        </div>
+      </div>
+      <div class="cmd-block">
+        <div class="cmd-head"><span>Homebrew</span><span data-i18n="dl.s1.brew">同一条 release 通道</span></div>
+        <div class="cmd-row"><span class="prompt">$</span><code id="dl-brew">brew tap Xustalis/openpanda &amp;&amp; brew install openpanda</code>
+          <button class="copy-btn" data-copy-target="dl-brew" data-i18n-aria="pg.copy" aria-label="复制命令"><svg class="ic-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="ic-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button>
+        </div>
+      </div>
+      <div class="cmd-block">
+        <div class="cmd-head"><span>Windows (PowerShell)</span><span data-i18n="dl.s1.win">PS 5.1 直接运行</span></div>
+        <div class="cmd-row"><span class="prompt">PS&gt;</span><code id="dl-win">irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex</code>
+          <button class="copy-btn" data-copy-target="dl-win" data-i18n-aria="pg.copy" aria-label="复制命令"><svg class="ic-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="ic-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button>
+        </div>
+      </div>
+      </section>
+
+      <section class="pg-section" id="artifacts">
+        <h2 data-i18n="dl.s2.t">平台产物</h2>
+        <p class="pg-lead" data-i18n="dl.s2.d">归档命名：macOS / Linux 为 panda-&lt;version&gt;-&lt;os&gt;-&lt;arch&gt;.tar.gz，Windows 为 panda-&lt;version&gt;-windows-&lt;arch&gt;.zip。</p>
+        <div class="pg-table-wrap"><table class="pg-table">
+          <thead><tr><th>OS</th><th>ARCH</th><th>FORMAT</th><th data-i18n="pg.table.what">说明</th></tr></thead>
+          <tbody>
+            <tr><td>macOS</td><td>arm64</td><td>.tar.gz</td><td data-i18n="dl.s2.r1">Apple Silicon</td></tr>
+            <tr><td>macOS</td><td>amd64</td><td>.tar.gz</td><td data-i18n="dl.s2.r2">Intel Mac</td></tr>
+            <tr><td>Linux</td><td>amd64</td><td>.tar.gz</td><td data-i18n="dl.s2.r3">x86-64 服务器与桌面</td></tr>
+            <tr><td>Linux</td><td>arm64</td><td>.tar.gz</td><td data-i18n="dl.s2.r4">ARM 开发板与云主机</td></tr>
+            <tr><td>Windows</td><td>amd64</td><td>.zip</td><td data-i18n="dl.s2.r5">PowerShell Expand-Archive</td></tr>
+            <tr><td>Windows</td><td>arm64</td><td>.zip</td><td data-i18n="dl.s2.r6">ARM64 Windows</td></tr>
+            <tr><td>lite-linux</td><td>amd64</td><td>.tar.gz</td><td data-i18n="dl.s2.r7">无内嵌 Web 控制台 / TUI</td></tr>
+            <tr><td>lite-linux</td><td>arm64</td><td>.tar.gz</td><td data-i18n="dlx.lite1">ARM64 开发板与云主机，lite 构建</td></tr>
+            <tr><td>lite-linux</td><td>armv7</td><td>.tar.gz</td><td data-i18n="dlx.lite2">32 位 ARM，树莓派等老旧设备</td></tr>
+          </tbody>
+        </table></div>
+        <p class="pg-note" data-i18n="dl.s2.note">lite 变体面向无头或资源受限的 Linux 主机，用安装器的 --lite 选择。</p>
+        <p class="pg-inline"><a href="https://github.com/Xustalis/OpenPanda/releases/tag/v0.1.4" target="_blank" rel="noopener" data-i18n="dl.s2.all">在 GitHub 浏览全部产物与校验值 ↗</a></p>
+      </section>
+
+      <section class="pg-section" id="verify">
+        <h2 data-i18n="dl.s3.t">校验你下载的东西</h2>
+        <ul class="pg-list">
+          <li data-i18n="dl.s3.a">checksums.txt 逐项列出每个归档的 SHA-256；安装器在解包前核对。</li>
+          <li data-i18n="dl.s3.b">checksums.txt.sig 是对该文件的 detached Ed25519 签名；本机 openssl 支持时安装器验签，自更新器一律强制验签。</li>
+          <li data-i18n="dl.s3.c">macOS 自带 LibreSSL 3.3 不支持 Ed25519，此时安装器会明确告警而不是悄悄跳过；OPENPANDA_REQUIRE_SIG=1 把「无法验签」变成硬失败。</li>
+          <li data-i18n="dl.s3.d">Windows PowerShell 5.1 无 Ed25519 原语，install.ps1 只做 SHA-256；Windows 网络栈的特殊情况写在 docs/install.md。</li>
+          <li data-i18n="dl.s3.e">降级会被拒绝：解包后比对新二进制的迁移上限与数据目录 schema，更旧版本一律拒绝；--force 才是有意的放行。</li>
+        </ul>
+      </section>
+
+      <section class="pg-section" id="upgrade">
+        <h2 data-i18n="dl.s4.t">升级与卸载</h2>
+        <div class="pg-steps">
+          <div class="pg-step"><span class="pg-step-n">01</span><code>panda update check</code><code>panda update apply</code><p data-i18n="dl.s4.a">检查新版本 / 应用更新（验签通过后才换二进制）。</p></div>
+          <div class="pg-step"><span class="pg-step-n">02</span><code>curl -fsSL … | sh</code><p data-i18n="dl.s4.b">重跑安装脚本即原地升级，配置、会话与数据保留。</p></div>
+          <div class="pg-step"><span class="pg-step-n">03</span><code>panda uninstall</code><p data-i18n="dl.s4.c">移除二进制、PATH 标记块与自启单元；--purge 连数据一起删，--backup-only 先归档。</p></div>
+        </div>
+      </section>
+
+      <section class="pg-section" id="older">
+        <h2 data-i18n="dl.s5.t">指定版本</h2>
+        <p class="pg-lead" data-i18n="dl.s5.d">macOS / Linux 用 --version 0.1.3，PowerShell 用 -Version 0.1.3 钉住某一版；预发布版必须显式指定，latest 永远只指最新稳定版。</p>
+        <p class="pg-inline"><a href="changelog.html" data-i18n="dl.s5.link">发布记录与逐版改动 →</a></p>
+      </section>
+
+<section class="pg-section" id="requirements">
+      <h2 data-i18n="dlx.s1.t">系统要求</h2>
+      <p class="pg-lead" data-i18n="dlx.s1.d">二进制是纯 Go 静态构建，运行时没有外部依赖；源码构建才需要下面三条工具链。</p>
+      <div class="pg-table-wrap"><table class="pg-table"><thead><tr>
+      <th></th>
+      <th data-i18n="dlx.s1.h1">要求</th>
+      <th data-i18n="dlx.s1.h2">说明</th>
+      </tr></thead><tbody>
+      <tr>
+      <td><code>macOS / Linux / Windows</code></td>
+      <td data-i18n="dlx.s1.r1.c2">amd64 与 arm64</td>
+      <td data-i18n="dlx.s1.r1.c3">六个正式发布目标，另有 Linux lite 变体</td>
+      </tr>
+      <tr>
+      <td><code data-i18n="dlx.s1.r2.c1">内存</code></td>
+      <td data-i18n="dlx.s1.r2.c2">约 40MB RSS（空闲守护进程）</td>
+      <td data-i18n="dlx.s1.r2.c3">不含你配置的模型与 agent CLI 自身占用</td>
+      </tr>
+      <tr>
+      <td><code>Python</code></td>
+      <td data-i18n="dlx.s1.r3.c2">≥ 3.10</td>
+      <td data-i18n="dlx.s1.r3.c3">适配器桥接脚本与语音侧车需要；lite 构建可免</td>
+      </tr>
+      <tr>
+      <td><code>Go / Node.js</code></td>
+      <td data-i18n="dlx.s1.r4.c2">≥ 1.26.10 / ≥ 18</td>
+      <td data-i18n="dlx.s1.r4.c3">仅源码构建：内核与内嵌 Web 控制台</td>
+      </tr>
+      <tr>
+      <td><code data-i18n="dlx.s1.r5.c1">网络</code></td>
+      <td data-i18n="dlx.s1.r5.c2">安装时需访问 GitHub releases</td>
+      <td data-i18n="dlx.s1.r5.c3">装完之后节点间只走你自己的网络</td>
+      </tr>
+      </tbody></table></div>
+      </section>
+      <section class="pg-section" id="params">
+      <h2 data-i18n="dlx.s2.t">安装参数</h2>
+      <p class="pg-lead" data-i18n="dlx.s2.d">一键脚本与 PowerShell 安装器支持的参数；latest 永远只指最新稳定版，预发布版必须显式指定。</p>
+      <div class="pg-table-wrap"><table class="pg-table"><thead><tr>
+      <th>PARAMETER</th>
+      <th data-i18n="dlx.s2.h1">作用</th>
+      </tr></thead><tbody>
+      <tr>
+      <td><code>--version 0.1.3</code></td>
+      <td data-i18n="dlx.s2.r1.c2">install.sh 钉住某一版，也可用环境变量 OPENPANDA_VERSION</td>
+      </tr>
+      <tr>
+      <td><code>-Version 0.1.3</code></td>
+      <td data-i18n="dlx.s2.r2.c2">install.ps1 的等价参数</td>
+      </tr>
+      <tr>
+      <td><code>--prefix &lt;dir&gt;</code></td>
+      <td data-i18n="dlx.s2.r3.c2">改安装根目录；默认 $XDG_DATA_HOME 或 ~/.local/share/openpanda</td>
+      </tr>
+      <tr>
+      <td><code>--lite</code></td>
+      <td data-i18n="dlx.s2.r4.c2">选无内嵌控制台与 TUI 的 Linux 变体，面向树莓派与纯命令行设备</td>
+      </tr>
+      <tr>
+      <td><code>-Yes / -NoService / -Force</code></td>
+      <td data-i18n="dlx.s2.r5.c2">PowerShell 安装器：免确认、不注册登录计划任务、有意放行降级保护</td>
+      </tr>
+      <tr>
+      <td><code>--purge / --backup-only / --dry-run</code></td>
+      <td data-i18n="dlx.s2.r6.c2">panda uninstall 的参数：连数据一起删、只归档、只看计划不动手</td>
+      </tr>
+      </tbody></table></div>
+      </section>
+      <section class="pg-section" id="manual">
+      <h2 data-i18n="dlx.s3.t">离线与手动安装</h2>
+      <p class="pg-lead" data-i18n="dlx.s3.d">受限网络下可以先把产物和校验文件拷进内网，再手工解包；命名规则与安装器一致。</p>
+      <div class="pg-steps">
+      <div class="pg-step"><span class="pg-step-n">01</span><code>panda-&lt;version&gt;-&lt;os&gt;-&lt;arch&gt;.tar.gz</code><p data-i18n="dlx.s3.s1">macOS / Linux 归档；Windows 对应 panda-&lt;version&gt;-windows-&lt;arch&gt;.zip。</p></div>
+      <div class="pg-step"><span class="pg-step-n">02</span><code>checksums.txt</code><code>checksums.txt.sig</code><p data-i18n="dlx.s3.s2">先核对 SHA-256，再验 detached Ed25519 签名；两者同信道送达时签名才是信任锚。</p></div>
+      <div class="pg-step"><span class="pg-step-n">03</span><code>tar -xzf …</code><code>./openpanda/bin/panda version --json</code><p data-i18n="dlx.s3.s3">解包后把 bin/ 加进 PATH；version --json 会同时给出二进制版本与数据库 schema。</p></div>
+      </div>
+      <p class="pg-note" data-i18n="dlx.s3.note">受限网络下的完整做法（代理、镜像、OPENPANDA_UPDATE_BASE）写在 docs/install.md，按五种语言发布。</p>
+      </section>
+      <section class="pg-section" id="after">
+      <h2 data-i18n="dlx.s4.t">安装后验证</h2>
+      <p class="pg-lead" data-i18n="dlx.s4.d">三条只读命令，用来确认装上去的那份就是刚下载的那份，且配置与端点都可用。</p>
+      <div class="cmd-block">
+      <div class="cmd-head"><span>panda version --json</span><span data-i18n="dlx.s4.c1.h">版本与数据库 schema</span></div>
+      <div class="cmd-row"><span class="prompt">$</span><code id="dlx-version">panda version --json</code><button class="copy-btn" data-copy-target="dlx-version" data-i18n-aria="pg.copy" aria-label="复制命令"><svg class="ic-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="ic-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button></div>
+      </div>
+      <div class="cmd-block">
+      <div class="cmd-head"><span>panda doctor</span><span data-i18n="dlx.s4.c2.h">配置、端点、适配器与网络诊断</span></div>
+      <div class="cmd-row"><span class="prompt">$</span><code id="dlx-doctor">panda doctor</code><button class="copy-btn" data-copy-target="dlx-doctor" data-i18n-aria="pg.copy" aria-label="复制命令"><svg class="ic-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="ic-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button></div>
+      </div>
+      <div class="cmd-block">
+      <div class="cmd-head"><span>panda init</span><span data-i18n="dlx.s4.c3.h">初始化节点与能力卡</span></div>
+      <div class="cmd-row"><span class="prompt">$</span><code id="dlx-init">panda init</code><button class="copy-btn" data-copy-target="dlx-init" data-i18n-aria="pg.copy" aria-label="复制命令"><svg class="ic-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="ic-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button></div>
+      </div>
+      <p class="pg-note" data-i18n="dlx.s4.note">如果 doctor 里出现「端点未配置」之类的拒绝项，先修配置再往下走；它打印的每一行都对应一个实际执行判定。</p>
+      </section>
+
+      <div class="pg-cta">
+        <a class="pg-cta-main" href="docs.html" data-i18n="pg.cta.docs">读文档 →</a>
+        <a href="status.html" data-i18n="pg.cta.st">看当前边界 →</a>
+      </div>
+    </div>
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div class="footer-brand">
+      <a class="brand" href="index.html" aria-label="OpenPanda">
+        <svg class="brand-mark" width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
+        <span>Open<b>Panda</b></span>
+      </a>
+      <p class="footer-tag" data-i18n="foot.tag">Local-first, forever.</p>
+      <p class="footer-version"><b>v0.1.4 Constellation</b> <span>· stable</span></p>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.product">产品</h4>
+      <a href="features.html" data-i18n="foot.features">能力清单</a>
+      <a href="index.html#graph" data-i18n="foot.why">为什么是图</a>
+      <a href="index.html#constitution" data-i18n="foot.thin">薄宪法</a>
+      <a href="index.html#roadmap" data-i18n="foot.roadmap">路线图</a>
+      <a href="faq.html" data-i18n="foot.faq">常见问题</a>
+      <a href="download.html" data-i18n="foot.install">安装</a>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.resources">资源</h4>
+      <a href="docs.html" data-i18n="foot.docs">文档中心</a>
+      <a href="download.html" data-i18n="foot.releases">下载与校验</a>
+      <a href="changelog.html" data-i18n="foot.changelog">更新日志</a>
+      <a href="status.html" data-i18n="foot.status">项目现状</a>
+      <a href="security.html" data-i18n="foot.trust">安全与信任</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0</a>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.contact">社区</h4>
+      <a href="community.html" data-i18n="foot.community">社区与贡献</a>
+      <a href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Xustalis/OpenPanda/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/SECURITY.md" target="_blank" rel="noopener" data-i18n="foot.security">安全策略</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/CODE_OF_CONDUCT.md" target="_blank" rel="noopener" data-i18n="foot.conduct">行为准则</a>
+      <a href="mailto:fing2024@outlook.com" data-i18n="foot.invest">合作 / 投资</a>
+      <a href="mailto:fing2024@outlook.com">fing2024@outlook.com</a>
+    </div>
+  </div>
+  <!-- A policy statement, not a live probe: claiming "all green" from a static
+       page would be a lie the first time a check fails. -->
+  <div class="wrap footer-status">
+    <span class="status-pill"><i aria-hidden="true"></i><span data-i18n="foot.green">main 分支全绿才允许合并</span></span>
+    <span class="status-sep" aria-hidden="true">·</span>
+    <span data-i18n="foot.checks">10 项必过检查 · 6 个发布目标 · 每周安全扫描</span>
+    <a class="status-link" href="download.html" data-i18n="foot.latest">最新版本 v0.1.4 Constellation <span aria-hidden="true">→</span></a>
+  </div>
+  <div class="wrap footer-bottom">
+    <p class="footer-credit" data-i18n="foot.credit">影像：<a href="https://www.eso.org/public/images/eso0932a/" target="_blank" rel="noopener">ESO/S. Brunier 银河全景</a>（<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>；已裁剪、调色并与程序星点合成）；NASA Blue Marble、Black Marble DNB 与地球云层影像（公有领域）。代码以 AGPL-3.0-or-later 发布；闭源嵌入与托管修改可另行授权。</p>
+    <div class="footer-meta"><span>© 2026 OpenPanda</span><span data-i18n="foot.built">Built for machines you own.</span><a href="index.html#top" aria-label="Back to top" data-i18n-aria="foot.top">↑</a></div>
+  </div>
+</footer>
+<script type="module" src="js/page.js"></script>
+</body>
+</html>

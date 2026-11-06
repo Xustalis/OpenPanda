@@ -1,0 +1,281 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title data-i18n-content="meta.cl.title">发布记录 — OpenPanda</title>
+<meta name="description" data-i18n-content="meta.cl.desc" content="OpenPanda 0.1.x 每个版本的改动摘要，以及发布级版本线的兼容承诺。" />
+<meta name="author" content="Xustalis" />
+<link rel="canonical" href="https://xustalis.github.io/OpenPanda/changelog.html" />
+<!-- One canonical Chinese document per page. English is a client-side swap
+     from js/i18n.js; there is deliberately no hreflang or alternate locale. -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="OpenPanda" />
+<meta property="og:locale" content="zh_CN" />
+<meta property="og:url" content="https://xustalis.github.io/OpenPanda/changelog.html" />
+<meta property="og:title" data-i18n-content="meta.cl.title" content="发布记录 — OpenPanda" />
+<meta property="og:description" data-i18n-content="meta.cl.desc" content="OpenPanda 0.1.x 每个版本的改动摘要，以及发布级版本线的兼容承诺。" />
+<meta property="og:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" data-i18n-content="meta.cl.title" content="发布记录 — OpenPanda" />
+<meta name="twitter:description" data-i18n-content="meta.cl.desc" content="OpenPanda 0.1.x 每个版本的改动摘要，以及发布级版本线的兼容承诺。" />
+<meta name="twitter:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
+<meta name="theme-color" content="#faf9f5" />
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="stylesheet" href="css/site.css" />
+<!-- Language bootstrap. Runs before the body parses so <html lang>, the toggle
+     state and the "hold the paint" guard are right on the first frame; the
+     dictionary itself is applied by js/i18n.js once the module loads. Order of
+     preference: ?lang= → saved choice → browser language (zh* → 中文, else EN). -->
+<script>
+(function () {
+  var KEY = 'openpanda.site.lang'
+  var q = new URLSearchParams(location.search).get('lang')
+  var lang = q === 'en' || q === 'zh' ? q : null
+  if (!lang) { try { var s = localStorage.getItem(KEY); if (s === 'en' || s === 'zh') lang = s } catch (e) {} }
+  if (!lang) lang = /^zh/i.test(navigator.language || '') ? 'zh' : 'en'
+  var root = document.documentElement
+  root.setAttribute('data-lang', lang)
+  root.setAttribute('lang', lang === 'zh' ? 'zh-CN' : 'en')
+  // English copy lives in the dictionary, not the markup: hide the Chinese
+  // paint for the few milliseconds until i18n.js swaps it in. The timer is the
+  // guard — a broken module must never leave a blank page.
+  if (lang === 'en') {
+    root.classList.add('lang-pending')
+    setTimeout(function () { root.classList.remove('lang-pending') }, 1200)
+  }
+})()
+</script>
+<noscript><style>html.lang-pending body { opacity: 1 !important; }</style></noscript>
+<script>document.documentElement.classList.add('js')</script>
+</head>
+<body class="subpage">
+<a class="skip-link" href="#main" data-i18n="skip">跳到正文</a>
+
+<nav class="site-nav solid" id="site-nav" aria-label="主导航" data-i18n-aria="nav.primary">
+  <a class="brand" href="index.html" aria-label="OpenPanda">
+    <svg class="brand-mark" width="27" height="27" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
+    <span>Open<b>Panda</b></span>
+  </a>
+  <!-- Site-level navigation, shared verbatim by every page. The eleven
+       chapters remain reachable through the hero index and ⌘K on this page;
+       a site is not one long scroll. -->
+  <div class="nav-links">
+    <a href="index.html" data-i18n="nav.overview">概览</a>
+    <a href="features.html" data-i18n="nav.features">能力</a>
+    <a href="docs.html" data-i18n="nav.docs">文档</a>
+    <a href="download.html" data-i18n="nav.download">下载</a>
+    <a href="changelog.html" aria-current="page" data-i18n="nav.changelog">更新日志</a>
+    <a href="status.html" data-i18n="nav.status">项目现状</a>
+    <a href="faq.html" data-i18n="nav.faq">常见问题</a>
+  </div>
+  <div class="nav-actions">
+    <button class="lang-toggle" type="button" data-lang-toggle aria-label="切换语言" data-i18n-aria="lang.switch" title="中文 / English">
+      <span class="lang-zh" lang="zh-CN">中文</span><span class="lang-sep" aria-hidden="true">/</span><span class="lang-en" lang="en">EN</span>
+    </button>
+    <a class="nav-gh" href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span>GitHub</span>
+      <span class="nav-stars" id="gh-stars" hidden></span>
+    </a>
+  </div>
+</nav>
+<main id="main" tabindex="-1">
+  <header class="pg-hero">
+    <div class="wrap">
+      <p class="mono-label pg-kicker">RELEASE NOTES</p>
+      <h1 class="pg-title" data-i18n="cl.h1">发布记录</h1>
+      <p class="pg-lede" data-i18n="cl.lede">0.1.x 是发布级版本线。以下是逐版摘要，五语完整日志留在仓库里。</p>
+      <p class="pg-meta">5 RELEASES · 0.1.0 → 0.1.4 · 2026-10-23 → 2026-11-03</p>
+    </div>
+  </header>
+  <div class="wrap pg-layout">
+      <aside class="pg-toc">
+        <p class="mono-label" data-i18n="pg.toc.on">ON THIS PAGE</p>
+        <nav aria-label="本页目录" data-i18n-aria="pg.toc.aria">
+        <a href="#promise" data-i18n="cl.promise.t">版本兼容承诺</a>
+        <a href="#v014" data-i18n="cl.v014.t">v0.1.4</a>
+        <a href="#v013" data-i18n="cl.v013.t">v0.1.3</a>
+        <a href="#v012" data-i18n="cl.v012.t">v0.1.2</a>
+        <a href="#v011" data-i18n="cl.v011.t">v0.1.1</a>
+        <a href="#v010" data-i18n="cl.v010.t">v0.1.0</a>
+        <a href="#older" data-i18n="cl.older.t">更早的版本</a>
+
+        <a href="#policy" data-i18n="toc.policy">版本与发布通道</a>
+        <a href="#upgrade" data-i18n="toc.upgrade">升级指引</a>
+        <a href="#verify" data-i18n="toc.verify">如何验证一次发布</a>
+        </nav>
+        <div class="pg-toc-foot">
+          <span class="mono-label">STABLE</span>
+          <b>v0.1.4</b>
+          <a href="download.html" data-i18n="pg.toc.dl">下载 →</a>
+        </div>
+      </aside>
+    <div class="pg-content">
+      <section class="pg-section" id="promise">
+        <h2 data-i18n="cl.promise.t">版本兼容承诺</h2>
+        <p class="pg-lead" data-i18n="cl.promise.d">0.1.x 的补丁版可以加能力、修缺陷，但不破坏配置、存储数据与线协议；破坏其中任一项的改动属于次版本（0.2.0）。无法避免的破坏仍会给出弃用窗口与 Breaking changes 条目，不会无声抵达。</p>
+      </section>
+
+      <article class="pg-release pg-release-current" id="v014">
+        <div class="pg-release-head"><span class="pg-release-ver">v0.1.4</span><span>2026-11-03</span><b>CONSTELLATION</b><em data-i18n="cl.current">当前版本</em></div>
+        <ul>
+          <li data-i18n="cl.v014.a">每个 agent 任务开始前拿到确定性的工作区地图（git 状态、目录结构、语言分布、项目自己的构建/验证命令）；完成判定看到实际执行的命令与验证入口是否真的跑过。</li>
+          <li data-i18n="cl.v014.b">大而模糊的请求先提最多四个有界选择题；大任务执行前停在「执行 / 只读分析 / 取消」。</li>
+          <li data-i18n="cl.v014.c">任务栏、文件查看器、产物预览与侧聊收成一列 dock；panda service install 把控制台注册为用户级常驻服务。</li>
+          <li data-i18n="cl.v014.d">Agent 可通过 panda browser 与 panda_browser_* 工具驱动真实无头浏览器；项目开发服务器经同源反向代理实时预览。</li>
+        </ul>
+        <a href="download.html" data-i18n="cl.more">下载这一版 →</a>
+      </article>
+
+      <article class="pg-release" id="v013">
+        <div class="pg-release-head"><span class="pg-release-ver">v0.1.3</span><span>2026-10-30</span><b>CONSTELLATION</b></div>
+        <ul>
+          <li data-i18n="cl.v013.a">一次性静默 CLI 运行每 20 秒发心跳，健康的长任务不再被当成 adapter stalled 杀掉。</li>
+          <li data-i18n="cl.v013.b">看门狗超时以 exit 124 与 timeout 结论结束，不再误判为模型提供方故障并触发多余重跑。</li>
+          <li data-i18n="cl.v013.c">控制台事件流在唤醒后立刻重连；X-Accel-Buffering: no 让反向代理后的实况不再被缓冲。</li>
+        </ul>
+      </article>
+
+      <article class="pg-release" id="v012">
+        <div class="pg-release-head"><span class="pg-release-ver">v0.1.2</span><span>2026-10-29</span><b>CONSTELLATION</b></div>
+        <ul>
+          <li data-i18n="cl.v012.a">五档权限模式（自动 / 手动 / 接受编辑 / 计划 / 绕过权限）随每个任务规格下发到执行端。</li>
+          <li data-i18n="cl.v012.b">panda task add --accept 在 agent 结束后跑可执行的验收合同，区分「回归」与「本来就红」。</li>
+          <li data-i18n="cl.v012.c">模型注册中心按连接分组（一个端点 + 一把 key 即一个账户）；自启单元补上能找到 agent CLI 的 PATH。</li>
+        </ul>
+      </article>
+
+      <article class="pg-release" id="v011">
+        <div class="pg-release-head"><span class="pg-release-ver">v0.1.1</span><span>2026-10-27</span><b>CONSTELLATION</b></div>
+        <ul>
+          <li data-i18n="cl.v011.a">入口客户端新增 OpenAI Responses 与 Google Gemini 原生方言：流式、工具调用、用量计量。</li>
+          <li data-i18n="cl.v011.b">节点名册与 pin 打通终端（/team、/node、panda ask --team/--node）。</li>
+          <li data-i18n="cl.v011.c">跨进程读写改为文件锁后的原子操作；UDP 数据报改为按对端 X25519 密钥封帧。</li>
+        </ul>
+      </article>
+
+      <article class="pg-release" id="v010">
+        <div class="pg-release-head"><span class="pg-release-ver">v0.1.0</span><span>2026-10-23</span><b>CONSTELLATION</b><em data-i18n="cl.first">发布级起点</em></div>
+        <ul>
+          <li data-i18n="cl.v010.a">跨网组网：双钥匙身份、盲中继、流行病式目录同步与 K=2 会合阶梯。</li>
+          <li data-i18n="cl.v010.b">同项目并行编排：--paths 限定作用域，--isolate 给私有 worktree 并三向合并回主树。</li>
+          <li data-i18n="cl.v010.c">发布级安全收口：不可逆命令不再能冒充可逆，strict 沙箱拒绝读取节点机密，信任断言读不到时 fail-closed。</li>
+          <li data-i18n="cl.v010.d">控制台成为干活的地方：以结论开头的任务页、待办板与会为线程招人的名册。</li>
+        </ul>
+      </article>
+
+      <section class="pg-section" id="older">
+        <h2 data-i18n="cl.older.t">更早的版本</h2>
+        <p class="pg-lead" data-i18n="cl.older.d">0.0.x 预览线（0.0.1 至 0.0.12-preview）逐版记录，包括当时的线协议破坏性变更；这些构建保留给显式钉版本的用户。</p>
+        <p class="pg-inline"><a href="https://github.com/Xustalis/OpenPanda/blob/main/CHANGELOG.md" target="_blank" rel="noopener" data-i18n="cl.older.link">完整更新日志（EN / 中文 / 日本語 / Español / Deutsch）↗</a></p>
+      </section>
+
+<section class="pg-section" id="policy">
+      <h2 data-i18n="clx.s1.t">版本与发布通道</h2>
+      <p class="pg-lead" data-i18n="clx.s1.d">一条发布级版本线，规则写死在 CHANGELOG 里，不靠口头约定。</p>
+      <div class="pg-facts">
+      <div class="pg-fact">
+      <h3 data-i18n="clx.s1.f1.t">语义与兼容</h3>
+      <p data-i18n="clx.s1.f1.d">0.1.x 补丁版可加能力、修缺陷，但不破坏配置、存储数据与线协议；破坏任一项属于次版本。无法避免的破坏会给弃用窗口与 Breaking changes 条目。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="clx.s1.f2.t">稳定通道</h3>
+      <p data-i18n="clx.s1.f2.d">latest 只指最新稳定版；预发布版必须显式钉版本。安装器与自更新器都带降级保护，拒绝装回比数据目录 schema 更旧的构建。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="clx.s1.f3.t">签名发布</h3>
+      <p data-i18n="clx.s1.f3.d">每个 release 附 checksums.txt 与 detached Ed25519 签名 checksums.txt.sig；官方公钥内置于二进制，同信道伪造的校验和会被拒绝。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="clx.s1.f4.t">五语记录</h3>
+      <p data-i18n="clx.s1.f4.d">CHANGELOG 以中文为准，另有 English / 日本語 / Español / Deutsch 四份；本页的 0.1.x 版本集合与 CHANGELOG.md 由校验脚本逐版对账。</p>
+      </div>
+      </div>
+      </section>
+      <section class="pg-section" id="upgrade">
+      <h2 data-i18n="clx.s2.t">升级指引</h2>
+      <p class="pg-lead" data-i18n="clx.s2.d">绝大多数升级只要重跑一条命令；下面四条是需要额外看一眼的例外。</p>
+      <ul class="pg-list">
+      <li data-i18n="clx.s2.b1">0.1.x 内部的补丁升级保留配置、会话与数据；自动迁移会在首次启动时补上所需的索引或表，不需要手工改库。</li>
+      <li data-i18n="clx.s2.b2">0.1.1 有一个明确的不兼容边：UDP 数据报平面与 0.1.0 节点不通。跨版本的 mesh 要整组一起升，不要留一台旧节点。</li>
+      <li data-i18n="clx.s2.b3">0.1.2 与 0.1.3 各带一次自动迁移（合同表与一个附加索引），线协议没有新增帧；升级前备份数据目录仍是好习惯。</li>
+      <li data-i18n="clx.s2.b4">自编译的旧构建没有内置发布公钥时会 fail-closed 拒绝更新；设 OPENPANDA_UPDATE_PUBKEY 指向官方公钥即可升入签名通道。</li>
+      <li data-i18n="clx.s2.b5">升级前后各跑一次 panda version --json，比对二进制版本与 db_schema；两者不匹配时不要继续跑写库命令。</li>
+      </ul>
+      </section>
+      <section class="pg-section" id="verify">
+      <h2 data-i18n="clx.s3.t">如何验证一次发布</h2>
+      <p class="pg-lead" data-i18n="clx.s3.d">不信任「我这边是好的」，信任可以复算的哈希与签名。</p>
+      <div class="pg-steps">
+      <div class="pg-step"><span class="pg-step-n">01</span><code>checksums.txt</code><p data-i18n="clx.s3.s1">逐个归档核对 SHA-256；安装器在解包前就会做这一步。</p></div>
+      <div class="pg-step"><span class="pg-step-n">02</span><code>checksums.txt.sig</code><p data-i18n="clx.s3.s2">用二进制内置的官方公钥验 detached Ed25519 签名；自更新器一律强制验签。</p></div>
+      <div class="pg-step"><span class="pg-step-n">03</span><code>panda version --json</code><p data-i18n="clx.s3.s3">装上之后再确认版本与 schema，对「已安装的那份」复跑一次验证。</p></div>
+      </div>
+      <p class="pg-note" data-i18n="clx.s3.note">macOS 自带 LibreSSL 3.3 不支持 Ed25519，安装器会明确告警而不是悄悄跳过；OPENPANDA_REQUIRE_SIG=1 可把「无法验签」变成硬失败。</p>
+      </section>
+
+      <div class="pg-cta">
+        <a class="pg-cta-main" href="download.html" data-i18n="pg.cta.dl">下载 v0.1.4 →</a>
+        <a href="status.html" data-i18n="pg.cta.st">看当前边界 →</a>
+      </div>
+    </div>
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div class="footer-brand">
+      <a class="brand" href="index.html" aria-label="OpenPanda">
+        <svg class="brand-mark" width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
+        <span>Open<b>Panda</b></span>
+      </a>
+      <p class="footer-tag" data-i18n="foot.tag">Local-first, forever.</p>
+      <p class="footer-version"><b>v0.1.4 Constellation</b> <span>· stable</span></p>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.product">产品</h4>
+      <a href="features.html" data-i18n="foot.features">能力清单</a>
+      <a href="index.html#graph" data-i18n="foot.why">为什么是图</a>
+      <a href="index.html#constitution" data-i18n="foot.thin">薄宪法</a>
+      <a href="index.html#roadmap" data-i18n="foot.roadmap">路线图</a>
+      <a href="faq.html" data-i18n="foot.faq">常见问题</a>
+      <a href="download.html" data-i18n="foot.install">安装</a>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.resources">资源</h4>
+      <a href="docs.html" data-i18n="foot.docs">文档中心</a>
+      <a href="download.html" data-i18n="foot.releases">下载与校验</a>
+      <a href="changelog.html" data-i18n="foot.changelog">更新日志</a>
+      <a href="status.html" data-i18n="foot.status">项目现状</a>
+      <a href="security.html" data-i18n="foot.trust">安全与信任</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0</a>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.contact">社区</h4>
+      <a href="community.html" data-i18n="foot.community">社区与贡献</a>
+      <a href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Xustalis/OpenPanda/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/SECURITY.md" target="_blank" rel="noopener" data-i18n="foot.security">安全策略</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/CODE_OF_CONDUCT.md" target="_blank" rel="noopener" data-i18n="foot.conduct">行为准则</a>
+      <a href="mailto:fing2024@outlook.com" data-i18n="foot.invest">合作 / 投资</a>
+      <a href="mailto:fing2024@outlook.com">fing2024@outlook.com</a>
+    </div>
+  </div>
+  <!-- A policy statement, not a live probe: claiming "all green" from a static
+       page would be a lie the first time a check fails. -->
+  <div class="wrap footer-status">
+    <span class="status-pill"><i aria-hidden="true"></i><span data-i18n="foot.green">main 分支全绿才允许合并</span></span>
+    <span class="status-sep" aria-hidden="true">·</span>
+    <span data-i18n="foot.checks">10 项必过检查 · 6 个发布目标 · 每周安全扫描</span>
+    <a class="status-link" href="download.html" data-i18n="foot.latest">最新版本 v0.1.4 Constellation <span aria-hidden="true">→</span></a>
+  </div>
+  <div class="wrap footer-bottom">
+    <p class="footer-credit" data-i18n="foot.credit">影像：<a href="https://www.eso.org/public/images/eso0932a/" target="_blank" rel="noopener">ESO/S. Brunier 银河全景</a>（<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>；已裁剪、调色并与程序星点合成）；NASA Blue Marble、Black Marble DNB 与地球云层影像（公有领域）。代码以 AGPL-3.0-or-later 发布；闭源嵌入与托管修改可另行授权。</p>
+    <div class="footer-meta"><span>© 2026 OpenPanda</span><span data-i18n="foot.built">Built for machines you own.</span><a href="index.html#top" aria-label="Back to top" data-i18n-aria="foot.top">↑</a></div>
+  </div>
+</footer>
+<script type="module" src="js/page.js"></script>
+</body>
+</html>
