@@ -42,7 +42,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
-- **Der Windows-Installer hängt nicht mehr, wenn GitHub stockt** — jede Download-Anfrage ist jetzt durchgängig begrenzt (eine Gesamtzeitgrenze und eine Mindestgeschwindigkeit von 1 KB/s für curl, ein Lesetimeout für den .NET-Fallback), sodass eine Verbindung, die aufgebaut wird und dann keine Bytes liefert, nach etwa einer Minute mit der zugeordneten curl-Ursache endet, statt dauerhaft bei `Installing …` stehen zu bleiben. Außerdem übergibt das Skript curl den Systemproxy aus den Windows-„Internetoptionen“; curl liest nur die Umgebungsvariablen `HTTP_PROXY`/`HTTPS_PROXY`, weshalb `irm` das Skript laden konnte, während der Archiv-Download direkt verband und hängen blieb.
+- **Der Windows-Installer hängt nicht mehr, wenn GitHub stockt** — jede Anfrage ist begrenzt: curl erhält für das Archiv eine Mindestgeschwindigkeit von 1 KB/s über 60 s und eine Gesamtgrenze von 300 s (45 s für die API); der .NET-Fallback hat ein Lesetimeout, das auch den Antwortkörper abdeckt. curl wiederholt Timeouts nicht mehr: Jeder Wiederholungsversuch setzte die Zeitmessung zurück und startete die gesamte Übertragung bis zu dreimal erneut. Eine Verbindung, die aufgebaut wird und dann keine Bytes liefert, endet jetzt mit der zugeordneten curl-Ursache statt dauerhaft bei `Installing …` stehen zu bleiben. Das Skript übergibt curl außerdem den Systemproxy aus den Windows-„Internetoptionen“, berücksichtigt dessen `ProxyOverride`-Ausnahmeliste (einschließlich Loopback), damit lokale Spiegel direkt bleiben, und überlässt reine PAC-Konfigurationen dem .NET-Fallback.
 
 ## [0.1.4] - 2026-11-03 — "Constellation"
 

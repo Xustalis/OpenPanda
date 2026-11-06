@@ -67,7 +67,7 @@ ${XDG_DATA_HOME:-~/.local/share}/openpanda/
   curl.exe -sS --ssl-no-revoke -o NUL -w "%{http_code}`n" https://api.github.com/repos/Xustalis/OpenPanda/releases/latest
   ```
 
-- **Windows 安装脚本停在 `Installing …` 之后不动**：这一行之后就是下载压缩包，GitHub 会把请求 302 到 `release-assets.githubusercontent.com`，该域名不通时连接能建立、字节却发不过来，curl 自己不会超时。脚本现在给每次下载设了总时限和最低速度（低于 1 KB/s 持续一分钟即中止），失败时打印映射后的原因，而不是无限挂着。另外它会把 Windows「Internet 选项」里的系统代理交给 curl：curl 只读 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，不读系统代理，于是会出现 `irm` 能拉到脚本、下载却直连失败的分裂现象；显式设了环境变量的，环境变量优先。
+- **Windows 安装脚本停在 `Installing …` 之后不动**：这一行之后就是下载压缩包，GitHub 会把请求 302 到 `release-assets.githubusercontent.com`，该域名不通时连接能建立、字节却发不过来，curl 自己不会超时。脚本现在给每次下载设了时限：压缩包低于 1 KB/s 持续 60 秒即中止，单次上限 300 秒（API 查询 45 秒），.NET 兜底的读取超时同样覆盖响应正文；curl 不再重试超时，因为每次重试都会用全新计时重跑整个传输，把等待时间成倍放大。失败时打印映射后的原因，而不是无限挂着。另外它会把 Windows「Internet 选项」里的系统代理交给 curl：curl 只读 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，不读系统代理，于是会出现 `irm` 能拉到脚本、下载却直连失败的分裂现象。代理的 `ProxyOverride` 绕过列表（含本地回环）同样生效，因此用 `OPENPANDA_RELEASE_BASE` 指向本地镜像时仍走直连；显式设了环境变量的，环境变量优先；只配了 PAC 的情况交给 .NET 兜底。
 
 镜像只改变传输路径，不改变信任：`checksums.txt`、Ed25519 签名与压缩包三者仍必须互相对应。
 

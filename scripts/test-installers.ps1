@@ -264,6 +264,49 @@ try {
     # $Work, which the finally block deletes.
     try { & schtasks.exe /Delete /TN "OpenPandaNode" /F 2>$null | Out-Null } catch {}
 
+    # ── 7. Timeout contract (source guard) ────────────────────────────────
+    # Sections 1-6 exercise only file:// success paths; none of them can see a
+    # stalled transfer. The limits are easy to "improve" back into a hang:
+    # curl treats exit 28 (what --speed-limit produces) as a transient error,
+    # so --retry re-runs the whole transfer with a fresh timer, and a larger
+    # --max-time reopens the unbounded wait. Assert the shape of the limits in
+    # the installer source the same way nodecli guards its command catalog.
+    Write-Host "-> timeout contract"
+    $installerSource = Get-Content (Join-Path $Root "scripts/install.ps1") -Raw
+    $curlArgLines = @($installerSource -split "`n" | Where-Object { $_ -match '\$curlArgs\s*=' })
+
+    if ($curlArgLines.Count -ne 2) {
+        Bad "expected 2 curl argument constructions, found $($curlArgLines.Count)"
+    } elseif (@($curlArgLines | Where-Object { $_ -match '"--retry"' }).Count -ne 0) {
+        Bad "curl downloads still use --retry; a timeout would be retried with a fresh timer"
+    } else {
+        Ok "curl downloads do not retry timeouts"
+        if (@($curlArgLines | Where-Object { $_ -match 'CurlTransferLimits|CurlJsonLimits' }).Count -eq 2) {
+            Ok "both download paths use the shared limit sets"
+        } else {
+            Bad "a download path bypasses the shared limit sets"
+        }
+    }
+
+    if ($installerSource -match 'CurlTransferLimits\s*=\s*@\("--max-time",\s*"(\d+)"') {
+        $archiveMax = [int]$Matches[1]
+        if ($archiveMax -gt 300) { Bad "archive --max-time is $archiveMax s (over the 300 s ceiling)" }
+        else { Ok "archive --max-time is $archiveMax s" }
+    } else { Bad "could not read the archive --max-time" }
+
+    if ($installerSource -match 'CurlTransferLimits\s*=\s*@\(.*"--speed-time",\s*"(\d+)"') {
+        $floorTime = [int]$Matches[1]
+        if ($floorTime -gt 60) { Bad "--speed-time is $floorTime s (over the 60 s ceiling)" }
+        else { Ok "--speed-time is $floorTime s" }
+    } else { Bad "could not read --speed-time" }
+
+    if ($installerSource -notmatch 'ReadWriteTimeout') { Bad ".NET fallback lost its body-read timeout" }
+    else { Ok ".NET fallback bounds body reads" }
+
+    if ($installerSource -notmatch 'ProxyOverride' -or $installerSource -notmatch 'NO_PROXY') {
+        Bad "system-proxy bypass (ProxyOverride / NO_PROXY) is missing"
+    } else { Ok "system-proxy bypass is present" }
+
     # ── Summary ────────────────────────────────────────────────────────────
     Write-Host ""
     if ($Fail -ne 0) {

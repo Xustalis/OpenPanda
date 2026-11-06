@@ -42,7 +42,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### Fixed
 
-- **GitHub 卡住时 Windows 安装器不再无限挂起** —— 下载从头到尾都有了时限（curl 是总时限加 1 KB/s 速度下限，.NET 兜底是读取超时），连接建立后收不到字节的情况会在一分钟左右以映射后的原因结束，而不是永远停在 `Installing …`。脚本还会把 Windows「Internet 选项」里的系统代理交给 curl——curl 只读 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，这正是 `irm` 能拉到脚本、压缩包却只能直连并卡死的原因。
+- **GitHub 卡住时 Windows 安装器不再无限挂起** —— 每次下载都有界：curl 对压缩包设 1 KB/s 速度下限（持续 60 秒）和 300 秒单次上限，API 查询是 45 秒；.NET 兜底的读取超时同样覆盖响应正文。curl 不再重试超时——每次重试都会以全新计时重跑整个传输，原本最多再跑三次；连接建立后收不到字节的情况现在会带着映射后的原因结束，而不是永远停在 `Installing …`。脚本还会把 Windows「Internet 选项」里的系统代理交给 curl，并按 `ProxyOverride` 绕过列表（含本地回环）让本地镜像保持直连；只配了 PAC 的情况交给 .NET 兜底。
 
 ## [0.1.4] - 2026-11-03 — "Constellation"
 

@@ -48,7 +48,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
-- **The Windows installer stops hanging when GitHub stalls** — every download is bounded end to end (a total time limit and a 1 KB/s floor for curl, a read timeout on the .NET fallback), so a connection that opens and then delivers nothing ends within about a minute with curl's mapped cause instead of sitting at `Installing …` forever. The script also hands curl the Windows "Internet Options" system proxy; curl reads only the `HTTP_PROXY`/`HTTPS_PROXY` environment variables, which is how `irm` could fetch the script while the archive download went direct and stalled.
+- **The Windows installer stops hanging when GitHub stalls** — every download is bounded: curl gets a 1 KB/s floor sustained for 60 s and a 300 s cap on the archive (45 s on the API call), and the .NET fallback carries a read timeout that also covers the response body. curl no longer retries timeouts, which used to restart the whole transfer with a fresh timer up to three more times; a connection that opens and then delivers nothing ends with curl's mapped cause instead of sitting at `Installing …` forever. The script also hands curl the Windows "Internet Options" system proxy, honours its `ProxyOverride` bypass list (loopback included) so a local mirror stays direct, and leaves PAC-only setups to the .NET stack.
 
 ## [0.1.4] - 2026-11-03 — "Constellation"
 
