@@ -1,0 +1,327 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title data-i18n-content="meta.fq.title">常见问题 — OpenPanda</title>
+<meta name="description" data-i18n-content="meta.fq.desc" content="OpenPanda 常见问题：安装、模型配置、适配器、任务调度、会话、多设备组网、数据存储与升级卸载。" />
+<meta name="author" content="Xustalis" />
+<link rel="canonical" href="https://xustalis.github.io/OpenPanda/faq.html" />
+<!-- One canonical Chinese document per page. English is a client-side swap
+     from js/i18n.js; there is deliberately no hreflang or alternate locale. -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="OpenPanda" />
+<meta property="og:locale" content="zh_CN" />
+<meta property="og:url" content="https://xustalis.github.io/OpenPanda/faq.html" />
+<meta property="og:title" data-i18n-content="meta.fq.title" content="常见问题 — OpenPanda" />
+<meta property="og:description" data-i18n-content="meta.fq.desc" content="OpenPanda 常见问题：安装、模型配置、适配器、任务调度、会话、多设备组网、数据存储与升级卸载。" />
+<meta property="og:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" data-i18n-content="meta.fq.title" content="常见问题 — OpenPanda" />
+<meta name="twitter:description" data-i18n-content="meta.fq.desc" content="OpenPanda 常见问题：安装、模型配置、适配器、任务调度、会话、多设备组网、数据存储与升级卸载。" />
+<meta name="twitter:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
+<meta name="theme-color" content="#faf9f5" />
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="stylesheet" href="css/site.css" />
+<!-- Language bootstrap. Runs before the body parses so <html lang>, the toggle
+     state and the "hold the paint" guard are right on the first frame; the
+     dictionary itself is applied by js/i18n.js once the module loads. Order of
+     preference: ?lang= → saved choice → browser language (zh* → 中文, else EN). -->
+<script>
+(function () {
+  var KEY = 'openpanda.site.lang'
+  var q = new URLSearchParams(location.search).get('lang')
+  var lang = q === 'en' || q === 'zh' ? q : null
+  if (!lang) { try { var s = localStorage.getItem(KEY); if (s === 'en' || s === 'zh') lang = s } catch (e) {} }
+  if (!lang) lang = /^zh/i.test(navigator.language || '') ? 'zh' : 'en'
+  var root = document.documentElement
+  root.setAttribute('data-lang', lang)
+  root.setAttribute('lang', lang === 'zh' ? 'zh-CN' : 'en')
+  // English copy lives in the dictionary, not the markup: hide the Chinese
+  // paint for the few milliseconds until i18n.js swaps it in. The timer is the
+  // guard — a broken module must never leave a blank page.
+  if (lang === 'en') {
+    root.classList.add('lang-pending')
+    setTimeout(function () { root.classList.remove('lang-pending') }, 1200)
+  }
+})()
+</script>
+<noscript><style>html.lang-pending body { opacity: 1 !important; }</style></noscript>
+<script>document.documentElement.classList.add('js')</script>
+</head>
+<body class="subpage">
+<a class="skip-link" href="#main" data-i18n="skip">跳到正文</a>
+
+<nav class="site-nav solid" id="site-nav" aria-label="主导航" data-i18n-aria="nav.primary">
+  <a class="brand" href="index.html" aria-label="OpenPanda">
+    <svg class="brand-mark" width="27" height="27" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
+    <span>Open<b>Panda</b></span>
+  </a>
+  <!-- Site-level navigation, shared verbatim by every page. The eleven
+       chapters remain reachable through the hero index and ⌘K on this page;
+       a site is not one long scroll. -->
+  <div class="nav-links">
+    <a href="index.html" data-i18n="nav.overview">概览</a>
+    <a href="features.html" data-i18n="nav.features">能力</a>
+    <a href="docs.html" data-i18n="nav.docs">文档</a>
+    <a href="download.html" data-i18n="nav.download">下载</a>
+    <a href="changelog.html" data-i18n="nav.changelog">更新日志</a>
+    <a href="status.html" data-i18n="nav.status">项目现状</a>
+    <a href="faq.html" aria-current="page" data-i18n="nav.faq">常见问题</a>
+  </div>
+  <div class="nav-actions">
+    <button class="lang-toggle" type="button" data-lang-toggle aria-label="切换语言" data-i18n-aria="lang.switch" title="中文 / English">
+      <span class="lang-zh" lang="zh-CN">中文</span><span class="lang-sep" aria-hidden="true">/</span><span class="lang-en" lang="en">EN</span>
+    </button>
+    <a class="nav-gh" href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span>GitHub</span>
+      <span class="nav-stars" id="gh-stars" hidden></span>
+    </a>
+  </div>
+</nav>
+<main id="main" tabindex="-1">
+  <header class="pg-hero">
+    <div class="wrap">
+      <p class="mono-label pg-kicker">FAQ</p>
+      <h1 class="pg-title" data-i18n="fq.h1">常见问题</h1>
+      <p class="pg-lede" data-i18n="fq.lede">按使用场景汇总 29 个高频问题。答案取自 docs/faq.md、SECURITY.md 与安装文档，不是把首页换个说法重抄一遍。</p>
+      <p class="pg-meta">29 QUESTIONS · 7 GROUPS · UPDATED FOR v0.1.4</p>
+    </div>
+  </header>
+  <div class="wrap pg-layout">
+      <aside class="pg-toc">
+        <p class="mono-label" data-i18n="pg.toc.on">ON THIS PAGE</p>
+        <nav aria-label="本页目录" data-i18n-aria="pg.toc.aria">
+        <a href="#getting-started" data-i18n="toc.getting-started">入门</a>
+        <a href="#models" data-i18n="toc.models">模型配置</a>
+        <a href="#agents" data-i18n="toc.agents">智能体与适配器</a>
+        <a href="#tasks" data-i18n="toc.tasks">任务与调度</a>
+        <a href="#sessions-ui" data-i18n="toc.sessions-ui">会话与交互</a>
+        <a href="#devices" data-i18n="toc.devices">多设备与安全</a>
+        <a href="#maintenance" data-i18n="toc.maintenance">数据与维护</a>
+        <a href="#more" data-i18n="toc.more">还找不到答案</a>
+        </nav>
+        <div class="pg-toc-foot">
+          <span class="mono-label">STABLE</span>
+          <b>v0.1.4</b>
+          <a href="download.html" data-i18n="pg.toc.dl">下载 →</a>
+        </div>
+      </aside>
+    <div class="pg-content">
+      <section class="pg-section pg-faq-group" id="getting-started">
+      <h2 data-i18n="fq.g1.t">入门</h2>
+      <div class="pg-faqs">
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g1.q1">装好之后第一步做什么？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g1.a1">跑 panda init 生成 config.yaml 与能力卡，节点名自动取主机名，只问是否现在配置模型；然后 panda 进 TUI，或 panda web 开控制台。panda doctor 随时自检 PATH、配置、数据库、适配器与 agent CLI。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g1.q2">panda 和 panda daemon 什么关系？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g1.a2">裸 panda 是交互式使用；panda daemon 是后台常驻进程，负责调度、心跳与提醒，也接收远程委派。注意 panda web 自己会起一个完整节点并占用 7836/7837，同一台机器再起 daemon 会争抢端口，日常选一个入口即可。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g1.q3">需要 GPU 或额外的模型额度吗？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g1.a3">不需要 GPU。路由、监督与验收都用你已经配置的模型提供方，本机模型或 API 都可以；守护进程空闲时常驻内存约 40MB，几乎不占 CPU。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g1.q4">数据会不会经过你们的服务器？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g1.a4">不会，也没有「我们的服务器」。节点之间 P2P 直连，会话内容按信任档逐跳钳制，断网时走 DTN 存储转发；唯一离开节点的是你自己配置的模型调用。</div>
+      </details>
+      </div></section>
+      <section class="pg-section pg-faq-group" id="models">
+      <h2 data-i18n="fq.g2.t">模型配置</h2>
+      <div class="pg-faqs">
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g2.q1">支持哪些模型服务？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g2.a1">任何 OpenAI 兼容或 Anthropic 兼容端点，api_type 填 anthropic（Messages 协议）或 openai（Chat Completions 协议）。v0.1.1 起入口客户端还原生支持 OpenAI Responses 与 Google Gemini。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g2.q2">报错「未配置模型 API key」？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g2.a2">三选一：panda init 引导填写、panda web 设置页保存（热生效，无需重启）、或环境变量 OPENPANDA_MODEL_API_KEY。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g2.q3">报错「模型接口不存在」？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g2.a3">base_url 或 model 名称写错。用控制台设置页的「测试连通」逐项排查；Anthropic 兼容端点不带 /v1 后缀。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g2.q4">额度用完了任务会中断吗？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g2.a4">不会。多模型注册表带健康熔断，额度耗尽或凭据失效（401/403）会自动注入备用模型；入口模型还带指数退避重试，持续限流才会停下。</div>
+      </details>
+      </div></section>
+      <section class="pg-section pg-faq-group" id="agents">
+      <h2 data-i18n="fq.g3.t">智能体与适配器</h2>
+      <div class="pg-faqs">
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g3.q1">什么是 agent 适配器？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g3.a1">OpenPanda 自己不执行长程任务，而是委派给设备上装好的 agent CLI；adapters/*.py 是统一协议的桥接脚本。panda agents 查看本机已装与缺失的 agent，并给出缺失项的安装命令。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g3.q2">支持哪些 Agent？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g3.a2">内置 10 个适配器：Claude Code、Codex、OpenCode、Grok Build、DeepSeek Harness、Antigravity、Hermes、Pi、ZCode、OpenClaw；另有一个 generic 通用桥，可接任意走 stdin/stdout 的无头 CLI。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g3.q3">某个 agent 没装，还能用吗？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g3.a3">能。不装也完全可用：调度器只把任务路由到声明了该 agent 的设备，在能力卡里删掉对应条目即可。require 声明是硬过滤条件。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g3.q4">凭证怎么给 agent？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g3.a4">默认 injection.model: auto——agent 自带登录态就直接用，没有自有凭证的复用 panda 配置的模型。用 panda config set injection auto|always|never 切策略，panda agents 会标出各适配器的注入支持。</div>
+      </details>
+      </div></section>
+      <section class="pg-section pg-faq-group" id="tasks">
+      <h2 data-i18n="fq.g4.t">任务与调度</h2>
+      <div class="pg-faqs">
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g4.q1">任务一直 pending？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g4.a1">依次检查：daemon 是否在跑（panda nodes 看 running 列）、能力卡是否存在（panda doctor 的 adapters 行）、目标 agent 是否已安装。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g4.q2">什么是 tier-2 授权？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g4.a2">命令分两级：tier-1 可逆（读文件、跑构建）默认放行；tier-2 不可逆（git push、删除）默认拒绝，需要 panda ask --authorize、REPL /authorize 或能力卡声明。被拒的任务进 review 队列并说明原因。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g4.q3">任务进了 review 状态？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g4.a3">不可逆操作或超出预算的监督循环会暂停等人审批：panda queue 查看，panda approve &lt;id&gt; / reject &lt;id&gt; 决定，Web 控制台任务卡上有同样的按钮。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g4.q4">一件事要跨几台机器做怎么办？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g4.a4">那是 plan 而不是单个任务：几个前后相接的阶段，每段路由到适合它的机器，被依赖阶段的产物自动打包搬到下一段。panda plan example 生成模板，panda plan run x.yaml --dry-run 先看路由；也可以直接一句话让入口模型自己拆。计划的任何阶段都不携带 tier-2 同意。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g4.q5">什么是 scope drift？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g4.a5">入口模型为每个任务声明允许操作的文件范围；执行中越界写文件会被拦截并转 review。合法操作被误拦时，检查任务描述里是否明确列出了要改的文件路径。</div>
+      </details>
+      </div></section>
+      <section class="pg-section pg-faq-group" id="sessions-ui">
+      <h2 data-i18n="fq.g5.t">会话与交互</h2>
+      <div class="pg-faqs">
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g5.q1">什么是侧边对话？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g5.a1">/side（或 /btw）在线程旁开一个独立会话：拿到与主线程相同的工具面，动作照常过权限与审批门，但问答不写回主线程。会话存在节点上，刷新、换设备甚至面板重启后都还在。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g5.q2">想撤销一轮里的文件改动？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g5.a2">/rewind 列出该会话的检查点，选中后恢复快照里的跟踪文件、删除快照之后新建的未跟踪文件，并把 transcript 截断到对应轮次。被 .gitignore 的构建产物不会被删。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g5.q3">回复里的文件路径能点吗？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g5.a3">能。控制台把可识别的工作区路径渲染成链接，点击在旁侧只读查看器打开并滚到行；终端里 panda read path:line 同样查看，/edit path:line 交给编辑器。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g5.q4">会话上下文能存多久？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g5.a4">终端与 Web 控制台是同一套会话，按线程存在 &lt;data&gt;/sessions/，启动时自动接上当前项目最近更新的那条。24k 字符预算超出时优先折叠成模型写的 running digest（自动压缩），模型不可达才退化成裁剪最旧内容；长线程还能 panda session fork 在任意轮次分叉。</div>
+      </details>
+      </div></section>
+      <section class="pg-section pg-faq-group" id="devices">
+      <h2 data-i18n="fq.g6.t">多设备与安全</h2>
+      <div class="pg-faqs">
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g6.q1">多台设备怎么组网？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g6.a1">每台设备 panda init 后两条路径任选：蓝牙式配对（panda pair &lt;addr&gt; 发起并显示短码，另一台 panda pair confirm 核对同一码，共享密钥经加密通道自动下发），或 LAN 发现加指纹准入（panda nodes 列出待准入设备，panda nodes admit &lt;id&gt; 按指纹确认，nodes verify 钉死 Ed25519 指纹）。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g6.q2">为什么对外监听启动被拒绝？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g6.a2">安全约束：非回环监听必须配置 shared_secret（或 OPENPANDA_SHARED_SECRET），否则 daemon 拒绝启动。回环监听不受限，且 Web 面板会自动生成临时 token。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g6.q3">同一台机器能跑两个节点吗？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g6.a3">同一节点身份有单例锁，第二个 daemon 会诊断后退出。需要多身份时用 VM 节点（node.kind: vm 加显式 node.identity）。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g6.q4">能让它看屏幕、点鼠标吗？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g6.a4">能，但有边界。带桌面会话的节点广告 hardware:screen_capture 与 hardware:gui_input（后者因不可逆属 tier-2），无头守护进程不广告这两项。屏幕内容只在 mesh 档链路上移动，非 mesh 来源的截屏任务在准入即拒；macOS 还需要「录屏」「辅助功能」授权。</div>
+      </details>
+      </div></section>
+      <section class="pg-section pg-faq-group" id="maintenance">
+      <h2 data-i18n="fq.g7.t">数据与维护</h2>
+      <div class="pg-faqs">
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g7.q1">数据存在哪里？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g7.a1">用户级目录，与安装位置无关：macOS ~/Library/Application Support/openpanda，Linux ~/.local/share/openpanda，Windows %LOCALAPPDATA%\openpanda-data。memory/、projects/、skills/ 是用户资产，卸载默认保留。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g7.q2">如何升级？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g7.a2">panda update check / apply（或 panda upgrade）走验签通道；一键脚本用户直接重跑安装命令也可以，配置、会话与数据保留。降级会被拒绝：解包后比对新二进制的迁移上限与数据目录 schema。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g7.q3">如何彻底卸载？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g7.a3">panda uninstall 白名单删除并自动备份；--purge 连用户数据一起删，--backup-only 只归档不删除，--dry-run 只看计划不动手。</div>
+      </details>
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g7.q4">Web 控制台打不开或 token 丢了？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g7.a4">回环模式重新 panda web 即可，URL 自带临时 token，前端读取后立刻从地址栏清除。对外监听需要 OPENPANDA_PANEL_TOKEN；所有 /api/* 请求仅接受 Authorization: Bearer 头，URL 里的 ?token= 会被拒绝。</div>
+      </details>
+      </div></section>
+      <section class="pg-section" id="more">
+      <h2 data-i18n="fq.s8.t">还找不到答案</h2>
+      <div class="pg-links">
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/faq.md" target="_blank" rel="noopener" data-i18n="fq.s8.l1">读仓库里的完整 FAQ（五语）↗</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/install.md" target="_blank" rel="noopener" data-i18n="fq.s8.l2">安装与受限网络排错 ↗</a>
+      <a href="status.html" data-i18n="fq.s8.l3">看项目现状与已知限制 →</a>
+      </div></section>
+
+      <div class="pg-cta">
+        <a class="pg-cta-main" href="docs.html" data-i18n="fq.cta1">读文档 →</a>
+        <a href="community.html" data-i18n="fq.cta2">参与讨论 →</a>
+      </div>
+    </div>
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div class="footer-brand">
+      <a class="brand" href="index.html" aria-label="OpenPanda">
+        <svg class="brand-mark" width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
+        <span>Open<b>Panda</b></span>
+      </a>
+      <p class="footer-tag" data-i18n="foot.tag">Local-first, forever.</p>
+      <p class="footer-version"><b>v0.1.4 Constellation</b> <span>· stable</span></p>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.product">产品</h4>
+      <a href="features.html" data-i18n="foot.features">能力清单</a>
+      <a href="index.html#graph" data-i18n="foot.why">为什么是图</a>
+      <a href="index.html#constitution" data-i18n="foot.thin">薄宪法</a>
+      <a href="index.html#roadmap" data-i18n="foot.roadmap">路线图</a>
+      <a href="faq.html" data-i18n="foot.faq">常见问题</a>
+      <a href="download.html" data-i18n="foot.install">安装</a>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.resources">资源</h4>
+      <a href="docs.html" data-i18n="foot.docs">文档中心</a>
+      <a href="download.html" data-i18n="foot.releases">下载与校验</a>
+      <a href="changelog.html" data-i18n="foot.changelog">更新日志</a>
+      <a href="status.html" data-i18n="foot.status">项目现状</a>
+      <a href="security.html" data-i18n="foot.trust">安全与信任</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0</a>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.contact">社区</h4>
+      <a href="community.html" data-i18n="foot.community">社区与贡献</a>
+      <a href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Xustalis/OpenPanda/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/SECURITY.md" target="_blank" rel="noopener" data-i18n="foot.security">安全策略</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/CODE_OF_CONDUCT.md" target="_blank" rel="noopener" data-i18n="foot.conduct">行为准则</a>
+      <a href="mailto:fing2024@outlook.com" data-i18n="foot.invest">合作 / 投资</a>
+      <a href="mailto:fing2024@outlook.com">fing2024@outlook.com</a>
+    </div>
+  </div>
+  <!-- A policy statement, not a live probe: claiming "all green" from a static
+       page would be a lie the first time a check fails. -->
+  <div class="wrap footer-status">
+    <span class="status-pill"><i aria-hidden="true"></i><span data-i18n="foot.green">main 分支全绿才允许合并</span></span>
+    <span class="status-sep" aria-hidden="true">·</span>
+    <span data-i18n="foot.checks">10 项必过检查 · 6 个发布目标 · 每周安全扫描</span>
+    <a class="status-link" href="download.html" data-i18n="foot.latest">最新版本 v0.1.4 Constellation <span aria-hidden="true">→</span></a>
+  </div>
+  <div class="wrap footer-bottom">
+    <p class="footer-credit" data-i18n="foot.credit">影像：<a href="https://www.eso.org/public/images/eso0932a/" target="_blank" rel="noopener">ESO/S. Brunier 银河全景</a>（<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>；已裁剪、调色并与程序星点合成）；NASA Blue Marble、Black Marble DNB 与地球云层影像（公有领域）。代码以 AGPL-3.0-or-later 发布；闭源嵌入与托管修改可另行授权。</p>
+    <div class="footer-meta"><span>© 2026 OpenPanda</span><span data-i18n="foot.built">Built for machines you own.</span><a href="index.html#top" aria-label="Back to top" data-i18n-aria="foot.top">↑</a></div>
+  </div>
+</footer>
+<script type="module" src="js/page.js"></script>
+</body>
+</html>

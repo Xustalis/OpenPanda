@@ -40,6 +40,8 @@ make gate         # pre-merge bar: fmt + vet + build + adapter-test + test + rac
 make gate-all     # gate plus web-gate and the two TUI PTY tests
 make adapter-test # adapter wire contract: fake CLIs on PATH assert argv/env/
                   # progress/timeout (python3 tests/adapter_contract_test.py)
+make site-check   # static invariants for site/ (i18n keys, anchors, assets,
+                  # JSON-LD, version, canonical host); also a Pages pre-publish step
 make tui-pty-test / tui-pty-exit-test
                   # real-pty TUI contracts: mouse ownership; exit note + failed-turn
                   # persistence (scripts/tui-*-pty-check.py, macOS/Linux only)
@@ -181,14 +183,43 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
 - Before opening a PR run `make gate` — it is what CI enforces.
 - User-facing strings go through `internal/i18n` and
   `webui/app/src/i18n/` — all five locales are maintained in parallel.
-- The marketing site (`site/`) is bilingual, but by a different mechanism:
-  Chinese is the markup (every translatable node carries `data-i18n`,
-  `data-i18n-aria`, `data-i18n-placeholder` or `data-i18n-content`) and
-  English lives in the flat table in `site/js/i18n.js`. New copy needs the
-  attribute *and* an English entry — a key without one falls back to the
-  Chinese already in the page. Language comes from `?lang=`, then
+- The marketing site (`site/`) is a nine-page site (`index.html`, plus
+  `features.html`, `docs.html`, `download.html`, `changelog.html`,
+  `status.html`, `security.html`, `community.html`, `faq.html`) plus a
+  self-contained `404.html`. Seven primary pages sit in the nav; security and
+  community are reached from the eight-card site map and the footer. The
+  eleven chapters of the landing page are reached through `hero-index` and ⌘K,
+  not the nav. Content for the standalone pages comes from `README.md`,
+  `SECURITY.md`, `CONTRIBUTING.md`, `docs/faq.md`, `docs/status.md` and the
+  installer scripts — do not invent capabilities or numbers. Adding a page
+  means adding its nav link (or site-map card), sitemap entry, canonical /
+  og:url, English keys and TOC anchors — `scripts/check-site.py` asserts all
+  of them, along with content floors for the capability, security, FAQ,
+  community and adapter pages.
+- It is bilingual by a different mechanism than the Go app: Chinese is the
+  markup (every translatable node carries `data-i18n`, `data-i18n-aria`,
+  `data-i18n-placeholder` or `data-i18n-content`) and English lives in the
+  flat table in `site/js/i18n.js`. New copy needs the attribute *and* an
+  English entry — a key without one falls back to the Chinese already in the
+  page. Language comes from `?lang=`, then
   `localStorage["openpanda.site.lang"]`, then the browser; there is no build
-  step, so Pages ships the files as they are.
+  step, so Pages ships the files as they are. The nav, footer and head
+  language bootstrap are therefore **copied verbatim into each page**;
+  `check-site.py` compares them byte for byte, so a one-page edit fails.
+  `js/main.js` belongs to the landing page, `js/page.js` to the eight content
+  pages.
+  Chinese is the only canonical edition: no hreflang or alternate locale is
+  declared, JSON-LD lives on the landing page only and carries
+  language-neutral facts (no FAQPage — it would disagree with the English
+  view), and social metadata stays zh_CN in both views.
+  `scripts/check-site.py` guards i18n key sets in both directions, in-page
+  and cross-page anchors, local assets, tab ARIA, per-page canonicals and
+  shared chrome, versions against `CHANGELOG.md`, the release list in
+  `changelog.html`, the target matrix in `download.html`, the sitemap and
+  link safety. A new release must update those two pages and every version
+  literal or the check goes red. Run `make site-check` after any `site/`
+  edit; it also runs before the artifact upload in
+  `.github/workflows/pages.yml`.
 - New agent adapters plug into `adapters/` and speak the `_harness.py`
   wire contract; `make adapter-test` (`tests/adapter_contract_test.py`)
   exercises it against fake CLIs on PATH and is a prerequisite of

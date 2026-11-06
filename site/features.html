@@ -1,0 +1,402 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title data-i18n-content="meta.ft.title">能力清单 — OpenPanda</title>
+<meta name="description" data-i18n-content="meta.ft.desc" content="OpenPanda 的编排、记忆、多设备协作、会话与界面能力清单，附内核分层与方案对比。" />
+<meta name="author" content="Xustalis" />
+<link rel="canonical" href="https://xustalis.github.io/OpenPanda/features.html" />
+<!-- One canonical Chinese document per page. English is a client-side swap
+     from js/i18n.js; there is deliberately no hreflang or alternate locale. -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="OpenPanda" />
+<meta property="og:locale" content="zh_CN" />
+<meta property="og:url" content="https://xustalis.github.io/OpenPanda/features.html" />
+<meta property="og:title" data-i18n-content="meta.ft.title" content="能力清单 — OpenPanda" />
+<meta property="og:description" data-i18n-content="meta.ft.desc" content="OpenPanda 的编排、记忆、多设备协作、会话与界面能力清单，附内核分层与方案对比。" />
+<meta property="og:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" data-i18n-content="meta.ft.title" content="能力清单 — OpenPanda" />
+<meta name="twitter:description" data-i18n-content="meta.ft.desc" content="OpenPanda 的编排、记忆、多设备协作、会话与界面能力清单，附内核分层与方案对比。" />
+<meta name="twitter:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
+<meta name="theme-color" content="#faf9f5" />
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="stylesheet" href="css/site.css" />
+<!-- Language bootstrap. Runs before the body parses so <html lang>, the toggle
+     state and the "hold the paint" guard are right on the first frame; the
+     dictionary itself is applied by js/i18n.js once the module loads. Order of
+     preference: ?lang= → saved choice → browser language (zh* → 中文, else EN). -->
+<script>
+(function () {
+  var KEY = 'openpanda.site.lang'
+  var q = new URLSearchParams(location.search).get('lang')
+  var lang = q === 'en' || q === 'zh' ? q : null
+  if (!lang) { try { var s = localStorage.getItem(KEY); if (s === 'en' || s === 'zh') lang = s } catch (e) {} }
+  if (!lang) lang = /^zh/i.test(navigator.language || '') ? 'zh' : 'en'
+  var root = document.documentElement
+  root.setAttribute('data-lang', lang)
+  root.setAttribute('lang', lang === 'zh' ? 'zh-CN' : 'en')
+  // English copy lives in the dictionary, not the markup: hide the Chinese
+  // paint for the few milliseconds until i18n.js swaps it in. The timer is the
+  // guard — a broken module must never leave a blank page.
+  if (lang === 'en') {
+    root.classList.add('lang-pending')
+    setTimeout(function () { root.classList.remove('lang-pending') }, 1200)
+  }
+})()
+</script>
+<noscript><style>html.lang-pending body { opacity: 1 !important; }</style></noscript>
+<script>document.documentElement.classList.add('js')</script>
+</head>
+<body class="subpage">
+<a class="skip-link" href="#main" data-i18n="skip">跳到正文</a>
+
+<nav class="site-nav solid" id="site-nav" aria-label="主导航" data-i18n-aria="nav.primary">
+  <a class="brand" href="index.html" aria-label="OpenPanda">
+    <svg class="brand-mark" width="27" height="27" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
+    <span>Open<b>Panda</b></span>
+  </a>
+  <!-- Site-level navigation, shared verbatim by every page. The eleven
+       chapters remain reachable through the hero index and ⌘K on this page;
+       a site is not one long scroll. -->
+  <div class="nav-links">
+    <a href="index.html" data-i18n="nav.overview">概览</a>
+    <a href="features.html" aria-current="page" data-i18n="nav.features">能力</a>
+    <a href="docs.html" data-i18n="nav.docs">文档</a>
+    <a href="download.html" data-i18n="nav.download">下载</a>
+    <a href="changelog.html" data-i18n="nav.changelog">更新日志</a>
+    <a href="status.html" data-i18n="nav.status">项目现状</a>
+    <a href="faq.html" data-i18n="nav.faq">常见问题</a>
+  </div>
+  <div class="nav-actions">
+    <button class="lang-toggle" type="button" data-lang-toggle aria-label="切换语言" data-i18n-aria="lang.switch" title="中文 / English">
+      <span class="lang-zh" lang="zh-CN">中文</span><span class="lang-sep" aria-hidden="true">/</span><span class="lang-en" lang="en">EN</span>
+    </button>
+    <a class="nav-gh" href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span>GitHub</span>
+      <span class="nav-stars" id="gh-stars" hidden></span>
+    </a>
+  </div>
+</nav>
+<main id="main" tabindex="-1">
+  <header class="pg-hero">
+    <div class="wrap">
+      <p class="mono-label pg-kicker">CAPABILITIES</p>
+      <h1 class="pg-title" data-i18n="ft.h1">能力清单</h1>
+      <p class="pg-lede" data-i18n="ft.lede">首页讲的是为什么。这一页把内核实际做了什么拆开：能力、对应命令、以及它在架构里的位置。</p>
+      <p class="pg-meta">CURRENT v0.1.4 · 5 CAPABILITY GROUPS · 2 REFERENCE TABLES</p>
+    </div>
+  </header>
+  <div class="wrap pg-layout">
+      <aside class="pg-toc">
+        <p class="mono-label" data-i18n="pg.toc.on">ON THIS PAGE</p>
+        <nav aria-label="本页目录" data-i18n-aria="pg.toc.aria">
+        <a href="#orchestration" data-i18n="toc.orchestration">编排与监督</a>
+        <a href="#memory" data-i18n="toc.memory">记忆与技能</a>
+        <a href="#mesh" data-i18n="toc.mesh">多设备协作</a>
+        <a href="#sessions" data-i18n="toc.sessions">会话与嵌入</a>
+        <a href="#interfaces" data-i18n="toc.interfaces">界面与运行时</a>
+        <a href="#layers" data-i18n="toc.layers">内核分层</a>
+        <a href="#replaces" data-i18n="toc.replaces">它替代什么</a>
+        </nav>
+        <div class="pg-toc-foot">
+          <span class="mono-label">STABLE</span>
+          <b>v0.1.4</b>
+          <a href="download.html" data-i18n="pg.toc.dl">下载 →</a>
+        </div>
+      </aside>
+    <div class="pg-content">
+      <section class="pg-section" id="orchestration">
+      <h2 data-i18n="ft.s1.t">编排与监督</h2>
+      <p class="pg-lead" data-i18n="ft.s1.d">它不替你写 Agent，而是把你已经装好的 Agent 组织成一支能验收的队伍。以下每条能力都有对应的命令或配置入口。</p>
+      <div class="pg-facts">
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s1.f1.t">意图分类与拆解</h3>
+      <p data-i18n="ft.s1.f1.d">入口把一句话分成「直接回答 / 工具调用 / 单个任务 / 多阶段计划」四类；多阶段工作先拆成带产物接线的计划，而不是一口气丢给一个模型。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s1.f2.t">监督回路</h3>
+      <p data-i18n="ft.s1.f2.d">入口模型持续判定完成度，执行器死掉时带着失败原因重新派发，直到完成或轮次预算耗尽；默认五轮。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s1.f3.t">多模型注册表与透明故障转移</h3>
+      <p data-i18n="ft.s1.f3.d">panda model add / switch / test 管理多个提供方；额度耗尽或凭据失效（401/403）会自动注入备用模型，任务不中断。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s1.f4.t">并行多 harness</h3>
+      <p data-i18n="ft.s1.f4.d">panda task add --agents a,b --mode parallel 把一条指令扇出成计划，收集多个 verdict 后给出裁定，而不是让你自己读四份答案。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s1.f5.t">分层审批</h3>
+      <p data-i18n="ft.s1.f5.d">可逆操作自主执行；git push、删除、生产库变更这类不可逆命令暂停，等人在 panda approve 或控制台里明确同意。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s1.f6.t">执行透明与熔断</h3>
+      <p data-i18n="ft.s1.f6.d">每条 Bash 命令、文件改动与工具调用连同负责的 Agent 和底层模型实时流到终端与控制台；循环检测与重试熔断阻止失控 Agent 烧光 token。</p>
+      </div>
+      </div>
+      <p class="pg-note" data-i18n="ft.s1.note">v0.1.4 起，完成判定看实际执行过的命令、失败的工具结果，以及声明的验证入口是否真的跑过；一句「测试通过」没有证据不算完成。</p>
+      </section>
+      <section class="pg-section" id="memory">
+      <h2 data-i18n="ft.s2.t">记忆与技能</h2>
+      <p class="pg-lead" data-i18n="ft.s2.d">偏好、项目事实与可复用流程分开存，跟随任务一起跨设备移动。</p>
+      <div class="pg-facts">
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s2.f1.t">双层记忆</h3>
+      <p data-i18n="ft.s2.f1.d">用户偏好写在 USER.md，项目事实写在 MEMORY.md，严格分开，避免把个人习惯当成仓库事实。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s2.f2.t">自演进技能</h3>
+      <p data-i18n="ft.s2.f2.d">跑通的工作流被蒸馏成 SKILL.md 剧本，随时间累积，下次遇到同类任务可直接复用。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s2.f3.t">技能 Hub 与自主发现</h3>
+      <p data-i18n="ft.s2.f3.d">panda skill hub 提供离线目录，panda skill import 从路径、URL 或归档导入；任务中途也能找到并安装所需技能。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s2.f4.t">随行上下文</h3>
+      <p data-i18n="ft.s2.f4.d">委派给另一台机器的任务自带项目记忆与工作区摘要，执行端不必重新读一遍仓库才能开工。</p>
+      </div>
+      </div>
+      </section>
+      <section class="pg-section" id="mesh">
+      <h2 data-i18n="ft.s3.t">多设备协作</h2>
+      <p class="pg-lead" data-i18n="ft.s3.d">节点之间是对等关系，没有主根、没有托管控制面。路由器按实测能力挑机器，链路断了由 DTN 托管。</p>
+      <div class="pg-facts">
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s3.f1.t">LAN 发现与蓝牙式配对</h3>
+      <p data-i18n="ft.s3.f1.d">同一局域网内 beacon 自动发现待准入设备，panda nodes admit 按指纹确认；panda pair 用两端核对的短码完成配对并密封下发共享密钥。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s3.f2.t">能力卡</h3>
+      <p data-i18n="ft.s3.f2.d">每个节点自动声明 CPU、内存、操作系统、可用 Agent 与硬件执行器；panda card 可查看、重扫与编辑，改动热重载。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s3.f3.t">P2P mesh 与会话加密</h3>
+      <p data-i18n="ft.s3.f3.d">认证 WebSocket 上协商逐连接 AES-256-GCM，密钥由共享密钥与两端 hello nonce 经 HKDF 派生；另有加密 UDP 数据平面承载大块数据。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s3.f4.t">三档信任区</h3>
+      <p data-i18n="ft.s3.f4.d">panda nodes trust &lt;id&gt; mesh|guarded|open 给每个对端钉档，钳制发过去的委派暴露面与从它进来的准入；屏幕内容只在 mesh 档链路上移动。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s3.f5.t">能力路由与多跳</h3>
+      <p data-i18n="ft.s3.f5.d">调度器按资源效率、优先级、节点等级、等待时间与链路延迟打分；Dijkstra 在链路状态图上取最便宜的第一跳，两跳外节点经 gossip 目录寻址。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s3.f6.t">工作树随行与产物回传</h3>
+      <p data-i18n="ft.s3.f6.d">文件类任务把 checkout 打包带去执行端、跑完把结果带回；panda task artifact &lt;id&gt; 列出并取回报告、截图等产物。</p>
+      </div>
+      </div>
+      <p class="pg-note" data-i18n="ft.s3.note">断网时 DTN bundle 会暂存并加密签名，链路恢复后再投递；篡改过的 bundle 不会被送达。</p>
+      </section>
+      <section class="pg-section" id="sessions">
+      <h2 data-i18n="ft.s4.t">会话与嵌入</h2>
+      <p class="pg-lead" data-i18n="ft.s4.d">对话是一等公民：可以分叉、压缩、被别的工具驱动。</p>
+      <div class="pg-facts">
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s4.f1.t">会话树</h3>
+      <p data-i18n="ft.s4.f1.d">panda session fork &lt;id&gt; --at N 在任意轮次分叉；在仓库里子会话的 worktree 从父会话分出，继承父会话写出的代码。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s4.f2.t">自动压缩</h3>
+      <p data-i18n="ft.s4.f2.d">历史溢出时折叠成模型写的 running digest，而不是直接丢掉最旧的对话；存储里的线程保持完整。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s4.f3.t">MCP 与 RPC 嵌入面</h3>
+      <p data-i18n="ft.s4.f3.d">panda mcp 把节点自身的任务、记忆与技能暴露成 MCP stdio 服务；panda rpc 提供 NDJSON-over-stdio 的状态与流式 ask 接口。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s4.f4.t">订阅 OAuth</h3>
+      <p data-i18n="ft.s4.f4.d">panda auth login anthropic 用 PKCE 登录已有订阅并自动刷新 token，不必再单独配一把 API key。</p>
+      </div>
+      </div>
+      </section>
+      <section class="pg-section" id="interfaces">
+      <h2 data-i18n="ft.s5.t">界面与运行时</h2>
+      <p class="pg-lead" data-i18n="ft.s5.d">同一个内核，四种入口；二进制是纯 Go 静态构建，不依赖外部运行时。</p>
+      <div class="pg-facts">
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s5.f1.t">终端 TUI</h3>
+      <p data-i18n="ft.s5.f1.d">Bubble Tea 全屏交互，带首次引导、实时进度与轮中转向；PANDA_CLASSIC_REPL=1 保留经典行式 REPL。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s5.f2.t">Web 控制台</h3>
+      <p data-i18n="ft.s5.f2.d">零配置看板、SSE 实时事件流、技能与会话管理、自动登录；panda web --lan 用一次性令牌在局域网共享。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s5.f3.t">语音入口</h3>
+      <p data-i18n="ft.s5.f3.d">panda voice 跑唤醒 → 转写 → 派发 → 朗读的完整链路，与 REPL 共用同一条持久会话；需要单独的 Python 语音依赖。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s5.f4.t">脚本化 CLI 与自更新</h3>
+      <p data-i18n="ft.s5.f4.d">panda ask 直接塞进自动化脚本；panda update check / apply 先探测暂存二进制，验签通过后才原地替换。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="ft.s5.f5.t">轻量常驻</h3>
+      <p data-i18n="ft.s5.f5.d">空闲时守护进程常驻内存约 40MB，几乎不占 CPU；数据库是纯 Go SQLite，不需要 CGO。</p>
+      </div>
+      </div>
+      </section>
+      <section class="pg-section" id="layers">
+      <h2 data-i18n="ft.s6.t">内核分层</h2>
+      <p class="pg-lead" data-i18n="ft.s6.d">包结构来自仓库源码布局，按职责从入口到存储自上而下排列。</p>
+      <div class="pg-table-wrap"><table class="pg-table"><thead><tr>
+      <th>LAYER</th>
+      <th></th>
+      <th data-i18n="ft.s6.h2">职责</th>
+      </tr></thead><tbody>
+      <tr>
+      <td><code>cmd/panda</code></td>
+      <td data-i18n="ft.s6.r1.c2">终端 TUI、Web 控制台、CLI 与语音入口</td>
+      </tr>
+      <tr>
+      <td><code>askengine / entry / plan</code></td>
+      <td data-i18n="ft.s6.r2.c2">意图分类、提示构建与多阶段拆解</td>
+      </tr>
+      <tr>
+      <td><code>commander / defense</code></td>
+      <td data-i18n="ft.s6.r3.c2">三层执行（native / agent / manual）、分级闸门、熔断与防循环</td>
+      </tr>
+      <tr>
+      <td><code>memory / skills</code></td>
+      <td data-i18n="ft.s6.r4.c2">双层记忆与自演进 SKILL.md</td>
+      </tr>
+      <tr>
+      <td><code>sessions / auth / updater</code></td>
+      <td data-i18n="ft.s6.r5.c2">会话树、订阅 OAuth 与自更新</td>
+      </tr>
+      <tr>
+      <td><code>scheduler / trust</code></td>
+      <td data-i18n="ft.s6.r6.c2">能力打分、延迟加权路由与逐对端信任档</td>
+      </tr>
+      <tr>
+      <td><code>bus / ledger</code></td>
+      <td data-i18n="ft.s6.r7.c2">WS 与密封 UDP 传输、会话 AEAD、Ed25519 身份与能力卡</td>
+      </tr>
+      <tr>
+      <td><code>artifact / security</code></td>
+      <td data-i18n="ft.s6.r8.c2">分块可续传产物、沙箱、网络白名单与机密脱敏</td>
+      </tr>
+      <tr>
+      <td><code>storage</code></td>
+      <td data-i18n="ft.s6.r9.c2">纯 Go SQLite（WAL 模式）</td>
+      </tr>
+      </tbody></table></div>
+      <p class="pg-note" data-i18n="ft.s6.note">完整目录与边界说明见 docs/status.md 的能力对账表；本页只列稳定分层，不把实验性模块写成已发布能力。</p>
+      </section>
+      <section class="pg-section" id="replaces">
+      <h2 data-i18n="ft.s7.t">它替代什么</h2>
+      <p class="pg-lead" data-i18n="ft.s7.d">把常见做法摆在同一张表里，差别就落在「谁持有你的代码」和「节点死了会怎样」。</p>
+      <div class="pg-table-wrap"><table class="pg-table"><thead><tr>
+      <th></th>
+      <th data-i18n="ft.s7.h1">单个 Agent CLI</th>
+      <th>ssh + tmux + cron</th>
+      <th data-i18n="ft.s7.h3">托管编排服务</th>
+      <th>OpenPanda</th>
+      </tr></thead><tbody>
+      <tr>
+      <td data-i18n="ft.s7.r1.c1">驱动你已经付费的 CLI</td>
+      <td data-i18n="ft.s7.r1.c2">一次一个</td>
+      <td data-i18n="ft.s7.r1.c3">靠手写脚本</td>
+      <td data-i18n="ft.s7.r1.c4">通常换成它自己的栈</td>
+      <td data-i18n="ft.s7.r1.c5">十个适配器加一个通用桥</td>
+      </tr>
+      <tr>
+      <td data-i18n="ft.s7.r2.c1">用上你所有的机器</td>
+      <td data-i18n="ft.s7.r2.c2">不能</td>
+      <td data-i18n="ft.s7.r2.c3">自己写脚本</td>
+      <td data-i18n="ft.s7.r2.c4">租用它的云主机</td>
+      <td data-i18n="ft.s7.r2.c5">局域网内发现自己的设备</td>
+      </tr>
+      <tr>
+      <td data-i18n="ft.s7.r3.c1">节点中途挂掉</td>
+      <td data-i18n="ft.s7.r3.c2">任务没了</td>
+      <td data-i18n="ft.s7.r3.c3">任务没了</td>
+      <td data-i18n="ft.s7.r3.c4">通常能续</td>
+      <td data-i18n="ft.s7.r3.c5">带失败原因重新派发</td>
+      </tr>
+      <tr>
+      <td data-i18n="ft.s7.r4.c1">代码与提示词在哪</td>
+      <td data-i18n="ft.s7.r4.c2">你的机器</td>
+      <td data-i18n="ft.s7.r4.c3">你的机器</td>
+      <td data-i18n="ft.s7.r4.c4">服务商的服务器</td>
+      <td data-i18n="ft.s7.r4.c5">你的机器，走加密 mesh</td>
+      </tr>
+      <tr>
+      <td data-i18n="ft.s7.r5.c1">成本</td>
+      <td data-i18n="ft.s7.r5.c2">订阅费</td>
+      <td data-i18n="ft.s7.r5.c3">订阅费</td>
+      <td data-i18n="ft.s7.r5.c4">按席位或 token 加价</td>
+      <td data-i18n="ft.s7.r5.c5">用你已有的订阅</td>
+      </tr>
+      </tbody></table></div>
+      <p class="pg-note" data-i18n="ft.s7.note">这张表是设计取向，不是性能基准；具体已验证与未做的边界写在项目现状页。</p>
+      </section>
+
+      <div class="pg-cta">
+        <a class="pg-cta-main" href="download.html" data-i18n="ft.cta1">下载 v0.1.4 →</a>
+        <a href="docs.html" data-i18n="ft.cta2">读文档 →</a>
+      </div>
+    </div>
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div class="footer-brand">
+      <a class="brand" href="index.html" aria-label="OpenPanda">
+        <svg class="brand-mark" width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
+        <span>Open<b>Panda</b></span>
+      </a>
+      <p class="footer-tag" data-i18n="foot.tag">Local-first, forever.</p>
+      <p class="footer-version"><b>v0.1.4 Constellation</b> <span>· stable</span></p>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.product">产品</h4>
+      <a href="features.html" data-i18n="foot.features">能力清单</a>
+      <a href="index.html#graph" data-i18n="foot.why">为什么是图</a>
+      <a href="index.html#constitution" data-i18n="foot.thin">薄宪法</a>
+      <a href="index.html#roadmap" data-i18n="foot.roadmap">路线图</a>
+      <a href="faq.html" data-i18n="foot.faq">常见问题</a>
+      <a href="download.html" data-i18n="foot.install">安装</a>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.resources">资源</h4>
+      <a href="docs.html" data-i18n="foot.docs">文档中心</a>
+      <a href="download.html" data-i18n="foot.releases">下载与校验</a>
+      <a href="changelog.html" data-i18n="foot.changelog">更新日志</a>
+      <a href="status.html" data-i18n="foot.status">项目现状</a>
+      <a href="security.html" data-i18n="foot.trust">安全与信任</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0</a>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.contact">社区</h4>
+      <a href="community.html" data-i18n="foot.community">社区与贡献</a>
+      <a href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Xustalis/OpenPanda/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/SECURITY.md" target="_blank" rel="noopener" data-i18n="foot.security">安全策略</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/CODE_OF_CONDUCT.md" target="_blank" rel="noopener" data-i18n="foot.conduct">行为准则</a>
+      <a href="mailto:fing2024@outlook.com" data-i18n="foot.invest">合作 / 投资</a>
+      <a href="mailto:fing2024@outlook.com">fing2024@outlook.com</a>
+    </div>
+  </div>
+  <!-- A policy statement, not a live probe: claiming "all green" from a static
+       page would be a lie the first time a check fails. -->
+  <div class="wrap footer-status">
+    <span class="status-pill"><i aria-hidden="true"></i><span data-i18n="foot.green">main 分支全绿才允许合并</span></span>
+    <span class="status-sep" aria-hidden="true">·</span>
+    <span data-i18n="foot.checks">10 项必过检查 · 6 个发布目标 · 每周安全扫描</span>
+    <a class="status-link" href="download.html" data-i18n="foot.latest">最新版本 v0.1.4 Constellation <span aria-hidden="true">→</span></a>
+  </div>
+  <div class="wrap footer-bottom">
+    <p class="footer-credit" data-i18n="foot.credit">影像：<a href="https://www.eso.org/public/images/eso0932a/" target="_blank" rel="noopener">ESO/S. Brunier 银河全景</a>（<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>；已裁剪、调色并与程序星点合成）；NASA Blue Marble、Black Marble DNB 与地球云层影像（公有领域）。代码以 AGPL-3.0-or-later 发布；闭源嵌入与托管修改可另行授权。</p>
+    <div class="footer-meta"><span>© 2026 OpenPanda</span><span data-i18n="foot.built">Built for machines you own.</span><a href="index.html#top" aria-label="Back to top" data-i18n-aria="foot.top">↑</a></div>
+  </div>
+</footer>
+<script type="module" src="js/page.js"></script>
+</body>
+</html>
