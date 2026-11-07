@@ -828,7 +828,7 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 // that arrived in the gap would read the same "active < max" and all accept
 // (M14).
 func (c *Core) reserveCapacity(ctx context.Context) (release func(), ok bool) {
-	maxConcurrent := c.Card().Capacity.MaxConcurrent
+	maxConcurrent := c.executionConcurrency()
 	if maxConcurrent <= 0 {
 		return func() {}, true
 	}

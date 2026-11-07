@@ -61,7 +61,7 @@ func (h *handler) onboardingState() onboardingState {
 	mc := h.engineModel()
 	st := onboardingState{
 		// OAuth (model.auth) counts as configured — api_key stays empty there.
-		ModelConfigured: strings.TrimSpace(mc.BaseURL) != "" && (mc.NoAuth || strings.TrimSpace(mc.APIKey) != "" || strings.TrimSpace(mc.Auth) != ""),
+		ModelConfigured: mc.Configured() && (mc.NoAuth || strings.TrimSpace(mc.APIKey) != "" || strings.TrimSpace(mc.Auth) != ""),
 		// Always the binary's revision, even when no config is readable.
 		TermsVersionCurrent: config.TermsVersionCurrent,
 	}

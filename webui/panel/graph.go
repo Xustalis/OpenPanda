@@ -3,11 +3,16 @@
 package panel
 
 import (
+	"bufio"
+	"fmt"
+	"hash/fnv"
+	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -21,16 +26,16 @@ import (
 // GET /api/memory/graph derives the console's knowledge-graph view in two
 // layers:
 //
-//   - Provenance ("file"): every memory surface (USER.md / MEMORY.md /
+//   - Provenance ("file"): every populated memory surface (USER.md / MEMORY.md /
 //     DREAMS.md / topics / project memory / the warm-layer diary) plus every
 //     skill becomes a node, and two cheap, honest edge kinds connect them:
 //
-//     · "promotion": an entry carrying the Dreamer's [from:日志] tag — the
-//       warm-layer diary feeding long-term memory.
+//     · "promotion": a Dreamer receipt in DREAMS.md whose promoted entry
+//       still exists in MEMORY.md, even after the daily logs are pruned.
 //     · "reference": one surface naming another by name inside its text —
 //       MEMORY.md mentioning a topic, a project memory mentioning a skill.
 //
-//   - Knowledge ("entity"): terms that literally recur inside those surfaces
+//   - Knowledge ("entity"): terms that literally recur inside memory content
 //     (see graph_terms.go) — repeated Chinese phrases, Latin words and quoted
 //     names — tied back to the surfaces by "mention" edges and to each other
 //     by "co" edges (co-occurrence in the same entry/line).
@@ -74,15 +79,14 @@ type graphEdgeJSON struct {
 	From string `json:"from"`
 	To   string `json:"to"`
 	Kind string `json:"kind"` // promotion | reference | mention | co
-	// Weight is the evidence count behind the edge — promotion markers
-	// written into the target, name mentions in the source, occurrences of an
+	// Weight is the evidence count behind the edge — retained diary promotion
+	// receipts, name mentions in the source, occurrences of an
 	// entity in a surface, or lines two entities share — so the view can
 	// render stronger links heavier. Capped, never zero.
 	Weight int `json:"weight,omitempty"`
 }
 
-// graphText is one readable surface's (id, name-in-text, content) triple the
-// mention scan runs over.
+// graphText is a readable surface's ID and content for the mention scan.
 type graphText struct {
 	id      string
 	content string
@@ -91,11 +95,12 @@ type graphText struct {
 // Knowledge-layer caps: enough terms and links to fill the view without
 // turning the payload (or the picture) into a hairball.
 const (
-	entityCap      = 60        // entity nodes kept, highest evidence first
-	mentionEdgeCap = 400       // entity→surface links kept, highest evidence first
-	coMinCount     = 2         // lines two entities must share to earn a co edge
-	coEdgeCap      = 200       // entity↔entity links kept, highest evidence first
-	extractBudget  = 256 << 10 // daily-log bytes the term scan will read
+	entityCapDefault = 20        // default entity nodes — a readable first view
+	entityCap        = 60        // hard ceiling, reachable with ?entities=60
+	mentionEdgeCap   = 120       // entity→surface links kept, highest evidence first
+	coMinCount       = 2         // lines two entities must share to earn a co edge
+	coEdgeCap        = 200       // entity↔entity links kept, highest evidence first
+	extractBudget    = 256 << 10 // daily-log bytes the term scan will read
 )
 
 // getMemoryGraph serves GET /api/memory/graph. Every source is optional — a
@@ -107,13 +112,46 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	var root string
 	h.readCfg(func(c *config.Config) { root = c.Storage.MemoryPath })
+	var projectsRoot, skillsRoot string
+	if h.projects != nil {
+		projectsRoot = h.projects.Root()
+	}
+	if h.skillStore != nil {
+		skillsRoot = h.skillStore.Root()
+	}
+
+	// The default view is the readable one: few entities, no statistical
+	// co-occurrence edges. Clients widen it explicitly with ?entities=N and
+	// ?co=1 when the reader asks for the full term cloud.
+	q := r.URL.Query()
+	entityLimit := entityCapDefault
+	if v := q.Get("entities"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			if n > entityCap {
+				n = entityCap
+			}
+			entityLimit = n
+		}
+	}
+	includeCo := q.Get("co") == "1"
+
+	// The scan reads every surface and enumerates CJK n-grams. A conditional
+	// request whose sources did not change skips all of that work.
+	etag := memoryGraphETag(entityLimit, includeCo, root, projectsRoot, skillsRoot)
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 
 	hermes := h.memoryHermes()
 	nodes := []graphNodeJSON{}
 	var texts []graphText
 	// extractDocs feed the knowledge layer: one doc per dated daily file (so
-	// entity dates land on the day they were actually seen) plus every other
-	// surface, tag-stripped so markers never become terms.
+	// entity dates land on the day they were actually seen) plus real memory
+	// surfaces. The Dreamer report is excluded: its repeated section labels
+	// and copied promotions are not independent facts or entity evidence.
 	var extractDocs []graphText
 	// mentionCandidates are the (node id → display name) pairs the reference
 	// scan looks for inside other surfaces. Kept apart from `nodes` so a
@@ -124,21 +162,20 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 
 	addCore := func(id, label, path string, countEntries bool) {
 		content := readFileCapped(filepath.Join(root, path))
+		if strings.TrimSpace(content) == "" {
+			return
+		}
 		n := graphNodeJSON{ID: id, Kind: "core", Layer: "file", Label: label, Chars: len([]rune(content))}
 		if countEntries {
 			n.Entries = len(memory.ParseMem([]byte(content)).Entries)
 		}
 		n.Weight = surfaceWeight(n)
 		n.LastSeen = fileDate(filepath.Join(root, path))
-		if id == "core:dreams" {
-			// The dream diary is dated by its own section headers.
-			if first, last := dreamDates(content); first != "" {
-				n.FirstSeen, n.LastSeen = first, last
-			}
-		}
 		nodes = append(nodes, n)
-		texts = append(texts, graphText{id: id, content: content})
-		extractDocs = append(extractDocs, graphText{id: id, content: stripTags(content)})
+		if id != "core:dreams" {
+			texts = append(texts, graphText{id: id, content: content})
+			extractDocs = append(extractDocs, graphText{id: id, content: stripTags(content)})
+		}
 		// Core filenames ("USER.md") are distinctive mentions — a surface
 		// naming one earns an honest reference edge like any other.
 		candidates = append(candidates, candidate{id: id, name: label, lower: strings.ToLower(label)})
@@ -151,6 +188,9 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 		for _, name := range names {
 			path := filepath.Join(hermes.TopicsDir(), name+".md")
 			content := readFileCapped(path)
+			if strings.TrimSpace(content) == "" {
+				continue
+			}
 			id := "topic:" + name
 			n := graphNodeJSON{
 				ID: id, Kind: "topic", Layer: "file", Label: name,
@@ -171,7 +211,11 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 	// does not carry. The knowledge layer still sees the days themselves (as
 	// "daily:<date>" docs) so entity dates stay honest. The extraction budget
 	// bounds the scan on a long history — newest days first, oldest dropped.
-	daily := listDaily(hermes.WarmDir())
+	daily, err := listDaily(hermes.WarmDir())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
 	{
 		var diary strings.Builder
 		chars := 0
@@ -185,11 +229,13 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 				budget -= len(d.Content)
 			}
 		}
-		n := graphNodeJSON{ID: "daily", Kind: "daily", Layer: "file", Label: "daily", Chars: chars, Files: len(daily)}
-		n.Weight = surfaceWeight(n)
-		n.FirstSeen, n.LastSeen = dailyDates(daily)
-		nodes = append(nodes, n)
-		texts = append(texts, graphText{id: "daily", content: diary.String()})
+		if len(daily) > 0 {
+			n := graphNodeJSON{ID: "daily", Kind: "daily", Layer: "file", Label: "daily", Chars: chars, Files: len(daily)}
+			n.Weight = surfaceWeight(n)
+			n.FirstSeen, n.LastSeen = dailyDates(daily)
+			nodes = append(nodes, n)
+			texts = append(texts, graphText{id: "daily", content: diary.String()})
+		}
 	}
 
 	if h.projects != nil {
@@ -197,6 +243,9 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 			for _, name := range names {
 				mf, err := h.projects.Load(name)
 				if err != nil {
+					continue
+				}
+				if len(mf.Entries) == 0 {
 					continue
 				}
 				id := "project:" + name
@@ -231,7 +280,7 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Edges. Promotion markers and name mentions; both dedup'd by (from,to,kind)
+	// Edges. Dream-diary promotion receipts and name mentions; both dedup'd by (from,to,kind)
 	// and carrying their evidence count as weight.
 	edgeSet := map[string]graphEdgeJSON{}
 	addEdge := func(from, to, kind string, weight int) {
@@ -243,10 +292,30 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 		}
 		edgeSet[from+"\x00"+to+"\x00"+kind] = graphEdgeJSON{From: from, To: to, Kind: kind, Weight: weight}
 	}
-	for _, g := range texts {
-		if n := strings.Count(g.content, memory.PromotionSourceTag); n > 0 {
-			addEdge("daily", g.id, "promotion", n)
+	// The Dreamer's receipts survive warm-log retention. Stream the whole
+	// diary instead of relying on its 64 KiB graph preview; only entries
+	// still present in long-term memory earn a promotion edge.
+	if diary, err := os.Open(filepath.Join(root, "DREAMS.md")); err == nil {
+		mem, readErr := os.ReadFile(filepath.Join(root, "MEMORY.md"))
+		if os.IsNotExist(readErr) {
+			readErr = nil
 		}
+		if readErr == nil {
+			n, first, last, scanErr := dreamPromotionEvidence(diary, string(mem))
+			if scanErr == nil {
+				for i := range nodes {
+					if nodes[i].ID == "core:dreams" && first != "" {
+						nodes[i].FirstSeen, nodes[i].LastSeen = first, last
+					}
+				}
+				if n > 0 {
+					addEdge("core:dreams", "core:memory", "promotion", n)
+				}
+			}
+		}
+		_ = diary.Close()
+	}
+	for _, g := range texts {
 		lower := strings.ToLower(g.content)
 		for _, cand := range candidates {
 			if cand.id == g.id || !mentionable(cand.name) {
@@ -266,7 +335,12 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 		exclude[strings.ToLower(n.Label)] = true
 		exclude[strings.ToLower(strings.TrimSuffix(n.Label, ".md"))] = true
 	}
-	terms := extractTerms(extractDocs, exclude, entityCap)
+	terms := extractTermsWithCancel(extractDocs, exclude, entityLimit, func() bool {
+		return r.Context().Err() != nil
+	})
+	if terms == nil {
+		return // client disconnected during the n-gram scan
+	}
 	collectEvidence(terms, extractDocs)
 
 	// seenBy is the dated-evidence roll-up per surface: entities inherit the
@@ -317,53 +391,58 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 		addEdge(m.from, m.to, "mention", m.weight)
 	}
 
-	// Co-occurrence edges: two entities sharing an entry/line, at least
-	// coMinCount times. A term nested inside another is the same evidence
-	// twice, so nested pairs never earn an edge. Term forms are lowered once
-	// here — lowering inside the line×term loop was the old hotspot.
-	termLower := make([]string, len(terms))
-	for i, t := range terms {
-		termLower[i] = strings.ToLower(t.Term)
-	}
-	coCount := map[string]int{}
-	for _, d := range extractDocs {
-		lower := strings.ToLower(d.content)
-		for line := range strings.Lines(lower) {
-			line = strings.TrimSpace(line)
-			if line == "" {
+	// Co-occurrence edges are statistical, not relational: two terms sharing
+	// a line says nothing about how they relate, and at the old 200-edge cap
+	// these chords crossed the whole canvas. They are opt-in (?co=1); the
+	// default graph omits them entirely, including their scan cost.
+	if includeCo {
+		termLower := make([]string, len(terms))
+		for i, t := range terms {
+			termLower[i] = strings.ToLower(t.Term)
+		}
+		coCount := map[string]int{}
+		for _, d := range extractDocs {
+			if r.Context().Err() != nil {
+				return
+			}
+			lower := strings.ToLower(d.content)
+			for line := range strings.Lines(lower) {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				var present []string
+				for i, tl := range termLower {
+					if strings.Contains(line, tl) {
+						present = append(present, terms[i].Term)
+					}
+				}
+				for i := 0; i < len(present); i++ {
+					for j := i + 1; j < len(present); j++ {
+						a, b := present[i], present[j]
+						if strings.Contains(a, b) || strings.Contains(b, a) {
+							continue
+						}
+						coCount[a+"\x00"+b]++
+					}
+				}
+			}
+		}
+		var co []edgeHit
+		for key, n := range coCount {
+			if n < coMinCount {
 				continue
 			}
-			var present []string
-			for i, tl := range termLower {
-				if strings.Contains(line, tl) {
-					present = append(present, terms[i].Term)
-				}
-			}
-			for i := 0; i < len(present); i++ {
-				for j := i + 1; j < len(present); j++ {
-					a, b := present[i], present[j]
-					if strings.Contains(a, b) || strings.Contains(b, a) {
-						continue
-					}
-					coCount[a+"\x00"+b]++
-				}
-			}
+			from, to, _ := strings.Cut(key, "\x00")
+			co = append(co, edgeHit{from: "entity:" + from, to: "entity:" + to, weight: n})
 		}
-	}
-	var co []edgeHit
-	for key, n := range coCount {
-		if n < coMinCount {
-			continue
+		sortEdgeHits(co)
+		if len(co) > coEdgeCap {
+			co = co[:coEdgeCap]
 		}
-		from, to, _ := strings.Cut(key, "\x00")
-		co = append(co, edgeHit{from: "entity:" + from, to: "entity:" + to, weight: n})
-	}
-	sortEdgeHits(co)
-	if len(co) > coEdgeCap {
-		co = co[:coEdgeCap]
-	}
-	for _, e := range co {
-		addEdge(e.from, e.to, "co", e.weight)
+		for _, e := range co {
+			addEdge(e.from, e.to, "co", e.weight)
+		}
 	}
 
 	edges := make([]graphEdgeJSON, 0, len(edgeSet))
@@ -384,9 +463,84 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"nodes": nodes, "edges": edges})
 }
 
+// dreamPromotionCount is a convenience wrapper for small, in-memory receipts.
+func dreamPromotionCount(diary, memoryContent string) int {
+	n, _, _, _ := dreamPromotionEvidence(strings.NewReader(diary), memoryContent)
+	return n
+}
+
+// dreamPromotionEvidence scans every dated receipt without loading the entire
+// DREAMS.md into memory. Only unique, currently retained long-term entries
+// count; neither a free-form marker nor an old promotion later forgotten does.
+func dreamPromotionEvidence(diary io.Reader, memoryContent string) (count int, first, last string, err error) {
+	entries := map[string]bool{}
+	for _, entry := range memory.ParseMem([]byte(memoryContent)).Entries {
+		entries[entry] = true
+	}
+	seen := map[string]bool{}
+	promotedSection := false
+	scan := bufio.NewScanner(diary)
+	scan.Buffer(make([]byte, 64<<10), maxDreamsEdit+1)
+	for scan.Scan() {
+		line := scan.Text()
+		if strings.HasPrefix(line, "## ") {
+			promotedSection = false
+			if day := strings.TrimSpace(strings.TrimPrefix(line, "## ")); isDayName(day) {
+				first, last = minDay(first, day), maxDay(last, day)
+			}
+		}
+		if strings.HasPrefix(line, "- Promoted to long-term memory / ") {
+			promotedSection = true
+			continue
+		}
+		if strings.HasPrefix(line, "- ") {
+			promotedSection = false
+		}
+		if promotedSection && strings.HasPrefix(line, "  - ") {
+			entry := strings.TrimSpace(strings.TrimPrefix(line, "  - "))
+			if entries[entry] && !seen[entry] {
+				count++
+				seen[entry] = true
+			}
+		}
+	}
+	return count, first, last, scan.Err()
+}
+
 // edgeWeightCap bounds the evidence count riding on one edge — plenty to tell
 // a stray mention from a recurring one without long scans.
 const edgeWeightCap = 50
+
+// memoryGraphETag fingerprints the graph's source files before any parsing
+// happens. Every writer in this package replaces files atomically, so a
+// content change always moves mtime or size. The query options join the
+// fingerprint because they change the response body.
+func memoryGraphETag(entityLimit int, includeCo bool, roots ...string) string {
+	h := fnv.New64a()
+	fmt.Fprintf(h, "entities=%d;co=%t;", entityLimit, includeCo)
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				fmt.Fprintf(h, "error:%s|%v;", path, err)
+				return nil
+			}
+			if !d.IsDir() && !strings.HasSuffix(d.Name(), ".md") {
+				return nil
+			}
+			fi, err := d.Info()
+			if err != nil {
+				fmt.Fprintf(h, "stat:%s|%v;", path, err)
+				return nil
+			}
+			fmt.Fprintf(h, "%s|%s|%o|%d|%d;", path, fi.Mode().Type(), fi.Mode().Perm(), fi.ModTime().UnixNano(), fi.Size())
+			return nil
+		})
+	}
+	return `"` + strconv.FormatUint(h.Sum64(), 16) + `"`
+}
 
 // surfaceWeight turns a surface's size into the evidence mass the view scales
 // nodes with: § entries where the file has them, daily files for the diary,
@@ -435,24 +589,6 @@ func dailyDates(daily []topicJSON) (string, string) {
 	}
 	return first, last
 }
-
-// dreamDates extracts the first/last "## YYYY-MM-DD" section dates from the
-// dream diary.
-func dreamDates(content string) (string, string) {
-	first, last := "", ""
-	for _, m := range dreamSectionRe.FindAllStringSubmatch(content, -1) {
-		day := m[1]
-		if !isDayName(day) {
-			continue
-		}
-		first = minDay(first, day)
-		last = maxDay(last, day)
-	}
-	return first, last
-}
-
-// dreamSectionRe matches a dream-diary section header ("## 2026-10-18").
-var dreamSectionRe = regexp.MustCompile(`(?m)^##\s+(\d{4}-\d{2}-\d{2})`)
 
 // minDay/maxDay fold ISO dates; "" (no evidence) always loses.
 func minDay(a, b string) string {

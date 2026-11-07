@@ -115,6 +115,8 @@ def main():
     cmd = ["agy", "-p", prompt,
            "--output-format", "json",
            "--dangerously-skip-permissions"]
+    if model := harness.selected_model(os.environ.get("GEMINI_MODEL", "")):
+        cmd += ["--model", model]
     if req.resume:
         cmd += ["--conversation", req.resume]
 

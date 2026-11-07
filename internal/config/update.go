@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 
 	"gopkg.in/yaml.v3"
@@ -201,4 +202,55 @@ func writeDoc(path string, root *yaml.Node) error {
 	}
 	hardenSecretPerms(path, out)
 	return nil
+}
+
+// UpdateAgentExecution persists one complete policy revision in a single atomic
+// write. Unrelated routing fields and YAML comments stay intact.
+func UpdateAgentExecution(path string, routing RoutingConfig, delegation DelegationConfig) error {
+	root, top, err := loadDocForUpdate(path)
+	if err != nil {
+		return err
+	}
+	for _, section := range []struct {
+		name   string
+		fields map[string]any
+	}{
+		{"routing", map[string]any{
+			"agent_models": routing.AgentModels, "subagent_models": routing.SubagentModels,
+			"max_concurrent": routing.MaxConcurrent, "agent_concurrency": routing.AgentConcurrency,
+		}},
+		{"delegation", map[string]any{
+			"enabled": delegation.Enabled, "max_concurrent": delegation.MaxConcurrent,
+			"max_children": delegation.MaxChildren, "fanout": delegation.FanOut, "max_depth": delegation.MaxDepth,
+		}},
+	} {
+		node := mappingValue(top, section.name)
+		if node == nil {
+			node = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			top.Content = append(top.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: section.name}, node)
+		}
+		if node.Kind != yaml.MappingNode {
+			return fmt.Errorf("config %s: %s is not a mapping", path, section.name)
+		}
+		// Fixed ordering makes file edits reproducible and reviewable.
+		keys := make([]string, 0, len(section.fields))
+		for key := range section.fields {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			value := &yaml.Node{}
+			if err := value.Encode(section.fields[key]); err != nil {
+				return err
+			}
+			old := mappingValue(node, key)
+			if old == nil {
+				node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: key}, value)
+			} else {
+				value.HeadComment, value.LineComment, value.FootComment = old.HeadComment, old.LineComment, old.FootComment
+				*old = *value
+			}
+		}
+	}
+	return writeDoc(path, root)
 }

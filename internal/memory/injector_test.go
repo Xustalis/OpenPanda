@@ -3,6 +3,7 @@
 package memory
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -169,5 +170,31 @@ func TestFenceEmptyStaysEmpty(t *testing.T) {
 	}
 	if pack != "" {
 		t.Fatalf("empty project produced %q", pack)
+	}
+}
+
+func TestConversationEmptyQueryStillBoundsWorldMemory(t *testing.T) {
+	h := NewHermes(t.TempDir())
+	entries := []string{"fact zero", "fact one", "fact two", "fact three", "fact four", "fact five"}
+	if err := h.SaveMemory(MemFile{Entries: entries}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewInjector(h, nil).Conversation("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, entries[5]) || !strings.Contains(got, entries[4]) {
+		t.Errorf("unbounded or missing fallback entries: %q", got)
+	}
+}
+
+func TestConversationReportsBrokenTopicStore(t *testing.T) {
+	root := t.TempDir()
+	h := NewHermes(root)
+	if err := os.WriteFile(h.TopicsDir(), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewInjector(h, nil).Conversation("topic"); err == nil {
+		t.Fatal("topic scan failed silently; user memory would be omitted")
 	}
 }

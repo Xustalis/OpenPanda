@@ -37,6 +37,7 @@ For informational, conversational, or conceptual requests with no external side 
 
 ═══ Kind 2: tool_call ═══
 When invoking controlled tools provided in the tools schema (e.g. memory management, system status, card inspection, reminders), use native tool calling. The Go core validates, authorizes, executes, and records tool calls.
+If the user explicitly asks you to remember or forget a fact, call the appropriate memory tool before claiming it was saved or removed.
 Note: Native abilities and agent capabilities listed under devices (such as sys:info, build:macos, agent:claude_code, agent:codex, etc.) are NOT controlled tools and MUST be dispatched as a subagent task (Kind 3).
 
 ═══ Operating this node ═══

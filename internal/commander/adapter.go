@@ -896,6 +896,7 @@ func adapterPath(name string) (string, error) {
 
 // AdapterRequest is written to the adapter's stdin.
 type AdapterRequest struct {
+	Model    string `json:"model,omitempty"`
 	Prompt   string `json:"prompt"`
 	TimeoutS int    `json:"timeout_s"`
 	CWD      string `json:"cwd,omitempty"`
@@ -1173,6 +1174,7 @@ func buildAdapterRequest(ctx context.Context, name, prompt, cwd string) (Adapter
 		timeout = int(d / time.Second)
 	}
 	req := AdapterRequest{Prompt: prompt, TimeoutS: timeout, CWD: cwd}
+	req.Model, _ = ctx.Value(selectedModelKey{}).(string)
 	if ref, ok := ctx.Value(resumeKey{}).(resumeRef); ok && (ref.Adapter == "" || ref.Adapter == name) {
 		req.Resume = ref.ID
 	}

@@ -202,7 +202,7 @@ def main():
     # resume one headless, and passing the handle to -s is refused because the
     # session already exists.
     session = _new_session()
-    model = os.environ.get("GROK_MODEL", "")
+    model = harness.selected_model(os.environ.get("GROK_MODEL", ""))
 
     def argv(output, session_id):
         cmd = ["grok"]
