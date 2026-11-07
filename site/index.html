@@ -352,9 +352,9 @@
       <p class="lede reveal" data-i18n="s3.lede">OpenPanda 本身不是 Agent。它理解意图、拆解任务、按能力卡路由到最合适的节点，监督执行、验收结果；真正动手的，是你已经装好的 Claude Code、Codex 和每一台设备。</p>
     </div>
 
-    <!-- Two views of the same run: the GUI answers "what is happening", the CLI
-         answers "how do I drive it". Real product pages show both; a single
-         static screenshot only ever proves the first. -->
+    <!-- Two views of the same run: the console answers "what happened", the
+         terminal answers "how it was driven". Both are captures of a real local
+         build, not a hand-drawn mock. The caption states where they came from. -->
     <div class="product-view reveal">
       <div class="view-tabs" role="tablist" aria-label="产品视图" data-i18n-aria="s3.tabs.aria">
         <button class="view-tab on" id="view-tab-console" role="tab" aria-selected="true" aria-controls="view-console" tabindex="0" data-view="console" data-i18n="s3.tab.console">控制台</button>
@@ -364,59 +364,15 @@
       <div class="console-frame" id="view-console" data-panel="console" role="tabpanel" aria-labelledby="view-tab-console" tabindex="0">
         <div class="console-chrome">
           <span class="dots"><i></i><i></i><i></i></span>
-          <span class="console-title">OpenPanda — Console</span>
-          <span class="console-live"><i></i> LIVE</span>
+          <span class="console-title" data-i18n="s3.rec.console">OpenPanda — 控制台 · 实机截图</span>
+          <span class="console-live"><i></i> <span data-i18n="s3.rec.badge">RECORDED</span></span>
           <span class="console-url">127.0.0.1:7840</span>
         </div>
-        <div class="console-body">
-          <aside class="console-rail">
-            <div class="console-brand"><svg class="console-mark" width="15" height="15" viewBox="0 0 64 64" aria-hidden="true"><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/></svg> OpenPanda</div>
-            <div class="console-new">+ New task</div>
-            <nav>
-              <a class="on">Chat <em>3</em></a>
-              <a>Workspace</a>
-              <a>Nodes</a>
-              <a>Queue · Tasks · Projects <em>12</em></a>
-              <a>To-dos <em>8</em></a>
-              <a>Settings</a>
-            </nav>
-            <div class="console-user"><span class="av"></span><div><b>This machine · Hub</b><small>panda daemon</small></div></div>
-          </aside>
-          <div class="console-main">
-            <header>
-              <div><h3>Queue · Tasks · Projects</h3><p>3 in progress · 1 waiting for approval</p></div>
-              <div class="console-filters"><span class="on">All</span><span>In progress</span><span>In review</span></div>
-            </header>
-            <div class="console-board">
-              <div class="console-col">
-                <div class="console-colhead"><span>To do</span><b>2</b></div>
-                <div class="console-card"><h5>Refactor release pipeline</h5><p>build-box · codex</p><div class="console-tags"><span class="tag-auto">Auto</span><span class="tag-muted">2 stages</span></div></div>
-                <div class="console-card"><h5>Generate API docs</h5><p>macbook-pro · claude-code</p><div class="console-tags"><span class="tag-auto">Auto</span></div></div>
-              </div>
-              <div class="console-col">
-                <div class="console-colhead"><span>In progress</span><b>2</b></div>
-                <div class="console-card active"><h5>Fix scheduler tests</h5><p>macbook-pro · claude-code</p><div class="console-progress"><i style="width:64%"></i></div><div class="console-tags"><span class="tag-auto">Judge 2/5</span><span class="tag-muted">Running</span></div></div>
-                <div class="console-card"><h5>Sync dataset to NAS</h5><p>nas-01 · restic</p><div class="console-progress"><i style="width:32%"></i></div><div class="console-tags"><span class="tag-info">Transfer</span></div></div>
-              </div>
-              <div class="console-col">
-                <div class="console-colhead"><span>In review</span><b>1</b></div>
-                <div class="console-card warn"><h5>Deploy to production</h5><p>build-box · codex</p><div class="console-tags"><span class="tag-warn">Needs approval</span></div><div class="console-approve"><span>Approve</span><span>Reject</span></div></div>
-              </div>
-            </div>
-          </div>
-          <aside class="console-inspector">
-            <div class="console-inspector-head"><span>Task detail</span><b>#T-2841</b></div>
-            <h5>Fix scheduler tests</h5>
-            <p class="console-sub">macbook-pro · claude-code</p>
-            <div class="console-detail"><span>Status</span><b>Running</b></div>
-            <div class="console-detail"><span>Judge round</span><b>2 / 5</b></div>
-            <div class="console-detail"><span>Artifact</span><b>report.md</b></div>
-            <div class="console-timeline">
-              <div><p><b>Task dispatched</b><small>09:41:02 · entry model</small></p></div>
-              <div><p><b>Scanned failing tests</b><small>09:41:08 · claude-code</small></p></div>
-              <div><p><b>Judge: artifact missing</b><small>09:42:11 · re-dispatched</small></p></div>
-            </div>
-          </aside>
+        <div class="console-body is-shot">
+          <img class="console-shot" src="media/console-task.webp" width="1440" height="900" loading="lazy" decoding="async"
+               alt="OpenPanda 控制台任务详情：任务 01a1b154 已完成，页面显示真实的 uptime 命令输出与模型结论"
+               aria-label="OpenPanda 控制台任务详情：任务 01a1b154 已完成，页面显示真实的 uptime 命令输出与模型结论"
+               data-i18n-aria="s3.shot.console" />
         </div>
       </div>
       <!-- /console-frame -->
@@ -424,25 +380,21 @@
       <div class="term-frame" id="view-term" data-panel="term" role="tabpanel" aria-labelledby="view-tab-term" tabindex="0" hidden>
         <div class="term-chrome">
           <span class="dots"><i></i><i></i><i></i></span>
-          <span class="term-title">panda — zsh</span>
-          <span class="term-tag">CLI</span>
+          <span class="term-title" data-i18n="s3.rec.term">panda — 实机录制 · zsh</span>
+          <span class="term-tag" data-i18n="s3.rec.tag">REC · 81s</span>
         </div>
-        <div class="term-body">
-          <p class="t-prompt"><span class="t-path">~/project</span> <span class="t-arrow">❯</span> panda ask <em data-i18n="s3.term.cmd">"修掉 scheduler 的失败测试，在构建机上跑完，结果发我手机"</em></p>
-          <div class="t-flow">
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">entry</span><span class="t-text" data-i18n="s3.term.classify">classify 意图 → <b>task.graph</b></span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">plan</span><span class="t-text"><b>3 stages</b> · 4 artifacts · 2 machines</span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">route</span><span class="t-text">macbook-pro · claude-code · <b>0.91</b></span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">route</span><span class="t-text">build-box · codex · <b>0.87</b> <span class="t-dim">hop +1</span></span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">route</span><span class="t-text">phone · notify · <b>0.74</b></span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">judge</span><span class="t-text">round 1/5 <span class="t-bad">FAIL</span> <span class="t-dim" data-i18n="s3.term.replan">artifact missing → 带因重派</span></span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">judge</span><span class="t-text">round 2/5 <span class="t-ok">PASS</span> <span class="t-dim">214 tests</span></span></div>
-          </div>
-          <p class="t-done"><span class="t-ok">✔</span> done <b>2m14s</b> · 4 artifacts · <span class="t-hl">0 bytes to cloud</span><i class="t-caret"></i></p>
+        <div class="term-body is-video">
+          <video class="term-video" controls preload="none" playsinline width="1008" height="604"
+                 poster="media/demo-poster.webp"
+                 aria-label="OpenPanda 终端实机录屏：依次运行 panda version、panda doctor、panda queue、panda ask 完成任务、panda queue 查看结果"
+                 data-i18n-aria="s3.shot.term">
+            <source src="media/openpanda-demo.mp4" type="video/mp4" />
+            <span data-i18n="s3.demo.fallback">浏览器不支持内嵌视频，可下载同目录下的 openpanda-demo.mp4 观看。</span>
+          </video>
         </div>
       </div>
 
-      <p class="figure-caption"><b>FIG. 01</b><span data-i18n="s3.caption">界面示意：控制台看状态与审批，终端看路由与验收，两个视角对应同一次运行。</span></p>
+      <p class="figure-caption"><b>FIG. 01</b><span data-i18n="s3.caption">2026-11-06，本机从源码构建 v0.1.4 后的实机录制。panda ask 让模型在本机执行 uptime，任务 01a1b154 由 opencode 适配器在 43 秒内完成；控制台截图与终端视频来自同一次运行。</span><a class="media-dl" href="media/openpanda-demo.mp4" data-i18n="s3.demo.link">完整录屏 · MP4 626 KB</a></p>
       </div>
     </div>
 
