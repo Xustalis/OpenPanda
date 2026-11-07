@@ -1878,6 +1878,13 @@ const ja: Messages = {
   'execution.limitsHelp': "上限はこのワーカーの実行中のアダプター呼び出しに適用されます。引き下げても実行中の処理は中断しません。並列書き込みには独立したパスか作業ツリーが必要です。任意の上限は 0 で解除します。",
   'execution.saved': "保存しました。このワーカーには適用済みです。他のローカルワーカーは自動同期します。",
 
+  // 各項目内部の設定サブメニュー（設定画面：Agent / スキル / モデル）。
+  'settings.itemSettings': '項目の設定',
+  'settings.itemSettingsFor': '{name} の設定',
+  'settings.customAgent': 'カスタム',
+  'settings.agentSettingsHelp': 'この Agent にのみ適用されます。実行ポリシーを保存すると反映されます。',
+  'skills.reinstall': '再インストール',
+
 }
 
 export default ja

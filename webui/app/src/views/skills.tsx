@@ -10,6 +10,13 @@ import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 import { useModalFocus } from '../components/modal-focus'
 import { Select } from '../components/select'
+import { ItemSettings } from '../components/item-settings'
+
+/** DOM ids for the per-skill settings disclosures. Skill names come from disk
+ *  and can contain path separators, so they are folded into a safe suffix. */
+function skillSettingsId(name: string): string {
+  return `skill-settings-${name.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+}
 
 /** The skills view: every skill with its approval status, plus
  *  quick recommended presets, custom importing and community Skills Hub integration. */
@@ -185,28 +192,43 @@ function SkillRow({
         >
           {t(`skills.status.${skill.status}`, skill.status)}
         </span>
-        {skill.builtin && (
-          <button
-            type="button"
-            class="btn"
-            style={{ fontSize: '12px', padding: '3px 8px' }}
-            disabled={busy}
-            title={t('skills.resetTooltip')}
-            onClick={() => onReset(skill.name)}
-          >
-            {t('skills.resetBtn')}
-          </button>
-        )}
-        {skill.status === 'pending' && (
-          <span class="skill-actions">
-            <button class="btn primary" disabled={busy} onClick={() => onAct(skill.name, true)}>
-              {t('skills.approve')}
-            </button>
-            <button class="btn danger" disabled={busy} onClick={() => onAct(skill.name, false)}>
-              {t('skills.reject')}
-            </button>
-          </span>
-        )}
+        {/* The row's own settings entry: status stays visible, every verb that
+            acts on this skill lives in the disclosure inside the row. */}
+        <ItemSettings
+          id={skillSettingsId(skill.name)}
+          label={t('settings.itemSettingsFor', { name: skill.name })}
+          title={skill.name}
+          align="end"
+        >
+          <p class="item-settings-note">
+            {t(`skills.status.${skill.status}`, skill.status)} · {skill.scope}
+            {skill.key ? `:${skill.key}` : ''} · {t('skills.usedN', { n: skill.use_count })}
+          </p>
+          <div class="item-settings-actions">
+            {skill.builtin && (
+              <button
+                type="button"
+                class="btn small"
+                disabled={busy}
+                title={t('skills.resetTooltip')}
+                onClick={() => onReset(skill.name)}
+              >
+                <Icon name="refresh" size={13} />
+                {t('skills.resetBtn')}
+              </button>
+            )}
+            {skill.status === 'pending' && (
+              <>
+                <button class="btn small primary" disabled={busy} onClick={() => onAct(skill.name, true)}>
+                  {t('skills.approve')}
+                </button>
+                <button class="btn small danger" disabled={busy} onClick={() => onAct(skill.name, false)}>
+                  {t('skills.reject')}
+                </button>
+              </>
+            )}
+          </div>
+        </ItemSettings>
       </div>
     </div>
   )
@@ -325,6 +347,9 @@ function HubSkillRow({
   installing: boolean
   onInstall(force?: boolean): void
 }) {
+  const meta = [skill.author && t('skills.byAuthor', { name: skill.author }), skill.version]
+    .filter(Boolean)
+    .join(' · ')
   return (
     <div class="skill-row">
       <div class="skill-info">
@@ -351,30 +376,38 @@ function HubSkillRow({
         )}
       </div>
       <div class="skill-side">
-        {skill.installed ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span class="badge green">{t('skills.installed')}</span>
-            <button
-              type="button"
-              class="btn"
-              disabled={installing}
-              title={t('skills.resetTooltip')}
-              onClick={() => onInstall(true)}
-              style={{ fontSize: '12px', padding: '4px 8px' }}
-            >
-              ↻
-            </button>
+        {skill.installed && <span class="badge green">{t('skills.installed')}</span>}
+        <ItemSettings
+          id={`hub-${skillSettingsId(skill.name)}`}
+          label={t('settings.itemSettingsFor', { name: skill.name })}
+          title={skill.name}
+          align="end"
+        >
+          {meta && <p class="item-settings-note">{meta}</p>}
+          <div class="item-settings-actions">
+            {skill.installed ? (
+              <button
+                type="button"
+                class="btn small"
+                disabled={installing}
+                title={t('skills.resetTooltip')}
+                onClick={() => onInstall(true)}
+              >
+                <Icon name="refresh" size={13} />
+                {t('skills.reinstall')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                class="btn small primary"
+                disabled={installing}
+                onClick={() => onInstall(false)}
+              >
+                {installing ? '...' : t('skills.install')}
+              </button>
+            )}
           </div>
-        ) : (
-          <button
-            type="button"
-            class="btn primary"
-            disabled={installing}
-            onClick={() => onInstall(false)}
-          >
-            {installing ? '...' : t('skills.install')}
-          </button>
-        )}
+        </ItemSettings>
       </div>
     </div>
   )
