@@ -441,11 +441,14 @@ function SidebarNode() {
   // web` serves the node itself, so `node_running` alone left this dot grey
   // on a node that was online and heartbeating.
   const up = isSelfNodeUp(self)
+  // The rail is 255px wide, so a long hostname ellipsises here. The title has
+  // to carry both halves: naming only the connection state left the truncated
+  // name unknowable on hover.
   return (
     <a
       href="#/profile"
       class="sidebar-node"
-      title={t(up ? 'sidebar.node.up' : 'sidebar.node.down')}
+      title={`${name} · ${t(up ? 'sidebar.node.up' : 'sidebar.node.down')}`}
     >
       <span class={`dot${up ? '' : ' off'}`} aria-hidden />
       <span class="mono sidebar-node-name">{name}</span>

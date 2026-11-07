@@ -315,7 +315,7 @@ const zhCN: Messages = {
   'sessions.railEmpty': '还没有对话。',
   'sessions.threads': '会话列表',
   'sessions.untitled': '未命名对话',
-  'sessions.placeholder': '向 OpenPanda 提问…（Enter 发送，Shift+Enter 换行）',
+  'sessions.placeholder': '向 OpenPanda 提问…',
   'sessions.placeholderRunning': 'Agent 正在执行… 可点击停止或补充指令',
   'sessions.msgQueued': '已排队 — Agent 将在下一轮读到',
   'sessions.msgNoFiles': '附件需要单独一轮 — 等这轮结束后再发文件',
