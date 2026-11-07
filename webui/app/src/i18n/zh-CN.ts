@@ -1825,6 +1825,25 @@ const zhCN: Messages = {
   'side.context': '每次提问都会带上这个线程的最新上下文；回答不会写回。',
   'side.placeholder': '就这个线程问点什么…',
   'common.stop': '停止',
+  // Agent execution policy
+  'execution.title': "Agent 模型与并行执行",
+  'execution.rootModel': "主 Agent 模型",
+  'execution.childModel': "Subagent 模型",
+  'execution.nativeDefault': "使用 CLI 默认模型",
+  'execution.inherit': "继承主 Agent 选择",
+  'execution.agentLimit': "单个 Agent 并行上限（0 为共享额度）",
+  'execution.limits': "执行限制",
+  'execution.maxConcurrent': "工作进程并行上限（0 为能力卡配置）",
+  'execution.delegation.max_concurrent': "所有 Subagent 并行上限（0 为共享额度）",
+  'execution.delegation.fanout': "每个父任务的并行子任务数",
+  'execution.delegation.max_children': "每个任务的累计子任务数",
+  'execution.delegation.max_depth': "最大派生深度",
+  'execution.enabled': "允许编排子 Agent",
+  'execution.modelsHelp': "填写 CLI 原生模型 ID；OpenCode 候选模型用逗号分隔。已注入的模型及 CLI 环境变量固定模型优先于这里的原生选择。",
+  'execution.nativeBoundary': "子 Agent 模型针对 OpenPanda 创建的子任务，不控制厂商 CLI 内部自行启动的子 Agent。",
+  'execution.limitsHelp': "限制作用于当前工作进程中的活跃适配器调用。调低额度不会中断已有调用；并行写入仍需无冲突路径或独立工作树。可选上限填 0 表示不额外限制。",
+  'execution.saved': "已保存，当前工作进程已生效，其他本地工作进程会自动同步。",
+
 }
 
 export default zhCN

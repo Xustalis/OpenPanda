@@ -935,6 +935,21 @@ export interface OnboardingPatch {
   approval_mode?: 'always' | 'on-request' | 'never'
 }
 
+/** Native CLI model selections and effective local execution limits. */
+export interface ExecutionSettings {
+  agent_models: Record<string, string[]> | null
+  subagent_models: Record<string, string[]> | null
+  max_concurrent: number
+  agent_concurrency: Record<string, number> | null
+  delegation: {
+    enabled: boolean | null
+    max_concurrent: number
+    max_children: number
+    fanout: number
+    max_depth: number
+  }
+}
+
 /** GET/PUT /api/settings/app — the four app policy groups (C1). */
 export interface AppSettings {
   injection_model: 'auto' | 'always' | 'never'
@@ -1440,6 +1455,14 @@ export const api = {
   },
 
   // ---- App policy settings (injection / routing / memory caps / approval) ----
+
+  getExecutionSettings(): Promise<ExecutionSettings> {
+    return request('GET', '/api/settings/execution')
+  },
+
+  putExecutionSettings(s: ExecutionSettings): Promise<ExecutionSettings> {
+    return request('PUT', '/api/settings/execution', s)
+  },
 
   getAppSettings(): Promise<AppSettings> {
     return request('GET', '/api/settings/app')

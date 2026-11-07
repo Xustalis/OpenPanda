@@ -1838,6 +1838,25 @@ const de: Messages = {
   'side.context': 'Jede Frage bringt den neuesten Kontext des Threads mit; Antworten werden nicht zurückgeschrieben.',
   'side.placeholder': 'Frage etwas zu diesem Thread…',
   'common.stop': 'Stoppen',
+  // Agent execution policy
+  'execution.title': "Agentenmodelle und parallele Ausführung",
+  'execution.rootModel': "Modell des Hauptagenten",
+  'execution.childModel': "Modell des Subagenten",
+  'execution.nativeDefault': "CLI-Standardmodell",
+  'execution.inherit': "Auswahl des Hauptagenten erben",
+  'execution.agentLimit': "Parallelgrenze je Agent (0 = geteilt)",
+  'execution.limits': "Ausführungslimits",
+  'execution.maxConcurrent': "Worker-Limit (0 = Fähigkeitskarte)",
+  'execution.delegation.max_concurrent': "Limit aller Subagenten (0 = geteilt)",
+  'execution.delegation.fanout': "Parallele Kinder je Elternaufgabe",
+  'execution.delegation.max_children': "Kinder insgesamt je Aufgabe",
+  'execution.delegation.max_depth': "Maximale Erzeugungstiefe",
+  'execution.enabled': "Orchestrierte Subagenten erlauben",
+  'execution.modelsHelp': "Native CLI-Modell-IDs eingeben; OpenCode-Kandidaten durch Kommas trennen. Injizierte Modelle und explizite CLI-Modellvariablen haben Vorrang vor dieser nativen Auswahl.",
+  'execution.nativeBoundary': "Kindmodelle gelten für von OpenPanda erzeugte Aufgaben, nicht für interne Subagenten einer Anbieter-CLI.",
+  'execution.limitsHelp': "Limits gelten für aktive Adapteraufrufe dieses Worker-Prozesses. Eine Senkung unterbricht laufende Aufrufe nicht. Parallele Schreibzugriffe benötigen getrennte Pfade oder isolierte Arbeitsbäume. Null hebt ein optionales Limit auf.",
+  'execution.saved': "Gespeichert und in diesem Worker aktiv. Andere lokale Worker synchronisieren sich automatisch.",
+
 }
 
 export default de

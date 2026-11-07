@@ -1824,6 +1824,25 @@ const ja: Messages = {
   'side.context': '質問のたびにスレッドの最新コンテキストが付きます。回答は書き戻されません。',
   'side.placeholder': 'このスレッドについて質問…',
   'common.stop': '停止',
+  // Agent execution policy
+  'execution.title': "Agent モデルと並列実行",
+  'execution.rootModel': "親 Agent のモデル",
+  'execution.childModel': "Subagent のモデル",
+  'execution.nativeDefault': "CLI の既定モデル",
+  'execution.inherit': "親の選択を継承",
+  'execution.agentLimit': "Agent ごとの並列上限（0 は共有）",
+  'execution.limits': "実行制限",
+  'execution.maxConcurrent': "ワーカー並列上限（0 は能力カード）",
+  'execution.delegation.max_concurrent': "全 Subagent の並列上限（0 は共有）",
+  'execution.delegation.fanout': "親タスクごとの並列子タスク数",
+  'execution.delegation.max_children': "タスクごとの子タスク総数",
+  'execution.delegation.max_depth': "最大生成深度",
+  'execution.enabled': "子 Agent の編成を許可",
+  'execution.modelsHelp': "CLI のモデル ID を入力します。OpenCode の候補はカンマ区切りです。注入モデルと明示的な CLI モデル環境変数は、この選択より優先されます。",
+  'execution.nativeBoundary': "子モデルは OpenPanda が作るタスクに適用され、ベンダー CLI 内部の子 Agent には適用されません。",
+  'execution.limitsHelp': "上限はこのワーカーの実行中のアダプター呼び出しに適用されます。引き下げても実行中の処理は中断しません。並列書き込みには独立したパスか作業ツリーが必要です。任意の上限は 0 で解除します。",
+  'execution.saved': "保存しました。このワーカーには適用済みです。他のローカルワーカーは自動同期します。",
+
 }
 
 export default ja

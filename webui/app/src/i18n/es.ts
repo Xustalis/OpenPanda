@@ -1838,6 +1838,25 @@ const es: Messages = {
   'side.context': 'Cada pregunta trae el contexto más reciente del hilo; las respuestas no se escriben de vuelta.',
   'side.placeholder': 'Pregunta algo sobre este hilo…',
   'common.stop': 'Detener',
+  // Agent execution policy
+  'execution.title': "Modelos de agentes y ejecución paralela",
+  'execution.rootModel': "Modelo del agente principal",
+  'execution.childModel': "Modelo del subagente",
+  'execution.nativeDefault': "Modelo predeterminado del CLI",
+  'execution.inherit': "Heredar selección principal",
+  'execution.agentLimit': "Límite por agente (0 = compartido)",
+  'execution.limits': "Límites de ejecución",
+  'execution.maxConcurrent': "Límite del proceso (0 = tarjeta de capacidades)",
+  'execution.delegation.max_concurrent': "Límite de todos los subagentes (0 = compartido)",
+  'execution.delegation.fanout': "Hijos paralelos por tarea principal",
+  'execution.delegation.max_children': "Total de hijos por tarea",
+  'execution.delegation.max_depth': "Profundidad máxima",
+  'execution.enabled': "Permitir subagentes orquestados",
+  'execution.modelsHelp': "Usa IDs de modelo nativos del CLI; separa los candidatos de OpenCode con comas. Los modelos inyectados y las variables explícitas de modelo del CLI tienen prioridad sobre estas opciones nativas.",
+  'execution.nativeBoundary': "Los modelos hijos se aplican a tareas creadas por OpenPanda, no a subagentes internos del CLI del proveedor.",
+  'execution.limitsHelp': "Los límites se aplican a llamadas activas de adaptadores en este proceso. Reducirlos no interrumpe llamadas activas. Las escrituras paralelas requieren rutas independientes o árboles aislados. Cero elimina un límite opcional.",
+  'execution.saved': "Guardado y aplicado a este proceso. Los otros procesos locales se sincronizan automáticamente.",
+
 }
 
 export default es
