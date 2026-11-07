@@ -80,6 +80,7 @@ type rpcError struct {
 
 const (
 	codeParseError     = -32700
+	codeInvalidRequest = -32600
 	codeMethodNotFound = -32601
 	codeInvalidParams  = -32602
 	codeInternal       = -32603
@@ -161,6 +162,12 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 			}
 		}
 		if err != nil {
+			// A reader error is normally EOF (the client closed stdin). When
+			// the context was canceled the caller needs to know the session
+			// ended by shutdown, not by a clean disconnect.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			return nil // EOF or reader failure ends the session quietly
 		}
 	}
@@ -173,6 +180,17 @@ func (s *Server) dispatch(ctx context.Context, line []byte) (rpcResponse, bool) 
 	if err := json.Unmarshal(line, &req); err != nil {
 		return rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"),
 			Error: &rpcError{Code: codeParseError, Message: "parse error"}}, true
+	}
+	// JSON-RPC 2.0 requires the jsonrpc member to be exactly "2.0". Without
+	// this check any JSON object — including a misframed tool payload — is
+	// treated as a request and answered with a confusing -32601.
+	if req.JSONRPC != "2.0" {
+		id := req.ID
+		if len(id) == 0 || string(id) == "null" {
+			id = json.RawMessage("null")
+		}
+		return rpcResponse{JSONRPC: "2.0", ID: id,
+			Error: &rpcError{Code: codeInvalidRequest, Message: `invalid request: jsonrpc must be "2.0"`}}, true
 	}
 	// Notifications carry no id: MCP servers must not answer them. That also
 	// covers notifications/initialized after the handshake.
@@ -223,7 +241,7 @@ func (s *Server) call(ctx context.Context, method string, params json.RawMessage
 		if !ok {
 			return toolError(fmt.Sprintf("unknown tool %q", p.Name)), nil
 		}
-		text, err := t.Handle(ctx, p.Arguments)
+		text, err := invokeTool(ctx, t, p.Arguments)
 		if err != nil {
 			return toolError(err.Error()), nil
 		}
@@ -231,6 +249,19 @@ func (s *Server) call(ctx context.Context, method string, params json.RawMessage
 	default:
 		return nil, &rpcError{Code: codeMethodNotFound, Message: "method not found: " + method}
 	}
+}
+
+// invokeTool isolates a handler panic to that one tool call. A panic used to
+// take down the whole `panda mcp` process, which silently removed every other
+// tool from the agent's run; turning it into an isError result keeps the
+// stdio session alive and gives the model a reason it can act on.
+func invokeTool(ctx context.Context, t Tool, args map[string]any) (text string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("tool %q panicked: %v", t.Name, r)
+		}
+	}()
+	return t.Handle(ctx, args)
 }
 
 // toolText is the MCP content-array success shape.
