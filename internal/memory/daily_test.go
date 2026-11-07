@@ -168,3 +168,120 @@ func TestParseDailyName(t *testing.T) {
 		t.Errorf("wrong extension should not parse")
 	}
 }
+
+func TestDailyOperationsWaitForOtherInstance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX flock timing test")
+	}
+	dir := filepath.Join(t.TempDir(), "daily")
+	first, second := NewDaily(dir), NewDaily(dir)
+	now := time.Date(2026, 8, 13, 19, 30, 0, 0, time.UTC)
+	if err := first.Append(now, "initial"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{"append", func() error { return second.Append(now, "new") }},
+		{"prune", func() error { return second.Prune(now) }},
+		{"delete", func() error { return second.Delete(now.Format(dailyLayout)) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			release, err := lockRoot(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- tc.run() }()
+			select {
+			case err := <-done:
+				release()
+				t.Fatalf("%s passed another store's lock: %v", tc.name, err)
+			case <-time.After(35 * time.Millisecond):
+			}
+			release()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("operation remained blocked after lock release")
+			}
+		})
+	}
+}
+
+func TestDailyArchiveMergesLateEntry(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "daily")
+	d := NewDaily(dir)
+	old := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	now := old.AddDate(0, 0, 40)
+	if err := d.Append(old, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Prune(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewDaily(dir).Append(old, "late"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Prune(now); err != nil {
+		t.Fatal(err)
+	}
+	archived := filepath.Join(dir, "archive", old.Format(dailyLayout)+".md")
+	data, err := os.ReadFile(archived)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "first") || !strings.Contains(string(data), "late") {
+		t.Fatalf("archive overwrote past entries: %q", data)
+	}
+	if _, err := os.Stat(d.PathFor(old)); !os.IsNotExist(err) {
+		t.Fatalf("warm copy not removed: %v", err)
+	}
+}
+
+func TestDailyDeleteRejectsNonDateAndSymlink(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "daily")
+	d := NewDaily(dir)
+	if err := d.Delete("README"); err == nil {
+		t.Fatal("deleted non-date file")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, d.PathFor(time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC))); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := d.Delete("2026-08-13"); err == nil {
+		t.Fatal("deleted symlink masquerading as daily log")
+	}
+}
+
+func TestDailyAppendRejectsSymlink(t *testing.T) {
+	d := NewDaily(filepath.Join(t.TempDir(), "daily"))
+	if err := os.MkdirAll(d.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	if err := os.Symlink(victim, d.PathFor(now)); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := d.Append(now, "do not leak"); err == nil {
+		t.Fatal("append followed a symlink")
+	}
+	data, err := os.ReadFile(victim)
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("external file corrupted: %q %v", data, err)
+	}
+}
