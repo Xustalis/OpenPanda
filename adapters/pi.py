@@ -254,8 +254,8 @@ def _build_cmd(req, injected_model, dropped=frozenset()):
     if injected_model:
         cmd += ["--model", injected_model]
     else:
-        if os.environ.get("PI_MODEL"):
-            cmd += ["--model", os.environ["PI_MODEL"]]
+        if model := harness.selected_model(os.environ.get("PI_MODEL", "")):
+            cmd += ["--model", model]
         if os.environ.get("PI_PROVIDER"):
             cmd += ["--provider", os.environ["PI_PROVIDER"]]
     if injected_model:
@@ -415,8 +415,8 @@ def main():
             plain = ["pi", "--print"] + _common_flags(req, dropped)
             if injected_model:
                 plain += ["--model", injected_model]
-            elif os.environ.get("PI_MODEL"):
-                plain += ["--model", os.environ["PI_MODEL"]]
+            elif model := harness.selected_model(os.environ.get("PI_MODEL", "")):
+                plain += ["--model", model]
             if req.resume:
                 if injected_model:
                     # Same session-store fix as the JSON path: the injected
