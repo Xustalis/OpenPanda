@@ -40,6 +40,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Added
+
+- **Una conexión entera se vacía de una vez** — la tarjeta del registro de modelos gana una papelera junto a «Añadir modelos»: un clic la arma, la franja dice cuántos modelos se van y la marca los elimina. El lote es una sola escritura de configuración y una sola decisión sobre qué modelo queda activo; el sucesor se verifica antes de borrar nada, de modo que un traspaso que no puede conectar deja la conexión intacta en lugar de a medio vaciar.
+
 ### Fixed
 
 - **El instalador de Windows deja de colgarse cuando GitHub se atasca** — cada descarga está acotada: curl aplica un suelo de 1 KB/s durante 60 s y un límite de 300 s al archivo (45 s a la API), y el respaldo .NET tiene un tiempo de espera de lectura que cubre también el cuerpo de la respuesta. curl ya no reintenta los timeouts: cada reintento reiniciaba el cronómetro y repetía la transferencia completa hasta tres veces más. Una conexión que se abre y no entrega bytes termina ahora con la causa mapeada de curl en lugar de quedarse en `Installing …` para siempre. El script también entrega a curl el proxy del sistema de «Opciones de Internet», respeta su lista de exclusiones `ProxyOverride` (incluido el loopback) para que los espejos locales sigan siendo directos y delega en .NET las configuraciones que solo usan PAC.

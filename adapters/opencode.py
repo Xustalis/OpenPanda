@@ -1288,6 +1288,60 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
     harness.emit(returncode == 0, text.strip() or err.strip(), returncode)
 
 
+def _event_failure(ev):
+    """Read provider failures only from terminal/session envelopes.
+
+    Tool errors and user text are not provider failures. In particular, a
+    message.updated event may report a failed assistant without a separate
+    top-level error event, while a long-lived CLI keeps its pipe open.
+    """
+    kind = ev.get("type")
+    props = ev.get("properties")
+    props = props if isinstance(props, dict) else ev
+    error = None
+    if kind in ("error", "session.error"):
+        error = props.get("error") or props.get("message") or "opencode error"
+    elif kind == "message.updated":
+        info = props.get("info")
+        if isinstance(info, dict) and info.get("role") == "assistant":
+            error = info.get("error")
+            if not error and info.get("finish") == "error":
+                error = "opencode assistant failed"
+    elif kind in ("session.idle", "session.status"):
+        status = props.get("status")
+        status = status if isinstance(status, dict) else props
+        if status.get("outcome") in ("failed", "error"):
+            error = status.get("error") or "opencode session failed"
+    if isinstance(error, dict):
+        data = error.get("data")
+        if isinstance(data, dict) and data.get("message"):
+            return str(data["message"])
+        return str(error.get("message") or error.get("name") or error.get("type") or "opencode error")
+    return str(error) if error else ""
+
+
+def _event_idle(ev):
+    props = ev.get("properties")
+    props = props if isinstance(props, dict) else ev
+    status = props.get("status")
+    return ev.get("type") == "session.idle" or (
+        ev.get("type") == "session.status" and
+        isinstance(status, dict) and status.get("type") == "idle")
+
+
+def _event_session(ev):
+    props = ev.get("properties")
+    props = props if isinstance(props, dict) else ev
+    part = props.get("part")
+    part = part if isinstance(part, dict) else {}
+    info = props.get("info")
+    info = info if isinstance(info, dict) else {}
+    return _session_id(props.get("sessionID") or props.get("session_id") or
+                       part.get("sessionID") or part.get("session_id") or
+                       info.get("sessionID") or info.get("session_id") or
+                       info.get("id") or props.get("id"))
+
+
 def _run_events(cmd, cwd, timeout):
     """Event mode: reduce opencode's raw JSON event stream to the result."""
     state = {
@@ -1307,22 +1361,21 @@ def _run_events(cmd, cwd, timeout):
         "usage": {"input_tokens": 0, "output_tokens": 0},
         "cost": None,
         "error": "",
+        "completed": False,
     }
 
     def on_line(line):
         ev = harness.parse_json_line(line)
         if ev is None:
             return
+        sid = _event_session(ev)
+        if sid and state["session_id"] and sid != state["session_id"]:
+            return  # service streams may include child-session events
         state["saw_event"] = True
-        et = ev.get("type") or ""
-        if et == "error":
-            err_obj = ev.get("error") if isinstance(ev.get("error"), dict) else {}
-            err_msg = ""
-            if isinstance(err_obj.get("data"), dict):
-                err_msg = err_obj["data"].get("message", "")
-            if not err_msg:
-                err_msg = str(err_obj.get("message") or "")
-            state["error"] = err_msg or "opencode error"
+        _fold(ev, state)
+        failure = _event_failure(ev)
+        if failure:
+            state["error"] = failure
             exc = ProviderFailure(state["error"])
             # The partial run state rides the exception so the terminal emit
             # can report the session/usage this failure leaves behind — the
@@ -1330,7 +1383,12 @@ def _run_events(cmd, cwd, timeout):
             # cold-starting and re-burning the whole run.
             exc.state = state
             raise exc
-        _fold(ev, state)
+        # A terminal idle after an answer is a completed turn even when the
+        # service-backed CLI keeps listening. Never infer completion merely
+        # from silence, a tool result, or an initial idle notification.
+        if (_event_idle(ev) and any(state["texts"].values()) and
+                not (state["seen_tool"] - state["done_tool"])):
+            state["completed"] = True
 
     def on_stderr(chunk):
         low = chunk.lower()
@@ -1340,7 +1398,10 @@ def _run_events(cmd, cwd, timeout):
             raise exc
 
     returncode, err, timed_out = harness.run_stream(
-        cmd, cwd=cwd, timeout=timeout, on_line=on_line, on_stderr=on_stderr)
+        cmd, cwd=cwd, timeout=timeout, on_line=on_line, on_stderr=on_stderr,
+        stop_when=lambda _: state["completed"])
+    if state["completed"] and not timed_out:
+        returncode = 0  # run_stream stopped the idle CLI after its answer
     if timed_out:
         # The watchdog killed the process tree mid-run. What matters to the
         # orchestrator is not the corpse but the checkpoint: the session the
@@ -1434,12 +1495,7 @@ def _fold(ev, state):
     # poisoned handle: every later resume attempt then died on a 400 and
     # cold-started, re-burning the whole run.
     part = props.get("part") if isinstance(props.get("part"), dict) else None
-    sid = _session_id(props.get("sessionID") or props.get("session_id"))
-    if not sid and part is not None:
-        sid = _session_id(part.get("sessionID") or part.get("session_id"))
-    if not sid:
-        info = props.get("info") if isinstance(props.get("info"), dict) else {}
-        sid = _session_id(info.get("id") or props.get("id"))
+    sid = _event_session(ev)
     if sid and not state["session_id"]:
         state["session_id"] = sid
         # Announce the minted handle early, before the result envelope

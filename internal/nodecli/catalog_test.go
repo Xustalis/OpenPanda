@@ -62,6 +62,27 @@ func TestPromptReferenceCoversWebConsole(t *testing.T) {
 
 // TestResolve covers the spellings callers look up: canonical names, aliases,
 // verb forms, the bare invocation, and a name that does not exist.
+func TestCompactPromptReference(t *testing.T) {
+	for _, loc := range i18n.Locales {
+		full := PromptReference(loc)
+		compact := PromptReferenceFor(loc, "fix a typo")
+		if len(compact)*2 >= len(full) {
+			t.Fatalf("%s: insufficient reduction: %d / %d", loc, len(compact), len(full))
+		}
+		for _, command := range []string{"panda help", "panda <command> --help", "panda status", "panda task"} {
+			if !strings.Contains(compact, command) {
+				t.Fatalf("%s: missing %s", loc, command)
+			}
+		}
+		for query, command := range map[string]string{"配置模型": "panda model", "panda web": "panda web", "memory": "panda memory", "诊断": "panda doctor"} {
+			if !strings.Contains(PromptReferenceFor(loc, query), command) {
+				t.Fatalf("%s: query %s omits %s", loc, query, command)
+			}
+		}
+		t.Logf("%s command reference bytes: %d -> %d", loc, len(full), len(compact))
+	}
+}
+
 func TestResolve(t *testing.T) {
 	cases := []struct {
 		name string

@@ -767,6 +767,15 @@ func substitutionIdentityNote(planned, running, reason string) string {
 }
 
 func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd string) Result {
+	// Fallbacks, transient retries and credential rescue share one execution
+	// deadline. Giving each nested attempt a fresh full timeout multiplies
+	// latency while this task continues to own its worktree lock.
+	budget := adapterHardTimeout
+	if d, ok := ctx.Value(timeoutKey{}).(time.Duration); ok && d > 0 {
+		budget = d + hardTimeoutGrace
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	runAdapter := r.runAdapter
 	if runAdapter == nil {
 		runAdapter = r.runAdapterDefault
@@ -786,6 +795,12 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 	var unavailable []string
 	var lastExecRes *Result
 	for i, name := range attempts {
+		if ctx.Err() != nil {
+			if lastExecRes != nil {
+				return *lastExecRes
+			}
+			return Result{ExitCode: 124, Stderr: ctx.Err().Error()}
+		}
 		ag, ok := r.card.Agents[name]
 		if !ok {
 			unavailable = append(unavailable, name+" (not on card)")
@@ -1243,7 +1258,7 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// have refused a plaintext endpoint the model explicitly opted into.
 	// A kill the commander itself performed is not a provider failure even
 	// though its verdict says "timeout" — see commanderKill.
-	if !res.OK && replayableFailure(res) && !dec.Inject && r.injectionModel != config.InjectionModelNever && !ModelCredsWithheld(ctx) && modelConfigured(injModel) && supportsModelInjection(name, adapter, injModel) && injModel.APIKey != "" && !commanderKill(res) && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
+	if ctx.Err() == nil && !res.OK && replayableFailure(res) && !dec.Inject && r.injectionModel != config.InjectionModelNever && !ModelCredsWithheld(ctx) && modelConfigured(injModel) && supportsModelInjection(name, adapter, injModel) && injModel.APIKey != "" && !commanderKill(res) && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
 		if ep := effectiveBaseURLFor(name, adapter, injModel); ep == "" || security.CheckModelEndpoint(ep, injModel.AllowPlaintext) == nil {
 			// Merged with the first attempt's environment, not replacing it:
 			// the retry is the same run with a different model endpoint, so the

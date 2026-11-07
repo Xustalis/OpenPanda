@@ -434,6 +434,18 @@ print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":
         )
         self.assertTrue(payload["ok"], payload)
 
+    def test_codex_managed_task_persists_resume_checkpoint(self):
+        payload, _, _ = run_adapter(
+            "codex.py", "codex", r'''
+import json, sys
+assert "--ephemeral" not in sys.argv
+assert "--sandbox" in sys.argv
+print(json.dumps({"type":"thread.started","thread_id":"managed-session"}))
+print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"done"}}))
+''', extra_request={"task_id": "managed-task"})
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["session_id"], "managed-session")
+
     def test_codex_resume_and_extended_policy_contract(self):
         payload, _, _ = run_adapter(
             "codex.py", "codex", r'''
@@ -1608,6 +1620,71 @@ if sys.argv[1:2] == ["run"]:
         )
         self.assertFalse(payload["ok"], payload)
         self.assertEqual(payload["session_id"], "ses_p9")
+
+    def test_opencode_terminal_errors_do_not_wait_for_process_exit(self):
+        events = [
+            {"type": "session.error", "properties": {"sessionID": "ses_terminal",
+             "error": {"data": {"message": "ConnectionRefused"}}}},
+            {"type": "message.updated", "properties": {"info": {
+             "role": "assistant", "sessionID": "ses_terminal",
+             "error": {"message": "ConnectionRefused"}}}},
+            {"type": "session.status", "sessionID": "ses_terminal",
+             "status": {"type": "idle", "outcome": "failed", "error": "ConnectionRefused"}},
+        ]
+        for event in events:
+            with self.subTest(event=event["type"]):
+                body = OC_HELP_CURRENT + '''
+import json, sys, time
+if sys.argv[1:2] != ["run"]:
+    sys.exit(0)
+print(%r, flush=True)
+time.sleep(30)
+''' % json.dumps(event)
+                payload, _, _ = run_adapter(
+                    "opencode.py", "opencode", body, timeout=8,
+                    extra_request={"timeout_s": 15})
+                self.assertFalse(payload["ok"], payload)
+                self.assertNotEqual(payload["exit_code"], 124, payload)
+                self.assertIn("ConnectionRefused", payload["result"])
+                self.assertEqual(payload["session_id"], "ses_terminal")
+
+    def test_opencode_idle_after_answer_finishes_hanging_cli(self):
+        for nested in (False, True):
+            with self.subTest(nested=nested):
+                idle = {"type": "session.idle", "sessionID": "ses_idle"}
+                if nested:
+                    idle = {"type": "session.status", "properties": {
+                        "sessionID": "ses_idle", "status": {"type": "idle"}}}
+                body = OC_HELP_CURRENT + '''
+import json, sys, time
+if sys.argv[1:2] != ["run"]:
+    sys.exit(0)
+# Initial idle cannot settle a task that has not answered.
+print(%r, flush=True)
+print(json.dumps({"type":"text","sessionID":"ses_idle","part":{"id":"p","type":"text","text":"complete"}}), flush=True)
+print(%r, flush=True)
+time.sleep(30)
+''' % (json.dumps(idle), json.dumps(idle))
+                payload, _, _ = run_adapter(
+                    "opencode.py", "opencode", body, timeout=8,
+                    extra_request={"timeout_s": 15})
+                self.assertTrue(payload["ok"], payload)
+                self.assertEqual(payload["result"], "complete")
+
+    def test_opencode_tool_and_foreign_session_errors_are_not_terminal(self):
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+if sys.argv[1:2] != ["run"]:
+    sys.exit(0)
+print(json.dumps({"type":"step_start","sessionID":"ses_main"}))
+print(json.dumps({"type":"session.error","sessionID":"ses_child","error":"child failed"}))
+print(json.dumps({"type":"tool_use","sessionID":"ses_main","part":{"id":"t","type":"tool","tool":"bash","state":{"status":"error","error":"command failed"}}}))
+print(json.dumps({"type":"message.updated","info":{"role":"user","error":"quoted text"}}))
+print(json.dumps({"type":"text","sessionID":"ses_main","part":{"id":"p","type":"text","text":"recovered"}}))
+''')
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "recovered")
 
     def test_opencode_textless_stream_fails_instead_of_reporting_success(self):
         """Events with no assistant text must be a failure, not a green result.

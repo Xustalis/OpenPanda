@@ -225,6 +225,9 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("PUT /api/models/{alias}", h.updateModel)
 	mux.HandleFunc("POST /api/models/{alias}/use", h.useModel)
 	mux.HandleFunc("DELETE /api/models/{alias}", h.removeModel)
+	// The batch form of that delete: one card is one account, and clearing it
+	// is one write, not one per model.
+	mux.HandleFunc("POST /api/models/remove", h.removeModels)
 	mux.HandleFunc("POST /api/models/fetch", h.fetchModels)
 	mux.HandleFunc("POST /api/models/test", h.testModel)
 	// "What can this machine already serve" — the four local collectors

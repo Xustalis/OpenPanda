@@ -1191,8 +1191,9 @@ type delegateRequest struct {
 	Node     string   `json:"node,omitempty"`
 	// Paths declares the project-relative directories the child owns — the
 	// scope it may write inside the shared worktree. Disjoint sibling
-	// scopes run in parallel; an omitted paths claim keeps the child on
-	// the whole-project lock, serialized like before.
+	// scopes run in parallel. An omitted claim keeps a lone child on the
+	// whole-project lock; in a multi-child project batch, the dispatcher
+	// instead isolates unscoped siblings automatically.
 	Paths []string `json:"paths,omitempty"`
 	// Isolate gives the child a private copy of the project tree (a git
 	// worktree when the project is a repository) instead of the shared one:
@@ -1400,7 +1401,7 @@ const agentResultSchema = `{
           "requires": {"type": "array", "items": {"type": "string"}, "description": "Capability ids the sub-task needs"},
           "title": {"type": "string", "description": "Short title"},
           "node": {"type": "string", "description": "Optional specific node name"},
-          "paths": {"type": "array", "items": {"type": "string"}, "maxItems": 8, "description": "Project-relative directories this sub-task owns and may write. Sibling sub-tasks whose paths do not overlap run in PARALLEL in the same worktree; overlapping or omitted paths serialize. Declare the narrowest real scope (e.g. [\"internal/api\", \"web/src/views\"]) and make sure two sub-tasks never name the same directory."},
+          "paths": {"type": "array", "items": {"type": "string"}, "maxItems": 8, "description": "Project-relative directories this sub-task owns and may write. Non-overlapping sibling scopes run in parallel in the same worktree; overlapping scopes serialize. In a multi-child project batch, siblings without paths/isolate/workdir are automatically isolated for safe parallel execution; a single unscoped task keeps the whole-project lock. Declare the narrowest real scope (e.g. [\"internal/api\", \"web/src/views\"])."},
           "isolate": {"type": "boolean", "description": "true gives this sub-task a private copy of the project tree (git worktree when available): it runs fully parallel with everything, and its changes merge back into the project tree when it finishes (conflicts are reported, not guessed). Use for sub-tasks that rewrite or build the tree at large; use paths instead when the edits are disjoint and cheap."},
           "workdir": {"type": "string", "description": "Absolute path to a directory this sub-task owns, for work that belongs to a different tree than yours — one business domain per directory. The child writes there, holds only that directory's lock, and never queues behind siblings editing other trees; its files stay out of your tree, so there is nothing to merge. Omit it to work in the project tree (then use paths to claim a lane). Ignored when isolate is true, and ignored when it names your own work directory."}
         },
@@ -1637,6 +1638,26 @@ func clarifySpecSummary(spec *entry.ClarifySpec) string {
 	return q
 }
 
+// parallelDelegateBatch isolates project siblings that did not declare a
+// shared-tree scope. A delegate batch is explicitly parallel work; making the
+// default private-copy execution preserves that intent without letting
+// unscoped children race on the same checkout. Single-child work remains on
+// the conservative whole-project lock, while explicit paths/workdirs retain
+// their cheaper caller-selected semantics.
+func parallelDelegateBatch(project string, fanout int, drs []delegateRequest) []delegateRequest {
+	if project == "" || fanout < 2 || len(drs) < 2 {
+		return drs
+	}
+	out := append([]delegateRequest(nil), drs...)
+	for i := range out {
+		if out[i].Isolate || len(normalizeScopePaths(out[i].Paths)) > 0 || strings.TrimSpace(out[i].WorkDir) != "" {
+			continue
+		}
+		out[i].Isolate = true
+	}
+	return out
+}
+
 // delegateChildren fans the agent's parsed requests out to causal children
 // in parallel — a turn asking to train on the GPU box AND probe the sensor
 // on the Pi should not serialize two cross-node round trips — then returns
@@ -1670,6 +1691,7 @@ func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegate
 	notes := make([]string, len(drs))
 	// Bound workers as well as active children; keep results in request order.
 	fanout := min(c.delegateLimits().FanOut, len(drs))
+	drs = parallelDelegateBatch(parent.Project, fanout, drs)
 	jobs := make(chan int)
 	var mu sync.Mutex
 	var wg sync.WaitGroup

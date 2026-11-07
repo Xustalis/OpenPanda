@@ -1426,7 +1426,7 @@ const en: Messages = {
   'models.removedLast': 'Removed {alias} — no model is configured now.',
   'models.removedConn': 'Removed {n} model(s) from this connection.',
   'models.removedConnSwitched': 'Removed {n} model(s) — now using {next}.',
-  'models.removeConnPartial': 'Removed {n} model(s), then stopped: {error}',
+  'models.removedConnEmpty': 'Removed {n} model(s) — no model is configured now.',
   'models.saved': 'Model updated.',
   'models.addedN': 'Added {n} model(s).',
   'models.addedSwitched': 'Added {n} model(s) — now using {alias}.',

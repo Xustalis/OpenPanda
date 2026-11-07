@@ -64,9 +64,12 @@ const maxModelBodyBytes = 64 << 20
 // Google Generative AI. Small and dependency-free so the core daemon does not
 // pull in an SDK.
 type Client struct {
-	apiType string
-	baseURL string
-	apiKey  string
+	// Immutable construction input for short auxiliary calls. Rebuild from
+	// config instead of copying Client's atomics or mutating a live client.
+	sourceModel config.ModelConfig
+	apiType     string
+	baseURL     string
+	apiKey      string
 	// keyFn resolves a live credential per request (subscription OAuth).
 	// When set it supersedes apiKey, and oauth marks that the credential
 	// is a Bearer token rather than an API key — Anthropic then takes
@@ -400,6 +403,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		}
 	}
 	c := &Client{
+		sourceModel:    model,
 		apiType:        apiType,
 		baseURL:        strings.TrimRight(base, "/"),
 		apiKey:         model.APIKey,
@@ -420,6 +424,8 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		sessionHeader:  sessionHeader,
 		sessionID:      sessionID,
 	}
+	c.sourceModel.Headers = maps.Clone(model.Headers)
+	c.sourceModel.Params = maps.Clone(model.Params)
 	// Subscription OAuth (model.auth): the credential resolves per request
 	// through the token store, so refreshes apply without a restart. The
 	// store directory follows the CLI's state-dir convention so a token

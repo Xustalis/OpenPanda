@@ -2070,6 +2070,15 @@ func (t *usageTracker) final(in, out int64) {
 
 // AskTurnsScoped is the session-aware ask with request-scoped project/workspace.
 func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, prompt string, scope AskScope, authorize bool, cb StreamCallbacks) (res *Result, err error) {
+	// Early-pipeline containment. Model-watcher sync, client selection and
+	// callback wiring all run before the accounting defer below is even
+	// registered; a panic there must still end this one ask, not the process.
+	// The inner defer recovers panics from the loop and from accounting itself.
+	defer func() {
+		if r := recover(); r != nil {
+			res, err = e.containedPanicResult(r)
+		}
+	}()
 	// Close the poll interval gap: an ask immediately after a saved model
 	// change must not start with the previous credential while awaiting a tick.
 	e.schedMu.Lock()
@@ -2168,6 +2177,13 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		}
 	}
 	defer func() {
+		// A panic anywhere in the pipeline — a tool adapter, a stream
+		// callback, a malformed parsed payload — ends this one ask with a
+		// readable error and its stack in the log, instead of taking down the
+		// CLI command or the whole daemon. The accounting below still runs.
+		if r := recover(); r != nil {
+			res, err = e.containedPanicResult(r)
+		}
 		// Catch-all for model-call failures that escaped unwrapped (a raw
 		// statusError/retryableError reads as provider JSON soup to a user).
 		// Non-model failures pass through untouched: a storage or routing
@@ -2194,6 +2210,12 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			// conversation history and the panel, even if a future provider
 			// path forgets the per-parse removal.
 			res.Answer = entry.StripThinking(res.Answer)
+			// A 200-OK with an empty content field is not an answer. Every
+			// return path funnels through here, so one backstop covers the
+			// CLI, the REPL and the panel without trusting each parser path.
+			if res.Kind == "answer" && strings.TrimSpace(res.Answer) == "" {
+				res.Answer = emptyAnswerNotice(effectiveLocale)
+			}
 		} else {
 			// Nothing was billed (the ask failed before a call completed), but
 			// the estimate from streamed bytes is still the honest last state.
@@ -2409,7 +2431,23 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// bare loop error (the "reached max tool rounds" report that hid six
 	// successfully-executed queue operations).
 	var toolDigest []string
-	digestOrErr := func(err error) (*Result, error) {
+	// digestOrErr is the loop's failure exit. Running tools already happened,
+	// so the honest answer is what they did — but the reason the loop stopped
+	// must not disappear with the error. Both go to the structured log and the
+	// user's reply; the old path returned only "stopped responding after N
+	// tool operations", which made a rejected request look like a crash.
+	digestOrErr := func(err error, round int) (*Result, error) {
+		if err != nil {
+			window := 0
+			if client != nil {
+				window = client.ContextWindow()
+			}
+			e.logError("askengine: classification failed in tool loop",
+				"err", err, "round", round, "tools_executed", len(toolDigest),
+				"turns", len(turns), "tool_result_runes", toolResultRunes(turns),
+				"window", window)
+		}
+		reason := loopFailureReason(err, effectiveLocale)
 		if lastTask != nil {
 			// A task ran: its outcome IS the answer. Dumping the raw tool
 			// results beside it buries the outcome in logs the user never
@@ -2425,10 +2463,24 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 					lastTask.Answer = strings.TrimRight(lastTask.Answer, "\n") + "\n\n" + note
 				}
 			}
+			if reason != "" {
+				if lastTask.Warning == "" {
+					lastTask.Warning = reason
+				} else {
+					lastTask.Warning += " · " + reason
+				}
+			}
 			return finalizeLastTask(lastTask), nil
 		}
 		if digest := toolResultsDigest(toolDigest, effectiveLocale); digest != "" {
-			return &Result{Kind: "answer", Answer: digest}, nil
+			// The precise provider error rides Warning and the log. Putting it
+			// in the Answer would bury the executed-tool summary under DSML or
+			// parse-error soup — the user-facing text stays protocol-free.
+			return &Result{
+				Kind:    "answer",
+				Answer:  digest + loopInterruptionNotice(effectiveLocale),
+				Warning: reason,
+			}, nil
 		}
 		return nil, err
 	}
@@ -2490,27 +2542,33 @@ rounds:
 				cb.OnReasoning(chunk)
 			}
 		}
+		streaming := cb.OnDelta != nil || cb.OnReasoning != nil
+		classify := func(c *entry.Client, ts []entry.Turn) (entry.Output, error) {
+			if streaming {
+				return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, reg, cb.OnDelta, trackReasoning, classifyOpts...)
+			}
+			return entry.ClassifyTurnsWithTools(ctx, c, devices, conversationMemory, ts, reg, classifyOpts...)
+		}
 		var out entry.Output
 		var err error
-		if cb.OnDelta != nil || cb.OnReasoning != nil {
-			out, err = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, reg, cb.OnDelta, trackReasoning, classifyOpts...)
-		} else {
-			out, err = entry.ClassifyTurnsWithTools(ctx, client, devices, conversationMemory, turns, reg, classifyOpts...)
-		}
+		// Bounded input before every classification: the loop may execute many
+		// tools, but the transcript it replays must stay inside the model's
+		// context window. An overflow rejection is retried on the same model
+		// with a tighter budget instead of surfacing as "stopped responding".
+		out, turns, err = e.classifyBounded(ctx, client, turns, func(ts []entry.Turn) (entry.Output, error) {
+			return classify(client, ts)
+		})
 		if err != nil {
 			if entry.IsFatalModelError(err) {
 				e.recordModelFailure(client.Key())
 				run := func(c *entry.Client) (entry.Output, error) {
-					if cb.OnDelta != nil || cb.OnReasoning != nil {
-						return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, turns, reg, cb.OnDelta, trackReasoning, classifyOpts...)
-					}
-					return entry.ClassifyTurnsWithTools(ctx, c, devices, conversationMemory, turns, reg, classifyOpts...)
+					return classify(c, turns)
 				}
 				fb, fbOut, ok := e.tryFallbackModels(ctx, client, run, func(name string) {
 					cb.progress(Progress{Kind: ProgressRoute, Name: name})
 				})
 				if !ok {
-					return digestOrErr(err)
+					return digestOrErr(err, round)
 				}
 				client = fb
 				usageBefore = fb.Usage()
@@ -2518,7 +2576,7 @@ rounds:
 				out = fbOut
 				err = nil
 			} else {
-				return digestOrErr(err)
+				return digestOrErr(err, round)
 			}
 		} else {
 			e.recordModelSuccess(client.Key())
@@ -2537,6 +2595,10 @@ rounds:
 			}
 			return budgetAdvisory(&Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}), nil
 		case entry.KindTask:
+			if out.Task == nil {
+				e.logWarn("askengine: task intent without a task spec, converging without a dispatch", "round", round)
+				break rounds
+			}
 			if budget.exhausted() {
 				// Refuse before submitTask: the budget limits actual task
 				// execution, not merely how many outcomes are replayed. The
@@ -2635,10 +2697,18 @@ rounds:
 				entry.Turn{Role: "user", Content: taskObservation(res, effectiveLocale)},
 			)
 		case entry.KindPlan:
+			if out.Plan == nil {
+				e.logWarn("askengine: plan intent without a plan spec, converging without a plan", "round", round)
+				break rounds
+			}
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
 			return e.startClassifiedPlan(ctx, out.Plan, scope, authorize, cb)
 		case entry.KindClarify:
-			if out.Clarify == nil {
+			// Progress and the card renderer both index Questions[0]. A model
+			// that emits a clarify intent with no questions is malformed, not a
+			// reason to panic the whole ask.
+			if out.Clarify == nil || len(out.Clarify.Questions) == 0 {
+				e.logWarn("askengine: empty clarification spec, converging without a question", "round", round)
 				break rounds
 			}
 			cb.progress(Progress{Kind: ProgressClarify, Name: out.Clarify.Questions[0].Header})
@@ -2668,7 +2738,16 @@ rounds:
 				entry.Turn{Role: "user", Content: clarifyAnswerTurn(answers, out.Clarify, effectiveLocale)},
 			)
 		case entry.KindToolCall:
-			calls := out.ToolCalls()
+			// A parsed payload can carry a nil call (malformed tool_use). Drop
+			// it here rather than dereferencing it in the progress line, the
+			// registry lookup or the replay builder.
+			rawCalls := out.ToolCalls()
+			calls := make([]*entry.ToolCall, 0, len(rawCalls))
+			for _, c := range rawCalls {
+				if c != nil {
+					calls = append(calls, c)
+				}
+			}
 			if len(calls) == 0 {
 				break rounds
 			}
@@ -2714,8 +2793,20 @@ rounds:
 				// Execute against the same registry snapshot classification
 				// saw: a mid-ask SetMCPCommand swap would otherwise make the
 				// model's tool call hit a registry that no longer knows it.
-				results[i] = executeTool(ctx, reg, call, toolAuthorized, toolDenied, approvalMode, effectiveLocale)
-				toolDigest = append(toolDigest, call.Tool+": "+results[i])
+				result, runErr := executeToolChecked(ctx, reg, call, toolAuthorized, toolDenied, approvalMode, effectiveLocale)
+				if runErr != nil {
+					var pe *toolPanicError
+					if errors.As(runErr, &pe) {
+						// A tool panic is a defect, not a normal failure: it gets
+						// an error-level log with the tool name, while the model
+						// still receives a contained failure message.
+						e.logError("askengine: tool panicked", "tool", call.Tool, "round", round, "err", runErr)
+					} else {
+						e.logWarn("askengine: tool execution failed", "tool", call.Tool, "round", round, "err", runErr)
+					}
+				}
+				results[i] = result
+				toolDigest = append(toolDigest, call.Tool+": "+boundToolResult(result, toolDigestCap))
 				for _, d := range taskCapture.takeAll() {
 					dispatched = append(dispatched, d)
 					if !d.NeedsApproval && d.TaskID != "" {
@@ -2785,21 +2876,24 @@ rounds:
 	// can only answer in text — the tools already ran and their results are
 	// in the turns — so the ask converges to something useful instead of
 	// surfacing a loop error to the user.
+	finalClassify := func(c *entry.Client, ts []entry.Turn) (entry.Output, error) {
+		if cb.OnDelta != nil || cb.OnReasoning != nil {
+			return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, nil, cb.OnDelta, cb.OnReasoning, classifyOpts...)
+		}
+		return entry.ClassifyTurns(ctx, c, devices, conversationMemory, ts, classifyOpts...)
+	}
 	var final entry.Output
 	var ferr error
-	if cb.OnDelta != nil || cb.OnReasoning != nil {
-		final, ferr = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, nil, cb.OnDelta, cb.OnReasoning, classifyOpts...)
-	} else {
-		final, ferr = entry.ClassifyTurns(ctx, client, devices, conversationMemory, turns, classifyOpts...)
-	}
+	// The final convergence call replays the same transcript, so it gets the
+	// same input bound and overflow recovery as every round above.
+	final, turns, ferr = e.classifyBounded(ctx, client, turns, func(ts []entry.Turn) (entry.Output, error) {
+		return finalClassify(client, ts)
+	})
 	if ferr != nil {
 		if entry.IsFatalModelError(ferr) {
 			e.recordModelFailure(client.Key())
 			run := func(c *entry.Client) (entry.Output, error) {
-				if cb.OnDelta != nil || cb.OnReasoning != nil {
-					return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, turns, nil, cb.OnDelta, cb.OnReasoning, classifyOpts...)
-				}
-				return entry.ClassifyTurns(ctx, c, devices, conversationMemory, turns, classifyOpts...)
+				return finalClassify(c, turns)
 			}
 			fb, fbOut, ok := e.tryFallbackModels(ctx, client, run, func(name string) {
 				cb.progress(Progress{Kind: ProgressRoute, Name: name})
@@ -2815,13 +2909,14 @@ rounds:
 		if ferr != nil {
 			// The tools already ran — report what they did rather than a bare
 			// loop error. toolDigest is empty only when nothing ever executed,
-			// in which case the wrapped error stands.
-			return digestOrErr(fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr))
+			// in which case the wrapped error stands. The real reason rides
+			// along now instead of being folded into "stopped responding".
+			return digestOrErr(fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr), maxRounds)
 		}
 	} else {
 		e.recordModelSuccess(client.Key())
 	}
-	if final.Kind == entry.KindTask {
+	if final.Kind == entry.KindTask && final.Task != nil {
 		if e.sched.Load() == nil {
 			e.tryAutoInitScheduler()
 		}
@@ -2847,7 +2942,7 @@ rounds:
 		}
 		return budgetAdvisory(res), nil
 	}
-	if final.Kind == entry.KindPlan {
+	if final.Kind == entry.KindPlan && final.Plan != nil {
 		if e.sched.Load() == nil {
 			e.tryAutoInitScheduler()
 		}
@@ -2857,11 +2952,18 @@ rounds:
 		cb.progress(Progress{Kind: ProgressPlan, Name: final.Plan.Goal})
 		return e.startClassifiedPlan(ctx, final.Plan, scope, authorize, cb)
 	}
+	answer := final.Answer
+	if strings.TrimSpace(answer) == "" {
+		// Convergence produced no text. The executed tools are the only
+		// truth available, so fall back to their digest rather than handing
+		// the user a blank turn (the deferred notice is the final backstop).
+		answer = toolResultsDigest(toolDigest, effectiveLocale)
+	}
 	if lastTask != nil {
-		lastTask.Answer = final.Answer
+		lastTask.Answer = answer
 		return budgetAdvisory(finalizeLastTask(lastTask)), nil
 	}
-	return budgetAdvisory(&Result{Kind: "answer", Answer: final.Answer}), nil
+	return budgetAdvisory(&Result{Kind: "answer", Answer: answer}), nil
 }
 
 // WorkPath returns the configured work directory — the project workspace

@@ -1149,7 +1149,7 @@ func (c *Core) supervisorForModel(model config.ModelConfig) (*entry.Client, erro
 	if strings.TrimSpace(model.APIKey) == "" {
 		return nil, nil
 	}
-	client, err := entry.NewClient(model)
+	client, err := entry.NewClient(entry.BriefModelConfig(model))
 	if err != nil {
 		return nil, err
 	}

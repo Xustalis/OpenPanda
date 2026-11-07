@@ -5,7 +5,7 @@
 // it because the view is JSX and `node --test` only loads .ts — these are the
 // parts worth pinning, and none of them touch the document.
 
-import type { ModelEntry, ModelsResponse, ProviderInfo } from '../api/client'
+import type { ModelEntry, ModelRefWire, ModelsResponse, ProviderInfo } from '../api/client'
 
 export interface Member {
   entry: ModelEntry
@@ -54,6 +54,18 @@ export function connIdOf(e: ModelEntry): string {
   // connection" borrow the other account's key. Older panels do not send
   // the digest, so key_hint stays as the fallback.
   return [e.provider ?? '', e.base_url, e.api_type, e.key_fingerprint ?? e.key_hint ?? ''].join('\u0000')
+}
+
+/** The address of every row the card is showing.
+ *
+ *  Clearing a card is one call, and the call names the rows rather than "this
+ *  endpoint": the store keeps a flat list and the grouping is a rendering fact,
+ *  so a server-side predicate would be a second, weaker notion of which rows
+ *  belong together than the one the card was built from — and one endpoint can
+ *  legitimately hold two accounts. A live row that was configured outside the
+ *  registry is included, because it is a row on screen too. */
+export function connRefs(c: Conn): ModelRefWire[] {
+  return c.members.map((m) => ({ alias: m.entry.alias, ...refOf(m.entry) }))
 }
 
 export function labelOf(providers: ProviderInfo[], id?: string): string {

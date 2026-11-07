@@ -1786,6 +1786,17 @@ export const api = {
     return request('DELETE', `/api/models/${encodeURIComponent(alias)}${refQuery(ref)}`)
   },
 
+  /** The batch form of `removeModel`: one request per connection card, one
+   *  config write on the server. `refs` are the rows the card is showing — the
+   *  server deletes exactly those and skips ones already gone, so a list that
+   *  went stale cannot take a neighbouring account with it. `removed` is what
+   *  actually went, not what was asked for. */
+  removeModels(
+    refs: ModelRefWire[],
+  ): Promise<{ removed: number; switched_to?: string; cleared?: boolean }> {
+    return request('POST', '/api/models/remove', { refs })
+  },
+
   fetchModels(req: ModelRefRequest): Promise<{ ok: boolean; alias?: string; models?: string[]; error?: string }> {
     return request('POST', '/api/models/fetch', req)
   },
@@ -1930,6 +1941,13 @@ export interface ModelRef {
   model?: string
   base_url?: string
   key?: string
+}
+
+/** One row's address for the batch delete: `ModelRef` again, with the alias the
+ *  single-row endpoints take from the path. A row whose alias is missing cannot
+ *  be addressed at all, so it is required here rather than optional. */
+export interface ModelRefWire extends ModelRef {
+  alias: string
 }
 
 function refQuery(ref?: ModelRef): string {

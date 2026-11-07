@@ -140,6 +140,13 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	var attemptID string
 	var claimed bool
 	defer func() {
+		// The outer goroutine guard recovers panics, but it cannot settle the
+		// attempt this stack claimed. Record a failure before rethrowing so a
+		// recovered adapter panic never strands a running task until its lease.
+		if p := recover(); p != nil {
+			rerr = errors.New("execution interrupted by panic")
+			defer func() { panic(p) }()
+		}
 		if out.TaskID != "" {
 			out.DurationMS = time.Since(start).Milliseconds()
 			out.Executor = c.nodeID
@@ -147,7 +154,8 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 			if len(out.Chain) == 0 {
 				out.Chain = taskChain
 			}
-		} else if rerr != nil && !errors.Is(rerr, ErrAlreadyRunning) && claimed {
+		}
+		if rerr != nil && !errors.Is(rerr, ErrAlreadyRunning) && claimed {
 			// If run failed or cancelled before reaching a terminal state,
 			// fail the task in the store so it never lingers stranded in
 			// 'running'. ErrAlreadyRunning is excluded: the row is legitimately
@@ -911,8 +919,9 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 		}
 	}
 
-	// Isolated delegation (delegateRequest.Isolate): the child declared it
-	// wants a private copy of the project tree instead of the shared one —
+	// Isolated delegation (delegateRequest.Isolate): the child explicitly
+	// requested, or its sibling batch defaulted to, a private copy of the
+	// project tree instead of the shared one —
 	// a git worktree when the project is a repository, a copy otherwise.
 	// Populated from the tree as it is right now (HEAD plus the working
 	// tree's uncommitted delta); the run below executes entirely inside it,
@@ -1589,14 +1598,13 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// overflow retry rebuilds under a shrunken budget, and a section added
 		// afterwards would push the prompt back over the window it was just
 		// shrunk to fit.
-		selfSection := selfManagementSection(c, restricted, promptLang)
+		selfSection := selfManagementSection(c, restricted, promptLang, task.Title, baseIntent)
 
 		// assemblePrompt builds this round's prompt; a context-overflow retry
 		// rebuilds it under the shrunken overflowPromptBudget so every matched
 		// skill degrades to its index line.
 		assemblePrompt := func(promptBudget int) string {
-			p, used := buildAgentPrompt(c, fullIntent(), task.Project, task.Title, workDir, promptBudgetFor(promptBudget, len(selfSection)), promptLang, outputLang)
-			usedSkills = used
+			var p string
 			// §4.2 Sub-MainAgent protocol hint: only a task with depth budget
 			// left learns the marker format — a task at delegation.max_depth
 			// gets no rope it cannot use.
@@ -1629,9 +1637,11 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// markers are what the agent acts on, the catalog is what it looks
 			// things up in.
 			p += selfSection
-			return p
+			base, used := buildAgentPrompt(c, fullIntent(), task.Project, task.Title, workDir, promptBudgetFor(promptBudget, len(p)), promptLang, outputLang)
+			usedSkills = used
+			return base + p
 		}
-		prompt := assemblePrompt(0)
+		prompt := assemblePrompt(agentContextBudget(task))
 
 		// — Trace: exec_agent_start (orbit Step-3 "starting this stage on N").
 		// We report before Execute so the orbit paints the stage bar as
@@ -1640,17 +1650,19 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// remote task ran under is auditable even when the adapter's own
 		// "restricted mode" note loses the progress-rate race.
 		c.EvTrace(execCtx, taskID, EvExecAgentStart, map[string]any{
-			"round":      round + 1,
-			"budget":     maxRounds,
-			"plan_kind":  plan.Kind,
-			"agent":      plan.Agent,
-			"adapter":    plan.Adapter,
-			"model":      activeModel,
-			"node_name":  scheduler.NodeNamePart(c.nodeID),
-			"authorized": task.Authorized,
-			"restricted": restricted,
-			"tier":       plan.Tier,
-			"workdir":    workDir,
+			"round":                round + 1,
+			"budget":               maxRounds,
+			"plan_kind":            plan.Kind,
+			"agent":                plan.Agent,
+			"adapter":              plan.Adapter,
+			"model":                activeModel,
+			"node_name":            scheduler.NodeNamePart(c.nodeID),
+			"authorized":           task.Authorized,
+			"restricted":           restricted,
+			"tier":                 plan.Tier,
+			"workdir":              workDir,
+			"prompt_bytes":         len(prompt),
+			"context_budget_bytes": agentContextBudget(task),
 		})
 
 		// The agent runs inside an inner attempt loop so a context-window
@@ -1742,7 +1754,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				// the next interruption and fail identically.
 				_ = c.store.SetAgentSession(context.WithoutCancel(execCtx), taskID, "", "", "")
 				intentNotes = c.compactRunNotesWithSupervisor(execCtx, intentNotes, supervisor)
-				prompt = assemblePrompt(overflowPromptBudget)
+				prompt = assemblePrompt(min(overflowPromptBudget, agentContextBudget(task)/2))
 				continue
 			}
 			break

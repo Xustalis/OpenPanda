@@ -22,6 +22,7 @@ import { needsPlaintextConsent } from './model-endpoint'
 import {
   type Conn,
   type Member,
+  connRefs,
   copyAlias,
   groupConnections,
   hostOf,
@@ -218,6 +219,32 @@ export function ModelsSection() {
     }
   }
 
+  /** Clear one card — the whole account, in one request.
+   *
+   *  The rows are sent as addresses, not as "everything on this endpoint": what
+   *  the page shows is what goes. Row-by-row deletes would have rewritten the
+   *  models block once per model and walked the live slot through the siblings
+   *  the next click was about to delete. */
+  async function removeConn(c: Conn) {
+    setBusy(`rmconn:${c.id}`)
+    try {
+      const r = await api.removeModels(connRefs(c))
+      toast(
+        r.cleared
+          ? t('models.removedConnEmpty', { n: r.removed })
+          : r.switched_to
+            ? t('models.removedConnSwitched', { n: r.removed, next: r.switched_to })
+            : t('models.removedConn', { n: r.removed }),
+        'success',
+      )
+      afterWrite()
+    } catch (err) {
+      toastError(err)
+    } finally {
+      setBusy('')
+    }
+  }
+
   return (
     <div class="models-section">
       {/* A caption row, not a header: one action, right-aligned, so the grid
@@ -261,6 +288,7 @@ export function ModelsSection() {
             onEdit={(e) => setSheet({ kind: 'edit', entry: e })}
             onCopy={(m) => void copy(m)}
             onRemove={(m) => void remove(m)}
+            onRemoveConn={(conn) => void removeConn(conn)}
             onAdd={(conn) => setSheet({ kind: 'add', conn })}
           />
         ))}
@@ -335,6 +363,11 @@ export function ModelsSection() {
  *  face — a preview crowded with a logo has less room for the thing being
  *  previewed. A card that carried its list at rest would be as tall as its
  *  account is wide, and a nine-model account would set the height of the wall.
+ *
+ *  The footer is outside the scrolling list on purpose: "add a model" and
+ *  "this account is wrong" are the two things done to a card, and an
+ *  eleven-model account pushed the add door off the bottom of the card, where
+ *  nobody scrolls to reach it.
  */
 function ConnectionTile(props: {
   conn: Conn
@@ -346,9 +379,14 @@ function ConnectionTile(props: {
   onEdit(e: ModelEntry): void
   onCopy(m: Member): void
   onRemove(m: Member): void
+  onRemoveConn(c: Conn): void
   onAdd(conn: Conn): void
 }) {
   const c = props.conn
+  // The count is the whole destructive act in one number, and it is the last
+  // thing read before the confirm — so it comes from the rows on screen, not
+  // from a second guess at what the server will match.
+  const [confirming, setConfirming] = useState(false)
   const name = c.providerLabel || labelOf(props.providers, c.provider) || t('models.customProvider')
   const host = hostOf(c.baseURL)
   // The card is ringed when one of its models is the live one: the answer to
@@ -373,26 +411,71 @@ function ConnectionTile(props: {
       </span>
 
       <div class="model-conn-models">
-        {c.members.map((m) => (
-          <ModelRow
-            key={keyOf(m.entry)}
-            m={m}
-            busy={props.busy}
-            result={props.results[keyOf(m.entry)]}
-            providers={props.providers}
-            onUse={() => props.onUse(m.entry)}
-            onTest={() => props.onTest(m.entry)}
-            onEdit={() => props.onEdit(m.entry)}
-            onCopy={() => props.onCopy(m)}
-            onRemove={() => props.onRemove(m)}
-          />
-        ))}
+        <div class="model-conn-list">
+          {c.members.map((m) => (
+            <ModelRow
+              key={keyOf(m.entry)}
+              m={m}
+              busy={props.busy}
+              result={props.results[keyOf(m.entry)]}
+              providers={props.providers}
+              onUse={() => props.onUse(m.entry)}
+              onTest={() => props.onTest(m.entry)}
+              onEdit={() => props.onEdit(m.entry)}
+              onCopy={() => props.onCopy(m)}
+              onRemove={() => props.onRemove(m)}
+            />
+          ))}
+        </div>
         {/* Adding to this account is the common case, so the door is inside the
-            card: a new connection is the rarer act and keeps its own tile. */}
-        <button type="button" class="model-conn-add" onClick={() => props.onAdd(c)}>
-          <Icon name="plus" size={13} />
-          <span>{t('models.addModel')}</span>
-        </button>
+            card: a new connection is the rarer act and keeps its own tile.
+            The bin beside it takes the row-level two-step: one click arms it,
+            the strip says what and how many, the tick commits. */}
+        <div class="model-conn-foot">
+          {confirming ? (
+            <>
+              <span class="model-conn-confirm">
+                {t('models.removeConnConfirm', { n: c.members.length })}
+              </span>
+              <button
+                type="button"
+                class="model-conn-act danger"
+                title={t('models.removeConnection')}
+                aria-label={t('models.removeConnection')}
+                disabled={props.busy !== ''}
+                onClick={() => props.onRemoveConn(c)}
+              >
+                <Icon name="check" size={13} />
+              </button>
+              <button
+                type="button"
+                class="model-conn-act"
+                title={t('common.cancel')}
+                aria-label={t('common.cancel')}
+                onClick={() => setConfirming(false)}
+              >
+                <Icon name="x" size={13} />
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" class="model-conn-add" onClick={() => props.onAdd(c)}>
+                <Icon name="plus" size={13} />
+                <span>{t('models.addModel')}</span>
+              </button>
+              <button
+                type="button"
+                class="model-conn-act"
+                title={t('models.removeConnection')}
+                aria-label={t('models.removeConnection')}
+                disabled={props.busy !== ''}
+                onClick={() => setConfirming(true)}
+              >
+                <Icon name="trash" size={13} />
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
