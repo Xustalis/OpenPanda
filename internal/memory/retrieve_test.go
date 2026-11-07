@@ -162,3 +162,21 @@ func TestRankCJKSingleIdeographOverlap(t *testing.T) {
 		t.Fatalf("function-word-only query matched: %v", got)
 	}
 }
+
+func TestRankDoesNotMatchUnrelatedChineseCharacters(t *testing.T) {
+	entries := []string{"广场的空气质量良好", "广州的天气晴朗"}
+	got := Retriever{}.Rank("广州天气", entries, 2)
+	if len(got) != 1 || got[0] != entries[1] {
+		t.Fatalf("single-character coincidences must not count: %v", got)
+	}
+}
+
+func TestRankShortChineseQueryAndMixedScripts(t *testing.T) {
+	entries := []string{"每天喝绿茶", "Debian 12 是服务器系统"}
+	if got := (Retriever{}).Rank("茶", entries, 2); len(got) != 1 || got[0] != entries[0] {
+		t.Fatalf("single-character query no longer matches: %v", got)
+	}
+	if got := (Retriever{}).Rank("Debian 系统", entries, 2); len(got) != 1 || got[0] != entries[1] {
+		t.Fatalf("mixed-script query misses memory: %v", got)
+	}
+}

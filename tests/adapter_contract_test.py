@@ -173,6 +173,56 @@ def run_harness(body, stdin_data="", env=None, timeout=5):
 
 
 class AdapterContractTest(unittest.TestCase):
+    def test_native_model_preferences_reach_single_model_clis(self):
+        cases = [
+            ("codex.py", "codex", 'print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"ok"}}))'),
+            ("claude_code.py", "claude", 'print(json.dumps({"type":"result","is_error":False,"result":"ok"}))'),
+            ("hermes.py", "hermes", 'print("ok")'),
+            ("openclaw.py", "openclaw", 'print("ok")'),
+            ("pi.py", "pi", 'print(json.dumps({"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}))'),
+            ("antigravity.py", "agy", 'print(json.dumps({"status":"SUCCESS","response":"ok"}))'),
+            ("grok_build.py", "grok", 'print(json.dumps({"type":"text","data":"ok"})); print(json.dumps({"type":"usage","usage":{}}))'),
+        ]
+        for adapter, binary, result in cases:
+            with self.subTest(adapter=adapter):
+                payload, _, _ = run_adapter(adapter, binary, """
+import json, sys
+args = sys.argv[1:]
+assert args[args.index("--model") + 1] == "selected-model", args
+""" + result,
+                    env={"OPENPANDA_AGENT_MODELS": '["selected-model","backup"]'})
+                self.assertTrue(payload["ok"], payload)
+
+        payload, _, _ = run_adapter("deepseek_harness.py", "dsh", r'''
+import pathlib, sys
+args = sys.argv[1:]
+patch = pathlib.Path(args[args.index("--patch") + 1]).read_text()
+assert 'model: "selected-model"' in patch, patch
+print("dsh selected")
+''', env={"OPENPANDA_AGENT_MODELS": '["selected-model"]'})
+        self.assertTrue(payload["ok"], payload)
+
+    def test_zcode_native_model_uses_private_selection_config(self):
+        payload, _, _ = run_adapter("zcode.py", "zcode", r'''
+import json, os
+path = os.environ["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"]
+with open(path, encoding="utf-8") as fh:
+    cfg = json.load(fh)
+assert cfg["config"]["defaultModelSelection"] == {"providerId":"native-provider", "modelId":"selected-model"}, cfg
+print("native selected")
+''', env={"OPENPANDA_AGENT_MODELS": '["native-provider/selected-model"]'})
+        self.assertTrue(payload["ok"], payload)
+
+    def test_generic_model_placeholder(self):
+        payload, _, _ = run_adapter("generic.py", "custom", r'''
+import sys
+args = sys.argv[1:]
+assert args[:2] == ["--model", "custom-selected"], args
+print("custom selected")
+''', env={"OPENPANDA_AGENT_MODELS": '["custom-selected"]'},
+            extra_request={"cmd":"custom --model {model} {prompt}"})
+        self.assertTrue(payload["ok"], payload)
+
     def test_claude_stream_contract(self):
         payload, progress, _ = run_adapter(
             "claude_code.py", "claude", r'''

@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/guard"
@@ -253,7 +254,7 @@ type Scheduler struct {
 	store    Store
 	runner   Runner
 	registry *ResourceRegistry
-	max      int
+	max      atomic.Int64
 	logger   *slog.Logger
 
 	// pollInterval bounds how long a wake-less event can stall the queue —
@@ -338,15 +339,25 @@ func New(store Store, runner Runner, maxConcurrent int, logger *slog.Logger) *Sc
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Scheduler{
+	s := &Scheduler{
 		store:        store,
 		runner:       runner,
 		registry:     NewResourceRegistry(),
-		max:          maxConcurrent,
 		logger:       logger,
 		pollInterval: 400 * time.Millisecond,
 		wake:         make(chan struct{}, 1),
 	}
+	s.max.Store(int64(maxConcurrent))
+	return s
+}
+
+// SetMaxConcurrent updates admission without interrupting existing runners.
+func (s *Scheduler) SetMaxConcurrent(n int) {
+	if n < 1 {
+		n = 1
+	}
+	s.max.Store(int64(n))
+	s.Wake()
 }
 
 // WithSelfPin installs the resolver that tells a foreign pin from a local
@@ -465,7 +476,7 @@ func (s *Scheduler) tick(ctx context.Context) int {
 	}
 
 	for _, t := range ready {
-		if active >= s.max {
+		if active >= int(s.max.Load()) {
 			return len(ready) // budget exhausted; a finishing task wakes the next pass
 		}
 		// Take the runner slot before anything is claimed. The slot is what

@@ -5,6 +5,9 @@ package memory
 import (
 	"math"
 	"sort"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -23,9 +26,11 @@ const (
 )
 
 // Retriever ranks memory entries against a query in memory. Memory is tiny (a
-// few KB), so no external index or vector store is needed: tokenize query and
-// entries (reusing the package's existing tokenize) and score with a BM25-lite
-// measure — shared tokens are weighted by inverse document frequency across
+// few KB), so no external index or vector store is needed: split Han runs into
+// adjacent character pairs and Latin into words, then score with BM25-lite.
+// A single-Han-character query also considers individual characters; longer
+// Chinese phrases do not match on accidental single-character coincidences.
+// Shared tokens are weighted by inverse document frequency across
 // the pool (a token present in every entry carries almost no signal) and
 // normalized by entry length (a long entry is not automatically the best one).
 type Retriever struct{}
@@ -43,7 +48,8 @@ func (Retriever) Rank(query string, entries []string, k int) []string {
 		}
 		return append([]string(nil), entries[:k]...)
 	}
-	q := tokenize(query)
+	singleHan := utf8.RuneCountInString(strings.TrimSpace(query)) == 1
+	q := retrievalTokens(query, singleHan)
 	n := len(entries)
 
 	// One pass over the pool: per-entry token sets plus the document frequency
@@ -52,7 +58,7 @@ func (Retriever) Rank(query string, entries []string, k int) []string {
 	df := make(map[string]int)
 	totalLen := 0
 	for i, e := range entries {
-		toks[i] = tokenize(e)
+		toks[i] = retrievalTokens(e, singleHan)
 		totalLen += len(toks[i])
 		for tok := range toks[i] {
 			if util.IsStopword(tok) {
@@ -100,5 +106,51 @@ func (Retriever) Rank(query string, entries []string, k int) []string {
 			break
 		}
 	}
+	return out
+}
+
+// retrievalTokens keeps Han pairs scoped to a contiguous run: it never makes
+// a fake phrase by joining characters separated by punctuation or Latin text.
+// The single-character fallback applies only when the query itself is short.
+func retrievalTokens(s string, includeSingles bool) map[string]struct{} {
+	out := make(map[string]struct{})
+	var latin strings.Builder
+	var han []rune
+	flushLatin := func() {
+		if latin.Len() > 0 {
+			out[strings.ToLower(latin.String())] = struct{}{}
+			latin.Reset()
+		}
+	}
+	flushHan := func() {
+		if len(han) == 1 {
+			out[string(han[0])] = struct{}{}
+		} else {
+			for i := 1; i < len(han); i++ {
+				out[string(han[i-1:i+1])] = struct{}{}
+			}
+			if includeSingles {
+				for _, r := range han {
+					out[string(r)] = struct{}{}
+				}
+			}
+		}
+		han = han[:0]
+	}
+	for _, r := range s {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			flushLatin()
+			han = append(han, r)
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			flushHan()
+			latin.WriteRune(r)
+		default:
+			flushHan()
+			flushLatin()
+		}
+	}
+	flushHan()
+	flushLatin()
 	return out
 }

@@ -226,6 +226,11 @@ func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project,
 			t.AttemptID, t.StateVersion, string(chainJSON), remote, now, now); err != nil {
 			return fmt.Errorf("insert task: %w", err)
 		}
+		sessionID, err := s.attachAskRoundTx(ctx, tx, taskID)
+		if err != nil {
+			return err
+		}
+		t.SessionID = sessionID
 		return s.recordEventTx(ctx, tx, taskID, EvSubmit, map[string]any{
 			"parent": parentID, "owner": owner,
 		})

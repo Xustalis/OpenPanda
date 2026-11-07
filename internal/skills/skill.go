@@ -142,6 +142,9 @@ func (s *Store) Path(sk *Skill) (string, error) {
 	return filepath.Join(s.root, dir, sk.Name, "SKILL.md"), nil
 }
 
+// Root returns the on-disk skill root used by this store.
+func (s *Store) Root() string { return s.root }
+
 // Save writes a skill to its scope directory, creating it as needed. An empty
 // store root is refused: filepath.Join would turn "" into a relative path and
 // the "write" would land in whatever directory the process happens to sit in.

@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { MemoryGraph, MemoryGraphEdge, MemoryGraphNode } from '../api/client'
 import { t } from '../i18n'
 import {
+  availableKinds,
+  captionExtent,
   ENTITY_KIND,
   filterGraph,
   fitText,
@@ -14,13 +16,14 @@ import {
   nodeRadius,
   recencyAlpha,
   rimDistance,
+  searchGraph,
   seenDates,
   type LayerMode,
 } from './graph-layout'
 
 /** The memory knowledge graph: two layers over the same evidence. Provenance
  *  ("file") nodes are the memory surfaces and skills; knowledge ("entity")
- *  nodes are terms literally recurring inside them. Edges are promotions,
+ *  nodes are terms literally recurring inside them. Edges are recorded promotions,
  *  name references, entity mentions and co-occurrence — every one of them a
  *  string the files actually contain. Rendering is dependency-free SVG over
  *  the graph-layout module: deterministic clustering, no-overlap relaxation,
@@ -79,8 +82,13 @@ export function MemoryGraphView({
   const [selected, setSelected] = useState<string | null>(null)
   const [view, setView] = useState<View>(VIEW_HOME)
   const [panning, setPanning] = useState(false)
+  // Start with both evidence and its terms, but keep the high-density skills
+  // and statistical co-occurrence links opt-in.
   const [layer, setLayer] = useState<LayerMode>('all')
-  const [hiddenKinds, setHiddenKinds] = useState<ReadonlySet<string>>(new Set())
+  const [hiddenKinds, setHiddenKinds] = useState<ReadonlySet<string>>(new Set(['skill']))
+  const [hiddenEdges, setHiddenEdges] = useState<ReadonlySet<string>>(new Set(['co']))
+  const [query, setQuery] = useState('')
+  const [neighborsOnly, setNeighborsOnly] = useState(false)
   const [until, setUntil] = useState('')
   const [playing, setPlaying] = useState(false)
   const drag = useRef<{ px: number; py: number; vx: number; vy: number } | null>(null)
@@ -142,10 +150,25 @@ export function MemoryGraphView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, steps])
 
-  const filtered = useMemo(
-    () => filterGraph(graph, { layer, hiddenKinds, until: effectiveUntil }),
-    [graph, layer, hiddenKinds, effectiveUntil],
-  )
+  // Selection behaves like a persistent hover: a picked node keeps its
+  // neighbourhood lit after the pointer leaves.
+  const focus = hover ?? selected
+  const filtered = useMemo(() => {
+    const base = filterGraph(graph, { layer, hiddenKinds, until: effectiveUntil })
+    const searched = searchGraph({ nodes: base.nodes, edges: base.edges.filter((e) => !hiddenEdges.has(e.kind)) }, query)
+    const edges = searched.edges
+    let nodes = searched.nodes
+    if (neighborsOnly && selected) {
+      const keep = new Set<string>([selected])
+      for (const e of edges) {
+        if (e.from === selected) keep.add(e.to)
+        if (e.to === selected) keep.add(e.from)
+      }
+      nodes = nodes.filter((n) => keep.has(n.id))
+    }
+    const ids = new Set(nodes.map((n) => n.id))
+    return { nodes, edges: edges.filter((e) => ids.has(e.from) && ids.has(e.to)) }
+  }, [graph, layer, hiddenKinds, hiddenEdges, effectiveUntil, query, neighborsOnly, selected])
   // Positions persist across filter/timeline changes: the layout is seeded
   // with the previous one (same canvas size), so playing the timeline makes
   // nodes appear in place rather than reshuffling the whole picture, and the
@@ -187,9 +210,7 @@ export function MemoryGraphView({
     return out
   }, [filtered])
 
-  // Selection behaves like a persistent hover: a picked node keeps its
-  // neighbourhood lit after the pointer leaves.
-  const focus = hover ?? selected
+  // Neighbours of the hovered or selected node drive the highlight.
   const neighbors = useMemo(() => {
     const set = new Set<string>()
     if (focus) {
@@ -208,10 +229,7 @@ export function MemoryGraphView({
   )
   const labelOf = (id: string) => byId.get(id)?.label ?? id
 
-  const kindsPresent = useMemo(() => {
-    const set = new Set(filtered.nodes.map((n) => n.kind))
-    return set
-  }, [filtered])
+  const kindsPresent = useMemo(() => availableKinds(graph, layer), [graph, layer])
 
   const chips = useMemo(() => {
     const order = layer === 'entities' ? [ENTITY_KIND] : layer === 'files' ? [...FILE_KIND_ORDER] : [...FILE_KIND_ORDER, ENTITY_KIND]
@@ -236,6 +254,45 @@ export function MemoryGraphView({
     })
   }
 
+  const toggleEdge = (kind: string) => {
+    setHiddenEdges((prev) => {
+      const next = new Set(prev)
+      if (next.has(kind)) next.delete(kind)
+      else next.add(kind)
+      return next
+    })
+  }
+
+  // Label LOD: a dense or zoomed-out canvas draws dots only. Close range
+  // brings every label back, so reading tools stay available without the
+  // all-at-once text collision of the old default view.
+  const showLabels = view.k >= 1.2 || (view.k >= 0.7 && filtered.nodes.length <= 30)
+
+  const fitView = () => {
+    const pts = [...pos.values()]
+    if (pts.length === 0) return
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const p of pts) {
+      const e = nodeExtent(p) + captionExtent(p)
+      minX = Math.min(minX, p.x - e)
+      maxX = Math.max(maxX, p.x + e)
+      minY = Math.min(minY, p.y - e)
+      maxY = Math.max(maxY, p.y + e)
+    }
+    const pad = 24
+    const bw = maxX - minX + pad * 2
+    const bh = maxY - minY + pad * 2
+    const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.min(size.w / bw, size.h / bh)))
+    setView({
+      k,
+      x: size.w / 2 - ((minX + maxX) / 2) * k,
+      y: size.h / 2 - ((minY + maxY) / 2) * k,
+    })
+  }
+
   return (
     <div class={`mg-wrap${panning ? ' panning' : ''}`} ref={wrap}>
       <div class="mg-toolbar">
@@ -249,18 +306,46 @@ export function MemoryGraphView({
                 class={`seg${layer === m ? ' on' : ''}`}
                 aria-pressed={layer === m}
                 disabled={empty}
-                onClick={() => setLayer(m)}
+                onClick={() => {
+                  setLayer(m)
+                  if (m === 'entities') setHiddenEdges((prev) => {
+                    const next = new Set(prev)
+                    next.delete('co')
+                    return next
+                  })
+                }}
               >
                 {t(`memory.graph.layer.${m}`)}
               </button>
             )
           })}
         </div>
+        <input
+          class="mg-search"
+          type="search"
+          value={query}
+          placeholder={t('memory.graph.searchPlaceholder')}
+          aria-label={t('memory.graph.search')}
+          onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+        />
+        <button
+          type="button"
+          class={`btn small${neighborsOnly ? ' on' : ''}`}
+          aria-pressed={neighborsOnly}
+          disabled={!selected}
+          title={t('memory.graph.neighbors')}
+          onClick={() => setNeighborsOnly((v) => !v)}
+        >
+          {t('memory.graph.neighbors')}
+        </button>
         <span class="mg-stats dim mono">
           {t('memory.graph.nodesN', { n: filtered.nodes.length })} ·{' '}
           {t('memory.graph.edgesN', { n: filtered.edges.length })}
         </span>
         <div class="mg-toolbar-right">
+          <button type="button" class="btn small" aria-label={t('memory.graph.fit')} title={t('memory.graph.fit')} onClick={fitView}>
+            {t('memory.graph.fit')}
+          </button>
           <button type="button" class="btn small" aria-label={t('memory.graph.zoomOut')} onClick={() => zoomAt(size.w / 2, size.h / 2, 1 / 1.3)}>
             −
           </button>
@@ -284,7 +369,7 @@ export function MemoryGraphView({
             ref={svgRef}
             class="mg-canvas"
             viewBox={`0 0 ${size.w} ${size.h}`}
-            role="img"
+            role="group"
             aria-label={t('memory.graphTitle')}
             onPointerDown={(e) => {
               const el = e.target as Element
@@ -415,14 +500,16 @@ export function MemoryGraphView({
                     fill={`url(#mg-glow-${KIND_FILL[c.key] ? c.key : 'core'})`}
                   />
                   <circle class="mg-cluster-ring" cx={c.x} cy={c.y} r={c.r * 0.88} />
-                  <text
-                    class="mg-cluster-label"
-                    x={c.x + ux * out}
-                    y={c.y + uy * out}
-                    dominant-baseline="central"
-                  >
-                    {t(`memory.graph.${c.key}`)}
-                  </text>
+                  {showLabels && (
+                    <text
+                      class="mg-cluster-label"
+                      x={c.x + ux * out}
+                      y={c.y + uy * out}
+                      dominant-baseline="central"
+                    >
+                      {t(`memory.graph.${c.key}`)}
+                    </text>
+                  )}
                 </g>
               )
             })}
@@ -462,7 +549,16 @@ export function MemoryGraphView({
                 >
                   <path
                     class={`mg-edge ${EDGE_CLASS[e.kind] ?? 'mg-edge-reference'}`}
-                    style={{ strokeWidth: edgeWidth(e) + (lit ? 0.7 : 0) }}
+                    style={{
+                      strokeWidth: edgeWidth(e) + (lit ? 0.7 : 0),
+                      // A one-off mention is nearly invisible; a repeated one
+                      // earns contrast. Static 0.3 made every link equally
+                      // loud and turned the canvas into a uniform mesh.
+                      opacity:
+                        e.kind === 'mention'
+                          ? Math.min(0.6, 0.12 + Math.sqrt(e.weight ?? 1) * 0.12)
+                          : undefined,
+                    }}
                     d={d}
                     marker-end={arrow}
                   />
@@ -492,6 +588,7 @@ export function MemoryGraphView({
               const ext = nodeExtent(n)
               const r = nodeRadius(n)
               const alpha = recencyAlpha(n.last_seen, now)
+              const labelVisible = showLabels || hover === n.id || selected === n.id
               const lines = labelLines(n.label)
               const lab = labelPlacement(p.x - size.w / 2, p.y - size.h / 2, r)
               return (
@@ -551,9 +648,11 @@ export function MemoryGraphView({
                         {/* Top sheen: a lighter strip sells the tag's raised
                             surface. */}
                         <rect class="mg-pill-sheen" x={-ext + 3} y={-8.6} width={ext * 2 - 6} height={7.6} rx={3.8} />
-                        <text class="mg-pill-label" dominant-baseline="central" text-anchor="middle">
-                          {fitText(n.label)}
-                        </text>
+                        {labelVisible && (
+                          <text class="mg-pill-label" dominant-baseline="central" text-anchor="middle">
+                            {fitText(n.label)}
+                          </text>
+                        )}
                       </>
                     ) : (
                       <>
@@ -578,17 +677,19 @@ export function MemoryGraphView({
                         {/* Captions point outward from the cluster anchor —
                             neighbours no longer stack their labels under
                             their dots. */}
-                        <text x={lab.x} y={lab.y} text-anchor={lab.anchor} dominant-baseline={lab.baseline}>
-                          {lines.length === 1 ? (
-                            lines[0]
-                          ) : (
-                            lines.map((ln, li) => (
-                              <tspan key={li} x={lab.x} dy={li === 0 ? lab.firstDy : 12}>
-                                {ln}
-                              </tspan>
-                            ))
-                          )}
-                        </text>
+                        {labelVisible && (
+                          <text x={lab.x} y={lab.y} text-anchor={lab.anchor} dominant-baseline={lab.baseline}>
+                            {lines.length === 1 ? (
+                              lines[0]
+                            ) : (
+                              lines.map((ln, li) => (
+                                <tspan key={li} x={lab.x} dy={li === 0 ? lab.firstDy : 12}>
+                                  {ln}
+                                </tspan>
+                              ))
+                            )}
+                          </text>
+                        )}
                       </>
                     )}
                   </g>
@@ -668,7 +769,7 @@ export function MemoryGraphView({
               ) : (
                 <p class="dim">{t('memory.graph.noEdges')}</p>
               )}
-              {onOpen && sel.kind !== 'core' && sel.kind !== ENTITY_KIND && (
+              {onOpen && sel.kind !== ENTITY_KIND && (
                 <button class="btn small" onClick={() => onOpen(sel)}>
                   {t('memory.graph.open')}
                 </button>
@@ -730,12 +831,18 @@ export function MemoryGraphView({
           </button>
         ))}
         {edgeLegend.map((k) => (
-          <span key={k} class={`mg-legend-item mg-legend-edge-${k}`}>
+          <button
+            key={k}
+            type="button"
+            class={`mg-legend-item mg-legend-edge-${k}${hiddenEdges.has(k) ? ' off' : ''}`}
+            aria-pressed={!hiddenEdges.has(k)}
+            onClick={() => toggleEdge(k)}
+          >
             <svg width="22" height="8">
               <line x1="0" y1="4" x2="22" y2="4" />
             </svg>
             {t(`memory.graph.${k}`)}
-          </span>
+          </button>
         ))}
       </div>
     </div>

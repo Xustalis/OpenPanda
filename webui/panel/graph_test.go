@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -54,7 +56,7 @@ func graphEdgeWeight(out map[string]any, from, to, kind string) int {
 	return 0
 }
 
-// A fresh node still answers 200 with the core surfaces — sparse, not broken.
+// A fresh node answers 200 with an empty graph, not invented file nodes.
 func TestMemoryGraphEmptyMemory(t *testing.T) {
 	h, _ := newMemoryPanel(t)
 	rr := httptest.NewRecorder()
@@ -66,11 +68,8 @@ func TestMemoryGraphEmptyMemory(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	ids := graphNodeIDs(t, out)
-	for _, want := range []string{"core:user", "core:memory", "core:dreams", "daily"} {
-		if !ids[want] {
-			t.Errorf("missing core node %s in %+v", want, ids)
-		}
+	if ids := graphNodeIDs(t, out); len(ids) != 0 {
+		t.Errorf("empty memory produced nodes: %+v", ids)
 	}
 }
 
@@ -79,6 +78,9 @@ func TestMemoryGraphEmptyMemory(t *testing.T) {
 func TestMemoryGraphEdges(t *testing.T) {
 	_, cfg := newMemoryPanel(t)
 	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memory.Limits{})
+	if err := hermes.SaveUser(memory.MemFile{Entries: []string{"private profile"}}); err != nil {
+		t.Fatal(err)
+	}
 
 	// MEMORY.md carries dreamer-promoted entries; one names a topic twice and
 	// one points back at USER.md (a core-file mention is a reference edge too).
@@ -99,6 +101,12 @@ func TestMemoryGraphEdges(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dailyDir, "2026-01-02.md"), []byte("# diary\nshipped a thing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.NewDreamDiary(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md")).Append(memory.Report{Promoted: []string{
+		"team ships fridays " + memory.PromotionSourceTag,
+		"deploys moved " + memory.PromotionSourceTag,
+	}}, time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	// A pending skill renders dimmed; status must round-trip. Rebuild the
@@ -135,9 +143,8 @@ func TestMemoryGraphEdges(t *testing.T) {
 			t.Errorf("missing node %s", want)
 		}
 	}
-	// [from:日志] inside MEMORY.md is the diary feeding long-term memory —
-	// two promoted entries make the edge twice as strong.
-	if w := graphEdgeWeight(out, "daily", "core:memory", "promotion"); w != 2 {
+	// Only entries present in both the dream receipt and long-term memory count.
+	if w := graphEdgeWeight(out, "core:dreams", "core:memory", "promotion"); w != 2 {
 		t.Errorf("promotion weight = %d, want 2: %v", w, out["edges"])
 	}
 	// MEMORY.md naming "work" twice is a reference edge with weight 2.
@@ -151,6 +158,15 @@ func TestMemoryGraphEdges(t *testing.T) {
 	// A skill's description naming a topic links skill→topic.
 	if !graphHasEdge(out, "skill:work-report", "topic:work", "reference") {
 		t.Errorf("reference edge skill:work-report→topic:work missing: %v", out["edges"])
+	}
+}
+
+func TestDreamPromotionCountRejectsUnverifiedTags(t *testing.T) {
+	if got := dreamPromotionCount("", "manually tagged "+memory.PromotionSourceTag); got != 0 {
+		t.Fatalf("forged marker count = %d", got)
+	}
+	if got := dreamPromotionCount("## 2026-01-03\n- Promoted to long-term memory / 提升到长期记忆：\n  - trusted fact\n", "trusted fact"); got != 1 {
+		t.Fatalf("trusted promotion count = %d", got)
 	}
 }
 
@@ -196,8 +212,10 @@ func TestMemoryGraphEntities(t *testing.T) {
 		Token:     testToken,
 	})
 
+	// The full term cloud is opt-in; this case exercises the co-occurrence
+	// and cap logic that the default view deliberately leaves out.
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/memory/graph?co=1&entities=60", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
 	}
@@ -238,8 +256,80 @@ func TestMemoryGraphEntities(t *testing.T) {
 		t.Errorf("daily dates = %v..%v, want 2026-01-02..2026-01-03", d["first_seen"], d["last_seen"])
 	}
 	// Surfaces carry the provenance layer flag.
-	if m := graphNode(t, out, "core:memory"); m["layer"] != "file" {
-		t.Errorf("core node layer = %v, want file", m["layer"])
+	if m := graphNode(t, out, "topic:work"); m["layer"] != "file" {
+		t.Errorf("topic node layer = %v, want file", m["layer"])
+	}
+}
+
+// The default graph is the readable one: no statistical co-occurrence
+// chords, and a conditional request short-circuits before the n-gram scan.
+func TestMemoryGraphDefaultViewAndETag(t *testing.T) {
+	_, cfg := newMemoryPanel(t)
+	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memory.Limits{})
+	dailyDir := hermes.WarmDir()
+	if err := os.MkdirAll(dailyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"2026-01-02.md": "巡护链路 只读排查\n巡护链路 只读排查\n巡护链路 只读排查\n",
+		"2026-01-03.md": "巡护链路 只读排查\ndog dog\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dailyDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := New(Deps{
+		Store:     newTestStore(t),
+		Projects:  memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memory.Limits{}),
+		Cfg:       cfg,
+		StaticDir: t.TempDir(),
+		Token:     testToken,
+	})
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	etag := rr.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("graph response has no ETag")
+	}
+	if rr.Header().Get("Cache-Control") != "no-cache" {
+		t.Errorf("Cache-Control = %q, want no-cache", rr.Header().Get("Cache-Control"))
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if w := graphEdgeWeight(out, "entity:只读排查", "entity:巡护链路", "co"); w != 0 {
+		t.Errorf("default view must omit co edges, got weight %d", w)
+	}
+
+	req := authedReq(http.MethodGet, "/api/memory/graph", nil)
+	req.Header.Set("If-None-Match", etag)
+	rr304 := httptest.NewRecorder()
+	h.ServeHTTP(rr304, req)
+	if rr304.Code != http.StatusNotModified {
+		t.Errorf("conditional request status = %d, want 304", rr304.Code)
+	}
+	if rr304.Body.Len() != 0 {
+		t.Errorf("304 carried %d bytes of body", rr304.Body.Len())
+	}
+
+	// A new source file changes the fingerprint, and so do the query options.
+	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "EXTRA.md"), []byte("§ new fact\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rrChanged := httptest.NewRecorder()
+	h.ServeHTTP(rrChanged, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if rrChanged.Header().Get("ETag") == etag {
+		t.Error("ETag did not change after a memory file was added")
+	}
+	rrOpts := httptest.NewRecorder()
+	h.ServeHTTP(rrOpts, authedReq(http.MethodGet, "/api/memory/graph?co=1", nil))
+	if rrOpts.Header().Get("ETag") == etag {
+		t.Error("ETag did not change for a different query")
 	}
 }
 
@@ -334,5 +424,73 @@ func TestMentionsName(t *testing.T) {
 	}
 	if mentionable("ab") || !mentionable("abc") {
 		t.Error("mentionable: names under 3 runes must be skipped")
+	}
+}
+
+func TestMemoryGraphPromotionSurvivesDiaryPreviewAndDailyPrune(t *testing.T) {
+	_, cfg := newMemoryPanel(t)
+	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
+	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{"retained fact"}}); err != nil {
+		t.Fatal(err)
+	}
+	content := "## 2026-01-01\n" + strings.Repeat("- routine note\n", 6000) +
+		"## 2026-02-02\n- Promoted to long-term memory / 提升到长期记忆：\n  - retained fact\n"
+	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := New(Deps{Store: newTestStore(t), Cfg: cfg, StaticDir: t.TempDir(), Token: testToken})
+	_, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if w := graphEdgeWeight(out, "core:dreams", "core:memory", "promotion"); w != 1 {
+		t.Errorf("promotion after daily prune and 64 KiB: %d, want 1", w)
+	}
+	n := graphNode(t, out, "core:dreams")
+	if n["first_seen"] != "2026-01-01" || n["last_seen"] != "2026-02-02" {
+		t.Errorf("full diary dates: %v", n)
+	}
+}
+
+func TestMemoryGraphETagTracksActualSkillStore(t *testing.T) {
+	_, cfg := newMemoryPanel(t)
+	store := skills.NewStore(t.TempDir()) // deliberately different from config
+	h := New(Deps{Store: newTestStore(t), Cfg: cfg, SkillStore: store, StaticDir: t.TempDir(), Token: testToken})
+	first := httptest.NewRecorder()
+	h.ServeHTTP(first, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first graph: %d", first.Code)
+	}
+	if err := store.Save(&skills.Skill{Name: "new-skill", Description: "changed", Status: skills.StatusActive, Body: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	req := authedReq(http.MethodGet, "/api/memory/graph", nil)
+	req.Header.Set("If-None-Match", first.Header().Get("ETag"))
+	second := httptest.NewRecorder()
+	h.ServeHTTP(second, req)
+	if second.Code != http.StatusOK {
+		t.Fatalf("changed skill graph was cached: %d", second.Code)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(second.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !graphNodeIDs(t, out)["skill:new-skill"] {
+		t.Error("new skill not visible in graph")
+	}
+}
+
+func TestMemoryGraphDoesNotExtractEntitiesFromDreamReportBoilerplate(t *testing.T) {
+	_, cfg := newMemoryPanel(t)
+	content := strings.Repeat("## 2026-01-01\n- Scanned 1 candidates / 扫描候选：1 条\n- Promoted to long-term memory / 提升到长期记忆：无 none\n", 4)
+	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := New(Deps{Store: newTestStore(t), Cfg: cfg, StaticDir: t.TempDir(), Token: testToken})
+	_, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph?co=1", nil))
+	for id := range graphNodeIDs(t, out) {
+		if strings.HasPrefix(id, "entity:") {
+			t.Fatalf("report boilerplate became a knowledge entity: %s", id)
+		}
+	}
+	if !graphNodeIDs(t, out)["core:dreams"] {
+		t.Fatal("dream report surface disappeared")
 	}
 }

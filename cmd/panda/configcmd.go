@@ -92,10 +92,12 @@ func configUsage() {
 	fmt.Fprintln(os.Stderr, "  mcp get|test | set \"<stdio command>\"   (empty command disables MCP)")
 	fmt.Fprintln(os.Stderr, "  limits get | set <user|memory|project> <int>")
 	fmt.Fprintln(os.Stderr, "  routing get | set preferred_agents <a,b,c>   (empty clears)")
-	fmt.Fprintln(os.Stderr, "  delegation get | set <max_children|fanout|max_depth> <int> | set enabled <true|false>")
+	fmt.Fprintln(os.Stderr, "              | set <agent_models|subagent_models> <agent> <m1,m2,...> (- clears)")
+	fmt.Fprintln(os.Stderr, "              | set max_concurrent <int> | agent_concurrency <agent> <int>")
+	fmt.Fprintln(os.Stderr, "  delegation get | set <max_children|fanout|max_depth|max_concurrent> <int> | set enabled <true|false>")
 	fmt.Fprintln(os.Stderr, "  injection get | set <auto|always|never>")
 	fmt.Fprintln(os.Stderr, "  approval get | set <always|on-request|never>")
-	fmt.Fprintln(os.Stderr, "writes preserve YAML comments; changes apply after the daemon/panel restarts")
+	fmt.Fprintln(os.Stderr, "writes preserve YAML comments; model/routing/delegation changes refresh automatically; other sections may require a restart")
 }
 
 func configWritePath(flagPath string) string {
@@ -155,34 +157,49 @@ func runConfigGet(section string, args []string) {
 			enabled = *cfg.Delegation.Enabled
 		}
 		if jsonOutput {
-			emitJSON(map[string]any{"max_children": cfg.Delegation.MaxChildren, "fanout": cfg.Delegation.FanOut, "max_depth": cfg.Delegation.MaxDepth, "enabled": enabled})
+			emitJSON(map[string]any{"max_children": cfg.Delegation.MaxChildren, "fanout": cfg.Delegation.FanOut, "max_depth": cfg.Delegation.MaxDepth, "max_concurrent": cfg.Delegation.MaxConcurrent, "enabled": enabled})
 			return
 		}
-		fmt.Printf("enabled:      %v\nmax_children: %d\nfanout:       %d\nmax_depth:    %d\n", enabled, cfg.Delegation.MaxChildren, cfg.Delegation.FanOut, cfg.Delegation.MaxDepth)
+		fmt.Printf("enabled:      %v\nmax_children: %d\nfanout:       %d\nmax_depth:    %d\nmax_concurrent: %d\n", enabled, cfg.Delegation.MaxChildren, cfg.Delegation.FanOut, cfg.Delegation.MaxDepth, cfg.Delegation.MaxConcurrent)
 	case "routing":
 		if jsonOutput {
 			emitJSON(map[string]any{
-				"preferred_agents": cfg.Routing.PreferredAgents,
-				"agent_models":     cfg.Routing.AgentModels,
+				"preferred_agents":  cfg.Routing.PreferredAgents,
+				"agent_models":      cfg.Routing.AgentModels,
+				"subagent_models":   cfg.Routing.SubagentModels,
+				"max_concurrent":    cfg.Routing.MaxConcurrent,
+				"agent_concurrency": cfg.Routing.AgentConcurrency,
 			})
 			return
 		}
-		if len(cfg.Routing.PreferredAgents) == 0 && len(cfg.Routing.AgentModels) == 0 {
-			fmt.Println(i18n.T(i18n.Detect(), "cli.config.routing.empty"))
-			return
-		}
+		fmt.Printf("max_concurrent: %d\n", cfg.Routing.MaxConcurrent)
 		if len(cfg.Routing.PreferredAgents) > 0 {
 			fmt.Println("preferred_agents: " + strings.Join(cfg.Routing.PreferredAgents, ", "))
 		}
-		agents := make([]string, 0, len(cfg.Routing.AgentModels))
-		for name := range cfg.Routing.AgentModels {
-			agents = append(agents, name)
+		for _, field := range []struct {
+			name   string
+			models map[string][]string
+		}{
+			{"agent_models", cfg.Routing.AgentModels}, {"subagent_models", cfg.Routing.SubagentModels},
+		} {
+			names := make([]string, 0, len(field.models))
+			for name := range field.models {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				fmt.Printf("%s.%s: %s\n", field.name, name, strings.Join(field.models[name], ", "))
+			}
 		}
-		sort.Strings(agents)
-		for _, name := range agents {
-			fmt.Printf("agent_models.%s: %s\n", name,
-				strings.Join(cfg.Routing.AgentModels[name], ", "))
+		names := make([]string, 0, len(cfg.Routing.AgentConcurrency))
+		for name := range cfg.Routing.AgentConcurrency {
+			names = append(names, name)
 		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Printf("agent_concurrency.%s: %d\n", name, cfg.Routing.AgentConcurrency[name])
+		}
+
 	case "injection":
 		if jsonOutput {
 			emitJSON(map[string]string{"model": cfg.Injection.NormalizedModel()})
@@ -303,7 +320,7 @@ func runConfigSet(section string, args []string) {
 		configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 		fs.Parse(reorderFlags(fs, args))
 		if fs.NArg() != 2 {
-			fail(2, "usage: panda config delegation set <max_children|fanout|max_depth> <int> | enabled <true|false>")
+			fail(2, "usage: panda config delegation set <max_children|fanout|max_depth|max_concurrent> <int> | enabled <true|false>")
 		}
 		key, raw := fs.Arg(0), fs.Arg(1)
 		if key == "enabled" {
@@ -318,13 +335,13 @@ func runConfigSet(section string, args []string) {
 			return
 		}
 		switch key {
-		case "max_children", "fanout", "max_depth":
+		case "max_children", "fanout", "max_depth", "max_concurrent":
 		default:
-			fail(2, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamedOpts", "kind", "delegation key", "name", key, "opts", "max_children|fanout|max_depth|enabled"))
+			fail(2, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamedOpts", "kind", "delegation key", "name", key, "opts", "max_children|fanout|max_depth|max_concurrent|enabled"))
 		}
 		value, err := strconv.Atoi(raw)
-		if err != nil || value <= 0 {
-			failf(2, "panda: delegation value must be a positive integer, got %q\n", raw)
+		if err != nil || value < 0 || (value == 0 && key != "max_concurrent") {
+			failf(2, "panda: delegation value must be positive (max_concurrent also accepts 0), got %q\n", raw)
 		}
 		if err := config.UpdateSectionFieldInt(configWritePath(*configPath), []string{"delegation"}, key, value); err != nil {
 			fatal("config delegation set", err)
@@ -335,17 +352,14 @@ func runConfigSet(section string, args []string) {
 		configPath := fs.String("config", cliConfigPath, "path to config.yaml")
 		fs.Parse(reorderFlags(fs, args))
 		if fs.NArg() < 1 {
-			fail(2, "usage: panda config routing set preferred_agents <a,b,c> | agent_models <agent> <m1,m2,...>")
+			fail(2, "usage: panda config routing set preferred_agents <a,b,c> | <agent_models|subagent_models> <agent> <m1,m2,...> | max_concurrent <int> | agent_concurrency <agent> <int>")
 		}
 		switch fs.Arg(0) {
-		case "agent_models":
-			if fs.NArg() < 3 {
-				fail(2, "usage: panda config routing set agent_models <agent> <m1,m2,...> (use - to clear)")
+		case "agent_models", "subagent_models":
+			if fs.NArg() != 3 {
+				fail(2, "usage: panda config routing set <agent_models|subagent_models> <agent> <m1,m2,...> | max_concurrent <int> | agent_concurrency <agent> <int> (use - to clear)")
 			}
 			agent := strings.TrimSpace(fs.Arg(1))
-			if agent == "" {
-				fail(2, "panda: agent name is required")
-			}
 			var models []string
 			for _, name := range strings.Split(fs.Arg(2), ",") {
 				if name = strings.TrimSpace(name); name != "" {
@@ -355,10 +369,44 @@ func runConfigSet(section string, args []string) {
 			if len(models) == 1 && (models[0] == "-" || models[0] == "none") {
 				models = nil
 			}
-			if err := config.UpdateSectionList(configWritePath(*configPath),
-				[]string{"routing", "agent_models"}, agent, models); err != nil {
+			if err := config.ValidateAgentExecution(config.RoutingConfig{AgentModels: map[string][]string{agent: models}}, config.DelegationConfig{}); err != nil {
 				fatal("config routing set", err)
 			}
+			if err := config.UpdateSectionList(configWritePath(*configPath),
+				[]string{"routing", fs.Arg(0)}, agent, models); err != nil {
+				fatal("config routing set", err)
+			}
+		case "max_concurrent", "agent_concurrency":
+			key := fs.Arg(0)
+			want := 2
+			if key == "agent_concurrency" {
+				want = 3
+			}
+			if fs.NArg() != want {
+				fail(2, "usage: panda config routing set max_concurrent <int> | agent_concurrency <agent> <int>")
+			}
+			n, err := strconv.Atoi(fs.Arg(want - 1))
+			if err != nil || n < 0 {
+				fail(2, "panda: concurrency must be a non-negative integer")
+			}
+			section := []string{"routing"}
+			if key == "agent_concurrency" {
+				section = append(section, key)
+				key = strings.TrimSpace(fs.Arg(1))
+				if key == "" {
+					fail(2, "panda: agent name is required")
+				}
+			}
+			path := configWritePath(*configPath)
+			if n == 0 && want == 3 {
+				err = config.UpdateSectionField(path, section, key, "")
+			} else {
+				err = config.UpdateSectionFieldInt(path, section, key, n)
+			}
+			if err != nil {
+				fatal("config routing set", err)
+			}
+
 		case "preferred_agents":
 			var agents []string
 			if fs.NArg() == 2 {
@@ -373,7 +421,7 @@ func runConfigSet(section string, args []string) {
 				fatal("config routing set", err)
 			}
 		default:
-			fail(2, "usage: panda config routing set preferred_agents <a,b,c> | agent_models <agent> <m1,m2,...>")
+			fail(2, "usage: panda config routing set preferred_agents <a,b,c> | <agent_models|subagent_models> <agent> <m1,m2,...> | max_concurrent <int> | agent_concurrency <agent> <int>")
 		}
 		configSetDone(loc, "routing")
 	case "injection":
@@ -453,7 +501,11 @@ func configSetDone(loc i18n.Locale, section string) {
 		return
 	}
 	fmt.Println(i18n.Tf(loc, "cli.config.saved", "section", section))
-	fmt.Println(i18n.T(loc, "cli.config.restart"))
+	if section == "model" || section == "routing" || section == "injection" || section == "delegation" {
+		fmt.Println(i18n.T(loc, "cli.config.live"))
+	} else {
+		fmt.Println(i18n.T(loc, "cli.config.restart"))
+	}
 }
 
 // runConfigTest runs a live check: `model test` does a one-word completion,

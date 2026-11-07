@@ -161,7 +161,7 @@ def main():
     req = harness.read_request_lined()
     _ensure_git_bash()
 
-    model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL", "")
+    model = harness.selected_model(os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL", ""))
     # Turn cap order: the task's own spec.max_turns wins, then the operator's
     # env, then the default. A task that needs a long build-test loop asks for
     # it in-band instead of inheriting a ceiling sized for a quick edit.

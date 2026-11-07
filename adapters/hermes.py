@@ -122,6 +122,8 @@ def main():
     # never be parsed as part of it.
     if os.environ.get("OPENPANDA_ACCEPT_HOOKS"):
         cmd = ["hermes", "--cli", "--yolo", "--accept-hooks", "-z", prompt]
+    if model := harness.selected_model():
+        cmd += ["--model", model]
     harness.run_simple(cmd, cwd=cwd, timeout=timeout, heartbeat_s=HEARTBEAT_S)
 
 

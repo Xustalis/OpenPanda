@@ -20,6 +20,7 @@ import { Select } from '../components/select'
 import { TermsModal } from '../components/terms'
 import { onThemeChange, setTheme, theme } from '../theme'
 import { SkillsView } from './skills'
+import { ExecutionSettingsForm } from './execution-settings'
 import { SystemView } from './system'
 import { ModelsSection } from './models'
 import { loadAgentRoster } from '../utils/agent-roster'
@@ -219,7 +220,7 @@ export function SettingsView(props: {
             {section === 'general' && <GeneralSection onLogout={props.onLogout} />}
             {section === 'models' && <ModelsSection />}
             {section === 'policy' && <PolicySection />}
-            {section === 'agents' && <AgentsSection />}
+            {section === 'agents' && <><ExecutionSettingsForm /><AgentsSection /></>}
             {section === 'mcp' && <MCPSection />}
             {section === 'skills' && <SkillsView />}
             {section === 'system' && <SystemView />}

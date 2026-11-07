@@ -5,6 +5,7 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,6 +25,9 @@ const (
 	// fact. Measured in runes: with len() a CJK line of ~4 ideographs would
 	// already pass the byte count, which is far below the intended bar.
 	minCandidateChars = 10
+	// A corrupted or untrusted daily path must not make one sweep read an
+	// unbounded file into memory. Oversized logs fail visibly, not partially.
+	maxDailyDreamBytes = 2 << 20
 )
 
 const (
@@ -110,6 +114,11 @@ func (d *Dreamer) Dream() (Report, error) {
 // gate.
 func (d *Dreamer) light() ([]*Candidate, error) {
 	dir := d.hermes.WarmDir()
+	release, err := lockRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("memory: lock daily scan: %w", err)
+	}
+	defer release()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -120,23 +129,32 @@ func (d *Dreamer) light() ([]*Candidate, error) {
 
 	byText := make(map[string]*Candidate)
 	for _, e := range entries {
-		if e.IsDir() {
-			continue // skip daily/archive/
+		info, err := e.Info() // Lstat even when the filesystem lacks d_type
+		if err != nil {
+			return nil, fmt.Errorf("memory: inspect %s: %w", e.Name(), err)
+		}
+		if !info.Mode().IsRegular() {
+			continue // archive/, symlinks, and special files are not daily logs
 		}
 		date, ok := parseDailyName(e.Name())
 		if !ok {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		data, err := os.ReadFile(path)
+		f, err := os.Open(path)
 		if err != nil {
-			// A log deleted or archived between ReadDir and ReadFile (the
-			// retention sweep and the panel's delete route do not share this
-			// scan) is a skipped file, not a sweep failure.
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("memory: read %s: %w", e.Name(), err)
+			return nil, fmt.Errorf("memory: open %s: %w", e.Name(), err)
+		}
+		data, readErr := io.ReadAll(io.LimitReader(f, maxDailyDreamBytes+1))
+		closeErr := f.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("memory: read %s: %w", e.Name(), readErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("memory: close %s: %w", e.Name(), closeErr)
+		}
+		if len(data) > maxDailyDreamBytes {
+			return nil, fmt.Errorf("memory: daily log %s exceeds %d bytes", e.Name(), maxDailyDreamBytes)
 		}
 		for i, line := range strings.Split(string(data), "\n") {
 			text := stripDailyPrefix(line)
@@ -152,9 +170,10 @@ func (d *Dreamer) light() ([]*Candidate, error) {
 			if rest, ok := strings.CutPrefix(text, ExternalMarker+" "); ok {
 				trusted = false
 				text = rest
-				if text == "" {
-					continue
-				}
+			}
+			text = sanitizeEntry(text)
+			if text == "" {
+				continue
 			}
 			c := byText[text]
 			if c == nil {

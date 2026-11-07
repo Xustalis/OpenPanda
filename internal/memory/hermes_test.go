@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -99,5 +100,37 @@ func TestHermesConcurrentSaveNoTornWrite(t *testing.T) {
 	}
 	if !strings.HasPrefix(got.Entries[0], "entry-") {
 		t.Fatalf("unexpected content: %q", got.Entries[0])
+	}
+}
+
+// TestReadDirOrAbsentSeparatesMissingFromCorrupt pins the platform difference
+// that broke Windows CI: a file sitting where memory/topics/ or memory/daily/
+// belongs must read as a broken store, not as an empty one. Windows reports
+// that case as "not found", so the helper stats the path before believing it.
+func TestReadDirOrAbsentSeparatesMissingFromCorrupt(t *testing.T) {
+	root := t.TempDir()
+
+	if entries, err := ReadDirOrAbsent(filepath.Join(root, "absent")); err != nil || entries != nil {
+		t.Fatalf("missing directory: entries=%v err=%v, want nil, nil", entries, err)
+	}
+
+	corrupt := filepath.Join(root, "topics")
+	if err := os.WriteFile(corrupt, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadDirOrAbsent(corrupt); err == nil {
+		t.Fatal("a file where the directory belongs must report an error, not an empty listing")
+	}
+
+	real := filepath.Join(root, "daily")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "2026-01-02.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ReadDirOrAbsent(real)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("populated directory: entries=%d err=%v, want 1, nil", len(entries), err)
 	}
 }

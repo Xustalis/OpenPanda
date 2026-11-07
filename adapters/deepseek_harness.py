@@ -85,7 +85,7 @@ def main():
     binary = harness.resolve_binary(BINARIES, default="dsh")
     argv = [binary, "--profile", "headless"]
     patch = ""
-    model = (os.environ.get("DEEPSEEK_MODEL") or "").strip()
+    model = harness.selected_model((os.environ.get("DEEPSEEK_MODEL") or "").strip())
     if model:
         try:
             patch = model_patch(model)
