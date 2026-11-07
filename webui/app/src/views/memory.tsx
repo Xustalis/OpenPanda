@@ -4,6 +4,7 @@ import type { ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
+	ApiError,
   type MemoryFiles,
   type MemoryGraphNode,
   type ProjectDetail,
@@ -20,6 +21,11 @@ import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 
 type Tab = 'graph' | 'user' | 'memory' | 'dreams' | 'topics' | 'daily' | 'projects'
+
+function memorySaveError(error: unknown) {
+  if (error instanceof ApiError && error.status === 409) toast(t('memory.conflict'), 'error')
+  else toastError(error)
+}
 
 const TABS: Tab[] = ['graph', 'user', 'memory', 'dreams', 'topics', 'daily', 'projects']
 
@@ -47,6 +53,7 @@ export function MemoryView(props: { initialTab?: string }) {
   const [tab, setTab] = useState<Tab>(
     TABS.includes(props.initialTab as Tab) ? (props.initialTab as Tab) : 'graph',
   )
+  const [graphTarget, setGraphTarget] = useState<{ tab: Tab; name: string } | null>(null)
   useEffect(() => {
     if (TABS.includes(props.initialTab as Tab)) setTab(props.initialTab as Tab)
   }, [props.initialTab])
@@ -127,7 +134,7 @@ export function MemoryView(props: { initialTab?: string }) {
               role="tab"
               aria-selected={tab === k}
               class={`seg${tab === k ? ' on' : ''}`}
-              onClick={() => setTab(k)}
+              onClick={() => { setGraphTarget(null); setTab(k) }}
             >
               {t(`memory.${k}`)}
               {n != null && <span class="memory-tab-n mono">{n}</span>}
@@ -136,11 +143,12 @@ export function MemoryView(props: { initialTab?: string }) {
         })}
       </div>
 
-      {tab === 'graph' && <GraphTab onOpenTab={setTab} />}
+      {tab === 'graph' && <GraphTab onOpen={(next, name) => { setGraphTarget({ tab: next, name }); setTab(next) }} />}
       {tab === 'user' && (
         <MemoryFileView
           file="user"
           content={data.user}
+          version={data.versions.user}
           fresh={freshEntries('user', data.user)}
           limit={data.user_limit}
           reload={reload}
@@ -150,15 +158,16 @@ export function MemoryView(props: { initialTab?: string }) {
         <MemoryFileView
           file="memory"
           content={data.memory}
+          version={data.versions.memory}
           fresh={freshEntries('memory', data.memory)}
           limit={data.mem_limit}
           reload={reload}
         />
       )}
-      {tab === 'dreams' && <DreamsView content={data.dreams} reload={reload} />}
-      {tab === 'topics' && <TopicsView topics={data.topics} limit={data.mem_limit} reload={reload} />}
-      {tab === 'daily' && <DailyView daily={data.daily} reload={reload} />}
-      {tab === 'projects' && <ProjectsView defaultLimit={data.project_limit} reload={reload} />}
+      {tab === 'dreams' && <DreamsView content={data.dreams} version={data.versions.dreams} truncated={data.dreams_truncated} reload={reload} />}
+      {tab === 'topics' && <TopicsView topics={data.topics} selectedName={graphTarget?.tab === 'topics' ? graphTarget.name : undefined} limit={data.mem_limit} reload={reload} />}
+      {tab === 'daily' && <DailyView daily={data.daily} selectedName={graphTarget?.tab === 'daily' ? graphTarget.name : undefined} reload={reload} />}
+      {tab === 'projects' && <ProjectsView selectedName={graphTarget?.tab === 'projects' ? graphTarget.name : undefined} defaultLimit={data.project_limit} reload={reload} />}
     </section>
   )
 }
@@ -246,12 +255,14 @@ function UsageMeter({ chars, limit }: { chars: number; limit: number }) {
 function MemoryFileView({
   file,
   content,
+  version,
   fresh,
   limit,
   reload,
 }: {
   file: 'user' | 'memory'
   content: string
+  version: string
   /** Entries the agent added since the previous load (see MemoryView). */
   fresh: Set<string>
   limit: number
@@ -278,12 +289,12 @@ function MemoryFileView({
   /** Rebuild the whole file from entries and persist (whole-file PUT). */
   async function persistEntries(next: string[]) {
     try {
-      await api.saveMemory(file, next.join('\n§\n'))
+      await api.saveMemory(file, next.join('\n§\n'), version)
       toast(t('memory.saved'), 'success')
       reload()
       return true
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
       return false
     }
   }
@@ -292,12 +303,12 @@ function MemoryFileView({
     if (saving) return
     setSaving(true)
     try {
-      await api.saveMemory(file, draft)
+      await api.saveMemory(file, draft, version)
       toast(t('memory.saved'), 'success')
       setEditing(false)
       reload()
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
     } finally {
       setSaving(false)
     }
@@ -573,12 +584,13 @@ function MemoryFileCard({
 
 /** DREAMS.md — the Dreamer's diary. Read-only at a glance; opening the
  *  editor asks for confirmation (it is free-form prose, not § entries). */
-function DreamsView({ content, reload }: { content: string; reload(): void }) {
+function DreamsView({ content, version, truncated, reload }: { content: string; version: string; truncated: boolean; reload(): void }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
 
   async function startEdit() {
+    if (truncated) return
     const ok = await confirmDialog({
       title: t('memory.dreamsEditTitle'),
       message: t('memory.dreamsEditMsg'),
@@ -594,12 +606,12 @@ function DreamsView({ content, reload }: { content: string; reload(): void }) {
     if (saving) return
     setSaving(true)
     try {
-      await api.saveMemory('dreams', draft)
+      await api.saveMemory('dreams', draft, version)
       toast(t('memory.saved'), 'success')
       setEditing(false)
       reload()
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
     } finally {
       setSaving(false)
     }
@@ -627,11 +639,12 @@ function DreamsView({ content, reload }: { content: string; reload(): void }) {
         <span class="memory-card-name mono">DREAMS.md</span>
         <span class="dim memory-card-count">{t('memory.charsN', { n: [...content].length })}</span>
         <div class="memory-card-tools">
-          <button class="btn small" onClick={startEdit}>
+          <button class="btn small" disabled={truncated} onClick={startEdit}>
             {t('memory.edit')}
           </button>
         </div>
       </div>
+      {truncated && <p class="gate-error">{t('memory.dreamsTooLarge')}</p>}
       {content ? (
         <pre class="memory-content mono">{content}</pre>
       ) : (
@@ -689,8 +702,9 @@ function MemoryRail({
 /** topics/*.md — the selective-load memory files. The rail picks one (the
  *  first is open by default, like the diary), typing a name creates a new
  *  one, and the card edits it in place. */
-function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: number; reload(): void }) {
-  const [selected, setSelected] = useState<string>('')
+function TopicsView({ topics, selectedName, limit, reload }: { topics: TopicFile[]; selectedName?: string; limit: number; reload(): void }) {
+  const [selected, setSelected] = useState<string>(selectedName ?? '')
+  useEffect(() => { if (selectedName) setSelected(selectedName) }, [selectedName])
   const [newName, setNewName] = useState('')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -714,7 +728,7 @@ function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: num
       reload()
       setSelected(name)
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
     } finally {
       setSaving(false)
     }
@@ -732,7 +746,7 @@ function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: num
       if (selected === name) setSelected('')
       reload()
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
     }
   }
 
@@ -740,12 +754,12 @@ function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: num
     if (saving || !current) return
     setSaving(true)
     try {
-      await api.saveMemoryTopic(current.name, draft)
+      await api.saveMemoryTopic(current.name, draft, current.version)
       toast(t('memory.saved'), 'success')
       setEditing(false)
       reload()
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
     } finally {
       setSaving(false)
     }
@@ -755,12 +769,12 @@ function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: num
   async function persistEntries(next: string[]) {
     if (!current) return false
     try {
-      await api.saveMemoryTopic(current.name, next.join('\n§\n'))
+      await api.saveMemoryTopic(current.name, next.join('\n§\n'), current.version)
       toast(t('memory.saved'), 'success')
       reload()
       return true
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
       return false
     }
   }
@@ -871,8 +885,9 @@ function TopicsView({ topics, limit, reload }: { topics: TopicFile[]; limit: num
 /** daily/*.md — the warm-layer diary. Content stays read-only (the Dreamer
  *  owns the writes), but whole files can be deleted and the 30d-archive /
  *  90d-delete retention windows can be applied on demand. Newest first. */
-function DailyView({ daily, reload }: { daily: TopicFile[]; reload(): void }) {
-  const [selected, setSelected] = useState<string>('')
+function DailyView({ daily, selectedName, reload }: { daily: TopicFile[]; selectedName?: string; reload(): void }) {
+  const [selected, setSelected] = useState<string>(selectedName ?? '')
+  useEffect(() => { if (selectedName) setSelected(selectedName) }, [selectedName])
   const [pruning, setPruning] = useState(false)
   const current = daily.find((d) => d.name === selected) ?? daily[0] ?? null
 
@@ -888,7 +903,7 @@ function DailyView({ daily, reload }: { daily: TopicFile[]; reload(): void }) {
       if (current?.name === name) setSelected('')
       reload()
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
     }
   }
 
@@ -907,7 +922,7 @@ function DailyView({ daily, reload }: { daily: TopicFile[]; reload(): void }) {
       toast(t('memory.dailyPruned'), 'success')
       reload()
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
     } finally {
       setPruning(false)
     }
@@ -981,9 +996,10 @@ function DailyView({ daily, reload }: { daily: TopicFile[]; reload(): void }) {
 
 /** Per-project MEMORY.md: pick a project, read or rewrite its memory with
  *  the configured project cap. */
-function ProjectsView({ defaultLimit, reload }: { defaultLimit: number; reload(): void }) {
+function ProjectsView({ selectedName, defaultLimit, reload }: { selectedName?: string; defaultLimit: number; reload(): void }) {
   const [list, setList] = useState<ProjectDetail[] | null>(null)
-  const [selected, setSelected] = useState('')
+  const [selected, setSelected] = useState(selectedName ?? '')
+  useEffect(() => { if (selectedName) setSelected(selectedName) }, [selectedName])
   const [mem, setMem] = useState<ProjectMemory | null>(null)
   const [loadErr, setLoadErr] = useState('')
   const [editing, setEditing] = useState(false)
@@ -1020,14 +1036,14 @@ function ProjectsView({ defaultLimit, reload }: { defaultLimit: number; reload()
     if (saving || !current) return
     setSaving(true)
     try {
-      await api.saveProjectMemory(current.name, draft)
+      await api.saveProjectMemory(current.name, draft, mem?.version)
       toast(t('memory.saved'), 'success')
       setEditing(false)
       reload()
       const re = await api.projectMemory(current.name)
       setMem(re)
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
     } finally {
       setSaving(false)
     }
@@ -1037,13 +1053,13 @@ function ProjectsView({ defaultLimit, reload }: { defaultLimit: number; reload()
   async function persistEntries(next: string[]) {
     if (!current) return false
     try {
-      await api.saveProjectMemory(current.name, next.join('\n§\n'))
+      await api.saveProjectMemory(current.name, next.join('\n§\n'), mem?.version)
       toast(t('memory.saved'), 'success')
       const re = await api.projectMemory(current.name)
       setMem(re)
       return true
     } catch (e) {
-      toastError(e)
+      memorySaveError(e)
       return false
     }
   }
@@ -1115,21 +1131,34 @@ function ProjectsView({ defaultLimit, reload }: { defaultLimit: number; reload()
  *  Dreamer wrote, or a literal name mention — so the picture never invents
  *  structure. Clicking a node lists its connections and jumps to the owning
  *  surface. */
-function GraphTab({ onOpenTab }: { onOpenTab(tab: Tab): void }) {
+function GraphTab({ onOpen }: { onOpen(tab: Tab, name: string): void }) {
   useLocaleRerender()
   const change = useChangeSignal()
-  const { data: graph, error } = useAsync(() => api.memoryGraph(), [], change)
+  const [tick, setTick] = useState(0)
+  const { data: graph, error } = useAsync(() => api.memoryGraph(), [tick], change)
 
   function openNode(n: MemoryGraphNode) {
     // Topics / projects / daily are tabs of this very page, so they switch
     // locally. A skill node is a different section, so it routes there.
-    if (n.kind === 'topic') onOpenTab('topics')
-    else if (n.kind === 'project') onOpenTab('projects')
-    else if (n.kind === 'daily') onOpenTab('daily')
+    if (n.kind === 'topic') onOpen('topics', n.label)
+    else if (n.kind === 'project') onOpen('projects', n.label)
+    else if (n.kind === 'daily') onOpen('daily', '')
     else if (n.kind === 'skill') navigate({ view: 'settings', tab: 'skills' })
+    else if (n.id === 'core:user') onOpen('user', '')
+    else if (n.id === 'core:memory') onOpen('memory', '')
+    else if (n.id === 'core:dreams') onOpen('dreams', '')
   }
 
-  if (error) return <ErrorState head={false} title={t('memory.graphTitle')} sub="" error={error} onRetry={() => {}} />
+  if (error)
+    return (
+      <ErrorState
+        head={false}
+        title={t('memory.graphTitle')}
+        sub=""
+        error={error}
+        onRetry={() => setTick((v) => v + 1)}
+      />
+    )
   if (!graph) return <LoadingState head={false} title={t('memory.graphTitle')} sub="" />
   if (graph.nodes.length === 0) return <p class="dim">{t('memory.graphEmpty')}</p>
   return <MemoryGraphView graph={graph} onOpen={openNode} />

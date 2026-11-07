@@ -57,6 +57,25 @@
   font-size: var(--text-xs);
   line-height: 1.5;
 }
+/* Search is a plain field inside the toolbar, sized so the layer switch,
+   the neighbour toggle and the counts still fit on one row. */
+.mg-search {
+  width: 150px;
+  padding: 3px 9px;
+  font-size: var(--text-sm);
+  color: inherit;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  outline: none;
+}
+.mg-search:focus-visible {
+  border-color: var(--accent);
+}
+.mg-toolbar .btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .mg-empty {
   padding: var(--sp-10) var(--sp-4);
   margin: 0;
@@ -112,27 +131,24 @@
     opacity var(--dur-fast) var(--ease),
     stroke var(--dur-fast) var(--ease);
 }
+/* Provenance edges are dotted but static: a perpetual flow animation on
+   every promotion edge competed with the nodes for attention. */
 .mg-edge-promotion {
   stroke: var(--accent);
-  stroke-dasharray: 0.5 6.5;
-  animation: mg-flow 1.15s linear infinite;
+  stroke-dasharray: 2 5;
 }
 /* Mention edges (file → entity) are thin and quiet — there can be hundreds,
-   they must not drown the provenance edges. */
+   they must not drown the provenance edges. The component grades opacity by
+   evidence weight; this is the floor for unweighted links. */
 .mg-edge-mention {
   stroke: var(--accent-2);
-  opacity: 0.3;
+  opacity: 0.22;
 }
 /* Co-occurrence edges (entity ↔ entity) read as faint dashed threads. */
 .mg-edge-co {
   stroke: var(--semantic-good);
   stroke-dasharray: 3 5;
   opacity: 0.5;
-}
-@keyframes mg-flow {
-  to {
-    stroke-dashoffset: -7;
-  }
 }
 .mg-edge-g.dim .mg-edge,
 .mg-edge-g.dim .mg-badge {
@@ -680,8 +696,7 @@ button.mg-legend-item:hover {
 @media (prefers-reduced-motion: reduce) {
   .mg-pop,
   .mg-edge-g,
-  .mg-halo,
-  .mg-edge-promotion {
+  .mg-halo {
     animation: none;
   }
 }

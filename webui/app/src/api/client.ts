@@ -954,12 +954,14 @@ export interface AppSettings {
 export interface TopicFile {
   name: string
   content: string
+  version?: string
 }
 
 export interface ProjectMemory {
   project: string
   content: string
   limit: number
+  version: string
 }
 
 // ProjectDetail is a project as the console now sees it: metadata, how big its
@@ -1597,13 +1599,14 @@ export const api = {
   saveMemory(
     file: 'user' | 'memory' | 'dreams',
     content: string,
+    version?: string,
   ): Promise<{ file: string; chars: number; limit: number }> {
-    return request('PUT', `/api/memory/${file}`, { content })
+    return request('PUT', `/api/memory/${file}`, { content, version })
   },
 
   /** Create or rewrite one topics/<name>.md file (§ entries). */
-  saveMemoryTopic(name: string, content: string): Promise<{ topic: string; chars: number; limit: number }> {
-    return request('PUT', `/api/memory/topics/${encodeURIComponent(name)}`, { content })
+  saveMemoryTopic(name: string, content: string, version?: string): Promise<{ topic: string; chars: number; limit: number }> {
+    return request('PUT', `/api/memory/topics/${encodeURIComponent(name)}`, { content, version })
   },
 
   deleteMemoryTopic(name: string): Promise<{ topic: string; status: string }> {
@@ -1625,14 +1628,14 @@ export const api = {
     return request('GET', `/api/projects/${encodeURIComponent(name)}/memory`)
   },
 
-  saveProjectMemory(name: string, content: string): Promise<{ project: string; chars: number; limit: number }> {
-    return request('PUT', `/api/projects/${encodeURIComponent(name)}/memory`, { content })
+  saveProjectMemory(name: string, content: string, version?: string): Promise<{ project: string; chars: number; limit: number }> {
+    return request('PUT', `/api/projects/${encodeURIComponent(name)}/memory`, { content, version })
   },
 
   /** The knowledge graph over every memory surface plus the skill index:
    *  edges are provenance ([from:日志] promotions) or literal name mentions. */
   memoryGraph(): Promise<MemoryGraph> {
-    return request('GET', '/api/memory/graph')
+    return request('GET', '/api/memory/graph?co=1')
   },
 
   // ---- MCP settings ----
@@ -2367,6 +2370,8 @@ export interface MemoryFiles {
   user: string
   memory: string
   dreams: string
+  versions: { user: string; memory: string; dreams: string }
+  dreams_truncated: boolean
   time: string // node's current time, RFC3339
   user_limit: number // char caps for the live edit counter (config values)
   mem_limit: number
@@ -2378,7 +2383,7 @@ export interface MemoryFiles {
 /** GET /api/memory/graph — two layers over the same evidence. Provenance
  *  ("file") nodes are the memory surfaces and skills; knowledge ("entity")
  *  nodes are terms literally recurring inside them. Edges are provenance
- *  ([from:…] promotions out of the daily diary), literal name mentions between
+ *  (promotion receipts in DREAMS.md), literal name mentions between
  *  surfaces, entity mentions (surface → entity), or entity co-occurrence. */
 export interface MemoryGraphNode {
   id: string

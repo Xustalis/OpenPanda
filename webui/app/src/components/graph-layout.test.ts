@@ -8,6 +8,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { MemoryGraph, MemoryGraphNode } from '../api/client.ts'
 import {
+  availableKinds,
+  captionExtent,
+  dominantSurface,
   filterGraph,
   fitText,
   isEntity,
@@ -16,6 +19,7 @@ import {
   nodeExtent,
   nodeRadius,
   recencyAlpha,
+  searchGraph,
   seenDates,
 } from './graph-layout.ts'
 
@@ -208,4 +212,110 @@ test('a seeded relayout absorbs a new node without displacing the old ones', () 
     const moved = Math.hypot(p.x - q.x, p.y - q.y)
     assert.ok(moved < 30, `${id} moved ${moved}`)
   }
+})
+
+test('captionExtent charges file labels for their width, bounded', () => {
+  assert.equal(captionExtent(entity('x')), 0) // the pill already carries its text
+  const short = captionExtent(file('a', 'core', { label: '小' }))
+  const long = captionExtent(file('b', 'core', { label: '导航模拟测试代码对照巡护链路全景' }))
+  assert.ok(long > short)
+  assert.ok(long <= 24)
+})
+
+test('dominantSurface picks the strongest mention and breaks ties deterministically', () => {
+  const g: MemoryGraph = {
+    nodes: [],
+    edges: [
+      { from: 'f1', to: 'entity:x', kind: 'mention', weight: 2 },
+      { from: 'f2', to: 'entity:x', kind: 'mention', weight: 9 },
+      { from: 'f3', to: 'entity:x', kind: 'co', weight: 99 },
+      { from: 'f1', to: 'entity:y', kind: 'mention', weight: 4 },
+      { from: 'f0', to: 'entity:y', kind: 'mention', weight: 4 },
+    ],
+  }
+  const owners = dominantSurface(g)
+  assert.equal(owners.get('entity:x'), 'f2')
+  assert.equal(owners.get('entity:y'), 'f0') // equal weight → lower id
+  assert.equal(owners.size, 2)
+})
+
+// A synthetic graph at the scale the real endpoint returns: 10 file
+// surfaces, 8 skills, N terms with 4-character labels and varied weights.
+const pool = '巡检脚本部署日志链路排查节点任务缓存同步索引模型网关凭证面板会话主题技能图谱'
+function synthetic(termCount: number): MemoryGraph {
+  const kinds = ['core', 'topic', 'project', 'daily']
+  const nodes: MemoryGraphNode[] = []
+  for (let i = 0; i < 10; i++) {
+    nodes.push(file(`f${i}`, kinds[i % 4]!, { label: `文件面${i}`, weight: 5 + (i % 7) }))
+  }
+  for (let i = 0; i < 8; i++) {
+    nodes.push(file(`s${i}`, 'skill', { label: `技能${i}`, weight: 1 }))
+  }
+  const edges: MemoryGraph['edges'] = []
+  for (let i = 0; i < termCount; i++) {
+    const a = (i * 7) % pool.length
+    const label = pool.slice(a, a + 3) + pool[(a + 11) % pool.length]!
+    const id = `entity:e${i}`
+    nodes.push(entity(`e${i}`, { label, weight: 3 + (i % 9) }))
+    edges.push({ from: `f${i % 10}`, to: id, kind: 'mention', weight: 3 + (i % 9) })
+  }
+  return { nodes, edges }
+}
+
+function pairStats(graph: MemoryGraph) {
+  const { pos } = layoutGraph(graph, 860, 560)
+  const pts = [...pos.values()]
+  let footprint = 0
+  let text = 0
+  let coincident = 0
+  let outside = 0
+  for (const p of pts) if (p.x < 0 || p.x > 860 || p.y < 0 || p.y > 560) outside++
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const a = pts[i]!
+      const b = pts[j]!
+      const d = Math.hypot(a.x - b.x, a.y - b.y)
+      if (d < nodeExtent(a) + nodeExtent(b)) footprint++
+      if (d < nodeExtent(a) + captionExtent(a) + nodeExtent(b) + captionExtent(b)) text++
+      if (d < 8) coincident++
+    }
+  }
+  return { footprint, text, coincident, outside, count: pts.length }
+}
+
+test('the default file-only view is fully readable at 860x560', () => {
+  const stats = pairStats(synthetic(0))
+  assert.equal(stats.count, 18)
+  assert.equal(stats.footprint, 0)
+  assert.equal(stats.text, 0)
+  assert.equal(stats.outside, 0)
+})
+
+test('the 60-entity view stays drawable; the ring has no coincident nodes', () => {
+  // An 860x560 outer ring physically cannot seat 60 labelled pills without
+  // overlap. The full view relies on search, focus and label LOD, not on
+  // geometry. What must hold: nothing leaves the canvas, nothing stacks
+  // exactly, and the text-overlap count does not regress past the
+  // 2026-11-02 baseline of 143 pairs (measured at 108 footprint overlaps).
+  const stats = pairStats(synthetic(60))
+  assert.equal(stats.count, 78)
+  assert.equal(stats.outside, 0)
+  assert.equal(stats.coincident, 0)
+  assert.ok(stats.text < 143, `text overlaps regressed to ${stats.text}`)
+})
+
+test('hidden kinds retain controls so they can be restored', () => {
+  const hidden = filterGraph(sample, { layer: 'all', hiddenKinds: new Set(['skill']) })
+  assert.ok(hidden.nodes.every((n) => n.kind !== 'skill'))
+  assert.ok(availableKinds(sample, 'all').has('skill'))
+  assert.ok(!availableKinds(sample, 'entities').has('skill'))
+})
+
+test('graph search retains evidence neighbors but respects prior layer filters', () => {
+  const result = searchGraph(sample, '巡护链路')
+  assert.deepEqual(new Set(result.nodes.map((n) => n.id)), new Set(['entity:巡护链路', 'daily', 'entity:dog']))
+  const files = filterGraph(sample, { layer: 'files', hiddenKinds: new Set() })
+  const narrowed = searchGraph(files, 'daily')
+  assert.ok(narrowed.nodes.every((n) => n.layer === 'file'))
+  assert.ok(narrowed.nodes.some((n) => n.id === 'core:MEMORY.md'))
 })
