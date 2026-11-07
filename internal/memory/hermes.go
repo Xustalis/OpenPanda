@@ -4,7 +4,9 @@ package memory
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -70,13 +72,13 @@ func (h *Hermes) SaveMemory(m MemFile) error {
 // UpdateUser runs fn against the current USER.md and writes the result back as
 // one critical section. fn's error aborts the write.
 func (h *Hermes) UpdateUser(fn func(*MemFile) error) error {
-	return h.update(UserPath(h.root), h.limits.user(), fn)
+	return h.update(UserPath(h.root), h.limits.user(), false, fn)
 }
 
 // UpdateMemory runs fn against the current MEMORY.md and writes the result back
 // as one critical section.
 func (h *Hermes) UpdateMemory(fn func(*MemFile) error) error {
-	return h.update(MemoryPath(h.root), h.limits.memory(), fn)
+	return h.update(MemoryPath(h.root), h.limits.memory(), false, fn)
 }
 
 // TopicsDir is the memory/topics/ directory holding optional topic files.
@@ -91,14 +93,28 @@ func (h *Hermes) TopicPath(name string) (string, error) {
 	return filepath.Join(h.TopicsDir(), name+".md"), nil
 }
 
+// ReadDirOrAbsent lists a memory directory, treating only a directory that is
+// genuinely missing as empty. Windows reports a regular file sitting where the
+// directory belongs as "not found", so believing os.IsNotExist alone would read
+// a corrupt store as an empty one and silently drop the user's context. The
+// stat below keeps that misconfiguration visible on every platform: POSIX
+// already answers ENOTDIR here, Windows now answers the same.
+func ReadDirOrAbsent(dir string) ([]fs.DirEntry, error) {
+	entries, err := os.ReadDir(dir)
+	if err == nil || !errors.Is(err, fs.ErrNotExist) {
+		return entries, err
+	}
+	if _, statErr := os.Stat(dir); statErr == nil {
+		return nil, fmt.Errorf("%s exists but is not a directory", dir)
+	}
+	return nil, nil
+}
+
 // ListTopics returns the names (file stem, sorted) of the topic files that
 // exist under topics/. A missing directory yields an empty list.
 func (h *Hermes) ListTopics() ([]string, error) {
-	entries, err := os.ReadDir(h.TopicsDir())
+	entries, err := ReadDirOrAbsent(h.TopicsDir())
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("memory: list topics: %w", err)
 	}
 	var names []string
@@ -141,7 +157,7 @@ func (h *Hermes) UpdateTopic(name string, fn func(*MemFile) error) error {
 	if err != nil {
 		return err
 	}
-	return h.update(path, h.limits.memory(), fn)
+	return h.update(path, h.limits.memory(), true, fn)
 }
 
 // DeleteTopic removes one topic file. Deleting a missing topic is an error so
@@ -279,7 +295,7 @@ func (h *Hermes) save(path string, m MemFile, defaultLimit int) error {
 // Callers that would otherwise load, mutate and save must come through here —
 // that sequence outside the lock is the lost-update case this store used to
 // have, and it fails silently (both writers report success, one entry is gone).
-func (h *Hermes) update(path string, limit int, fn func(*MemFile) error) error {
+func (h *Hermes) update(path string, limit int, createIfMissing bool, fn func(*MemFile) error) error {
 	release, err := lockRoot(h.root)
 	if err != nil {
 		return fmt.Errorf("memory: lock %s: %w", filepath.Base(path), err)
@@ -300,7 +316,16 @@ func (h *Hermes) update(path string, limit int, fn func(*MemFile) error) error {
 	// and a fresh mtime on an identical file tells every watcher the memory
 	// changed when it did not.
 	if bytes.Equal(before, m.Bytes()) {
-		return nil
+		if !createIfMissing {
+			return nil
+		}
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		// An empty new topic still needs a file, or the console reports
+		// success but ListTopics cannot find what the user just created.
 	}
 	return h.saveLocked(path, m, limit)
 }

@@ -14,6 +14,14 @@
 ![Memory](https://img.shields.io/badge/Memoria%20RSS-~40MB-brightgreen)
 ![No Cloud Relay](https://img.shields.io/badge/Relay%20Cloud-Ninguno-success)
 
+## Demo real
+
+![Sesión de terminal de OpenPanda grabada en una compilación local desde el código fuente](site/media/openpanda-demo.gif)
+
+[Grabación completa de 81 segundos (MP4, 626 KB)](site/media/openpanda-demo.mp4) · [Captura de la consola](site/media/console-task.webp) · [Fotograma de la terminal](site/media/terminal-ask.webp)
+
+Grabado el 2026-11-06 en una sola máquina macOS arm64 con la v0.1.4 compilada desde el código fuente. El vídeo ejecuta `panda version`, `panda doctor`, `panda queue`, después `panda ask -authorize` con una petición de ejecutar `uptime` e informar de la carga, y termina con la tarea finalizada en `panda queue`. La tarea `01a1b154-c86c-7600-a83d-f7d11ffbb26e` se ejecutó mediante el adaptador opencode y se completó en 43 s. Las cifras de `uptime` en pantalla proceden de una llamada real al shell de esa máquina.
+
 ---
 
 ## ⚡ ¿Por qué OpenPanda?

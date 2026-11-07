@@ -14,6 +14,14 @@
 ![Memory](https://img.shields.io/badge/Speicherbedarf-~40MB%20RSS-brightgreen)
 ![No Cloud Relay](https://img.shields.io/badge/Cloud--Relay-Keiner-success)
 
+## Demo auf echter Maschine
+
+![OpenPanda-Terminalsitzung, aufgezeichnet auf einem lokalen Quellcode-Build](site/media/openpanda-demo.gif)
+
+[Vollständige Aufzeichnung, 81 Sekunden (MP4, 626 KB)](site/media/openpanda-demo.mp4) · [Screenshot der Konsole](site/media/console-task.webp) · [Einzelbild des Terminals](site/media/terminal-ask.webp)
+
+Aufgezeichnet am 2026-11-06 auf einem macOS-arm64-Rechner mit einem aus dem Quellcode gebauten v0.1.4. Der Ablauf zeigt `panda version`, `panda doctor`, `panda queue`, danach `panda ask -authorize` mit der Anweisung, `uptime` auszuführen und die Last zu melden, und endet mit der abgeschlossenen Aufgabe in `panda queue`. Aufgabe `01a1b154-c86c-7600-a83d-f7d11ffbb26e` lief über den opencode-Adapter und war nach 43 s abgeschlossen. Die angezeigten Lastwerte stammen aus einem echten Shell-Aufruf auf diesem Rechner.
+
 ---
 
 ## ⚡ Warum OpenPanda?

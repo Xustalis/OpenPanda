@@ -68,6 +68,11 @@ func (d *Daily) append(now time.Time, entry string, external bool) error {
 	if external {
 		entry = ExternalMarker + " " + entry
 	}
+	release, err := lockRoot(d.dir)
+	if err != nil {
+		return fmt.Errorf("memory: lock daily log: %w", err)
+	}
+	defer release()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err := os.MkdirAll(d.dir, 0o700); err != nil {
@@ -78,13 +83,18 @@ func (d *Daily) append(now time.Time, entry string, external bool) error {
 	// a looser umask does not stay readable to other local accounts.
 	_ = os.Chmod(d.dir, 0o700)
 	path := d.PathFor(now)
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("memory: daily log %s is not a regular file", path)
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("memory: inspect daily log: %w", err)
+	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("memory: open daily log: %w", err)
 	}
 	defer f.Close()
 	_ = os.Chmod(path, 0o600)
-	if _, err := fmt.Fprintf(f, "- %s %s\n", now.Format("15:04:05"), entry); err != nil {
+	if _, err := f.Write([]byte(fmt.Sprintf("- %s %s\n", now.Format("15:04:05"), entry))); err != nil {
 		return fmt.Errorf("memory: append daily log: %w", err)
 	}
 	return nil
@@ -101,9 +111,14 @@ func sanitizeEntry(entry string) string {
 // daily/archive/. The delete window sweeps the archive too — archiving moves a
 // log out of the warm scan path, it does not exempt it from deletion, or
 // archive/ would grow without bound. Files that do not match the YYYY-MM-DD.md
-// naming are left untouched. It shares the Daily mutex with Append so a prune
-// cannot race an in-flight append.
+// naming are left untouched. The store lock serializes across Daily instances
+// and processes, including console deletes; take it before the instance mutex.
 func (d *Daily) Prune(now time.Time) error {
+	release, err := lockRoot(d.dir)
+	if err != nil {
+		return fmt.Errorf("memory: lock daily logs: %w", err)
+	}
+	defer release()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	entries, err := os.ReadDir(d.dir)
@@ -169,10 +184,68 @@ func (d *Daily) archive(name string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("memory: create archive dir: %w", err)
 	}
-	if err := os.Rename(filepath.Join(d.dir, name), filepath.Join(dir, name)); err != nil {
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		return fmt.Errorf("memory: archive path is not a directory: %v", err)
+	}
+	src, dst := filepath.Join(d.dir, name), filepath.Join(dir, name)
+	// A late append can recreate a warm file for a date already archived.
+	// Rename would overwrite the archived file on Unix and silently lose its
+	// original entries. Merge before removing the warm copy instead.
+	if info, err := os.Lstat(dst); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("memory: archived daily %s is not a regular file", name)
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return fmt.Errorf("memory: read daily %s: %w", name, err)
+		}
+		f, err := os.OpenFile(dst, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			return fmt.Errorf("memory: open archived daily %s: %w", name, err)
+		}
+		_, writeErr := f.Write(data)
+		closeErr := f.Close()
+		if writeErr != nil {
+			return fmt.Errorf("memory: merge archived daily %s: %w", name, writeErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("memory: close archived daily %s: %w", name, closeErr)
+		}
+		if err := os.Remove(src); err != nil {
+			return fmt.Errorf("memory: remove merged daily %s: %w", name, err)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("memory: stat archived daily %s: %w", name, err)
+	}
+	if err := os.Rename(src, dst); err != nil {
 		return fmt.Errorf("memory: archive daily %s: %w", name, err)
 	}
 	return nil
+}
+
+// Delete removes a warm daily log by exact date, under the same store lock
+// as Append and Prune. A missing log returns os.ErrNotExist to the caller.
+func (d *Daily) Delete(name string) error {
+	if _, ok := parseDailyName(name + ".md"); !ok || name != filepath.Base(name) {
+		return fmt.Errorf("memory: invalid daily name %q", name)
+	}
+	release, err := lockRoot(d.dir)
+	if err != nil {
+		return fmt.Errorf("memory: lock daily logs: %w", err)
+	}
+	defer release()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	path := filepath.Join(d.dir, name+".md")
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("memory: daily %s is not a regular file", name)
+	}
+	return os.Remove(path)
 }
 
 // parseDailyName parses a YYYY-MM-DD.md filename. The bool is false for any

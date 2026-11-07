@@ -38,6 +38,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - Este changelog es curado: algunas refactorizaciones internas y adaptadores no se listan aquí.
 - Este archivo en inglés es el canónico. Las traducciones zh-CN / ja / es / de lo replican y pueden retrasarse brevemente alrededor de un lanzamiento.
 
+## [Unreleased]
+
+### Fixed
+
+- **El instalador de Windows deja de colgarse cuando GitHub se atasca** — cada descarga está acotada: curl aplica un suelo de 1 KB/s durante 60 s y un límite de 300 s al archivo (45 s a la API), y el respaldo .NET tiene un tiempo de espera de lectura que cubre también el cuerpo de la respuesta. curl ya no reintenta los timeouts: cada reintento reiniciaba el cronómetro y repetía la transferencia completa hasta tres veces más. Una conexión que se abre y no entrega bytes termina ahora con la causa mapeada de curl en lugar de quedarse en `Installing …` para siempre. El script también entrega a curl el proxy del sistema de «Opciones de Internet», respeta su lista de exclusiones `ProxyOverride` (incluido el loopback) para que los espejos locales sigan siendo directos y delega en .NET las configuraciones que solo usan PAC.
+
 ## [0.1.4] - 2026-11-03 — "Constellation"
 
 ### Añadido

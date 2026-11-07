@@ -12,6 +12,14 @@
 ![Memory](https://img.shields.io/badge/%E5%86%85%E5%AD%98%E5%B8%B8%E9%A9%BB-~40MB%20RSS-brightgreen)
 ![无厂商中转](https://img.shields.io/badge/%E5%8E%82%E5%95%86%E4%B8%AD%E8%BD%AC-%E6%97%A0-success)
 
+## 实机演示
+
+![OpenPanda 本机源码构建的终端实录](site/media/openpanda-demo.gif)
+
+[完整 81 秒录屏（MP4，626 KB）](site/media/openpanda-demo.mp4) · [控制台截图](site/media/console-task.webp) · [终端静帧](site/media/terminal-ask.webp)
+
+2026-11-06 在一台 macOS arm64 机器上录制，运行的是从源码构建的 v0.1.4。片段依次执行 `panda version`、`panda doctor`、`panda queue`，随后用 `panda ask -authorize` 要求在本机运行 `uptime` 并回报负载，最后在 `panda queue` 里看到任务完成。任务 `01a1b154-c86c-7600-a83d-f7d11ffbb26e` 由 opencode 适配器执行，43 秒落地；画面里的负载数字来自那台机器上的真实 shell 调用。
+
 ***
 
 ## 简介

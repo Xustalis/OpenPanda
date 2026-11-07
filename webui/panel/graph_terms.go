@@ -65,6 +65,15 @@ type termHit struct {
 // the provenance layer. Output is deterministic: sorted by count desc, term
 // asc, capped at cap.
 func extractTerms(docs []graphText, exclude map[string]bool, cap int) []termHit {
+	return extractTermsWithCancel(docs, exclude, cap, nil)
+}
+
+// extractTermsWithCancel is extractTerms with a cooperative cancellation
+// hook. `cancelled` is checked once per document, so a client that walked
+// away stops the O(n²) n-gram scan instead of paying for the whole payload.
+// A nil result means the caller abandoned the request; it is not an empty
+// memory store.
+func extractTermsWithCancel(docs []graphText, exclude map[string]bool, cap int, cancelled func() bool) []termHit {
 	counts := map[string]int{}
 	perDoc := map[string]map[string]int{}
 	prevs := map[string]map[rune]bool{}
@@ -90,6 +99,9 @@ func extractTerms(docs []graphText, exclude map[string]bool, cap int) []termHit 
 	}
 
 	for _, d := range docs {
+		if cancelled != nil && cancelled() {
+			return nil
+		}
 		for _, run := range hanRuns(d.content) {
 			rs := []rune(run)
 			for i := 0; i < len(rs); i++ {

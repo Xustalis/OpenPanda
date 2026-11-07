@@ -165,6 +165,33 @@ def main():
     prompt, timeout, cwd = harness.read_request()
 
     if os.environ.get("OPENPANDA_INJECTED_MODEL") != "1":
+        if model := harness.selected_model(os.environ.get("ZCODE_MODEL", "")):
+            # zcode has no --model flag. Copy its personal config and only
+            # change the selection; native providers/auth remain untouched.
+            source = os.environ.get(CONFIG_ENV) or os.path.expanduser("~/.zcode/v2/provider_config.json")
+            try:
+                doc = {}
+                if os.path.exists(source):
+                    with open(source, encoding="utf-8") as fh:
+                        doc = json.load(fh)
+                config = doc.setdefault("config", {})
+                provider, sep, model_id = model.partition("/")
+                if not sep:
+                    provider = config.get("defaultModelSelection", {}).get("providerId", "")
+                    model_id = model
+                if not provider:
+                    raise ValueError("native model requires provider/model or an existing provider selection")
+                config["defaultModelSelection"] = {"providerId": provider, "modelId": model_id}
+                root = tempfile.mkdtemp(prefix="panda-zcode-native-")
+                harness.at_cleanup(shutil.rmtree, root, True)
+                path = os.path.join(root, "provider_config.json")
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(doc, fh, ensure_ascii=False)
+                os.environ[CONFIG_ENV] = path
+            except (OSError, ValueError) as ex:
+                harness.emit(False, "cannot select zcode native model: %s" % ex, 2)
+                return
         harness.run_simple(["zcode", "--prompt", prompt],
                            cwd=cwd, timeout=timeout)
         return

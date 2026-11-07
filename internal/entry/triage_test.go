@@ -37,6 +37,8 @@ func TestFastTriage(t *testing.T) {
 		{prompt: "/model list", wantFast: false, wantReason: "command prefix"},
 		{prompt: "!git status", wantFast: false, wantReason: "command prefix"},
 		{prompt: "修改 main.go 添加日志", wantFast: false, wantReason: "file reference"},
+		{prompt: "请记住我喜欢蓝色，好吗？", wantFast: false, wantReason: "action intent"},
+		{prompt: "Remember that I prefer dark mode?", wantFast: false, wantReason: "action intent"},
 
 		// Time/weather/date queries need the built-in tools, which the fast
 		// path deliberately does not attach — they must fall back.

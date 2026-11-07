@@ -260,9 +260,9 @@ func TestPutProjectMemory(t *testing.T) {
 	}
 
 	// The configured project cap applies.
-	big := `{"content":"` + strings.Repeat("p", 100) + `"}`
+	version := memory.Version(memory.ParseMem(data).Bytes())
 	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, authedReq(http.MethodPut, "/api/projects/demo/memory", strings.NewReader(big)))
+	h.ServeHTTP(rr, authedReq(http.MethodPut, "/api/projects/demo/memory", memoryBody(t, strings.Repeat("p", 100), version)))
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("over-limit project memory status = %d, want 400", rr.Code)
 	}
@@ -332,5 +332,193 @@ func TestReadFileCappedRuneBoundary(t *testing.T) {
 	}
 	if !strings.Contains(got, "已截断") {
 		t.Fatalf("truncation marker missing")
+	}
+}
+
+func memoryBody(t *testing.T, content, version string) *strings.Reader {
+	t.Helper()
+	b, err := json.Marshal(map[string]string{"content": content, "version": version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.NewReader(string(b))
+}
+
+func TestMemoryEditsRejectStaleVersions(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	_, snapshot := doJSON(t, h, authedReq(http.MethodGet, "/api/memory", nil))
+	versions := snapshot["versions"].(map[string]any)
+	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
+	if err := hermes.UpdateUser(func(m *memory.MemFile) error { return m.Add("another writer") }); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := doJSON(t, h, authedReq(http.MethodPut, "/api/memory/user", memoryBody(t, "old draft", versions["user"].(string))))
+	if code != http.StatusConflict {
+		t.Errorf("stale user edit: %d, want 409", code)
+	}
+	if m, err := hermes.LoadUser(); err != nil || len(m.Entries) != 1 || m.Entries[0] != "another writer" {
+		t.Errorf("user data lost: %+v, %v", m, err)
+	}
+
+	if code, _ := doJSON(t, h, authedReq(http.MethodPut, "/api/memory/topics/work", memoryBody(t, "initial", ""))); code != http.StatusOK {
+		t.Fatalf("create topic: %d", code)
+	}
+	_, snapshot = doJSON(t, h, authedReq(http.MethodGet, "/api/memory", nil))
+	topicVersion := snapshot["topics"].([]any)[0].(map[string]any)["version"].(string)
+	if err := hermes.UpdateTopic("work", func(m *memory.MemFile) error { return m.Add("new topic fact") }); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = doJSON(t, h, authedReq(http.MethodPut, "/api/memory/topics/work", memoryBody(t, "stale", topicVersion)))
+	if code != http.StatusConflict {
+		t.Errorf("stale topic edit: %d, want 409", code)
+	}
+
+	_, project := doJSON(t, h, authedReq(http.MethodGet, "/api/projects/work/memory", nil))
+	projects := memory.NewProjects(cfg.Storage.ProjectsPath)
+	if err := projects.Update("work", func(m *memory.MemFile) error { return m.Add("new project fact") }); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = doJSON(t, h, authedReq(http.MethodPut, "/api/projects/work/memory", memoryBody(t, "stale", project["version"].(string))))
+	if code != http.StatusConflict {
+		t.Errorf("stale project edit: %d, want 409", code)
+	}
+}
+
+func TestDreamsEditIncludesBeyond64KiBAndRejectsConcurrentAppend(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	large := strings.Repeat("log line\n", 10000)
+	if code, _ := doJSON(t, h, authedReq(http.MethodPut, "/api/memory/dreams", memoryBody(t, large, ""))); code != http.StatusOK {
+		t.Fatalf("save large diary: %d", code)
+	}
+	_, snapshot := doJSON(t, h, authedReq(http.MethodGet, "/api/memory", nil))
+	if snapshot["dreams"] != large || snapshot["dreams_truncated"] != false {
+		t.Fatal("diary was truncated before the edit cap")
+	}
+	version := snapshot["versions"].(map[string]any)["dreams"].(string)
+	diary := memory.NewDreamDiary(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"))
+	if err := diary.Append(memory.Report{}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := doJSON(t, h, authedReq(http.MethodPut, "/api/memory/dreams", memoryBody(t, large+"edit", version)))
+	if code != http.StatusConflict {
+		t.Errorf("stale diary edit: %d, want 409", code)
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"))
+	if err != nil || !strings.Contains(string(data), "Promoted to long-term") {
+		t.Errorf("append was lost: %v", err)
+	}
+}
+
+func TestEmptyTopicCreationAndUnversionedOverwriteProtection(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	// The create UI submits an empty topic; it must become a visible file.
+	put := func(path, content, version string) int {
+		t.Helper()
+		code, _ := doJSON(t, h, authedReq(http.MethodPut, path, memoryBody(t, content, version)))
+		return code
+	}
+	if code := put("/api/memory/topics/empty", "", ""); code != http.StatusOK {
+		t.Fatalf("create empty topic: %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Storage.MemoryPath, "topics", "empty.md")); err != nil {
+		t.Fatalf("empty topic not created: %v", err)
+	}
+	_, snapshot := doJSON(t, h, authedReq(http.MethodGet, "/api/memory", nil))
+	if topics := snapshot["topics"].([]any); len(topics) != 1 {
+		t.Fatalf("empty topic not listed: %v", topics)
+	}
+	if code := put("/api/memory/topics/empty", "first entry", ""); code != http.StatusOK {
+		t.Fatalf("first write to empty topic: %d", code)
+	}
+	if code := put("/api/memory/topics/empty", "stale rewrite", ""); code != http.StatusConflict {
+		t.Errorf("unversioned topic overwrite: %d, want 409", code)
+	}
+	if code := put("/api/memory/user", "user likes tea", ""); code != http.StatusOK {
+		t.Fatalf("first user write: %d", code)
+	}
+	if code := put("/api/memory/user", "forget tea", ""); code != http.StatusConflict {
+		t.Errorf("unversioned user overwrite: %d, want 409", code)
+	}
+	if code := put("/api/projects/work/memory", "project fact", ""); code != http.StatusOK {
+		t.Fatalf("first project write: %d", code)
+	}
+	if code := put("/api/projects/work/memory", "stale project", ""); code != http.StatusConflict {
+		t.Errorf("unversioned project overwrite: %d, want 409", code)
+	}
+	if code := put("/api/memory/dreams", "## 2026-01-01\n", ""); code != http.StatusOK {
+		t.Fatalf("first diary write: %d", code)
+	}
+	if code := put("/api/memory/dreams", "erase diary", ""); code != http.StatusConflict {
+		t.Errorf("unversioned diary overwrite: %d, want 409", code)
+	}
+}
+
+func TestDreamsPreviewHashesFullFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "DREAMS.md")
+	data := []byte(strings.Repeat("2026-01-01\n", 200000) + "recent section")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preview := readDreams(path)
+	if !preview.Truncated || len(preview.Content) > maxDreamsEdit || !utf8.ValidString(preview.Content) {
+		t.Fatalf("preview not bounded/valid: %d bytes, truncated=%t", len(preview.Content), preview.Truncated)
+	}
+	if preview.Version != memory.Version(data) {
+		t.Fatal("preview version omitted the unshown tail")
+	}
+}
+
+func TestEditableMemoryDoesNotTruncateAtPreviewLimit(t *testing.T) {
+	_, cfg := newMemoryPanel(t)
+	cfg.Memory.Limits.User = 100000
+	original := strings.Repeat("记", maxMemoryView/len("记")+1) // beyond 64 KiB, under configured cap
+	h := New(Deps{Store: newTestStore(t), Cfg: cfg, StaticDir: t.TempDir(), Token: testToken})
+	if code, _ := doJSON(t, h, authedReq(http.MethodPut, "/api/memory/user", memoryBody(t, original, ""))); code != http.StatusOK {
+		t.Fatalf("first large write: %d", code)
+	}
+	_, snapshot := doJSON(t, h, authedReq(http.MethodGet, "/api/memory", nil))
+	if snapshot["user"] != original {
+		t.Fatal("editable USER.md truncated before configured cap")
+	}
+	version := snapshot["versions"].(map[string]any)["user"].(string)
+	if code, _ := doJSON(t, h, authedReq(http.MethodPut, "/api/memory/user", memoryBody(t, original+"后", version))); code != http.StatusOK {
+		t.Fatalf("safe edit of >64 KiB memory: %d", code)
+	}
+}
+
+func TestListDailyIgnoresSymlinkedFiles(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secret, []byte("external secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, "2026-08-13.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if files, err := listDaily(dir); err != nil || len(files) != 0 {
+		t.Fatalf("daily preview followed a symlink: %+v", files)
+	}
+}
+
+func TestDailyReadErrorsAreNotEmptyMemory(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	before := httptest.NewRecorder()
+	h.ServeHTTP(before, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if before.Code != http.StatusOK {
+		t.Fatalf("baseline graph status: %d", before.Code)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "daily"), []byte("broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/memory", "/api/memory/graph"} {
+		rr := httptest.NewRecorder()
+		req := authedReq(http.MethodGet, path, nil)
+		if path == "/api/memory/graph" {
+			req.Header.Set("If-None-Match", before.Header().Get("ETag"))
+		}
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusInternalServerError {
+			t.Errorf("%s status = %d, want read error, not empty memory", path, rr.Code)
+		}
 	}
 }

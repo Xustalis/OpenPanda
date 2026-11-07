@@ -18,6 +18,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
@@ -26,6 +27,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/scout"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 )
 
@@ -165,7 +167,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 	}()
 
-	plan, router, breakerKey, err := c.resolveRunPlan(ctx, taskID, required)
+	c.refreshModel(ctx)
+	router, model, supervisor := c.executionSnapshot()
+	plan, router, breakerKey, err := c.resolveRunPlanWithRouter(ctx, taskID, required, router)
 	if err != nil {
 		return bus.TaskResultPayload{}, err
 	}
@@ -174,6 +178,9 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		return bus.TaskResultPayload{}, err
 	}
 	claimed = true
+	if task.SpawnDepth > 0 {
+		ctx = commander.WithSubagent(ctx)
+	}
 	// Bind the attempt at claim time — before any fallible step — so the
 	// stranded-run cleanup above and every verdict write below stay scoped
 	// to exactly the dispensation this run owns.
@@ -252,6 +259,17 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		}
 	}
 
+	// Persist both positive and negative decisions. The old injection notice
+	// only explained overrides, leaving native/self-contained/never opaque.
+	// Endpoint is intentionally omitted: URLs can carry query credentials.
+	if plan.Kind == "agent" {
+		_ = c.store.RecordEvent(ctx, taskID, "model_injection_decision", map[string]any{
+			"attempt_id": attemptID, "agent": plan.Agent, "adapter": plan.Adapter,
+			"inject": injection.Inject, "reason": security.Redact(injection.Reason),
+			"model": injection.Model, "kind": injection.Kind,
+		})
+	}
+
 	prep, err := c.prepareRunDir(execCtx, ctx, task, taskID, plan)
 	if err != nil {
 		return bus.TaskResultPayload{}, err
@@ -270,7 +288,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	}
 	var execCleanup func()
 	evidence := newExecEvidence()
-	execCtx, execCleanup = c.decorateExecCtx(execCtx, ctx, taskID, task, plan, evidence)
+	execCtx, execCleanup = c.decorateExecCtx(execCtx, ctx, taskID, task, plan, evidence, supervisor != nil)
 	defer execCleanup()
 
 	// Delivery contract (P0): run the declared acceptance checks before the
@@ -290,6 +308,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	work := &runWork{
 		c: c, taskID: taskID, intent: intent, required: required,
 		task: task, plan: plan, router: router, breakerKey: breakerKey, injection: injection,
+		model: model, supervisor: supervisor,
 		execCtx: execCtx, attemptID: attemptID,
 		workDir: prep.workDir, oscKey: prep.oscKey, scope: prep.scope,
 		before: prep.before, beforeOK: prep.beforeOK,
@@ -436,7 +455,10 @@ func rosterIncludes(roster []string, name string) bool {
 // failover/alternate pruning those gates imply. It is run()'s first phase —
 // everything that can still be decided without touching the store.
 func (c *Core) resolveRunPlan(ctx context.Context, taskID string, required []string) (commander.Plan, *commander.Router, string, error) {
-	router := c.currentRouter()
+	return c.resolveRunPlanWithRouter(ctx, taskID, required, c.currentRouter())
+}
+
+func (c *Core) resolveRunPlanWithRouter(ctx context.Context, taskID string, required []string, router *commander.Router) (commander.Plan, *commander.Router, string, error) {
 	if router == nil {
 		// No capability card loaded: nothing to execute.
 		return commander.Plan{}, nil, "", fmt.Errorf("no commander configured")
@@ -1005,7 +1027,7 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 // pool, and the per-task timeout/tools/turn overrides. It returns the
 // decorated context and the pool's cleanup (a no-op when no pool was made)
 // so the caller can hold them for the run's lifetime.
-func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task Task, plan commander.Plan, evidence *execEvidence) (context.Context, func()) {
+func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task Task, plan commander.Plan, evidence *execEvidence, supervised bool) (context.Context, func()) {
 	cleanup := func() {}
 	// Live progress (A5) is per-task, not per-round: the throttled progress
 	// sink is built once and reused across supervision rounds. It decorates
@@ -1144,7 +1166,7 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 		// costs one stdin line instead of a spawn + transcript reload. The
 		// pool dies with the task; adapters that never take a session simply
 		// never populate it.
-		if c.supervisor != nil {
+		if supervised {
 			var pool *commander.AgentSessions
 			execCtx, pool = commander.WithSessionPool(execCtx)
 			cleanup = pool.CloseAll
@@ -1246,6 +1268,8 @@ type runWork struct {
 	task            Task
 	plan            commander.Plan
 	router          *commander.Router
+	model           config.ModelConfig
+	supervisor      *entry.Client
 	breakerKey      string
 	injection       commander.InjectionDecision
 	execCtx         context.Context
@@ -1281,6 +1305,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	required := w.required
 	plan := &w.plan
 	router := w.router
+	model := w.model
+	supervisor := w.supervisor
 	breakerKey := w.breakerKey
 	injection := w.injection
 	execCtx := w.execCtx
@@ -1305,7 +1331,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	// the round budget runs out. Every non-agent plan — and every agent plan
 	// without a supervisor — converges in a single round.
 	maxRounds := 1
-	if plan.Kind == "agent" && c.supervisor != nil {
+	if plan.Kind == "agent" && supervisor != nil {
 		maxRounds = c.superviseRounds
 	}
 
@@ -1532,10 +1558,10 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			activeModel = plan.Agent
 		}
 		if activeModel == "" {
-			activeModel = c.model.Model
+			activeModel = model.Model
 		}
 		if activeModel == "" {
-			activeModel = c.model.Provider
+			activeModel = model.Provider
 		}
 
 		geo := providers.DetectRegion(activeModel)
@@ -1715,7 +1741,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				// overflowed; leaving it would resume the same transcript on
 				// the next interruption and fail identically.
 				_ = c.store.SetAgentSession(context.WithoutCancel(execCtx), taskID, "", "", "")
-				intentNotes = c.compactRunNotes(execCtx, intentNotes)
+				intentNotes = c.compactRunNotesWithSupervisor(execCtx, intentNotes, supervisor)
 				prompt = assemblePrompt(overflowPromptBudget)
 				continue
 			}
@@ -1972,7 +1998,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// minus the token gate (an exhausted round parks on "review" instead).
 		// Gated: an authorization refusal parks before agent execution; emitting
 		// a failed supervision round would falsely mark that a judge round took place.
-		judgeWillRun := plan.Kind == "agent" && c.supervisor != nil && res.OK && !tokenExhausted
+		judgeWillRun := plan.Kind == "agent" && supervisor != nil && res.OK && !tokenExhausted
 		if !judgeWillRun && !commander.IsAuthorizationRefusal(res.Stderr) {
 			status := string(verdict.Status)
 			if !res.OK {
@@ -2073,7 +2099,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					}
 				}
 				if injection.BaseURL == "" {
-					injection.BaseURL = commander.EffectiveBaseURL(c.model)
+					injection.BaseURL = commander.EffectiveBaseURL(model)
 				}
 				if rescued || injection.Reason == "" {
 					injection.Reason = "credential rescue: the agent's own model failed, panda's model was injected for the retry"
@@ -2315,7 +2341,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		}
 
 		// Supervision applies only to agent tasks under a configured supervisor.
-		if plan.Kind != "agent" || c.supervisor == nil {
+		if plan.Kind != "agent" || supervisor == nil {
 			break
 		}
 		if tokenExhausted {
@@ -2325,7 +2351,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			verdict.Reason = "token budget exhausted"
 			break
 		}
-		usageBefore := c.supervisor.Usage()
+		usageBefore := supervisor.Usage()
 		// — Trace: judge_start. The reviewing stage's on-screen duration runs
 		// until the next event lands, so the judge call needs its own opening
 		// marker — otherwise its runtime is billed to the executing stage.
@@ -2378,8 +2404,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// scoped to. Using ctx here meant a dropped peer link aborted the judge
 		// mid-call, parking work for review that a live judge would have
 		// accepted (or rejected with a real verdict).
-		v, serr := entry.Supervise(execCtx, c.supervisor, fullIntent(), judgeResult)
-		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, c.supervisor, usageBefore,
+		v, serr := entry.Supervise(execCtx, supervisor, fullIntent(), judgeResult)
+		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, supervisor, usageBefore,
 			v.Status == entry.VerdictDone, time.Since(judgeStart))
 		if serr != nil {
 			// Supervisor unreachable: Supervise parks the result for review rather
@@ -2597,7 +2623,8 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	// review with the latest result and a marker so a human sees what was done
 	// and what remains, rather than looping indefinitely or silently accepting
 	// unverified work.
-	if plan.Kind == "agent" && c.supervisor != nil &&
+	// Honor the attempt's verdict even if its model was cleared meanwhile.
+	if plan.Kind == "agent" &&
 		(verdict.Status == entry.VerdictContinue || verdict.Status == entry.VerdictReview) {
 		wCtx, cancel := c.storeWriteCtx(ctx)
 		defer cancel()

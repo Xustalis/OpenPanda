@@ -10452,3 +10452,20 @@ main .pipeline-chip {
 .model-tile:focus-within .model-tile-flag {
   opacity: 0;
 }
+
+/* Execution policy follows the existing settings sheet's spacing and tokens. */
+.execution-agent-grid,
+.execution-limits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 16px;
+}
+.execution-agent {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.execution-agent legend { padding: 0 4px; }
+.execution-field { display: grid; gap: 6px; margin-bottom: 12px; font-size: .85rem; }

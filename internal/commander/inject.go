@@ -197,7 +197,7 @@ func (r *Router) InjectionDecision(name, adapter string) InjectionDecision {
 // injected: the historical "empty means DeepSeek" fallbacks would aim the
 // author's vendor choice at a user who never picked one.
 func modelConfigured(model config.ModelConfig) bool {
-	return strings.TrimSpace(model.Provider) != "" || strings.TrimSpace(model.BaseURL) != ""
+	return model.Configured()
 }
 
 // supportsModelInjection is registry-driven: an agent is injectable when its

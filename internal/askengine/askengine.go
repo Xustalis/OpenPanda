@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/configsync"
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
@@ -126,10 +128,13 @@ type Options struct {
 // Engine is the long-lived unified entry engine. It is safe for concurrent
 // Ask calls (the entry client and registry are; the scheduler core is).
 type Engine struct {
-	cfg      *config.Config
-	db       *sql.DB
-	client   atomic.Pointer[entry.Client]
-	injector *memory.Injector
+	modelSyncCancel context.CancelFunc
+	modelWatcher    *configsync.Watcher  // schedMu; optional persisted config observer
+	appliedRuntime  config.RuntimeConfig // cfgMu; last published client/router, not a pending cfg edit
+	cfg             *config.Config
+	db              *sql.DB
+	client          atomic.Pointer[entry.Client]
+	injector        *memory.Injector
 
 	// registry is swapped whole by SetMCPCommand; regMu guards the swap and
 	// gives in-flight Asks a stable registry reference.
@@ -457,34 +462,55 @@ func (e *Engine) buildFallbacks(primary config.ModelConfig, db *sql.DB) []*entry
 // user just deleted. Config, engine and UI would disagree in the worst way: the
 // page says nothing is configured while turns keep reaching the old endpoint.
 func (e *Engine) ClearModel() {
-	e.client.Store(nil)
-	e.cfgMu.Lock()
-	if e.cfg != nil {
-		e.cfg.Model = config.ModelConfig{}
-	}
-	e.fallbacksMu.Lock()
-	e.fallbacks = nil
-	e.fallbacksMu.Unlock()
-	e.cfgMu.Unlock()
+	cfg := e.RuntimeConfig()
+	cfg.Model = config.ModelConfig{}
+	_ = e.ApplyRuntimeConfig(cfg)
 }
 
-// SetModel hot-swaps the entry model client at runtime (the settings page):
-// a failed build leaves the previous client serving.
+// SetModel changes only the shared default, preserving explicit agent policy.
 func (e *Engine) SetModel(mc config.ModelConfig) error {
-	c, err := entry.NewClient(mc)
-	if err != nil {
-		return err
+	cfg := e.RuntimeConfig()
+	cfg.Model = mc
+	return e.ApplyRuntimeConfig(cfg)
+}
+
+func (e *Engine) RuntimeConfig() config.RuntimeConfig {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	return e.appliedRuntime
+}
+
+// ApplyRuntimeConfig updates the entry client and scheduler from one validated
+// file revision. schedMu -> cfgMu is also scheduler initialization's lock order.
+func (e *Engine) ApplyRuntimeConfig(cfg config.RuntimeConfig) error {
+	var client *entry.Client
+	var err error
+	if cfg.Model.Configured() {
+		client, err = entry.NewClient(cfg.Model)
+		if err != nil {
+			return err
+		}
+		client.SetDiskCache(entry.NewDiskCache(e.db))
 	}
-	c.SetDiskCache(entry.NewDiskCache(e.db))
-	e.client.Store(c)
-	// cfgMu covers both writes: the cfg.Model field the REPL's r.cfg aliases,
-	// and the Models registry buildFallbacks reads for fallbacks.
+	e.schedMu.Lock()
+	defer e.schedMu.Unlock()
+	if sched := e.sched.Load(); sched != nil {
+		if err := sched.ApplyRuntimeConfig(cfg); err != nil {
+			return err
+		}
+	}
 	e.cfgMu.Lock()
-	e.cfg.Model = mc
+	defer e.cfgMu.Unlock()
+	e.client.Store(client)
+	e.cfg.Model, e.cfg.Injection, e.cfg.Routing, e.cfg.Delegation = cfg.Model, cfg.Injection, cfg.Routing, cfg.Delegation
+	e.appliedRuntime = cfg
 	e.fallbacksMu.Lock()
-	e.fallbacks = e.buildFallbacks(mc, e.db)
+	if client == nil {
+		e.fallbacks = nil
+	} else {
+		e.fallbacks = e.buildFallbacks(cfg.Model, e.db)
+	}
 	e.fallbacksMu.Unlock()
-	e.cfgMu.Unlock()
 	return nil
 }
 
@@ -1103,6 +1129,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 
 	e := &Engine{
 		cfg:            cfg,
+		appliedRuntime: cfg.RuntimeConfig(),
 		db:             db,
 		injector:       injector,
 		hermes:         hermes,
@@ -1179,6 +1206,22 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		}
 	}
 
+	// Observe writes made by another CLI/panel/daemon process. This duty has
+	// its own lifetime even when scheduler initialization was deferred.
+	// A caller may supply an entirely in-memory config (tests/embedders).
+	// Never import a different node's default config into that engine.
+	if persisted, err := config.Load(e.configPath); err == nil && filepath.Clean(persisted.Storage.DBPath) == filepath.Clean(cfg.Storage.DBPath) {
+		syncCtx, syncCancel := context.WithCancel(ctx)
+		e.modelSyncCancel = syncCancel
+		watcher := configsync.NewRuntime(e.db, e.configPath, "engine", e.RuntimeConfig, e.ApplyRuntimeConfig)
+		e.schedMu.Lock()
+		e.modelWatcher = watcher
+		if sched := e.sched.Load(); sched != nil {
+			sched.SetModelRefresh(watcher.Sync)
+		}
+		e.schedMu.Unlock()
+		e.goBG("askengine: model config sync", func() { watcher.Run(syncCtx) })
+	}
 	return e, nil
 }
 
@@ -1363,6 +1406,9 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	schedCtx, cancel := context.WithCancel(context.Background())
 	e.schedCtx = schedCtx
 	e.schedCancel = cancel
+	if e.modelWatcher != nil {
+		sched.SetModelRefresh(e.modelWatcher.Sync)
+	}
 	e.sched.Store(sched) // store last: a non-nil load implies ctx/cancel set
 
 	// ownCtx scopes the duties only a node-row owner may run — the mesh
@@ -1796,11 +1842,30 @@ func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Resul
 // takes effect without a restart. A no-op on an engine with no card, which has no
 // router to configure.
 func (e *Engine) SetRouterPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
-	sched := e.sched.Load()
-	if sched == nil {
-		return
+	e.schedMu.Lock()
+	defer e.schedMu.Unlock()
+	if sched := e.sched.Load(); sched != nil {
+		sched.SetRouterPolicy(injection, routing)
 	}
-	sched.SetRouterPolicy(injection, routing)
+	e.cfgMu.Lock()
+	defer e.cfgMu.Unlock()
+	e.cfg.Injection, e.cfg.Routing = injection, routing
+	e.appliedRuntime.Injection, e.appliedRuntime.Routing = injection, routing
+}
+
+// SetAgentExecutionPolicy refreshes model selections and all child limits
+// without rebuilding the entry client or changing credentials.
+func (e *Engine) SetAgentExecutionPolicy(routing config.RoutingConfig, delegation config.DelegationConfig) {
+	e.schedMu.Lock()
+	defer e.schedMu.Unlock()
+	if sched := e.sched.Load(); sched != nil {
+		sched.SetRouterPolicy(e.RuntimeConfig().Injection, routing)
+		sched.SetDelegationLimits(delegation)
+	}
+	e.cfgMu.Lock()
+	defer e.cfgMu.Unlock()
+	e.cfg.Routing, e.cfg.Delegation = routing, delegation
+	e.appliedRuntime.Routing, e.appliedRuntime.Delegation = routing, delegation
 }
 
 // SetProject names the ambient project for the tasks this engine submits, and
@@ -1822,6 +1887,8 @@ func (e *Engine) Project() (string, string) {
 // threaded through every classified and tool-call task path instead of mutating
 // the Engine's ambient project or the scheduler Core's default directory.
 type AskScope struct {
+	// RoundID names a persisted dispatch boundary, independently of approval SessionID.
+	RoundID string
 	Project string
 	WorkDir string
 	// Mode is the slash-prefix interaction mode the user picked for this turn
@@ -2003,6 +2070,14 @@ func (t *usageTracker) final(in, out int64) {
 
 // AskTurnsScoped is the session-aware ask with request-scoped project/workspace.
 func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, prompt string, scope AskScope, authorize bool, cb StreamCallbacks) (res *Result, err error) {
+	// Close the poll interval gap: an ask immediately after a saved model
+	// change must not start with the previous credential while awaiting a tick.
+	e.schedMu.Lock()
+	watcher := e.modelWatcher
+	e.schedMu.Unlock()
+	if watcher != nil {
+		_ = watcher.Sync(ctx)
+	}
 	workDir := scope.WorkDir
 	client, fallbackUsed := e.healthyClient()
 	if client == nil {
@@ -2054,6 +2129,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// sharing provider-side state; an ask with no thread keeps the client's
 	// own id.
 	ctx = entry.WithSessionID(ctx, scope.SessionID)
+	if scope.RoundID != "" {
+		ctx = core.WithAskRound(ctx, scope.RoundID)
+	}
 
 	// The reply locale is resolved up here rather than next to the classifier
 	// options because the deferred catch-all below also speaks it: an escaped
@@ -2267,6 +2345,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// project-free conversation must refuse project-targeted calls, not fall
 	// back to whatever name the model supplied.
 	ctx = memory.WithScopeProject(ctx, scopeProj)
+	if workDir != "" {
+		ctx = memory.WithoutPersonalMemory(ctx)
+	}
 	verdict := e.approvalFor(scope.SessionID, scopeProj).withPermission(scope.PermissionMode)
 	toolAuthorized, toolDenied := verdict.gate(authorize)
 	approvalMode := verdict.mode
@@ -3839,6 +3920,9 @@ func (e *Engine) goBG(name string, fn func()) {
 }
 
 func (e *Engine) Close() {
+	if e.modelSyncCancel != nil {
+		e.modelSyncCancel()
+	}
 	e.schedMu.Lock()
 	cancel := e.schedCancel
 	e.schedMu.Unlock()

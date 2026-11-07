@@ -1,0 +1,260 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title data-i18n-content="meta.sc.title">安全与信任 — OpenPanda</title>
+<meta name="description" data-i18n-content="meta.sc.desc" content="OpenPanda 的信任模型、逐连接 AEAD、签名审计链、发布验签、部署红线与漏洞上报方式。" />
+<meta name="author" content="Xustalis" />
+<link rel="canonical" href="https://xustalis.github.io/OpenPanda/security.html" />
+<!-- One canonical Chinese document per page. English is a client-side swap
+     from js/i18n.js; there is deliberately no hreflang or alternate locale. -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="OpenPanda" />
+<meta property="og:locale" content="zh_CN" />
+<meta property="og:url" content="https://xustalis.github.io/OpenPanda/security.html" />
+<meta property="og:title" data-i18n-content="meta.sc.title" content="安全与信任 — OpenPanda" />
+<meta property="og:description" data-i18n-content="meta.sc.desc" content="OpenPanda 的信任模型、逐连接 AEAD、签名审计链、发布验签、部署红线与漏洞上报方式。" />
+<meta property="og:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" data-i18n-content="meta.sc.title" content="安全与信任 — OpenPanda" />
+<meta name="twitter:description" data-i18n-content="meta.sc.desc" content="OpenPanda 的信任模型、逐连接 AEAD、签名审计链、发布验签、部署红线与漏洞上报方式。" />
+<meta name="twitter:image" content="https://xustalis.github.io/OpenPanda/og-cover.jpg" />
+<meta name="theme-color" content="#faf9f5" />
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="stylesheet" href="css/site.css" />
+<!-- Language bootstrap. Runs before the body parses so <html lang>, the toggle
+     state and the "hold the paint" guard are right on the first frame; the
+     dictionary itself is applied by js/i18n.js once the module loads. Order of
+     preference: ?lang= → saved choice → browser language (zh* → 中文, else EN). -->
+<script>
+(function () {
+  var KEY = 'openpanda.site.lang'
+  var q = new URLSearchParams(location.search).get('lang')
+  var lang = q === 'en' || q === 'zh' ? q : null
+  if (!lang) { try { var s = localStorage.getItem(KEY); if (s === 'en' || s === 'zh') lang = s } catch (e) {} }
+  if (!lang) lang = /^zh/i.test(navigator.language || '') ? 'zh' : 'en'
+  var root = document.documentElement
+  root.setAttribute('data-lang', lang)
+  root.setAttribute('lang', lang === 'zh' ? 'zh-CN' : 'en')
+  // English copy lives in the dictionary, not the markup: hide the Chinese
+  // paint for the few milliseconds until i18n.js swaps it in. The timer is the
+  // guard — a broken module must never leave a blank page.
+  if (lang === 'en') {
+    root.classList.add('lang-pending')
+    setTimeout(function () { root.classList.remove('lang-pending') }, 1200)
+  }
+})()
+</script>
+<noscript><style>html.lang-pending body { opacity: 1 !important; }</style></noscript>
+<script>document.documentElement.classList.add('js')</script>
+</head>
+<body class="subpage">
+<a class="skip-link" href="#main" data-i18n="skip">跳到正文</a>
+
+<nav class="site-nav solid" id="site-nav" aria-label="主导航" data-i18n-aria="nav.primary">
+  <a class="brand" href="index.html" aria-label="OpenPanda">
+    <svg class="brand-mark" width="27" height="27" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
+    <span>Open<b>Panda</b></span>
+  </a>
+  <!-- Site-level navigation, shared verbatim by every page. The eleven
+       chapters remain reachable through the hero index and ⌘K on this page;
+       a site is not one long scroll. -->
+  <div class="nav-links">
+    <a href="index.html" data-i18n="nav.overview">概览</a>
+    <a href="features.html" data-i18n="nav.features">能力</a>
+    <a href="docs.html" data-i18n="nav.docs">文档</a>
+    <a href="download.html" data-i18n="nav.download">下载</a>
+    <a href="changelog.html" data-i18n="nav.changelog">更新日志</a>
+    <a href="status.html" data-i18n="nav.status">项目现状</a>
+    <a href="faq.html" data-i18n="nav.faq">常见问题</a>
+  </div>
+  <div class="nav-actions">
+    <button class="lang-toggle" type="button" data-lang-toggle aria-label="切换语言" data-i18n-aria="lang.switch" title="中文 / English">
+      <span class="lang-zh" lang="zh-CN">中文</span><span class="lang-sep" aria-hidden="true">/</span><span class="lang-en" lang="en">EN</span>
+    </button>
+    <a class="nav-gh" href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span>GitHub</span>
+      <span class="nav-stars" id="gh-stars" hidden></span>
+    </a>
+  </div>
+</nav>
+<main id="main" tabindex="-1">
+  <header class="pg-hero">
+    <div class="wrap">
+      <p class="mono-label pg-kicker">SECURITY & TRUST</p>
+      <h1 class="pg-title" data-i18n="sc.h1">安全与信任</h1>
+      <p class="pg-lede" data-i18n="sc.lede">信任模型、部署红线、完整性校验与漏洞上报渠道。先把边界看清，再把节点接进网络。</p>
+      <p class="pg-meta">CURRENT v0.1.4 · SECURITY.MD · 5 LANGUAGES</p>
+    </div>
+  </header>
+  <div class="wrap pg-layout">
+      <aside class="pg-toc">
+        <p class="mono-label" data-i18n="pg.toc.on">ON THIS PAGE</p>
+        <nav aria-label="本页目录" data-i18n-aria="pg.toc.aria">
+        <a href="#summary" data-i18n="toc.summary">先读这一段</a>
+        <a href="#model" data-i18n="toc.model">信任模型</a>
+        <a href="#audit" data-i18n="toc.audit">完整性校验</a>
+        <a href="#redlines" data-i18n="toc.redlines">部署红线</a>
+        <a href="#hooks" data-i18n="toc.hooks">生命周期 hooks</a>
+        <a href="#report" data-i18n="toc.report">漏洞上报</a>
+        <a href="#gaps" data-i18n="toc.gaps">已知边界</a>
+        </nav>
+        <div class="pg-toc-foot">
+          <span class="mono-label">STABLE</span>
+          <b>v0.1.4</b>
+          <a href="download.html" data-i18n="pg.toc.dl">下载 →</a>
+        </div>
+      </aside>
+    <div class="pg-content">
+      <section class="pg-section" id="summary">
+      <h2 data-i18n="sc.s1.t">先读这一段</h2>
+      <ul class="pg-list">
+      <li data-i18n="sc.s1.b1">缺省下每个节点视为 mesh 档，节点之间同等完全信任。任一节点失陷即全网失陷，不要把 mesh 扩展到不完全受控的机器。</li>
+      <li data-i18n="sc.s1.b2">「不可逆操作必须我审批」这条约束只在单机与可信内网成立。一旦网络里出现你不完全信任的节点，它不再成立。</li>
+      <li data-i18n="sc.s1.b3">本页是 SECURITY.md 的站点摘要，不是替代。接入生产网络前请读完整原文，它按五语发布。</li>
+      </ul>
+      </section>
+      <section class="pg-section" id="model">
+      <h2 data-i18n="sc.s2.t">信任模型</h2>
+      <p class="pg-lead" data-i18n="sc.s2.d">五条边界决定了哪些流量可以被谁伪造，以及哪些操作必须有签名。</p>
+      <div class="pg-facts">
+      <div class="pg-fact">
+      <h3 data-i18n="sc.s2.f1.t">成员凭据与身份签名</h3>
+      <p data-i18n="sc.s2.f1.d">总线成员凭据是 shared_secret（只经 OPENPANDA_SHARED_SECRET 注入）；hello 用带时间戳与 nonce 的 HMAC-SHA256 限制重放。tier-2 同意另带 Ed25519 签名，验签不过一律拒绝。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="sc.s2.f2.t">逐连接 AEAD</h3>
+      <p data-i18n="sc.s2.f2.d">两端在 hello 里宣告 sessaead 且存在共享密钥时，握手后武装 AES-256-GCM，密钥由 HKDF 绑定两端身份与 nonce，逐拨号更新。协商不出加密的链路才过明文门禁。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="sc.s2.f3.t">审计链签名</h3>
+      <p data-i18n="sc.s2.f3.d">task_events 与 audit_log 的哈希链逐行带 Ed25519 签名，验证时绑定本节点公钥；已签名链里再出现未签名行会被判为尾部剥离。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="sc.s2.f4.t">自更新验签</h3>
+      <p data-i18n="sc.s2.f4.d">每个发布为 checksums.txt 附带 detached Ed25519 签名，官方公钥内置于二进制；与压缩包同信道送达的伪造校验和会被直接拒绝。</p>
+      </div>
+      <div class="pg-fact">
+      <h3 data-i18n="sc.s2.f5.t">技能 URL 出站边界</h3>
+      <p data-i18n="sc.s2.f5.d">panda skill install &lt;url&gt; 只允许 https（环回除外），拨号时拒绝环回、私网与链路本地地址，防止节点被当成内网探测跳板。</p>
+      </div>
+      </div>
+      <p class="pg-note" data-i18n="sc.s2.note">UDP 数据报平面全程 AES-256-GCM 封装，DTN bundle v2+ 的载荷同样加密并签名。明文链路只允许出现在已由底层加密的路径上。</p>
+      </section>
+      <section class="pg-section" id="audit">
+      <h2 data-i18n="sc.s3.t">完整性校验</h2>
+      <p class="pg-lead" data-i18n="sc.s3.d">两条命令都能在本地离线跑，用来确认审计链没有被改写。</p>
+      <div class="cmd-block">
+      <div class="cmd-head"><span>panda audit verify</span><span data-i18n="sc.s3.c1.h">校验全局审计链</span></div>
+      <div class="cmd-row"><span class="prompt">$</span><code id="sc-audit-all">panda audit verify</code><button class="copy-btn" data-copy-target="sc-audit-all" data-i18n-aria="pg.copy" aria-label="复制命令"><svg class="ic-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="ic-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button></div>
+      </div>
+      <div class="cmd-block">
+      <div class="cmd-head"><span>panda audit verify --task &lt;id&gt;</span><span data-i18n="sc.s3.c2.h">校验单个任务的事件链</span></div>
+      <div class="cmd-row"><span class="prompt">$</span><code id="sc-audit-one">panda audit verify --task &lt;id&gt;</code><button class="copy-btn" data-copy-target="sc-audit-one" data-i18n-aria="pg.copy" aria-label="复制命令"><svg class="ic-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="ic-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button></div>
+      </div>
+      <p class="pg-note" data-i18n="sc.s3.note">控制台的 GET /api/audit 走同一份校验逻辑。签名缺失、签名剥离或换钥重签都会报错。</p>
+      </section>
+      <section class="pg-section" id="redlines">
+      <h2 data-i18n="sc.s4.t">部署红线</h2>
+      <p class="pg-lead" data-i18n="sc.s4.d">在补齐 per-node 密钥分发与可验签准入之前，以下五条不是建议，是前置条件。</p>
+      <ul class="pg-list">
+      <li data-i18n="sc.s4.b1">只走加密 overlay 互联。节点间经 Tailscale / WireGuard 相连，listen_addr 绑 overlay 网卡；绝不把总线端口直接暴露到公网或不可信局域网。跨公网时由反向代理终结 TLS，对端写成 wss://。</li>
+      <li data-i18n="sc.s4.b2">密钥只经环境变量注入。shared_secret 只用 OPENPANDA_SHARED_SECRET 提供，不写进 config.yaml，不进任何公共仓库；生成用 openssl rand -hex 32。</li>
+      <li data-i18n="sc.s4.b3">不给未知远端声明 tier-2 能力。capabilities.yaml 里的不可逆能力只授予你完全信任的节点。</li>
+      <li data-i18n="sc.s4.b4">面板保持回环。panel_addr 只绑 127.0.0.1；非回环绑定且未配 panel_token 时会生成一次性令牌并大声告警。不要把带 token 的自动登录 URL 粘进聊天或工单。</li>
+      <li data-i18n="sc.s4.b5">默认回环监听。总线默认只听回环；未配置 shared_secret 时监听器根本不启动，节点仅本地运行。</li>
+      </ul>
+      </section>
+      <section class="pg-section" id="hooks">
+      <h2 data-i18n="sc.s5.t">生命周期 hooks</h2>
+      <p class="pg-lead" data-i18n="sc.s5.d">hooks 是可选的本地扩展，默认关闭；打开后仍要守住执行面。</p>
+      <ul class="pg-list">
+      <li data-i18n="sc.s5.b1">子进程只继承白名单环境，不含模型凭据与对端 token；命令先过 tier 判定，被判为 tier-2 的默认拒绝，只有 hooks.allow_tier2 显式放行。</li>
+      <li data-i18n="sc.s5.b2">任务值只通过 PANDA_HOOK_* 环境变量传入，模板里的 {title} 等占位符展开为变量引用而不是字面值；Windows 以 cmd /V:ON 延迟展开，值不进命令解析器。</li>
+      <li data-i18n="sc.s5.b3">每次执行写一条审计行。可绑定 task_submitted / task_started / task_done / task_failed / task_review 五个事件，panda hooks list|test 查看与试跑。</li>
+      </ul>
+      </section>
+      <section class="pg-section" id="report">
+      <h2 data-i18n="sc.s6.t">漏洞上报</h2>
+      <p class="pg-lead" data-i18n="sc.s6.d">传输认证、权限 Tier 模型或密钥脱敏层的缺陷，请不要开公开 issue。</p>
+      <div class="pg-links">
+      <a href="mailto:fing2024@outlook.com" data-i18n="sc.s6.l1">私下联系维护者并附复现步骤 ↗</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/SECURITY.md" target="_blank" rel="noopener" data-i18n="sc.s6.l2">完整安全策略（中文为准，五语）↗</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener" data-i18n="sc.s6.l3">贡献指南里的安全上报流程 ↗</a>
+      </div></section>
+      <section class="pg-section" id="gaps">
+      <h2 data-i18n="sc.s7.t">已知边界</h2>
+      <p class="pg-lead" data-i18n="sc.s7.d">这些不是待修的小 bug，是当前信任模型的结构性边界；改动它们等于换模型。</p>
+      <ul class="pg-list pg-list-todo">
+      <li data-i18n="sc.s7.b1">共享密钥成员仍可为「接收端从未见过其公钥的节点」伪造同意（多跳中继加 TOFU 的固有边界）；该路径会打印警告，未钉住的身份按首次见到即信任处理。</li>
+      <li data-i18n="sc.s7.b2">审计链的签名锚点在数据库本身，从未签过名的历史前缀无法与「被整体重写」区分；进一步收紧需要外部存证，仍在路线图上。</li>
+      <li data-i18n="sc.s7.b3">per-node 密钥分发与可验签准入尚未补齐；信任档是本机的单方面断言，能收窄你对某个对端的暴露，但不改变「持有共享密钥即为成员」这一底层事实。</li>
+      </ul>
+      </section>
+
+      <div class="pg-cta">
+        <a class="pg-cta-main" href="docs.html" data-i18n="sc.cta1">读文档 →</a>
+        <a href="status.html" data-i18n="sc.cta2">看已知边界 →</a>
+      </div>
+    </div>
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div class="footer-brand">
+      <a class="brand" href="index.html" aria-label="OpenPanda">
+        <svg class="brand-mark" width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
+        <span>Open<b>Panda</b></span>
+      </a>
+      <p class="footer-tag" data-i18n="foot.tag">Local-first, forever.</p>
+      <p class="footer-version"><b>v0.1.4 Constellation</b> <span>· stable</span></p>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.product">产品</h4>
+      <a href="features.html" data-i18n="foot.features">能力清单</a>
+      <a href="index.html#graph" data-i18n="foot.why">为什么是图</a>
+      <a href="index.html#constitution" data-i18n="foot.thin">薄宪法</a>
+      <a href="index.html#roadmap" data-i18n="foot.roadmap">路线图</a>
+      <a href="faq.html" data-i18n="foot.faq">常见问题</a>
+      <a href="download.html" data-i18n="foot.install">安装</a>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.resources">资源</h4>
+      <a href="docs.html" data-i18n="foot.docs">文档中心</a>
+      <a href="download.html" data-i18n="foot.releases">下载与校验</a>
+      <a href="changelog.html" data-i18n="foot.changelog">更新日志</a>
+      <a href="status.html" data-i18n="foot.status">项目现状</a>
+      <a href="security.html" data-i18n="foot.trust">安全与信任</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0</a>
+    </div>
+    <div class="footer-col">
+      <h4 data-i18n="foot.contact">社区</h4>
+      <a href="community.html" data-i18n="foot.community">社区与贡献</a>
+      <a href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Xustalis/OpenPanda/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/SECURITY.md" target="_blank" rel="noopener" data-i18n="foot.security">安全策略</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/CODE_OF_CONDUCT.md" target="_blank" rel="noopener" data-i18n="foot.conduct">行为准则</a>
+      <a href="mailto:fing2024@outlook.com" data-i18n="foot.invest">合作 / 投资</a>
+      <a href="mailto:fing2024@outlook.com">fing2024@outlook.com</a>
+    </div>
+  </div>
+  <!-- A policy statement, not a live probe: claiming "all green" from a static
+       page would be a lie the first time a check fails. -->
+  <div class="wrap footer-status">
+    <span class="status-pill"><i aria-hidden="true"></i><span data-i18n="foot.green">main 分支全绿才允许合并</span></span>
+    <span class="status-sep" aria-hidden="true">·</span>
+    <span data-i18n="foot.checks">10 项必过检查 · 6 个发布目标 · 每周安全扫描</span>
+    <a class="status-link" href="download.html" data-i18n="foot.latest">最新版本 v0.1.4 Constellation <span aria-hidden="true">→</span></a>
+  </div>
+  <div class="wrap footer-bottom">
+    <p class="footer-credit" data-i18n="foot.credit">影像：<a href="https://www.eso.org/public/images/eso0932a/" target="_blank" rel="noopener">ESO/S. Brunier 银河全景</a>（<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>；已裁剪、调色并与程序星点合成）；NASA Blue Marble、Black Marble DNB 与地球云层影像（公有领域）。代码以 AGPL-3.0-or-later 发布；闭源嵌入与托管修改可另行授权。</p>
+    <div class="footer-meta"><span>© 2026 OpenPanda</span><span data-i18n="foot.built">Built for machines you own.</span><a href="index.html#top" aria-label="Back to top" data-i18n-aria="foot.top">↑</a></div>
+  </div>
+</footer>
+<script type="module" src="js/page.js"></script>
+</body>
+</html>

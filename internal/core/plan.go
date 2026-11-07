@@ -1668,45 +1668,40 @@ func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegate
 	}()
 
 	notes := make([]string, len(drs))
-	// Fan-out width (delegation.fanout): only this many children may be
-	// spawned-and-awaited at once. Extra requests hold on the semaphore —
-	// their task rows don't even exist until a sibling slot frees, so a
-	// burst cannot oversubscribe the node the way an ungated launch could.
-	// Children whose await window expires are released (they keep running
-	// under the queue's own MaxConcurrent budget) — the slot bounds ACTIVE
-	// orchestration, not lifetime.
-	fanout := c.delegateLimits().FanOut
-	if fanout < 1 {
-		fanout = 1
-	}
-	sem := make(chan struct{}, fanout)
+	// Bound workers as well as active children; keep results in request order.
+	fanout := min(c.delegateLimits().FanOut, len(drs))
+	jobs := make(chan int)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for i, dr := range drs {
+	for range fanout {
 		wg.Add(1)
-		c.goGuarded("plan delegate child "+dr.Title, func() {
+		c.goGuarded("plan delegate worker", func() {
 			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				notes[i] = "delegation failed: " + ctx.Err().Error()
-				return
+			for i := range jobs {
+				dr := drs[i]
+				c.delegateActive.Add(1)
+				note, pendingID, derr := c.delegateChild(ctx, parent, dr, drs)
+				c.delegateActive.Add(-1)
+				if derr != nil {
+					note = "delegation failed: " + derr.Error()
+				}
+				if pendingID != "" {
+					mu.Lock()
+					*pending = append(*pending, pendingChild{id: pendingID, title: dr.Title})
+					mu.Unlock()
+				}
+				notes[i] = note
 			}
-			c.delegateActive.Add(1)
-			defer c.delegateActive.Add(-1)
-			note, pendingID, derr := c.delegateChild(ctx, parent, dr, drs)
-			if derr != nil {
-				note = "delegation failed: " + derr.Error()
-			}
-			if pendingID != "" {
-				mu.Lock()
-				*pending = append(*pending, pendingChild{id: pendingID, title: dr.Title})
-				mu.Unlock()
-			}
-			notes[i] = note
 		})
 	}
+	for i := range drs {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			notes[i] = "delegation failed: " + ctx.Err().Error()
+		}
+	}
+	close(jobs)
 	wg.Wait()
 	return notes
 }
