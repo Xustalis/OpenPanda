@@ -3984,6 +3984,16 @@
   border: 1px solid var(--border-soft);
   border-radius: 20px;
   box-shadow: var(--shadow-lg);
+  /* Three bands stacked from the bottom edge up: the section label, the
+     models, the account footer. Making it a column is what lets the model
+     list give height back when the window is short, instead of the card
+     running off the top of the screen. */
+  display: flex;
+  flex-direction: column;
+  /* The window is the last limit. With the account list unfolded the three
+     bands add up past the room above a laptop composer; the models absorb
+     the shortfall because they are the band that scrolls. */
+  max-height: min(420px, calc(100vh - 24px));
   /* Grows out of the corner it is anchored to — Radix hands Codex the same
      origin as a variable. */
   transform-origin: bottom right;
@@ -4003,6 +4013,7 @@
   }
 }
 .model-panel-label {
+  flex: none;
   margin: 0;
   padding: 6px 8px 4px;
   font-size: var(--text-sm);
@@ -4011,12 +4022,19 @@
 .model-panel-list {
   display: flex;
   flex-direction: column;
-  /* A fixed height, not a cap: the card hangs off the composer and grows
-     upward, so any change in height moves the accounts column under the
-     pointer — hovering a two-model account after a three-model one made the
-     rows slide down, the pointer landed on the row above, and the panes
-     ping-ponged. Four rows, then it scrolls. */
-  height: 176px;
+  /* Content height, capped at four rows (4 × 44px). An account with two
+     models gets a two-row card — a fixed four-row well left most accounts
+     looking at empty space, and the card read as if something were still
+     loading. Past four rows the cap is where it scrolls, so a nine-model
+     account opens at a predictable height either way.
+     The card is anchored by its bottom edge, so a shorter list moves the
+     label and the rows above the footer; the footer — and with it the
+     account rows an open account list puts under the pointer — never
+     moves. That is what the fixed height used to buy, and it does not
+     depend on the height being fixed. */
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 176px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -4106,6 +4124,7 @@
 .model-panel-foot {
   display: flex;
   flex-direction: column;
+  flex: none;
   gap: 2px;
   margin-top: 6px;
   padding-top: 4px;
