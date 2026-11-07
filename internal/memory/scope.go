@@ -10,6 +10,18 @@ import "context"
 // another project must be refused: memory isolation is a boundary between
 // projects, not a convention the model is trusted to keep.
 type scopeProjectKey struct{}
+type scopePersonalBlockedKey struct{}
+
+// WithoutPersonalMemory marks workspace turns that have no named project.
+// They still need the same personal-memory wall as named project turns.
+func WithoutPersonalMemory(ctx context.Context) context.Context {
+	return context.WithValue(ctx, scopePersonalBlockedKey{}, true)
+}
+
+func personalMemoryBlocked(ctx context.Context) bool {
+	v, _ := ctx.Value(scopePersonalBlockedKey{}).(bool)
+	return v
+}
 
 // WithScopeProject pins the turn's project ("" for a project-free
 // conversation) on the context. Pinning an empty project is meaningful: it

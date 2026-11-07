@@ -2267,6 +2267,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// project-free conversation must refuse project-targeted calls, not fall
 	// back to whatever name the model supplied.
 	ctx = memory.WithScopeProject(ctx, scopeProj)
+	if workDir != "" {
+		ctx = memory.WithoutPersonalMemory(ctx)
+	}
 	verdict := e.approvalFor(scope.SessionID, scopeProj).withPermission(scope.PermissionMode)
 	toolAuthorized, toolDenied := verdict.gate(authorize)
 	approvalMode := verdict.mode

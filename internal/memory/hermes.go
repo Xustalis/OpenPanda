@@ -70,13 +70,13 @@ func (h *Hermes) SaveMemory(m MemFile) error {
 // UpdateUser runs fn against the current USER.md and writes the result back as
 // one critical section. fn's error aborts the write.
 func (h *Hermes) UpdateUser(fn func(*MemFile) error) error {
-	return h.update(UserPath(h.root), h.limits.user(), fn)
+	return h.update(UserPath(h.root), h.limits.user(), false, fn)
 }
 
 // UpdateMemory runs fn against the current MEMORY.md and writes the result back
 // as one critical section.
 func (h *Hermes) UpdateMemory(fn func(*MemFile) error) error {
-	return h.update(MemoryPath(h.root), h.limits.memory(), fn)
+	return h.update(MemoryPath(h.root), h.limits.memory(), false, fn)
 }
 
 // TopicsDir is the memory/topics/ directory holding optional topic files.
@@ -141,7 +141,7 @@ func (h *Hermes) UpdateTopic(name string, fn func(*MemFile) error) error {
 	if err != nil {
 		return err
 	}
-	return h.update(path, h.limits.memory(), fn)
+	return h.update(path, h.limits.memory(), true, fn)
 }
 
 // DeleteTopic removes one topic file. Deleting a missing topic is an error so
@@ -279,7 +279,7 @@ func (h *Hermes) save(path string, m MemFile, defaultLimit int) error {
 // Callers that would otherwise load, mutate and save must come through here —
 // that sequence outside the lock is the lost-update case this store used to
 // have, and it fails silently (both writers report success, one entry is gone).
-func (h *Hermes) update(path string, limit int, fn func(*MemFile) error) error {
+func (h *Hermes) update(path string, limit int, createIfMissing bool, fn func(*MemFile) error) error {
 	release, err := lockRoot(h.root)
 	if err != nil {
 		return fmt.Errorf("memory: lock %s: %w", filepath.Base(path), err)
@@ -300,7 +300,16 @@ func (h *Hermes) update(path string, limit int, fn func(*MemFile) error) error {
 	// and a fresh mtime on an identical file tells every watcher the memory
 	// changed when it did not.
 	if bytes.Equal(before, m.Bytes()) {
-		return nil
+		if !createIfMissing {
+			return nil
+		}
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		// An empty new topic still needs a file, or the console reports
+		// success but ListTopics cannot find what the user just created.
 	}
 	return h.saveLocked(path, m, limit)
 }
