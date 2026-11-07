@@ -9382,6 +9382,198 @@ input.switch:focus-visible {
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+
+/* The guide step: the one page of the wizard that is not a question. Three
+   cards — where things live, what the panda answers to, how a model gets
+   wired — so the modal grows a body that scrolls while the progress dots and
+   the buttons hold still: on a phone the 「继续」 never leaves reach. */
+.onboarding-modal.wizard.is-guide {
+  width: min(760px, 92vw);
+  max-height: min(820px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  /* The box stops scrolling as a whole; .guide-body takes over, so the
+     progress strip and the actions keep their place while the page moves. */
+  overflow: hidden;
+}
+.onboarding-modal.wizard.is-guide .wizard-progress,
+.onboarding-modal.wizard.is-guide .modal-actions {
+  flex: none;
+}
+.onboarding-modal.wizard.is-guide .guide-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+}
+/* Cards share the wizard's inset plate (.wizard-lang and friends), so the
+   guide reads as the same surface, not a guest page. */
+.guide-card {
+  min-width: 0;
+  padding: var(--sp-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+.guide-card-wide {
+  grid-column: 1 / -1;
+}
+.guide-card-title {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+@media (max-width: 620px) {
+  .guide-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.guide-nav {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.guide-nav-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+}
+.guide-nav-row + .guide-nav-row {
+  border-top: 1px solid var(--border-soft);
+}
+.guide-nav-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+}
+.guide-nav-icon .ico {
+  width: 16px;
+  height: 16px;
+}
+.guide-nav-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.guide-nav-name {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.guide-nav-desc {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.guide-panda {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: var(--sp-2) 0 var(--sp-3);
+}
+.guide-panda-stage {
+  display: block;
+  width: 76px;
+  height: 76px;
+}
+/* The same sprite the composer runs, on the guide's own canvas: six frames
+   at 76px = 456px across. A stand-in would teach the wrong panda. */
+.guide-panda-stage .composer-panda-sprite {
+  width: 76px;
+  height: 76px;
+  background-size: 456px 76px;
+}
+.guide-panda-pose {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.guide-gestures {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+.guide-gesture {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 0;
+}
+.guide-gesture + .guide-gesture {
+  border-top: 1px solid var(--border-soft);
+}
+.guide-gesture dt {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.guide-gesture dd {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.guide-steps {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 var(--sp-3);
+  padding: 0;
+  list-style: none;
+}
+.guide-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 0;
+}
+.guide-step + .guide-step {
+  border-top: 1px solid var(--border-soft);
+}
+.guide-step-n {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.guide-step-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.guide-step-name {
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.guide-step-desc {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.guide-note {
+  margin: 0;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border-soft);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
 .wizard-langs {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -10260,3 +10452,20 @@ main .pipeline-chip {
 .model-tile:focus-within .model-tile-flag {
   opacity: 0;
 }
+
+/* Execution policy follows the existing settings sheet's spacing and tokens. */
+.execution-agent-grid,
+.execution-limits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 16px;
+}
+.execution-agent {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.execution-agent legend { padding: 0 4px; }
+.execution-field { display: grid; gap: 6px; margin-bottom: 12px; font-size: .85rem; }

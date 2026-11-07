@@ -1,5 +1,5 @@
 # robots.txt — OpenPanda
-# The site is a single page plus a 404; nothing here needs crawling limits.
+# Nine pages plus a 404, all listed in sitemap.xml; no crawling limits needed.
 
 User-agent: *
 Allow: /

@@ -495,3 +495,34 @@ func TestWaitOrdersAgainstDispatch(t *testing.T) {
 		t.Fatalf("started = %v; no task may start after the queue was drained", started)
 	}
 }
+
+func TestSchedulerHotConcurrencyLimit(t *testing.T) {
+	store := &fakeStore{ready: []ReadyTask{
+		{ID: "one", ResourceKeys: []string{"one"}},
+		{ID: "two", ResourceKeys: []string{"two"}},
+		{ID: "three", ResourceKeys: []string{"three"}},
+	}}
+	runner := newGateRunner()
+	s := New(store, runner, 1, nil)
+	s.tick(context.Background())
+	waitForStarted(t, runner, 1)
+	store.mu.Lock()
+	store.active = 1
+	store.mu.Unlock()
+	s.SetMaxConcurrent(2)
+	s.tick(context.Background())
+	waitForStarted(t, runner, 2)
+	store.mu.Lock()
+	store.active = 2
+	store.mu.Unlock()
+	s.SetMaxConcurrent(1)
+	s.tick(context.Background())
+	if len(runner.startedIDs()) != 2 {
+		t.Fatal("lowered limit admitted a new runner")
+	}
+	runner.release <- "one"
+	runner.release <- "two"
+	<-runner.done
+	<-runner.done
+	s.Wait()
+}

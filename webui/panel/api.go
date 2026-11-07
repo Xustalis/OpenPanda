@@ -353,6 +353,7 @@ func (h *handler) getProjectMemory(w http.ResponseWriter, r *http.Request) {
 		"project": name,
 		"content": string(mf.Bytes()),
 		"limit":   h.projects.Limit(),
+		"version": memory.Version(mf.Bytes()),
 	})
 }
 

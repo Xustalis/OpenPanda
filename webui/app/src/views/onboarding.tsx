@@ -16,6 +16,7 @@ import { useModalFocus } from '../components/modal-focus'
 import { ProviderCard } from '../components/provider-card'
 import { onboardingGate } from '../utils/onboarding'
 import { needsPlaintextConsent } from './model-endpoint'
+import { GuideStep } from './onboarding-guide'
 
 // First-run onboarding: `panda web` boots zero-config — the panel is fully
 // reachable but chat cannot answer until a model is set up, and the TUI
@@ -32,8 +33,8 @@ export function notifyModelSaved(): void {
   window.dispatchEvent(new CustomEvent(MODEL_SAVED_EVENT))
 }
 
-type Step = 'language' | 'terms' | 'approval' | 'model'
-const STEPS: Step[] = ['language', 'terms', 'approval', 'model']
+type Step = 'language' | 'terms' | 'guide' | 'approval' | 'model'
+const STEPS: Step[] = ['language', 'terms', 'guide', 'approval', 'model']
 
 /** First-run gate rendered at the top of the main pane. Fresh installs
  *  (no answer recorded yet) get the full wizard immediately; a recorded
@@ -122,8 +123,13 @@ function OnboardingWizard(props: {
   onDone(): void
 }) {
   useLocaleRerender()
-  const steps: Step[] = props.termsOnly ? ['terms'] : STEPS
-  const [stepIdx, setStepIdx] = useState(props.modelOnly ? steps.length - 1 : 0)
+  // Re-consent (termsOnly) must not re-run the tour: the install was already
+  // configured, and this pass only collects a signature. modelOnly is the
+  // "configured but still no model" banner path — it lands straight on the
+  // model step, so its progress strip should read one step, not four empty
+  // dots.
+  const steps: Step[] = props.termsOnly ? ['terms'] : props.modelOnly ? ['model'] : STEPS
+  const [stepIdx, setStepIdx] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const step = steps[stepIdx]
@@ -183,8 +189,8 @@ function OnboardingWizard(props: {
         if (e.target === e.currentTarget) props.onClose()
       }}
     >
-      <div ref={box} class="modal onboarding-modal wizard" role="dialog" aria-modal="true"
-        aria-label={t('onboarding.title')}>
+      <div ref={box} class={`modal onboarding-modal wizard${step === 'guide' ? ' is-guide' : ''}`}
+        role="dialog" aria-modal="true" aria-label={t('onboarding.title')}>
         <div class="wizard-progress" aria-hidden="true">
           {steps.map((s, i) => (
             <span
@@ -197,6 +203,7 @@ function OnboardingWizard(props: {
 
         {step === 'language' && <LanguageStep />}
         {step === 'terms' && <TermsStep />}
+        {step === 'guide' && <GuideStep />}
         {step === 'approval' && (
           <ApprovalStep
             initial={props.state.approval_mode}
@@ -213,10 +220,14 @@ function OnboardingWizard(props: {
         {step !== 'approval' && step !== 'model' && (
           <div class="modal-actions">
             <button type="button" class="btn" onClick={props.onClose}>
-              {t('onboarding.skip')}
+              {t(step === 'guide' ? 'onboarding.guide.skip' : 'onboarding.skip')}
             </button>
             <button type="button" class="btn primary" disabled={busy} onClick={next}>
-              {step === 'terms' ? t('onboarding.agree') : t('onboarding.next')}
+              {step === 'terms'
+                ? t('onboarding.agree')
+                : step === 'guide'
+                  ? t('onboarding.guide.cta')
+                  : t('onboarding.next')}
             </button>
           </div>
         )}

@@ -1147,6 +1147,34 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		send("error", map[string]string{"message": "create operation failed"})
 		return
 	}
+	// Persist the dispatch boundary before the entry model can submit work.
+	// A unique operation, rather than session ID, separates overlapping asks.
+	roundID := op.operationID
+	if err := h.store.BeginAskRound(execCtx, roundID, sess.ID, string(eng.Locale())); err != nil {
+		send("error", map[string]string{"message": "create round failed"})
+		h.unregisterSessionAsk(opKey, op)
+		return
+	}
+	roundCtx, stopRound := context.WithCancel(execCtx)
+	roundStatus := "interrupted"
+	guard.Go(nil, "panel: ask round lease", nil, func() {
+		tick := time.NewTicker(core.AskRoundLease / 3)
+		defer tick.Stop()
+		for {
+			select {
+			case <-roundCtx.Done():
+				return
+			case <-tick.C:
+				_ = h.store.TouchAskRound(roundCtx, roundID)
+			}
+		}
+	})
+	defer func() {
+		stopRound()
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer closeCancel()
+		_ = h.store.CloseAskRound(closeCtx, roundID, roundStatus)
+	}()
 	defer h.unregisterSessionAsk(opKey, op)
 	// The steer queue lives exactly as long as the turn that drains it. Notes
 	// still in it when the turn ends are not dropped: a note typed into the
@@ -1218,6 +1246,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		approvalSession = sess.ID + sideOperationSuffix
 	}
 	out, err := eng.AskTurnsScoped(execCtx, history, req.Prompt, askengine.AskScope{
+		RoundID:        roundID,
 		Project:        sess.Project,
 		WorkDir:        workDir,
 		SessionID:      approvalSession,
@@ -1227,6 +1256,10 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		Side:           side,
 		SideTurns:      sideReplay,
 	}, req.Authorize, cb)
+	roundStatus = "closed"
+	if execCtx.Err() != nil {
+		roundStatus = "stopped"
+	}
 	askDuration := time.Since(askStarted).Milliseconds()
 	if err != nil {
 		msg := err.Error()

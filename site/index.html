@@ -8,16 +8,20 @@
 <meta name="description" data-i18n-content="meta.desc" content="OpenPanda 是本地优先的图状编排内核。它不替代 Claude Code、Codex，而是把你所有设备上已有的 Agent 连成一张网：意图、拆解、路由、监督、验收，全部在本地完成。" />
 <meta name="author" content="Xustalis" />
 <link rel="canonical" href="https://xustalis.github.io/OpenPanda/" />
-<link rel="alternate" hreflang="zh-CN" href="https://xustalis.github.io/OpenPanda/" />
-<link rel="alternate" hreflang="en" href="https://xustalis.github.io/OpenPanda/?lang=en" />
-<link rel="alternate" hreflang="x-default" href="https://xustalis.github.io/OpenPanda/" />
+<!-- No hreflang on purpose. Chinese is the only canonical version: the server
+     always returns this Chinese markup, and English is a client-side swap from
+     js/i18n.js. Declaring ?lang=en as a language alternate would point crawlers
+     at a URL whose raw HTML, meta and JSON-LD are still Chinese, which is both a
+     broken hreflang cluster and a cloaking signal. The toggle is a reader
+     convenience, not a second indexed edition. If a real English edition is
+     ever added it needs its own /en/ markup, meta and structured data. -->
 
-<!-- Open Graph / social. The canonical host is set once here and in sitemap.xml;
-     change both if the site moves to a custom domain. -->
+<!-- Open Graph / social. The canonical host is set once here and in sitemap.xml,
+     robots.txt, the JSON-LD url and 404.html; scripts/check-site.py asserts they
+     all agree, so a domain move cannot leave one behind. -->
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="OpenPanda" />
 <meta property="og:locale" content="zh_CN" />
-<meta property="og:locale:alternate" content="en_US" />
 <meta property="og:url" content="https://xustalis.github.io/OpenPanda/" />
 <meta property="og:title" data-i18n-content="meta.title" content="OpenPanda — 让异构的智能体与设备，像一个整体一样工作" />
 <meta property="og:description" data-i18n-content="meta.ogDesc" content="本地优先的图状编排内核：把 Claude Code、Codex 与每一台设备连成一张会自己调度、监督、验收的网。无厂商中转。" />
@@ -68,6 +72,13 @@
 </script>
 <noscript><style>html.lang-pending body { opacity: 1 !important; }</style></noscript>
 
+<!-- Structured data describes the canonical Chinese document only. The old
+     FAQPage node duplicated its eight answers in static Chinese while the
+     English view swaps them client-side — markup that disagrees with the
+     rendered page is a cloaking signal, and FAQ rich results have been limited
+     to authoritative government / health sites since 2023, so the node bought
+     nothing and cost a standing risk. Keep language-bound fields out of here
+     unless a real /en/ edition with its own markup and metadata exists. -->
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -75,6 +86,7 @@
     {
       "@type": "SoftwareApplication",
       "name": "OpenPanda",
+      "inLanguage": "zh-CN",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "macOS, Linux, Windows",
       "description": "本地优先的图状编排内核：把异构的智能体与设备连成一张可路由、可监督、可验收的网，无厂商中转。",
@@ -85,51 +97,6 @@
       "softwareVersion": "0.1.4",
       "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
       "author": { "@type": "Person", "name": "Xustalis", "url": "https://github.com/Xustalis" }
-    },
-    {
-      "@type": "FAQPage",
-      "mainEntity": [
-        {
-          "@type": "Question",
-          "name": "OpenPanda 和 LangGraph、CrewAI 有什么区别？",
-          "acceptedAnswer": { "@type": "Answer", "text": "那些是编排框架，冻结的是「怎么想」——节点、边、状态机怎么写。OpenPanda 冻结的是关系事实：身份、授权、边界、生命周期。它不替你写 Agent，而是把你已经装好的 Agent 连成一张可路由、可监督、可验收的网。" }
-        },
-        {
-          "@type": "Question",
-          "name": "需要 GPU 或额外的模型额度吗？",
-          "acceptedAnswer": { "@type": "Answer", "text": "不需要 GPU。路由、监督和验收都用你已经配置的模型提供方，本机模型或 API 都可以。守护进程空闲时常驻内存约 40MB，几乎不占 CPU。" }
-        },
-        {
-          "@type": "Question",
-          "name": "数据会不会经过你们的服务器？",
-          "acceptedAnswer": { "@type": "Answer", "text": "不会，也没有「我们的服务器」。节点之间 P2P 直连，会话内容 AEAD 加密，并按信任三档逐跳钳制。断网时走 DTN 存储转发，链路恢复后再送。" }
-        },
-        {
-          "@type": "Question",
-          "name": "支持哪些平台和 Agent？",
-          "acceptedAnswer": { "@type": "Answer", "text": "六个发布目标：macOS、Linux、Windows × amd64 / arm64，另有 lite-linux 变体。目前 11 个适配器，包括 Claude Code、Codex、Antigravity、OpenCode、Grok Build、Hermes、OpenClaw、Pi、DeepSeek Harness、ZCode，以及一个可以接任意其他无头 CLI 的通用适配器。" }
-        },
-        {
-          "@type": "Question",
-          "name": "现在能用在生产环境吗？",
-          "acceptedAnswer": { "@type": "Answer", "text": "v0.1.4「Constellation」是发布级这条线的当前版本（v0.1.0 起这条线进入发布级），可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 status.md 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、daemon→面板 mesh 指标 IPC。逐条列出，不含糊。" }
-        },
-        {
-          "@type": "Question",
-          "name": "免费吗？许可证怎么算？",
-          "acceptedAnswer": { "@type": "Answer", "text": "个人、学习、公司内部自用都不花钱。只有把修改版对外分发或托管，AGPL 才要求你同样开源；不愿意开源，才需要买商业授权——可以直接邮件联系。" }
-        },
-        {
-          "@type": "Question",
-          "name": "我要怎么参与？",
-          "acceptedAnswer": { "@type": "Answer", "text": "提 Issue、开 PR 都欢迎。main 上有 10 项必过检查，PR 合并前会全部跑一遍。也可以先在 GitHub 上 Star，或者从 status.md 里列出的已知边界挑一条去复现。" }
-        },
-        {
-          "@type": "Question",
-          "name": "会出桌面 App 吗？",
-          "acceptedAnswer": { "@type": "Answer", "text": "v0.1.4 继续把内核做成发布级：CLI 加本地控制台已经可以日常用，配置、数据与协议向前兼容。桌面薄壳排在 v0.1.x 线上——托盘常驻、全局热键、原生通知、自更新，配上稠密网格层。" }
-        }
-      ]
     }
   ]
 }
@@ -150,18 +117,21 @@
 
 <!-- ═══════════════════════════════ NAV ═══════════════════════════════ -->
 <nav class="site-nav" id="site-nav" aria-label="主导航" data-i18n-aria="nav.primary">
-  <a class="brand" href="#top" aria-label="OpenPanda">
+  <a class="brand" href="index.html" aria-label="OpenPanda">
     <svg class="brand-mark" width="27" height="27" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
     <span>Open<b>Panda</b></span>
   </a>
+  <!-- Site-level navigation, shared verbatim by every page. The eleven
+       chapters remain reachable through the hero index and ⌘K on this page;
+       a site is not one long scroll. -->
   <div class="nav-links">
-    <a href="#graph" data-i18n="nav.graph">星状 → 图状</a>
-    <a href="#product" data-i18n="nav.product">产品</a>
-    <a href="#constitution" data-i18n="nav.constitution">薄宪法</a>
-    <a href="#roadmap" data-i18n="nav.roadmap">路线图</a>
-    <a href="#license" data-i18n="nav.license">许可</a>
-    <a href="#faq" data-i18n="nav.faq">常见问题</a>
-    <a href="#install" data-i18n="nav.install">安装</a>
+    <a href="index.html" aria-current="page" data-i18n="nav.overview">概览</a>
+    <a href="features.html" data-i18n="nav.features">能力</a>
+    <a href="docs.html" data-i18n="nav.docs">文档</a>
+    <a href="download.html" data-i18n="nav.download">下载</a>
+    <a href="changelog.html" data-i18n="nav.changelog">更新日志</a>
+    <a href="status.html" data-i18n="nav.status">项目现状</a>
+    <a href="faq.html" data-i18n="nav.faq">常见问题</a>
   </div>
   <div class="nav-actions">
     <button class="lang-toggle" type="button" data-lang-toggle aria-label="切换语言" data-i18n-aria="lang.switch" title="中文 / English">
@@ -189,11 +159,21 @@
     <a href="#graph"><b>02</b><span data-i18n="nav.graph">星状 → 图状</span></a>
     <a href="#product"><b>03</b><span data-i18n="nav.product">产品</span></a>
     <a href="#constitution"><b>04</b><span data-i18n="nav.constitution">薄宪法</span></a>
-    <a href="#roadmap"><b>05</b><span data-i18n="nav.roadmap">路线图</span></a>
-    <a href="#license"><b>06</b><span data-i18n="nav.license">许可</span></a>
-    <a href="#faq"><b>07</b><span data-i18n="nav.faq">常见问题</span></a>
-    <a href="#install"><b>08</b><span data-i18n="nav.install">安装</span></a>
+    <a href="#roadmap"><b>08</b><span data-i18n="nav.roadmap">路线图</span></a>
+    <a href="#license"><b>09</b><span data-i18n="nav.license">许可</span></a>
+    <a href="#faq"><b>10</b><span data-i18n="nav.faq">常见问题</span></a>
+    <a href="#install"><b>11</b><span data-i18n="nav.install">安装</span></a>
     <div class="mobile-menu-foot">
+      <div class="menu-sites">
+        <a href="docs.html" data-i18n="hub.docs.t">文档中心</a>
+        <a href="download.html" data-i18n="hub.dl.t">下载与校验</a>
+        <a href="changelog.html" data-i18n="hub.cl.t">发布记录</a>
+        <a href="status.html" data-i18n="hub.st.t">项目现状</a>
+        <a href="features.html" data-i18n="hub.ft.t">能力清单</a>
+        <a href="security.html" data-i18n="hub.sc.t">安全与信任</a>
+        <a href="community.html" data-i18n="hub.cm.t">社区与贡献</a>
+        <a href="faq.html" data-i18n="hub.fq.t">常见问题</a>
+      </div>
       <a href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">GitHub ↗</a>
       <button class="lang-toggle lang-toggle-menu" type="button" data-lang-toggle aria-label="切换语言" data-i18n-aria="lang.switch">
         <span class="lang-zh" lang="zh-CN">中文</span><span class="lang-sep" aria-hidden="true">/</span><span class="lang-en" lang="en">EN</span>
@@ -213,7 +193,7 @@
     <div class="hero-copy">
       <p class="hero-kicker reveal"><span>OPENPANDA</span> <i>/</i> <span data-i18n="hero.kicker">LOCAL-FIRST ORCHESTRATION KERNEL</span></p>
       <h1 class="hero-title reveal" data-i18n="hero.title">让异构的智能体与设备，<br>像一个整体一样工作。</h1>
-      <p class="hero-en reveal" data-i18n="hero.en">Make heterogeneous agents and devices work as one.</p>
+      <p class="hero-en reveal" lang="en" data-i18n="hero.en">Make heterogeneous agents and devices work as one.</p>
       <p class="hero-sub reveal" data-i18n="hero.sub">你只说一句话。理解、拆解、派活、盯完、验收，它全包。真正动手的，是你早就装好的 Claude Code、Codex，和桌上那几台机器。</p>
       <div class="hero-cta reveal">
         <div class="install-pill">
@@ -234,14 +214,18 @@
     </div>
   </div>
 
+  <!-- Index numbers are the chapter pages of the whole eleven-section story,
+       not 1..N of this shortlist: "Install" is 11 / 11 in the section label,
+       11 in the mobile index and 11 here. Keep them in step with the
+       `NN / 11` labels and the palette hints in js/main.js. -->
   <div class="wrap hero-index">
     <a href="#why"><b>01</b><span data-i18n="hero.idx.why">四堵墙</span></a>
     <a href="#graph"><b>02</b><span data-i18n="hero.idx.graph">星状 → 图状</span></a>
     <a href="#product"><b>03</b><span data-i18n="hero.idx.product">产品</span></a>
     <a href="#constitution"><b>04</b><span data-i18n="hero.idx.constitution">薄宪法</span></a>
-    <a href="#install"><b>05</b><span data-i18n="hero.idx.install">安装</span></a>
+    <a href="#install"><b>11</b><span data-i18n="hero.idx.install">安装</span></a>
     <div class="hero-meta">
-      <span class="mono-label" data-i18n="hero.credit">ESO/S. BRUNIER · MILKY WAY · NASA BLUE MARBLE / DNB · PUBLIC DOMAIN</span>
+      <span class="mono-label" data-i18n="hero.credit">ESO/S. BRUNIER · CC BY 4.0 · NASA BLUE MARBLE / DNB · PUBLIC DOMAIN</span>
       <span class="hero-scroll" data-i18n="hero.scroll">SCROLL</span>
     </div>
   </div>
@@ -271,7 +255,7 @@
 </section>
 
 <!-- ═══════════════════════════════ 01 · FOUR WALLS ═══════════════════════════════ -->
-<section class="paper-section" id="why">
+<section class="paper-section" id="why" tabindex="-1">
   <div class="wrap">
     <div class="section-label reveal"><span data-i18n="s1.label">THE FOUR WALLS</span><span>01 / 11</span></div>
     <div class="section-head">
@@ -368,97 +352,49 @@
       <p class="lede reveal" data-i18n="s3.lede">OpenPanda 本身不是 Agent。它理解意图、拆解任务、按能力卡路由到最合适的节点，监督执行、验收结果；真正动手的，是你已经装好的 Claude Code、Codex 和每一台设备。</p>
     </div>
 
-    <!-- Two views of the same run: the GUI answers "what is happening", the CLI
-         answers "how do I drive it". Real product pages show both; a single
-         static screenshot only ever proves the first. -->
+    <!-- Two views of the same run: the console answers "what happened", the
+         terminal answers "how it was driven". Both are captures of a real local
+         build, not a hand-drawn mock. The caption states where they came from. -->
     <div class="product-view reveal">
       <div class="view-tabs" role="tablist" aria-label="产品视图" data-i18n-aria="s3.tabs.aria">
-        <button class="view-tab on" role="tab" aria-selected="true" aria-controls="view-console" data-view="console" data-i18n="s3.tab.console">控制台</button>
-        <button class="view-tab" role="tab" aria-selected="false" aria-controls="view-term" data-view="term" data-i18n="s3.tab.term">终端</button>
+        <button class="view-tab on" id="view-tab-console" role="tab" aria-selected="true" aria-controls="view-console" tabindex="0" data-view="console" data-i18n="s3.tab.console">控制台</button>
+        <button class="view-tab" id="view-tab-term" role="tab" aria-selected="false" aria-controls="view-term" tabindex="-1" data-view="term" data-i18n="s3.tab.term">终端</button>
       </div>
       <div class="console-bleed">
-      <div class="console-frame" id="view-console" data-panel="console" role="tabpanel">
+      <div class="console-frame" id="view-console" data-panel="console" role="tabpanel" aria-labelledby="view-tab-console" tabindex="0">
         <div class="console-chrome">
           <span class="dots"><i></i><i></i><i></i></span>
-          <span class="console-title">OpenPanda — Console</span>
-          <span class="console-live"><i></i> LIVE</span>
+          <span class="console-title" data-i18n="s3.rec.console">OpenPanda — 控制台 · 实机截图</span>
+          <span class="console-live"><i></i> <span data-i18n="s3.rec.badge">RECORDED</span></span>
           <span class="console-url">127.0.0.1:7840</span>
         </div>
-        <div class="console-body">
-          <aside class="console-rail">
-            <div class="console-brand"><svg class="console-mark" width="15" height="15" viewBox="0 0 64 64" aria-hidden="true"><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/></svg> OpenPanda</div>
-            <div class="console-new">+ New task</div>
-            <nav>
-              <a class="on">Chat <em>3</em></a>
-              <a>Workspace</a>
-              <a>Nodes</a>
-              <a>Queue · Tasks · Projects <em>12</em></a>
-              <a>To-dos <em>8</em></a>
-              <a>Settings</a>
-            </nav>
-            <div class="console-user"><span class="av"></span><div><b>This machine · Hub</b><small>panda daemon</small></div></div>
-          </aside>
-          <div class="console-main">
-            <header>
-              <div><h3>Queue · Tasks · Projects</h3><p>3 in progress · 1 waiting for approval</p></div>
-              <div class="console-filters"><span class="on">All</span><span>In progress</span><span>In review</span></div>
-            </header>
-            <div class="console-board">
-              <div class="console-col">
-                <div class="console-colhead"><span>To do</span><b>2</b></div>
-                <div class="console-card"><h5>Refactor release pipeline</h5><p>build-box · codex</p><div class="console-tags"><span class="tag-auto">Auto</span><span class="tag-muted">2 stages</span></div></div>
-                <div class="console-card"><h5>Generate API docs</h5><p>macbook-pro · claude-code</p><div class="console-tags"><span class="tag-auto">Auto</span></div></div>
-              </div>
-              <div class="console-col">
-                <div class="console-colhead"><span>In progress</span><b>2</b></div>
-                <div class="console-card active"><h5>Fix scheduler tests</h5><p>macbook-pro · claude-code</p><div class="console-progress"><i style="width:64%"></i></div><div class="console-tags"><span class="tag-auto">Judge 2/5</span><span class="tag-muted">Running</span></div></div>
-                <div class="console-card"><h5>Sync dataset to NAS</h5><p>nas-01 · restic</p><div class="console-progress"><i style="width:32%"></i></div><div class="console-tags"><span class="tag-info">Transfer</span></div></div>
-              </div>
-              <div class="console-col">
-                <div class="console-colhead"><span>In review</span><b>1</b></div>
-                <div class="console-card warn"><h5>Deploy to production</h5><p>build-box · codex</p><div class="console-tags"><span class="tag-warn">Needs approval</span></div><div class="console-approve"><span>Approve</span><span>Reject</span></div></div>
-              </div>
-            </div>
-          </div>
-          <aside class="console-inspector">
-            <div class="console-inspector-head"><span>Task detail</span><b>#T-2841</b></div>
-            <h5>Fix scheduler tests</h5>
-            <p class="console-sub">macbook-pro · claude-code</p>
-            <div class="console-detail"><span>Status</span><b>Running</b></div>
-            <div class="console-detail"><span>Judge round</span><b>2 / 5</b></div>
-            <div class="console-detail"><span>Artifact</span><b>report.md</b></div>
-            <div class="console-timeline">
-              <div><p><b>Task dispatched</b><small>09:41:02 · entry model</small></p></div>
-              <div><p><b>Scanned failing tests</b><small>09:41:08 · claude-code</small></p></div>
-              <div><p><b>Judge: artifact missing</b><small>09:42:11 · re-dispatched</small></p></div>
-            </div>
-          </aside>
+        <div class="console-body is-shot">
+          <img class="console-shot" src="media/console-task.webp" width="1440" height="900" loading="lazy" decoding="async"
+               alt="OpenPanda 控制台任务详情：任务 01a1b154 已完成，页面显示真实的 uptime 命令输出与模型结论"
+               aria-label="OpenPanda 控制台任务详情：任务 01a1b154 已完成，页面显示真实的 uptime 命令输出与模型结论"
+               data-i18n-aria="s3.shot.console" />
         </div>
       </div>
       <!-- /console-frame -->
 
-      <div class="term-frame" id="view-term" data-panel="term" role="tabpanel" hidden>
+      <div class="term-frame" id="view-term" data-panel="term" role="tabpanel" aria-labelledby="view-tab-term" tabindex="0" hidden>
         <div class="term-chrome">
           <span class="dots"><i></i><i></i><i></i></span>
-          <span class="term-title">panda — zsh</span>
-          <span class="term-tag">CLI</span>
+          <span class="term-title" data-i18n="s3.rec.term">panda — 实机录制 · zsh</span>
+          <span class="term-tag" data-i18n="s3.rec.tag">REC · 81s</span>
         </div>
-        <div class="term-body">
-          <p class="t-prompt"><span class="t-path">~/project</span> <span class="t-arrow">❯</span> panda ask <em data-i18n="s3.term.cmd">"修掉 scheduler 的失败测试，在构建机上跑完，结果发我手机"</em></p>
-          <div class="t-flow">
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">entry</span><span class="t-text" data-i18n="s3.term.classify">classify 意图 → <b>task.graph</b></span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">plan</span><span class="t-text"><b>3 stages</b> · 4 artifacts · 2 machines</span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">route</span><span class="t-text">macbook-pro · claude-code · <b>0.91</b></span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">route</span><span class="t-text">build-box · codex · <b>0.87</b> <span class="t-dim">hop +1</span></span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">route</span><span class="t-text">phone · notify · <b>0.74</b></span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">judge</span><span class="t-text">round 1/5 <span class="t-bad">FAIL</span> <span class="t-dim" data-i18n="s3.term.replan">artifact missing → 带因重派</span></span></div>
-            <div class="t-row"><span class="t-sign">◇</span><span class="t-key">judge</span><span class="t-text">round 2/5 <span class="t-ok">PASS</span> <span class="t-dim">214 tests</span></span></div>
-          </div>
-          <p class="t-done"><span class="t-ok">✔</span> done <b>2m14s</b> · 4 artifacts · <span class="t-hl">0 bytes to cloud</span><i class="t-caret"></i></p>
+        <div class="term-body is-video">
+          <video class="term-video" controls preload="none" playsinline width="1008" height="604"
+                 poster="media/demo-poster.webp"
+                 aria-label="OpenPanda 终端实机录屏：依次运行 panda version、panda doctor、panda queue、panda ask 完成任务、panda queue 查看结果"
+                 data-i18n-aria="s3.shot.term">
+            <source src="media/openpanda-demo.mp4" type="video/mp4" />
+            <span data-i18n="s3.demo.fallback">浏览器不支持内嵌视频，可下载同目录下的 openpanda-demo.mp4 观看。</span>
+          </video>
         </div>
       </div>
 
-      <p class="figure-caption"><b>FIG. 01</b><span data-i18n="s3.caption">界面示意：控制台看状态与审批，终端看路由与验收，两个视角对应同一次运行。</span></p>
+      <p class="figure-caption"><b>FIG. 01</b><span data-i18n="s3.caption">2026-11-06，本机从源码构建 v0.1.4 后的实机录制。panda ask 让模型在本机执行 uptime，任务 01a1b154 由 opencode 适配器在 43 秒内完成；控制台截图与终端视频来自同一次运行。</span><a class="media-dl" href="media/openpanda-demo.mp4" data-i18n="s3.demo.link">完整录屏 · MP4 626 KB</a></p>
       </div>
     </div>
 
@@ -784,18 +720,20 @@
         <h2 class="install-title" data-i18n="s9.title">一行命令，<br>点火入轨。</h2>
         <p class="install-note" data-i18n="s9.note">安装器会按平台与架构取产物，校验 <span class="nowrap">SHA-256</span>、解压并写进 PATH，装完跑一次 <b>panda init</b> 就绪。默认装最新稳定版；要指定版本，macOS / Linux 加 <b>--version</b>，Windows 加 <b>-Version</b>。</p>
       </div>
-      <div class="install-tabs" role="tablist" aria-label="Install method">
-        <button class="install-tab active" data-os="unix" role="tab" aria-selected="true" data-i18n="s9.tab.unix"
+      <!-- All three tabs drive one shared command box, so they point at the
+           same tabpanel; main.js keeps aria-labelledby on the active tab. -->
+      <div class="install-tabs" role="tablist" aria-label="安装方式" data-i18n-aria="s9.tabs.aria">
+        <button class="install-tab active" id="install-tab-unix" data-os="unix" role="tab" aria-selected="true" aria-controls="install-command-panel" tabindex="0" data-i18n="s9.tab.unix"
           data-prompt="$"
           data-cmd="curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh">macOS / Linux</button>
-        <button class="install-tab" data-os="brew" role="tab" aria-selected="false"
+        <button class="install-tab" id="install-tab-brew" data-os="brew" role="tab" aria-selected="false" aria-controls="install-command-panel" tabindex="-1"
           data-prompt="$"
           data-cmd="brew tap Xustalis/openpanda &amp;&amp; brew install openpanda">Homebrew</button>
-        <button class="install-tab" data-os="win" role="tab" aria-selected="false"
+        <button class="install-tab" id="install-tab-win" data-os="win" role="tab" aria-selected="false" aria-controls="install-command-panel" tabindex="-1"
           data-prompt="PS&gt;"
           data-cmd="irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps1 | iex">Windows</button>
       </div>
-      <div class="install-command">
+      <div class="install-command" id="install-command-panel" role="tabpanel" aria-labelledby="install-tab-unix" tabindex="0">
         <span class="prompt">$</span>
         <code id="install-command">curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh</code>
         <button class="copy-btn" data-copy-target="install-command" data-i18n-aria="s9.copy" aria-label="复制">
@@ -817,8 +755,71 @@
         <p>macOS <b>arm64 · amd64</b></p>
         <p>Linux <b>amd64 · arm64</b></p>
         <p>Windows <b>amd64 · arm64</b></p>
-        <a href="https://github.com/Xustalis/OpenPanda/releases" target="_blank" rel="noopener" data-i18n="s9.all">全部安装包与校验值 ↗</a>
+        <a href="download.html" data-i18n="s9.all">全部安装包与校验值 →</a>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ SITE MAP ═══════════════════════════════ -->
+<!-- The page above is the story; these four are the parts of a site that are
+     worth bookmarking and that keep changing after the story is finished. -->
+<section class="paper-section pg-hub" id="resources" tabindex="-1">
+  <div class="wrap">
+    <div class="section-label"><span>SITE MAP</span><span>09 PAGES</span></div>
+    <div class="section-head">
+      <h2 class="h2" id="resources-title" data-i18n="hub.title">站点目录。</h2>
+      <p class="lede" data-i18n="hub.lede">文档、下载、发布记录、当前边界、能力清单、安全模型、社区与常见问题各有独立地址，可以直接收藏，也可以单独发给同事。</p>
+    </div>
+    <div class="hub-grid">
+      <a class="hub-card" href="docs.html">
+        <span class="hub-num">01 / DOCS</span>
+        <h3 data-i18n="hub.docs.t">文档中心</h3>
+        <p data-i18n="hub.docs.d">快速开始、命令速查、安装参数、架构与信任模型。</p>
+        <span class="hub-go" aria-hidden="true">→</span>
+      </a>
+      <a class="hub-card" href="download.html">
+        <span class="hub-num">02 / DOWNLOAD</span>
+        <h3 data-i18n="hub.dl.t">下载与校验</h3>
+        <p data-i18n="hub.dl.d">六个发布目标、lite 变体、SHA-256 与 Ed25519 验签。</p>
+        <span class="hub-go" aria-hidden="true">→</span>
+      </a>
+      <a class="hub-card" href="changelog.html">
+        <span class="hub-num">03 / RELEASE NOTES</span>
+        <h3 data-i18n="hub.cl.t">发布记录</h3>
+        <p data-i18n="hub.cl.d">0.1.x 五个版本的逐条改动，以及版本兼容承诺。</p>
+        <span class="hub-go" aria-hidden="true">→</span>
+      </a>
+      <a class="hub-card" href="status.html">
+        <span class="hub-num">04 / STATUS</span>
+        <h3 data-i18n="hub.st.t">项目现状</h3>
+        <p data-i18n="hub.st.d">已验证的部署、未做完的边界与已知限制。</p>
+        <span class="hub-go" aria-hidden="true">→</span>
+      </a>
+      <a class="hub-card" href="features.html">
+        <span class="hub-num">05 / CAPABILITIES</span>
+        <h3 data-i18n="hub.ft.t">能力清单</h3>
+        <p data-i18n="hub.ft.d">编排、记忆、组网、会话与界面的逐条能力对账。</p>
+        <span class="hub-go" aria-hidden="true">→</span>
+      </a>
+      <a class="hub-card" href="security.html">
+        <span class="hub-num">06 / SECURITY</span>
+        <h3 data-i18n="hub.sc.t">安全与信任</h3>
+        <p data-i18n="hub.sc.d">信任模型、部署红线、完整性校验与漏洞上报。</p>
+        <span class="hub-go" aria-hidden="true">→</span>
+      </a>
+      <a class="hub-card" href="community.html">
+        <span class="hub-num">07 / COMMUNITY</span>
+        <h3 data-i18n="hub.cm.t">社区与贡献</h3>
+        <p data-i18n="hub.cm.d">工具链、工程门禁、代码约定与 PR 流程。</p>
+        <span class="hub-go" aria-hidden="true">→</span>
+      </a>
+      <a class="hub-card" href="faq.html">
+        <span class="hub-num">08 / FAQ</span>
+        <h3 data-i18n="hub.fq.t">常见问题</h3>
+        <p data-i18n="hub.fq.d">按场景分组的 29 个高频问题与答案。</p>
+        <span class="hub-go" aria-hidden="true">→</span>
+      </a>
     </div>
   </div>
 </section>
@@ -828,7 +829,7 @@
 <footer class="site-footer">
   <div class="wrap footer-grid">
     <div class="footer-brand">
-      <a class="brand" href="#top" aria-label="OpenPanda">
+      <a class="brand" href="index.html" aria-label="OpenPanda">
         <svg class="brand-mark" width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
         <span>Open<b>Panda</b></span>
       </a>
@@ -837,25 +838,29 @@
     </div>
     <div class="footer-col">
       <h4 data-i18n="foot.product">产品</h4>
-      <a href="#graph" data-i18n="foot.why">为什么是图</a>
-      <a href="#constitution" data-i18n="foot.thin">薄宪法</a>
-      <a href="#roadmap" data-i18n="foot.roadmap">路线图</a>
-      <a href="#faq" data-i18n="foot.faq">常见问题</a>
-      <a href="#install" data-i18n="foot.install">安装</a>
+      <a href="features.html" data-i18n="foot.features">能力清单</a>
+      <a href="index.html#graph" data-i18n="foot.why">为什么是图</a>
+      <a href="index.html#constitution" data-i18n="foot.thin">薄宪法</a>
+      <a href="index.html#roadmap" data-i18n="foot.roadmap">路线图</a>
+      <a href="faq.html" data-i18n="foot.faq">常见问题</a>
+      <a href="download.html" data-i18n="foot.install">安装</a>
     </div>
     <div class="footer-col">
       <h4 data-i18n="foot.resources">资源</h4>
-      <a href="https://github.com/Xustalis/OpenPanda/blob/main/README.md" target="_blank" rel="noopener" data-i18n="foot.docs">文档</a>
-      <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener" data-i18n="foot.status">项目现状</a>
-      <a href="https://github.com/Xustalis/OpenPanda/releases" target="_blank" rel="noopener" data-i18n="foot.releases">版本发布</a>
-      <a href="https://github.com/Xustalis/OpenPanda/blob/main/CHANGELOG.md" target="_blank" rel="noopener" data-i18n="foot.changelog">更新日志</a>
+      <a href="docs.html" data-i18n="foot.docs">文档中心</a>
+      <a href="download.html" data-i18n="foot.releases">下载与校验</a>
+      <a href="changelog.html" data-i18n="foot.changelog">更新日志</a>
+      <a href="status.html" data-i18n="foot.status">项目现状</a>
+      <a href="security.html" data-i18n="foot.trust">安全与信任</a>
       <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL-3.0</a>
     </div>
     <div class="footer-col">
       <h4 data-i18n="foot.contact">社区</h4>
+      <a href="community.html" data-i18n="foot.community">社区与贡献</a>
       <a href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">GitHub</a>
       <a href="https://github.com/Xustalis/OpenPanda/issues" target="_blank" rel="noopener">Issues</a>
       <a href="https://github.com/Xustalis/OpenPanda/blob/main/SECURITY.md" target="_blank" rel="noopener" data-i18n="foot.security">安全策略</a>
+      <a href="https://github.com/Xustalis/OpenPanda/blob/main/CODE_OF_CONDUCT.md" target="_blank" rel="noopener" data-i18n="foot.conduct">行为准则</a>
       <a href="mailto:fing2024@outlook.com" data-i18n="foot.invest">合作 / 投资</a>
       <a href="mailto:fing2024@outlook.com">fing2024@outlook.com</a>
     </div>
@@ -866,11 +871,11 @@
     <span class="status-pill"><i aria-hidden="true"></i><span data-i18n="foot.green">main 分支全绿才允许合并</span></span>
     <span class="status-sep" aria-hidden="true">·</span>
     <span data-i18n="foot.checks">10 项必过检查 · 6 个发布目标 · 每周安全扫描</span>
-    <a class="status-link" href="https://github.com/Xustalis/OpenPanda/releases/latest" target="_blank" rel="noopener" data-i18n="foot.latest">最新版本 v0.1.4 Constellation <span aria-hidden="true">↗</span></a>
+    <a class="status-link" href="download.html" data-i18n="foot.latest">最新版本 v0.1.4 Constellation <span aria-hidden="true">→</span></a>
   </div>
   <div class="wrap footer-bottom">
-    <p class="footer-credit" data-i18n="foot.credit">影像：ESO/S. Brunier 银河全景（CC BY 4.0）；NASA Blue Marble 与 Black Marble DNB 城市灯（公有领域）。代码以 AGPL-3.0-or-later 发布；闭源嵌入与托管修改可另行授权。</p>
-    <div class="footer-meta"><span>© 2026 OpenPanda</span><span data-i18n="foot.built">Built for machines you own.</span><a href="#top" aria-label="Back to top" data-i18n-aria="foot.top">↑</a></div>
+    <p class="footer-credit" data-i18n="foot.credit">影像：<a href="https://www.eso.org/public/images/eso0932a/" target="_blank" rel="noopener">ESO/S. Brunier 银河全景</a>（<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>；已裁剪、调色并与程序星点合成）；NASA Blue Marble、Black Marble DNB 与地球云层影像（公有领域）。代码以 AGPL-3.0-or-later 发布；闭源嵌入与托管修改可另行授权。</p>
+    <div class="footer-meta"><span>© 2026 OpenPanda</span><span data-i18n="foot.built">Built for machines you own.</span><a href="index.html#top" aria-label="Back to top" data-i18n-aria="foot.top">↑</a></div>
   </div>
 </footer>
 

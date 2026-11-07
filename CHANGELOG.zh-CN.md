@@ -38,6 +38,12 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - 本 changelog 为策展式记录：部分内部重构与 adapter 未在此列出。
 - 英文版（CHANGELOG.md）为权威版本，zh-CN / ja / es / de 翻译与其镜像，发布前后可能短暂滞后。
 
+## [Unreleased]
+
+### Fixed
+
+- **GitHub 卡住时 Windows 安装器不再无限挂起** —— 每次下载都有界：curl 对压缩包设 1 KB/s 速度下限（持续 60 秒）和 300 秒单次上限，API 查询是 45 秒；.NET 兜底的读取超时同样覆盖响应正文。curl 不再重试超时——每次重试都会以全新计时重跑整个传输，原本最多再跑三次；连接建立后收不到字节的情况现在会带着映射后的原因结束，而不是永远停在 `Installing …`。脚本还会把 Windows「Internet 选项」里的系统代理交给 curl，并按 `ProxyOverride` 绕过列表（含本地回环）让本地镜像保持直连；只配了 PAC 的情况交给 .NET 兜底。
+
 ## [0.1.4] - 2026-11-03 — "Constellation"
 
 ### 新增功能

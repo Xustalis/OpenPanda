@@ -28,8 +28,8 @@ func NewInjector(hermes *Hermes, projects *Projects) *Injector {
 // relevant to query. The hot-layer files are scored together as one pool (A3
 // multi-file retrieval): a non-empty query returns at most conversationMemoryK
 // matching entries across all files, so a growing hot layer no longer forces
-// the whole file set into every prompt; an empty query returns the full pool
-// (no relevance signal, so nothing is filtered). It returns "" when there is
+// the whole file set into every prompt; an empty query takes the first few
+// entries, never an unbounded number of topic files. It returns "" when there is
 // no memory. The result is a frozen snapshot — a later write does not change it.
 func (i *Injector) Conversation(query string) (string, error) {
 	if i.hermes == nil {
@@ -44,19 +44,20 @@ func (i *Injector) Conversation(query string) (string, error) {
 		return "", err
 	}
 	pool := append([]string(nil), mem.Entries...)
-	// Topic files join the same retrieval pool; an unreadable topic is
-	// skipped rather than failing the whole injection.
-	if names, err := i.hermes.ListTopics(); err == nil {
-		for _, name := range names {
-			if t, err := i.hermes.LoadTopic(name); err == nil {
-				pool = append(pool, t.Entries...)
-			}
+	// A failed topic scan is not an empty memory store. Surface the error so
+	// a corrupt path or unreadable file does not silently erase context.
+	names, err := i.hermes.ListTopics()
+	if err != nil {
+		return "", err
+	}
+	for _, name := range names {
+		topic, err := i.hermes.LoadTopic(name)
+		if err != nil {
+			return "", fmt.Errorf("memory: load topic %q: %w", name, err)
 		}
+		pool = append(pool, topic.Entries...)
 	}
-	entries := pool
-	if query != "" {
-		entries = Retriever{}.Rank(query, pool, conversationMemoryK)
-	}
+	entries := Retriever{}.Rank(query, pool, conversationMemoryK)
 	return joinSnapshot(user, MemFile{Entries: entries, Limit: mem.Limit}), nil
 }
 

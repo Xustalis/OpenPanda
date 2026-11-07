@@ -250,7 +250,7 @@ func (c *Core) queueWake() {
 // enforcing resource conflicts and the card's MaxConcurrent budget. Idempotent
 // within one Core; runs until ctx ends.
 func (c *Core) StartQueueScheduler(ctx context.Context) *queue.Scheduler {
-	max := c.Card().Capacity.MaxConcurrent
+	max := c.executionConcurrency()
 	if max < 1 {
 		max = 1
 	}

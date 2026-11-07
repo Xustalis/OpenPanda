@@ -1002,6 +1002,13 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			c.checkpointLoop.Reset(taskID)
 			return final, result, nil
 		}
+		// A machine-readable explanation for recovery diagnostics, including
+		// skipped retries. No stderr/endpoint/credential is persisted here.
+		if result.AttemptID == "" || final.AttemptID == result.AttemptID {
+			_ = c.store.RecordEvent(ctx, taskID, "recovery_assessment", map[string]any{
+				"attempt_id": result.AttemptID, "node": c.nodeID, "assessment": assessRecovery(result),
+			})
+		}
 		if result.NoRetry {
 			// A contract failure is the outcome, not a transient error: the
 			// retry budget would re-run the agent and the same checks to

@@ -1286,3 +1286,14 @@ def read_turn_lines():
         if msg is None or msg.get("type") != "user":
             continue
         yield msg
+
+
+def selected_model(native=""):
+    """Native single-model CLI choice; injection and explicit CLI env pins win.
+
+    The preference list was validated at the configuration boundary. OpenCode
+    uses its own roster-based resolver instead of this first-candidate helper.
+    """
+    if native or os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
+        return native
+    return next(iter(json.loads(os.environ.get("OPENPANDA_AGENT_MODELS", "[]"))), "")

@@ -3,10 +3,44 @@
 package memory
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 )
+
+func TestProjectTurnCannotReadOrWritePersonalMemory(t *testing.T) {
+	tool := NewTool(NewHermes(t.TempDir()), NewProjects(t.TempDir()))
+	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "user", "entry": "private preference"}); err != nil {
+		t.Fatal(err)
+	}
+	projectCtx := WithScopeProject(context.Background(), "work")
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+	}{
+		{ToolRead, nil},
+		{ToolRead, map[string]any{"target": "user"}},
+		{ToolRead, map[string]any{"target": "memory"}},
+		{ToolAdd, map[string]any{"target": "memory", "entry": "leaked"}},
+		{ToolReplace, map[string]any{"target": "user", "old": "private", "new": "leaked"}},
+		{ToolRemove, map[string]any{"target": "user", "old": "private"}},
+	} {
+		if out, err := tool.ExecuteCtx(projectCtx, tc.name, tc.args); err == nil {
+			t.Errorf("%s %+v returned %q in project context", tc.name, tc.args, out)
+		}
+	}
+	if _, err := tool.ExecuteCtx(projectCtx, ToolAdd, map[string]any{"target": "project", "entry": "project fact"}); err != nil {
+		t.Fatal(err)
+	}
+	workspaceCtx := WithoutPersonalMemory(WithScopeProject(context.Background(), ""))
+	if _, err := tool.ExecuteCtx(workspaceCtx, ToolRead, map[string]any{"target": "user"}); err == nil {
+		t.Fatal("unnamed workspace can read personal memory")
+	}
+	if out, err := tool.ExecuteCtx(WithScopeProject(context.Background(), ""), ToolRead, map[string]any{"target": "user"}); err != nil || !strings.Contains(out, "private preference") {
+		t.Fatalf("project-free personal read: %q, %v", out, err)
+	}
+}
 
 func TestToolAddReadRoundTrip(t *testing.T) {
 	root := t.TempDir()

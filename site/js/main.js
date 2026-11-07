@@ -58,10 +58,13 @@ paintNav()
 
 /* ── nav: current section ──────────────────────────────────────────────── */
 
-const navLinks = [...document.querySelectorAll('.nav-links a')].filter((a) =>
-  a.getAttribute('href')?.startsWith('#')
-)
-const linkFor = new Map(navLinks.map((a) => [a.getAttribute('href').slice(1), a]))
+// The nav is site-level now, so only its in-page entry (FAQ, written as
+// index.html#faq to stay valid on the other pages) can follow the scroll spy.
+const navLinks = [...document.querySelectorAll('.nav-links a')].filter((a) => {
+  const href = a.getAttribute('href') || ''
+  return href.startsWith('#') || href.startsWith('index.html#')
+})
+const linkFor = new Map(navLinks.map((a) => [a.getAttribute('href').split('#')[1], a]))
 
 if (navLinks.length) {
   // Observe every section, not just the ones the nav links to: the page runs
@@ -81,12 +84,27 @@ if (navLinks.length) {
   for (const section of sections) spy.observe(section)
 }
 
+// A skip link or ⌘K jump only moves keyboard focus if its target can hold it.
+// #why carries tabindex="-1" in the markup for the no-JS path; this covers the
+// remaining destinations without putting them in the ordinary tab sequence.
+for (const el of document.querySelectorAll('main section[id], main header[id]')) {
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1')
+}
+
 /* ── mobile index ──────────────────────────────────────────────────────── */
 
 const menuBtn = $('menu-toggle')
 const menu = $('mobile-menu')
 
-const menuInertHosts = [document.querySelector('.skip-link'), document.querySelector('main'), document.querySelector('.site-footer')].filter(Boolean)
+// The sheet is aria-modal, so the chrome behind it leaves the tab order too,
+// nav included. The toggle itself stays reachable — it is the visible close
+// control, and inert inherited from an ancestor cannot be undone by a child.
+const menuInertHosts = [
+  document.querySelector('.skip-link'),
+  document.querySelector('main'),
+  document.querySelector('.site-footer'),
+  ...[...document.querySelectorAll('.site-nav a, .site-nav button')].filter((el) => el !== menuBtn),
+].filter(Boolean)
 
 function setMenu(open) {
   if (!menu || !menuBtn) return
@@ -269,26 +287,55 @@ document.querySelectorAll('.copy-btn').forEach((btn) => {
   })
 })
 
+/* ── tablist keyboard contract ─────────────────────────────────────────── */
+// Both tablists are short and horizontal. WAI-ARIA expects one tab stop for the
+// group, arrow keys to move inside it, and Home/End at the ends. The markup
+// carries the initial tabindex so the same holds before this module loads.
+function markTabs(tabs, active) {
+  for (const tab of tabs) {
+    const on = tab === active
+    tab.setAttribute('aria-selected', String(on))
+    tab.setAttribute('tabindex', on ? '0' : '-1')
+  }
+}
+
+function wireTabKeys(tabs, activate) {
+  tabs.forEach((tab, i) => {
+    tab.addEventListener('keydown', (e) => {
+      let next = null
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (i + 1) % tabs.length
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (i - 1 + tabs.length) % tabs.length
+      else if (e.key === 'Home') next = 0
+      else if (e.key === 'End') next = tabs.length - 1
+      if (next === null) return
+      e.preventDefault()
+      activate(tabs[next])
+      tabs[next].focus()
+    })
+  })
+}
+
 /* ── install switcher ──────────────────────────────────────────────────── */
-// Each tab carries its own command, so the markup stays the single source.
+// Each tab carries its own command, so the markup stays the single source. All
+// three share one command panel, whose label follows the active tab.
 
 const installCmd = $('install-command')
 const installPrompt = installCmd?.parentElement.querySelector('.prompt')
+const installPanel = $('install-command-panel')
 const installTabs = [...document.querySelectorAll('.install-tab')]
 
-for (const tab of installTabs) {
-  tab.addEventListener('click', () => {
-    if (tab.classList.contains('active')) return
-    for (const other of installTabs) {
-      const on = other === tab
-      other.classList.toggle('active', on)
-      other.setAttribute('aria-selected', String(on))
-    }
-    if (!installCmd || !tab.dataset.cmd) return
-    installCmd.textContent = tab.dataset.cmd
-    if (installPrompt && tab.dataset.prompt) installPrompt.textContent = tab.dataset.prompt
-  })
+function setInstall(tab) {
+  for (const other of installTabs) other.classList.toggle('active', other === tab)
+  markTabs(installTabs, tab)
+  if (installPanel && tab.id) installPanel.setAttribute('aria-labelledby', tab.id)
+  if (!installCmd || !tab.dataset.cmd) return
+  installCmd.textContent = tab.dataset.cmd
+  if (installPrompt && tab.dataset.prompt) installPrompt.textContent = tab.dataset.prompt
 }
+
+for (const tab of installTabs) tab.addEventListener('click', () => setInstall(tab))
+wireTabKeys(installTabs, setInstall)
+if (installTabs.length) markTabs(installTabs, installTabs.find((t) => t.classList.contains('active')) || installTabs[0])
 
 /* ── pointer tilt ──────────────────────────────────────────────────────── */
 // A few degrees, only for fine pointers: enough that the diagrams feel like
@@ -374,17 +421,19 @@ const viewTabs = [...document.querySelectorAll('.view-tab')]
 const viewPanels = [...document.querySelectorAll('.product-view [data-panel]')]
 
 function setView(name) {
-  for (const tab of viewTabs) {
-    const on = tab.dataset.view === name
-    tab.classList.toggle('on', on)
-    tab.setAttribute('aria-selected', String(on))
+  const active = viewTabs.find((t) => t.dataset.view === name) || viewTabs[0]
+  for (const tab of viewTabs) tab.classList.toggle('on', tab === active)
+  markTabs(viewTabs, active)
+  for (const panel of viewPanels) {
+    const on = panel.dataset.panel === name
+    panel.hidden = !on
+    if (on && active.id) panel.setAttribute('aria-labelledby', active.id)
   }
-  for (const panel of viewPanels) panel.hidden = panel.dataset.panel !== name
 }
 
-for (const tab of viewTabs) {
-  tab.addEventListener('click', () => setView(tab.dataset.view))
-}
+for (const tab of viewTabs) tab.addEventListener('click', () => setView(tab.dataset.view))
+wireTabKeys(viewTabs, (tab) => setView(tab.dataset.view))
+if (viewTabs.length) markTabs(viewTabs, viewTabs.find((t) => t.classList.contains('on')) || viewTabs[0])
 
 /* ── toast ─────────────────────────────────────────────────────────────── */
 // Only the palette needs it: a copy action otherwise gives no feedback at all.
@@ -558,7 +607,12 @@ async function runCommand(cmd) {
 
   if (cmd.go) {
     const target = document.querySelector(cmd.go)
-    if (target) target.scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' })
+    if (target) {
+      target.scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' })
+      // Every jump destination carries tabindex="-1", so this moves the
+      // reading position for screen readers rather than only the viewport.
+      target.focus({ preventScroll: true })
+    }
     try { history.replaceState(null, '', cmd.go) } catch { /* file:// */ }
     return
   }

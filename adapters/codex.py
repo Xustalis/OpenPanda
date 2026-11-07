@@ -77,7 +77,7 @@ def main():
     if os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
         base_url = os.environ.get("OPENAI_BASE_URL", "")
         api_key = os.environ.get("OPENAI_API_KEY", "")
-        inj_model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL", "")
+        inj_model = harness.selected_model(os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL", ""))
         if base_url:
             cmd += [
                 "-c", 'model_provider="custom"',
@@ -96,7 +96,7 @@ def main():
     else:
         # Model selection is Codex-specific; Anthropic variables must not leak
         # into this provider contract.
-        model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL", "")
+        model = harness.selected_model(os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL", ""))
         if model:
             cmd += ["--model", model]
     cmd.append(prompt)

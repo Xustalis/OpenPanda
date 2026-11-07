@@ -22,9 +22,10 @@ import (
 // close behind the task's terminal transition without busy-polling.
 const sessionFinalizeInterval = 5 * time.Second
 
-// evSessionSummary is the task_events marker making the summary turn
-// exactly-once: written before the turn is appended so a crash between the
-// two steps can at worst lose the turn, never duplicate it.
+// evSessionSummary is the task_events marker for a persisted summary turn.
+// Append the idempotently keyed turn BEFORE the marker: failed writes remain
+// eligible for a later sweep, and a crash/marker failure replays without
+// duplicating the turn.
 const evSessionSummary = "session_summary"
 
 // startSessionFinalizer runs the summary sweep until ctx ends (queue
@@ -55,24 +56,13 @@ func (h *handler) startSessionFinalizer(ctx context.Context) {
 // event timeline on every pass, so a board of already-summarized tasks was
 // re-read forever.
 func (h *handler) finalizeSessionSweep(ctx context.Context) {
+	defer h.finalizeAskRounds(ctx)
 	tasks, err := h.store.TerminalSessionTasksWithoutEvent(ctx, evSessionSummary)
 	if err != nil {
 		return
 	}
 	for _, t := range tasks {
 		summary := h.taskSummary(ctx, t)
-		// Marker first (see evSessionSummary): a crash after the marker but
-		// before the turn loses one turn, a crash the other way round would
-		// duplicate it on restart. The attempt id scopes the marker to the run
-		// it reported: a retried task rotates it, and the attempt that finally
-		// finished owes the thread a report of its own.
-		if err := h.store.RecordEvent(ctx, t.TaskID, evSessionSummary, map[string]string{
-			"session_id": t.SessionID,
-			"state":      t.State,
-			"attempt_id": t.AttemptID,
-		}); err != nil {
-			continue
-		}
 		// A task turn measures the task, not the dispatch: the row's own
 		// timestamps are the only clock that spans queue wait plus execution,
 		// and the console prints the number above the summary. Guarded because
@@ -90,14 +80,29 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) {
 			// already carries the card and the jump link; this one is just
 			// what happened. Ref still travels so the report can fold the
 			// task's own process under it without drawing a second card.
-			Kind:       "answer",
-			Ref:        t.TaskID,
-			Text:       summary,
-			DurationMS: durationMS,
+			Kind:           "answer",
+			Ref:            t.TaskID,
+			Text:           summary,
+			DurationMS:     durationMS,
+			IdempotencyKey: taskSummaryKey(t),
 		}); err != nil {
 			log.From(ctx).Warn("session summary append", "task", t.TaskID, "session", t.SessionID, "err", err)
+			continue
+		}
+		if err := h.store.RecordEvent(ctx, t.TaskID, evSessionSummary, map[string]string{
+			"session_id": t.SessionID,
+			"state":      t.State,
+			"attempt_id": t.AttemptID,
+		}); err != nil {
+			log.From(ctx).Warn("session summary marker", "task", t.TaskID, "session", t.SessionID, "err", err)
 		}
 	}
+}
+
+// taskSummaryKey is stable across sweeps and process restarts, but rotates
+// with a retry so a failed attempt cannot suppress the eventual result.
+func taskSummaryKey(t core.Task) string {
+	return evSessionSummary + ":" + t.TaskID + ":" + t.AttemptID
 }
 
 // taskSummary renders the one-turn report of a finished task.

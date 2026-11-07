@@ -101,6 +101,7 @@ var migrations = []Migration{
 	{Version: 64, Name: "add_task_checks_and_verification", Apply: migrateV64},
 	{Version: 65, Name: "index_tasks_by_session", Apply: migrateV65},
 	{Version: 66, Name: "add_intake_seen", Apply: migrateV66},
+	{Version: 67, Name: "add_ask_rounds", Apply: migrateV67},
 }
 
 // migrateV62 adds employee_cache.dir_signer: the Ed25519 key that SIGNED a
@@ -1599,4 +1600,27 @@ func migrateV66(tx MigrationExec) error {
 	}
 	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_intake_seen_at ON intake_seen(seen_at)`)
 	return err
+}
+
+// migrateV67 persists dispatch boundaries independently of a session. One
+// session can own multiple simultaneous asks; queue tasks outlive the ask.
+func migrateV67(tx MigrationExec) error {
+	for _, q := range []string{
+		`CREATE TABLE IF NOT EXISTS ask_rounds (
+   round_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, locale TEXT NOT NULL DEFAULT '',
+   status TEXT NOT NULL DEFAULT 'open', reported_version TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL,
+   created_at INTEGER NOT NULL, closed_at INTEGER NOT NULL DEFAULT 0
+  )`,
+		`CREATE INDEX IF NOT EXISTS ask_rounds_status ON ask_rounds(status,lease_until)`,
+		`CREATE TABLE IF NOT EXISTS ask_round_tasks (
+   task_id TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE CASCADE,
+   round_id TEXT NOT NULL REFERENCES ask_rounds(round_id) ON DELETE CASCADE
+  )`,
+		`CREATE INDEX IF NOT EXISTS ask_round_tasks_round ON ask_round_tasks(round_id)`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	return nil
 }

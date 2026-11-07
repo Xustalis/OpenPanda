@@ -108,7 +108,7 @@ _ARGV_ARG_LIMIT = 32_000 if os.name == "nt" else 128 * 1024
 
 
 def expand(template, prompt, cwd="", resume="", max_turns=0, task_id="",
-           effort="", system_prompt="", timeout_s=0):
+           effort="", system_prompt="", timeout_s=0, model=""):
     """argv-expand a card-declared command template.
 
     Returns (argv, prompt_via_stdin): argv is the expanded list — None when
@@ -124,6 +124,7 @@ def expand(template, prompt, cwd="", resume="", max_turns=0, task_id="",
         # {cwd} always resolves (the adapter's own cwd when the request left
         # it unset), so it never drops its element; the others drop.
         "{cwd}": cwd or os.getcwd(),
+        "{model}": model,
         "{resume}": resume,
         "{max_turns}": str(max_turns) if max_turns > 0 else "",
         "{task_id}": task_id,
@@ -220,7 +221,7 @@ def main():
     argv, use_stdin = expand(
         req.cmd, req.prompt, cwd=req.cwd or "", resume=req.resume,
         max_turns=req.max_turns, task_id=req.task_id, effort=req.effort,
-        system_prompt=req.system_prompt, timeout_s=req.timeout)
+        system_prompt=req.system_prompt, timeout_s=req.timeout, model=harness.selected_model())
     if argv is None:
         harness.emit(False,
                      "generic adapter: card agent.command template is empty, unparseable, or expands to nothing",

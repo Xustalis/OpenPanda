@@ -100,6 +100,9 @@ func (p *Projects) Load(name string) (MemFile, error) {
 	return m, nil
 }
 
+// Root returns the on-disk project-memory root used by this store.
+func (p *Projects) Root() string { return p.root }
+
 // Save writes a project's memory, creating the project directory as needed. It
 // enforces the project character cap and refuses an over-limit file rather than
 // silently truncating, mirroring Hermes.save.
