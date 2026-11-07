@@ -7867,13 +7867,30 @@ button.project-stat:hover {
   inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
   padding: 6px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
   opacity: 0;
   visibility: hidden;
   transition: opacity var(--dur-fast) var(--ease);
+}
+/* The list scrolls, the footer does not. Both of a card's verbs live in the
+   footer, and on an eleven-model account the add door rode the bottom of the
+   scroll — arriving out of sight, i.e. not arriving. */
+.model-conn-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.model-conn-foot {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
 }
 .model-conn:hover .model-conn-face,
 .model-conn:focus-within .model-conn-face {
@@ -8064,7 +8081,8 @@ button.project-stat:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: none;
+  flex: 1 1 auto;
+  min-width: 0;
   margin-top: 2px;
   padding: 6px 8px;
   border: 0;
@@ -8082,6 +8100,53 @@ button.project-stat:hover {
 .model-conn-add:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+/* The other verb on the card: the whole account at once. It stays a single
+   24px target so a stray pointer cannot reach it, and the click only arms the
+   strip — the count and the tick are what commit. */
+.model-conn-act {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.model-conn-act:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.model-conn-act.danger {
+  color: var(--danger);
+}
+.model-conn-act.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+.model-conn-act:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+/* What the tick answers: how many rows go. The number is the whole sentence of
+   a bulk delete, so it takes the room the two buttons leave. */
+.model-conn-confirm {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-left: 8px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* On a phone-width card a row is ~150px: four verbs and a name cannot share it,

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ModelEntry, ModelsResponse } from '../api/client.ts'
-import { connIdOf, copyAlias, groupConnections, hostOf, keyOf, refOf } from './model-connections.ts'
+import { connIdOf, connRefs, copyAlias, groupConnections, hostOf, keyOf, refOf } from './model-connections.ts'
 
 /** A wire entry with only the fields these tests care about; the rest of the
  *  payload is the panel's and is not read here. */
@@ -103,4 +103,34 @@ test('hostOf prints an unparsable address as typed', () => {
   assert.equal(hostOf('http://127.0.0.1:3065/v1'), '127.0.0.1:3065')
   assert.equal(hostOf('not a url'), 'not a url')
   assert.equal(hostOf('  '), '')
+})
+
+test('connRefs addresses every row of the card and nothing else', () => {
+  // Clearing a card sends the rows it is showing. The neighbour on another
+  // endpoint is one card away and must not be in the list: the server deletes
+  // what it is told, so an over-broad address takes a working account with it.
+  const conns = groupConnections(
+    response([
+      entry({ alias: 'relay', model: 'm-1', base_url: 'https://a.example/v1', key_fingerprint: 'aaaa' }),
+      entry({ alias: 'relay-2', model: 'm-2', base_url: 'https://a.example/v1', key_fingerprint: 'aaaa' }),
+      entry({ alias: 'spare', model: 's', base_url: 'https://b.example/v1', key_fingerprint: 'bbbb' }),
+    ]),
+  )
+  const refs = connRefs(conns.find((c) => c.baseURL === 'https://a.example/v1')!)
+  assert.deepEqual(refs, [
+    { alias: 'relay', model: 'm-1', base_url: 'https://a.example/v1', key: 'aaaa' },
+    { alias: 'relay-2', model: 'm-2', base_url: 'https://a.example/v1', key: 'aaaa' },
+  ])
+})
+
+test('connRefs includes the live row that has no registry entry', () => {
+  // That row is on screen — the page offers it edit and delete — so a card
+  // clear that skipped it would leave the card standing with one row in it.
+  const live = entry({ alias: 'live', model: 'x', base_url: 'https://elsewhere.example/v1' })
+  const conns = groupConnections(response([entry({ alias: 'relay' })], live))
+  const refs = connRefs(conns.find((c) => c.baseURL === 'https://elsewhere.example/v1')!)
+  assert.deepEqual(
+    refs.map((r) => r.alias),
+    ['live'],
+  )
 })

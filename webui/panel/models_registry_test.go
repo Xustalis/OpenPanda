@@ -838,3 +838,160 @@ func TestRemoveModelAddressesAnEndpointSpelledWithATrailingSlash(t *testing.T) {
 		t.Fatalf("live model = %q, want spare", cfg.Model.Alias())
 	}
 }
+
+// Clearing a connection is one request and one config write. The page paints a
+// card per account, and "this account is wrong" is a fact about all of its rows
+// at once: doing it row by row meant a rewrite of the models block and a
+// hot-swap of the live model per click, with the slot passing through siblings
+// that the next click would delete.
+func TestRemoveModelsClearsOneConnectionAndYieldsToTheNext(t *testing.T) {
+	sol := config.ModelConfig{
+		Name: "sol", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://relay-a.example/v1", Model: "gpt-5.6-sol", APIKey: "ka",
+	}
+	luna := config.ModelConfig{
+		Name: "luna", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://relay-a.example/v1", Model: "gpt-5.6-luna", APIKey: "ka",
+	}
+	spare := config.ModelConfig{
+		Name: "spare", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://relay-b.example/v1", Model: "spare", APIKey: "kb",
+	}
+	h, path := newModelPanel(t, func(c *config.Config) {
+		c.Model = sol
+		c.Models = []config.ModelConfig{sol, luna, spare}
+	})
+
+	body := `{"refs":[
+		{"alias":"sol","model":"gpt-5.6-sol","base_url":"https://relay-a.example/v1"},
+		{"alias":"luna","model":"gpt-5.6-luna","base_url":"https://relay-a.example/v1"}]}`
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/models/remove", body))
+	if code != http.StatusOK {
+		t.Fatalf("clear the connection = %d %v", code, out)
+	}
+	if out["removed"] != 2.0 {
+		t.Fatalf("removed = %v, want both rows of the account", out["removed"])
+	}
+	if out["switched_to"] != "spare" {
+		t.Fatalf("switched_to = %v, want the surviving account", out["switched_to"])
+	}
+	cfg := readConfig(t, path)
+	if len(cfg.Models) != 1 || cfg.Models[0].Alias() != "spare" {
+		t.Fatalf("registry after the clear = %+v, want only spare", cfg.Models)
+	}
+	if cfg.Model.Alias() != "spare" {
+		t.Fatalf("live model = %q, want the promoted spare", cfg.Model.Alias())
+	}
+	// The other account is untouched on every field, not just its name: a purge
+	// that rewrote rows it was not asked about would have taken its key with it.
+	if cfg.Models[0].APIKey != "kb" || cfg.Models[0].BaseURL != spare.BaseURL {
+		t.Fatalf("the survivor was rewritten: %+v", cfg.Models[0])
+	}
+}
+
+// A stale address is what a tab left open through another surface's edit sends.
+// Skipping it keeps the call useful; reporting the count that actually went is
+// what keeps the toast honest.
+func TestRemoveModelsSkipsAddressesThatNoLongerExist(t *testing.T) {
+	keep := config.ModelConfig{
+		Name: "keep", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://relay.example/v1", Model: "keep", APIKey: "k",
+	}
+	gone := config.ModelConfig{
+		Name: "gone", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://relay.example/v1", Model: "gone", APIKey: "k",
+	}
+	h, path := newModelPanel(t, func(c *config.Config) {
+		c.Model = keep
+		c.Models = []config.ModelConfig{keep, gone}
+	})
+
+	body := `{"refs":[
+		{"alias":"gone","model":"gone","base_url":"https://relay.example/v1"},
+		{"alias":"already-deleted","model":"ghost","base_url":"https://relay.example/v1"}]}`
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/models/remove", body))
+	if code != http.StatusOK {
+		t.Fatalf("clear with a stale ref = %d %v", code, out)
+	}
+	if out["removed"] != 1.0 {
+		t.Fatalf("removed = %v, want exactly the row that existed", out["removed"])
+	}
+	if cfg := readConfig(t, path); len(cfg.Models) != 1 || cfg.Models[0].Alias() != "keep" {
+		t.Fatalf("registry = %+v, want keep untouched", cfg.Models)
+	}
+	// Nothing matched at all is a different answer from nothing left to do.
+	code, _ = doJSON(t, h, jsonReq(http.MethodPost, "/api/models/remove",
+		`{"refs":[{"alias":"already-deleted","model":"ghost"}]}`))
+	if code != http.StatusNotFound {
+		t.Fatalf("a batch that matches nothing = %d, want 404", code)
+	}
+}
+
+// Clearing every card is allowed and says so: the node is left with no model,
+// which is a supported state (asks degrade with ErrNoModel) and the only
+// honest end for a config whose models were all wrong.
+func TestRemoveModelsClearsTheLastConnection(t *testing.T) {
+	only := config.ModelConfig{
+		Name: "only", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://only.example/v1", Model: "m", APIKey: "k",
+	}
+	h, path := newModelPanel(t, func(c *config.Config) {
+		c.Model = only
+		c.Models = []config.ModelConfig{only}
+	})
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/models/remove",
+		`{"refs":[{"alias":"only","model":"m","base_url":"https://only.example/v1"}]}`))
+	if code != http.StatusOK {
+		t.Fatalf("clear the only connection = %d %v", code, out)
+	}
+	if out["cleared"] != true || out["removed"] != 1.0 {
+		t.Fatalf("response = %v, want removed:1 and cleared:true", out)
+	}
+	cfg := readConfig(t, path)
+	if len(cfg.Models) != 0 {
+		t.Fatalf("registry after the clear = %+v", cfg.Models)
+	}
+	if cfg.Model.Model != "" || cfg.Model.Provider != "" || cfg.Model.BaseURL != "" {
+		t.Fatalf("model: still names a purged row: %+v", cfg.Model)
+	}
+}
+
+// The survivor is verified before anything is removed. Draining the account
+// first and then discovering the only remaining row cannot be dialed would
+// leave the node failing every ask with no way back but the file.
+func TestRemoveModelsRefusesWhenTheSurvivorCannotTakeOver(t *testing.T) {
+	live := config.ModelConfig{
+		Name: "live", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://relay.example/v1", Model: "live", APIKey: "k",
+	}
+	second := config.ModelConfig{
+		Name: "second", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "https://relay.example/v1", Model: "second", APIKey: "k",
+	}
+	// A plain-http endpoint that never gave the waiver: buildable only by
+	// breaking the guard, which is exactly what the check is for.
+	broken := config.ModelConfig{
+		Name: "broken", Provider: "custom", APIType: config.APITypeOpenAI,
+		BaseURL: "http://relay.example/v1", Model: "broken", APIKey: "k",
+	}
+	h, path := newModelPanel(t, func(c *config.Config) {
+		c.Model = live
+		c.Models = []config.ModelConfig{live, second, broken}
+	})
+
+	body := `{"refs":[
+		{"alias":"live","model":"live","base_url":"https://relay.example/v1"},
+		{"alias":"second","model":"second","base_url":"https://relay.example/v1"}]}`
+	code, out := doJSON(t, h, jsonReq(http.MethodPost, "/api/models/remove", body))
+	if code != http.StatusConflict {
+		t.Fatalf("clear with an unbuildable survivor = %d %v, want 409", code, out)
+	}
+	cfg := readConfig(t, path)
+	if len(cfg.Models) != 3 {
+		t.Fatalf("a refused batch still removed rows: %+v", cfg.Models)
+	}
+	if cfg.Model.Alias() != "live" {
+		t.Fatalf("live model = %q, want it left alone", cfg.Model.Alias())
+	}
+}

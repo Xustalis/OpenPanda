@@ -1080,6 +1080,179 @@ func (h *handler) removeModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// modelRefWire is one row's address as the console hands it back: the alias
+// from the registry, narrowed by the three fields two rows under one name can
+// share. `Key` is the key_fingerprint the list returned, never the secret — the
+// same address entryMatches already understands.
+type modelRefWire struct {
+	Alias   string `json:"alias"`
+	Model   string `json:"model,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+	Key     string `json:"key,omitempty"`
+}
+
+// containsEntry answers "is this row one of the addressed ones", by identity —
+// the same comparison the removal itself uses, so "is this a target" and "does
+// this get deleted" can never disagree.
+func containsEntry(list []config.ModelConfig, m config.ModelConfig) bool {
+	return slices.ContainsFunc(list, func(x config.ModelConfig) bool { return sameEntry(x, m) })
+}
+
+// removeModels serves POST /api/models/remove — the batch form of DELETE
+// /api/models/{alias}, addressed by the rows the page is showing.
+//
+// A card is one account, and "this account is wrong" is a fact about all of its
+// rows at once. Twenty-seven single deletes were twenty-seven rewrites of the
+// models block and as many hot-swaps of the live model, each free to hand the
+// slot to a sibling the next click would delete; a failure halfway left a
+// connection nobody asked for and no sentence that could describe it. One call
+// is one lock, one write, and one decision about what the node asks next —
+// and a survivor that cannot dial refuses the batch before anything is gone, so
+// there is no half-purged connection to explain.
+//
+// The address is a list of rows, not "everything on this endpoint". The store
+// has no notion of a connection — it is derived from (provider, endpoint, key)
+// on the page — so a predicate that invented one would delete rows the user was
+// never shown, and the same relay can legitimately hold two accounts. A ref that
+// no longer matches anything is skipped rather than refused: a stale tab should
+// end up consistent, and `removed` says how many rows actually went.
+func (h *handler) removeModels(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Refs []modelRefWire `json:"refs"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	if h.cfg == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
+		return
+	}
+	// An address without an alias names nothing: entryMatches would compare the
+	// empty string against every row's name and quietly match none, which reads
+	// as "already deleted" instead of "malformed".
+	refs := make([]modelRefWire, 0, len(req.Refs))
+	for _, ref := range req.Refs {
+		if ref.Alias != "" {
+			refs = append(refs, ref)
+		}
+	}
+	if len(refs) == 0 {
+		writeErr(w, http.StatusBadRequest, errors.New("no models to remove"))
+		return
+	}
+	if len(refs) > 500 {
+		writeErr(w, http.StatusBadRequest, errors.New("too many models in one request"))
+		return
+	}
+	matches := func(m config.ModelConfig) bool {
+		for _, ref := range refs {
+			if entryMatches(m, ref.Alias, ref.Model, ref.BaseURL, ref.Key) {
+				return true
+			}
+		}
+		return false
+	}
+
+	active := h.engineModel()
+	var targets []config.ModelConfig
+	var successor config.ModelConfig
+	hasSuccessor, liveOnly := false, false
+	h.readCfg(func(c *config.Config) {
+		for _, m := range c.Models {
+			if matches(m) {
+				targets = append(targets, m)
+			}
+		}
+		// A live model configured outside the registry is a row of its own —
+		// the one the page paints with no registry row behind it — and it can
+		// be the connection being cleared. When the registry already holds it,
+		// the registry copy is the one addressed.
+		if (c.Model.Model != "" || c.Model.Provider != "") && matches(c.Model) &&
+			!containsEntry(targets, c.Model) {
+			targets = append(targets, c.Model)
+			liveOnly = true
+		}
+		// The survivor is the first row outside the batch, by identity: a
+		// same-named row on another endpoint is a legitimate successor.
+		for _, m := range c.Models {
+			if containsEntry(targets, m) {
+				continue
+			}
+			successor, hasSuccessor = m, true
+			return
+		}
+	})
+	if len(targets) == 0 {
+		writeErr(w, http.StatusNotFound, errors.New("no such model"))
+		return
+	}
+	// liveOnly is the live row by construction, whatever the engine happens to
+	// hold — it is the row `model:` carries, so dropping it rewrites that
+	// section too.
+	wasActive := liveOnly || containsEntry(targets, active)
+	// The successor has to be buildable *before* the rows disappear: draining
+	// the account first and discovering the only survivor cannot dial leaves the
+	// node naming a model that fails every ask, with no way back but the file.
+	if wasActive && hasSuccessor {
+		if _, err := entry.NewClient(successor); err != nil {
+			writeErr(w, http.StatusConflict, fmt.Errorf("%s cannot take over: %w", successor.Alias(), err))
+			return
+		}
+	}
+	gone := 0
+	err := h.mutateCfgErr(func(c *config.Config) error {
+		kept := make([]config.ModelConfig, 0, len(c.Models))
+		for _, m := range c.Models {
+			if containsEntry(targets, m) {
+				gone++
+				continue
+			}
+			kept = append(kept, m)
+		}
+		if gone == 0 && !liveOnly {
+			return nil
+		}
+		c.Models = kept
+		// Persist inside the lock — the whole models block is rewritten, so a
+		// concurrent save between memory and file would lose one.
+		if h.configPath != "" {
+			return config.UpdateModelsSection(h.configPath, slices.Clone(c.Models))
+		}
+		return nil
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if wasActive {
+		if hasSuccessor {
+			if err := h.applyModelConfig(successor); err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		} else if err := h.clearModelConfig(); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	removed := gone
+	if liveOnly {
+		removed++
+	}
+	out := map[string]any{"removed": removed}
+	if liveOnly {
+		out["live"] = true
+	}
+	if wasActive && !hasSuccessor {
+		out["cleared"] = true
+	}
+	if wasActive && hasSuccessor {
+		out["switched_to"] = successor.Alias()
+	}
+	writeJSON(w, out)
+}
+
 // modelRefRequest resolves a fetch/test target: a registered alias, a
 // catalogue provider id (with an inline or saved key), or empty = the
 // active model.

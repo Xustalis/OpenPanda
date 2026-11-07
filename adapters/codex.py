@@ -67,9 +67,10 @@ def main():
         cmd = ["codex", "exec"]
     cmd += ["--json", "--skip-git-repo-check",
             "--sandbox", sandbox, "-c", "approval_policy=\"never\""]
-    if not req.resume:
-        # A resumed run continues an existing session; --ephemeral would
-        # discard exactly what the resume is meant to keep.
+    if not req.resume and not req.task_id:
+        # Managed tasks persist checkpoints for supervision/timeout resume.
+        # An ephemeral first run emits an id but saves no session to resume.
+        # Standalone diagnostics retain the stateless default.
         cmd.append("--ephemeral")
 
     # If PANDA model injection is active, override Codex's provider and model
@@ -246,12 +247,17 @@ def _tool_call(item):
 def _session_id(line):
     """The session id from a codex session envelope, or "".
 
-    Current CLIs open with {"type":"session.created","payload":{"id":…}};
-    older ones print {"type":"session_meta","payload":{"id":…}}. Both carry
-    the id `codex exec resume` accepts.
+    Accept thread.started/thread_id as well as session.created and the
+    legacy session_meta envelopes. The handle must come from a session
+    event, never an arbitrary tool or message id.
     """
     obj = harness.parse_json_line(line)
-    if obj is None or obj.get("type") not in ("session.created", "session_meta"):
+    if obj is None:
+        return ""
+    if obj.get("type") == "thread.started":
+        sid = obj.get("thread_id")
+        return sid if isinstance(sid, str) else ""
+    if obj.get("type") not in ("session.created", "session_meta"):
         return ""
     payload = obj.get("payload")
     if isinstance(payload, dict) and payload.get("id"):

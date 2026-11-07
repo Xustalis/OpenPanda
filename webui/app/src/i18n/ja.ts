@@ -1380,7 +1380,7 @@ const ja: Messages = {
   'models.removedLast': '{alias} を削除しました — 現在モデルが設定されていません。',
   'models.removedConn': 'この接続から {n} 件のモデルを削除しました。',
   'models.removedConnSwitched': '{n} 件のモデルを削除し、{next} に切り替えました。',
-  'models.removeConnPartial': '{n} 件を削除した後に停止しました：{error}',
+  'models.removedConnEmpty': '{n} 件のモデルを削除しました — 現在モデルは設定されていません。',
   'models.saved': '保存しました。',
   'models.addedN': '{n} 件のモデルを追加しました。',
   'models.addedSwitched': '{n} 件のモデルを追加し、{alias} に切り替えました。',

@@ -4,6 +4,8 @@ package core
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/projects"
 )
 
 // Spawn generations persist on the row: root 0, child 1, grandchild 2 — and
@@ -121,12 +124,26 @@ func TestDelegateChildrenFanOutBound(t *testing.T) {
 		ID: "slow:work", Command: "sleep", Args: []string{"1"}, Tier: 1,
 	})
 	c.SetDelegationLimits(config.DelegationConfig{MaxChildren: 8, FanOut: 2, MaxDepth: 3})
+	projDir := filepath.Join(t.TempDir(), "proj")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("create project dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projDir, "README.md"), []byte("shared project\n"), 0o644); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	ps := projects.NewStore(c.db)
+	if _, err := ps.Create("proj", projDir, "fanout test"); err != nil {
+		t.Fatalf("register project: %v", err)
+	}
+	c.SetProjectStores(ps, filepath.Join(t.TempDir(), "projects-root"))
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	c.StartQueueScheduler(ctx)
 
-	parent, _, _, err := c.createTask(ctx, TaskInput{Title: "parent", Intent: "coordinate"})
+	parent, _, _, err := c.createTask(ctx, TaskInput{
+		Title: "parent", Intent: "coordinate", Project: "proj", SessionID: "fanout-session",
+	})
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
@@ -140,6 +157,7 @@ func TestDelegateChildrenFanOutBound(t *testing.T) {
 	stop := make(chan struct{})
 	finished := make(chan struct{})
 	var peak atomic.Int64
+	var overlapped atomic.Bool
 	go func() {
 		defer close(finished)
 		for {
@@ -153,6 +171,13 @@ func TestDelegateChildrenFanOutBound(t *testing.T) {
 				if n <= peak.Load() || peak.CompareAndSwap(peak.Load(), n) {
 					break
 				}
+			}
+			var running int
+			_ = c.store.db.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM tasks WHERE parent_id = ? AND state = 'running'`, parent.TaskID,
+			).Scan(&running)
+			if running >= 2 {
+				overlapped.Store(true)
 			}
 			time.Sleep(2 * time.Millisecond)
 		}
@@ -171,6 +196,18 @@ func TestDelegateChildrenFanOutBound(t *testing.T) {
 	}
 	if len(notes) != len(drs) {
 		t.Fatalf("notes = %d, want %d", len(notes), len(drs))
+	}
+	if !overlapped.Load() {
+		t.Fatal("unscoped project siblings never ran concurrently; expected default isolation")
+	}
+	var unisolated int
+	if err := c.store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE parent_id = ? AND isolate = 0`, parent.TaskID,
+	).Scan(&unisolated); err != nil {
+		t.Fatalf("count unisolated children: %v", err)
+	}
+	if unisolated != 0 {
+		t.Fatalf("unscoped siblings left without isolation: %d", unisolated)
 	}
 	// The four one-second children overlap pairwise (peak 2): the whole
 	// fan-out takes roughly two batches, not four serial runs. The parent

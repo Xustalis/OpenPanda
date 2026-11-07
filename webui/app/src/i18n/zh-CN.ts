@@ -1408,7 +1408,7 @@ const zhCN: Messages = {
   'models.removedLast': '已移除 {alias} — 当前没有配置任何模型。',
   'models.removedConn': '已从该连接移除 {n} 个模型。',
   'models.removedConnSwitched': '已移除 {n} 个模型 — 现在使用 {next}。',
-  'models.removeConnPartial': '已移除 {n} 个模型后停止：{error}',
+  'models.removedConnEmpty': '已移除 {n} 个模型 — 当前没有配置任何模型。',
   'models.saved': '已保存。',
   'models.addedN': '已添加 {n} 个模型。',
   'models.addedSwitched': '已添加 {n} 个模型 — 已切换到 {alias}。',

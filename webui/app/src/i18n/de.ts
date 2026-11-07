@@ -1395,7 +1395,7 @@ const de: Messages = {
   'models.removedLast': '{alias} entfernt — jetzt ist kein Modell konfiguriert.',
   'models.removedConn': '{n} Modell(e) aus dieser Verbindung entfernt.',
   'models.removedConnSwitched': '{n} Modell(e) entfernt — jetzt aktiv: {next}.',
-  'models.removeConnPartial': '{n} Modell(e) entfernt, dann abgebrochen: {error}',
+  'models.removedConnEmpty': '{n} Modell(e) entfernt — derzeit ist kein Modell konfiguriert.',
   'models.saved': 'Modell gespeichert.',
   'models.addedN': '{n} Modelle hinzugefügt.',
   'models.addedSwitched': '{n} Modelle hinzugefügt — jetzt aktiv: {alias}.',

@@ -5,6 +5,7 @@ package askengine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -304,16 +305,73 @@ func toolProgressDetail(call *entry.ToolCall) string {
 // denied reports a remembered "deny" for the scope: the refusal then names the
 // standing decision instead of asking for a grant the user already declined.
 func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall, authorized, denied bool, approvalMode string, loc ...i18n.Locale) string {
+	result, _ := executeToolChecked(ctx, reg, call, authorized, denied, approvalMode, loc...)
+	return result
+}
+
+// toolPanicError carries a recovered panic out of a tool's Run. A single
+// misbehaving adapter (or a nil map inside a built-in tool) must not take down
+// the ask — let alone the whole daemon process — so the guard lives at the
+// tool boundary rather than in each tool implementation.
+type toolPanicError struct {
+	tool  string
+	value any
+}
+
+func (e *toolPanicError) Error() string {
+	return fmt.Sprintf("tool %s panicked: %v", e.tool, e.value)
+}
+
+func runToolGuarded(ctx context.Context, t entry.Tool, args map[string]any) (result string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			result, err = "", &toolPanicError{tool: t.Name, value: r}
+		}
+	}()
+	return t.Run(ctx, args)
+}
+
+// toolFailureMessage keeps a tool failure inside the conversation as a
+// tool_result the model can react to. A recovered panic gets its own wording:
+// echoing a raw panic value at the user (or into the next prompt) leaks
+// internals and invites the model to "fix" a crash it cannot see.
+func toolFailureMessage(err error, loc i18n.Locale) string {
+	var pe *toolPanicError
+	if errors.As(err, &pe) {
+		if loc == i18n.English {
+			return "Tool execution failed: " + pe.tool + " raised an internal error (contained; the conversation is intact)"
+		}
+		return "工具执行失败：" + pe.tool + " 发生内部异常（已隔离，会话未中断）"
+	}
+	if loc == i18n.English {
+		return "Tool execution failed: " + err.Error()
+	}
+	return "工具执行失败：" + err.Error()
+}
+
+// executeToolChecked is executeTool with the underlying run error exposed. The
+// ask loop uses it to log failures (including recovered panics) instead of
+// folding them into a string that vanishes into the transcript; the string
+// result is still exactly what the model sees.
+func executeToolChecked(ctx context.Context, reg *entry.Registry, call *entry.ToolCall, authorized, denied bool, approvalMode string, loc ...i18n.Locale) (string, error) {
 	targetLoc := i18n.ChineseSimp
 	if len(loc) > 0 && loc[0] != "" {
 		targetLoc = loc[0]
 	}
+	if call == nil {
+		err := errors.New("nil tool call")
+		return toolFailureMessage(err, targetLoc), err
+	}
+	if reg == nil {
+		err := errors.New("tool registry unavailable")
+		return toolFailureMessage(err, targetLoc), err
+	}
 	t, ok := reg.Lookup(call.Tool)
 	if !ok {
 		if targetLoc == i18n.English {
-			return "Tool execution failed: unknown tool " + call.Tool
+			return "Tool execution failed: unknown tool " + call.Tool, nil
 		}
-		return "工具执行失败：未知工具 " + call.Tool
+		return "工具执行失败：未知工具 " + call.Tool, nil
 	}
 	// A remembered "deny" answers the tier-2 gate for this scope, so it may
 	// only withhold the operations that gate guards. Applying it to every
@@ -323,24 +381,21 @@ func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall,
 	// connect to "the assistant suddenly stopped working".
 	if denied && t.Tier != defense.TierReversible {
 		if targetLoc == i18n.English {
-			return "Tool execution refused: the user previously denied tier-2 operations for this scope. Ask the user to clear the remembered denial before retrying."
+			return "Tool execution refused: the user previously denied tier-2 operations for this scope. Ask the user to clear the remembered denial before retrying.", nil
 		}
-		return "工具执行被拒：该范围内已有需授权操作的拒绝记录。请先让用户清除已记住的拒绝再重试。"
+		return "工具执行被拒：该范围内已有需授权操作的拒绝记录。请先让用户清除已记住的拒绝再重试。", nil
 	}
 	if err := defense.Authorize(t.Tier, authorized); err != nil {
 		if targetLoc == i18n.English {
-			return "Tool execution refused (tier-2 requires authorization): " + toolConsentHint(t, approvalMode, targetLoc)
+			return "Tool execution refused (tier-2 requires authorization): " + toolConsentHint(t, approvalMode, targetLoc), nil
 		}
-		return "工具执行被拒（tier-2 需授权）：" + toolConsentHint(t, approvalMode, targetLoc)
+		return "工具执行被拒（tier-2 需授权）：" + toolConsentHint(t, approvalMode, targetLoc), nil
 	}
-	result, err := t.Run(ctx, call.Arguments)
+	result, err := runToolGuarded(ctx, t, call.Arguments)
 	if err != nil {
-		if targetLoc == i18n.English {
-			return "Tool execution failed: " + err.Error()
-		}
-		return "工具执行失败：" + err.Error()
+		return toolFailureMessage(err, targetLoc), err
 	}
-	return result
+	return result, nil
 }
 
 // taskDispatchCapture carries typed task results beside task_submit's string
@@ -637,6 +692,20 @@ func toolConsentHint(t entry.Tool, approvalMode string, loc ...i18n.Locale) stri
 	return fmt.Sprintf("工具 %s 属 tier-2（不可逆）操作，本次会话未开启授权。请让用户开启授权后重试（REPL 输入 /authorize，一次性调用加 --authorize，Web 面板勾选“授权”）。", t.Name)
 }
 
+// resultAt reads one tool result and bounds it before it enters the replayed
+// transcript. Calls and results are only equal in length on the happy path: a
+// round that aborts part-way stops dispatching while the call list is already
+// complete, so indexing past the end would panic inside the very loop that
+// exists to keep one bad tool from taking the ask down. A whole-file tool dump
+// is bounded for the same reason — the full text still reaches the user
+// through the progress lines and the interruption digest.
+func resultAt(results []string, i int) string {
+	if i < 0 || i >= len(results) {
+		return ""
+	}
+	return boundToolResult(results[i], toolResultHardCap)
+}
+
 // appendToolCalls records one round of tool calls — every call the model
 // emitted, its accompanying note (text emitted alongside the calls), and each
 // result — in the conversation. Calls carrying a tool_use id are replayed as a
@@ -664,11 +733,11 @@ func appendToolCalls(turns []entry.Turn, calls []*entry.ToolCall, note string, r
 		}
 		user := entry.Turn{Role: "user"}
 		for i, call := range calls {
-			if call.ID == "" {
+			if call == nil || call.ID == "" {
 				continue
 			}
 			assistant.Blocks = append(assistant.Blocks, entry.ContentBlock{Type: "tool_use", ID: call.ID, Name: call.Tool, Input: call.Arguments})
-			user.Blocks = append(user.Blocks, entry.ContentBlock{Type: "tool_result", ToolUseID: call.ID, Content: results[i]})
+			user.Blocks = append(user.Blocks, entry.ContentBlock{Type: "tool_result", ToolUseID: call.ID, Content: resultAt(results, i)})
 		}
 		turns = append(turns, assistant, user)
 		note = ""
@@ -678,7 +747,7 @@ func appendToolCalls(turns []entry.Turn, calls []*entry.ToolCall, note string, r
 		prefix = "Tool result: "
 	}
 	for i, call := range calls {
-		if call.ID != "" {
+		if call == nil || call.ID != "" {
 			continue
 		}
 		blob, _ := json.Marshal(call)
@@ -689,7 +758,7 @@ func appendToolCalls(turns []entry.Turn, calls []*entry.ToolCall, note string, r
 		}
 		turns = append(turns,
 			entry.Turn{Role: "assistant", Content: msg},
-			entry.Turn{Role: "user", Content: prefix + results[i]},
+			entry.Turn{Role: "user", Content: prefix + resultAt(results, i)},
 		)
 	}
 	return turns
