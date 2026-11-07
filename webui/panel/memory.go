@@ -51,11 +51,8 @@ type topicJSON struct {
 const maxDailyView = 31
 
 func listDaily(dir string) ([]topicJSON, error) {
-	entries, err := os.ReadDir(dir)
+	entries, err := memory.ReadDirOrAbsent(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []topicJSON{}, nil
-		}
 		return nil, err
 	}
 	var names []string

@@ -4,7 +4,9 @@ package memory
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -91,14 +93,28 @@ func (h *Hermes) TopicPath(name string) (string, error) {
 	return filepath.Join(h.TopicsDir(), name+".md"), nil
 }
 
+// ReadDirOrAbsent lists a memory directory, treating only a directory that is
+// genuinely missing as empty. Windows reports a regular file sitting where the
+// directory belongs as "not found", so believing os.IsNotExist alone would read
+// a corrupt store as an empty one and silently drop the user's context. The
+// stat below keeps that misconfiguration visible on every platform: POSIX
+// already answers ENOTDIR here, Windows now answers the same.
+func ReadDirOrAbsent(dir string) ([]fs.DirEntry, error) {
+	entries, err := os.ReadDir(dir)
+	if err == nil || !errors.Is(err, fs.ErrNotExist) {
+		return entries, err
+	}
+	if _, statErr := os.Stat(dir); statErr == nil {
+		return nil, fmt.Errorf("%s exists but is not a directory", dir)
+	}
+	return nil, nil
+}
+
 // ListTopics returns the names (file stem, sorted) of the topic files that
 // exist under topics/. A missing directory yields an empty list.
 func (h *Hermes) ListTopics() ([]string, error) {
-	entries, err := os.ReadDir(h.TopicsDir())
+	entries, err := ReadDirOrAbsent(h.TopicsDir())
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("memory: list topics: %w", err)
 	}
 	var names []string
