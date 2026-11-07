@@ -1899,6 +1899,13 @@ const en: Messages = {
   'execution.limitsHelp': "Limits apply to active adapter calls in this worker runtime. Lowering a limit lets active calls finish; disjoint paths or isolated worktrees are required for parallel writes. Zero removes an optional cap.",
   'execution.saved': "Saved. This worker uses the policy now; other local workers refresh automatically.",
 
+  // Per-item settings disclosures (settings sheet: agents, skills, models).
+  'settings.itemSettings': 'Item settings',
+  'settings.itemSettingsFor': '{name} settings',
+  'settings.customAgent': 'Custom',
+  'settings.agentSettingsHelp': 'Applies to this agent only; save the execution policy to apply.',
+  'skills.reinstall': 'Reinstall',
+
 }
 
 export default en

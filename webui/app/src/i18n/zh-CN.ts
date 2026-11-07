@@ -1878,6 +1878,13 @@ const zhCN: Messages = {
   'execution.limitsHelp': "限制作用于当前工作进程中的活跃适配器调用。调低额度不会中断已有调用；并行写入仍需无冲突路径或独立工作树。可选上限填 0 表示不额外限制。",
   'execution.saved': "已保存，当前工作进程已生效，其他本地工作进程会自动同步。",
 
+  // 各条目内部的设置二级菜单（设置页：Agents / 技能 / 模型）。
+  'settings.itemSettings': '项目设置',
+  'settings.itemSettingsFor': '{name} 的设置',
+  'settings.customAgent': '自定义',
+  'settings.agentSettingsHelp': '仅作用于该 Agent，保存执行策略后生效。',
+  'skills.reinstall': '重新安装',
+
 }
 
 export default zhCN

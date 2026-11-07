@@ -204,15 +204,14 @@ export function dominantSurface(graph: MemoryGraph): Map<string, string> {
   return out
 }
 
-/** Distance from the node's centre to its visual rim along the unit vector
- *  (ux, uy). Pills are ellipses (half-width × 11), so an edge approaching
- *  from above lands much closer than one coming from the side — a radial
- *  half-width guess leaves ugly gaps on vertical approaches. */
-export function rimDistance(n: MemoryGraphNode, ux: number, uy: number): number {
-  if (!isEntity(n)) return nodeRadius(n)
-  const rx = nodeExtent(n)
-  const ry = 11
-  return (rx * ry) / Math.sqrt(ry * ry * ux * ux + rx * rx * uy * uy)
+/** Distance from the node's centre to its rim along a direction. Every node
+ *  is a circle now (terms carry their label below the dot, not inside a pill),
+ *  so the approach angle no longer changes the rim distance. The signature
+ *  stays direction-aware because edge endpoints still call it with a unit
+ *  vector, and the layout's spacing keeps using the wider `nodeExtent` so a
+ *  long term's caption still has room. */
+export function rimDistance(n: MemoryGraphNode, _ux: number, _uy: number): number {
+  return nodeRadius(n)
 }
 
 /** Deterministic cluster-and-relax layout. `seed` carries positions from a
@@ -264,8 +263,8 @@ export function layoutGraph(
   const anchors = new Map<string, { x: number; y: number }>()
   for (const [kind, list] of byKind) {
     const angle = -Math.PI / 2 + (presentKinds.indexOf(kind) / Math.max(1, presentKinds.length)) * Math.PI * 2
-    const ax = cx + Math.cos(angle) * innerR * 0.78
-    const ay = cy + Math.sin(angle) * innerR * 0.78
+    const ax = cx + Math.cos(angle) * innerR * 0.68
+    const ay = cy + Math.sin(angle) * innerR * 0.68
     anchors.set(kind, { x: ax, y: ay })
     clusters.push({ key: kind, x: ax, y: ay, r: 46 + 17 * Math.sqrt(list.length) })
     ;[...list].sort(byWeight).forEach((n, i) => {
@@ -276,21 +275,48 @@ export function layoutGraph(
     })
   }
 
-  // Seed entities: terms sharing a dominant surface start as neighbours on
-  // the outer ring, so their mention edges stay short instead of crossing
-  // the canvas. Unowned terms come last and still get an even angular
-  // spread; the golden-ratio fraction scatters depth into an organic halo.
+  // Seed entities by neighbourhood, not by a global golden-ratio scatter.
+  // Terms that a file mentions start as a compact arc around that file's
+  // bearing, so a connected group reads as one cluster on the first paint —
+  // the picture Obsidian's graph produces with a force layout. A per-group
+  // offset keeps several groups that share one kind anchor from piling onto
+  // the same angle, and three fixed depth rings give the outer band an
+  // order instead of a random radius for every term. Unowned terms still get
+  // an even spread over the whole circle. Seeded re-layouts keep their old
+  // coordinates, so timeline ticks and filter toggles never reshuffle.
   const owners = dominantSurface(graph)
-  const ownerOf = (n: MemoryGraphNode) => owners.get(n.id) ?? '\uffff'
-  ;[...entities]
-    .sort((a, b) => ownerOf(a).localeCompare(ownerOf(b)) || byWeight(a, b))
-    .forEach((n, i) => {
+  const groups = new Map<string, MemoryGraphNode[]>()
+  const unowned: MemoryGraphNode[] = []
+  for (const n of entities) {
+    const owner = owners.get(n.id)
+    if (owner && pos.has(owner)) {
+      const list = groups.get(owner) ?? []
+      list.push(n)
+      groups.set(owner, list)
+    } else {
+      unowned.push(n)
+    }
+  }
+  const groupKeys = [...groups.keys()].sort()
+  groupKeys.forEach((key, gi) => {
+    const list = [...groups.get(key)!].sort(byWeight)
+    const ownerPos = pos.get(key)!
+    const bearing = Math.atan2(ownerPos.y - cy, ownerPos.x - cx)
+    const offset = ((gi * 0.618034) % 1 - 0.5) * 0.9
+    const spread = Math.min(1.2, 0.14 * list.length + 0.24)
+    list.forEach((n, j) => {
       const s = seed?.get(n.id)
-      const t = -Math.PI / 2 + (i / Math.max(1, entities.length)) * Math.PI * 2
-      const frac = (i * 0.618034) % 1
-      const rr = outerMin + (outerMax - outerMin) * (0.16 + 0.68 * frac)
-      pos.set(n.id, { ...n, x: s?.x ?? cx + Math.cos(t) * rr, y: s?.y ?? cy + Math.sin(t) * rr })
+      const angle = bearing + offset + (list.length === 1 ? 0 : (j / (list.length - 1) - 0.5) * spread)
+      const depth = outerMin + (outerMax - outerMin) * (0.36 + 0.44 * ((j % 3) / 2))
+      pos.set(n.id, { ...n, x: s?.x ?? cx + Math.cos(angle) * depth, y: s?.y ?? cy + Math.sin(angle) * depth })
     })
+  })
+  ;[...unowned].sort(byWeight).forEach((n, i) => {
+    const s = seed?.get(n.id)
+    const angle = -Math.PI / 2 + (i / Math.max(1, unowned.length)) * Math.PI * 2
+    const depth = outerMin + (outerMax - outerMin) * (0.36 + 0.44 * ((i % 3) / 2))
+    pos.set(n.id, { ...n, x: s?.x ?? cx + Math.cos(angle) * depth, y: s?.y ?? cy + Math.sin(angle) * depth })
+  })
 
   const list = graph.nodes.map((n) => pos.get(n.id)!)
   // Spacing follows each node's real footprint (pill width / circle radius)

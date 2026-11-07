@@ -15,6 +15,7 @@ import { ModelPicker } from '../components/model-picker'
 import { Select } from '../components/select'
 import { useModalFocus } from '../components/modal-focus'
 import { Icon } from '../components/icons'
+import { ItemSettings } from '../components/item-settings'
 import { toast, toastError } from '../components/toast'
 import { ProviderLogo } from '../brand/providers'
 import { DiscoverSheet } from './model-discover'
@@ -425,80 +426,91 @@ function ModelTile(props: {
         </div>
       )}
 
-      <div class="model-tile-actions">
-        {confirming ? (
-          <>
-            <button
-              type="button"
-              class="model-tile-act danger"
-              title={t('models.confirmRemove')}
-              aria-label={t('models.confirmRemove')}
-              disabled={props.busy !== ''}
-              onClick={props.onRemove}
-            >
-              <Icon name="check" size={15} />
-            </button>
-            <button
-              type="button"
-              class="model-tile-act"
-              title={t('common.cancel')}
-              aria-label={t('common.cancel')}
-              onClick={() => setConfirming(false)}
-            >
-              <Icon name="x" size={15} />
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              class="model-tile-act"
-              title={t('models.test')}
-              aria-label={t('models.test')}
-              disabled={props.busy !== ''}
-              onClick={props.onTest}
-            >
-              <Icon name={props.busy === `test:${k}` ? 'refresh' : 'activity'} size={15} />
-            </button>
-            <button
-              type="button"
-              class="model-tile-act"
-              title={t('models.edit')}
-              aria-label={t('models.edit')}
-              disabled={props.busy !== ''}
-              onClick={props.onEdit}
-            >
-              <Icon name="pencil" size={15} />
-            </button>
-            {/* The row in use is a configuration like any other, registered
-                or not: hiding its delete button is how a model got stuck in a
-                config for good. Copy stays with the registry rows, because a
-                duplicate is a row a later delete can address. */}
-            {props.m.registry && (
+      <ItemSettings
+        id={`model-settings-${k.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
+        label={t('settings.itemSettingsFor', { name: entry.alias })}
+        title={entry.alias}
+        align="end"
+        class="model-item-settings"
+      >
+        <p class="item-settings-note">
+          {[entry.model, hostOf(entry.base_url)].filter(Boolean).join(' · ')}
+        </p>
+        <div class="item-settings-actions">
+          {confirming ? (
+            <>
               <button
                 type="button"
-                class="model-tile-act"
-                title={t('models.copy')}
-                aria-label={t('models.copy')}
+                class="btn small danger"
+                title={t('models.confirmRemove')}
+                aria-label={t('models.confirmRemove')}
                 disabled={props.busy !== ''}
-                onClick={props.onCopy}
+                onClick={props.onRemove}
               >
-                <Icon name="copy" size={15} />
+                <Icon name="check" size={13} />
+                {t('models.confirmRemove')}
               </button>
-            )}
-            <button
-              type="button"
-              class="model-tile-act"
-              title={t('models.remove')}
-              aria-label={t('models.remove')}
-              disabled={props.busy !== ''}
-              onClick={() => setConfirming(true)}
-            >
-              <Icon name="trash" size={15} />
-            </button>
-          </>
-        )}
-      </div>
+              <button
+                type="button"
+                class="btn small"
+                title={t('common.cancel')}
+                aria-label={t('common.cancel')}
+                onClick={() => setConfirming(false)}
+              >
+                <Icon name="x" size={13} />
+                {t('common.cancel')}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                class="btn small"
+                title={t('models.test')}
+                disabled={props.busy !== ''}
+                onClick={props.onTest}
+              >
+                <Icon name={props.busy === `test:${k}` ? 'refresh' : 'activity'} size={13} />
+                {t('models.test')}
+              </button>
+              <button
+                type="button"
+                class="btn small"
+                title={t('models.edit')}
+                disabled={props.busy !== ''}
+                onClick={props.onEdit}
+              >
+                <Icon name="pencil" size={13} />
+                {t('models.edit')}
+              </button>
+              {/* Copy stays with registry rows: a duplicate is a row a later
+                  delete can address. */}
+              {props.m.registry && (
+                <button
+                  type="button"
+                  class="btn small"
+                  title={t('models.copy')}
+                  disabled={props.busy !== ''}
+                  onClick={props.onCopy}
+                >
+                  <Icon name="copy" size={13} />
+                  {t('models.copy')}
+                </button>
+              )}
+              <button
+                type="button"
+                class="btn small danger"
+                title={t('models.remove')}
+                disabled={props.busy !== ''}
+                onClick={() => setConfirming(true)}
+              >
+                <Icon name="trash" size={13} />
+                {t('models.remove')}
+              </button>
+            </>
+          )}
+        </div>
+      </ItemSettings>
     </div>
   )
 }

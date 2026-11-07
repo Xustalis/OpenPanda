@@ -1085,3 +1085,188 @@ dialog.confirm-modal::backdrop {
   flex: none;
   width: 14px;
 }
+
+/* ---- Per-item settings disclosure ------------------------------------
+   One gear per item, and the panel it opens is a child of that item. The
+   wrapper stays statically positioned on purpose: the panel anchors to the
+   item's own `position: relative` root so it can span the full row even when
+   the trigger lives in a narrow state column. DOM containment (not visual
+   position) is what the outside-click check uses. */
+.item-settings {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.item-settings-btn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  /* A hairline frame makes "this item has its own settings" readable without
+     hovering; a bare glyph disappears into a row of pills and buttons. */
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.item-settings-btn:hover,
+.item-settings-btn.on {
+  background: var(--bg-raised);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: var(--shadow-xs);
+}
+.item-settings-btn:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+.item-settings-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.item-settings-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% - 2px);
+  left: 0;
+  right: 0;
+  min-width: 260px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-lg);
+  /* The panel's height is capped to the scrollport at runtime; let its body
+     scroll rather than clipping the last field off at the edge. */
+  overflow: auto;
+  animation: item-settings-in var(--dur-med) var(--ease) both;
+}
+/* Compact items (model tiles, narrow rows) anchor to their right edge. */
+.item-settings-menu.align-end {
+  left: auto;
+  right: 0;
+  width: min(300px, calc(100vw - 40px));
+}
+/* Near the foot of a scrollport the panel opens upward instead of being
+   cut off. The same anchored geometry, only the vertical edge changes. */
+.item-settings-menu.flip-up {
+  top: auto;
+  bottom: calc(100% - 2px);
+  margin-top: 0;
+  margin-bottom: 6px;
+  animation-name: item-settings-in-up;
+}
+@keyframes item-settings-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+@keyframes item-settings-in {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+}
+.item-settings-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 9px 9px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-chrome);
+}
+.item-settings-kicker {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.item-settings-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.item-settings-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.item-settings-close:hover {
+  background: var(--surface-alpha-md);
+  color: var(--text);
+}
+.item-settings-body {
+  padding: 12px 14px 14px;
+}
+.item-settings-body > :first-child {
+  margin-top: 0;
+}
+.item-settings-body > :last-child {
+  margin-bottom: 0;
+}
+.item-settings-note {
+  margin: 0 0 12px;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+/* Menu bodies reuse the form's field vocabulary but at one step smaller,
+   so three fields fit without turning the row into a second page. */
+.item-settings-body .execution-field {
+  margin-bottom: 10px;
+}
+.item-settings-body .execution-field:last-child {
+  margin-bottom: 0;
+}
+.item-settings-body .execution-field > span {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.item-settings-body .input {
+  width: 100%;
+}
+/* Action lists inside a menu: one verb per row, not a hover strip of icons. */
+.item-settings-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.item-settings-actions .btn,
+.item-settings-actions .model-tile-act,
+.item-settings-actions .skill-btn {
+  justify-content: flex-start;
+  width: 100%;
+  text-align: left;
+}
+@media (prefers-reduced-motion: reduce) {
+  .item-settings-menu {
+    animation: none;
+  }
+}

@@ -1895,6 +1895,13 @@ const es: Messages = {
   'execution.limitsHelp': "Los límites se aplican a llamadas activas de adaptadores en este proceso. Reducirlos no interrumpe llamadas activas. Las escrituras paralelas requieren rutas independientes o árboles aislados. Cero elimina un límite opcional.",
   'execution.saved': "Guardado y aplicado a este proceso. Los otros procesos locales se sincronizan automáticamente.",
 
+  // Menús de ajustes dentro de cada elemento (ajustes: agentes, skills, modelos).
+  'settings.itemSettings': 'Ajustes del elemento',
+  'settings.itemSettingsFor': 'Ajustes de {name}',
+  'settings.customAgent': 'Personalizado',
+  'settings.agentSettingsHelp': 'Se aplica solo a este agente; guarda la política de ejecución para aplicarla.',
+  'skills.reinstall': 'Reinstalar',
+
 }
 
 export default es

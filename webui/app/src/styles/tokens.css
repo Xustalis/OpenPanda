@@ -127,6 +127,19 @@
   /* — Focus ring. */
   --ring: 0 0 0 2px var(--bg-raised), 0 0 0 4px rgba(28, 28, 32, 0.28);
 
+  /* — Memory graph. A monochrome ink field like Obsidian's graph view: the
+     nodes are one neutral dot, kind lives in a thin rim, and hierarchy comes
+     from size, contrast and focus rather than saturated fills. */
+  --mg-canvas: #fbfbfc;
+  --mg-ink: #4e4f56;
+  --mg-ink-strong: #202126;
+  --mg-ink-muted: #8e8f97;
+  --mg-edge: #c5c7ce;
+  --mg-edge-strong: #8b8d97;
+  --mg-label: #4a4a52;
+  --mg-label-strong: #1b1b1e;
+  --mg-halo: rgba(47, 43, 34, 0.16);
+
   /* — 8px-base spacing grid. */
   --sp-1: 4px;
   --sp-2: 8px;
@@ -476,4 +489,32 @@
 ::-webkit-scrollbar-track,
 ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* The graph's ink ramp in the dark themes. Kept here — with every other
+   theme fork — rather than in graph.css, so the drawing reskins from one
+   source of truth. */
+:root[data-theme='dark'] {
+  --mg-canvas: #232323;
+  --mg-ink: #c2c2c7;
+  --mg-ink-strong: #ffffff;
+  --mg-ink-muted: #82828a;
+  --mg-edge: #55555c;
+  --mg-edge-strong: #8c8c95;
+  --mg-label: #d0d0d5;
+  --mg-label-strong: #f2f2f2;
+  --mg-halo: rgba(255, 255, 255, 0.2);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --mg-canvas: #232323;
+    --mg-ink: #c2c2c7;
+    --mg-ink-strong: #ffffff;
+    --mg-ink-muted: #82828a;
+    --mg-edge: #55555c;
+    --mg-edge-strong: #8c8c95;
+    --mg-label: #d0d0d5;
+    --mg-label-strong: #f2f2f2;
+    --mg-halo: rgba(255, 255, 255, 0.2);
+  }
 }

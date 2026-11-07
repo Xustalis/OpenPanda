@@ -8,7 +8,6 @@ import {
   captionExtent,
   ENTITY_KIND,
   filterGraph,
-  fitText,
   isEntity,
   labelLines,
   layoutGraph,
@@ -23,11 +22,18 @@ import {
 
 /** The memory knowledge graph: two layers over the same evidence. Provenance
  *  ("file") nodes are the memory surfaces and skills; knowledge ("entity")
- *  nodes are terms literally recurring inside them. Edges are recorded promotions,
- *  name references, entity mentions and co-occurrence — every one of them a
- *  string the files actually contain. Rendering is dependency-free SVG over
- *  the graph-layout module: deterministic clustering, no-overlap relaxation,
- *  wheel zoom, drag-to-pan, a first-seen timeline and layer/kind filters. */
+ *  nodes are terms literally recurring inside them. Edges are recorded
+ *  promotions, name references, entity mentions and co-occurrence — every one
+ *  of them a string the files actually contain.
+ *
+ *  Visual language follows Obsidian's graph view: one quiet dot per node, its
+ *  caption always beneath it, straight hairline edges, and hierarchy carried
+ *  by size, ink weight and focus — not by glows, gradients, pills or dashed
+ *  territory rings. Hovering a node lights its neighbourhood and dims the
+ *  rest, the same way Obsidian isolates a note's links. Rendering remains
+ *  dependency-free SVG over the graph-layout module; all filters, the
+ *  first-seen timeline, wheel zoom, drag-to-pan, search and detail card are
+ *  unchanged. */
 
 interface View {
   k: number // zoom scale
@@ -46,17 +52,6 @@ const KIND_CLASS: Record<string, string> = {
   daily: 'mg-daily',
   skill: 'mg-skill',
   [ENTITY_KIND]: 'mg-entity',
-}
-
-/** Kind → (strong, soft) theme vars feeding the node's radial gradient — a
- *  pale core with a tinted rim reads as a sphere instead of a flat disc. */
-const KIND_FILL: Record<string, [strong: string, soft: string]> = {
-  core: ['accent', 'accent-soft'],
-  topic: ['accent-2', 'accent-2-soft'],
-  project: ['semantic-info', 'semantic-info-soft'],
-  daily: ['semantic-warn', 'semantic-warn-soft'],
-  skill: ['danger', 'danger-soft'],
-  [ENTITY_KIND]: ['semantic-good', 'semantic-good-soft'],
 }
 
 const EDGE_CLASS: Record<string, string> = {
@@ -205,7 +200,7 @@ export function MemoryGraphView({
       const k = pairKey(e)
       const idx = seen.get(k) ?? 0
       seen.set(k, idx + 1)
-      out.set(i, (idx - ((count.get(k) ?? 1) - 1) / 2) * 30)
+      out.set(i, (idx - ((count.get(k) ?? 1) - 1) / 2) * 14)
     })
     return out
   }, [filtered])
@@ -403,61 +398,15 @@ export function MemoryGraphView({
             }}
           >
           <defs>
-            {Object.entries(KIND_FILL).map(([kind, [strong, soft]]) => (
-              <radialGradient key={kind} id={`mg-fill-${kind}`} cx="36%" cy="28%" r="100%">
-                <stop offset="0%" style={{ stopColor: `var(--${soft})` }} />
-                <stop offset="58%" style={{ stopColor: `var(--${soft})` }} />
-                <stop offset="100%" style={{ stopColor: `var(--${strong})`, stopOpacity: 0.42 }} />
-              </radialGradient>
-            ))}
-            {/* Territory glow per kind: a tinted centre melting to nothing —
-                soft zones instead of hard-edged discs. */}
-            {Object.entries(KIND_FILL).map(([kind, [strong]]) => (
-              <radialGradient key={kind} id={`mg-glow-${kind}`}>
-                <stop offset="0%" style={{ stopColor: `var(--${strong})`, stopOpacity: 0.13 }} />
-                <stop offset="55%" style={{ stopColor: `var(--${strong})`, stopOpacity: 0.06 }} />
-                <stop offset="100%" style={{ stopColor: `var(--${strong})`, stopOpacity: 0 }} />
-              </radialGradient>
-            ))}
-            {/* Stronger aura for hover/selection feedback. */}
-            {Object.entries(KIND_FILL).map(([kind, [strong]]) => (
-              <radialGradient key={kind} id={`mg-aura-${kind}`}>
-                <stop offset="0%" style={{ stopColor: `var(--${strong})`, stopOpacity: 0.3 }} />
-                <stop offset="60%" style={{ stopColor: `var(--${strong})`, stopOpacity: 0.12 }} />
-                <stop offset="100%" style={{ stopColor: `var(--${strong})`, stopOpacity: 0 }} />
-              </radialGradient>
-            ))}
-            {/* Pill body: raised surface at the top melting into a green tint
-                at the bottom — a tag, not a dot. */}
-            <linearGradient id="mg-pill-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" style={{ stopColor: 'var(--bg-raised)' }} />
-              <stop offset="62%" style={{ stopColor: 'var(--semantic-good-soft)' }} />
-              <stop offset="100%" style={{ stopColor: 'var(--semantic-good)', stopOpacity: 0.26 }} />
-            </linearGradient>
-            {/* Corner vignette: keeps the eye inside the canvas. */}
-            <radialGradient id="mg-vig" cx="50%" cy="46%" r="72%">
-              <stop offset="0%" stop-color="#000" stop-opacity="0" />
-              <stop offset="76%" stop-color="#000" stop-opacity="0" />
-              <stop offset="100%" stop-color="#000" stop-opacity="0.05" />
-            </radialGradient>
-            {/* Viewport-fixed dot grid — the canvas texture, deliberately not
-                inside the zoom group so panning slides content over it. */}
-            <pattern id="mg-dots" width="26" height="26" patternUnits="userSpaceOnUse">
-              <circle cx="1" cy="1" r="1" style={{ fill: 'var(--border)' }} />
-            </pattern>
-            <filter id="mg-node-shadow" x="-60%" y="-60%" width="220%" height="220%">
-              <feDropShadow dx="0" dy="1.6" stdDeviation="2.4" flood-opacity="0.28" />
-            </filter>
-            <filter id="mg-edge-glow" x="-30%" y="-30%" width="160%" height="160%">
-              <feDropShadow dx="0" dy="0" stdDeviation="2.4" style={{ floodColor: 'var(--accent)', floodOpacity: 0.65 }} />
-            </filter>
+            {/* Direction survives, but as a small neutral head rather than a
+                coloured arrow competing with the nodes. */}
             <marker
               id="mg-arr-ref"
               viewBox="0 0 10 10"
               refX="7.6"
               refY="5"
-              markerWidth="8"
-              markerHeight="8"
+              markerWidth="7"
+              markerHeight="7"
               markerUnits="userSpaceOnUse"
               orient="auto-start-reverse"
             >
@@ -468,51 +417,18 @@ export function MemoryGraphView({
               viewBox="0 0 10 10"
               refX="7.6"
               refY="5"
-              markerWidth="8"
-              markerHeight="8"
+              markerWidth="7"
+              markerHeight="7"
               markerUnits="userSpaceOnUse"
               orient="auto-start-reverse"
             >
               <path d="M 1 1.4 L 8.6 5 L 1 8.6 z" class="mg-arrow-promo" />
             </marker>
           </defs>
-          <rect width={size.w} height={size.h} fill="url(#mg-dots)" opacity="0.55" />
           <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
+            {/* One transparent plane is the pan/zoom target; no dot grid,
+                vignette or cluster rings — the drawing is the content. */}
             <rect class="mg-bg" x={-size.w * 4} y={-size.h * 4} width={size.w * 9} height={size.h * 9} />
-            {/* Cluster territories: a tinted glow that melts to nothing, a
-                faint dashed boundary hugging the zone, and a small caps
-                label pushed to the territory's outer rim — radially away
-                from the canvas centre so it never sits inside the mass. */}
-            {layout.clusters.map((c) => {
-              const dx = c.x - size.w / 2
-              const dy = c.y - size.h / 2
-              const d = Math.hypot(dx, dy)
-              const ux = d > 4 ? dx / d : 0
-              const uy = d > 4 ? dy / d : -1
-              const out = c.r * 0.88 + 12
-              return (
-                <g key={c.key} class={`mg-cluster ${KIND_CLASS[c.key] ?? 'mg-core'}`}>
-                  <circle
-                    class="mg-cluster-glow"
-                    cx={c.x}
-                    cy={c.y}
-                    r={c.r}
-                    fill={`url(#mg-glow-${KIND_FILL[c.key] ? c.key : 'core'})`}
-                  />
-                  <circle class="mg-cluster-ring" cx={c.x} cy={c.y} r={c.r * 0.88} />
-                  {showLabels && (
-                    <text
-                      class="mg-cluster-label"
-                      x={c.x + ux * out}
-                      y={c.y + uy * out}
-                      dominant-baseline="central"
-                    >
-                      {t(`memory.graph.${c.key}`)}
-                    </text>
-                  )}
-                </g>
-              )
-            })}
             {filtered.edges.map((e, i) => {
               const a = pos.get(e.from)
               const b = pos.get(e.to)
@@ -522,25 +438,40 @@ export function MemoryGraphView({
               const dist = Math.max(Math.hypot(dx, dy), 1)
               const ux = dx / dist
               const uy = dy / dist
-              // Endpoints pull back to the actual node rim along the edge's
-              // direction — pills are ellipses, so an approach from above
-              // lands much closer than one from the side.
+              // Endpoints pull back to the actual dot rim; parallel edges
+              // shift both ends along the perpendicular so they stay straight
+              // and evenly spaced.
               const x1 = a.x + ux * (rimDistance(a, ux, uy) + 3)
               const y1 = a.y + uy * (rimDistance(a, ux, uy) + 3)
-              const x2 = b.x - ux * (rimDistance(b, ux, uy) + 8)
-              const y2 = b.y - uy * (rimDistance(b, ux, uy) + 8)
+              const x2 = b.x - ux * (rimDistance(b, ux, uy) + 6)
+              const y2 = b.y - uy * (rimDistance(b, ux, uy) + 6)
               const off = edgeSpread.get(i) ?? 0
-              const mx = (x1 + x2) / 2 - uy * off
-              const my = (y1 + y2) / 2 + ux * off
+              const nx = -uy * off
+              const ny = ux * off
+              const ax = x1 + nx
+              const ay = y1 + ny
+              const bx = x2 + nx
+              const by = y2 + ny
+              const d = `M ${ax} ${ay} L ${bx} ${by}`
               const lit = focus !== null && (e.from === focus || e.to === focus)
               const dim = focus !== null && !lit
-              // Quadratic Bézier point at t=0.5: (P0 + 2·C + P2) / 4 — the
-              // badge sits on the curve itself, not the control point.
-              const lx = (x1 + 2 * mx + x2) / 4
-              const ly = (y1 + 2 * my + y2) / 4
-              const d = `M ${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}`
+              const lx = (ax + bx) / 2
+              const ly = (ay + by) / 2
               const bw = 9 + String(e.weight ?? 0).length * 4.6
               const arrow = e.kind === 'promotion' ? 'url(#mg-arr-promo)' : e.kind === 'reference' ? 'url(#mg-arr-ref)' : undefined
+              // Opacity is computed as one number so focus dimming cannot be
+              // overridden by an inline "mention" opacity. A stray mention is
+              // nearly invisible; a repeated one earns contrast.
+              const mentionOpacity = Math.min(0.62, 0.22 + Math.sqrt(e.weight ?? 1) * 0.16)
+              const opacity = dim
+                ? 0.05
+                : lit
+                  ? 1
+                  : e.kind === 'mention'
+                    ? mentionOpacity
+                    : e.kind === 'co'
+                      ? 0.55
+                      : 0.92
               return (
                 <g
                   key={i}
@@ -550,14 +481,8 @@ export function MemoryGraphView({
                   <path
                     class={`mg-edge ${EDGE_CLASS[e.kind] ?? 'mg-edge-reference'}`}
                     style={{
-                      strokeWidth: edgeWidth(e) + (lit ? 0.7 : 0),
-                      // A one-off mention is nearly invisible; a repeated one
-                      // earns contrast. Static 0.3 made every link equally
-                      // loud and turned the canvas into a uniform mesh.
-                      opacity:
-                        e.kind === 'mention'
-                          ? Math.min(0.6, 0.12 + Math.sqrt(e.weight ?? 1) * 0.12)
-                          : undefined,
+                      strokeWidth: edgeWidth(e) + (lit ? 0.45 : 0),
+                      opacity,
                     }}
                     d={d}
                     marker-end={arrow}
@@ -584,13 +509,10 @@ export function MemoryGraphView({
             {filtered.nodes.map((n, i) => {
               const p = pos.get(n.id)!
               const dimmed = focus !== null && focus !== n.id && !neighbors.has(n.id)
-              const ent = isEntity(n)
-              const ext = nodeExtent(n)
               const r = nodeRadius(n)
               const alpha = recencyAlpha(n.last_seen, now)
               const labelVisible = showLabels || hover === n.id || selected === n.id
               const lines = labelLines(n.label)
-              const lab = labelPlacement(p.x - size.w / 2, p.y - size.h / 2, r)
               return (
                 <g
                   key={n.id}
@@ -619,86 +541,31 @@ export function MemoryGraphView({
                   {/* Inner g carries the pop-in — animating transform on the
                       outer one would fight its translate() attribute. */}
                   <g class="mg-pop" style={{ animationDelay: `${Math.min(i * 30, 520)}ms` }}>
-                    {ent ? (
-                      <>
-                        <rect
-                          class="mg-aura"
-                          x={-ext - 11}
-                          y={-21}
-                          width={ext * 2 + 22}
-                          height={42}
-                          rx={21}
-                          fill="url(#mg-aura-entity)"
-                        />
-                        {selected === n.id && (
-                          <rect class="mg-halo" x={-ext - 5} y={-16} width={ext * 2 + 10} height={32} rx={16} />
+                    {selected === n.id && <circle class="mg-halo" r={r + 6} />}
+                    <circle class="mg-hit" r={r + 10} />
+                    {n.status && n.status !== 'active' && <circle class="mg-ring" r={r + 4.5} />}
+                    <circle class="mg-dot" r={r} opacity={alpha} />
+                    {/* Every caption sits beneath its dot, centred. One
+                        consistent baseline is what makes a dense graph read
+                        as a list of names instead of scattered annotation. */}
+                    {labelVisible && (
+                      <text class="mg-label" y={r + 13} text-anchor="middle">
+                        {lines.length === 1 ? (
+                          lines[0]
+                        ) : (
+                          lines.map((ln, li) => (
+                            <tspan key={li} x={0} dy={li === 0 ? 0 : 12}>
+                              {ln}
+                            </tspan>
+                          ))
                         )}
-                        <rect class="mg-hit" x={-ext - 6} y={-14} width={ext * 2 + 12} height={28} rx={14} />
-                        <rect
-                          class="mg-pill"
-                          x={-ext}
-                          y={-11}
-                          width={ext * 2}
-                          height={22}
-                          rx={11}
-                          fill="url(#mg-pill-fill)"
-                          filter="url(#mg-node-shadow)"
-                          opacity={alpha}
-                        />
-                        {/* Top sheen: a lighter strip sells the tag's raised
-                            surface. */}
-                        <rect class="mg-pill-sheen" x={-ext + 3} y={-8.6} width={ext * 2 - 6} height={7.6} rx={3.8} />
-                        {labelVisible && (
-                          <text class="mg-pill-label" dominant-baseline="central" text-anchor="middle">
-                            {fitText(n.label)}
-                          </text>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <circle
-                          class="mg-aura"
-                          r={r + 13}
-                          fill={`url(#mg-aura-${KIND_FILL[n.kind] ? n.kind : 'core'})`}
-                        />
-                        {selected === n.id && <circle class="mg-halo" r={r + 6} />}
-                        <circle class="mg-hit" r={r + 10} />
-                        {n.status && n.status !== 'active' && <circle class="mg-ring" r={r + 4.5} />}
-                        <circle
-                          class="mg-dot"
-                          r={r}
-                          fill={`url(#mg-fill-${KIND_FILL[n.kind] ? n.kind : 'core'})`}
-                          filter="url(#mg-node-shadow)"
-                          opacity={alpha}
-                        />
-                        {/* Specular dot: the little highlight that reads as a
-                            glossy surface. */}
-                        <circle class="mg-spec" cx={-r * 0.32} cy={-r * 0.38} r={Math.max(1.4, r * 0.26)} />
-                        {/* Captions point outward from the cluster anchor —
-                            neighbours no longer stack their labels under
-                            their dots. */}
-                        {labelVisible && (
-                          <text x={lab.x} y={lab.y} text-anchor={lab.anchor} dominant-baseline={lab.baseline}>
-                            {lines.length === 1 ? (
-                              lines[0]
-                            ) : (
-                              lines.map((ln, li) => (
-                                <tspan key={li} x={lab.x} dy={li === 0 ? lab.firstDy : 12}>
-                                  {ln}
-                                </tspan>
-                              ))
-                            )}
-                          </text>
-                        )}
-                      </>
+                      </text>
                     )}
                   </g>
                 </g>
               )
             })}
           </g>
-          {/* Vignette pinned to the viewport (outside the zoom group). */}
-          <rect class="mg-vig" width={size.w} height={size.h} fill="url(#mg-vig)" pointer-events="none" />
           </svg>
           {/* Pan/zoom hint lives on the canvas, bottom-left: it is a gesture
               legend for the drawing, not a control in the toolbar. */}
@@ -849,34 +716,11 @@ export function MemoryGraphView({
   )
 }
 
-/** Caption placement relative to a file dot: the label faces radially away
- *  from the canvas centre, so captions never point into a neighbouring
- *  cluster's territory. dx/dy is the node-to-centre vector, r the radius. */
-interface LabelSpot {
-  x: number
-  y: number
-  anchor: 'middle' | 'start' | 'end'
-  baseline?: 'central' | 'auto'
-  firstDy: number
-}
-const LABEL_BELOW: LabelSpot = { x: 0, y: 0, anchor: 'middle', firstDy: 0 }
-
-function labelPlacement(dx: number, dy: number, r: number): LabelSpot {
-  const d = Math.hypot(dx, dy)
-  if (d < 14) return { ...LABEL_BELOW, y: r + 13 }
-  const ux = dx / d
-  const uy = dy / d
-  if (ux > 0.5) return { x: r + 5, y: 0, anchor: 'start', baseline: 'central', firstDy: 0 }
-  if (ux < -0.5) return { x: -r - 5, y: 0, anchor: 'end', baseline: 'central', firstDy: 0 }
-  // Above the dot: the first of two lines lifts so the stack grows upward.
-  if (uy < -0.5) return { x: 0, y: -r - 4, anchor: 'middle', baseline: 'auto', firstDy: -12 }
-  return { x: 0, y: r + 13, anchor: 'middle', firstDy: 0 }
-}
-
-/** Edge thickness follows evidence: a repeated mention or several promotions
- *  draw a heavier line than a stray one. */
+/** Edge thickness follows evidence, but stays a hairline: a repeated mention
+ *  or several promotions draw a slightly heavier line than a stray one. In
+ *  Obsidian's graph even the strongest link never becomes a thick band. */
 function edgeWidth(e: MemoryGraphEdge): number {
-  const base = e.kind === 'promotion' ? 1.7 : e.kind === 'mention' ? 1.1 : e.kind === 'co' ? 1 : 1.2
-  const bonus = (Math.sqrt(e.weight ?? 1) - 1) * 0.8
-  return Math.min(6, base + bonus)
+  const base = e.kind === 'promotion' ? 1.25 : e.kind === 'mention' ? 0.75 : e.kind === 'co' ? 0.7 : 0.95
+  const bonus = (Math.sqrt(e.weight ?? 1) - 1) * 0.42
+  return Math.min(2.4, base + bonus)
 }

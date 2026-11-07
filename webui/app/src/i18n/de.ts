@@ -1898,6 +1898,13 @@ const de: Messages = {
   'execution.limitsHelp': "Limits gelten für aktive Adapteraufrufe dieses Worker-Prozesses. Eine Senkung unterbricht laufende Aufrufe nicht. Parallele Schreibzugriffe benötigen getrennte Pfade oder isolierte Arbeitsbäume. Null hebt ein optionales Limit auf.",
   'execution.saved': "Gespeichert und in diesem Worker aktiv. Andere lokale Worker synchronisieren sich automatisch.",
 
+  // Einstellungsmenüs innerhalb der einzelnen Elemente (Agenten, Skills, Modelle).
+  'settings.itemSettings': 'Elementeinstellungen',
+  'settings.itemSettingsFor': 'Einstellungen für {name}',
+  'settings.customAgent': 'Benutzerdefiniert',
+  'settings.agentSettingsHelp': 'Gilt nur für diesen Agenten; zum Anwenden die Ausführungsrichtlinie speichern.',
+  'skills.reinstall': 'Neu installieren',
+
 }
 
 export default de
