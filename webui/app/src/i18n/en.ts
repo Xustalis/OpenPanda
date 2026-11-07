@@ -321,7 +321,7 @@ const en: Messages = {
   'sessions.railEmpty': 'No conversations yet.',
   'sessions.threads': 'Conversations',
   'sessions.untitled': 'Untitled chat',
-  'sessions.placeholder': 'Ask OpenPanda… (Enter to send, Shift+Enter for a new line)',
+  'sessions.placeholder': 'Ask OpenPanda…',
   'sessions.placeholderRunning': 'Agent running… press Stop or type an addition',
   'sessions.msgQueued': 'queued — the agent reads it at its next round',
   'sessions.msgNoFiles': 'attachments need a new turn — send the file once this one finishes',

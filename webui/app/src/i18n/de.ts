@@ -318,7 +318,7 @@ const de: Messages = {
   'sessions.railEmpty': 'Noch keine Unterhaltungen.',
   'sessions.threads': 'Unterhaltungen',
   'sessions.untitled': 'Unbenannter Chat',
-  'sessions.placeholder': 'Frag OpenPanda… (Enter zum Senden, Shift+Enter für neue Zeile)',
+  'sessions.placeholder': 'Frag OpenPanda…',
   'sessions.placeholderRunning': 'Agent läuft… Stop drücken oder Ergänzung eingeben',
   'sessions.msgQueued': 'eingereiht — der Agent liest es in der nächsten Runde',
   'sessions.msgNoFiles': 'Anhänge brauchen einen neuen Turn — sende die Datei, wenn dieser fertig ist',

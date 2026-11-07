@@ -317,7 +317,7 @@ const ja: Messages = {
   'sessions.railEmpty': 'まだ会話はありません。',
   'sessions.threads': '会話一覧',
   'sessions.untitled': '無題のチャット',
-  'sessions.placeholder': 'OpenPanda に質問…（Enter で送信、Shift+Enter で改行）',
+  'sessions.placeholder': 'OpenPanda に質問…',
   'sessions.placeholderRunning': 'エージェント実行中… 停止ボタンまたは追記を入力できます',
   'sessions.msgQueued': 'キューに追加しました — 次のラウンドで読み取ります',
   'sessions.msgNoFiles': '添付ファイルは新しいターンが必要です — このターンが終わってから送信してください',

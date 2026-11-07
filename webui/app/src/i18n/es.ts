@@ -318,7 +318,7 @@ const es: Messages = {
   'sessions.railEmpty': 'Aún no hay conversaciones.',
   'sessions.threads': 'Conversaciones',
   'sessions.untitled': 'Chat sin título',
-  'sessions.placeholder': 'Pregunta a OpenPanda… (Enter para enviar, Shift+Enter para nueva línea)',
+  'sessions.placeholder': 'Pregunta a OpenPanda…',
   'sessions.placeholderRunning': 'El agente se está ejecutando… pulsa Detener o escribe una indicación',
   'sessions.msgQueued': 'en cola — el agente lo leerá en su próxima ronda',
   'sessions.msgNoFiles': 'los adjuntos necesitan un turno nuevo — envía el archivo cuando termine este',
