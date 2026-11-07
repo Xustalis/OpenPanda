@@ -1887,6 +1887,8 @@ func (e *Engine) Project() (string, string) {
 // threaded through every classified and tool-call task path instead of mutating
 // the Engine's ambient project or the scheduler Core's default directory.
 type AskScope struct {
+	// RoundID names a persisted dispatch boundary, independently of approval SessionID.
+	RoundID string
 	Project string
 	WorkDir string
 	// Mode is the slash-prefix interaction mode the user picked for this turn
@@ -2127,6 +2129,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// sharing provider-side state; an ask with no thread keeps the client's
 	// own id.
 	ctx = entry.WithSessionID(ctx, scope.SessionID)
+	if scope.RoundID != "" {
+		ctx = core.WithAskRound(ctx, scope.RoundID)
+	}
 
 	// The reply locale is resolved up here rather than next to the classifier
 	// options because the deferred catch-all below also speaks it: an escaped

@@ -328,6 +328,8 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("POST /api/sessions", h.createSession)
 		mux.HandleFunc("POST /api/sessions/bulk-delete", h.bulkDeleteSession)
 		mux.HandleFunc("GET /api/sessions/{id}", h.getSession)
+		mux.HandleFunc("GET /api/sessions/{id}/summary-audit", h.sessionSummaryAudit)
+		mux.HandleFunc("POST /api/sessions/{id}/summary-repair", h.sessionSummaryAudit)
 		mux.HandleFunc("PATCH /api/sessions/{id}", h.patchSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", h.deleteSession)
 		mux.HandleFunc("POST /api/sessions/{id}/fork", h.forkSession)
