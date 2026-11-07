@@ -3,8 +3,11 @@
 package panel
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,7 +18,6 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/memory"
-	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // memoryHermes builds the Hermes store backing the memory console with the
@@ -40,6 +42,7 @@ func (h *handler) memoryHermes() *memory.Hermes {
 type topicJSON struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
+	Version string `json:"version,omitempty"`
 }
 
 // listDaily reads the warm-layer diary files (daily/*.md), newest first,
@@ -47,14 +50,24 @@ type topicJSON struct {
 // ride along so a long history cannot bloat the response.
 const maxDailyView = 31
 
-func listDaily(dir string) []topicJSON {
+func listDaily(dir string) ([]topicJSON, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return []topicJSON{}
+		if os.IsNotExist(err) {
+			return []topicJSON{}, nil
+		}
+		return nil, err
 	}
 	var names []string
 	for _, e := range entries {
-		if e.IsDir() {
+		info, err := e.Info()
+		if os.IsNotExist(err) { // concurrent retention sweep
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
 			continue
 		}
 		stem, ok := strings.CutSuffix(e.Name(), ".md")
@@ -74,16 +87,24 @@ func listDaily(dir string) []topicJSON {
 	}
 	out := make([]topicJSON, 0, len(names))
 	for _, name := range names {
-		out = append(out, topicJSON{Name: name, Content: readFileCapped(filepath.Join(dir, name+".md"))})
+		content, err := readDailyCapped(filepath.Join(dir, name+".md"))
+		if os.IsNotExist(err) { // concurrent delete/archive
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, topicJSON{Name: name, Content: content})
 	}
-	return out
+	return out, nil
 }
 
 // getMemory serves GET /api/memory — a read-only peek at every Hermes memory
 // file (USER.md / MEMORY.md / topics/*.md / DREAMS.md) so the console can
 // show what the agent remembers and what it dreamed (A3: all memory files are
-// user-managed). Each file is capped at 64 KiB; a missing file is reported as
-// an empty string, not an error (fresh nodes start without memory). The edit
+// user-managed). Editable files are returned in full, even when an operator
+// raises their cap above 64 KiB; only read-only daily previews are capped.
+// A missing file is reported as an empty string. The edit
 // caps ride along so the console can render a live character counter; they
 // are the configured values (config memory.limits), not compile-time constants.
 func (h *handler) getMemory(w http.ResponseWriter, r *http.Request) {
@@ -99,24 +120,51 @@ func (h *handler) getMemory(w http.ResponseWriter, r *http.Request) {
 	})
 	hermes := h.memoryHermes()
 	topics := []topicJSON{}
-	if names, err := hermes.ListTopics(); err == nil {
+	if names, err := hermes.ListTopics(); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	} else {
 		for _, name := range names {
-			topics = append(topics, topicJSON{
-				Name:    name,
-				Content: readFileCapped(filepath.Join(hermes.TopicsDir(), name+".md")),
-			})
+			content, version, err := readEditableMemory(filepath.Join(hermes.TopicsDir(), name+".md"))
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+			topics = append(topics, topicJSON{Name: name, Content: content, Version: version})
 		}
 	}
+	user, userVersion, err := readEditableMemory(filepath.Join(root, "USER.md"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	mem, memVersion, err := readEditableMemory(filepath.Join(root, "MEMORY.md"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	dreams := readDreams(filepath.Join(root, "DREAMS.md"))
+	daily, err := listDaily(hermes.WarmDir())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
 	resp := map[string]any{
-		"user":          readFileCapped(filepath.Join(root, "USER.md")),
-		"memory":        readFileCapped(filepath.Join(root, "MEMORY.md")),
-		"dreams":        readFileCapped(filepath.Join(root, "DREAMS.md")),
+		"user":             user,
+		"memory":           mem,
+		"dreams":           dreams.Content,
+		"dreams_truncated": dreams.Truncated,
+		"versions": map[string]string{
+			"user":   userVersion,
+			"memory": memVersion,
+			"dreams": dreams.Version,
+		},
 		"time":          time.Now().Format(time.RFC3339),
 		"user_limit":    limits.User,
 		"mem_limit":     limits.Memory,
 		"project_limit": limits.Project,
 		"topics":        topics,
-		"daily":         listDaily(hermes.WarmDir()),
+		"daily":         daily,
 	}
 	writeJSON(w, resp)
 }
@@ -139,14 +187,15 @@ func (h *handler) memoryFileLimit(name string) (limit int, ok bool) {
 }
 
 // decodeMemoryBody parses the shared {"content": "..."} edit body.
-func decodeMemoryBody(r *http.Request) (string, error) {
+func decodeMemoryBody(r *http.Request) (content, version string, err error) {
 	var req struct {
 		Content string `json:"content"`
+		Version string `json:"version"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return "", errors.New("invalid JSON body")
+		return "", "", errors.New("invalid JSON body")
 	}
-	return req.Content, nil
+	return req.Content, req.Version, nil
 }
 
 // putMemory serves PUT /api/memory/{file} — the editable memory files of the
@@ -163,18 +212,18 @@ func (h *handler) putMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("file")
-	content, err := decodeMemoryBody(r)
+	content, version, err := decodeMemoryBody(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 
 	if name == "dreams" {
-		if err := h.saveDreams(content); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
+		if err := h.saveDreams(content, version); err != nil {
+			writeMemoryError(w, err)
 			return
 		}
-		writeJSON(w, map[string]any{"file": "dreams", "chars": len([]rune(content)), "limit": maxMemoryView})
+		writeJSON(w, map[string]any{"file": "dreams", "chars": len([]rune(content)), "limit": maxDreamsEdit})
 		return
 	}
 
@@ -190,13 +239,20 @@ func (h *handler) putMemory(w http.ResponseWriter, r *http.Request) {
 	mf := memory.ParseMem([]byte(content))
 	mf.Limit = limit
 	hermes := h.memoryHermes()
+	update := func(current *memory.MemFile) error {
+		if err := checkMemoryVersion(current, version); err != nil {
+			return err
+		}
+		*current = mf
+		return nil
+	}
 	if name == "user" {
-		err = hermes.SaveUser(mf)
+		err = hermes.UpdateUser(update)
 	} else {
-		err = hermes.SaveMemory(mf)
+		err = hermes.UpdateMemory(update)
 	}
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeMemoryError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"file": name, "chars": mf.Chars(), "limit": limit})
@@ -206,18 +262,37 @@ func (h *handler) putMemory(w http.ResponseWriter, r *http.Request) {
 // capped at maxMemoryView bytes and written atomically like every other
 // memory file — same 0700/0600 tightening too: the diary's promoted entries
 // are memory content, so it is not world-readable either.
-func (h *handler) saveDreams(content string) error {
-	if len(content) > maxMemoryView {
-		return errors.New("dreams diary exceeds the 64 KiB edit cap")
+func (h *handler) saveDreams(content, version string) error {
+	if len(content) > maxDreamsEdit {
+		return errors.New("dreams diary exceeds the 2 MiB edit cap")
 	}
-	path := filepath.Join(h.cfg.Storage.MemoryPath, "DREAMS.md")
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	var root string
+	h.readCfg(func(c *config.Config) { root = c.Storage.MemoryPath })
+	return memory.NewDreamDiary(filepath.Join(root, "DREAMS.md")).Replace([]byte(content), version)
+}
+
+// checkMemoryVersion treats a missing version as create-only. Older callers
+// can still create a fresh file, but cannot silently replace existing facts
+// after the daemon or another editor has written them.
+func checkMemoryVersion(current *memory.MemFile, version string) error {
+	if version == "" {
+		if len(current.Bytes()) != 0 {
+			return memory.ErrConflict
+		}
+		return nil
 	}
-	_ = os.Chmod(dir, 0o700)
-	// WriteFileAtomic chmods the temp before rename — the file lands 0600.
-	return util.WriteFileAtomic(path, []byte(content), 0o600)
+	if memory.Version(current.Bytes()) != version {
+		return memory.ErrConflict
+	}
+	return nil
+}
+
+func writeMemoryError(w http.ResponseWriter, err error) {
+	if errors.Is(err, memory.ErrConflict) {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	writeErr(w, http.StatusBadRequest, err)
 }
 
 // putMemoryTopic serves PUT /api/memory/topics/{name} — create-or-rewrite one
@@ -235,7 +310,7 @@ func (h *handler) putMemoryTopic(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid topic name"))
 		return
 	}
-	content, err := decodeMemoryBody(r)
+	content, version, err := decodeMemoryBody(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -250,8 +325,14 @@ func (h *handler) putMemoryTopic(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid topic name"))
 		return
 	}
-	if err := hermes.SaveTopic(name, mf); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+	if err := hermes.UpdateTopic(name, func(current *memory.MemFile) error {
+		if err := checkMemoryVersion(current, version); err != nil {
+			return err
+		}
+		*current = mf
+		return nil
+	}); err != nil {
+		writeMemoryError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"topic": name, "chars": mf.Chars(), "limit": limit})
@@ -305,12 +386,16 @@ func (h *handler) deleteMemoryDaily(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid daily name"))
 		return
 	}
-	if info, err := os.Stat(path); err != nil || info.IsDir() {
+	if date, err := time.Parse("2006-01-02", name); err != nil || date.Format("2006-01-02") != name {
 		writeErr(w, http.StatusNotFound, errors.New("no such daily file"))
 		return
 	}
-	if err := os.Remove(path); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+	if err := memory.NewDaily(dir).Delete(name); err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, errors.New("no such daily file"))
+		} else {
+			writeErr(w, http.StatusInternalServerError, err)
+		}
 		return
 	}
 	writeJSON(w, map[string]any{"daily": name, "status": "deleted"})
@@ -346,15 +431,21 @@ func (h *handler) putProjectMemory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid project name"))
 		return
 	}
-	content, err := decodeMemoryBody(r)
+	content, version, err := decodeMemoryBody(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	mf := memory.ParseMem([]byte(content))
 	mf.Limit = h.projects.Limit()
-	if err := h.projects.Save(name, mf); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+	if err := h.projects.Update(name, func(current *memory.MemFile) error {
+		if err := checkMemoryVersion(current, version); err != nil {
+			return err
+		}
+		*current = mf
+		return nil
+	}); err != nil {
+		writeMemoryError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"project": name, "chars": mf.Chars(), "limit": mf.Limit})
@@ -368,14 +459,77 @@ func withinDir(dir, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// readEditableMemory uses the same parsed snapshot as the store's conditional
+// update, while returning all source text to the editor. A 64 KiB graph/daily
+// preview must never be reused as a whole-file edit draft.
+func readEditableMemory(path string) (content, version string, err error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", memory.Version(nil), nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return string(data), memory.Version(memory.ParseMem(data).Bytes()), nil
+}
+
 // readFileCapped returns the file's content capped at maxMemoryView bytes
 // (with a truncation marker), or "" when unreadable.
 const maxMemoryView = 64 << 10
+const maxDreamsEdit = 2 << 20
+
+type dreamsView struct {
+	Content   string
+	Version   string
+	Truncated bool
+}
+
+func readDreams(path string) dreamsView {
+	f, err := os.Open(path)
+	if err != nil {
+		return dreamsView{Version: memory.Version(nil)}
+	}
+	defer f.Close()
+	// Keep only the editable prefix in memory, but hash the entire file so
+	// even an append beyond the 2 MiB preview invalidates a stale editor.
+	data, err := io.ReadAll(io.LimitReader(f, maxDreamsEdit+1))
+	if err != nil {
+		return dreamsView{Version: memory.Version(nil)}
+	}
+	h := sha256.New()
+	_, _ = h.Write(data)
+	if _, err := io.Copy(h, f); err != nil {
+		return dreamsView{Version: memory.Version(nil)}
+	}
+	out := dreamsView{Version: hex.EncodeToString(h.Sum(nil))}
+	if len(data) > maxDreamsEdit {
+		out.Truncated = true
+		data = data[:maxDreamsEdit]
+		for len(data) > 0 && !utf8.Valid(data) {
+			data = data[:len(data)-1]
+		}
+	}
+	out.Content = string(data)
+	return out
+}
 
 func readFileCapped(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
-		return ""
+	content, _ := readDailyCapped(path)
+	return content
+}
+
+func readDailyCapped(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxMemoryView+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) == 0 {
+		return "", nil
 	}
 	if len(data) > maxMemoryView {
 		// Cut on a rune boundary: a mid-rune split would hand the JSON
@@ -384,7 +538,7 @@ func readFileCapped(path string) string {
 		for cut > 0 && !utf8.RuneStart(data[cut]) {
 			cut--
 		}
-		return string(data[:cut]) + "\n…（已截断）"
+		return string(data[:cut]) + "\n…（已截断）", nil
 	}
-	return string(data)
+	return string(data), nil
 }
