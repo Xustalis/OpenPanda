@@ -14,6 +14,14 @@
 ![Memory](https://img.shields.io/badge/常駐メモリ-~40MB%20RSS-brightgreen)
 ![No Cloud Relay](https://img.shields.io/badge/クラウド中継-なし-success)
 
+## 実機デモ
+
+![ローカルのソースビルドで記録した OpenPanda の端末セッション](site/media/openpanda-demo.gif)
+
+[81 秒の完全録画（MP4、626 KB）](site/media/openpanda-demo.mp4) · [コンソールのスクリーンショット](site/media/console-task.webp) · [端末の静止画](site/media/terminal-ask.webp)
+
+2026-11-06 に macOS arm64 の 1 台で、ソースからビルドした v0.1.4 を使って録画した。`panda version`、`panda doctor`、`panda queue` の後、`panda ask -authorize` で `uptime` の実行と負荷の報告を依頼し、最後に `panda queue` で完了したタスクを確認する。タスク `01a1b154-c86c-7600-a83d-f7d11ffbb26e` は opencode アダプタで実行され 43 秒で完了した。画面の負荷値はそのマシンでの実際のシェル呼び出しによるもの。
+
 ---
 
 ## ⚡ なぜ OpenPanda なのか？

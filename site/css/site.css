@@ -2415,6 +2415,35 @@ body.menu-open .menu-toggle { border-color: var(--line); color: var(--ink); }
   50%, 100% { opacity: 0; }
 }
 
+/* 03 now shows captures of a real run instead of the hand-drawn mock. The tab
+   ARIA contract and both panel ids are unchanged; these rules only give the
+   screenshot and the recording their own frame. */
+.console-body.is-shot { display: block; min-height: 0; }
+.console-shot { display: block; width: 100%; height: auto; }
+.term-body.is-video { min-height: 0; padding: 0; overflow: hidden; }
+.term-video {
+  display: block;
+  width: 100%;
+  max-width: 1008px;
+  height: auto;
+  margin: 0 auto;
+  background: #080a0f;
+  font: 400 12px/1.7 var(--mono);
+  color: #8f9bab;
+}
+.term-video span { display: block; padding: 24px; }
+.figure-caption .media-dl {
+  margin-left: auto;
+  color: var(--jade);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.figure-caption .media-dl:hover { text-decoration: underline; }
+@media (max-width: 720px) {
+  .figure-caption { flex-wrap: wrap; }
+  .figure-caption .media-dl { margin-left: 0; }
+}
+
 /* ── 09 · licensing ─────────────────────────────────────────────────── */
 .licensing {
   background: var(--paper-2);

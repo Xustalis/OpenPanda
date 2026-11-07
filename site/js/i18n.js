@@ -131,11 +131,19 @@ export const EN = {
   's3.tabs.aria': 'Product views',
   's3.tab.console': 'Console',
   's3.tab.term': 'Terminal',
-  's3.term.cmd': '"fix the failing scheduler tests, run them on the build box, send me the result"',
-  's3.term.classify': 'classify intent → <b>task.graph</b>',
-  's3.term.replan': 'artifact missing → re-dispatched with cause',
+  's3.rec.console': 'OpenPanda — Console · real screenshot',
+  's3.rec.badge': 'RECORDED',
+  's3.rec.term': 'panda — recorded session · zsh',
+  's3.rec.tag': 'REC · 81s',
+  's3.shot.console':
+    'OpenPanda console task detail: task 01a1b154 is done, showing the real uptime output and the model conclusion',
+  's3.shot.term':
+    'OpenPanda terminal recording: panda version, panda doctor, panda queue, a panda ask task running to completion, then panda queue again',
+  's3.demo.fallback':
+    'This browser cannot play inline video. Download openpanda-demo.mp4 from the same directory.',
+  's3.demo.link': 'Full recording · MP4 626 KB',
   's3.caption':
-    'An interface sketch: the console shows state and approvals, the terminal shows routing and acceptance. Both views describe the same run.',
+    'Recorded 2026-11-06 on a source build of v0.1.4. panda ask had the model run uptime locally; task 01a1b154 finished through the opencode adapter in 43 s. The console screenshot and the terminal video come from that same run.',
   's3.flow1.t': 'Read the intent',
   's3.flow1.d':
     'First decide whether this is chat, a lookup, or real work. Only the third goes further.',

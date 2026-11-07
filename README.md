@@ -14,9 +14,13 @@ Self-hosted · peer-to-peer · no vendor relay · ~40 MB RSS · macOS / Linux / 
 ![Memory](https://img.shields.io/badge/Memory%20Footprint-~40MB%20RSS-brightgreen)
 ![No Vendor Relay](https://img.shields.io/badge/Vendor%20Relay-None-success)
 
-<!-- Demo slot: record with vhs (a scripted terminal recording) and put the GIF here,
-     above the install block. The two scenes that convert: a task finishing on a second
-     node after the first is killed mid-run, and one prompt fanned out to four harnesses. -->
+## ▶ Demo
+
+![OpenPanda terminal session recorded on a local source build](site/media/openpanda-demo.gif)
+
+[Full 81-second recording (MP4, 626 KB)](site/media/openpanda-demo.mp4) · [Console screenshot](site/media/console-task.webp) · [Terminal still](site/media/terminal-ask.webp)
+
+Recorded 2026-11-06 on one macOS arm64 machine running v0.1.4 built from source. The clip runs `panda version`, `panda doctor`, `panda queue`, then `panda ask -authorize` with a request to run `uptime` and report the load average, and closes on the finished task in `panda queue`. Task `01a1b154-c86c-7600-a83d-f7d11ffbb26e` ran through the opencode adapter and settled in 43 s. The `uptime` figures on screen come from a real shell call on that machine.
 
 ---
 
