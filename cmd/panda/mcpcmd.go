@@ -83,7 +83,15 @@ func runMCP(args []string) {
 	// Stdout is the JSON-RPC channel: anything that writes to it corrupts the
 	// stream, so this command never logs to stdout and fatal() stays on
 	// stderr.
-	_ = srv.Serve(context.Background(), os.Stdin, os.Stdout)
+	ctx, stop := shutdownContext()
+	defer stop()
+	// A canceled context cannot by itself interrupt a read that is already
+	// blocked on os.Stdin. Closing stdin is what lets Serve exit on
+	// SIGINT/SIGTERM (or a Windows console close) instead of hanging until
+	// the launching agent gives up.
+	undoClose := context.AfterFunc(ctx, func() { _ = os.Stdin.Close() })
+	defer undoClose()
+	_ = srv.Serve(ctx, os.Stdin, os.Stdout)
 }
 
 // selfToolsDeps carries the read/submit handles the self-management tools
@@ -135,7 +143,7 @@ func selfTools(d *selfToolsDeps) []mcpserve.Tool {
 		},
 		{
 			Name:        "panda_task_submit",
-			Description: "Submit a new task to this node's scheduler queue (equivalent to `panda task add`). Requires is a list of ability ids the task needs (e.g. \"coding\", \"sys:info\", \"hardware:gpio_servo\"); routing picks the node that can run it. Returns the queued task id. Capped per session.",
+			Description: "Submit a new task to this node's scheduler queue (equivalent to `panda task add`). The `requires` argument is a list of ability ids the task needs (e.g. \"coding\", \"sys:info\", \"hardware:gpio_servo\"); routing picks the node that can run it. Returns the queued task id. Capped per session.",
 			InputSchema: mcpserve.SchemaObject(map[string]any{
 				"title":    mcpserve.StringProp("short task title (required)"),
 				"prompt":   mcpserve.StringProp("full instruction; defaults to title"),
@@ -452,7 +460,7 @@ func (d *selfToolsDeps) toolNodes(ctx context.Context, _ map[string]any) (string
 			Chip: n.Chip, Abilities: n.Abilities(), LastSeen: n.LastSeen})
 	}
 	b, _ := json.Marshal(out)
-	return string(b), nil
+	return clipSelfOut(string(b)), nil
 }
 
 func (d *selfToolsDeps) toolQueue(ctx context.Context, _ map[string]any) (string, error) {
