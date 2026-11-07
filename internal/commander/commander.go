@@ -27,6 +27,9 @@ import (
 // card and produces an execution plan (native command / agent adapter /
 // manual notification).
 type Router struct {
+	concurrency    *AgentConcurrency
+	subagentModels map[string][]string
+
 	card     ledger.Card
 	executor *Executor
 	model    config.ModelConfig
@@ -123,21 +126,33 @@ func NewRouter(card ledger.Card, executor *Executor, model config.ModelConfig, i
 		pandaTools:      routing.NormalizedPandaTools(),
 		preferred:       routing.PreferredAgents,
 		agentModels:     routing.AgentModels,
+		subagentModels:  routing.SubagentModels,
 		cooldown:        &agentCooldown{},
 	}
-	r.runAdapter = r.runAdapterDefault
+	r.concurrency = NewAgentConcurrency()
+	r.concurrency.Configure(card.Capacity.MaxConcurrent, routing, config.DelegationConfig{})
 	r.runProcess = runAdapterProcess
 	r.endpointProbe = modelProbe
 	// The production probe is credential- AND connectivity-aware
 	// (AgentDispatchable), not just a PATH check: routing to an
 	// installed-but-locked-out CLI, or one whose model endpoint is
 	// unreachable, guarantees a runtime failure after a long hang.
-	r.probeAgent = r.AgentDispatchable
 	return r
 }
 
-// SetPolicy swaps the injection/routing policy after construction (the core
-// builds its router before the full config is wired through).
+// WithConfig publishes an independent policy snapshot while preserving the
+// process runner, test hooks and shared concurrency accounting. Default methods
+// are bound at call time so cloned routers never execute against stale policy.
+func (r *Router) WithConfig(card ledger.Card, model config.ModelConfig, injection config.InjectionConfig, routing config.RoutingConfig) *Router {
+	clone := *r
+	clone.card, clone.model = card, model
+	clone.SetPolicy(injection, routing)
+	clone.cooldown = &agentCooldown{}
+	return &clone
+}
+
+// SetPolicy configures an unpublished router. Runtime callers use WithConfig
+// instead of mutating a snapshot held by active tasks.
 func (r *Router) SetPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
 	r.injectionModel = injection.NormalizedModel()
 	r.injectionAgents = injection.Agents
@@ -145,12 +160,26 @@ func (r *Router) SetPolicy(injection config.InjectionConfig, routing config.Rout
 	r.pandaTools = routing.NormalizedPandaTools()
 	r.preferred = routing.PreferredAgents
 	r.agentModels = routing.AgentModels
+	r.subagentModels = routing.SubagentModels
+}
+
+// SetConcurrency installs the core-owned gate before publishing a router.
+func (r *Router) SetConcurrency(g *AgentConcurrency) { r.concurrency = g }
+
+type subagentKey struct{}
+type selectedModelKey struct{}
+
+// WithSubagent marks an orchestrated child, independently of the CLI's native
+// internal delegation tools (whose policy remains owned by that CLI).
+func WithSubagent(ctx context.Context) context.Context {
+	return context.WithValue(ctx, subagentKey{}, true)
 }
 
 // agentModelPrefs resolves an agent's ordered model preference list by its
 // card name first, then by adapter file name — the same lookup order
 // injection.agents uses, so a renamed card entry still finds its list.
 func (r *Router) agentModelPrefs(name, adapter string) []string {
+
 	if len(r.agentModels) == 0 {
 		return nil
 	}
@@ -738,6 +767,10 @@ func substitutionIdentityNote(planned, running, reason string) string {
 }
 
 func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd string) Result {
+	runAdapter := r.runAdapter
+	if runAdapter == nil {
+		runAdapter = r.runAdapterDefault
+	}
 	// Fallback chain: run the highest-scored agent whose CLI is actually
 	// available; an unavailable candidate (missing binary / failed probe) is
 	// skipped in favor of the next match. All unavailable fails closed with
@@ -824,7 +857,7 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// the request (no .mcp.json in the work dir); project-discovery CLIs
 		// keep the materialize-and-remove file path.
 		runCtx, cleanupMCP := r.wireMCPPassthrough(runCtx, name, ag.Adapter, cwd)
-		ar := r.runAdapter(runCtx, ag.Adapter, runPrompt, cwd)
+		ar := runAdapter(runCtx, ag.Adapter, runPrompt, cwd)
 		// One bounded retry on provider-side turbulence (rate limit /
 		// overload / 5xx): these resolve in seconds, and the narrow
 		// transientAgentFailure patterns keep real task failures — and
@@ -842,7 +875,7 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			case <-timer.C:
 			}
 			if ctx.Err() == nil {
-				retry := r.runAdapter(runCtx, ag.Adapter, runPrompt, cwd)
+				retry := runAdapter(runCtx, ag.Adapter, runPrompt, cwd)
 				if retry.OK {
 					retry.Result = "[retried once after transient provider error] " + retry.Result
 					ar = retry
@@ -1116,6 +1149,12 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// share generic.py, so the script alone must not inherit an entry's
 	// credential manifest or model-env mapping.
 	name := AgentName(ctx)
+	child, _ := ctx.Value(subagentKey{}).(bool)
+	release, err := r.concurrency.acquire(ctx, name, adapter, child)
+	if err != nil {
+		return AgentResult{Result: err.Error(), ExitCode: 1}
+	}
+	defer release()
 	dec := r.InjectionDecision(name, adapter)
 	// The model actually injected into this agent: a per-agent pin
 	// (injection.agents) overrides the node model, so the endpoint guard,
@@ -1138,10 +1177,18 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// advisory: the adapter picks the first entry its install serves. It
 	// rides every run, injected or not, because it describes the CLI's own
 	// model choice; an injected run ignores it.
-	if prefs := r.agentModelPrefs(name, adapter); len(prefs) > 0 {
-		if raw, err := json.Marshal(prefs); err == nil {
-			env = append(env, "OPENPANDA_AGENT_MODELS="+string(raw))
+	prefs := r.agentModelPrefs(name, adapter)
+	if child {
+		if models, ok := r.subagentModels[name]; ok {
+			prefs = models
+		} else if models, ok := r.subagentModels[adapter]; ok {
+			prefs = models
 		}
+	}
+	if len(prefs) > 0 {
+		ctx = context.WithValue(ctx, selectedModelKey{}, prefs[0])
+		raw, _ := json.Marshal(prefs) // []string is always JSON-encodable
+		env = append(env, "OPENPANDA_AGENT_MODELS="+string(raw))
 	}
 	if dec.Inject {
 		// The model endpoint must be HTTPS so the API key never travels
@@ -1439,7 +1486,10 @@ func (r *Router) agentDispatchable(name string, ag ledger.Agent) bool {
 	if _, _, cooling := r.agentCooldown(name); cooling {
 		return false
 	}
-	return r.probeAgent(name, ag)
+	if r.probeAgent != nil {
+		return r.probeAgent(name, ag)
+	}
+	return r.AgentDispatchable(name, ag)
 }
 
 // AgentDispatchable reports whether an agent is ready to receive a task right

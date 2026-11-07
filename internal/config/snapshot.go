@@ -76,13 +76,14 @@ func writeConfigFileAllowingClear(path string, data []byte) error {
 // configured here" — the pair the console keys the whole chat surface off.
 type modelIdentity struct {
 	Model struct {
-		BaseURL string `yaml:"base_url"`
-		Model   string `yaml:"model"`
+		Provider string `yaml:"provider"`
+		BaseURL  string `yaml:"base_url"`
+		Model    string `yaml:"model"`
 	} `yaml:"model"`
 }
 
 func (m modelIdentity) configured() bool {
-	return strings.TrimSpace(m.Model.BaseURL) != "" || strings.TrimSpace(m.Model.Model) != ""
+	return strings.TrimSpace(m.Model.Provider) != "" || strings.TrimSpace(m.Model.BaseURL) != "" || strings.TrimSpace(m.Model.Model) != ""
 }
 
 // guardModelDowngrade reports an error when next would clear a model that the

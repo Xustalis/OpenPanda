@@ -28,6 +28,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/artifact"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/configsync"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/executil"
 	"github.com/Xustalis/OpenPanda/internal/guard"
@@ -527,9 +528,18 @@ func runDaemon(args []string) {
 				logger.Warn("reload config on SIGHUP", "err", err)
 				continue
 			}
+			if err := coreNode.ApplyRuntimeConfig(reloaded.RuntimeConfig()); err != nil {
+				logger.Warn("reload model on SIGHUP", "code", "apply_failed")
+			}
 			coreNode.ApplyNetworkConfig(ctx, reloaded.Network)
 		}
 	})
+
+	// File observation is the cross-platform path (including Windows) and
+	// acknowledges the revision in the shared store for settings diagnostics.
+	modelWatcher := configsync.NewRuntime(db, *configPath, "daemon", coreNode.RuntimeConfig, coreNode.ApplyRuntimeConfig)
+	coreNode.SetModelRefresh(modelWatcher.Sync)
+	guard.Go(logger, "daemon: model config sync", cancel, func() { modelWatcher.Run(ctx) })
 
 	// Task recovery FIRST, then the queue scheduler: the order is
 	// load-bearing (see recoverThenStartQueue).

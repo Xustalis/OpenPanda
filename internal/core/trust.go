@@ -411,14 +411,15 @@ const policySystemPrompt = `你是节点准入策略评审员。一个来自半�
 const policyVerdictTimeout = 15 * time.Second
 
 func (c *Core) policyVerdict(ctx context.Context, p bus.TaskDelegatePayload) (string, string) {
-	if c.supervisor == nil {
+	supervisor := c.currentSupervisor()
+	if supervisor == nil {
 		return trust.AcceptReview, "policy classifier unavailable (no model configured)"
 	}
 	ctx, cancel := context.WithTimeout(ctx, policyVerdictTimeout)
 	defer cancel()
 	user := fmt.Sprintf("任务标题：%s\n任务意图：%s\n能力要求：%s\n复杂度：%.2f  风险：%s",
 		p.TitleOrDefault(), p.Intent, strings.Join(p.Requires, ","), p.Complexity, p.Risk)
-	text, err := c.supervisor.Complete(ctx, policySystemPrompt, user)
+	text, err := supervisor.Complete(ctx, policySystemPrompt, user)
 	if err != nil {
 		return trust.AcceptReview, "policy classifier unreachable: " + err.Error()
 	}

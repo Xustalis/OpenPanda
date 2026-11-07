@@ -77,6 +77,7 @@ func expandGenericTemplate(req AdapterRequest) ([]string, bool) {
 	}
 	optional := map[string]string{
 		"{cwd}":           cwd,
+		"{model}":         req.Model,
 		"{resume}":        req.Resume,
 		"{task_id}":       req.TaskID,
 		"{effort}":        req.Effort,
