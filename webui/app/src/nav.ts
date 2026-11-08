@@ -30,8 +30,10 @@ export type Route =
  *  had stopped earning their 24px. 新对话 leads
  *  (it is an action, but it reads as a row); then the machines-and-work
  *  destinations: 工作空间 (the fleet as a map) and 队列·任务·项目 (the node's
- *  boards). 团队 closes the block — it is a slot reserved for team work, and
- *  its page is empty until that lands. The 节点网络 page (fleet) was removed
+ *  boards). 团队 is the opt-in slot reserved for team work: its page is still
+ *  empty, so the rail row is hidden until 设置 → 偏好 → 团队 → 启用团队功能
+ *  is checked (app.tsx gates the row, palette.tsx gates the ⌘K command, and
+ *  a disabled #/team is redirected). The 节点网络 page (fleet) was removed
  *  from the console; its old routes land on the thread list instead.
  *
  *  What is deliberately NOT a row: 对话 — the thread history is the tail of the
@@ -47,9 +49,9 @@ export const navViews: Array<[view: string, key: string]> = [
   ['workspace', 'nav.workspace'],
   ['control', 'nav.control'],
   ['team', 'nav.team'],
-  // 记忆 sits right under 团队 in the rail: what the node has learned is a
-  // place you go and read, not a knob you turn, so it left 设置 when the sheet
-  // was rebuilt. 技能 stayed behind — it is configuration.
+  // 记忆 follows the rail's work rows: what the node has learned is a place
+  // you go and read, not a knob you turn, so it left 设置 when the sheet was
+  // rebuilt. 技能 stayed behind — it is configuration.
   ['memory', 'nav.memory'],
   // The two boards that are tabs rather than rows.
   ['control:plans', 'nav.plans'],
@@ -99,9 +101,9 @@ export function parseHash(): Route {
   }
   if (path === 'plans') return { view: 'control', tab: 'plans' }
   if (path === 'projects') return { view: 'control', tab: 'projects' }
-  // 团队: its own destination, beside the boards. The page is empty for now —
-  // it holds the slot for team work so the rail's shape does not have to change
-  // again when that lands.
+  // 团队: its own destination, beside the boards — but only when the feature
+  // is switched on. parseHash still answers the URL (a bookmark is harmless);
+  // app.tsx redirects it to the thread list while the switch is off.
   if (path === 'team') return { view: 'team' }
   // The to-do board was folded into the task centre; its old URLs land on the
   // board where that work now lives instead of on the empty team page.
@@ -109,8 +111,8 @@ export function parseHash(): Route {
   // 节点网络 (fleet) is gone from the console; its legacy URLs (`#/fleet`,
   // `#/nodes`) fall through to the thread list below.
   if (path === 'workspace') return { view: 'workspace' }
-  // 记忆 is its own destination (under 团队 in the rail) and 技能 is a tab of
-  // 设置. Old deep links (`#/memory`, `#/memory/topics`) still land on the
+  // 记忆 is its own destination (below the rail's work rows) and 技能 is a tab
+  // of 设置. Old deep links (`#/memory`, `#/memory/topics`) still land on the
   // memory page; `#/skills` still opens the settings sheet on its tab, and a
   // `#/settings?tab=memory` bookmark is answered by the redirect below.
   if (path === 'memory' || path.startsWith('memory/')) return { view: 'memory' }

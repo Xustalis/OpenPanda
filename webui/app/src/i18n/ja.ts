@@ -971,6 +971,9 @@ const ja: Messages = {
   'settings.theme.dark': 'ダーク',
   'settings.theme.auto': 'システムに従う',
   'settings.themeHelp': 'ライト・ダーク・システム設定に従うの3択。選択はこの端末に保存されます。',
+  'settings.teamFeature': 'チーム機能を有効にする',
+  'settings.teamFeatureHelp':
+    'チェックするとサイドバーに「チーム」入口とそのページを表示します。既定はオフで、オフのときはコマンドパレットと #/team も非表示になります。設定はこのブラウザに保存されます。',
   'settings.policy': 'アプリポリシー',
   'settings.injection': '注入方法',
   'settings.injection.auto': '自動',

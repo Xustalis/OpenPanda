@@ -979,6 +979,9 @@ const es: Messages = {
   'settings.theme.dark': 'Oscuro',
   'settings.theme.auto': 'Seguir al sistema',
   'settings.themeHelp': 'Claro, oscuro o según la preferencia del sistema. La elección se guarda en este dispositivo.',
+  'settings.teamFeature': 'Activar funciones de equipo',
+  'settings.teamFeatureHelp':
+    'Al marcarlo, la barra lateral muestra la entrada Equipo y su página. Está desactivado por defecto; al desactivarlo también se ocultan la paleta de comandos y #/team. Se guarda en este navegador.',
   'settings.policy': 'Políticas de la app',
   'settings.injection': 'Inyección',
   'settings.injection.auto': 'Auto',

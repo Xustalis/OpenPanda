@@ -994,6 +994,9 @@ const zhCN: Messages = {
   'settings.theme.dark': '暗色',
   'settings.theme.auto': '跟随系统',
   'settings.themeHelp': '亮色、暗色或跟随系统偏好，选择会保存在本机。',
+  'settings.teamFeature': '启用团队功能',
+  'settings.teamFeatureHelp':
+    '勾选后，侧栏显示「团队」入口并打开团队页面；默认不勾选，关闭时命令面板和 #/team 深链也会一并收起。选择保存在本机浏览器。',
   'settings.policy': '应用策略',
   'settings.injection': '注入方式',
   'settings.injection.auto': '自动',

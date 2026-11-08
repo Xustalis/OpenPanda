@@ -1013,6 +1013,9 @@ const en: Messages = {
   'settings.theme.dark': 'Dark',
   'settings.theme.auto': 'Follow system',
   'settings.themeHelp': 'Light, dark, or follow the OS preference. The choice is stored on this device.',
+  'settings.teamFeature': 'Enable team features',
+  'settings.teamFeatureHelp':
+    'When checked, the sidebar shows the Team entry and its page. Off by default — turning it off also hides the command palette item and the #/team link. Saved in this browser.',
   'settings.policy': 'App policies',
   'settings.injection': 'Injection',
   'settings.injection.auto': 'Auto',
