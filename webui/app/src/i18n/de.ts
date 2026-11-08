@@ -982,6 +982,9 @@ const de: Messages = {
   'settings.theme.dark': 'Dunkel',
   'settings.theme.auto': 'System folgen',
   'settings.themeHelp': 'Hell, dunkel oder nach Systemeinstellung. Die Wahl wird auf diesem Gerät gespeichert.',
+  'settings.teamFeature': 'Team-Funktionen aktivieren',
+  'settings.teamFeatureHelp':
+    'Wenn aktiviert, zeigt die Seitenleiste den Eintrag Team und öffnet dessen Seite. Standardmäßig aus; dann sind auch die Befehlspalette und #/team verborgen. In diesem Browser gespeichert.',
   'settings.policy': 'App-Richtlinien',
   'settings.injection': 'Injektion',
   'settings.injection.auto': 'Auto',
