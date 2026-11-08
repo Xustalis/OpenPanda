@@ -14,6 +14,7 @@ import { t } from '../i18n'
 import { ModelPicker } from '../components/model-picker'
 import { Select } from '../components/select'
 import { useModalFocus } from '../components/modal-focus'
+import { confirmDialog } from '../components/confirm'
 import { Icon } from '../components/icons'
 import { toast, toastError } from '../components/toast'
 import { ProviderLogo } from '../brand/providers'
@@ -22,7 +23,6 @@ import { needsPlaintextConsent } from './model-endpoint'
 import {
   type Conn,
   type Member,
-  connRefs,
   copyAlias,
   groupConnections,
   hostOf,
@@ -219,51 +219,76 @@ export function ModelsSection() {
     }
   }
 
-  /** Clear one card — the whole account, in one request.
-   *
-   *  The rows are sent as addresses, not as "everything on this endpoint": what
-   *  the page shows is what goes. Row-by-row deletes would have rewritten the
-   *  models block once per model and walked the live slot through the siblings
-   *  the next click was about to delete. */
+  /** 删一条连接 = 删掉它名下的每一行。注册表本来就按行存，逐行删既能复用
+   *  后端的「当前模型被删就切换」规则，也能在半途失败时说清删掉几行。 */
   async function removeConn(c: Conn) {
+    const rows = c.members.filter((m) => m.registry)
+    if (!rows.length) return
+    const ok = await confirmDialog({
+      title: t('models.deleteConnection'),
+      message: t('models.removeConnMessage', { n: rows.length }),
+      confirmLabel: t('models.deleteConnection'),
+    })
+    if (!ok) return
     setBusy(`rmconn:${c.id}`)
+    let done = 0
+    let switched = ''
     try {
-      const r = await api.removeModels(connRefs(c))
+      for (const m of rows) {
+        const r = await api.removeModel(m.entry.alias, refOf(m.entry))
+        done++
+        if (r.switched_to) switched = r.switched_to
+      }
       toast(
-        r.cleared
-          ? t('models.removedConnEmpty', { n: r.removed })
-          : r.switched_to
-            ? t('models.removedConnSwitched', { n: r.removed, next: r.switched_to })
-            : t('models.removedConn', { n: r.removed }),
+        switched
+          ? t('models.removedConnSwitched', { n: done, next: switched })
+          : t('models.removedConn', { n: done }),
         'success',
       )
       afterWrite()
     } catch (err) {
-      toastError(err)
+      const msg = err instanceof Error ? err.message : String(err)
+      toastError(done > 0 ? t('models.removeConnPartial', { n: done, error: msg }) : msg)
     } finally {
       setBusy('')
     }
   }
 
+  /** 卡片的「编辑」落在连接上：拿这条账号里第一行注册过的模型开表，表里
+   *  既能改端点和密钥，也能在「更多模型」里继续给这个账号加型号。 */
+  function editConn(c: Conn) {
+    const e = c.members.find((m) => m.registry)?.entry ?? c.members[0]?.entry
+    if (e) setSheet({ kind: 'edit', entry: e, conn: c })
+  }
+
   return (
     <div class="models-section">
-      {/* A caption row, not a header: one action, right-aligned, so the grid
-          still starts with the add door. It sits above the tiles because a
-          registry of seven models pushes a footnote below the fold, and an
-          entry nobody scrolls to is not an entry. */}
-      <div class="model-actions">
-        <button type="button" class="model-discover" onClick={() => setDiscovering(true)}>
+      {/* One tool row above the wall: the registry's size on the left, the one
+          bulk action on the right. The collectors' names are a tooltip here, not
+          a permanent caption — they belong to the sheet that actually scans,
+          whose subtitle already explains them. */}
+      <div class="model-toolbar">
+        <span class="model-toolbar-meta">
+          {t('models.registryMeta', { c: conns.length, m: registry.length })}
+        </span>
+        <button
+          type="button"
+          class="btn small model-discover tip-wrap tip-right tip-down"
+          data-tip={t('models.discover.triggerHint')}
+          aria-label={`${t('models.discover.trigger')} · ${t('models.discover.triggerHint')}`}
+          onClick={() => setDiscovering(true)}
+        >
           <Icon name="orbit" size={14} />
           <span>{t('models.discover.trigger')}</span>
-          <span class="model-discover-hint">{t('models.discover.triggerHint')}</span>
+          <Icon name="chevron-right" size={13} class="model-discover-arrow" />
         </button>
       </div>
 
       <div class="model-grid">
         {/* The first cell opens a *connection*: an endpoint and the key it
-            dials with. A model is added from inside the card that already
-            holds its account, which is where a person is when they think of
-            one. Same square as the rest, so the wall stays a wall. */}
+            dials with. An existing card edits/removes that account from its
+            own footer, and one more model id is added from the edit sheet.
+            Same square as the rest, so the wall stays a wall. */}
         <button
           type="button"
           class="model-tile model-add"
@@ -288,8 +313,8 @@ export function ModelsSection() {
             onEdit={(e) => setSheet({ kind: 'edit', entry: e })}
             onCopy={(m) => void copy(m)}
             onRemove={(m) => void remove(m)}
-            onRemoveConn={(conn) => void removeConn(conn)}
-            onAdd={(conn) => setSheet({ kind: 'add', conn })}
+            onEditConn={editConn}
+            onRemoveConn={(c) => void removeConn(c)}
           />
         ))}
       </div>
@@ -379,14 +404,10 @@ function ConnectionTile(props: {
   onEdit(e: ModelEntry): void
   onCopy(m: Member): void
   onRemove(m: Member): void
-  onRemoveConn(c: Conn): void
-  onAdd(conn: Conn): void
+  onEditConn(conn: Conn): void
+  onRemoveConn(conn: Conn): void
 }) {
   const c = props.conn
-  // The count is the whole destructive act in one number, and it is the last
-  // thing read before the confirm — so it comes from the rows on screen, not
-  // from a second guess at what the server will match.
-  const [confirming, setConfirming] = useState(false)
   const name = c.providerLabel || labelOf(props.providers, c.provider) || t('models.customProvider')
   const host = hostOf(c.baseURL)
   // The card is ringed when one of its models is the live one: the answer to
@@ -411,70 +432,37 @@ function ConnectionTile(props: {
       </span>
 
       <div class="model-conn-models">
-        <div class="model-conn-list">
-          {c.members.map((m) => (
-            <ModelRow
-              key={keyOf(m.entry)}
-              m={m}
-              busy={props.busy}
-              result={props.results[keyOf(m.entry)]}
-              providers={props.providers}
-              onUse={() => props.onUse(m.entry)}
-              onTest={() => props.onTest(m.entry)}
-              onEdit={() => props.onEdit(m.entry)}
-              onCopy={() => props.onCopy(m)}
-              onRemove={() => props.onRemove(m)}
-            />
-          ))}
-        </div>
-        {/* Adding to this account is the common case, so the door is inside the
-            card: a new connection is the rarer act and keeps its own tile.
-            The bin beside it takes the row-level two-step: one click arms it,
-            the strip says what and how many, the tick commits. */}
-        <div class="model-conn-foot">
-          {confirming ? (
-            <>
-              <span class="model-conn-confirm">
-                {t('models.removeConnConfirm', { n: c.members.length })}
-              </span>
-              <button
-                type="button"
-                class="model-conn-act danger"
-                title={t('models.removeConnection')}
-                aria-label={t('models.removeConnection')}
-                disabled={props.busy !== ''}
-                onClick={() => props.onRemoveConn(c)}
-              >
-                <Icon name="check" size={13} />
-              </button>
-              <button
-                type="button"
-                class="model-conn-act"
-                title={t('common.cancel')}
-                aria-label={t('common.cancel')}
-                onClick={() => setConfirming(false)}
-              >
-                <Icon name="x" size={13} />
-              </button>
-            </>
-          ) : (
-            <>
-              <button type="button" class="model-conn-add" onClick={() => props.onAdd(c)}>
-                <Icon name="plus" size={13} />
-                <span>{t('models.addModel')}</span>
-              </button>
-              <button
-                type="button"
-                class="model-conn-act"
-                title={t('models.removeConnection')}
-                aria-label={t('models.removeConnection')}
-                disabled={props.busy !== ''}
-                onClick={() => setConfirming(true)}
-              >
-                <Icon name="trash" size={13} />
-              </button>
-            </>
-          )}
+        {c.members.map((m) => (
+          <ModelRow
+            key={keyOf(m.entry)}
+            m={m}
+            busy={props.busy}
+            result={props.results[keyOf(m.entry)]}
+            providers={props.providers}
+            onUse={() => props.onUse(m.entry)}
+            onTest={() => props.onTest(m.entry)}
+            onEdit={() => props.onEdit(m.entry)}
+            onCopy={() => props.onCopy(m)}
+            onRemove={() => props.onRemove(m)}
+          />
+        ))}
+        {/* Account-level verbs, kept as two plain rows under the model list.
+            Adding another id lives in the edit sheet's "more models" table, so
+            the card itself only offers the two things that address the card. */}
+        <div class="model-conn-ops">
+          <button type="button" class="model-conn-op" onClick={() => props.onEditConn(c)}>
+            <Icon name="pencil" size={13} />
+            <span>{t('models.edit')}</span>
+            <Icon name="chevron-right" size={12} class="model-conn-op-arrow" />
+          </button>
+          <button
+            type="button"
+            class="model-conn-op danger"
+            onClick={() => props.onRemoveConn(c)}
+          >
+            <Icon name="trash" size={13} />
+            <span>{t('models.deleteConnection')}</span>
+          </button>
         </div>
       </div>
     </div>
@@ -656,8 +644,12 @@ function ModelRow(props: {
 // ---- the sheet ----
 
 /** What the sheet is opened on: a new connection, an existing one (adding more
- *  models to it), or one registered row. */
-type SheetTarget = { kind: 'add'; conn?: Conn } | { kind: 'edit'; entry: ModelEntry }
+ *  models to it), or one registered row. An edit opened from the card carries
+ *  the connection so the sheet can call itself "edit connection" and show the
+ *  account it belongs to rather than pretending to edit a single model row. */
+type SheetTarget =
+  | { kind: 'add'; conn?: Conn }
+  | { kind: 'edit'; entry: ModelEntry; conn?: Conn }
 
 function sheetKey(s: SheetTarget): string {
   return s.kind === 'edit' ? `edit:${keyOf(s.entry)}` : `add:${s.conn?.id ?? ''}`
@@ -748,6 +740,7 @@ function ModelSheet(props: {
 }) {
   const editing = props.target.kind === 'edit' ? props.target.entry : null
   const pre = props.target.kind === 'add' ? props.target.conn : null
+  const connEditing = props.target.kind === 'edit' ? props.target.conn : null
   const initial = providerFor(
     props.providers,
     editing?.provider ?? pre?.provider ?? props.active.provider,
@@ -1107,12 +1100,16 @@ function ModelSheet(props: {
   const canSubmit = provider !== null && baseReady && keyReady && (editing ? drafts[0]!.model.trim() !== '' : pickedCount > 0)
 
   const title = editing
-    ? t('models.editModel')
+    ? connEditing
+      ? t('models.editConnection')
+      : t('models.editModel')
     : pre
       ? t('models.addModelTitle')
       : t('models.addConnection')
   const subtitle = editing
-    ? t('models.editModelSub')
+    ? connEditing
+      ? `${connEditing.providerLabel || t('models.customProvider')} · ${connEditing.baseURL || t('models.customEndpoint')}`
+      : t('models.editModelSub')
     : pre
       ? `${pre.providerLabel || t('models.customProvider')} · ${pre.baseURL || t('models.customEndpoint')}`
       : t('models.pickProviderShort')

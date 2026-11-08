@@ -268,9 +268,9 @@ export function ModelSelect(props: { disabled?: boolean }) {
               aria-expanded={connsOpen}
               onClick={() => setConnsOpen((v) => !v)}
             >
-              <Icon name="chevron-right" size={16} class="model-conn-toggle-caret" />
               <span class="model-conn-toggle-name">{current ? connName(current) : '—'}</span>
               {current && <span class="model-conn-toggle-sub mono">{hostOf(current.baseURL)}</span>}
+              <Icon name="chevron-right" size={16} class="model-conn-toggle-caret" />
             </button>
 
             {connsOpen && (
@@ -312,8 +312,7 @@ export function ModelSelect(props: { disabled?: boolean }) {
                 navigate({ view: 'settings', tab: 'models' })
               }}
             >
-              <Icon name="gear" size={16} />
-              {t('sessions.modelManage')}
+              <span class="model-foot-label">{t('sessions.modelManage')}</span>
               <Icon name="chevron-right" size={16} class="model-foot-arrow" />
             </button>
           </div>
