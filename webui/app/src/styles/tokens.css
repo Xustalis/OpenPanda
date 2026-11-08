@@ -21,11 +21,9 @@
   --bg-hover: #eaeaec;
   --bg-active: rgba(28, 28, 32, 0.08);
 
-  /* The chat header band. On paper it is the same white as the page (the title
-     and its tools are the only edge it needs); in dark it drops to the chrome
-     grey, one step under the page, so the bar caps the reading surface instead
-     of floating on it. */
-  --chat-head: var(--bg-raised);
+  /* The chat title and its tools share the reading surface in every theme,
+     so the header remains part of the page rather than a separate band. */
+  --chat-head: var(--bg);
 
   /* — Hairlines: neutral, so edges read engineered rather than warm. */
   --border: #d8d8dd;
@@ -209,9 +207,8 @@
   --bg-inset: #181818;
   --bg-hover: #303030;
   --bg-active: rgba(255, 255, 255, 0.1);
-  /* The bar over the transcript takes the chrome grey: darker than the page it
-     caps, which is what makes the header read as the top edge of the window. */
-  --chat-head: var(--bg-chrome);
+  /* Keep the title band continuous with the transcript, as in light mode. */
+  --chat-head: var(--bg);
 
   --border: #3b3b3b;
   --border-soft: #2f2f2f;
@@ -294,7 +291,7 @@
     --bg-inset: #181818;
     --bg-hover: #303030;
     --bg-active: rgba(255, 255, 255, 0.1);
-    --chat-head: var(--bg-chrome);
+    --chat-head: var(--bg);
     --border: #3b3b3b;
     --border-soft: #2f2f2f;
     --border-strong: #545454;

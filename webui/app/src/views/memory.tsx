@@ -462,16 +462,20 @@ function MemoryFileCard({
   return (
     <div class="card memory-card">
       <div class="memory-card-head">
-        <span class="memory-card-name mono" title={name}>
-          {name}
-        </span>
-        <span class="dim memory-card-count">{t('memory.entriesN', { n: entries.length })}</span>
-        <UsageMeter chars={chars} limit={limit} />
-        {limit > 0 && (
-          <span class="memory-counter mono">
-            {chars} / {limit}
+        <div class="memory-card-id">
+          <span class="memory-card-name mono" title={name}>
+            {name}
           </span>
-        )}
+          <span class="memory-card-count">{t('memory.entriesN', { n: entries.length })}</span>
+        </div>
+        <div class="memory-card-budget">
+          <UsageMeter chars={chars} limit={limit} />
+          {limit > 0 && (
+            <span class="memory-counter mono">
+              {chars} / {limit}
+            </span>
+          )}
+        </div>
         <div class="memory-card-tools">
           {entries.length > 0 && (
             <label class="memory-filter">
