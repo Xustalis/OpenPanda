@@ -52,7 +52,16 @@ all: build
 # where a PR lands with a broken vet warning or unformatted code.
 build: fmt-check vet
 	$(GO) build -ldflags "$(LDFLAGS_DEV)" -o $(BIN) ./cmd/panda
-	@if [ "$$(uname -s)" = "Darwin" ]; then codesign --force --deep --sign - $(BIN) 2>/dev/null || true; fi
+	@# Sign with the stable local identity when it is present in the keychain:
+	@# an ad-hoc signature embeds a fresh cdhash on every rebuild, and macOS
+	@# treats each one as a new TCC Local Network identity, so a launchd
+	@# daemon silently loses its grant after every build. Fall back to ad-hoc
+	@# (`-`) so a machine without the certificate — every CI runner — still
+	@# produces a signed binary.
+	@if [ "$$(uname -s)" = "Darwin" ]; then \
+		codesign --force --deep --identifier com.openpanda.node --sign "OpenPanda Local Development" $(BIN) 2>/dev/null \
+		|| codesign --force --deep --sign - $(BIN) 2>/dev/null || true; \
+	fi
 
 # Build the web console (webui/app) into webui/panel/dist/app, where go:embed
 # folds it into the panel binary. Requires node/npm. The committed
