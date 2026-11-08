@@ -50,6 +50,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/todos"
@@ -247,6 +248,7 @@ func init() {
 		{"web", "system", "cmd.web", (*repl).cmdWeb},
 		{"authorize", "system", "cmd.authorize", (*repl).cmdAuthorize},
 		{"approval", "system", "cmd.approval", (*repl).cmdApproval},
+		{"sandbox", "system", "cmd.sandbox", (*repl).cmdSandbox},
 		{"lang", "system", "cmd.lang", (*repl).cmdLang},
 		{"version", "system", "cmd.version", (*repl).cmdVersion},
 		{"read", "system", "cmd.read", (*repl).cmdRead},
@@ -2819,13 +2821,19 @@ func (r *repl) cmdContext(arg string) {
 	r.outf("  card:     %v\n", hasCard)
 }
 
-// cmdPolicy shows the four app-policy groups (the web console's Settings →
-// app policy page, read form).
+// cmdPolicy shows the app-policy groups (the web console's Settings → app
+// policy page, read form). The sandbox belongs here even though its mode is
+// writable elsewhere: the help line for /policy has promised it all along, and
+// a policy report that omits the strongest boundary is the one omission an
+// operator cannot work around by trying a command.
 func (r *repl) cmdPolicy(arg string) {
 	r.outln(i18n.T(r.loc, "repl.policy.head"))
+	backend := security.Backend()
 	r.readConfig(func(c *config.Config) {
 		r.outf("  injection_model: %s\n", c.Injection.NormalizedModel())
 		r.outf("  approval_mode:   %s\n", c.Approval.NormalizedMode())
+		r.outf("  sandbox_mode:    %s\n", c.Sandbox.NormalizedMode())
+		r.outf("  sandbox_backend: %s\n", orDash(backend))
 		r.outf("  preferred_agents: %s\n", orDash(strings.Join(c.Routing.PreferredAgents, ", ")))
 		r.outf("  memory_limits:   user=%d memory=%d project=%d\n",
 			c.Memory.Limits.User, c.Memory.Limits.Memory, c.Memory.Limits.Project)

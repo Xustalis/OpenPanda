@@ -1384,9 +1384,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// scheduler init (not just when a mode is set) so a config reload that
 	// turned the sandbox off resets the process-wide base policy instead of
 	// leaving the previous mode armed.
-	if backend := commander.SetSandboxConfig(e.cfg.Sandbox,
-		commander.ProtectedPaths(e.cfg, e.configPath, cardPath),
-		commander.SecretReadDenyPaths(e.cfg, e.configPath, cardPath)); e.cfg.Sandbox.NormalizedMode() != "off" {
+	if backend := commander.ApplyFromConfig(e.cfg, e.configPath, cardPath); e.cfg.Sandbox.NormalizedMode() != "off" {
 		if backend == "" {
 			e.logger.Warn("sandbox mode configured but no backend on this platform",
 				"mode", e.cfg.Sandbox.NormalizedMode())
@@ -1835,6 +1833,29 @@ func modelNote(p Progress) string {
 // delegated) and its outcome returned.
 func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Result, error) {
 	return e.AskTurns(ctx, nil, prompt, "", authorize, StreamCallbacks{})
+}
+
+// ApplySandboxPolicy re-installs the process-wide subprocess policy from the
+// engine's current config. initSchedulerLocked already does this on every
+// build, but a mode edited at runtime has no rebuild to wait for: without this
+// half the config would read "strict" while every spawned subprocess kept the
+// policy installed at startup — a setting that reports a boundary it is not
+// enforcing.
+//
+// The card and config paths are the ones this engine was built with (not the
+// caller's guess): ProtectedPaths/SecretReadDenyPaths derive the deny list
+// from them, so a runtime switch must cover exactly what a restart would.
+//
+// A read lock, not MutateConfigErr: this installs from the config, it does not
+// change it, and MutateConfigErr would additionally reconcile the network
+// layer — a sandbox write has no business touching the peer keepalive set.
+func (e *Engine) ApplySandboxPolicy() string {
+	cardPath := e.cardPathNow()
+	var backend string
+	e.ReadConfig(func(c *config.Config) {
+		backend = commander.ApplyFromConfig(c, e.configPath, cardPath)
+	})
+	return backend
 }
 
 // SetRouterPolicy re-applies the injection and routing policy to the engine's
