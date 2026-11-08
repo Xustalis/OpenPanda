@@ -271,8 +271,20 @@ func sourcePrivateFile(name string) bool {
 // the SQLite database (whose settings table holds the node private key), its
 // WAL/SHM sidecars, pid and lock files. Entries are normalized to cleaned
 // absolute paths; anything outside the tree simply never matches.
+//
+// Unlike a source pack this one keeps git-ignored output (dist/, *.out) —
+// that is the deliverable. The credential baseline still applies: an output
+// tree can be the node's own checkout or the user's working directory, and
+// .env / id_rsa / config snapshots sitting in it are never part of a result.
 func (s *Store) PackDirExceptPaths(tree string, skip map[string]bool, absSkip []string, limit int64) (Manifest, error) {
-	return s.packDir(tree, skip, nil, absSkip, nil, limit, false)
+	dirSkip := make(map[string]bool, len(skip)+len(sourcePrivateDirs))
+	for k := range skip {
+		dirSkip[k] = true
+	}
+	for k := range sourcePrivateDirs {
+		dirSkip[k] = true
+	}
+	return s.packDir(tree, dirSkip, sourcePrivateFile, absSkip, nil, limit, false)
 }
 
 // packDir is the shared pack body. fileSkip prunes individual file names on

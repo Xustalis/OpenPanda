@@ -9,7 +9,9 @@
 <style>
   /* Self-contained on purpose: GitHub Pages serves this file for any missing
      path, so relative asset URLs would resolve against that path and 404 too.
-     The two background URLs cover root-relative hosting and local preview. */
+     The first background URL is the canonical absolute one — it must match the
+     canonical host in index.html, sitemap.xml and robots.txt; scripts/check-site.py
+     asserts they agree. The relative one is the offline / local-preview fallback. */
   :root {
     --paper: #faf9f5;
     --jade: #6fc7a1;
@@ -39,7 +41,7 @@
     inset: 0;
     background:
       linear-gradient(180deg, rgba(5,6,10,.72) 0%, rgba(5,6,10,.88) 60%, #05060a 100%),
-      url('/OpenPanda/textures/hero-still.jpg') center / cover no-repeat,
+      url('https://xustalis.github.io/OpenPanda/textures/hero-still.jpg') center / cover no-repeat,
       url('textures/hero-still.jpg') center / cover no-repeat,
       radial-gradient(120% 80% at 70% 10%, rgba(111,199,161,.12), transparent 60%),
       #05060a;
@@ -132,7 +134,7 @@
     <p class="lede" data-i18n="lede">页面可能已经改名、被合并进别的章节，或者这一步本来就在你的计划之外。回到主场，或者去仓库里找找。</p>
 
     <div class="links">
-      <a class="primary" href="/OpenPanda/" data-i18n="home">返回首页</a>
+      <a class="primary" href="https://xustalis.github.io/OpenPanda/" data-i18n="home">返回首页</a>
       <a href="https://github.com/Xustalis/OpenPanda">GitHub</a>
       <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" data-i18n="status">项目现状</a>
       <button type="button" id="lang-toggle" aria-label="切换语言 / Switch language">EN</button>

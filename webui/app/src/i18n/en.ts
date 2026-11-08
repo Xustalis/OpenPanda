@@ -647,6 +647,45 @@ const en: Messages = {
   'onboarding.saved': 'Model configured — chat is ready to go.',
   'onboarding.skip': 'Not now',
 
+  // First-run tour (after the terms step, before the model step)
+  'onboarding.guide.title': 'A three-minute look around',
+  'onboarding.guide.sub':
+    'The console does three things: you say something, it gets done, you stay in charge. Here is the map, the panda in the corner, and how a model gets wired up.',
+  'onboarding.guide.nav': 'The left rail',
+  'onboarding.guide.nav.newChat':
+    'Starts a thread. The session appears when the first message leaves the box.',
+  'onboarding.guide.nav.workspace':
+    'Devices and agents on one map. Wheel zooms, a click shows the edges.',
+  'onboarding.guide.nav.control': 'Queue, plans and projects — three boards over the same tasks.',
+  'onboarding.guide.nav.team': 'Who works on this thread — the same card the panda opens.',
+  'onboarding.guide.nav.memory': 'What this node has learned. Read, edit, delete.',
+  'onboarding.guide.nav.settings': 'Models, policies, agents, MCP, skills, system.',
+  'onboarding.guide.panda': 'The panda in the corner',
+  'onboarding.guide.panda.pose': 'Standing = idle · hopping = answering · lying = off duty',
+  'onboarding.guide.panda.click': 'One click',
+  'onboarding.guide.panda.clickDesc': 'Opens the team card — pick who works on this thread.',
+  'onboarding.guide.panda.working': 'Mid-answer',
+  'onboarding.guide.panda.workingDesc':
+    'Opens at once, no squish — the roster stays live during a turn.',
+  'onboarding.guide.panda.double': 'Double click',
+  'onboarding.guide.panda.doubleDesc': 'Squashes it. A toy — nothing is counted or remembered.',
+  'onboarding.guide.panda.burst': 'Keep tapping',
+  'onboarding.guide.panda.burstDesc': 'It stops offering the card and just takes the pokes.',
+  'onboarding.guide.panda.night': '20:00–08:00',
+  'onboarding.guide.panda.nightDesc': 'It lies down. Tasks keep running; the pose is decoration.',
+  'onboarding.guide.model': 'Wiring up a model',
+  'onboarding.guide.model.one': 'Settings → Models → Add connection',
+  'onboarding.guide.model.oneDesc':
+    'Pick a provider, paste the endpoint and key. One card is one account.',
+  'onboarding.guide.model.two': 'Add models to the card',
+  'onboarding.guide.model.twoDesc': 'Click a row to switch. Name the alias however you like.',
+  'onboarding.guide.model.three': 'Press Test connection',
+  'onboarding.guide.model.threeDesc': 'A ✓ and a latency means it answers.',
+  'onboarding.guide.modelNote':
+    'The next step walks you through it once — and it stays editable in Settings.',
+  'onboarding.guide.cta': 'Continue',
+  'onboarding.guide.skip': 'Skip the tour',
+
   // Skills view
   'skills.title': 'Skills',
   'skills.subtitle':
@@ -1004,7 +1043,7 @@ const en: Messages = {
   'memory.daily': 'Daily diary',
   'memory.projects': 'Projects',
   'memory.graphTitle': 'Memory graph',
-  'memory.graphEmpty': 'No memory yet — the graph fills in as conversations accumulate.',
+  'memory.graphEmpty': 'No saved memory yet. Add a note here or ask the assistant to save one with a memory tool.',
   'memory.graph.filteredEmpty': 'No nodes under the current filters.',
   'memory.graph.noEdges': 'No connections recorded yet.',
   'memory.graph.open': 'Open',
@@ -1013,8 +1052,12 @@ const en: Messages = {
   'memory.graph.project': 'Projects',
   'memory.graph.daily': 'Diary',
   'memory.graph.skill': 'Skills',
-  'memory.graph.promotion': 'promoted from diary',
+  'memory.graph.promotion': 'promotion recorded in dream diary',
   'memory.graph.reference': 'names',
+  'memory.graph.search': 'Search',
+  'memory.graph.searchPlaceholder': 'Filter nodes…',
+  'memory.graph.neighbors': 'Neighbors only',
+  'memory.graph.fit': 'Fit',
   'memory.graph.zoomIn': 'Zoom in',
   'memory.graph.zoomOut': 'Zoom out',
   'memory.graph.reset': 'Reset view',
@@ -1055,6 +1098,8 @@ const en: Messages = {
   'memory.dreamsEditMsg':
     'DREAMS.md is free-form prose (no § entries). Your rewrite replaces the diary verbatim.',
   'memory.dreamsEditHint': 'Free-form text; saved verbatim.',
+  'memory.dreamsTooLarge': 'The diary exceeds 2 MiB. Only a preview is shown; editing is disabled to protect the full history.',
+  'memory.conflict': 'Memory changed elsewhere. Refresh and reapply your edit.',
   'memory.fromLog': 'from log',
   'memory.fromLogTip': 'Promoted from the daily logs — low-weight signal; fix or delete it if it is off.',
   'memory.entryDelete': 'Delete',
@@ -1835,6 +1880,32 @@ const en: Messages = {
   'side.context': "Each question brings the thread's latest context; answers are not written back.",
   'side.placeholder': 'Ask something about this thread…',
   'common.stop': 'Stop',
+  // Agent execution policy
+  'execution.title': "Agent models and parallel execution",
+  'execution.rootModel': "Root agent model(s)",
+  'execution.childModel': "Subagent model(s)",
+  'execution.nativeDefault': "CLI default",
+  'execution.inherit': "Inherit root selection",
+  'execution.agentLimit': "Per-agent parallel cap (0 = shared)",
+  'execution.limits': "Execution limits",
+  'execution.maxConcurrent': "Worker parallel cap (0 = capability card)",
+  'execution.delegation.max_concurrent': "All subagents parallel cap (0 = shared)",
+  'execution.delegation.fanout': "Parallel children per parent",
+  'execution.delegation.max_children': "Total children per task",
+  'execution.delegation.max_depth': "Maximum spawn depth",
+  'execution.enabled': "Allow orchestrated subagents",
+  'execution.modelsHelp': "Use native CLI model IDs; separate OpenCode candidates with commas. Injected models and explicit CLI model environment pins take precedence over these native choices.",
+  'execution.nativeBoundary': "Child models apply to OpenPanda-created tasks, not invisible subagents launched inside a vendor CLI.",
+  'execution.limitsHelp': "Limits apply to active adapter calls in this worker runtime. Lowering a limit lets active calls finish; disjoint paths or isolated worktrees are required for parallel writes. Zero removes an optional cap.",
+  'execution.saved': "Saved. This worker uses the policy now; other local workers refresh automatically.",
+
+  // Per-item settings disclosures (settings sheet: agents, skills, models).
+  'settings.itemSettings': 'Item settings',
+  'settings.itemSettingsFor': '{name} settings',
+  'settings.customAgent': 'Custom',
+  'settings.agentSettingsHelp': 'Applies to this agent only; save the execution policy to apply.',
+  'skills.reinstall': 'Reinstall',
+
 }
 
 export default en

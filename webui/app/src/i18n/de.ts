@@ -642,6 +642,47 @@ const de: Messages = {
   'onboarding.saved': 'Modell konfiguriert — der Chat ist einsatzbereit.',
   'onboarding.skip': 'Später',
 
+  // Erststart-Tour (nach den Bedingungen, vor der Modell-Einrichtung)
+  'onboarding.guide.title': 'Drei Minuten Rundgang',
+  'onboarding.guide.sub':
+    'Die Konsole kann drei Dinge: du sagst etwas, es wird erledigt, du behältst die Kontrolle. Hier sind die Karte, der Panda in der Ecke und der Weg zu einem Modell.',
+  'onboarding.guide.nav': 'Die linke Leiste',
+  'onboarding.guide.nav.newChat':
+    'Startet einen Thread. Die Sitzung entsteht mit der ersten Nachricht.',
+  'onboarding.guide.nav.workspace':
+    'Geräte und Agenten auf einer Karte. Rad zoomt, Klick zeigt die Kanten.',
+  'onboarding.guide.nav.control':
+    'Warteschlange, Pläne, Projekte — drei Boards über denselben Aufgaben.',
+  'onboarding.guide.nav.team': 'Wer an diesem Thread arbeitet — dieselbe Karte, die der Panda öffnet.',
+  'onboarding.guide.nav.memory': 'Was dieser Knoten gelernt hat. Lesen, ändern, löschen.',
+  'onboarding.guide.nav.settings': 'Modelle, Richtlinien, Agenten, MCP, Skills, System.',
+  'onboarding.guide.panda': 'Der Panda in der Ecke',
+  'onboarding.guide.panda.pose': 'Steht = frei · hüpft = antwortet · liegt = außer Dienst',
+  'onboarding.guide.panda.click': 'Ein Klick',
+  'onboarding.guide.panda.clickDesc': 'Öffnet die Team-Karte — wähle die Agenten dieses Threads.',
+  'onboarding.guide.panda.working': 'Im Turn',
+  'onboarding.guide.panda.workingDesc':
+    'Öffnet sofort, ohne Drücken — das Team bleibt im Turn änderbar.',
+  'onboarding.guide.panda.double': 'Doppelklick',
+  'onboarding.guide.panda.doubleDesc':
+    'Drückt ihn platt. Ein Spielzeug — nichts wird gezählt oder gemerkt.',
+  'onboarding.guide.panda.burst': 'Weiter tippen',
+  'onboarding.guide.panda.burstDesc': 'Er lässt die Karte sein und lässt sich nur noch drücken.',
+  'onboarding.guide.panda.night': '20:00–08:00',
+  'onboarding.guide.panda.nightDesc': 'Er legt sich hin. Aufgaben laufen weiter; die Pose ist Dekoration.',
+  'onboarding.guide.model': 'Ein Modell anschließen',
+  'onboarding.guide.model.one': 'Einstellungen → Modelle → Verbindung hinzufügen',
+  'onboarding.guide.model.oneDesc':
+    'Anbieter wählen, Endpunkt und Schlüssel einfügen. Eine Karte ist ein Konto.',
+  'onboarding.guide.model.two': 'Modelle zur Karte hinzufügen',
+  'onboarding.guide.model.twoDesc': 'Zeile anklicken zum Wechseln. Den Alias benennst du selbst.',
+  'onboarding.guide.model.three': '„Verbindung testen“ drücken',
+  'onboarding.guide.model.threeDesc': 'Ein ✓ mit Latenz heißt: es antwortet.',
+  'onboarding.guide.modelNote':
+    'Der nächste Schritt führt dich einmal durch — und alles bleibt später in den Einstellungen änderbar.',
+  'onboarding.guide.cta': 'Weiter',
+  'onboarding.guide.skip': 'Tour überspringen',
+
   // Skills view
   'skills.title': 'Skills',
   'skills.subtitle':
@@ -971,7 +1012,7 @@ const de: Messages = {
   'memory.daily': 'Tagebuch',
   'memory.projects': 'Projektgedächtnis',
   'memory.graphTitle': 'Gedächtnis-Graph',
-  'memory.graphEmpty': 'Noch kein Gedächtnis — der Graph wächst mit den Gesprächen.',
+  'memory.graphEmpty': 'Noch keine gespeicherten Erinnerungen. Füge hier eine Notiz hinzu oder bitte den Assistenten, sie zu speichern.',
   'memory.graph.filteredEmpty': 'Keine Knoten unter den aktuellen Filtern.',
   'memory.graph.noEdges': 'Noch keine Verbindungen aufgezeichnet.',
   'memory.graph.open': 'Öffnen',
@@ -980,8 +1021,12 @@ const de: Messages = {
   'memory.graph.project': 'Projekte',
   'memory.graph.daily': 'Tagebuch',
   'memory.graph.skill': 'Skills',
-  'memory.graph.promotion': 'aus Tagebuch übernommen',
+  'memory.graph.promotion': 'Aufstieg im Traumtagebuch erfasst',
   'memory.graph.reference': 'referenziert',
+  'memory.graph.search': 'Suchen',
+  'memory.graph.searchPlaceholder': 'Knoten filtern…',
+  'memory.graph.neighbors': 'Nur Nachbarn',
+  'memory.graph.fit': 'Einpassen',
   'memory.graph.zoomIn': 'Vergrößern',
   'memory.graph.zoomOut': 'Verkleinern',
   'memory.graph.reset': 'Ansicht zurücksetzen',
@@ -1022,6 +1067,8 @@ const de: Messages = {
   'memory.dreamsEditMsg':
     'DREAMS.md ist Freitext (keine §-Einträge). Deine Fassung ersetzt das Tagebuch wortwörtlich.',
   'memory.dreamsEditHint': 'Freitext; wird wortwörtlich gespeichert.',
+  'memory.dreamsTooLarge': 'Das Tagebuch überschreitet 2 MiB. Es wird nur eine Vorschau gezeigt; die Bearbeitung ist zum Schutz des Verlaufs deaktiviert.',
+  'memory.conflict': 'Der Speicher wurde anderswo geändert. Bitte aktualisieren und die Änderung erneut vornehmen.',
   'memory.fromLog': 'aus Log',
   'memory.fromLogTip': 'Aus den Tageslogs befördert — Signal mit geringem Gewicht; korrigieren oder löschen, falls daneben.',
   'memory.entryDelete': 'Löschen',
@@ -1832,6 +1879,32 @@ const de: Messages = {
   'side.context': 'Jede Frage bringt den neuesten Kontext des Threads mit; Antworten werden nicht zurückgeschrieben.',
   'side.placeholder': 'Frage etwas zu diesem Thread…',
   'common.stop': 'Stoppen',
+  // Agent execution policy
+  'execution.title': "Agentenmodelle und parallele Ausführung",
+  'execution.rootModel': "Modell des Hauptagenten",
+  'execution.childModel': "Modell des Subagenten",
+  'execution.nativeDefault': "CLI-Standardmodell",
+  'execution.inherit': "Auswahl des Hauptagenten erben",
+  'execution.agentLimit': "Parallelgrenze je Agent (0 = geteilt)",
+  'execution.limits': "Ausführungslimits",
+  'execution.maxConcurrent': "Worker-Limit (0 = Fähigkeitskarte)",
+  'execution.delegation.max_concurrent': "Limit aller Subagenten (0 = geteilt)",
+  'execution.delegation.fanout': "Parallele Kinder je Elternaufgabe",
+  'execution.delegation.max_children': "Kinder insgesamt je Aufgabe",
+  'execution.delegation.max_depth': "Maximale Erzeugungstiefe",
+  'execution.enabled': "Orchestrierte Subagenten erlauben",
+  'execution.modelsHelp': "Native CLI-Modell-IDs eingeben; OpenCode-Kandidaten durch Kommas trennen. Injizierte Modelle und explizite CLI-Modellvariablen haben Vorrang vor dieser nativen Auswahl.",
+  'execution.nativeBoundary': "Kindmodelle gelten für von OpenPanda erzeugte Aufgaben, nicht für interne Subagenten einer Anbieter-CLI.",
+  'execution.limitsHelp': "Limits gelten für aktive Adapteraufrufe dieses Worker-Prozesses. Eine Senkung unterbricht laufende Aufrufe nicht. Parallele Schreibzugriffe benötigen getrennte Pfade oder isolierte Arbeitsbäume. Null hebt ein optionales Limit auf.",
+  'execution.saved': "Gespeichert und in diesem Worker aktiv. Andere lokale Worker synchronisieren sich automatisch.",
+
+  // Einstellungsmenüs innerhalb der einzelnen Elemente (Agenten, Skills, Modelle).
+  'settings.itemSettings': 'Elementeinstellungen',
+  'settings.itemSettingsFor': 'Einstellungen für {name}',
+  'settings.customAgent': 'Benutzerdefiniert',
+  'settings.agentSettingsHelp': 'Gilt nur für diesen Agenten; zum Anwenden die Ausführungsrichtlinie speichern.',
+  'skills.reinstall': 'Neu installieren',
+
 }
 
 export default de

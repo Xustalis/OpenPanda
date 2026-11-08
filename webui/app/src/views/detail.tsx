@@ -296,7 +296,7 @@ export function DetailView({
                 value={rejectReason}
                 onInput={(e) => setRejectReason((e.target as HTMLInputElement).value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
                     act(() =>
                       api.reject(task.id, rejectReason.trim() || t('detail.rejectedViaWeb'), scope),
                     ).then(() => setRejecting(false))
@@ -364,7 +364,7 @@ export function DetailView({
             value={msgText}
             onInput={(e) => setMsgText((e.target as HTMLInputElement).value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void sendMessage(false)
+              if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) void sendMessage(false)
             }}
           />
           <button class="btn" disabled={busy || !msgText.trim()} onClick={() => sendMessage(false)}>

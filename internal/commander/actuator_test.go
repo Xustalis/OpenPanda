@@ -5,6 +5,7 @@ package commander
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -68,6 +69,26 @@ func TestSubstituteActionSpec(t *testing.T) {
 	want := []string{"--action", "rotate", "--angle", "90", "--note", "turn the valve"}
 	if strings.Join(plan.Args, "|") != strings.Join(want, "|") {
 		t.Fatalf("args = %v, want %v", plan.Args, want)
+	}
+}
+
+// TestSubstituteActionSpecRejectsSelfReference pins the DoS gate: a parameter
+// whose value is itself a placeholder used to make the fixed-point expansion
+// loop spin forever, holding the task's runner slot and actuator lock.
+func TestSubstituteActionSpecRejectsSelfReference(t *testing.T) {
+	plan := Plan{ActuatorID: "x", Command: "drv", Args: []string{"{param:args}"}}
+	done := make(chan error, 1)
+	go func() {
+		done <- SubstituteActionSpec(&plan,
+			&ledger.ActionSpec{Parameters: map[string]any{"args": "{param:args}"}}, "")
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("self-referential parameter was expanded instead of refused")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("substitution did not terminate")
 	}
 }
 

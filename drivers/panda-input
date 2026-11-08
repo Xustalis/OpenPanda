@@ -67,6 +67,11 @@ xy() { # "x,y" -> "x y"; integer coords only
 click_parts() { # "x,y[,button[,times]]" -> x y button times
     a1=${1%%,*}; rest=${1#*,}
     a2=${rest%%,*}; rest=${rest#*,}
+    # Coordinates reach a PowerShell -Command string on Windows, where the
+    # surrounding quotes do not stop `);&(...)` from ending the expression.
+    # Validate them here, like xy() does for move, instead of trusting that
+    # the caller passed digits.
+    case $a1$a2 in ''|*[!0-9-]*) echo "panda-input: bad coords '$1'" >&2; exit 2 ;; esac
     btn=left; times=1
     if [ "$rest" != "$a2" ]; then
         case $rest in

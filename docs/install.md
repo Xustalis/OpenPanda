@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/ins
 等效的显式写法：
 
 ```bash
-sh scripts/install.sh --version 0.1.3           # 安装指定版本（默认 latest，即最新稳定版；预发布版必须显式指定）
+sh scripts/install.sh --version 0.1.4           # 安装指定版本（默认 latest，即最新稳定版；预发布版必须显式指定）
 sh scripts/install.sh --prefix /opt/openpanda  # 自定义安装目录
 sh scripts/install.sh --lite                   # lite 构建：无内嵌 Web 控制台/TUI（仅 Linux）
 sh scripts/install.sh --yes                    # 额外注册开机自启（不询问）
@@ -27,7 +27,7 @@ sh scripts/install.sh --no-service             # 不碰开机自启
 sh scripts/install.sh --force                  # 强制安装：跳过“版本低于数据目录 schema”的拒绝
 ```
 
-当前稳定版是 `0.1.3`；上一支稳定版 `0.1.2` 仍可按版本号显式安装（`--version 0.1.2`），预发布版同理，`latest` 永远只指最新稳定版。
+当前稳定版是 `0.1.4`；上一支稳定版 `0.1.3` 仍可按版本号显式安装（`--version 0.1.3`），预发布版同理，`latest` 永远只指最新稳定版。
 
 默认前缀（与 Go 的 XDG/用户目录约定对齐）：
 
@@ -55,17 +55,19 @@ ${XDG_DATA_HOME:-~/.local/share}/openpanda/
 - **自更新器**：报 `fetch checksums: … net/http: TLS handshake timeout`。用 `OPENPANDA_UPDATE_BASE` 把下载指向镜像，值就是"到版本目录为止"的完整 URL：
 
   ```powershell
-  $env:OPENPANDA_UPDATE_BASE = "https://<镜像>/Xustalis/OpenPanda/releases/download/v0.1.3"
+  $env:OPENPANDA_UPDATE_BASE = "https://<镜像>/Xustalis/OpenPanda/releases/download/v0.1.4"
   panda upgrade
   ```
 
   安装脚本认的 `OPENPANDA_RELEASE_BASE` 是同一语义的别名，设一次两边都吃。走代理也行，但 Go 的 `ProxyFromEnvironment` 只读 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，不读 Windows「Internet 选项」里的系统代理——Clash 一类工具停在「系统代理」模式时，`panda` 拿不到它。
 
-- **Windows 安装脚本**：报 `curl: (35) schannel: … CRYPT_E_NO_REVOCATION_CHECK (0x80092012)`。这是本机 curl 使用 Schannel 后端、而证书吊销列表（CRL/OCSP）地址不可达，**不是**证书本身有问题；脚本在探测到该能力时自动补 `--ssl-no-revoke`，之后还有 `Invoke-WebRequest` 兜底。手工确认：
+- **Windows 安装脚本**：报 `curl: (35) schannel: … CRYPT_E_NO_REVOCATION_CHECK (0x80092012)`。这是本机 curl 使用 Schannel 后端、而证书吊销列表（CRL/OCSP）地址不可达，**不是**证书本身有问题；脚本在探测到该能力时自动补 `--ssl-no-revoke`，之后还有 .NET 的 HTTP 兜底（正文读取同样带超时）。手工确认：
 
   ```powershell
   curl.exe -sS --ssl-no-revoke -o NUL -w "%{http_code}`n" https://api.github.com/repos/Xustalis/OpenPanda/releases/latest
   ```
+
+- **Windows 安装脚本停在 `Installing …` 之后不动**：这一行之后就是下载压缩包，GitHub 会把请求 302 到 `release-assets.githubusercontent.com`，该域名不通时连接能建立、字节却发不过来，curl 自己不会超时。脚本现在给每次下载设了时限：压缩包低于 1 KB/s 持续 60 秒即中止，单次上限 300 秒（API 查询 45 秒），.NET 兜底的读取超时同样覆盖响应正文；curl 不再重试超时，因为每次重试都会用全新计时重跑整个传输，把等待时间成倍放大。失败时打印映射后的原因，而不是无限挂着。另外它会把 Windows「Internet 选项」里的系统代理交给 curl：curl 只读 `HTTP_PROXY`/`HTTPS_PROXY` 环境变量，不读系统代理，于是会出现 `irm` 能拉到脚本、下载却直连失败的分裂现象。代理的 `ProxyOverride` 绕过列表（含本地回环）同样生效，因此用 `OPENPANDA_RELEASE_BASE` 指向本地镜像时仍走直连；显式设了环境变量的，环境变量优先；只配了 PAC 的情况交给 .NET 兜底。
 
 镜像只改变传输路径，不改变信任：`checksums.txt`、Ed25519 签名与压缩包三者仍必须互相对应。
 
@@ -97,7 +99,7 @@ irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps
 或下载后运行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.3 -Yes
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.4 -Yes
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force    # 强制降级（跳过 schema 守卫）
 ```
 
@@ -183,7 +185,7 @@ panda uninstall --backup-only
 
 ## 发布一个新版本
 
-1. 变更合入 `main`，确认该 commit 的 **Gate 已经跑绿**，再打标签：`git tag v0.1.3 && git push origin v0.1.3`（注意两点：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布；release 流水线会向 Gate 查验**同一个 commit** 的结论，没有 push 触发的 Gate 运行记录、或结论不是 success，都会直接拒绝发布并报错）。
+1. 变更合入 `main`，确认该 commit 的 **Gate 已经跑绿**，再打标签：`git tag v0.1.4 && git push origin v0.1.4`（注意两点：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布；release 流水线会向 Gate 查验**同一个 commit** 的结论，没有 push 触发的 Gate 运行记录、或结论不是 success，都会直接拒绝发布并报错）。
 2. `.github/workflows/release.yml` 自动跨平台构建 → 打包 `.tar.gz`/`.zip` → 生成 `checksums.txt` → 发布 GitHub Release。
 3. 预发布（带连字符的标签，如 `v0.0.9-beta`、`v0.0.8-alpha`、`v1.0.0-rc1`）会自动标记为 **pre-release**：它不会成为仓库的 Latest，`releases/latest` 仍指向最后一个稳定版，一键安装脚本也只装稳定版；同时**不会**同步 Homebrew tap。
 4. 落地后可用：

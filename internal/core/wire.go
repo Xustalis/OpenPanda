@@ -740,7 +740,8 @@ func (c *Core) relayToParent(ctx context.Context, typ string, chain []string, pa
 		return
 	}
 	env.To = parent
-	if err := c.sendTo(parent, env); err != nil {
+	relayed, err := c.sendToDetail(parent, env)
+	if err != nil {
 		// A progress beat to an offline delegator is expected, not news: the
 		// executor keeps working while the delegator is away, and a WARN per
 		// beat (one every few seconds for a live task) is pure log noise.
@@ -760,9 +761,17 @@ func (c *Core) relayToParent(ctx context.Context, typ string, chain []string, pa
 		return
 	}
 	if typ == bus.MsgTaskResult {
-		// Delivered now: clear any copy parked from an earlier failed attempt.
 		if rp, ok := payload.(bus.TaskResultPayload); ok {
-			c.outboxDrop(ctx, parent, rp.TaskID)
+			if relayed {
+				// A transit hop accepted the frame; the final hop is not
+				// confirmed. Keep the parked copy so the parent's next hello
+				// redelivers it — dropping here lost the only copy whenever
+				// the relay could not reach the parent.
+				c.outboxPersist(ctx, parent, rp)
+			} else {
+				// Delivered now: clear any copy parked from an earlier failed attempt.
+				c.outboxDrop(ctx, parent, rp.TaskID)
+			}
 		}
 	}
 }
@@ -1232,6 +1241,16 @@ func (c *Core) handleAcceptWork(ctx context.Context, env bus.Envelope, t Task) {
 			"disposition", disposition, "err", err)
 		return
 	}
+	// An isolated child parked for review keeps its workspace untouched until
+	// the work is accepted. Approving on the origin is only a mirror — the
+	// executor holds the workspace and its own copy is the one that must land
+	// the changes, exactly as resumeApproved does locally. Skipping this left
+	// an accepted isolated subtask with its work still inside the private
+	// workspace while both copies read "done".
+	mergeNote := ""
+	if t.Isolate && t.Project != "" && t.PlanID == "" {
+		mergeNote = c.mergeIsolatedRun(ctx, t)
+	}
 	if err := c.store.Approve(ctx, t.TaskID); err != nil {
 		c.logger.Warn("accept approve failed", "task", t.TaskID, "err", err)
 		return
@@ -1250,6 +1269,12 @@ func (c *Core) handleAcceptWork(ctx context.Context, env bus.Envelope, t Task) {
 	if final.ResultJSON != "" {
 		_ = json.Unmarshal([]byte(final.ResultJSON), &result)
 		result.TaskID, result.AttemptID, result.State, result.Chain = final.TaskID, final.AttemptID, final.State, final.Chain
+	}
+	if mergeNote != "" {
+		if result.Stdout != "" {
+			result.Stdout += "\n"
+		}
+		result.Stdout += mergeNote
 	}
 	c.replyResult(ctx, env, result)
 }

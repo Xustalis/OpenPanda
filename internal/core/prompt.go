@@ -14,6 +14,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/defense"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/nodecli"
@@ -255,6 +256,10 @@ func promptBudgetFor(budget, reserved int) int {
 // supervisor model writes the digest; without one the oldest notes drop and
 // the tail is hard-capped — losing detail, never correctness.
 func (c *Core) compactRunNotes(ctx context.Context, notes []string) []string {
+	return c.compactRunNotesWithSupervisor(ctx, notes, c.currentSupervisor())
+}
+
+func (c *Core) compactRunNotesWithSupervisor(ctx context.Context, notes []string, supervisor *entry.Client) []string {
 	if len(notes) == 0 {
 		return notes
 	}
@@ -273,9 +278,9 @@ func (c *Core) compactRunNotes(ctx context.Context, notes []string) []string {
 			joined = joined[i+1:]
 		}
 	}
-	if c.supervisor != nil {
+	if supervisor != nil {
 		sctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		digest, err := c.supervisor.Complete(sctx,
+		digest, err := supervisor.Complete(sctx,
 			"You compress task-run context for an agent whose prompt overflowed "+
 				"its context window. The notes accumulate across execution rounds: "+
 				"delegated-child results, sibling-board posts, supervisor follow-ups. "+

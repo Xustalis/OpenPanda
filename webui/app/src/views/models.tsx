@@ -147,13 +147,11 @@ export function ModelsSection() {
 
   const conns = groupConnections(data)
   const active = data.active
-  // 这一页只剩卡片。连接（一个端点 + 一把密钥）是配置的存储方式，不是读的
-  // 东西——哪张卡属于哪个账号，卡片自己的角标已经说了；分组只决定「添加」
-  // 续在哪把密钥上，不再有标题、徽章和那一排按钮。
-  const tiles = conns.flatMap((c) => c.members)
-  // 只有一个连接时，「添加」直接续在那把密钥上；没有连接（或不止一个）时它
-  // 退回选供应商的流程——这也是新建连接的唯一入口。
-  const onlyConn = conns.length === 1 ? conns[0] : undefined
+  // 一张卡 = 一个连接（一个端点 + 一把密钥）。注册表本来就按模型存行、每行
+  // 各带一份密钥，分组是从 (供应商, 端点, 密钥) 推出来的：一个中继上挂三个
+  // 模型，就是三行、一个账号。按行画卡会把这件事抹掉——三张卡各自复述同一个
+  // 账号，互相之间什么也没说。
+  // 卡面只写账号；把鼠标放上去，卡面换成这个账号名下的模型，点一下即切换。
   const registry = data.models
 
   function afterWrite() {
@@ -235,29 +233,35 @@ export function ModelsSection() {
       </div>
 
       <div class="model-grid">
+        {/* The first cell opens a *connection*: an endpoint and the key it
+            dials with. A model is added from inside the card that already
+            holds its account, which is where a person is when they think of
+            one. Same square as the rest, so the wall stays a wall. */}
         <button
           type="button"
           class="model-tile model-add"
-          aria-label={t('models.addModel')}
-          onClick={() => setSheet(onlyConn ? { kind: 'add', conn: onlyConn } : { kind: 'add' })}
+          aria-label={t('models.addConnection')}
+          onClick={() => setSheet({ kind: 'add' })}
         >
           <span class="model-add-plus" aria-hidden="true">
             <Icon name="plus" size={26} />
           </span>
-          <span class="model-add-label">{t('models.addModel')}</span>
+          <span class="model-add-label">{t('models.addConnection')}</span>
+          <span class="model-add-sub">{t('models.addSub')}</span>
         </button>
-        {tiles.map((m) => (
-          <ModelTile
-            key={keyOf(m.entry)}
-            m={m}
+        {conns.map((c) => (
+          <ConnectionTile
+            key={c.id}
+            conn={c}
             busy={busy}
-            result={results[keyOf(m.entry)]}
+            results={results}
             providers={data.providers}
-            onUse={() => void switchTo(m.entry)}
-            onTest={() => void test(m.entry)}
-            onEdit={() => setSheet({ kind: 'edit', entry: m.entry })}
-            onCopy={() => void copy(m)}
-            onRemove={() => void remove(m)}
+            onUse={(e) => void switchTo(e)}
+            onTest={(e) => void test(e)}
+            onEdit={(e) => setSheet({ kind: 'edit', entry: e })}
+            onCopy={(m) => void copy(m)}
+            onRemove={(m) => void remove(m)}
+            onAdd={(conn) => setSheet({ kind: 'add', conn })}
           />
         ))}
       </div>
@@ -317,21 +321,97 @@ export function ModelsSection() {
   )
 }
 
-/** One model as a square tile: the vendor mark *is* the tile.
+/** One card per connection: an endpoint plus the credential it dials with.
  *
- *  A grid can hold a dozen models of several accounts; as rows they all read
- *  alike, and the only thing telling them apart was a model id at the end of a
- *  line. The mark fills the square and the alias is the caption, so "which
- *  endpoint is this" is answered before reading. Clicking the tile switches to
- *  that model; test / edit / copy / remove surface on hover or keyboard focus,
- *  leaving the resting state a picture.
+ *  The card is the account, because that is what a person recognises and what
+ *  the registry actually stores — one row per model, each carrying its own copy
+ *  of the key, grouped by (provider, endpoint, key). Painting one card per row
+ *  hid that: three models on one relay became three squares that each restated
+ *  the same account and said nothing about each other.
  *
- *  Nothing that can run long is printed here — the model id, the endpoint and
- *  the limits live in the tooltip and in the edit sheet. What the bottom strip
- *  carries is the one thing a picture cannot: whether this config actually
- *  answered, and why not when it did not.
+ *  The face is the account and nothing else. On hover (or keyboard focus) the
+ *  face steps aside and the card shows what is behind it: the models that key
+ *  can ask for, each one a click away from being live. The mark goes with the
+ *  face — a preview crowded with a logo has less room for the thing being
+ *  previewed. A card that carried its list at rest would be as tall as its
+ *  account is wide, and a nine-model account would set the height of the wall.
  */
-function ModelTile(props: {
+function ConnectionTile(props: {
+  conn: Conn
+  busy: string
+  results: Record<string, TestResult>
+  providers: ProviderInfo[]
+  onUse(e: ModelEntry): void
+  onTest(e: ModelEntry): void
+  onEdit(e: ModelEntry): void
+  onCopy(m: Member): void
+  onRemove(m: Member): void
+  onAdd(conn: Conn): void
+}) {
+  const c = props.conn
+  const name = c.providerLabel || labelOf(props.providers, c.provider) || t('models.customProvider')
+  const host = hostOf(c.baseURL)
+  // The card is ringed when one of its models is the live one: the answer to
+  // "where is the request going" has to be visible before opening anything.
+  const live = c.members.some((m) => m.entry.active)
+  return (
+    <div class={`model-conn${live ? ' live' : ''}`} tabindex={0}>
+      <span class="model-conn-face">
+        <span class="model-conn-logo">
+          <ProviderLogo id={c.provider || c.apiType} size={56} />
+        </span>
+        <span class="model-conn-name" title={name}>
+          {name}
+        </span>
+        {host && (
+          <span class="model-conn-host mono" title={c.baseURL}>
+            {host}
+          </span>
+        )}
+        <span class="model-conn-count">{t('models.modelCount', { n: c.members.length })}</span>
+        {live && <span class="model-conn-live">{t('models.inUse')}</span>}
+      </span>
+
+      <div class="model-conn-models">
+        {c.members.map((m) => (
+          <ModelRow
+            key={keyOf(m.entry)}
+            m={m}
+            busy={props.busy}
+            result={props.results[keyOf(m.entry)]}
+            providers={props.providers}
+            onUse={() => props.onUse(m.entry)}
+            onTest={() => props.onTest(m.entry)}
+            onEdit={() => props.onEdit(m.entry)}
+            onCopy={() => props.onCopy(m)}
+            onRemove={() => props.onRemove(m)}
+          />
+        ))}
+        {/* Adding to this account is the common case, so the door is inside the
+            card: a new connection is the rarer act and keeps its own tile. */}
+        <button type="button" class="model-conn-add" onClick={() => props.onAdd(c)}>
+          <Icon name="plus" size={13} />
+          <span>{t('models.addModel')}</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** One model inside a connection card.
+ *
+ *  The radio is the switch: clicking the row makes that model live, which is
+ *  what this page is for. The alias is a name a person typed and can retype;
+ *  the model id is what the request carries, so when the two differ both are
+ *  printed — an account serving three ids under human names is exactly the case
+ *  this page exists for. A test verdict rides on the same line, because it has
+ *  to survive the pointer staying on the row that started the test.
+ *
+ *  Four verbs on a 220px row would squeeze every name, so they take the right
+ *  edge on hover and the name gives up just that much room — the row never
+ *  turns into four anonymous circles.
+ */
+function ModelRow(props: {
   m: Member
   busy: string
   result?: TestResult
@@ -350,82 +430,68 @@ function ModelTile(props: {
   const keyOk = entry.no_auth || entry.key_set || !!entry.auth
   const testing = props.busy === `test:${k}`
   const verdict = props.result ? (props.result.ok ? 'ok' : 'bad') : ''
-  // The corner dot is down to one job: a config that cannot dial at all. A test
-  // result is said in the strip instead — two marks for one fact read as two
-  // facts, and a 7px dot was never going to carry "and here is what broke".
-  // An endpoint-owner warning counts even when the key is present: the row
-  // would dial another vendor's roster, which is exactly what the dot is for.
   const dot = verdict || testing ? '' : entry.warning_code || !keyOk ? 'warn' : ''
   const dotTitle = entry.warning_code
     ? t('models.warn.endpointOwnerShort', {
         owner: labelOf(props.providers, entry.warning_arg),
       })
     : t('models.keyMissing')
-  const busyHere = props.busy.endsWith(`:${k}`)
   const title = [entry.alias, entry.model, hostOf(entry.base_url), limitsText(entry)]
     .filter(Boolean)
     .join(' · ')
+  const showId = !!entry.model && entry.model !== entry.alias
 
   return (
-    <div
-      class={`model-tile${entry.active ? ' active' : ''}${confirming ? ' confirming' : ''}${busyHere ? ' busy' : ''}${testing || props.result ? ' has-result' : ''}`}
-    >
+    <div class={`model-item${entry.active ? ' active' : ''}${confirming ? ' confirming' : ''}`}>
       <button
         type="button"
-        class="model-tile-use"
+        class="model-item-use"
         title={title}
         disabled={props.busy !== '' || entry.active}
         onClick={props.onUse}
       >
-        <span class="model-tile-logo">
-          <ProviderLogo id={entry.provider || entry.api_type} size={72} />
-        </span>
-        <span class="model-tile-name">{entry.alias}</span>
-      </button>
-
-      {/* The one tile that is lit up says so in words as well as in colour:
-          a ring alone reads as "hovered" in a grid where hover is a verb. */}
-      {entry.active && <span class="model-tile-active">{t('models.inUse')}</span>}
-      {!props.m.registry && <span class="model-tile-flag">{t('models.notRegistered')}</span>}
-
-      {dot && (
-        <span class={`model-tile-dot ${dot}`} title={dotTitle} role="img" aria-label={dotTitle} />
-      )}
-
-      {/* The verdict, at the size of a sentence: a tinted band on the bottom
-          edge with the icon, the word, and the one detail worth keeping —
-          the round trip when it worked, the upstream's own complaint when it
-          did not. It stays until the next test, because a result that fades
-          after a few seconds is a result nobody can compare. */}
-      {(testing || props.result) && (
-        <div
-          class={`model-tile-result${testing ? ' testing' : ` ${verdict}`}`}
-          role="status"
-          title={
-            !testing && props.result && !props.result.ok
-              ? `${t('models.testFailed')} · ${props.result.detail}`
-              : undefined
-          }
-        >
-          <Icon
-            name={testing ? 'refresh' : verdict === 'ok' ? 'check' : 'alert'}
-            size={12}
-            class={testing ? 'model-tile-result-spin' : undefined}
-          />
-          <span class="model-tile-result-label">
-            {testing
-              ? t('models.testing')
-              : t(verdict === 'ok' ? 'models.testPassed' : 'models.testFailed')}
-          </span>
-          {!testing && props.result && (
-            <span class="model-tile-result-detail">
-              {props.result.ok ? fmtMs(props.result.ms) : props.result.detail}
+        <span class="model-item-mark" aria-hidden="true" />
+        <span class="model-item-text">
+          <span class="model-item-name">{entry.alias}</span>
+          {(showId || testing || props.result) && (
+            <span class="model-item-sub">
+              {showId && <span class="model-item-id mono">{entry.model}</span>}
+              {showId && (testing || props.result) && <span class="model-item-sep">·</span>}
+              {(testing || props.result) && (
+                <span
+                  class={`model-item-result ${testing ? 'testing' : verdict}`}
+                  role="status"
+                  title={
+                    !testing && props.result && !props.result.ok
+                      ? `${t('models.testFailed')} · ${props.result.detail}`
+                      : undefined
+                  }
+                >
+                  <Icon
+                    name={testing ? 'refresh' : verdict === 'ok' ? 'check' : 'alert'}
+                    size={11}
+                    class={testing ? 'model-tile-result-spin' : undefined}
+                  />
+                  <span>
+                    {testing
+                      ? t('models.testing')
+                      : props.result!.ok
+                        ? fmtMs(props.result!.ms)
+                        : t('models.testFailed')}
+                  </span>
+                </span>
+              )}
             </span>
           )}
-        </div>
-      )}
+        </span>
+        {entry.active && <span class="model-item-tag">{t('models.inUse')}</span>}
+        {!props.m.registry && <span class="model-item-note">{t('models.notRegistered')}</span>}
+        {dot && (
+          <span class={`model-item-dot ${dot}`} title={dotTitle} role="img" aria-label={dotTitle} />
+        )}
+      </button>
 
-      <div class="model-tile-actions">
+      <div class="model-item-acts">
         {confirming ? (
           <>
             <button
@@ -436,7 +502,7 @@ function ModelTile(props: {
               disabled={props.busy !== ''}
               onClick={props.onRemove}
             >
-              <Icon name="check" size={15} />
+              <Icon name="check" size={13} />
             </button>
             <button
               type="button"
@@ -445,7 +511,7 @@ function ModelTile(props: {
               aria-label={t('common.cancel')}
               onClick={() => setConfirming(false)}
             >
-              <Icon name="x" size={15} />
+              <Icon name="x" size={13} />
             </button>
           </>
         ) : (
@@ -458,7 +524,7 @@ function ModelTile(props: {
               disabled={props.busy !== ''}
               onClick={props.onTest}
             >
-              <Icon name={props.busy === `test:${k}` ? 'refresh' : 'activity'} size={15} />
+              <Icon name={testing ? 'refresh' : 'activity'} size={13} />
             </button>
             <button
               type="button"
@@ -468,12 +534,11 @@ function ModelTile(props: {
               disabled={props.busy !== ''}
               onClick={props.onEdit}
             >
-              <Icon name="pencil" size={15} />
+              <Icon name="pencil" size={13} />
             </button>
-            {/* The row in use is a configuration like any other, registered
-                or not: hiding its delete button is how a model got stuck in a
-                config for good. Copy stays with the registry rows, because a
-                duplicate is a row a later delete can address. */}
+            {/* Copy exists because the same account often serves one more id
+                than the config lists: duplicating the row carries the key and
+                the overrides the form can never echo back. */}
             {props.m.registry && (
               <button
                 type="button"
@@ -483,19 +548,21 @@ function ModelTile(props: {
                 disabled={props.busy !== ''}
                 onClick={props.onCopy}
               >
-                <Icon name="copy" size={15} />
+                <Icon name="copy" size={13} />
               </button>
             )}
-            <button
-              type="button"
-              class="model-tile-act"
-              title={t('models.remove')}
-              aria-label={t('models.remove')}
-              disabled={props.busy !== ''}
-              onClick={() => setConfirming(true)}
-            >
-              <Icon name="trash" size={15} />
-            </button>
+            {props.m.registry && (
+              <button
+                type="button"
+                class="model-tile-act"
+                title={t('models.remove')}
+                aria-label={t('models.remove')}
+                disabled={props.busy !== ''}
+                onClick={() => setConfirming(true)}
+              >
+                <Icon name="trash" size={13} />
+              </button>
+            )}
           </>
         )}
       </div>

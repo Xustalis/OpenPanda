@@ -216,6 +216,12 @@ func blockedIP(ip net.IP) bool {
 		if ip4[0] == 0 {
 			return true
 		}
+		// 100.64.0.0/10 is CGNAT, not "the internet": cloud metadata
+		// endpoints (100.100.100.200 on Alibaba) and carrier/Tailscale
+		// internals live there, and IsPrivate does not cover it.
+		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+			return true
+		}
 	}
 	return ip.IsLoopback() ||
 		ip.IsPrivate() ||

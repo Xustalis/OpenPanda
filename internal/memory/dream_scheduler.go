@@ -4,7 +4,9 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -77,8 +79,26 @@ func (s *Scheduler) Run(ctx context.Context) error {
 // housekeeping that should not depend on the node being idle or a dream being
 // due. It reports whether a dream sweep ran.
 func (s *Scheduler) tick(now time.Time) (bool, error) {
+	// Serialize both stamps and pending receipts across daemon processes.
+	release, err := lockRoot(s.dreamer.hermes.ColdDir())
+	if err != nil {
+		return false, fmt.Errorf("memory: lock dream schedule: %w", err)
+	}
+	defer release()
 	if err := s.pruneIfDue(now); err != nil {
 		return false, err
+	}
+	pending, err := s.readPending()
+	if err != nil {
+		return false, err
+	}
+	if pending != nil {
+		// Repair an earlier receipt before ever running Deep again, even if
+		// the node is no longer idle.
+		if err := s.finishPending(*pending); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	if s.idle != nil && !s.idle() {
 		return false, nil
@@ -94,15 +114,83 @@ func (s *Scheduler) tick(now time.Time) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := s.writeState("last-deep", now); err != nil {
+	// The promotion report must survive a failed diary append. On retry the
+	// same promotions are already in MEMORY.md and Dream() would omit them.
+	pending = &pendingDream{At: now, Report: report}
+	if err := s.writePending(*pending); err != nil {
 		return false, err
 	}
-	if s.diary != nil {
-		if err := s.diary.Append(report, now); err != nil {
-			return false, err
-		}
+	if err := s.finishPending(*pending); err != nil {
+		return false, err
 	}
 	return true, nil
+}
+
+type pendingDream struct {
+	At     time.Time `json:"at"`
+	Report Report    `json:"report"`
+}
+
+func (s *Scheduler) readPending() (*pendingDream, error) {
+	f, err := os.Open(s.statePath("pending-deep.json"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("memory: read pending dream: %w", err)
+	}
+	defer f.Close()
+	const maxPendingBytes = 1 << 20
+	data, err := io.ReadAll(io.LimitReader(f, maxPendingBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("memory: read pending dream: %w", err)
+	}
+	if len(data) > maxPendingBytes {
+		return nil, fmt.Errorf("memory: pending dream exceeds %d bytes", maxPendingBytes)
+	}
+	var pending pendingDream
+	if err := json.Unmarshal(data, &pending); err != nil {
+		return nil, fmt.Errorf("memory: invalid pending dream receipt: %w", err)
+	}
+	if pending.At.IsZero() {
+		return nil, fmt.Errorf("memory: invalid pending dream timestamp")
+	}
+	return &pending, nil
+}
+
+func (s *Scheduler) writePending(pending pendingDream) error {
+	data, err := json.Marshal(pending)
+	if err != nil {
+		return fmt.Errorf("memory: encode pending dream: %w", err)
+	}
+	if err := os.MkdirAll(s.dreamer.hermes.ColdDir(), 0o700); err != nil {
+		return fmt.Errorf("memory: create .dreams dir: %w", err)
+	}
+	if err := util.WriteFileAtomic(s.statePath("pending-deep.json"), data, 0o600); err != nil {
+		return fmt.Errorf("memory: write pending dream: %w", err)
+	}
+	return nil
+}
+
+func (s *Scheduler) finishPending(pending pendingDream) error {
+	last, err := s.readState("last-deep")
+	if err != nil {
+		return err
+	}
+	if last.Before(pending.At) {
+		if s.diary != nil {
+			if err := s.diary.AppendSweep(pending.Report, pending.At); err != nil {
+				return err
+			}
+		}
+		if err := s.writeState("last-deep", pending.At); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(s.statePath("pending-deep.json")); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("memory: remove pending dream: %w", err)
+	}
+	return nil
 }
 
 // pruneIfDue runs daily.Prune at most once per pruneInterval, recording the

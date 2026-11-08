@@ -338,6 +338,42 @@ else:
     GROUP_KW = {"start_new_session": True}
 
 
+class UnsafeShimCommand(FileNotFoundError):
+    """A .cmd/.bat shim reachable only through cmd.exe, carrying arguments
+    cmd would reinterpret as shell syntax. Subclasses FileNotFoundError so
+    the adapters' existing spawn-failure branches handle it as "cannot run
+    this binary"; the message is what the task result then shows."""
+
+
+def _cmd_safe_line(args):
+    """Build a cmd.exe command line that carries argv as DATA.
+
+    Quoting each argument keeps cmd's metacharacters (& | < > ( ) ^) literal.
+    Two shapes cannot be quoted away and are refused instead: % and ! perform
+    variable expansion even inside quotes, and an embedded double quote ends
+    the quoted region, handing what follows back to cmd's parser — an
+    argument `a"&calc"` would run `calc`. Line breaks are folded for the same
+    reason the old list2cmdline fallback folded them: a batch file's %* ends
+    an argument at the first break.
+    """
+    parts = []
+    for arg in args:
+        arg = _flatten_newlines(str(arg))
+        if "\x00" in arg:
+            raise UnsafeShimCommand("adapter argument contains a NUL byte")
+        if any(ch in arg for ch in '%!"'):
+            raise UnsafeShimCommand(
+                "cannot launch this .cmd/.bat shim: an argument contains "
+                "%% ! or a double quote, which cmd.exe would reinterpret as "
+                "shell syntax. Install the CLI as a native .exe or as a shim "
+                "whose target can be resolved.")
+        # Backslashes before the closing quote would escape it in the C
+        # runtime's argv parser; doubling them keeps the argument intact.
+        trailing = len(arg) - len(arg.rstrip("\\"))
+        parts.append('"' + arg + "\\" * trailing + '"')
+    return " ".join(parts)
+
+
 def resolve_argv(cmd):
     """Resolve cmd[0] to something CreateProcess can actually run on
     Windows; POSIX returns cmd untouched.
@@ -380,10 +416,12 @@ def resolve_argv(cmd):
             if alt_prefix:
                 return alt_prefix + cmd[1:]
         comspec = os.environ.get("COMSPEC") or "cmd.exe"
-        # Nothing else to try: keep the COMSPEC route, with the one concession
-        # the shell can honour — no line breaks inside an argument.
-        return [comspec, "/d", "/s", "/c",
-                _flatten_newlines(subprocess.list2cmdline([found] + cmd[1:]))]
+        # Nothing else to try. The COMSPEC route is a shell, so the arguments
+        # are quoted for cmd (list2cmdline speaks CreateProcess, not cmd.exe,
+        # and leaves & | < > % alone) and arguments cmd cannot carry are
+        # refused above rather than handed to its parser.
+        line = _cmd_safe_line([found] + cmd[1:])
+        return [comspec, "/d", "/s", "/c", '"' + line + '"']
     return [found] + cmd[1:]
 
 
@@ -573,18 +611,32 @@ def read_request_lined(default_timeout=DEFAULT_TIMEOUT):
                 _parse_request(line, default_timeout), default_timeout)
 
 
+def _strip_nul(value):
+    """Drop NUL bytes from a string request field.
+
+    argv cannot carry a NUL on any platform — Popen raises ValueError for the
+    whole call — and JSON decodes `\\u0000` verbatim, so a prompt pasted from
+    binary data used to kill every argv-based adapter with a traceback
+    instead of a task failure. The character itself carries no meaning in a
+    text prompt; dropping it is lossless in practice.
+    """
+    return value.replace("\x00", "") if isinstance(value, str) else value
+
+
 def _build_request(req, default_timeout):
-    prompt = req.get("prompt", "")
+    prompt = _strip_nul(req.get("prompt", ""))
+    if not isinstance(prompt, str):
+        prompt = ""
     try:
         timeout = int(req.get("timeout_s", default_timeout))
     except (TypeError, ValueError):
         timeout = default_timeout
-    cwd = req.get("cwd") or None
-    resume = req.get("resume") or ""
-    tools_policy = req.get("tools_policy") or ""
+    cwd = _strip_nul(req.get("cwd") or None)
+    resume = _strip_nul(req.get("resume") or "")
+    tools_policy = _strip_nul(req.get("tools_policy") or "")
     restricted = bool(req.get("restricted"))
     authorized = bool(req.get("authorized"))
-    cmd = req.get("cmd") or ""
+    cmd = _strip_nul(req.get("cmd") or "")
     try:
         max_turns = max(0, int(req.get("max_turns", 0) or 0))
     except (TypeError, ValueError):
@@ -599,13 +651,13 @@ def _build_request(req, default_timeout):
         complexity = 0.0
     return Request(
         prompt, timeout, cwd, resume, tools_policy, cmd, max_turns, restricted,
-        system_prompt=req.get("system_prompt") or "",
-        result_schema=req.get("result_schema") or "",
-        mcp_config=req.get("mcp_config") or "",
+        system_prompt=_strip_nul(req.get("system_prompt") or ""),
+        result_schema=_strip_nul(req.get("result_schema") or ""),
+        mcp_config=_strip_nul(req.get("mcp_config") or ""),
         max_budget_usd=max_budget,
-        effort=req.get("effort") or "",
+        effort=_strip_nul(req.get("effort") or ""),
         session=bool(req.get("session")),
-        task_id=req.get("task_id") or "",
+        task_id=_strip_nul(req.get("task_id") or ""),
         complexity=complexity,
         authorized=authorized,
     )
@@ -1129,9 +1181,11 @@ def run_simple(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, label=None, input=None,
         returncode, out, err = run_plain(cmd, cwd=cwd, timeout=timeout, input=input,
                                          heartbeat_s=heartbeat_s)
     except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError,
-            OSError) as ex:
+            ValueError, OSError) as ex:
         if isinstance(ex, subprocess.TimeoutExpired):
             diag, code = label + " timed out", 124
+        elif isinstance(ex, UnsafeShimCommand):
+            diag, code = str(ex), 126
         elif isinstance(ex, FileNotFoundError):
             diag, code = label + " binary not found", 127
         elif isinstance(ex, PermissionError):
@@ -1232,3 +1286,14 @@ def read_turn_lines():
         if msg is None or msg.get("type") != "user":
             continue
         yield msg
+
+
+def selected_model(native=""):
+    """Native single-model CLI choice; injection and explicit CLI env pins win.
+
+    The preference list was validated at the configuration boundary. OpenCode
+    uses its own roster-based resolver instead of this first-candidate helper.
+    """
+    if native or os.environ.get("OPENPANDA_INJECTED_MODEL") == "1":
+        return native
+    return next(iter(json.loads(os.environ.get("OPENPANDA_AGENT_MODELS", "[]"))), "")

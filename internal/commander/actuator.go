@@ -67,7 +67,14 @@ func SubstituteActionSpec(p *Plan, spec *ledger.ActionSpec, intent string) error
 	subst := func(arg string) (string, error) {
 		out := strings.ReplaceAll(arg, "{intent}", intent)
 		out = strings.ReplaceAll(out, "{action}", action)
-		for {
+		// Expansion runs to a fixed point, so a parameter whose value is
+		// itself a placeholder ("args": "{param:args}") would spin here
+		// forever at 100% CPU with the task's runner slot held. Refuse the
+		// self-reference and bound the loop as a second gate.
+		for round := 0; ; round++ {
+			if round > 64 {
+				return "", fmt.Errorf("placeholder expansion did not terminate in %q", arg)
+			}
 			i := strings.Index(out, "{param:")
 			if i < 0 {
 				break
@@ -84,6 +91,9 @@ func SubstituteActionSpec(p *Plan, spec *ledger.ActionSpec, intent string) error
 			s, err := scalarString(v)
 			if err != nil {
 				return "", fmt.Errorf("parameter %q: %w", name, err)
+			}
+			if strings.Contains(s, "{param:") {
+				return "", fmt.Errorf("parameter %q contains a placeholder; nested expansion is not allowed", name)
 			}
 			out = out[:i] + s + out[i+j+1:]
 		}

@@ -1,7 +1,13 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 
-/* Memory knowledge graph — the "what the agent knows" map. SVG nodes and
-   edges ride the design tokens so it reskins with the theme for free. */
+/* Memory knowledge graph — the "what the agent knows" map.
+ *
+ * Obsidian's graph view is the reference: a plain canvas, one quiet dot per
+ * node, its caption on a single baseline beneath it, straight hairline links,
+ * and hierarchy carried by size, ink weight and what the pointer is focused
+ * on. The colour that used to live in gradients, glows, dashed territories
+ * and text pills is reduced to a thin rim on the provenance dots; terms are
+ * deliberately lighter and smaller than the surfaces that mention them. */
 
 .mg-wrap {
   position: relative;
@@ -10,26 +16,30 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-raised);
+  box-shadow: var(--shadow-xs);
   overflow: hidden;
 }
 
-/* Toolbar: layer segmented control + live node/edge counts on the left,
-   zoom controls on the right. The layer chips are one step smaller than the
-   page tabs above them: they filter this drawing, they do not pick a page. */
-.mg-layers .seg {
-  padding: 3px 11px;
-  font-size: var(--text-sm);
-}
+/* Toolbar: one row of quiet controls. The layer switch is a step smaller
+   than the page tabs above it — it filters this drawing, it does not pick a
+   page. The right-hand group owns only zoom and view verbs. */
 .mg-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   flex-wrap: wrap;
-  padding: 8px var(--sp-3);
+  padding: 9px var(--sp-4);
   border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+}
+.mg-layers .seg {
+  padding: 4px 12px;
+  font-size: var(--text-sm);
 }
 .mg-stats {
+  margin-left: 2px;
   font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
 }
 .mg-toolbar-right {
   margin-left: auto;
@@ -37,38 +47,42 @@
   align-items: center;
   gap: 4px;
 }
-/* Gesture legend pinned to the canvas corner — a caption for the drawing,
-   not a toolbar item competing with the filters and the zoom. */
-.mg-hint-chip {
-  position: absolute;
-  left: var(--sp-3);
-  bottom: var(--sp-3);
-  padding: 2px 8px;
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--bg-raised) 78%, transparent);
-  border: 1px solid var(--border-soft);
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
-  pointer-events: none;
-  opacity: 0.9;
-}
 .mg-toolbar-right .btn {
-  padding: 2px 10px;
+  padding: 3px 10px;
   font-size: var(--text-xs);
   line-height: 1.5;
 }
+.mg-search {
+  width: 176px;
+  padding: 5px 12px;
+  font-size: var(--text-sm);
+  color: inherit;
+  background: var(--bg-inset);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.mg-search:focus-visible {
+  border-color: var(--accent-border);
+}
+.mg-toolbar .btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .mg-empty {
-  padding: var(--sp-10) var(--sp-4);
+  padding: var(--sp-12) var(--sp-4);
   margin: 0;
   text-align: center;
+  background: var(--mg-canvas);
 }
 
-/* Stage: positioned shell so floating chrome (detail card) anchors to the
-   canvas, not the wrapping card — toolbar wrapping can never push it off. */
+/* Stage: the canvas is one flat paper tone. No dot grid, no vignette, no
+   cluster halos — the drawing itself supplies the structure. */
 .mg-stage {
   position: relative;
+  background: var(--mg-canvas);
 }
-
 .mg-canvas {
   display: block;
   width: 100%;
@@ -76,11 +90,6 @@
   user-select: none;
   touch-action: none;
 }
-.mg-vig {
-  pointer-events: none;
-}
-
-/* Pan/zoom affordances. */
 .mg-bg {
   fill: transparent;
   cursor: grab;
@@ -88,61 +97,61 @@
 .mg-wrap.panning .mg-bg {
   cursor: grabbing;
 }
+.mg-hint-chip {
+  position: absolute;
+  left: var(--sp-3);
+  bottom: var(--sp-3);
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  pointer-events: none;
+  opacity: 0.86;
+}
 
-/* Arrowheads follow the edge colors. */
+/* Direction is a small neutral arrowhead, never a coloured one. */
 .mg-arrow-ref {
-  fill: var(--border-strong);
+  fill: var(--mg-edge-strong);
+  opacity: 0.8;
 }
 .mg-arrow-promo {
-  fill: var(--accent);
+  fill: var(--mg-ink);
 }
 
-/* Edges fade in under the nodes, then glow + thicken when they touch the
-   hovered node. Promotion edges are animated dotted beads flowing toward
-   the target — the diary literally feeding long-term memory. */
+/* Edges: straight hairlines. Promotion and reference read a shade darker,
+   mentions are graded by evidence in the component, co-occurrence is a
+   dashed thread. Focus lifts the neighbourhood and drops everything else. */
 .mg-edge-g {
-  animation: mg-fade 0.45s var(--ease) both;
+  animation: mg-fade 0.4s var(--ease) both;
 }
 .mg-edge {
   fill: none;
-  stroke: var(--border-strong);
-  stroke-width: 1.2;
+  stroke: var(--mg-edge);
   stroke-linecap: round;
   transition:
-    opacity var(--dur-fast) var(--ease),
-    stroke var(--dur-fast) var(--ease);
+    stroke var(--dur-fast) var(--ease),
+    stroke-width var(--dur-fast) var(--ease);
 }
 .mg-edge-promotion {
-  stroke: var(--accent);
-  stroke-dasharray: 0.5 6.5;
-  animation: mg-flow 1.15s linear infinite;
+  stroke: var(--mg-edge-strong);
 }
-/* Mention edges (file → entity) are thin and quiet — there can be hundreds,
-   they must not drown the provenance edges. */
+.mg-edge-reference {
+  stroke: var(--mg-edge);
+}
 .mg-edge-mention {
-  stroke: var(--accent-2);
-  opacity: 0.3;
+  stroke: var(--mg-edge);
 }
-/* Co-occurrence edges (entity ↔ entity) read as faint dashed threads. */
 .mg-edge-co {
-  stroke: var(--semantic-good);
-  stroke-dasharray: 3 5;
-  opacity: 0.5;
-}
-@keyframes mg-flow {
-  to {
-    stroke-dashoffset: -7;
-  }
-}
-.mg-edge-g.dim .mg-edge,
-.mg-edge-g.dim .mg-badge {
-  opacity: 0.15;
+  stroke: var(--mg-edge);
+  stroke-dasharray: 2 5;
 }
 .mg-edge-g.lit .mg-edge {
-  filter: url(#mg-edge-glow);
+  stroke: var(--mg-ink);
 }
-.mg-edge-g.lit .mg-badge rect {
-  stroke: var(--accent);
+.mg-edge-g.dim .mg-badge {
+  opacity: 0.12;
 }
 .mg-edge-hit {
   fill: none;
@@ -150,95 +159,34 @@
   stroke-width: 14;
   pointer-events: stroke;
 }
-
-/* Weight badge: a tiny pill riding the curve. */
 .mg-badge {
   pointer-events: none;
   transition: opacity var(--dur-fast) var(--ease);
 }
 .mg-badge rect {
   fill: var(--bg-raised);
-  stroke: var(--border-strong);
+  stroke: var(--border);
   stroke-width: 0.7;
 }
 .mg-badge text {
   font-size: 8px;
-  fill: var(--text-secondary);
-}
-
-/* Cluster territories: the glow is a radial gradient (fill comes from the
-   per-kind url() in markup) melting to nothing; the dashed ring inside it
-   marks the zone without a hard circle. Labels are small caps tinted to the
-   kind so a zone announces itself quietly. */
-.mg-cluster-ring {
-  fill: none;
-  stroke: var(--border-strong);
-  stroke-width: 1;
-  stroke-dasharray: 2.5 5;
-  opacity: 0.5;
-}
-.mg-cluster-label {
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
   fill: var(--text-tertiary);
-  text-anchor: middle;
-  paint-order: stroke;
-  stroke: var(--bg-raised);
-  stroke-width: 3.5px;
-}
-.mg-cluster.mg-core .mg-cluster-label {
-  fill: var(--accent);
-}
-.mg-cluster.mg-topic .mg-cluster-label {
-  fill: var(--accent-2);
-}
-.mg-cluster.mg-project .mg-cluster-label {
-  fill: var(--semantic-info);
-}
-.mg-cluster.mg-daily .mg-cluster-label {
-  fill: var(--semantic-warn);
-}
-.mg-cluster.mg-skill .mg-cluster-label {
-  fill: var(--danger);
-}
-.mg-cluster.mg-core .mg-cluster-ring {
-  stroke: var(--accent);
-  opacity: 0.3;
-}
-.mg-cluster.mg-topic .mg-cluster-ring {
-  stroke: var(--accent-2);
-  opacity: 0.35;
-}
-.mg-cluster.mg-project .mg-cluster-ring {
-  stroke: var(--semantic-info);
-  opacity: 0.35;
-}
-.mg-cluster.mg-daily .mg-cluster-ring {
-  stroke: var(--semantic-warn);
-  opacity: 0.4;
-}
-.mg-cluster.mg-skill .mg-cluster-ring {
-  stroke: var(--danger);
-  opacity: 0.35;
 }
 
+/* Nodes: one circle, one caption below it. */
 .mg-node {
   cursor: pointer;
   transition: opacity var(--dur-fast) var(--ease);
 }
-/* .mg-pop animates scale on a wrapper without a transform attribute — the
-   outer g's translate() must stay the single source of position. */
 .mg-pop {
-  animation: mg-pop 0.38s var(--ease) both;
+  animation: mg-pop 0.32s var(--ease) both;
   transform-box: fill-box;
   transform-origin: center;
 }
 @keyframes mg-pop {
   from {
     opacity: 0;
-    transform: scale(0.45);
+    transform: scale(0.6);
   }
 }
 @keyframes mg-fade {
@@ -249,89 +197,18 @@
 .mg-hit {
   fill: transparent;
 }
-/* Aura: the kind-tinted halo that fades in on hover / stays lit on
-   selection — focus feedback that reads as warmth, not a hard outline. */
-.mg-aura {
-  opacity: 0;
-  transition: opacity var(--dur-med) var(--ease);
-  pointer-events: none;
-}
-.mg-node:hover .mg-aura,
-.mg-node.sel .mg-aura {
-  opacity: 1;
-}
-/* Specular highlight on file dots — fixed white: on light themes it sits on
-   the tinted rim, on dark it is the one light accent the sphere needs. */
-.mg-spec {
-  fill: #fff;
-  opacity: 0.5;
-  pointer-events: none;
-}
 .mg-dot {
-  stroke-width: 1.5;
+  fill: var(--mg-ink);
+  stroke-width: 1.6;
   transform-box: fill-box;
   transform-origin: center;
   transition:
-    r var(--dur-med) var(--ease),
+    fill var(--dur-fast) var(--ease),
     transform var(--dur-fast) var(--ease),
     stroke-width var(--dur-fast) var(--ease);
 }
-/* Pending / non-active surfaces get a quiet dashed ring, not a colour —
-   they exist but are not fully live yet. */
-.mg-ring {
-  fill: none;
-  stroke: var(--semantic-warn);
-  stroke-width: 1;
-  stroke-dasharray: 3 3.5;
-  opacity: 0.8;
-}
-.mg-halo {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.2;
-  opacity: 0.55;
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: mg-halo 2.6s ease-in-out infinite;
-}
-@keyframes mg-halo {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 0.55;
-  }
-  50% {
-    transform: scale(1.16);
-    opacity: 0.15;
-  }
-}
-.mg-node text {
-  font-size: 10.5px;
-  fill: var(--text-secondary);
-  pointer-events: none;
-  paint-order: stroke;
-  stroke: var(--bg-raised);
-  stroke-width: 3px;
-  stroke-linejoin: round;
-}
-.mg-node.sel text {
-  font-weight: 600;
-  fill: var(--text-primary);
-}
-.mg-node.dim {
-  opacity: 0.25;
-}
-.mg-node.sel .mg-dot {
-  stroke: var(--accent);
-  stroke-width: 2.5;
-}
-.mg-node.pending {
-  opacity: 0.55;
-}
-
-/* Kind palette (stroke colors; fills come from the mg-fill-* gradients):
-   accent for long-term cores, blue for topics, indigo for project memory,
-   amber for the daily diary, red for skills, green for knowledge terms. */
+/* The rim is the only place a kind gets a hue. Terms stay neutral: they are
+   the leaves of this graph, not another category of hub. */
 .mg-core .mg-dot {
   stroke: var(--accent);
 }
@@ -347,62 +224,78 @@
 .mg-skill .mg-dot {
   stroke: var(--danger);
 }
-.mg-node:hover .mg-dot {
-  transform: scale(1.14);
+.mg-entity .mg-dot {
+  fill: var(--mg-ink-muted);
+  stroke: var(--mg-ink-muted);
+}
+.mg-node:hover .mg-dot,
+.mg-node.sel .mg-dot {
+  fill: var(--mg-ink-strong);
+  stroke: var(--mg-ink-strong);
+  stroke-width: 2.2;
+  transform: scale(1.12);
+}
+.mg-halo {
+  fill: none;
+  stroke: var(--mg-halo);
   stroke-width: 2;
 }
-
-/* Knowledge terms render as text pills — a term is text, so it reads as a
-   tag instead of pretending to be a dot. The body is a vertical gradient
-   (raised surface melting into a green tint); a sheen strip on top sells
-   the raised surface. */
-.mg-pill {
-  stroke: var(--semantic-good);
-  stroke-width: 1.2;
-  transition: stroke-width var(--dur-fast) var(--ease);
+/* Pending / non-active surfaces keep the quiet dashed ring. */
+.mg-ring {
+  fill: none;
+  stroke: var(--semantic-warn);
+  stroke-width: 1;
+  stroke-dasharray: 3 3.5;
+  opacity: 0.75;
 }
-.mg-pill-sheen {
-  fill: #fff;
-  opacity: 0.3;
+.mg-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  fill: var(--mg-label);
   pointer-events: none;
+  paint-order: stroke;
+  stroke: var(--mg-canvas);
+  stroke-width: 3.5px;
+  stroke-linejoin: round;
 }
-.mg-pill-label {
-  font-size: 10px;
-  fill: var(--text-primary);
-  pointer-events: none;
+.mg-entity .mg-label {
+  font-size: 10.5px;
+  font-weight: 400;
 }
-.mg-node:hover .mg-pill {
-  stroke-width: 1.9;
+.mg-node:hover .mg-label,
+.mg-node.sel .mg-label {
+  fill: var(--mg-label-strong);
+  font-weight: 600;
 }
-.mg-node.sel .mg-pill {
-  stroke: var(--semantic-good);
-  stroke-width: 2.2;
+.mg-node.dim {
+  opacity: 0.16;
 }
-.mg-entity .mg-halo {
-  stroke: var(--semantic-good);
+.mg-node.pending {
+  opacity: 0.6;
 }
 
+/* Legend: quiet chips, one row under the canvas. Each kind chip's dot is the
+   node's rim colour; the entity chip matches the muted leaf dot. */
 .mg-legend {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2) var(--sp-3);
-  padding: var(--sp-2) var(--sp-4);
+  padding: 9px var(--sp-4);
   border-top: 1px solid var(--border-soft);
   font-size: var(--text-xs);
   color: var(--text-secondary);
+  background: var(--bg-raised);
 }
 .mg-legend-item {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-/* Kind chips are pill buttons — toggling one filters that kind out of the
-   view. The dot is filled, matching the node's rim colour. */
 button.mg-legend-item {
-  background: var(--bg-raised);
-  border: 1px solid var(--border-soft);
-  padding: 2px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 2px 8px;
   font: inherit;
   color: inherit;
   cursor: pointer;
@@ -414,17 +307,16 @@ button.mg-legend-item {
 }
 button.mg-legend-item:hover {
   background: var(--bg-hover);
-  border-color: var(--border-strong);
+  border-color: var(--border-soft);
 }
 .mg-legend-item.off {
-  opacity: 0.4;
+  opacity: 0.38;
 }
 .mg-legend-item i {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, currentColor 30%, transparent);
+  border: 1.6px solid currentColor;
 }
 .mg-legend-item.mg-core i {
   color: var(--accent);
@@ -442,41 +334,40 @@ button.mg-legend-item:hover {
   color: var(--danger);
 }
 .mg-legend-item.mg-entity i {
-  color: var(--semantic-good);
+  color: var(--mg-ink-muted);
+  background: var(--mg-ink-muted);
 }
 .mg-legend-edge-promotion line {
-  stroke: var(--accent);
-  stroke-width: 1.7;
+  stroke: var(--mg-edge-strong);
+  stroke-width: 1.4;
   stroke-linecap: round;
-  stroke-dasharray: 0.5 5.5;
 }
 .mg-legend-edge-reference line {
-  stroke: var(--border-strong);
+  stroke: var(--mg-edge);
   stroke-width: 1.2;
   stroke-linecap: round;
 }
 .mg-legend-edge-mention line {
-  stroke: var(--accent-2);
-  stroke-width: 1.2;
+  stroke: var(--mg-edge);
+  stroke-width: 1;
   stroke-linecap: round;
-  opacity: 0.6;
+  opacity: 0.7;
 }
 .mg-legend-edge-co line {
-  stroke: var(--semantic-good);
-  stroke-width: 1.2;
+  stroke: var(--mg-edge);
+  stroke-width: 1.1;
   stroke-linecap: round;
-  stroke-dasharray: 3 4;
+  stroke-dasharray: 2 4;
 }
 
-/* First-seen timeline: play button + date slider riding under the canvas.
-   The track is a progress fill painted inline (accent up to the current
-   step); the thumb is a raised dot that grows on hover/drag. */
+/* First-seen timeline: play button + date slider riding under the canvas. */
 .mg-timeline {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: 7px var(--sp-4);
+  padding: 8px var(--sp-4);
   border-top: 1px solid var(--border-soft);
+  background: var(--bg-raised);
 }
 .mg-play {
   flex: none;
@@ -499,7 +390,7 @@ button.mg-legend-item:hover {
   appearance: none;
   height: 4px;
   border-radius: 2px;
-  background: var(--bg-inset); /* inline gradient overrides with progress */
+  background: var(--bg-inset);
   outline: none;
   cursor: pointer;
 }
@@ -523,15 +414,11 @@ button.mg-legend-item:hover {
   background: var(--bg-raised);
   border: 2px solid var(--accent);
   box-shadow: var(--shadow-xs);
-  transition: transform var(--dur-fast) var(--ease);
-}
-.mg-range::-moz-range-thumb:hover {
-  transform: scale(1.2);
 }
 .mg-range::-moz-range-track {
   height: 4px;
   border-radius: 2px;
-  background: transparent; /* inline gradient on the input shows through */
+  background: transparent;
 }
 .mg-date {
   flex: none;
@@ -540,8 +427,7 @@ button.mg-legend-item:hover {
   text-align: right;
 }
 
-/* Detail card floats inside .mg-stage — anchored to the canvas' top-right
-   corner regardless of how the toolbar wraps. */
+/* Detail card floats inside .mg-stage, anchored to the canvas corner. */
 .mg-detail {
   position: absolute;
   top: var(--sp-3);
@@ -549,12 +435,12 @@ button.mg-legend-item:hover {
   width: min(310px, calc(100% - 24px));
   max-height: calc(100% - 24px);
   overflow-y: auto;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border);
   border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   animation: palette-in var(--dur-med) var(--ease);
 }
-/* Kind chip in the detail head: a filled dot tinted like the node's rim,
-   keeping the card honest about what kind of thing it describes. */
 .mg-kind-chip {
   display: inline-flex;
   align-items: center;
@@ -574,42 +460,18 @@ button.mg-legend-item:hover {
   border-radius: 50%;
   background: currentColor;
 }
-.mg-kind-chip.mg-core i {
-  color: var(--accent);
-}
-.mg-kind-chip.mg-topic i {
-  color: var(--accent-2);
-}
-.mg-kind-chip.mg-project i {
-  color: var(--semantic-info);
-}
-.mg-kind-chip.mg-daily i {
-  color: var(--semantic-warn);
-}
-.mg-kind-chip.mg-skill i {
-  color: var(--danger);
-}
-.mg-kind-chip.mg-entity i {
-  color: var(--semantic-good);
-}
-.mg-detail-core {
-  border-left-color: var(--accent);
-}
-.mg-detail-topic {
-  border-left-color: var(--accent-2);
-}
-.mg-detail-project {
-  border-left-color: var(--semantic-info);
-}
-.mg-detail-daily {
-  border-left-color: var(--semantic-warn);
-}
-.mg-detail-skill {
-  border-left-color: var(--danger);
-}
-.mg-detail-entity {
-  border-left-color: var(--semantic-good);
-}
+.mg-kind-chip.mg-core i { color: var(--accent); }
+.mg-kind-chip.mg-topic i { color: var(--accent-2); }
+.mg-kind-chip.mg-project i { color: var(--semantic-info); }
+.mg-kind-chip.mg-daily i { color: var(--semantic-warn); }
+.mg-kind-chip.mg-skill i { color: var(--danger); }
+.mg-kind-chip.mg-entity i { color: var(--mg-ink-muted); }
+.mg-detail-core { border-left-color: var(--accent); }
+.mg-detail-topic { border-left-color: var(--accent-2); }
+.mg-detail-project { border-left-color: var(--semantic-info); }
+.mg-detail-daily { border-left-color: var(--semantic-warn); }
+.mg-detail-skill { border-left-color: var(--danger); }
+.mg-detail-entity { border-left-color: var(--mg-ink-muted); }
 .mg-detail-head {
   display: flex;
   align-items: center;
@@ -653,9 +515,6 @@ button.mg-legend-item:hover {
   font-size: var(--text-xs);
   margin-bottom: 6px;
 }
-
-/* Evidence samples: the literal lines an entity was seen in — each on its
-   own inset strip so raw memory text reads as a quote, not chrome text. */
 .mg-evidence {
   margin-bottom: var(--sp-2);
   font-size: var(--text-xs);
@@ -679,9 +538,7 @@ button.mg-legend-item:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .mg-pop,
-  .mg-edge-g,
-  .mg-halo,
-  .mg-edge-promotion {
+  .mg-edge-g {
     animation: none;
   }
 }

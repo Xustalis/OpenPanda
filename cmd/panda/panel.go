@@ -660,6 +660,9 @@ func runQueue(args []string) {
 		runQueueClear(cfg, *yes, *configPath)
 		return
 	}
+	// A verb the board does not have used to be ignored: `panda queue helpp`
+	// printed the board and exited 0, which reads as "your filter applied".
+	rejectExtraArgs(fs, "usage: panda queue [--state s] [--project p] [--watch] | panda queue clear [--yes]")
 
 	db, store, err := panelStore(cfg)
 	if err != nil {

@@ -642,6 +642,44 @@ const es: Messages = {
   'onboarding.saved': 'Modelo configurado — el chat está listo.',
   'onboarding.skip': 'Ahora no',
 
+  // Recorrido de primer arranque (tras los términos, antes del modelo)
+  'onboarding.guide.title': 'Tres minutos de recorrido',
+  'onboarding.guide.sub':
+    'La consola hace tres cosas: dices algo, se hace, y tú mantienes el control. Aquí están el mapa, el panda de la esquina y cómo se conecta un modelo.',
+  'onboarding.guide.nav': 'La barra izquierda',
+  'onboarding.guide.nav.newChat': 'Abre un hilo. La sesión nace con el primer mensaje.',
+  'onboarding.guide.nav.workspace':
+    'Dispositivos y agentes en un mapa. La rueda acerca, un clic muestra las conexiones.',
+  'onboarding.guide.nav.control': 'Cola, planes y proyectos — tres tableros sobre las mismas tareas.',
+  'onboarding.guide.nav.team': 'Quién trabaja en este hilo — la misma tarjeta que abre el panda.',
+  'onboarding.guide.nav.memory': 'Lo que este nodo ha aprendido. Leer, editar, borrar.',
+  'onboarding.guide.nav.settings': 'Modelos, políticas, agentes, MCP, habilidades, sistema.',
+  'onboarding.guide.panda': 'El panda de la esquina',
+  'onboarding.guide.panda.pose': 'De pie = libre · saltando = responde · tumbado = descansa',
+  'onboarding.guide.panda.click': 'Un clic',
+  'onboarding.guide.panda.clickDesc': 'Abre la tarjeta de equipo — elige los agentes del hilo.',
+  'onboarding.guide.panda.working': 'Respondiendo',
+  'onboarding.guide.panda.workingDesc':
+    'Abre al instante, sin aplastar — el equipo sigue editable durante el turno.',
+  'onboarding.guide.panda.double': 'Doble clic',
+  'onboarding.guide.panda.doubleDesc': 'Lo aplasta. Un juguete: no cuenta ni recuerda nada.',
+  'onboarding.guide.panda.burst': 'Sigue tocando',
+  'onboarding.guide.panda.burstDesc': 'Deja la tarjeta y solo recibe aplastamientos.',
+  'onboarding.guide.panda.night': '20:00–08:00',
+  'onboarding.guide.panda.nightDesc': 'Se tumba. Las tareas siguen; la pose es decoración.',
+  'onboarding.guide.model': 'Conectar un modelo',
+  'onboarding.guide.model.one': 'Ajustes → Modelos → Añadir conexión',
+  'onboarding.guide.model.oneDesc':
+    'Elige proveedor, pega el endpoint y la clave. Una tarjeta es una cuenta.',
+  'onboarding.guide.model.two': 'Añade modelos a la tarjeta',
+  'onboarding.guide.model.twoDesc': 'Clic en una fila para cambiar. El alias lo pones tú.',
+  'onboarding.guide.model.three': 'Pulsa «Probar conexión»',
+  'onboarding.guide.model.threeDesc': 'Un ✓ con latencia significa que responde.',
+  'onboarding.guide.modelNote':
+    'El siguiente paso te lleva una vez por el proceso, y todo sigue editable en Ajustes.',
+  'onboarding.guide.cta': 'Continuar',
+  'onboarding.guide.skip': 'Saltar la guía',
+
   // Skills view
   'skills.title': 'Habilidades',
   'skills.subtitle':
@@ -971,7 +1009,7 @@ const es: Messages = {
   'memory.daily': 'Diario',
   'memory.projects': 'Memoria de proyectos',
   'memory.graphTitle': 'Grafo de memoria',
-  'memory.graphEmpty': 'Aún no hay memoria — el grafo crece con las conversaciones.',
+  'memory.graphEmpty': 'Aún no hay recuerdos guardados. Añade una nota aquí o pide al asistente que la guarde.',
   'memory.graph.filteredEmpty': 'No hay nodos con los filtros actuales.',
   'memory.graph.noEdges': 'Aún no hay conexiones registradas.',
   'memory.graph.open': 'Abrir',
@@ -980,8 +1018,12 @@ const es: Messages = {
   'memory.graph.project': 'Proyectos',
   'memory.graph.daily': 'Diario',
   'memory.graph.skill': 'Habilidades',
-  'memory.graph.promotion': 'promovido del diario',
+  'memory.graph.promotion': 'promoción registrada en el diario de sueños',
   'memory.graph.reference': 'referencia',
+  'memory.graph.search': 'Buscar',
+  'memory.graph.searchPlaceholder': 'Filtrar nodos…',
+  'memory.graph.neighbors': 'Solo vecinos',
+  'memory.graph.fit': 'Ajustar',
   'memory.graph.zoomIn': 'Acercar',
   'memory.graph.zoomOut': 'Alejar',
   'memory.graph.reset': 'Restablecer vista',
@@ -1022,6 +1064,8 @@ const es: Messages = {
   'memory.dreamsEditMsg':
     'DREAMS.md es texto libre (sin entradas §). Tu reescritura reemplaza el diario literalmente.',
   'memory.dreamsEditHint': 'Texto libre; se guarda literalmente.',
+  'memory.dreamsTooLarge': 'El diario supera los 2 MiB. Solo se muestra una vista previa; se desactiva la edición para proteger el historial.',
+  'memory.conflict': 'La memoria cambió en otro lugar. Actualiza y vuelve a aplicar tus cambios.',
   'memory.fromLog': 'del diario',
   'memory.fromLogTip': 'Promovido desde los diarios — señal de peso bajo; corrígela o elimínala si no encaja.',
   'memory.entryDelete': 'Eliminar',
@@ -1832,6 +1876,32 @@ const es: Messages = {
   'side.context': 'Cada pregunta trae el contexto más reciente del hilo; las respuestas no se escriben de vuelta.',
   'side.placeholder': 'Pregunta algo sobre este hilo…',
   'common.stop': 'Detener',
+  // Agent execution policy
+  'execution.title': "Modelos de agentes y ejecución paralela",
+  'execution.rootModel': "Modelo del agente principal",
+  'execution.childModel': "Modelo del subagente",
+  'execution.nativeDefault': "Modelo predeterminado del CLI",
+  'execution.inherit': "Heredar selección principal",
+  'execution.agentLimit': "Límite por agente (0 = compartido)",
+  'execution.limits': "Límites de ejecución",
+  'execution.maxConcurrent': "Límite del proceso (0 = tarjeta de capacidades)",
+  'execution.delegation.max_concurrent': "Límite de todos los subagentes (0 = compartido)",
+  'execution.delegation.fanout': "Hijos paralelos por tarea principal",
+  'execution.delegation.max_children': "Total de hijos por tarea",
+  'execution.delegation.max_depth': "Profundidad máxima",
+  'execution.enabled': "Permitir subagentes orquestados",
+  'execution.modelsHelp': "Usa IDs de modelo nativos del CLI; separa los candidatos de OpenCode con comas. Los modelos inyectados y las variables explícitas de modelo del CLI tienen prioridad sobre estas opciones nativas.",
+  'execution.nativeBoundary': "Los modelos hijos se aplican a tareas creadas por OpenPanda, no a subagentes internos del CLI del proveedor.",
+  'execution.limitsHelp': "Los límites se aplican a llamadas activas de adaptadores en este proceso. Reducirlos no interrumpe llamadas activas. Las escrituras paralelas requieren rutas independientes o árboles aislados. Cero elimina un límite opcional.",
+  'execution.saved': "Guardado y aplicado a este proceso. Los otros procesos locales se sincronizan automáticamente.",
+
+  // Menús de ajustes dentro de cada elemento (ajustes: agentes, skills, modelos).
+  'settings.itemSettings': 'Ajustes del elemento',
+  'settings.itemSettingsFor': 'Ajustes de {name}',
+  'settings.customAgent': 'Personalizado',
+  'settings.agentSettingsHelp': 'Se aplica solo a este agente; guarda la política de ejecución para aplicarla.',
+  'skills.reinstall': 'Reinstalar',
+
 }
 
 export default es

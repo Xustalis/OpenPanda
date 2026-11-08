@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/configsync"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 )
@@ -20,11 +21,12 @@ import (
 // is write-only: GET reports only whether one is set, PUT treats an empty key
 // as "keep the existing one".
 type modelSettingsJSON struct {
-	Provider string `json:"provider,omitempty"`
-	Name     string `json:"name,omitempty"`
-	APIType  string `json:"api_type"` // "anthropic" | "openai"
-	BaseURL  string `json:"base_url"`
-	Model    string `json:"model"`
+	RuntimeSync *configsync.Report `json:"runtime_sync,omitempty"`
+	Provider    string             `json:"provider,omitempty"`
+	Name        string             `json:"name,omitempty"`
+	APIType     string             `json:"api_type"` // "anthropic" | "openai"
+	BaseURL     string             `json:"base_url"`
+	Model       string             `json:"model"`
 	// The numeric knobs are pointers so "absent" and "explicit 0" mean
 	// different things: absent keeps the stored value (a sparse client), 0
 	// resets to the provider/entry default (what the form's empty box means).
@@ -146,7 +148,11 @@ func modelSettingsFromConfig(mc config.ModelConfig) modelSettingsJSON {
 // getModelSettings serves GET /api/settings/model — the current model
 // configuration minus the secret itself.
 func (h *handler) getModelSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, modelSettingsFromConfig(h.engineModel()))
+	out := modelSettingsFromConfig(h.engineModel())
+	if report, err := configsync.ReadReport(r.Context(), h.db, h.configPath); err == nil {
+		out.RuntimeSync = &report
+	}
+	writeJSON(w, out)
 }
 
 // putModelSettings serves PUT /api/settings/model — validate, persist to the
@@ -164,8 +170,16 @@ func (h *handler) putModelSettings(w http.ResponseWriter, r *http.Request) {
 
 	cur := h.engineModel()
 	mc := modelSettingsToConfig(req, cur)
-	if mc.BaseURL == "" {
+	if !mc.Configured() {
 		writeErr(w, http.StatusBadRequest, errors.New("base_url must not be empty"))
+		return
+	}
+	// A save that changes the endpoint host while keeping the stored key would
+	// hand that key to the new host on the next turn. Require the key that
+	// belongs to the new endpoint.
+	if cur.APIKey != "" && strings.TrimSpace(req.APIKey) == "" && !sameEndpointHost(modelSettingsFromConfig(mc).BaseURL, modelSettingsFromConfig(cur).BaseURL) {
+		writeErr(w, http.StatusBadRequest, errors.New(
+			"changing the endpoint host requires its own API key; the stored key is only sent to "+endpointHost(cur.BaseURL)))
 		return
 	}
 
@@ -223,6 +237,10 @@ func (h *handler) testModelSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	cur := h.engineModel()
 	mc := modelSettingsToConfig(req, cur)
+	if cur.APIKey != "" && strings.TrimSpace(req.APIKey) == "" && !sameEndpointHost(modelSettingsFromConfig(mc).BaseURL, modelSettingsFromConfig(cur).BaseURL) {
+		writeJSON(w, map[string]any{"ok": false, "error": "changing the endpoint host requires its own API key; the stored key is only sent to " + endpointHost(cur.BaseURL)})
+		return
+	}
 
 	client, err := entry.NewClient(mc)
 	if err != nil {

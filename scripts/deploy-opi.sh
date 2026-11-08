@@ -33,10 +33,11 @@ ssh "$TARGET" "chmod +x $REMOTE_DIR/panda"
 # 共享密钥（gitignored，来自 data/network-secret）经 systemd EnvironmentFile 注入，
 # 不写入 config.yaml——后者由 testdata/deploy-opi.yaml 生成、会被 git 跟踪。
 if [ -f data/network-secret ]; then
-  printf 'OPENPANDA_SHARED_SECRET=%s\n' "$(cat data/network-secret)" > /tmp/openpanda.env
-  scp /tmp/openpanda.env "$TARGET:$REMOTE_DIR/openpanda.env"
-  ssh "$TARGET" "chmod 600 $REMOTE_DIR/openpanda.env"
-  rm -f /tmp/openpanda.env
+  # 密钥经 ssh stdin 直达远端,不落本地磁盘:固定 /tmp 路径在多用户机器上
+  # 可被预先创建(含符号链接),写入窗口内他人可读,而这个值是 mesh 成员密钥。
+  printf 'OPENPANDA_SHARED_SECRET=%s\n' "$(cat data/network-secret)" \
+    | ssh "$TARGET" "umask 077; cat > '$REMOTE_DIR/openpanda.env'"
+  ssh "$TARGET" "chmod 600 '$REMOTE_DIR/openpanda.env'"
 else
   echo "!! 缺少 data/network-secret；WS 监听将因无 shared_secret 而禁用" >&2
 fi

@@ -1902,6 +1902,15 @@ func codeEscalates(code string) bool {
 		if irreversibleVerbs[tok] || destructiveCodeTokens[tok] {
 			return true
 		}
+		// The top-level command is normalized to its basename before lookup,
+		// but code inside `bash -c` was compared token-for-token: "/bin/rm"
+		// and "/usr/bin/sudo" matched nothing and the whole call graded
+		// Tier 1. Normalize each token the same way.
+		if base := normalizeCommand(tok); base != tok {
+			if irreversibleVerbs[base] || destructiveCodeTokens[base] {
+				return true
+			}
+		}
 	}
 	for _, pat := range irreversibleCodePatterns {
 		if strings.Contains(lower, pat) {

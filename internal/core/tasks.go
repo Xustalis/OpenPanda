@@ -226,6 +226,11 @@ func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project,
 			t.AttemptID, t.StateVersion, string(chainJSON), remote, now, now); err != nil {
 			return fmt.Errorf("insert task: %w", err)
 		}
+		sessionID, err := s.attachAskRoundTx(ctx, tx, taskID)
+		if err != nil {
+			return err
+		}
+		t.SessionID = sessionID
 		return s.recordEventTx(ctx, tx, taskID, EvSubmit, map[string]any{
 			"parent": parentID, "owner": owner,
 		})
@@ -494,8 +499,12 @@ func (s *TaskStore) withTx(ctx context.Context, fn func(tx *sql.Tx) error) error
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
+	// Rollback on panic too: the event listeners run inside the callback, and
+	// one panicking listener would otherwise leave a BEGIN IMMEDIATE holding
+	// the write lock until the process dies. Commit makes the deferred
+	// Rollback a no-op.
+	defer func() { _ = tx.Rollback() }()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()
@@ -3506,7 +3515,7 @@ const retentionSweepBatch = 2000
 // with it rather than replaying for a task that no longer exists.
 var taskSatellites = []string{
 	"task_events", "delegation_metrics", "result_outbox", "cancel_outbox",
-	"task_outbox", "artifact_push_outbox",
+	"task_outbox", "artifact_push_outbox", "resume_outbox",
 }
 
 // DeleteSettledBefore removes settled tasks (done/failed/cancelled/expired)

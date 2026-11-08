@@ -148,6 +148,20 @@ func TestSelfToolsSubtaskSpawnGuards(t *testing.T) {
 	}
 }
 
+// TestClipSelfOut pins the context-window guard every list tool must apply:
+// toolNodes used to be the only unbounded reader in the tool set.
+func TestClipSelfOut(t *testing.T) {
+	short := "small payload"
+	if got := clipSelfOut(short); got != short {
+		t.Fatalf("short payload was modified: %q", got)
+	}
+	long := strings.Repeat("x", maxSelfToolOut+500)
+	got := clipSelfOut(long)
+	if !strings.HasSuffix(got, "…[truncated]") || len(got) > maxSelfToolOut+len("…[truncated]") {
+		t.Fatalf("oversized payload not truncated: len=%d", len(got))
+	}
+}
+
 // TestSelfToolsSubtaskAwait verifies subtask await behavior on terminal state and error.
 func TestSelfToolsSubtaskAwait(t *testing.T) {
 	d := selfDeps(t)

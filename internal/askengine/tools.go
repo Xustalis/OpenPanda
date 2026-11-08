@@ -44,7 +44,7 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 			"properties": map[string]any{"target": targetEnum, "project": projectArg},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
-			return mem.Execute(memory.ToolRead, args)
+			return mem.ExecuteCtx(ctx, memory.ToolRead, args)
 		},
 	})
 
@@ -62,7 +62,7 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 			"required": []string{"target", "entry"},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
-			return mem.Execute(memory.ToolAdd, args)
+			return mem.ExecuteCtx(ctx, memory.ToolAdd, args)
 		},
 	})
 
@@ -81,7 +81,7 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 			"required": []string{"target", "old", "new"},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
-			return mem.Execute(memory.ToolReplace, args)
+			return mem.ExecuteCtx(ctx, memory.ToolReplace, args)
 		},
 	})
 
@@ -99,7 +99,7 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 			"required": []string{"target", "old"},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
-			return mem.Execute(memory.ToolRemove, args)
+			return mem.ExecuteCtx(ctx, memory.ToolRemove, args)
 		},
 	})
 

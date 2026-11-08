@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/ins
 Equivalent explicit invocations:
 
 ```bash
-sh scripts/install.sh --version 0.1.3           # install a specific version (default `latest` = newest stable; pre-releases must be pinned)
+sh scripts/install.sh --version 0.1.4           # install a specific version (default `latest` = newest stable; pre-releases must be pinned)
 sh scripts/install.sh --prefix /opt/openpanda  # custom install directory
 sh scripts/install.sh --lite                   # lite build: no embedded Web console/TUI (Linux only)
 sh scripts/install.sh --yes                    # also register auto-start (no prompt)
@@ -37,7 +37,7 @@ sh scripts/install.sh --no-service             # do not touch auto-start
 sh scripts/install.sh --force                  # force a version older than the data directory's schema
 ```
 
-The current stable is `0.1.3`; the previous stable, `0.1.2`, is still installable by naming it (`--version 0.1.2`), as is any pre-release — `latest` only ever resolves the newest stable.
+The current stable is `0.1.4`; the previous stable, `0.1.3`, is still installable by naming it (`--version 0.1.3`), as is any pre-release — `latest` only ever resolves the newest stable.
 
 Default prefix (aligned with Go's XDG/user-directory convention):
 
@@ -95,7 +95,7 @@ differently, and are unblocked differently.
   value is the full URL up to and including the version directory:
 
   ```powershell
-  $env:OPENPANDA_UPDATE_BASE = "https://<mirror>/Xustalis/OpenPanda/releases/download/v0.1.3"
+  $env:OPENPANDA_UPDATE_BASE = "https://<mirror>/Xustalis/OpenPanda/releases/download/v0.1.4"
   panda upgrade
   ```
 
@@ -110,11 +110,30 @@ differently, and are unblocked differently.
   That is curl using the Schannel backend and failing to reach a certificate
   revocation endpoint (CRL/OCSP) — not a bad certificate. The script adds
   `--ssl-no-revoke` by itself when the local curl supports it, and falls back
-  to `Invoke-WebRequest` after that. To check the link by hand:
+  to the .NET HTTP stack after that (whose body reads are bounded too). To
+  check the link by hand:
 
   ```powershell
   curl.exe -sS --ssl-no-revoke -o NUL -w "%{http_code}`n" https://api.github.com/repos/Xustalis/OpenPanda/releases/latest
   ```
+
+- **The Windows installer stops at `Installing …` and never returns.** That
+  line is followed by the archive download, which GitHub redirects to
+  `release-assets.githubusercontent.com`. On a network where that host is
+  blocked, the connection opens but no bytes arrive, and curl has no timeout
+  of its own to give up on. The script bounds every download: under 1 KB/s
+  for 60 s aborts a stalled archive transfer, with a 300 s cap on the whole
+  attempt (45 s for the API call); the .NET fallback has a read timeout that
+  covers the response body too. curl deliberately does not retry timeouts —
+  a retry restarts the entire transfer with a fresh timer, which used to
+  multiply the wait — and prints the mapped cause instead of hanging. It
+  also hands curl the Windows "Internet Options" system proxy: curl reads
+  only `HTTP_PROXY`/`HTTPS_PROXY` from the environment, so `irm` fetching
+  this script while the download connects direct is a split you will see on
+  such hosts. The proxy's `ProxyOverride` bypass list is honoured (loopback
+  included), so a local mirror set through `OPENPANDA_RELEASE_BASE` stays
+  direct. A proxy in the environment still takes precedence; a PAC-only
+  setup falls through to the .NET stack, which understands PAC.
 
 A mirror only changes the transport, not the trust: `checksums.txt`, the
 Ed25519 signature and the archive still have to agree with one another.
@@ -157,7 +176,7 @@ irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps
 Or download first and run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.3 -Yes
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.4 -Yes
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force    # deliberate downgrade (skips the schema guard)
 ```
 
@@ -287,7 +306,7 @@ from "manual control" once more.
 ## Publishing a new release
 
 1. Merge the change into `main`, confirm that commit's **Gate is green**,
-   then tag: `git tag v0.1.3 && git push origin v0.1.3` (two caveats:
+   then tag: `git tag v0.1.4 && git push origin v0.1.4` (two caveats:
    the CHANGELOG must already contain a section for that version or the
    release pipeline refuses to publish; the release pipeline checks the
    Gate conclusion for **the same commit** — if there is no push-triggered

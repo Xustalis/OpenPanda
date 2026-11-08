@@ -60,6 +60,32 @@ export function filterGraph(
   return { nodes, edges }
 }
 
+/** Search keeps one hop of context so a matching term still shows which
+ *  memory surfaces support it. It never restores a layer/kind already hidden
+ *  by filterGraph; the caller applies that first. */
+export function searchGraph(graph: MemoryGraph, query: string): MemoryGraph {
+  const q = query.trim().toLowerCase()
+  if (!q) return graph
+  const matches = new Set(graph.nodes.filter((n) => n.label.toLowerCase().includes(q)).map((n) => n.id))
+  const visible = new Set(matches)
+  for (const e of graph.edges) {
+    if (matches.has(e.from)) visible.add(e.to)
+    if (matches.has(e.to)) visible.add(e.from)
+  }
+  return {
+    nodes: graph.nodes.filter((n) => visible.has(n.id)),
+    edges: graph.edges.filter((e) => visible.has(e.from) && visible.has(e.to)),
+  }
+}
+
+/** Kind controls reflect the unfiltered graph. Otherwise hiding a kind
+ *  immediately removes its own toggle, trapping that category invisible. */
+export function availableKinds(graph: MemoryGraph, layer: LayerMode): Set<string> {
+  return new Set(graph.nodes.filter((n) =>
+    layer === 'all' || (layer === 'entities' ? isEntity(n) : !isEntity(n)),
+  ).map((n) => n.kind))
+}
+
 /** Distinct first_seen dates, ascending — the timeline's play steps. */
 export function seenDates(graph: MemoryGraph): string[] {
   const set = new Set<string>()
@@ -148,15 +174,44 @@ export function nodeExtent(n: MemoryGraphNode): number {
   return nodeRadius(n)
 }
 
-/** Distance from the node's centre to its visual rim along the unit vector
- *  (ux, uy). Pills are ellipses (half-width × 11), so an edge approaching
- *  from above lands much closer than one coming from the side — a radial
- *  half-width guess leaves ugly gaps on vertical approaches. */
-export function rimDistance(n: MemoryGraphNode, ux: number, uy: number): number {
-  if (!isEntity(n)) return nodeRadius(n)
-  const rx = nodeExtent(n)
-  const ry = 11
-  return (rx * ry) / Math.sqrt(ry * ry * ux * ux + rx * rx * uy * uy)
+/** File captions hang outside their dot; the circle-only footprint used to
+ *  ignore that width entirely, so two labels could sit on top of a neighbour
+ *  even while every dot was "non-overlapping". Bounded: a long caption must
+ *  not push the whole inner disc apart. */
+export function captionExtent(n: MemoryGraphNode): number {
+  if (isEntity(n)) return 0 // the pill's nodeExtent already includes its text
+  const widest = Math.max(...labelLines(n.label).map((l) => uwidth(l)))
+  return Math.min(24, (widest * 10.6) / 2 + 4)
+}
+
+/** The surface an entity belongs to: the strongest `mention` edge wins.
+ *  Relations, not just node counts, decide where terms start out — a term
+ *  mentioned mostly in one topic lands beside it instead of at a random
+ *  angle on the outer ring. Ties break by surface id so the result stays
+ *  deterministic. Entities with no mention edge keep the even spread. */
+export function dominantSurface(graph: MemoryGraph): Map<string, string> {
+  const best = new Map<string, { id: string; weight: number }>()
+  for (const e of graph.edges) {
+    if (e.kind !== 'mention') continue
+    const w = e.weight ?? 1
+    const cur = best.get(e.to)
+    if (!cur || w > cur.weight || (w === cur.weight && e.from < cur.id)) {
+      best.set(e.to, { id: e.from, weight: w })
+    }
+  }
+  const out = new Map<string, string>()
+  for (const [id, s] of best) out.set(id, s.id)
+  return out
+}
+
+/** Distance from the node's centre to its rim along a direction. Every node
+ *  is a circle now (terms carry their label below the dot, not inside a pill),
+ *  so the approach angle no longer changes the rim distance. The signature
+ *  stays direction-aware because edge endpoints still call it with a unit
+ *  vector, and the layout's spacing keeps using the wider `nodeExtent` so a
+ *  long term's caption still has room. */
+export function rimDistance(n: MemoryGraphNode, _ux: number, _uy: number): number {
+  return nodeRadius(n)
 }
 
 /** Deterministic cluster-and-relax layout. `seed` carries positions from a
@@ -179,7 +234,10 @@ export function layoutGraph(
   const mixed = files.length > 0 && entities.length > 0
 
   const innerR = mixed ? R * 0.52 : R * 0.92
-  const outerMin = mixed ? R * 0.62 : R * 0.12
+  // The old outer band was only ~80px deep: 60 terms could not fit and the
+  // relaxation had nowhere to put them. Widening inward gives the ring real
+  // area; repulsion keeps terms clear of the inner file clusters.
+  const outerMin = mixed ? R * 0.48 : R * 0.12
   const outerMax = mixed ? R * 0.98 : R * 0.92
 
   const pos = new Map<string, Placed>()
@@ -205,8 +263,8 @@ export function layoutGraph(
   const anchors = new Map<string, { x: number; y: number }>()
   for (const [kind, list] of byKind) {
     const angle = -Math.PI / 2 + (presentKinds.indexOf(kind) / Math.max(1, presentKinds.length)) * Math.PI * 2
-    const ax = cx + Math.cos(angle) * innerR * 0.78
-    const ay = cy + Math.sin(angle) * innerR * 0.78
+    const ax = cx + Math.cos(angle) * innerR * 0.68
+    const ay = cy + Math.sin(angle) * innerR * 0.68
     anchors.set(kind, { x: ax, y: ay })
     clusters.push({ key: kind, x: ax, y: ay, r: 46 + 17 * Math.sqrt(list.length) })
     ;[...list].sort(byWeight).forEach((n, i) => {
@@ -217,25 +275,58 @@ export function layoutGraph(
     })
   }
 
-  // Seed entities: an even angular spread around the outside, depth scattered
-  // by the golden-ratio fractional sequence — reads as an organic halo of
-  // terms instead of three mechanical orbit rings.
-  ;[...entities].sort(byWeight).forEach((n, i) => {
+  // Seed entities by neighbourhood, not by a global golden-ratio scatter.
+  // Terms that a file mentions start as a compact arc around that file's
+  // bearing, so a connected group reads as one cluster on the first paint —
+  // the picture Obsidian's graph produces with a force layout. A per-group
+  // offset keeps several groups that share one kind anchor from piling onto
+  // the same angle, and three fixed depth rings give the outer band an
+  // order instead of a random radius for every term. Unowned terms still get
+  // an even spread over the whole circle. Seeded re-layouts keep their old
+  // coordinates, so timeline ticks and filter toggles never reshuffle.
+  const owners = dominantSurface(graph)
+  const groups = new Map<string, MemoryGraphNode[]>()
+  const unowned: MemoryGraphNode[] = []
+  for (const n of entities) {
+    const owner = owners.get(n.id)
+    if (owner && pos.has(owner)) {
+      const list = groups.get(owner) ?? []
+      list.push(n)
+      groups.set(owner, list)
+    } else {
+      unowned.push(n)
+    }
+  }
+  const groupKeys = [...groups.keys()].sort()
+  groupKeys.forEach((key, gi) => {
+    const list = [...groups.get(key)!].sort(byWeight)
+    const ownerPos = pos.get(key)!
+    const bearing = Math.atan2(ownerPos.y - cy, ownerPos.x - cx)
+    const offset = ((gi * 0.618034) % 1 - 0.5) * 0.9
+    const spread = Math.min(1.2, 0.14 * list.length + 0.24)
+    list.forEach((n, j) => {
+      const s = seed?.get(n.id)
+      const angle = bearing + offset + (list.length === 1 ? 0 : (j / (list.length - 1) - 0.5) * spread)
+      const depth = outerMin + (outerMax - outerMin) * (0.36 + 0.44 * ((j % 3) / 2))
+      pos.set(n.id, { ...n, x: s?.x ?? cx + Math.cos(angle) * depth, y: s?.y ?? cy + Math.sin(angle) * depth })
+    })
+  })
+  ;[...unowned].sort(byWeight).forEach((n, i) => {
     const s = seed?.get(n.id)
-    const t = -Math.PI / 2 + (i / Math.max(1, entities.length)) * Math.PI * 2
-    const frac = (i * 0.618034) % 1
-    const rr = outerMin + (outerMax - outerMin) * (0.16 + 0.68 * frac)
-    pos.set(n.id, { ...n, x: s?.x ?? cx + Math.cos(t) * rr, y: s?.y ?? cy + Math.sin(t) * rr })
+    const angle = -Math.PI / 2 + (i / Math.max(1, unowned.length)) * Math.PI * 2
+    const depth = outerMin + (outerMax - outerMin) * (0.36 + 0.44 * ((i % 3) / 2))
+    pos.set(n.id, { ...n, x: s?.x ?? cx + Math.cos(angle) * depth, y: s?.y ?? cy + Math.sin(angle) * depth })
   })
 
   const list = graph.nodes.map((n) => pos.get(n.id)!)
   // Spacing follows each node's real footprint (pill width / circle radius)
   // plus a per-pair air gap — long terms get room, small circles pack tighter.
   const minDist = (a: Placed, b: Placed) => {
-    // Air gaps are generous on purpose: file labels hang below their dots, so
-    // circle-only spacing would let neighbouring captions collide.
+    // Captions hang outside file dots, so their half-width joins the pair's
+    // spacing requirement; entity pills already carry their text in
+    // nodeExtent. The per-pair air gap stays generous on purpose.
     const gap = isEntity(a) && isEntity(b) ? 11 : isEntity(a) || isEntity(b) ? 20 : 26
-    return nodeExtent(a) + nodeExtent(b) + gap
+    return nodeExtent(a) + captionExtent(a) + nodeExtent(b) + captionExtent(b) + gap
   }
   const clampRadius = (p: Placed, lo: number, hi: number) => {
     const dx = p.x - cx
@@ -287,6 +378,25 @@ export function layoutGraph(
         const pull = ((home - d) / d) * 0.05
         p.x += (p.x - cx) * pull
         p.y += (p.y - cy) * pull
+        // Angular spring: drift toward the bearing of the dominant surface.
+        // Tangential only, so the radius band stays intact and the repulsion
+        // pass still resolves crowding inside a group. It runs only on the
+        // first (unseeded) pass: a seeded re-layout must stay a fixed point,
+        // otherwise timeline ticks would keep rotating the ring forever.
+        const owner = owners.get(p.id)
+        const ownerPos = owner ? pos.get(owner) : undefined
+        if (ownerPos && !seed) {
+          const target = Math.atan2(ownerPos.y - cy, ownerPos.x - cx)
+          const cur = Math.atan2(p.y - cy, p.x - cx)
+          const delta = Math.atan2(Math.sin(target - cur), Math.cos(target - cur))
+          if (Math.abs(delta) > 1e-3) {
+            const step = delta * 0.03
+            const rx = p.x - cx
+            const ry = p.y - cy
+            p.x = cx + rx * Math.cos(step) - ry * Math.sin(step)
+            p.y = cy + rx * Math.sin(step) + ry * Math.cos(step)
+          }
+        }
         clampRadius(p, mixed ? outerMin : 0, outerMax)
       } else {
         const a = anchors.get(p.kind)

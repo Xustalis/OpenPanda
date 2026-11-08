@@ -3970,19 +3970,30 @@
 /* The card opens *upward* from the button: the composer is docked to the
    bottom of the pane, so a downward card would hang off the viewport. Right
    edge, not centre — the button is the last control before Send. */
+/* Fixed, and placed from the trigger's measured rect (see ModelSelect.place):
+   the card is wide enough to run off the left of a phone if it were anchored
+   with `right: 0` to a button that already sits near the right edge. */
 .model-panel {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  right: 0;
+  position: fixed;
   z-index: 30;
-  /* 300px is the menu's own floor in Codex (`--menu-min-width`); the node card
-     in the header holds the same, so the two popovers cannot disagree. */
-  width: min(300px, calc(100vw - 32px));
+  /* Two panes: 168 for the accounts, the rest for their models. Wider than
+     Codex's 300px floor because this card answers two questions at once. */
+  width: min(430px, calc(100vw - 32px));
   padding: 6px;
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: 20px;
   box-shadow: var(--shadow-lg);
+  /* Three bands stacked from the bottom edge up: the section label, the
+     models, the account footer. Making it a column is what lets the model
+     list give height back when the window is short, instead of the card
+     running off the top of the screen. */
+  display: flex;
+  flex-direction: column;
+  /* The window is the last limit. With the account list unfolded the three
+     bands add up past the room above a laptop composer; the models absorb
+     the shortfall because they are the band that scrolls. */
+  max-height: min(420px, calc(100vh - 24px));
   /* Grows out of the corner it is anchored to — Radix hands Codex the same
      origin as a variable. */
   transform-origin: bottom right;
@@ -4002,6 +4013,7 @@
   }
 }
 .model-panel-label {
+  flex: none;
   margin: 0;
   padding: 6px 8px 4px;
   font-size: var(--text-sm);
@@ -4010,9 +4022,19 @@
 .model-panel-list {
   display: flex;
   flex-direction: column;
-  /* Codex caps the list at 316px; past that the card scrolls rather than
-     growing taller than the transcript it sits over. */
-  max-height: 316px;
+  /* Content height, capped at four rows (4 × 44px). An account with two
+     models gets a two-row card — a fixed four-row well left most accounts
+     looking at empty space, and the card read as if something were still
+     loading. Past four rows the cap is where it scrolls, so a nine-model
+     account opens at a predictable height either way.
+     The card is anchored by its bottom edge, so a shorter list moves the
+     label and the rows above the footer; the footer — and with it the
+     account rows an open account list puts under the pointer — never
+     moves. That is what the fixed height used to buy, and it does not
+     depend on the height being fixed. */
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 176px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -4093,33 +4115,158 @@
   font-size: var(--text-sm);
   color: var(--text-tertiary);
 }
+/* The card's last band: the account the models belong to, and the door into
+   the registry. One rule above the whole band, and both rows cut from the
+   same cloth — 16px icon column, same inset for the label, same 13.5px line,
+   same trailing edge. The account row used to carry a rule of its own below
+   it, which boxed a single 26px strip in between two hairlines and made the
+   two rows look like they belonged to different sections. */
 .model-panel-foot {
-  border-top: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 2px;
   margin-top: 6px;
-  padding-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
 }
+
+/* The shared row: the account switcher and the way out are peers. */
+.model-conn-toggle,
 .model-foot-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  padding: 6px 8px;
+  padding: 7px 8px;
   border: 0;
+  /* Same radius as .model-row, so every pill in the card is one shape. */
   border-radius: 14px;
   background: transparent;
   color: var(--text-secondary);
+  font: inherit;
   font-size: var(--text-md);
-  font-family: inherit;
+  text-align: left;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
 }
-.model-foot-btn:hover {
+.model-conn-toggle:hover,
+.model-conn-toggle:focus-visible,
+.model-foot-btn:hover,
+.model-foot-btn:focus-visible {
   background: var(--bg-hover);
   color: var(--text);
 }
+/* The tint is the focus indicator here, the way it is for every other row. */
+.model-conn-toggle:focus-visible,
+.model-foot-btn:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+/* Both rows open with a 16px glyph in the same column, so the two labels
+   start on the same x. */
+.model-conn-toggle-caret,
+.model-foot-btn > .ico:first-child,
+.model-foot-arrow {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.model-conn-toggle-caret {
+  transition: transform var(--dur-fast) var(--ease);
+}
+.model-conn-toggle.open .model-conn-toggle-caret {
+  transform: rotate(90deg);
+}
+.model-conn-toggle-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The endpoint is the row's trailing accessory, and it has to sit where the
+   chevron under it sits: the arrow's ink ends 5px inside its 16px box, so the
+   text takes the same 5px back. Without it the two right edges were 6px apart
+   and the footer looked ragged. */
+.model-conn-toggle-sub {
+  flex: none;
+  margin-left: auto;
+  padding-right: 5px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+/* The accounts, once the row above is opened. Indented by the icon column so
+   their names line up under the account name they are alternatives to, and
+   the rule above them stops at the same inset. */
+.model-panel-conns {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 176px;
+  margin: 0 0 2px 24px;
+  padding: 4px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--border-soft);
+  animation: model-panel-in 120ms var(--ease-enter);
+}
+.model-conn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.model-conn-row:hover,
+.model-conn-row:focus-visible {
+  background: var(--bg-hover);
+}
+.model-conn-row:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+/* The account the models belong to. It needs a tint the hover cannot be
+   mistaken for, so it takes the accent wash. */
+.model-conn-row.on {
+  background: var(--accent-soft);
+}
+.model-conn-row.on .model-conn-row-name {
+  font-weight: 600;
+}
+.model-conn-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.model-conn-row-name {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-conn-row-sub {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Pushed to the row's trailing edge — the same edge the endpoint above ends
+   on. */
 .model-foot-arrow {
   margin-left: auto;
-  color: var(--text-tertiary);
 }
 
 /* ---- Composer attachments (inline pills) --------------------------------- */

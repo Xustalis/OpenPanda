@@ -42,10 +42,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Windows PowerShell 5.1 renders a progress bar for every Invoke-WebRequest
-# byte unless this is off; on a ~30 MB archive that is the difference between
-# seconds and minutes, and it floods the console the script is also trying to
-# print into.
+# Windows PowerShell 5.1 renders a progress bar for every byte a cmdlet
+# moves — on the ~30 MB archive Expand-Archive unpacks that is the difference
+# between seconds and minutes, and it floods the console the script is also
+# trying to print into.
 $ProgressPreference = "SilentlyContinue"
 
 # Environment defaults, matching scripts/install.sh's OPENPANDA_VERSION /
@@ -103,15 +103,97 @@ if ($script:CurlExe) {
     if ($LASTEXITCODE -eq 0) { $script:CurlTlsArgs = @("--ssl-no-revoke") }
 }
 
+# curl.exe ignores the WinINET system proxy that Invoke-WebRequest inherits:
+# it reads only HTTP_PROXY / HTTPS_PROXY / ALL_PROXY from the environment. On a
+# host whose proxy lives in Internet Options — the "system proxy" mode Clash
+# and similar tools leave on — `irm` reaches GitHub while every curl call in
+# this script connects directly, and the download stalls with no error. Hand
+# curl the same proxy the browser stack uses, unless the environment already
+# names one (curl honours those itself, and an explicit setting should win).
+# NO_PROXY is the one bypass mechanism every curl build understands. The
+# --noproxy option only exists from 7.86 on, and probing for it under
+# $ErrorActionPreference = "Stop" can turn an old curl's stderr complaint
+# into a terminating NativeCommandError. Set the variable instead.
+$envProxySet = $env:HTTPS_PROXY -or $env:https_proxy -or $env:HTTP_PROXY -or $env:http_proxy -or $env:ALL_PROXY -or $env:all_proxy
+$script:CurlProxyArgs = @()
+# Set when a direct retry succeeds after the proxy attempt failed. The registry
+# entry is stale, and the .NET fallback must not go straight back to it.
+$script:ProxyKnownStale = $false
+if ($script:CurlExe -and -not $envProxySet) {
+    try {
+        $inet = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+        # A PAC-only setup (AutoConfigURL with no ProxyServer) is left alone:
+        # curl cannot consume a PAC script, so it connects directly and the
+        # .NET fallback below uses WinINET, which does honour the PAC.
+        if ($inet.ProxyEnable -eq 1 -and $inet.ProxyServer) {
+            $proxy = $inet.ProxyServer
+            # ProxyServer is either "host:port" or a per-scheme list such as
+            # "http=host:port;https=host:port". Everything this installer
+            # fetches is https, so that entry wins when there is a choice.
+            if ($proxy -match '=') {
+                $byScheme = @{}
+                foreach ($entry in ($proxy -split ';')) {
+                    $kv = $entry -split '=', 2
+                    if ($kv.Count -eq 2) { $byScheme[$kv[0].Trim().ToLowerInvariant()] = $kv[1].Trim() }
+                }
+                $proxy = if ($byScheme['https']) { $byScheme['https'] } elseif ($byScheme['http']) { $byScheme['http'] } else { $null }
+            }
+            if ($proxy) {
+                if ($proxy -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') { $proxy = "http://$proxy" }
+                $script:CurlProxyArgs = @("--proxy", $proxy)
+
+                # WinINET applies ProxyOverride ("<local>;*.corp;10.*") and
+                # bypasses loopback; curl applies neither unless told. Without
+                # this, a host using OPENPANDA_RELEASE_BASE to point at a local
+                # or intranet mirror sends those requests to the public proxy.
+                # curl ignores patterns it does not understand (e.g. 10.*), so
+                # passing the original entries through is safe.
+                $noProxy = @("localhost", "127.0.0.1", "::1")
+                foreach ($entry in ($inet.ProxyOverride -split ';')) {
+                    $item = $entry.Trim()
+                    if (-not $item -or $item -eq '<local>' -or $item -eq '<-loopback>') { continue }
+                    if ($item.StartsWith('.')) { $item = "*$item" }
+                    $noProxy += $item
+                }
+                $noProxyList = (($noProxy | Select-Object -Unique) -join ",")
+                $existingNoProxy = $env:NO_PROXY
+                if ($existingNoProxy) { $noProxyList = "$existingNoProxy,$noProxyList" }
+                $env:NO_PROXY = $noProxyList
+            }
+        }
+    } catch {
+        # Registry unreadable (locked-down host, or not Windows): curl keeps
+        # connecting directly, which is what it did before this probe existed.
+    }
+}
+
+# A stalled transfer is the failure behind "the installer just sits there":
+# an established connection that stops delivering bytes is not a failed
+# attempt until a limit says so. --speed-limit/--speed-time abort a transfer
+# that stays under 1 KB/s for a minute; --max-time bounds the whole attempt
+# for a link that keeps dripping above the floor without ever finishing.
+#
+# Deliberately no --retry: curl counts the timeout those limits produce
+# (exit 28) as a transient error and re-runs the entire transfer with a fresh
+# timer. --retry 3 with a 900 s cap turned a one-minute stall into four
+# attempts and up to an hour of waiting. The only retries left are the
+# explicit direct-connection attempts in Get-Url/Get-Json, which serve a
+# different purpose (a stale proxy) and are bounded to one per layer.
+$script:CurlTransferLimits = @("--max-time", "300", "--speed-limit", "1024", "--speed-time", "60")
+$script:CurlJsonLimits     = @("--max-time", "45", "--speed-limit", "512", "--speed-time", "30")
+
 # Curl's exit codes are the only structured signal it gives; without a mapping
 # the installer tells the operator "exited 35", which is not actionable.
 function ConvertFrom-CurlExit([int]$Code) {
     switch ($Code) {
         6  { "host not resolvable (DNS)" }
         7  { "connection refused or host unreachable" }
-        28 { "timed out" }
+        22 { "HTTP error (404 = no such release or asset; 403/407 = refused by a proxy)" }
+        28 { "timed out (or the transfer stalled below the speed floor)" }
         35 { "TLS handshake failed (blocked proxy, or an unreachable certificate revocation endpoint)" }
+        52 { "empty reply from the server" }
         56 { "connection reset while receiving" }
+        60 { "TLS certificate verification failed" }
         default { "exit code $Code" }
     }
 }
@@ -125,34 +207,101 @@ function Format-UrlForMessage([string]$Url) {
     return $Url
 }
 
+# One curl attempt, stderr captured rather than streamed: curl's raw
+# multi-line diagnostic reads like a crash even when the very next line
+# succeeds via the fallback. Returns the exit code and whatever curl said, so
+# the caller can choose between a retry, a mapped warning and the fallback.
+function Invoke-CurlDownload([string]$Url, [string]$OutFile, [string[]]$CurlArgs) {
+    $errFile = [System.IO.Path]::GetTempFileName()
+    # Under $ErrorActionPreference = "Stop", a native command whose stderr is
+    # redirected can raise a terminating NativeCommandError in Windows
+    # PowerShell 5.1 (test-installers.ps1 documents the same trap). curl emits
+    # diagnostics on stderr precisely when it fails, which is the case this
+    # function exists to handle, so relax the preference for the call only.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $script:CurlExe @CurlArgs -o $OutFile $Url 2>$errFile
+        $code = $LASTEXITCODE
+        $detail = if ($code -ne 0) { Get-Content -Raw $errFile -ErrorAction SilentlyContinue } else { $null }
+        return @{ Code = $code; Detail = $detail }
+    } finally {
+        $ErrorActionPreference = $prevEap
+        Remove-Item -Force $errFile -ErrorAction SilentlyContinue
+    }
+}
+
+# The curl-free fallback, with a timeout that actually covers the body:
+# Invoke-WebRequest's -TimeoutSec bounds the wait for the response, but a body
+# that stops arriving is governed by HttpWebRequest.ReadWriteTimeout, whose
+# default is five minutes — the same silent hang one layer down. Here that
+# timeout is the time allowed between reads, so a slow transfer that keeps
+# moving still finishes and a stalled one fails within a minute.
+function Invoke-HttpRequest([string]$Url, [string]$OutFile, [int]$TimeoutSec, [bool]$UseSystemProxy) {
+    $req = [System.Net.HttpWebRequest]::Create($Url)
+    # When curl proved the registry proxy stale, bypassing it here too is what
+    # makes the fallback usable. Otherwise leave WinINET in charge: it handles
+    # PAC scripts and ProxyOverride, which curl cannot.
+    if (-not $UseSystemProxy) { $req.Proxy = $null }
+    $req.Timeout = $TimeoutSec * 1000
+    $req.ReadWriteTimeout = $TimeoutSec * 1000
+    $resp = $req.GetResponse()
+    try {
+        $stream = $resp.GetResponseStream()
+        if ($OutFile) {
+            $file = [System.IO.File]::Create($OutFile)
+            try { $stream.CopyTo($file) } finally { $file.Dispose() }
+        } else {
+            $reader = New-Object System.IO.StreamReader -ArgumentList $stream
+            try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+        }
+    } finally {
+        $resp.Close()
+    }
+}
+
 function Get-Url([string]$Url, [string]$OutFile) {
     if ($script:CurlExe) {
-        # stderr is captured rather than streamed: curl's raw multi-line
-        # diagnostic reads like a crash even when the very next line succeeds
-        # via the fallback below.
-        $errFile = [System.IO.Path]::GetTempFileName()
-        try {
-            $tls = $script:CurlTlsArgs
-            & $script:CurlExe -fsSL @tls --retry 3 --connect-timeout 20 -o $OutFile $Url 2>$errFile
-            if ($LASTEXITCODE -eq 0) { return }
-            $detail = (Get-Content -Raw $errFile -ErrorAction SilentlyContinue)
-        } finally {
-            Remove-Item -Force $errFile -ErrorAction SilentlyContinue
+        $curlArgs = @("-fsSL") + $script:CurlTlsArgs + $script:CurlTransferLimits + @("--connect-timeout", "20")
+        $attempt = Invoke-CurlDownload $Url $OutFile ($curlArgs + $script:CurlProxyArgs)
+        if ($attempt.Code -eq 0) { return }
+        if ($script:CurlProxyArgs.Count -gt 0) {
+            # The registry entry can be stale (a proxy since uninstalled, or
+            # one scoped to certain hosts). A direct retry costs one bounded
+            # attempt and keeps such a host working instead of failing it.
+            $direct = Invoke-CurlDownload $Url $OutFile $curlArgs
+            if ($direct.Code -eq 0) {
+                $script:CurlProxyArgs = @()
+                $script:ProxyKnownStale = $true
+                return
+            }
+            $attempt = $direct
         }
-        Warn "curl.exe failed for $(Format-UrlForMessage $Url): $(ConvertFrom-CurlExit $LASTEXITCODE) - retrying with Invoke-WebRequest..."
-        if ($detail) { Write-Verbose $detail.Trim() }
+        Warn "curl.exe failed for $(Format-UrlForMessage $Url): $(ConvertFrom-CurlExit $attempt.Code) - retrying over .NET..."
+        if ($attempt.Detail) { Write-Verbose $attempt.Detail.Trim() }
     }
-    Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri $Url -OutFile $OutFile
+    try {
+        Invoke-HttpRequest $Url $OutFile 60 (-not $script:ProxyKnownStale)
+    } catch {
+        Fail "Unable to download $(Format-UrlForMessage $Url): $($_.Exception.Message)"
+    }
 }
 
 function Get-Json([string]$Url) {
     if ($script:CurlExe) {
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("openpanda-api-" + [guid]::NewGuid().ToString("N") + ".json")
-        $errFile = [System.IO.Path]::GetTempFileName()
+        $curlArgs = @("-fsSL") + $script:CurlTlsArgs + $script:CurlJsonLimits + @("--connect-timeout", "20")
         try {
-            $tls = $script:CurlTlsArgs
-            & $script:CurlExe -fsSL @tls --retry 3 --connect-timeout 20 -o $tmp $Url 2>$errFile
-            if ($LASTEXITCODE -eq 0) {
+            $attempt = Invoke-CurlDownload $Url $tmp ($curlArgs + $script:CurlProxyArgs)
+            if ($attempt.Code -ne 0 -and $script:CurlProxyArgs.Count -gt 0) {
+                $direct = Invoke-CurlDownload $Url $tmp $curlArgs
+                if ($direct.Code -eq 0) {
+                    $script:CurlProxyArgs = @()
+                    $script:ProxyKnownStale = $true
+                    $attempt = $direct
+                }
+            }
+            if ($attempt.Code -eq 0) {
                 try { return (Get-Content -Raw $tmp | ConvertFrom-Json) }
                 # -Force, not -f: Remove-Item has both -Filter and -Force, so the
                 # one-letter form is an ambiguous parameter prefix and fails to
@@ -160,13 +309,13 @@ function Get-Json([string]$Url) {
                 # would abort the install at its first API call.
                 finally { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
             }
-            Warn "curl.exe failed for $(Format-UrlForMessage $Url): $(ConvertFrom-CurlExit $LASTEXITCODE) - retrying with Invoke-RestMethod..."
+            Warn "curl.exe failed for $(Format-UrlForMessage $Url): $(ConvertFrom-CurlExit $attempt.Code) - retrying over .NET..."
         } finally {
             Remove-Item -Force $tmp -ErrorAction SilentlyContinue
-            Remove-Item -Force $errFile -ErrorAction SilentlyContinue
         }
     }
-    return (Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 -Uri $Url)
+    $body = Invoke-HttpRequest $Url "" 30 (-not $script:ProxyKnownStale)
+    return ($body | ConvertFrom-Json)
 }
 
 $Repo = if ($env:OPENPANDA_REPO_URL) { $env:OPENPANDA_REPO_URL } else { "https://github.com/Xustalis/OpenPanda" }
@@ -198,8 +347,8 @@ if ($Version -eq "latest") {
         # used by Invoke-WebRequest is misconfigured).
         try {
             if ($script:CurlExe) {
-                $tls = $script:CurlTlsArgs
-                $hdr = & $script:CurlExe -fsSI @tls --connect-timeout 20 "$Repo/releases/latest" 2>$null
+                $headArgs = @("-fsSI") + $script:CurlTlsArgs + $script:CurlProxyArgs + @("--connect-timeout", "20", "--max-time", "30", "--speed-limit", "512", "--speed-time", "15")
+                $hdr = & $script:CurlExe @headArgs "$Repo/releases/latest" 2>$null
                 $loc = ($hdr | Where-Object { $_ -match '^[Ll]ocation:' } | Select-Object -First 1)
                 if ($loc -match '^[Ll]ocation:\s*(\S+)') { $tag = $Matches[1] }
             }
@@ -234,6 +383,9 @@ $Archive = "panda-$Version-windows-$arch.zip"
 $Base    = if ($env:OPENPANDA_RELEASE_BASE) { $env:OPENPANDA_RELEASE_BASE } else { "$Repo/releases/download/v$Version" }
 
 Info "Installing $Archive to $Prefix..."
+# The download base is printed because it is the first thing to check when an
+# install fails: OPENPANDA_RELEASE_BASE (a mirror) changes it silently.
+Info "Downloading from $Base"
 
 # Probe a binary for the two numbers the schema guard needs: `schema` (the
 # migration ceiling this build supports) and `db_schema` (the configured

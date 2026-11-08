@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // serveOnce feeds a batch of request lines through the server and returns
@@ -222,5 +224,89 @@ func TestArgsHelpers(t *testing.T) {
 	}
 	if got := ArgList(args, "missing"); len(got) != 0 {
 		t.Fatalf("missing ArgList = %v", got)
+	}
+}
+
+// TestInvalidJSONRPCRejected: without the jsonrpc member check, any JSON
+// object on stdin was dispatched as a request and answered with a confusing
+// -32601 instead of the protocol's -32600.
+func TestInvalidJSONRPCRejected(t *testing.T) {
+	s := New("openpanda", "1.0-test", testTools())
+	resps := serveOnce(t, s,
+		`{"id":1,"method":"ping"}`,
+		`{"jsonrpc":"1.0","id":2,"method":"ping"}`,
+		`{"jsonrpc":"2.0","id":3,"method":"ping"}`,
+	)
+	if len(resps) != 3 {
+		t.Fatalf("expected 3 responses, got %d", len(resps))
+	}
+	for i, want := range []int{codeInvalidRequest, codeInvalidRequest} {
+		var e struct {
+			Code int `json:"code"`
+		}
+		if err := json.Unmarshal(resps[i]["error"], &e); err != nil || e.Code != want {
+			t.Fatalf("response %d error = %s, want code %d", i, resps[i]["error"], want)
+		}
+	}
+	if string(resps[0]["id"]) != "1" || string(resps[1]["id"]) != "2" {
+		t.Fatalf("invalid-request ids not echoed: %s / %s", resps[0]["id"], resps[1]["id"])
+	}
+	if resps[2]["error"] != nil {
+		t.Fatalf("valid request after two invalid ones failed: %s", resps[2]["error"])
+	}
+}
+
+// TestPanickingToolKeepsSessionAlive: one handler panic used to take down the
+// whole `panda mcp` process, silently removing every other tool from the
+// agent's run. It must now become an isError result with the session intact.
+func TestPanickingToolKeepsSessionAlive(t *testing.T) {
+	tools := append(testTools(), Tool{
+		Name:        "panic",
+		Description: "always panics",
+		InputSchema: SchemaObject(nil),
+		Handle: func(context.Context, map[string]any) (string, error) {
+			panic("kaboom")
+		},
+	})
+	s := New("openpanda", "1.0-test", tools)
+	resps := serveOnce(t, s,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"panic","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"ping"}`,
+	)
+	if len(resps) != 2 {
+		t.Fatalf("expected the panic to be contained and ping to answer, got %d responses", len(resps))
+	}
+	var r struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"isError"`
+	}
+	if err := json.Unmarshal(resps[0]["result"], &r); err != nil {
+		t.Fatalf("panic result: %v", err)
+	}
+	if !r.IsError || len(r.Content) == 0 || !strings.Contains(r.Content[0].Text, "panicked") {
+		t.Fatalf("panic must surface as isError content, got %+v", r)
+	}
+	if resps[1]["error"] != nil {
+		t.Fatalf("session died after the panic: %s", resps[1]["error"])
+	}
+}
+
+// TestCanceledContextReported distinguishes a shutdown from a clean EOF when
+// the reader unblocks. The CLI closes stdin on SIGTERM to cause exactly this.
+func TestCanceledContextReported(t *testing.T) {
+	s := New("openpanda", "1.0-test", testTools())
+	pr, pw := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+		_ = pw.Close()
+	}()
+	var out bytes.Buffer
+	if err := s.Serve(ctx, pr, &out); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Serve = %v, want context.Canceled", err)
 	}
 }

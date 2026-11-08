@@ -28,6 +28,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/artifact"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/configsync"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/executil"
 	"github.com/Xustalis/OpenPanda/internal/guard"
@@ -402,8 +403,14 @@ func runDaemon(args []string) {
 	// The node's own config and card are never artifact content: a tree that
 	// happens to contain them (a project rooted at the daemon dir, a dev node
 	// running work_path="." in its checkout) must not ship the mesh secret
-	// or the card to whoever asked for the pack.
-	coreNode.SetPackProtectedPaths([]string{*configPath, *cardPath})
+	// or the card to whoever asked for the pack. Config snapshots sit beside
+	// the file and carry the same secrets; the glob covers the ones written
+	// after this call.
+	coreNode.SetPackProtectedPaths([]string{
+		*configPath,
+		*configPath + config.ConfigSnapshotMark + "*",
+		*cardPath,
+	})
 	// OS sandbox (sandbox.*): the environment filter always applies; when a
 	// mode is configured, every spawned native command and adapter runs under
 	// the platform's deny-default confinement on top. The node's own
@@ -521,9 +528,18 @@ func runDaemon(args []string) {
 				logger.Warn("reload config on SIGHUP", "err", err)
 				continue
 			}
+			if err := coreNode.ApplyRuntimeConfig(reloaded.RuntimeConfig()); err != nil {
+				logger.Warn("reload model on SIGHUP", "code", "apply_failed")
+			}
 			coreNode.ApplyNetworkConfig(ctx, reloaded.Network)
 		}
 	})
+
+	// File observation is the cross-platform path (including Windows) and
+	// acknowledges the revision in the shared store for settings diagnostics.
+	modelWatcher := configsync.NewRuntime(db, *configPath, "daemon", coreNode.RuntimeConfig, coreNode.ApplyRuntimeConfig)
+	coreNode.SetModelRefresh(modelWatcher.Sync)
+	guard.Go(logger, "daemon: model config sync", cancel, func() { modelWatcher.Run(ctx) })
 
 	// Task recovery FIRST, then the queue scheduler: the order is
 	// load-bearing (see recoverThenStartQueue).

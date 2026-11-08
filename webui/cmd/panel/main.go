@@ -100,28 +100,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// The ask engine powers POST /api/ask — the same unified entry `panda ask`
-	// runs (classification, memory/MCP tools, task submission). It needs a
-	// model endpoint; --card additionally opts in to task execution exactly
-	// like `panda ask --card`. Without an endpoint the panel still serves the
-	// queue/projects/nodes and /api/ask reports it is not configured.
-	var engine *askengine.Engine
-	if cfg.Model.BaseURL != "" {
-		engine, err = askengine.New(ctx, cfg, askengine.Options{
-			CardPath:   *cardPath,
-			MCPCommand: *mcpCommand,
-			QueueTasks: true,
-			// The sidecar is long-lived; when it owns the node row it is the
-			// node's mesh endpoint (listener + peer keepalives + auto-dial).
-			MeshNode:   true,
-			ConfigPath: *configPath,
-			Logger:     logger,
-		})
-		if err != nil {
-			fatal("init ask engine", err)
-		}
-		defer engine.Close()
+	// Keep the model-free task/queue surface alive on worker-only nodes.
+	// New accepts an empty model; only ask reports ErrNoModel until configured.
+	engine, err := askengine.New(ctx, cfg, askengine.Options{
+		CardPath: *cardPath, MCPCommand: *mcpCommand, QueueTasks: true,
+		MeshNode: true, ConfigPath: *configPath, Logger: logger,
+	})
+	if err != nil {
+		fatal("init ask engine", err)
 	}
+	defer engine.Close()
 
 	var pushSvc *push.Service
 	if cfg.Push.Enabled {

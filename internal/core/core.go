@@ -64,6 +64,8 @@ type Peer struct {
 // Core wires the node lifecycle, task store, and WebSocket transport into a
 // running daemon. It is the root type for the Phase 0 loop.
 type Core struct {
+	agentConcurrency *commander.AgentConcurrency
+
 	db     *sql.DB
 	nodeID string
 	card   ledger.Card
@@ -77,9 +79,10 @@ type Core struct {
 	// ReloadCard swaps at runtime. Reads go through Card() and currentRouter()
 	// so a hot reload never races a concurrent routing decision.
 	cardMu sync.RWMutex
-	// model / routerInjection / routerRouting remember what the daemon wired
-	// at startup so ReloadCard can rebuild the router identically (with the
-	// new card) instead of leaving the old router routing on stale abilities.
+	// model / routerInjection / routerRouting hold the live execution defaults.
+	// cardMu guards them, the router and supervisor so a run can snapshot
+	// one coherent configuration while model/card settings are hot-swapped.
+	modelRefresh    func(context.Context) error // optional persisted-config preflight; cardMu
 	model           config.ModelConfig
 	routerInjection config.InjectionConfig
 	routerRouting   config.RoutingConfig
@@ -673,29 +676,31 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		logger = slog.Default()
 	}
 	c := &Core{
-		db:             db,
-		nodeID:         nodeID,
-		card:           card,
-		tier:           tier,
-		logger:         logger,
-		store:          NewTaskStore(db, logger),
-		ctx:            ctxstore.New(db, ctxstore.MaxEntriesForResourceClass(card.ResourceClass)),
-		node:           NewNode(db, nodeID, card, tier, logger),
-		peers:          make(map[string]*Peer),
-		autoDialCands:  make(map[string]autoDialCand),
-		greetedConns:   make(map[*bus.Conn]bool),
-		evictedConns:   make(map[*bus.Conn]struct{}),
-		orphanSeen:     make(map[string]time.Time),
-		peerBlocked:    make(map[string][]string),
-		helloSeen:      make(map[string]time.Time),
-		msgSeen:        make(map[msgSeenKey]time.Time),
-		breaker:        defense.NewCircuitBreaker(0, 0),
-		loop:           defense.NewLoopDetector(2),
-		checkpointLoop: defense.NewLoopDetector(maxCheckpointRetries),
-		auditLog:       security.NewAudit(db),
-		workDir:        ".",
-		model:          model,
-		ownsNodeRow:    true,
+		agentConcurrency: commander.NewAgentConcurrency(),
+		delegLimits:      config.DelegationConfig{}.NormalizedDelegation(),
+		db:               db,
+		nodeID:           nodeID,
+		card:             card,
+		tier:             tier,
+		logger:           logger,
+		store:            NewTaskStore(db, logger),
+		ctx:              ctxstore.New(db, ctxstore.MaxEntriesForResourceClass(card.ResourceClass)),
+		node:             NewNode(db, nodeID, card, tier, logger),
+		peers:            make(map[string]*Peer),
+		autoDialCands:    make(map[string]autoDialCand),
+		greetedConns:     make(map[*bus.Conn]bool),
+		evictedConns:     make(map[*bus.Conn]struct{}),
+		orphanSeen:       make(map[string]time.Time),
+		peerBlocked:      make(map[string][]string),
+		helloSeen:        make(map[string]time.Time),
+		msgSeen:          make(map[msgSeenKey]time.Time),
+		breaker:          defense.NewCircuitBreaker(0, 0),
+		loop:             defense.NewLoopDetector(2),
+		checkpointLoop:   defense.NewLoopDetector(maxCheckpointRetries),
+		auditLog:         security.NewAudit(db),
+		workDir:          ".",
+		model:            model,
+		ownsNodeRow:      true,
 
 		superviseRounds: defaultSuperviseRounds,
 		leaseTimeout:    defaultDelegateTimeout,
@@ -712,6 +717,8 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 	// config once the caller has it.
 	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 || len(card.Actuators) > 0 {
 		c.router = commander.NewRouter(card, commander.NewExecutor(), model, config.InjectionConfig{}, config.RoutingConfig{})
+		c.agentConcurrency.Configure(card.Capacity.MaxConcurrent, config.RoutingConfig{}, config.DelegationConfig{})
+		c.router.SetConcurrency(c.agentConcurrency)
 		// Local ranking consults the same breaker whose open circuits are
 		// published to peers as blocked_agents: an agent this node already
 		// ruled out must not keep winning its own dispatch plan. The predicate
@@ -785,13 +792,10 @@ func (c *Core) wireContacts() []bus.Contact {
 // the router with the same policy.
 func (c *Core) SetRouterPolicy(injection config.InjectionConfig, routing config.RoutingConfig) {
 	c.cardMu.Lock()
-	c.routerInjection = injection
-	c.routerRouting = routing
-	router := c.router
+	c.routerInjection, c.routerRouting = injection, routing
+	c.rebuildRouterLocked()
 	c.cardMu.Unlock()
-	if router != nil {
-		router.SetPolicy(injection, routing)
-	}
+	c.updateQueueLimit()
 }
 
 // SetAgentMCPPassthrough sets the stdio MCP server (mcp.command argv string,
@@ -863,16 +867,10 @@ func (c *Core) ReloadCard(ctx context.Context, path string) error {
 
 	c.cardMu.Lock()
 	c.card = card
-	if len(card.Native) > 0 || len(card.Agents) > 0 || len(card.Manual) > 0 || len(card.Actuators) > 0 {
-		c.router = commander.NewRouter(card, commander.NewExecutor(), c.model, c.routerInjection, c.routerRouting)
-		c.router.SetAgentBlocked(func(name string) bool { return c.breaker.Blocked("agent:" + name) })
-		c.router.SetMCPPassthrough(c.mcpPassthrough)
-		c.router.SetSelfConfigPath(c.selfConfigPath)
-	} else {
-		c.router = nil
-	}
+	c.rebuildRouterLocked()
 	c.cardMu.Unlock()
 
+	c.updateQueueLimit()
 	c.node.SetCard(card)
 	if err := c.node.Register(ctx); err != nil {
 		return err
@@ -974,7 +972,87 @@ func (c *Core) WaitArtifacts() {
 // completeness (上级完成度判定). A nil client disables supervision: agent
 // tasks then finish in one shot exactly as before, so minimal nodes and tests
 // are unaffected.
-func (c *Core) SetSupervisor(client *entry.Client) { c.supervisor = client }
+func (c *Core) SetSupervisor(client *entry.Client) {
+	c.cardMu.Lock()
+	c.supervisor = client
+	c.cardMu.Unlock()
+}
+
+func (c *Core) currentSupervisor() *entry.Client {
+	c.cardMu.RLock()
+	defer c.cardMu.RUnlock()
+	return c.supervisor
+}
+
+// ModelConfig returns the live default used for agent injection and judging.
+func (c *Core) ModelConfig() config.ModelConfig {
+	c.cardMu.RLock()
+	defer c.cardMu.RUnlock()
+	return c.model
+}
+
+// executionSnapshot binds an attempt's router, model attribution and judge to
+// the same settings revision. In-flight attempts keep their snapshot on a
+// hot switch; subsequently started attempts use the new defaults.
+func (c *Core) executionSnapshot() (*commander.Router, config.ModelConfig, *entry.Client) {
+	c.cardMu.RLock()
+	defer c.cardMu.RUnlock()
+	return c.router, c.model, c.supervisor
+}
+
+// SetModelRefresh installs an optional pre-attempt config observer. The
+// callback runs outside cardMu: it may atomically publish a new model.
+func (c *Core) SetModelRefresh(fn func(context.Context) error) {
+	c.cardMu.Lock()
+	defer c.cardMu.Unlock()
+	c.modelRefresh = fn
+}
+
+func (c *Core) refreshModel(ctx context.Context) {
+	c.cardMu.RLock()
+	refresh := c.modelRefresh
+	c.cardMu.RUnlock()
+	if refresh != nil {
+		_ = refresh(ctx)
+	} // invalid/deleted file keeps last-good defaults
+}
+
+// SetModel publishes new execution defaults without changing explicit agent
+// overrides or injection policy. Client construction is validated first, so
+// failure leaves the previous snapshot intact. An empty model clears both
+// injection credentials and the supervisor for future attempts.
+func (c *Core) SetModel(model config.ModelConfig) error {
+	supervisor, err := c.supervisorForModel(model)
+	if err != nil {
+		return err
+	}
+	c.cardMu.Lock()
+	defer c.cardMu.Unlock()
+	c.model = model
+	c.supervisor = supervisor
+	c.rebuildRouterLocked()
+	return nil
+}
+
+// rebuildRouterLocked keeps every rebuild (card or model) wired identically.
+// The caller holds cardMu; existing runs keep their old router pointer.
+func (c *Core) rebuildRouterLocked() {
+	card := c.card
+	if len(card.Native) == 0 && len(card.Agents) == 0 && len(card.Manual) == 0 && len(card.Actuators) == 0 {
+		c.router = nil
+		return
+	}
+	if c.router == nil {
+		c.router = commander.NewRouter(card, commander.NewExecutor(), c.model, c.routerInjection, c.routerRouting)
+	} else {
+		c.router = c.router.WithConfig(card, c.model, c.routerInjection, c.routerRouting)
+	}
+	c.agentConcurrency.Configure(card.Capacity.MaxConcurrent, c.routerRouting, c.delegLimits)
+	c.router.SetConcurrency(c.agentConcurrency)
+	c.router.SetAgentBlocked(func(name string) bool { return c.breaker.Blocked("agent:" + name) })
+	c.router.SetMCPPassthrough(c.mcpPassthrough)
+	c.router.SetSelfConfigPath(c.selfConfigPath)
+}
 
 // SetSuperviseRounds bounds the execute → judge → re-delegate loop for agent
 // tasks. A value <= 0 resets to defaultSuperviseRounds.
@@ -1011,16 +1089,20 @@ func (c *Core) msgBudget() int {
 }
 
 // SetDelegationLimits applies the configured sub-agent bounds (the
-// delegation: section). Call after NewCore, before serving starts — the
-// fields are read unsynchronized afterward, like the other config installs.
+// delegation: section). It is safe to refresh while tasks are running.
 func (c *Core) SetDelegationLimits(d config.DelegationConfig) {
-	c.delegLimits = d
+	c.cardMu.Lock()
+	c.delegLimits = d.NormalizedDelegation()
+	c.agentConcurrency.Configure(c.card.Capacity.MaxConcurrent, c.routerRouting, c.delegLimits)
+	c.cardMu.Unlock()
 }
 
 // delegateLimits resolves the effective bounds: whatever config installed,
 // normalized so unset fields carry the documented defaults.
 func (c *Core) delegateLimits() config.DelegationConfig {
-	return c.delegLimits.NormalizedDelegation()
+	c.cardMu.RLock()
+	defer c.cardMu.RUnlock()
+	return c.delegLimits
 }
 
 // effectiveSpawnCap resolves the max_depth bound applying to a task: the
@@ -1039,7 +1121,8 @@ func (c *Core) effectiveSpawnCap(t Task) int {
 // sub-agent spawning at all (delegation.enabled). A nil flag is on —
 // configs predating the toggle must not silently disable orchestration.
 func (c *Core) delegationEnabled() bool {
-	return c.delegLimits.Enabled == nil || *c.delegLimits.Enabled
+	d := c.delegateLimits()
+	return d.Enabled == nil || *d.Enabled
 }
 
 // delegateActiveCount reports how many delegate children are in flight on
@@ -1057,13 +1140,21 @@ func (c *Core) delegateActiveCount() int64 {
 // the disk cache over the node database: identical (intent, result) pairs
 // reuse the previous verdict without an LLM call.
 func (c *Core) AttachSupervisor(model config.ModelConfig) {
+	if client, err := c.supervisorForModel(model); err == nil {
+		c.SetSupervisor(client)
+	}
+}
+
+func (c *Core) supervisorForModel(model config.ModelConfig) (*entry.Client, error) {
 	if strings.TrimSpace(model.APIKey) == "" {
-		return
+		return nil, nil
 	}
-	if client, err := entry.NewClient(model); err == nil {
-		client.SetDiskCache(entry.NewDiskCache(c.db))
-		c.supervisor = client
+	client, err := entry.NewClient(model)
+	if err != nil {
+		return nil, err
 	}
+	client.SetDiskCache(entry.NewDiskCache(c.db))
+	return client, nil
 }
 
 // Register upserts this node in the local ledger.

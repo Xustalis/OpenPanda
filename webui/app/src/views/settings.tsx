@@ -20,6 +20,14 @@ import { Select } from '../components/select'
 import { TermsModal } from '../components/terms'
 import { onThemeChange, setTheme, theme } from '../theme'
 import { SkillsView } from './skills'
+import {
+  AgentExecutionFields,
+  ExecutionLimitsSection,
+  ExecutionSaveBar,
+  useExecutionSettings,
+  type ExecutionController,
+} from './execution-settings'
+import { ItemSettings } from '../components/item-settings'
 import { SystemView } from './system'
 import { ModelsSection } from './models'
 import { loadAgentRoster } from '../utils/agent-roster'
@@ -147,6 +155,14 @@ export function SettingsView(props: {
     }
   }, [])
 
+  // Sections share one scrollport. Carrying the previous section's scrollTop
+  // into the next one opens it halfway down — a clipped first block and an
+  // action bar that appears to sit in the middle of the list.
+  useEffect(() => {
+    const body = sheet.current?.querySelector<HTMLElement>('.settings-pane-body')
+    if (body) body.scrollTop = 0
+  }, [section])
+
   const handleSelect = (s: Section) => {
     setSection(s)
     props.onSelectTab?.(s)
@@ -201,30 +217,21 @@ export function SettingsView(props: {
           </nav>
         </aside>
 
-        <section class="settings-pane">
-          <header class="settings-pane-head">
-            <h2 class="settings-pane-title">{t(title)}</h2>
-            <button
-              type="button"
-              class="settings-close"
-              aria-label={t('common.close')}
-              title={t('common.close')}
-              onClick={props.onClose}
-            >
-              <Icon name="x" size={16} />
-            </button>
-          </header>
-
-          <div class="settings-pane-body">
-            {section === 'general' && <GeneralSection onLogout={props.onLogout} />}
-            {section === 'models' && <ModelsSection />}
-            {section === 'policy' && <PolicySection />}
-            {section === 'agents' && <AgentsSection />}
-            {section === 'mcp' && <MCPSection />}
-            {section === 'skills' && <SkillsView />}
-            {section === 'system' && <SystemView />}
-          </div>
-        </section>
+        {section === 'agents' ? (
+          <AgentsPane title={t(title)} onClose={props.onClose} />
+        ) : (
+          <section class="settings-pane">
+            <PaneHead title={t(title)} onClose={props.onClose} />
+            <div class="settings-pane-body">
+              {section === 'general' && <GeneralSection onLogout={props.onLogout} />}
+              {section === 'models' && <ModelsSection />}
+              {section === 'policy' && <PolicySection />}
+              {section === 'mcp' && <MCPSection />}
+              {section === 'skills' && <SkillsView />}
+              {section === 'system' && <SystemView />}
+            </div>
+          </section>
+        )}
       </div>
     </dialog>
   )
@@ -780,6 +787,58 @@ function InstallCopy(props: { text: string }) {
   )
 }
 
+/** The Agents tab is one policy with two owners. Global limits stay in a
+ *  section; everything that belongs to a single agent — its two model ids and
+ *  its parallel cap — lives inside that agent's own settings disclosure.
+ *  One controller keeps dirty tracking, discard and the single PUT intact. */
+/** The sheet's header is shared by the ordinary sections and the agents pane,
+ *  which owns a footer and therefore needs a different pane skeleton. */
+function PaneHead({ title, onClose }: { title: string; onClose(): void }) {
+  return (
+    <header class="settings-pane-head">
+      <h2 class="settings-pane-title">{title}</h2>
+      <button
+        type="button"
+        class="settings-close"
+        aria-label={t('common.close')}
+        title={t('common.close')}
+        onClick={onClose}
+      >
+        <Icon name="x" size={16} />
+      </button>
+    </header>
+  )
+}
+
+/** Agents is the one section with a persistent action bar. It lives outside
+ *  the scrollport: a sticky bar inside the body slices whichever row happens
+ *  to scroll under it, and the last rows can never be read in full. */
+function AgentsPane({ title, onClose }: { title: string; onClose(): void }) {
+  const ctrl = useExecutionSettings()
+  return (
+    <section class="settings-pane">
+      <PaneHead title={title} onClose={onClose} />
+      <div class="settings-pane-body">
+        <div class="agents-tab">
+          <ExecutionLimitsSection ctrl={ctrl} />
+          <AgentsSection ctrl={ctrl} />
+        </div>
+      </div>
+      {ctrl.form && (
+        <footer class="settings-pane-footer">
+          <ExecutionSaveBar ctrl={ctrl} />
+        </footer>
+      )}
+    </section>
+  )
+}
+
+/** DOM ids for the disclosures: agent names come from a card and may contain
+ *  characters that are unsafe in an id selector. */
+function settingsId(name: string): string {
+  return `agent-settings-${name.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+}
+
 /** Agent CLIs (queue redesign §6): which coding agents the node can drive —
  *  claude code / opencode / codex — with install path, best-effort version,
  *  and a live connectivity test.
@@ -789,8 +848,9 @@ function InstallCopy(props: { text: string }) {
  *  used to be a bordered well with its own button, which made every row three
  *  nested frames deep; it is now a pill and one action, and a failed probe's
  *  stderr drops to a full-width line underneath instead of being squeezed into
- *  a 236px column. */
-function AgentsSection() {
+ *  a 236px column. Per-agent configuration is a gear on the row, not a grid
+ *  of fieldsets further down the page. */
+function AgentsSection({ ctrl }: { ctrl: ExecutionController }) {
   const [agents, setAgents] = useState<AgentInfo[] | null>(null)
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
@@ -882,6 +942,10 @@ function AgentsSection() {
   }
 
   const installed = agents.filter((a) => a.installed).length
+  // Names the policy or the node card can dispatch but the installed roster
+  // does not list. They still own a row and their own settings disclosure —
+  // a configurable item must never exist only as a fieldset somewhere else.
+  const extras = ctrl.names.filter((name) => !agents.some((a) => a.name === name))
 
   return (
     <div class="card settings-card agents-card">
@@ -894,7 +958,7 @@ function AgentsSection() {
             the same fact at a glance. */}
         <div class="agents-actions">
           <span class="agents-count">
-            {t('settings.agentCount', { installed, total: agents.length })}
+            {t('settings.agentCount', { installed, total: agents.length + extras.length })}
           </span>
           <button
             type="button"
@@ -950,21 +1014,25 @@ function AgentsSection() {
                   {/* The name is how you say it, the binary is how you type
                       it: the chip keeps both without a second line. */}
                   <span class="agent-bin mono">{a.binary}</span>
-                  {a.installed && a.version && <span class="agent-version">{a.version}</span>}
                 </div>
-                {a.installed && a.path && (
-                  <div class="agent-path mono" title={a.path}>
-                    {a.path}
+                {/* The second line is the machine-readable identity: path, then
+                    version. Keeping both here means one agent's long build hash
+                    no longer stretches the name row out of alignment. */}
+                {a.installed ? (
+                  <div class="agent-meta">
+                    {a.path && <span class="agent-path mono" title={a.path}>{a.path}</span>}
+                    {a.version && (
+                      <span class="agent-version mono" title={a.version}>{a.version}</span>
+                    )}
                   </div>
-                )}
-                {!a.installed && a.install_hint && (
+                ) : a.install_hint ? (
                   <div class="agent-install">
                     <span class="agent-path mono" title={a.install_hint}>
                       {t('settings.agentInstall')} {a.install_hint}
                     </span>
                     <InstallCopy text={a.install_hint} />
                   </div>
-                )}
+                ) : null}
               </div>
               <div class="agent-state">
                 <span class={`agent-pill ${state}`}>
@@ -993,6 +1061,13 @@ function AgentsSection() {
                     </a>
                   )
                 )}
+                <ItemSettings
+                  id={settingsId(a.name)}
+                  label={t('settings.itemSettingsFor', { name: a.display_name || a.binary })}
+                  title={a.display_name || a.binary}
+                >
+                  <AgentExecutionFields ctrl={ctrl} agent={a.name} />
+                </ItemSettings>
               </div>
               {detail && (
                 <p class="agent-detail" title={detail}>
@@ -1002,6 +1077,33 @@ function AgentsSection() {
             </li>
           )
         })}
+        {extras.map((name) => (
+          <li key={`custom:${name}`} class="agent-row custom">
+            <AgentFace name={name} label={name} />
+            <div class="agent-id">
+              <div class="agent-main">
+                <span class="agent-name">{name}</span>
+                <span class="agent-bin mono">{t('settings.customAgent')}</span>
+              </div>
+              <div class="agent-meta">
+                <span class="agent-path mono" title={name}>{name}</span>
+              </div>
+            </div>
+            <div class="agent-state">
+              <span class="agent-pill">
+                <span class="agent-pill-dot" aria-hidden="true" />
+                {t('settings.customAgent')}
+              </span>
+              <ItemSettings
+                id={settingsId(name)}
+                label={t('settings.itemSettingsFor', { name })}
+                title={name}
+              >
+                <AgentExecutionFields ctrl={ctrl} agent={name} />
+              </ItemSettings>
+            </div>
+          </li>
+        ))}
       </ul>
     </div>
   )

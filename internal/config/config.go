@@ -355,6 +355,15 @@ func (i InjectionConfig) NormalizedModel() string {
 
 // RoutingConfig tunes local agent routing.
 type RoutingConfig struct {
+	// MaxConcurrent caps active agent calls in this worker runtime. Zero
+	// uses the capability card capacity. Running calls drain when lowered.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent"`
+	// AgentConcurrency applies an additional per-agent cap (name or adapter).
+	AgentConcurrency map[string]int `yaml:"agent_concurrency,omitempty" json:"agent_concurrency"`
+	// SubagentModels overrides AgentModels for orchestrated children (depth > 0).
+	// Missing entries inherit the root agent's choices; an empty list uses
+	// the child CLI's default model instead.
+	SubagentModels map[string][]string `yaml:"subagent_models,omitempty" json:"subagent_models"`
 	// PreferredAgents lists agent names that receive a score bonus during
 	// routing, so the user can pin favorites without editing capability cards.
 	PreferredAgents []string `yaml:"preferred_agents"`
@@ -364,8 +373,8 @@ type RoutingConfig struct {
 	// back to the next one. Keys are agent names (the capability card's key)
 	// or adapter file names. The list rides every agent run as
 	// OPENPANDA_AGENT_MODELS, injected or not; an adapter that picks among
-	// several served models honours it today (opencode.py), and one whose CLI
-	// takes a single model ignores the value it is handed.
+	// several served models selects a candidate (opencode.py); single-model
+	// CLIs take the first entry.
 	// Precedence: an injected model (injection.model=always or an
 	// injection.agents pin) still overrides this list, and the adapter's own
 	// single-model env pin wins over it. An entry under the OpenCode Go
@@ -378,7 +387,7 @@ type RoutingConfig struct {
 	//	    opencode:
 	//	      - opencode-go/kimi-k3
 	//	      - opencode-go/deepseek-v4.1-flash
-	AgentModels map[string][]string `yaml:"agent_models,omitempty"`
+	AgentModels map[string][]string `yaml:"agent_models,omitempty" json:"agent_models"`
 	// ToolsPolicy grades the tool face agent adapters run with: minimal
 	// (default) keeps each adapter's safe whitelist; extended lifts the
 	// restriction so the agent's own skills, sub-agent tooling and MCP
@@ -450,19 +459,22 @@ const (
 // negative values fall back to the defaults at load time, so a config
 // without a delegation section keeps working.
 type DelegationConfig struct {
+	// MaxConcurrent bounds all local child agent subprocesses across parents.
+	// Zero shares the node-wide budget without an extra child-only cap.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent"`
 	// MaxChildren caps the total delegate children one task may spawn
 	// across all its rounds (default 8).
-	MaxChildren int `yaml:"max_children"`
+	MaxChildren int `yaml:"max_children" json:"max_children"`
 	// FanOut caps how many children one parent executes concurrently
 	// (default 4).
-	FanOut int `yaml:"fanout"`
+	FanOut int `yaml:"fanout" json:"fanout"`
 	// MaxDepth bounds spawn generations — a task at this depth is refused
 	// further delegation (default 3).
-	MaxDepth int `yaml:"max_depth"`
+	MaxDepth int `yaml:"max_depth" json:"max_depth"`
 	// Enabled is a pointer so "absent" (delegation allowed — the pre-toggle
 	// behavior) is distinguishable from an explicit `enabled: false` that
 	// forbids all agent-driven sub-agent spawning on this node.
-	Enabled *bool `yaml:"enabled,omitempty"`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled"`
 }
 
 // NormalizedDelegation returns the bounds with defaults applied for
@@ -1378,6 +1390,12 @@ type ModelConfig struct {
 	Headers map[string]string `yaml:"headers,omitempty"`
 }
 
+// Configured reports whether a model endpoint was explicitly selected. A
+// provider can resolve its own endpoint; model names alone are not endpoints.
+func (m ModelConfig) Configured() bool {
+	return strings.TrimSpace(m.Provider) != "" || strings.TrimSpace(m.BaseURL) != ""
+}
+
 // NormalizedAPIType returns the validated api type, defaulting to Anthropic.
 func (m ModelConfig) NormalizedAPIType() string {
 	switch m.APIType {
@@ -1655,15 +1673,12 @@ func (c *Config) Validate() error {
 		{"memory.limits.user", c.Memory.Limits.User},
 		{"memory.limits.memory", c.Memory.Limits.Memory},
 		{"memory.limits.project", c.Memory.Limits.Project},
-		{"delegation.max_children", c.Delegation.MaxChildren},
-		{"delegation.fanout", c.Delegation.FanOut},
-		{"delegation.max_depth", c.Delegation.MaxDepth},
 	} {
 		if limit.value < 0 {
 			return fmt.Errorf("config: %s %d must not be negative", limit.name, limit.value)
 		}
 	}
-	return nil
+	return ValidateAgentExecution(c.Routing, c.Delegation)
 }
 
 // ValidatePeerAddr checks one network.peers entry against the wire-address
@@ -2242,9 +2257,6 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 	cfg.normalize()
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("config %s: %w", path, err)
-	}
 	return cfg, nil
 }
 

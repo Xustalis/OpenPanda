@@ -177,8 +177,10 @@ def main():
     prompt, timeout, cwd = harness.read_request()
 
     if os.environ.get("OPENPANDA_INJECTED_MODEL") != "1":
-        harness.run_simple(["openclaw", "agent", "exec", prompt],
-                           cwd=cwd, timeout=timeout, heartbeat_s=HEARTBEAT_S)
+        cmd = ["openclaw", "agent", "exec"]
+        if model := harness.selected_model(os.environ.get("OPENCLAW_MODEL", "")):
+            cmd += ["--model", model]
+        harness.run_simple(cmd + [prompt], cwd=cwd, timeout=timeout, heartbeat_s=HEARTBEAT_S)
         return
 
     model = os.environ.get("OPENCLAW_MODEL", "")
@@ -188,8 +190,10 @@ def main():
         # A half-configured injection must not take the agent down with it:
         # run the agent's own model exactly as the non-injected path does.
         harness.progress("injection carried no usable endpoint; using the agent's own model")
-        harness.run_simple(["openclaw", "agent", "exec", prompt],
-                           cwd=cwd, timeout=timeout, heartbeat_s=HEARTBEAT_S)
+        cmd = ["openclaw", "agent", "exec"]
+        if model := harness.selected_model(os.environ.get("OPENCLAW_MODEL", "")):
+            cmd += ["--model", model]
+        harness.run_simple(cmd + [prompt], cwd=cwd, timeout=timeout, heartbeat_s=HEARTBEAT_S)
         return
 
     qualified = PROVIDER_ID + "/" + model

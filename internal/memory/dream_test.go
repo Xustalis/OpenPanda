@@ -486,3 +486,160 @@ func TestSchedulerCorruptStateRecovers(t *testing.T) {
 		t.Fatalf("corrupt stamp must recover to a fresh run: ran=%v err=%v", ran, err)
 	}
 }
+
+func TestSchedulerRecoversPromotionReceiptAfterDiaryFailure(t *testing.T) {
+	hermes := NewHermes(t.TempDir())
+	daily := NewDaily(hermes.WarmDir())
+	text := "user prefers dark mode in the UI"
+	for _, day := range []string{"2026-08-10", "2026-08-11", "2026-08-12"} {
+		at, _ := time.Parse(dailyLayout, day)
+		if err := daily.Append(at, text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	dreamer := NewDreamer(hermes)
+	dreamer.now = func() time.Time { return now }
+	diaryPath := filepath.Join(hermes.root, "DREAMS.md")
+	if err := os.Mkdir(diaryPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := NewScheduler(dreamer, NewDreamDiary(diaryPath), nil, time.Hour)
+	if ran, err := s.tick(now); err == nil || ran {
+		t.Fatalf("diary failure must be reported: ran=%v err=%v", ran, err)
+	}
+	mem, err := hermes.LoadMemory()
+	if err != nil || len(mem.Entries) != 1 || mem.Entries[0] != text {
+		t.Fatalf("promoted memory must persist: %v, %v", mem.Entries, err)
+	}
+	if _, err := os.Stat(s.statePath("pending-deep.json")); err != nil {
+		t.Fatalf("receipt must be pending: %v", err)
+	}
+	if _, err := os.Stat(s.statePath("last-deep")); !os.IsNotExist(err) {
+		t.Fatalf("failed receipt must not stamp complete: %v", err)
+	}
+	if err := os.Remove(diaryPath); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a daemon restart; recovery must not rerun Deep or require idle.
+	restarted := NewScheduler(NewDreamer(NewHermes(hermes.root)), NewDreamDiary(diaryPath), func() bool { return false }, time.Hour)
+	if ran, err := restarted.tick(now.Add(time.Hour)); err != nil || !ran {
+		t.Fatalf("receipt recovery: ran=%v err=%v", ran, err)
+	}
+	data, err := os.ReadFile(diaryPath)
+	if err != nil || strings.Count(string(data), text) != 1 {
+		t.Fatalf("promotion receipt lost or duplicated: %q, %v", data, err)
+	}
+	if ran, err := restarted.tick(now.Add(2 * time.Hour)); err != nil || ran {
+		t.Fatalf("recovered sweep should now be stamped: ran=%v err=%v", ran, err)
+	}
+	if _, err := os.Stat(s.statePath("pending-deep.json")); !os.IsNotExist(err) {
+		t.Fatalf("pending receipt not cleared: %v", err)
+	}
+}
+
+func TestSchedulerReceiptRetryIsIdempotent(t *testing.T) {
+	hermes := NewHermes(t.TempDir())
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	diary := NewDreamDiary(filepath.Join(hermes.root, "DREAMS.md"))
+	s := NewScheduler(NewDreamer(hermes), diary, nil, time.Hour)
+	report := Report{Candidates: 1, Promoted: []string{"durable fact"}}
+	if err := s.writePending(pendingDream{At: now, Report: report}); err != nil {
+		t.Fatal(err)
+	}
+	if err := diary.AppendSweep(report, now); err != nil {
+		t.Fatal(err)
+	}
+	if ran, err := s.tick(now.Add(time.Hour)); err != nil || !ran {
+		t.Fatalf("recover after diary commit: ran=%v err=%v", ran, err)
+	}
+	data, err := os.ReadFile(diary.path)
+	if err != nil || strings.Count(string(data), "durable fact") != 1 {
+		t.Fatalf("retry duplicated diary: %q, %v", data, err)
+	}
+}
+
+func TestSchedulersShareDeepStampAcrossInstances(t *testing.T) {
+	hermes := NewHermes(t.TempDir())
+	now := time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC)
+	first := NewScheduler(NewDreamer(hermes), NewDreamDiary(filepath.Join(hermes.root, "DREAMS.md")), nil, time.Hour)
+	second := NewScheduler(NewDreamer(NewHermes(hermes.root)), first.diary, nil, time.Hour)
+	type result struct {
+		ran bool
+		err error
+	}
+	out := make(chan result, 2)
+	go func() { ran, err := first.tick(now); out <- result{ran, err} }()
+	go func() { ran, err := second.tick(now); out <- result{ran, err} }()
+	count := 0
+	for range 2 {
+		v := <-out
+		if v.err != nil {
+			t.Fatal(v.err)
+		}
+		if v.ran {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("two schedulers ran %d sweeps, want one", count)
+	}
+}
+
+func TestDreamScanBoundsDailyFiles(t *testing.T) {
+	hermes := NewHermes(t.TempDir())
+	path := NewDaily(hermes.WarmDir()).PathFor(time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxDailyDreamBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewDreamer(hermes).Dream(); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized log was silently read or ignored: %v", err)
+	}
+}
+
+func TestDreamScanNormalizesWhitespaceWithoutLosingTaint(t *testing.T) {
+	hermes := NewHermes(t.TempDir())
+	d := NewDaily(hermes.WarmDir())
+	for _, day := range []string{"2026-08-10", "2026-08-11", "2026-08-12"} {
+		at, _ := time.Parse(dailyLayout, day)
+		if err := d.Append(at, "verified build uses Go 1.26"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := d.PathFor(time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC))
+	if err := os.WriteFile(path, []byte("- 00:00:00 verified  build uses Go 1.26\n- 00:00:00 [ext] verified  build uses Go 1.26\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The extra-space line and trusted lines coalesce, but the [ext] sighting
+	// still taints their shared candidate; no promotion via the trusted path.
+	dreamer := NewDreamer(hermes)
+	dreamer.now = func() time.Time { return time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC) }
+	candidates, err := dreamer.light()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].Count != 4 || Sources(candidates[0].Sources).Trusted() {
+		t.Fatalf("whitespace split or taint lost: %+v", candidates)
+	}
+}
+
+func TestDreamScanSkipsSymlinkedDaily(t *testing.T) {
+	hermes := NewHermes(t.TempDir())
+	if err := os.MkdirAll(hermes.WarmDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secret, []byte("- 00:00:00 should never be a trusted memory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(hermes.WarmDir(), "2026-08-13.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	candidates, err := NewDreamer(hermes).light()
+	if err != nil || len(candidates) != 0 {
+		t.Fatalf("symlink became a memory source: %v, %v", candidates, err)
+	}
+}

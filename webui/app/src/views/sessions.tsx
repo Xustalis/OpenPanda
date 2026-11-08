@@ -837,8 +837,11 @@ export function SessionsView({
     setPageAsk(null)
     setDirectAsk(null)
     // The queue belongs to the thread it was typed in: a counter carried over
-    // from another thread would make the next note look like a removal.
+    // from another thread would make the next note look like a removal, and a
+    // note list left in place would show the previous thread's pending queue.
     noteCount.current = 0
+    setNotes([])
+    setNotesOpen(false)
   }, [activeId])
   const [busy, setBusy] = useState(false)
   // The pre-execution question the running turn is parked on. Cleared when the
@@ -1053,12 +1056,21 @@ export function SessionsView({
 
   // Session list (refresh when the active thread changes — its title may, or when project changes).
   useEffect(() => {
+    let alive = true
+    const want = activeProject
     api
-      .sessions(activeProject || undefined)
+      .sessions(want || undefined)
       .then((ls) => {
-        setSessions(ls)
+        // A reply for the project just left must not replace the new one's
+        // list — the sidebar and rail would show another project's threads.
+        if (alive && activeProjectRef.current === want) setSessions(ls)
       })
-      .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => {
+        if (alive) setLoadError(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      alive = false
+    }
   }, [activeId, activeProject])
 
   // The projects table, once: the composer foot's read-only directory pill
@@ -1085,10 +1097,11 @@ export function SessionsView({
       const reconnect = ev.kinds.includes('reconnect')
       if (!reconnect && ev.sessionFP === lastFP) return
       lastFP = ev.sessionFP
+      const want = activeProjectRef.current
       api
-        .sessions(activeProjectRef.current || undefined)
+        .sessions(want || undefined)
         .then((ls) => {
-          setSessions(ls)
+          if (activeProjectRef.current === want) setSessions(ls)
         })
         .catch(() => {})
       // The open thread: pull the persisted transcript when it moved and
@@ -1230,9 +1243,16 @@ export function SessionsView({
     setMsgs([])
     setTurnMs({})
     setLiveFrom(0)
+    // Guard the response against the thread that is current NOW, not the one
+    // this effect closed over. Rapid A→B switching let A's slower reply land
+    // after B's: the transcript under B's header showed A's conversation, and
+    // a failed A load cleared B's messages.
+    let alive = true
+    const current = () => alive && activeIdRef.current === activeId
     api
       .session(activeId)
       .then((s) => {
+        if (!current()) return
         setSession(s)
         setLoadError('')
         setTeam(s.team ?? [])
@@ -1242,11 +1262,17 @@ export function SessionsView({
         setMsgs((s.turns ?? []).map((turn, i) => ({ ...turn, k: `srv-${i}` })))
       })
       .catch((e: unknown) => {
+        if (!current()) return
         setSession(null)
         setMsgs([])
         setLoadError(e instanceof Error ? e.message : String(e))
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
   }, [activeId])
 
   // A turn can be started from a surface that renders no transcript — the
@@ -1613,14 +1639,17 @@ export function SessionsView({
    *  than pushed — the round loop's consumption is a row stamp, not an event
    *  every surface subscribes to, and a 4s tick costs one small GET. */
   async function refreshNotes() {
-    const sid = activeId
+    // Read the CURRENT thread, not the render this function closed over: the
+    // old comparison compared a stale value to itself, so a slow reply for the
+    // thread just left could install its notes under the new one.
+    const sid = activeIdRef.current
     if (!sid) {
       setNotes([])
       return
     }
     try {
       const r = await api.sessionNotes(sid)
-      if (sid === activeId) setNotes(r.notes)
+      if (activeIdRef.current === sid) setNotes(r.notes)
     } catch {
       // A note list is advisory: a failed read must not paint an error over
       // the transcript. The next tick retries.
@@ -3048,7 +3077,7 @@ export function SessionsView({
                                 aria-label={t('sessions.noteEdit')}
                                 onInput={(e) => setNoteDraft(e.currentTarget.value)}
                                 onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
+                                  if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
                                     e.preventDefault()
                                     void saveEditNote(n)
                                   } else if (e.key === 'Escape') {
@@ -3283,7 +3312,7 @@ export function SessionsView({
                   // While the menu is open the navigation keys belong to it:
                   // Tab/Enter accept, arrows move, Escape hides it until the
                   // input changes again.
-                  if (e.key === 'Tab' || e.key === 'Enter') {
+                  if ((e.key === 'Tab' || e.key === 'Enter') && !e.isComposing && e.keyCode !== 229) {
                     e.preventDefault()
                     const cmd = completeShown[completeIdx]
                     if (cmd) acceptCompletion(cmd)
@@ -3310,7 +3339,7 @@ export function SessionsView({
                 // a line break inside a contenteditable — the row stays one
                 // line tall and the caret sits mid-string. Insert the <br>
                 // ourselves so the editor actually grows.
-                if (e.key === 'Enter' && e.shiftKey && !e.isComposing) {
+                if (e.key === 'Enter' && e.shiftKey && !e.isComposing && e.keyCode !== 229) {
                   e.preventDefault()
                   const el2 = e.currentTarget as HTMLDivElement
                   const br = el2.ownerDocument.createElement('br')
@@ -3340,12 +3369,12 @@ export function SessionsView({
                 // composing, Enter belongs to the composition, not to us.
                 // Checking isComposing is the whole reason a contenteditable can
                 // replace the textarea here.
-                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing
+                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229
                     && !(e.metaKey || e.ctrlKey)) {
                   e.preventDefault()
                   send()
                 }
-                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
                   e.preventDefault()
                   send()
                 }
@@ -4656,7 +4685,7 @@ function TaskQuickSend({ taskId, hint }: { taskId: string; hint?: Task | null })
         value={text}
         onInput={(e) => setText((e.target as HTMLInputElement).value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') void deliver(false)
+          if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) void deliver(false)
           if (e.key === 'Escape') setOpen(false)
         }}
       />

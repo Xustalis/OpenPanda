@@ -39,6 +39,22 @@ func ShadowRoot(workDir, taskID string) string {
 	return filepath.Join(workDir, ".panda-shadow", taskID)
 }
 
+// validShadowTaskID reports whether taskID is usable as one path segment.
+// Task ids are generated locally as UUIDv7, but the ids this function guards
+// have also crossed the wire: filepath.Join cleans "..", so an id such as
+// "../../victim" would point MergeShadow's RemoveAll at a directory outside
+// the shadow root. The wire boundary validates too; this is the second gate
+// in front of the destructive call itself.
+func validShadowTaskID(taskID string) bool {
+	if taskID == "" || taskID == "." || taskID == ".." || len(taskID) > 128 {
+		return false
+	}
+	if strings.ContainsAny(taskID, `/\`) || strings.ContainsRune(taskID, 0) {
+		return false
+	}
+	return filepath.Base(taskID) == taskID
+}
+
 // inScope reports whether a slash-relative path sits under any of the
 // declared scope roots. An empty root set means "everything" — the caller
 // only reaches SaveShadow for scoped tasks, but an unset scope must not
@@ -66,6 +82,9 @@ func inScope(rel string, roots []string) bool {
 // is removed: a partial shadow merged later would silently resurrect half a
 // change set, which is worse than none.
 func SaveShadow(workDir, taskID string, roots []string) error {
+	if !validShadowTaskID(taskID) {
+		return errors.New("defense: unsafe task id for shadow")
+	}
 	dst := ShadowRoot(workDir, taskID)
 	_ = os.RemoveAll(dst) // a stale shadow from an older preemption dies first
 	if len(roots) == 0 {
@@ -123,6 +142,9 @@ func SaveShadow(workDir, taskID string, roots []string) error {
 // way: a merge that half-failed must not be replayed, since a second merge
 // could not tell shadow bytes from winner bytes anymore.
 func MergeShadow(workDir, taskID string) (restored, conflicts []string, err error) {
+	if !validShadowTaskID(taskID) {
+		return nil, nil, errors.New("defense: unsafe task id for shadow merge")
+	}
 	src := ShadowRoot(workDir, taskID)
 	defer os.RemoveAll(src)
 	info, err := os.Stat(src)

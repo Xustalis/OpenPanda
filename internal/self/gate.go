@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // GateLegs is the release gate spelled out as the Makefile's `gate` target
@@ -40,6 +42,12 @@ func RunGate(ctx context.Context, dir string) GateDigest {
 		start := time.Now()
 		cmd := exec.CommandContext(lctx, "make", leg)
 		cmd.Dir = dir
+		// The gate runs patch-authored tests and build scripts. Inheriting the
+		// daemon's environment would let them read OPENPANDA_* (panel token,
+		// mesh secret, model keys) and cloud credentials — the gate would then
+		// certify a patch that exfiltrated them. The sandbox allow-list is the
+		// same one every adapter gets.
+		cmd.Env = security.NewSandbox(dir).Env()
 		out, err := cmd.CombinedOutput()
 		cancel()
 		l := GateLeg{Name: leg, OK: err == nil, Sec: int64(time.Since(start).Seconds())}

@@ -6,9 +6,53 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 )
+
+// ProxyTargetMetadata reports whether rawurl names a cloud metadata service
+// that an egress proxy would resolve outside this process. GuardedDialContext
+// only sees the proxy address on such a connection, so the target has to be
+// resolved and judged here, before the request carries a credential into the
+// proxy. A name the local resolver cannot answer is allowed through: a
+// proxy-only split-DNS deployment still has to work.
+func ProxyTargetMetadata(rawurl string) bool {
+	if !proxyConfigured() {
+		return false
+	}
+	u, err := url.Parse(strings.TrimSpace(rawurl))
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		return MetadataHost(host)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if MetadataHost(ip.String()) {
+			return true
+		}
+	}
+	return false
+}
+
+// proxyConfigured reports an egress proxy in the order net/http reads one.
+func proxyConfigured() bool {
+	for _, key := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			return true
+		}
+	}
+	return false
+}
 
 // cleanHost trims whitespace, strips any port, and folds to lowercase.
 func cleanHost(host string) string {

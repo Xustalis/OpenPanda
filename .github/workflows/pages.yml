@@ -2,6 +2,12 @@ name: Pages
 
 # Deploys the static marketing site in site/ to GitHub Pages. Path-filtered so
 # Go changes don't redeploy the page and page changes don't touch the gate.
+# CHANGELOG.md is in the filter on purpose: a new release must not publish a
+# site that still advertises the previous version (check-site.py asserts it).
+#
+# The validation step runs before the artifact is uploaded, so a broken page
+# blocks the publish instead of replacing the live one. Equivalent locally:
+# `make site-check`.
 #
 # Repo Settings → Pages → Source is already "GitHub Actions"; this workflow is
 # what actually publishes. It was dropped in e141550 while the site was still
@@ -12,6 +18,8 @@ on:
     branches: [main]
     paths:
       - 'site/**'
+      - 'CHANGELOG.md'
+      - 'scripts/check-site.py'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -37,6 +45,9 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Validate site invariants
+        run: python3 scripts/check-site.py
 
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
 

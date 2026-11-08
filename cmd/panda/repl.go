@@ -473,8 +473,11 @@ func runRepl(args []string) {
 	// a configured engine; it replaces the banner, footer, task watcher and line
 	// loop below with a managed display. PANDA_CLASSIC_REPL falls back here.
 	if shouldUseTUI(r) {
-		runTUI(r)
+		err := runTUI(r)
 		r.stopWeb()
+		if err != nil {
+			os.Exit(1)
+		}
 		return
 	}
 

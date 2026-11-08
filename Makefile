@@ -41,7 +41,7 @@ NPM_INSTALL ?= npm ci --no-fund --no-audit
 
 .PHONY: all build web web-test web-gate build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test adapter-test vet staticcheck fmt fmt-check race race-focused gate gate-all run run-local measure clean icons release package release-local install-local
+        dev test adapter-test vet staticcheck fmt fmt-check site-check race race-focused gate gate-all run run-local measure clean icons release package release-local install-local
 
 all: build
 
@@ -252,6 +252,12 @@ fmt-check:
 		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
 	fi
 
+# The marketing site has no build step: Pages publishes site/ verbatim. This is
+# the publish gate in .github/workflows/pages.yml and the local equivalent. It
+# stays out of `gate`, which is a Go-only pipeline by design.
+site-check:
+	python3 scripts/check-site.py
+
 # The per-package test timeout is raised for the race legs. Under -race the
 # core package's e2e suite (real loopback websockets, real timers) runs for
 # about nine minutes on a workstation — past Go's 10-minute default on a
@@ -321,7 +327,7 @@ dev: build
 	./bin/panda web --config config.yaml
 
 run:
-	$(GO) run ./cmd/panda daemon --config config.yaml
+	OPENPANDA_DEV_ADAPTERS=1 $(GO) run ./cmd/panda daemon --config config.yaml
 
 # Start the daemon + webui sidecar locally with one command (see scripts/run-local.sh).
 run-local:

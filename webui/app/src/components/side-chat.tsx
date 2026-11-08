@@ -548,7 +548,7 @@ export function SideChat(props: SideChatProps) {
           onKeyDown={(e) => {
             // Enter sends, Shift+Enter breaks the line — the composer's rule,
             // because two text boxes in one pane should not disagree.
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
               e.preventDefault()
               void send()
             }

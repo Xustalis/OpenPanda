@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 const summarizeCacheNS = "summarize"
@@ -44,24 +45,28 @@ func SummarizeResult(ctx context.Context, c *Client, title, intent string, ok bo
 	var b strings.Builder
 	b.WriteString(i18n.Tf(targetLoc, "prompt.summarize.title", "title", title) + "\n")
 	if intent != "" {
-		b.WriteString(i18n.Tf(targetLoc, "prompt.summarize.intent", "intent", truncate(intent, 500)) + "\n")
+		b.WriteString(i18n.Tf(targetLoc, "prompt.summarize.intent", "intent", security.Redact(truncate(intent, 500))) + "\n")
 	}
 	if ok {
 		b.WriteString(i18n.T(targetLoc, "prompt.summarize.success") + "\n")
 	} else {
 		b.WriteString(i18n.Tf(targetLoc, "prompt.summarize.failure", "code", fmt.Sprintf("%d", exitCode)) + "\n")
 	}
-	if out := truncate(strings.TrimSpace(stdout), 3000); out != "" {
+	// Task output routinely contains credentials (a CLI echoing its env, a
+	// failing curl with an Authorization header). The summary lands in the
+	// daily log and the transcript, so redact before it becomes model input
+	// and before the result is cached.
+	if out := security.Redact(truncate(strings.TrimSpace(stdout), 3000)); out != "" {
 		b.WriteString(i18n.T(targetLoc, "prompt.summarize.stdout_excerpt") + "\n" + out + "\n")
 	}
-	if errText := truncate(strings.TrimSpace(stderr), 1500); errText != "" {
+	if errText := security.Redact(truncate(strings.TrimSpace(stderr), 1500)); errText != "" {
 		b.WriteString(i18n.T(targetLoc, "prompt.summarize.stderr_excerpt") + "\n" + errText + "\n")
 	}
 	text, err := c.Complete(ctx, systemPrompt, b.String())
 	if err != nil {
 		return "", err
 	}
-	text = strings.TrimSpace(text)
+	text = security.Redact(strings.TrimSpace(text))
 	if text == "" {
 		return "", fmt.Errorf("empty summary")
 	}

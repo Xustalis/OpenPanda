@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -207,5 +208,12 @@ func TestRunGenericNativeTimeout(t *testing.T) {
 	}
 	if res.ExitCode != 124 {
 		t.Fatalf("timeout exit = %d, want 124", res.ExitCode)
+	}
+}
+
+func TestGenericNativeModelPlaceholder(t *testing.T) {
+	argv, _ := expandGenericTemplate(AdapterRequest{Cmd: "agent --model {model} {prompt}", Model: "selected-model", Prompt: "work"})
+	if !slices.Equal(argv, []string{"agent", "--model", "selected-model", "work"}) {
+		t.Fatalf("model placeholder: %v", argv)
 	}
 }
