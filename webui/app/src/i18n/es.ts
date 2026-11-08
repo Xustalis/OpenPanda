@@ -553,6 +553,11 @@ const es: Messages = {
   'fileView.empty': 'archivo vacío',
   'fileView.truncated': 'mostrando parte de un archivo grande',
   'fileView.linesOf': 'mostrando {shown} de {total} líneas',
+  'fileView.preview': 'Vista previa',
+  'fileView.source': 'Código fuente',
+  'fileView.wrap': 'Ajustar líneas',
+  'fileView.toc': 'En esta página',
+  'fileView.imageError': 'Imagen no disponible',
   'md.copied': 'Copiado',
 
   // Settings view

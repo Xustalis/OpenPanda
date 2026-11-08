@@ -23,6 +23,7 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  /* Every surface is a pane inside this card now; nothing hangs out of it. */
   overflow: hidden;
   background: var(--bg);
   border: 1px solid var(--border-soft);
@@ -62,9 +63,9 @@
   background: var(--accent, var(--border-strong));
 }
 
-/* The one head line: `+`, the tabs, the fold. 56px is the pane head's height —
-   two cards whose first rows end at different heights make the eye read the
-   seam first and the content second. */
+/* The one head line: the three tools, `+`, the three tabs, the fold. 56px is
+   the pane head's height — two cards whose first rows end at different heights
+   make the eye read the seam first and the content second. */
 .dock-head {
   flex: none;
   display: flex;
@@ -77,6 +78,138 @@
 .dock-new,
 .dock-fold {
   flex: none;
+}
+
+/* The three thread tools share the head with the tabs. 30px squares with an
+   18px glyph is the tab's own scale: at the chat head's 36px/19px they would
+   read as a second, louder toolbar inside a narrower column. */
+.dock-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 6px;
+  padding-right: 8px;
+  border-right: 1px solid var(--border-soft);
+}
+.dock-head .icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-tertiary);
+}
+.dock-head .icon-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.dock-head .icon-btn:hover,
+.dock-head .icon-btn.open {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+}
+
+/* ---- Tool pages -----------------------------------------------------------
+   The node and task cards were born as popovers under the chat head. Inside the
+   dock they are `.is-inline`: static, full-width panes that take the body's
+   height and scroll in place. Nothing is absolutely positioned here, so a tool
+   can never cover the "start from here" rows or float over the transcript. */
+.dock-tool-pane {
+  overflow: hidden;
+}
+.dock-tool-pane .node-picker,
+.dock-tool-pane .orch-picker {
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.dock-body .node-panel.is-inline {
+  position: static;
+  flex: 1;
+  min-height: 0;
+  width: auto;
+  max-width: none;
+  padding: 12px;
+  overflow-y: auto;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  animation: none;
+}
+.dock-body .orch-flyout.is-inline {
+  position: static;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 10px;
+  max-width: none;
+  max-height: none;
+  padding: 12px;
+  overflow-y: auto;
+}
+.dock-body .orch-flyout.is-inline .orch-panel,
+.dock-body .orch-flyout.is-inline .orch-orch-card {
+  width: 100%;
+  max-height: none;
+  box-shadow: none;
+  animation: none;
+}
+/* The export page: the same Markdown the下载 button writes, shown before the
+   reader commits to a file. One scrollable reading surface plus a foot action. */
+.dock-export {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 12px;
+}
+.dock-export-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dock-export-title {
+  flex: none;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.dock-export-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-export-preview {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md, 8px);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dock-export-foot {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
 }
 /* `+` is the odd one out in this row — the tabs are places, this one makes
    something — so it gets a wider gap after it than the tabs have between them. */
@@ -134,6 +267,9 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* The dock no longer clips: the two surfaces that can fill it keep the
+     card's lower corners themselves. */
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
   animation: dock-in var(--dur-fast) var(--ease-enter);
 }
 
@@ -180,6 +316,7 @@
   gap: 2px;
   padding: 16px 12px 16px;
   overflow-y: auto;
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
 }
 .dock-start-title {
   margin: 0 0 6px;
@@ -325,39 +462,228 @@
   color: var(--text-tertiary);
   font-size: var(--text-xs);
 }
+/* The file view owns a lightbox, and its controls adapt to the *dock's*
+   width (the viewport is a different number). */
+.dock-file {
+  position: relative;
+  container-type: inline-size;
+}
+
+.df-bar {
+  gap: 8px;
+}
+.df-bar .fv-title {
+  flex: 1;
+  min-width: 0;
+}
+.df-bar .fv-name {
+  color: var(--text-primary);
+  font-size: var(--text-md);
+}
+.df-bar .fv-actions {
+  flex: none;
+}
+.df-bar .fv-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.df-bar .fv-btn svg {
+  flex: none;
+}
+.df-badge {
+  flex: none;
+  padding: 2px 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--surface-alpha-sm);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.df-kind {
+  flex: none;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--accent-2-soft);
+  color: var(--accent-2);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+/* ---- The view toggle --------------------------------------------------
+   A second, deliberately thin row: the file name stays the head's subject,
+   and "preview / source" is a property of what is below it, not another
+   title. Only documents get one. */
+.df-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface-alpha-xs);
+}
+.df-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg-inset);
+}
+.df-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 3px 8px;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.df-seg-btn svg {
+  flex: none;
+}
+.df-seg-btn:hover {
+  color: var(--text-primary);
+}
+.df-seg-btn.on {
+  background: var(--bg);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-xs);
+}
+.df-tools-spacer {
+  flex: 1;
+}
+.df-tool {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.df-tool:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-border);
+}
+.df-tool.on {
+  background: var(--bg);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+.df-wrap-glyph {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* ---- Source -----------------------------------------------------------
+   Line numbers stick to the left while a long line scrolls sideways; the
+   wrap toggle trades that scroll for folded lines in a narrow dock. The
+   colour classes come from the shared semantic tokens, never a hardcoded
+   palette, so both themes get readable code for free. */
 .df-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .df-code {
+  width: max-content;
+  min-width: 100%;
   margin: 0;
-  padding: 8px 0 16px;
-  font-size: var(--text-sm);
-  line-height: 1.55;
+  padding: 10px 0 18px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-primary);
+  font-variant-ligatures: none;
 }
 .df-line {
   display: flex;
   gap: 10px;
-  padding: 0 12px;
+  min-width: 100%;
+  padding-right: 14px;
   white-space: pre;
 }
+.df-line:hover {
+  background: var(--surface-alpha-xs);
+}
 .df-line.is-focus {
-  background: var(--bg-inset);
-  box-shadow: inset 2px 0 0 var(--accent, #2f6ca0);
+  background: var(--accent-2-soft);
+  box-shadow: inset 2px 0 0 var(--accent-2);
 }
 .df-num {
+  position: sticky;
+  left: 0;
+  z-index: 1;
   flex: none;
-  width: 3.2em;
+  width: 3.6em;
+  margin-right: 2px;
+  padding: 0 8px 0 10px;
+  border-right: 1px solid var(--border-soft);
+  background: var(--bg);
   text-align: right;
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
   user-select: none;
 }
+.df-line:hover .df-num,
+.df-line.is-focus .df-num {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
 .df-text {
   flex: 1;
   min-width: 0;
 }
+.df-body.is-wrap .df-code {
+  width: auto;
+}
+.df-body.is-wrap .df-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.df-tk-comment {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.df-tk-string {
+  color: var(--good);
+}
+.df-tk-number {
+  color: var(--warn);
+}
+.df-tk-keyword {
+  color: var(--semantic-info);
+}
+.df-tk-type,
+.df-tk-key {
+  color: var(--accent-2);
+}
+.df-tk-tag {
+  color: var(--danger);
+}
+.df-tk-attr {
+  color: var(--warn);
+}
+.df-tk-marker {
+  color: var(--text-tertiary);
+}
+
 .df-note {
   margin: 10px 14px;
   color: var(--text-secondary);
@@ -368,10 +694,254 @@
 }
 .df-foot {
   flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 6px 12px;
   border-top: 1px solid var(--border-soft);
   color: var(--text-tertiary);
   font-size: var(--text-xs);
+}
+.df-foot-more {
+  color: var(--warn);
+}
+
+/* ---- Rendered Markdown ------------------------------------------------
+   The chat renderer supplies the vnodes; these rules give a document its
+   own scale — wider measure, real heading hierarchy, quieter code wells.
+   Everything else (copy buttons, tables, inline code) stays shared. */
+.df-body.is-doc {
+  padding: 16px 18px 30px;
+}
+.df-doc {
+  max-width: 72ch;
+  margin: 0 auto;
+  font-size: 13.5px;
+  line-height: 1.72;
+  color: var(--text-primary);
+}
+.df-md {
+  gap: 12px;
+}
+.df-md p {
+  line-height: 1.75;
+}
+.df-md h2 {
+  margin: 20px 0 0;
+  font-size: 20px;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+.df-md h3 {
+  margin: 16px 0 0;
+  font-size: 16.5px;
+}
+.df-md h4,
+.df-md h5,
+.df-md h6 {
+  font-size: 14.5px;
+  color: var(--text-secondary);
+}
+.df-md > :first-child {
+  margin-top: 0;
+}
+.df-md ul,
+.df-md ol {
+  gap: 6px;
+  padding-left: 22px;
+}
+.df-md li {
+  padding-left: 2px;
+}
+.df-md blockquote {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent-2-border);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-alpha-xs);
+  color: var(--text-secondary);
+}
+.df-md hr {
+  margin: 8px 0;
+}
+.df-md .md-table-wrap {
+  background: var(--bg);
+}
+.df-md .md-table tbody tr:nth-child(even) {
+  background: var(--surface-alpha-xs);
+}
+.df-md .md-code {
+  background: var(--bg-inset);
+}
+.df-md .md-code pre {
+  max-height: 340px;
+  font-size: 12px;
+}
+.df-md a[href^='#file:'] {
+  color: var(--accent-2);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent-2-border);
+}
+.df-md a[href^='#file:']:hover {
+  border-bottom-style: solid;
+}
+.df-md a[href^='#image:'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  text-decoration: none;
+}
+.df-md a[href^='#image:']::before {
+  content: '\25a3';
+  color: var(--accent-2);
+}
+.df-md a[href^='#image:']:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-2);
+}
+
+/* Outline. It is a <details> so a long README does not push the first
+   paragraph down the column; open by default because a document with three
+   headings is a document worth navigating. */
+.df-toc {
+  max-width: 72ch;
+  margin: 0 auto 20px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--surface-alpha-xs);
+}
+.df-toc > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+.df-toc > summary::-webkit-details-marker {
+  display: none;
+}
+.df-toc > summary::after {
+  content: '\25be';
+  margin-left: auto;
+  color: var(--text-tertiary);
+}
+.df-toc:not([open]) > summary::after {
+  transform: rotate(-90deg);
+}
+.df-toc-count {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+.df-toc nav {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  padding: 0 8px 10px;
+  overflow: auto;
+}
+.df-toc-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  font-size: var(--text-sm);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.df-toc-item:hover {
+  background: var(--surface-alpha-md);
+  color: var(--text-primary);
+}
+.df-toc-item.is-l2 {
+  padding-left: 18px;
+}
+.df-toc-item.is-l3 {
+  padding-left: 30px;
+}
+.df-toc-item.is-l4 {
+  padding-left: 42px;
+}
+
+/* Clicking an image link opens its bytes over the column, not a new pane. */
+.df-lightbox {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--backdrop);
+}
+.df-lightbox-card {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  max-height: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.df-lightbox-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+.df-lightbox-head .mono {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.df-lightbox img {
+  display: block;
+  max-width: 100%;
+  max-height: min(60vh, 520px);
+  object-fit: contain;
+  background: var(--bg-inset);
+}
+
+@container (max-width: 440px) {
+  .df-bar .fv-btn-label,
+  .df-seg-btn > span {
+    display: none;
+  }
+  .df-bar .fv-btn {
+    padding: 5px 7px;
+  }
+  .df-body.is-doc {
+    padding: 12px 12px 24px;
+  }
+}
+@container (max-width: 360px) {
+  .df-badge {
+    display: none;
+  }
 }
 
 /* The dev strip: the project's live server, above the address bar. It is
@@ -765,20 +1335,78 @@ button.side-task:hover {
 .side-err {
   color: var(--danger, #b3261e);
 }
+/* The side conversation's composer. It used to be a bare 72px-min textarea
+   with a resize grip next to a detached square button; at dock width that read
+   as two unrelated controls and ate a third of the panel. One rounded box now
+   holds both, at the same scale as the dock's 30px head buttons. */
 .side-compose {
   flex: none;
+  padding: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+.side-compose-box {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 8px 10px 10px;
-  border-top: 1px solid var(--border-soft);
+  padding: 7px 7px 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+/* Neutral focus, the same answer the main composer gives: the caret is in the
+   field, so the box deepens its edge instead of painting the whole footer
+   with an accent ring. */
+.side-compose-box:focus-within {
+  border-color: var(--border-strong);
 }
 .side-input {
   flex: 1;
   min-width: 0;
-  resize: none;
+  /* Two lines, not the 72px floor `.input` gives every textarea, and no resize
+     grip: the box is the field, so a grip inside it has nothing to resize. */
+  min-height: 40px;
+  max-height: 120px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
   font-size: var(--text-sm);
   line-height: 1.5;
+  outline: none;
+  resize: none;
+}
+.side-input::placeholder {
+  color: var(--text-tertiary);
+}
+.side-input:disabled {
+  opacity: 0.55;
+}
+/* Send and Stop share one slot at the field's bottom-right corner, 32px tall —
+   the head's control height, not the 40px block that used to hang outside. */
+.side-compose-box .side-send {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+/* Tonal, like the main composer's Send: a solid accent square in a 320px dock
+   was the loudest object on the surface. */
+.side-compose-box .side-send.primary {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+  box-shadow: none;
+}
+.side-compose-box .side-send.primary:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: none;
+}
+.side-compose-box .side-stop {
+  flex: none;
+  height: 32px;
 }
 
 /* Below this the two cards can no longer both be cards: under ~710px of canvas

@@ -553,6 +553,11 @@ const de: Messages = {
   'fileView.empty': 'leere Datei',
   'fileView.truncated': 'Ausschnitt einer großen Datei',
   'fileView.linesOf': '{shown} von {total} Zeilen',
+  'fileView.preview': 'Vorschau',
+  'fileView.source': 'Quelltext',
+  'fileView.wrap': 'Zeilen umbrechen',
+  'fileView.toc': 'Auf dieser Seite',
+  'fileView.imageError': 'Bild nicht verfügbar',
   'md.copied': 'Kopiert',
 
   // Settings view

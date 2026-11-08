@@ -33,6 +33,10 @@ export function NodePicker(props: {
    *  orchestration card hang off the same corner and must not both be up;
    *  omitted, the card manages its own like it always did. */
   open?: boolean
+  /** Render only the list, as a page inside the side dock. No trigger button
+   *  and no floating card: the dock head owns the button and its body owns the
+   *  surface. Omitted, this stays the header popover workspace.tsx uses. */
+  inline?: boolean
 }) {
   const [selfOpen, setSelfOpen] = useState(false)
   const open = props.open ?? selfOpen
@@ -67,23 +71,29 @@ export function NodePicker(props: {
 
   return (
     <div class="node-picker">
-      <button
-        type="button"
-        class={`icon-btn tip-down node-pick-btn${open ? ' open' : ''}${props.value ? ' pinned' : ''}`}
-        /* The tip is the control's name, not the current choice: the choice is
-           already spelled out by the card behind it, and a header tooltip that
-           changes with the selection reads as a status line rather than a
-           label. The selection is still announced to assistive tech below. */
-        data-tip={open ? undefined : t('sessions.nodeBtn')}
-        aria-label={`${t('sessions.nodePick')}: ${current}`}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <Icon name="git-fork" size={19} />
-      </button>
+      {!props.inline && (
+        <button
+          type="button"
+          class={`icon-btn tip-down node-pick-btn${open ? ' open' : ''}${props.value ? ' pinned' : ''}`}
+          /* The tip is the control's name, not the current choice: the choice is
+             already spelled out by the card behind it, and a header tooltip that
+             changes with the selection reads as a status line rather than a
+             label. The selection is still announced to assistive tech below. */
+          data-tip={open ? undefined : t('sessions.nodeBtn')}
+          aria-label={`${t('sessions.nodePick')}: ${current}`}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+        >
+          <Icon name="git-fork" size={19} />
+        </button>
+      )}
       {open && (
-        <div class="node-panel" role="dialog" aria-label={t('sessions.nodePick')}>
+        <div
+          class={`node-panel${props.inline ? ' is-inline' : ''}`}
+          role="dialog"
+          aria-label={t('sessions.nodePick')}
+        >
           <p class="node-panel-label">{t('sessions.nodePanelTitle')}</p>
           <div class="node-panel-list">
             <button

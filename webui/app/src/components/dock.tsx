@@ -1,26 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The console's side dock: one column on the right of a thread that holds every
-// surface you reach for while reading it — the thread's unfinished work, the
-// files it names, a page it is talking about, and a conversation beside the one
-// you are in.
+// The console's side dock: one column on the right of a thread that holds the
+// surfaces you reach for while reading it — the files it names, a page it is
+// talking about, and a conversation beside the one you are in. The thread's
+// unfinished work is not a dock panel: the orchestration card in the pane head
+// owns that list, so the same tasks do not appear twice in one view.
 //
-// It replaces three surfaces that used to have three different shapes: the task
-// rail (an absolute column over the transcript), the file viewer (a horizontal
-// drawer across its top) and the artifact preview (a modal dialog over the whole
-// console). Each was the right answer to its own question and the wrong answer
-// to "show me that beside what I am reading": a drawer that eats the top of the
-// transcript moves nothing else out of the way, and a modal asks the reader to
-// stop reading.
+// It replaces two surfaces that used to have two different shapes: the file
+// viewer (a horizontal drawer across the top) and the artifact preview (a modal
+// dialog over the whole console). Each was the right answer to its own question
+// and the wrong answer to "show me that beside what I am reading": a drawer that
+// eats the top of the transcript moves nothing else out of the way, and a modal
+// asks the reader to stop reading.
 //
 // The dock is a column, not a popover. Its width is the lane the chat pane
 // reserves (`.chat-pane.dock-open`), so opening it slides the transcript, the
 // composer and the jump arrow left together — the same promise the header cards
 // keep, with one number instead of three.
 //
-// One head line, not two: `+`, the four tabs, and the fold control sit in the
-// same row. A second rail would cost a column of width in a panel whose whole
-// job is showing content beside the reading column.
+// One head line, not two: the thread's tools, `+`, the three tabs and the fold
+// control sit in the same row. A second rail would cost a column of width in a
+// panel whose whole job is showing content beside the reading column.
 //
 // Tabs keep their own state. Switching from files to a side conversation and
 // back must land on the same file, scrolled where it was; that is the whole
@@ -31,9 +31,11 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../i18n'
 import { Icon, type IconName } from './icons'
 
-/** What the column can show. `''` means it is open but nothing is picked —
- *  the "start from here" state. */
-export type DockTab = 'tasks' | 'files' | 'browser' | 'side' | ''
+/** What the column can show. The first three are the thread's tools, reached
+ *  from the left group in the head; the last three are the places a tab opens.
+ *  All six own a pane in the body — none of them is a floating layer over it.
+ *  `''` means it is open but nothing is picked, the "start from here" state. */
+export type DockTab = 'export' | 'node' | 'orch' | 'files' | 'browser' | 'side' | ''
 
 /** Narrower than this and a line of code wraps on every scroll; wider and the
  *  transcript stops being the page. Exported so the state that owns the width
@@ -61,6 +63,11 @@ export interface DockProps {
   onNew?(): void
   /** Counts shown as a badge on a tab. */
   badges?: Partial<Record<Exclude<DockTab, ''>, number>>
+  /** The thread's actions, parked at the left of the head: export, the node
+   *  pick and the orchestration card. They live here rather than in the chat
+   *  head so the two cards of the workbench do not carry the same controls
+   *  twice. Only mounted while the column is open. */
+  tools?: ComponentChildren
   /** The panel body. Rendered only once a tab is picked. */
   children?: ComponentChildren
 }
@@ -96,7 +103,6 @@ export function Dock(props: DockProps) {
   }, [dragging, onWidth])
 
   const tabs: TabSpec[] = [
-    { key: 'tasks', icon: 'list-checks', label: t('dock.tasks') },
     { key: 'files', icon: 'folder', label: t('dock.files') },
     { key: 'browser', icon: 'globe', label: t('dock.browser') },
     { key: 'side', icon: 'message', label: t('dock.side') },
@@ -159,10 +165,11 @@ export function Dock(props: DockProps) {
       )}
 
       <header class="dock-head">
-        {/* `+` only where it has something to add. On the task list it was a
-            button that did nothing (the thread's own work is not something you
-            start from here), and a control that looks live and is not is worse
-            than one that is absent. */}
+        {open && props.tools && <div class="dock-tools">{props.tools}</div>}
+
+        {/* `+` only where it has something to add: the three tool pages and
+            the start state have nothing to start fresh in, and a control that
+            looks live and is not is worse than one that is absent. */}
         {open && props.onNew && (tab === 'files' || tab === 'browser' || tab === 'side') && (
           <button
             type="button"

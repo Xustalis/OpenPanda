@@ -32,7 +32,6 @@ import { DockBrowser, type BrowserArtifact, type BrowserPageRequest } from '../c
 import { scanArtifacts } from '../components/auto-preview'
 import { DockFiles } from '../components/dock-files'
 import { SideChat } from '../components/side-chat'
-import { TaskRail } from '../components/task-rail'
 import { ArtifactSection } from '../components/artifact'
 import { FileViewContext, type FileOpener, type FileRef } from '../components/file-link'
 import { ComposerContext } from '../components/composer-context'
@@ -629,19 +628,12 @@ export function SessionsView({
   // that. Empty means no restriction (the scheduler picks the best hand),
   // which is what every thread had before rosters existed.
   const [team, setTeam] = useState<string[]>([])
-  // Which header card is up: '' | 'node' | 'orch'. One slot, two cards — they
-  // hang off the same corner of the bar, so the pane keeps the state for both
-  // instead of letting each card decide (two `open` cards would stack).
-  // While a card is up the pane reserves one lane for it on the right
-  // (`.chat-pane.panel-open`), which is what moves the transcript, the composer
-  // and the jump arrow left as one block instead of letting the card cover the
-  // last reply's line ends. The lane is the same for both cards on purpose:
-  // switching from one to the other is a swap in place, not a re-layout.
-  const [card, setCard] = useState<'' | 'node' | 'orch'>('')
-  // The side dock: one column holding the thread's work, its files, a page being
-  // read, and a conversation beside it. `tab` survives a collapse so reopening
-  // returns to the surface you left; `epoch` is the head's `+`, which every
-  // panel reads as "start a fresh one".
+  // The side dock: one column holding the thread's tools (export, node pick,
+  // tasks), its files, a page being read, and a conversation beside it. One
+  // `tab` owns all six surfaces — a tool button switches the body to that tool's
+  // page, it never opens a floating card over the panel underneath. `tab`
+  // survives a collapse so reopening returns to the surface you left; `epoch`
+  // is the head's `+`, which every panel reads as "start a fresh one".
   const [dockOpen, setDockOpen] = useState(false)
   const [dockTab, setDockTab] = useState<DockTab>('')
   // The column's width is a preference, not fleet or thread state: it lives in
@@ -670,8 +662,7 @@ export function SessionsView({
   // that, hidden rather than dropped: a file tree you scrolled, a page you
   // were reading and a half-typed side question are all the reader's place,
   // and a tab switch or a fold is not a reason to lose it. Lazy on first use
-  // so an unopened dock costs nothing — the file tree and the task rail both
-  // fetch on mount.
+  // so an unopened dock costs nothing — the file tree fetches on mount.
   const [dockSeen, setDockSeen] = useState<DockTab[]>([])
   useEffect(() => {
     if (dockTab === '') return
@@ -705,7 +696,6 @@ export function SessionsView({
   const fileOpener = useMemo<FileOpener>(
     () => ({
       open: (ref) => {
-        setCard('')
         setDockTab('files')
         setDockOpen(true)
         setFileRef(ref)
@@ -734,14 +724,13 @@ export function SessionsView({
     const openArtifact = () => {
       if (!hash || !stillHere()) return
       setDirectAsk(null)
-      setPageAsk((prev) => ({
-        taskId: task.id,
-        hash,
-        nonce: (prev?.nonce ?? 0) + 1,
-      }))
-      setCard('')
-      setDockOpen(true)
-      setDockTab('browser')
+        setPageAsk((prev) => ({
+          taskId: task.id,
+          hash,
+          nonce: (prev?.nonce ?? 0) + 1,
+        }))
+        setDockOpen(true)
+        setDockTab('browser')
     }
     const openDirect = (url: string) => {
       if (!stillHere()) return
@@ -752,7 +741,6 @@ export function SessionsView({
         nonce: (prev?.nonce ?? 0) + 1,
         sameOrigin: true,
       }))
-      setCard('')
       setDockOpen(true)
       setDockTab('browser')
     }
@@ -806,21 +794,28 @@ export function SessionsView({
   // every request so a second click on the same 查看任务 still re-opens a pane
   // the reader had closed.
   const [focusTask, setFocusTask] = useState<{ id: string } | null>(null)
-  /** Open one task where the reader already is — the orchestration card with
-   *  that task picked, the thread's list beside it. Leaving for the task page
-   *  used to cost the conversation: its scroll, its draft, its place. */
+  /** Open one task where the reader already is — the tasks page in the side
+   *  dock, with that task picked. Leaving for the task page used to cost the
+   *  conversation: its scroll, its draft, its place. */
   function openTaskInPlace(id: string) {
-    // The card is a popover over the thread; the dock is a column beside it.
-    // One lane, so only one of them is up at a time.
-    setDockOpen(false)
-    setCard('orch')
+    setDockOpen(true)
+    setDockTab('orch')
     setFocusTask({ id })
   }
-  // A card belongs to the thread it was opened in. Switching threads closes
-  // it: the cards are remounted per session, so a lane kept reserved by the
-  // parent would outlive the card that asked for it.
+  /** The head's three tools are pages, not popovers: one click swaps the dock
+   *  body to that tool, a second click on the same one folds the column (the
+   *  tabs on the right behave the same way). */
+  function pickTool(key: 'export' | 'node' | 'orch') {
+    if (dockOpen && dockTab === key) {
+      setDockOpen(false)
+      return
+    }
+    setDockTab(key)
+    setDockOpen(true)
+  }
+  // A dock page belongs to the thread it was opened in. Switching threads
+  // closes it: the pages are remounted per session.
   useEffect(() => {
-    setCard('')
     // The dock's panels are thread-scoped in the same way: a file path resolves
     // against this thread's worktree, a page is what this thread was talking
     // about, and a side conversation is a snapshot of it. Carrying any of them
@@ -2607,26 +2602,15 @@ export function SessionsView({
     openTaskPreview(task)
   }, [sessionTasks, openTaskPreview])
   const reportRefs = reportFallbackRefs(msgs)
-  // What the dock's task tab counts on its badge: the rows that still want
-  // something — running, waiting on a human, or queued. Terminal rows are the
-  // board's history, not an inbox item.
-  const openTaskCount = (sessionTasks ?? []).filter(
-    (t) => !['done', 'failed', 'cancelled', 'expired'].includes(t.state),
-  ).length
-
-  // The rail's jump: scroll the task's own card into view. A task the thread
-  // has no card for — dispatched from the bench, or older than the loaded
-  // transcript — opens its task page instead, so a row never dead-ends.
-  const jumpToTask = (id: string) => {
-    const el = document.querySelector(`[data-task-id="${id}"]`)
-    if (el) {
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      el.classList.add('task-jump-flash')
-      window.setTimeout(() => el.classList.remove('task-jump-flash'), 1200)
-      return
-    }
-    navigate({ view: 'detail', id })
-  }
+  // The export page shows exactly what the download will contain. Built only
+  // while that page is up, so a long thread does not serialize on every render.
+  const exportText =
+    dockTab === 'export'
+      ? exportMarkdown(msgs, {
+          project: session?.project ?? activeProject,
+          title: session?.title,
+        })
+      : ''
 
   // — one round, one bubble. The turns a fan-out files are consecutive and
   // carry the round's clock, so the first one wears the panda's face and holds
@@ -2643,9 +2627,7 @@ export function SessionsView({
       class={`chat${dockOpen ? ' dock-open' : ''}`}
       style={dockOpen ? `--dock-w:${dockW}px` : undefined}
     >
-
-
-      <div class={`chat-pane${card ? ' panel-open' : ''}`}>
+      <div class="chat-pane">
         {/* The header is unconditional so the drawer toggle is reachable even
             on a brand-new, empty thread — that is exactly when a phone user
             needs to get back to the thread list. */}
@@ -2712,87 +2694,13 @@ export function SessionsView({
               ± {diff.changes.length} {t('sessions.changes')}
             </button>
           )}
-          {/* Last, and pushed to the far edge: the header reads title → tools →
-              execution target. All three are ghost icon buttons at the top of
-              the size scale — what you reach for before sending, in the order
-              you reach for it: take the reply out, choose *where* the turn
-              runs, choose *how* it is split into steps. The node choice lost
-              its spelled-out `<select>`: the glyph plus the card behind it says
-              more (which machine is local, which is offline, which one the
-              scheduler would pick) in a quarter of the width, and the card is
-              what the pane makes room for. */}
+          {/* The head keeps one control: the door into the side dock. 导出、节点
+              和编排卡都搬进了 dock 的头部，所以这条 bar 只剩标题与一个入口。
+              新对话页也保留它 —— 节点选择现在就在这扇门后面。 */}
           <div class="chat-head-tools">
-            {/* The thread's unfinished work as a side column — the web twin of
-                the TUI's task rail. It sits left of the node pick because it is
-                about the thread, not about where this turn runs.
-
-                Only while the column is folded. Open, the same task list is one
-                click away as the dock's first tab, and two `list-checks` glyphs
-                a gutter apart read as one control drawn twice — the reader ends
-                up clicking the copy that does not fold. */}
-            {!dockOpen && (
-              <button
-                type="button"
-                class="icon-btn tip-down"
-                data-tip={t('rail.title')}
-                aria-label={t('rail.title')}
-                aria-expanded={false}
-                onClick={() => {
-                  setCard('')
-                  setDockTab('tasks')
-                  setDockOpen(true)
-                }}
-              >
-                <Icon name="list-checks" size={19} />
-              </button>
-            )}
-            {session && msgs.length > 0 && (
-              <button
-                class="icon-btn tip-down"
-                onClick={exportSession}
-                data-tip={t('sessions.export')}
-                aria-label={t('sessions.export')}
-              >
-                <Icon name="download" size={19} />
-              </button>
-            )}
-            <NodePicker
-              /* Remounted per thread: the card belongs to the pane you opened
-                 it in, and a stale `open` would keep the transcript's lane
-                 reserved after switching threads with nothing in it. The
-                 prefix keeps the key distinct from the orchestration card's —
-                 two siblings keyed the same id made Preact warn on every
-                 render of this bar. */
-              key={`node-${session?.id ?? 'none'}`}
-              nodes={nodes}
-              value={nodePref}
-              onPick={setNodePref}
-              open={card === 'node'}
-              onOpenChange={(open) => {
-                setDockOpen(false)
-                setCard(open ? 'node' : '')
-              }}
-            />
-            {/* Orchestration, to the right of the node pick: the node answers
-                *where* a turn runs, this one answers *what the thread has
-                become* — its tasks, moving or waiting on you. Both cards hang
-                off the same corner, so `panel` keeps exactly one of them up. */}
-            <OrchestrateCard
-              key={`orch-${session?.id ?? 'none'}`}
-              sessionId={session?.id ?? null}
-              open={card === 'orch'}
-              onOpenChange={(open) => {
-                setDockOpen(false)
-                setCard(open ? 'orch' : '')
-              }}
-              onlineNodeCount={onlineNodeCount}
-              selfNodeId={selfNodeId}
-              focusTask={focusTask}
-            />
-            {/* The dock's own door — and only a door. Open, the column carries
-                the fold control in its own head, so this one steps aside: two
-                `panel-right` glyphs on the same row, one in each card's corner,
-                was the other half of "the same button twice". */}
+            {/* Open, the column carries the fold control in its own head, so
+                this one steps aside: two `panel-right` glyphs on the same row
+                were the same button twice. */}
             {!dockOpen && (
               <button
                 type="button"
@@ -3482,28 +3390,107 @@ export function SessionsView({
         open={dockOpen}
         tab={dockTab}
         width={dockW}
-        badges={{ tasks: openTaskCount }}
+        tools={
+          <>
+            {!newChatPage && session && msgs.length > 0 && (
+              <button
+                type="button"
+                class={`icon-btn tip-down${dockTab === 'export' ? ' open' : ''}`}
+                onClick={() => pickTool('export')}
+                /* The page is already saying what the tool is; a tooltip over
+                   its first line would be the floating layer we removed. */
+                data-tip={dockTab === 'export' ? undefined : t('sessions.export')}
+                aria-label={t('sessions.export')}
+                aria-pressed={dockTab === 'export'}
+              >
+                <Icon name="download" size={18} />
+              </button>
+            )}
+            <button
+              type="button"
+              class={`icon-btn tip-down${dockTab === 'node' ? ' open' : ''}`}
+              onClick={() => pickTool('node')}
+              data-tip={dockTab === 'node' ? undefined : t('sessions.nodeBtn')}
+              aria-label={t('sessions.nodePick')}
+              aria-pressed={dockTab === 'node'}
+            >
+              <Icon name="git-fork" size={18} />
+            </button>
+            {!newChatPage && (
+              <button
+                type="button"
+                class={`icon-btn tip-down${dockTab === 'orch' ? ' open' : ''}`}
+                onClick={() => pickTool('orch')}
+                data-tip={dockTab === 'orch' ? undefined : t('sessions.orchestrate')}
+                aria-label={t('sessions.orchestrate')}
+                aria-pressed={dockTab === 'orch'}
+              >
+                <Icon name="route" size={18} />
+              </button>
+            )}
+          </>
+        }
         onWidth={setDockW}
         onTab={(next) => {
-          setCard('')
           setDockTab(next)
           setDockOpen(true)
         }}
         onToggle={() => setDockOpen((v) => !v)}
         onNew={() => {
-          // `+` means "a fresh one of whatever is showing". The task panel
-          // has nothing to clear — it is the thread's own work — so it keeps
-          // the button inert rather than inventing a verb.
+          // `+` means "a fresh one of whatever is showing": the file panel
+          // goes back to the workspace root, the other two start over.
           if (dockTab === 'files') setFileRef(null)
-          if (dockTab !== 'tasks') setDockEpoch((n) => n + 1)
+          else setDockEpoch((n) => n + 1)
         }}
       >
-        {dockSeen.includes('tasks') && (
-          <div class="dock-pane" hidden={dockTab !== 'tasks'}>
-            <TaskRail
-              tasks={sessionTasks ?? []}
-              onJump={jumpToTask}
-              onClose={() => setDockOpen(false)}
+        {/* The three tool pages. They are panes like files/browser/side, not
+            layers: a tool button swaps the body, so nothing floats over the
+            "start from here" rows underneath. */}
+        {dockSeen.includes('export') && (
+          <div class="dock-pane dock-tool-pane" hidden={dockTab !== 'export'}>
+            <div class="dock-export">
+              <div class="dock-export-head">
+                <p class="dock-export-title">{t('sessions.export')}</p>
+                <span class="dock-export-name mono">{exportFilename(session?.title)}</span>
+              </div>
+              <pre class="dock-export-preview">{exportText}</pre>
+              <div class="dock-export-foot">
+                <button type="button" class="btn" onClick={exportSession}>
+                  <Icon name="download" size={14} />
+                  {t('sessions.export')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {dockSeen.includes('node') && (
+          <div class="dock-pane dock-tool-pane" hidden={dockTab !== 'node'}>
+            <NodePicker
+              key={`node-${session?.id ?? 'none'}`}
+              inline
+              nodes={nodes}
+              value={nodePref}
+              onPick={setNodePref}
+              open
+              onOpenChange={(open) => {
+                if (!open) setDockTab('')
+              }}
+            />
+          </div>
+        )}
+        {dockSeen.includes('orch') && (
+          <div class="dock-pane dock-tool-pane" hidden={dockTab !== 'orch'}>
+            <OrchestrateCard
+              key={`orch-${session?.id ?? 'none'}`}
+              inline
+              sessionId={session?.id ?? null}
+              open
+              onOpenChange={(open) => {
+                if (!open) setDockTab('')
+              }}
+              onlineNodeCount={onlineNodeCount}
+              selfNodeId={selfNodeId}
+              focusTask={focusTask}
             />
           </div>
         )}

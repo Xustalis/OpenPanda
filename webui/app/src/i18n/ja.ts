@@ -552,6 +552,11 @@ const ja: Messages = {
   'fileView.empty': '空のファイル',
   'fileView.truncated': '大きいファイルの一部を表示しています',
   'fileView.linesOf': '{total} 行中 {shown} 行を表示',
+  'fileView.preview': 'プレビュー',
+  'fileView.source': 'ソース',
+  'fileView.wrap': '行の折り返し',
+  'fileView.toc': '目次',
+  'fileView.imageError': '画像を表示できません',
   'md.copied': 'コピーしました',
 
   // Settings view

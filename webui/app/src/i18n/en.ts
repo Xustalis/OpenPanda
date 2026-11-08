@@ -558,6 +558,11 @@ const en: Messages = {
   'fileView.empty': 'empty file',
   'fileView.truncated': 'showing part of a large file',
   'fileView.linesOf': 'showing {shown} of {total} lines',
+  'fileView.preview': 'Preview',
+  'fileView.source': 'Source',
+  'fileView.wrap': 'Wrap lines',
+  'fileView.toc': 'On this page',
+  'fileView.imageError': 'Image unavailable',
   'md.copied': 'Copied',
 
   // Settings view
