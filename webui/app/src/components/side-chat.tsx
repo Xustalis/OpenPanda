@@ -537,32 +537,43 @@ export function SideChat(props: SideChatProps) {
           void send()
         }}
       >
-        <textarea
-          ref={inputRef}
-          class="input side-input"
-          rows={2}
-          value={input}
-          placeholder={t('side.placeholder')}
-          disabled={!props.sessionId}
-          onInput={(e) => setInput((e.currentTarget as HTMLTextAreaElement).value)}
-          onKeyDown={(e) => {
-            // Enter sends, Shift+Enter breaks the line — the composer's rule,
-            // because two text boxes in one pane should not disagree.
-            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
-              e.preventDefault()
-              void send()
-            }
-          }}
-        />
-        {busy ? (
-          <button type="button" class="btn small" onClick={stop}>
-            {t('common.stop')}
-          </button>
-        ) : (
-          <button type="submit" class="btn small primary" disabled={!input.trim() || !props.sessionId}>
-            <Icon name="send" size={14} />
-          </button>
-        )}
+        {/* One surface, like the main composer: the field and its button live
+            inside the same rounded box. A bare textarea beside a detached
+            square made the dock's footer look like two unrelated controls. */}
+        <div class="side-compose-box">
+          <textarea
+            ref={inputRef}
+            class="side-input"
+            rows={2}
+            value={input}
+            placeholder={t('side.placeholder')}
+            disabled={!props.sessionId}
+            onInput={(e) => setInput((e.currentTarget as HTMLTextAreaElement).value)}
+            onKeyDown={(e) => {
+              // Enter sends, Shift+Enter breaks the line — the composer's rule,
+              // because two text boxes in one pane should not disagree.
+              if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+                e.preventDefault()
+                void send()
+              }
+            }}
+          />
+          {busy ? (
+            <button type="button" class="btn small side-stop" onClick={stop}>
+              {t('common.stop')}
+            </button>
+          ) : (
+            <button
+              type="submit"
+              class="btn small primary side-send"
+              aria-label={t('sessions.send')}
+              title={t('sessions.send')}
+              disabled={!input.trim() || !props.sessionId}
+            >
+              <Icon name="send" size={15} />
+            </button>
+          )}
+        </div>
       </form>
     </div>
   )

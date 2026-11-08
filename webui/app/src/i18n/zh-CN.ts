@@ -549,6 +549,11 @@ const zhCN: Messages = {
   'fileView.empty': '空文件',
   'fileView.truncated': '文件较大，仅显示部分',
   'fileView.linesOf': '显示 {shown} / {total} 行',
+  'fileView.preview': '预览',
+  'fileView.source': '源码',
+  'fileView.wrap': '自动换行',
+  'fileView.toc': '本页目录',
+  'fileView.imageError': '图片无法显示',
   'md.copied': '已复制',
 
   // Settings view
