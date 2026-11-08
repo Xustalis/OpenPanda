@@ -5,6 +5,8 @@ package doctor
 import (
 	"fmt"
 	"net"
+	"os"
+	"syscall"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -62,5 +64,29 @@ func TestDiscoveryCheckOffPasses(t *testing.T) {
 	c := checkDiscovery(cfg)
 	if c.Key != "doctor.discovery.off" || !c.OK {
 		t.Fatalf("checkDiscovery = %+v, want the explicit-off pass", c)
+	}
+}
+
+// TestAddrInUseCoversTheWindowsErrno: WSAEADDRINUSE is 10048, and a windows
+// Errno does not compare equal to syscall.EADDRINUSE (98), so a POSIX-only test
+// reads the held port as a bind fault on Windows — which is exactly what
+// TestDiscoveryCheckSeesListener did on the cross-platform job. Feeding both
+// errnos here pins the branch on every OS instead of waiting for that one
+// runner to disagree.
+func TestAddrInUseCoversTheWindowsErrno(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"windows", os.NewSyscallError("bind", syscall.Errno(10048)), true},
+		{"posix", os.NewSyscallError("bind", syscall.EADDRINUSE), true},
+		{"wrapped", &net.OpError{Op: "listen", Net: "udp", Err: os.NewSyscallError("bind", syscall.Errno(10048))}, true},
+		{"denied", os.NewSyscallError("bind", syscall.EACCES), false},
+	}
+	for _, tc := range cases {
+		if got := addrInUse(tc.err); got != tc.want {
+			t.Errorf("addrInUse(%s) = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

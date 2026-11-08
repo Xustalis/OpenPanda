@@ -34,8 +34,25 @@ func checkDiscovery(cfg *config.Config) Check {
 		_ = conn.Close()
 		return fail("doctor.discovery.idle", "addr", bind)
 	}
-	if errors.Is(err, syscall.EADDRINUSE) {
+	if addrInUse(err) {
 		return pass("doctor.discovery.ok", "addr", bind)
 	}
 	return fail("doctor.discovery.bindfail", "addr", bind, "err", err.Error())
+}
+
+// wsaEAddrInUse is Windows' WSAEADDRINUSE. A windows.Errno does not compare
+// equal to syscall.EADDRINUSE — 10048 against 98 — so the POSIX constant alone
+// reads a socket that is held exactly as intended as a bind fault, which is the
+// one verdict this check must never get backwards.
+const wsaEAddrInUse = syscall.Errno(10048)
+
+// addrInUse reports whether the bind lost the address to another socket. That
+// is the passing state here: the other socket is the node's own discovery
+// listener.
+func addrInUse(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	var errno syscall.Errno
+	return errors.As(err, &errno) && errno == wsaEAddrInUse
 }
