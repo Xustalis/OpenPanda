@@ -593,6 +593,19 @@ type Core struct {
 	autoDialMu    sync.Mutex
 	autoDialCands map[string]autoDialCand // node id -> dial candidate
 
+	// discovery reports the LAN-discovery listener's state to whoever asks —
+	// `panda doctor`, and the pairing panel through the engine. Without it a
+	// node that could not bind the discovery port looked exactly like a LAN
+	// with no peers: both render as "no devices found", and the operator has
+	// no way to tell "my network filters broadcasts" from "my own listener
+	// never came up". The bind error is kept rather than only logged, because
+	// the one startup line scrolls away long before anyone reads the panel.
+	discMu         sync.RWMutex
+	discListening  bool
+	discAddr       string
+	discErr        string
+	discLastBeacon int64 // unix seconds of the last accepted beacon; 0 = never
+
 	// retentionDays is the configured age limit for settled task rows
 	// (storage.task_retention_days): 0 keeps history forever. retentionSweepAt
 	// paces the hourly pass inside taskSweeps — the monitor ticks every 5s

@@ -1494,6 +1494,12 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 		// Bare "/project" only reports the active pointer — read-only output.
 	case "authorize":
 		return m.toggleAuthorize()
+	case "pair":
+		// Bare opens the yes/no card for the newest request; a verb answers
+		// without one. It runs inline rather than through the exec pump: the
+		// pump cannot raise a card, and this is a store write the daemon's
+		// confirm goroutine is already waiting on.
+		return m.pairCommand(arg)
 	case "sandbox":
 		// A config write plus a process-wide policy install, and no
 		// `panda sandbox` verb exists for the exec pump to find: inline keeps

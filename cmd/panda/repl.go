@@ -240,6 +240,10 @@ func init() {
 		{"skills", "memory", "cmd.skills", (*repl).cmdSkills},
 		{"skill", "memory", "cmd.skills", (*repl).cmdSkills},
 		{"nodes", "system", "cmd.nodes", (*repl).cmdNodes},
+		// `/pair` answers an inbound pairing request — the responder's half of
+		// the ceremony, which `panda pair confirm` does at the CLI. It lives in
+		// the shell because the shell is what notices the request.
+		{"pair", "system", "cmd.pair", (*repl).cmdPair},
 		{"card", "system", "cmd.card", (*repl).cmdCard},
 		{"agents", "system", "cmd.agents", (*repl).cmdAgents},
 		{"config", "system", "cmd.config", (*repl).cmdConfig},

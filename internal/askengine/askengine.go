@@ -105,6 +105,15 @@ type Options struct {
 	// it off: the flap a short-lived REPL causes on peers outweighs the
 	// benefit (and a co-resident daemon makes the row borrowed anyway).
 	MeshNode bool
+	// HoldIdentityLock keeps the node identity lock for this engine's whole
+	// lifetime instead of probing and releasing it. `panda web` sets it: the
+	// console is the long-lived owner of the node row, and `panda status`
+	// decides "the local node is up" from whether anyone holds that lock — a
+	// console that only probed reported itself down while it was serving, and
+	// a second console could start a duplicate owner. A co-resident daemon
+	// takes the lock first, so the console still degrades to a borrowed row
+	// instead of failing to start.
+	HoldIdentityLock bool
 	// LocalOnly marks a process that writes to the store and exits: `panda
 	// task add`, `task send`, `task continue`. Such a command needs the
 	// schema, the card and the task store — not a network presence. Opening
@@ -129,12 +138,17 @@ type Options struct {
 // Ask calls (the entry client and registry are; the scheduler core is).
 type Engine struct {
 	modelSyncCancel context.CancelFunc
-	modelWatcher    *configsync.Watcher  // schedMu; optional persisted config observer
-	appliedRuntime  config.RuntimeConfig // cfgMu; last published client/router, not a pending cfg edit
-	cfg             *config.Config
-	db              *sql.DB
-	client          atomic.Pointer[entry.Client]
-	injector        *memory.Injector
+	// identityLock is held only when Options.HoldIdentityLock is set and this
+	// engine won the node identity lock at scheduler init — the console's way
+	// of being the row's owner for as long as it serves. nil otherwise.
+	identityLock     *nodeidentity.Lock
+	holdIdentityLock bool
+	modelWatcher     *configsync.Watcher  // schedMu; optional persisted config observer
+	appliedRuntime   config.RuntimeConfig // cfgMu; last published client/router, not a pending cfg edit
+	cfg              *config.Config
+	db               *sql.DB
+	client           atomic.Pointer[entry.Client]
+	injector         *memory.Injector
 
 	// registry is swapped whole by SetMCPCommand; regMu guards the swap and
 	// gives in-flight Asks a stable registry reference.
@@ -1128,26 +1142,27 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 	}
 
 	e := &Engine{
-		cfg:            cfg,
-		appliedRuntime: cfg.RuntimeConfig(),
-		db:             db,
-		injector:       injector,
-		hermes:         hermes,
-		daily:          memory.NewDaily(hermes.WarmDir()),
-		projects:       projects,
-		remind:         remind,
-		skills:         skillStore,
-		logger:         logger,
-		queueTasks:     opts.QueueTasks,
-		awaitQueued:    opts.AwaitQueued,
-		asyncPeers:     opts.AsyncPeers,
-		meshNode:       opts.MeshNode,
-		localOnly:      opts.LocalOnly,
-		replyASCII:     opts.ReplyASCII,
-		cardPath:       opts.CardPath,
-		configPath:     config.ResolvePath(opts.ConfigPath),
-		locale:         loc,
-		explicitLocale: explicitLocale,
+		cfg:              cfg,
+		appliedRuntime:   cfg.RuntimeConfig(),
+		db:               db,
+		injector:         injector,
+		hermes:           hermes,
+		daily:            memory.NewDaily(hermes.WarmDir()),
+		projects:         projects,
+		remind:           remind,
+		skills:           skillStore,
+		logger:           logger,
+		queueTasks:       opts.QueueTasks,
+		awaitQueued:      opts.AwaitQueued,
+		asyncPeers:       opts.AsyncPeers,
+		meshNode:         opts.MeshNode,
+		holdIdentityLock: opts.HoldIdentityLock,
+		localOnly:        opts.LocalOnly,
+		replyASCII:       opts.ReplyASCII,
+		cardPath:         opts.CardPath,
+		configPath:       config.ResolvePath(opts.ConfigPath),
+		locale:           loc,
+		explicitLocale:   explicitLocale,
 	}
 	if db != nil {
 		// The gate fails closed without the store: approvalFor just reads
@@ -1258,6 +1273,42 @@ func (e *Engine) tryAutoInitScheduler() {
 	}
 }
 
+// identityLockHandoff is how long a long-lived owner keeps retrying the node
+// identity lock before accepting that somebody else owns the node.
+//
+// The race it covers is a restart: `panda web -daemon` starts the new console
+// the moment the old one is asked to stop, and the dying process may hold the
+// flock for a few hundred milliseconds while it finishes. Losing that race is
+// sticky — the loser keeps ownsRow=false for its whole life and therefore
+// never binds the mesh listener or runs discovery — so a one-second restart
+// left a node that answered on 7840 and on nothing else, with no line in the
+// log to say why.
+//
+// A daemon co-resident with the console pays this window once at startup and
+// then degrades exactly as before: it is the price of not confusing "another
+// owner" with "our own predecessor".
+const identityLockHandoff = 5 * time.Second
+
+// acquireNodeIdentity takes the identity lock, retrying briefly when a
+// long-lived owner (Options.HoldIdentityLock) finds it held. Probe-only
+// engines keep the single attempt: they release the lock immediately, so
+// waiting would slow every short command for nothing.
+func acquireNodeIdentity(kind, identity string, hold bool) (*nodeidentity.Lock, error) {
+	lock, err := nodeidentity.Acquire(kind, identity)
+	if err == nil || !hold || !errors.Is(err, nodeidentity.ErrAlreadyRunning) {
+		return lock, err
+	}
+	deadline := time.Now().Add(identityLockHandoff)
+	for time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		lock, err = nodeidentity.Acquire(kind, identity)
+		if err == nil || !errors.Is(err, nodeidentity.ErrAlreadyRunning) {
+			return lock, err
+		}
+	}
+	return nil, err
+}
+
 func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// The shared config supplies most of the scheduler's inputs; hold cfgMu
 	// for the build so a concurrent /model or /nodes mutation cannot tear a
@@ -1321,8 +1372,11 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// holds the lock and heartbeats the row, so a borrowed engine's Shutdown
 	// must not mark it offline — otherwise every `task add`/`ask` exit flips
 	// the daemon's self row until the next beat, and routing sees the local
-	// node as gone. Probe-only: the lock is released immediately so this
-	// process never blocks a real daemon from starting.
+	// node as gone. Probe-only for short-lived engines: the lock is released
+	// immediately so this process never blocks a real daemon from starting.
+	// A long-lived console that owns the row (Options.HoldIdentityLock) keeps
+	// it instead — status reads ownership from this lock, so a console that
+	// only probed advertised itself as down for its whole lifetime.
 	//
 	// ownsRow=false carries the same signal further: the daemon already runs
 	// the queue scheduler, task-lifecycle sweeps, peer links and discovery for
@@ -1331,12 +1385,28 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// shared store and its sibling conns only churn the daemon's held edges —
 	// one node identity, one work pipeline. Borrowed engines submit and read.
 	ownsRow := true
-	if lock, err := nodeidentity.Acquire(e.cfg.Node.Kind, card.NodeIdentity); err == nil {
-		_ = lock.Release()
-	} else if errors.Is(err, nodeidentity.ErrAlreadyRunning) {
+	lock, err := acquireNodeIdentity(e.cfg.Node.Kind, card.NodeIdentity, e.holdIdentityLock)
+	switch {
+	case err == nil:
+		if e.holdIdentityLock {
+			e.identityLock = lock
+		} else {
+			_ = lock.Release()
+		}
+	case errors.Is(err, nodeidentity.ErrAlreadyRunning):
 		sched.SetOwnsNodeRow(false)
 		ownsRow = false
-	} else {
+		// Say it out loud. A console that degrades to a borrowed node starts
+		// no mesh listener and no discovery, so it serves a panel while being
+		// unreachable — and before this line the only evidence was an absent
+		// log entry nobody was looking for. `panda status` still reports the
+		// consequence ("this node is not running"); this names the cause.
+		if e.meshNode {
+			e.logger.Info("askengine: node identity held by another process; serving as a borrowed node",
+				"identity", card.NodeIdentity,
+				"hint", "the mesh listener and LAN discovery stay with the lock holder")
+		}
+	default:
 		// Anything else (an unwritable lock directory, a filesystem error) is
 		// not evidence that this process owns the row. The permissive default
 		// made it consume the same queue as the daemon — double claims, tasks
@@ -1415,13 +1485,18 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// it probed the lock free at init because no daemon was up, and the
 	// moment a real daemon takes the lock these duties must die with it —
 	// or the stray keeps the listen port the daemon needs to bind and
-	// churns edges it no longer owns. watchNodeRow is the demotion tripwire.
+	// churns edges it no longer owns. watchNodeRow is the demotion tripwire —
+	// but an engine that HOLDS the lock (Options.HoldIdentityLock) is the
+	// row's owner by right, not provisionally: Held() returning true is its
+	// own doing, and reading that as a daemon takeover would tear down the
+	// mesh listener it should be keeping.
 	ownCtx := schedCtx
 	if ownsRow {
 		var ownCancel context.CancelFunc
 		ownCtx, ownCancel = context.WithCancel(schedCtx)
+		selfHolds := e.identityLock != nil
 		e.goBG("askengine: node row watch", func() {
-			e.watchNodeRow(ownCtx, sched, ownCancel, card)
+			e.watchNodeRow(ownCtx, sched, ownCancel, card, selfHolds)
 		})
 	}
 
@@ -1569,7 +1644,15 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 // that wedges the real node out. The probe is a cheap flock attempt; on
 // ErrAlreadyRunning the duties' ownCtx dies and the core stops claiming the
 // row, so its remaining conns arbitrate as ordinary siblings.
-func (e *Engine) watchNodeRow(ctx context.Context, sched *core.Core, demote context.CancelFunc, card ledger.Card) {
+//
+// A console that took the lock itself (Options.HoldIdentityLock) owns the row
+// permanently instead, and there is nothing to watch: the same probe would
+// read its own lock as a daemon takeover on the very first tick.
+func (e *Engine) watchNodeRow(ctx context.Context, sched *core.Core, demote context.CancelFunc, card ledger.Card, selfHolds bool) {
+	if selfHolds {
+		<-ctx.Done()
+		return
+	}
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -4098,5 +4181,12 @@ func (e *Engine) Close() {
 	}
 	if e.db != nil {
 		e.db.Close()
+	}
+	// Release the row ownership last: the lock is what `panda status` reads to
+	// call this node up, so it must outlive every store and duty above rather
+	// than advertise a down node that is still writing.
+	if e.identityLock != nil {
+		_ = e.identityLock.Release()
+		e.identityLock = nil
 	}
 }

@@ -205,6 +205,9 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/pair", h.listPair)
 	mux.HandleFunc("POST /api/pair/initiate", h.initiatePair)
 	mux.HandleFunc("POST /api/pair/answer", h.answerPair)
+	// Active /24 sweep behind the panel's "rescan" button: the fallback for
+	// LANs whose AP filters the discovery broadcast (see lanscan.go).
+	mux.HandleFunc("POST /api/pair/scan", h.scanPair)
 	mux.HandleFunc("GET /api/self", h.getSelf)
 	// Self-evolution (design doc §4.2): patch-set queue + diff preview for the
 	// merge-review gate. Read-only — the approve/reject actions ride the

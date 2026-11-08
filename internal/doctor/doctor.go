@@ -108,6 +108,12 @@ func Run(configPath string) []Check {
 			if c := checkMesh(cfg); c.Key != "" {
 				add(c)
 			}
+			// Discovery is checked last among the network rows: its verdict
+			// ("nobody is listening for beacons") only makes sense once the
+			// mesh and database states above are known.
+			if c := checkDiscovery(cfg); c.Key != "" {
+				add(c)
+			}
 		} else {
 			// A missing database on a writable path is the state every fresh
 			// `panda init` leaves behind: the daemon creates it on first run.

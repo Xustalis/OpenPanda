@@ -104,7 +104,11 @@ func main() {
 	// New accepts an empty model; only ask reports ErrNoModel until configured.
 	engine, err := askengine.New(ctx, cfg, askengine.Options{
 		CardPath: *cardPath, MCPCommand: *mcpCommand, QueueTasks: true,
-		MeshNode: true, ConfigPath: *configPath, Logger: logger,
+		// MeshNode + HoldIdentityLock: the sidecar serves the node for as long
+		// as it runs, so it must own the identity lock — that is the signal
+		// `panda status` reads to call this node up. A daemon that started
+		// first keeps the lock and the sidecar borrows the row instead.
+		MeshNode: true, HoldIdentityLock: true, ConfigPath: *configPath, Logger: logger,
 	})
 	if err != nil {
 		fatal("init ask engine", err)
