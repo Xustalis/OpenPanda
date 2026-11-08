@@ -214,9 +214,14 @@ func runWeb(args []string) {
 		// it listens for inbound peers, holds outbound keepalives and answers
 		// LAN beacons — otherwise the console is an island that can drain the
 		// queue but never be reached.
-		MeshNode:   true,
-		ConfigPath: *configPath,
-		Logger:     logger,
+		MeshNode: true,
+		// The console outlives every request and is the node's row owner while
+		// it serves; holding the identity lock is what `panda status` and the
+		// panel's own node list read to call this node up. A daemon that got
+		// there first keeps the lock, and the console borrows the row.
+		HoldIdentityLock: true,
+		ConfigPath:       *configPath,
+		Logger:           logger,
 	})
 	if err != nil {
 		fatal("init ask engine", err)

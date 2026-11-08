@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -144,7 +145,7 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("event: change\ndata: init\n\n"))
 	flusher.Flush()
 
-	var lastTask, lastNode, lastRem, lastSess, lastTodo string
+	var lastTask, lastNode, lastRem, lastSess, lastTodo, lastPair string
 	// trace watermark: the highest task_events.id we have already delivered.
 	// The stream is a post-connect delta by design — the orbit hydrates from
 	// GET /api/tasks/{id} and the board reads each task's last_event stamp,
@@ -181,11 +182,12 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 			remFP := h.cachedReminderFingerprint()
 			sessFP := h.cachedSessionFingerprint()
 			todoFP := h.cachedTodoFingerprint()
+			pairFP := h.cachedPairFingerprint()
 			fpChanged := first || taskFP != lastTask || nodeFP != lastNode || remFP != lastRem ||
-				sessFP != lastSess || todoFP != lastTodo
+				sessFP != lastSess || todoFP != lastTodo || pairFP != lastPair
 			if fpChanged {
 				first = false
-				lastTask, lastNode, lastRem, lastSess, lastTodo = taskFP, nodeFP, remFP, sessFP, todoFP
+				lastTask, lastNode, lastRem, lastSess, lastTodo, lastPair = taskFP, nodeFP, remFP, sessFP, todoFP, pairFP
 				kinds := []string{"tasks"}
 				if nodeFP != "" {
 					kinds = append(kinds, "nodes")
@@ -199,11 +201,14 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 				if todoFP != "" {
 					kinds = append(kinds, "todos")
 				}
-				// Fixed-slot fingerprint field — task/node/reminder/session/todo —
-				// so a missing middle fingerprint never shifts the slots after it
-				// left. Older clients read the first three (or four) and ignore
-				// the tail; the kinds list is what they actually switch on.
-				data := taskFP + "/" + nodeFP + "/" + remFP + "/" + sessFP + "/" + todoFP
+				if pairFP != "" {
+					kinds = append(kinds, "pairs")
+				}
+				// Fixed-slot fingerprint field — task/node/reminder/session/todo/
+				// pair — so a missing middle fingerprint never shifts the slots
+				// after it left. Older clients read the first three (or four) and
+				// ignore the tail; the kinds list is what they actually switch on.
+				data := taskFP + "/" + nodeFP + "/" + remFP + "/" + sessFP + "/" + todoFP + "/" + pairFP
 				if _, err := w.Write([]byte("event: change\ndata: " + strings.Join(kinds, ",") + " " + data + "\n\n")); err != nil {
 					return
 				}
@@ -403,6 +408,21 @@ func (h *handler) cachedNodeFingerprint() string {
 			sum.Write([]byte{';'})
 		}
 		return hex.EncodeToString(sum.Sum(nil))[:16], nil
+	})
+	return fp
+}
+
+// cachedPairFingerprint digests the pairing table so a console anywhere in the
+// app — not just the one with the pairing card open — hears that somebody is
+// standing at the other machine waiting for an answer. Before this, an inbound
+// request was only visible to a viewer who happened to open 工作空间 → 连接设备,
+// and the request's four-minute window routinely expired unseen.
+func (h *handler) cachedPairFingerprint() string {
+	if h.db == nil {
+		return ""
+	}
+	fp, _ := sharedFingerprints.get("pairs", func() (string, error) {
+		return core.PairFingerprint(h.db), nil
 	})
 	return fp
 }

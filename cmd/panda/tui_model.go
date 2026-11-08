@@ -24,6 +24,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -134,6 +135,14 @@ type tuiModel struct {
 	// nextNode is the pending one-shot /node pin. It is cleared when the next
 	// ask consumes it.
 	nextNode string
+	// pairReq is the inbound pairing request this console is showing: the
+	// banner above the composer and the /pair card both key off it. It is
+	// refreshed by the task watcher's poll (2s) rather than a timer of its
+	// own — the same store, the same cadence, one thing that can stop.
+	pairReq *core.PairPendingRow
+	// pairNoted is the request id already announced in the transcript, so a
+	// four-minute request is not printed on every poll.
+	pairNoted string
 	// teamMarks is the working set of the open roster picker: toggling changes
 	// only this map until Enter applies it, so Esc is a true cancel.
 	teamMarks map[string]bool

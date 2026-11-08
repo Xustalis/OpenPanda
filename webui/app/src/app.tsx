@@ -28,6 +28,7 @@ import { Icon } from './components/icons'
 import { ConfirmHost } from './components/confirm'
 import { PaletteHost, openPalette } from './components/palette'
 import { ReminderBell, openReminders } from './components/reminders'
+import { PairRequestHost } from './components/pair-request-host'
 
 /** Re-render the subtree on locale change (the whole shell is cheap). */
 function useLocaleRerender(): void {
@@ -141,6 +142,9 @@ export function App() {
       <ToastHost placement={base.view === 'workspace' ? 'top-center' : 'bottom-right'} />
       <ConfirmHost />
       <PaletteHost onLogout={logout} />
+      {/* Ambient, not a route: a pairing request expires in four minutes, so
+          it cannot live inside 工作空间 → 连接设备 and wait to be found. */}
+      <PairRequestHost />
       <aside
         ref={sidebar}
         class={`sidebar${menuOpen ? ' mobile-open' : ''}`}

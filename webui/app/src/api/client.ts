@@ -875,6 +875,36 @@ export interface PairView {
   requests: PairRequest[]
   discovered: DiscoveredDevice[]
   outgoing: OutgoingPair[]
+  /** Nodes already in this fleet that are online. A joined node is not a
+   *  pairing candidate, so an empty discover list with linked > 0 means
+   *  "already connected", not "nothing on the network". */
+  linked: number
+  /** This machine's own name and LAN address, printed above the list so the
+   *  operator can find it on the other screen — and type it there when the
+   *  beacon never arrives. Empty when the host has no non-loopback IPv4. */
+  self_name: string
+  self_addr: string
+  /** Bare hosts of fleet nodes already online. A joined node still answers the
+   *  sweep, so its row is labelled instead of offering a pairing it cannot
+   *  complete. */
+  linked_hosts: string[]
+}
+
+/** One address an active LAN sweep found accepting TCP on the mesh port. */
+export interface ScanCandidate {
+  addr: string
+}
+
+/** POST /api/pair/scan — the fallback for access points that filter the
+ *  discovery broadcast. Reachability only: identity still comes from the
+ *  pairing handshake, so a hit is a candidate to dial, never a peer. */
+export interface PairScanResult {
+  port: number
+  subnets: string[]
+  candidates: ScanCandidate[]
+  probed: number
+  elapsed_ms: number
+  truncated?: boolean
 }
 
 /** One inbound pairing request (a row in pair_sessions on the daemon). */
@@ -885,6 +915,10 @@ export interface PairRequest {
   code: string
   state: string
   expires_at: string
+  /** Seconds left, measured by the daemon's clock. Present on every current
+   *  build; optional only so a console can drive an older node, where the
+   *  countdown falls back to parsing `expires_at` against the local clock. */
+  expires_in?: number
 }
 
 /** One LAN-discovered device the pair button can target. */
@@ -1362,6 +1396,13 @@ export const api = {
    *  hands over the mesh secret; reject ends the session. */
   pairAnswer(id: string, confirm: boolean): Promise<{ state: string }> {
     return request('POST', '/api/pair/answer', { id, confirm })
+  },
+
+  /** Sweep the node's own IPv4 /24 for a listening mesh port. This is what
+   *  "rescan" falls back to when the access point filters broadcast beacons —
+   *  the case where every device on the LAN is present and invisible. */
+  pairScan(): Promise<PairScanResult> {
+    return request('POST', '/api/pair/scan', {}, { timeoutMs: 20_000 })
   },
 
   // ---- Capability card (structured editor + raw YAML editor) ----

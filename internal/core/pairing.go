@@ -850,6 +850,81 @@ func ListPairSessions(db *sql.DB) ([]PairSessionRow, error) {
 	return out, rows.Err()
 }
 
+// PairPendingRow is one inbound request a human still has to answer: state
+// 'ready' and still inside its window.
+//
+// It is deliberately narrower than PairSessionRow. The listing surfaces
+// (`panda pair`, the console's pairing card) want every row including the
+// terminal ones so they can say what happened; every *notification* surface —
+// the TUI banner, the console's floating request card, the `status` hint —
+// wants only the rows that can still be acted on. Asking the question in SQL
+// keeps those three from each re-deriving "is this still answerable" and
+// drifting apart from the sweep that expires rows.
+type PairPendingRow struct {
+	ID        string
+	PeerName  string
+	PeerAddr  string
+	SAS       string
+	ExpiresAt time.Time
+}
+
+// PairPending lists the inbound requests that are still answerable, newest
+// first.
+func PairPending(db *sql.DB) ([]PairPendingRow, error) {
+	if db == nil {
+		return nil, nil
+	}
+	rows, err := db.Query(
+		`SELECT id, peer_name, peer_addr, sas, expires_at FROM pair_sessions
+		 WHERE state=? AND expires_at>? ORDER BY created_at DESC`,
+		PairStateReady, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PairPendingRow
+	for rows.Next() {
+		var r PairPendingRow
+		var ea int64
+		if err := rows.Scan(&r.ID, &r.PeerName, &r.PeerAddr, &r.SAS, &ea); err != nil {
+			return nil, err
+		}
+		r.ExpiresAt = time.Unix(ea, 0)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// PairFingerprint digests the pairing table's (id, state) pairs so a console
+// watching the change feed learns that somebody knocked — and that the request
+// was answered or expired — without polling the endpoint on its own timer.
+//
+// The SAS and the peer name are left out on purpose: the digest only has to
+// answer "did the set of requests change", and hashing the presented code
+// would make the fingerprint flip on data no renderer keys on.
+func PairFingerprint(db *sql.DB) string {
+	if db == nil {
+		return ""
+	}
+	rows, err := db.Query(`SELECT id, state FROM pair_sessions ORDER BY id`)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	sum := sha256.New()
+	for rows.Next() {
+		var id, state string
+		if err := rows.Scan(&id, &state); err != nil {
+			return ""
+		}
+		sum.Write([]byte(id))
+		sum.Write([]byte{':'})
+		sum.Write([]byte(state))
+		sum.Write([]byte{';'})
+	}
+	return hex.EncodeToString(sum.Sum(nil))[:16]
+}
+
 // AnswerPairSession flips a ready session to confirmed or rejected — the
 // responder CLI's side of the human decision. ID may be a unique prefix so
 // the operator can answer with the displayed short id.

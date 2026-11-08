@@ -76,7 +76,65 @@ const (
 	// its beacons stop.
 	autoDialTick     = 5 * time.Second
 	autoDialCooldown = 60 * time.Second
+
+	// discoveryRetry paces the bind retry. A failed bind used to end discovery
+	// for the whole process lifetime, which is the worst possible failure
+	// shape for a feature whose only symptom is an empty list: the port is
+	// usually held by a sibling process that exits minutes after startup (a
+	// previous daemon still draining, a console probing the lock), and the
+	// node then silently loses discovery until someone restarts it. Retrying
+	// converts a permanent outage into a bounded startup delay.
+	discoveryRetry = 30 * time.Second
 )
+
+// DiscoverySnapshot is a point-in-time view of the LAN-discovery listener.
+// Listening=false with Err set means the socket never bound — the case the
+// panel and `panda doctor` surface instead of an unexplained empty list.
+// LastBeacon is unix seconds of the last accepted beacon datagram (0 = never),
+// which separates "listener up, network silent" from "listener never up".
+type DiscoverySnapshot struct {
+	Listening  bool
+	Addr       string
+	Err        string
+	LastBeacon int64
+}
+
+// DiscoveryStatus reports the listener state recorded by RunDiscovery. Safe to
+// call concurrently: the discovery goroutine is the only writer.
+func (c *Core) DiscoveryStatus() DiscoverySnapshot {
+	c.discMu.RLock()
+	defer c.discMu.RUnlock()
+	return DiscoverySnapshot{
+		Listening:  c.discListening,
+		Addr:       c.discAddr,
+		Err:        c.discErr,
+		LastBeacon: c.discLastBeacon,
+	}
+}
+
+// noteDiscoveryListening records a successful bind.
+func (c *Core) noteDiscoveryListening(addr string) {
+	c.discMu.Lock()
+	c.discListening, c.discAddr, c.discErr = true, addr, ""
+	c.discMu.Unlock()
+}
+
+// noteDiscoveryBindError records why the socket could not be bound. The
+// listener flag drops back to false so a mid-life rebind failure cannot leave
+// the panel claiming a socket it does not hold.
+func (c *Core) noteDiscoveryBindError(err error) {
+	c.discMu.Lock()
+	c.discListening, c.discErr = false, err.Error()
+	c.discMu.Unlock()
+}
+
+// noteBeaconHeard stamps an accepted beacon. Written from the read loop, read
+// by diagnostics only — the value is a hint, never a decision input.
+func (c *Core) noteBeaconHeard() {
+	c.discMu.Lock()
+	c.discLastBeacon = time.Now().Unix()
+	c.discMu.Unlock()
+}
 
 // autoDialCand is a beacon-origin dial candidate: an address the receiver
 // resolved to the datagram's own source IP (src-pinned), lastSeen for TTL,
@@ -222,6 +280,7 @@ func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string,
 	uaddr, err := net.ResolveUDPAddr("udp", bindAddr)
 	if err != nil {
 		c.logger.Warn("discovery: bad bind addr", "addr", bindAddr, "err", err)
+		c.noteDiscoveryBindError(err)
 		return
 	}
 	port := uaddr.Port
@@ -230,11 +289,35 @@ func (c *Core) RunDiscovery(ctx context.Context, bindAddr, advertiseAddr string,
 	// listener binds happily and then never hears a single beacon. The
 	// beacon wire is IPv4-only by design, so the v4 wildcard is the
 	// correct socket.
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: port})
-	if err != nil {
-		c.logger.Warn("discovery: listener failed", "addr", bindAddr, "err", err)
+	//
+	// The bind retries rather than giving up: the port is regularly held for
+	// the first seconds of startup by a sibling that is about to exit (a
+	// previous daemon draining, a console that probed and released the
+	// identity lock), and surrendering on that transient costs discovery for
+	// the rest of the process's life. The retry is bounded by ctx, so
+	// shutdown stays immediate.
+	for {
+		conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: port})
+		if err != nil {
+			c.noteDiscoveryBindError(err)
+			c.logger.Warn("discovery: listener failed; retrying",
+				"addr", bindAddr, "err", err, "retry_in", discoveryRetry)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(discoveryRetry):
+			}
+			continue
+		}
+		c.noteDiscoveryListening(conn.LocalAddr().String())
+		c.serveDiscovery(ctx, conn, port, advertiseAddr, autoDial)
 		return
 	}
+}
+
+// serveDiscovery runs the announcer and the beacon read loop on a socket that
+// is already bound, until ctx ends.
+func (c *Core) serveDiscovery(ctx context.Context, conn *net.UDPConn, port int, advertiseAddr string, autoDial bool) {
 	defer conn.Close()
 	// ReadFromUDP blocks; closing the socket on shutdown is what releases
 	// the read loop below — without this the goroutine outlives ctx forever.
@@ -381,6 +464,12 @@ func (c *Core) onBeacon(ctx context.Context, raw []byte, src *net.UDPAddr) {
 	if !ok || b.ID == c.nodeID {
 		return
 	}
+	// A well-formed beacon from someone else proves both halves of discovery
+	// are alive: our socket is bound AND broadcasts cross this LAN. That is
+	// exactly the distinction the operator needs when the device list is
+	// empty, so it is recorded before any of the policy filters below can
+	// discard the row.
+	c.noteBeaconHeard()
 	verified := false
 	if b.Sig != "" {
 		if !beaconVerified(b) {

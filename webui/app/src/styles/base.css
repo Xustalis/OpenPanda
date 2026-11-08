@@ -173,3 +173,22 @@ kbd {
   color: var(--text-secondary);
   margin-bottom: var(--sp-5);
 }
+
+/* — Screen-reader-only ---------------------------------------------- */
+
+/* For text that exists only for assistive tech: a live-region announcement
+   whose visible form would be redundant (the card it describes is already on
+   screen), or a label the layout has no room for. Clipped rather than
+   `display: none` — the latter removes the node from the accessibility tree
+   too, which is the opposite of the point. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

@@ -216,6 +216,57 @@
   color: var(--text);
 }
 
+/* Narrow viewports: the card stops being a 360px popover hanging off a corner
+   and spans the width under the header instead. At 360px it was already
+   `min(360px, 100% - 40px)` — on a 390px phone that leaves 350px for rows
+   carrying a name, a badge, an address and a button, which is where the
+   confirm button and the code ended up clipped rather than reflowed. */
+@media (max-width: 640px) {
+  /* A bottom sheet rather than a card hanging off the header.
+     At this width the card is the widest thing on the screen anyway — 360px
+     from a corner leaves two strips of background and a scrollable column that
+     starts at the top of the window. The sheet takes the full width, answers to
+     the viewport instead of the header's box (so `inset` alone guarantees the
+     fit), and sits where the thumb is: this panel is a two-tap surface — pick a
+     device, confirm on the other screen — not a place to read. */
+  .ws-connect {
+    position: fixed;
+    top: auto;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    max-height: min(76vh, 620px);
+    padding: 12px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+    animation: ws-sheet-in var(--dur-fast) var(--ease-enter);
+  }
+}
+
+@keyframes ws-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Fingers, not cursors: pairing is a two-device act and the second device is
+   often a phone or a tablet opened at the other machine. 28px rows are a
+   miss-and-retry at that size. */
+@media (pointer: coarse) {
+  .pair-item-cta,
+  .pair-cta,
+  .pair-cta-secondary,
+  .pair-manual .btn,
+  .connect-id-copybtn {
+    min-height: 40px;
+    min-width: 40px;
+  }
+}
+
 /* Map. One column, always: the rail floats over it rather than taking a lane
    out of it — a lane narrowed the canvas, and the ring layout re-centred every
    plate the moment a list opened. */
