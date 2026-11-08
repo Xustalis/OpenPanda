@@ -5878,6 +5878,9 @@ code.md-file:focus-visible {
 .policy-sandbox-head {
   display: flex;
   align-items: center;
+  /* The mode picker wraps under the state on a narrow column instead of
+     squeezing the pill and the backend name out of the card. */
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }
@@ -5916,10 +5919,15 @@ code.md-file:focus-visible {
   color: var(--warn);
 }
 .policy-sandbox-mode {
-  margin-left: auto;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--text-tertiary);
+}
+/* The control owns the right edge: the head is dot · title · state · backend
+   · mode picker, and only the picker is pinned. */
+.policy-sandbox-pick {
+  display: flex;
+  margin-left: auto;
 }
 .policy-sandbox .hint {
   margin: 0;

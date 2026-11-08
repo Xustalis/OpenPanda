@@ -184,6 +184,12 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 				return []string{"once", "session", "project"}
 			}
 		}
+	case "sandbox":
+		// Three modes, no verbs: `/sandbox ` lists them in the popup and on Tab,
+		// which is the whole discovery story for a command with one argument.
+		if len(args) == 1 {
+			return []string{config.SandboxModeOff, config.SandboxModeStandard, config.SandboxModeStrict}
+		}
 	case "session", "sessions":
 		if len(args) == 1 {
 			return append(r.sessionIDs(), "list", "new", "show", "mv", "rm", "diff", "merge", "revert")

@@ -1082,17 +1082,41 @@ type SandboxConfig struct {
 	DenyWritePaths []string `yaml:"deny_write_paths"`
 }
 
+// The three canonical spellings of sandbox.mode. Off is the shipped default;
+// standard and strict turn OS confinement on.
+const (
+	SandboxModeOff      = "off"
+	SandboxModeStandard = "standard"
+	SandboxModeStrict   = "strict"
+)
+
 // NormalizedMode folds unset/unknown spellings into the canonical mode names
 // ("off", "standard", "strict") — anything unrecognized fails closed-ish by
 // degrading to "off" rather than inventing a policy.
 func (s SandboxConfig) NormalizedMode() string {
 	switch strings.ToLower(strings.TrimSpace(s.Mode)) {
-	case "standard":
-		return "standard"
-	case "strict":
-		return "strict"
+	case SandboxModeStandard:
+		return SandboxModeStandard
+	case SandboxModeStrict:
+		return SandboxModeStrict
 	default:
-		return "off"
+		return SandboxModeOff
+	}
+}
+
+// ParseSandboxMode is the write-side twin of NormalizedMode: it accepts the
+// three spellings (case- and space-insensitive) and rejects everything else.
+// The two differ on purpose. Reading a file, an unrecognized spelling has to
+// degrade to "off" — refusing to boot over a typo would be worse than running
+// unconfined and saying so. Writing one, silence is the dangerous answer: an
+// operator who asked for "standrad" must be told, not handed a node that
+// reports off and was never confined.
+func ParseSandboxMode(in string) (string, error) {
+	switch mode := strings.ToLower(strings.TrimSpace(in)); mode {
+	case SandboxModeOff, SandboxModeStandard, SandboxModeStrict:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("sandbox.mode must be off, standard, or strict, got %q", in)
 	}
 }
 

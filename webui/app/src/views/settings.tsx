@@ -33,6 +33,11 @@ import { SystemView } from './system'
 import { ModelsSection } from './models'
 import { loadAgentRoster } from '../utils/agent-roster'
 
+/** The subprocess sandbox's writable half. Kept here rather than in the API
+ *  types: `sandbox.mode` arrives as a plain string (an older node may omit
+ *  it), and narrowing at the control is what keeps the segmented row total. */
+type SandboxMode = 'off' | 'standard' | 'strict'
+
 export type Section =
   | 'general'
   | 'models'
@@ -353,9 +358,9 @@ function TeamSection() {
 
 
 /** App policies (C1, GET/PUT /api/settings/app): how Panda injects itself,
- *  which agents routing prefers, the memory caps, and the approval gate.
- *  The sandbox row is GET-only — it describes the confinement every agent
- *  subprocess already runs under, it is not a switch.
+ *  which agents routing prefers, the memory caps, the approval gate, and the
+ *  subprocess sandbox's mode. The sandbox's platform half (backend/active) is
+ *  still read-only — it reports what the OS can do; the mode is a setting.
  *
  *  The page is four blocks, one topic each: 模型注入 / 路由 / 记忆 / 安全. A
  *  header names the topic, and inside, one setting per row — a label, one
@@ -421,13 +426,25 @@ function PolicySection() {
     setNotice('')
   }
 
+  function setSandboxMode(mode: SandboxMode) {
+    setForm((f) => (f && f.sandbox ? { ...f, sandbox: { ...f.sandbox, mode } } : f))
+    setNotice('')
+  }
+
   async function save(e: Event) {
     e.preventDefault()
     if (saving || badLimits) return
     setSaving(true)
     setError('')
     try {
-      const next = await api.putAppSettings(current)
+      // sandbox_mode is the write half of the read-only sandbox block; the
+      // rest of that object (backend, active, work_path) is ignored server-side.
+      // Omitted, not defaulted, when the node reported no sandbox block: an
+      // unknown mode must stay unknown rather than save as "off".
+      const next = await api.putAppSettings({
+        ...current,
+        sandbox_mode: current.sandbox?.mode,
+      })
       setForm(next)
       setSaved(next)
       setNotice(t('settings.saved'))
@@ -520,7 +537,9 @@ function PolicySection() {
             onPick={(v) => patch({ approval_mode: v })}
           />
         </PolicyRow>
-        {current.sandbox && <SandboxCard sandbox={current.sandbox} />}
+        {current.sandbox && (
+          <SandboxCard sandbox={current.sandbox} onPick={setSandboxMode} />
+        )}
       </PolicyGroup>
 
       <div class="policy-actions">
@@ -562,8 +581,9 @@ function PolicySection() {
   )
 }
 
-/** Both settings objects describe the same five editable policy groups; the
- *  sandbox block is GET-only and must not make an untouched form look dirty. */
+/** Both settings objects describe the same editable policy groups. The
+ *  sandbox's backend/active/work_path are platform facts and never make the
+ *  form dirty; its mode is a policy and does. */
 function samePolicy(a: AppSettings, b: AppSettings) {
   return (
     a.injection_model === b.injection_model &&
@@ -572,7 +592,8 @@ function samePolicy(a: AppSettings, b: AppSettings) {
     a.preferred_agents.join('\u0000') === b.preferred_agents.join('\u0000') &&
     a.memory_limits.user === b.memory_limits.user &&
     a.memory_limits.memory === b.memory_limits.memory &&
-    a.memory_limits.project === b.memory_limits.project
+    a.memory_limits.project === b.memory_limits.project &&
+    (a.sandbox?.mode || 'off') === (b.sandbox?.mode || 'off')
   )
 }
 
@@ -718,15 +739,29 @@ function AgentChips(props: {
   )
 }
 
-/** The sandbox block is a status, not a setting: it reports the confinement
- *  the subprocesses actually run under. It used to sit in the same column as
- *  the switches, where it read as a third, oddly worded toggle — so it is a
- *  panel now, with the state as a pill and the path on its own line instead
- *  of a sentence that wraps around a file path. */
-function SandboxCard(props: { sandbox: NonNullable<AppSettings['sandbox']> }) {
+/** The sandbox block: a status panel that is also steerable. `backend` and
+ *  `active` stay read-only — they are facts about the platform — while `mode`
+ *  is the policy its owner sets, so it is a segmented control writing the same
+ *  config.yaml key `/sandbox` and `panda config sandbox set` write. Saves ride
+ *  the page's single 保存, the same as every other policy row. */
+function SandboxCard(props: {
+  sandbox: NonNullable<AppSettings['sandbox']>
+  onPick(mode: SandboxMode): void
+}) {
   const sb = props.sandbox
-  const configured = !!sb.mode && sb.mode !== 'off'
-  const state = sb.active ? 'on' : configured ? 'warn' : 'off'
+  const mode = (sb.mode || 'off') as SandboxMode
+  const configured = mode !== 'off'
+  // Derive "in effect" from the *pending* mode, not from the saved `active`
+  // flag: picking standard on a page that was saved as off has to light the
+  // dot immediately, or the control looks inert.
+  const active = configured && !!sb.backend
+  const state = active ? 'on' : configured ? 'warn' : 'off'
+  const desc =
+    mode === 'off'
+      ? t('settings.sandboxDesc')
+      : mode === 'standard'
+        ? t('settings.sandboxDescStandard')
+        : t('settings.sandboxDescStrict')
   return (
     <div class="policy-sandbox" data-state={state}>
       <div class="policy-sandbox-head">
@@ -739,20 +774,21 @@ function SandboxCard(props: { sandbox: NonNullable<AppSettings['sandbox']> }) {
               ? t('policy.sandboxNoBackend')
               : t('policy.sandboxOff')}
         </span>
-        {configured && (
-          <code class="policy-sandbox-mode">
-            {sb.mode}
-            {sb.backend ? ` · ${sb.backend}` : ''}
-          </code>
-        )}
+        {sb.backend && <code class="policy-sandbox-mode">{sb.backend}</code>}
+        <span class="policy-sandbox-pick">
+          <PolicySegmented
+            label={t('settings.sandbox')}
+            value={mode}
+            options={(['off', 'standard', 'strict'] as const).map((v) => ({
+              value: v,
+              label: t(`settings.sandbox.${v}`),
+            }))}
+            onPick={props.onPick}
+          />
+        </span>
       </div>
-      <p class="hint">
-        {state === 'on'
-          ? t('settings.sandboxDescOn')
-          : state === 'warn'
-            ? t('settings.sandboxDescNoBackend')
-            : t('settings.sandboxDesc')}
-      </p>
+      <p class="hint">{desc}</p>
+      {state === 'warn' && <p class="hint">{t('settings.sandboxDescNoBackend')}</p>}
       {sb.work_path && (
         <div class="policy-sandbox-path">
           <span>{t('policy.sandboxPath')}</span>

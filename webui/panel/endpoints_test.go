@@ -23,6 +23,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -957,8 +958,89 @@ func TestAppSettingsRoundTrip(t *testing.T) {
 	}
 }
 
-// ---- skills approval ----
+// TestAppSettingsSandboxMode pins the writable half of the sandbox block: the
+// console used to describe confinement and tell the operator to go edit
+// config.yaml. mode is now a policy the page owns — but only the mode: backend
+// and active stay facts, and "off" has to be reachable again.
+func TestAppSettingsSandboxMode(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := config.Default()
+	cfg.Storage.WorkPath = tmp
+	configPath := filepath.Join(tmp, "config.yaml")
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The base policy is process-wide: a mode installed here would otherwise
+	// outlive the test and wrap every subprocess a later test spawns.
+	before := security.BasePolicy()
+	defer security.SetBasePolicy(before)
 
+	h := New(Deps{
+		Store:      newTestStore(t),
+		Cfg:        cfg,
+		ConfigPath: configPath,
+		StaticDir:  t.TempDir(),
+		Token:      testToken,
+	})
+
+	const base = `"injection_model":"auto","approval_mode":"on-request","memory_limits":{"user":1,"memory":1,"project":1}`
+
+	// A typo is refused, not folded to off: a node that reports "off" after
+	// the operator asked for confinement is the failure this guards.
+	code, _ := doJSON(t, h, jsonReq(http.MethodPut, "/api/settings/app",
+		`{`+base+`,"sandbox_mode":"standrad"}`))
+	if code != http.StatusBadRequest {
+		t.Fatalf("bad sandbox_mode status = %d, want 400", code)
+	}
+
+	code, out := doJSON(t, h, jsonReq(http.MethodPut, "/api/settings/app",
+		`{`+base+`,"sandbox_mode":"standard"}`))
+	if code != http.StatusOK {
+		t.Fatalf("put status = %d, out = %v", code, out)
+	}
+	sb, ok := out["sandbox"].(map[string]any)
+	if !ok || sb["mode"] != "standard" {
+		t.Fatalf("sandbox echo = %v", out["sandbox"])
+	}
+	if cfg.Sandbox.Mode != config.SandboxModeStandard {
+		t.Fatalf("live config sandbox.mode = %q", cfg.Sandbox.Mode)
+	}
+	if onDisk, err := os.ReadFile(configPath); err != nil || !strings.Contains(string(onDisk), config.SandboxModeStandard) {
+		t.Fatalf("config file not updated: %q err %v", onDisk, err)
+	}
+	// active is derived, never asserted blindly: a host without a backend must
+	// report configured-but-unenforced instead of pretending.
+	if sb["active"] == true && sb["backend"] == "" {
+		t.Fatalf("active without a backend: %v", sb)
+	}
+
+	// An absent sandbox_mode leaves the mode alone — older clients save the
+	// rest of the policy without carrying this field.
+	if code, out := doJSON(t, h, jsonReq(http.MethodPut, "/api/settings/app", `{`+base+`}`)); code != http.StatusOK {
+		t.Fatalf("put without sandbox_mode status = %d", code)
+	} else if sb, _ := out["sandbox"].(map[string]any); sb["mode"] != "standard" {
+		t.Fatalf("omitted sandbox_mode changed the mode: %v", out["sandbox"])
+	}
+
+	// off is a value, not an absence — it must turn confinement back off.
+	code, out = doJSON(t, h, jsonReq(http.MethodPut, "/api/settings/app",
+		`{`+base+`,"sandbox_mode":"off"}`))
+	if code != http.StatusOK {
+		t.Fatalf("disable status = %d", code)
+	}
+	if sb, _ := out["sandbox"].(map[string]any); sb["mode"] != "off" {
+		t.Fatalf("sandbox after off = %v", out["sandbox"])
+	}
+	if cfg.Sandbox.Mode != config.SandboxModeOff {
+		t.Fatalf("live config sandbox.mode = %q, want off", cfg.Sandbox.Mode)
+	}
+}
+
+// ---- skills approval ----
 func TestSkillsApprovalFlow(t *testing.T) {
 	store := skills.NewStore(t.TempDir())
 	for _, sk := range []*skills.Skill{

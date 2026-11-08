@@ -9,15 +9,18 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
-// appSettingsJSON is the wire form of the four "app policy" config groups
-// (C1): model injection, routing preferences, memory caps, and the approval
-// gate. Sandbox is GET-only — it describes the confinement every agent
-// subprocess already runs under (security.Sandbox), it is not a switch.
+// appSettingsJSON is the wire form of the "app policy" config groups (C1):
+// model injection, routing preferences, memory caps, the approval gate, the
+// agent tool face, and the subprocess sandbox mode. The sandbox block reports
+// the confinement actually in effect; SandboxMode is its single writable
+// field, because mode is a policy the operator owns while backend/active are
+// facts about the platform.
 type appSettingsJSON struct {
 	InjectionModel  string           `json:"injection_model"` // auto | always | never
 	PreferredAgents []string         `json:"preferred_agents"`
@@ -29,6 +32,10 @@ type appSettingsJSON struct {
 	// it since v0.0.7; it was the one policy the console could not reach.
 	ToolsPolicy string       `json:"tools_policy"` // minimal | extended
 	Sandbox     *sandboxJSON `json:"sandbox,omitempty"`
+	// SandboxMode is the write half of that block: off | standard | strict.
+	// Empty means "leave the configured mode alone", so a client built before
+	// this field existed still saves the rest of the policy.
+	SandboxMode string `json:"sandbox_mode,omitempty"`
 }
 
 type memoryLimitsJSON struct {
@@ -37,10 +44,10 @@ type memoryLimitsJSON struct {
 	Project int `json:"project"`
 }
 
-// sandboxJSON reports the confinement actually in effect — read-only by
-// design: the mode comes from config.yaml, the backend from whatever the
-// platform provides (seatbelt/bwrap/""), and the UI must not pretend the
-// sandbox is stronger than it is.
+// sandboxJSON reports the confinement actually in effect. Mode is writable
+// (PUT, sandbox_mode); backend and active are read-only facts — the platform
+// provides whatever backend it has (seatbelt/bwrap/""), and the UI must not
+// pretend the sandbox is stronger than it is.
 type sandboxJSON struct {
 	WorkPath string `json:"work_path"`
 	Mode     string `json:"mode"`
@@ -51,8 +58,8 @@ type sandboxJSON struct {
 	Active bool `json:"active"`
 }
 
-// getAppSettings serves GET /api/settings/app — the live values of the four
-// policy groups plus the read-only sandbox description.
+// getAppSettings serves GET /api/settings/app — the live values of the policy
+// groups plus the sandbox block (mode writable, backend/active descriptive).
 func (h *handler) getAppSettings(w http.ResponseWriter, r *http.Request) {
 	if h.cfg == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
@@ -81,11 +88,17 @@ func (h *handler) getAppSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// putAppSettings serves PUT /api/settings/app — validate the four policy
-// groups, persist them to config.yaml with comments preserved (one
-// comment-preserving config.UpdateSection* write per field), then refresh the
-// in-memory config the engine shares so the next task already
-// routes/injects/approves with the new policy. No restart needed.
+// putAppSettings serves PUT /api/settings/app — validate the policy groups,
+// persist them to config.yaml with comments preserved (one comment-preserving
+// config.UpdateSection* write per field), then refresh the in-memory config
+// the engine shares so the next task already routes/injects/approves with the
+// new policy. No restart needed.
+//
+// sandbox_mode rides the same request and the same critical section as the
+// rest: it is the one policy whose runtime half lives outside the config —
+// the process-wide base policy every subprocess launch reads — so after the
+// write the handler re-enters commander.ApplyFromConfig through the engine,
+// with the engine's own config/card paths, exactly as a restart would.
 func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 	if h.cfg == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
@@ -122,6 +135,19 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, http.StatusBadRequest, errors.New("tools_policy must be minimal or extended"))
 		return
+	}
+	// An absent sandbox_mode keeps the configured mode, same rule as
+	// tools_policy. "off" is a value here, not an absence: it is how
+	// confinement gets turned back off, so only "" means "unchanged".
+	sandboxMode := strings.TrimSpace(req.SandboxMode)
+	sandboxChanged := sandboxMode != ""
+	if sandboxChanged {
+		parsed, err := config.ParseSandboxMode(sandboxMode)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		sandboxMode = parsed
 	}
 	limits := req.MemoryLimits
 	if limits.User <= 0 || limits.Memory <= 0 || limits.Project <= 0 {
@@ -180,6 +206,13 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 			if err := config.UpdateSectionField(h.configPath, []string{"routing"}, "tools_policy", tools); err != nil {
 				return err
 			}
+			// Only when it actually differs: the modal save writes every field,
+			// and rewriting the mode would churn the file for nothing.
+			if sandboxChanged && c.Sandbox.NormalizedMode() != sandboxMode {
+				if err := config.UpdateSectionField(h.configPath, []string{"sandbox"}, "mode", sandboxMode); err != nil {
+					return err
+				}
+			}
 		}
 		c.Injection.Model = injection
 		c.Routing.PreferredAgents = agents
@@ -188,6 +221,9 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 		c.Memory.Limits.Project = limits.Project
 		c.Approval.Mode = approval
 		c.Routing.ToolsPolicy = tools
+		if sandboxChanged {
+			c.Sandbox.Mode = sandboxMode
+		}
 		// Snapshot the copies SetRouterPolicy installs: reading c.Routing
 		// after mutateCfg returned would race the next mutation.
 		inj = c.Injection
@@ -203,10 +239,27 @@ func (h *handler) putAppSettings(w http.ResponseWriter, r *http.Request) {
 	// change here has to re-enter it or it waits for a restart.
 	if eng := h.currentEngine(); eng != nil {
 		eng.SetRouterPolicy(inj, routing)
+		// sandbox.mode makes no diff outside this process: every subprocess
+		// launch reads the process-wide base policy, which only a restart —
+		// or this call — rewrites. The engine owns the config/card paths the
+		// startup install used, so asking it is what keeps the deny list
+		// identical to a restart's.
+		if sandboxChanged {
+			eng.ApplySandboxPolicy()
+		}
+	} else if sandboxChanged {
+		// Degraded static panel (no engine): same install, with this handler's
+		// paths. cardPath() resolves them the way the card API does — the
+		// configured CardPath, then the config's effective one — so the deny
+		// list still covers the card the startup call protected. Resolved
+		// before readCfg: cardPath() takes the same read lock internally.
+		cardPath := h.cardPath()
+		h.readCfg(func(c *config.Config) {
+			commander.ApplyFromConfig(c, h.configPath, cardPath)
+		})
 	}
 
-	// sandbox.* is not part of this PUT — it is a startup decision (mode and
-	// backend), so the response echoes whatever the live config reports.
+	// The response echoes the live state, which now includes the new mode.
 	var sbMode string
 	var sbBackend string
 	h.readCfg(func(c *config.Config) {

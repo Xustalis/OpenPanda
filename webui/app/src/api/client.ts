@@ -950,7 +950,7 @@ export interface ExecutionSettings {
   }
 }
 
-/** GET/PUT /api/settings/app — the four app policy groups (C1). */
+/** GET/PUT /api/settings/app — the app policy groups (C1). */
 export interface AppSettings {
   injection_model: 'auto' | 'always' | 'never'
   preferred_agents: string[]
@@ -959,10 +959,14 @@ export interface AppSettings {
   /** Agent tool face: minimal keeps each adapter's whitelist, extended reaches
    *  the agent's own skills, sub-agents and MCP servers. */
   tools_policy: 'minimal' | 'extended'
-  /** GET-only: read-only confinement info. mode is off|standard|strict from
-   *  config.yaml; backend is the OS mechanism in effect (seatbelt|bwrap|"");
-   *  active is false when mode is configured but no backend exists. */
+  /** The platform half is read-only: backend is the OS mechanism in effect
+   *  (seatbelt|bwrap|"") and active is false when mode is configured but no
+   *  backend exists. mode is the writable half — send it back as sandbox_mode. */
   sandbox?: { work_path: string; mode?: string; backend?: string; active?: boolean }
+  /** Write half of sandbox.mode: off | standard | strict. Absent leaves the
+   *  configured mode alone. The server re-installs the process-wide policy, so
+   *  no restart is involved. */
+  sandbox_mode?: string
 }
 
 /** One topics/*.md (or daily/*.md) file in GET /api/memory. */
