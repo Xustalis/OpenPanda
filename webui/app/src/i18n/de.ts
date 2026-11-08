@@ -553,6 +553,11 @@ const de: Messages = {
   'fileView.empty': 'leere Datei',
   'fileView.truncated': 'Ausschnitt einer großen Datei',
   'fileView.linesOf': '{shown} von {total} Zeilen',
+  'fileView.preview': 'Vorschau',
+  'fileView.source': 'Quelltext',
+  'fileView.wrap': 'Zeilen umbrechen',
+  'fileView.toc': 'Auf dieser Seite',
+  'fileView.imageError': 'Bild nicht verfügbar',
   'md.copied': 'Kopiert',
 
   // Settings view
@@ -977,6 +982,9 @@ const de: Messages = {
   'settings.theme.dark': 'Dunkel',
   'settings.theme.auto': 'System folgen',
   'settings.themeHelp': 'Hell, dunkel oder nach Systemeinstellung. Die Wahl wird auf diesem Gerät gespeichert.',
+  'settings.teamFeature': 'Team-Funktionen aktivieren',
+  'settings.teamFeatureHelp':
+    'Wenn aktiviert, zeigt die Seitenleiste den Eintrag Team und öffnet dessen Seite. Standardmäßig aus; dann sind auch die Befehlspalette und #/team verborgen. In diesem Browser gespeichert.',
   'settings.policy': 'App-Richtlinien',
   'settings.injection': 'Injektion',
   'settings.injection.auto': 'Auto',
@@ -1406,6 +1414,10 @@ const de: Messages = {
   'models.addModel': 'Modelle hinzufügen',
   'models.removeConnection': 'Verbindung entfernen',
   'models.removeConnConfirm': '{n} Modelle entfernen?',
+  'models.deleteConnection': 'Verbindung löschen',
+  'models.removeConnMessage': 'Damit werden {n} Modell(e) dieser Verbindung samt Endpunkt und Schlüssel gelöscht. Das lässt sich nicht rückgängig machen.',
+  'models.editConnection': 'Verbindung bearbeiten',
+  'models.registryMeta': '{c} Verbindungen · {m} Modelle',
   'models.modelCount': '{n} Modelle',
   'models.addModelTitle': 'Modelle zu dieser Verbindung hinzufügen',
   'models.empty': 'Noch keine Modelle registriert. Lege zuerst eine Verbindung an.',

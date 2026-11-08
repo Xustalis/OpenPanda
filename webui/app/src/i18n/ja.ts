@@ -552,6 +552,11 @@ const ja: Messages = {
   'fileView.empty': '空のファイル',
   'fileView.truncated': '大きいファイルの一部を表示しています',
   'fileView.linesOf': '{total} 行中 {shown} 行を表示',
+  'fileView.preview': 'プレビュー',
+  'fileView.source': 'ソース',
+  'fileView.wrap': '行の折り返し',
+  'fileView.toc': '目次',
+  'fileView.imageError': '画像を表示できません',
   'md.copied': 'コピーしました',
 
   // Settings view
@@ -966,6 +971,9 @@ const ja: Messages = {
   'settings.theme.dark': 'ダーク',
   'settings.theme.auto': 'システムに従う',
   'settings.themeHelp': 'ライト・ダーク・システム設定に従うの3択。選択はこの端末に保存されます。',
+  'settings.teamFeature': 'チーム機能を有効にする',
+  'settings.teamFeatureHelp':
+    'チェックするとサイドバーに「チーム」入口とそのページを表示します。既定はオフで、オフのときはコマンドパレットと #/team も非表示になります。設定はこのブラウザに保存されます。',
   'settings.policy': 'アプリポリシー',
   'settings.injection': '注入方法',
   'settings.injection.auto': '自動',
@@ -1391,6 +1399,10 @@ const ja: Messages = {
   'models.addModel': 'モデルを追加',
   'models.removeConnection': '接続を削除',
   'models.removeConnConfirm': '{n} 件のモデルを削除しますか？',
+  'models.deleteConnection': '接続を削除',
+  'models.removeConnMessage': 'この接続のモデル {n} 件を、エンドポイントとキーの設定ごと削除します。元に戻せません。',
+  'models.editConnection': '接続を編集',
+  'models.registryMeta': '接続 {c} 件 · モデル {m} 件',
   'models.modelCount': '{n} モデル',
   'models.addModelTitle': 'この接続にモデルを追加',
   'models.empty': 'まだモデルが登録されていません。まず接続を追加してください。',

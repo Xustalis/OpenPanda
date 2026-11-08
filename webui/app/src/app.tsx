@@ -6,6 +6,7 @@ import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, ty
 import { onLocaleChange, t } from './i18n'
 import { useAsync, useChangeSignal } from './hooks'
 import { isSelfNodeUp } from './format/node-status'
+import { useTeamEnabled } from './features'
 import { navigate, parseHash, type Route } from './nav'
 import { lazy, Suspense } from 'preact/compat'
 import { SessionsView } from './views/sessions'
@@ -47,6 +48,9 @@ function useRoute(): Route {
 
 export function App() {
   useLocaleRerender()
+  // 团队 is an opt-in feature: its rail row, palette command and page all
+  // follow the switch in 设置 → 偏好 → 团队 (features.ts).
+  const teamOn = useTeamEnabled()
   const route = useRoute()
   const [authed, setAuthed] = useState<boolean>(getToken() !== '')
   const [gateError, setGateError] = useState('')
@@ -95,6 +99,14 @@ export function App() {
     history.replaceState(null, '', '#/chat')
     requestAnimationFrame(openReminders)
   }, [route, authed])
+
+  // A bookmark (or a stale tab) pointing at #/team must not open a page whose
+  // rail row is hidden. Replace rather than push, so Back does not bounce the
+  // reader straight back into the disabled destination.
+  useEffect(() => {
+    if (!authed || teamOn || route.view !== 'team') return
+    navigate({ view: 'sessions', id: null }, true)
+  }, [route.view, teamOn, authed])
 
   if (!authed) {
     return (
@@ -250,22 +262,24 @@ export function App() {
               </span>
             )}
           </a>
-          {/* 团队 sits beside the boards, not inside them: 队列·任务·项目 is
-              what the node is doing, this is who does it with you. The page is
-              deliberately empty for now — the row is here so the slot exists
-              before the feature does. It is the only way in. */}
-          <a
-            href="#/team"
-            class={`nav-item${active === 'team' ? ' active' : ''}`}
-            aria-current={active === 'team' ? 'page' : undefined}
-          >
-            <Icon name="users" />
-            <span class="nav-label">{t('nav.team')}</span>
-          </a>
-          {/* 记忆 closes the block, right under 团队: what the node has learned
-              is something you go and read, not a knob — so it is a destination
-              here rather than a tab buried in 设置. 技能 stayed in the sheet
-              because installing one *is* configuration. */}
+          {/* 团队 is no longer a fixed rail row: the page is still a
+              placeholder, so showing it to every reader costs a row for an
+              empty destination. 设置 → 偏好 → 团队 → 启用团队功能 turns this
+              row (and the ⌘K command, and the #/team route) on. */}
+          {teamOn && (
+            <a
+              href="#/team"
+              class={`nav-item${active === 'team' ? ' active' : ''}`}
+              aria-current={active === 'team' ? 'page' : undefined}
+            >
+              <Icon name="users" />
+              <span class="nav-label">{t('nav.team')}</span>
+            </a>
+          )}
+          {/* 记忆 closes the block: what the node has learned is something you
+              go and read, not a knob — so it is a destination here rather than
+              a tab buried in 设置. 技能 stayed in the sheet because installing
+              one *is* configuration. */}
           <a
             href="#/memory"
             class={`nav-item${active === 'memory' ? ' active' : ''}`}
@@ -356,7 +370,7 @@ export function App() {
             onOpenTask={(tid) => navigate({ view: 'detail', id: tid })}
           />
         )}
-        {base.view === 'team' && <TeamView />}
+        {base.view === 'team' && teamOn && <TeamView />}
         {base.view === 'memory' && <MemoryView />}
         {base.view === 'workspace' && <WorkspaceView />}
         {base.view === 'profile' && <ProfileView />}
@@ -364,7 +378,16 @@ export function App() {
           <SettingsView
             initialSection={route.tab ?? undefined}
             onSelectTab={(tab) => navigate({ view: 'settings', tab })}
-            onClose={() => navigate(lastView.current, true)}
+            // Turning the switch off while the sheet is open over the team
+            // page must not drop the reader back onto a now-hidden view.
+            onClose={() =>
+              navigate(
+                lastView.current.view === 'team' && !teamOn
+                  ? { view: 'sessions', id: null }
+                  : lastView.current,
+                true,
+              )
+            }
             onLogout={logout}
           />
         )}

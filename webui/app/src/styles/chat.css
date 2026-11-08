@@ -508,12 +508,10 @@
 }
 /* One lane for both header cards. They are the same kind of popover hanging off
    the same corner, so switching between them has to leave the reading column
-   exactly where it is: two lane values (320 for the node card, 380 for the
-   orchestration card) meant every switch slid the transcript, the composer and
-   the jump arrow 60px sideways — a flinch you could see, for no reason.
-   The lane is the wider card's footprint and both cards are sized to fill it:
-   20 (bar padding) + 360 (orchestration card) = 380, and the node card is
-   20 + 38 (the orchestration tool sits to its right) + 322 = 380. */
+   exactly where it is: two lane values meant every switch slid the transcript,
+   the composer and the jump arrow sideways — a flinch you could see, for no
+   reason. Both cards are now the same 360px box on the same right edge, so one
+   lane covers either: 20 (bar padding) + 360 = 380. */
 .chat-pane.panel-open {
   --panel-lane: 380px;
 }
@@ -676,12 +674,9 @@
   align-items: center;
   gap: var(--sp-3);
   padding: 10px var(--sp-5);
-  /* The header is the top edge of the page rather than a bar laid over it, and
-     the log scrolls in its own box below, so nothing ever slides under this
-     that would need a line to stop it. It takes the chrome grey — one step
-     under the page, so the bar caps the reading surface instead of floating on
-     it — and no hairline, because a line under a band that is already darker
-     than the page is a second edge for the same border. */
+  /* The title and tools share the page's reading surface in every theme.
+     The log scrolls in its own box below, so no divider or contrasting band
+     is needed to separate the header from content sliding underneath it. */
   background: var(--chat-head);
   flex: none;
   /* The node card hangs out of this bar and over the transcript. Owning a
@@ -2189,17 +2184,12 @@
 }
 /* ---- Header tools + node card --------------------------------------------- */
 
-/* The head's right edge: download, the node pick, then orchestration. All three
-   are ghost icon buttons one size up from the console's 28px `.icon-btn`,
-   because they are the only things in this bar you press (the rest of the
-   header is a title and a badge). 36px square with a 19px glyph is the weight
-   Codex and WorkBuddy both use for their header popovers — measured off their
-   screenshots, where the toolbar square is 40px around a 20px mark inside a
-   56px bar; this header is 56 tall once these buttons are in it. */
+/* The head's right edge holds one control: the door into the side dock.
+   导出 / 节点 / 编排 are tools in the dock's head (30px squares, 18px glyph) and
+   their content is a page in the dock's body — see dock.css. This one stays at
+   the 36px/19px header weight: it is the only thing left to press here. */
 .chat-head-tools {
-  /* One size for every tool in the bar, named here because the node card has
-     to step left by exactly one button when a tool is added to its right
-     (see `.node-panel`). */
+  /* One size for every tool in the bar, so the row cannot develop a runt. */
   --head-tool: 36px;
   --head-tool-gap: 2px;
   display: flex;
@@ -2230,28 +2220,24 @@
 .node-pick-btn.pinned:not(.open) {
   color: var(--accent);
 }
-/* Static, not relative: the card below anchors to the *header*, so it hangs
-   under the bar's bottom edge rather than under this 36px button (which would
-   start the card 2px inside the bar). */
+/* Static, not relative: the popover form anchors to the chat head, so it hangs
+   under the bar's bottom edge rather than under this button. In the side dock
+   the same markup gets `.is-inline` and becomes a static page (dock.css). */
 .node-picker {
   display: flex;
 }
 .node-panel {
   position: absolute;
   top: calc(100% + 8px);
-  /* The card hangs off the node button's right edge, not the bar's: with the
-     orchestration tool now sitting to its right, `--sp-5` alone would leave
-     the card hanging under that button instead. */
-  right: calc(var(--sp-5) + var(--head-tool) + var(--head-tool-gap));
+  /* The same right edge as the orchestration card: the two share one slot on
+     the bar, so switching between them must not slide the popover sideways. */
+  right: var(--sp-5);
   z-index: 20;
-  /* 322px, not 300: the card has to reach the lane the pane reserves for it
-     (20 + 38 + 322 = 380, the orchestration card's own footprint), otherwise
-     switching cards would leave the reading column 60px away from one card and
-     14px from the other. At 322 the gap between the text and either card is the
-     same 52px the prompt rail already reserves. The `min()` is for a phone:
-     below ~340px of pane the card gives up its width rather than hanging off
-     the left edge. */
-  width: min(322px, calc(100% - 40px));
+  /* 360px, the orchestration card's width, so the two are interchangeable
+     without the popover changing size. The `min()` is for a phone: below
+     ~400px of pane the card gives up its width rather than hanging off the
+     left edge. */
+  width: min(360px, calc(100% - 40px));
   padding: 6px;
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
@@ -2681,24 +2667,24 @@
   font-size: var(--text-sm);
   color: var(--text-tertiary);
 }
-/* The strip: two tiles across, two rows in view — four tasks without a click.
-   Past four it scrolls downwards inside its own ceiling, so a thread with
-   twenty finished tasks still leaves 进行中 and 待审核 where they were. The
-   ceiling is exactly two rows plus the gap; the tiles are fixed at
-   `--orch-card-h` so the fifth task is what starts the scroll, not a rounding
-   error. A wheel and a press-drag both move it (`.is-dragging`, bound in
-   `strip-drag.ts`), and the thin scrollbar is the third way in. */
+/* The strip is one row of fixed-width tiles running left to right. The chip
+   never grows with the card around it: a wider dock simply fits more of them,
+   a narrower one keeps the same tiles and scrolls sideways. This is the
+   original strip behaviour — a 1fr grid made the tiles swell to half of a
+   760px dock, which turned one task into a poster.
+   `--orch-chip-w` is the tile's whole width; `--orch-card-h` is its height.
+   Wheel, press-drag and a thin scrollbar all move it (`.is-dragging`, bound in
+   `strip-drag.ts` with the `x` axis). */
 .orch-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  --orch-chip-w: 156px;
+  display: flex;
   gap: 8px;
   padding: 0 6px;
-  max-height: calc(var(--orch-card-h) * 2 + 8px);
-  overflow-y: auto;
-  /* The grid is the scroller here, and it is inside a card that scrolls too:
-     letting the notch chain out at either end is what keeps the wheel useful
-     once the strip is exhausted. */
-  overscroll-behavior-y: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
   /* A strip that can be pulled says so before the first pull. */
   cursor: grab;
 }
@@ -2713,6 +2699,11 @@
   user-select: none;
 }
 .orch-chip {
+  /* Fixed, not 1fr: the number of tiles on screen is a function of the dock's
+     width, the tile itself never changes size. */
+  flex: 0 0 var(--orch-chip-w);
+  width: var(--orch-chip-w);
+  scroll-snap-align: start;
   display: flex;
   flex-direction: column;
   min-height: var(--orch-card-h);
@@ -4015,7 +4006,7 @@
 .model-panel-label {
   flex: none;
   margin: 0;
-  padding: 6px 8px 4px;
+  padding: 6px 4px 4px;
   font-size: var(--text-sm);
   color: var(--text-tertiary);
 }
@@ -4046,7 +4037,7 @@
   /* 44px: the descriptive variant's min-height — a label, its sub-line, and
      the pill's own breathing room. */
   min-height: 44px;
-  padding: 4px 8px;
+  padding: 4px;
   border: 0;
   /* radius 20 minus the 6px gutter — Codex derives the row pill from the card
      so the two radii stay concentric. */
@@ -4138,7 +4129,7 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 8px;
+  padding: 7px 4px;
   border: 0;
   /* Same radius as .model-row, so every pill in the card is one shape. */
   border-radius: 14px;
@@ -4165,10 +4156,10 @@
   outline: none;
   box-shadow: none;
 }
-/* Both rows open with a 16px glyph in the same column, so the two labels
-   start on the same x. */
+/* The two footer rows are plain menu lines: label on the left edge, chevron
+   on the right. The label starts where the model names start, so the card has
+   one left margin rather than a different inset per band. */
 .model-conn-toggle-caret,
-.model-foot-btn > .ico:first-child,
 .model-foot-arrow {
   flex: none;
   color: var(--text-tertiary);
@@ -4180,32 +4171,36 @@
   transform: rotate(90deg);
 }
 .model-conn-toggle-name {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The endpoint is the row's trailing accessory, and it has to sit where the
-   chevron under it sits: the arrow's ink ends 5px inside its 16px box, so the
-   text takes the same 5px back. Without it the two right edges were 6px apart
-   and the footer looked ragged. */
+/* The endpoint rides beside the chevron as the row's trailing accessory. */
 .model-conn-toggle-sub {
   flex: none;
-  margin-left: auto;
-  padding-right: 5px;
+  margin-left: 8px;
   color: var(--text-tertiary);
   font-size: var(--text-xs);
 }
+.model-foot-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-/* The accounts, once the row above is opened. Indented by the icon column so
-   their names line up under the account name they are alternatives to, and
-   the rule above them stops at the same inset. */
+/* The accounts, once the row above is opened. No inset: they are alternatives
+   to the account above, and they start on the same left edge as the models so
+   the whole card reads as one column. */
 .model-panel-conns {
   display: flex;
   flex-direction: column;
   gap: 1px;
   max-height: 176px;
-  margin: 0 0 2px 24px;
+  margin: 0 0 2px;
   padding: 4px 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -4217,7 +4212,7 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 8px;
+  padding: 6px 4px;
   border: 0;
   border-radius: 10px;
   background: transparent;

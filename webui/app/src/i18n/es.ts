@@ -553,6 +553,11 @@ const es: Messages = {
   'fileView.empty': 'archivo vacío',
   'fileView.truncated': 'mostrando parte de un archivo grande',
   'fileView.linesOf': 'mostrando {shown} de {total} líneas',
+  'fileView.preview': 'Vista previa',
+  'fileView.source': 'Código fuente',
+  'fileView.wrap': 'Ajustar líneas',
+  'fileView.toc': 'En esta página',
+  'fileView.imageError': 'Imagen no disponible',
   'md.copied': 'Copiado',
 
   // Settings view
@@ -974,6 +979,9 @@ const es: Messages = {
   'settings.theme.dark': 'Oscuro',
   'settings.theme.auto': 'Seguir al sistema',
   'settings.themeHelp': 'Claro, oscuro o según la preferencia del sistema. La elección se guarda en este dispositivo.',
+  'settings.teamFeature': 'Activar funciones de equipo',
+  'settings.teamFeatureHelp':
+    'Al marcarlo, la barra lateral muestra la entrada Equipo y su página. Está desactivado por defecto; al desactivarlo también se ocultan la paleta de comandos y #/team. Se guarda en este navegador.',
   'settings.policy': 'Políticas de la app',
   'settings.injection': 'Inyección',
   'settings.injection.auto': 'Auto',
@@ -1403,6 +1411,10 @@ const es: Messages = {
   'models.addModel': 'Añadir modelos',
   'models.removeConnection': 'Eliminar conexión',
   'models.removeConnConfirm': '¿Eliminar {n} modelos?',
+  'models.deleteConnection': 'Eliminar conexión',
+  'models.removeConnMessage': 'Se eliminarán {n} modelo(s) de esta conexión, junto con su endpoint y su clave. No se puede deshacer.',
+  'models.editConnection': 'Editar conexión',
+  'models.registryMeta': '{c} conexiones · {m} modelos',
   'models.modelCount': '{n} modelos',
   'models.addModelTitle': 'Añadir modelos a esta conexión',
   'models.empty': 'Aún no hay modelos registrados. Empieza añadiendo una conexión.',

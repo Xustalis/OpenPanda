@@ -90,6 +90,11 @@ export function OrchestrateCard(props: {
    *  A fresh object per request — that is what lets the same link re-open the
    *  pane after it was closed. */
   focusTask?: { id: string } | null
+  /** Render only the task cards, as a page inside the side dock. The dock head
+   *  owns the trigger and its body owns the surface, so no button and no
+   *  floating flyout are rendered. Omitted, this stays the header popover
+   *  the workspace page uses. */
+  inline?: boolean
 }) {
   const [picked, setPicked] = useState<string | null>(null)
   // Local nudge after an action: the shared change feed usually arrives a beat
@@ -226,24 +231,25 @@ export function OrchestrateCard(props: {
 
   return (
     <div class="orch-picker" ref={box}>
-      <button
-        type="button"
-        class={`icon-btn tip-down orch-pick-btn${props.open ? ' open' : ''}`}
-        /* The tip is the control's name; the card behind it is the answer. */
-        data-tip={props.open ? undefined : t('sessions.orchestrate')}
-        aria-label={t('sessions.orchestrate')}
-        aria-haspopup="dialog"
-        aria-expanded={props.open}
-        onClick={() => props.onOpenChange(!props.open)}
-      >
-        <Icon name="route" size={19} />
-      </button>
+      {!props.inline && (
+        <button
+          type="button"
+          class={`icon-btn tip-down orch-pick-btn${props.open ? ' open' : ''}`}
+          /* The tip is the control's name; the card behind it is the answer. */
+          data-tip={props.open ? undefined : t('sessions.orchestrate')}
+          aria-label={t('sessions.orchestrate')}
+          aria-haspopup="dialog"
+          aria-expanded={props.open}
+          onClick={() => props.onOpenChange(!props.open)}
+        >
+          <Icon name="route" size={19} />
+        </button>
+      )}
       {props.open && (
         /* One row of cards hanging off the bar: the picked task on the left,
-           the list on the right. The row is the positioning context — each card
-           keeps its own height and scroll, and the gap between them is the only
-           thing tying the two together. */
-        <div class="orch-flyout">
+           the list on the right. Inline, the same cards become a column inside
+           the side dock's body (see dock.css). */
+        <div class={`orch-flyout${props.inline ? ' is-inline' : ''}`}>
           <div
             class="orch-panel"
             role="dialog"
@@ -343,8 +349,9 @@ function OrchRow(props: {
   const [strip, setStrip] = useState<HTMLDivElement | null>(null)
   useEffect(() => {
     if (!strip) return
-    // The grid runs downwards: two tiles wide, four in view.
-    return bindStripDrag(strip, 'y')
+    // The strip runs sideways: fixed-width tiles, as many as the column fits,
+    // the rest reached by wheel or press-drag rather than by resizing a tile.
+    return bindStripDrag(strip, 'x')
   }, [strip])
   return (
     <section class="orch-sec">

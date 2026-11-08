@@ -16,6 +16,7 @@ import { agentLogo } from '../format/agent-logo'
 import { agentInitial } from '../format/agent-role'
 import { t } from '../i18n'
 import { locale, localeNames, locales, setLocale } from '../i18n'
+import { setTeamEnabled, useTeamEnabled } from '../features'
 import { Select } from '../components/select'
 import { TermsModal } from '../components/terms'
 import { onThemeChange, setTheme, theme } from '../theme'
@@ -35,27 +36,35 @@ import { loadAgentRoster } from '../utils/agent-roster'
 export type Section =
   | 'general'
   | 'models'
+  | 'team'
   | 'policy'
   | 'agents'
   | 'mcp'
   | 'skills'
   | 'system'
 
-/** The rail, grouped the way a reader looks for things: the two preferences
- *  you change on day one, then everything the node can *do*, then the one
- *  section about the node itself. A flat list of eight rows was already at
- *  the edge of scannable; the headings cost two lines and buy the grouping.
+/** The rail, grouped the way a reader looks for things: the preferences you
+ *  change on day one, then everything the node can *do*, then the one section
+ *  about the node itself. A flat list of eight rows was already at the edge of
+ *  scannable; the headings cost two lines and buy the grouping.
  *
- *  记忆 is not here — it is a destination under 团队 in the rail (app.tsx),
- *  because reading what the node learned is not configuration. 技能 sits
- *  directly under MCP 服务器: both answer "what can this node call", one over
- *  stdio tools and one over prompt-level skills. */
+ *  团队 lives under 偏好 as its own row, not folded into 常规: an opt-in
+ *  feature nobody can find is the same as a feature nobody built, and the
+ *  reader looks for the word 团队, not for a switch hidden among the language
+ *  and theme controls. The row is always here; the checkbox behind it decides
+ *  whether 团队 appears in the app's own rail.
+ *
+ *  记忆 is not here — it is a destination in the rail (app.tsx), because
+ *  reading what the node learned is not configuration. 技能 sits directly
+ *  under MCP 服务器: both answer "what can this node call", one over stdio
+ *  tools and one over prompt-level skills. */
 const GROUPS: Array<{ label: string; items: Array<{ id: Section; label: string; icon: IconName }> }> = [
   {
     label: 'settings.group.prefs',
     items: [
       { id: 'general', label: 'settings.group.general', icon: 'gear' },
       { id: 'models', label: 'settings.model', icon: 'cpu' },
+      { id: 'team', label: 'nav.team', icon: 'users' },
     ],
   },
   {
@@ -91,6 +100,7 @@ function normalizeSection(raw?: string): Section {
   const valid: Section[] = [
     'general',
     'models',
+    'team',
     'policy',
     'agents',
     'mcp',
@@ -225,6 +235,7 @@ export function SettingsView(props: {
             <div class="settings-pane-body">
               {section === 'general' && <GeneralSection onLogout={props.onLogout} />}
               {section === 'models' && <ModelsSection />}
+              {section === 'team' && <TeamSection />}
               {section === 'policy' && <PolicySection />}
               {section === 'mcp' && <MCPSection />}
               {section === 'skills' && <SkillsView />}
@@ -310,6 +321,33 @@ function GeneralSection(props: { onLogout(): void }) {
 
       {showTerms && <TermsModal onClose={() => setShowTerms(false)} />}
     </>
+  )
+}
+
+/** 团队 (偏好 → 团队): the one switch that decides whether the 团队
+ *  destination exists in the console at all. It has its own row in the
+ *  settings rail so the feature can be found by its name; the checkbox is
+ *  browser-local (features.ts), which is why it sits with the other
+ *  preferences rather than with the node's policies. */
+function TeamSection() {
+  const teamOn = useTeamEnabled()
+
+  return (
+    <div class="card settings-card">
+      <p class="hint">{t('team.subtitle')}</p>
+      <div class="field-group">
+        <label for="team-feature">{t('settings.teamFeature')}</label>
+        <input
+          id="team-feature"
+          class="switch"
+          type="checkbox"
+          checked={teamOn}
+          aria-label={t('settings.teamFeature')}
+          onChange={(e) => setTeamEnabled((e.target as HTMLInputElement).checked)}
+        />
+        <p class="hint">{t('settings.teamFeatureHelp')}</p>
+      </div>
+    </div>
   )
 }
 

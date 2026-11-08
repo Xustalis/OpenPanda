@@ -549,6 +549,11 @@ const zhCN: Messages = {
   'fileView.empty': '空文件',
   'fileView.truncated': '文件较大，仅显示部分',
   'fileView.linesOf': '显示 {shown} / {total} 行',
+  'fileView.preview': '预览',
+  'fileView.source': '源码',
+  'fileView.wrap': '自动换行',
+  'fileView.toc': '本页目录',
+  'fileView.imageError': '图片无法显示',
   'md.copied': '已复制',
 
   // Settings view
@@ -989,6 +994,9 @@ const zhCN: Messages = {
   'settings.theme.dark': '暗色',
   'settings.theme.auto': '跟随系统',
   'settings.themeHelp': '亮色、暗色或跟随系统偏好，选择会保存在本机。',
+  'settings.teamFeature': '启用团队功能',
+  'settings.teamFeatureHelp':
+    '勾选后，侧栏显示「团队」入口并打开团队页面；默认不勾选，关闭时命令面板和 #/team 深链也会一并收起。选择保存在本机浏览器。',
   'settings.policy': '应用策略',
   'settings.injection': '注入方式',
   'settings.injection.auto': '自动',
@@ -1419,6 +1427,10 @@ const zhCN: Messages = {
   'models.addModel': '添加模型',
   'models.removeConnection': '移除连接',
   'models.removeConnConfirm': '移除 {n} 个模型？',
+  'models.deleteConnection': '删除连接',
+  'models.removeConnMessage': '将删除这条连接下的 {n} 个模型，端点与密钥配置一并移除，无法恢复。',
+  'models.editConnection': '编辑连接',
+  'models.registryMeta': '{c} 条连接 · {m} 个模型',
   'models.modelCount': '{n} 个模型',
   'models.addModelTitle': '给这条连接添加模型',
   'models.empty': '还没有注册任何模型。先添加一条连接。',
