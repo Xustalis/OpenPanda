@@ -1613,6 +1613,10 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// stream — a reloaded thread reads this instead.
 		Model:  out.EntryModel,
 		Tokens: out.Tokens(),
+		// An interrupted tool loop tells the user the real model error is in
+		// the warning. Persist it so a reloaded thread still has the promise's
+		// other half; replay ignores this field (sessionTurnEntries).
+		Warning: out.Warning,
 	}
 	switch out.Kind {
 	case "task":
