@@ -59,6 +59,7 @@ import { atQuery, expandFileRefs, exportMarkdown, exportFilename, isImageFile, w
 import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
 import { splitReportHead } from '../components/report-head'
+import { displayUserTurn } from '../components/turn-display'
 import { liveTaskIds } from '../components/task-activity'
 import { groupDispatches } from './chat-batch.ts'
 import {
@@ -358,6 +359,28 @@ interface ChatMsg extends SessionTurn {
    *  waiting for the task to settle; `kind`/`ref` are only set once the
    *  result lands, which is far too late to show progress. */
   liveTask?: string
+}
+
+/** Install a server transcript as bubbles.
+ *
+ *  A stored user turn is the prompt the model read, not the sentence the
+ *  composer showed: `sessions.go` files req.Prompt verbatim, and every @file
+ *  rides along as a fenced copy of its contents. An unpurified reload — after
+ *  a stop, a focus change, a change-feed update or a refresh — repainted that
+ *  short bubble with the whole file (one real turn was 33k chars of a JVM
+ *  classlist). Every path that adopts server turns funnels through here; the
+ *  stored prompt itself is left alone so history still replays to the model. */
+function hydrateTurns(turns: SessionTurn[], key: (i: number) => string): ChatMsg[] {
+  return turns.map((turn, i) => {
+    const shown = turn.role === 'user' ? displayUserTurn(turn.text) : null
+    return {
+      ...turn,
+      ...(shown
+        ? { text: shown.text, files: shown.files.length ? shown.files : undefined }
+        : {}),
+      k: key(i),
+    }
+  })
 }
 
 /** One file waiting in the composer's attachment tray.
@@ -1114,7 +1137,7 @@ export function SessionsView({
           const prev = sessionRef.current
           setSession(s)
           if (!prev || prev.id !== s.id || turnsChanged(prev.turns, s.turns)) {
-            setMsgs((s.turns ?? []).map((turn, i) => ({ ...turn, k: `srv-${i}` })))
+            setMsgs(hydrateTurns(s.turns ?? [], (i) => `srv-${i}`))
           }
         })
         .catch((e: unknown) => {
@@ -1254,7 +1277,7 @@ export function SessionsView({
         setPermission(normalizePermission(s.permission_mode))
         setTurnMs({})
         setLiveFrom(0)
-        setMsgs((s.turns ?? []).map((turn, i) => ({ ...turn, k: `srv-${i}` })))
+        setMsgs(hydrateTurns(s.turns ?? [], (i) => `srv-${i}`))
       })
       .catch((e: unknown) => {
         if (!current()) return
@@ -1313,7 +1336,7 @@ export function SessionsView({
           if (cancelled) return
           if (s.operation?.id === op.id && s.operation.status === 'running') continue
           setSession(s)
-          setMsgs((s.turns ?? []).map((turn, i) => ({ ...turn, k: `srv-${i}` })))
+          setMsgs(hydrateTurns(s.turns ?? [], (i) => `srv-${i}`))
           return
         } catch {
           // A transient read failure is not the end of the turn; keep
@@ -1360,7 +1383,7 @@ export function SessionsView({
           const last = turns[turns.length - 1]
           if (last?.role === 'assistant') {
             setSession(s)
-            setMsgs(turns.map((turn, i) => ({ ...turn, k: `srv-${i}` })))
+            setMsgs(hydrateTurns(turns, (i) => `srv-${i}`))
             setBusy(false)
           }
         })
@@ -2122,7 +2145,7 @@ export function SessionsView({
                 if (settled) {
                   const turns = s.turns ?? []
                   setSession(s)
-                  setMsgs(turns.map((turn, i) => ({ ...turn, k: `srv-${i}` })))
+                  setMsgs(hydrateTurns(turns, (i) => `srv-${i}`))
                   // The turn did land server-side, just not over the stream —
                   // its wall-clock is as real as any other reply's.
                   finishTurn()
@@ -2180,7 +2203,12 @@ export function SessionsView({
             // frame, one turn per task — so the surplus rows are adopted here
             // rather than waiting for a reload.
             setMsgs((ms) =>
-              mergeTailTurn(ms, s.turns ?? [], (turn) => ({ ...turn, k: localMsgId() }) as ChatMsg),
+              // mergeTailTurn widens the adopted row to TurnLike; the rows it
+              // inserts are assistant task turns, so the cast only carries
+              // the transcript's narrower kind through the same hydrator.
+              mergeTailTurn(ms, s.turns ?? [], (turn) =>
+                hydrateTurns([turn as SessionTurn], () => localMsgId())[0]!,
+              ),
             )
           }
         }).catch(() => {})
