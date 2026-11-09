@@ -10,10 +10,10 @@ package version
 // Version is the semantic version of this build, and the default for a build
 // that does not go through release packaging.
 //
-// It tracks the newest tag on main — currently v0.1.4, the patch that made an
-// agent run verifiable and the console one place to work — so ad-hoc builds
+// It tracks the newest release on main — currently v0.1.5, the documentation
+// and deployment-hardening patch — so ad-hoc builds
 // identify themselves with the branch's latest published lineage.
-var Version = "0.1.4"
+var Version = "0.1.5"
 
 // Codename is the release line's thematic name — "Constellation": the fleet
 // drawn as one sky. The workspace page renders every device as a plate on a
@@ -34,7 +34,7 @@ var Codename = "Constellation"
 // Version and Codename when a release is cut, and left empty for ad-hoc
 // builds that never had a release day. The console's profile page prints it
 // as "发布于 …" and falls back to omitting the line when it is empty.
-var ReleaseDate = "2026-11-03"
+var ReleaseDate = "2026-11-09"
 
 // Build provenance classes — which channel produced a binary. They ride the
 // wire as hello/heartbeat `prov`. The unset default normalizes to

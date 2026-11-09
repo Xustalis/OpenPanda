@@ -108,7 +108,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force    # 强制降级�
 ## 4. 从源码 / Go
 
 ```bash
-# 源码构建（需要 Go 1.26+；先 make web 以嵌入 Web 控制台）
+# 源码构建（需要 Go 1.26.10+；先 make web 以嵌入 Web 控制台）
 make build            # → bin/panda
 go install github.com/Xustalis/OpenPanda/cmd/panda@latest
 ```
@@ -183,9 +183,53 @@ panda uninstall --backup-only
 
 `panda uninstall` 会**顺带停用开机自启**：macOS 注销 LaunchAgent（`launchctl bootout`）、Linux 停用用户 systemd 单元（`systemctl --user disable --now`）、Windows 删除 `OpenPandaNode` 登录计划任务（`schtasks /Delete`）。若自启是你按上文手动注册的（例如换了服务名），它不在清理范围内，此时再用「手动控制」里的停用命令删一次。
 
+## 云服务器 / 公网 IP 部署
+
+`network.exposure_mode` 决定对外面：新装默认 `loopback`，总线与控制台都只在
+`127.0.0.1`（`7836` / `7840`），UDP 数据面与 LAN 发现关闭。改成 `lan` 后总线绑
+`0.0.0.0:7836`、发现绑 `:7837`，控制台仍在回环；`public` 额外强制稳定
+`shared_secret` 与 `panel_token`、关闭发现、拒绝明文拨号。已有配置只要显式写过
+`listen_addr` / `panel_addr` / `udp_listen`，就按 `legacy` 保持 0.1.5 之前的绑定，
+升级不会挪端口。
+
+daemon 启动会自动生成并写回 `shared_secret`，所以只要不是 `loopback`，总线端口
+一定在监听。陌生设备连得上端口，但过不了 HMAC 成员校验、下发不了任务；持有共享
+密钥即为 `mesh` 成员，可自动委派任务（等价于远程执行）。当前版本没有按设备或被
+授权人的准入名单。
+
+`--lan` 与 `panda service install --lan` 会把控制台也绑到 `0.0.0.0`，明文 HTTP
+只靠一个 Bearer token，token 与任务内容可被链路上的人嗅探，不要直接用在公网。
+
+配置顺序：
+
+1. 设 `network.exposure_mode: public`（云主机）或 `lan`（只有私网），再把
+   `network.listen_addr` 绑到 Tailscale / WireGuard 的 overlay 网卡地址；
+   `udp_listen: "off"`、`discovery_addr: "off"`、`discovery_auto_dial: false`。
+2. 安全组入站只放行 overlay 网段与端口。下表是默认会监听的端口，均不对
+   `0.0.0.0/0` 开放。
+
+   | 端口 | 用途 | 默认绑定 |
+   | --- | --- | --- |
+   | 7836 | 节点间 WebSocket 总线 | `0.0.0.0` |
+   | 7837 | UDP 数据面 / LAN 发现信标 | `0.0.0.0` |
+   | 7840 | Web 控制台 | `127.0.0.1`（`--lan` 后变 `0.0.0.0`） |
+   | 动态 | 产物预览、项目开发服务器 | 随 `--lan` 变 `0.0.0.0` |
+
+3. 控制台保持 `127.0.0.1`，由 nginx / Caddy 终结 TLS 再转发；跨公网对端写成
+   `wss://host:port`，不要用 `ws://`。
+4. `OPENPANDA_SHARED_SECRET` 与 `OPENPANDA_PANEL_TOKEN` 走环境变量，`panel_token`
+   用稳定值；`panda pair` 人工核对短配对码，不要用 `--yes`。非回环绑定下不要把带
+   token 的自动登录 URL 打进日志、聊天或工单。
+5. 跨公网对端显式配置 `guarded` / `open` 信任档，不让默认 `mesh` 的自动委派覆盖
+   公网链路。
+
+从 `v0.1.4` 升级只需替换二进制，配置、存储数据与线协议不变。核对监听面用 `ss -lntup | grep panda`（Linux）或
+`lsof -nP -iTCP -sTCP:LISTEN | grep panda`（macOS）。部署红线与泄露后的处置见
+`SECURITY.md`。密钥轮换会让所有旧节点离网，per-node 授权与可验签准入不在 0.1.x 内。
+
 ## 发布一个新版本
 
-1. 变更合入 `main`，确认该 commit 的 **Gate 已经跑绿**，再打标签：`git tag v0.1.4 && git push origin v0.1.4`（注意两点：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布；release 流水线会向 Gate 查验**同一个 commit** 的结论，没有 push 触发的 Gate 运行记录、或结论不是 success，都会直接拒绝发布并报错）。
+1. 变更合入 `main`，确认该 commit 的 **Gate 已经跑绿**，再打标签：`git tag v0.1.5 && git push origin v0.1.5`（注意两点：CHANGELOG 必须先有该版本章节，否则 release 流水线会拒绝发布；release 流水线会向 Gate 查验**同一个 commit** 的结论，没有 push 触发的 Gate 运行记录、或结论不是 success，都会直接拒绝发布并报错）。
 2. `.github/workflows/release.yml` 自动跨平台构建 → 打包 `.tar.gz`/`.zip` → 生成 `checksums.txt` → 发布 GitHub Release。
 3. 预发布（带连字符的标签，如 `v0.0.9-beta`、`v0.0.8-alpha`、`v1.0.0-rc1`）会自动标记为 **pre-release**：它不会成为仓库的 Latest，`releases/latest` 仍指向最后一个稳定版，一键安装脚本也只装稳定版；同时**不会**同步 Homebrew tap。
 4. 落地后可用：

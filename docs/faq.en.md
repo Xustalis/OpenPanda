@@ -214,12 +214,24 @@ address (`peers`) and the shared secret (`shared_secret` — injecting via
 run `panda daemon` on each. `panda nodes` shows the node directory,
 online status, and trust tiers.
 
-**Why was the outward listener refused at startup?**
+**If panda runs on a cloud server, can every device that reaches the host connect to it?**
 
-A security constraint: a non-loopback listener requires `shared_secret`
-(or `OPENPANDA_SHARED_SECRET`), otherwise the daemon refuses to start.
-Loopback listeners are unrestricted, and the Web panel generates a
-temporary token automatically.
+The web console binds to `127.0.0.1:7840` by default, so it is not reachable
+from the internet. `network.exposure_mode` defaults to `loopback` on a new
+install: the bus, the UDP datagram plane and LAN discovery all stay on
+loopback, so an outside device cannot even open the port. Only `lan` or
+`public` makes them reachable — then the bus binds `0.0.0.0:7836`, discovery
+binds `:7837`, and a daemon generates and persists a `shared_secret` at boot,
+so those ports are always listening. An unknown device can open the port and
+learn the node exists, but it cannot pass the HMAC membership check or submit
+a task — the real boundary is "holding the shared secret is membership", with
+no per-device or per-authorized-user admission list. If the secret leaks, the
+default `mesh` trust tier accepts delegated tasks automatically, which is
+remote execution. `--lan` binds the console to `0.0.0.0` too, where cleartext
+HTTP is guarded only by a Bearer token; do not use it directly on the public
+internet. The full checklist for narrowing the bind, security groups, a TLS
+reverse proxy and trust tiers is in `SECURITY.en.md` ("Public-host
+deployment") and `docs/install.en.md`.
 
 **Can two nodes run on the same machine?**
 
