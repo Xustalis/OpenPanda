@@ -46,7 +46,11 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-09 — "Constellation"
+
 ### Added
+- **Exposure modes** — `network.exposure_mode` (`loopback` · `lan` · `public`, with pre-0.1.5 configs auto-detected as `legacy`) is now the single switch for every listening socket: load rewrites `listen_addr`, `panel_addr`, `udp_listen` and `discovery_*` from it, `public` fails closed without a stable `shared_secret` and `panel_token`, and `panda doctor` prints the mode next to the binds it produced. A fresh install lands on `loopback` instead of binding every interface.
+- **Local actions** — a bare imperative for one of this node's own subcommands ("open the web console", "启动 web 服务", "run doctor", "看看状态") now runs locally and answers with its output: no entry-model call, no task row, no agent subprocess. The matcher is a whole-message anchored test that rejects questions and extra work clauses, only fires on a fresh turn, and falls through to the normal path when the command fails.
 
 - **A whole connection clears in one click** — the model registry's card grows a bin beside *Add models*: one click arms it, the strip names how many models go, the tick removes the account. The batch is one config write and one decision about which model is live next, and the survivor is verified before anything is removed — a hand-over that cannot dial leaves the connection intact instead of half-emptied.
 
@@ -54,9 +58,40 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **A pairing request finds you instead of waiting to be found** — a peer that dials in is now announced in three places at once: the web console floats a card over whatever page you are on and folds it into a countdown badge if you dismiss it, the TUI puts a bar above the input (a popup would swallow keys) with `/pair` to reopen the decision, and `panda status` ends with a waiting line for anyone sitting on a bare shell. All three read the same request row and answer through the same path as `panda pair confirm`, so the four-minute window no longer passes in silence on a machine with no browser open.
 
+- **The site is nine pages, and the demo is a real machine** — the landing page is now a product site with overview, capabilities, docs, download, changelog, status, security, community and FAQ pages sharing one nav and footer, and a static checker asserts their links, anchors, canonicals and version literals. Section 03 shows console screenshots and an 81-second recording from a local v0.1.4 build instead of a drawn mock; the README's Demo section uses the same files.
+
+- **Agent models and concurrency are settings that take effect live** — `routing.agent_models`, `routing.subagent_models`, `routing.agent_concurrency` and the delegation limits are validated at the file and HTTP boundary, editable from Settings → Execution, and reach the running engine and scheduler without a restart. Adapters honour each agent's native model preference, and `docs/agent-execution.*` documents the surface in five languages.
+
+- **A long tool loop can no longer outgrow the model's context** — a "look at this repo" ask once replayed fourteen full `workspace_read` results until the provider rejected the request and the loop reported only that "the model stopped responding after 14 tool operations". One result is now capped at 12,000 runes, the transcript's tool text at 12,000–64,000 runes derived from the serving model's window, and the oldest results shrink first. Context-overflow rejections get a targeted recovery, failures name their cause, and a panic escaping a tool adapter or stream callback is contained instead of ending the session.
+
+- **An ask keeps its round, and a summary that failed to land is retried** — every task an entry ask creates, including tool batches and plan stages, is filed under one leased round (`ask_rounds`, schema v67). Turn writes are idempotent across stores, compaction and forks, and the finalizer retries a failed transcript write or summary delivery. Recovery deliberately refuses to infer cross-node replay safety from an exit code or argv, so automatic retries stay on the node that owns the workspace.
+
+- **A misbehaving MCP server cannot take the client down with it** — the stdio transport caps a response at 4 MiB, `tools/list` pagination at 100 pages, a tool's error text at 2,048 characters and the stderr tail it reports at 4 KiB redacted. Response IDs are matched (string IDs included), unsolicited server requests are refused, invalid JSON-RPC and non-text content are reported, and a panicking tool leaves the session alive.
+
+- **The console's first run explains itself, and unfinished surfaces stop occupying the rail** — the setup wizard gains a guided tour, the team destination becomes a browser-side opt-in switch (off by default, with its ⌘K command and deep link disappearing with it), the memory graph is redrawn in an Obsidian-style layout with per-item menus, the dock reads source files with syntax highlighting, and the model registry settles on per-connection cards with the account row folded into its footer.
+
+- **Public-host deployment guidance** — SECURITY.md, its four translations, both FAQs and both install guides now describe the bus's real all-interface bind, the default port matrix and the hardening order for a host with a public IP; the example configs no longer claim a wildcard bind is safe.
+
 ### Fixed
+- **A delegated run no longer dies with the peer's link** — the executor's context came from the connection's read loop, so a dropped WebSocket cancelled a task that was still running; it now outlives the transport and is bounded by its lease, deadline and `cancelRunning` instead.
+- **Concurrent waiters on one task all get the result** — the single-slot `task_id → chan` map displaced the first waiter when a second registered (a plan child also awaited by `Submit`, a resume racing a delegation wait), leaving it blocked until its lease lapsed. Results now fan out to a per-registration set, and a delegated child no longer leaks a waiter when its wait window closes.
+- **Unverified work is labelled, not promoted** — an agent run with no supervisor and no delivery contract used to report a plain `done`; it now carries `verification: unverified`, and a run that also left no output and no changed file parks for review. A delegated result whose contract stayed on the origin is labelled the same way instead of reading as verified.
 
 - **The Windows installer stops hanging when GitHub stalls** — every download is bounded: curl gets a 1 KB/s floor sustained for 60 s and a 300 s cap on the archive (45 s on the API call), and the .NET fallback carries a read timeout that also covers the response body. curl no longer retries timeouts, which used to restart the whole transfer with a fresh timer up to three more times; a connection that opens and then delivers nothing ends with curl's mapped cause instead of sitting at `Installing …` forever. The script also hands curl the Windows "Internet Options" system proxy, honours its `ProxyOverride` bypass list (loopback included) so a local mirror stays direct, and leaves PAC-only setups to the .NET stack.
+
+- **Memory edits, daily logs and the graph now agree on what is real** — daily files reject symlinks and non-date names, archive merges late entries and wait for the other instance, and dream promotions carry a retryable receipt. Retrieval ranks short Chinese queries, reports a broken topic store and keeps personal memory out of project turns. Console edits carry a version and an ETag tied to the real skill store, preview the whole file rather than its first 64 KiB, and refuse stale or concurrent writes; graph promotions require evidence and no longer extract entities from report boilerplate.
+
+- **LAN discovery now says why the list is empty** — a node whose discovery listener never came up looked exactly like a LAN with no peers. `panda doctor` binds the discovery port to check whether anything is listening, and when an access point eats broadcast beacons the pairing panel can sweep the node's own /24 over TCP — a hit proves reachability only, the shared secret and signed hello still admit the peer. Windows `WSAEADDRINUSE` is read as a held port instead of a bind fault, so a healthy listener no longer fails the check on Windows.
+
+- **The local build keeps its macOS network permission** — ad-hoc signing embedded a fresh cdhash on every rebuild, which macOS treats as a new TCC Local Network identity, so a launchd daemon silently lost its grant after each build. `make build` now signs with the stable `OpenPanda Local Development` identity when it is in the keychain and falls back to ad-hoc where no certificate exists (every CI runner).
+
+- **A discovery port held at startup no longer silences the node for its whole lifetime** — a failed bind used to end LAN discovery permanently, with an empty peer list as the only symptom. The listener now retries every 30 seconds, which covers the usual case: a previous daemon still draining, or a console probing the lock. The condition is also recorded in the discovery snapshot, so `panda doctor` can separate "listener never came up" from "the network is quiet".
+
+- **Restarting the console no longer leaves the node an island** — a long-lived engine that finds the node identity lock held (`ErrAlreadyRunning`) now retries every 200 ms for up to 5 seconds, the window in which a predecessor releases it during `panda web -daemon` restarts. Probe-only engines keep a single attempt, so short commands do not pay the wait; a daemon that genuinely co-resides with the console still degrades as before, without mistaking "another owner" for "our own predecessor".
+
+- **Security docs no longer contradict the code** — the claim that the bus listens on loopback and does not start without a `shared_secret` was false: the daemon mints a secret at boot and binds `0.0.0.0:7836` / `:7837`. Both install guides now state the Go 1.26.10 floor, the download page says three lite builds, and the help page lists all nine config sections plus `pair confirm|reject`.
+- **Three concurrency edges** — a lease renewal is bounded to five seconds and re-checks the stop signal before writing, so a blocked SQLite write cannot make the monitor re-route a live task to a second node; router rebuilds configure the agent concurrency gate even when the capability card is empty; queue shutdown waits through the guarded goroutine helper instead of a bare goroutine.
+- **Console polish and private service logs** — the light theme colour and PWA manifest no longer flash near-black, the duplicate spinner definition is gone, clipped usage cards grow instead of hiding their last line, iframe stages follow the theme token, and the service log is created 0600 inside a 0700 directory so its token-bearing URL is not world-readable.
 
 ## [0.1.4] - 2026-11-03 — "Constellation"
 
@@ -220,7 +255,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - `panda update` survives a flaky asset host: release metadata is retried up to three times on a transport failure instead of failing the whole upgrade on a single reset, and the TLS handshake to GitHub's asset CDN gets 30s instead of the 10s default. The signed query string GitHub appends to asset URLs is redacted from the error, which used to push the actual cause off screen.
 - `scripts/install.ps1` no longer aborts on Windows with `CRYPT_E_NO_REVOCATION_CHECK` (`0x80092012`): curl runs with `--ssl-no-revoke` when the local Schannel build supports it, so an unreachable certificate revocation endpoint can no longer stop the install. Chain, hostname and expiry are still verified, and the archive is still authenticated by SHA-256 against `checksums.txt`.
 - **A task pinned to an agent the team excludes is refused, not re-staffed** — three tasks pinned to `agent:claude_code`, `agent:codex` and `agent:deepseek_harness` ran on a `[deepseek_harness, opencode]` roster, all three executed on deepseek_harness, and each printed `<name> 调用成功` for an agent that never started: three green passes, two of them fiction. The mismatch is refused before routing and the reason names both sides; a roster whose agents are not installed on this node says so instead of degrading to the unrestricted card.
-- **The round roll-up waits for employees that never ran** — "本轮工作已全部完成" printed as soon as one employee reported, even with a colleague parked before execution ("尚未执行——批准后将继续执行"): `review` covered both a sign-off on finished work and a gate that never let the work start. A `review` row now holds the round open unless approving it accepts work that already exists (`accept_work` / `self_merge`).
+- **The round roll-up waits for employees that never ran** — "本轮工作已全部完成" printed as soon as one employee reported, even with a colleague parked before execution ("尚未执行—批准后将继续执行"): `review` covered both a sign-off on finished work and a gate that never let the work start. A `review` row now holds the round open unless approving it accepts work that already exists (`accept_work` / `self_merge`).
 - **A round's verdict counts the whole batch, not the last report** — a round where two employees finished and one failed was summed up in red as "本轮工作已结束（已失败）", and the recap printed the shared dispatch template once per job. The roll-up counts every report and names the split ("2 done, 1 failed"), amber when the round is mixed and red only when nobody finished; a common title head ending on a colon is printed once.
 - **A substitute no longer passes for the agent that was asked for** — a task pinned to `agent:claude_code` that failed mid-run was finished by the fallback chain, and the transcript showed "DeepSeek Harness" above a job titled `连通性测试：agent:claude_code` with nothing saying why. The swap was recorded twice (an `agent_fallback` event, and a note at the head of the result payload) but the thread prints neither — it keeps one closing paragraph. The report line now names both sides.
 - **The injection notice is one line, and it says which strategy** — the footnote prepended to a task's output repeated the same sentence in English and Chinese, which buried the agent's own answer, and a failure-time rescue read like a policy injection. The notice now names the agent, the model, the endpoint host and the strategy (`auto` / `always` / `rescue`); the `model_injection` event carries the same fields for the log, and `injection.model: never` no longer allows the rescue — "never" means the agent always uses its own model.
@@ -920,7 +955,7 @@ The usability release: the capability card — the file that tells the scheduler
 
 - **Web: robustness and accessibility** — a top-level error boundary with retry; focus trapping in the command palette and confirm dialogs; keyboard-operable kanban cards (Enter/Space with visible focus); system polling pauses while the tab is hidden and skips polls still in flight; stable list keys.
 
-- **`panda skill --help`** **/** **`panda reminder --help`** — print their usage and exit 0 instead of treating `--help` as an unknown verb.
+- **`panda skill --help` / `panda reminder --help`** — print their usage and exit 0 instead of treating `--help` as an unknown verb.
 
 - **CI: gate and installer legs repaired** — all four failing gate legs and the installer pipeline repaired (7c418b0).
 
@@ -996,11 +1031,11 @@ The three-device lab patch: the first real macOS + OrangePi + Windows cluster �
 
 - **Locked-out agent CLIs no longer attract routing** — a capability card is static, but an installed CLI can be unusable: `claude.exe` on the Windows box with no login state and no model key advertised `agent:*` to the fleet, routing sent it a coding task, and it hung for minutes before failing on a network error. The local fallback chain and the capability summary advertised over hello now gate on viability — CLI on PATH *and* a reachable model (own credentials or injection); the Windows summary now advertises only `win.sysinfo` (2db530f).
 
-- **`panda web`** **no longer dies on a taken port** — a second `/web` (or a leftover process) errored with `bind: address already in use` and printed a token to copy by hand. The console now falls forward to a nearby port and says so; the browser opens already authenticated (the token is never printed), and `/web` while it runs re-opens the browser logged in. `--no-browser` still prints a token-carrying URL for manual use (c4e1bc7).
+- **`panda web` no longer dies on a taken port** — a second `/web` (or a leftover process) errored with `bind: address already in use` and printed a token to copy by hand. The console now falls forward to a nearby port and says so; the browser opens already authenticated (the token is never printed), and `/web` while it runs re-opens the browser logged in. `--no-browser` still prints a token-carrying URL for manual use (c4e1bc7).
 
 - **Peer hello reports the real version** — all three hello paths advertised a hardcoded `0.1.0-dev`, so `panda nodes` showed wrong versions across a mixed-version fleet; they now report `version.Version` (all three lab devices show 0.0.5) (2db530f).
 
-- **The capability card next to the resolved config wins over** **`./capabilities.yaml`** — starting a daemon from a directory that happens to contain a capabilities.yaml (a repo checkout, another node's card) silently loaded the wrong card; the init-written card next to the config file now takes precedence, `--card` still overrides (2db530f).
+- **The capability card next to the resolved config wins over `./capabilities.yaml`** — starting a daemon from a directory that happens to contain a capabilities.yaml (a repo checkout, another node's card) silently loaded the wrong card; the init-written card next to the config file now takes precedence, `--card` still overrides (2db530f).
 
 - **Windows data directory no longer collides with the install prefix** — the default state dir `%LOCALAPPDATA%\openpanda` and the install prefix `%LOCALAPPDATA%\OpenPanda` are the same directory on case-insensitive NTFS: the SQLite store, memory, and projects lived inside the install prefix and an uninstall swept them away. The data dir is now `%LOCALAPPDATA%\openpanda-data`; Windows nodes coming from 0.0.4 start with a fresh store (fc50721).
 
@@ -1028,7 +1063,7 @@ working directory** and the first public release with end-to-end docs.
   Peer hello protocol v2 carries `node_kind` + `node_identity` and `employee_cache`
   v10 backfills the two columns with `DEFAULT 'physical'` for existing rows.
 
-- **Singleton daemon guard (`nodeidentity`** **package)** — `Acquire(kind, identity)` takes
+- **Singleton daemon guard (`nodeidentity` package)** — `Acquire(kind, identity)` takes
   an OS-level file lock in `$USER_DATA_DIR/locks/`, with platform-native `flock(2)` on
   Unix / `LockFileEx` on Windows. Running a second `panda daemon` on the same identity
   exits cleanly with a diagnostic instead of corrupting the shared store.
@@ -1041,7 +1076,7 @@ working directory** and the first public release with end-to-end docs.
   `adapters/codex.py` argument parsing and stdout framing were fixed as part of the
   hardening work.
 
-- **`/api/self`** **+** **`/api/nodes`** **+ web Nodes page** — panel/self.go exposes the local
+- **`/api/self` + `/api/nodes` + web Nodes page** — panel/self.go exposes the local
   node (name, kind, identity, resource class, running state, capabilities) and the
   node directory (local + connected peers with last-seen / running state). The new
   `Nodes` tab (`webui/app/src/views/nodes.tsx`) renders a running/last-seen table
@@ -1145,7 +1180,7 @@ working directory** and the first public release with end-to-end docs.
   drop even that prompt. The example capability cards are rewritten to the real
   `ledger.Card` schema with agent tier semantics.
 
-- **Default model moves to** **`deepseek-v4-flash`** — the `deepseek-chat`/`reasoner`
+- **Default model moves to `deepseek-v4-flash`** — the `deepseek-chat`/`reasoner`
   aliases were retired by the provider on 2026-07-24; the pro model is
   deliberately never a default (cost control). Card discovery also looks next to
   the resolved config file, matching the daemon's discovery order.
@@ -1178,7 +1213,7 @@ working directory** and the first public release with end-to-end docs.
 
 ### Fixed
 
-- **Multi-line** **`--version`** **banner** (e.g. Hermes) no longer pollutes the one-line agent table — version output is truncated to its first line in both the CLI and the web settings API.
+- **Multi-line `--version` banner** (e.g. Hermes) no longer pollutes the one-line agent table — version output is truncated to its first line in both the CLI and the web settings API.
 
 ## [0.0.2] - 2026-08-22
 
@@ -1256,7 +1291,7 @@ The CLI-first release: the kernel redesign lands (stages A–C) — every web ca
 
 ### Breaking changes
 
-- **Bare** **`panda`** **now opens the interactive REPL** instead of the headless daemon; the kernel moved to an explicit `panda daemon` subcommand. The systemd unit, LaunchAgent, Windows launchers, and Makefile run targets were updated — deployments invoking `panda` directly must switch to `panda daemon` (f0a1b9f).
+- **Bare `panda` now opens the interactive REPL** instead of the headless daemon; the kernel moved to an explicit `panda daemon` subcommand. The systemd unit, LaunchAgent, Windows launchers, and Makefile run targets were updated — deployments invoking `panda` directly must switch to `panda daemon` (f0a1b9f).
 
 ## [0.0.1] - 2026-08-19
 
@@ -1290,7 +1325,7 @@ Initial open-source pre-release: the full kernel feature set (daemon, CLI, P2P d
 
 - **`panda web`** — zero-config loopback console with an ephemeral-token auto-login URL (47517e3).
 
-- **`panda install`** **/** **`uninstall`** **/** **`doctor`** — cross-platform lifecycle: persistent PATH registration, standalone self-check, whitelist-safe uninstall with confirm + zip backup (86b9b9d).
+- **`panda install` / `uninstall` / `doctor`** — cross-platform lifecycle: persistent PATH registration, standalone self-check, whitelist-safe uninstall with confirm + zip backup (86b9b9d).
 
 - **Kanban queue board** — create form, priority cycling, per-column drag reorder, inline approvals (da9c9e1).
 
@@ -1304,7 +1339,7 @@ Initial open-source pre-release: the full kernel feature set (daemon, CLI, P2P d
 
 - **codex adapter + agent visibility** — installed-CLI probe with connectivity tests; `panda detect` hardware scan into a capabilities.yaml draft (c36cad1).
 
-- **`panda metrics [--csv]`** **and** **`panda audit verify [--task <id>]`** — delegation metrics export and audit-chain verification (7582754).
+- **`panda metrics [--csv]` and `panda audit verify [--task <id>]`** — delegation metrics export and audit-chain verification (7582754).
 
 - **`scripts/smoke-delegate`** — cross-process delegation verifier: exit 0 means a peer-only-capability task reached done on a peer.
 
@@ -1350,7 +1385,7 @@ Initial open-source pre-release: the full kernel feature set (daemon, CLI, P2P d
 
 - **Peer reconnect replaces stale connections** — a new conn from the same identity swaps into the registry; removal matches by conn identity (7911bbe).
 
-- **Interpreter** **`-c`** **classification is whitelist-based** — only provably pure-output code stays Tier 1 (f5db449).
+- **Interpreter `-c` classification is whitelist-based** — only provably pure-output code stays Tier 1 (f5db449).
 
 - **Deployment baseline documented** — plain `ws://` only over loopback/Tailscale/trusted LAN; TLS reverse proxy + `wss://` across the public Internet (7582754).
 

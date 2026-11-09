@@ -1,11 +1,21 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# check-docs.sh — doc-drift guard for two regressions we already paid for.
+# check-docs.sh — doc-drift guard for regressions we already paid for.
 #
 #   1. The retired model alias "deepseek-chat" must not linger in the
 #      user-facing docs or example configs (current default is
 #      deepseek-v4-flash; the alias was retired 2026-07-24).
 #   2. docs/install.md version examples must track the latest release tag.
+#   3. The five translated changelogs must carry the same version headings
+#      and the same entry counts as CHANGELOG.md.
+#   4. The CJK double em-dash "——" must not leak into the Latin-script
+#      changelogs; zh-CN and ja use it deliberately, en/es/de use "—".
+#   5. All five READMEs must carry the same release rows in descending order,
+#      plus their own Status / release-history / roadmap sections. The roadmap
+#      table used to mix ten released versions (ascending) with three future
+#      tracks (descending) under a "Roadmap" heading.
+#   6. A changelog entry title must not be split across bold runs ("** **").
+#      The acronym expansion on line 29 is deliberate and is the sole exception.
 #
 # POSIX sh, no dependencies beyond grep/git. Exits non-zero on drift.
 set -u
@@ -140,6 +150,70 @@ if [ "$missing_file" -eq 0 ]; then
 		check_counts "$newest"
 	fi
 fi
+
+# ── 4. Chinese/Japanese double em-dash must not leak into Latin changelogs ─
+# "——" is CJK typesetting. CHANGELOG.zh-CN.md and CHANGELOG.ja.md use it by
+# design; the English, Spanish and German files use a single "—". A translated
+# entry pasted straight from the Chinese draft reintroduces it silently.
+for f in CHANGELOG.md CHANGELOG.es.md CHANGELOG.de.md; do
+	if grep -n '——' "$f" >/dev/null 2>&1; then
+		echo "FAIL: CJK double em-dash '——' found in $f:"
+		grep -n '——' "$f" | head -n 5
+		fail=1
+	fi
+done
+
+# ── 5. README release tables: same rows, newest first, sections present ─────
+readmes="README.md README.zh-CN.md README.ja.md README.es.md README.de.md"
+ref_rows=$(grep -oE '^\| \*\*v[0-9]+\.[0-9]+\.[0-9]+' README.md | sed 's/^| \*\*//' | sort -u)
+for f in $readmes; do
+	if [ ! -f "$f" ]; then
+		echo "FAIL: $f missing"
+		fail=1
+		continue
+	fi
+	for marker in '^## 📜' '^## 🗺️' '^## Status$' '^## 📊 '; do
+		if ! grep -qE "$marker" "$f"; then
+			# English keeps the plain "## Status" heading; the translations
+			# use "## 📊 …". Either one satisfies the Status requirement.
+			if [ "$marker" = '^## Status$' ] && grep -qE '^## 📊 ' "$f"; then continue; fi
+			if [ "$marker" = '^## 📊 ' ] && grep -qE '^## Status$' "$f"; then continue; fi
+			echo "FAIL: $f is missing section matching $marker"
+			fail=1
+		fi
+	done
+	got_rows=$(grep -oE '^\| \*\*v[0-9]+\.[0-9]+\.[0-9]+' "$f" | sed 's/^| \*\*//' | sort -u)
+	if [ "$got_rows" != "$ref_rows" ]; then
+		echo "FAIL: $f release rows differ from README.md:"
+		echo "  canonical: $(echo "$ref_rows" | tr '\n' ' ')"
+		echo "  found:     $(echo "$got_rows" | tr '\n' ' ')"
+		fail=1
+	fi
+	if ! awk '
+		/^\| \*\*v[0-9]+\.[0-9]+\.[0-9]+/ {
+			v = $0; sub(/^\| \*\*v/, "", v); sub(/[^0-9.].*/, "", v)
+			split(v, a, "."); n = a[1] * 1000000 + a[2] * 1000 + a[3]
+			if (prev != "" && n > prev) { printf "%s: release row %s is out of order\n", FILENAME, v; bad = 1 }
+			prev = n; count++
+		}
+		END { if (count < 2) { printf "%s: fewer than two release rows\n", FILENAME; bad = 1 } exit bad }
+	' "$f"; then
+		fail=1
+	fi
+done
+
+# ── 6. bold runs must not split a changelog entry title ────────────────────
+# "**A** **B** —" renders as two separate bold fragments. Only bullet lines
+# are checked: the acronym expansion in the intro paragraph deliberately uses
+# adjacent bold runs, and is not an entry title.
+for f in $changelogs; do
+	breaks=$(grep -nF '** **' "$f" | grep -E '^[0-9]+:- ' || true)
+	if [ -n "$breaks" ]; then
+		echo "FAIL: $f has a split bold entry title:"
+		echo "$breaks" | head -n 5 | sed 's/^/  /'
+		fail=1
+	fi
+done
 
 if [ "$fail" -ne 0 ]; then
 	echo "check-docs: FAILED"

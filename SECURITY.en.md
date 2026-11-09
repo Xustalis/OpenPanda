@@ -1,6 +1,8 @@
 # Security
 
-English translation of [SECURITY.md](SECURITY.md)（中文版为准）· English · [日本語](SECURITY.ja.md) · [Español](SECURITY.es.md) · [Deutsch](SECURITY.de.md)
+Languages: 简体中文（为准）[SECURITY.md](SECURITY.md) · English · [日本語](SECURITY.ja.md) · [Español](SECURITY.es.md) · [Deutsch](SECURITY.de.md)
+
+*English translation of [SECURITY.md](SECURITY.md); if the two disagree, the Chinese version governs.*
 
 OpenPanda is a P2P task-orchestration kernel that runs on your own devices.
 This document explains its trust model, deployment red lines, and the
@@ -137,10 +139,66 @@ trust model, not a patch), the following are mandatory:
    long-term external exposure configure a stable token or a TLS reverse
    proxy. Do not paste auto-login URLs containing the token into chat or
    ticketing systems.
-5. **Loopback listening by default.** The bus listens on loopback by
-   default; with no `shared_secret` configured the listener does not start
-   at all and the node runs locally only (a security constraint, see
-   `docs/install.md`).
+5. **A new install listens on loopback only; widening it is an explicit
+   act.** With `network.exposure_mode: loopback` (the default) the bus, the
+   console and the UDP datagram plane all bind `127.0.0.1`, and LAN discovery
+   is off. Only `lan` or `public` makes the bus reachable — the datagram plane
+   and discovery open with it, and a daemon also generates a `shared_secret`
+   and persists it into `config.yaml` at first boot, so the listener always
+   starts: an unset secret does not keep the node local. An unknown device can
+   open the port and learn the node exists, but cannot pass the HMAC
+   membership check or submit a task. Holding that secret is membership, and
+   the default trust tier is `mesh`: delegates are accepted automatically,
+   which is remote execution. A config written before 0.1.5 that declared its
+   own binds resolves to `legacy` and keeps them. On a host with a public IP,
+   follow "Public-host deployment" below.
+
+## Public-host deployment
+
+`network.exposure_mode` is the single switch for who may reach this machine:
+`loopback` (the default for new installs — every listener bound to loopback),
+`lan` (bus reachable on the private network, console stays on loopback),
+`public` (reachable from a public interface; requires a stable `shared_secret`
+and `panel_token`, disables discovery and refuses cleartext dials) and
+`legacy` (keeps the pre-0.1.5 binds exactly as written). Load rewrites
+`listen_addr` / `panel_addr` / `udp_listen` / `discovery_*` from it, so
+`panda doctor` reports the addresses actually bound. A config that already
+declared one of those binds is treated as `legacy`, so upgrading never moves an
+existing node's sockets.
+
+`panel_addr` defaults to `127.0.0.1:7840`, so the console itself is not
+reachable; the bus, UDP plane and LAN discovery are. `--lan` and
+`panda service install --lan` bind the console to `0.0.0.0` as well, where
+cleartext HTTP is guarded only by a Bearer token and both the token and task
+contents can be sniffed on the path — **do not use this directly on the
+public internet**.
+
+Hardening order:
+
+1. **Set `exposure_mode`, then narrow the bind.** On a cloud host use
+   `public` (or `lan` plus an overlay address); point `network.listen_addr` at
+   the Tailscale / WireGuard overlay interface; set `udp_listen` and
+   `discovery_addr` to `off` (a cloud host rarely needs LAN discovery) and
+   `discovery_auto_dial` to `false`. Verify with `ss -lntup | grep panda`.
+2. **Let the security group admit the overlay only.** Allow inbound traffic
+   from the overlay subnet and port only; never expose 7836 / 7837 / 7840 or
+   the dynamic preview/devserver ports to `0.0.0.0/0`.
+3. **Put the console behind a TLS reverse proxy.** Keep `panel_addr` on
+   `127.0.0.1`, terminate TLS at nginx / Caddy, and write peers that cross a
+   public link as `wss://host:port` rather than `ws://`.
+4. **Credentials and admission.** Inject `shared_secret` only through
+   `OPENPANDA_SHARED_SECRET`, set a stable `panel_token` via the environment,
+   and confirm the short authentication string by hand in `panda pair` —
+   do not skip it with `--yes`. On a non-loopback bind, keep auto-login URLs
+   containing the token out of logs, chat and tickets.
+5. **Tighten the trust tier.** Configure `guarded` / `open` explicitly for
+   peers reached over a public link; do not let the default `mesh`
+   "accept delegates automatically" behaviour cover that link. A trust tier
+   only tightens policy — it does not replace the secret.
+
+Once the secret leaks, the current model has no per-device revocation:
+rotating `shared_secret` exiles every existing node. Per-device authorization
+and verifiable admission change the trust model and are outside 0.1.x.
 
 ## Reporting vulnerabilities
 

@@ -164,10 +164,59 @@ verbindlich:
    externe Exposition ein stabiles Token oder einen TLS-Reverse-Proxy.
    Auto-Login-URLs mit dem Token nicht in Chat- oder Ticket-Systeme
    einfügen.
-5. **Standardmäßig Loopback-Listen.** Der Bus lauscht standardmäßig auf
-   Loopback; ohne konfiguriertes `shared_secret` startet der Listener
-   gar nicht und der Knoten läuft nur lokal (eine
-   Sicherheitsbedingung, siehe `docs/install.md`).
+5. **Eine Neuinstallation lauscht nur auf Loopback; das zu öffnen ist ein
+   ausdrücklicher Schritt.** Mit `network.exposure_mode: loopback` (der
+   Standard) binden Bus, Konsole und UDP-Datenebene an `127.0.0.1`, und die
+   LAN-Discovery ist aus. Erst `lan` oder `public` macht den Bus erreichbar —
+   dann öffnen Datenebene und Discovery mit, und ein Daemon erzeugt beim
+   ersten Start zusätzlich ein `shared_secret` und schreibt es nach
+   `config.yaml`, sodass der Listener immer startet; ein leeres Secret hält
+   den Knoten nicht lokal. Ein unbekanntes Gerät kann den Port öffnen und die
+   Existenz des Knotens feststellen, passiert aber nicht die
+   HMAC-Mitgliedsprüfung und kann keine Tasks einreichen. Wer das Secret
+   besitzt, ist Mitglied, und die Standard-Vertrauensstufe `mesh` akzeptiert
+   Delegationen automatisch (gleichbedeutend mit Fernausführung). Eine vor
+   0.1.5 geschriebene Konfiguration mit eigenen Bindings gilt als `legacy` und
+   behält sie.
+
+## Einsatz auf einem Host mit öffentlicher IP
+
+`network.exposure_mode` ist der einzige Schalter dafür, wer diese Maschine
+erreichen kann: `loopback` (Standard für Neuinstallationen), `lan` (Bus im
+privaten Netz erreichbar, Konsole auf Loopback), `public` (über eine
+öffentliche Schnittstelle erreichbar; verlangt ein stabiles `shared_secret`
+und `panel_token`, schaltet Discovery ab und lehnt Klartext-Dials ab) und
+`legacy` (behält die Bindings von vor 0.1.5 unverändert). Beim Laden werden
+`listen_addr` / `panel_addr` / `udp_listen` / `discovery_*` daraus abgeleitet,
+sodass `panda doctor` die tatsächlich gebundenen Adressen meldet.
+
+`panel_addr` ist standardmäßig `127.0.0.1:7840`, die Konsole geht also nicht
+nach außen. `--lan` und `panda service install --lan` binden sie ebenfalls an
+`0.0.0.0`; dort schützt nur ein Bearer-Token über Klartext-HTTP, und Token wie
+Task-Inhalte sind auf dem Weg mitlesbar — nicht direkt im Internet verwenden.
+
+Reihenfolge der Härtung:
+
+1. **`exposure_mode` setzen, dann das Binding verengen.** Auf einem Cloud-Host
+   `public` (oder `lan` plus Overlay-Adresse); `network.listen_addr` auf das
+   Overlay-Interface (Tailscale / WireGuard) zeigen lassen; `udp_listen` und
+   `discovery_addr` auf `off`, `discovery_auto_dial` auf `false`. Mit
+   `ss -lntup | grep panda` prüfen.
+2. **Die Security Group nur das Overlay zulassen.** 7836 / 7837 / 7840 und die
+   dynamischen Preview-Ports niemals für `0.0.0.0/0` öffnen.
+3. **Konsole hinter einen TLS-Reverse-Proxy.** `panel_addr` auf `127.0.0.1`
+   lassen, TLS an nginx / Caddy terminieren, Peers über das Internet als
+   `wss://host:port` schreiben, nie `ws://`.
+4. **Zugangsdaten und Admission.** `shared_secret` nur über
+   `OPENPANDA_SHARED_SECRET` injizieren, ein stabiles `panel_token` per
+   Umgebung setzen und in `panda pair` den kurzen Code von Hand bestätigen —
+   nicht mit `--yes` überspringen.
+5. **Vertrauensstufe anziehen.** Für Peers über das Internet `guarded` /
+   `open` konfigurieren; das Standard-`mesh` nimmt Delegationen automatisch an.
+   Die Stufe verschärft nur die Policy, sie ersetzt das Secret nicht.
+
+Die vollständige Liste steht in `SECURITY.en.md` ("Public-host deployment")
+und `docs/install.en.md`.
 
 ## Sicherheitslücken melden
 
