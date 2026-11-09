@@ -26,6 +26,23 @@ func (r *recordingApplier) ApplyNetworkConfig(_ context.Context, n config.Networ
 	}
 }
 
+// writeNetworkConfig replaces config.yaml atomically. os.WriteFile truncates
+// in place, so a one-second poller tick can land between the truncate and the
+// write and read half a YAML document. The observer advances its digest before
+// loading, so that unreadable revision is then skipped forever — a CI-only
+// flake that looks exactly like "the default path was never observed".
+// Rename is atomic on every platform the observer supports.
+func writeNetworkConfig(t *testing.T, path, body string) {
+	t.Helper()
+	tmp := path + ".next"
+	if err := os.WriteFile(tmp, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestNetworkSyncAppliesPeerAddedToFile is the regression for the split that
 // parked pinned tasks: the web console writes network.peers to config.yaml and
 // applies it to its own process, so the daemon must notice the file on its own
@@ -33,9 +50,7 @@ func (r *recordingApplier) ApplyNetworkConfig(_ context.Context, n config.Networ
 func TestNetworkSyncAppliesPeerAddedToFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("network:\n  shared_secret: s\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeNetworkConfig(t, path, "network:\n  shared_secret: s\n")
 	bootCfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("load boot config: %v", err)
@@ -54,9 +69,7 @@ func TestNetworkSyncAppliesPeerAddedToFile(t *testing.T) {
 	case <-time.After(1500 * time.Millisecond):
 	}
 
-	if err := os.WriteFile(path, []byte("network:\n  shared_secret: s\n  peers:\n    - 10.0.0.2:7836\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeNetworkConfig(t, path, "network:\n  shared_secret: s\n  peers:\n    - 10.0.0.2:7836\n")
 
 	select {
 	case got := <-applier.applied:
@@ -76,9 +89,7 @@ func TestNetworkSyncAppliesPeerAddedToFile(t *testing.T) {
 func TestNetworkSyncResolvesDefaultConfigPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("network:\n  shared_secret: s\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeNetworkConfig(t, path, "network:\n  shared_secret: s\n")
 	t.Setenv("OPENPANDA_CONFIG_PATH", path)
 	bootCfg, err := config.Load("")
 	if err != nil {
@@ -94,14 +105,15 @@ func TestNetworkSyncResolvesDefaultConfigPath(t *testing.T) {
 	// The observer reads its initial digest asynchronously. Writing several
 	// distinct revisions removes the race where the first edit lands before
 	// that read and therefore looks like "unchanged since boot" forever.
-	deadline := time.After(8 * time.Second)
+	// CI runs 60+ packages in parallel and the observer only ticks once a
+	// second, so allow enough ticks for a full revision to land. A broken
+	// ResolvePath applies nothing and still fails this deadline.
+	deadline := time.After(20 * time.Second)
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for n := 1; ; n++ {
 		body := fmt.Sprintf("network:\n  shared_secret: s\n  peers:\n    - 10.0.0.%d:7836\n", n)
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeNetworkConfig(t, path, body)
 		select {
 		case got := <-applier.applied:
 			peers := got.PeerAddrs()
@@ -110,7 +122,9 @@ func TestNetworkSyncResolvesDefaultConfigPath(t *testing.T) {
 			}
 			return
 		case <-deadline:
-			t.Fatal("default config path was never observed")
+			raw, _ := os.ReadFile(path)
+			t.Fatalf("default config path was never observed: ResolvePath(\"\")=%q, file=%q",
+				config.ResolvePath(""), string(raw))
 		case <-tick.C:
 		}
 	}
@@ -155,9 +169,7 @@ func TestEngineNetworkApplierKeepsLiveSecret(t *testing.T) {
 func TestNetworkSyncKeepsMeshOnBrokenRevision(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("network:\n  shared_secret: s\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeNetworkConfig(t, path, "network:\n  shared_secret: s\n")
 	bootCfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("load boot config: %v", err)
@@ -169,9 +181,7 @@ func TestNetworkSyncKeepsMeshOnBrokenRevision(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	go runNetworkSync(ctx, logger, path, applier, bootCfg.Network)
 
-	if err := os.WriteFile(path, []byte("network:\n\tbroken: [\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeNetworkConfig(t, path, "network:\n\tbroken: [\n")
 	select {
 	case got := <-applier.applied:
 		t.Fatalf("broken revision applied: %+v", got)

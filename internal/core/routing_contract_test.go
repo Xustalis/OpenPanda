@@ -134,7 +134,7 @@ func TestHelloFailureReason(t *testing.T) {
 			name:   "legacy two-field HMAC mismatch",
 			secret: "different-secret",
 			p: bus.HelloPayload{
-				NodeID: "xin", Ts: ts, Sig: bus.HelloSig(secret, "xin", ts),
+				NodeID: "xin", Ts: ts, Sig: bus.HelloSigLegacy(secret, "xin", ts),
 			},
 			want: "shared_secret mismatch (legacy HMAC)",
 		},

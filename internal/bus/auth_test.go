@@ -18,6 +18,12 @@ func TestHelloSigVerify(t *testing.T) {
 	if sig == "" {
 		t.Fatal("HelloSig returned empty signature")
 	}
+	// HelloSig is the deprecated compatibility entry point. Verification and
+	// the handshake diagnostics use the non-deprecated form, so the two must
+	// stay byte-identical or legacy peers would be misdiagnosed.
+	if got := HelloSigLegacy(secret, "node-a", now.Unix()); got != sig {
+		t.Fatalf("HelloSigLegacy = %q, want the deprecated form's bytes %q", got, sig)
+	}
 
 	cases := []struct {
 		name   string
