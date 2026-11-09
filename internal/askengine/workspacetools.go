@@ -44,8 +44,12 @@ const (
 	wsReadBytes = 64 << 10
 	// wsReadLines caps a read even when the byte budget allows more lines —
 	// hundreds of one-character lines are still hundreds of messages.
-	wsReadLines        = 400
-	wsReadDefaultLines = 200
+	// The default used to be 200, which split common project files (README,
+	// CLAUDE.md) across two or three round trips: the model kept re-reading
+	// the same file and burned the whole tool-round budget before answering.
+	// A wider default still fits the per-result context bound in toolbudget.go.
+	wsReadLines        = 600
+	wsReadDefaultLines = 300
 	// wsListEntries caps one directory listing. A node_modules tree is not a
 	// report.
 	wsListEntries = 200
@@ -85,15 +89,17 @@ func registerWorkspaceTools(reg *entry.Registry, workDir string) {
 	reg.Register(entry.Tool{
 		Name: "workspace_read",
 		Description: "Read a text file inside this conversation's workspace. Returns numbered lines. " +
-			"Use start_line/max_lines to page through a large file instead of asking again. / " +
-			"读取当前工作区内的文本文件，返回带行号的内容；大文件用 start_line/max_lines 分页。",
+			"Prefer workspace_search when you only need specific content; read a file once and answer from what you have, " +
+			"paging with start_line/max_lines only when a specific missing section is essential. / " +
+			"读取当前工作区内的文本文件，返回带行号的内容。只需要特定内容时优先用 workspace_search；" +
+			"读一次即可据此作答，仅在确实缺少关键段落时才用 start_line/max_lines 继续翻页。",
 		Tier: defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":       map[string]any{"type": "string", "description": "File path, relative to the workspace / 相对工作区的文件路径"},
 				"start_line": map[string]any{"type": "integer", "description": "First line to return, 1-based (default 1) / 起始行（从 1 开始）"},
-				"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return (default 200, cap 400) / 最多返回行数"},
+				"max_lines":  map[string]any{"type": "integer", "description": "Maximum lines to return (default 300, cap 600) / 最多返回行数（默认 300，上限 600）"},
 			},
 			"required": []string{"path"},
 		},
@@ -269,7 +275,13 @@ func wsRead(root string, args map[string]any) (string, error) {
 		return fmt.Sprintf("No lines at or after line %d; the file has %d lines.", start, lineNo), nil
 	}
 	if truncated {
-		fmt.Fprintf(&b, "\n[stopped after %d lines; continue with start_line=%d]", emitted, start+emitted)
+		// The old trailer ("continue with start_line=N") read as an
+		// instruction to keep paging. On an "analyse this project" ask the
+		// model obeyed it literally and spent every tool round re-reading
+		// files instead of producing the answer. State the fact, point at
+		// the targeted tool, and leave paging as an explicit last resort.
+		fmt.Fprintf(&b, "\n[showing lines %d-%d; more content exists. Use workspace_search for specific text; "+
+			"start_line=%d only if a missing section is essential]", start, start+emitted-1, start+emitted)
 	}
 	return b.String(), nil
 }

@@ -31,6 +31,28 @@ func TestProgressNoteLocalRoute(t *testing.T) {
 	}
 }
 
+// TestProgressClarifyUsesHeaderFallback: the clarify choice card is the UI,
+// so the progress stream adds no wording of its own. progressNote's default
+// returns p.Name (the card's first question header) in every locale — no
+// empty row, no raw "cli.progress.*" key, and no locale-specific drift.
+// Pin it here: the kind is defined in askengine but intentionally has no
+// case in the renderer, which otherwise looks like a missed four-surface
+// contract to the next reader.
+func TestProgressClarifyUsesHeaderFallback(t *testing.T) {
+	const header = "Which tree should change?"
+	for _, loc := range []i18n.Locale{
+		i18n.English, i18n.ChineseSimp, i18n.Japanese, i18n.Spanish, i18n.German,
+	} {
+		got := progressNote(loc, askengine.Progress{
+			Kind: askengine.ProgressClarify,
+			Name: header,
+		})
+		if got != header {
+			t.Fatalf("%s: clarify progress row = %q, want the card header %q", loc, got, header)
+		}
+	}
+}
+
 // TestElapsedSubSecond: a stage that finishes in milliseconds (a routing
 // decision) used to print "0s", which reads as a broken timer. Sub-second
 // durations say so explicitly instead.

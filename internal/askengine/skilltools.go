@@ -122,6 +122,24 @@ func (e *Engine) getHubURL() string {
 	return ""
 }
 
+// deviceSkillKeys are the labels this engine accepts for a device-scoped
+// skill. They mirror core.nodeDeviceKeys so the ask-engine tools and the
+// execution prompt agree on which procedures are actually available here.
+func (e *Engine) deviceSkillKeys() []string {
+	if e.cfg == nil {
+		return nil
+	}
+	id := e.stableNodeID()
+	keys := []string{id}
+	if name := strings.TrimSpace(e.cfg.Node.Name); name != "" {
+		keys = append(keys, name)
+	}
+	if i := strings.Index(id, "@vm"); i > 0 {
+		keys = append(keys, id[:i])
+	}
+	return keys
+}
+
 func (e *Engine) toolSkillSearch(ctx context.Context, query string) (string, error) {
 	if query == "" {
 		return "", fmt.Errorf("query 不能为空")
@@ -249,6 +267,7 @@ func (e *Engine) toolSkillList(ctx context.Context) (string, error) {
 	}
 	summaries := make([]skillSummary, 0, len(index))
 	scopeProj, pinned := memory.ScopeProject(ctx)
+	deviceKeys := e.deviceSkillKeys()
 	for _, entry := range index {
 		// A skill index covers every project on this node. The model must see
 		// only what this conversation may use: global and device skills, plus
@@ -260,7 +279,14 @@ func (e *Engine) toolSkillList(ctx context.Context) (string, error) {
 			if !pinned || scopeProj == "" || !strings.EqualFold(entry.Key, scopeProj) {
 				continue
 			}
-		case skills.ScopeGlobal, skills.ScopeDevice:
+		case skills.ScopeGlobal:
+		case skills.ScopeDevice:
+			// The execution prompt injects only this node's device skills.
+			// Advertising another device's procedure as active would tell the
+			// model it can rely on steps it will never receive.
+			if !skills.MatchKey(entry.Key, deviceKeys) {
+				continue
+			}
 		default:
 			continue
 		}
@@ -291,13 +317,18 @@ func (e *Engine) toolSkillShow(ctx context.Context, name string) (string, error)
 	if sk == nil {
 		index, _ := st.Index()
 		scopeProj, pinned := memory.ScopeProject(ctx)
+		deviceKeys := e.deviceSkillKeys()
 		for _, entry := range index {
 			if !strings.EqualFold(entry.Name, name) {
 				continue
 			}
 			switch entry.Scope {
-			case skills.ScopeGlobal, skills.ScopeDevice:
+			case skills.ScopeGlobal:
 				sk, _ = st.Load(entry.Scope, entry.Key, entry.Name)
+			case skills.ScopeDevice:
+				if skills.MatchKey(entry.Key, deviceKeys) {
+					sk, _ = st.Load(entry.Scope, entry.Key, entry.Name)
+				}
 			case skills.ScopeProject:
 				// Same boundary as skill_list: another project's procedure is
 				// not this conversation's to load.

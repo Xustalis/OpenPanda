@@ -751,7 +751,8 @@ func (e *Engine) cardShow(ctx context.Context, name string) (string, error) {
 			for id, relay := range transitVia(nodes, e.selfNodeID()) {
 				if id == name || strings.EqualFold(namePart(id), namePart(name)) {
 					return fmt.Sprintf("设备 %q 不在本机目录（两跳外，本机未直连），但 %s 的邻居广告里有它——经 %s 中继可达。"+
-						"\n能力卡详情存在 %s 的目录里，本机看不到；可以派硬钉任务（task_submit 的 node 或 --preferred %s）由它执行，路由会经 %s 转发。",
+						"\n能力卡详情存在 %s 的目录里，本机看不到；可以派硬钉任务（task_submit 的 node=%s）由它执行，路由会经 %s 转发。"+
+						"--preferred 只是软提示，设备不可达时会回退本机并留下 route_fallback，别用它当硬性指定。",
 						id, relay, relay, relay, id, relay), nil
 				}
 			}
