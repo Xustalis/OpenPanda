@@ -171,7 +171,7 @@ const taskExampleSection = `
     "spec": {
       "scope": "Relative paths allowed to modify, comma-separated; empty if uncertain",
       "target": "Goal to achieve — restate the user's request faithfully, keep specifics verbatim",
-      "node": "Preferred target node ID (optional, from device list; omit for scheduler selection)",
+      "node": "HARD PIN — device id from Connected Devices. Required when the user names a device: the task runs ONLY there and waits for the link if offline. Omit only for free routing. requires never expresses device choice",
       "constraints": ["Prohibited actions"],
       "success_definition": "How to verify completion",
       "action_spec": "ONLY when driving a hardware:* actuator: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{\"name\":value}}"

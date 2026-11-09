@@ -20,7 +20,9 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/security"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // Pre-dispatch model probing. AgentViable proves an agent is locally
@@ -115,6 +117,12 @@ type ProbeVerdict struct {
 	// connect or an unknown host is NOT unknown — that is a deterministic
 	// answer that nothing serves this address, and it still disqualifies.
 	Unknown bool
+	// Status is the HTTP status the probe received, 0 when no response
+	// arrived. Routing ignores it (a 4xx still proves the service answers
+	// API-shaped requests), but a diagnostic surface needs it: "reachable"
+	// and "reachable, but it rejected this request" are different sentences,
+	// and Detail alone forces the caller to parse a string.
+	Status int
 }
 
 // probeKey is the cache identity: everything that can change the verdict
@@ -128,6 +136,7 @@ type endpointVerdict struct {
 	detail   string // e.g. "http 200", "http 503", "dial tcp …: connect refused"
 	rejected bool
 	unknown  bool // no answer arrived: deadline or transport failure
+	status   int  // HTTP status; 0 when no response arrived
 	checked  time.Time
 }
 
@@ -162,7 +171,7 @@ func modelProbe(spec ProbeSpec) ProbeVerdict {
 		}
 		if probeNow().Sub(v.checked) < ttl {
 			endpointMu.Unlock()
-			return ProbeVerdict{OK: v.ok, Detail: v.detail, Rejected: v.rejected, Unknown: v.unknown}
+			return ProbeVerdict{OK: v.ok, Detail: v.detail, Rejected: v.rejected, Unknown: v.unknown, Status: v.status}
 		}
 	}
 	endpointMu.Unlock()
@@ -174,7 +183,7 @@ func modelProbe(spec ProbeSpec) ProbeVerdict {
 	// already known not to answer quickly, and caching it costs nothing now
 	// that unknown no longer disqualifies the agent.
 	endpointMu.Lock()
-	endpointCache[key] = endpointVerdict{ok: v.OK, detail: v.Detail, rejected: v.Rejected, unknown: v.Unknown, checked: probeNow()}
+	endpointCache[key] = endpointVerdict{ok: v.OK, detail: v.Detail, rejected: v.Rejected, unknown: v.Unknown, status: v.Status, checked: probeNow()}
 	endpointMu.Unlock()
 	return v
 }
@@ -218,6 +227,16 @@ func probeModelOnce(spec ProbeSpec) ProbeVerdict {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	// Some gateways route and cache by conversation and refuse everything
+	// without their session header — OpenCode's Go surface answers 400
+	// MissingSessionID to a request that carries none. Probing without it made
+	// a perfectly working endpoint report "http 400" forever, and doctor then
+	// painted that as reachable-and-fine. The run path mints one id per client
+	// (entry/model.go); a probe is a single request, so one fresh id per probe
+	// is the honest equivalent.
+	if hdr := probeSessionHeader(spec); hdr != "" {
+		req.Header.Set(hdr, probeSessionValue())
+	}
 	resp, err := endpointClient.Do(req)
 	if err != nil {
 		// Only a deadline is unknown. A refused connect, an unreachable host or
@@ -230,14 +249,40 @@ func probeModelOnce(spec ProbeSpec) ProbeVerdict {
 	detail := fmt.Sprintf("http %d", resp.StatusCode)
 	switch {
 	case resp.StatusCode >= http.StatusInternalServerError:
-		return ProbeVerdict{Detail: detail}
+		return ProbeVerdict{Detail: detail, Status: resp.StatusCode}
 	case credentialRejected(resp.StatusCode) && spec.KeyDefinitive && spec.APIKey != "":
-		return ProbeVerdict{Detail: detail, Rejected: true}
+		return ProbeVerdict{Detail: detail, Status: resp.StatusCode, Rejected: true}
 	case credentialRejected(resp.StatusCode) && spec.RejectionHint != "":
-		return ProbeVerdict{Detail: detail + " · " + spec.RejectionHint, Rejected: true}
+		return ProbeVerdict{Detail: detail + " · " + spec.RejectionHint, Status: resp.StatusCode, Rejected: true}
 	default:
-		return ProbeVerdict{OK: true, Detail: detail}
+		return ProbeVerdict{OK: true, Detail: detail, Status: resp.StatusCode}
 	}
+}
+
+// probeSessionHeader names the conversation header this endpoint requires, if
+// any. The provider catalogue is keyed by base URL, so an explicitly written
+// "custom" entry pointed at a known gateway still gets its header — the same
+// rule entry/model.go applies when it builds a client.
+func probeSessionHeader(spec ProbeSpec) string {
+	if p, ok := providerDetect(spec.Endpoint, spec.Model); ok {
+		return p.SessionHeader
+	}
+	return ""
+}
+
+// providerDetect is a test seam over providers.Detect: a loopback httptest
+// server is the only endpoint a probe test may dial, and it can never match a
+// catalogue host, so the header wiring would otherwise be untestable.
+var providerDetect = providers.Detect
+
+// probeSessionValue mints the value probeSessionHeader carries. The "ses_"
+// prefix matches the run path so a provider's own logs group probe and run
+// traffic together.
+func probeSessionValue() string {
+	if id, err := util.UUIDv7(); err == nil {
+		return "ses_" + id
+	}
+	return "ses_probe"
 }
 
 // credentialRejected reports whether the status means "the credential or the
@@ -389,7 +434,7 @@ func ProbeModel(spec ProbeSpec) (ProbeVerdict, time.Duration) {
 	start := probeNow()
 	v := probeModelOnce(spec)
 	endpointMu.Lock()
-	endpointCache[spec.probeKey()] = endpointVerdict{ok: v.OK, detail: v.Detail, rejected: v.Rejected, unknown: v.Unknown, checked: probeNow()}
+	endpointCache[spec.probeKey()] = endpointVerdict{ok: v.OK, detail: v.Detail, rejected: v.Rejected, unknown: v.Unknown, status: v.Status, checked: probeNow()}
 	endpointMu.Unlock()
 	return v, time.Since(start)
 }

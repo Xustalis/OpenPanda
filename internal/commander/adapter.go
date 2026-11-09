@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -894,6 +895,66 @@ func adapterPath(name string) (string, error) {
 	return filepath.Join(resolveAdapterDir(), name), nil
 }
 
+// ErrAdapterUnavailable prefixes every failure that means "this node cannot
+// spawn this agent at all" — the script is not where the install layout says it
+// should be, the interpreter is missing, or the path names something that is
+// not a file. It exists as a message prefix rather than only an error value
+// because the diagnosis has to survive the trip through AgentResult.Result →
+// Result.Stderr → bus.TaskResultPayload.Stderr, where no error chain is left to
+// unwrap. AdapterUnavailable is the matcher for that trip.
+var ErrAdapterUnavailable = errors.New("adapter unavailable")
+
+// adapterScript resolves an adapter name to the script this process will
+// actually spawn and checks that the file is there. The spawn site used to
+// leave that question to the interpreter, so a missing script arrived as
+//
+//	python3: can't open file '/…/adapters/claude_code.py': [Errno 2] …
+//
+// which reads like a Python problem, says nothing about which directory was
+// searched, and — because it looks like an ordinary failed attempt — spends the
+// whole retry budget before parking an impossible task in human review. Naming
+// the path (and the directory it was expected in) at the boundary gives the
+// user the one fact they need and hands the retry loop a deterministic verdict.
+func adapterScript(name string) (string, error) {
+	path, err := adapterPath(name)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(path)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("%w: %q is not at %s (adapter dir %s — reinstall the adapters or set %s)",
+			ErrAdapterUnavailable, name, path, filepath.Dir(path), adapterDirEnv)
+	case info.IsDir():
+		return "", fmt.Errorf("%w: %q resolves to a directory, not a script (%s)",
+			ErrAdapterUnavailable, name, path)
+	}
+	return path, nil
+}
+
+// AdapterUnavailable reports whether a failure text means the agent could never
+// have started on this node, so retrying cannot change the outcome and a human
+// review of the *work* would be reviewing nothing.
+//
+// The patterns cover the two ways that happens in practice: adapterScript's own
+// verdict (which carries the sentinel), the interpreter-missing result the spawn
+// site returns with exit 127, and the interpreter's report when the script path
+// does not resolve — the last for rows recorded before adapterScript existed,
+// including the ones already sitting in a database's task_events.
+func AdapterUnavailable(text string) bool {
+	if strings.Contains(text, ErrAdapterUnavailable.Error()) {
+		return true
+	}
+	msg := strings.ToLower(text)
+	if strings.Contains(msg, "no python 3 interpreter") {
+		return true
+	}
+	// "python3: can't open file '/…/x.py': [Errno 2] No such file or directory".
+	// Both halves are required: an agent may well report its own ENOENT on a
+	// file it was asked to read, and that is a real task failure.
+	return strings.Contains(msg, "can't open file") && strings.Contains(msg, ".py")
+}
+
 // AdapterRequest is written to the adapter's stdin.
 type AdapterRequest struct {
 	Model    string `json:"model,omitempty"`
@@ -1301,7 +1362,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		return AgentResult{OK: false, Result: "bad adapter request", ExitCode: 1}
 	}
 
-	path, err := adapterPath(name)
+	path, err := adapterScript(name)
 	if err != nil {
 		return AgentResult{OK: false, Result: security.Redact(err.Error()), ExitCode: 1}
 	}
@@ -1833,7 +1894,7 @@ func startAgentSession(spawnCtx, turnCtx context.Context, name string, req Adapt
 	if err != nil {
 		return nil, err
 	}
-	path, err := adapterPath(name)
+	path, err := adapterScript(name)
 	if err != nil {
 		return nil, err
 	}
