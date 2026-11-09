@@ -2249,10 +2249,15 @@ func (s *TaskStore) ListReadySummaries(ctx context.Context) ([]queue.ReadyTask, 
 	var out []queue.ReadyTask
 	for rows.Next() {
 		var t queue.ReadyTask
-		var keysJSON sql.NullString
-		if err := rows.Scan(&t.ID, &t.Project, &t.Priority, &t.Seq, &t.CreatedAt, &keysJSON, &t.WorkDir, &t.Pin); err != nil {
+		var keysJSON, workDir sql.NullString
+		// work_dir is nullable: a row enqueued before a work directory was
+		// pinned (or written by an older build) carries NULL, and scanning it
+		// into a string failed the whole ready set — which stops the queue
+		// scheduler outright, since it treats "cannot list" as "nothing to run".
+		if err := rows.Scan(&t.ID, &t.Project, &t.Priority, &t.Seq, &t.CreatedAt, &keysJSON, &workDir, &t.Pin); err != nil {
 			return nil, err
 		}
+		t.WorkDir = workDir.String
 		if keysJSON.Valid {
 			_ = json.Unmarshal([]byte(keysJSON.String), &t.ResourceKeys)
 		}

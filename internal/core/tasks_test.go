@@ -2928,3 +2928,34 @@ func TestTerminalSessionTasksWithoutEventReportsEachAttempt(t *testing.T) {
 		t.Fatalf("candidate state = %q, want done", got[0].State)
 	}
 }
+
+// A queued row with no work directory must not blind the queue scheduler.
+//
+// ListReadySummaries scanned work_dir straight into a string, so one NULL — a
+// row written before a directory was pinned, or by an older build — failed the
+// whole ready set. The scheduler reads "cannot list" as "nothing to run", so a
+// single such row stopped every queued task on the node, and the poll repeated
+// the warning twice a second.
+func TestListReadySummariesToleratesNullWorkDir(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	tk := createTask(t, s, "", "null work dir", "owner")
+	if err := s.Queue(ctx, tk.TaskID, "owner"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET scheduled = 1, work_dir = NULL WHERE task_id = ?`, tk.TaskID); err != nil {
+		t.Fatalf("blank work_dir: %v", err)
+	}
+
+	ready, err := s.ListReadySummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListReadySummaries: %v", err)
+	}
+	if len(ready) != 1 {
+		t.Fatalf("ready = %d, want 1", len(ready))
+	}
+	if ready[0].WorkDir != "" {
+		t.Fatalf("WorkDir = %q, want empty", ready[0].WorkDir)
+	}
+}
