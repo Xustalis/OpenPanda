@@ -168,10 +168,11 @@ func cachedClassification(ctx context.Context, c *Client, po PromptOptions, regi
 	if !classificationCacheable(out) {
 		return Output{}, false
 	}
-	// Never serve a cached answer that carries DSML tool-call markup: such rows
-	// predate the recover/reject path (resolveDSML) and would re-leak the raw
-	// protocol text to the user on every identical ask.
-	if out.Kind == KindAnswer && ContainsDSMLToolCall(out.Answer) {
+	// Never serve a cached answer that carries textual tool-call markup: such
+	// rows predate the recover/reject paths (resolveDSML, resolveXMLToolCall)
+	// and would re-leak the raw protocol text to the user on every identical
+	// ask.
+	if out.Kind == KindAnswer && ContainsTextualToolCall(out.Answer) {
 		return Output{}, false
 	}
 	return out, true
@@ -308,6 +309,12 @@ func resolveResponse(resp Response, toolsOffered bool, locs ...i18n.Locale) (Out
 	}
 	if ContainsDSMLToolCall(resp.Text) {
 		return resolveDSML(resp, toolsOffered, loc)
+	}
+	// A second dialect of the same failure: GLM's <tool_call> template. Both
+	// are protocol artifacts, never answer prose, and the recovery contract is
+	// identical — see texttool.go.
+	if strings.Contains(resp.Text, xmlToolOpen) {
+		return resolveXMLToolCall(resp, toolsOffered, loc)
 	}
 	out, err := ParseOutput(resp.Text)
 	if err != nil {

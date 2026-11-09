@@ -326,6 +326,18 @@ func (g *deltaGuard) deliver(text string) {
 		if dsmlMarkerPrefix(trimmed) {
 			return // a DSML marker split across deltas is still undecidable
 		}
+		// GLM's textual tool call opens a response the same way DSML does:
+		// markup where the answer should begin, withheld and recovered (or
+		// rejected) by resolveXMLToolCall. A split tag keeps buffering.
+		if xmlToolCallStartIndex(trimmed) == 0 {
+			g.decided = true
+			g.structured = true
+			g.buffered = nil
+			return
+		}
+		if xmlToolCallPrefix(trimmed) {
+			return
+		}
 		switch {
 		case trimmed[0] == '{':
 			// A response opening on a bare object is the dominant directive
