@@ -26,11 +26,12 @@ func notifyDaemonReload(configPath string) {
 }
 
 func notifyDaemonReloadTo(out io.Writer, _ string) {
-	fmt.Fprintln(out, "restart the daemon for the new card to be advertised to peers")
+	fmt.Fprintln(out, "running instances reload the card automatically within ~1s; otherwise restart the daemon")
 }
 
-// notifyDaemonMeshTo mirrors the unix peer-list notification: Windows cannot
-// SIGHUP the daemon, so the honest outcome is the restart hint.
+// notifyDaemonMeshTo mirrors the unix peer-list notification. Windows cannot
+// SIGHUP the daemon, but the 1-second config.yaml observer (runNetworkSync)
+// is cross-platform, so a restart is not required while a node is running.
 func notifyDaemonMeshTo(out io.Writer, _ string) {
-	fmt.Fprintln(out, "restart the daemon for the new peer list to take effect")
+	fmt.Fprintln(out, "running instances reload the peer list automatically within ~1s; otherwise it applies at next start")
 }

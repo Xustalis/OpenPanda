@@ -90,3 +90,47 @@ func TestSyncPeerTrustConfig(t *testing.T) {
 		t.Fatal("an unbound id rewrote the config")
 	}
 }
+
+// TestNodesDisconnectRevokesCleartextExemption: the exemption is consent for
+// exactly one peer. Removing that peer must not leave a permanent plaintext
+// allowance for the same host behind.
+func TestNodesDisconnectRevokesCleartextExemption(t *testing.T) {
+	addr := "10.0.0.5:7836"
+	host := peerDialHost(addr)
+	if host == "" {
+		t.Fatal("test address has no dial host")
+	}
+	cfg := config.Default()
+	cfg.Network.Peers = []config.PeerEntry{{Addr: addr}}
+	cfg.Network.AllowCleartextFor = []string{host, "10.0.0.9"}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runNodesDisconnect([]string{"--config", path, addr})
+
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Network.Peers) != 0 {
+		t.Fatalf("peer still configured: %+v", got.Network.Peers)
+	}
+	kept := false
+	for _, e := range got.Network.AllowCleartextFor {
+		if e == host {
+			t.Fatalf("cleartext exemption for the removed peer survived: %+v", got.Network.AllowCleartextFor)
+		}
+		if e == "10.0.0.9" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatal("an unrelated exemption was removed too")
+	}
+}

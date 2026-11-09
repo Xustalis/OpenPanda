@@ -5,8 +5,10 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -50,5 +52,21 @@ func TestLooksLikePandaProcessWithoutPS(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if got := looksLikePandaProcess(os.Getpid()); got != procUnverified {
 		t.Fatalf("verdict without ps = %v, want procUnverified", got)
+	}
+}
+
+// TestMeshReloadHintNoLongerClaimsDaemonDown: a missing daemon pid is not
+// evidence that nothing applied the change — the 1s config observer runs in
+// the standalone web console too. The old wording told operators to restart
+// a healthy process.
+func TestMeshReloadHintNoLongerClaimsDaemonDown(t *testing.T) {
+	var buf bytes.Buffer
+	notifyDaemonMeshTo(&buf, filepath.Join(t.TempDir(), "config.yaml"))
+	out := buf.String()
+	if strings.Contains(out, "daemon not running") {
+		t.Fatalf("stale restart advice: %q", out)
+	}
+	if !strings.Contains(out, "within ~1s") && !strings.Contains(out, "live now") {
+		t.Fatalf("hint omits the live reload: %q", out)
 	}
 }

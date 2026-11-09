@@ -174,7 +174,12 @@ func selfCheckPeer(w io.Writer, loc i18n.Locale, configPath string, cfg *config.
 			}
 			return
 		}
-		if attempt == 0 && core.CleartextDialError(addr, cfg.Network.AllowCleartext, cfg.Network.AllowCleartextFor) != nil {
+		// Only an actual cleartext-gate verdict earns the exemption. The old
+		// static check opened it on ANY first failure, so a host that never
+		// answered (i/o timeout) and a peer rejecting our hello (auth) both
+		// came away with a permanent plaintext allowance for that host.
+		if attempt == 0 && errors.Is(err, core.ErrCleartextRefused) &&
+			core.CleartextDialError(addr, cfg.Network.AllowCleartext, cfg.Network.AllowCleartextFor) != nil {
 			ensureCleartextAllowed(w, loc, configPath, cfg, addr)
 			continue
 		}
@@ -318,9 +323,34 @@ func runNodesDisconnect(args []string) {
 		fmt.Println(i18n.Tf(i18n.Detect(), "cli.nodes.disconnect.none", "addr", addr))
 		return
 	}
+	// A host-scoped cleartext exemption is consent to talk to THAT peer.
+	// Once the peer is gone it has no subject left; leaving it behind keeps
+	// plaintext dialing open for a machine the operator just removed.
+	allowFor := cfg.Network.AllowCleartextFor
+	host := peerDialHost(addr)
+	if host != "" && len(allowFor) > 0 {
+		stillUsed := false
+		for _, p := range remaining {
+			if peerDialHost(p.Addr) == host {
+				stillUsed = true
+				break
+			}
+		}
+		if !stillUsed {
+			kept := make([]string, 0, len(allowFor))
+			for _, entry := range allowFor {
+				if entry != host {
+					kept = append(kept, entry)
+				}
+			}
+			// Non-nil empty slice clears the key; nil means "leave alone".
+			allowFor = kept
+		}
+	}
 	writePath := configWritePath(*configPath)
 	if err := config.UpdateNetworkSection(writePath, config.NetworkConfig{
-		Peers: remaining,
+		Peers:             remaining,
+		AllowCleartextFor: allowFor,
 	}); err != nil {
 		fatal("write config", err)
 	}
@@ -919,7 +949,7 @@ func pairInitiate(w io.Writer, configPath, target, trustLevel string) {
 		switch {
 		case errors.As(err, &rj):
 			fatal("pair", fmt.Errorf("%s", i18n.Tf(loc, "cli.pair.rejected", "reason", rj.Reason)))
-		case errors.Is(err, context.DeadlineExceeded):
+		case errors.Is(err, core.ErrPairExpired), errors.Is(err, context.DeadlineExceeded):
 			fatal("pair", fmt.Errorf("%s", i18n.T(loc, "cli.pair.timeout")))
 		default:
 			fatal("waiting", fmt.Errorf("%s — %s", err, i18n.T(loc, "cli.pair.daemonhint")))

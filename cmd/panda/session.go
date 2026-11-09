@@ -849,7 +849,7 @@ func runSessionAsk(args []string) {
 		}
 	}
 
-	turn := sessions.Turn{Role: "assistant", Kind: out.Kind}
+	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Warning: out.Warning}
 	if out.Kind == "task" {
 		turn.Text = out.TaskID
 		turn.Ref = out.TaskID

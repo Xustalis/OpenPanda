@@ -328,7 +328,7 @@ func appendExchangeToSession(st *sessions.Store, id, prompt string, out *askengi
 	if st == nil || id == "" || out == nil {
 		return
 	}
-	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: convoSummaryOf(loc, out)}
+	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: convoSummaryOf(loc, out), Warning: out.Warning}
 	switch out.Kind {
 	case "task":
 		turn.Ref = out.TaskID

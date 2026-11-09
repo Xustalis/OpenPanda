@@ -106,7 +106,7 @@ func joinWithSpec(w io.Writer, configPath string, spec *core.JoinSpec, trustLeve
 		switch {
 		case errors.As(err, &rj):
 			fatal("join", fmt.Errorf("%s", i18n.Tf(loc, "cli.pair.rejected", "reason", rj.Reason)))
-		case errors.Is(err, context.DeadlineExceeded):
+		case errors.Is(err, core.ErrPairExpired), errors.Is(err, context.DeadlineExceeded):
 			fatal("join", fmt.Errorf("%s", i18n.T(loc, "cli.pair.timeout")))
 		default:
 			fatal("waiting", fmt.Errorf("%s — %s", err, i18n.T(loc, "cli.pair.daemonhint")))

@@ -375,6 +375,20 @@ install-local: build
 		(codesign -s "OpenPanda Local Development" --identifier com.openpanda.node --force $$tmp 2>/dev/null || true) && \
 		mv $$tmp $(HOME)/.local/bin/panda; \
 	fi
+	@# The agent adapters are Python scripts, and the daemon loads them from
+	@# the install prefix (adapters/ beside the PATH entry or the release
+	@# prefix) — NOT from this checkout. Syncing only the binary, which is all
+	@# this target used to do, left ~/.local/adapters frozen at whatever
+	@# `panda install` last wrote, so a fix to adapters/*.py never reached a
+	@# running node: the daemon kept spawning the old script from a path no
+	@# test covers, and the failure looked like a product bug. Copy after the
+	@# mv so a failed build cannot leave adapters newer than the binary.
+	@for d in "$(HOME)/.local/adapters" "$(HOME)/.local/share/openpanda/adapters"; do \
+		mkdir -p "$$d" && \
+		( command -v rsync >/dev/null 2>&1 && rsync -a --delete "$(CURDIR)/adapters/" "$$d/" \
+			|| cp -R "$(CURDIR)/adapters/." "$$d/" ) && \
+		echo "synced adapters → $$d"; \
+	done
 
 # Measure steady-state RSS: start core, sample after 2s, stop.
 measure:
