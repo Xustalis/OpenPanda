@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -336,5 +337,25 @@ func TestStartImplicitSessionMovesConvoAndTeam(t *testing.T) {
 	// same turns.
 	if got, err := st.Get(sess.ID); err != nil || len(got.Turns) != 2 {
 		t.Fatalf("stored session = %+v, %v", got, err)
+	}
+}
+
+// TestSessionTurnWarningIsNotReplayed pins why Turn.Warning is display-only.
+// An interrupted tool loop stores the provider's real error on the turn so a
+// reloaded thread can still show it, but feeding that error back into the
+// next model request would poison the context with an old protocol failure.
+func TestSessionTurnWarningIsNotReplayed(t *testing.T) {
+	sess := &sessions.Session{Turns: []sessions.Turn{
+		{Role: "user", Text: "分析一下这个项目"},
+		{Role: "assistant", Text: "本次回答未完成", Warning: "中断原因：invalid request schema"},
+	}}
+	got := sessionTurnEntries(sess)
+	if len(got) != 2 || got[0].Content != "分析一下这个项目" || got[1].Content != "本次回答未完成" {
+		t.Fatalf("replay turns = %+v", got)
+	}
+	for _, tr := range got {
+		if strings.Contains(tr.Content, "invalid request schema") {
+			t.Fatalf("warning leaked into the replayed context: %q", tr.Content)
+		}
 	}
 }
