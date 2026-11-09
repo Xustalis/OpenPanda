@@ -23,11 +23,15 @@ const (
 )
 
 // Verdict statuses. verified means every selected check ran and passed.
+// unverified is the honest label for an agent run that had neither a
+// supervisor nor a delivery contract: the work may well be fine, but nothing
+// checked it, so the row must not read like a verified one.
 const (
-	VerdictVerified = "verified"
-	VerdictFailed   = "failed"
-	VerdictPartial  = "partial"
-	VerdictSkipped  = "skipped"
+	VerdictVerified   = "verified"
+	VerdictFailed     = "failed"
+	VerdictPartial    = "partial"
+	VerdictSkipped    = "skipped"
+	VerdictUnverified = "unverified"
 )
 
 // ExecResult is what a process launcher returns. Err is set when the process

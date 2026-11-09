@@ -332,7 +332,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		return outcome.payload, nil
 	}
 	return c.finalizeRun(ctx, taskID, task, work.plan, required, attemptID, prep.workDir,
-		outcome.res, outcome.lastChanged, outcome.filesTruncated, outcome.verdict,
+		outcome.res, outcome.lastChanged, outcome.filesTruncated, outcome.verdict, outcome.unverified,
 		outcome.sessionID, outcome.sessionAdapter,
 		acceptanceChecks, acceptanceBaseline)
 }
@@ -1263,6 +1263,10 @@ type roundOutcome struct {
 	lastChanged    []string
 	filesTruncated bool
 	verdict        entry.SuperviseVerdict
+	// unverified marks an agent run that nothing checked: no supervisor to
+	// judge it and no delivery contract to run. finalizeRun turns it into the
+	// result's verification label instead of silently reporting a bare done.
+	unverified     bool
 	sessionID      string
 	sessionAdapter string
 }
@@ -1449,7 +1453,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// Every exit path drops the waiters of still-pending children: the
 		// row, not the channel, is what a late result needs to land on.
 		for _, pc := range pendingChildren {
-			c.waiters.Delete(pc.id)
+			c.waiters.clear(pc.id)
 		}
 	}()
 	// boardSeen tracks which board slots have already been folded into the
@@ -2516,6 +2520,22 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			intentNotes = append(intentNotes, "[上级补充指令]\n"+v.Followup)
 		}
 	}
+	// No judge and no contract: nobody verified this run. Two different
+	// truths hide there, and the old code reported both as a plain done.
+	// Silence — the agent claimed success, wrote nothing and touched no file
+	// — is not work, so it parks for a human under the same rule the
+	// supervised path applies. Anything else is accepted but labelled
+	// unverified, so a downstream delegator can tell "done" from "checked".
+	unverified := false
+	if plan.Kind == "agent" && supervisor == nil && len(w.checks) == 0 &&
+		verdict.Status == entry.VerdictDone {
+		if beforeOK && strings.TrimSpace(res.Stdout) == "" && len(lastChanged) == 0 {
+			verdict.Status = entry.VerdictReview
+			verdict.Reason = "agent finished with no output and no changed files; no supervisor or contract was configured to verify it"
+		} else {
+			unverified = true
+		}
+	}
 	// §4.2 final fold: a run must not report a verdict while children it
 	// delegated are still outstanding — that is the "declared done while a
 	// sub-task is still running" lie from the orchestrator's side. Hold until
@@ -2529,7 +2549,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		}
 	}
 	return roundOutcome{res: res, lastChanged: lastChanged, filesTruncated: filesTruncated,
-		verdict: verdict, sessionID: sessionID, sessionAdapter: sessionAdapter}, nil
+		verdict: verdict, unverified: unverified, sessionID: sessionID, sessionAdapter: sessionAdapter}, nil
 }
 
 // annotateAgentSubstitution prefixes the result with a note whenever the
@@ -2558,7 +2578,7 @@ func annotateAgentSubstitution(plan commander.Plan, res commander.Result) comman
 // Tier-2) or done. Every return is already the wire payload run reports.
 func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan commander.Plan,
 	required []string, attemptID, workDir string, res commander.Result,
-	lastChanged []string, filesTruncated bool, verdict entry.SuperviseVerdict,
+	lastChanged []string, filesTruncated bool, verdict entry.SuperviseVerdict, unverified bool,
 	sessionID, sessionAdapter string,
 	checks []contract.Check, baseline []contract.Result) (bus.TaskResultPayload, error) {
 	// A stage hands its work-dir to its successors as a content-addressed
@@ -2625,8 +2645,20 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	}
 
 	// verificationStatus records the contract verdict for every terminal
-	// payload below. Empty means the task carried no contract at all.
+	// payload below. Empty means the task carried no contract at all; the
+	// unverified label means it carried no contract AND had no judge either,
+	// which is a weaker claim than "verified" and must not read like one.
 	verificationStatus := ""
+	if unverified {
+		verificationStatus = contract.VerdictUnverified
+		// The row carries the label too, not just the wire: the contract path
+		// below writes its verdict explicitly, and a payload saying
+		// "unverified" next to a row saying nothing lets `panda task show`
+		// contradict the result the delegator received.
+		if err := c.store.SetVerification(context.WithoutCancel(ctx), taskID, contract.VerdictUnverified); err != nil {
+			c.logger.Warn("persist unverified label", "task", taskID, "err", err)
+		}
+	}
 
 	// The supervisor did not accept the result: either work still remains after
 	// the round budget ("continue"), or the model answered without a usable

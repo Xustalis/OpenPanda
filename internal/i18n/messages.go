@@ -8,6 +8,10 @@ package i18n
 
 var messages = map[Locale]map[string]string{
 	English: {
+		"doctor.network.exposure":           "Network exposure {mode}: mesh {addr}, console {panel}, datagram {udp}.",
+		"doctor.network.exposure.legacy":    "Legacy exposure: mesh {addr} and console {panel} keep their pre-0.1.5 binds. Set network.exposure_mode to loopback, lan or public (see SECURITY.md).",
+		"ask.localAction.done":              "Ran {cmd} locally - no model call, no agent.",
+		"ask.localAction.already":           "{name} is already running on {url}.",
 		"cli.help.d.hooks":                  "task lifecycle hooks — list the bindings, or run one against a sample event",
 		"tui.sidebar.title":                 "Tasks",
 		"tui.sidebar.running":               "{n} running",
@@ -1331,6 +1335,10 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "The plan cannot run: {err}",
 	},
 	ChineseSimp: {
+		"doctor.network.exposure":           "网络暴露级别 {mode}：总线 {addr}，控制台 {panel}，数据报 {udp}。",
+		"doctor.network.exposure.legacy":    "旧版暴露配置：总线 {addr} 与控制台 {panel} 仍沿用 0.1.5 之前的绑定。请设置 network.exposure_mode 为 loopback、lan 或 public（见 SECURITY.md）。",
+		"ask.localAction.done":              "已在本机直接执行 {cmd}：未调用模型，未派发 agent。",
+		"ask.localAction.already":           "{name} 已在 {url} 运行。",
 		"cli.help.d.hooks":                  "任务生命周期钩子 — 列出绑定，或用样例事件试跑一条",
 		"tui.sidebar.title":                 "任务",
 		"tui.sidebar.running":               "{n} 运行中",
@@ -2645,6 +2653,10 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "计划无法执行：{err}",
 	},
 	Japanese: {
+		"doctor.network.exposure":                "ネットワーク公開範囲 {mode}：バス {addr}、コンソール {panel}、データグラム {udp}。",
+		"doctor.network.exposure.legacy":         "旧方式の公開設定：バス {addr} とコンソール {panel} は 0.1.5 以前のバインドのままです。network.exposure_mode に loopback、lan または public を設定してください（SECURITY.md 参照）。",
+		"ask.localAction.done":                   "{cmd} をローカルで直接実行しました（モデル呼び出しなし、agent 派遣なし）。",
+		"ask.localAction.already":                "{name} は既に {url} で動作しています。",
 		"cli.help.d.hooks":                       "タスクライフサイクルフック — 設定の一覧、またはサンプルイベントでの実行",
 		"tui.sidebar.title":                      "タスク",
 		"tui.sidebar.running":                    "{n} 実行中",
@@ -3944,6 +3956,10 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "計画を実行できません：{err}",
 	},
 	Spanish: {
+		"doctor.network.exposure":                "Exposición de red {mode}: bus {addr}, consola {panel}, datagramas {udp}.",
+		"doctor.network.exposure.legacy":         "Exposición heredada: el bus {addr} y la consola {panel} conservan los enlaces anteriores a 0.1.5. Ajuste network.exposure_mode a loopback, lan o public (véase SECURITY.md).",
+		"ask.localAction.done":                   "{cmd} ejecutado localmente: sin llamada al modelo y sin agent.",
+		"ask.localAction.already":                "{name} ya está activo en {url}.",
 		"cli.help.d.hooks":                       "hooks del ciclo de vida de tareas — listar los enlaces o ejecutar uno con un evento de ejemplo",
 		"tui.sidebar.title":                      "Tareas",
 		"tui.sidebar.running":                    "{n} en marcha",
@@ -5243,6 +5259,10 @@ var messages = map[Locale]map[string]string{
 		"ask.plan.invalid":        "El plan no puede ejecutarse: {err}",
 	},
 	German: {
+		"doctor.network.exposure":                "Netzwerk-Exposition {mode}: Bus {addr}, Konsole {panel}, Datagramme {udp}.",
+		"doctor.network.exposure.legacy":         "Legacy-Exposition: Bus {addr} und Konsole {panel} behalten die Binds von vor 0.1.5. Setze network.exposure_mode auf loopback, lan oder public (siehe SECURITY.md).",
+		"ask.localAction.done":                   "{cmd} lokal ausgeführt - kein Modellaufruf, kein Agent.",
+		"ask.localAction.already":                "{name} läuft bereits auf {url}.",
 		"cli.help.d.hooks":                       "Lifecycle-Hooks — Bindungen auflisten oder eine mit einem Beispielereignis ausführen",
 		"tui.sidebar.title":                      "Aufgaben",
 		"tui.sidebar.running":                    "{n} laufen",

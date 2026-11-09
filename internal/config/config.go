@@ -835,6 +835,9 @@ func (n NetworkConfig) PeerTrustHints() map[string]string {
 // PanelToken are read only by the optional webui sidecar (webui/cmd/panel), not
 // by the kernel daemon.
 type NetworkConfig struct {
+	// ExposureMode is the single source of truth for every listening socket.
+	// See exposure.go for the four modes and the legacy compatibility rule.
+	ExposureMode        string      `yaml:"exposure_mode"`          // loopback (fresh installs) | lan | public | legacy
 	ListenAddr          string      `yaml:"listen_addr"`            // e.g. ":7836"
 	PanelAddr           string      `yaml:"panel_addr"`             // webui sidecar HTTP listener; loopback by default (P1-24)
 	PanelToken          string      `yaml:"panel_token"`            // Bearer token guarding /api/* in the webui sidecar
@@ -1634,6 +1637,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: network.discovery_addr %q is not host:port or \"off\": %w", c.Network.DiscoveryAddr, err)
 		}
 	}
+	if err := c.validateExposure(); err != nil {
+		return err
+	}
 	if c.Network.BootstrapEdges < 0 || c.Network.BootstrapEdges > 8 {
 		return fmt.Errorf("config: network.bootstrap_edges %d is out of range (0 disables rendezvous edges; more than 8 is not a personal mesh)", c.Network.BootstrapEdges)
 	}
@@ -1901,12 +1907,12 @@ func Default() *Config {
 			Kind:          NodeKindPhysical,
 		},
 		Network: NetworkConfig{
-			// Wildcard by default: sessaead (capability-negotiated AEAD keyed
-			// from the shared secret + both hello nonces) seals every frame
-			// after the hello exchange, so the wildcard bind exposes nothing
-			// plaintext beyond the two signed hellos — which carry no secret
-			// material and are replay-bound. Peers too old to negotiate fall
-			// back to the cleartext policy (loopback/Tailscale/allowlist).
+			// These are the pre-0.1.5 (legacy) binds. Load() resolves
+			// exposure_mode from the YAML and rewrites every one of them:
+			// a fresh install becomes loopback-only, an existing config that
+			// declared a bind keeps these values verbatim. Keeping the legacy
+			// values here is what makes decodeStrict preserve old behaviour
+			// for configs that omit discovery_addr / udp_listen.
 			ListenAddr: "0.0.0.0:7836",
 			// Loopback by default (P1-24): the panel speaks plain HTTP, so a
 			// wildcard bind would expose the Bearer token and task contents to
@@ -2255,10 +2261,12 @@ func Load(path string) (*Config, error) {
 			// No config file on disk: Default already has absolute per-user
 			// paths, so there is nothing to rebase.
 			cfg.applyEnv()
-			cfg.normalize()
+			cfg.Network.ExposureMode = resolveExposureMode(nil, false)
+			cfg.applyExposure()
 			if err := cfg.Validate(); err != nil {
 				return nil, err
 			}
+			cfg.normalize()
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("read config %s: %w", path, err)
@@ -2274,6 +2282,14 @@ func Load(path string) (*Config, error) {
 		cfg.resolveRelativePaths(filepath.Dir(abs))
 	}
 	cfg.applyEnv()
+	// Exposure is resolved from the raw document, not the decoded struct:
+	// Default() fills in wildcard binds even when the operator never wrote a
+	// listen_addr, so the struct alone cannot tell a fresh install from a
+	// pre-0.1.5 config that deliberately bound every interface.
+	if os.Getenv("OPENPANDA_EXPOSURE_MODE") == "" {
+		cfg.Network.ExposureMode = resolveExposureMode(data, exposureFromEnv())
+	}
+	cfg.applyExposure()
 	if cfg.Node.Name == "" {
 		return nil, fmt.Errorf("config %s: node.name must not be empty", path)
 	}
@@ -2295,6 +2311,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("OPENPANDA_NODE_IDENTITY"); v != "" {
 		c.Node.Identity = v
+	}
+	if v := os.Getenv("OPENPANDA_EXPOSURE_MODE"); v != "" {
+		c.Network.ExposureMode = strings.ToLower(strings.TrimSpace(v))
 	}
 	if v := os.Getenv("OPENPANDA_LISTEN_ADDR"); v != "" {
 		c.Network.ListenAddr = v

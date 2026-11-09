@@ -747,8 +747,16 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 	// Execute asynchronously so the message loop stays responsive to
 	// task_cancel while a long native/agent command runs. The result (or a
 	// decline) is reported back via the env captured here.
+	//
+	// The run must NOT be bound to this handler's ctx: that ctx is the peer
+	// connection's read loop, so a dropped link (a laptop lid, a Wi-Fi flap, a
+	// NAT timeout) cancelled a task that was already executing here and the
+	// delegator saw a failure for work that was in fact still running. The
+	// task's own lifetime is governed by its lease, its deadline and
+	// cancelRunning — the transport is not a supervisor.
+	execCtx := context.WithoutCancel(ctx)
 	c.goGuarded("delegated exec "+taskID, func() {
-		result, err := c.execute(ctx, taskID, p.Intent, required, release)
+		result, err := c.execute(execCtx, taskID, p.Intent, required, release)
 		if err != nil {
 			if errors.Is(err, ErrCancelled) {
 				c.logger.Info("task cancelled during execution", "task", taskID)
@@ -763,11 +771,11 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 				return
 			}
 			c.logger.Warn("route delegated task", "err", err, "task", taskID)
-			c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, AttemptID: p.AttemptID, Reason: err.Error()})
+			c.reply(execCtx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, AttemptID: p.AttemptID, Reason: err.Error()})
 			// The decline tells the parent to re-route, but the local row must
 			// not linger in submitted/queued: Recover would resurrect it on
 			// restart as an orphan nobody dispatches (P1-9).
-			c.terminalizeDeclined(ctx, taskID, err.Error())
+			c.terminalizeDeclined(execCtx, taskID, err.Error())
 			return
 		}
 		// One execute call is one attempt; without the shared retry/review
@@ -776,7 +784,7 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 		// checkpoint-resumed (observed: a peer-run task died on a 4-minute
 		// silence kill holding a minted session). settleDelegated also maps
 		// an exhausted-retry park to State:review so the delegator mirrors it.
-		_, result, err = c.settleDelegated(ctx, taskID, p.Intent, required, result)
+		_, result, err = c.settleDelegated(execCtx, taskID, p.Intent, required, result)
 		if err != nil {
 			// ErrConflict means the row left the failed state under us — a
 			// task_resume or a sibling runner claimed it: that runner owns the
@@ -786,11 +794,11 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 				return
 			}
 			c.logger.Warn("settle delegated task", "err", err, "task", taskID)
-			c.reply(ctx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, AttemptID: p.AttemptID, Reason: err.Error()})
-			c.terminalizeDeclined(ctx, taskID, err.Error())
+			c.reply(execCtx, env, bus.MsgTaskDecline, bus.TaskDeclinePayload{TaskID: taskID, AttemptID: p.AttemptID, Reason: err.Error()})
+			c.terminalizeDeclined(execCtx, taskID, err.Error())
 			return
 		}
-		relayed, rerr := c.replyWithDelivery(ctx, env, bus.MsgTaskResult, result)
+		relayed, rerr := c.replyWithDelivery(execCtx, env, bus.MsgTaskResult, result)
 		if rerr != nil {
 			c.logger.Warn("send task_result", "err", rerr, "task", taskID)
 			// The delegator is unreachable at the moment the result is ready
@@ -799,7 +807,7 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 			if result.TaskID == "" {
 				result.TaskID = taskID
 			}
-			c.outboxPersist(ctx, env.From, result)
+			c.outboxPersist(execCtx, env.From, result)
 		} else if relayed {
 			// A relay took the frame but did not confirm the final hop. Keep
 			// custody until a direct send (or an idempotent duplicate) lands.
@@ -807,9 +815,9 @@ func (c *Core) proceedLocalDelegate(ctx context.Context, env bus.Envelope, taskI
 				result.TaskID = taskID
 			}
 			c.logger.Info("task_result handed to transit; keeping outbox row", "task", taskID)
-			c.outboxPersist(ctx, env.From, result)
+			c.outboxPersist(execCtx, env.From, result)
 		} else {
-			c.outboxDrop(ctx, env.From, taskID)
+			c.outboxDrop(execCtx, env.From, taskID)
 		}
 	})
 }

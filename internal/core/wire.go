@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/self"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -623,6 +624,27 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	default:
 		c.logger.Warn("unknown task_result state ignored", "task", p.TaskID, "state", state)
 		return
+	}
+
+	// The origin keeps this task's acceptance checks; the executor strips
+	// them (a peer may not dictate shell commands). After a remote done,
+	// then, nothing has actually run them — so the row must not read as
+	// verified. Label it, and leave the reason in the timeline. Running the
+	// checks here would have to wait for the executor's tree to be adopted,
+	// which happens asynchronously below.
+	if state == StateDone && transitionOK && strings.TrimSpace(p.Verification) == "" {
+		if local, gerr := c.store.Get(ctx, p.TaskID); gerr == nil && len(taskAcceptance(local.SpecJSON)) > 0 {
+			p.Verification = contract.VerdictUnverified
+			if verr := c.store.SetVerification(context.WithoutCancel(ctx), p.TaskID, contract.VerdictUnverified); verr != nil {
+				c.logger.Warn("label origin-side contract as unverified", "task", p.TaskID, "err", verr)
+			}
+			if rerr := c.store.RecordEvent(ctx, p.TaskID, EvVerdict, map[string]any{
+				"status": contract.VerdictUnverified,
+				"reason": "the acceptance checks stay on the origin and are not run on the executor",
+			}); rerr != nil {
+				c.logger.Debug("record unverified verdict failed", "task", p.TaskID, "err", rerr)
+			}
+		}
 	}
 
 	// Record the executor's adapter session against our copy of the task

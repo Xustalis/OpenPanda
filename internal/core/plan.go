@@ -1881,10 +1881,9 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 	if err != nil {
 		return "", "", err
 	}
-	waiter := make(chan bus.TaskResultPayload, 1)
-	c.waiters.Store(child.TaskID, waiter)
+	waiter := c.waiters.add(child.TaskID)
 	if err := c.DispatchChild(ctx, child, in); err != nil {
-		c.waiters.Delete(child.TaskID)
+		c.waiters.remove(child.TaskID, waiter)
 		return "", "", err
 	}
 	if paths := normalizeScopePaths(in.Paths); len(paths) > 0 && in.Project != "" && !in.Isolate {
@@ -1912,14 +1911,12 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 		"paths":   dr.Paths,
 		"isolate": dr.Isolate,
 	})
-	r, delivered, state, err := c.awaitChild(ctx, parent, child, waiter)
-	if delivered || err != nil {
-		// Terminal or cancelled: nothing more can arrive that a fold would
-		// still want — the row carries the final word. Only a still-pending
-		// child keeps its waiter registered, so a fast late frame still
-		// signals whoever next reads the row.
-		c.waiters.Delete(child.TaskID)
-	}
+	r, delivered, state, err := c.awaitChild(ctx, parent, child, waiter.ch)
+	// Always unregister: the channel is local to this call, so a waiter kept
+	// "for a late frame" had no reader and leaked one buffer per delegated
+	// child. Async completion is read from the row (childRowResult), which is
+	// the same source the fold uses when the wait window closes.
+	c.waiters.remove(child.TaskID, waiter)
 	if err != nil {
 		return "", "", err
 	}
@@ -2051,7 +2048,7 @@ func (c *Core) foldLateChildren(ctx context.Context, pending *[]pendingChild) []
 			rest = append(rest, pc)
 			continue
 		}
-		c.waiters.Delete(pc.id)
+		c.waiters.clear(pc.id)
 		out := r.Stdout
 		if s := strings.TrimSpace(r.Stderr); s != "" {
 			out += "\nstderr: " + s
@@ -2194,7 +2191,7 @@ func (c *Core) awaitPendingChildren(ctx context.Context, parent Task, pending []
 		// The parent is reporting without this child — drop its waiter so a
 		// result frame arriving later lands on the row alone rather than
 		// holding a map entry for a reader that no longer exists.
-		c.waiters.Delete(pc.id)
+		c.waiters.clear(pc.id)
 		notes = append(notes, fmt.Sprintf("child task %s is still outstanding at completion time; its result will reconcile asynchronously.", pc.id))
 	}
 	return notes

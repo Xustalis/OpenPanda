@@ -38,9 +38,18 @@ func serviceInstall(spec webServiceSpec, dry bool) int {
 		fmt.Fprintln(os.Stderr, "service:", err)
 		return 1
 	}
-	if err := os.MkdirAll(filepath.Dir(spec.LogPath), 0o755); err != nil {
+	logDir := filepath.Dir(spec.LogPath)
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		fmt.Fprintln(os.Stderr, "service:", err)
 		return 1
+	}
+	_ = os.Chmod(logDir, 0o700)
+	// The service's stdout carries the console URL with its bearer token.
+	// Create the log 0600 up front so an inherited umask cannot make it
+	// world-readable — `panda web` already does this for its own daemon log.
+	if lf, err := os.OpenFile(spec.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		_ = lf.Close()
+		_ = os.Chmod(spec.LogPath, 0o600)
 	}
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "service:", err)

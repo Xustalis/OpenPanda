@@ -15,6 +15,7 @@ node:
   resource_class: "Standard"
 
 network:
+  exposure_mode: "loopback"      # 由配置加载器统一改写所有监听面，见 config.example.yaml
   listen_addr: "127.0.0.1:7840"
   shared_secret: ""  # 留空即可，单节点不需要 P2P
   panel_addr: "127.0.0.1:7841"   # webui 面板（panda web）HTTP 地址
@@ -22,8 +23,12 @@ network:
   # LAN 自动发现（Track 1）：UDP 广播 beacon 宣告"本机有 panda"，
   # 对端 `panda nodes` 看到未配对列表 → nodes admit/verify 入网。
   # 数据报不含凭据；入网仍要求 shared_secret + Ed25519 hello。
-  # "" 默认 :7837；"off" 完全关闭（不广播也不监听）。
-  # discovery_addr: ":7837"
+  # "" 默认 :7837（绑全网卡）；"off" 完全关闭（不广播也不监听）。
+  # exposure_mode: loopback 会自动把 udp_listen 收成 127.0.0.1、把
+  # discovery_addr 置为 "off" 并关闭 discovery_auto_dial，无需在此重复设置。
+  # 单节点即使 shared_secret 留空，daemon 也会自动生成并写回。有公网 IP 的
+  # 机器参见 docs/install.md 的「云服务器 / 公网 IP 部署」。
+  # discovery_addr: "off"
   # 明文 ws:// 出站门禁：hello 只证明成员身份，握手后的帧仍明文无签名——
   # 明文链路上的 MITM 可以伪造 task_delegate（即远程执行）。默认拒绝拨往
   # 非安全地址的 ws://：回环与 Tailscale（100.64.0.0/10、fd7a:115e:a214::/48、
