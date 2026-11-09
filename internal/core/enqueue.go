@@ -235,6 +235,33 @@ func targetNodeOf(t Task) string {
 	return spec.Node
 }
 
+// deviceIntent separates the DEVICE decision from the EXECUTOR decision. An
+// ability such as "agent:opencode" only says which adapter the executor must
+// have — every machine that installed opencode satisfies it, including this
+// one. Conflating the two let a task aimed at another device run in the local
+// opencode CLI: the scheduler scored this node as capable, localBias tipped
+// the scale, and the queue's send-failure fallback kept the row here.
+//
+// hard=true means spec.node (an exclusive destination); hard=false means
+// spec.preferred (a hint the scheduler may fall back from). A pin that names
+// this node is a local task, not a remote intent — resolvePin owns that
+// comparison; SameRuntimeIdentity covers the ephemeral ask-session ids.
+func deviceIntent(t Task, selfID string) (ref string, hard bool) {
+	if pin := targetNodeOf(t); pin != "" {
+		if scheduler.SameRuntimeIdentity(pin, selfID) {
+			return "", false
+		}
+		return pin, true
+	}
+	if pref := preferredNodeOf(t); pref != "" {
+		if scheduler.SameRuntimeIdentity(pref, selfID) {
+			return "", false
+		}
+		return pref, false
+	}
+	return "", false
+}
+
 // queueWake nudges the queue scheduler if one is running.
 func (c *Core) queueWake() {
 	c.mu.RLock()
@@ -362,6 +389,29 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 	// citizens, not local-only work.
 	if c.forwardScheduled(ctx, t) {
 		return
+	}
+	// Fail closed for an explicit device pin. forwardScheduled owns every
+	// legitimate exit for a pinned task (forward, park in task_outbox, honest
+	// terminal failure), so reaching c.run below would mean the task named
+	// another machine and yet was about to start HERE — in this node's agent
+	// adapter. Refuse it instead of silently substituting the local machine:
+	// the operator's device choice is a contract, not a preference.
+	if ref, hard := deviceIntent(t, c.nodeID); hard && !c.resolvePin(ctx, ref).self {
+		// resolvePin (not a string compare) decides whether the pin names us:
+		// a display name or an ephemeral id can look remote and still resolve
+		// to this node, and routePinned legitimately returns ActionLocal for it.
+		reason := fmt.Sprintf("task is pinned to device %q but routing did not hand it off; refusing local execution", ref)
+		c.logger.Warn("queue: remote pin reached local executor", "task", taskID, "device", ref)
+		c.failLocal(ctx, taskID, fmt.Errorf("%s", reason), t.AttemptID)
+		c.signalResult(taskID, bus.TaskResultPayload{
+			TaskID: taskID, AttemptID: t.AttemptID,
+			State: StateFailed, Stderr: reason,
+		})
+		return
+	}
+	if ref, _ := deviceIntent(t, c.nodeID); ref != "" {
+		c.logger.Warn("queue: preferred device unavailable, running locally",
+			"task", taskID, "preferred", ref)
 	}
 	result, err := c.run(ctx, taskID, t.Intent, t.Requires, nil)
 	final, _, rerr := c.retryLoop(ctx, taskID, t.Intent, t.Requires, result, err)
@@ -585,6 +635,12 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		MaxDepth:         c.effectiveSpawnCap(t),
 		DelegationBudget: &t.DelegationBudget,
 		TokenBudget:      t.TokenBudget,
+		// Carry the soft device hint on the wire. It used to be dropped on
+		// every queue forward, so the receiving hop could not distinguish a
+		// task the operator aimed at a machine from one that was merely
+		// load-balanced there — and a failed send silently fell back to this
+		// node's executor. See docs/routing-layers.md.
+		PreferredNode: preferredNodeOf(t),
 	}
 	if pinned {
 		// Stable identity on the wire: the executor's own pin re-check (and
@@ -648,6 +704,14 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 			})
 			return true
 		}
+		// Soft hints may fall back to this node, but never quietly: the
+		// operator named a device, so say that the named executor is not the
+		// one about to run the work. Hard pins never reach this branch (the
+		// fail-closed guard in runScheduled is the second line of defence).
+		if pref := preferredNodeOf(t); pref != "" {
+			c.logger.Warn("queue: preferred device forward failed, falling back to local executor",
+				"task", t.TaskID, "preferred", pref, "intended", decision.Target, "err", err)
+		}
 		return false
 	}
 	c.logger.Info("queue: task forwarded to peer", "task", t.TaskID, "target", decision.Target)
@@ -694,7 +758,14 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 	// its silence is measured, not permanent, and the parked bundle — bounded
 	// by the task deadline — is the only path that survives a revival.
 	pinned := p.TargetNode != ""
-	parkable := dtn || pinned || (len(awaitRevival) > 0 && awaitRevival[0])
+	// preferredPeer is a named device that is not this node. A soft hint may
+	// lose a score to a better candidate, but once routing HAS chosen that
+	// device, a dead link must not silently turn into local execution: park
+	// the bundle and let the next hello deliver it. Only an explicitly named
+	// device gets this contract; a purely load-balanced forward still keeps
+	// the corrective local fallback (and its route_fallback event).
+	preferredPeer := p.PreferredNode != "" && !scheduler.SameRuntimeIdentity(p.PreferredNode, c.nodeID)
+	parkable := dtn || pinned || preferredPeer || (len(awaitRevival) > 0 && awaitRevival[0])
 	pushDeadline := p.DeadlineUnix
 	if pushDeadline <= 0 {
 		pushDeadline = time.Now().Add(defaultDTNTTL).Unix()
@@ -748,6 +819,8 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 					kind = "pin"
 				} else if len(awaitRevival) > 0 && awaitRevival[0] {
 					kind = "revive"
+				} else if preferredPeer && !dtn {
+					kind = "prefer"
 				}
 				// A parked cancel for this pair stood down the task's
 				// PREVIOUS dispensation — the delegate being parked carries
@@ -799,6 +872,8 @@ func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p
 			kind = "pin"
 		} else if len(awaitRevival) > 0 && awaitRevival[0] {
 			kind = "revive"
+		} else if preferredPeer && !dtn {
+			kind = "prefer"
 		}
 		// Same stale-cancel drop as the send-failure park above —
 		// dispensation-scoped only; a parked tree cancel survives.

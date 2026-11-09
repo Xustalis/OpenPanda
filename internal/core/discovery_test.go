@@ -590,3 +590,35 @@ func TestAdvertiseIsLoopback(t *testing.T) {
 		}
 	}
 }
+
+// TestAutoDialBackoff: a candidate whose dials never form a link must not be
+// retried on the fixed base cooldown forever (the wrong-secret storm).
+func TestAutoDialBackoff(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "node-a")
+	base := time.Now().Add(-autoDialCooldown - time.Second)
+	c.autoDialCands["flaky"] = autoDialCand{
+		addr: "127.0.0.1:1", lastSeen: time.Now(), lastDial: base,
+	}
+	c.autoDialPass(ctx)
+	c.autoDialMu.Lock()
+	got := c.autoDialCands["flaky"]
+	c.autoDialMu.Unlock()
+	if got.failures < 1 {
+		t.Fatal("a dial that produced no edge was not counted as a failure")
+	}
+	// Same elapsed time, but failures=1 stretches the cooldown to 2x: the
+	// base-cooldown dial must now be suppressed.
+	c.autoDialMu.Lock()
+	cand := c.autoDialCands["flaky"]
+	cand.lastDial = base
+	c.autoDialCands["flaky"] = cand
+	c.autoDialMu.Unlock()
+	c.autoDialPass(ctx)
+	c.autoDialMu.Lock()
+	after := c.autoDialCands["flaky"]
+	c.autoDialMu.Unlock()
+	if !after.lastDial.Equal(base) {
+		t.Fatal("backoff did not suppress a dial the base cooldown would have allowed")
+	}
+}

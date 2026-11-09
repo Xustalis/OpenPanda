@@ -295,7 +295,7 @@ func (h *handler) finishPair(pc *core.PairClient, addr string) {
 			// a state — writing it into the state field left the row with no
 			// badge at all.
 			mark("rejected", rj.Reason)
-		case errors.Is(err, context.DeadlineExceeded):
+		case errors.Is(err, core.ErrPairExpired), errors.Is(err, context.DeadlineExceeded):
 			mark("expired", "")
 		default:
 			mark("error", err.Error())

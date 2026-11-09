@@ -4,6 +4,8 @@ package core
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -351,5 +353,70 @@ func TestDelegatedRunReviewMirrorsUpstream(t *testing.T) {
 	}
 	if payload.ApprovalDisposition == "" {
 		t.Fatalf("payload carries no approval disposition — the delegator cannot tell what approving would do")
+	}
+}
+
+// TestAdapterUnavailableFailsWithoutRetrying pins the other half of the retry
+// contract: a task whose agent could not start at all is not "flaky work" and
+// not "a human should judge this output". The script is missing on this node,
+// so every attempt reads the same filesystem and dies identically — retrying
+// burns the budget, and parking in review files a broken install as a work
+// quality question. It settles failed on the first attempt, with the reason
+// the spawn site wrote, and the diagnostic says which category it is.
+func TestAdapterUnavailableFailsWithoutRetrying(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreWithAgent(t, "adapter-unavailable-node")
+	c.SetWorkDir(t.TempDir())
+	c.sleep = func(time.Duration) {}
+
+	attempts := 0
+	c.router.SetAdapterRunner(func(context.Context, string, string, string) commander.AgentResult {
+		attempts++
+		return commander.AgentResult{OK: false, ExitCode: 1, Result: `adapter unavailable: "claude_code.py" is not at ` +
+			`/opt/x/adapters/claude_code.py (adapter dir /opt/x/adapters — reinstall the adapters or set OPENPANDA_ADAPTER_DIR)`}
+	})
+
+	task, result, err := c.SubmitLocal(ctx, TaskInput{
+		Title: "missing adapter", Project: "proj", ContextType: "command",
+		Intent: "do the work", Requires: []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit local: %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1 — a missing adapter cannot be retried into existence", attempts)
+	}
+	if task.State != StateFailed {
+		t.Fatalf("state = %s, want failed (review would file an install bug as a work verdict)", task.State)
+	}
+	if result.OK {
+		t.Fatal("result should report the failure")
+	}
+	if !strings.Contains(result.Stderr, "adapter unavailable") {
+		t.Fatalf("stderr = %q, want the adapter diagnosis preserved", result.Stderr)
+	}
+
+	events, err := c.store.Events(ctx, task.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessed := false
+	for _, e := range events {
+		if e.Type != "recovery_assessment" {
+			continue
+		}
+		var data struct {
+			Assessment RecoveryAssessment `json:"assessment"`
+		}
+		if err := json.Unmarshal([]byte(e.DataJSON), &data); err != nil {
+			t.Fatalf("decode assessment: %v", err)
+		}
+		if data.Assessment.Category != "adapter_unavailable" || data.Assessment.Strategy != "stop" {
+			t.Fatalf("assessment = %+v, want adapter_unavailable/stop", data.Assessment)
+		}
+		assessed = true
+	}
+	if !assessed {
+		t.Fatal("no recovery_assessment event recorded for the failed task")
 	}
 }

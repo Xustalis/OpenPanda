@@ -474,6 +474,56 @@ func TestCLITaskAddAndShow(t *testing.T) {
 	}
 }
 
+// TestCLITaskAddPreferredIsSoftHint pins the soft/hard split at the CLI
+// boundary (docs/routing-layers.md §5). --preferred was written into
+// TaskInput.TargetNode, so naming a device that was not in the directory
+// failed the task outright instead of letting the scheduler fall back and
+// record a route_fallback — "prefer my laptop" behaved identically to
+// --nodes, which is the one thing its help text promises it does not do.
+func TestCLITaskAddPreferredIsSoftHint(t *testing.T) {
+	home := t.TempDir()
+	configPath, _ := initNode(t, home)
+
+	add := runCLI(t, home, "--json", "task", "add", "--title", "soft hint",
+		"--preferred", "ghost-node", "--config", configPath)
+	if add.code != 0 {
+		t.Fatalf("task add --preferred exited %d\nstdout:\n%s\nstderr:\n%s",
+			add.code, add.stdout, add.stderr)
+	}
+	var created struct {
+		TaskID string `json:"task_id"`
+		State  string `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(add.stdout), &created); err != nil {
+		t.Fatalf("task add --preferred --json wrote non-JSON: %v\n%s", err, add.stdout)
+	}
+	// A soft hint naming a device the directory does not know must still
+	// queue: the preference is applied at routing time, and a miss falls back
+	// to the best remaining candidate.
+	if created.State != "queued" {
+		t.Fatalf("--preferred produced state %q, want queued (a soft hint never fails at enqueue)",
+			created.State)
+	}
+
+	show := runCLI(t, home, "--json", "task", created.TaskID, "--config", configPath)
+	if show.code != 0 {
+		t.Fatalf("task show exited %d: %s", show.code, show.output())
+	}
+	var got struct {
+		Pinned    string `json:"pinned"`
+		Preferred string `json:"preferred"`
+	}
+	if err := json.Unmarshal([]byte(show.stdout), &got); err != nil {
+		t.Fatalf("task show --json is not JSON: %v\n%s", err, show.stdout)
+	}
+	if got.Pinned != "" {
+		t.Fatalf("--preferred wrote a HARD pin (%q); it must land in spec.preferred", got.Pinned)
+	}
+	if got.Preferred != "ghost-node" {
+		t.Fatalf("task show preferred = %q, want ghost-node", got.Preferred)
+	}
+}
+
 func TestCLICompletion(t *testing.T) {
 	home := t.TempDir()
 	for _, shell := range []string{"bash", "zsh", "fish"} {

@@ -17,12 +17,20 @@ import (
 // to run. "" means unpinned — normal scored routing applies.
 func PinnedNode(t Task) string { return targetNodeOf(t) }
 
-// pinResolution is the outcome of mapping a user-named node reference
-// (spec.node, --preferred, task_submit's node, plan-stage node) onto the
+// PreferredNode exposes the SOFT device hint a task carries (spec.preferred).
+// It is the counterpart to PinnedNode and deliberately weaker: the scorer
+// favours that node, and a miss falls back to the best remaining candidate
+// with a route_fallback event. Nothing may treat a non-empty value here as a
+// constraint — that is the bug the soft/hard split exists to prevent.
+func PreferredNode(t Task) string { return preferredNodeOf(t) }
+
+// pinResolution is the outcome of mapping a user-named HARD node reference
+// (spec.node, task_submit's node, plan-stage node, --nodes) onto the
 // capability directory. The reference is a HARD pin: once the user names a
 // destination the task runs there, waits for it, or fails with the reason —
 // it never silently reroutes to a higher-scored candidate. Soft scoring
-// remains the default only for submissions that name nobody.
+// remains the default only for submissions that name nobody; --preferred is
+// resolved by the scorer (PreferredNode) and never reaches this type.
 type pinResolution struct {
 	// targetID is the canonical directory row id the reference resolved to.
 	// Empty when found is false.
@@ -299,6 +307,30 @@ func pinWireDest(d scheduler.Decision) string {
 	return d.Target
 }
 
+// pinRefHint explains a pin that resolved to no directory row. The common
+// LAN case is a node whose signed beacon is arriving right now: online and
+// reachable, but discovery deliberately keeps it out of the capability
+// directory until an operator pairs it. A hard pin must still decline —
+// resolving it to a different directory member would be a silent reroute —
+// yet "not in the directory" reads as "the machine is gone" and offers no
+// way forward. Name the exact command when the ref matches a live beacon.
+func (c *Core) pinRefHint(ref string) string {
+	const generic = "run `panda nodes` to list the fleet"
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return generic
+	}
+	c.autoDialMu.Lock()
+	defer c.autoDialMu.Unlock()
+	for id, cand := range c.autoDialCands {
+		if !strings.EqualFold(id, ref) && !strings.EqualFold(cand.addr, ref) {
+			continue
+		}
+		return fmt.Sprintf("visible on the LAN as %q but not paired — run `panda nodes admit %s` first, or `panda nodes` to list the fleet", id, id)
+	}
+	return generic
+}
+
 // routePinned produces the routing decision for a task carrying a hard node
 // pin. Unlike scheduler.RouteP it never scores alternatives: the pin resolves
 // to self (run locally — when this node can actually serve the task), to a
@@ -341,7 +373,7 @@ func (c *Core) routePinned(ctx context.Context, ref string, chain []string,
 			Reason: fmt.Sprintf("pinned node %q matches multiple %s; use the node id", ref, what)}
 	case !res.found:
 		return scheduler.Decision{Action: scheduler.ActionDecline,
-			Reason: fmt.Sprintf("pinned node %q is not in the directory", ref)}
+			Reason: fmt.Sprintf("pinned node %q is not in the directory (%s)", ref, c.pinRefHint(ref))}
 	case slices.Contains(chain, res.targetID):
 		return scheduler.Decision{Action: scheduler.ActionDecline,
 			Reason: fmt.Sprintf("pinned node %q is already in the delegation chain", ref)}

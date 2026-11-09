@@ -525,13 +525,49 @@ func nodeBinaryFallback() string {
 	return strings.TrimSpace(exe)
 }
 
+// nodeDeviceKeys lists every name this node may be labelled by in a
+// device-scoped SKILL.md. `panda skill import --device` takes a human label
+// (usually cfg.Node.Name or the capability card's device), while the core
+// only holds its derived RuntimeNodeID — which for VM nodes carries a
+// @vm[-identity] suffix. Matching only one of them would silently hide the
+// procedure; matching any of them keeps all three spellings equivalent.
+func nodeDeviceKeys(c *Core) []string {
+	var keys []string
+	add := func(k string) {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			return
+		}
+		for _, existing := range keys {
+			if strings.EqualFold(existing, k) {
+				return
+			}
+		}
+		keys = append(keys, k)
+	}
+	add(c.nodeID)
+	add(c.Card().Device)
+	if i := strings.Index(c.nodeID, "@vm"); i > 0 {
+		add(c.nodeID[:i])
+	}
+	return keys
+}
+
+// skillIntentSample bounds the secondary retrieval signal. A full multi-KB
+// intent would otherwise match nearly every CJK trigger in the library; the
+// title still carries twice the weight of this sample.
+const skillIntentSample = 512
+
 // withSkills prepends matched active skills to the intent via the lightweight
 // index (design §8.5 progressive loading): only a matched skill's full body is
-// loaded, never the whole bank. Global skills apply everywhere; project skills
-// apply within their own project. budget bounds the skills section (bytes):
-// a body that does not fit degrades to an index line (name + description) so
-// the agent still knows the skill exists without the prompt overflowing the
-// agent's window. The returned slice is the set actually loaded.
+// loaded, never the whole bank. Global, project and device skills are ranked
+// together in one pass, and a bounded slice of the intent supplements the
+// short title so Chinese titles can reach curated bilingual triggers. budget
+// bounds the skills section (bytes): a body that does not fit degrades to an
+// index line (name + description) so the agent still knows the skill exists.
+// Only skills whose full body actually entered the prompt are returned as
+// "used": a degraded index line must not refresh LastUsed and keep a dormant
+// skill artificially alive.
 func withSkills(c *Core, intent, project, query string, budget int, loc ...i18n.Locale) (string, []*skills.Skill) {
 	targetLoc := i18n.ChineseSimp
 	if len(loc) > 0 && loc[0] != "" {
@@ -548,13 +584,16 @@ func withSkills(c *Core, intent, project, query string, budget int, loc ...i18n.
 		c.logger.Warn("load skill index", "err", err)
 		return intent, nil
 	}
-	var matched []skills.IndexEntry
-	matched = append(matched, skills.Match(index, skills.ScopeGlobal, "", query)...)
-	if project != "" {
-		matched = append(matched, skills.Match(index, skills.ScopeProject, project, query)...)
+	secondary := intent
+	if len(secondary) > skillIntentSample {
+		secondary = strings.ToValidUTF8(secondary[:skillIntentSample], "")
 	}
+	matched := skills.MatchScopes(index, project, nodeDeviceKeys(c), query, secondary)
 	if len(matched) == 0 {
 		return intent, nil
+	}
+	if len(matched) > skills.MaxSkillMatches {
+		matched = matched[:skills.MaxSkillMatches]
 	}
 	// Headings and discovery count toward the optional budget. Never trim
 	// the mandatory intent when it leaves no room for optional context.
@@ -591,7 +630,9 @@ func withSkills(c *Core, intent, project, query string, budget int, loc ...i18n.
 		if len(line) <= remaining {
 			b.WriteString(line)
 			remaining -= len(line)
-			used = append(used, sk)
+			// A discoverable index line is not a use: recordSkillUse would
+			// otherwise bump use_count and refresh LastUsed for a procedure
+			// whose steps never reached the agent.
 		}
 		c.logger.Warn("agent prompt budget: skill degraded to index line",
 			"skill", sk.Name, "budget", budget)
