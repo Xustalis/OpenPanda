@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/ccswitch"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 )
@@ -30,11 +31,16 @@ func (c Candidate) Row(opt Options) (config.ModelConfig, error) {
 	// An `env:` reference is stored as a reference, not resolved: copying the
 	// secret into config.yaml is the one thing this registry's own header tells
 	// people not to do. A literal (a local proxy's placeholder) has to be
-	// written, because nothing else holds it.
-	key, keyEnv := "", ""
-	if name, ok := strings.CutPrefix(c.KeyRef, "env:"); ok {
-		keyEnv = name
-	} else if c.KeyRef != "" {
+	// written, because nothing else holds it. A `ccswitch:` reference is the
+	// same idea pointed at another app's store: the row names the credential,
+	// the client reads it at call time.
+	key, keyEnv, keyRef := "", "", ""
+	switch {
+	case strings.HasPrefix(c.KeyRef, "env:"):
+		keyEnv = strings.TrimPrefix(c.KeyRef, "env:")
+	case strings.HasPrefix(c.KeyRef, ccswitch.RefPrefix):
+		keyRef = c.KeyRef
+	case c.KeyRef != "":
 		key = ResolveKey(c.KeyRef, opt)
 	}
 
@@ -45,8 +51,9 @@ func (c Candidate) Row(opt Options) (config.ModelConfig, error) {
 		Model:         c.Model,
 		APIKey:        key,
 		KeyEnv:        keyEnv,
+		KeyRef:        keyRef,
 		ContextWindow: c.ContextWindow,
-		NoAuth:        c.NoAuth || (c.Auth == "" && key == "" && keyEnv == ""),
+		NoAuth:        c.NoAuth || (c.Auth == "" && key == "" && keyEnv == "" && keyRef == ""),
 	}
 
 	// A known provider owns its endpoint, dialect and limits: borrow them so the
@@ -58,10 +65,11 @@ func (c Candidate) Row(opt Options) (config.ModelConfig, error) {
 			if built, ok := providers.ModelConfig(p.ID, c.Model, key); ok {
 				mc = built
 				mc.KeyEnv = keyEnv
+				mc.KeyRef = keyRef
 				if c.ContextWindow > 0 {
 					mc.ContextWindow = c.ContextWindow
 				}
-				mc.NoAuth = c.NoAuth || (c.Auth == "" && mc.APIKey == "" && mc.KeyEnv == "")
+				mc.NoAuth = c.NoAuth || (c.Auth == "" && mc.APIKey == "" && mc.KeyEnv == "" && mc.KeyRef == "")
 				if c.BaseURL != "" && !sameURL(c.BaseURL, built.BaseURL) {
 					mc.BaseURL = strings.TrimRight(c.BaseURL, "/")
 					mc.APIType = c.APIType
@@ -80,6 +88,10 @@ func (c Candidate) Row(opt Options) (config.ModelConfig, error) {
 	if mc.Model == "" {
 		return config.ModelConfig{}, fmt.Errorf("candidate has no model id")
 	}
+	// Provenance survives the catalogue branch above, like the key reference:
+	// the row is still the one this collector reported, whatever endpoint the
+	// catalogue lent it.
+	mc.Source = c.Source
 	// Applied last: the catalogue branch above replaces the whole row when the
 	// provider is a known one, and a subscription credential must survive that.
 	mc.Auth = c.Auth

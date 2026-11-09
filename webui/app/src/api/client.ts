@@ -1858,6 +1858,13 @@ export const api = {
     return request('GET', '/api/models/discover', undefined, { timeoutMs: 90_000 })
   },
 
+  /** CC Switch's four app rosters, each as its own group. A separate call from
+   *  discovery because the console shows it behind its own button and one
+   *  roster at a time. */
+  ccswitchGroups(): Promise<{ groups: DiscoverSource[] }> {
+    return request('GET', '/api/models/ccswitch', undefined, { timeoutMs: 60_000 })
+  },
+
   /** Register the ticked candidates in one write. Items carry a credential
    *  *reference* (`env:NAME`, `codex:<provider>`), never a key: the server
    *  resolves it, so a console session never sees a secret. */
@@ -2009,6 +2016,10 @@ export interface ModelEntry {
   alias: string
   provider?: string
   provider_label?: string
+  /** The discovery collector this row was imported from — "codex", "claude",
+   *  "opencode", "local". Empty for a hand-written row. The console names a
+   *  connection after it instead of showing a relay's loopback address. */
+  source?: string
   api_type: string
   base_url: string
   model: string

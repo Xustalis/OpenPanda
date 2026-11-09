@@ -148,10 +148,18 @@ func collectOpenCode(ctx context.Context, opt Options) Source {
 				// that store belongs to the app (see the package comment). Naming
 				// the variable is the whole fix — "no credential" alone reads as
 				// a bug to anyone who has already run `opencode auth login`.
-				if keyEnv != "" {
+				switch {
+				case freeOnProvider(k.provider, m.ID):
+					// The free tier is a client-side grant, not a keyless API:
+					// OpenCode's own CLI rides it and every outside call answers
+					// 429 FreeUsageLimitError. Saying "export OPENCODE_API_KEY"
+					// here would promise a free model the person cannot dial, so
+					// the row says what is actually true and what would change it.
+					c.Note = "opencode-free"
+				case keyEnv != "":
 					c.Note = k.provider + ": no " + keyEnv + " in this environment" +
 						" (OpenCode's own login is not read — export it to import these)"
-				} else {
+				default:
 					c.Note = k.provider + ": no credential variable known for this provider"
 				}
 			case roster == nil:
@@ -195,6 +203,22 @@ func collectOpenCode(ctx context.Context, opt Options) Source {
 		src.Detail = "opencode models printed nothing"
 	}
 	return src
+}
+
+// freeOnProvider reports whether the catalogue serves this id on a free tier.
+// Most free ids say so in the name ("deepseek-v4.1-flash-free"); big-pickle is
+// the one the provider table has to name explicitly, which is why both
+// spellings are checked.
+func freeOnProvider(providerID, model string) bool {
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(model)), "-free") {
+		return true
+	}
+	p, ok := providers.Lookup(providerID)
+	if !ok {
+		return false
+	}
+	spec, ok := p.SpecFor(model)
+	return ok && spec.Free
 }
 
 // singleEnvName returns the one variable in the set, or "" when there are none

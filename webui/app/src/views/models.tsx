@@ -19,13 +19,18 @@ import { Icon } from '../components/icons'
 import { toast, toastError } from '../components/toast'
 import { ProviderLogo } from '../brand/providers'
 import { DiscoverSheet } from './model-discover'
+import { CCSwitchSheet } from './model-ccswitch'
 import { needsPlaintextConsent } from './model-endpoint'
 import {
   type Conn,
   type Member,
+  connHost,
+  connImported,
+  connName,
   copyAlias,
   groupConnections,
   hostOf,
+  isLoopbackURL,
   keyOf,
   labelOf,
   refOf,
@@ -91,8 +96,11 @@ export function ModelsSection() {
   const [results, setResults] = useState<Record<string, TestResult>>({})
   const [sheet, setSheet] = useState<SheetTarget | null>(null)
   // The discovery sheet is not a SheetTarget: it writes rows the person never
-  // typed, so it owns its own load and its own import call.
+  // typed, so it owns its own load and its own import call. CC Switch is a
+  // second door of the same kind — its four rosters are a different question
+  // from "what can this machine serve", so it gets its own button and sheet.
   const [discovering, setDiscovering] = useState(false)
+  const [ccswitchOpen, setCcsOpen] = useState(false)
 
   function reload() {
     return api
@@ -271,17 +279,33 @@ export function ModelsSection() {
         <span class="model-toolbar-meta">
           {t('models.registryMeta', { c: conns.length, m: registry.length })}
         </span>
-        <button
-          type="button"
-          class="btn small model-discover tip-wrap tip-right tip-down"
-          data-tip={t('models.discover.triggerHint')}
-          aria-label={`${t('models.discover.trigger')} · ${t('models.discover.triggerHint')}`}
-          onClick={() => setDiscovering(true)}
-        >
-          <Icon name="orbit" size={14} />
-          <span>{t('models.discover.trigger')}</span>
-          <Icon name="chevron-right" size={13} class="model-discover-arrow" />
-        </button>
+        <span class="model-toolbar-actions">
+          {/* CC Switch gets its own door: its store holds four independent app
+              rosters, and folding them into the discover list buried the rows
+              the person actually wanted. */}
+          <button
+            type="button"
+            class="btn small model-discover tip-wrap tip-right tip-down"
+            data-tip={t('models.ccswitch.triggerHint')}
+            aria-label={`${t('models.ccswitch.trigger')} · ${t('models.ccswitch.triggerHint')}`}
+            onClick={() => setCcsOpen(true)}
+          >
+            <Icon name="plug" size={14} />
+            <span>{t('models.ccswitch.trigger')}</span>
+            <Icon name="chevron-right" size={13} class="model-discover-arrow" />
+          </button>
+          <button
+            type="button"
+            class="btn small model-discover tip-wrap tip-right tip-down"
+            data-tip={t('models.discover.triggerHint')}
+            aria-label={`${t('models.discover.trigger')} · ${t('models.discover.triggerHint')}`}
+            onClick={() => setDiscovering(true)}
+          >
+            <Icon name="orbit" size={14} />
+            <span>{t('models.discover.trigger')}</span>
+            <Icon name="chevron-right" size={13} class="model-discover-arrow" />
+          </button>
+        </span>
       </div>
 
       <div class="model-grid">
@@ -329,6 +353,21 @@ export function ModelsSection() {
             toast(t('models.discover.imported', { n }), 'success')
             // A row the endpoint refused is the one thing this sheet must not
             // report as success: it was found in a config, not proven to work.
+            if (skipped?.length) {
+              const reason = skipped[0]!.length > 120 ? `${skipped[0]!.slice(0, 120)}…` : skipped[0]!
+              toastError(t('models.discover.skipped', { n: skipped.length, reason }))
+            }
+            afterWrite()
+          }}
+        />
+      )}
+
+      {ccswitchOpen && (
+        <CCSwitchSheet
+          onClose={() => setCcsOpen(false)}
+          onDone={(n, skipped) => {
+            setCcsOpen(false)
+            toast(t('models.discover.imported', { n }), 'success')
             if (skipped?.length) {
               const reason = skipped[0]!.length > 120 ? `${skipped[0]!.slice(0, 120)}…` : skipped[0]!
               toastError(t('models.discover.skipped', { n: skipped.length, reason }))
@@ -408,8 +447,10 @@ function ConnectionTile(props: {
   onRemoveConn(conn: Conn): void
 }) {
   const c = props.conn
-  const name = c.providerLabel || labelOf(props.providers, c.provider) || t('models.customProvider')
-  const host = hostOf(c.baseURL)
+  const name = connName(c, props.providers)
+  const host = connHost(c)
+  const imported = connImported(c)
+  const localHost = isLoopbackURL(c.baseURL)
   // The card is ringed when one of its models is the live one: the answer to
   // "where is the request going" has to be visible before opening anything.
   const live = c.members.some((m) => m.entry.active)
@@ -423,29 +464,39 @@ function ConnectionTile(props: {
           {name}
         </span>
         {host && (
-          <span class="model-conn-host mono" title={c.baseURL}>
+          <span class={`model-conn-host${localHost ? '' : ' mono'}`} title={localHost ? undefined : c.baseURL}>
             {host}
           </span>
         )}
         <span class="model-conn-count">{t('models.modelCount', { n: c.members.length })}</span>
         {live && <span class="model-conn-live">{t('models.inUse')}</span>}
+        {/* The badge the discover sheet earns: this row was not typed here, a
+            tool on this machine already held its endpoint and key. It sits
+            opposite "使用中" so the two never fight for the same corner. */}
+        {imported && <span class="model-conn-imported">{t('models.localImport')}</span>}
       </span>
 
       <div class="model-conn-models">
-        {c.members.map((m) => (
-          <ModelRow
-            key={keyOf(m.entry)}
-            m={m}
-            busy={props.busy}
-            result={props.results[keyOf(m.entry)]}
-            providers={props.providers}
-            onUse={() => props.onUse(m.entry)}
-            onTest={() => props.onTest(m.entry)}
-            onEdit={() => props.onEdit(m.entry)}
-            onCopy={() => props.onCopy(m)}
-            onRemove={() => props.onRemove(m)}
-          />
-        ))}
+        {/* The list scrolls; the two account verbs under it do not. Without
+            this wrapper the rows were direct children of the card's hover
+            layer — which is `overflow: hidden` — so the fifth model on an
+            account was simply cut off with no way to reach it. */}
+        <div class="model-conn-list">
+          {c.members.map((m) => (
+            <ModelRow
+              key={keyOf(m.entry)}
+              m={m}
+              busy={props.busy}
+              result={props.results[keyOf(m.entry)]}
+              providers={props.providers}
+              onUse={() => props.onUse(m.entry)}
+              onTest={() => props.onTest(m.entry)}
+              onEdit={() => props.onEdit(m.entry)}
+              onCopy={() => props.onCopy(m)}
+              onRemove={() => props.onRemove(m)}
+            />
+          ))}
+        </div>
         {/* Account-level verbs, kept as two plain rows under the model list.
             Adding another id lives in the edit sheet's "more models" table, so
             the card itself only offers the two things that address the card. */}

@@ -43,6 +43,7 @@ import (
 const (
 	SourceCodex    = "codex"
 	SourceClaude   = "claude"
+	SourceCCSwitch = "ccswitch"
 	SourceOpenCode = "opencode"
 	SourceLocal    = "local"
 )
@@ -206,6 +207,10 @@ func Discover(ctx context.Context, opt Options) []Source {
 	for i := 0; i < 4; i++ {
 		out = append(out, <-slots)
 	}
+	// CC Switch is deliberately absent: it has its own entry point
+	// (CCSwitchGroups), because its four app rosters are a different question
+	// from "what can this machine serve" and mixing them made one list of
+	// thirty rows nobody could scan.
 	order := map[string]int{SourceCodex: 0, SourceClaude: 1, SourceOpenCode: 2, SourceLocal: 3}
 	for i := 1; i < len(out); i++ {
 		for j := i; j > 0 && order[out[j].ID] < order[out[j-1].ID]; j-- {
