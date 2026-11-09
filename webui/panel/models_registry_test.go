@@ -995,3 +995,34 @@ func TestRemoveModelsRefusesWhenTheSurvivorCannotTakeOver(t *testing.T) {
 		t.Fatalf("live model = %q, want it left alone", cfg.Model.Alias())
 	}
 }
+
+// A row imported from another tool carries its provenance to the wire, and a
+// hand-written row carries none. The console names a connection after it: an
+// imported Claude Code tier must not read as "custom base_url" plus a loopback
+// port, while a row the person typed keeps the generic label.
+func TestModelEntryCarriesTheImportSource(t *testing.T) {
+	imported := modelEntryOf(config.ModelConfig{
+		Name:     "claude-opus-5[1M]",
+		Provider: "custom",
+		Source:   "claude",
+		APIType:  "anthropic",
+		BaseURL:  "http://127.0.0.1:7896",
+		APIKey:   "PROXY_MANAGED",
+		Model:    "claude-opus-5[1M]",
+	}, config.ModelConfig{})
+	if imported.Source != "claude" {
+		t.Fatalf("source = %q, want claude", imported.Source)
+	}
+
+	handWritten := modelEntryOf(config.ModelConfig{
+		Name:     "relay",
+		Provider: "custom",
+		APIType:  "openai",
+		BaseURL:  "http://127.0.0.1:3065/v1",
+		APIKey:   "sk-local",
+		Model:    "m-1",
+	}, config.ModelConfig{})
+	if handWritten.Source != "" {
+		t.Fatalf("hand-written row got source %q", handWritten.Source)
+	}
+}

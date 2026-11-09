@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/auth"
+	"github.com/Xustalis/OpenPanda/internal/ccswitch"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/security"
@@ -246,6 +247,14 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	// daemon, CLI) reads the same way and the value never lands in config.yaml.
 	if model.APIKey == "" && model.KeyEnv != "" {
 		model.APIKey = strings.TrimSpace(os.Getenv(model.KeyEnv))
+	}
+	// A row may also name a credential another app owns (CC Switch's store).
+	// Same contract as KeyEnv: the reference is what config holds, the value
+	// is read here and never written back. An unreadable store leaves the key
+	// empty, and the client reports "no key" rather than dialing without one.
+	if model.APIKey == "" && model.KeyRef != "" {
+		home, _ := os.UserHomeDir()
+		model.APIKey = ccswitch.ResolveKey(model.KeyRef, home)
 	}
 	p, hasProvider := providers.Lookup(model.Provider)
 	name := model.Model

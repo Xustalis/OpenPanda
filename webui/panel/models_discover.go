@@ -45,11 +45,33 @@ func (h *handler) discoverModels(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), discoverTimeout)
 	defer cancel()
 	sources := localmodels.Discover(ctx, localmodels.Options{})
+	h.markRegistered(sources)
+	writeJSON(w, map[string]any{"sources": sources})
+}
 
-	// "Already registered" is a property of this config, not of the machine:
-	// the same endpoint+model pair can be a fresh find on another node. Marking
-	// it here keeps the console from offering a duplicate the write would only
-	// suffix into `-2`.
+// ccswitchModels serves GET /api/models/ccswitch: CC Switch's four app rosters
+// as independent groups. It is a separate endpoint from discovery because the
+// console shows it behind its own button and one group at a time — a single
+// mixed list of thirty rows is what this split exists to avoid.
+func (h *handler) ccswitchModels(w http.ResponseWriter, r *http.Request) {
+	if h.cfg == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("config not loaded"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), discoverTimeout)
+	defer cancel()
+	groups := localmodels.CCSwitchGroups(ctx, localmodels.Options{})
+	h.markRegistered(groups)
+	writeJSON(w, map[string]any{"groups": groups})
+}
+
+// markRegistered fills Candidate.Existing.
+//
+// "Already registered" is a property of this config, not of the machine: the
+// same endpoint+model pair can be a fresh find on another node. Marking it here
+// keeps the console from offering a duplicate the write would only suffix into
+// `-2`.
+func (h *handler) markRegistered(sources []localmodels.Source) {
 	h.readCfg(func(c *config.Config) {
 		registered := make(map[string]bool, len(c.Models)+1)
 		note := func(m config.ModelConfig) {
@@ -68,7 +90,6 @@ func (h *handler) discoverModels(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	})
-	writeJSON(w, map[string]any{"sources": sources})
 }
 
 // modelIdentity is the triple entry.Client keys a row on: two rows that agree on
@@ -200,23 +221,34 @@ func (h *handler) importModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var stored []config.ModelConfig
+	relabeled := 0
 	err := h.mutateCfgErr(func(c *config.Config) error {
 		stored = stored[:0]
+		relabeled = 0
 		// Identity, not alias: an import that lands on an endpoint+dialect+model
 		// the registry already holds is the same row, and suffixing its alias
 		// with -2 would create a duplicate that the health check cannot tell
 		// apart (entry.Client keys on exactly this triple).
-		seen := make(map[string]bool, len(c.Models)+len(added))
-		for _, m := range c.Models {
-			seen[modelIdentity(m)] = true
+		seen := make(map[string]int, len(c.Models)+len(added))
+		for i, m := range c.Models {
+			seen[modelIdentity(m)] = i
 		}
 		for _, mc := range added {
 			id := modelIdentity(mc)
-			if seen[id] {
+			if idx, ok := seen[id]; ok {
+				// The row is already here, but this is the only moment the
+				// machine tells us where it came from: backfill the provenance
+				// so a connection imported before the field existed is still
+				// named after the tool that reported it. Not a duplicate —
+				// nothing is added, only labelled.
+				if mc.Source != "" && c.Models[idx].Source == "" {
+					c.Models[idx].Source = mc.Source
+					relabeled++
+				}
 				skipped = append(skipped, fmt.Sprintf("%s: already registered", mc.Model))
 				continue
 			}
-			seen[id] = true
+			seen[id] = len(c.Models)
 			mc.Name = freeAliasIn(c, defaultAlias(mc), config.ModelConfig{})
 			// Append inside the loop: freeAliasIn reads the config, so the next
 			// row in this batch has to be visible to it or two candidates with
@@ -224,8 +256,9 @@ func (h *handler) importModels(w http.ResponseWriter, r *http.Request) {
 			c.Models = append(c.Models, mc)
 			stored = append(stored, mc)
 		}
-		// Nothing new is not a reason to rewrite (and snapshot) the file.
-		if len(stored) > 0 && h.configPath != "" {
+		// Nothing new is not a reason to rewrite (and snapshot) the file — but
+		// a backfilled label is a change, and it is the only one this pass made.
+		if (len(stored) > 0 || relabeled > 0) && h.configPath != "" {
 			return config.UpdateModelsSection(h.configPath, append([]config.ModelConfig(nil), c.Models...))
 		}
 		return nil
@@ -252,7 +285,7 @@ func (h *handler) importModels(w http.ResponseWriter, r *http.Request) {
 	for _, m := range stored {
 		aliases = append(aliases, m.Alias())
 	}
-	writeJSON(w, map[string]any{"added": len(stored), "aliases": aliases, "skipped": skipped})
+	writeJSON(w, map[string]any{"added": len(stored), "labeled": relabeled, "aliases": aliases, "skipped": skipped})
 }
 
 // discoveredKeyRefs indexes the credential references discovery reported,
