@@ -298,6 +298,72 @@ func TestDiscoverySocketEndToEnd(t *testing.T) {
 	}
 }
 
+// TestDiscoveryStatusTracksListener: a bound listener is reported as such. The
+// snapshot is what the panel and doctor read, so "listening" has to become true
+// only after the socket exists — otherwise diagnostics claim a socket the node
+// does not hold.
+func TestDiscoveryStatusTracksListener(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c := newCore(t, "self")
+	probe, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	port := probe.LocalAddr().(*net.UDPAddr).Port
+	_ = probe.Close()
+
+	go c.RunDiscovery(ctx, "127.0.0.1:"+strconv.Itoa(port), "127.0.0.1:7836", false)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if st := c.DiscoveryStatus(); st.Listening {
+			if st.Addr == "" {
+				t.Fatal("listening snapshot carries no bound address")
+			}
+			if st.Err != "" {
+				t.Fatalf("listening snapshot still carries an error: %q", st.Err)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("listener never reported as listening: %+v", c.DiscoveryStatus())
+}
+
+// TestDiscoveryRecordsBindFailure is the regression guard for the outage this
+// file used to have: a bind that fails on startup was logged once and then
+// abandoned for the life of the process, leaving an empty device list with no
+// explanation anywhere. The failure must land in the snapshot instead.
+func TestDiscoveryRecordsBindFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c := newCore(t, "self")
+	held, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		t.Fatalf("hold port: %v", err)
+	}
+	defer held.Close()
+	port := held.LocalAddr().(*net.UDPAddr).Port
+
+	go c.RunDiscovery(ctx, ":"+strconv.Itoa(port), "0.0.0.0:7836", false)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		st := c.DiscoveryStatus()
+		if st.Err != "" {
+			if st.Listening {
+				t.Fatal("a failed bind must not report a listening socket")
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("bind failure was never recorded in the discovery snapshot")
+}
+
 // TestDiscoveryBadBindAddr: a malformed discovery_addr must degrade to a
 // warning and a clean return — a non-numeric port must not silently bind an
 // ephemeral socket that announces to port 0.

@@ -388,6 +388,11 @@ export function ModelsSection() {
  *  face — a preview crowded with a logo has less room for the thing being
  *  previewed. A card that carried its list at rest would be as tall as its
  *  account is wide, and a nine-model account would set the height of the wall.
+ *
+ *  The footer is outside the scrolling list on purpose: "add a model" and
+ *  "this account is wrong" are the two things done to a card, and an
+ *  eleven-model account pushed the add door off the bottom of the card, where
+ *  nobody scrolls to reach it.
  */
 function ConnectionTile(props: {
   conn: Conn

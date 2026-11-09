@@ -205,6 +205,9 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/pair", h.listPair)
 	mux.HandleFunc("POST /api/pair/initiate", h.initiatePair)
 	mux.HandleFunc("POST /api/pair/answer", h.answerPair)
+	// Active /24 sweep behind the panel's "rescan" button: the fallback for
+	// LANs whose AP filters the discovery broadcast (see lanscan.go).
+	mux.HandleFunc("POST /api/pair/scan", h.scanPair)
 	mux.HandleFunc("GET /api/self", h.getSelf)
 	// Self-evolution (design doc §4.2): patch-set queue + diff preview for the
 	// merge-review gate. Read-only — the approve/reject actions ride the
@@ -225,6 +228,9 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("PUT /api/models/{alias}", h.updateModel)
 	mux.HandleFunc("POST /api/models/{alias}/use", h.useModel)
 	mux.HandleFunc("DELETE /api/models/{alias}", h.removeModel)
+	// The batch form of that delete: one card is one account, and clearing it
+	// is one write, not one per model.
+	mux.HandleFunc("POST /api/models/remove", h.removeModels)
 	mux.HandleFunc("POST /api/models/fetch", h.fetchModels)
 	mux.HandleFunc("POST /api/models/test", h.testModel)
 	// "What can this machine already serve" — the four local collectors

@@ -35,6 +35,11 @@ type watchMsg struct {
 	// have lines to commit; a poll fills events, and onWatch reads both.
 	notes []string
 	proj  string
+	// pairs is the inbound pairing queue as of this poll. It rides the task
+	// poll rather than arming a second timer: the two questions are asked of
+	// the same store at the same cadence, and one more re-arming chain is one
+	// more thing that can silently stop.
+	pairs []core.PairPendingRow
 }
 
 // watchTasks arms the next store poll. It sleeps first, so the command doubles as
@@ -53,10 +58,14 @@ func watchTasks(r *repl) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(watchPollInterval)
 		proj := r.activeProjectName()
+		// Read before the askingNow branch: a request that arrives mid-turn is
+		// exactly when the reader is least likely to notice it, so the banner
+		// has to keep moving while the model streams.
+		pairs := pendingPairs(r)
 		if r.askingNow() {
-			return watchMsg{proj: proj}
+			return watchMsg{proj: proj, pairs: pairs}
 		}
-		return watchMsg{events: r.pollCompletions(context.Background()), proj: proj}
+		return watchMsg{events: r.pollCompletions(context.Background()), proj: proj, pairs: pairs}
 	}
 }
 
@@ -94,6 +103,9 @@ func (m tuiModel) onWatch(msg watchMsg) (tea.Model, tea.Cmd) {
 		m.refreshSidebar()
 	}
 	cmds := []tea.Cmd{watchTasks(m.r)}
+	// Pairing first: it is the only item on this poll with a deadline, and a
+	// note printed under it keeps the two events in the order they happened.
+	cmds = append(cmds, m.adoptPairs(msg.pairs)...)
 	note := func(body string) {
 		cmds = append(cmds, m.printBlock(block{kind: blockNote, body: body}))
 	}

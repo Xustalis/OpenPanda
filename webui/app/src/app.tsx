@@ -28,6 +28,7 @@ import { Icon } from './components/icons'
 import { ConfirmHost } from './components/confirm'
 import { PaletteHost, openPalette } from './components/palette'
 import { ReminderBell, openReminders } from './components/reminders'
+import { PairRequestHost } from './components/pair-request-host'
 
 /** Re-render the subtree on locale change (the whole shell is cheap). */
 function useLocaleRerender(): void {
@@ -141,6 +142,9 @@ export function App() {
       <ToastHost placement={base.view === 'workspace' ? 'top-center' : 'bottom-right'} />
       <ConfirmHost />
       <PaletteHost onLogout={logout} />
+      {/* Ambient, not a route: a pairing request expires in four minutes, so
+          it cannot live inside 工作空间 → 连接设备 and wait to be found. */}
+      <PairRequestHost />
       <aside
         ref={sidebar}
         class={`sidebar${menuOpen ? ' mobile-open' : ''}`}
@@ -464,11 +468,14 @@ function SidebarNode() {
   // web` serves the node itself, so `node_running` alone left this dot grey
   // on a node that was online and heartbeating.
   const up = isSelfNodeUp(self)
+  // The rail is 255px wide, so a long hostname ellipsises here. The title has
+  // to carry both halves: naming only the connection state left the truncated
+  // name unknowable on hover.
   return (
     <a
       href="#/profile"
       class="sidebar-node"
-      title={t(up ? 'sidebar.node.up' : 'sidebar.node.down')}
+      title={`${name} · ${t(up ? 'sidebar.node.up' : 'sidebar.node.down')}`}
     >
       <span class={`dot${up ? '' : ' off'}`} aria-hidden />
       <span class="mono sidebar-node-name">{name}</span>

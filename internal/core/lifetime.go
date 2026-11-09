@@ -164,6 +164,14 @@ func (c *Core) renewLease(ctx context.Context, taskID string, chain []string, at
 			case <-ctx.Done():
 				return
 			case <-t.C:
+				// The owner may have called the stop function while the
+				// previous write was blocked. Re-check before touching the
+				// store again rather than waiting for the next tick.
+				select {
+				case <-done:
+					return
+				default:
+				}
 				c.setLease(ctx, taskID, lease)
 				c.relayToParent(context.WithoutCancel(ctx), bus.MsgTaskProgress, chain,
 					bus.TaskProgressPayload{TaskID: taskID, AttemptID: attemptID})
@@ -173,10 +181,19 @@ func (c *Core) renewLease(ctx context.Context, taskID string, chain []string, at
 	return func() { once.Do(func() { close(done) }) }
 }
 
+// leaseWriteTimeout bounds a single lease renewal. A SQLite write can block
+// for as long as another process holds the write lock; without a deadline the
+// renewal goroutine stops writing while the monitor still sees a live task,
+// the expired lease is read as a dead executor, and the same work is routed
+// to a second node. Bounding the write lets the next ticker tick renew.
+const leaseWriteTimeout = 5 * time.Second
+
 // setLease writes one lease renewal, tolerating a task that has already reached
 // a terminal state (the write simply matches no active row).
 func (c *Core) setLease(ctx context.Context, taskID string, lease time.Duration) {
-	if err := c.store.SetLease(context.WithoutCancel(ctx), taskID, lease.Milliseconds()); err != nil {
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaseWriteTimeout)
+	defer cancel()
+	if err := c.store.SetLease(writeCtx, taskID, lease.Milliseconds()); err != nil {
 		c.logger.Warn("renew lease", "task", taskID, "err", err)
 	}
 }

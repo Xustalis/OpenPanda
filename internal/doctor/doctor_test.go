@@ -283,3 +283,40 @@ func TestMeshSingleNodePasses(t *testing.T) {
 		t.Fatalf("mesh check = %+v, want a passing single-node result", c)
 	}
 }
+
+// A pre-0.1.5 config is legacy by definition — it spells its binds out. That
+// only deserves a failure when the binds are actually wide: an upgrade that
+// kept 127.0.0.1 is as closed as a loopback install, and crying wolf there is
+// how an operator learns to skip the report.
+func TestLegacyExposureIsAFindingOnlyWhenWide(t *testing.T) {
+	isolatedDoctorEnv(t)
+	cases := []struct {
+		name string
+		yaml string
+		ok   bool
+	}{
+		{"loopback and udp off", "node:\n  name: legacy-narrow\nnetwork:\n  listen_addr: \"127.0.0.1:7836\"\n  panel_addr: \"127.0.0.1:7840\"\n  udp_listen: \"off\"\n", true},
+		// "" means "follow the WS port on every interface" — the trap.
+		{"loopback ws, implicit wildcard udp", "node:\n  name: legacy-wide-udp\nnetwork:\n  listen_addr: \"127.0.0.1:7836\"\n", false},
+		{"wildcard ws", "node:\n  name: legacy-wide-ws\nnetwork:\n  listen_addr: \"0.0.0.0:7836\"\n  udp_listen: \"off\"\n", false},
+	}
+	for _, tc := range cases {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var found *Check
+		for _, c := range Run(path) {
+			if strings.HasPrefix(c.Key, "doctor.network.exposure") {
+				cc := c
+				found = &cc
+			}
+		}
+		if found == nil {
+			t.Fatalf("%s: no exposure check reported", tc.name)
+		}
+		if found.OK != tc.ok {
+			t.Fatalf("%s: exposure check ok=%v (%s), want %v", tc.name, found.OK, found.Key, tc.ok)
+		}
+	}
+}

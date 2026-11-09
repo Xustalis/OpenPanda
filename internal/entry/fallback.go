@@ -287,6 +287,97 @@ func IsModelConfigError(err error) bool {
 	return false
 }
 
+// IsContextOverflowError reports whether a model call was rejected because the
+// request no longer fits the provider's context window. It is deliberately
+// narrow: a 400 can also mean a bad key, a retired model id or a malformed
+// tool schema, and neither switching models nor trimming the transcript would
+// fix those, so a 400 qualifies only when its text names an oversized input.
+// 413/414 are unambiguous on their own — the transport rejected the request
+// for being too large. Callers that own the transcript should compress it and
+// retry the same model; a failover to a smaller-window model would reproduce
+// the fault.
+func IsContextOverflowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Gather every clue on the error chain before deciding. WrapAPIError
+	// copies the provider body into ClassifyError.Detail, but a shorter or
+	// reformatted body can leave one of the two without the offending phrase;
+	// returning on the first match would then miss a real overflow.
+	status := 0
+	var clues []string
+	var se *statusError
+	if errors.As(err, &se) {
+		status = se.status
+		clues = append(clues, se.body)
+	}
+	var ce *ClassifyError
+	if errors.As(err, &ce) {
+		if status == 0 {
+			status = ce.Status
+		}
+		clues = append(clues, ce.Detail, ce.UserMsg)
+	}
+	if len(clues) == 0 || (status != 0 && !overflowStatus(status)) {
+		return false
+	}
+	if status == http.StatusRequestEntityTooLarge || status == http.StatusRequestURITooLong {
+		return true
+	}
+	return overflowWording(strings.Join(clues, " "))
+}
+
+func overflowStatus(status int) bool {
+	return status == http.StatusBadRequest ||
+		status == http.StatusRequestEntityTooLarge ||
+		status == http.StatusRequestURITooLong
+}
+
+// overflowWording matches the phrasings providers actually use for a request
+// that exceeds the context window. Both English and Chinese bodies occur: the
+// gateway in front of some compatible endpoints answers in Chinese.
+func overflowWording(body string) bool {
+	s := strings.ToLower(strings.TrimSpace(body))
+	if s == "" {
+		return false
+	}
+	for _, phrase := range []string{
+		"context_length_exceeded",
+		"context length",
+		"maximum context",
+		"context window",
+		"prompt is too long",
+		"prompt too long",
+		"input is too long",
+		"input too long",
+		"request too large",
+		"request body too large",
+		"payload too large",
+		"token limit",
+		"tokens exceed",
+		"exceed the limit",
+		"reduce the length",
+		"string_above_max_length",
+		"上下文长度",
+		"上下文过长",
+		"提示词过长",
+		"请求过长",
+		"超出最大长度",
+		"长度超出",
+	} {
+		if strings.Contains(s, phrase) {
+			return true
+		}
+	}
+	// "too long" / "too large" alone are applied only alongside a token or
+	// context word, so "model name too long" cannot masquerade as an overflow.
+	if strings.Contains(s, "too long") || strings.Contains(s, "too large") {
+		return strings.Contains(s, "token") || strings.Contains(s, "context") ||
+			strings.Contains(s, "prompt") || strings.Contains(s, "input")
+	}
+	return false
+}
+
 // IsFatalModelError reports whether an error from the model client indicates
 // that the provider or endpoint failed in an unrecoverable manner (unauthorized 401,
 // forbidden/quota 403, not found 404, rate limited 429 after retries, 5xx server outage,

@@ -515,20 +515,9 @@
 
 
 
-.spinner {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* The .spinner primitive and @keyframes spin live in components.css. Views
+   used to redefine both here; because components is imported first, the
+   second definition silently won and the token-based one was dead code. */
 
 /* task result card inside a reply */
 
@@ -2371,89 +2360,17 @@ code.md-file:focus-visible {
 }
 
 /* ---- Connect card (nodes page aside) ------------------------------------
-   One card, two methods: LAN pairing (compare the code on both screens) and
-   an address written straight into the dial list. They were two boxes with
-   two near-identical host:port inputs; now they are two labelled halves of
-   the same job. */
-
-.connect-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
-}
+   One card, one lane. The panel is read top-down in the order the operator
+   needs it: who am I → somebody is waiting on me → who can I pair with →
+   the long tail (typed address, configured dial list). The tab bar that
+   split pairing from a second address form is gone: it asked the reader to
+   choose a method before showing them whether they needed to. */
 
 .connect-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-width: 0;
-}
-
-.connect-lead {
-  margin: 0;
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-  line-height: 1.45;
-}
-
-/* Two methods, one lane each. Tabs keep the card from growing into a
-   scroll of two forms at 320px; the pending-request count is the only
-   reason the pairing tab ever pulls focus on its own. */
-.connect-tabs {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  background: var(--bg-inset);
-}
-
-.connect-tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-width: 0;
-  height: 30px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-tertiary);
-  font: inherit;
-  font-size: var(--text-sm);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-
-.connect-tab:hover {
-  background: var(--surface-alpha-xs);
-  color: var(--text);
-}
-
-.connect-tab.active {
-  background: var(--bg-raised);
-  color: var(--text);
-  font-weight: 600;
-  box-shadow: var(--shadow-xs);
-}
-
-.connect-tab-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: var(--radius-pill);
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
 }
 
 .connect-pane {
@@ -2470,6 +2387,91 @@ code.md-file:focus-visible {
   line-height: 1.45;
 }
 
+/* The panel's own identity line. Pairing happens across two screens, so the
+   one fact the operator needs before anything else is which machine this
+   window is — it is the row they will look for on the other screen, and the
+   address they have to type there when no beacon arrives. */
+.connect-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px 6px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-xs);
+}
+
+.connect-id-plate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+}
+
+.connect-id-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.connect-id-label {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.connect-id-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.connect-id-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The address never truncates: a half-printed host:port is worse than a
+   shortened device name, because it is the value being copied across. */
+.connect-id-addr {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.connect-id-copybtn {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--text-tertiary);
+}
+
+.connect-id-copybtn:hover {
+  color: var(--text);
+}
+
+.connect-id-copybtn.done {
+  color: var(--good);
+}
+
 .connect-feedback {
   margin: 0;
   padding: 7px 9px;
@@ -2480,88 +2482,350 @@ code.md-file:focus-visible {
   line-height: 1.4;
 }
 
-.connect-notice {
+/* Outcome colour rides the border as well as the ink: a green sentence on a
+   grey box is easy to scroll past, and this is the only place a result is
+   reported. */
+.connect-feedback.is-ok {
   color: var(--good);
+  border-color: var(--semantic-good-border);
+  background: var(--good-soft);
 }
 
-/* Pairing opens with the shape of the job, not an empty list. The hero and
-   the three steps are static; the scan state below them is what changes. */
-.pair-hero {
+.connect-feedback.is-error {
+  color: var(--danger);
+  border-color: var(--semantic-danger-border);
+  background: var(--danger-soft);
+}
+
+/* The blocking case, promoted out of the list: someone is standing at the
+   other machine mid-ceremony and cannot proceed without this screen. It gets
+   the accent edge, the full width, and the largest type in the panel — the
+   code is the one thing being compared, so it is set like a value read from
+   across a desk rather than as metadata in a row. */
+.pair-callout {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 11px;
-  border: 1px solid var(--accent-border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.pair-callout.request {
+  border-color: var(--accent-border);
   background: var(--accent-soft);
 }
 
-.pair-hero-icon {
+.pair-callout.outgoing {
+  border-style: dashed;
+  background: var(--surface-alpha-xs);
+}
+
+.pair-callout.done {
+  border-style: solid;
+  border-color: var(--semantic-good-border);
+  background: var(--good-soft);
+}
+
+.pair-callout-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pair-callout-plate {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   background: var(--bg-raised);
   color: var(--accent);
   box-shadow: var(--shadow-xs);
 }
 
-.pair-hero-copy {
+.pair-callout.done .pair-callout-plate {
+  color: var(--good);
+}
+
+.pair-callout-copy {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
-.pair-hero-title {
+.pair-callout-title {
   margin: 0;
   color: var(--text);
   font-size: var(--text-sm);
   font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
-.pair-hero-hint {
+.pair-callout-sub {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What is left of the request's life. It runs out on its own, and the row
+   disappears when it does — saying so is cheaper than letting the operator
+   wonder why the card vanished. */
+.pair-callout-clock {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+}
+
+.pair-callout-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: var(--text-tertiary);
+}
+
+/* Stacked, not side by side: the instruction is a sentence, and at 360px a
+   sentence sharing a line with the code wraps under it anyway — with the code
+   chip left hanging beside two orphan lines. */
+.pair-callout-code {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+
+/* The shared secret's fingerprint, at a size two people can compare from
+   where they are standing. Tabular figures and wide tracking so digit-by-digit
+   reading is possible without pointing. */
+.pair-code-chip {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.pair-callout-code-hint {
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.pair-callout-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The one primary action in the panel: admitting the device. It takes the
+   remaining width so it cannot be missed next to the dismissive one. */
+.pair-cta {
+  flex: 1 1 auto;
+  min-height: 32px;
+}
+
+.pair-cta-secondary {
+  flex: none;
+}
+
+.pair-callout-wait {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   color: var(--text-tertiary);
   font-size: var(--text-xs);
   line-height: 1.4;
 }
 
-.pair-steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 5px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.pair-callout-wait.ok {
+  color: var(--text-secondary);
 }
 
-.pair-steps li {
+/* — Inbound pairing request, floating over whatever you were reading ------
+   The card that appears when somebody knocks while the pairing panel is
+   closed. Top-right, not bottom-right: toasts own the bottom corner, and a
+   request that lives four minutes must not be covered by a two-second
+   "saved" toast. No backdrop, and no focus steal — a pairing request is a
+   glance-and-press, and interrupting a sentence to show it is worse than the
+   interruption it is reporting. */
+.pair-req {
+  position: fixed;
+  top: 72px;
+  right: 20px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 340px;
+  max-width: calc(100vw - 40px);
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+  animation: pair-req-in var(--dur-fast) var(--ease-enter);
+}
+
+@keyframes pair-req-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pair-req-head {
   display: flex;
   align-items: center;
-  gap: 5px;
-  min-width: 0;
-  color: var(--text-tertiary);
-  font-size: 10px;
-  line-height: 1.25;
+  gap: 8px;
+  padding: 0 2px;
 }
 
-.pair-step-num {
+.pair-req-label {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* A slow pulse, not a blink: the dot says "someone is waiting right now",
+   and a hard blink in the corner of the eye reads as an alarm. */
+.pair-req-dot {
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pair-req-pulse 2s var(--ease-standard) infinite;
+}
+
+@keyframes pair-req-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.pair-req-more {
+  padding: 0 5px;
   border-radius: var(--radius-pill);
-  border: 1px solid var(--border-soft);
   background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pair-req-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: var(--text-tertiary);
+}
+
+.pair-req-error {
+  margin: 0;
+  padding: 0 2px;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+/* "Later" does not mean "never": the collapsed form keeps the count so the
+   request stays findable and still expires visibly. */
+.pair-req-badge {
+  position: fixed;
+  top: 72px;
+  right: 20px;
+  z-index: 900;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: calc(100vw - 40px);
+  padding: 5px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-sm);
   color: var(--text-secondary);
-  font-size: 9px;
-  font-weight: 700;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  animation: pair-req-in var(--dur-fast) var(--ease-enter);
+}
+
+.pair-req-badge:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.pair-req-badge-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.pair-req-badge-clock {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+/* Phones and narrow windows: the same bottom sheet the pairing panel uses.
+   A top-right float would sit under the notch and outside thumb reach. */
+@media (max-width: 640px) {
+  .pair-req {
+    top: auto;
+    left: 10px;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    width: auto;
+    max-width: none;
+    padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    animation: ws-sheet-in var(--dur-fast) var(--ease-enter);
+  }
+
+  .pair-req-badge {
+    top: auto;
+    left: 10px;
+    right: auto;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 /* Narrow column: who (with the action) on top, where and which code below.
@@ -2573,12 +2837,53 @@ code.md-file:focus-visible {
   gap: 6px;
 }
 
+/* Title and refresh on one line: "scan again" used to sit under the empty
+   state as a lone button, which made it look like a way out rather than the
+   control for the list above it. */
+.pair-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .pair-group-title {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Between "scan started" and "list has rows": an explicit progress state
+   instead of an empty list that fills in later. */
+.pair-searching {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 12px;
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.pair-searching-copy {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.pair-searching-sub {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
 }
 
 .pair-item {
@@ -2591,11 +2896,20 @@ code.md-file:focus-visible {
   background: var(--bg-inset);
 }
 
-/* An inbound request is the one row that is actually blocking a person on
-   the other machine — give it the accent edge instead of another grey box. */
-.pair-item.request {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
+.pair-item.has-error {
+  border-color: var(--semantic-danger-border);
+}
+
+/* Already in the fleet: still listed (it is on the LAN, and pretending
+   otherwise would be a lie about the network) but demoted — no action, no
+   accent, nothing to press. */
+.pair-item.linked {
+  background: var(--surface-alpha-xs);
+}
+
+.pair-item.linked .pair-name {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .pair-request-hint {
@@ -2736,20 +3050,133 @@ code.md-file:focus-visible {
   line-height: 1.45;
 }
 
-.pair-refresh {
-  align-self: flex-start;
-}
-
-.pair-manual-group {
+/* Why the list is empty, as three things the operator can check — the panel
+   used to answer "nothing found" and leave the diagnosis to them. */
+.pair-checks {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-soft);
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 0 2px;
+  list-style: none;
 }
 
-.pair-manual-group .hint {
+.pair-checks li {
+  position: relative;
+  padding-left: 14px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.pair-checks li::before {
+  content: '';
+  position: absolute;
+  top: 0.52em;
+  left: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+}
+
+/* What the sweep actually did, in one line. Small on purpose: it is evidence
+   for the reader who wants it, not a headline. */
+.pair-scan-note {
   margin: 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* Which evidence put this row here. Only shown for the strong case, where a
+   beacon and a reachable port agreed. */
+.pair-src {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+/* A failed dial reports on its own row, not at the top of the panel. */
+.pair-row-error {
+  margin: 2px 0 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.pair-item-cta {
+  flex: none;
+  margin-left: auto;
+  min-height: 28px;
+}
+
+.pair-refresh {
+  flex: none;
+}
+
+/* The long tail, folded. `summary` is a real control, so this works from the
+   keyboard without any of the ARIA a hand-rolled disclosure would need. */
+.pair-fold {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 8px;
+}
+
+.pair-fold-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 2px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* The native triangle sits at a different offset in every engine; the chevron
+   is drawn here so the two folds line up with the rows above them. */
+.pair-fold-head::-webkit-details-marker {
+  display: none;
+}
+
+.pair-fold-head::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-right: 1.5px solid var(--text-tertiary);
+  border-bottom: 1.5px solid var(--text-tertiary);
+  transform: rotate(45deg) translate(-1px, -1px);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.pair-fold[open] > .pair-fold-head::after {
+  transform: rotate(-135deg) translate(-1px, -1px);
+}
+
+.pair-fold-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.pair-fold-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-fold-hint {
+  margin: 2px 0 6px;
+}
+
+.pair-fold-body {
+  padding-top: 2px;
 }
 
 /* ---- Device form + configured dial list ---- */
@@ -5878,6 +6305,9 @@ code.md-file:focus-visible {
 .policy-sandbox-head {
   display: flex;
   align-items: center;
+  /* The mode picker wraps under the state on a narrow column instead of
+     squeezing the pill and the backend name out of the card. */
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }
@@ -5916,10 +6346,15 @@ code.md-file:focus-visible {
   color: var(--warn);
 }
 .policy-sandbox-mode {
-  margin-left: auto;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--text-tertiary);
+}
+/* The control owns the right edge: the head is dot · title · state · backend
+   · mode picker, and only the picker is pinned. */
+.policy-sandbox-pick {
+  display: flex;
+  margin-left: auto;
 }
 .policy-sandbox .hint {
   margin: 0;
@@ -7296,7 +7731,9 @@ pre,
   max-height: 82vh;
   object-fit: contain;
   border-radius: 4px;
-  background: #fff;
+  /* Transparent by design: a white plate behind a transparent PNG breaks
+     the dark overlay and stays white when the console switches themes. */
+  background: transparent;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
 }
 
@@ -7940,13 +8377,30 @@ button.project-stat:hover {
   inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
   padding: 6px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
   opacity: 0;
   visibility: hidden;
   transition: opacity var(--dur-fast) var(--ease);
+}
+/* The list scrolls, the footer does not. Both of a card's verbs live in the
+   footer, and on an eleven-model account the add door rode the bottom of the
+   scroll — arriving out of sight, i.e. not arriving. */
+.model-conn-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.model-conn-foot {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
 }
 .model-conn:hover .model-conn-face,
 .model-conn:focus-within .model-conn-face {

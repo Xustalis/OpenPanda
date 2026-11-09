@@ -657,6 +657,23 @@ func TestPureAccessors(t *testing.T) {
 		t.Errorf("unknown sandbox mode = %q, want off", got)
 	}
 
+	// ParseSandboxMode is the write-side twin: same spellings, but a typo is
+	// reported instead of silently folded to off — a caller that asked for
+	// confinement must not be handed a node that reports none.
+	for _, tc := range []struct{ in, want string }{
+		{"off", "off"}, {" Standard ", "standard"}, {"STRICT", "strict"},
+	} {
+		got, err := ParseSandboxMode(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("ParseSandboxMode(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+	}
+	for _, in := range []string{"", "standrad", "on", "true"} {
+		if got, err := ParseSandboxMode(in); err == nil {
+			t.Errorf("ParseSandboxMode(%q) = %q, want error", in, got)
+		}
+	}
+
 	if got := (TimeoutsConfig{}).TaskLease(); got != DefaultTaskLeaseS*time.Second {
 		t.Errorf("default task lease = %v, want %vs", got, DefaultTaskLeaseS)
 	}

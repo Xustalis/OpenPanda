@@ -105,6 +105,15 @@ type Options struct {
 	// it off: the flap a short-lived REPL causes on peers outweighs the
 	// benefit (and a co-resident daemon makes the row borrowed anyway).
 	MeshNode bool
+	// HoldIdentityLock keeps the node identity lock for this engine's whole
+	// lifetime instead of probing and releasing it. `panda web` sets it: the
+	// console is the long-lived owner of the node row, and `panda status`
+	// decides "the local node is up" from whether anyone holds that lock — a
+	// console that only probed reported itself down while it was serving, and
+	// a second console could start a duplicate owner. A co-resident daemon
+	// takes the lock first, so the console still degrades to a borrowed row
+	// instead of failing to start.
+	HoldIdentityLock bool
 	// LocalOnly marks a process that writes to the store and exits: `panda
 	// task add`, `task send`, `task continue`. Such a command needs the
 	// schema, the card and the task store — not a network presence. Opening
@@ -129,12 +138,17 @@ type Options struct {
 // Ask calls (the entry client and registry are; the scheduler core is).
 type Engine struct {
 	modelSyncCancel context.CancelFunc
-	modelWatcher    *configsync.Watcher  // schedMu; optional persisted config observer
-	appliedRuntime  config.RuntimeConfig // cfgMu; last published client/router, not a pending cfg edit
-	cfg             *config.Config
-	db              *sql.DB
-	client          atomic.Pointer[entry.Client]
-	injector        *memory.Injector
+	// identityLock is held only when Options.HoldIdentityLock is set and this
+	// engine won the node identity lock at scheduler init — the console's way
+	// of being the row's owner for as long as it serves. nil otherwise.
+	identityLock     *nodeidentity.Lock
+	holdIdentityLock bool
+	modelWatcher     *configsync.Watcher  // schedMu; optional persisted config observer
+	appliedRuntime   config.RuntimeConfig // cfgMu; last published client/router, not a pending cfg edit
+	cfg              *config.Config
+	db               *sql.DB
+	client           atomic.Pointer[entry.Client]
+	injector         *memory.Injector
 
 	// registry is swapped whole by SetMCPCommand; regMu guards the swap and
 	// gives in-flight Asks a stable registry reference.
@@ -155,6 +169,10 @@ type Engine struct {
 	mcp        *mcp.Client
 	mcpCommand string
 	logger     *slog.Logger
+	// localRunner executes a matched local action (entry.MatchLocalAction).
+	// nil means the built-in runner: this binary, bounded by a timeout. It is
+	// set once before the engine serves, so no lock is taken on the read path.
+	localRunner func(ctx context.Context, argv []string) (string, error)
 
 	// sched powers task execution once initialized — either eagerly from
 	// Options.CardPath/config or lazily on first use (tryAutoInitScheduler).
@@ -1128,26 +1146,27 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 	}
 
 	e := &Engine{
-		cfg:            cfg,
-		appliedRuntime: cfg.RuntimeConfig(),
-		db:             db,
-		injector:       injector,
-		hermes:         hermes,
-		daily:          memory.NewDaily(hermes.WarmDir()),
-		projects:       projects,
-		remind:         remind,
-		skills:         skillStore,
-		logger:         logger,
-		queueTasks:     opts.QueueTasks,
-		awaitQueued:    opts.AwaitQueued,
-		asyncPeers:     opts.AsyncPeers,
-		meshNode:       opts.MeshNode,
-		localOnly:      opts.LocalOnly,
-		replyASCII:     opts.ReplyASCII,
-		cardPath:       opts.CardPath,
-		configPath:     config.ResolvePath(opts.ConfigPath),
-		locale:         loc,
-		explicitLocale: explicitLocale,
+		cfg:              cfg,
+		appliedRuntime:   cfg.RuntimeConfig(),
+		db:               db,
+		injector:         injector,
+		hermes:           hermes,
+		daily:            memory.NewDaily(hermes.WarmDir()),
+		projects:         projects,
+		remind:           remind,
+		skills:           skillStore,
+		logger:           logger,
+		queueTasks:       opts.QueueTasks,
+		awaitQueued:      opts.AwaitQueued,
+		asyncPeers:       opts.AsyncPeers,
+		meshNode:         opts.MeshNode,
+		holdIdentityLock: opts.HoldIdentityLock,
+		localOnly:        opts.LocalOnly,
+		replyASCII:       opts.ReplyASCII,
+		cardPath:         opts.CardPath,
+		configPath:       config.ResolvePath(opts.ConfigPath),
+		locale:           loc,
+		explicitLocale:   explicitLocale,
 	}
 	if db != nil {
 		// The gate fails closed without the store: approvalFor just reads
@@ -1258,6 +1277,42 @@ func (e *Engine) tryAutoInitScheduler() {
 	}
 }
 
+// identityLockHandoff is how long a long-lived owner keeps retrying the node
+// identity lock before accepting that somebody else owns the node.
+//
+// The race it covers is a restart: `panda web -daemon` starts the new console
+// the moment the old one is asked to stop, and the dying process may hold the
+// flock for a few hundred milliseconds while it finishes. Losing that race is
+// sticky — the loser keeps ownsRow=false for its whole life and therefore
+// never binds the mesh listener or runs discovery — so a one-second restart
+// left a node that answered on 7840 and on nothing else, with no line in the
+// log to say why.
+//
+// A daemon co-resident with the console pays this window once at startup and
+// then degrades exactly as before: it is the price of not confusing "another
+// owner" with "our own predecessor".
+const identityLockHandoff = 5 * time.Second
+
+// acquireNodeIdentity takes the identity lock, retrying briefly when a
+// long-lived owner (Options.HoldIdentityLock) finds it held. Probe-only
+// engines keep the single attempt: they release the lock immediately, so
+// waiting would slow every short command for nothing.
+func acquireNodeIdentity(kind, identity string, hold bool) (*nodeidentity.Lock, error) {
+	lock, err := nodeidentity.Acquire(kind, identity)
+	if err == nil || !hold || !errors.Is(err, nodeidentity.ErrAlreadyRunning) {
+		return lock, err
+	}
+	deadline := time.Now().Add(identityLockHandoff)
+	for time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		lock, err = nodeidentity.Acquire(kind, identity)
+		if err == nil || !errors.Is(err, nodeidentity.ErrAlreadyRunning) {
+			return lock, err
+		}
+	}
+	return nil, err
+}
+
 func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// The shared config supplies most of the scheduler's inputs; hold cfgMu
 	// for the build so a concurrent /model or /nodes mutation cannot tear a
@@ -1321,8 +1376,11 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// holds the lock and heartbeats the row, so a borrowed engine's Shutdown
 	// must not mark it offline — otherwise every `task add`/`ask` exit flips
 	// the daemon's self row until the next beat, and routing sees the local
-	// node as gone. Probe-only: the lock is released immediately so this
-	// process never blocks a real daemon from starting.
+	// node as gone. Probe-only for short-lived engines: the lock is released
+	// immediately so this process never blocks a real daemon from starting.
+	// A long-lived console that owns the row (Options.HoldIdentityLock) keeps
+	// it instead — status reads ownership from this lock, so a console that
+	// only probed advertised itself as down for its whole lifetime.
 	//
 	// ownsRow=false carries the same signal further: the daemon already runs
 	// the queue scheduler, task-lifecycle sweeps, peer links and discovery for
@@ -1331,12 +1389,28 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// shared store and its sibling conns only churn the daemon's held edges —
 	// one node identity, one work pipeline. Borrowed engines submit and read.
 	ownsRow := true
-	if lock, err := nodeidentity.Acquire(e.cfg.Node.Kind, card.NodeIdentity); err == nil {
-		_ = lock.Release()
-	} else if errors.Is(err, nodeidentity.ErrAlreadyRunning) {
+	lock, err := acquireNodeIdentity(e.cfg.Node.Kind, card.NodeIdentity, e.holdIdentityLock)
+	switch {
+	case err == nil:
+		if e.holdIdentityLock {
+			e.identityLock = lock
+		} else {
+			_ = lock.Release()
+		}
+	case errors.Is(err, nodeidentity.ErrAlreadyRunning):
 		sched.SetOwnsNodeRow(false)
 		ownsRow = false
-	} else {
+		// Say it out loud. A console that degrades to a borrowed node starts
+		// no mesh listener and no discovery, so it serves a panel while being
+		// unreachable — and before this line the only evidence was an absent
+		// log entry nobody was looking for. `panda status` still reports the
+		// consequence ("this node is not running"); this names the cause.
+		if e.meshNode {
+			e.logger.Info("askengine: node identity held by another process; serving as a borrowed node",
+				"identity", card.NodeIdentity,
+				"hint", "the mesh listener and LAN discovery stay with the lock holder")
+		}
+	default:
 		// Anything else (an unwritable lock directory, a filesystem error) is
 		// not evidence that this process owns the row. The permissive default
 		// made it consume the same queue as the daemon — double claims, tasks
@@ -1384,9 +1458,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// scheduler init (not just when a mode is set) so a config reload that
 	// turned the sandbox off resets the process-wide base policy instead of
 	// leaving the previous mode armed.
-	if backend := commander.SetSandboxConfig(e.cfg.Sandbox,
-		commander.ProtectedPaths(e.cfg, e.configPath, cardPath),
-		commander.SecretReadDenyPaths(e.cfg, e.configPath, cardPath)); e.cfg.Sandbox.NormalizedMode() != "off" {
+	if backend := commander.ApplyFromConfig(e.cfg, e.configPath, cardPath); e.cfg.Sandbox.NormalizedMode() != "off" {
 		if backend == "" {
 			e.logger.Warn("sandbox mode configured but no backend on this platform",
 				"mode", e.cfg.Sandbox.NormalizedMode())
@@ -1417,13 +1489,18 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// it probed the lock free at init because no daemon was up, and the
 	// moment a real daemon takes the lock these duties must die with it —
 	// or the stray keeps the listen port the daemon needs to bind and
-	// churns edges it no longer owns. watchNodeRow is the demotion tripwire.
+	// churns edges it no longer owns. watchNodeRow is the demotion tripwire —
+	// but an engine that HOLDS the lock (Options.HoldIdentityLock) is the
+	// row's owner by right, not provisionally: Held() returning true is its
+	// own doing, and reading that as a daemon takeover would tear down the
+	// mesh listener it should be keeping.
 	ownCtx := schedCtx
 	if ownsRow {
 		var ownCancel context.CancelFunc
 		ownCtx, ownCancel = context.WithCancel(schedCtx)
+		selfHolds := e.identityLock != nil
 		e.goBG("askengine: node row watch", func() {
-			e.watchNodeRow(ownCtx, sched, ownCancel, card)
+			e.watchNodeRow(ownCtx, sched, ownCancel, card, selfHolds)
 		})
 	}
 
@@ -1571,7 +1648,15 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 // that wedges the real node out. The probe is a cheap flock attempt; on
 // ErrAlreadyRunning the duties' ownCtx dies and the core stops claiming the
 // row, so its remaining conns arbitrate as ordinary siblings.
-func (e *Engine) watchNodeRow(ctx context.Context, sched *core.Core, demote context.CancelFunc, card ledger.Card) {
+//
+// A console that took the lock itself (Options.HoldIdentityLock) owns the row
+// permanently instead, and there is nothing to watch: the same probe would
+// read its own lock as a daemon takeover on the very first tick.
+func (e *Engine) watchNodeRow(ctx context.Context, sched *core.Core, demote context.CancelFunc, card ledger.Card, selfHolds bool) {
+	if selfHolds {
+		<-ctx.Done()
+		return
+	}
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -1837,6 +1922,29 @@ func (e *Engine) Ask(ctx context.Context, prompt string, authorize bool) (*Resul
 	return e.AskTurns(ctx, nil, prompt, "", authorize, StreamCallbacks{})
 }
 
+// ApplySandboxPolicy re-installs the process-wide subprocess policy from the
+// engine's current config. initSchedulerLocked already does this on every
+// build, but a mode edited at runtime has no rebuild to wait for: without this
+// half the config would read "strict" while every spawned subprocess kept the
+// policy installed at startup — a setting that reports a boundary it is not
+// enforcing.
+//
+// The card and config paths are the ones this engine was built with (not the
+// caller's guess): ProtectedPaths/SecretReadDenyPaths derive the deny list
+// from them, so a runtime switch must cover exactly what a restart would.
+//
+// A read lock, not MutateConfigErr: this installs from the config, it does not
+// change it, and MutateConfigErr would additionally reconcile the network
+// layer — a sandbox write has no business touching the peer keepalive set.
+func (e *Engine) ApplySandboxPolicy() string {
+	cardPath := e.cardPathNow()
+	var backend string
+	e.ReadConfig(func(c *config.Config) {
+		backend = commander.ApplyFromConfig(c, e.configPath, cardPath)
+	})
+	return backend
+}
+
 // SetRouterPolicy re-applies the injection and routing policy to the engine's
 // scheduler core, so a policy edited at runtime (the console's settings view)
 // takes effect without a restart. A no-op on an engine with no card, which has no
@@ -2070,6 +2178,15 @@ func (t *usageTracker) final(in, out int64) {
 
 // AskTurnsScoped is the session-aware ask with request-scoped project/workspace.
 func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, prompt string, scope AskScope, authorize bool, cb StreamCallbacks) (res *Result, err error) {
+	// Early-pipeline containment. Model-watcher sync, client selection and
+	// callback wiring all run before the accounting defer below is even
+	// registered; a panic there must still end this one ask, not the process.
+	// The inner defer recovers panics from the loop and from accounting itself.
+	defer func() {
+		if r := recover(); r != nil {
+			res, err = e.containedPanicResult(r)
+		}
+	}()
 	// Close the poll interval gap: an ask immediately after a saved model
 	// change must not start with the previous credential while awaiting a tick.
 	e.schedMu.Lock()
@@ -2168,6 +2285,13 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		}
 	}
 	defer func() {
+		// A panic anywhere in the pipeline — a tool adapter, a stream
+		// callback, a malformed parsed payload — ends this one ask with a
+		// readable error and its stack in the log, instead of taking down the
+		// CLI command or the whole daemon. The accounting below still runs.
+		if r := recover(); r != nil {
+			res, err = e.containedPanicResult(r)
+		}
 		// Catch-all for model-call failures that escaped unwrapped (a raw
 		// statusError/retryableError reads as provider JSON soup to a user).
 		// Non-model failures pass through untouched: a storage or routing
@@ -2194,6 +2318,12 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			// conversation history and the panel, even if a future provider
 			// path forgets the per-parse removal.
 			res.Answer = entry.StripThinking(res.Answer)
+			// A 200-OK with an empty content field is not an answer. Every
+			// return path funnels through here, so one backstop covers the
+			// CLI, the REPL and the panel without trusting each parser path.
+			if res.Kind == "answer" && strings.TrimSpace(res.Answer) == "" {
+				res.Answer = emptyAnswerNotice(effectiveLocale)
+			}
 		} else {
 			// Nothing was billed (the ask failed before a call completed), but
 			// the estimate from streamed bytes is still the honest last state.
@@ -2273,6 +2403,24 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	}
 
 	reg := e.currentRegistry()
+
+	// Local action fast path: a bare imperative for one of this node's own
+	// subcommands ("open the web console", "启动 web 服务", "run doctor") is
+	// executed here and answered with its output — no model call, no task
+	// row, no agent subprocess. The matcher is a whole-message anchored test
+	// and rejects anything interrogative, and it only runs on a fresh turn so
+	// a follow-up cannot be hijacked. A failed action falls through to the
+	// full pipeline rather than failing the ask.
+	if len(history) == 0 && !scope.Side {
+		if act, ok := entry.MatchLocalAction(prompt); ok {
+			if text, done := e.RunLocalAction(ctx, act, effectiveLocale); done {
+				if cb.OnDelta != nil && text != "" {
+					cb.OnDelta(text)
+				}
+				return &Result{Kind: "answer", Answer: text}, nil
+			}
+		}
+	}
 
 	// Tier 1 Fast-Path Triage: if this is a standalone conceptual/conversational
 	// query without prior task state or action intent, stream directly with a micro-prompt
@@ -2409,7 +2557,23 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// bare loop error (the "reached max tool rounds" report that hid six
 	// successfully-executed queue operations).
 	var toolDigest []string
-	digestOrErr := func(err error) (*Result, error) {
+	// digestOrErr is the loop's failure exit. Running tools already happened,
+	// so the honest answer is what they did — but the reason the loop stopped
+	// must not disappear with the error. Both go to the structured log and the
+	// user's reply; the old path returned only "stopped responding after N
+	// tool operations", which made a rejected request look like a crash.
+	digestOrErr := func(err error, round int) (*Result, error) {
+		if err != nil {
+			window := 0
+			if client != nil {
+				window = client.ContextWindow()
+			}
+			e.logError("askengine: classification failed in tool loop",
+				"err", err, "round", round, "tools_executed", len(toolDigest),
+				"turns", len(turns), "tool_result_runes", toolResultRunes(turns),
+				"window", window)
+		}
+		reason := loopFailureReason(err, effectiveLocale)
 		if lastTask != nil {
 			// A task ran: its outcome IS the answer. Dumping the raw tool
 			// results beside it buries the outcome in logs the user never
@@ -2425,10 +2589,24 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 					lastTask.Answer = strings.TrimRight(lastTask.Answer, "\n") + "\n\n" + note
 				}
 			}
+			if reason != "" {
+				if lastTask.Warning == "" {
+					lastTask.Warning = reason
+				} else {
+					lastTask.Warning += " · " + reason
+				}
+			}
 			return finalizeLastTask(lastTask), nil
 		}
 		if digest := toolResultsDigest(toolDigest, effectiveLocale); digest != "" {
-			return &Result{Kind: "answer", Answer: digest}, nil
+			// The precise provider error rides Warning and the log. Putting it
+			// in the Answer would bury the executed-tool summary under DSML or
+			// parse-error soup — the user-facing text stays protocol-free.
+			return &Result{
+				Kind:    "answer",
+				Answer:  digest + loopInterruptionNotice(effectiveLocale),
+				Warning: reason,
+			}, nil
 		}
 		return nil, err
 	}
@@ -2490,27 +2668,33 @@ rounds:
 				cb.OnReasoning(chunk)
 			}
 		}
+		streaming := cb.OnDelta != nil || cb.OnReasoning != nil
+		classify := func(c *entry.Client, ts []entry.Turn) (entry.Output, error) {
+			if streaming {
+				return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, reg, cb.OnDelta, trackReasoning, classifyOpts...)
+			}
+			return entry.ClassifyTurnsWithTools(ctx, c, devices, conversationMemory, ts, reg, classifyOpts...)
+		}
 		var out entry.Output
 		var err error
-		if cb.OnDelta != nil || cb.OnReasoning != nil {
-			out, err = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, reg, cb.OnDelta, trackReasoning, classifyOpts...)
-		} else {
-			out, err = entry.ClassifyTurnsWithTools(ctx, client, devices, conversationMemory, turns, reg, classifyOpts...)
-		}
+		// Bounded input before every classification: the loop may execute many
+		// tools, but the transcript it replays must stay inside the model's
+		// context window. An overflow rejection is retried on the same model
+		// with a tighter budget instead of surfacing as "stopped responding".
+		out, turns, err = e.classifyBounded(ctx, client, turns, func(ts []entry.Turn) (entry.Output, error) {
+			return classify(client, ts)
+		})
 		if err != nil {
 			if entry.IsFatalModelError(err) {
 				e.recordModelFailure(client.Key())
 				run := func(c *entry.Client) (entry.Output, error) {
-					if cb.OnDelta != nil || cb.OnReasoning != nil {
-						return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, turns, reg, cb.OnDelta, trackReasoning, classifyOpts...)
-					}
-					return entry.ClassifyTurnsWithTools(ctx, c, devices, conversationMemory, turns, reg, classifyOpts...)
+					return classify(c, turns)
 				}
 				fb, fbOut, ok := e.tryFallbackModels(ctx, client, run, func(name string) {
 					cb.progress(Progress{Kind: ProgressRoute, Name: name})
 				})
 				if !ok {
-					return digestOrErr(err)
+					return digestOrErr(err, round)
 				}
 				client = fb
 				usageBefore = fb.Usage()
@@ -2518,7 +2702,7 @@ rounds:
 				out = fbOut
 				err = nil
 			} else {
-				return digestOrErr(err)
+				return digestOrErr(err, round)
 			}
 		} else {
 			e.recordModelSuccess(client.Key())
@@ -2537,6 +2721,10 @@ rounds:
 			}
 			return budgetAdvisory(&Result{Kind: "answer", Answer: out.Answer, Thought: accumulatedReasoning.String()}), nil
 		case entry.KindTask:
+			if out.Task == nil {
+				e.logWarn("askengine: task intent without a task spec, converging without a dispatch", "round", round)
+				break rounds
+			}
 			if budget.exhausted() {
 				// Refuse before submitTask: the budget limits actual task
 				// execution, not merely how many outcomes are replayed. The
@@ -2635,10 +2823,18 @@ rounds:
 				entry.Turn{Role: "user", Content: taskObservation(res, effectiveLocale)},
 			)
 		case entry.KindPlan:
+			if out.Plan == nil {
+				e.logWarn("askengine: plan intent without a plan spec, converging without a plan", "round", round)
+				break rounds
+			}
 			cb.progress(Progress{Kind: ProgressPlan, Name: out.Plan.Goal})
 			return e.startClassifiedPlan(ctx, out.Plan, scope, authorize, cb)
 		case entry.KindClarify:
-			if out.Clarify == nil {
+			// Progress and the card renderer both index Questions[0]. A model
+			// that emits a clarify intent with no questions is malformed, not a
+			// reason to panic the whole ask.
+			if out.Clarify == nil || len(out.Clarify.Questions) == 0 {
+				e.logWarn("askengine: empty clarification spec, converging without a question", "round", round)
 				break rounds
 			}
 			cb.progress(Progress{Kind: ProgressClarify, Name: out.Clarify.Questions[0].Header})
@@ -2668,7 +2864,16 @@ rounds:
 				entry.Turn{Role: "user", Content: clarifyAnswerTurn(answers, out.Clarify, effectiveLocale)},
 			)
 		case entry.KindToolCall:
-			calls := out.ToolCalls()
+			// A parsed payload can carry a nil call (malformed tool_use). Drop
+			// it here rather than dereferencing it in the progress line, the
+			// registry lookup or the replay builder.
+			rawCalls := out.ToolCalls()
+			calls := make([]*entry.ToolCall, 0, len(rawCalls))
+			for _, c := range rawCalls {
+				if c != nil {
+					calls = append(calls, c)
+				}
+			}
 			if len(calls) == 0 {
 				break rounds
 			}
@@ -2714,8 +2919,20 @@ rounds:
 				// Execute against the same registry snapshot classification
 				// saw: a mid-ask SetMCPCommand swap would otherwise make the
 				// model's tool call hit a registry that no longer knows it.
-				results[i] = executeTool(ctx, reg, call, toolAuthorized, toolDenied, approvalMode, effectiveLocale)
-				toolDigest = append(toolDigest, call.Tool+": "+results[i])
+				result, runErr := executeToolChecked(ctx, reg, call, toolAuthorized, toolDenied, approvalMode, effectiveLocale)
+				if runErr != nil {
+					var pe *toolPanicError
+					if errors.As(runErr, &pe) {
+						// A tool panic is a defect, not a normal failure: it gets
+						// an error-level log with the tool name, while the model
+						// still receives a contained failure message.
+						e.logError("askengine: tool panicked", "tool", call.Tool, "round", round, "err", runErr)
+					} else {
+						e.logWarn("askengine: tool execution failed", "tool", call.Tool, "round", round, "err", runErr)
+					}
+				}
+				results[i] = result
+				toolDigest = append(toolDigest, call.Tool+": "+boundToolResult(result, toolDigestCap))
 				for _, d := range taskCapture.takeAll() {
 					dispatched = append(dispatched, d)
 					if !d.NeedsApproval && d.TaskID != "" {
@@ -2785,21 +3002,24 @@ rounds:
 	// can only answer in text — the tools already ran and their results are
 	// in the turns — so the ask converges to something useful instead of
 	// surfacing a loop error to the user.
+	finalClassify := func(c *entry.Client, ts []entry.Turn) (entry.Output, error) {
+		if cb.OnDelta != nil || cb.OnReasoning != nil {
+			return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, nil, cb.OnDelta, cb.OnReasoning, classifyOpts...)
+		}
+		return entry.ClassifyTurns(ctx, c, devices, conversationMemory, ts, classifyOpts...)
+	}
 	var final entry.Output
 	var ferr error
-	if cb.OnDelta != nil || cb.OnReasoning != nil {
-		final, ferr = entry.ClassifyStreamWithTools(ctx, client, devices, conversationMemory, turns, nil, cb.OnDelta, cb.OnReasoning, classifyOpts...)
-	} else {
-		final, ferr = entry.ClassifyTurns(ctx, client, devices, conversationMemory, turns, classifyOpts...)
-	}
+	// The final convergence call replays the same transcript, so it gets the
+	// same input bound and overflow recovery as every round above.
+	final, turns, ferr = e.classifyBounded(ctx, client, turns, func(ts []entry.Turn) (entry.Output, error) {
+		return finalClassify(client, ts)
+	})
 	if ferr != nil {
 		if entry.IsFatalModelError(ferr) {
 			e.recordModelFailure(client.Key())
 			run := func(c *entry.Client) (entry.Output, error) {
-				if cb.OnDelta != nil || cb.OnReasoning != nil {
-					return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, turns, nil, cb.OnDelta, cb.OnReasoning, classifyOpts...)
-				}
-				return entry.ClassifyTurns(ctx, c, devices, conversationMemory, turns, classifyOpts...)
+				return finalClassify(c, turns)
 			}
 			fb, fbOut, ok := e.tryFallbackModels(ctx, client, run, func(name string) {
 				cb.progress(Progress{Kind: ProgressRoute, Name: name})
@@ -2815,13 +3035,14 @@ rounds:
 		if ferr != nil {
 			// The tools already ran — report what they did rather than a bare
 			// loop error. toolDigest is empty only when nothing ever executed,
-			// in which case the wrapped error stands.
-			return digestOrErr(fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr))
+			// in which case the wrapped error stands. The real reason rides
+			// along now instead of being folded into "stopped responding".
+			return digestOrErr(fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr), maxRounds)
 		}
 	} else {
 		e.recordModelSuccess(client.Key())
 	}
-	if final.Kind == entry.KindTask {
+	if final.Kind == entry.KindTask && final.Task != nil {
 		if e.sched.Load() == nil {
 			e.tryAutoInitScheduler()
 		}
@@ -2847,7 +3068,7 @@ rounds:
 		}
 		return budgetAdvisory(res), nil
 	}
-	if final.Kind == entry.KindPlan {
+	if final.Kind == entry.KindPlan && final.Plan != nil {
 		if e.sched.Load() == nil {
 			e.tryAutoInitScheduler()
 		}
@@ -2857,11 +3078,18 @@ rounds:
 		cb.progress(Progress{Kind: ProgressPlan, Name: final.Plan.Goal})
 		return e.startClassifiedPlan(ctx, final.Plan, scope, authorize, cb)
 	}
+	answer := final.Answer
+	if strings.TrimSpace(answer) == "" {
+		// Convergence produced no text. The executed tools are the only
+		// truth available, so fall back to their digest rather than handing
+		// the user a blank turn (the deferred notice is the final backstop).
+		answer = toolResultsDigest(toolDigest, effectiveLocale)
+	}
 	if lastTask != nil {
-		lastTask.Answer = final.Answer
+		lastTask.Answer = answer
 		return budgetAdvisory(finalizeLastTask(lastTask)), nil
 	}
-	return budgetAdvisory(&Result{Kind: "answer", Answer: final.Answer}), nil
+	return budgetAdvisory(&Result{Kind: "answer", Answer: answer}), nil
 }
 
 // WorkPath returns the configured work directory — the project workspace
@@ -3975,5 +4203,12 @@ func (e *Engine) Close() {
 	}
 	if e.db != nil {
 		e.db.Close()
+	}
+	// Release the row ownership last: the lock is what `panda status` reads to
+	// call this node up, so it must outlive every store and duty above rather
+	// than advertise a down node that is still writing.
+	if e.identityLock != nil {
+		_ = e.identityLock.Release()
+		e.identityLock = nil
 	}
 }

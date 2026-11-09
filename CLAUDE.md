@@ -168,8 +168,8 @@ packages by subsystem.
   (`verify`/`entries`), `session`/`sessions` (`list`/`show`/`rm` plus
   `fork`/`tree` for thread branching), `memory`, `model`/`models`
   (multi-model registry + active-model switcher), `config` (sections
-  `model`/`mcp`/`limits`/`routing`/`injection`/`approval`/`delegation`/
-  `self_evolution`, comments preserved; `routing set` also edits the
+  `model`/`mcp`/`limits`/`routing`/`injection`/`approval`/`sandbox`/
+  `delegation`/`self_evolution`, comments preserved; `routing set` also edits the
   per-agent model and concurrency maps — see `docs/agent-execution.md`),
   `agents`, `project`, `mcp` (exposes
   the node's self-tools as an MCP stdio server), `rpc` (NDJSON-over-stdio

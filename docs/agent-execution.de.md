@@ -30,7 +30,7 @@ delegation:
 - `delegation.max_concurrent` begrenzt aktive Kinder über alle Eltern; null fügt kein Limit hinzu. `fanout` begrenzt erzeugte und erwartete Kinder je Elternaufgabe, `max_children` die kumulative Anzahl und `max_depth` die Generationen.
 - Eine Senkung unterbricht laufende Aufrufe nicht. Wartende Eltern belegen keinen Agentenaufrufplatz.
 - Dies sind Limits aktiver Adapteraufrufe eines Workers, keine Clusterquote oder Kontrolle interner Anbieteragenten bzw. inaktiver Sitzungen. Unabhängige Worker teilen kein striktes Prozesssemaphor.
-- Parallele Schreibzugriffe erfordern getrennte `paths`, andere `workdir`-Werte oder `isolate`. Überlappende oder unbekannte Bereiche bleiben seriell.
+- Bei einem projektgebundenen Batch mit effektivem `fanout` über eins werden Geschwister ohne `paths`, `isolate` und `workdir` automatisch isoliert und können parallel laufen, begrenzt durch Worker-, Agent- und Delegationslimits; Änderungen werden konfliktbewusst zusammengeführt. Eine einzelne Aufgabe ohne Bereich sperrt weiterhin das ganze Projekt. Explizite, disjunkte `paths` vermeiden die Kopie; überlappende Pfade im gemeinsamen Arbeitsbaum bleiben seriell.
 
 Die Modellwahl ist CLI-nativ. Injizierte Modelle und explizite CLI-Modellvariablen behalten Vorrang. Das Beispiel nutzt mit `injection.model: never` eigene CLI-Anmeldedaten; nicht übernehmen, wenn Panda-Zugangsdaten benötigt werden. Für Endpoint und Zugangsdaten weiterhin `injection.agents` nutzen. Einmodell-CLIs wählen den ersten Kandidaten, OpenCode prüft seinen Katalog. ZCode unterstützt `provider/model`, generic-Vorlagen verwenden `{model}`.
 
@@ -47,3 +47,13 @@ panda config routing get --json
 ```
 
 API: `GET /api/settings/execution`, `PUT /api/settings/execution` (Bearer token).
+
+## Ausführungsfristen und Kontext
+
+- Kandidatenwechsel, Wiederholungen bei vorübergehenden Fehlern und Credential-Fallback teilen eine Frist pro Runde: Aufgabenwert oder globales Timeout plus Beendigungsfrist. Nach Abbruch starten keine neuen Kandidaten. Eine Panic beendet den eigenen Versuch und gibt Ressourcen frei.
+- OpenCode beendet Aufrufe bei Provider-/Sitzungsfehlern sowie bei terminalem Idle nach einer Antwort. Initiales Idle, Werkzeugfehler und fremde Sitzungsereignisse gelten nicht als Abschluss. Verwaltete Codex-Aufgaben speichern Sitzungen für die Fortsetzung; eigenständige Diagnosen bleiben standardmäßig temporär. `thread.started` und ältere Sitzungsereignisse werden unterstützt.
+- Kontext erhält je nach Komplexität ein weiches Budget von 12.000 / 32.000 / 64.000 Bytes; unbekannte Komplexität verwendet 32.000. Anforderungen, Abnahmekriterien, Geltungsbereich und Protokollregeln bleiben vollständig. Skill-Inhalte und Kurzindizes teilen das Restbudget. Persönliche Speicherindizes enthalten höchstens sechs relevante Themen innerhalb von 4.000 Bytes; die Projektisolation bleibt erhalten. `panda help` erschließt den vollständigen Befehlskatalog.
+- Bei Kontextüberlauf wird das Budget halbiert und auf höchstens 32.000 Bytes begrenzt. Laufnotizen können auf 12.000 Bytes mit sichtbaren Auslassungen und gültigem UTF-8 schrumpfen. Fortsetzungen behalten vollständige Aufgabenanforderungen für Kaltstarts. `prompt_bytes` und `context_budget_bytes` in `exec_agent_start` messen Bytes, keine Token.
+- Prüfung und Zusammenfassung verwenden dasselbe Modell mit separater Kurzkonfiguration: höchstens 2.048 Ausgabetoken, eine Transportwiederholung und angeforderte Deaktivierung erweiterten Denkens, abhängig vom Provider. Die Prüfung hat eine Frist von 45 Sekunden; Fehler gehen weiterhin zur menschlichen Prüfung. Dialog-/Agent-Konfigurationen bleiben unverändert. Das lesende Werkzeug `model_list` beantwortet Fragen zu konfigurierten/aktiven Modellen ohne Agent-Aufgabe.
+
+Die Änderungen erfordern die Bereitstellung der neuen Binärdatei und Adapter; Konfigurations-Hot-Reload ersetzt keinen laufenden Programmcode.

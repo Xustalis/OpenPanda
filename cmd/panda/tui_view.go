@@ -1098,6 +1098,13 @@ func (m tuiModel) inputView() string {
 	rows := []string{
 		"", // the blank line every committed block gets above it
 	}
+	// An unanswered pairing request gets the row above the box for as long as
+	// it lives. It is part of the input column, not the transcript, so it
+	// cannot scroll away while the operator is reading something else — and
+	// it is one line, so it costs the composer nothing when there is none.
+	if banner := m.pairBanner(); banner != "" {
+		rows = append(rows, banner)
+	}
 	// Lip Gloss Width includes padding but adds borders afterward. textWidth is the
 	// actual terminal-bounded frame width, so reserve the two border cells here.
 	rows = append(rows, boxStyle.Width(max(1, m.textWidth()-2)).Render(m.ta.View()))

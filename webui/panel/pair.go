@@ -27,8 +27,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +62,22 @@ type pairView struct {
 	Requests   []pairRequestJSON `json:"requests"`
 	Discovered []discoveredJSON  `json:"discovered"`
 	Outgoing   []outgoingJSON    `json:"outgoing"`
+	// Linked counts nodes already in this fleet that are online right now.
+	// A joined node is deliberately absent from Discovered — it is fleet, not
+	// a candidate — so without this number the panel answered "nothing found"
+	// to an operator whose devices were all connected and healthy.
+	Linked int `json:"linked"`
+	// LinkedHosts is the same set as bare hosts. A joined node's port still
+	// answers the sweep, so without this the panel offered "pair" on a device
+	// that was already in the fleet — a press that can only end in "refused".
+	LinkedHosts []string `json:"linked_hosts"`
+	// SelfName/SelfAddr are this machine's own identity, printed at the top of
+	// the panel. Pairing is a two-screen act: the operator has to know which
+	// row on the *other* screen is the machine they are standing at, and when
+	// the beacon never arrives the only way in is to read this address out and
+	// type it there. Without it the panel knew every device except itself.
+	SelfName string `json:"self_name"`
+	SelfAddr string `json:"self_addr"`
 }
 
 // pairRequestJSON is one inbound pairing request awaiting this operator.
@@ -70,6 +88,13 @@ type pairRequestJSON struct {
 	Code      string `json:"code"`
 	State     string `json:"state"`
 	ExpiresAt string `json:"expires_at"`
+	// ExpiresIn is the seconds left on the request, measured by the clock that
+	// actually owns the deadline. The browser's clock is not that clock: a
+	// laptop whose time drifted by a minute would render a request that
+	// already expired as "0:58 left", and the operator would press confirm on
+	// a session the daemon had already swept. Every renderer counts down from
+	// this number instead of parsing expires_at, which stays for display.
+	ExpiresIn int `json:"expires_in"`
 }
 
 // discoveredJSON is one LAN beacon the discovery table heard recently —
@@ -111,15 +136,22 @@ func (h *handler) listPair(w http.ResponseWriter, r *http.Request) {
 		Outgoing:   []outgoingJSON{},
 	}
 	if sessions, err := core.ListPairSessions(h.db); err == nil {
+		now := time.Now()
 		for _, s := range sessions {
 			// Only live requests matter to the answer UI — terminal rows
 			// (done/rejected/expired) would only be noise here.
 			if s.State != core.PairStateReady && s.State != core.PairStateConfirmed {
 				continue
 			}
+			left := int(s.ExpiresAt.Sub(now).Round(time.Second).Seconds())
+			if left < 0 {
+				left = 0
+			}
 			view.Requests = append(view.Requests, pairRequestJSON{
 				ID: s.ID, PeerName: s.PeerName, PeerAddr: s.PeerAddr,
-				Code: s.SAS, State: s.State, ExpiresAt: s.ExpiresAt.UTC().Format(time.RFC3339),
+				Code: s.SAS, State: s.State,
+				ExpiresAt: s.ExpiresAt.UTC().Format(time.RFC3339),
+				ExpiresIn: left,
 			})
 		}
 	}
@@ -130,6 +162,23 @@ func (h *handler) listPair(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	// Online fleet rows, this node excluded: the count the panel needs to say
+	// "your devices are already connected" instead of "nothing found".
+	var selfID, selfName, listenAddr string
+	h.readCfg(func(c *config.Config) {
+		selfID = core.RuntimeNodeID(c.Node.Name, c.Node.Kind, c.Node.EffectiveIdentity())
+		selfName = c.Node.Name
+		listenAddr = c.Network.ListenAddr
+	})
+	view.SelfName = selfName
+	if ips := localIPv4Strings(); len(ips) > 0 {
+		view.SelfAddr = net.JoinHostPort(ips[0], strconv.Itoa(meshPortFromListenAddr(listenAddr)))
+	}
+	_ = h.db.QueryRow(
+		`SELECT COUNT(1) FROM employee_cache WHERE status='online' AND last_seen > ? AND id != ?`,
+		time.Now().Add(-90*time.Second).Unix(), selfID,
+	).Scan(&view.Linked)
+	view.LinkedHosts = linkedHosts(h, selfID)
 	h.pair.mu.Lock()
 	now := time.Now()
 	for id, o := range h.pair.outgoing {
@@ -334,6 +383,46 @@ func (h *handler) answerPair(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(300 * time.Millisecond)
 	}
 	writeJSON(w, map[string]string{"state": core.PairStateConfirmed})
+}
+
+// linkedHosts returns the bare hosts of fleet nodes that are online right now,
+// this node excluded. The addresses come from the directory row's advertised
+// list, which is what the sweep would have dialled — comparing on host (not
+// host:port) is deliberate, since a beacon or a sweep may disagree with the
+// directory about the port while still naming the same machine.
+func linkedHosts(h *handler, selfID string) []string {
+	out := []string{}
+	if h.db == nil {
+		return out
+	}
+	rows, err := h.db.Query(
+		`SELECT addrs FROM employee_cache WHERE status='online' AND last_seen > ? AND id != ?`,
+		time.Now().Add(-90*time.Second).Unix(), selfID,
+	)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			continue
+		}
+		var addrs []string
+		if err := json.Unmarshal([]byte(raw), &addrs); err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			host := hostOf(a)
+			if host == "" || seen[host] {
+				continue
+			}
+			seen[host] = true
+			out = append(out, host)
+		}
+	}
+	return out
 }
 
 // resolvePairTarget mirrors the CLI's resolution: a pending-discovery

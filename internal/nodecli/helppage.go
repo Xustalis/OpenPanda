@@ -93,7 +93,7 @@ var helpPage = []HelpSection{
 	}},
 	{Group: GroupSettings, Col: helpColWide, Rows: []HelpRow{
 		{"model [status|list|add|rm|switch|test]", "cli.help.d.model"},
-		{"config model|mcp|limits|routing|injection|approval get|set|test", ""},
+		{"config model|mcp|limits|routing|injection|approval|sandbox|delegation|self_evolution get|set|test", ""},
 		{"", "cli.help.d.config"},
 		{"agents [test <name>]", "cli.help.d.agents"},
 		{"reminder list|add|rm", "cli.help.d.reminder"},

@@ -1143,10 +1143,17 @@ func TestTUISlashCommandExecutionAndOutputPersisted(t *testing.T) {
 		t.Fatalf("View() should render the tail of the help output: %s", view)
 	}
 
-	// Pressing PgUp scrolls up to reveal /skills from earlier in the help text
-	mUp, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-	viewUp := mUp.(tuiModel).View()
-	if !strings.Contains(viewUp, "/skills") {
+	// Pressing PgUp scrolls up to reveal /skills from earlier in the help text.
+	// One page is not a fixed distance — the help grows with the command
+	// table, and each new row moves /skills one line further from the tail —
+	// so page up until it is on screen. What this pins is that PgUp walks
+	// backwards through the transcript, not how many rows a page holds.
+	scrolled := m
+	for i := 0; i < 4 && !strings.Contains(scrolled.View(), "/skills"); i++ {
+		next, _ := scrolled.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+		scrolled = next.(tuiModel)
+	}
+	if viewUp := scrolled.View(); !strings.Contains(viewUp, "/skills") {
 		t.Fatalf("Scrolled View() should render /skills from earlier in help output: %s", viewUp)
 	}
 

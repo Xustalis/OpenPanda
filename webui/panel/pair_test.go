@@ -50,6 +50,16 @@ func TestPairListSeedsRequestsAndDiscovered(t *testing.T) {
 	if row["code"] != "123-456" || row["peer_name"] != "pi" {
 		t.Fatalf("request row = %v", row)
 	}
+	// The countdown the panel renders must be the daemon's number, not a
+	// timestamp the browser re-derives: a console whose clock is a minute off
+	// would otherwise offer to answer a request that had already expired.
+	left, ok := row["expires_in"].(float64)
+	if !ok {
+		t.Fatalf("request row has no expires_in: %v", row)
+	}
+	if left < 280 || left > 300 {
+		t.Fatalf("expires_in = %v, want the seeded 300s window", left)
+	}
 	disc, _ := out["discovered"].([]any)
 	if len(disc) != 1 || disc[0].(map[string]any)["id"] != "pi@vm-aaa" {
 		t.Fatalf("discovered = %v", disc)

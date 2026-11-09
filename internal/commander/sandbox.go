@@ -61,6 +61,21 @@ func SetSandboxConfig(sc config.SandboxConfig, protected, secretReads []string) 
 	return security.Backend()
 }
 
+// ApplyFromConfig installs the node-wide base policy for cfg — the one call
+// the daemon and the embedded engine make at startup, and the one a settings
+// surface repeats when sandbox.mode changes at runtime. Both halves of the
+// deny list come from the same cfg/configPath/cardPath triple, so a runtime
+// switch covers exactly what a restart would. Returns the backend in effect
+// ("" when the mode is off or the platform has none).
+func ApplyFromConfig(cfg *config.Config, configPath, cardPath string) string {
+	if cfg == nil {
+		return ""
+	}
+	return SetSandboxConfig(cfg.Sandbox,
+		ProtectedPaths(cfg, configPath, cardPath),
+		SecretReadDenyPaths(cfg, configPath, cardPath))
+}
+
 // SecretReadDenyPaths lists the node-owned files a sandboxed process must not
 // read under strict mode: the config and capability card beside it, the
 // SQLite database and its WAL/SHM siblings (the node key pairs live in the

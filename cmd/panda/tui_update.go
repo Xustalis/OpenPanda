@@ -1327,6 +1327,11 @@ func (m tuiModel) submitDuringTurn(text string) (tea.Model, tea.Cmd) {
 		// while this turn streams, which is precisely when a user wants it.
 		// Backgrounding it would look for a CLI verb that does not exist.
 		return m.sendTaskNote(arg, name == "inject")
+	case "sandbox":
+		// The policy install applies at the next subprocess launch, so a live
+		// turn is no reason to defer it — and the mode is exactly what an
+		// operator reaches for while something looks wrong.
+		return m.runSandbox(arg)
 	}
 	if m.turnNeedsForeground(name, arg) {
 		return m.enqueuePending(text)
@@ -1489,6 +1494,17 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 		// Bare "/project" only reports the active pointer — read-only output.
 	case "authorize":
 		return m.toggleAuthorize()
+	case "pair":
+		// Bare opens the yes/no card for the newest request; a verb answers
+		// without one. It runs inline rather than through the exec pump: the
+		// pump cannot raise a card, and this is a store write the daemon's
+		// confirm goroutine is already waiting on.
+		return m.pairCommand(arg)
+	case "sandbox":
+		// A config write plus a process-wide policy install, and no
+		// `panda sandbox` verb exists for the exec pump to find: inline keeps
+		// the TUI and the classic REPL on one code path.
+		return m.runSandbox(arg)
 	case "lang":
 		// A bare "/lang" only lists locales — read-only, fine on exec. With
 		// an argument it writes r.loc, which the watcher's tea.Cmd goroutine
@@ -1545,6 +1561,20 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 		return m.openTasksList(strings.Join(rest, " "))
 	}
 	return m.startExec(text)
+}
+
+// runSandbox reports or applies sandbox.mode from the TUI. It stays on the
+// Update goroutine because the handler persists config.yaml and reinstalls the
+// process-wide policy — a store/config write, like /queue's note, not a turn.
+func (m tuiModel) runSandbox(arg string) (tea.Model, tea.Cmd) {
+	if m.r == nil {
+		return m, m.printBlock(block{kind: blockError, body: "panda: " + i18n.T(m.loc, "repl.sandbox.noConfig")})
+	}
+	msg, err := m.r.sandboxCommand(arg)
+	if err != nil {
+		return m, m.printBlock(block{kind: blockError, body: "panda: " + err.Error()})
+	}
+	return m, m.printBlock(block{kind: blockNote, body: msg})
 }
 
 // startExec sends one line through the classic dispatch on a worker goroutine.

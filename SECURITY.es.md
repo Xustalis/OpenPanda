@@ -156,10 +156,58 @@ siguiente es obligatorio:
    exposición externa prolongada configure un token estable o un proxy
    inverso TLS. No pegue URLs de auto-login que contengan el token en
    chats ni en sistemas de tickets.
-5. **Escucha en loopback por defecto.** El bus escucha en loopback por
-   defecto; sin `shared_secret` configurado, el escucha no arranca en
-   absoluto y el nodo corre solo localmente (una restricción de
-   seguridad, véase `docs/install.md`).
+5. **Una instalación nueva escucha solo en loopback; ampliarla es un acto
+   explícito.** Con `network.exposure_mode: loopback` (el valor por defecto),
+   el bus, la consola y el plano UDP se vinculan a `127.0.0.1` y el
+   descubrimiento LAN queda apagado. Solo `lan` o `public` hacen alcanzable el
+   bus: con ellos se abren el plano de datagramas y el descubrimiento, y el
+   daemon además genera un `shared_secret` y lo guarda en `config.yaml` en el
+   primer arranque, así que el listener siempre se inicia: un secreto vacío no
+   mantiene el nodo en local. Un dispositivo desconocido puede abrir el puerto
+   y detectar el nodo, pero no pasa la verificación HMAC de pertenencia ni
+   puede enviar tareas. Poseer ese secreto equivale a ser miembro, y el nivel
+   de confianza por defecto es `mesh` (acepta delegaciones automáticamente, es
+   decir, ejecución remota). Una configuración anterior a 0.1.5 que declaraba
+   sus propios enlaces se trata como `legacy` y los conserva.
+
+## Despliegue en un host con IP pública
+
+`network.exposure_mode` es el único interruptor de quién puede alcanzar esta
+máquina: `loopback` (por defecto en instalaciones nuevas), `lan` (bus
+alcanzable en la red privada, consola en loopback), `public` (alcanzable desde
+una interfaz pública; exige `shared_secret` y `panel_token` estables, desactiva
+el descubrimiento y rechaza los enlaces en claro) y `legacy` (conserva los
+enlaces anteriores a 0.1.5 tal como están escritos). Al cargar se reescriben
+`listen_addr` / `panel_addr` / `udp_listen` / `discovery_*`, de modo que
+`panda doctor` informa las direcciones realmente vinculadas.
+
+`panel_addr` es `127.0.0.1:7840` por defecto, así que la consola no sale al
+exterior. `--lan` y `panda service install --lan` también la vinculan a
+`0.0.0.0`, donde HTTP en texto plano solo se protege con un Bearer token
+interceptable en la ruta: no lo use directamente en Internet.
+
+Orden de endurecimiento:
+
+1. **Ajuste `exposure_mode` y luego estreche el enlace.** En un host en la
+   nube use `public` (o `lan` más una dirección de overlay); apunte
+   `network.listen_addr` a la interfaz del overlay (Tailscale / WireGuard);
+   ponga `udp_listen` y `discovery_addr` en `off` y `discovery_auto_dial` en
+   `false`. Verifique con `ss -lntup | grep panda`.
+2. **El grupo de seguridad solo admite el overlay.** Nunca exponga 7836 /
+   7837 / 7840 ni los puertos dinámicos de preview a `0.0.0.0/0`.
+3. **La consola detrás de un proxy TLS.** Mantenga `panel_addr` en
+   `127.0.0.1`, termine TLS en nginx / Caddy y escriba los pares que cruzan
+   Internet como `wss://host:port`, nunca `ws://`.
+4. **Credenciales y admisión.** Inyecte `shared_secret` solo por
+   `OPENPANDA_SHARED_SECRET`, fije un `panel_token` estable por entorno y
+   confirme a mano el código corto en `panda pair` — no lo omita con `--yes`.
+5. **Apriete el nivel de confianza.** Configure `guarded` / `open` para los
+   pares que llegan por Internet; el `mesh` por defecto acepta delegaciones
+   automáticamente. El nivel solo endurece la política, no sustituye al
+   secreto.
+
+La lista completa está en `SECURITY.en.md` ("Public-host deployment") y
+`docs/install.en.md`.
 
 ## Notificar vulnerabilidades
 

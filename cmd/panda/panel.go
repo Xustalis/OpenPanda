@@ -264,6 +264,7 @@ func runStatus(args []string) {
 		}
 		printMeshLineTo(os.Stdout, loc, cfg, db, views)
 		printPendingTo(os.Stdout, db, loc)
+		printPairWaitingTo(os.Stdout, db, loc)
 	}
 }
 
@@ -386,6 +387,26 @@ func printPendingTo(w io.Writer, db *sql.DB, loc i18n.Locale) {
 	if lines > 0 {
 		fmt.Fprintln(w, p.Muted(i18n.T(loc, "cli.nodes.pending.hint")))
 	}
+}
+
+// printPairWaitingTo appends the pairing queue to `status`.
+//
+// On a node with no console and no TUI — the daemon alone behind SSH — an
+// inbound request had exactly one trace: a line in the daemon log. Nobody
+// tails that log, so the request died unanswered while the other human waited
+// out the four-minute window. `status` is the command a person runs when a
+// pairing "does not work", which makes it the right place to say that someone
+// is knocking right now and which command answers.
+func printPairWaitingTo(w io.Writer, db *sql.DB, loc i18n.Locale) {
+	if db == nil {
+		return
+	}
+	rows, err := core.PairPending(db)
+	if err != nil || len(rows) == 0 {
+		return
+	}
+	p := pal()
+	fmt.Fprintln(w, p.Warn(i18n.Tf(loc, "cli.status.pairWaiting", "n", strconv.Itoa(len(rows)))))
 }
 
 // nodeStateWord collapses the directory's two overlapping liveness fields into

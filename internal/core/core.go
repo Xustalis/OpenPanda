@@ -298,9 +298,11 @@ type Core struct {
 	// swap, so there is no window where eviction is invisible.
 	evictedConns map[*bus.Conn]struct{}
 
-	// waiters maps task_id -> result channel for synchronous Submit calls
-	// that forwarded a task and are blocked awaiting the outcome.
-	waiters sync.Map // string -> chan bus.TaskResultPayload
+	// waiters fans an inbound task_result out to every synchronous caller
+	// blocked on that task id. It is a set, not one channel per task: plan
+	// children and explicit Submit can wait on the same id at once, and the
+	// old single-slot map silently displaced the first caller.
+	waiters waiterSet
 
 	// pendingCtx maps task_id -> execution context awaiting a context_fetch
 	// response, so handleContextAck can resume the task once the snapshot
@@ -592,6 +594,19 @@ type Core struct {
 	autoDialOn    atomic.Bool
 	autoDialMu    sync.Mutex
 	autoDialCands map[string]autoDialCand // node id -> dial candidate
+
+	// discovery reports the LAN-discovery listener's state to whoever asks —
+	// `panda doctor`, and the pairing panel through the engine. Without it a
+	// node that could not bind the discovery port looked exactly like a LAN
+	// with no peers: both render as "no devices found", and the operator has
+	// no way to tell "my network filters broadcasts" from "my own listener
+	// never came up". The bind error is kept rather than only logged, because
+	// the one startup line scrolls away long before anyone reads the panel.
+	discMu         sync.RWMutex
+	discListening  bool
+	discAddr       string
+	discErr        string
+	discLastBeacon int64 // unix seconds of the last accepted beacon; 0 = never
 
 	// retentionDays is the configured age limit for settled task rows
 	// (storage.task_retention_days): 0 keeps history forever. retentionSweepAt
@@ -1038,6 +1053,12 @@ func (c *Core) SetModel(model config.ModelConfig) error {
 // The caller holds cardMu; existing runs keep their old router pointer.
 func (c *Core) rebuildRouterLocked() {
 	card := c.card
+	// The concurrency gate is shared with the commander, so it must follow the
+	// live routing config even when this node has no capability card at all
+	// (a pure router, or a card that failed to load). Skipping Configure here
+	// leaves a zero-valued gate: a later agent acquire then blocks until its
+	// context expires instead of running.
+	c.agentConcurrency.Configure(card.Capacity.MaxConcurrent, c.routerRouting, c.delegLimits)
 	if len(card.Native) == 0 && len(card.Agents) == 0 && len(card.Manual) == 0 && len(card.Actuators) == 0 {
 		c.router = nil
 		return
@@ -1047,7 +1068,6 @@ func (c *Core) rebuildRouterLocked() {
 	} else {
 		c.router = c.router.WithConfig(card, c.model, c.routerInjection, c.routerRouting)
 	}
-	c.agentConcurrency.Configure(card.Capacity.MaxConcurrent, c.routerRouting, c.delegLimits)
 	c.router.SetConcurrency(c.agentConcurrency)
 	c.router.SetAgentBlocked(func(name string) bool { return c.breaker.Blocked("agent:" + name) })
 	c.router.SetMCPPassthrough(c.mcpPassthrough)
@@ -1149,7 +1169,7 @@ func (c *Core) supervisorForModel(model config.ModelConfig) (*entry.Client, erro
 	if strings.TrimSpace(model.APIKey) == "" {
 		return nil, nil
 	}
-	client, err := entry.NewClient(model)
+	client, err := entry.NewClient(entry.BriefModelConfig(model))
 	if err != nil {
 		return nil, err
 	}
@@ -3432,18 +3452,12 @@ func newUUID() (string, error) {
 	return util.UUIDv7()
 }
 
-// signalResult delivers an inbound task_result to any synchronous Submit
-// waiter for that task. A non-blocking send means a waiter that already gave
-// up (ctx done) simply drops the late result.
+// signalResult delivers an inbound task_result to every synchronous Submit
+// waiter for that task. Each send is non-blocking, so a waiter that already
+// gave up (ctx done) simply drops the late result and the read loop is never
+// held up by a parked caller.
 func (c *Core) signalResult(taskID string, p bus.TaskResultPayload) {
-	if v, ok := c.waiters.Load(taskID); ok {
-		if ch, ok := v.(chan bus.TaskResultPayload); ok {
-			select {
-			case ch <- p:
-			default:
-			}
-		}
-	}
+	c.waiters.signal(taskID, p)
 }
 
 // summary reduces this node's capability card to the compact profile it

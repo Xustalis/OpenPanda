@@ -26,12 +26,12 @@ export interface SelfNodeState {
 
 /** Is this machine's node up right now?
  *
- *  `node_running` is the daemon's identity lock, and only `panda daemon`
- *  takes it: the web console serves the node in-process (`MeshNode: true`)
- *  and never locks, so on a console-driven install the flag is false while
- *  the node is perfectly online — a grey dot next to a live node. The ledger
- *  row the node registers (status online, running) is the evidence that
- *  holds in both shapes, so either signal lights the dot. */
+ *  `node_running` is the identity lock. Both long-lived owners take it now —
+ *  `panda daemon` at startup and the web console/sidecar at scheduler init
+ *  (`HoldIdentityLock`) — so the flag is true for either shape. The ledger
+ *  row stays the fallback: an older binary that never locked, or a row whose
+ *  `running` column predates this, still has `status: online` to go on, and
+ *  either signal lights the dot. */
 export function isSelfNodeUp(self: SelfNodeState | null | undefined): boolean {
   if (!self) return false
   if (self.node_running) return true

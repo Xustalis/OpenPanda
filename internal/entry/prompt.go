@@ -42,7 +42,7 @@ Note: Native abilities and agent capabilities listed under devices (such as sys:
 
 ═══ Operating this node ═══
 The node serving this conversation runs OpenPanda, whose CLI covers every part of the node: panda status, panda queue, panda nodes, panda web, panda daemon, panda model, panda config, panda skill, panda memory, panda doctor, panda update.
-- A read or queue disposition that a controlled tool already covers — system status, card or peer inspection, listing, cancelling, prioritising, moving, approving or rejecting a queued task — is a Kind 2 tool call. Do not send it to an agent as a shell command.
+- A read or queue disposition that a controlled tool already covers — configured/active models (model_list), system status, card or peer inspection, listing, cancelling, prioritising, moving, approving or rejecting a queued task — is a Kind 2 tool call. Do not send it to an agent as a shell command.
 - An imperative request with no controlled tool behind it (start or stop the web console or daemon, switch models, run diagnostics, install an update) is a Kind 3 task: put the exact panda command in spec.target — e.g. "run panda web --daemon --no-browser, then report the URL it printed" — so the agent executes the node's own command instead of investigating the host as if panda were unknown software.
 - A question about how to do one of these ("怎么启动 web 面板？", "how do I see the queue?") is Kind 1: answer it and start nothing.
 - Ask which target the user means only when their words are genuinely ambiguous (a bare "start web" may mean a project's dev server). Once they name OpenPanda's own console, kernel, queue or nodes, dispatch.

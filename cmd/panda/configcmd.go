@@ -24,7 +24,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/mcp"
 )
 
-var configSections = []string{"model", "mcp", "limits", "routing", "injection", "approval", "delegation", "self_evolution"}
+var configSections = []string{"model", "mcp", "limits", "routing", "injection", "approval", "sandbox", "delegation", "self_evolution"}
 
 func isConfigAction(s string) bool {
 	switch s {
@@ -97,6 +97,7 @@ func configUsage() {
 	fmt.Fprintln(os.Stderr, "  delegation get | set <max_children|fanout|max_depth|max_concurrent> <int> | set enabled <true|false>")
 	fmt.Fprintln(os.Stderr, "  injection get | set <auto|always|never>")
 	fmt.Fprintln(os.Stderr, "  approval get | set <always|on-request|never>")
+	fmt.Fprintln(os.Stderr, "  sandbox get | set <off|standard|strict>   (OS confinement of spawned subprocesses)")
 	fmt.Fprintln(os.Stderr, "writes preserve YAML comments; model/routing/delegation changes refresh automatically; other sections may require a restart")
 }
 
@@ -212,6 +213,12 @@ func runConfigGet(section string, args []string) {
 			return
 		}
 		fmt.Println("mode: " + cfg.Approval.NormalizedMode())
+	case "sandbox":
+		if jsonOutput {
+			emitJSON(map[string]string{"mode": cfg.Sandbox.NormalizedMode()})
+			return
+		}
+		fmt.Println("mode: " + cfg.Sandbox.NormalizedMode())
 	case "self_evolution":
 		se := cfg.SelfEvolution
 		if jsonOutput {
@@ -452,6 +459,18 @@ func runConfigSet(section string, args []string) {
 			fatal("config approval set", err)
 		}
 		configSetDone(loc, "approval")
+	case "sandbox":
+		fs := flag.NewFlagSet("config sandbox set", flag.ExitOnError)
+		configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+		fs.Parse(reorderFlags(fs, args))
+		mode, err := config.ParseSandboxMode(strings.TrimSpace(fs.Arg(0)))
+		if err != nil {
+			fail(2, "panda: "+err.Error())
+		}
+		if err := config.UpdateSectionField(configWritePath(*configPath), []string{"sandbox"}, "mode", mode); err != nil {
+			fatal("config sandbox set", err)
+		}
+		configSetDone(loc, "sandbox")
 	case "self_evolution":
 		fs := flag.NewFlagSet("config self_evolution set", flag.ExitOnError)
 		configPath := fs.String("config", cliConfigPath, "path to config.yaml")

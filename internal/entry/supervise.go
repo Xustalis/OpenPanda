@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // SuperviseVerdict is the outcome of a post-execution completion check: did
@@ -83,6 +84,10 @@ func Supervise(ctx context.Context, c *Client, intent, result string) (Supervise
 		}
 	}
 	user := "任务要求：\n" + intent + "\n\n智能体回报：\n" + result
+	// An unreachable judge must not hold the task/worktree for the full
+	// transport retry ladder. Deadline failure still parks for human review.
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
 	text, err := c.Complete(ctx, superviseSystemPrompt, user)
 	if err != nil {
 		// Park, don't accept: with no supervisor there is no verification, and

@@ -96,8 +96,52 @@ Ed25519 签名；`panda audit verify --task <id>` 校验单个任务的事件链
    且未配置 `panel_token` 时会生成一次性临时令牌并大声警告——`/api/*` 永不裸奔，
    但明文 HTTP 下令牌可被链路上的人嗅探，长期对外必须配置稳定 token 或 TLS
    反向代理。不要把带 token 的自动登录 URL 粘贴到聊天 / 工单系统。
-5. **默认回环监听。** 总线默认监听回环地址；未配置 `shared_secret` 时监听器
-   不启动，节点仅本地运行（安全约束，见 `docs/install.md`）。
+5. **新装默认只监听回环，对外暴露必须显式声明。** `network.exposure_mode`
+   为 `loopback`（新装默认）时，总线、控制台与 UDP 数据面全部绑 `127.0.0.1`，
+   LAN 发现关闭。改成 `lan` 或 `public` 之后总线才对私网 / 公网可达：UDP 数据面
+   与发现随之打开，daemon 首次启动还会自动生成 `shared_secret` 并写回
+   `config.yaml`，所以监听器一定会起来，不会因「未配置密钥」而留在本地。陌生
+   设备能连上端口、能探到节点存在，但过不了 HMAC 成员校验、不能下发任务；持有
+   该密钥即被视为全网成员，而默认信任档是 `mesh`（自动接受 `task_delegate`，
+   等价于远程执行）。0.1.5 之前自己写过绑定的配置按 `legacy` 处理，端口不会
+   被挪动。在有公网 IP 的机器上按「云服务器 / 公网 IP 部署」一节收窄绑定。
+
+## 云服务器 / 公网 IP 部署
+
+`network.exposure_mode` 是决定「谁能连到这台机器」的唯一开关，取值
+`loopback`（新装默认，所有监听只在回环）、`lan`（总线在私网可达，控制台仍留
+回环）、`public`（公网可达，强制稳定 `shared_secret` 与 `panel_token`，关闭
+发现并拒绝明文拨号）、`legacy`（保持 0.1.5 之前写死的绑定）。加载时由它改写
+`listen_addr` / `panel_addr` / `udp_listen` / `discovery_*`，所以 `panda doctor`
+报告的地址与真实 socket 永远一致。已有配置若显式写过 `listen_addr` 等绑定，
+会自动按 `legacy` 处理，升级不会挪动现有节点的端口。
+
+`panel_addr` 默认 `127.0.0.1:7840`，控制台本身不对外；总线、UDP 数据面与
+LAN 发现会对外。`--lan` 或 `panda service install --lan` 会把控制台也绑到
+`0.0.0.0`，此时明文 HTTP 只靠一个 Bearer token 保护，token 与任务内容都能
+被链路上的人嗅探，**不要直接用在公网**。
+
+加固顺序：
+
+1. **设 `exposure_mode`，再收窄绑定。** 云主机用 `public`（或 `lan` + overlay
+   地址）；`network.listen_addr` 绑到 Tailscale / WireGuard 的 overlay 网卡
+   地址；`udp_listen` 与 `discovery_addr` 设 `off`（云主机通常不需要 LAN
+   发现），`discovery_auto_dial` 设 `false`。用 `ss -lntup | grep panda` 核对
+   实际监听地址。
+2. **安全组只放 overlay。** 入站只放行 overlay 网段与端口；7836 / 7837 /
+   7840 以及预览、开发服务器的动态端口一律不对 `0.0.0.0/0` 开放。
+3. **控制台走 TLS 反向代理。** `panel_addr` 保持 `127.0.0.1`，由 nginx /
+   Caddy 终结 TLS 再转发；跨公线的 peer 写成 `wss://host:port`，不要用
+   `ws://`。
+4. **凭据与准入。** `shared_secret` 只经 `OPENPANDA_SHARED_SECRET` 注入，
+   `panel_token` 配成稳定值并经环境变量提供；`panda pair` 需人工核对短配对码，
+   不要用 `--yes` 跳过。非回环绑定下不要把带 token 的自动登录 URL 打进日志、
+   聊天或工单。
+5. **收紧信任档。** 为跨公网对端显式配置 `guarded` / `open`，不要让默认
+   `mesh` 的「自动接受委派」覆盖公网链路。信任档只能收紧，不能替代密钥本身。
+
+密钥一旦泄露，现有模型没有按设备吊销的能力：轮换 `shared_secret` 会让旧节点
+全部离网。设备级授权与可验签准入属于信任模型改造，不在 0.1.x 内。
 
 ## 漏洞上报
 

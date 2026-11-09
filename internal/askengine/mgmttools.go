@@ -48,6 +48,7 @@ import (
 // never gets one), so the engine's fields are read at call time, never at
 // registration time.
 func registerMgmtTools(reg *entry.Registry, e *Engine) {
+	registerModelTools(reg, e)
 	reg.Register(entry.Tool{
 		Name:        "system_status",
 		Description: "Check OpenPanda's overall status: version, this node's identity, entry model, capability-card load state, device-network online counts, per-state task counts. First step for questions like \"what's going on / how many devices online / how many tasks queued\". / 查看 OpenPanda 整体运行状态：版本、本节点身份、入口模型、能力卡加载情况、设备网络在线状况、各状态任务数量。回答“现在什么情况/几台设备在线/队列里有多少任务”等问题的第一步。",

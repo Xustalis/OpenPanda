@@ -152,7 +152,9 @@ func TestAcceptanceNamesPreExistingFailure(t *testing.T) {
 }
 
 // TestNoContractIsNotVerified: without a contract the task may still be done,
-// but the row must not claim verification.
+// but the row must not claim verification. With no supervisor either, nothing
+// checked the run at all, so the label is the explicit "unverified" — an empty
+// string read as "no contract" and said nothing about whether anyone looked.
 func TestNoContractIsNotVerified(t *testing.T) {
 	ctx := context.Background()
 	c := newCoreWithTwoAgents(t)
@@ -173,8 +175,11 @@ func TestNoContractIsNotVerified(t *testing.T) {
 	if task.State != StateDone || !result.OK {
 		t.Fatalf("state = %s ok=%v, want done", task.State, result.OK)
 	}
-	if task.Verification != "" {
-		t.Fatalf("verification = %q, want empty (no contract)", task.Verification)
+	if task.Verification != contract.VerdictUnverified {
+		t.Fatalf("verification = %q, want %q (no contract, no judge)", task.Verification, contract.VerdictUnverified)
+	}
+	if result.Verified {
+		t.Fatal("a run nobody checked must not carry the verified flag")
 	}
 	rows, err := c.store.Checks(ctx, task.TaskID)
 	if err != nil {

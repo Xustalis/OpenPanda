@@ -875,6 +875,36 @@ export interface PairView {
   requests: PairRequest[]
   discovered: DiscoveredDevice[]
   outgoing: OutgoingPair[]
+  /** Nodes already in this fleet that are online. A joined node is not a
+   *  pairing candidate, so an empty discover list with linked > 0 means
+   *  "already connected", not "nothing on the network". */
+  linked: number
+  /** This machine's own name and LAN address, printed above the list so the
+   *  operator can find it on the other screen — and type it there when the
+   *  beacon never arrives. Empty when the host has no non-loopback IPv4. */
+  self_name: string
+  self_addr: string
+  /** Bare hosts of fleet nodes already online. A joined node still answers the
+   *  sweep, so its row is labelled instead of offering a pairing it cannot
+   *  complete. */
+  linked_hosts: string[]
+}
+
+/** One address an active LAN sweep found accepting TCP on the mesh port. */
+export interface ScanCandidate {
+  addr: string
+}
+
+/** POST /api/pair/scan — the fallback for access points that filter the
+ *  discovery broadcast. Reachability only: identity still comes from the
+ *  pairing handshake, so a hit is a candidate to dial, never a peer. */
+export interface PairScanResult {
+  port: number
+  subnets: string[]
+  candidates: ScanCandidate[]
+  probed: number
+  elapsed_ms: number
+  truncated?: boolean
 }
 
 /** One inbound pairing request (a row in pair_sessions on the daemon). */
@@ -885,6 +915,10 @@ export interface PairRequest {
   code: string
   state: string
   expires_at: string
+  /** Seconds left, measured by the daemon's clock. Present on every current
+   *  build; optional only so a console can drive an older node, where the
+   *  countdown falls back to parsing `expires_at` against the local clock. */
+  expires_in?: number
 }
 
 /** One LAN-discovered device the pair button can target. */
@@ -950,7 +984,7 @@ export interface ExecutionSettings {
   }
 }
 
-/** GET/PUT /api/settings/app — the four app policy groups (C1). */
+/** GET/PUT /api/settings/app — the app policy groups (C1). */
 export interface AppSettings {
   injection_model: 'auto' | 'always' | 'never'
   preferred_agents: string[]
@@ -959,10 +993,14 @@ export interface AppSettings {
   /** Agent tool face: minimal keeps each adapter's whitelist, extended reaches
    *  the agent's own skills, sub-agents and MCP servers. */
   tools_policy: 'minimal' | 'extended'
-  /** GET-only: read-only confinement info. mode is off|standard|strict from
-   *  config.yaml; backend is the OS mechanism in effect (seatbelt|bwrap|"");
-   *  active is false when mode is configured but no backend exists. */
+  /** The platform half is read-only: backend is the OS mechanism in effect
+   *  (seatbelt|bwrap|"") and active is false when mode is configured but no
+   *  backend exists. mode is the writable half — send it back as sandbox_mode. */
   sandbox?: { work_path: string; mode?: string; backend?: string; active?: boolean }
+  /** Write half of sandbox.mode: off | standard | strict. Absent leaves the
+   *  configured mode alone. The server re-installs the process-wide policy, so
+   *  no restart is involved. */
+  sandbox_mode?: string
 }
 
 /** One topics/*.md (or daily/*.md) file in GET /api/memory. */
@@ -1358,6 +1396,13 @@ export const api = {
    *  hands over the mesh secret; reject ends the session. */
   pairAnswer(id: string, confirm: boolean): Promise<{ state: string }> {
     return request('POST', '/api/pair/answer', { id, confirm })
+  },
+
+  /** Sweep the node's own IPv4 /24 for a listening mesh port. This is what
+   *  "rescan" falls back to when the access point filters broadcast beacons —
+   *  the case where every device on the LAN is present and invisible. */
+  pairScan(): Promise<PairScanResult> {
+    return request('POST', '/api/pair/scan', {}, { timeoutMs: 20_000 })
   },
 
   // ---- Capability card (structured editor + raw YAML editor) ----
@@ -1786,6 +1831,17 @@ export const api = {
     return request('DELETE', `/api/models/${encodeURIComponent(alias)}${refQuery(ref)}`)
   },
 
+  /** The batch form of `removeModel`: one request per connection card, one
+   *  config write on the server. `refs` are the rows the card is showing — the
+   *  server deletes exactly those and skips ones already gone, so a list that
+   *  went stale cannot take a neighbouring account with it. `removed` is what
+   *  actually went, not what was asked for. */
+  removeModels(
+    refs: ModelRefWire[],
+  ): Promise<{ removed: number; switched_to?: string; cleared?: boolean }> {
+    return request('POST', '/api/models/remove', { refs })
+  },
+
   fetchModels(req: ModelRefRequest): Promise<{ ok: boolean; alias?: string; models?: string[]; error?: string }> {
     return request('POST', '/api/models/fetch', req)
   },
@@ -1930,6 +1986,13 @@ export interface ModelRef {
   model?: string
   base_url?: string
   key?: string
+}
+
+/** One row's address for the batch delete: `ModelRef` again, with the alias the
+ *  single-row endpoints take from the path. A row whose alias is missing cannot
+ *  be addressed at all, so it is required here rather than optional. */
+export interface ModelRefWire extends ModelRef {
+  alias: string
 }
 
 function refQuery(ref?: ModelRef): string {

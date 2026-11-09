@@ -133,6 +133,52 @@ func TestParseDelegateRequestBoundary(t *testing.T) {
 	}
 }
 
+func TestParallelDelegateBatchDefaultsUnscopedSiblingsToIsolation(t *testing.T) {
+	input := []delegateRequest{
+		{Intent: "probe one"},
+		{Intent: "edit api", Paths: []string{"internal/api"}},
+		{Intent: "broad rewrite", Isolate: true},
+		{Intent: "other tree", WorkDir: "/tmp/other-tree"},
+	}
+	got := parallelDelegateBatch("panda", 4, input)
+	if len(got) != len(input) {
+		t.Fatalf("batch size = %d, want %d", len(got), len(input))
+	}
+	if !got[0].Isolate {
+		t.Fatal("unscoped sibling did not get default isolation")
+	}
+	if got[1].Isolate || len(got[1].Paths) != 1 {
+		t.Fatalf("explicit path scope changed: %+v", got[1])
+	}
+	if !got[2].Isolate {
+		t.Fatal("explicit isolation was lost")
+	}
+	if got[3].Isolate || got[3].WorkDir != input[3].WorkDir {
+		t.Fatalf("explicit workdir changed: %+v", got[3])
+	}
+	if input[0].Isolate {
+		t.Fatal("helper mutated caller's request slice")
+	}
+
+	for name, tc := range map[string]struct {
+		project string
+		fanout  int
+		drs     []delegateRequest
+	}{
+		"single child": {project: "panda", fanout: 1, drs: []delegateRequest{{Intent: "one"}}},
+		"no project":   {project: "", fanout: 4, drs: []delegateRequest{{Intent: "one"}, {Intent: "two"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := parallelDelegateBatch(tc.project, tc.fanout, tc.drs)
+			for i, dr := range got {
+				if dr.Isolate {
+					t.Fatalf("request %d unexpectedly isolated: %+v", i, dr)
+				}
+			}
+		})
+	}
+}
+
 func TestDelegationBudgetResolution(t *testing.T) {
 	ctx := context.Background()
 	c := newCore(t, "node-x")

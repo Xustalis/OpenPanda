@@ -136,7 +136,7 @@ var catalog = []Command{
 		Usage:   "panda nodes disconnect <id>",
 		HelpKey: "cli.help.d.nodes_disconnect", Group: GroupRuntime},
 	{Names: []string{"pair"},
-		Usage:   "panda pair --secret S --peer <host:port>",
+		Usage:   "panda pair --secret S --peer <host:port> | confirm|reject [id]",
 		HelpKey: "cli.help.d.pair", Group: GroupRuntime},
 	{Names: []string{"join"},
 		Usage:   "panda join <uri> [--trust mesh|guarded|open]",
@@ -342,15 +342,51 @@ func joinWrapped(desc string) string {
 	return out
 }
 
-// PromptReference renders the catalog as the compact, grouped block an agent
-// prompt carries. Descriptions are the localized `panda help` one-liners,
-// with the help page's terminal hard wraps flattened back into one line, and
-// every usage aligned to a single column so the block scans as a table.
-//
-// Sections render in groupOrder rather than in catalog order: the heading is
-// therefore emitted exactly once per group even if a future edit files a
-// command out of order, and a group added without a row in groupOrder fails
-// the catalog test instead of disappearing from the reference.
+// PromptReferenceFor keeps the full catalog discoverable through help, while
+// sending only the command groups relevant to this task. No command is hidden
+// from the CLI or from authorization; this only reduces repeated prompt text.
+func PromptReferenceFor(loc i18n.Locale, query string) string {
+	q := strings.ToLower(query)
+	groups := map[Group]bool{}
+	keywords := map[Group][]string{
+		GroupRuntime:       {"panda web", "console", "daemon", "service", "node", "控制台", "面板", "节点", "设备", "ノード", "nodo", "knoten"},
+		GroupSessions:      {"session", "会话", "セッション", "sesión", "sitzung"},
+		GroupTasks:         {"panda task", "queue", "子任务", "队列", "キュー", "cola", "warteschlange"},
+		GroupMemory:        {"memory", "skill", "记忆", "技能", "メモリ", "スキル", "memoria", "gedächtnis"},
+		GroupSettings:      {"model", "config", "mcp", "模型", "配置", "设置", "モデル", "設定", "modelo", "einstellung"},
+		GroupObservability: {"diagnos", "doctor", "metric", "audit", "日志", "诊断", "审计", "診断", "protokoll"},
+		GroupSetup:         {"install", "update", "upgrade", "diagnos", "doctor", "诊断", "診断", "安装", "升级", "更新", "インストール", "actualiz"},
+	}
+	for group, words := range keywords {
+		for _, word := range words {
+			if strings.Contains(q, word) {
+				groups[group] = true
+				break
+			}
+		}
+	}
+	// Explicit CLI commands always bring their group, even when no natural
+	// language keyword matched (project/todo/auth and aliases included).
+	for _, c := range catalog {
+		for _, name := range c.Names {
+			if name != "" && strings.Contains(q, "panda "+name) {
+				groups[c.Group] = true
+			}
+		}
+	}
+	var b strings.Builder
+	b.WriteString("\n\n" + i18n.T(loc, "prompt.selfcmd.title") + "\npanda help\npanda <command> --help")
+	for _, c := range catalog {
+		if !groups[c.Group] && c.Names[0] != "status" && c.Names[0] != "task" {
+			continue
+		}
+		fmt.Fprintf(&b, "\n%s — %s", c.Usage, joinWrapped(i18n.T(loc, c.HelpKey)))
+	}
+	return b.String()
+}
+
+// PromptReference renders the full localized catalog in group order, with
+// terminal wraps flattened and command usages aligned for readability.
 func PromptReference(loc i18n.Locale) string {
 	width := 0
 	for _, c := range catalog {
