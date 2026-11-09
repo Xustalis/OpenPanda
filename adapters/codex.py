@@ -65,8 +65,17 @@ def main():
         cmd = ["codex", "exec", "resume", req.resume]
     else:
         cmd = ["codex", "exec"]
-    cmd += ["--json", "--skip-git-repo-check",
-            "--sandbox", sandbox, "-c", "approval_policy=\"never\""]
+    cmd += ["--json", "--skip-git-repo-check"]
+    # `codex exec resume` is a separate clap subcommand with its own flag set:
+    # it has no --sandbox (0.15x answers "unexpected argument '--sandbox'
+    # found"), so the policy rides the config override there. Sending the flag
+    # on a resume made every supervision continuation die in argv parsing
+    # before the model was ever contacted.
+    if req.resume:
+        cmd += ["-c", 'sandbox_mode="%s"' % sandbox]
+    else:
+        cmd += ["--sandbox", sandbox]
+    cmd += ["-c", "approval_policy=\"never\""]
     if not req.resume and not req.task_id:
         # Managed tasks persist checkpoints for supervision/timeout resume.
         # An ephemeral first run emits an id but saves no session to resume.

@@ -455,8 +455,10 @@ args = sys.argv[1:]
 assert args[:3] == ["exec", "resume", "codex-sess-1"], args
 # The resumed run keeps its history: no --ephemeral.
 assert "--ephemeral" not in args
+# `codex exec resume` has no --sandbox flag; the policy rides -c.
+assert "-s" not in args and "--sandbox" not in args, args
 # tools_policy=extended escalates the sandbox scope.
-assert args[args.index("--sandbox") + 1] == "danger-full-access"
+assert 'sandbox_mode="danger-full-access"' in args
 assert args[-1] == "contract prompt"
 print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"resumed"}}))
 ''',
@@ -547,6 +549,90 @@ print(json.dumps({"type":"text","sessionID":"s1","part":{"id":"px","type":"text"
         self.assertFalse(events[1]["is_error"])
         # First sighting wins — the update does not re-emit a second row.
         self.assertEqual(events[2]["text"], "half")
+
+    def test_opencode_v2_tool_part_shape(self):
+        """v2 renamed two tool-part fields: the tool is `name` (not `tool`),
+        and the result rides `state.content` as a list of typed parts (not
+        `state.output`).
+
+        Shapes captured from `opencode session export` on 2.0.20. Reading only
+        the 1.18 names logs an unnamed tool and an empty result — the call
+        shows on the timeline, what it returned is lost.
+        """
+        payload, lines, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json
+print(json.dumps({"type":"tool_use","sessionID":"ses_v2","part":{"id":"prt_t","type":"tool","name":"shell","state":{"status":"completed","input":{"command":"uname -m"},"content":[{"type":"text","text":"arm64"}],"metadata":{"exit":0}}}}))
+print(json.dumps({"type":"text","sessionID":"ses_v2","part":{"id":"prt_x","type":"text","text":"arm64"}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "arm64")
+        events = [json.loads(l) for l in lines if l.startswith("{")]
+        events = [e for e in events if e.get("type") == "event"]
+        # The session frame comes first: a ses_-prefixed handle is announced as
+        # soon as it is minted so a killed run still leaves a resumable one.
+        self.assertEqual([e["ev"] for e in events],
+                         ["session", "tool_use", "tool_result", "text"])
+        self.assertEqual(events[1]["name"], "shell")
+        self.assertEqual(events[2]["content"], "arm64")
+        self.assertFalse(events[2]["is_error"])
+
+    def test_opencode_v2_idle_ends_the_turn(self):
+        """v2's terminal record is a bare `idle`, not `session.idle`.
+
+        The CLI below answers and then sleeps for far longer than the
+        watchdog: the case can only pass in time if the idle ends the turn
+        (stop_when kills the tree). An unrecognised terminator is not
+        cosmetic — every v2 task would burn its full timeout and be reported
+        as one.
+        """
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys, time
+if sys.argv[1:2] == ["models"]:
+    sys.exit(0)
+if sys.argv[1:3] == ["api", "model.list"]:
+    sys.exit(1)
+if sys.argv[1:2] == ["run"]:
+    print(json.dumps({"type":"text","sessionID":"ses_i1","part":{"id":"px","type":"text","text":"done"}}))
+    print(json.dumps({"type":"idle","sessionID":"ses_i1","outcome":"completed"}))
+    sys.stdout.flush()
+    time.sleep(30)
+''',
+            extra_request={"timeout_s": 5},
+            timeout=25,
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "done")
+
+    def test_opencode_v2_catalog_model_id_wins(self):
+        """The v2 catalog carries the id twice; a run is handed `modelID`.
+
+        `id` is the catalogue's own key, `modelID` is what `--model` resolves.
+        They agree on 2.0.20, and the fallback keeps the pin working when they
+        do not.
+        """
+        payload, _, _ = run_adapter(
+            "opencode.py", "opencode", OC_HELP_CURRENT + r'''
+import json, sys
+if sys.argv[1:2] == ["models"]:
+    sys.exit(0)
+if sys.argv[1:3] == ["api", "model.list"]:
+    print(json.dumps({"location":{"directory":"/tmp"},"data":[
+        {"id":"alias-row","modelID":"real-slug","providerID":"opencode",
+         "name":"Real","cost":[{"input":0,"output":0}],"status":"active",
+         "enabled":True}]}))
+    sys.exit(0)
+if sys.argv[1:2] == ["run"]:
+    args = sys.argv[1:]
+    model = args[args.index("--model") + 1] if "--model" in args else ""
+    print(json.dumps({"type":"text","sessionID":"ses_c1",
+                      "part":{"id":"px","type":"text","text":"on " + model}}))
+''',
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "on opencode/real-slug")
 
     def test_opencode_probe_cache_across_processes(self):
         """Roster, catalog and flag probes survive between adapter processes.

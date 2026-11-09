@@ -3,17 +3,30 @@
 package localmodels
 
 // OpenCode is the one source that has to be asked, not read: it keeps its
-// provider registry inside the app, so `opencode models` is the only way to see
-// what it can serve.
+// provider registry inside the app, so the CLI is the only way to see what it
+// can serve.
 //
-// `--verbose` is the important half. The plain list is `provider/model` and
-// nothing else, which tempts a caller into mapping the namespace onto a
-// registry provider by name — and that is wrong for the one case that matters
-// here: OpenCode's `alibaba` and `alibaba-cn` are two different services
-// (dashscope-intl vs dashscope), so folding both into one provider writes half
-// the rows against an endpoint their key cannot reach. The verbose form carries
-// each model's own `api.url`, which is the only honest answer to "where does
-// this id live".
+// Two catalogue surfaces exist, and the installed build decides which one
+// answers:
+//
+//   - v2 (the 2.x line) publishes `opencode api model.list`: one JSON envelope
+//     served by the CLI's own background service, carrying each model's
+//     provider, endpoint, limits and cost. The bare `models` subcommand still
+//     exists there but prints nothing, and `models --verbose` was removed
+//     outright — on 2.0.20 it answers "Unrecognized flag: --verbose" and exits
+//     1, which used to fail this collector on every fresh install.
+//   - 1.x answers `opencode models --verbose` with a `provider/model` header
+//     per model followed by one pretty-printed JSON object each.
+//
+// The v2 surface is asked first and the 1.x dump is the fallback; see
+// readOpenCodeCatalogue for why that order is the cheap one.
+//
+// The endpoint is the field that matters. A catalogue row is only honest about
+// where its model lives if it carries the model's own `api.url` (1.x) or
+// `settings.baseURL` (v2) — the namespace alone is not enough: OpenCode's
+// `alibaba` and `alibaba-cn` are two different services (dashscope-intl vs
+// dashscope), so folding both into one provider writes half the rows against
+// an endpoint their key cannot reach.
 //
 // Two things this collector deliberately does not do:
 //
@@ -31,8 +44,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/providers"
 )
@@ -53,18 +69,89 @@ var providerKeyEnv = map[string]string{
 	"zhipu":       "ZHIPU_API_KEY",
 }
 
-// ocModel is one record of `opencode models --verbose`.
+// ocModel is one catalogue entry. Both surfaces are decoded into it: they
+// overlap on the id, the name and the limits, and differ on where the endpoint
+// lives (1.x `api.url`, v2 `settings.baseURL`) and on which id field carries
+// the model (v2 repeats it as `modelID`, which is the one a run passes to
+// --model). Reading both into one struct keeps a single row-building path.
 type ocModel struct {
 	ID         string `json:"id"`
+	ModelID    string `json:"modelID"`
 	ProviderID string `json:"providerID"`
 	Name       string `json:"name"`
 	Status     string `json:"status"`
+	Enabled    *bool  `json:"enabled"`
 	API        struct {
 		URL string `json:"url"`
 	} `json:"api"`
+	Settings struct {
+		BaseURL  string `json:"baseURL"`
+		Provider string `json:"provider"`
+	} `json:"settings"`
 	Limit struct {
 		Context int `json:"context"`
+		Output  int `json:"output"`
 	} `json:"limit"`
+	Cost []struct {
+		Input  float64 `json:"input"`
+		Output float64 `json:"output"`
+	} `json:"cost"`
+}
+
+// Model is the id a run would pass to --model. v2 carries it twice; `modelID`
+// is the resolved one, and the 1.x shape has only `id`.
+func (m ocModel) Model() string {
+	if id := strings.TrimSpace(m.ModelID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(m.ID)
+}
+
+// BaseURL is the endpoint this model lives on, on either shape.
+func (m ocModel) BaseURL() string {
+	if base := strings.TrimSpace(m.Settings.BaseURL); base != "" {
+		return base
+	}
+	return strings.TrimSpace(m.API.URL)
+}
+
+// Namespace is the catalogue's own provider id — the key a credential
+// variable is looked up by.
+func (m ocModel) Namespace() string {
+	if ns := strings.TrimSpace(m.Settings.Provider); ns != "" {
+		return ns
+	}
+	return strings.TrimSpace(m.ProviderID)
+}
+
+// Retired reports a row the catalogue itself says is not servable. An absent
+// status is not retirement: the 1.x dump does not always carry one, and
+// dropping those records would empty the sheet on an older build.
+func (m ocModel) Retired() bool {
+	if m.Enabled != nil && !*m.Enabled {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(m.Status)) {
+	case "", "active":
+		return false
+	}
+	return true
+}
+
+// FreeTier reports a model the catalogue prices at zero on every entry. The
+// cost array is the only evidence accepted: a v2 catalogue with no cost block
+// says nothing about price, and guessing from the slug is how a paid flagship
+// ends up filed as free.
+func (m ocModel) FreeTier() bool {
+	if len(m.Cost) == 0 {
+		return false
+	}
+	for _, c := range m.Cost {
+		if c.Input != 0 || c.Output != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // collectOpenCode runs the CLI and groups its catalogue by (provider, endpoint).
@@ -81,7 +168,7 @@ func collectOpenCode(ctx context.Context, opt Options) Source {
 	models, err := readOpenCodeCatalogue(runCtx, cli)
 	if err != nil {
 		src.Status = StatusError
-		src.Detail = "opencode models: " + firstLine(err.Error())
+		src.Detail = "opencode catalogue: " + firstLine(err.Error())
 		return src
 	}
 
@@ -90,7 +177,7 @@ func collectOpenCode(ctx context.Context, opt Options) Source {
 	order := make([]key, 0, 4)
 	groups := make(map[key][]ocModel)
 	for _, m := range models {
-		k := key{m.ProviderID, strings.TrimRight(m.API.URL, "/")}
+		k := key{m.Namespace(), strings.TrimRight(m.BaseURL(), "/")}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
@@ -125,16 +212,21 @@ func collectOpenCode(ctx context.Context, opt Options) Source {
 		}
 
 		providerID := "custom"
-		if id, ok := providerForBase(k.url); ok {
+		if id, ok := providerForCatalogue(k.provider, k.url); ok {
 			providerID = id
 		}
+		// OpenCode's own gateway meters an anonymous request against a free
+		// usage quota instead of rejecting it, so a zero-cost row there is
+		// addressable with no credential at all.
+		gateway := opencodeGateway(k.url)
 
 		for _, m := range rows {
+			model := m.Model()
 			c := Candidate{
 				Source:        SourceOpenCode,
 				Provider:      providerID,
-				Model:         m.ID,
-				Label:         firstNonEmpty(m.Name, m.ID),
+				Model:         model,
+				Label:         firstNonEmpty(m.Name, model),
 				BaseURL:       k.url,
 				APIType:       "openai",
 				KeyRef:        keyRef,
@@ -142,6 +234,17 @@ func collectOpenCode(ctx context.Context, opt Options) Source {
 				Note:          k.provider,
 			}
 			switch {
+			case keyRef == "" && gateway && k.url != "" && m.FreeTier():
+				// The free tier is the reason this agent exists in the mesh:
+				// no key, no config, just a per-account quota. Refusing these
+				// rows for a missing variable would report a working install
+				// as unusable — verified on v2.0.20, where a keyless POST to
+				// the gateway answers 429 FreeUsageLimitError (a quota), not
+				// 401 (a credential problem).
+				c.NoAuth = true
+				c.Importable = true
+				c.Note = k.provider + ": free tier, no key needed (usage is metered per account)"
+				importable++
 			case keyRef == "":
 				// The environment is the only credential this collector reads:
 				// OpenCode keeps its own login in auth.json / opencode.db, and
@@ -164,7 +267,7 @@ func collectOpenCode(ctx context.Context, opt Options) Source {
 				}
 			case roster == nil:
 				c.Note = k.provider + ": endpoint did not answer"
-			case !roster[m.ID]:
+			case !roster[model]:
 				c.Note = k.provider + ": not in the endpoint roster"
 			default:
 				c.Importable = true
@@ -184,7 +287,7 @@ func collectOpenCode(ctx context.Context, opt Options) Source {
 	switch {
 	case len(src.Candidates) > 0:
 		src.Status = StatusOK
-		src.Detail = "opencode models · " + strconv.Itoa(len(src.Candidates)) + " model(s)"
+		src.Detail = "opencode catalogue · " + strconv.Itoa(len(src.Candidates)) + " model(s)"
 		if importable > 0 {
 			src.Detail += ", " + strconv.Itoa(importable) + " usable with this machine's keys"
 		}
@@ -200,7 +303,8 @@ func collectOpenCode(ctx context.Context, opt Options) Source {
 		}
 	case len(models) == 0:
 		src.Status = StatusEmpty
-		src.Detail = "opencode models printed nothing"
+		src.Detail = "opencode returned no models" +
+			" (v2 answers via api model.list, 1.x via models --verbose)"
 	}
 	return src
 }
@@ -234,11 +338,117 @@ func singleEnvName(names map[string]bool) string {
 	return ""
 }
 
-// readOpenCodeCatalogue parses `models --verbose`: a `provider/model` header
-// line followed by one pretty-printed JSON object per model. The objects are
-// multi-line and nested, so the parser buffers until a top-level `}` closes the
-// record rather than trying to read a line at a time.
+// readOpenCodeCatalogue asks both catalogue surfaces, newest first.
+//
+// v2 first: `opencode api model.list` is what 2.x publishes, and it is the
+// same call the agent adapter probes. A build that predates it fails in
+// milliseconds ("unknown command") and falls through to the 1.x dump, while
+// the reverse order would make every 2.x run pay for a removed flag — 2.0
+// answers `models --verbose` with "Unrecognized flag: --verbose" and exit 1.
+//
+// Both surfaces empty is "empty", not "broken": a v2 install whose background
+// service is disabled answers a well-formed envelope with no entries, and
+// calling that an error would send the person to fix a machine that works.
 func readOpenCodeCatalogue(ctx context.Context, cli string) ([]ocModel, error) {
+	models, apiErr := readOpenCodeAPI(ctx, cli)
+	if len(models) > 0 {
+		return models, nil
+	}
+	legacy, legacyErr := readOpenCodeVerbose(ctx, cli)
+	if len(legacy) > 0 {
+		return legacy, nil
+	}
+	if apiErr == nil || legacyErr == nil {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("api model.list: %v; models --verbose: %v", apiErr, legacyErr)
+}
+
+// readOpenCodeAPI reads the v2 catalogue envelope:
+//
+//	{"location":{…},"data":[{"id","modelID","providerID","name","settings":
+//	 {"baseURL","provider"},"limit":{…},"cost":[…],"status","enabled"}]}
+//
+// The background service does the work (`--standalone` starts a private one
+// with no providers configured and answers an empty list), so this is the same
+// surface a person sees when they run the command by hand.
+func readOpenCodeAPI(ctx context.Context, cli string) ([]ocModel, error) {
+	// The service builds its provider registry on first use: on 2.0.20 the
+	// first call after it starts answers a well-formed envelope with no
+	// entries, and the same call a moment later lists the whole catalogue.
+	// One retry separates that warm-up from an install that serves nothing.
+	for attempt := 0; ; attempt++ {
+		out, err := runOpenCodeAPI(ctx, cli)
+		if err != nil {
+			return nil, err
+		}
+		if models := parseOpenCodeCatalogue(out); len(models) > 0 {
+			return models, nil
+		}
+		if !json.Valid(out) {
+			// A different build's `api` command, or noise: fall through to the
+			// dump rather than read it as "this install serves nothing".
+			return nil, errString("api model.list printed something that is not a catalogue")
+		}
+		if attempt > 0 || !sleepCtx(ctx, 400*time.Millisecond) {
+			return nil, nil
+		}
+	}
+}
+
+// runOpenCodeAPI is one attempt at the v2 catalogue, stderr folded into the
+// error so a refusal reads as the CLI's own sentence.
+func runOpenCodeAPI(ctx context.Context, cli string) ([]byte, error) {
+	cmd := shimCommand(ctx, cli, "api", "model.list")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return nil, errString(firstLine(detail))
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+// sleepCtx waits, but not past the caller's deadline. Returns false when the
+// context ended first, so a wait never turns into a timeout of its own.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// parseOpenCodeCatalogue decodes a v2 catalogue body and keeps the entries a
+// row can be built from, in catalogue order.
+func parseOpenCodeCatalogue(raw []byte) []ocModel {
+	var doc struct {
+		Data []ocModel `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	models := make([]ocModel, 0, len(doc.Data))
+	for _, m := range doc.Data {
+		if m.Model() == "" || m.Namespace() == "" || m.Retired() {
+			continue
+		}
+		models = append(models, m)
+	}
+	return models
+}
+
+// readOpenCodeVerbose parses the 1.x dump (`models --verbose`): a
+// `provider/model` header line followed by one pretty-printed JSON object per
+// model. The objects are multi-line and nested, so the parser buffers until a
+// top-level `}` closes the record rather than trying to read a line at a time.
+func readOpenCodeVerbose(ctx context.Context, cli string) ([]ocModel, error) {
 	cmd := shimCommand(ctx, cli, "models", "--verbose")
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -266,7 +476,8 @@ func readOpenCodeCatalogue(ctx context.Context, cli string) ([]ocModel, error) {
 			return
 		}
 		var rec ocModel
-		if json.Unmarshal([]byte(buf.String()), &rec) == nil && rec.ID != "" && rec.ProviderID != "" {
+		if json.Unmarshal([]byte(buf.String()), &rec) == nil && rec.Model() != "" &&
+			rec.Namespace() != "" && !rec.Retired() {
 			out = append(out, rec)
 		}
 		buf.Reset()
@@ -307,10 +518,36 @@ func readOpenCodeCatalogue(ctx context.Context, cli string) ([]ocModel, error) {
 	return out, nil
 }
 
-// providerForBase maps an endpoint onto the catalogue provider that owns it.
-// Matching the URL — not the namespace — is the point: `alibaba` and
-// `alibaba-cn` are different services, and only one of them is the endpoint the
-// qwen catalogue row dials.
+// providerForCatalogue maps one catalogue group onto a registry provider.
+//
+// The catalogue states which provider serves an entry, in the registry's own
+// id vocabulary, so that namespace is tried first — it is the only thing that
+// distinguishes `alibaba` from `alibaba-cn`, which share nothing but a vendor.
+// An unknown namespace falls back to matching the endpoint, and a relay behind
+// a known vendor stays "custom".
+func providerForCatalogue(namespace, base string) (string, bool) {
+	if p, ok := providers.Lookup(strings.TrimSpace(namespace)); ok {
+		return p.ID, true
+	}
+	return providerForBase(base)
+}
+
+// opencodeGateway reports whether an endpoint is OpenCode's own inference
+// gateway. That gateway accepts an anonymous request and meters it against a
+// free-usage quota instead of rejecting it, which is what makes a zero-cost
+// row there importable without any credential.
+func opencodeGateway(base string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "opencode.ai" || strings.HasSuffix(host, ".opencode.ai")
+}
+
+// providerForBase maps an endpoint onto the registry provider that publishes
+// it. It is the fallback for a catalogue namespace the registry does not know:
+// matching the URL is still better than calling every relay "custom".
 func providerForBase(base string) (string, bool) {
 	if strings.TrimSpace(base) == "" {
 		return "", false

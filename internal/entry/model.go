@@ -30,6 +30,16 @@ import (
 // anthropicVersion is the header required by Anthropic-compatible endpoints.
 const anthropicVersion = "2023-06-01"
 
+// absoluteMaxTokens bounds a config-declared completion cap for a route that
+// has NO tuning entry at all (a self-hosted or unknown aggregator). A value
+// like 125000 — often paired with an equally optimistic 1M context window —
+// is sent verbatim and rejected with a 400 before any token is generated;
+// the ask loop can then only report an interrupted turn. A provider present
+// in the tuning table is trusted with its own cap, including one that has
+// published no ceiling (kimi), whose verbatim value stays an explicit
+// contract in TestNewClientMaxTokensCap.
+const absoluteMaxTokens = 65536
+
 // nonStreamingTimeout is the client ceiling for a whole non-streaming request.
 // It used to be 30s, which a thinking model passes easily: Gemini gets a 4096
 // token budget and Responses "high" effort, so the request timed out, the
@@ -352,6 +362,13 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		// API rejects it verbatim — so it is clamped, not failed.
 		if maxTokensCap > 0 && maxTokens > maxTokensCap {
 			maxTokens = maxTokensCap
+		}
+		// A route with no tuning entry at all has no known ceiling, so the
+		// config's declared cap goes straight onto the wire. Bound just that
+		// case (see absoluteMaxTokens); a known provider keeps its own cap —
+		// or its deliberate lack of one.
+		if !hasTuning && maxTokens > absoluteMaxTokens {
+			maxTokens = absoluteMaxTokens
 		}
 	}
 	apiType := strings.ToLower(strings.TrimSpace(model.APIType))

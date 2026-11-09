@@ -452,6 +452,9 @@ var builtins = []Provider{
 			{ID: "claude-haiku-5-5", ContextWindow: 1000000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 0.10, OutputPerMillion: 0.50}},
 			{ID: "claude-opus-5-5", ContextWindow: 1000000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 4.00, OutputPerMillion: 20.00}},
 			{ID: "claude-sonnet-5-5", ContextWindow: 1000000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00}},
+			// Served free by the 2.x catalogue (cost 0 on every entry); the
+			// limits are the ones that catalogue reports.
+			{ID: "crouton-alpha-free", ContextWindow: 1048576, MaxTokensCap: 270000, Free: true},
 			{ID: "deepseek-v4-pro", ContextWindow: 1000000, MaxTokensCap: 384000, Pricing: Pricing{InputPerMillion: 1.74, OutputPerMillion: 3.48}},
 			{ID: "deepseek-v4.1-flash", ContextWindow: 1000000, MaxTokensCap: 384000, Pricing: Pricing{InputPerMillion: 0.30, OutputPerMillion: 1.20}},
 			{ID: "deepseek-v4.1-flash-free", ContextWindow: 200000, MaxTokensCap: 32000, Free: true},
@@ -475,6 +478,8 @@ var builtins = []Provider{
 			{ID: "gpt-6.1-sol", ContextWindow: 1050000, MaxTokensCap: 128000, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 10.00}},
 			{ID: "grok-4.7", ContextWindow: 500000, MaxTokensCap: 500000, Pricing: Pricing{InputPerMillion: 2.00, OutputPerMillion: 6.00}},
 			{ID: "grok-build-0.1", ContextWindow: 256000, MaxTokensCap: 256000, Pricing: Pricing{InputPerMillion: 1.00, OutputPerMillion: 2.00}},
+			{ID: "iceman-free", ContextWindow: 262144, MaxTokensCap: 131072, Free: true},
+			{ID: "inkling-2-small-free", ContextWindow: 1048576, MaxTokensCap: 131072, Free: true},
 			{ID: "kimi-k2.7-code", ContextWindow: 262144, MaxTokensCap: 262144, Pricing: Pricing{InputPerMillion: 0.95, OutputPerMillion: 4.00}},
 			{ID: "kimi-k3", ContextWindow: 1048576, MaxTokensCap: 131072, Pricing: Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00}},
 			{ID: "mimo-v2.6-flash-free", ContextWindow: 200000, MaxTokensCap: 32000, Free: true},
