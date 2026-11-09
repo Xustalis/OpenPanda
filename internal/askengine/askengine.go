@@ -169,6 +169,10 @@ type Engine struct {
 	mcp        *mcp.Client
 	mcpCommand string
 	logger     *slog.Logger
+	// localRunner executes a matched local action (entry.MatchLocalAction).
+	// nil means the built-in runner: this binary, bounded by a timeout. It is
+	// set once before the engine serves, so no lock is taken on the read path.
+	localRunner func(ctx context.Context, argv []string) (string, error)
 
 	// sched powers task execution once initialized — either eagerly from
 	// Options.CardPath/config or lazily on first use (tryAutoInitScheduler).
@@ -2399,6 +2403,24 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	}
 
 	reg := e.currentRegistry()
+
+	// Local action fast path: a bare imperative for one of this node's own
+	// subcommands ("open the web console", "启动 web 服务", "run doctor") is
+	// executed here and answered with its output — no model call, no task
+	// row, no agent subprocess. The matcher is a whole-message anchored test
+	// and rejects anything interrogative, and it only runs on a fresh turn so
+	// a follow-up cannot be hijacked. A failed action falls through to the
+	// full pipeline rather than failing the ask.
+	if len(history) == 0 && !scope.Side {
+		if act, ok := entry.MatchLocalAction(prompt); ok {
+			if text, done := e.RunLocalAction(ctx, act, effectiveLocale); done {
+				if cb.OnDelta != nil && text != "" {
+					cb.OnDelta(text)
+				}
+				return &Result{Kind: "answer", Answer: text}, nil
+			}
+		}
+	}
 
 	// Tier 1 Fast-Path Triage: if this is a standalone conceptual/conversational
 	// query without prior task state or action intent, stream directly with a micro-prompt

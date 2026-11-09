@@ -398,9 +398,10 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			return c.runLocal(ctx, t, in)
 		}
 		// Register a waiter so the inbound task_result unblocks this call.
-		ch := make(chan bus.TaskResultPayload, 1)
-		c.waiters.Store(t.TaskID, ch)
-		defer c.waiters.Delete(t.TaskID)
+		// add/remove are per-registration: a concurrent plan child awaiting
+		// the same id keeps its own waiter.
+		waiter := c.waiters.add(t.TaskID)
+		defer c.waiters.remove(t.TaskID, waiter)
 
 		if err := c.forwardDelegated(ctx, t.TaskID, decision.Target, payload, chain); err != nil {
 			// The delegate never left (or was never acked): settle the row so
@@ -408,7 +409,7 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			c.failLocal(ctx, t.TaskID, fmt.Errorf("forward: %w", err), t.AttemptID)
 			return t, bus.TaskResultPayload{}, fmt.Errorf("forward: %w", err)
 		}
-		return c.waitRemoteResult(ctx, t, ch, "delegation")
+		return c.waitRemoteResult(ctx, t, waiter.ch, "delegation")
 	default:
 		// A pin decline names its own reason ("pinned node X is not in the
 		// directory"); the generic wrapper would bury it under a capability
@@ -896,9 +897,8 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target, answer string
 	if err := c.store.SetLease(ctx, taskID, c.lease().Milliseconds()); err != nil {
 		c.logger.Warn("resume: set lease", "task", taskID, "err", err)
 	}
-	ch := make(chan bus.TaskResultPayload, 1)
-	c.waiters.Store(taskID, ch)
-	defer c.waiters.Delete(taskID)
+	waiter := c.waiters.add(taskID)
+	defer c.waiters.remove(taskID, waiter)
 
 	msgID, err := newUUID()
 	if err != nil {
@@ -947,7 +947,7 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target, answer string
 		}
 		// The link exists but the write failed transiently: the periodic
 		// outbox sweep redelivers on this same connection, so keep waiting.
-		return c.waitRemoteResult(ctx, cur, ch, "resume")
+		return c.waitRemoteResult(ctx, cur, waiter.ch, "resume")
 	}
 	if relayed {
 		// A relay accepted the frame, but the final hop is unconfirmed. Keep
@@ -959,7 +959,7 @@ func (c *Core) resumeRemote(ctx context.Context, cur Task, target, answer string
 	}
 	c.logger.Info("resume forwarded to executor", "task", taskID, "to", target)
 
-	return c.waitRemoteResult(ctx, cur, ch, "resume")
+	return c.waitRemoteResult(ctx, cur, waiter.ch, "resume")
 }
 
 // retryLoop drives a task from its first execution outcome to a stable state:

@@ -163,6 +163,23 @@ func Run(configPath string) []Check {
 			add(c)
 		}
 
+		// Exposure is the single truth for every bind: report the effective
+		// mode next to the sockets it produced. A legacy config is only a
+		// finding when it actually listens wide — an upgrade that kept
+		// `listen_addr: 127.0.0.1:7836` wrote its binds out by hand and is
+		// as closed as a loopback install, so failing it would teach people
+		// to ignore the check.
+		exposure := cfg.Network.Exposure()
+		switch {
+		case exposure == config.ExposureLegacy && !narrowBinds(cfg.Network):
+			add(fail("doctor.network.exposure.legacy",
+				"addr", cfg.Network.ListenAddr, "panel", cfg.Network.PanelAddr))
+		default:
+			add(pass("doctor.network.exposure",
+				"mode", exposure, "addr", cfg.Network.ListenAddr,
+				"panel", cfg.Network.PanelAddr, "udp", cfg.Network.UDPListen))
+		}
+
 		// Network planes. Validate() already guarantees listen_addr and
 		// udp_listen parse, so what remains silent is an empty shared_secret
 		// — the WS listener then refuses every inbound peer and the daemon
@@ -456,4 +473,25 @@ func databaseDirWritable(dbPath string) bool {
 // stays free of a storage dependency for two queries.
 func escapeURIPath(path string) string {
 	return strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
+}
+
+// narrowBinds reports whether every socket a config will open stays on the
+// loopback interface. An empty udp_listen is NOT narrow: the daemon materialises
+// it as ":" + the WS port (see cmd/panda/main.go), i.e. every interface — the
+// single most common way a pre-0.1.5 config was wider than its author thought.
+func narrowBinds(n config.NetworkConfig) bool {
+	if !config.IsLoopbackBind(n.ListenAddr) {
+		return false
+	}
+	if n.PanelAddr != "" && !config.IsLoopbackBind(n.PanelAddr) {
+		return false
+	}
+	switch n.UDPListen {
+	case "off":
+		return true
+	case "":
+		return false
+	default:
+		return config.IsLoopbackBind(n.UDPListen)
+	}
 }

@@ -136,7 +136,7 @@ var catalog = []Command{
 		Usage:   "panda nodes disconnect <id>",
 		HelpKey: "cli.help.d.nodes_disconnect", Group: GroupRuntime},
 	{Names: []string{"pair"},
-		Usage:   "panda pair --secret S --peer <host:port>",
+		Usage:   "panda pair --secret S --peer <host:port> | confirm|reject [id]",
 		HelpKey: "cli.help.d.pair", Group: GroupRuntime},
 	{Names: []string{"join"},
 		Usage:   "panda join <uri> [--trust mesh|guarded|open]",

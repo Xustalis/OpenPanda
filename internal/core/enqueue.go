@@ -281,10 +281,10 @@ func (c *Core) WaitQueue(ctx context.Context) {
 		return
 	}
 	done := make(chan struct{})
-	go func() {
+	c.goGuarded("queue wait", func() {
 		s.Wait()
 		close(done)
-	}()
+	})
 	select {
 	case <-done:
 	case <-ctx.Done():
