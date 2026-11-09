@@ -320,3 +320,35 @@ func TestLegacyExposureIsAFindingOnlyWhenWide(t *testing.T) {
 		}
 	}
 }
+
+// TestAdapterScriptCountIgnoresNonScripts: doctor used to pass this check on a
+// non-empty path alone, and resolveAdapterDir always answers with some path —
+// so a machine with no adapters at all reported a healthy tree and the
+// resulting task failure looked like an agent bug. Counting the scripts is the
+// difference between "the folder exists" and "there is something to run".
+func TestAdapterScriptCountIgnoresNonScripts(t *testing.T) {
+	dir := t.TempDir()
+	if n := adapterScriptCount(dir); n != 0 {
+		t.Fatalf("empty dir counted %d scripts, want 0", n)
+	}
+	for _, name := range []string{"claude_code.py", "codex.py", "_shared.py"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/usr/bin/env python3\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "__pycache__"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("docs"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Two spawnable adapters. The underscore-prefixed helper is a shared module
+	// rather than an agent, and __pycache__/README.md are not scripts at all.
+	if n := adapterScriptCount(dir); n != 2 {
+		t.Fatalf("counted %d scripts, want 2", n)
+	}
+	// A path that is not a directory is an incomplete install too, not a panic.
+	if n := adapterScriptCount(filepath.Join(dir, "README.md")); n != 0 {
+		t.Fatalf("file path counted %d scripts, want 0", n)
+	}
+}

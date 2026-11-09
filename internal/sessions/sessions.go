@@ -108,6 +108,13 @@ type Turn struct {
 	// model answered after the thread is reloaded — the live result object
 	// carries it, but that object is never written to disk.
 	Model string `json:"model,omitempty"`
+	// Warning is the non-fatal advisory attached to this reply — currently
+	// the interrupted tool loop's real model error. It is stored for the
+	// reloaded thread but intentionally excluded from replay (see
+	// sessionTurnEntries): a provider error from an old turn is not context
+	// the model should answer again. Before this field existed the reply said
+	// "see the warning" and a reload erased the only copy of it.
+	Warning string `json:"warning,omitempty"`
 	// TS is when the turn was written (Unix seconds). It exists for the usage
 	// calendar: a thread that stays open across midnight has its messages
 	// counted on the days they actually happened, which the session's own
