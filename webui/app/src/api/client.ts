@@ -1716,7 +1716,7 @@ export const api = {
     return request('PUT', '/api/settings/mcp', s)
   },
 
-  // ---- Web Push (reminder notifications) ----
+  // ---- Web Push (approval notifications) ----
 
   pushKey(): Promise<{ key: string }> {
     return request('GET', '/api/push/key')
@@ -2940,9 +2940,9 @@ export function isAbort(err: unknown): boolean {
 // ---- SSE live subscriptions -----------------------------------------------
 
 /** Change payload delivered on `event: change` — the "what changed" portion of
- *  the SSE line: `kinds fp/tasks/fp/nodes/fp/reminders/fp/sessions`. Old
- *  servers that only send `init` or a single task fingerprint still
- *  deserialize safely (missing slots read as undefined). */
+ *  the SSE line: `kinds taskFP/nodeFP/reminderFP/sessionFP/todoFP/pairFP`. Old
+ *  servers that only send `init` or a single task fingerprint still deserialize
+ *  safely (missing slots read as undefined). */
 export interface ChangeEvent {
   kinds: string[]
   taskFP?: string
