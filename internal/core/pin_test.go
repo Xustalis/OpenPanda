@@ -1184,3 +1184,25 @@ func TestPinMultiHopE2E(t *testing.T) {
 }
 
 var _ = fmt.Sprintf // silence unused-import if helpers evolve
+
+// TestRoutePinnedDiscoveredHint: a LAN-discovered node is online but has no
+// directory row until an operator admits it. The hard pin must still decline
+// (no silent reroute), but the reason has to name the command that fixes it.
+func TestRoutePinnedDiscoveredHint(t *testing.T) {
+	c := pinCore(t, "self-node", "marker")
+	c.autoDialMu.Lock()
+	c.autoDialCands["opi3b"] = autoDialCand{addr: "10.86.36.57:7836", lastSeen: time.Now()}
+	c.autoDialMu.Unlock()
+
+	d := c.routePinned(context.Background(), "opi3b", []string{"root-x"}, nil, ledger.ResourceProfile{})
+	if d.Action != scheduler.ActionDecline {
+		t.Fatalf("action = %v, want decline", d.Action)
+	}
+	if !strings.Contains(d.Reason, "panda nodes admit opi3b") {
+		t.Fatalf("decline gives no remediation for a discovered node: %q", d.Reason)
+	}
+	d2 := c.routePinned(context.Background(), "ghost", []string{"root-x"}, nil, ledger.ResourceProfile{})
+	if !strings.Contains(d2.Reason, "panda nodes") {
+		t.Fatalf("decline for an unknown ref gives no fleet hint: %q", d2.Reason)
+	}
+}

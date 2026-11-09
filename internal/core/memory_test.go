@@ -150,9 +150,11 @@ func TestWithSkillsBudgetDegrades(t *testing.T) {
 	c := &Core{logger: testLogger(), skills: store}
 
 	// Tight budget: the body degrades to an index line but stays visible.
+	// A degraded line is discovery, not a use: it must not bump use_count or
+	// refresh LastUsed for a procedure whose steps never reached the agent.
 	got, used := withSkills(c, "run the playbook", "", "playbook", 100)
-	if len(used) != 1 {
-		t.Fatalf("used = %d, want 1", len(used))
+	if len(used) != 0 {
+		t.Fatalf("used = %d, want 0 (degraded index lines are not skill uses)", len(used))
 	}
 	if !strings.Contains(got, "big-skill") {
 		t.Fatalf("degraded skill lost its name: %q", got)
@@ -168,6 +170,95 @@ func TestWithSkillsBudgetDegrades(t *testing.T) {
 	got, _ = withSkills(c, "run the playbook", "", "playbook", agentPromptBudget)
 	if !strings.Contains(got, "playbook line\nplaybook line") {
 		t.Fatalf("roomy budget should keep the full body (%d bytes)", len(got))
+	}
+}
+
+// Chinese task titles reach curated bilingual triggers, and a device-scoped
+// skill is injected only on the device that owns it. Both were invisible to
+// the old title-only, global+project matcher.
+func TestWithSkillsChineseTriggerAndDeviceScope(t *testing.T) {
+	store := skills.NewStore(t.TempDir())
+	global := &skills.Skill{
+		Name: "root-cause-debugging", Description: "Systematic root cause analysis",
+		Scope: skills.ScopeGlobal, Status: skills.StatusActive,
+		Triggers: []string{"debug", "排查", "根因"}, Body: "REPRODUCE-MARKER",
+	}
+	device := &skills.Skill{
+		Name: "node-build", Description: "Device build procedure",
+		Scope: skills.ScopeDevice, Device: "node-a", Status: skills.StatusActive,
+		Triggers: []string{"build", "编译"}, Body: "DEVICE-BUILD-MARKER",
+	}
+	other := &skills.Skill{
+		Name: "other-node-build", Description: "Another device build procedure",
+		Scope: skills.ScopeDevice, Device: "node-b", Status: skills.StatusActive,
+		Triggers: []string{"build", "编译"}, Body: "OTHER-DEVICE-MARKER",
+	}
+	for _, sk := range []*skills.Skill{global, device, other} {
+		if err := store.Save(sk); err != nil {
+			t.Fatalf("save %s: %v", sk.Name, err)
+		}
+	}
+	c := &Core{logger: testLogger(), skills: store, nodeID: "node-a"}
+
+	got, _ := withSkills(c, "排查登录失败的根因", "", "排查登录失败的根因", agentPromptBudget)
+	if !strings.Contains(got, "REPRODUCE-MARKER") {
+		t.Errorf("Chinese trigger did not load the debugging procedure: %q", got)
+	}
+	if strings.Contains(got, "DEVICE-BUILD-MARKER") {
+		t.Errorf("unrelated device skill injected: %q", got)
+	}
+
+	got, _ = withSkills(c, "编译构建失败", "", "编译构建失败", agentPromptBudget)
+	if !strings.Contains(got, "DEVICE-BUILD-MARKER") {
+		t.Errorf("this device's skill was not injected: %q", got)
+	}
+	if strings.Contains(got, "OTHER-DEVICE-MARKER") {
+		t.Errorf("another device's skill leaked: %q", got)
+	}
+	if strings.Contains(got, "REPRODUCE-MARKER") {
+		t.Errorf("unrelated global skill injected: %q", got)
+	}
+
+	// The capability card's device label is accepted too: a user usually
+	// types that name into --device, not the derived runtime node ID.
+	labeled := &skills.Skill{
+		Name: "labeled-device-build", Description: "Labelled device build",
+		Scope: skills.ScopeDevice, Device: "device-label", Status: skills.StatusActive,
+		Triggers: []string{"编译"}, Body: "LABELED-DEVICE-MARKER",
+	}
+	if err := store.Save(labeled); err != nil {
+		t.Fatalf("save labeled: %v", err)
+	}
+	c2 := &Core{logger: testLogger(), skills: store, nodeID: "runtime-id"}
+	c2.card.Device = "device-label"
+	got, _ = withSkills(c2, "编译构建失败", "", "编译构建失败", agentPromptBudget)
+	if !strings.Contains(got, "LABELED-DEVICE-MARKER") {
+		t.Errorf("card device label did not reach the skill: %q", got)
+	}
+	if strings.Contains(got, "DEVICE-BUILD-MARKER") {
+		t.Errorf("a different node's device skill leaked into this prompt: %q", got)
+	}
+}
+
+// An always-on procedure rides regardless of the title, and still counts as a
+// use because its full body reached the prompt.
+func TestWithSkillsAlwaysOn(t *testing.T) {
+	store := skills.NewStore(t.TempDir())
+	sk := &skills.Skill{
+		Name: "standing-rule", Description: "Standing verification rule",
+		Scope: skills.ScopeGlobal, Status: skills.StatusActive,
+		Always: true, Body: "ALWAYS-MARKER",
+	}
+	if err := store.Save(sk); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	c := &Core{logger: testLogger(), skills: store}
+	got, used := withSkills(c, "ordinary unrelated title", "", "ordinary unrelated title", agentPromptBudget)
+	if !strings.Contains(got, "ALWAYS-MARKER") {
+		t.Errorf("always-on skill missing from prompt: %q", got)
+	}
+	if len(used) != 1 || used[0].Name != "standing-rule" {
+		t.Errorf("used = %v, want the always-on skill", used)
 	}
 }
 

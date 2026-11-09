@@ -36,8 +36,11 @@ type createTaskRequest struct {
 	ResourceKeys []string `json:"resource_keys"`
 	Requires     []string `json:"requires"`
 	Authorize    bool     `json:"authorize"`
-	// Node pins the task to a preferred executor (id or name) — the board's
-	// environment picker. Empty leaves routing to the scheduler.
+	// Node is the board's device picker: the operator chose a machine, so it
+	// is a HARD pin, not a scoring hint. Empty leaves routing to the scheduler.
+	// A soft hint would let localBias win whenever the chosen device is
+	// offline — the task then ran in this node's agent CLI while the UI still
+	// showed the other device as its destination. See docs/routing-layers.md.
 	Node string `json:"node"`
 	// Same-tree parallelism declaration — the same semantics a delegate
 	// marker carries: paths names the project-relative lanes this task holds
@@ -142,6 +145,26 @@ func (h *handler) createTask(w http.ResponseWriter, r *http.Request) {
 
 // enqueueBoardTask is the shared tail of every "a human asked for a task"
 // path: POST /api/tasks and the to-do board's 开始 (POST /api/todos/{id}/start).
+// boardTaskInput is the board's device-picker contract, kept as a pure seam
+// so a regression cannot quietly turn an operator's device choice back into a
+// scoring hint again. req.Node must become TargetNode (hard pin): as a soft
+// PreferredNode it was only honoured while the named device was online and
+// capable, and an offline device handed the task to localBias — i.e. to this
+// machine's own agent CLI, with the UI still showing the other device.
+func boardTaskInput(req createTaskRequest, requires []string) core.TaskInput {
+	return core.TaskInput{
+		Title:      req.Title,
+		Project:    strings.TrimSpace(req.Project),
+		Intent:     req.Prompt,
+		Requires:   requires,
+		Authorized: req.Authorize,
+		TargetNode: req.Node,
+		Paths:      req.ScopePaths,
+		Isolate:    req.Isolate,
+		WorkDir:    req.WorkDir,
+	}
+}
+
 // It enqueues the row and mints the linked session so the card can jump into
 // the thread where the work streams.
 //
@@ -164,17 +187,7 @@ func (h *handler) enqueueBoardTask(
 	if len(requires) == 0 {
 		requires = defaultBoardRequires
 	}
-	in := core.TaskInput{
-		Title:         req.Title,
-		Project:       strings.TrimSpace(req.Project),
-		Intent:        req.Prompt,
-		Requires:      requires,
-		Authorized:    req.Authorize,
-		PreferredNode: req.Node,
-		Paths:         req.ScopePaths,
-		Isolate:       req.Isolate,
-		WorkDir:       req.WorkDir,
-	}
+	in := boardTaskInput(req, requires)
 	q := core.DefaultQueueSpec()
 	q.Priority = priority
 	q.ResourceKeys = req.ResourceKeys

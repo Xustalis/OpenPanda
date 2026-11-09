@@ -761,12 +761,33 @@ func DialPairTo(ctx context.Context, dialAddr, target, selfID, name, listenAddr 
 	}, nil
 }
 
+// ErrPairExpired marks a pairing session that ended because the responder's
+// human never confirmed within pairSessionTTL. The responder closes the
+// socket when its own TTL lapses; the initiator's context is deliberately
+// longer, so that close arrives as a plain read error while ctx.Err() is
+// still nil. Without this sentinel callers see a raw "i/o timeout" and the
+// UI's "expired" state is unreachable — the panel reports an error for the
+// most ordinary outcome of all: nobody answered.
+var ErrPairExpired = errors.New("pairing session expired")
+
+// classifyPairReadError keeps the network error for a genuinely broken
+// connection and calls a read failure "expired" only once the wait has
+// reached the responder's own session TTL. A socket dropped after five
+// seconds is a transport failure, not an abandoned confirmation.
+func classifyPairReadError(err error, waited, remoteTTL time.Duration) error {
+	if err == nil || waited < remoteTTL {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrPairExpired, err)
+}
+
 // WaitSecret blocks on the responder's human answer: pair_secret returns
 // the mesh secret in plaintext bytes; pair_reject returns *PairRejected;
 // ctx cancellation or a dropped conn returns the underlying error. The
 // responder's session TTL bounds the wait on its side, so the caller's
 // ctx only needs a margin past it.
 func (c *PairClient) WaitSecret(ctx context.Context) (string, error) {
+	started := time.Now()
 	done := make(chan struct{})
 	defer close(done)
 	guard.Go(nil, "pair: wait secret watcher", nil, func() {
@@ -782,7 +803,7 @@ func (c *PairClient) WaitSecret(ctx context.Context) (string, error) {
 			if ctx.Err() != nil {
 				return "", ctx.Err()
 			}
-			return "", err
+			return "", classifyPairReadError(err, time.Since(started), pairSessionTTL)
 		}
 		switch env.Type {
 		case bus.MsgPairReject:

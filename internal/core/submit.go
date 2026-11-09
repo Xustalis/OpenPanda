@@ -1018,6 +1018,18 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			c.checkpointLoop.Reset(taskID)
 			return final, result, nil
 		}
+		if commander.AdapterUnavailable(result.Stderr) {
+			// The agent never started: its script or interpreter is missing on
+			// this node. That is a property of the install, not of the attempt —
+			// re-running reads the same filesystem and dies the same way, and
+			// parking it in review would file "the machine is misconfigured" as
+			// "a human should judge this work". Settle as failed with the
+			// reason adapterScript already wrote: reinstalling the adapters and
+			// resubmitting is the only step that can change the outcome.
+			c.loop.Reset(taskID)
+			c.checkpointLoop.Reset(taskID)
+			return final, result, nil
+		}
 		if result.AttemptID != "" && final.AttemptID != result.AttemptID {
 			// The row was rotated (lease-expiry reroute) and re-attempted while
 			// this loop idled in backoff: the failed row now belongs to a
