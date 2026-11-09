@@ -55,7 +55,7 @@ import { ClarifyCard } from '../components/clarify-card'
 import { buildCommands, type Command } from '../components/palette'
 import { rank } from '../components/fuzzy'
 import { mergeTailTurn, patchStreaming, slashQuery } from '../components/chatstate'
-import { atQuery, expandFileRefs, exportMarkdown, exportFilename, isImageFile, withAttachments } from '../components/attach'
+import { atQuery, expandFileRefs, exportMarkdown, exportFilename, isImageFile, splitFileRef, withAttachments } from '../components/attach'
 import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
 import { splitReportHead } from '../components/report-head'
@@ -289,7 +289,11 @@ interface PendingAttachment {
   name: string
   size: number
   image: boolean
-  file: File
+  /** Bytes to upload at send. A workspace reference has none — it rides as an
+   *  `@path` in the prompt instead, which expandFileRefs reads for the model. */
+  file?: File
+  /** Workspace path behind a reference pill (the files dock's 插入). */
+  ref?: string
 }
 
 function makeChipNode(p: PendingAttachment): HTMLElement {
@@ -297,7 +301,7 @@ function makeChipNode(p: PendingAttachment): HTMLElement {
   chip.className = 'attach-pill'
   chip.setAttribute('data-pk', p.key)
   chip.setAttribute('contenteditable', 'false')
-  chip.setAttribute('title', p.name)
+  chip.setAttribute('title', p.ref ?? p.name)
   chip.textContent = p.name
   const ico = document.createElement('span')
   ico.className = p.image ? 'attach-pill-ico img' : 'attach-pill-ico'
@@ -681,6 +685,20 @@ export function SessionsView({
     }
   }, [dockW])
   const [dockEpoch, setDockEpoch] = useState(0)
+  // The side conversation keeps its own clock. `+` there is a genuine new
+  // chat — a server-side reset — while `+` in files/browser only resets that
+  // panel. Sharing one epoch meant starting a new page silently wiped the
+  // thread's side chat history.
+  const [sideEpoch, setSideEpoch] = useState(0)
+  // Bumped when the reader comes back to the 对话 tab. The pane stays mounted
+  // behind a hidden tab, so re-read the thread's stored side conversation
+  // rather than showing a stale one.
+  const [sideReload, setSideReload] = useState(0)
+  // The head's `+` is always mounted now. When it opens the side conversation
+  // from a tool page or the start state, that pane may be mounting in the same
+  // render as the epoch bump — it needs a mount-time flag to know the new
+  // conversation is intentional rather than a reopen.
+  const [sideFresh, setSideFresh] = useState(false)
   // Panels mount the first time their tab is picked and stay mounted after
   // that, hidden rather than dropped: a file tree you scrolled, a page you
   // were reading and a half-typed side question are all the reader's place,
@@ -691,6 +709,11 @@ export function SessionsView({
     if (dockTab === '') return
     setDockSeen((prev) => (prev.includes(dockTab) ? prev : [...prev, dockTab]))
   }, [dockTab])
+  // The flag is read once by SideChat on mount. Clear it after that render so
+  // a later remount cannot inherit someone else's fresh start.
+  useEffect(() => {
+    if (sideFresh && dockSeen.includes('side')) setSideFresh(false)
+  }, [sideFresh, dockSeen])
   // Which artifact keys this thread has already shown. `null` means "no poll
   // has landed yet": the first snapshot is the baseline, so reopening a thread
   // after the work finished does not pop previews for pages already seen.
@@ -1631,11 +1654,15 @@ export function SessionsView({
     try {
       // Upload before the note so a failed upload leaves the draft intact.
       let mentions: string[] = []
-      if (tray.length > 0) {
-        const up = await api.uploadSessionFiles(sid, tray.map((p) => p.file))
+      const uploads = tray.filter((p) => p.file)
+      if (uploads.length > 0) {
+        const up = await api.uploadSessionFiles(sid, uploads.flatMap((p) => (p.file ? [p.file] : [])))
         mentions = up.files.map((f) => f.mention)
       }
-      const r = await api.sendSessionMessage(sid, text, false, mentions)
+      // A workspace reference has no bytes to upload: its path rides with the
+      // note as an attachment, the same shape an uploaded file's mention takes.
+      const refs = tray.flatMap((p) => (p.ref ? [p.ref] : []))
+      const r = await api.sendSessionMessage(sid, text, false, [...mentions, ...refs])
       // Only clear once the server accepted it: a refused note is still the
       // user's text, and losing it to an optimistic clear costs more than the
       // round trip.
@@ -1837,8 +1864,11 @@ export function SessionsView({
       // Uploads land in the session's own uploads directory, so a brand-new
       // chat with attachments needs its thread up front — the same create the
       // send below would have made anyway, one step earlier.
-      if (tray.length > 0 && !id) {
-        const s = await api.createSession((raw || tray[0]?.name || '').slice(0, 48), threadProject, team)
+      // Only byte attachments need a thread before the send: a workspace
+      // reference resolves from the prompt after the thread exists anyway.
+      const uploads = tray.filter((p) => p.file)
+      if (uploads.length > 0 && !id) {
+        const s = await api.createSession((raw || uploads[0]?.name || '').slice(0, 48), threadProject, team)
         id = s.id
         setSession(s)
         setSessions((ls) => [s, ...ls])
@@ -1852,25 +1882,34 @@ export function SessionsView({
         // in between, which is why it never had to be written twice.
         inflightSid.current = s.id
       }
-      // One multipart round-trip for the whole tray, then the mentions ride
-      // the prompt as @paths: text files arrive as fenced blocks, images stay
-      // paths for the agent to open (see expandFileRefs).
+      // One multipart round-trip for the tray's real uploads, then the
+      // mentions ride the prompt as @paths: text files arrive as fenced
+      // blocks, images stay paths for the agent to open (see expandFileRefs).
       let mentions: string[] = []
-      if (tray.length > 0) {
-        const up = await api.uploadSessionFiles(id!, tray.map((p) => p.file))
+      if (uploads.length > 0) {
+        const up = await api.uploadSessionFiles(id!, uploads.flatMap((p) => (p.file ? [p.file] : [])))
         mentions = up.files.map((f) => f.mention)
       }
+      // The files dock's 插入 inserts a pill for a workspace path rather than
+      // uploading bytes. Hand that path to the same @file expansion, so the
+      // model sees the file's contents instead of just a filename.
+      const refs = tray.flatMap((p) => (p.ref ? [p.ref] : []))
       // @file references become inline fenced blocks before the prompt
       // leaves the composer — "explain @main.go" works without pasting the
       // file. Inside try so a rejected expansion still clears inflight.
-      const expanded = await expandFileRefs(withAttachments(raw, mentions), (p) => api.fsRead(p))
+      const expanded = await expandFileRefs(
+        withAttachments(raw, [...mentions, ...refs]),
+        (p) => api.fsRead(p),
+      )
       prompt = expanded.prompt
       // The bubble lists what rode along: the refs the prompt expanded, plus
       // the tray's own files under the name the user knows them by. The tray's
       // mentions are dropped from the first group — they resolve to the same
       // file under its stamped upload name, and listing both showed every
       // pasted file twice.
-      const trayMentions = new Set(mentions)
+      // A reference pill already lists its file under the name the reader
+      // knows; drop the expanded path too, or the bubble shows it twice.
+      const trayMentions = new Set([...mentions, ...refs])
       attached = [
         ...new Set([
           ...expanded.attached.filter((a) => !trayMentions.has(a)),
@@ -2429,23 +2468,12 @@ export function SessionsView({
     URL.revokeObjectURL(url)
   }
 
-  /** Take pasted, dropped or picked files into the tray. The tile appears at
-   *  once — the bytes themselves go up at send, when the thread they belong to
-   *  is known and a brand-new chat has one to upload into. */
-  function addFiles(files: File[]): void {
-    if (files.length === 0) return
-    const added: PendingAttachment[] = files.map((file) => ({
-      key: localMsgId(),
-      name: file.name || t('sessions.attachPasted'),
-      size: file.size,
-      image: isImageFile(file),
-      file,
-    }))
-    setPending((ps) => [...ps, ...added])
-    // The pill lands in the editable itself, at the caret — that is the whole
-    // point of the contenteditable. Inserted by hand, never by React: the
-    // framework reconciling children inside an editable would fight the text
-    // nodes the user's own typing puts there.
+  /** Put the pills in the editable itself, at the caret — the whole point of
+   *  a contenteditable. Inserted by hand, never by React: the framework
+   *  reconciling children inside an editable would fight the text nodes the
+   *  user's own typing puts there. Shared by uploaded files and workspace
+   *  references, so the two look and behave identically. */
+  function insertChips(added: PendingAttachment[]): void {
     const el = composer.current
     if (!el) return
     el.focus()
@@ -2470,6 +2498,40 @@ export function SessionsView({
     setInput(editorTextOf(el))
     setCaret(editorCaretOffset(el))
     autoGrow(el)
+  }
+
+  /** Take pasted, dropped or picked files into the tray. The tile appears at
+   *  once — the bytes themselves go up at send, when the thread they belong to
+   *  is known and a brand-new chat has one to upload into. */
+  function addFiles(files: File[]): void {
+    if (files.length === 0) return
+    const added: PendingAttachment[] = files.map((file) => ({
+      key: localMsgId(),
+      name: file.name || t('sessions.attachPasted'),
+      size: file.size,
+      image: isImageFile(file),
+      file,
+    }))
+    setPending((ps) => [...ps, ...added])
+    insertChips(added)
+  }
+
+  /** The files dock's 插入: a workspace path becomes the same atomic pill an
+   *  attached file gets, instead of a bare filename typed into the prompt.
+   *  A `:line` suffix stays in the label (and on the sent bubble) but is not
+   *  part of the path expandFileRefs reads at send. */
+  function addFileRef(raw: string): void {
+    const { path, label } = splitFileRef(raw)
+    if (!path) return
+    const added: PendingAttachment = {
+      key: localMsgId(),
+      name: label,
+      size: 0,
+      image: isImageFile({ name: path }),
+      ref: path,
+    }
+    setPending((ps) => [...ps, added])
+    insertChips([added])
   }
 
   function removePending(key: string): void {
@@ -3462,13 +3524,34 @@ export function SessionsView({
         onTab={(next) => {
           setDockTab(next)
           setDockOpen(true)
+          // Coming back to 对话 re-reads this thread's history. Clicking the
+          // tab is never a new conversation — only `+` is.
+          if (next === 'side') setSideReload((n) => n + 1)
         }}
         onToggle={() => setDockOpen((v) => !v)}
         onNew={() => {
-          // `+` means "a fresh one of whatever is showing": the file panel
-          // goes back to the workspace root, the other two start over.
-          if (dockTab === 'files') setFileRef(null)
-          else setDockEpoch((n) => n + 1)
+          // Files and the browser keep their own "fresh one of whatever is
+          // showing": the file panel goes back to the workspace root, the
+          // page starts over. Neither may touch the side conversations — a
+          // new chat beside the thread is a separate pane's business.
+          if (dockTab === 'files') {
+            setFileRef(null)
+            return
+          }
+          if (dockTab === 'browser') {
+            setDockEpoch((n) => n + 1)
+            return
+          }
+          // Everywhere else `+` is 新对话: another conversation beside the
+          // thread. The ones already there stay in the pane's history list,
+          // one click away — `+` no longer throws the last one away.
+          const sideMounted = dockSeen.includes('side')
+          setSideFresh(!sideMounted)
+          setDockTab('side')
+          setDockOpen(true)
+          // An already-mounted pane sees the epoch change; a first-time pane
+          // takes the mount flag (it did not exist when the epoch moved).
+          if (sideMounted) setSideEpoch((n) => n + 1)
         }}
       >
         {/* The three tool pages. They are panes like files/browser/side, not
@@ -3528,7 +3611,7 @@ export function SessionsView({
               session={session?.id ?? null}
               request={fileRef}
               resetSignal={dockEpoch}
-              onInsert={composerInsert}
+              onInsert={addFileRef}
             />
           </div>
         )}
@@ -3547,7 +3630,9 @@ export function SessionsView({
           <div class="dock-pane" hidden={dockTab !== 'side'}>
             <SideChat
               sessionId={session?.id ?? null}
-              resetSignal={dockEpoch}
+              resetSignal={sideEpoch}
+              reloadSignal={sideReload}
+              freshStart={sideFresh}
               onInsert={composerInsert}
               onOpenTask={openTaskInPlace}
             />

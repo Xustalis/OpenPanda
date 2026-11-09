@@ -63,14 +63,18 @@
   background: var(--accent, var(--border-strong));
 }
 
-/* The one head line: the three tools, `+`, the three tabs, the fold. 56px is
-   the pane head's height — two cards whose first rows end at different heights
-   make the eye read the seam first and the content second. */
+/* The one head line: `+`, the three places, the thread's tools, the fold.
+   56px is the pane head's height — two cards whose first rows end at different
+   heights make the eye read the seam first and the content second.
+   Left to right: start something, go somewhere, then the tools only this
+   thread needs, and finally the fold at the outer edge. The flexible gap now
+   sits between the places and the tools, so the tool trio takes the far end
+   instead of the whole row being crowded into its first third. */
 .dock-head {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   padding: 0 10px;
   height: 56px;
   border-bottom: 1px solid var(--border-soft);
@@ -80,17 +84,18 @@
   flex: none;
 }
 
-/* The three thread tools share the head with the tabs. 30px squares with an
-   18px glyph is the tab's own scale: at the chat head's 36px/19px they would
-   read as a second, louder toolbar inside a narrower column. */
+/* 30px squares with an 18px glyph is the tab's own scale: at the chat head's
+   36px/19px they would read as a second, louder toolbar inside a narrower
+   column. The tools now sit behind a hairline at the far end — the auto
+   margin is what puts them there, and it works at every dock width. */
 .dock-tools {
   flex: none;
   display: flex;
   align-items: center;
   gap: 2px;
-  margin-right: 6px;
-  padding-right: 8px;
-  border-right: 1px solid var(--border-soft);
+  margin-left: auto;
+  padding-left: 9px;
+  border-left: 1px solid var(--border-soft);
 }
 .dock-head .icon-btn {
   width: 30px;
@@ -124,6 +129,12 @@
 }
 .dock-body .node-panel.is-inline {
   position: static;
+  /* The popover carried `z-index: 20` to float over the transcript. Static or
+     not, a flex item honours it — and 20 beats the 12px grip's 3, so the pane
+     painted over the seam and swallowed every drag: the column could not be
+     resized while the node list was showing. As a page it has nothing to float
+     above, so the stacking slot goes. */
+  z-index: auto;
   flex: 1;
   min-height: 0;
   width: auto;
@@ -138,6 +149,9 @@
 }
 .dock-body .orch-flyout.is-inline {
   position: static;
+  /* Same reason as the node list above: the flyout's 20 outranked the grip's 3
+     and made the task list's page un-resizable. */
+  z-index: auto;
   flex: 1;
   min-height: 0;
   flex-direction: column;
@@ -211,20 +225,37 @@
   display: flex;
   justify-content: flex-end;
 }
-/* `+` is the odd one out in this row — the tabs are places, this one makes
-   something — so it gets a wider gap after it than the tabs have between them. */
-.dock-new {
-  margin-right: 6px;
+/* `+` is the row's only action, and it is always there. A quiet raised square
+   with a hairline edge reads as a button rather than as a fourth tab; the
+   tabs' well is the only sunken surface in the row. */
+.dock-head .icon-btn.dock-new {
+  box-sizing: border-box;
+  color: var(--text-secondary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+}
+.dock-head .icon-btn.dock-new:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 .dock-fold {
-  margin-left: auto;
+  /* The tools own the auto margin now; the fold is just the last button. */
+  flex: none;
 }
 
+/* The three places share one well. A lit tab is a raised card inside it, so
+   "where you are" is a shape, not just a slightly darker wash over one glyph
+   among six. */
 .dock-tabs {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 2px;
   min-width: 0;
+  padding: 3px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-inset);
 }
 
 .dock-tab {
@@ -240,12 +271,13 @@
   cursor: pointer;
 }
 .dock-tab:hover {
-  background: var(--bg-inset);
+  background: var(--surface-alpha-md);
   color: var(--text-primary);
 }
 .dock-tab.on {
-  background: var(--bg-inset);
+  background: var(--bg-raised);
   color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
 }
 .dock-badge {
   position: absolute;
@@ -394,6 +426,132 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* The history of this thread's side conversations: one collapsed bar above the
+   transcript, expanded into a list. It is a list rather than a popover because
+   the dock is a narrow column — a floating menu would clip against its edge,
+   and the rows are the point, not a detail behind a menu. */
+.side-history {
+  flex: none;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+}
+.side-history-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 12px;
+  background: none;
+  border: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.side-history-head:hover,
+.side-history-head:focus-visible {
+  color: var(--text);
+}
+.side-history-label {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.side-history-count {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 15px;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-alpha-sm);
+}
+.side-history-caret {
+  margin-left: auto;
+  transition: transform var(--dur-fast) var(--ease-enter);
+}
+.side-history.is-open .side-history-caret {
+  transform: rotate(180deg);
+}
+.side-history-list {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 0 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.side-history-empty {
+  margin: 0;
+  padding: 4px 4px 8px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.side-history-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-md);
+}
+.side-history-row:hover {
+  background: var(--bg-raised);
+}
+/* The conversation on screen is lit, not outlined: in a list of near-identical
+   titles the fill is what says "this is the one you are reading". */
+.side-history-row.is-active {
+  background: var(--accent-soft);
+}
+.side-history-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 6px;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+.side-history-title {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.side-history-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.side-history-del {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+}
+.side-history-row:hover .side-history-del,
+.side-history-del:focus-visible {
+  opacity: 1;
+}
+.side-history-del:hover {
+  color: var(--text);
+  background: var(--surface-alpha-sm);
+}
+/* No pointer means no hover to reveal the trash: keep it visible rather than
+   hiding the only way to prune the list on a touch device. */
+@media (hover: none) {
+  .side-history-del {
+    opacity: 1;
+  }
 }
 
 .df-bar {
@@ -1194,23 +1352,62 @@
   font-size: var(--text-sm);
   line-height: 1.6;
 }
+/* Two voices, told apart by position and shape before any label is read:
+   your turn is a bubble hugging the right edge, the panda's is a face plus
+   open text on the left. The old pair of 10px names above two identical
+   paragraphs made the reader decode a caption to know who was speaking —
+   in a pane this narrow the caption was the only signal, and it was the
+   weakest one on screen. */
 .side-turn {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.side-who {
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
+.side-turn.is-user {
+  align-items: flex-end;
 }
 .side-q {
   margin: 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm, 6px);
-  background: var(--bg-inset);
+  max-width: 88%;
+  padding: 8px 11px;
+  border-radius: 12px 12px 4px 12px;
+  border: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--text) 7.5%, var(--bg));
   font-size: var(--text-sm);
   line-height: 1.6;
   white-space: pre-wrap;
+}
+.side-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 1px;
+}
+/* The pet sprite keyed to transparency, same as the thread's avatar: on the
+   light theme the cream body disappears without the rim, leaving black ears
+   and limbs floating over the page. */
+.side-ava {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  filter: drop-shadow(1px 0 0 var(--panda-rim)) drop-shadow(-1px 0 0 var(--panda-rim))
+    drop-shadow(0 1px 0 var(--panda-rim)) drop-shadow(0 -1px 0 var(--panda-rim));
+}
+.side-name {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.35;
+}
+/* The reply keeps the head's lane: prose, tool chips, the task it started and
+   its actions all start where the name does. */
+.side-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-left: 26px;
 }
 .side-md {
   font-size: var(--text-sm);
@@ -1221,14 +1418,55 @@
 }
 .side-acts {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  padding-top: 2px;
+  gap: 6px;
+  padding-top: 8px;
 }
 /* The transcript's copy icon fades in on message hover; a side answer has no
-   `.msg` row to hover, so its copy control is simply always visible. */
+   `.msg` row to hover, so its copy control is simply always visible. The
+   transparent border is what makes it the same height as the two chips beside
+   it — a 22px glyph next to two 24px pills read as a stray icon rather than
+   the first control of the row. */
 .side-acts .msg-copy {
   opacity: 1;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+}
+.side-acts .msg-copy:hover {
+  border-color: var(--border-soft);
+}
+/* The two crossings back into the thread are controls, not prose. As bare
+   underlined text they read as a continuation of the answer — the reader had
+   to aim at a word to discover they were buttons — so each one gets a chip
+   outline: same weight as the tool chips above, but a pointer cursor and a
+   hover wash that says "press me". */
+.side-acts .link-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease,
+    background var(--dur-fast) ease;
+}
+.side-acts .link-btn:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-inset);
+  color: var(--text);
+}
+.side-acts .link-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 /* What the answer checked: one chip per tool call, the call's subject after
    the tool name. It is the evidence trail behind a side answer, and it stays
@@ -1293,6 +1531,7 @@
 .side-tokens {
   margin-left: auto;
   font-size: var(--text-xs);
+  white-space: nowrap;
 }
 /* A side answer that dispatched work: the way into the task, kept with the
    answer and after a reload. */
@@ -1335,24 +1574,29 @@ button.side-task:hover {
 .side-err {
   color: var(--danger, #b3261e);
 }
-/* The side conversation's composer. It used to be a bare 72px-min textarea
-   with a resize grip next to a detached square button; at dock width that read
-   as two unrelated controls and ate a third of the panel. One rounded box now
-   holds both, at the same scale as the dock's 30px head buttons. */
+/* The side conversation's composer. The dock is already a bordered card, so a
+   bordered `<textarea class="input">` inside another rounded card drew two
+   thick outlines around one line of text, with a square button stranded beside
+   it. One quiet surface at the foot of the pane: the field and Send share its
+   edge, the field grows from a single line, and neither focus nor an empty
+   input adds another box. */
 .side-compose {
   flex: none;
-  padding: 10px;
-  border-top: 1px solid var(--border-soft);
+  /* No divider: the box's own edge is the boundary. A hairline above it made
+     three outlines where one is enough. */
+  padding: 8px 10px 10px;
 }
 .side-compose-box {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  padding: 7px 7px 7px 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  gap: 6px;
+  padding: 5px 5px 5px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
   background: var(--bg-raised);
-  transition: border-color var(--dur-fast) var(--ease);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
 /* Neutral focus, the same answer the main composer gives: the caret is in the
    field, so the box deepens its edge instead of painting the whole footer
@@ -1363,18 +1607,20 @@ button.side-task:hover {
 .side-input {
   flex: 1;
   min-width: 0;
-  /* Two lines, not the 72px floor `.input` gives every textarea, and no resize
-     grip: the box is the field, so a grip inside it has nothing to resize. */
-  min-height: 40px;
+  /* One line at rest: 20px of text in a 32px field, so the first line and the
+     32px Send button share a centre. fitInput() grows it to 120px; no resize
+     grip, because the box is the field. */
+  min-height: 32px;
   max-height: 120px;
-  padding: 0;
+  padding: 6px 0;
   border: 0;
   background: transparent;
   color: var(--text);
   font-family: inherit;
   font-size: var(--text-sm);
-  line-height: 1.5;
+  line-height: 20px;
   outline: none;
+  overflow-y: auto;
   resize: none;
 }
 .side-input::placeholder {
@@ -1383,30 +1629,50 @@ button.side-task:hover {
 .side-input:disabled {
   opacity: 0.55;
 }
-/* Send and Stop share one slot at the field's bottom-right corner, 32px tall —
-   the head's control height, not the 40px block that used to hang outside. */
+/* The console's double focus ring would draw a second rounded box inside this
+   one; the box's border already carries the focus. */
+.side-input:focus-visible {
+  box-shadow: none;
+}
+/* Send and Stop share one 32px slot at the field's bottom-right corner. An
+   enabled Send is the one saturated object in the dock; an empty field leaves
+   a quiet outline instead of a greyed-out button that still reads clickable. */
 .side-compose-box .side-send {
   flex: none;
   width: 32px;
   height: 32px;
   padding: 0;
+  border-radius: var(--radius-md);
 }
-/* Tonal, like the main composer's Send: a solid accent square in a 320px dock
-   was the loudest object on the surface. */
-.side-compose-box .side-send.primary {
+.side-compose-box .side-send.primary:not(:disabled) {
   background: var(--accent-soft);
   border-color: var(--accent-border);
   color: var(--accent-strong);
   box-shadow: none;
 }
 .side-compose-box .side-send.primary:hover:not(:disabled) {
-  background: var(--accent-soft);
-  border-color: var(--accent);
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
   box-shadow: none;
+}
+.side-compose-box .side-send.primary:disabled {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-disabled);
+  opacity: 1;
 }
 .side-compose-box .side-stop {
   flex: none;
   height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+}
+.side-compose-box .side-stop:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
 }
 
 /* Below this the two cards can no longer both be cards: under ~710px of canvas

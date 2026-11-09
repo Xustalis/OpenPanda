@@ -107,6 +107,13 @@ func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []*sessions.Session{}
 	}
+	// The rail renders titles, not transcripts. Side conversations are the
+	// biggest thing a session file carries and the list has no use for them —
+	// with several chats per thread they would dominate the payload.
+	for _, sess := range list {
+		sess.SideChats = nil
+		sess.SideTurns = nil
+	}
 	writeJSON(w, list)
 }
 
@@ -203,6 +210,11 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("no such session"))
 		return
 	}
+	// The thread's own transcript is the payload here; the conversations
+	// beside it have their own read surface (/side) and would otherwise be
+	// shipped twice on every open.
+	sess.SideChats = nil
+	sess.SideTurns = nil
 	writeJSON(w, sess)
 }
 
@@ -620,13 +632,21 @@ func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 	if !cancelled {
 		// A stored side operation whose ask died with a previous panel process
 		// has no live cancel to call. Stop still ends it on the record, so a
-		// reopened pane does not sit on a spinner that can never finish.
-		if sess, err := h.sessions.Get(id); err == nil && sess.SideOperation != nil &&
-			sess.SideOperation.ID == req.OperationID && sess.SideOperation.Status == core.StateRunning {
-			if ok, _ := h.sessions.SetSideOperation(id, sessions.Operation{
-				ID: req.OperationID, Status: core.StateCancelled, Error: "cancelled",
-			}); ok {
-				cancelled = true
+		// reopened pane does not sit on a spinner that can never finish. The
+		// operation id names the chat it belongs to, so the write lands on the
+		// conversation that is actually stuck.
+		if sess, err := h.sessions.Get(id); err == nil {
+			for _, chat := range sess.SideChats {
+				if chat.Operation == nil || chat.Operation.ID != req.OperationID ||
+					chat.Operation.Status != core.StateRunning {
+					continue
+				}
+				if ok, _ := h.sessions.SetSideOperation(id, sessions.Operation{
+					ID: req.OperationID, Status: core.StateCancelled, Error: "cancelled",
+				}); ok {
+					cancelled = true
+				}
+				break
 			}
 		}
 	}
@@ -643,13 +663,39 @@ func (h *handler) hasActiveAsk(key string) bool {
 	return ok
 }
 
-// sessionSide serves the side conversation: GET returns its stored turns and
-// latest operation; DELETE clears both (the pane's `+`).
+// sideChatRow is one conversation in the pane's history list: what the header
+// shows, without the transcript.
+type sideChatRow struct {
+	ID        string `json:"id"`
+	Title     string `json:"title,omitempty"`
+	Turns     int    `json:"turns"`
+	UpdatedAt int64  `json:"updated_at,omitempty"`
+	Running   bool   `json:"running,omitempty"`
+}
+
+// sidePayload is what every /side response carries: the list the pane's header
+// renders, and the transcript it is showing. `chat` names the conversation the
+// turns belong to — a GET for one chat does not move the stored pointer, so
+// the pane must be told which one it got.
+type sidePayload struct {
+	Chats     []sideChatRow       `json:"chats"`
+	Active    string              `json:"active,omitempty"`
+	Chat      string              `json:"chat,omitempty"`
+	Turns     []sessions.SideTurn `json:"turns"`
+	Operation *sessions.Operation `json:"operation"`
+}
+
+// sessionSide serves the conversations beside a thread.
 //
-// The GET is the reconnect surface. A pane that reloads, reopens on another
-// device, or comes back after a background answer reads the conversation from
-// here instead of starting over — and a running operation tells it to keep
-// polling until the answer lands.
+// GET returns every chat in the list plus the transcript of one of them —
+// `?chat=` picks it, and the active chat is the default. This is the reconnect
+// surface: a pane that reloads, reopens on another device, or comes back after
+// a background answer reads the conversation from here instead of starting
+// over, and a running operation tells it to keep polling until the answer
+// lands.
+//
+// DELETE discards one chat (`?chat=`, default the active one) — the pane's
+// trash. The other conversations are untouched.
 func (h *handler) sessionSide(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sess, err := h.sessions.Get(id)
@@ -658,32 +704,162 @@ func (h *handler) sessionSide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
-		if sess.SideOperation != nil && sess.SideOperation.Status == core.StateRunning {
-			// Stop owns the live ask; the reset owns the record. Cancelling
-			// first keeps the late finalizer from appending into a transcript
-			// the user just discarded (AppendSideTurnIfCurrent would drop it
-			// anyway, but the goroutine should stop too).
-			h.cancelSessionAsk(id+sideOperationSuffix, sess.SideOperation.ID)
+		chatID := r.URL.Query().Get("chat")
+		if chatID == "" {
+			if chat := sess.ActiveSideChat(); chat != nil {
+				chatID = chat.ID
+			}
 		}
-		cleared, err := h.sessions.ResetSide(id)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, errors.New("reset side conversation failed"))
+		if chatID == "" {
+			h.writeSide(w, sess, "")
 			return
 		}
-		writeJSON(w, map[string]any{"turns": cleared.SideTurns, "operation": nil})
+		if chat := sess.SideChatByID(chatID); chat != nil && chat.Operation != nil &&
+			chat.Operation.Status == core.StateRunning {
+			// Stop owns the live ask; the delete owns the record. Cancelling
+			// first keeps the late finalizer from appending into a transcript
+			// the user just discarded (FinishSideOperation would drop it
+			// anyway, but the goroutine should stop too).
+			h.cancelSessionAsk(id+sideOperationSuffix, chat.Operation.ID)
+		}
+		cleared, err := h.sessions.DeleteSideChat(id, chatID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("delete side conversation failed"))
+			return
+		}
+		h.writeSide(w, cleared, "")
 		return
 	}
+	h.writeSide(w, sess, r.URL.Query().Get("chat"))
+}
 
-	op := sess.SideOperation
-	if op != nil && op.Status == core.StateRunning && !h.hasActiveAsk(id+sideOperationSuffix) {
+// writeSide answers with the pane's whole state. A `running` operation with no
+// live ask behind it is settled as interrupted on the way out: the answer died
+// with the panel process, and a spinner that can never finish is worse than a
+// stated failure. It walks every chat, not only the one being read, so a stale
+// spinner cannot hide in a conversation the reader is not looking at.
+func (h *handler) writeSide(w http.ResponseWriter, sess *sessions.Session, want string) {
+	live := h.hasActiveAsk(sess.ID + sideOperationSuffix)
+	for i := range sess.SideChats {
+		op := sess.SideChats[i].Operation
+		if live || op == nil || op.Status != core.StateRunning {
+			continue
+		}
 		updated := *op
 		updated.Status = core.StateFailed
 		updated.Error = "interrupted"
-		if ok, _ := h.sessions.SetSideOperation(id, updated); ok {
-			op = &updated
+		if ok, _ := h.sessions.SetSideOperation(sess.ID, updated); ok {
+			sess.SideChats[i].Operation = &updated
 		}
 	}
-	writeJSON(w, map[string]any{"turns": sess.SideTurns, "operation": op})
+
+	chats := make([]sideChatRow, 0, len(sess.SideChats))
+	for _, c := range sess.SideChats {
+		// A chat with no turns is a draft the writer never sent; it has no
+		// title to show and nothing to open, so it does not earn a row.
+		if len(c.Turns) == 0 {
+			continue
+		}
+		chats = append(chats, sideChatRow{
+			ID: c.ID, Title: c.Title, Turns: len(c.Turns), UpdatedAt: c.UpdatedAt,
+			Running: c.Operation != nil && c.Operation.Status == core.StateRunning,
+		})
+	}
+	// Newest first: the list is a history, and the conversation just used is
+	// the one being reopened.
+	sort.SliceStable(chats, func(i, j int) bool { return chats[i].UpdatedAt > chats[j].UpdatedAt })
+
+	chat := sess.SideChatByID(want)
+	if chat == nil {
+		chat = sess.ActiveSideChat()
+	}
+	out := sidePayload{Chats: chats, Active: sess.SideActive, Turns: []sessions.SideTurn{}}
+	if chat != nil {
+		out.Chat = chat.ID
+		out.Turns = legacyFreeSideTurns(chat.Turns)
+		out.Operation = chat.Operation
+	}
+	writeJSON(w, out)
+}
+
+// sessionSideNew starts another conversation beside the thread. The pane's `+`
+// is this call: the previous chats stay in the list, nothing is discarded.
+func (h *handler) sessionSideNew(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sess, err := h.sessions.NewSideChat(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("create side conversation failed"))
+		return
+	}
+	h.writeSide(w, sess, sess.SideActive)
+}
+
+// sessionSideSelect moves the pane to another stored conversation and returns
+// its transcript.
+func (h *handler) sessionSideSelect(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		ChatID string `json:"chat_id"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+			return
+		}
+	}
+	req.ChatID = strings.TrimSpace(req.ChatID)
+	if req.ChatID == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("chat_id is required"))
+		return
+	}
+	sess, err := h.sessions.SelectSideChat(id, req.ChatID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such side conversation"))
+		return
+	}
+	h.writeSide(w, sess, req.ChatID)
+}
+
+// legacyFreeSideTurns rewrites answers that were stored as raw tool-call
+// markup before the recovery path existed (GLM's <tool_call> template, DSML).
+// A side conversation is a transcript, not a log: the pane re-renders every
+// stored turn on open, so an old row would keep showing protocol text the
+// model never meant as prose — and there is no way to re-run it. The calls
+// become tool chips, which is what the reader can still use; the prose around
+// them (usually none) stays.
+func legacyFreeSideTurns(turns []sessions.SideTurn) []sessions.SideTurn {
+	var out []sessions.SideTurn
+	for i, t := range turns {
+		if t.Role != "assistant" || t.Text == "" {
+			continue
+		}
+		names, prose, ok := entry.ParseTextualToolCalls(t.Text)
+		if !ok {
+			continue
+		}
+		if out == nil {
+			out = append([]sessions.SideTurn(nil), turns...)
+		}
+		row := out[i]
+		row.Text = prose
+		for _, name := range names {
+			seen := false
+			for _, have := range row.Tools {
+				if have == name {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				row.Tools = append(row.Tools, name)
+			}
+		}
+		out[i] = row
+	}
+	if out == nil {
+		return turns
+	}
+	return out
 }
 
 // ---- Session approval state ----
@@ -765,11 +941,19 @@ type sessionAskRequest struct {
 	// thread, asked from the console's dock. It gets the thread's full tool
 	// face (dispatch included) and its own transcript on the session; the
 	// thread's turns are replayed as reference and nothing this ask produces
-	// is appended to them. The question and answer are filed in SideTurns, so
-	// the ask can outlive the pane that started it.
+	// is appended to them. The question and answer are filed in the side chat,
+	// so the ask can outlive the pane that started it.
 	Side bool `json:"side"`
+	// SideChat names the conversation beside the thread this question belongs
+	// to. Empty means the active one, which is what a pane that never switched
+	// sends.
+	SideChat string `json:"side_chat"`
+	// SideNew starts a fresh conversation for this question instead of
+	// appending to an existing one — the pane's `+` followed by a send. The
+	// previous chats stay in the list.
+	SideNew bool `json:"side_new"`
 	// SideTurns is deprecated and ignored: the server owns the side
-	// conversation (Session.SideTurns), so a side question outlives the pane
+	// conversation (Session.SideChats), so a side question outlives the pane
 	// and a second device sees the same history. The field stays on the wire
 	// so an older console does not fail to decode its own request.
 	SideTurns []entry.Turn `json:"side_turns"`
@@ -931,17 +1115,42 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// truth, so the conversation survives a reload, a second device and a panel
 	// restart, and the answer keeps arriving after the pane is gone.
 	var sideReplay []entry.Turn
+	sideChatID := ""
 	if side {
+		// Which conversation beside the thread this question belongs to. A
+		// pane that pressed `+` asks for a fresh one; a pane that names no
+		// chat (an older console, or a thread whose list is empty) means the
+		// active one, and only a thread with none at all mints a new one.
+		// Either way the id is resolved before the question is filed, so the
+		// answer can never land in a different transcript than the question.
+		chat := sess.SideChatByID(req.SideChat)
+		if chat == nil && req.SideChat == "" {
+			chat = sess.ActiveSideChat()
+		}
+		if req.SideNew || chat == nil {
+			updated, err := h.sessions.NewSideChat(sess.ID)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, errors.New("create side conversation failed"))
+				return
+			}
+			sess = updated
+			chat = sess.ActiveSideChat()
+		}
+		if chat == nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("no side conversation"))
+			return
+		}
+		sideChatID = chat.ID
 		budget := sessions.ReplayBudget(eng.ContextWindow()) / 2
 		if budget < 4000 {
 			budget = 4000
 		}
-		stored := sessions.TrimSideTurns(sess.SideTurns, budget)
+		stored := sessions.TrimSideTurns(chat.Turns, budget)
 		sideReplay = make([]entry.Turn, 0, len(stored))
 		for _, t := range stored {
 			sideReplay = append(sideReplay, entry.Turn{Role: t.Role, Content: t.Text})
 		}
-		if _, err := h.sessions.AppendSideTurn(sess.ID, sessions.SideTurn{Role: "user", Text: req.Prompt}); err != nil {
+		if _, err := h.sessions.AppendSideTurnTo(sess.ID, sideChatID, sessions.SideTurn{Role: "user", Text: req.Prompt}); err != nil {
 			writeErr(w, http.StatusInternalServerError, errors.New("save side turn failed"))
 			return
 		}
@@ -1194,7 +1403,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// continues to persist its final task/session result.
 	}
 	if side {
-		if err := h.sessions.StartSideOperation(sess.ID, sessions.Operation{
+		if err := h.sessions.StartSideOperationFor(sess.ID, sideChatID, sessions.Operation{
 			ID: op.operationID, Status: core.StateRunning,
 		}); err != nil {
 			send("error", map[string]string{"message": "save side operation failed"})

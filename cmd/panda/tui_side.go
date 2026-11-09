@@ -118,7 +118,14 @@ func (m *tuiModel) openSide(arg string) tea.Cmd {
 		// stored turns instead of an empty room.
 		if id := m.mainSessionID(); id != "" && m.r.sessionsSt != nil {
 			if sess, err := m.r.sessionsSt.Get(id); err == nil {
-				for _, t := range sess.SideTurns {
+				// The TUI has no chat list of its own: it reads the
+				// conversation the console is showing, which is the stored
+				// active one.
+				var turns []sessions.SideTurn
+				if chat := sess.ActiveSideChat(); chat != nil {
+					turns = chat.Turns
+				}
+				for _, t := range turns {
 					turn := entry.Turn{Role: t.Role, Content: t.Text}
 					m.side.turns = append(m.side.turns, turn)
 					if t.Role == "user" {

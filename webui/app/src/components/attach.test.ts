@@ -10,6 +10,7 @@ import {
   exportFilename,
   isBinaryRef,
   isImageFile,
+  splitFileRef,
   withAttachments,
 } from './attach.ts'
 import { setLocale } from '../i18n/index.ts'
@@ -147,4 +148,21 @@ test('exportFilename sanitizes and falls back', () => {
   assert.equal(exportFilename('My Chat!'), 'My-Chat.md')
   assert.equal(exportFilename(''), 'chat.md')
   assert.equal(exportFilename(null), 'chat.md')
+})
+
+test('splitFileRef keeps the line anchor on the label, not on the @path', () => {
+  // The files dock inserts "src/app.tsx:42" when a line is focused. Sending
+  // that whole string would make expandFileRefs read a file that cannot exist.
+  assert.deepEqual(splitFileRef('src/app.tsx:42'), { path: 'src/app.tsx', label: 'app.tsx:42' })
+  assert.deepEqual(splitFileRef('pelican-bike.html'), {
+    path: 'pelican-bike.html',
+    label: 'pelican-bike.html',
+  })
+  assert.deepEqual(splitFileRef('a/b/README'), { path: 'a/b/README', label: 'README' })
+  // A Windows drive letter is a colon too, but only a trailing :digits is an
+  // anchor — the rest has to stay in the path.
+  assert.deepEqual(splitFileRef('C:\\work\\main.go:7'), {
+    path: 'C:\\work\\main.go',
+    label: 'main.go:7',
+  })
 })
