@@ -57,7 +57,16 @@ type Skill struct {
 	SuccessCount int       `yaml:"success_count"`
 	LastUsed     time.Time `yaml:"last_used,omitempty"`
 	Builtin      bool      `yaml:"builtin,omitempty"`
-	Body         string    `yaml:"-"`
+	// Triggers are explicit retrieval keywords, bilingual where useful. They
+	// are scored far above incidental word overlap in name/description: a task
+	// titled "修复登录失败" must be able to reach an English-titled procedure
+	// without rewriting its description into Chinese prose.
+	Triggers []string `yaml:"triggers,omitempty"`
+	// Always marks a procedure that must ride in every agent prompt regardless
+	// of the task title (e.g. a standing verification convention). Budget
+	// pressure can still degrade it to an index line.
+	Always bool   `yaml:"always,omitempty"`
+	Body   string `yaml:"-"`
 }
 
 // ParseSkill decodes SKILL.md bytes (YAML frontmatter + Markdown body).

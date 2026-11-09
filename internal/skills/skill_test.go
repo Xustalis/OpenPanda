@@ -201,6 +201,157 @@ func TestMatchIgnoresStopwords(t *testing.T) {
 	}
 }
 
+func TestParseSkillTriggersAndAlwaysRoundTrip(t *testing.T) {
+	sk := sampleSkill()
+	sk.Triggers = []string{"deploy", "发布", "code review"}
+	sk.Always = true
+	data, err := sk.Bytes()
+	if err != nil {
+		t.Fatalf("bytes: %v", err)
+	}
+	got, err := ParseSkill(data)
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, data)
+	}
+	if len(got.Triggers) != 3 || got.Triggers[1] != "发布" || !got.Always {
+		t.Fatalf("trigger metadata lost: %+v", got)
+	}
+}
+
+// A built-in SKILL.md seeded by an older binary has no triggers on disk.
+// Index() must merge the curated table at read time so a reseed (which would
+// discard the user's counters and edits) is never required.
+func TestIndexMergesCuratedTriggers(t *testing.T) {
+	store := NewStore(t.TempDir())
+	sk := &Skill{
+		Name:        "git-workflow",
+		Description: "Standard Git branching, commit conventions, rebase workflow and pull request verification",
+		Scope:       ScopeGlobal,
+		Status:      StatusActive,
+		Builtin:     true,
+		UseCount:    7,
+		Body:        "## Steps\n1. branch",
+	}
+	if err := store.Save(sk); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	index, err := store.Index()
+	if err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	if len(index) != 1 || !index[0].Builtin || index[0].UseCount != 7 {
+		t.Fatalf("index lost disk state: %+v", index)
+	}
+	if len(index[0].Triggers) == 0 {
+		t.Fatal("built-in entry did not inherit curated triggers")
+	}
+	if got := Match(index, ScopeGlobal, "", "提交代码到分支"); len(got) != 1 || got[0].Name != "git-workflow" {
+		t.Errorf("Chinese title cannot reach the built-in skill: %v", names(got))
+	}
+}
+
+func TestMatchBilingualTriggers(t *testing.T) {
+	index := []IndexEntry{
+		{Name: "root-cause-debugging", Description: "Systematic root cause analysis", Scope: ScopeGlobal, Status: StatusActive,
+			Triggers: []string{"debug", "排查", "复现", "根因"}},
+		{Name: "docker-compose", Description: "Manage multi-container stacks", Scope: ScopeGlobal, Status: StatusActive,
+			Triggers: []string{"docker", "容器"}},
+	}
+	got := Match(index, ScopeGlobal, "", "排查登录失败的根因")
+	if len(got) != 1 || got[0].Name != "root-cause-debugging" {
+		t.Errorf("bilingual trigger match = %v, want only root-cause-debugging", names(got))
+	}
+}
+
+// Latin triggers must match whole words: "api" inside "capitalize" is not a
+// retrieval signal.
+func TestMatchTriggerWordBoundary(t *testing.T) {
+	index := []IndexEntry{
+		{Name: "api-debug", Description: "REST endpoints", Scope: ScopeGlobal, Status: StatusActive,
+			Triggers: []string{"api", "endpoint"}},
+	}
+	if got := Match(index, ScopeGlobal, "", "capitalize the word"); len(got) != 0 {
+		t.Errorf("substring fired a Latin trigger: %v", names(got))
+	}
+	if got := Match(index, ScopeGlobal, "", "call the api endpoint"); len(got) != 1 {
+		t.Errorf("whole-word trigger did not fire: %v", names(got))
+	}
+}
+
+// Device skills used to be visible to skill_list/skill_show but were never
+// matched for injection. Scope keys are also case-insensitive here, matching
+// the boundary used by the ask-engine tools.
+func TestMatchScopesRanksAcrossScopesAndIncludesDevice(t *testing.T) {
+	index := []IndexEntry{
+		{Name: "global-generic", Description: "Generic notes", Scope: ScopeGlobal, Status: StatusActive,
+			Triggers: []string{"build"}},
+		{Name: "device-build", Description: "Device-specific build", Scope: ScopeDevice, Key: "node-a", Status: StatusActive,
+			Triggers: []string{"build", "编译"}},
+		{Name: "other-device-build", Description: "Another device build", Scope: ScopeDevice, Key: "node-b", Status: StatusActive,
+			Triggers: []string{"build", "编译"}},
+		{Name: "project-build", Description: "Project build", Scope: ScopeProject, Key: "Panda", Status: StatusActive,
+			Triggers: []string{"build", "编译"}},
+	}
+	got := MatchScopes(index, "panda", []string{"node-a", "node-a@vm-1a2b3c4d"}, "编译构建", "")
+	if len(got) != 2 {
+		t.Fatalf("match = %v, want device + project only", names(got))
+	}
+	seen := map[string]bool{}
+	for _, e := range got {
+		seen[e.Name] = true
+	}
+	if !seen["device-build"] || !seen["project-build"] {
+		t.Errorf("scope isolation/ranking broken: %v", names(got))
+	}
+	if seen["other-device-build"] || seen["global-generic"] {
+		t.Errorf("other device's or unrelated global skill leaked: %v", names(got))
+	}
+}
+
+func TestMatchScopesAcceptsAnyDeviceAlias(t *testing.T) {
+	index := []IndexEntry{
+		{Name: "vm-skill", Description: "VM build procedure", Scope: ScopeDevice,
+			Key: "build-node@vm-1a2b3c4d", Status: StatusActive, Triggers: []string{"编译"}},
+	}
+	if got := MatchScopes(index, "", []string{"build-node", "build-node@vm-1a2b3c4d"}, "编译", ""); len(got) != 1 {
+		t.Errorf("neither node alias reached the device skill: %v", names(got))
+	}
+	if got := MatchScopes(index, "", []string{"other-node"}, "编译", ""); len(got) != 0 {
+		t.Errorf("another node's device skill leaked: %v", names(got))
+	}
+	index[0].Key = ""
+	if got := MatchScopes(index, "", []string{"build-node"}, "编译", ""); len(got) != 0 {
+		t.Errorf("a device skill with no label became globally visible: %v", names(got))
+	}
+}
+
+func TestMatchDormantDeprioritized(t *testing.T) {
+	index := []IndexEntry{
+		{Name: "active-skill", Description: "build workflow", Scope: ScopeGlobal, Status: StatusActive},
+		{Name: "dormant-skill", Description: "build workflow", Scope: ScopeGlobal, Status: StatusDormant, UseCount: 99},
+	}
+	got := Match(index, ScopeGlobal, "", "build")
+	if len(got) != 2 || got[0].Name != "active-skill" {
+		t.Errorf("dormant skill not deprioritized despite higher use count: %v", names(got))
+	}
+}
+
+func TestMatchCapsResults(t *testing.T) {
+	index := make([]IndexEntry, 0, 8)
+	for i := 0; i < 8; i++ {
+		index = append(index, IndexEntry{
+			Name:        "skill-" + string(rune('a'+i)),
+			Description: "Build procedure",
+			Scope:       ScopeGlobal,
+			Status:      StatusActive,
+			Triggers:    []string{"build"},
+		})
+	}
+	if got := Match(index, ScopeGlobal, "", "build"); len(got) != MaxSkillMatches {
+		t.Errorf("match count = %d, want cap %d", len(got), MaxSkillMatches)
+	}
+}
+
 func names(entries []IndexEntry) []string {
 	var out []string
 	for _, e := range entries {

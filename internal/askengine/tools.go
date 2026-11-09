@@ -764,6 +764,28 @@ func appendToolCalls(turns []entry.Turn, calls []*entry.ToolCall, note string, r
 	return turns
 }
 
+// The interruption digest is a last-resort reply, not a transcript. A long
+// exploration can execute dozens of tools; printing even 300 runes of each
+// buries the one useful fact ("your question was not answered") under a wall
+// of file dumps. Keep a handful of one-line entries and fold the rest.
+const (
+	digestMaxLines  = 8
+	digestLineRunes = 120
+)
+
+// digestExcerpt is a plain, user-facing truncation. excerpt() must not be
+// reused here: it inserts prompt.subagent.excerpt_omitted, an instruction
+// written for the model ("the full result was already shown to the user, no
+// need to re-read"). Leaking that marker into the reply is what made the
+// interruption look like a raw work log pasted from a prompt.
+func digestExcerpt(s string, limit int) string {
+	runes := []rune(strings.TrimSpace(s))
+	if len(runes) <= limit {
+		return string(runes)
+	}
+	return string(runes[:limit]) + "…"
+}
+
 // toolResultsDigest renders the "tool: result" lines collected across the
 // rounds when the model fails mid-loop or on the final convergence call: the
 // operations already happened, so the honest answer is what they did, plus a
@@ -774,12 +796,24 @@ func toolResultsDigest(digest []string, loc i18n.Locale) string {
 	}
 	var b strings.Builder
 	if loc == i18n.English {
-		fmt.Fprintf(&b, "Model stopped responding after %d tool operation(s); all of them did execute. Results:\n", len(digest))
+		fmt.Fprintf(&b, "Incomplete reply: the model stopped responding after %d tool operation(s). Operations that did run (excerpted):\n", len(digest))
 	} else {
-		fmt.Fprintf(&b, "模型在完成 %d 项工具操作后停止响应；这些操作均已实际执行。执行结果：\n", len(digest))
+		fmt.Fprintf(&b, "本次回答未完成：模型在完成 %d 项工具操作后停止响应。已执行的操作（节选）：\n", len(digest))
 	}
+	shown := 0
 	for _, line := range digest {
-		b.WriteString("- " + excerpt(line, 300, loc) + "\n")
+		if shown >= digestMaxLines {
+			break
+		}
+		b.WriteString("- " + digestExcerpt(line, digestLineRunes) + "\n")
+		shown++
+	}
+	if len(digest) > shown {
+		if loc == i18n.English {
+			fmt.Fprintf(&b, "- ... and %d more operation(s) not listed individually.\n", len(digest)-shown)
+		} else {
+			fmt.Fprintf(&b, "- ……另有 %d 项操作未逐条列出。\n", len(digest)-shown)
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

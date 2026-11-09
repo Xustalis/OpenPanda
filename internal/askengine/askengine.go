@@ -421,10 +421,8 @@ func (e *Engine) modelFallbacks(skipKey string) []*entry.Client {
 // receives each model name as it is tried (the progress line a fallback emits).
 func (e *Engine) tryFallbackModels(ctx context.Context, primary *entry.Client, run func(*entry.Client) (entry.Output, error), announce func(string)) (*entry.Client, entry.Output, bool) {
 	for _, fb := range e.modelFallbacks(primary.Key()) {
-		if e.logger != nil {
-			e.logger.Warn("askengine: fatal model error, attempting fallback",
-				"primary", primary.ModelName(), "fallback", fb.ModelName())
-		}
+		e.logWarn("askengine: fatal model error, attempting fallback",
+			"primary", primary.ModelName(), "fallback", fb.ModelName())
 		if announce != nil {
 			announce(fb.ModelName())
 		}
@@ -436,6 +434,11 @@ func (e *Engine) tryFallbackModels(ctx context.Context, primary *entry.Client, r
 		if entry.IsFatalModelError(err) {
 			e.recordModelFailure(fb.Key())
 		}
+		// Every fallback sharing an endpoint can fail for the same reason.
+		// Without this line the loop reports only the primary's error and the
+		// user cannot tell whether failover was even attempted.
+		e.logWarn("askengine: fallback model failed too",
+			"primary", primary.ModelName(), "fallback", fb.ModelName(), "err", err)
 	}
 	return primary, entry.Output{}, false
 }
@@ -587,7 +590,16 @@ func (e *Engine) applyNetworkConfig() {
 	n := e.cfg.Network
 	reputation := e.cfg.Routing.Reputation
 	e.cfgMu.RUnlock()
-	if e.meshNode {
+	// Peer edges belong to the process that owns the node row. A borrowed
+	// engine — the web console sitting beside a daemon — shares the identity
+	// but not the transport, and dialing here would take the one edge the
+	// daemon needs: dispatch runs there, the outbox flush runs there, and a
+	// peer whose only track lives in this process is a peer the scheduler
+	// cannot reach. The task then parks in task_outbox while the panel shows
+	// the node online, which is exactly the split this guard removes.
+	// Submit-and-read engines still take the credential/policy half below so
+	// whatever they dial themselves is authenticated correctly.
+	if e.meshNode && sched.OwnsNodeRow() {
 		sched.ApplyNetworkConfig(e.schedCtx, n)
 		sched.SetReputationEnabled(reputation)
 		return
@@ -1729,6 +1741,14 @@ const (
 	ProgressPlan ProgressKind = "plan" // starting a multi-stage plan
 	ProgressTool ProgressKind = "tool" // running a tool
 	// ProgressClarify means the ask is waiting on the user's choice card.
+	// This is the one kind with no localized progress wording: the card
+	// itself (Result.Kind == "clarify") is the UI, and a second status row
+	// would only repeat its first question header. cmd/panda/ui.go's
+	// progressNote deliberately falls through to its default, which returns
+	// p.Name — exactly that header. ui_test.go pins the behaviour so a later
+	// kind-exhaustive refactor cannot quietly turn it into an empty row or a
+	// raw i18n key, and so nobody adds five locale strings for a row the
+	// card already renders.
 	ProgressClarify ProgressKind = "clarify"
 	// The following are lifecycle milestones bridged from the scheduler core's
 	// trace events while a synchronous Submit blocks — so the CLI shows the run
@@ -2014,11 +2034,15 @@ type AskScope struct {
 	// package (panel sessions) can make the same choice explicitly.
 	AmbientProject bool
 
-	// Node pins this ask's classified task to a preferred executor node
-	// (id or name). A model-emitted spec.node always wins — the scope value
-	// is the composer's explicit pick, used when the model leaves routing
-	// to the scheduler. Plans are unaffected: per-stage routing is the
-	// point of a pipeline, so a flat node pin would defeat it.
+	// Node HARD-pins this ask's classified task to an executor node (id or
+	// name): it lands in spec.node, and an offline or incapable node fails the
+	// task instead of running it somewhere else. The panel's device picker has
+	// to mean exactly that — a soft hint would silently fall back to this
+	// machine, and the user who picked a device would be the last to know.
+	// A model-emitted spec.node always wins — the scope value is the
+	// composer's explicit pick, used when the model leaves routing to the
+	// scheduler. Plans are unaffected: per-stage routing is the point of a
+	// pipeline, so a flat node pin would defeat it.
 	Node string
 
 	// Agents is the thread's roster: the agent names this conversation is
@@ -2662,6 +2686,14 @@ rounds:
 				}
 			}
 		}
+		// A workspace-exploration ask tends to spend every round emitting
+		// another read/list call: the paged "[stopped after N lines]" trailer
+		// reads as an invitation to continue, and the model never switches to
+		// prose. Nudge one round before the ceiling so convergence happens
+		// while the transcript is still small enough to replay reliably.
+		if round == maxRounds-2 && len(toolDigest) > 0 {
+			turns = append(turns, entry.Turn{Role: "user", Content: convergenceNudge(effectiveLocale)})
+		}
 		trackReasoning := func(chunk string) {
 			accumulatedReasoning.WriteString(chunk)
 			if cb.OnReasoning != nil {
@@ -3008,6 +3040,31 @@ rounds:
 		}
 		return entry.ClassifyTurns(ctx, c, devices, conversationMemory, ts, classifyOpts...)
 	}
+	// convergeCompact is the last chance at a real answer. The full history —
+	// every tool call plus every full result — is exactly what the final call
+	// just failed on, so re-sending it (or a raw dump of it) cannot help. Ask
+	// once more over the question plus a bounded inventory of what ran: small
+	// enough for any window, still enough evidence to write an answer. This is
+	// deliberately non-streaming: a failed convergence may already have
+	// streamed a partial token, and a second stream would duplicate it.
+	convergeCompact := func() (string, error) {
+		if len(toolDigest) == 0 {
+			return "", errors.New("no tool observations to converge on")
+		}
+		out, cerr := entry.ClassifyTurns(ctx, client, devices, conversationMemory,
+			compactConvergenceTranscript(prompt, toolDigest, effectiveLocale), classifyOpts...)
+		if cerr != nil {
+			return "", cerr
+		}
+		if out.Kind != entry.KindAnswer {
+			return "", fmt.Errorf("compact convergence produced %s instead of an answer", out.Kind)
+		}
+		answer := strings.TrimSpace(out.Answer)
+		if answer == "" || entry.ContainsDSMLToolCall(answer) {
+			return "", errors.New("compact convergence produced no usable text")
+		}
+		return answer, nil
+	}
 	var final entry.Output
 	var ferr error
 	// The final convergence call replays the same transcript, so it gets the
@@ -3033,11 +3090,27 @@ rounds:
 			}
 		}
 		if ferr != nil {
+			loopErr := fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr)
+			// The full replay failed; a compact tool-free retry often still
+			// succeeds, and a real answer beats an honest tool transcript.
+			// The provider's reason survives on Warning either way.
+			if answer, cerr := convergeCompact(); cerr == nil {
+				e.logWarn("askengine: convergence recovered on a compact transcript",
+					"rounds", maxRounds, "tools", len(toolDigest))
+				return budgetAdvisory(&Result{
+					Kind:    "answer",
+					Answer:  answer,
+					Warning: loopFailureReason(ferr, effectiveLocale),
+				}), nil
+			} else {
+				e.logError("askengine: compact convergence failed",
+					"err", cerr, "original", ferr, "tools", len(toolDigest))
+			}
 			// The tools already ran — report what they did rather than a bare
 			// loop error. toolDigest is empty only when nothing ever executed,
 			// in which case the wrapped error stands. The real reason rides
 			// along now instead of being folded into "stopped responding".
-			return digestOrErr(fmt.Errorf("reached max tool rounds (%d): %w", maxRounds, ferr), maxRounds)
+			return digestOrErr(loopErr, maxRounds)
 		}
 	} else {
 		e.recordModelSuccess(client.Key())
@@ -3080,10 +3153,20 @@ rounds:
 	}
 	answer := final.Answer
 	if strings.TrimSpace(answer) == "" {
-		// Convergence produced no text. The executed tools are the only
-		// truth available, so fall back to their digest rather than handing
-		// the user a blank turn (the deferred notice is the final backstop).
-		answer = toolResultsDigest(toolDigest, effectiveLocale)
+		// Convergence produced no text. Try the compact transcript before
+		// degrading to the tool digest: the user asked for an answer, and one
+		// small model call is cheap next to a wall of raw tool output.
+		if recovered, cerr := convergeCompact(); cerr == nil {
+			answer = recovered
+			e.logWarn("askengine: empty convergence recovered on a compact transcript",
+				"rounds", maxRounds, "tools", len(toolDigest))
+		} else {
+			e.logError("askengine: empty convergence, compact retry failed",
+				"err", cerr, "tools", len(toolDigest))
+			// The executed tools are the only truth available, so fall back
+			// to their digest rather than handing the user a blank turn.
+			answer = toolResultsDigest(toolDigest, effectiveLocale)
+		}
 	}
 	if lastTask != nil {
 		lastTask.Answer = answer

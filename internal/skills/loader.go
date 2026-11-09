@@ -8,9 +8,21 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"unicode"
 
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
+
+// MaxSkillMatches bounds how many skills one agent prompt may inject. Without
+// a cap, a long task title can pull in most of the library and starve the
+// mandatory intent of its context budget even though the assembly degrades
+// individual bodies to index lines.
+const MaxSkillMatches = 4
+
+// alwaysBaseScore keeps an always-on procedure ahead of incidental keyword
+// matches without making it immune to the prompt budget in withSkills.
+const alwaysBaseScore = 1000
 
 // IndexEntry is a lightweight skill reference for progressive loading (Hermes's
 // skill index): it holds only what matching needs, not the full body, so the
@@ -23,6 +35,9 @@ type IndexEntry struct {
 	Status      Status
 	UseCount    int
 	Builtin     bool
+	Triggers    []string
+	Always      bool
+	Score       int // filled in by Match/MatchScopes; zero straight from Index
 }
 
 // Index scans the skills root and returns lightweight entries, dropping skills
@@ -45,6 +60,14 @@ func (s *Store) Index() ([]IndexEntry, error) {
 		if err != nil {
 			return nil // skip malformed skill, keep indexing the rest
 		}
+		triggers, always := sk.Triggers, sk.Always
+		builtin := sk.Builtin || IsBuiltinSkill(sk.Name)
+		if builtin && len(triggers) == 0 {
+			// Built-in skills seeded by an older binary (or edited by the user)
+			// carry no triggers on disk. Merge the curated table at read time:
+			// no reseed, no overwritten counters, no second source of truth.
+			triggers, always = BuiltinTriggers(sk.Name)
+		}
 		out = append(out, IndexEntry{
 			Name:        sk.Name,
 			Description: sk.Description,
@@ -52,7 +75,9 @@ func (s *Store) Index() ([]IndexEntry, error) {
 			Key:         sk.keyForScope(),
 			Status:      sk.Status,
 			UseCount:    sk.UseCount,
-			Builtin:     sk.Builtin || IsBuiltinSkill(sk.Name),
+			Builtin:     builtin,
+			Triggers:    triggers,
+			Always:      always,
 		})
 		return nil
 	})
@@ -62,62 +87,189 @@ func (s *Store) Index() ([]IndexEntry, error) {
 	return out, nil
 }
 
-// Match returns index entries whose name/description overlap the query, ranked
-// by relevance and restricted to the given scope (and key for project/device
-// scopes). Expired and pending skills never match. An empty query matches every
-// skill in scope in index order. Scoring is lexical token overlap — whole-word
-// for Latin, single ideograph for CJK — enough to rank related skills without a
-// semantic index.
+// Match returns index entries in one scope whose name/description/triggers
+// overlap query, ranked by relevance. Expired and pending skills never match;
+// dormant ones are deprioritized. An empty query matches every skill in scope
+// in index order.
 func Match(index []IndexEntry, scope Scope, key, query string) []IndexEntry {
+	return matchRanked(index, func(e IndexEntry) bool {
+		if e.Scope != scope {
+			return false
+		}
+		if (scope == ScopeProject || scope == ScopeDevice) && !strings.EqualFold(e.Key, key) {
+			return false
+		}
+		return true
+	}, query, "")
+}
+
+// MatchScopes matches global, project and device skills in ONE ranked pass.
+// Matching each scope separately and concatenating the results (the old
+// withSkills behaviour) made every global skill outrank every project or
+// device skill regardless of relevance, and left device skills out entirely.
+// deviceKeys accepts several names for this node because `panda skill import
+// --device` takes a user-chosen label while the core knows only its derived
+// runtime node ID; either spelling must reach the same procedure.
+func MatchScopes(index []IndexEntry, project string, deviceKeys []string, primary, secondary string) []IndexEntry {
+	return matchRanked(index, func(e IndexEntry) bool {
+		switch e.Scope {
+		case ScopeGlobal:
+			return true
+		case ScopeProject:
+			return project != "" && strings.EqualFold(e.Key, project)
+		case ScopeDevice:
+			return MatchKey(e.Key, deviceKeys)
+		default:
+			return false
+		}
+	}, primary, secondary)
+}
+
+// MatchKey reports whether a scoped skill's key is one of the accepted names
+// for the current node/project. Empty keys never match: a device skill saved
+// without a label must not become visible everywhere. Shared by the execution
+// prompt and the ask-engine tools so what is listed is what can be loaded.
+func MatchKey(key string, keys []string) bool {
+	if key == "" {
+		return false
+	}
+	for _, k := range keys {
+		if k != "" && strings.EqualFold(key, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchRanked scores the in-scope, usable entries. The primary query (the
+// task title) is weighted twice the secondary one (a bounded slice of the
+// intent), so a short specific title still dominates a long generic body.
+func matchRanked(index []IndexEntry, allowed func(IndexEntry) bool, primary, secondary string) []IndexEntry {
 	var candidates []IndexEntry
 	for _, e := range index {
-		if e.Scope != scope {
-			continue
-		}
-		if (scope == ScopeProject || scope == ScopeDevice) && e.Key != key {
-			continue
-		}
 		if e.Status == StatusExpired || e.Status == StatusPending {
 			continue // expired is pruned; pending awaits user approval before use
 		}
+		if !allowed(e) {
+			continue
+		}
 		candidates = append(candidates, e)
 	}
-	if query == "" {
-		return candidates
+	pTokens := util.Tokenize(primary)
+	sTokens := util.Tokenize(secondary)
+	if len(pTokens) == 0 && len(sTokens) == 0 {
+		return candidates // no signal: keep index order, do not invent a ranking
 	}
-	q := util.Tokenize(query)
+	pRaw := strings.ToLower(primary)
+	sRaw := strings.ToLower(secondary)
 	type scored struct {
 		entry IndexEntry
 		score int
+		order int
 	}
 	ranked := make([]scored, 0, len(candidates))
-	for _, e := range candidates {
-		if s := overlapTokens(q, util.Tokenize(e.Name+" "+e.Description)); s > 0 {
-			ranked = append(ranked, scored{e, s})
+	for i, e := range candidates {
+		score := scoreEntry(e, pTokens, pRaw, 2) + scoreEntry(e, sTokens, sRaw, 1)
+		if e.Always {
+			score += alwaysBaseScore
 		}
+		if e.Status == StatusDormant && !e.Always && score > 1 {
+			score /= 2 // lifecycle §8.5: dormant stays visible but deprioritized
+		}
+		if score <= 0 {
+			continue
+		}
+		e.Score = score
+		ranked = append(ranked, scored{e, score, i})
 	}
-	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		if ranked[i].entry.UseCount != ranked[j].entry.UseCount {
+			return ranked[i].entry.UseCount > ranked[j].entry.UseCount
+		}
+		return ranked[i].order < ranked[j].order
+	})
 	out := make([]IndexEntry, 0, len(ranked))
-	for _, r := range ranked {
+	for i, r := range ranked {
+		if i >= MaxSkillMatches {
+			break
+		}
 		out = append(out, r.entry)
 	}
 	return out
 }
 
-// overlapTokens counts the query tokens present in the text tokens, skipping
-// function words (Latin and CJK) so a match on a common word like "the" or "的"
-// alone never drives ranking.
-func overlapTokens(query, text map[string]struct{}) int {
-	n := 0
-	for t := range text {
+// scoreEntry counts lexical overlap with the query. Explicit triggers are
+// worth much more than an incidental word in a description: they are the
+// curated, bilingual statement of when a procedure applies.
+func scoreEntry(e IndexEntry, qTokens map[string]struct{}, qRaw string, weight int) int {
+	if weight <= 0 || len(qTokens) == 0 {
+		return 0
+	}
+	nameTokens := util.Tokenize(e.Name)
+	descTokens := util.Tokenize(e.Description)
+	score := 0
+	for t := range qTokens {
 		if util.IsStopword(t) {
 			continue
 		}
-		if _, ok := query[t]; ok {
-			n++
+		if _, ok := nameTokens[t]; ok {
+			score += 5
+		}
+		if _, ok := descTokens[t]; ok {
+			score++
 		}
 	}
-	return n
+	score += triggerHits(e.Triggers, qTokens, qRaw)
+	return score * weight
+}
+
+// triggerHits scores explicit triggers. Latin triggers are matched as whole
+// words (so "api" cannot fire on "capital"); Han triggers are matched as
+// substrings of the raw query (so "发版" fires on "打开发版清单"). Multi-word
+// Latin triggers require all of their words to be present.
+func triggerHits(triggers []string, qTokens map[string]struct{}, qRaw string) int {
+	hits := 0
+	for _, tr := range triggers {
+		lt := strings.ToLower(strings.TrimSpace(tr))
+		if lt == "" {
+			continue
+		}
+		if containsHan(lt) {
+			if strings.Contains(qRaw, lt) {
+				hits++
+			}
+			continue
+		}
+		trTokens := util.Tokenize(lt)
+		if len(trTokens) == 0 {
+			continue
+		}
+		all := true
+		for tt := range trTokens {
+			if _, ok := qTokens[tt]; !ok {
+				all = false
+				break
+			}
+		}
+		if all {
+			hits++
+		}
+	}
+	return hits * 6
+}
+
+// containsHan reports whether s has any CJK ideograph. Shared by the skill
+// index and the Hub catalog scorer.
+func containsHan(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // keyForScope returns the scoping key (project/device name) relevant to the
