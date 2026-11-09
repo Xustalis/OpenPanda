@@ -64,6 +64,17 @@ export function isBinaryRef(path: string): boolean {
   return BINARY_EXT.test(path)
 }
 
+/** The files dock hands 插入 a path with an optional `:line` suffix. The
+ *  suffix is a UI anchor for the file viewer, not part of the path the prompt
+ *  expands — keep it on the pill's label, drop it from the `@path` token. */
+export function splitFileRef(raw: string): { path: string; label: string } {
+  const m = /^(.*):(\d+)$/.exec(raw)
+  const path = m?.[1] || raw
+  const line = m?.[2]
+  const base = path.split(/[\\/]/).pop() || path
+  return { path, label: base + (line ? `:${line}` : '') }
+}
+
 /** Fold the composer tray's uploads into the prompt. Each one rides as an
  *  `@path` token so `expandFileRefs` sees it — text files then arrive as
  *  fenced blocks, and binary ones stay paths for the agent to open. */

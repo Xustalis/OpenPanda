@@ -1590,14 +1590,36 @@ export const api = {
     return request('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`, { operation_id: operationID })
   },
 
-  /** The server-owned side conversation beside a thread: its stored turns and
-   *  the latest side operation. This is the reconnect surface — a pane that
-   *  reloads mid-answer reads it instead of starting over. */
-  sideConversation(id: string): Promise<SideConversation> {
-    return request('GET', `/api/sessions/${encodeURIComponent(id)}/side`)
+  /** The server-owned conversations beside a thread: the history list plus one
+   *  transcript. This is the reconnect surface — a pane that reloads
+   *  mid-answer reads it instead of starting over. `chat` picks the
+   *  conversation to read; the active one is the default. */
+  sideConversation(id: string, chat?: string): Promise<SideConversation> {
+    const q = chat ? `?chat=${encodeURIComponent(chat)}` : ''
+    return request('GET', `/api/sessions/${encodeURIComponent(id)}/side${q}`)
   },
 
-  /** Discard the side conversation and cancel any running side ask. */
+  /** Start another conversation beside the thread. Nothing is discarded: the
+   *  previous chats stay in the list. */
+  newSideChat(id: string): Promise<SideConversation> {
+    return request('POST', `/api/sessions/${encodeURIComponent(id)}/side/new`, {})
+  },
+
+  /** Move the pane to a stored conversation and read its transcript. */
+  selectSideChat(id: string, chatID: string): Promise<SideConversation> {
+    return request('POST', `/api/sessions/${encodeURIComponent(id)}/side/select`, { chat_id: chatID })
+  },
+
+  /** Discard one conversation and cancel its running ask. */
+  deleteSideChat(id: string, chatID: string): Promise<SideConversation> {
+    return request(
+      'DELETE',
+      `/api/sessions/${encodeURIComponent(id)}/side?chat=${encodeURIComponent(chatID)}`,
+    )
+  },
+
+  /** Discard the conversation the pane is showing (a console that predates the
+   *  history list uses this as its `+`). */
   resetSideConversation(id: string): Promise<SideConversation> {
     return request('DELETE', `/api/sessions/${encodeURIComponent(id)}/side`)
   },
@@ -2898,10 +2920,26 @@ export interface StoredSideTurn {
   ts?: number
 }
 
-/** GET/DELETE /api/sessions/{id}/side. The operation is the latest side ask:
- *  `running` means the answer is still being produced server-side, so the pane
- *  should keep following it instead of offering a new question. */
+/** One conversation beside a thread, as the pane's history list sees it. The
+ *  title is the chat's first question; `turns` is how many messages it holds. */
+export interface SideChatSummary {
+  id: string
+  title?: string
+  turns: number
+  updated_at?: number
+  /** An answer is still being produced server-side for this chat. */
+  running?: boolean
+}
+
+/** GET /api/sessions/{id}/side. `chats` is the history the pane's header lists
+ *  (newest first); `turns` is the transcript of `chat` — the one asked for, or
+ *  the active one. The operation is that chat's latest ask: `running` means the
+ *  answer is still being produced server-side, so the pane should keep
+ *  following it instead of offering a new question. */
 export interface SideConversation {
+  chats: SideChatSummary[]
+  active?: string
+  chat?: string
   turns: StoredSideTurn[]
   operation?: {
     id: string
@@ -2913,19 +2951,21 @@ export interface SideConversation {
 }
 
 /** POST /api/sessions/{id}/ask with `side: true`: the full conversation beside
- *  the thread. The server owns the transcript (Session.SideTurns), files the
+ *  the thread. The server owns the transcript (Session.SideChats), files the
  *  question before the model runs, and keeps producing the answer after this
  *  stream closes — so the caller sends only the prompt and reads the result
- *  back through GET /api/sessions/{id}/side. */
+ *  back through GET /api/sessions/{id}/side. `chat` names the conversation the
+ *  question belongs to; `fresh` starts a new one instead. */
 export async function askSideStream(
   id: string,
   prompt: string,
+  opts: { chat?: string; fresh?: boolean },
   h: AskStreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
   await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
     method: 'POST',
-    body: { prompt, authorize: false, side: true },
+    body: { prompt, authorize: false, side: true, side_chat: opts.chat ?? '', side_new: !!opts.fresh },
     signal,
     onEvent: (event, data) => dispatchAskEvent(event, data, h),
   })

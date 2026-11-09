@@ -18,9 +18,16 @@
 // composer and the jump arrow left together — the same promise the header cards
 // keep, with one number instead of three.
 //
-// One head line, not two: the thread's tools, `+`, the three tabs and the fold
-// control sit in the same row. A second rail would cost a column of width in a
-// panel whose whole job is showing content beside the reading column.
+// One head line, not two: `+`, the three places, the thread's tools and the
+// fold control sit in the same row. A second rail would cost a column of width
+// in a panel whose whole job is showing content beside the reading column.
+//
+// The order is by how often the hand reaches for the button: start something,
+// go somewhere, then the tools that only this thread needs; the fold stays at
+// the outer edge. Previously the tools opened the row and the tabs sat at its
+// end, which put the six glyphs at one weight and left `+` stranded between
+// two groups it belonged to neither. The tabs now wear a segmented well, so
+// the row reads as one action, one place-group and one tool-group.
 //
 // Tabs keep their own state. Switching from files to a side conversation and
 // back must land on the same file, scrolled where it was; that is the whole
@@ -59,11 +66,12 @@ export interface DockProps {
   onToggle(): void
   onWidth(width: number): void
   /** The `+` in the head: a fresh object in the current panel (a new page, a
-   *  new side conversation, the workspace root). Absent leaves the button out. */
+   *  new side conversation, the workspace root). The button is always shown
+   *  while the column is open; without a handler it opens a fresh side chat. */
   onNew?(): void
   /** Counts shown as a badge on a tab. */
   badges?: Partial<Record<Exclude<DockTab, ''>, number>>
-  /** The thread's actions, parked at the left of the head: export, the node
+  /** The thread's actions, parked at the far end of the head: export, the node
    *  pick and the orchestration card. They live here rather than in the chat
    *  head so the two cards of the workbench do not carry the same controls
    *  twice. Only mounted while the column is open. */
@@ -165,23 +173,27 @@ export function Dock(props: DockProps) {
       )}
 
       <header class="dock-head">
-        {open && props.tools && <div class="dock-tools">{props.tools}</div>}
-
-        {/* `+` only where it has something to add: the three tool pages and
-            the start state have nothing to start fresh in, and a control that
-            looks live and is not is worse than one that is absent. */}
-        {open && props.onNew && (tab === 'files' || tab === 'browser' || tab === 'side') && (
+        {/* `+` opens the row and never leaves it. It used to be hidden on the
+            three tool pages and on the start state: the one control that says
+            "start fresh" disappeared exactly where there was nothing fresh to
+            lose. Every pane has an answer for it now (the caller owns which
+            one), and a Dock without an `onNew` opens a side conversation. */}
+        {open && (
           <button
             type="button"
             class="icon-btn dock-new"
             title={t('dock.new')}
             aria-label={t('dock.new')}
-            onClick={props.onNew}
+            onClick={() => (props.onNew ? props.onNew() : onTab('side'))}
           >
             <Icon name="plus" size={16} />
           </button>
         )}
 
+        {/* The three places share one segmented well: files, the page being
+            read, and the conversation beside this one. Keeping them together
+            makes the lit tab read as "where you are" rather than as one of six
+            equally weighted glyphs. */}
         {open && (
           <nav class="dock-tabs" aria-label={t('dock.label')}>
             {tabs.map(({ key, icon, label }) => {
@@ -203,6 +215,12 @@ export function Dock(props: DockProps) {
             })}
           </nav>
         )}
+
+        {/* The thread-only tools sit at the far end, next to the fold: export,
+            node pick and orchestration are reached for far less often than a
+            place, and they vary with the thread (the export one only exists
+            once there is a transcript). The hairline is the group boundary. */}
+        {open && props.tools && <div class="dock-tools">{props.tools}</div>}
 
         <button
           type="button"
