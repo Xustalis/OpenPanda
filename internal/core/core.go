@@ -1403,7 +1403,7 @@ func helloFailureReason(secret, receiverID string, p bus.HelloPayload, now time.
 		return "hello carries no HMAC signature"
 	case p.To == "" && p.Nonce != "" && p.Sig != bus.HelloSigN(secret, p.NodeID, p.Ts, p.Nonce):
 		return "shared_secret mismatch (HMAC)"
-	case p.To == "" && p.Nonce == "" && p.Sig != bus.HelloSig(secret, p.NodeID, p.Ts):
+	case p.To == "" && p.Nonce == "" && p.Sig != bus.HelloSigLegacy(secret, p.NodeID, p.Ts):
 		return "shared_secret mismatch (legacy HMAC)"
 	default:
 		return "identity signature (Ed25519) invalid or half-present"
