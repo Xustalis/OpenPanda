@@ -7,7 +7,7 @@ import { navigateView, navViews } from '../nav'
 import { setTheme, theme, type Theme } from '../theme'
 import { rank } from './fuzzy'
 import { useModalFocus } from './modal-focus'
-import { openReminders } from './reminders'
+import { openNotifications } from './notifications'
 
 // ⌘K command palette. Every destination and appearance switch in the console
 // reachable from one keystroke, so learning the sidebar's tree is optional
@@ -223,15 +223,16 @@ export function buildCommands(onLogout: () => void): Command[] {
       run: () => navigateView(view),
     }))
 
-  // 提醒 is a card behind the rail's bell, not a destination — but "reminders"
-  // is still how you would ask for it, and typing "rem" has to find it. It
-  // rides the go group because that is the group a reader looks in.
+  // 通知 is a card behind the rail's bell, not a destination — but "notify",
+  // "alarm" and the old "reminder" are all how you would ask for it, and
+  // typing any of them has to find it. It rides the go group because that is
+  // the group a reader looks in.
   cmds.push({
-    id: 'action:reminders',
+    id: 'action:notifications',
     group: go,
-    label: t('nav.reminders'),
-    alias: 'reminders cron schedule timer jobs alarm remind',
-    run: openReminders,
+    label: t('nav.notifications'),
+    alias: 'notifications notify alerts alarm inbox devices pairing reminder reminders',
+    run: openNotifications,
   })
 
   const settingsTabs: Array<{ tab: string; key: string; alias: string }> = [

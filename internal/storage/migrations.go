@@ -1037,6 +1037,10 @@ func tableExistsTx(tx MigrationExec, name string) (bool, error) {
 	return true, nil
 }
 
+// migrateV8 creates the reminders table for the scheduled-reminder feature.
+// 提醒 lives in the console's notification window now (its own pane, beside the
+// inbox sources), and the daemon/panel scanners still claim due rows from this
+// table — the schema never changed, only where the reader creates a reminder.
 func migrateV8(tx MigrationExec) error {
 	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS reminders (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -3511,30 +3511,34 @@ code.md-file:focus-visible {
   font-size: var(--text-xs);
 }
 
-/* ---- Reminders ---------------------------------------------------------
-   提醒 is a bell in the rail's head (components/reminders.tsx), and its card
-   hangs off the rail's right edge. The card is `position: fixed` rather than
-   absolute inside the head because the narrow layout turns the rail into a
-   horizontally scrolling strip, and an absolutely positioned card inside a
-   scroll container is clipped by it. */
+/* ---- Notifications -----------------------------------------------------
+   通知 is a bell in the rail's head (components/notifications.tsx) and a
+   fixed-size window behind it. Fixed on purpose: the window is a destination
+   you learn, and a panel that resizes with its contents moves the rail under
+   the pointer every time you switch source.
 
-.reminder-bell {
+   Inside, one row shape serves every source — glyph, title, one line of
+   evidence, right-hand slot. Sections name the source once instead of letting
+   every row repeat it in its title, which is what lets the rows stay one
+   short line and the list stay scannable. */
+
+.notif-bell {
   position: relative;
   display: flex;
 }
 
-/* Open, the bell keeps the tinted square the card below extends from: the
-   control has to look pressed while its card is up. */
-.reminder-bell .icon-btn.open {
+/* Open, the bell keeps the tinted square the window extends from: the control
+   has to look pressed while its surface is up. */
+.notif-bell .icon-btn.open {
   background: var(--bg-hover);
   color: var(--text);
 }
 
-/* The count rides the bell's corner as a number, not a dot: "2 pending" and
-   "9 pending" are different reasons to open the card. Amber is the tone the
+/* The count rides the bell's corner as a number, not a dot: "2 waiting" and
+   "9 waiting" are different reasons to open the window. Amber is the tone the
    rail's review badge already uses, so the head gains one warm speck and no
    new colour. */
-.reminder-bell-dot {
+.notif-bell-dot {
   position: absolute;
   top: -1px;
   right: -3px;
@@ -3551,29 +3555,34 @@ code.md-file:focus-visible {
   pointer-events: none;
 }
 
-.reminder-pop {
-  position: fixed;
-  top: 10px;
-  /* Beside the rail, not over it: the nav stays clickable while the card is
-     up, which is what "glance at what is pending" has to allow for. */
-  left: calc(var(--sidebar-w) + 8px);
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  width: 356px;
-  max-height: calc(100dvh - 20px);
-  background: var(--bg-raised);
-  border: 1px solid var(--border-soft);
+.notif-dialog {
+  width: min(880px, calc(100vw - 48px));
+  height: min(620px, calc(100dvh - 64px));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-xl);
   overflow: hidden;
-  animation: reminder-pop-in var(--dur-fast) var(--ease-enter);
 }
 
-@keyframes reminder-pop-in {
+.notif-dialog[open] {
+  animation: notif-window-in var(--dur-med) var(--ease);
+}
+
+/* Lighter than the settings sheet's backdrop: this window is read while the
+   page is still in view, so the dim should separate, not black out. */
+.notif-dialog::backdrop {
+  background: var(--backdrop);
+}
+
+@keyframes notif-window-in {
   from {
     opacity: 0;
-    transform: translateX(-6px);
+    transform: translateY(6px) scale(0.995);
   }
   to {
     opacity: 1;
@@ -3581,89 +3590,534 @@ code.md-file:focus-visible {
   }
 }
 
-.reminder-pop-head {
+.notif-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
+  min-height: 0;
+}
+
+.notif-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 8px 8px 14px;
+  gap: 10px;
+  height: 52px;
+  padding: 0 12px 0 20px;
   border-bottom: 1px solid var(--border-soft);
 }
 
-.reminder-pop-title {
+.notif-head-title {
+  font-size: var(--text-lg);
+  font-weight: 650;
+}
+
+/* "6 条未读" as a chip rather than a sentence: the head already says 通知, so
+   the only new information is how much of it is new. */
+.notif-head-count {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--semantic-warn-soft);
+  color: var(--semantic-warn);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 16px;
+}
+
+.notif-mark {
+  margin-left: auto;
+  font-size: var(--text-xs);
+}
+
+.notif-mark:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.notif-close {
+  width: 26px;
+  height: 26px;
+  color: var(--text-tertiary);
+}
+
+.notif-main {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* The source rail is the window's chrome — one step below the reading surface,
+   the way the app's own sidebar is. */
+.notif-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding: 10px 10px 12px;
+  border-right: 1px solid var(--border-soft);
+  background: var(--bg-chrome);
+}
+
+.notif-tab {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: none;
+  height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notif-tab:hover {
+  background: var(--bg-hover);
+}
+
+/* Selected reads as a raised surface, not a filled accent: the rail is a place
+   marker, and the rows on the right are what the reader is actually looking
+   at. */
+.notif-tab.on {
+  background: var(--bg-raised);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+}
+
+.notif-tab-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notif-tab-count {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-sm);
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 16px;
+  text-align: center;
+}
+
+.notif-tab.on .notif-tab-count {
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+}
+
+/* Why the rail exists at all, in one line at its foot — it answers "who makes
+   these" without a help page. */
+.notif-rail-note {
+  margin: auto 6px 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.notif-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 8px;
+}
+
+/* A section is a subject, not a box: one small label, then its rows. No
+   per-row rules — the labels do the dividing, and seven hairlines in a row
+   would only add texture to a list that is read by scanning. */
+.notif-section + .notif-section {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.notif-section-label {
+  margin: 0;
+  padding: 10px 20px 2px 28px;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+/* The way out of the section, at its foot: the rows themselves stay one line,
+   so the link belongs to the section rather than to each row. */
+.notif-section-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 2px 0 0;
+  padding: 8px 20px 8px 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.notif-section-foot:hover {
+  color: var(--text);
+}
+
+/* The one row shape: glyph, title, evidence, right slot. */
+.notif-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 20px 8px 28px;
+  cursor: pointer;
+}
+
+.notif-row:hover {
+  background: var(--bg-hover);
+}
+
+.notif-row.static {
+  cursor: default;
+}
+
+/* Unread is a dot in the gutter, not a tinted block: the list is read in one
+   pass, and a whole row changing colour makes the eye re-read what it has
+   already dealt with. */
+.notif-row.unread::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 17px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--semantic-warn);
+}
+
+/* The tile is neutral for every source; the tone lives in the glyph. Five red
+   squares stacked read as five alarms, which is louder than five findings. */
+.notif-glyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-sm);
+  color: var(--text-secondary);
+}
+
+.notif-glyph.warn {
+  background: var(--semantic-warn-soft);
+  color: var(--semantic-warn);
+}
+
+.notif-glyph.bad {
+  color: var(--danger);
+}
+
+.notif-glyph.ok {
+  color: var(--semantic-good);
+}
+
+.notif-glyph.dim {
+  color: var(--text-dim);
+}
+
+.notif-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.notif-title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.notif-row:not(.unread) .notif-title {
+  color: var(--text-secondary);
+}
+
+/* The evidence line: keys in the quiet voice, values in mono. One line, so a
+   row stays the same height whether or not it carries facts. */
+.notif-detail {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.notif-detail .mono {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.notif-k {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+.notif-hint {
+  margin: 2px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+/* A release's changelog digest, bounded: two lines is enough to decide whether
+   to care, and the full note belongs to 设置 → 系统. */
+.notif-notes {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 2px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+/* The right slot holds either a time or the verbs the row supports, aligned
+   with the title line so the eye reads "what, then what can I do". */
+.notif-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: 12px;
+  padding-top: 2px;
+}
+
+.notif-time {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.notif-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.notif-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+  min-height: 240px;
+  padding: 24px;
+  text-align: center;
+}
+
+.notif-empty-glyph {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  background: var(--surface-alpha-sm);
+  color: var(--text-tertiary);
+}
+
+.notif-empty-title {
+  margin: 0;
   font-size: var(--text-md);
   font-weight: 600;
 }
 
-.reminder-pop-close {
-  width: 24px;
-  height: 24px;
-  margin-left: auto;
-  color: var(--text-tertiary);
-}
-
-/* The compose block. Three stacked rows instead of the page's one wrapping
-   line: 356px is not enough for a message field and three time controls side
-   by side, and a form that re-wraps at a different place every locale reads as
-   broken rather than dense. */
-.reminder-pop .reminder-form {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
+.notif-empty-hint {
   margin: 0;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border-soft);
+  max-width: 44ch;
+  font-size: var(--text-xs);
+  line-height: 1.55;
 }
 
-.reminder-pop .reminder-message {
-  width: 100%;
-  min-width: 0;
-}
-
-/* The two ways to name a due time are a choice, not two fields joined by
-   "or": a segmented track hides the inactive form, so nobody has to work out
-   whether the disabled minutes box still counts. */
-.reminder-mode {
-  width: 100%;
-}
-
-.reminder-mode .seg {
-  flex: 1;
-  text-align: center;
-}
-
-.reminder-line {
+/* When the node was last checked. It is a stamp, not a control bar, so it
+   stays one dim line with the re-check link at the far end. */
+.notif-foot {
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 38px;
+  padding: 0 20px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-chrome);
+  font-size: var(--text-xs);
 }
 
-.reminder-pop .reminder-minutes {
-  width: 84px;
+.notif-recheck {
+  margin-left: auto;
   flex: none;
 }
 
-.reminder-pop .reminder-at,
-.reminder-pop .reminder-every {
-  width: 100%;
-  min-width: 0;
+.notif-recheck:disabled {
+  color: var(--text-dim);
+  cursor: default;
 }
 
-.reminder-suffix {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
+/* Phone: the window becomes the page. A centred 580px sheet on a 360px screen
+   is just a cramped box, so the dialog fills the viewport and the source rail
+   turns back into the horizontal strip it was in the popover. */
+@media (max-width: 720px) {
+  .notif-dialog {
+    width: 100vw;
+    height: 100dvh;
+    max-width: 100vw;
+    max-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .notif-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .notif-rail {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-soft);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .notif-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .notif-rail-note {
+    display: none;
+  }
+
+  .notif-tab {
+    height: 30px;
+    padding: 0 9px;
+  }
 }
 
-/* Preview left, submit right: the line answers "when will this fire" while
-   the time is being chosen, so Add is never a leap of faith. */
-.reminder-submit-line {
+/* ---- 提醒: the one pane the reader writes into -------------------------
+   Pending reminders are a plan, not news: they are not unread, they have not
+   happened yet. So they get a management pane — a toolbar with the count and
+   the 新建提醒 button, an optional compose form, the pending list, and the
+   reminders that already fired folded underneath. The push switch lives at the
+   pane's foot because it is a property of this browser, not of a reminder. */
+
+.rem-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.rem-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: none;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border-soft);
 }
 
-.reminder-preview {
-  flex: 1;
+.rem-toolbar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.rem-toolbar-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-sm);
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 16px;
+  text-align: center;
+}
+
+.rem-new {
+  margin-left: auto;
+}
+
+/* The two verbs travel together: if the line has to wrap, they land on the
+   next row as a pair at the right edge instead of one button stranded on its
+   own. */
+.rem-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: auto;
+}
+
+/* The compose block is a tinted well above the list: it is a mode, and the
+   rows underneath are what you return to when it closes. */
+.rem-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+}
+
+.rem-form-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rem-mode {
+  flex: none;
+}
+
+.rem-minutes {
+  width: 72px;
+  flex: none;
+}
+
+.rem-at {
+  width: 196px;
+  flex: none;
+}
+
+.rem-every {
+  width: 104px;
+  flex: none;
+}
+
+.rem-suffix {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+/* Preview takes the slack so the two verbs sit at the right edge, and it is
+   the line that answers "when will this fire" while the time is being chosen —
+   Add is never a leap of faith. */
+.rem-preview {
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3672,121 +4126,67 @@ code.md-file:focus-visible {
   line-height: 1.45;
 }
 
-.reminder-add {
-  flex: none;
-}
-
-.reminder-pop-scroll {
+.rem-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 14px 8px;
+  padding: 4px 0;
 }
 
-.reminder-pop-label {
-  margin: 10px 0 2px;
+.rem-section {
+  margin: 12px 18px 2px;
+  color: var(--text-tertiary);
   font-size: var(--text-xs);
   font-weight: 600;
-  color: var(--text-tertiary);
 }
 
-.reminder-pop-empty {
-  margin: 2px 0 6px;
-  font-size: var(--text-sm);
-}
-
-.reminder-pop-err {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 0;
-}
-
-.reminder-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 0;
+/* A reminder row is a record, not a link: the pointer stays an arrow, and the
+   only verb is the trash at its end. */
+/* The reminder list has no section structure to divide it, so the rows carry
+   their own hairline — without one, two schedules read as one paragraph. */
+.rem-row {
+  cursor: default;
   border-bottom: 1px solid var(--border-soft);
 }
 
-.reminder-row:last-child {
-  border-bottom: none;
+.rem-row:last-child {
+  border-bottom: 0;
 }
 
-.reminder-row.fired .reminder-msg {
+.rem-row.fired .notif-title {
   color: var(--text-dim);
 }
 
-.reminder-info {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.reminder-msg {
-  font-weight: 550;
-  font-size: var(--text-md);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.reminder-meta {
-  font-size: var(--text-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.reminder-side {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.reminder-x {
-  width: 22px;
-  height: 22px;
-  color: var(--text-tertiary);
-}
-
-.reminder-x:hover:not(:disabled) {
-  color: var(--semantic-danger);
-}
-
-.badge.dim {
-  color: var(--text-dim);
-  border-color: var(--border);
-}
-
-/* Push is a switch about *this* browser, so it lives at the card's foot as a
-   line of status rather than as a card of its own — it is either already on
-   (a sentence) or one click away (a link). */
-.reminder-pop-foot {
+.rem-side {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
+  flex: none;
+  align-self: center;
+}
+
+.rem-x {
+  width: 26px;
+  height: 26px;
+  color: var(--text-tertiary);
+}
+
+.rem-x:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+/* The push switch is a line of status rather than a card of its own — it is
+   either already on (a sentence) or one click away (a link). */
+.rem-push {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 7px 18px;
   border-top: 1px solid var(--border-soft);
   background: var(--bg-chrome);
   font-size: var(--text-xs);
   line-height: 1.5;
-}
-
-@media (max-width: 720px) {
-  /* The rail is a top bar here, so the card drops under it instead of hanging
-     off its right edge. */
-  .reminder-pop {
-    top: 52px;
-    left: 8px;
-    right: 8px;
-    width: auto;
-    max-height: calc(100dvh - 60px);
-  }
 }
 
 /* ---- Memory: one page bar, one strip, one card per file ---------------- */

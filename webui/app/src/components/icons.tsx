@@ -29,6 +29,7 @@ export type IconName =
   | 'check'
   | 'chevron-down'
   | 'chevron-right'
+  | 'clock'
   | 'code'
   | 'coins'
   | 'copy'
@@ -437,6 +438,14 @@ const paths: Record<IconName, JSX.Element> = {
     <>
       <path d="M5 12h14" />
       <path d="M12 5v14" />
+    </>
+  ),
+  // 提醒 is a schedule, not an alarm: a dial with hands says "at a time"
+  // where a bell would say "right now", and the rail already has a bell.
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
     </>
   ),
   refresh: (
