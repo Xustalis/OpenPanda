@@ -10,6 +10,7 @@ import {
   type ProviderInfo,
 } from '../api/client'
 import { useLocaleRerender } from '../hooks'
+import { notifyModelSaved } from '../model-events'
 import { t } from '../i18n'
 import { ModelPicker } from '../components/model-picker'
 import { Select } from '../components/select'
@@ -165,6 +166,11 @@ export function ModelsSection() {
 
   function afterWrite() {
     void reload()
+    // This page is a dialog over the chat view: closing it does not remount the
+    // composer, whose model card read the registry once when it was born. Every
+    // write here — add, edit, remove, switch, import, copy — is announced so
+    // that card re-reads instead of staying on the set it saw at page load.
+    notifyModelSaved()
   }
 
   async function switchTo(e: ModelEntry) {

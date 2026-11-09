@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ModelEntry } from '../api/client'
 import { useAsync } from '../hooks'
 import { t } from '../i18n'
+import { onModelSaved } from '../model-events'
 import { navigate } from '../nav'
 import { Icon } from './icons'
 import { toast, toastError } from './toast'
@@ -89,8 +90,17 @@ export function ModelSelect(props: { disabled?: boolean }) {
       setOpen(false)
       trigger.current?.focus()
     }
-    // A fixed card would be stranded by anything that moves the composer.
-    const onMove = () => setOpen(false)
+    // A fixed card would be stranded by anything that moves the composer —
+    // but only by things that move *it*. Both lists inside the card scroll on
+    // their own (nine models, a dozen accounts), and a capture-phase listener
+    // on window sees those events too: closing on them made the wheel dismiss
+    // the card instead of scrolling it, and every arrow-key move closed it as
+    // well, because focusing a row scrolls it into view. select.tsx and
+    // model-picker.tsx guard the same way; this one was the odd one out.
+    const onMove = (e: Event) => {
+      if (box.current?.contains(e.target as Node)) return
+      setOpen(false)
+    }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey, true)
     window.addEventListener('resize', onMove)
@@ -103,12 +113,23 @@ export function ModelSelect(props: { disabled?: boolean }) {
     }
   }, [open])
 
+  // The registry can be written from the settings dialog, which covers this
+  // composer without unmounting it: the row that was just added used to be
+  // missing from the card until the page was reloaded by hand. The write
+  // announces itself (views/models.tsx → notifyModelSaved), and `tick` is the
+  // same reload key `pick` already uses to move the active flag.
+  useEffect(() => onModelSaved(() => setTick((n) => n + 1)), [])
+
   // Opening lands on the account that owns the live model, and the model list
   // starts at its top — a card that always opens at row one hides the answer
   // you came for.
   useEffect(() => {
     if (!open) return
     place()
+    // Re-read on every open. The window event above only reaches this document;
+    // a model added from another tab, a paired device or `panda model` never
+    // fires it, and this card is exactly where that staleness shows.
+    setTick((n) => n + 1)
     setPane(liveConn?.id ?? conns[0]?.id ?? null)
     setConnsOpen(false)
     panel.current
