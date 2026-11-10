@@ -457,8 +457,8 @@ assert args[:3] == ["exec", "resume", "codex-sess-1"], args
 assert "--ephemeral" not in args
 # `codex exec resume` has no --sandbox flag; the policy rides -c.
 assert "-s" not in args and "--sandbox" not in args, args
-# tools_policy=extended escalates the sandbox scope.
-assert 'sandbox_mode="danger-full-access"' in args
+# tools_policy=extended does not grant filesystem access outside workspace.
+assert 'sandbox_mode="workspace-write"' in args
 assert args[-1] == "contract prompt"
 print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"resumed"}}))
 ''',
@@ -499,6 +499,19 @@ print(json.dumps({"type":"item.completed","item":{"id":"i3","type":"agent_messag
         self.assertFalse(events[3]["is_error"])
         self.assertEqual(events[4]["text"], "codex answer")
         self.assertEqual(events[4]["id"], "i3")
+
+    def test_codex_nonzero_command_is_error_even_when_completed(self):
+        payload, lines, _ = run_adapter(
+            "codex.py", "codex", r'''
+import json
+print(json.dumps({"type":"item.completed","item":{"id":"failed-cmd","type":"command_execution","command":"make test","status":"completed","exit_code":2,"aggregated_output":"tests failed"}}))
+print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"reported failure"}}))
+''',
+        )
+        events = [json.loads(line) for line in lines if line.startswith("{")]
+        results = [ev for ev in events if ev.get("ev") == "tool_result"]
+        self.assertEqual(len(results), 1, events)
+        self.assertTrue(results[0]["is_error"], results)
 
     def test_codex_completion_only_tool_pair(self):
         """Older codex streams emit item.completed with no item.started:
