@@ -171,15 +171,10 @@ type TaskSpec struct {
 	Complexity  float64         `json:"complexity"`
 	Risk        string          `json:"risk"`
 	Resources   ResourceProfile `json:"resource_profile"`
-	// ToolsPolicy is the per-task tool-face override. Empty means "use the
-	// global routing.tools_policy"; "minimal" keeps the safe whitelist;
-	// "extended" lifts it so the agent's native skills, MCP and sub-agent
-	// tools are reachable. The entry model sets this based on the task's
-	// complexity and risk: high-complexity tasks that need the agent's
-	// full capability set can request extended without operator intervention
-	// at the routing layer. The engine copies it into Spec.ToolsPolicy so it
-	// rides spec_json to the executor; this outer field only exists for the
-	// model's emit shape.
+	// ToolsPolicy requests a per-task tool face. Empty inherits the operator's
+	// global policy; minimal may narrow extended, but extended never widens
+	// global minimal. This does not grant filesystem sandbox privileges.
+	// Copied into Spec.ToolsPolicy so the request survives persistence/hops.
 	ToolsPolicy string `json:"tools_policy,omitempty"`
 	// MaxTurns is the per-task agent turn cap the entry model may request for
 	// a task whose complexity needs more (or fewer) rounds than the adapter
@@ -194,8 +189,11 @@ type Requires struct {
 
 // TaskSpecDetail captures what to do, where, and how to verify success.
 type TaskSpecDetail struct {
-	Scope  string `json:"scope"`
-	Target string `json:"target"`
+	// Kind selects the delivery evidence contract, never an authorization grant.
+	// Empty preserves legacy tasks; it persists across routing and resume.
+	Kind   TaskKind `json:"task_kind,omitempty"`
+	Scope  string   `json:"scope"`
+	Target string   `json:"target"`
 	// Node is a HARD device pin, not a preference: when non-empty the task
 	// may execute only on that node. An unreachable pin parks in task_outbox
 	// until the link returns (or fails honestly at its deadline) — it never
@@ -263,6 +261,7 @@ type PlanSpec struct {
 // only run on that node — the requires match alone is a coincidence across a
 // fleet where every machine advertises the same agent.
 type PlanStageSpec struct {
+	Kind      TaskKind        `json:"task_kind,omitempty"`
 	ID        string          `json:"id"`
 	Title     string          `json:"title"`
 	Intent    string          `json:"intent"`
