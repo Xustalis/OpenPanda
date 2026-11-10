@@ -104,9 +104,8 @@ type toolsPolicyKey struct{}
 
 // WithToolsPolicy attaches the normalized tools policy to an execution
 // context. The orchestration layer sets it on the execution context to
-// override with a per-task policy from the task spec; the Router applies its
-// global policy (routing.tools_policy) only when the context carries no
-// task-level policy yet, so a per-task override always takes precedence.
+// request a narrower tool face for a task. The Router enforces the operator's
+// global policy as a ceiling before dispatching to any adapter.
 func WithToolsPolicy(ctx context.Context, policy string) context.Context {
 	if policy == "" {
 		return ctx
@@ -1535,6 +1534,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		return AgentResult{ExitCode: 127, Result: security.Redact(err.Error())}
 	}
 
+	emitExecutionProfile(ctx, adapterExecutionProfile(ctx, name, req, cmd.Env, "one_shot"))
 	if err := cmd.Run(); err != nil {
 		actMu.Lock()
 		wasStalled := stalled
@@ -1817,6 +1817,13 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 			return AgentResult{}, false
 		}
 	}
+	if !fresh {
+		// Follow-up messages do not reconfigure a running CLI. Report the
+		// original launch request, not this turn's possibly changed fields.
+		profile := s.profile
+		profile.Transport = "session_turn"
+		emitExecutionProfile(ctx, profile)
+	}
 	// Turn 0's prompt rode inside the request line — nothing to send for a
 	// fresh session.
 	// The per-turn hard limit mirrors the one-shot path: the advertised
@@ -1865,6 +1872,7 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 // reads turn messages from stdin and emits one result envelope per turn on
 // stdout; stderr keeps the progress/event demux of a one-shot run.
 type agentSession struct {
+	profile AdapterExecutionProfile // immutable launch facts, retained across turns
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	dec     *json.Decoder
@@ -1953,6 +1961,8 @@ func startAgentSession(spawnCtx, turnCtx context.Context, name string, req Adapt
 		cancel()
 		return nil, err
 	}
+	s.profile = adapterExecutionProfile(turnCtx, name, req, cmd.Env, "session_start")
+	emitExecutionProfile(turnCtx, s.profile)
 	if _, err := stdin.Write(append(reqJSON, '\n')); err != nil {
 		// Cancel triggers the group kill via the ctx watcher, but only Wait
 		// reaps the process — without it the adapter stays a zombie.

@@ -301,15 +301,21 @@ for line in sys.stdin:
 	ctx, pool := WithSessionPool(context.Background())
 	ctx = WithSessionMode(ctx)
 	ctx = WithTaskID(ctx, "t-session-1")
+	var profiles []AdapterExecutionProfile
+	ctx = WithExecutionProfiles(ctx, func(p AdapterExecutionProfile) { profiles = append(profiles, p) })
 	res1 := r.Execute(ctx, plan, "first", workDir, true)
 	if !res1.OK || res1.Stdout != "turn0:first:t-session-1" {
 		t.Fatalf("turn0 = %+v (want the task id in the process env)", res1)
 	}
+	ctx = context.WithValue(ctx, selectedModelKey{}, "not-effective-for-live-session")
 	res2 := r.Execute(ctx, plan, "second", workDir, true)
 	if !res2.OK || res2.Stdout != "turnN:second:t-session-1" {
 		t.Fatalf("turnN = %+v", res2)
 	}
 	pool.CloseAll()
+	if len(profiles) != 2 || profiles[0].Transport != "session_start" || profiles[1].Transport != "session_turn" || profiles[1].NativeModel != "unknown" || profiles[1].ModelPreference != profiles[0].ModelPreference {
+		t.Fatalf("session profiles = %+v", profiles)
+	}
 
 	marks, err := os.ReadFile(filepath.Join(workDir, "marks.log"))
 	if err != nil {
