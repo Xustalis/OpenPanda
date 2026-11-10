@@ -2,7 +2,7 @@
 
 package askengine
 
-// Read-only workspace tools for the side channel.
+// Read-only workspace tools for workspace-backed conversations.
 //
 // The side channel exists to answer questions beside the main thread. Its
 // observation tools cover live node state, but the most common question — "what
@@ -14,8 +14,8 @@ package askengine
 // Everything here is confined to the ask's work dir: a path is resolved through
 // symlinks and then checked to sit under the resolved root, so neither ".." nor
 // a link can reach outside it. The tools only read — no writes, no execution —
-// which is why the side ask's allow-list keeps them while it drops every
-// mutation and every dispatch path.
+// so observation permissions never authorize filesystem changes. Dispatch
+// permissions are enforced separately by the ask engine.
 
 import (
 	"bufio"
@@ -87,12 +87,13 @@ func registerWorkspaceTools(reg *entry.Registry, workDir string) {
 		return
 	}
 	reg.Register(entry.Tool{
-		Name: "workspace_read",
+		Name:     "workspace_read",
+		ReadOnly: true,
 		Description: "Read a text file inside this conversation's workspace. Returns numbered lines. " +
-			"Prefer workspace_search when you only need specific content; read a file once and answer from what you have, " +
-			"paging with start_line/max_lines only when a specific missing section is essential. / " +
+			"Prefer workspace_search to locate relevant code, then read the implementation and tests needed to support the claim; " +
+			"a README or directory listing does not establish implementation behavior. Page with start_line/max_lines when needed. / " +
 			"读取当前工作区内的文本文件，返回带行号的内容。只需要特定内容时优先用 workspace_search；" +
-			"读一次即可据此作答，仅在确实缺少关键段落时才用 start_line/max_lines 继续翻页。",
+			"需读取支撑结论的实现和测试，README 或目录列表不能证明实现行为；必要时用 start_line/max_lines 翻页。",
 		Tier: defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
@@ -109,7 +110,8 @@ func registerWorkspaceTools(reg *entry.Registry, workDir string) {
 	})
 
 	reg.Register(entry.Tool{
-		Name: "workspace_list",
+		Name:     "workspace_list",
+		ReadOnly: true,
 		Description: "List a directory inside this conversation's workspace: entries, sizes, and which are directories. " +
 			"Use it to find the file to read or search. / " +
 			"列出当前工作区内的目录内容（名称、大小、是否为目录），用来定位要读或搜索的文件。",
@@ -126,7 +128,8 @@ func registerWorkspaceTools(reg *entry.Registry, workDir string) {
 	})
 
 	reg.Register(entry.Tool{
-		Name: "workspace_search",
+		Name:     "workspace_search",
+		ReadOnly: true,
 		Description: "Search file contents inside this conversation's workspace with a regular expression. " +
 			"Returns file:line: text, bounded to the first matches. Skips .git, dependencies and build output. / " +
 			"用正则搜索当前工作区内的文件内容，返回 file:line: 文本，结果有上限；自动跳过 .git、依赖和构建产物。",
@@ -368,10 +371,13 @@ func wsSearch(ctx context.Context, root string, args map[string]any) (string, er
 
 	var b strings.Builder
 	hits, files := 0, 0
+	skippedLarge, skippedUnreadable := 0, 0
+	excludedDirs, skippedNonRegular, skippedBinary := 0, 0, 0
 	var scanned int64
 	truncated := false
 	walk := func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil || d == nil {
+			skippedUnreadable++
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -379,11 +385,13 @@ func wsSearch(ctx context.Context, root string, args map[string]any) (string, er
 		}
 		if d.IsDir() {
 			if path != start && wsSkipDirs[d.Name()] {
+				excludedDirs++
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if !d.Type().IsRegular() {
+			skippedNonRegular++
 			return nil
 		}
 		if files >= wsSearchFiles {
@@ -392,7 +400,12 @@ func wsSearch(ctx context.Context, root string, args map[string]any) (string, er
 		}
 		files++
 		info, ierr := d.Info()
-		if ierr != nil || info.Size() > wsSearchFileBytes {
+		if ierr != nil {
+			skippedUnreadable++
+			return nil
+		}
+		if info.Size() > wsSearchFileBytes {
+			skippedLarge++
 			return nil
 		}
 		if scanned+info.Size() > wsSearchTotalBytes {
@@ -402,15 +415,18 @@ func wsSearch(ctx context.Context, root string, args map[string]any) (string, er
 		scanned += info.Size()
 		f, oerr := os.Open(path)
 		if oerr != nil {
+			skippedUnreadable++
 			return nil
 		}
 		defer f.Close()
 		prefix := make([]byte, 2048)
 		n, _ := f.Read(prefix)
 		if bytes.IndexByte(prefix[:n], 0) >= 0 {
+			skippedBinary++
 			return nil
 		}
 		if _, serr := f.Seek(0, io.SeekStart); serr != nil {
+			skippedUnreadable++
 			return nil
 		}
 		sc := bufio.NewScanner(f)
@@ -437,6 +453,9 @@ func wsSearch(ctx context.Context, root string, args map[string]any) (string, er
 				return filepath.SkipAll
 			}
 		}
+		if sc.Err() != nil {
+			skippedUnreadable++
+		}
 		return nil
 	}
 	// WalkDir handles a single file as a one-entry walk, so the same callback
@@ -448,13 +467,15 @@ func wsSearch(ctx context.Context, root string, args map[string]any) (string, er
 		}
 		return "", fmt.Errorf("search %s: %w", rel, werr)
 	}
-	if hits == 0 {
-		return fmt.Sprintf("No matches for %q under %s.", pattern, rel), nil
-	}
+	incomplete := truncated || skippedLarge > 0 || skippedUnreadable > 0
 	out := b.String()
-	if truncated {
-		out += fmt.Sprintf("[stopped at %d matches after %d files; narrow the pattern or path]", hits, files)
+	if hits == 0 {
+		out = fmt.Sprintf("No matches in the files scanned for %q under %s.\n", pattern, rel)
 	}
+	if incomplete {
+		out += fmt.Sprintf("[search incomplete after %d matches and %d files (limit reached: %t; files over 2 MiB skipped: %d; unreadable files: %d); absence is NOT established — narrow the path/pattern or inspect skipped files]", hits, files, truncated, skippedLarge, skippedUnreadable)
+	}
+	out += fmt.Sprintf("\n[search scope: regular text files under %s; excluded directories: %d; symlink/non-regular entries: %d; binary files: %d. Results apply only to scanned content.]", rel, excludedDirs, skippedNonRegular, skippedBinary)
 	return out, nil
 }
 

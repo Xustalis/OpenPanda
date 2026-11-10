@@ -147,6 +147,31 @@ func TestWorkspaceToolsListAndSearch(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSearchDoesNotClaimExhaustivenessWhenBounded(t *testing.T) {
+	root, ok := workspaceRoot(t.TempDir())
+	if !ok {
+		t.Fatal("temporary workspace rejected")
+	}
+	large := filepath.Join(root, "too-large.go")
+	if err := os.WriteFile(large, []byte(strings.Repeat("x", wsSearchFileBytes+1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := wsSearch(context.Background(), root, map[string]any{"pattern": "MissingSymbol"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "search incomplete") || !strings.Contains(out, "absence is NOT established") || strings.HasPrefix(out, "No matches for") {
+		t.Fatalf("skipped file was reported as exhaustive: %q", out)
+	}
+	if err := os.WriteFile(filepath.Join(root, "many.go"), []byte(strings.Repeat("const Match = 1\n", wsSearchHits+1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = wsSearch(context.Background(), root, map[string]any{"pattern": "Match"})
+	if err != nil || !strings.Contains(out, "search incomplete") || !strings.Contains(out, "limit reached: true") {
+		t.Fatalf("hit limit must mark incomplete: out=%q err=%v", out, err)
+	}
+}
+
 // TestWorkspaceToolsRefuseWideRoot: a channel pinned to $HOME must not become
 // a whole-disk reader. The projects breadth rule is the same gate the console's
 // file viewer uses.
@@ -160,6 +185,31 @@ func TestWorkspaceToolsRefuseWideRoot(t *testing.T) {
 		registerWorkspaceTools(reg, dir)
 		if _, ok := reg.Lookup("workspace_read"); ok {
 			t.Errorf("workspace_read registered for work dir %q", dir)
+		}
+	}
+}
+
+func TestWorkspaceSearchReportsExcludedCoverage(t *testing.T) {
+	root, ok := workspaceRoot(t.TempDir())
+	if !ok {
+		t.Fatal("temporary workspace rejected")
+	}
+	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vendor", "hidden.go"), []byte("HiddenSymbol"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "blob"), []byte{0, 'x'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := wsSearch(context.Background(), root, map[string]any{"pattern": "HiddenSymbol"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"No matches in the files scanned", "excluded directories: 1", "binary files: 1", "only to scanned content"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q: %s", want, out)
 		}
 	}
 }

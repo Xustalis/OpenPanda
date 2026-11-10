@@ -2219,7 +2219,25 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	if watcher != nil {
 		_ = watcher.Sync(ctx)
 	}
+	// Resolve the scoped/ambient project before routing, not only at task
+	// submission: otherwise a project-bound question could still fast-answer
+	// from memory because its caller omitted a redundant WorkDir.
+	project, projectDir := e.scopeProject(scope)
+	if scope.WorkDir == "" {
+		scope.WorkDir = projectDir
+	}
+	if scope.WorkDir == "" && project != "" && e.projStore != nil {
+		if pr, err := e.projStore.GetFold(project); err == nil {
+			scope.WorkDir = pr.UsableWorkDir()
+		}
+	}
 	workDir := scope.WorkDir
+	// Broad reviews require a harness; narrow code questions need actual
+	// source evidence. Follow-ups and side asks obey the same quality gate.
+	repositoryQuestion, deepRepositoryAsk := repositoryRequest(prompt, append(append([]entry.Turn(nil), history...), scope.SideTurns...), workDir != "")
+	if deepRepositoryAsk && repositoryInvestigationReadOnly(prompt) {
+		scope.PermissionMode = defense.ModePlan
+	}
 	client, fallbackUsed := e.healthyClient()
 	if client == nil {
 		return nil, entry.ErrNoModel
@@ -2436,7 +2454,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// a follow-up cannot be hijacked. A failed action falls through to the
 	// full pipeline rather than failing the ask.
 	if len(history) == 0 && !scope.Side {
-		if act, ok := entry.MatchLocalAction(prompt); ok {
+		if act, ok := entry.MatchLocalAction(prompt); ok && (scope.PermissionMode != defense.ModePlan || act.ReadOnly) {
 			if text, done := e.RunLocalAction(ctx, act, effectiveLocale); done {
 				if cb.OnDelta != nil && text != "" {
 					cb.OnDelta(text)
@@ -2457,7 +2475,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// generic system prompt, which would strip the channel's observation and
 	// workspace tools and its boundary rider exactly when the user asked it to
 	// check something. The saved round is not worth an answer from hearsay.
-	if len(history) == 0 && !scope.Side {
+	if len(history) == 0 && !scope.Side && scope.Mode == "" && !repositoryQuestion {
 		if triage := entry.FastTriage(prompt, history); triage.IsFastPath {
 			fastSystem := entry.FastPathPrompt(e.replyASCII, effectiveLocale)
 			if conversationMemory != "" {
@@ -2517,6 +2535,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// project-free conversation must refuse project-targeted calls, not fall
 	// back to whatever name the model supplied.
 	ctx = memory.WithScopeProject(ctx, scopeProj)
+	if scope.PermissionMode == defense.ModePlan {
+		ctx = withReadOnlyEntryTools(ctx)
+	}
 	if workDir != "" {
 		ctx = memory.WithoutPersonalMemory(ctx)
 	}
@@ -2566,8 +2587,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// lastTask keeps the most recent task outcome so the converged Result
 	// carries the task fields (id/state/output) alongside the model's report.
 	var lastTask *Result
+	sourceRead := false
 	finalizeLastTask := func(t *Result) *Result {
-		if t != nil && strings.TrimSpace(t.Answer) == "" && strings.TrimSpace(t.Report) == "" {
+		if t != nil && !incompleteRepositoryTask(deepRepositoryAsk, t) && strings.TrimSpace(t.Answer) == "" && strings.TrimSpace(t.Report) == "" {
 			if report, rerr := entry.SummarizeResult(ctx, client, t.TaskTitle, "", t.OK, t.ExitCode, t.Stdout, t.Stderr, effectiveLocale); rerr == nil {
 				t.Report = report
 				e.noteDailyObservation(report)
@@ -2581,6 +2603,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// bare loop error (the "reached max tool rounds" report that hid six
 	// successfully-executed queue operations).
 	var toolDigest []string
+	answerWithoutInvestigation := 0
 	// digestOrErr is the loop's failure exit. Running tools already happened,
 	// so the honest answer is what they did — but the reason the loop stopped
 	// must not disappear with the error. Both go to the structured log and the
@@ -2692,7 +2715,7 @@ rounds:
 		// prose. Nudge one round before the ceiling so convergence happens
 		// while the transcript is still small enough to replay reliably.
 		if round == maxRounds-2 && len(toolDigest) > 0 {
-			turns = append(turns, entry.Turn{Role: "user", Content: convergenceNudge(effectiveLocale)})
+			turns = append(turns, entry.Turn{Role: "user", Content: convergenceNudge(effectiveLocale, deepRepositoryAsk && lastTask == nil)})
 		}
 		trackReasoning := func(chunk string) {
 			accumulatedReasoning.WriteString(chunk)
@@ -2702,7 +2725,9 @@ rounds:
 		}
 		streaming := cb.OnDelta != nil || cb.OnReasoning != nil
 		classify := func(c *entry.Client, ts []entry.Turn) (entry.Output, error) {
-			if streaming {
+			// Do not stream a shallow answer before the dispatch guard has
+			// accepted it. The delegated harness still streams its own progress.
+			if streaming && !((deepRepositoryAsk || repositoryQuestion && !sourceRead) && lastTask == nil) && !incompleteRepositoryTask(deepRepositoryAsk, lastTask) {
 				return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, reg, cb.OnDelta, trackReasoning, classifyOpts...)
 			}
 			return entry.ClassifyTurnsWithTools(ctx, c, devices, conversationMemory, ts, reg, classifyOpts...)
@@ -2742,7 +2767,28 @@ rounds:
 
 		switch out.Kind {
 		case entry.KindAnswer:
+			if repositoryQuestion && !deepRepositoryAsk && !sourceRead && lastTask == nil {
+				if answerWithoutInvestigation == 0 {
+					answerWithoutInvestigation++
+					turns = append(turns, entry.Turn{Role: "user", Content: "Read the actual implementation with workspace_read before answering this concrete workspace question. A directory list, README or guessed symbol behavior is not implementation evidence. If the source is unavailable, state that instead of inventing an answer."})
+					continue
+				}
+				return budgetAdvisory(&Result{Kind: "answer", Answer: i18n.T(effectiveLocale, "ask.repository.unverified")}), nil
+			}
+			if deepRepositoryAsk && lastTask == nil {
+				if answerWithoutInvestigation == 0 {
+					answerWithoutInvestigation++
+					turns = append(turns, entry.Turn{Role: "user", Content: investigationRouteReminder(effectiveLocale)})
+					continue
+				}
+				return budgetAdvisory(&Result{Kind: "answer", Answer: incompleteInvestigationNotice(effectiveLocale)}), nil
+			}
 			if lastTask != nil {
+				if incompleteRepositoryTask(deepRepositoryAsk, lastTask) {
+					// A task receipt, approval request or failed run is not a
+					// completed investigation; preserve its real state/report.
+					return budgetAdvisory(finalizeLastTask(lastTask)), nil
+				}
 				// The model has seen the task's outcome and is reporting it:
 				// the report is the answer, the task fields ride along.
 				lastTask.Answer = out.Answer
@@ -2963,6 +3009,9 @@ rounds:
 						e.logWarn("askengine: tool execution failed", "tool", call.Tool, "round", round, "err", runErr)
 					}
 				}
+				if sourceReadEvidence(call, result, runErr) {
+					sourceRead = true
+				}
 				results[i] = result
 				toolDigest = append(toolDigest, call.Tool+": "+boundToolResult(result, toolDigestCap))
 				for _, d := range taskCapture.takeAll() {
@@ -3027,6 +3076,21 @@ rounds:
 		default:
 			return budgetAdvisory(&Result{Kind: "answer", Answer: out.Answer}), nil
 		}
+	}
+
+	if repositoryQuestion && !sourceRead && !deepRepositoryAsk && lastTask == nil {
+		return budgetAdvisory(&Result{Kind: "answer", Answer: i18n.T(effectiveLocale, "ask.repository.unverified")}), nil
+	}
+	if deepRepositoryAsk && lastTask == nil {
+		// A tool-free answer cannot turn shallow exploration into a completed
+		// agent investigation. Surface the gap rather than asserting success.
+		return budgetAdvisory(&Result{Kind: "answer", Answer: incompleteInvestigationNotice(effectiveLocale)}), nil
+	}
+
+	if incompleteRepositoryTask(deepRepositoryAsk, lastTask) {
+		// Stop before final/compact convergence can manufacture a completed
+		// investigation from a queued, failed or approval-pending receipt.
+		return budgetAdvisory(finalizeLastTask(lastTask)), nil
 	}
 
 	// Round budget exhausted without a converged intent: run one final
@@ -3130,7 +3194,7 @@ rounds:
 		}
 		cb.progress(Progress{Kind: ProgressTask, Name: final.Task.Title})
 		res := e.submitTask(ctx, final.Task, prompt, authorize, scope, accumulatedReasoning.String(), cb, e.awaitQueued)
-		if !res.NeedsApproval && (!e.queueTasks || e.awaitQueued) {
+		if !res.NeedsApproval && (!e.queueTasks || e.awaitQueued) && !incompleteRepositoryTask(deepRepositoryAsk, res) {
 			// No rounds left to converge through, so produce the report in
 			// one shot rather than returning raw output.
 			if report, rerr := e.reportTaskOutcome(ctx, client, turns, devices, conversationMemory, classifyOpts, final.Task, res); rerr == nil {
@@ -3358,17 +3422,53 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 		return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error())}, nil
 	}
 	q := core.DefaultQueueSpec()
+	q.Project, _ = e.scopeProject(scope)
+	q.WorkDir = scope.WorkDir
+	if q.WorkDir == "" && q.Project != "" {
+		_, q.WorkDir = e.scopeProject(scope)
+	}
+	// A stage has its own task row and spec_json; do not discard the
+	// conversation's roster, read-only mode and delivery contract at the
+	// plan/task boundary. Model-provided task_kind cannot lift plan mode.
+	for i := range p.Stages {
+		kind := spec.Stages[i].Kind
+		if scope.PermissionMode == defense.ModePlan {
+			kind = entry.TaskInvestigation
+		}
+		permission := scope.PermissionMode
+		if kind == entry.TaskInvestigation || kind == entry.TaskCodeQuestion {
+			permission = defense.ModePlan
+		}
+		detail := entry.TaskSpecDetail{Kind: kind, PermissionMode: permission,
+			AllowAgents: append([]string(nil), scope.Agents...)}
+		// User checks describe the delivered result, not intermediate steps.
+		terminal := true
+		for _, other := range p.Stages {
+			for _, need := range other.Needs {
+				if need == p.Stages[i].ID {
+					terminal = false
+				}
+			}
+		}
+		if permission != defense.ModePlan && terminal {
+			detail.Acceptance = append(detail.Acceptance, scope.Acceptance...)
+		}
+		body, err := json.Marshal(detail)
+		if err != nil {
+			return nil, fmt.Errorf("marshal plan stage %s contract: %w", p.Stages[i].ID, err)
+		}
+		p.Stages[i].SpecJSON = string(body)
+	}
 	if hardwarePlanConsent(ctx) && authorize {
 		project, _ := e.scopeProject(scope)
-		authorized, denied := e.approvalFor(scope.SessionID, project).gate(authorize)
+		authorized, denied := e.approvalFor(scope.SessionID, project).withPermission(scope.PermissionMode).gate(authorize)
 		if denied {
 			return &Result{Kind: "plan", PlanGoal: p.Goal, Denied: true, Stderr: ErrApprovalDenied.Error(), ExitCode: 1}, nil
 		}
 		q.Authorized = authorized
 	}
-	// No work dir, for the same reason `panda plan run` sets none: a path on this
-	// machine means nothing on the machine that runs the stage.
-	q.WorkDir = ""
+	// WorkDir is a source snapshot only. Core.StartPlan extracts it into
+	// node-local stage directories rather than forwarding the source path.
 	// The stages belong to the conversation that asked for the plan. Without
 	// the link a plan's stages settled into silence: the thread got the receipt
 	// ("3 stages started") and never heard which employee finished what, while
@@ -3441,6 +3541,23 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	// user said which hands may touch this conversation.
 	if len(scope.Agents) > 0 {
 		spec.Spec.AllowAgents = append([]string(nil), scope.Agents...)
+	}
+	// Both JSON directives and task_submit converge here. Preserve a typed
+	// delivery contract; the lexical guard remains only a compatibility
+	// fallback for older entry models that omit task_kind.
+	if scope.WorkDir != "" && needsRepositoryInvestigation(prompt) {
+		if repositoryInvestigationReadOnly(prompt) {
+			spec.Spec.Kind = entry.TaskInvestigation
+			scope.PermissionMode = defense.ModePlan
+		} else if spec.Spec.Kind == "" {
+			spec.Spec.Kind = entry.TaskEdit
+		}
+	}
+	// A model's delivery label cannot widen the conversation permission.
+	// Investigation is read-only by default, even if the entry omitted the
+	// legacy repository keywords. Other kinds still obey the normal gates.
+	if spec.Spec.Kind == entry.TaskInvestigation || spec.Spec.Kind == entry.TaskCodeQuestion {
+		scope.PermissionMode = defense.ModePlan
 	}
 	// The conversation's permission mode rides the spec for the same reason
 	// the roster does: the executor (a peer included) must apply the policy

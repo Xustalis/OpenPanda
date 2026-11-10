@@ -80,7 +80,7 @@ func decisionKey(sessionID, project string) string {
 // and the task gate cannot disagree about which project's policy applies.
 func (e *Engine) scopeProject(scope AskScope) (project, projectDir string) {
 	project, projectDir = scope.Project, ""
-	if scope.AmbientProject {
+	if scope.AmbientProject && project == "" {
 		project, projectDir = e.Project()
 	}
 	return project, projectDir

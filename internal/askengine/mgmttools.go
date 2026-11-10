@@ -51,6 +51,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 	registerModelTools(reg, e)
 	reg.Register(entry.Tool{
 		Name:        "system_status",
+		ReadOnly:    true,
 		Description: "Check OpenPanda's overall status: version, this node's identity, entry model, capability-card load state, device-network online counts, per-state task counts. First step for questions like \"what's going on / how many devices online / how many tasks queued\". / 查看 OpenPanda 整体运行状态：版本、本节点身份、入口模型、能力卡加载情况、设备网络在线状况、各状态任务数量。回答“现在什么情况/几台设备在线/队列里有多少任务”等问题的第一步。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -64,6 +65,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_list",
+		ReadOnly:    true,
 		Description: "List every node in the device network with a capability-card summary (name, kind, online status, ability list). Look here first when picking a device for a task. / 列出设备网络里所有节点及其能力卡概要（设备名、类型、在线状态、能力清单）。需要为任务挑选合适设备时先看这里。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -77,6 +79,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "card_show",
+		ReadOnly:    true,
 		Description: "Show one node's full capability card: native abilities (with their commands), agent config (capabilities/best_at/not_for/cost tier), manual abilities, capacity and resource profile. name = device name or node ID; empty = this node. / 查看一个节点的能力卡详情：原生能力（含执行命令）、agent 配置（能力/擅长/不擅长/成本档）、人工能力、容量与资源档案。name 填设备名或节点 ID，留空看本机。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -93,6 +96,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "taskq_list",
+		ReadOnly:    true,
 		Description: "List the task queue. filter is optional: active (queued/dispatched/running, default), review (pending approval), history (done/failed/cancelled), all (everything), or a raw state name (e.g. running). / 查看任务队列。filter 可选：active（排队/已派发/运行中，默认）、review（待审批）、history（已完成/失败/已取消）、all（全部），或直接填某个状态名（如 running）。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -109,6 +113,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "taskq_show",
+		ReadOnly:    true,
 		Description: "Show one task's detail: title, state, owner node, intent, ability requirements, result summary, event timeline. task_id = the task ID. / 查看一个任务的详情：标题、状态、负责节点、意图、能力要求、结果摘要、事件时间线。task_id 填任务 ID。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -485,6 +490,7 @@ func registerMgmtTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "project_list",
+		ReadOnly:    true,
 		Description: "List all projects in the system and which one the current session is inside. / 查看系统中所有项目列表，以及当前会话正处于哪个激活项目中。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{

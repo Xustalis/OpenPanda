@@ -17,6 +17,7 @@ import (
 func registerModelTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "model_list",
+		ReadOnly:    true,
 		Description: "List this node's configured models and the active model. Read-only local settings; no provider request or agent task. / 列出本节点已配置模型及当前模型，直接读取本地设置，不启动 Agent。",
 		Tier:        defense.TierReversible,
 		Schema:      map[string]any{"type": "object", "properties": map[string]any{}},

@@ -503,7 +503,7 @@ func TestAskTurnsRecoversOnCompactConvergence(t *testing.T) {
 	}
 	nudged := false
 	for _, b := range bodies {
-		if strings.Contains(b, "已收集到足够的上下文") {
+		if strings.Contains(b, "不要假定已经收集到足够上下文") {
 			nudged = true
 			break
 		}
