@@ -38,6 +38,7 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 
 	reg.Register(entry.Tool{
 		Name:        memory.ToolRead,
+		ReadOnly:    true,
 		Description: "List memory entries (read before merge/delete) / 列出当前记忆条目（合并/删除前先读）。target: user / memory / project。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -168,6 +169,7 @@ func registerReminderTools(reg *entry.Registry, rem *reminders.Store) {
 
 	reg.Register(entry.Tool{
 		Name:        "reminder_list",
+		ReadOnly:    true,
 		Description: "List all active pending reminders / 列出当前所有未触发的提醒。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -295,6 +297,14 @@ func toolProgressDetail(call *entry.ToolCall) string {
 	return ""
 }
 
+// readOnlyEntryToolsKey is request-scoped, not a mutable engine setting: a
+// read-only thread must not silently grant a concurrent ordinary ask its tools.
+type readOnlyEntryToolsKey struct{}
+
+func withReadOnlyEntryTools(ctx context.Context) context.Context {
+	return context.WithValue(ctx, readOnlyEntryToolsKey{}, true)
+}
+
 // executeTool runs a tool call through the registry and returns a user-facing
 // result (a tool failure is folded into the result, not a hard exit, so the
 // model can consolidate and retry). authorized is the ask's effective tier-2
@@ -372,6 +382,15 @@ func executeToolChecked(ctx context.Context, reg *entry.Registry, call *entry.To
 			return "Tool execution failed: unknown tool " + call.Tool, nil
 		}
 		return "工具执行失败：未知工具 " + call.Tool, nil
+	}
+	// A tier is a reversibility classification, not a read-only promise.
+	// Unknown/MCP tools (and the many Tier-1 mutation tools) fail closed.
+	if ctx.Value(readOnlyEntryToolsKey{}) == true && !t.ReadOnly &&
+		call.Tool != entry.ToolNameTaskSubmit && call.Tool != entry.ToolNameTaskBudget {
+		if targetLoc == i18n.English {
+			return "Tool execution refused: this conversation is read-only (plan mode).", nil
+		}
+		return "工具执行被拒：当前对话为只读（plan 模式）。", nil
 	}
 	// A remembered "deny" answers the tier-2 gate for this scope, so it may
 	// only withhold the operations that gate guards. Applying it to every
@@ -463,6 +482,10 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 				"required": []string{"target_actuator", "action"}},
 		}
 	}
+	props["task_kind"] = map[string]any{
+		"type": "string", "enum": []string{"code_question", "investigation", "edit", "operations"},
+		"description": "Delivery type: investigation/code_question require source evidence; edit requires relevant verification; operations requires an observed postcondition. Does not grant permissions.",
+	}
 	return entry.Tool{
 		Name:        entry.ToolNameTaskSubmit,
 		Description: desc,
@@ -491,6 +514,7 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 			node, _ := args["node"].(string)
 			taskScope, _ := args["scope"].(string)
 			successDef, _ := args["success_definition"].(string)
+			kind, _ := args["task_kind"].(string)
 			var actionSpec *ledger.ActionSpec
 			if raw, ok := args["action_spec"]; ok && raw != nil {
 				// The argument arrives as untyped JSON; round-tripping into the
@@ -516,6 +540,7 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 				ContextType: contextType,
 				Requires:    entry.Requires{Abilities: abilities},
 				Spec: entry.TaskSpecDetail{
+					Kind:              entry.TaskKind(kind),
 					Target:            strings.TrimSpace(target),
 					Node:              strings.TrimSpace(node),
 					Scope:             strings.TrimSpace(taskScope),

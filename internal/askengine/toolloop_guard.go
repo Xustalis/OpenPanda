@@ -131,17 +131,17 @@ func loopInterruptionNotice(loc i18n.Locale) string {
 	return "\n\n（模型调用失败中断，本次回答未完成；具体原因已记入运行日志和本轮警告信息，请重试。）"
 }
 
-// convergenceNudge is injected one round before the loop's ceiling. A model
-// exploring a large workspace otherwise spends every round emitting another
-// workspace_read and never produces the prose the user asked for; by the time
-// the tool-free round arrives the transcript is at its largest and most
-// likely to be rejected. Asking for convergence while there is still a round
-// left is both cheaper and more reliable.
-func convergenceNudge(loc i18n.Locale) string {
-	if loc == i18n.English {
-		return "You have gathered enough context. In the next turn, give the final answer in prose instead of calling more tools; mark any unverified detail as uncertain."
+// convergenceNudge reports the approaching budget boundary, not evidence
+// sufficiency. Broad investigations need a harness handoff; other requests
+// should report only what their bounded observations can substantiate.
+func convergenceNudge(loc i18n.Locale, investigation bool) string {
+	if investigation {
+		return investigationRouteReminder(loc)
 	}
-	return "已收集到足够的上下文。下一轮请直接给出最终答案，不要再调用工具；未核实的细节标注为不确定即可。"
+	if loc == i18n.English {
+		return "The tool-round limit is near; stop broad exploration. Answer only what the evidence actually supports, and clearly mark any unverified or incomplete claim."
+	}
+	return "工具轮次接近上限，请停止宽泛探查。只根据已核实的证据作答，明确标注未验证或未完成的部分，不要假定已经收集到足够上下文。"
 }
 
 const (
