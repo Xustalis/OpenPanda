@@ -338,6 +338,28 @@ func TestExecAgentPerTaskToolsPolicyWins(t *testing.T) {
 	}
 }
 
+// TestExecAgentGlobalMinimalCannotBeWidenedByTask ensures an untrusted task
+// spec cannot bypass the operator's minimal tool face at the last hop.
+func TestExecAgentGlobalMinimalCannotBeWidenedByTask(t *testing.T) {
+	card := scoreCard()
+	card.Agents["cheap"] = ledger.Agent{Adapter: "opencode.py", Capabilities: []string{"code:modify"}, CostTier: "low", Tier: 1}
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: config.ToolsPolicyMinimal})
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	var gotPolicy string
+	r.SetAdapterRunner(func(ctx context.Context, _, _, _ string) AgentResult {
+		gotPolicy, _ = ctx.Value(toolsPolicyKey{}).(string)
+		return AgentResult{OK: true, Result: "done", ExitCode: 0}
+	})
+	plan, err := r.Route([]string{"code:modify"})
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	res := r.Execute(WithToolsPolicy(context.Background(), config.ToolsPolicyExtended), plan, "fix it", "", false)
+	if !res.OK || gotPolicy != config.ToolsPolicyMinimal {
+		t.Fatalf("result=%+v, adapter policy=%q; want minimal", res, gotPolicy)
+	}
+}
+
 // TestExecAgentGlobalPolicyAppliesWithoutOverride: with no per-task policy on
 // the context, the router's global policy still reaches the adapter.
 func TestExecAgentGlobalPolicyAppliesWithoutOverride(t *testing.T) {

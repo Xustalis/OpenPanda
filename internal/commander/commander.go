@@ -674,6 +674,9 @@ func (r *Router) Route(required []string) (Plan, error) {
 func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd string, authorized bool) Result {
 	switch plan.Kind {
 	case "native":
+		if Restricted(ctx) {
+			return Result{OK: false, ExitCode: 1, Stderr: "read-only execution refuses native commands without a restricted tool face"}
+		}
 		if err := defense.Authorize(plan.Tier, authorized); err != nil {
 			return Result{OK: false, ExitCode: 1, Stderr: authorizationHint(err, plan)}
 		}
@@ -858,13 +861,15 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// stays unchanged for tests); runAdapterProcess copies it into the
 		// request. MCP passthrough materializes a project .mcp.json for the
 		// run when the policy is extended and a server is configured. A
-		// per-task override (WithToolsPolicy set by the orchestration layer on
-		// ctx) wins: the global policy is applied only when the context
-		// carries no task-level policy yet.
+		// A task may narrow the operator's tool face, never widen it. This
+		// check belongs at the final router boundary: forwarded and resumed
+		// tasks can carry untrusted spec_json independently of askengine.
 		runCtx := WithAgentName(ctx, name)
-		if ctx.Value(toolsPolicyKey{}) == nil {
-			runCtx = WithToolsPolicy(runCtx, r.toolsPolicy)
+		policy, _ := ctx.Value(toolsPolicyKey{}).(string)
+		if r.toolsPolicy != config.ToolsPolicyExtended || policy != config.ToolsPolicyMinimal {
+			policy = r.toolsPolicy
 		}
+		runCtx = WithToolsPolicy(runCtx, policy)
 		if ag.Command != "" {
 			runCtx = WithAgentCommand(runCtx, ag.Command)
 		}
