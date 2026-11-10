@@ -60,14 +60,20 @@ const (
 
 // pathState holds the reachability ladder's bookkeeping.
 type pathState struct {
-	mu         sync.Mutex
-	kickAt     map[string]time.Time
-	addrCool   map[string]time.Time
-	dialSem    chan struct{}
-	punchAt    map[string]time.Time
-	punchTries map[string]int
-	natSuspect map[string]time.Time
-	wantAt     map[string]time.Time
+	// Reachability work may outlive a parked resume. Shutdown must cancel
+	// and join it before its directory queries can race store teardown.
+	reachCtx    context.Context
+	reachCancel context.CancelFunc
+	reachWG     sync.WaitGroup
+	closing     bool
+	mu          sync.Mutex
+	kickAt      map[string]time.Time
+	addrCool    map[string]time.Time
+	dialSem     chan struct{}
+	punchAt     map[string]time.Time
+	punchTries  map[string]int
+	natSuspect  map[string]time.Time
+	wantAt      map[string]time.Time
 	// edgeLoad caches each peer's heartbeat-advertised live edge count for
 	// rendezvous scoring — volatile by nature, so it stays in memory.
 	edgeLoad map[string]int
@@ -194,6 +200,46 @@ func (p *pathState) init() {
 
 // kickReachable starts one background ladder run for id, deduped. Called by
 // sendTo whenever a send had to fall back below a live track.
+// goReach tracks only reachability work, not long-lived peer handlers. The
+// closing gate and Add share path.mu so Shutdown cannot miss a late launch.
+func (c *Core) goReach(parent context.Context, name string, fn func(context.Context)) bool {
+	c.path.mu.Lock()
+	if c.path.closing {
+		c.path.mu.Unlock()
+		return false
+	}
+	if c.path.reachCtx == nil {
+		c.path.reachCtx, c.path.reachCancel = context.WithCancel(context.Background())
+	}
+	ctx, cancel := context.WithCancel(c.path.reachCtx)
+	stopParent := context.AfterFunc(parent, cancel)
+	c.path.reachWG.Add(1)
+	c.path.mu.Unlock()
+	c.goGuarded(name, func() {
+		defer c.path.reachWG.Done()
+		defer cancel()
+		defer stopParent()
+		fn(ctx)
+	})
+	return true
+}
+
+func (c *Core) stopReachability(ctx context.Context) {
+	c.path.mu.Lock()
+	c.path.closing = true
+	if c.path.reachCancel != nil {
+		c.path.reachCancel()
+	}
+	c.path.mu.Unlock()
+	done := make(chan struct{})
+	go func() { c.path.reachWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		c.logger.Warn("reachability work still running at shutdown deadline", "err", ctx.Err())
+	}
+}
+
 func (c *Core) kickReachable(id string) {
 	if id == "" || id == c.nodeID || ledger.SessionRowID(id) {
 		return
@@ -206,7 +252,7 @@ func (c *Core) kickReachable(id string) {
 	}
 	c.path.kickAt[id] = time.Now()
 	c.path.mu.Unlock()
-	c.goGuarded("reach "+id, func() { c.reachPeer(context.Background(), id) })
+	c.goReach(context.Background(), "reach "+id, func(ctx context.Context) { c.reachPeer(ctx, id) })
 }
 
 // reachPeer walks the ladder: direct addrs first, auto-punch after. Transit
@@ -272,9 +318,9 @@ func (c *Core) dialPeerAddrs(ctx context.Context, id string) bool {
 		}
 		c.path.mu.Unlock()
 		tried++
-		go func(addr string) {
+		if !c.goReach(ctx, "reach dial "+id, func(reachCtx context.Context) {
 			defer func() { <-c.path.dialSem }()
-			dctx, cancel := context.WithTimeout(ctx, addrDialTimeout)
+			dctx, cancel := context.WithTimeout(reachCtx, addrDialTimeout)
 			defer cancel()
 			// DialPeer registers whatever answers under ITS hello id; the
 			// addr is a hint about id, not a claim we enforce pre-hello.
@@ -283,7 +329,10 @@ func (c *Core) dialPeerAddrs(ctx context.Context, id string) bool {
 				c.path.addrCool[key] = time.Now().Add(addrDialCooldown)
 				c.path.mu.Unlock()
 			}
-		}(addr)
+		}) {
+			<-c.path.dialSem
+			return false
+		}
 	}
 	if tried == 0 {
 		return false

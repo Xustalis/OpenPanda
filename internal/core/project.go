@@ -247,16 +247,7 @@ func (c *Core) attachProject(ctx context.Context, p *bus.TaskDelegatePayload, pr
 	if project == "" {
 		return
 	}
-	if pack, err := c.packProjectMemory(project); err != nil {
-		c.logger.Warn("pack project memory", "project", project, "err", err)
-		if p.TaskID != "" && c.store != nil {
-			_ = c.store.RecordEvent(ctx, p.TaskID, EvContextDegraded, map[string]any{
-				"stage": "pack_memory", "project": project, "err": err.Error(),
-			})
-		}
-	} else if len(pack) > 0 {
-		p.ProjectPack = pack
-	}
+	c.attachProjectMemory(ctx, p, project)
 	dir := c.projectDir(project)
 	if dir == "" {
 		return
@@ -274,6 +265,24 @@ func (c *Core) attachProject(ctx context.Context, p *bus.TaskDelegatePayload, pr
 	}
 	if ref.Hash != "" {
 		p.Inputs = append(p.Inputs, ref)
+	}
+}
+
+// attachProjectMemory carries project knowledge without adding a checkout or
+// origin path. Plan stages already own their source/dependency input order.
+func (c *Core) attachProjectMemory(ctx context.Context, p *bus.TaskDelegatePayload, project string) {
+	if project == "" {
+		return
+	}
+	if pack, err := c.packProjectMemory(project); err != nil {
+		c.logger.Warn("pack project memory", "project", project, "err", err)
+		if p.TaskID != "" && c.store != nil {
+			_ = c.store.RecordEvent(ctx, p.TaskID, EvContextDegraded, map[string]any{
+				"stage": "pack_memory", "project": project, "err": err.Error(),
+			})
+		}
+	} else if len(pack) > 0 {
+		p.ProjectPack = pack
 	}
 }
 

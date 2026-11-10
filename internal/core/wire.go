@@ -383,7 +383,11 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 		payload.ResumeSessionAdapter = t.AgentSessionAdapter
 	}
 	// A re-routed project task needs its context as much as the first attempt did.
-	c.attachProject(ctx, &payload, t.Project)
+	if t.PlanID == "" {
+		c.attachProject(ctx, &payload, t.Project)
+	} else {
+		c.attachProjectMemory(ctx, &payload, t.Project)
+	}
 	// Same for an ad-hoc file task: the tree travels with the re-route or the
 	// task stays — a blind copy on a fresh peer is the failure mode the
 	// attach exists to prevent.

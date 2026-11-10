@@ -44,6 +44,16 @@ func taskAcceptance(specJSON string) []contract.Check {
 	return checks
 }
 
+// Acceptance commands execute outside the agent's restricted tool face. A
+// read-only/plan task must not run them automatically, even if a check was
+// selected from the project shortlist or supplied by the user.
+func executableAcceptance(specJSON string) []contract.Check {
+	if taskPermissionMode(specJSON) == defense.ModePlan {
+		return nil
+	}
+	return taskAcceptance(specJSON)
+}
+
 // acceptanceConfig reads the configured budgets under the same lock the
 // runtime setters use.
 func (c *Core) acceptanceConfig() config.AcceptanceConfig {
