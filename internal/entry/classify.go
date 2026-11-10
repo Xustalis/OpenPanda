@@ -34,7 +34,11 @@ const ToolNameTaskBudget = "task_budget"
 // semantics can never be served (they expire by TTL). v3: coreRules gained
 // the "Operating this node" routing guidance. v4: the key carries the
 // workspace map and the acceptance shortlist. v5: both changes landed.
-const classificationCacheVersion = "v5"
+// v6: broad workspace investigation is routed to an evidence-backed agent
+// task rather than cached as a conceptual answer.
+// v7: task_kind persists the task-specific delivery evidence contract.
+// v8: workspace classifications bypass cache until content revisions are keyed.
+const classificationCacheVersion = "v8"
 
 // classificationCacheable reports whether a classified Output may be replayed
 // from the disk cache. Kinds that materialize durable work — a task row, or a
@@ -151,11 +155,25 @@ func classifyCacheKey(po PromptOptions, model string, registry *Registry) (k1, k
 	return hashString(b.String()), hashString(summarizeDevicesCached(po.Devices, promptLocale(po)))
 }
 
+// A map identifies structure, not the revision of its files. Workspace
+// answers and follow-up tool choices must be recomputed after edits, including
+// uncommitted edits. Do not pretend a path-only cache key proves freshness.
+func liveWorkspaceClassification(po PromptOptions, registry *Registry) bool {
+	if po.WorkspaceMap != "" {
+		return true
+	}
+	if registry != nil {
+		_, ok := registry.Lookup("workspace_read")
+		return ok
+	}
+	return false
+}
+
 // cachedClassification returns a previously stored classification for these
 // exact inputs, if the client carries a disk cache and one exists.
 func cachedClassification(ctx context.Context, c *Client, po PromptOptions, registry *Registry) (Output, bool) {
 	dc := c.diskCache()
-	if dc == nil {
+	if dc == nil || liveWorkspaceClassification(po, registry) {
 		return Output{}, false
 	}
 	k1, k2 := classifyCacheKey(po, c.ModelName(), registry)
@@ -182,7 +200,7 @@ func cachedClassification(ctx context.Context, c *Client, po PromptOptions, regi
 // a failed write only costs a future miss.
 func storeClassification(ctx context.Context, c *Client, po PromptOptions, registry *Registry, out Output) {
 	dc := c.diskCache()
-	if dc == nil {
+	if dc == nil || liveWorkspaceClassification(po, registry) {
 		return
 	}
 	if !classificationCacheable(out) {
