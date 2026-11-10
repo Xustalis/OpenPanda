@@ -16,6 +16,10 @@
 #      tracks (descending) under a "Roadmap" heading.
 #   6. A changelog entry title must not be split across bold runs ("** **").
 #      The acronym expansion on line 29 is deliberate and is the sole exception.
+#   7. Every code-of-conduct variant must open with a blockquote naming the
+#      canonical file, and carry the same number of sections as it. ASCII
+#      ordering puts CODE_OF_CONDUCT.de.md above CODE_OF_CONDUCT.md, so the
+#      German text is what a visitor meets first in a plain listing.
 #
 # POSIX sh, no dependencies beyond grep/git. Exits non-zero on drift.
 set -u
@@ -211,6 +215,47 @@ for f in $changelogs; do
 	if [ -n "$breaks" ]; then
 		echo "FAIL: $f has a split bold entry title:"
 		echo "$breaks" | head -n 5 | sed 's/^/  /'
+		fail=1
+	fi
+done
+
+# ── 7. code of conduct: one canonical file, four marked translations ───────
+# ASCII sorts "CODE_OF_CONDUCT.de.md" above "CODE_OF_CONDUCT.md" (the 17th
+# character decides: 'd' < 'm'), so in a plain listing — the repo root, `ls`, a
+# quick-open dialog — the German text sits where a reader expects the default
+# and is read as one. Ordering cannot be fixed without renaming the set away
+# from `CODE_OF_CONDUCT.<locale>.md`, which is the convention GitHub's community
+# standards look for, so the disambiguation has to be visible in the file: every
+# variant opens with a blockquote, and every translation names the canonical
+# file inside it. The italic one-liner this replaced was skipped by readers and
+# had already drifted into four different spellings.
+coc_files="CODE_OF_CONDUCT.md CODE_OF_CONDUCT.zh-CN.md CODE_OF_CONDUCT.ja.md CODE_OF_CONDUCT.es.md CODE_OF_CONDUCT.de.md"
+
+# Sections are compared by count, not by text: headings are translated, so a
+# translated heading can never equal the English one. Equal counts still catch
+# the drift that matters — a section added or dropped in one language only.
+coc_ref_sections=$(grep -c '^## ' CODE_OF_CONDUCT.md)
+for f in $coc_files; do
+	if [ ! -f "$f" ]; then
+		echo "FAIL: $f missing"
+		fail=1
+		continue
+	fi
+	got_sections=$(grep -c '^## ' "$f")
+	if [ "$got_sections" != "$coc_ref_sections" ]; then
+		echo "FAIL: $f has $got_sections '## ' sections, CODE_OF_CONDUCT.md has $coc_ref_sections"
+		fail=1
+	fi
+	# The banner sits under the title and the language line, so line 8 is a
+	# generous ceiling that still rejects a banner pushed below the first
+	# section — i.e. below the point where the rendered page cuts it off.
+	if ! head -n 8 "$f" | grep -q '^> '; then
+		echo "FAIL: $f does not open with a blockquote disambiguating its status"
+		fail=1
+	fi
+	if [ "$f" != "CODE_OF_CONDUCT.md" ] &&
+		! head -n 8 "$f" | grep -q '](CODE_OF_CONDUCT\.md)'; then
+		echo "FAIL: $f does not name CODE_OF_CONDUCT.md as the authoritative text"
 		fail=1
 	fi
 done

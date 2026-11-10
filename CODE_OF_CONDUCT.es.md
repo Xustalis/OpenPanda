@@ -1,8 +1,9 @@
 # Código de Conducta del Contributor Covenant
 
-Idiomas: [English](CODE_OF_CONDUCT.md) (versión vinculante) · [简体中文](CODE_OF_CONDUCT.zh-CN.md) · [日本語](CODE_OF_CONDUCT.ja.md) · Español · [Deutsch](CODE_OF_CONDUCT.de.md)
+[English](CODE_OF_CONDUCT.md) (authoritative) · [简体中文](CODE_OF_CONDUCT.zh-CN.md) · [日本語](CODE_OF_CONDUCT.ja.md) · Español · [Deutsch](CODE_OF_CONDUCT.de.md)
 
-*Esta traducción se ofrece solo como referencia; en caso de discrepancia rige la versión en inglés.*
+> **Traducción de referencia.** El texto vinculante es el inglés, en
+> [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md); en caso de discrepancia rige ese texto.
 
 ## Nuestro compromiso
 

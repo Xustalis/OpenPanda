@@ -1,8 +1,8 @@
 # コントリビューター規約 行動規範（Contributor Covenant Code of Conduct）
 
-言語: [English](CODE_OF_CONDUCT.md)（正文）· [简体中文](CODE_OF_CONDUCT.zh-CN.md) · 日本語 · [Español](CODE_OF_CONDUCT.es.md) · [Deutsch](CODE_OF_CONDUCT.de.md)
+[English](CODE_OF_CONDUCT.md) (authoritative) · [简体中文](CODE_OF_CONDUCT.zh-CN.md) · 日本語 · [Español](CODE_OF_CONDUCT.es.md) · [Deutsch](CODE_OF_CONDUCT.de.md)
 
-*この日本語訳は参考訳です。英語版と齟齬がある場合は英語版が優先されます。*
+> **本文は参考訳です。** 正文は英語版 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) であり、齟齬がある場合は英語版が優先されます。
 
 ## 私たちの誓い
 
