@@ -16,12 +16,21 @@ package askengine
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
 	"runtime/debug"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
+
+// stderrLogger is the last-resort sink for guard-rail diagnostics. Engines
+// built by tests (and the borrowed web engine, which has no logger wired to
+// its structured log) otherwise drop every "model call failed" record, while
+// the reply tells the user to "check the log". The web process redirects
+// stderr into web.log, so writing JSON here keeps that promise true.
+var stderrLogger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 // maxOverflowRetries bounds the compress-and-retry ladder. Each step halves
 // the tool-result budget, so a retried request is strictly smaller than the
@@ -30,18 +39,23 @@ import (
 const maxOverflowRetries = 2
 
 // logWarn/logError keep a nil logger from turning a diagnostic into a second
-// crash. Tests construct Engine literals directly; production always supplies
-// one, but the guard paths must be safe in both.
-func (e *Engine) logWarn(msg string, args ...any) {
+// crash. Tests construct Engine literals directly and some production paths
+// (notably a borrowed web engine) never wire e.logger, so they fall back to
+// stderr rather than silently losing the one line that explains an aborted
+// turn. A test engine stays safe: the fallback never panics and never blocks.
+func (e *Engine) guardLogger() *slog.Logger {
 	if e.logger != nil {
-		e.logger.Warn(msg, args...)
+		return e.logger
 	}
+	return stderrLogger
+}
+
+func (e *Engine) logWarn(msg string, args ...any) {
+	e.guardLogger().Warn(msg, args...)
 }
 
 func (e *Engine) logError(msg string, args ...any) {
-	if e.logger != nil {
-		e.logger.Error(msg, args...)
-	}
+	e.guardLogger().Error(msg, args...)
 }
 
 // classifyBounded runs one classification over a bounded transcript. Tool
@@ -112,9 +126,75 @@ func loopFailureReason(err error, loc i18n.Locale) string {
 // user-facing summary of what already ran.
 func loopInterruptionNotice(loc i18n.Locale) string {
 	if loc == i18n.English {
-		return "\n\n(The model call failed; the detailed reason is in the log.)"
+		return "\n\n(The model call failed, so this reply is incomplete; the reason is recorded in the run log and in this turn's warning. Please retry.)"
 	}
-	return "\n\n（模型调用失败中断，详细原因见日志。）"
+	return "\n\n（模型调用失败中断，本次回答未完成；具体原因已记入运行日志和本轮警告信息，请重试。）"
+}
+
+// convergenceNudge is injected one round before the loop's ceiling. A model
+// exploring a large workspace otherwise spends every round emitting another
+// workspace_read and never produces the prose the user asked for; by the time
+// the tool-free round arrives the transcript is at its largest and most
+// likely to be rejected. Asking for convergence while there is still a round
+// left is both cheaper and more reliable.
+func convergenceNudge(loc i18n.Locale) string {
+	if loc == i18n.English {
+		return "You have gathered enough context. In the next turn, give the final answer in prose instead of calling more tools; mark any unverified detail as uncertain."
+	}
+	return "已收集到足够的上下文。下一轮请直接给出最终答案，不要再调用工具；未核实的细节标注为不确定即可。"
+}
+
+const (
+	// compactConvergence keeps only a bounded slice of each tool result: the
+	// point is to leave the model enough evidence to write an answer, not to
+	// replay the whole exploration that just overflowed the provider.
+	compactPerToolRunes = 500
+	compactTotalRunes   = 6000
+	compactMaxTools     = 16
+)
+
+// compactConvergenceTranscript rebuilds a minimal tool-free transcript for a
+// last-chance answer. The full history (every tool call and its full output)
+// is what failed the final convergence call; re-sending it unchanged can only
+// reproduce the failure. The user's question plus an excerpted inventory of
+// what actually ran fits comfortably inside any serving window.
+func compactConvergenceTranscript(prompt string, toolDigest []string, loc i18n.Locale) []entry.Turn {
+	var b strings.Builder
+	if loc == i18n.English {
+		b.WriteString("Now answer the question above in prose. Do not call tools and do not ask to read more files; note any unverified detail briefly and give the best answer the evidence supports.\n\nObservations already collected (excerpted):\n")
+	} else {
+		b.WriteString("现在请直接回答上面的问题，用正文输出：不要调用任何工具、不要再要求读取更多文件。未核实的细节简要说明，基于已有证据给出尽可能完整的答案。\n\n已执行的探查与结果节选：\n")
+	}
+	used, shown := 0, 0
+	for _, line := range toolDigest {
+		if shown >= compactMaxTools || used >= compactTotalRunes {
+			break
+		}
+		take := compactPerToolRunes
+		if used+take > compactTotalRunes {
+			take = compactTotalRunes - used
+		}
+		runes := []rune(strings.TrimSpace(line))
+		if len(runes) > take {
+			runes = append(runes[:take], '…')
+		}
+		b.WriteString("- ")
+		b.WriteString(string(runes))
+		b.WriteByte('\n')
+		used += take
+		shown++
+	}
+	if len(toolDigest) > shown {
+		if loc == i18n.English {
+			fmt.Fprintf(&b, "- ... and %d more tool result(s) omitted.\n", len(toolDigest)-shown)
+		} else {
+			fmt.Fprintf(&b, "- ……另有 %d 项结果未展开。\n", len(toolDigest)-shown)
+		}
+	}
+	return []entry.Turn{
+		{Role: "user", Content: prompt},
+		{Role: "user", Content: b.String()},
+	}
 }
 
 // emptyAnswerNotice is the last-resort text for a converged answer that came

@@ -237,6 +237,7 @@ func New(d Deps) http.Handler {
 	// (Codex, Claude Code, OpenCode, loopback inference) and the batch write
 	// that turns ticked candidates into rows.
 	mux.HandleFunc("GET /api/models/discover", h.discoverModels)
+	mux.HandleFunc("GET /api/models/ccswitch", h.ccswitchModels)
 	mux.HandleFunc("POST /api/models/import", h.importModels)
 	// Dictation: the composer records in the browser and this relays the clip
 	// to an OpenAI-compatible /audio/transcriptions endpoint (see voice.go).
@@ -342,11 +343,14 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("DELETE /api/sessions/{id}", h.deleteSession)
 		mux.HandleFunc("POST /api/sessions/{id}/fork", h.forkSession)
 		mux.HandleFunc("POST /api/sessions/{id}/ask", h.sessionAsk)
-		// The side conversation is server-owned so a question outlives the
-		// pane: GET returns its turns and latest operation (the reconnect
-		// surface), DELETE is the pane's `+`.
+		// The side conversations are server-owned so a question outlives the
+		// pane: GET returns the list plus one transcript (the reconnect
+		// surface), DELETE drops one chat, `new` starts another and `select`
+		// moves the pane to one it already holds.
 		mux.HandleFunc("GET /api/sessions/{id}/side", h.sessionSide)
 		mux.HandleFunc("DELETE /api/sessions/{id}/side", h.sessionSide)
+		mux.HandleFunc("POST /api/sessions/{id}/side/new", h.sessionSideNew)
+		mux.HandleFunc("POST /api/sessions/{id}/side/select", h.sessionSideSelect)
 		// Type into the thread while the agent works — the queue/inject pair
 		// the composer promises (see session_msg.go). The notes routes are the
 		// same contract's read/edit/drop/promote half: a queued note the user

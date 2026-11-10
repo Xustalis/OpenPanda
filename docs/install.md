@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/ins
 等效的显式写法：
 
 ```bash
-sh scripts/install.sh --version 0.1.4           # 安装指定版本（默认 latest，即最新稳定版；预发布版必须显式指定）
+sh scripts/install.sh --version 0.1.5           # 安装指定版本（默认 latest，即最新稳定版；预发布版必须显式指定）
 sh scripts/install.sh --prefix /opt/openpanda  # 自定义安装目录
 sh scripts/install.sh --lite                   # lite 构建：无内嵌 Web 控制台/TUI（仅 Linux）
 sh scripts/install.sh --yes                    # 额外注册开机自启（不询问）
@@ -27,7 +27,7 @@ sh scripts/install.sh --no-service             # 不碰开机自启
 sh scripts/install.sh --force                  # 强制安装：跳过“版本低于数据目录 schema”的拒绝
 ```
 
-当前稳定版是 `0.1.4`；上一支稳定版 `0.1.3` 仍可按版本号显式安装（`--version 0.1.3`），预发布版同理，`latest` 永远只指最新稳定版。
+当前稳定版是 `0.1.5`；上一支稳定版 `0.1.4` 仍可按版本号显式安装（`--version 0.1.4`），预发布版同理，`latest` 永远只指最新稳定版。
 
 默认前缀（与 Go 的 XDG/用户目录约定对齐）：
 
@@ -55,7 +55,7 @@ ${XDG_DATA_HOME:-~/.local/share}/openpanda/
 - **自更新器**：报 `fetch checksums: … net/http: TLS handshake timeout`。用 `OPENPANDA_UPDATE_BASE` 把下载指向镜像，值就是"到版本目录为止"的完整 URL：
 
   ```powershell
-  $env:OPENPANDA_UPDATE_BASE = "https://<镜像>/Xustalis/OpenPanda/releases/download/v0.1.4"
+  $env:OPENPANDA_UPDATE_BASE = "https://<镜像>/Xustalis/OpenPanda/releases/download/v0.1.5"
   panda upgrade
   ```
 
@@ -99,7 +99,7 @@ irm https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.ps
 或下载后运行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.4 -Yes
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.1.5 -Yes
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force    # 强制降级（跳过 schema 守卫）
 ```
 

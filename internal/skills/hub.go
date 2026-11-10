@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // HubSkill is one entry in the Skills Hub catalog.
@@ -26,6 +29,13 @@ type HubSkill struct {
 	DocURL      string   `json:"doc_url,omitempty" yaml:"doc_url,omitempty"`
 	Recommended bool     `json:"recommended,omitempty" yaml:"recommended,omitempty"`
 	Alias       string   `json:"alias,omitempty" yaml:"alias,omitempty"`
+	// Triggers are the curated bilingual retrieval keywords for this skill.
+	// They live here, not inside Content, so the on-disk SKILL.md body stays a
+	// plain procedure and the built-in trigger table has exactly one source.
+	// Index() merges them into built-in entries that predate this field (or
+	// that the user has edited), so no reseed is needed to pick them up.
+	Triggers []string `json:"triggers,omitempty" yaml:"triggers,omitempty"`
+	Always   bool     `json:"always,omitempty" yaml:"always,omitempty"`
 }
 
 // CuratedSkills contains built-in, production-grade procedural workflows available offline or by default.
@@ -38,6 +48,7 @@ var CuratedSkills = []HubSkill{
 		Author:      "OpenPanda Team",
 		Version:     "1.1.0",
 		Tags:        []string{"git", "workflow", "vcs", "dev"},
+		Triggers:    []string{"git", "commit", "branch", "rebase", "merge", "pull request", "提交", "分支", "合并", "变基", "代码提交", "拉取请求"},
 		Recommended: true,
 		Content: strings.Join([]string{
 			"---",
@@ -76,6 +87,7 @@ var CuratedSkills = []HubSkill{
 		Author:      "OpenPanda Team",
 		Version:     "1.0.0",
 		Tags:        []string{"review", "audit", "security", "qa"},
+		Triggers:    []string{"code review", "review", "audit", "refactor", "代码审查", "评审", "复查", "检查代码", "代码质量"},
 		Recommended: true,
 		Content: strings.Join([]string{
 			"---",
@@ -116,6 +128,7 @@ var CuratedSkills = []HubSkill{
 		Author:      "OpenPanda Team",
 		Version:     "1.0.0",
 		Tags:        []string{"docker", "containers", "devops", "deploy"},
+		Triggers:    []string{"docker", "compose", "container", "容器", "编排", "镜像", "本地环境"},
 		Recommended: true,
 		Content: strings.Join([]string{
 			"---",
@@ -154,6 +167,7 @@ var CuratedSkills = []HubSkill{
 		Author:      "OpenPanda Team",
 		Version:     "1.0.0",
 		Tags:        []string{"testing", "golang", "quality", "bench"},
+		Triggers:    []string{"unit test", "test", "go test", "table-driven", "race", "单元测试", "测试用例", "覆盖率", "补测试", "跑测试"},
 		Recommended: true,
 		Content: strings.Join([]string{
 			"---",
@@ -187,6 +201,7 @@ var CuratedSkills = []HubSkill{
 		Author:      "OpenPanda Team",
 		Version:     "1.0.0",
 		Tags:        []string{"python", "venv", "pip", "pytest"},
+		Triggers:    []string{"python", "venv", "pip", "uv", "pytest", "ruff", "虚拟环境", "依赖安装", "包管理"},
 		Recommended: true,
 		Content: strings.Join([]string{
 			"---",
@@ -221,6 +236,7 @@ var CuratedSkills = []HubSkill{
 		Author:      "OpenPanda Team",
 		Version:     "1.0.0",
 		Tags:        []string{"node", "npm", "pnpm", "frontend"},
+		Triggers:    []string{"node", "npm", "pnpm", "yarn", "typescript", "前端", "构建前端", "打包", "依赖安装"},
 		Recommended: true,
 		Content: strings.Join([]string{
 			"---",
@@ -255,6 +271,7 @@ var CuratedSkills = []HubSkill{
 		Author:      "OpenPanda Team",
 		Version:     "1.0.0",
 		Tags:        []string{"api", "curl", "http", "debug"},
+		Triggers:    []string{"api", "endpoint", "curl", "http", "rest", "接口", "请求", "联调", "端点"},
 		Recommended: true,
 		Content: strings.Join([]string{
 			"---",
@@ -287,6 +304,7 @@ var CuratedSkills = []HubSkill{
 		Author:      "OpenPanda Team",
 		Version:     "1.0.0",
 		Tags:        []string{"system", "ops", "diagnostic", "monitor"},
+		Triggers:    []string{"cpu", "memory", "disk", "port", "process", "内存", "磁盘", "端口", "进程", "性能", "诊断", "卡顿"},
 		Recommended: true,
 		Content: strings.Join([]string{
 			"---",
@@ -310,6 +328,208 @@ var CuratedSkills = []HubSkill{
 			"   `ps aux --sort=-%mem | head -n 10`",
 			"4. Check open listening ports:",
 			"   `lsof -iTCP -sTCP:LISTEN -n -P`",
+			"",
+		}, "\n"),
+	},
+	{
+		Name:        "root-cause-debugging",
+		Alias:       "debug",
+		Description: "Systematic root-cause analysis and regression isolation for failing code, builds and runtime behavior",
+		Scope:       ScopeGlobal,
+		Author:      "OpenPanda Team",
+		Version:     "1.0.0",
+		Tags:        []string{"debug", "diagnosis", "regression", "method"},
+		Triggers:    []string{"debug", "troubleshoot", "root cause", "regression", "排查", "定位", "复现", "报错", "失败原因", "根因", "不对劲"},
+		Recommended: true,
+		Content: strings.Join([]string{
+			"---",
+			"name: root-cause-debugging",
+			"description: Systematic root-cause analysis and regression isolation for failing code, builds and runtime behavior",
+			"scope: global",
+			"status: active",
+			"use_count: 0",
+			"success_count: 0",
+			"---",
+			"",
+			"## Purpose",
+			"Find the cause of a failure before changing anything, so a fix addresses the mechanism rather than the symptom.",
+			"",
+			"## Steps",
+			"1. Reproduce deterministically. Record the exact command, input, environment and observed output; an unreproduced failure is not yet diagnosable.",
+			"2. Confirm the diagnostic surface and the execution surface are the same object: verify which binary, config file, working tree and endpoint the failing command actually used. A report that says a key is configured while injection is refused is a symptom, not a diagnosis.",
+			"3. Minimize: remove inputs and steps until the smallest case still fails. Note the last change that made it fail (diff, dependency, config, platform).",
+			"4. State 2-3 falsifiable hypotheses, then test them one at a time with the cheapest discriminating check. Do not apply fixes while still testing hypotheses.",
+			"5. Fix the confirmed cause, then re-run the original reproducer and the project's verification gate. Add a regression test that fails on the old behavior.",
+			"6. Reverse-verify: temporarily disable the fix (or set the guard to false) and confirm the test goes red. A test that passes either way proves nothing.",
+			"",
+			"## Avoid",
+			"- Do not treat an environment-specific failure as a code regression; establish the baseline first by re-running and by checking another platform.",
+			"- Do not refactor unrelated code while diagnosing.",
+			"",
+		}, "\n"),
+	},
+	{
+		Name:        "ci-failure-triage",
+		Alias:       "ci",
+		Description: "Classify CI failures, separate flaky and environment-only reds from real regressions, and verify the right workflow",
+		Scope:       ScopeGlobal,
+		Author:      "OpenPanda Team",
+		Version:     "1.0.0",
+		Tags:        []string{"ci", "pipeline", "flake", "verification"},
+		Triggers:    []string{"ci", "pipeline", "github actions", "flaky", "build failed", "持续集成", "流水线", "红灯", "构建失败", "门禁", "检查项"},
+		Recommended: true,
+		Content: strings.Join([]string{
+			"---",
+			"name: ci-failure-triage",
+			"description: Classify CI failures, separate flaky and environment-only reds from real regressions, and verify the right workflow",
+			"scope: global",
+			"status: active",
+			"use_count: 0",
+			"success_count: 0",
+			"---",
+			"",
+			"## Purpose",
+			"Decide whether a red check is a real regression before spending turns on a fix.",
+			"",
+			"## Steps",
+			"1. Establish which checks actually ran on that commit: a green-looking check may be a skipped job, and workflows often have different triggers (pull request, push to main, tag, schedule, manual).",
+			"2. Read the failing step's full log, not just the summary. Identify the first error, not the cascade after it.",
+			"3. Classify into one of: real regression, known flake, environment-only failure (sandbox, port collision, missing platform capability), or infrastructure/network error.",
+			"4. For a suspected flake, re-run the single job unchanged. A pass on the same SHA is evidence of a flake; record it rather than silently ignoring it.",
+			"5. For a platform-specific failure, reproduce on that platform. Cross-platform behavior (certificate revocation, proxy resolution, path separators, file encoding) cannot be faked on another OS.",
+			"6. Only then change code, and re-run the full gate. Never narrow a check to make it pass; fix the cause or document the exemption.",
+			"",
+		}, "\n"),
+	},
+	{
+		Name:        "release-checklist",
+		Alias:       "release",
+		Description: "Version bump, gate verification, tag ordering, artifact checksums, changelog and rollback for a release",
+		Scope:       ScopeGlobal,
+		Author:      "OpenPanda Team",
+		Version:     "1.0.0",
+		Tags:        []string{"release", "version", "tag", "delivery"},
+		Triggers:    []string{"release", "tag", "version", "changelog", "发布", "发版", "打标签", "版本号", "更新日志", "上线"},
+		Recommended: true,
+		Content: strings.Join([]string{
+			"---",
+			"name: release-checklist",
+			"description: Version bump, gate verification, tag ordering, artifact checksums, changelog and rollback for a release",
+			"scope: global",
+			"status: active",
+			"use_count: 0",
+			"success_count: 0",
+			"---",
+			"",
+			"## Purpose",
+			"Ship a reproducible release without a version literal drifting between documents, packages and download links.",
+			"",
+			"## Steps",
+			"1. Enumerate every version literal (docs, download page, package manifests, sample configs) and update them together with the changelog section.",
+			"2. Push the release commit to the mainline and wait for its full gate on that exact SHA to go green. Do not tag from a branch whose CI did not run.",
+			"3. Only after the gate is green, create the tag. Build and cross-compile all targets, record checksums and verify signatures.",
+			"4. Publish artifacts, then verify a fresh install path end-to-end: download, checksum verify, run the version command, and confirm the reported revision matches the tag.",
+			"5. Expect CDN warming: the first few artifact requests may fail transiently. Retry before declaring the release broken.",
+			"6. Prepare a rollback: name the previous tag, the revert path for version literals, and who can take the download links down.",
+			"",
+		}, "\n"),
+	},
+	{
+		Name:        "dependency-upgrade",
+		Alias:       "deps",
+		Description: "Safe dependency and toolchain upgrades, lockfile semantics, breaking changes and CI parity checks",
+		Scope:       ScopeGlobal,
+		Author:      "OpenPanda Team",
+		Version:     "1.0.0",
+		Tags:        []string{"dependency", "lockfile", "toolchain", "upgrade"},
+		Triggers:    []string{"dependency", "dependabot", "upgrade", "lockfile", "go.mod", "依赖", "升级", "锁文件", "工具链", "安全补丁"},
+		Recommended: true,
+		Content: strings.Join([]string{
+			"---",
+			"name: dependency-upgrade",
+			"description: Safe dependency and toolchain upgrades, lockfile semantics, breaking changes and CI parity checks",
+			"scope: global",
+			"status: active",
+			"use_count: 0",
+			"success_count: 0",
+			"---",
+			"",
+			"## Purpose",
+			"Upgrade a dependency without silently changing what CI runs or leaving the lockfile out of sync.",
+			"",
+			"## Steps",
+			"1. Read the upstream changelog and classify the change (patch / minor / major). For a major, read its action or API definition rather than assuming the old contract.",
+			"2. Check the toolchain pin: the language version declared in the manifest is often also the CI toolchain version. A stdlib security advisory may require raising the pin, not patching code.",
+			"3. Update the manifest and the lockfile together, then run the dependency tidy/verify command and confirm the diff is limited to intended packages.",
+			"4. Verify against the workflow that will actually run the new version. A step that only runs on push or tag cannot be validated by a pull request check; trigger it manually if needed.",
+			"5. Run the full local gate, including formatting and cross-target builds, before pushing.",
+			"6. Record the rollback point (previous manifest, lockfile and toolchain pin) in the change description.",
+			"",
+		}, "\n"),
+	},
+	{
+		Name:        "schema-migration",
+		Alias:       "migration",
+		Description: "Backward-compatible schema and config migrations with backup, version checks and a rehearsed rollback",
+		Scope:       ScopeGlobal,
+		Author:      "OpenPanda Team",
+		Version:     "1.0.0",
+		Tags:        []string{"schema", "database", "migration", "compatibility"},
+		Triggers:    []string{"migration", "schema", "database", "sqlite", "backward compatible", "迁移", "数据库", "表结构", "兼容性", "回滚", "版本号"},
+		Recommended: true,
+		Content: strings.Join([]string{
+			"---",
+			"name: schema-migration",
+			"description: Backward-compatible schema and config migrations with backup, version checks and a rehearsed rollback",
+			"scope: global",
+			"status: active",
+			"use_count: 0",
+			"success_count: 0",
+			"---",
+			"",
+			"## Purpose",
+			"Change persisted structure without making an older reader unable to open the data.",
+			"",
+			"## Steps",
+			"1. Back up the live store before any write and confirm the backup is readable.",
+			"2. Make each migration idempotent and ordered by an explicit version. Never let a development branch raise the on-disk version above the highest version the released binary understands.",
+			"3. Keep a compatibility window: old readers must tolerate the new shape, or the migration must be gated behind a coordinated rollout.",
+			"4. Verify the version and a representative read/write after migrating, using the same command a user would run.",
+			"5. Rehearse rollback on a copy: restore the backup, confirm the old binary reads it, and note that re-running the newer binary will push the version forward again.",
+			"6. Add a test that pins the highest supported version and fails when a migration is added without raising it.",
+			"",
+		}, "\n"),
+	},
+	{
+		Name:        "frontend-verification",
+		Alias:       "browser",
+		Description: "Verify a rendered web page in a headless browser with console, network, layout, screenshot and localization checks",
+		Scope:       ScopeGlobal,
+		Author:      "OpenPanda Team",
+		Version:     "1.0.0",
+		Tags:        []string{"frontend", "browser", "rendering", "qa"},
+		Triggers:    []string{"frontend", "browser", "web page", "render", "screenshot", "页面", "前端", "渲染", "无头浏览器", "截图", "网页"},
+		Recommended: true,
+		Content: strings.Join([]string{
+			"---",
+			"name: frontend-verification",
+			"description: Verify a rendered web page in a headless browser with console, network, layout, screenshot and localization checks",
+			"scope: global",
+			"status: active",
+			"use_count: 0",
+			"success_count: 0",
+			"---",
+			"",
+			"## Purpose",
+			"A passing build is not a working page. Verify the artifact the user will actually see.",
+			"",
+			"## Steps",
+			"1. Build the production bundle, serve it, and open the page in the node's headless browser.",
+			"2. Inspect the browser console and the network panel: zero uncaught errors and zero failed requests are part of done, not a bonus.",
+			"3. Take a screenshot and check layout at the intended viewport; check at least one narrow viewport if the page is responsive.",
+			"4. Exercise the primary interaction (submit, navigate, toggle) and re-check console and network afterwards.",
+			"5. For localized pages, switch every supported locale and look for raw translation keys, untranslated strings and CJK characters leaking into non-CJK files.",
+			"6. Report the commands run, the console/network result, and attach or reference the screenshot alongside the build result.",
 			"",
 		}, "\n"),
 	},
@@ -427,6 +647,13 @@ func FetchHubIndex(ctx context.Context, hubURL string) (*HubIndex, error) {
 }
 
 // SearchHub filters skills in index by a search query (matching name, description, tags, author, alias).
+// SearchHub ranks catalog entries by relevance to query. The old behaviour
+// required every whitespace token to be a substring of one concatenated
+// string and returned catalog order, so a multi-word need either matched
+// nothing or made DiscoverAndInstall install whichever skill happened to be
+// listed first. Scoring is lexical (whole Latin words, individual Han
+// ideographs) with name/alias/tag/trigger boosts; only positive scores are
+// returned, so a completely unrelated query still yields no match.
 func SearchHub(index *HubIndex, query string) []HubSkill {
 	if index == nil {
 		return nil
@@ -435,24 +662,76 @@ func SearchHub(index *HubIndex, query string) []HubSkill {
 	if query == "" {
 		return index.Skills
 	}
-
-	tokens := strings.Fields(query)
-	var matched []HubSkill
-
-	for _, sk := range index.Skills {
-		text := strings.ToLower(sk.Name + " " + sk.Alias + " " + sk.Description + " " + sk.Author + " " + strings.Join(sk.Tags, " "))
-		matchAll := true
-		for _, token := range tokens {
-			if !strings.Contains(text, token) {
-				matchAll = false
-				break
-			}
-		}
-		if matchAll {
-			matched = append(matched, sk)
+	qTokens := util.Tokenize(query)
+	type scored struct {
+		skill HubSkill
+		score int
+		order int
+	}
+	var ranked []scored
+	for i, sk := range index.Skills {
+		if s := hubSearchScore(sk, query, qTokens); s > 0 {
+			ranked = append(ranked, scored{sk, s, i})
 		}
 	}
-	return matched
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		return ranked[i].order < ranked[j].order
+	})
+	out := make([]HubSkill, 0, len(ranked))
+	for _, r := range ranked {
+		out = append(out, r.skill)
+	}
+	return out
+}
+
+// hubSearchScore weights a catalog entry's fields against one query. Explicit
+// triggers and tags outrank free-text description overlap, and an exact
+// substring hit on the whole query (common with Chinese phrases) is a strong
+// signal. Recommended entries get a single tie-break point, not a ranking
+// override.
+func hubSearchScore(sk HubSkill, query string, qTokens map[string]struct{}) int {
+	name := strings.ToLower(sk.Name)
+	alias := strings.ToLower(sk.Alias)
+	desc := strings.ToLower(sk.Description)
+	tags := strings.ToLower(strings.Join(sk.Tags, " "))
+	triggers := strings.ToLower(strings.Join(sk.Triggers, " "))
+	author := strings.ToLower(sk.Author)
+	all := strings.ToLower(strings.Join([]string{name, alias, desc, tags, triggers, author}, " "))
+	allTokens := util.Tokenize(all)
+
+	score := 0
+	if containsHan(query) && strings.Contains(all, query) {
+		score += 10
+	}
+	for t := range qTokens {
+		if util.IsStopword(t) {
+			continue
+		}
+		_, whole := allTokens[t]
+		if !whole && !(containsHan(t) && strings.Contains(all, t)) {
+			continue
+		}
+		score++
+		if strings.Contains(name, t) {
+			score += 5
+		}
+		if alias != "" && strings.Contains(alias, t) {
+			score += 4
+		}
+		if strings.Contains(tags, t) {
+			score += 4
+		}
+		if strings.Contains(triggers, t) {
+			score += 5
+		}
+	}
+	if score > 0 && sk.Recommended {
+		score++
+	}
+	return score
 }
 
 // InstallFromHub finds a skill in the hub (resolving aliases and numeric IDs) and installs it.
@@ -522,6 +801,20 @@ func InstallAllRecommended(ctx context.Context, store *Store, hubURL string, opt
 	return installed, nil
 }
 
+// BuiltinTriggers returns the curated retrieval keywords and the always-on
+// flag for a built-in skill (by canonical name or alias). Index() uses it to
+// upgrade entries that were seeded before triggers existed, without rewriting
+// the user's on-disk SKILL.md — the curated table stays the single source.
+func BuiltinTriggers(name string) ([]string, bool) {
+	clean := strings.ToLower(strings.TrimSpace(name))
+	for _, c := range CuratedSkills {
+		if strings.EqualFold(c.Name, clean) || (c.Alias != "" && strings.EqualFold(c.Alias, clean)) {
+			return append([]string(nil), c.Triggers...), c.Always
+		}
+	}
+	return nil, false
+}
+
 // IsBuiltinSkill reports whether name (or its alias) matches a standard built-in skill.
 func IsBuiltinSkill(name string) bool {
 	clean := strings.ToLower(strings.TrimSpace(name))
@@ -552,7 +845,10 @@ func (s *Store) EnsureBuiltins() error {
 		}
 		sk, err := ParseSkill([]byte(cur.Content))
 		if err != nil {
-			continue
+			// A broken factory template used to be skipped silently: the
+			// built-in simply never appeared in the index and the only symptom
+			// was a missing skill. Fail loudly instead.
+			return fmt.Errorf("skills: builtin %q template: %w", cur.Name, err)
 		}
 		sk.Builtin = true
 		sk.Status = StatusActive

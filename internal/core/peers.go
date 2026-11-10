@@ -186,7 +186,21 @@ func (c *Core) punchPeerLoop(ctx context.Context, peerID string) {
 // and the discovery binding stay boot-time decisions: re-binding a socket
 // hot is a restart-shaped operation.
 func (c *Core) ApplyNetworkConfig(ctx context.Context, n config.NetworkConfig) {
-	c.SetSharedSecret(n.SharedSecret)
+	// A reload that arrives with no secret must not exile a live node. Several
+	// callers rebuild NetworkConfig from a partial read, and a config that
+	// lost network.shared_secret is exactly the case netsetup.go warns about:
+	// the next boot mints a fresh in-memory secret and both ends then reject
+	// each other's hellos forever, while TCP keeps connecting. Keeping the
+	// live material makes that reload a no-op instead of a silent partition;
+	// an operator who really wants to clear it does so at startup.
+	if n.SharedSecret != "" {
+		c.SetSharedSecret(n.SharedSecret)
+	} else if c.sharedSecretValue() != "" {
+		c.logger.Warn("network reload carried no shared_secret — keeping the live mesh secret",
+			"secret_fp", c.SecretFingerprint())
+	}
+	c.logger.Info("mesh network config applied", "secret_fp", c.SecretFingerprint(),
+		"peers", len(n.PeerAddrs()))
 	c.SetAllowCleartext(n.AllowCleartext)
 	c.SetCleartextAllowlist(n.AllowCleartextFor)
 	c.SyncPeers(ctx, n.PeerAddrs())
@@ -268,6 +282,14 @@ func ProbePeer(ctx context.Context, nodeID string, card ledger.Card, model confi
 		// remedies (check the secret, not the network).
 		if v := probe.lastHelloReject.Load(); v != nil {
 			return nil, fmt.Errorf("peer online but rejected our authentication (hello_reject: %s) — check shared_secret matches", v.(string))
+		}
+		// The cleartext gate's refusal is asynchronous (it runs once the
+		// socket is open), so it never appears as a DialPeer error. Without
+		// surfacing it here `nodes add` cannot distinguish a pre-sessaead
+		// peer — the one case its host-scoped exemption exists for — from
+		// an offline host or a wrong shared_secret.
+		if v := probe.lastCleartextRefusal.Load(); v != nil {
+			return nil, fmt.Errorf("peer online but refused the unencrypted link (%s): %w", v.(string), ErrCleartextRefused)
 		}
 		// The peer answered our hello and then closed the probe conn — it
 		// holds a live same-id session (the daemon's own edge), so the

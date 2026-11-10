@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -43,6 +44,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/self"
 	"github.com/Xustalis/OpenPanda/internal/skills"
+	"github.com/Xustalis/OpenPanda/internal/updater"
 	"github.com/Xustalis/OpenPanda/internal/util"
 	"github.com/Xustalis/OpenPanda/internal/version"
 	"github.com/gorilla/websocket"
@@ -509,6 +511,11 @@ type Core struct {
 	// ProbePeer loop) can still report "online but refusing our credential"
 	// instead of a generic handshake timeout.
 	lastHelloReject atomic.Value // string
+	// lastCleartextRefusal is the outbound address the link policy refused
+	// for being unencrypted. Like lastHelloReject it exists for one-shot
+	// probes: the gate runs after the socket opens, so its verdict never
+	// reaches DialPeer's caller as an error.
+	lastCleartextRefusal atomic.Value // string
 	// lastVerifiedHello is the evidence a one-shot probe needs: the id a
 	// verified hello reply announced and whether the session cipher armed on
 	// that exchange. ProbePeer normally polls the peer registry, but a peer
@@ -1350,6 +1357,108 @@ func (c *Core) sharedSecretValue() string {
 	c.netMu.RLock()
 	defer c.netMu.RUnlock()
 	return c.sharedSecret
+}
+
+// MeshSecretFingerprint is a short one-way label for a mesh secret. It is
+// safe to log: an operator can compare two machines' fingerprints without
+// ever pasting the credential into a terminal, ticket or chat. It is
+// deliberately not reversible to the secret (and only 32 bits, so it is a
+// comparison aid, never an authentication token). Exported because the
+// standalone web console has no *Core at the point it logs its boot line,
+// yet it is the mesh endpoint and must publish the same evidence.
+func MeshSecretFingerprint(secret string) string {
+	if secret == "" {
+		return "unset"
+	}
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:4])
+}
+
+// SecretFingerprint reports this node's current mesh-secret fingerprint.
+// Both ends of a link must print the same value; a mismatch is the whole
+// explanation for a storm of "peer rejected our hello: auth" on one side and
+// "rejected hello: bad signature" on the other.
+func (c *Core) SecretFingerprint() string {
+	return MeshSecretFingerprint(c.sharedSecretValue())
+}
+
+// helloFailureReason turns the wire's single fixed "auth" verdict into the
+// actual local cause. It mirrors bus.VerifyHelloP's checks in the same order
+// and is diagnostic only — the authentication decision stays in bus. Without
+// it a shared-secret mismatch, a clock jump and a broken identity signature
+// all look identical, and two operators keep staring at TCP connects that
+// succeed while the mesh never links.
+func helloFailureReason(secret, receiverID string, p bus.HelloPayload, now time.Time) string {
+	skew := now.Sub(time.Unix(p.Ts, 0))
+	switch {
+	case skew > bus.MaxHelloAge || skew < -bus.MaxHelloAge:
+		return "clock skew: hello timestamp outside the replay window"
+	case secret == "":
+		return "local shared_secret is empty"
+	case p.To != "" && (receiverID == "" || p.To != receiverID || p.SigB == ""):
+		return "hello bound for a different receiver"
+	case p.To != "" && p.SigB != bus.HelloSigB(secret, p.NodeID, p.To, p.Ts, p.Nonce):
+		return "shared_secret mismatch (bound HMAC)"
+	case p.To == "" && p.Sig == "":
+		return "hello carries no HMAC signature"
+	case p.To == "" && p.Nonce != "" && p.Sig != bus.HelloSigN(secret, p.NodeID, p.Ts, p.Nonce):
+		return "shared_secret mismatch (HMAC)"
+	case p.To == "" && p.Nonce == "" && p.Sig != bus.HelloSigLegacy(secret, p.NodeID, p.Ts):
+		return "shared_secret mismatch (legacy HMAC)"
+	default:
+		return "identity signature (Ed25519) invalid or half-present"
+	}
+}
+
+// helloVersionHint surfaces a version skew an auth rejection alone cannot
+// explain. Ver is self-asserted and outside the signature domain, so this is
+// bookkeeping only: it never changes the HMAC verdict, it just names the
+// build on the other end. A v0.0.11 peer talking to a v0.1.5 receiver can
+// fail the handshake for protocol/schema reasons while both hold the same
+// secret; without this line the operator keeps re-pairing two nodes that
+// already agree. Fleet observability has shown version skew since v0.0.10
+// (employee_cache.ver), but the handshake failure path never did.
+func helloVersionHint(peerVer, localVer string) string {
+	if peerVer == "" {
+		return "peer sent no version (build predates Ver); align every node to the same release before debugging secrets"
+	}
+	norm := func(v string) string {
+		return strings.TrimPrefix(strings.TrimPrefix(v, "v"), "V")
+	}
+	pv, lv := norm(peerVer), norm(localVer)
+	if pv == lv {
+		return ""
+	}
+	// Only order well-formed numeric versions. A dev/custom stamp such as
+	// "dev" would otherwise compare as 0.0.0 and produce a false "upgrade
+	// the peer" instruction.
+	plain := func(v string) bool {
+		v = strings.SplitN(strings.SplitN(v, "-", 2)[0], "+", 2)[0]
+		parts := strings.Split(v, ".")
+		if len(parts) < 2 || len(parts) > 3 {
+			return false
+		}
+		for _, part := range parts {
+			if part == "" {
+				return false
+			}
+			for _, r := range part {
+				if r < '0' || r > '9' {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if !plain(pv) || !plain(lv) {
+		return fmt.Sprintf("peer runs %s, this node runs %s: builds differ — align all nodes to one release before re-pairing", peerVer, localVer)
+	}
+	switch updater.CompareVersion(pv, lv) {
+	case -1:
+		return fmt.Sprintf("peer runs %s, this node runs %s: the peer is on an older build — upgrade it and re-check mesh protocol/db schema compatibility before re-pairing", peerVer, localVer)
+	default:
+		return fmt.Sprintf("peer runs %s, this node runs %s: this node is behind — upgrade it before re-pairing", peerVer, localVer)
+	}
 }
 
 // SetAllowCleartext lifts the outbound plaintext gate (network.allow_cleartext).
@@ -2464,7 +2573,12 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 	c.mu.Lock()
 	c.greetedConns[conn] = true
 	c.mu.Unlock()
-	c.logger.Info("connected to peer", "peer", addr)
+	// The hello is on the wire, but admission is asynchronous: the peer can
+	// still reject it (bad signature, clock skew, wrong identity). Calling
+	// this "connected" made an unauthenticated socket look like a formed
+	// link in INFO logs — the false positive that hid a secret mismatch for
+	// hours while auto-dial kept retrying.
+	c.logger.Debug("hello sent to peer; awaiting authentication", "peer", addr)
 	return conn, nil
 }
 
@@ -2877,6 +2991,18 @@ func (c *Core) rejectHello(conn *bus.Conn, reason string) {
 	conn.CloseReason(4001, "hello rejected: "+reason)
 }
 
+// helloRejectHint keeps the operator's next action tied to the actual
+// verdict. Only "auth" says anything about the shared secret: pointing at a
+// secret mismatch for an identity or policy refusal sends two nodes that
+// already agree straight into a re-pair, while the real cause (a self-dial,
+// a duplicate node id, a stale directory row) stays hidden.
+func helloRejectHint(reason string) string {
+	if reason == "auth" {
+		return "the peer's network.shared_secret differs (or its clock is more than 5m off); compare both nodes' secret_fp, then re-pair with `panda pair --secret <copied from the inviter's config.yaml> --peer <inviter host:port>`. Also verify both nodes run the same panda version: a much older build can fail the handshake for protocol reasons even with matching secrets"
+	}
+	return "not a credential problem; check for a duplicate node id, a self-dial or a stale directory row"
+}
+
 // handleHelloReject records a peer's refusal verdict on our conn and closes
 // it. The conn carries the reason for MaintainPeer; the core-level marker
 // gives one-shot probes (ProbePeer) the same signal without a conn handle.
@@ -2897,7 +3023,8 @@ func (c *Core) handleHelloReject(ctx context.Context, conn *bus.Conn, env bus.En
 		conn.SetRejectReason(reason)
 	}
 	c.lastHelloReject.Store(reason)
-	c.logger.Warn("peer rejected our hello", "peer", env.From, "reason", reason)
+	c.logger.Warn("peer rejected our hello", "peer", env.From, "reason", reason,
+		"local_secret_fp", c.SecretFingerprint(), "hint", helloRejectHint(reason))
 	if conn != nil {
 		conn.Close()
 	}
@@ -2916,8 +3043,21 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// from "the network dropped us". Our own id goes in so a hello bound to
 	// some other node — the shape a captured hello takes when a member
 	// replays it here — fails on the address, not just on the signature.
-	if !bus.VerifyHelloP(c.sharedSecretValue(), c.nodeID, p, time.Now()) {
-		c.logger.Warn("rejected hello: bad signature", "peer", p.NodeID)
+	if secret := c.sharedSecretValue(); !bus.VerifyHelloP(secret, c.nodeID, p, time.Now()) {
+		args := []any{
+			"peer", p.NodeID,
+			"reason", helloFailureReason(secret, c.nodeID, p, time.Now()),
+			"local_secret_fp", MeshSecretFingerprint(secret),
+			"peer_ver", p.Ver,
+			"local_ver", version.Version,
+			"peer_ts", p.Ts,
+			"skew_seconds", int64(time.Since(time.Unix(p.Ts, 0)).Seconds()),
+			"hint", "both nodes must hold the same network.shared_secret; a restart that found an empty secret mints a fresh in-memory one (see cmd/panda/netsetup.go)",
+		}
+		if vh := helloVersionHint(p.Ver, version.Version); vh != "" {
+			args = append(args, "version_hint", vh)
+		}
+		c.logger.Warn("rejected hello: bad signature", args...)
 		c.rejectHello(conn, "auth")
 		return
 	}
@@ -3277,6 +3417,11 @@ func (c *Core) armSessionLink(conn *bus.Conn, p bus.HelloPayload) error {
 // inbound conns on the source IP — a verified-mesh peer from an untrusted
 // network is still refused plaintext, because a hello signature proves
 // membership, not that the link itself is free of relays.
+// ErrCleartextRefused identifies the one probe failure an operator's admit
+// command can legitimately fix by opening network.allow_cleartext_for. A
+// timeout, a DNS failure or hello_reject(auth) must never open it.
+var ErrCleartextRefused = errors.New("cleartext link refused by policy")
+
 func (c *Core) enforceLinkPolicy(conn *bus.Conn, peerID string) error {
 	allow, allowFor := c.cleartextPolicy()
 	if conn.Outbound() {
@@ -3285,6 +3430,11 @@ func (c *Core) enforceLinkPolicy(conn *bus.Conn, peerID string) error {
 			addr = conn.RemoteAddr()
 		}
 		if err := cleartextOK(addr, allow, allowFor); err != nil {
+			// The gate runs after the socket opens, so this verdict never
+			// reaches DialPeer's caller. Publish it for ProbePeer, which
+			// otherwise sees an ordinary timeout and cannot tell a
+			// pre-sessaead neighbour from a machine that is simply offline.
+			c.lastCleartextRefusal.Store(addr)
 			c.logger.Warn("refusing cleartext link", "peer", peerID, "addr", addr)
 			return fmt.Errorf("peer %s cannot encrypt (needs sessaead) and %w", peerID, err)
 		}

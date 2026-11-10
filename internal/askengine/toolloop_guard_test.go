@@ -383,3 +383,132 @@ func TestAskTurnsLoopFailureShowsReason(t *testing.T) {
 		t.Fatalf("warning = %q, want the provider's real failure reason", res.Warning)
 	}
 }
+
+// TestToolResultsDigestIsBoundedAndPromptFree pins the incident's visible
+// symptom: a 19-tool exploration used to produce a ~6000-rune reply made of
+// raw file dumps with a model-facing prompt instruction ("full result already
+// shown to the user, no need to re-read") spliced into the middle of each
+// entry. The digest is a last resort, not a transcript.
+func TestToolResultsDigestIsBoundedAndPromptFree(t *testing.T) {
+	digest := make([]string, 0, 19)
+	for i := 0; i < 19; i++ {
+		digest = append(digest, "workspace_read: "+strings.Repeat("文件内容", 200))
+	}
+	got := toolResultsDigest(digest, i18n.ChineseSimp)
+	if !strings.Contains(got, "本次回答未完成") || !strings.Contains(got, "停止响应") {
+		t.Fatalf("digest lost its incomplete-reply framing: %q", got)
+	}
+	if strings.Contains(got, "完整结果已全量保存并直接展示给用户") {
+		t.Fatalf("model-facing prompt text leaked into the user reply: %q", got)
+	}
+	if n := len([]rune(got)); n > 1600 {
+		t.Fatalf("digest has %d runes, want a bounded summary (<= 1600)", n)
+	}
+	if !strings.Contains(got, "另有 11 项") {
+		t.Fatalf("digest did not fold the 11 unlisted operations: %q", got)
+	}
+	en := toolResultsDigest(digest, i18n.English)
+	if !strings.Contains(en, "Incomplete reply") || !strings.Contains(en, "11 more") {
+		t.Fatalf("English digest = %q", en)
+	}
+	if toolResultsDigest(nil, i18n.ChineseSimp) != "" {
+		t.Fatal("an empty digest must stay empty")
+	}
+}
+
+func TestCompactConvergenceTranscriptIsBounded(t *testing.T) {
+	digest := make([]string, 0, 19)
+	for i := 0; i < 19; i++ {
+		digest = append(digest, "workspace_read: "+strings.Repeat("x", 2000))
+	}
+	turns := compactConvergenceTranscript("分析一下这个项目", digest, i18n.ChineseSimp)
+	if len(turns) != 2 || turns[0].Content != "分析一下这个项目" {
+		t.Fatalf("compact transcript lost the original question: %+v", turns)
+	}
+	if !strings.Contains(turns[1].Content, "不要调用任何工具") || !strings.Contains(turns[1].Content, "已执行的探查") {
+		t.Fatalf("compact transcript lost its convergence instruction: %q", turns[1].Content)
+	}
+	total := 0
+	for _, tr := range turns {
+		total += len([]rune(tr.Content))
+	}
+	if total > compactTotalRunes+300 {
+		t.Fatalf("compact transcript has %d runes, want <= %d", total, compactTotalRunes+300)
+	}
+	if !strings.Contains(turns[1].Content, "项结果未展开") {
+		t.Fatalf("compact transcript did not report the folded results: %q", turns[1].Content)
+	}
+}
+
+// TestAskTurnsRecoversOnCompactConvergence is the end-to-end regression for
+// "the task never completes, it just dumps a wall of work-log text": the model
+// spends every round calling a tool, the full-history convergence call is
+// rejected, and the ask must still produce a real prose answer from a small
+// transcript instead of falling straight through to the tool digest.
+func TestAskTurnsRecoversOnCompactConvergence(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	largeRejected, compactAnswered := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(string(b), `"tools"`) {
+			_, _ = io.WriteString(w, toolCallResponse)
+			return
+		}
+		// The full replay is huge and rejected; the compact retry is small
+		// and gets a normal answer. A non-overflow 400 keeps classifyBounded
+		// from succeeding on its own compression ladder.
+		if len(b) > 45000 {
+			mu.Lock()
+			largeRejected++
+			mu.Unlock()
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"invalid request schema"}}`)
+			return
+		}
+		mu.Lock()
+		compactAnswered++
+		mu.Unlock()
+		writeAnswer(w, "这是基于已读文件的完整分析结论")
+	}))
+	defer srv.Close()
+
+	reg := entry.NewRegistry()
+	reg.Register(entry.Tool{
+		Name: "dump", Tier: defense.TierReversible,
+		Schema: map[string]any{"type": "object"},
+		Run: func(context.Context, map[string]any) (string, error) {
+			return strings.Repeat("x", 50000), nil
+		},
+	})
+	e := newGuardTestEngine(t, srv, reg, 200000)
+	res, err := e.AskTurns(context.Background(), nil, "分析一下这个项目", "", true, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+	if res.Kind != "answer" || !strings.Contains(res.Answer, "完整分析结论") {
+		t.Fatalf("res = %+v, want the recovered prose answer", res)
+	}
+	if strings.Contains(res.Answer, "停止响应") || strings.Contains(res.Answer, "本次回答未完成") {
+		t.Fatalf("reply degraded to a tool digest: %q", res.Answer)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if largeRejected == 0 || compactAnswered == 0 {
+		t.Fatalf("largeRejected=%d compactAnswered=%d, want both paths exercised", largeRejected, compactAnswered)
+	}
+	nudged := false
+	for _, b := range bodies {
+		if strings.Contains(b, "已收集到足够的上下文") {
+			nudged = true
+			break
+		}
+	}
+	if !nudged {
+		t.Fatal("convergence nudge was never sent before the round ceiling")
+	}
+}

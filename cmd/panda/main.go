@@ -541,6 +541,16 @@ func runDaemon(args []string) {
 	coreNode.SetModelRefresh(modelWatcher.Sync)
 	guard.Go(logger, "daemon: model config sync", cancel, func() { modelWatcher.Run(ctx) })
 
+	// The same file-observation duty for network.peers. SIGHUP covers
+	// `nodes add`, but the web console has no PID to signal: it writes the
+	// file and applies the change to its own process only. Without this the
+	// daemon — the process that actually runs dispatch and the outbox flush —
+	// keeps the peer list it booted with, and a task pinned to a peer added
+	// later parks with no track to reach it.
+	guard.Go(logger, "daemon: network config sync", cancel, func() {
+		runNetworkSync(ctx, logger, *configPath, coreNode, cfg.Network)
+	})
+
 	// Task recovery FIRST, then the queue scheduler: the order is
 	// load-bearing (see recoverThenStartQueue).
 	recoverThenStartQueue(ctx, logger, coreNode)
@@ -720,6 +730,9 @@ func runDaemon(args []string) {
 		"card", *cardPath,
 		"listen", cfg.Network.ListenAddr,
 		"db", cfg.Storage.DBPath,
+		// Compare with the peer's startup line when hellos are refused: an
+		// unequal fingerprint is a shared_secret mismatch, not a network fault.
+		"secret_fp", coreNode.SecretFingerprint(),
 	)
 
 	// The kernel runs headless: the legacy PWA panel is an optional sidecar

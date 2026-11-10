@@ -258,6 +258,12 @@ func runTaskShow(args []string) {
 	if pin := core.PinnedNode(t); pin != "" {
 		taskField("pinned", pin)
 	}
+	// The soft hint rides its own line, never "pinned": it constrains nothing
+	// and a miss leaves a route_fallback rather than a failure. Showing it is
+	// what makes "prefer my laptop, but run it anywhere" auditable.
+	if pref := core.PreferredNode(t); pref != "" {
+		taskField("preferred", pref)
+	}
 	taskField("attempt", t.AttemptID)
 	taskField("chain", strings.Join(t.Chain, " "+pal().MarkArrow()+" "))
 	taskField("created", ts(t.CreatedAt))
@@ -678,8 +684,13 @@ type taskJSON struct {
 	Owner      string `json:"owner,omitempty"`
 	Executor   string `json:"executor,omitempty"`
 	Pinned     string `json:"pinned,omitempty"`
-	Session    string `json:"session_id,omitempty"`
-	Intent     string `json:"intent,omitempty"`
+	// Preferred is the soft device hint (spec.preferred). It is reported
+	// separately from pinned because the two mean opposite things: pinned is
+	// where the task MUST run, preferred is where it would PREFER to run and
+	// may legitimately fall back from (route_fallback).
+	Preferred string `json:"preferred,omitempty"`
+	Session   string `json:"session_id,omitempty"`
+	Intent    string `json:"intent,omitempty"`
 	// WorkDir is the submitter's pin (a session worktree), empty for
 	// ordinary tasks; ExecWorkDir is where the run actually happened.
 	WorkDir     string `json:"work_dir,omitempty"`
@@ -728,6 +739,7 @@ func taskToJSON(t core.Task) taskJSON {
 		Priority:            priorityName(t.Priority),
 		Owner:               t.OwnerNode,
 		Pinned:              core.PinnedNode(t),
+		Preferred:           core.PreferredNode(t),
 		Session:             t.SessionID,
 		Intent:              t.Intent,
 		WorkDir:             t.WorkDir,
@@ -978,7 +990,7 @@ func runTaskAdd(args []string) {
 	agents := fs.String("agents", "", "comma-separated agent harnesses to run this task on (e.g. claude_code,codex); more than one becomes a plan")
 	mode := fs.String("mode", "parallel", "with --agents: 'parallel' runs every harness at once, 'serial' chains them in order")
 	parentID := fs.String("parent-id", "", "parent task id (defaults to PANDA_TASK_ID environment variable)")
-	preferred := fs.String("preferred", "", "target node id or name (hard pin: runs there or fails)")
+	preferred := fs.String("preferred", "", "soft device hint: prefer this node id/name, but let the scheduler fall back if it is offline or incapable (use --nodes for a hard pin)")
 	nodes := fs.String("nodes", "", "comma-separated node ids to pin the task onto (one task per node; each lands on its named node or fails)")
 	actionSpec := fs.String("action-spec", "", "actuator dispatch JSON: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{...}}")
 	scopePaths := fs.String("paths", "", "comma-separated project-relative dirs the task owns (needs --project): disjoint tasks run in parallel in the shared tree")
@@ -1068,9 +1080,12 @@ func runTaskAdd(args []string) {
 	// on the previous stage's output. A single agent folds into the normal
 	// requires path unchanged.
 	agentList := parseAgentList(*agents)
-	// --wait watches one row; the fan-out paths create several, so a single
-	// exit code could never describe the batch.
-	if *wait && (len(agentList) > 1 || strings.TrimSpace(*nodes) != "") {
+	nodeList := parseAgentList(*nodes)
+	// --wait watches one row; a fan-out creates several, so a single exit
+	// code could never describe the batch. Judging by the raw --nodes string
+	// refused a single pinned node too (one task, perfectly waitable) with a
+	// message claiming it had fanned out.
+	if *wait && waitRejectsFanout(len(agentList), len(nodeList)) {
 		fail(2, i18n.T(loc, "cli.task.wait.multi"))
 	}
 	if len(agentList) > 1 {
@@ -1212,8 +1227,13 @@ func runTaskAdd(args []string) {
 		Paths:       pathList,
 		Isolate:     *isolate,
 		WorkDir:     pinnedWorkDir,
-		TargetNode:  pref,
-		Authorized:  *authorize,
+		// --preferred is the SOFT hint (docs/routing-layers.md §5): the scorer
+		// prefers this node but may still run the task elsewhere, leaving a
+		// route_fallback behind. --nodes is the only hard pin this command
+		// writes, and it runs through runTaskAddNodes below, so nothing that
+		// reaches here should land in TargetNode.
+		PreferredNode: pref,
+		Authorized:    *authorize,
 	}
 	// A contract is bound to the tree it was enumerated from. Pinning the work
 	// dir keeps the run and the checks on the same bytes; it also keeps the
@@ -1244,7 +1264,6 @@ func runTaskAdd(args []string) {
 	// checks run in the tree they were enumerated from, and that tree lives
 	// here, so the task is pinned here on purpose.
 
-	nodeList := parseAgentList(*nodes)
 	if len(nodeList) > 0 {
 		// --nodes IS the routing preference: combining it with --preferred or
 		// a multi-harness plan would produce ambiguous ownership per stage.
@@ -1254,7 +1273,7 @@ func runTaskAdd(args []string) {
 		if len(accept) > 0 {
 			fail(2, i18n.T(loc, "cli.task.add.acceptNodes"))
 		}
-		runTaskAddNodes(loc, engine, cfg, nodeList, in, q, priorityName(prio))
+		runTaskAddNodes(loc, engine, cfg, nodeList, in, q, priorityName(prio), *wait, *waitTimeout)
 		return
 	}
 
@@ -1357,6 +1376,14 @@ func failedAwaitingRetry(ctx context.Context, store *core.TaskStore, taskID stri
 		}
 	}
 	return false
+}
+
+// waitRejectsFanout reports whether --wait can describe the batch the two
+// fan-outs would create. A single --nodes entry is one task and IS waitable;
+// the bug this pins judged the raw --nodes string instead of its parsed
+// length, rejecting a single pinned node with a "fan out to several" error.
+func waitRejectsFanout(agentCount, nodeCount int) bool {
+	return agentCount > 1 || nodeCount > 1
 }
 
 // waitForTaskAdd is the --wait half of `task add`: the row is already
@@ -1466,13 +1493,15 @@ func linkTaskSessionIn(cfg *config.Config, taskID, title, prompt, project string
 }
 
 // runTaskAddNodes fans one task out to the named nodes (Track 2): one
-// enqueued task per node, each pinned by PreferredNode — the router's
-// authoritative-preferred path then lands each copy on its named target
-// while the usual fall-through still applies if a node proves incapable.
+// enqueued task per node, each hard-pinned by TargetNode. routePinned never
+// falls through to a scored candidate, so a copy either runs on its named
+// node, parks in task_outbox until the link returns, or fails honestly. The
+// operator named a machine; substituting another one silently is not an
+// option here.
 // Results are aggregated as the per-node task list: enqueue is
 // asynchronous, so what can be reported here is where each copy went, and
 // `panda task show <id>` tracks each outcome.
-func runTaskAddNodes(loc i18n.Locale, engine *askengine.Engine, cfg *config.Config, nodes []string, in core.TaskInput, q core.QueueSpec, prioName string) {
+func runTaskAddNodes(loc i18n.Locale, engine *askengine.Engine, cfg *config.Config, nodes []string, in core.TaskInput, q core.QueueSpec, prioName string, wait bool, waitTimeout time.Duration) {
 	type fanResult struct {
 		Node      string `json:"node"`
 		TaskID    string `json:"task_id"`
@@ -1503,6 +1532,17 @@ func runTaskAddNodes(loc i18n.Locale, engine *askengine.Engine, cfg *config.Conf
 	}
 	if consumerWarn != "" {
 		fmt.Fprintln(os.Stderr, "⚠ "+consumerWarn)
+	}
+	// One --nodes entry produces exactly one row, so --wait has a single
+	// outcome to follow. Keep this before the output split: the ordinary
+	// `task add --wait` path also blocks instead of printing a JSON envelope.
+	if wait && len(nodes) == 1 {
+		for _, r := range results {
+			if r.TaskID != "" {
+				waitForTaskAdd(loc, cfg, r.TaskID, waitTimeout)
+				return
+			}
+		}
 	}
 	if jsonOutput {
 		emitJSON(map[string]any{"fanout": len(nodes), "tasks": results})

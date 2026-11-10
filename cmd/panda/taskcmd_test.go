@@ -143,3 +143,24 @@ func TestLinkTaskSessionInCarriesProject(t *testing.T) {
 		t.Fatalf("session turns = %+v, want the prompt", sess.Turns)
 	}
 }
+
+// TestWaitRejectsFanout pins the single-node case: --nodes opi3b creates
+// exactly one row, so --wait must be allowed to follow it.
+func TestWaitRejectsFanout(t *testing.T) {
+	cases := []struct {
+		agents, nodes int
+		want          bool
+	}{
+		{0, 0, false},
+		{1, 0, false},
+		{0, 1, false}, // the regression
+		{1, 1, false},
+		{2, 0, true},
+		{0, 2, true},
+	}
+	for _, c := range cases {
+		if got := waitRejectsFanout(c.agents, c.nodes); got != c.want {
+			t.Errorf("waitRejectsFanout(%d,%d) = %v, want %v", c.agents, c.nodes, got, c.want)
+		}
+	}
+}

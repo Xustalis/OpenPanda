@@ -128,8 +128,8 @@ function normalizeSection(raw?: string): Section {
  *  keypress cannot throw away a half-edited model form. The same rule covers
  *  the backdrop: clicking it does nothing, because there is no handler.
  *
- *  提醒 is deliberately not here: it is a bell in the rail's head
- *  (components/reminders.tsx), because a clock you set several times a day does
+ *  通知 is deliberately not here: it is a bell in the rail's head
+ *  (components/notifications.tsx), because the things that need you do
  *  not belong behind a sheet you open monthly. */
 export function SettingsView(props: {
   initialSection?: string

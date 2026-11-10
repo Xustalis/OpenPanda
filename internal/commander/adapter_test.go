@@ -4,6 +4,7 @@ package commander
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -954,5 +955,75 @@ func TestBuildAdapterRequestCarriesConsent(t *testing.T) {
 	if refusal != nil || !req.Restricted || req.Authorized {
 		t.Fatalf("restricted consent: restricted=%v authorized=%v refusal=%v, want restricted only",
 			req.Restricted, req.Authorized, refusal)
+	}
+}
+
+// TestAdapterScriptNamesTheMissingFile: the spawn site used to hand an
+// unresolved path to Python, which answered with its own ENOENT — no directory,
+// no hint, and indistinguishable from a real agent failure to the retry loop.
+// adapterScript answers first, and the message carries the three facts a user
+// needs: which adapter, which path, which directory was searched.
+func TestAdapterScriptNamesTheMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(adapterDirEnv, dir)
+
+	path, err := adapterScript("claude_code.py")
+	if err == nil {
+		t.Fatalf("resolved %q for a script that does not exist", path)
+	}
+	msg := err.Error()
+	if !errors.Is(err, ErrAdapterUnavailable) {
+		t.Fatalf("error = %v, want ErrAdapterUnavailable", err)
+	}
+	if !strings.Contains(msg, filepath.Join(dir, "claude_code.py")) {
+		t.Fatalf("message %q does not name the expected path", msg)
+	}
+	if !strings.Contains(msg, dir) {
+		t.Fatalf("message %q does not name the adapter dir", msg)
+	}
+
+	// A directory in the script's place is the same class of problem: the
+	// interpreter would fail on it and say nothing useful.
+	if err := os.Mkdir(filepath.Join(dir, "dir.py"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapterScript("dir.py"); !errors.Is(err, ErrAdapterUnavailable) {
+		t.Fatalf("directory-in-place error = %v, want ErrAdapterUnavailable", err)
+	}
+
+	// And the happy path still resolves, so the check cannot fail closed.
+	if err := os.WriteFile(filepath.Join(dir, "real.py"), []byte("#!/usr/bin/env python3\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := adapterScript("real.py"); err != nil || got != filepath.Join(dir, "real.py") {
+		t.Fatalf("adapterScript(real.py) = %q, %v", got, err)
+	}
+}
+
+// TestAdapterUnavailableClassifier pins the strings that reach it after a
+// round-trip through AgentResult → Result.Stderr, where no error value survives.
+func TestAdapterUnavailableClassifier(t *testing.T) {
+	unavailable := []string{
+		"adapter unavailable: \"claude_code.py\" is not at /opt/x/adapters/claude_code.py (adapter dir /opt/x/adapters — …)",
+		"no Python 3 interpreter found for adapter claude_code.py — install Python 3 or set OPENPANDA_PYTHON",
+		"python3: can't open file '/private/tmp/adapters/claude_code.py': [Errno 2] No such file or directory",
+	}
+	for _, text := range unavailable {
+		if !AdapterUnavailable(text) {
+			t.Fatalf("AdapterUnavailable(%q) = false, want true", text)
+		}
+	}
+	// An agent reporting its own missing file is a task failure, not an
+	// install problem: retrying and reviewing must both stay available.
+	failures := []string{
+		"",
+		"flaky",
+		"open config/app.yaml: no such file or directory",
+		"cannot find module ./src/index.ts",
+	}
+	for _, text := range failures {
+		if AdapterUnavailable(text) {
+			t.Fatalf("AdapterUnavailable(%q) = true, want false", text)
+		}
 	}
 }

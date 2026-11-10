@@ -2,8 +2,21 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ModelEntry, ModelsResponse } from '../api/client.ts'
-import { connIdOf, connRefs, copyAlias, groupConnections, hostOf, keyOf, refOf } from './model-connections.ts'
+import type { ModelEntry, ModelsResponse, ProviderInfo } from '../api/client.ts'
+import { setLocale } from '../i18n/index.ts'
+import {
+  connHost,
+  connIdOf,
+  connImported,
+  connName,
+  connRefs,
+  copyAlias,
+  groupConnections,
+  hostOf,
+  isLoopbackURL,
+  keyOf,
+  refOf,
+} from './model-connections.ts'
 
 /** A wire entry with only the fields these tests care about; the rest of the
  *  payload is the panel's and is not read here. */
@@ -133,4 +146,73 @@ test('connRefs includes the live row that has no registry entry', () => {
     refs.map((r) => r.alias),
     ['live'],
   )
+})
+
+/** A catalogue row as the panel sends it. */
+function provider(id: string, label: string): ProviderInfo {
+  return { id, label, api_type: 'openai', base_url: '', default_model: '', no_auth: false, key_saved: false, region: 'cn' }
+}
+
+test('an imported relay is named after the tool, not its loopback address', () => {
+  setLocale('en')
+  // The person never typed 127.0.0.1:7896 — their Claude Code settings did.
+  // The card owes them the tool's name, and it owes them the port nowhere.
+  const conns = groupConnections(
+    response([
+      entry({ source: 'claude', provider: 'custom', base_url: 'http://127.0.0.1:7896', api_type: 'anthropic' }),
+    ]),
+  )
+  const c = conns[0]!
+  assert.equal(connName(c, []), 'Claude Code')
+  assert.equal(connHost(c), 'Local endpoint')
+  assert.ok(connImported(c))
+})
+
+test('a known vendor keeps its brand even when imported', () => {
+  setLocale('en')
+  // "ChatGPT (OpenAI)" is the best a card can say; the badge carries the rest.
+  const conns = groupConnections(
+    response([
+      entry({
+        source: 'codex',
+        provider: 'codex',
+        provider_label: 'ChatGPT (OpenAI)',
+        base_url: 'https://chatgpt.com/backend-api/codex/responses',
+        api_type: 'responses',
+      }),
+    ]),
+  )
+  const c = conns[0]!
+  assert.equal(connName(c, [provider('codex', 'ChatGPT (OpenAI)')]), 'ChatGPT (OpenAI)')
+  assert.equal(connHost(c), 'chatgpt.com')
+  assert.ok(connImported(c))
+})
+
+test('a hand-written relay keeps the short label and hides its port', () => {
+  setLocale('en')
+  const conns = groupConnections(response([entry({ provider: 'custom', base_url: 'http://127.0.0.1:3065/v1' })]))
+  const c = conns[0]!
+  assert.equal(connName(c, [provider('custom', '自定义 / 中转站 (custom base_url)')]), 'Custom endpoint')
+  assert.equal(connHost(c), 'Local endpoint')
+  assert.equal(connImported(c), false)
+})
+
+test('one imported row labels the whole account', () => {
+  const conns = groupConnections(
+    response([
+      entry({ alias: 'a', model: 'm-1' }),
+      entry({ alias: 'b', model: 'm-2', source: 'opencode' }),
+    ]),
+  )
+  assert.equal(conns.length, 1)
+  assert.equal(conns[0]!.source, 'opencode')
+})
+
+test('loopback detection covers localhost, v4 and v6', () => {
+  assert.ok(isLoopbackURL('http://127.0.0.1:3065/v1'))
+  assert.ok(isLoopbackURL('http://127.9.9.9:1/v1'))
+  assert.ok(isLoopbackURL('http://localhost:1234/v1'))
+  assert.ok(isLoopbackURL('http://[::1]:1234/v1'))
+  assert.equal(isLoopbackURL('https://dashscope.aliyuncs.com/compatible-mode/v1'), false)
+  assert.equal(isLoopbackURL('not a url'), false)
 })

@@ -131,9 +131,10 @@ export function parseHash(): Route {
 
   // Graceful redirects for legacy URLs: promoted views land on their own
   // routes now; system stays inside Settings. 提醒 left Settings for a bell in
-  // the rail's head, so `#/reminders` lands on the thread and the app raises
-  // the reminder card over it (app.tsx) — the card is state, not a route.
-  if (path === 'reminders') return { view: 'sessions', id: null }
+  // the rail's head and was later rebuilt as 通知, so `#/reminders` (and the
+  // `#/notifications` a reader may guess at) lands on the thread and the app
+  // raises the card over it (app.tsx) — the card is state, not a route.
+  if (path === 'reminders' || path === 'notifications') return { view: 'sessions', id: null }
   if (path === 'system') return { view: 'settings', tab: 'system' }
 
   return { view: 'sessions', id: null, project: projectParam }

@@ -304,7 +304,7 @@ func (h *handler) startTodo(w http.ResponseWriter, r *http.Request) {
 }
 
 // cachedTodoFingerprint digests the board for the SSE change feed, behind the
-// same shared cache the task/node/reminder scans use.
+// same shared cache the task/node scans use.
 func (h *handler) cachedTodoFingerprint() string {
 	if h.todos == nil {
 		return ""

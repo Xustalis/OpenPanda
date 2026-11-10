@@ -108,6 +108,13 @@ type Turn struct {
 	// model answered after the thread is reloaded — the live result object
 	// carries it, but that object is never written to disk.
 	Model string `json:"model,omitempty"`
+	// Warning is the non-fatal advisory attached to this reply — currently
+	// the interrupted tool loop's real model error. It is stored for the
+	// reloaded thread but intentionally excluded from replay (see
+	// sessionTurnEntries): a provider error from an old turn is not context
+	// the model should answer again. Before this field existed the reply said
+	// "see the warning" and a reload erased the only copy of it.
+	Warning string `json:"warning,omitempty"`
 	// TS is when the turn was written (Unix seconds). It exists for the usage
 	// calendar: a thread that stays open across midnight has its messages
 	// counted on the days they actually happened, which the session's own
@@ -160,15 +167,41 @@ type Session struct {
 	// autonomy the user granted it. Empty means "never picked", which reads
 	// as auto.
 	PermissionMode string `json:"permission_mode,omitempty"`
-	// SideTurns is the conversation beside this thread: its own transcript,
-	// which may read, write and dispatch like the thread but never appends to
-	// Turns and never rewrites the thread's summary. It lives on the session
-	// so a side question outlives the pane that asked it — a reload, a second
-	// device, or a panel restart still finds the conversation and the answer.
-	SideTurns []SideTurn `json:"side_turns,omitempty"`
-	// SideOperation is the latest durable side ask, tracked separately from
-	// Operation so a side question never looks like the thread's own turn.
+	// SideChats are the conversations beside this thread. Each has its own
+	// transcript, which may read, write and dispatch like the thread but never
+	// appends to Turns and never rewrites the thread's summary. They live on
+	// the session so a side question outlives the pane that asked it — a
+	// reload, a second device, or a panel restart still finds every one of
+	// them, and a thread can hold several without them seeing each other.
+	SideChats []SideChat `json:"side_chats,omitempty"`
+	// SideActive names the side chat the console is showing. It is the
+	// reader's place rather than a fact about the thread, but it is stored so
+	// reopening the pane lands where they left off instead of jumping to
+	// whichever conversation was written last.
+	SideActive string `json:"side_active,omitempty"`
+	// SideTurns and SideOperation are the one-conversation-per-thread shape
+	// that predates SideChats. They are read once and folded into SideChats by
+	// normalizeSide; every write persists the list and drops them.
+	SideTurns     []SideTurn `json:"side_turns,omitempty"`
 	SideOperation *Operation `json:"side_operation,omitempty"`
+}
+
+// SideChat is one conversation beside a thread. Its transcript is separate
+// from the thread's Turns and from every other side chat: switching chats in
+// the pane changes what the reader sees and what the next question replays,
+// and nothing else.
+type SideChat struct {
+	ID string `json:"id"`
+	// Title is the first question, trimmed to one line — a list of rows all
+	// named "side chat" is a list you cannot navigate.
+	Title string     `json:"title,omitempty"`
+	Turns []SideTurn `json:"turns,omitempty"`
+	// Operation is this chat's latest ask, tracked separately from the
+	// thread's Operation so a side question never looks like its own turn.
+	Operation *Operation `json:"operation,omitempty"`
+	CreatedAt int64      `json:"created_at,omitempty"`
+	// UpdatedAt is the last message's clock. The pane sorts by it.
+	UpdatedAt int64 `json:"updated_at,omitempty"`
 }
 
 // SideTurn is one message in a session's side conversation. It carries the
@@ -677,16 +710,173 @@ func (s *Store) StartOperation(id string, op Operation) error {
 	return s.save(sess)
 }
 
-// maxSideTurns bounds a stored side conversation. A side thread is a thinking
-// space, not an archive: the newest 200 messages keep the working context
-// without letting one pane grow the session file without bound.
+// maxSideTurns bounds one stored side conversation. A side thread is a
+// thinking space, not an archive: the newest 200 messages keep the working
+// context without letting a pane grow the session file without bound. The
+// bound is per chat — a thread holding five of them keeps five transcripts,
+// each still bounded.
 const maxSideTurns = 200
 
-// AppendSideTurn appends one message to the session's side conversation. It
-// deliberately leaves UpdatedAt alone: side chatter is not thread activity,
-// and letting it reorder the console's rail would make the sidebar jump every
-// time the reader asks a side question.
+// legacySideChatID names the single conversation a pre-list session carries.
+// Fixed rather than generated so two reads of the same file before any write
+// see the same id.
+const legacySideChatID = "legacy"
+
+// SideChatByID returns the named side chat, or nil. The pointer is into the
+// session's slice: a caller holding the session may edit it and save.
+func (sess *Session) SideChatByID(id string) *SideChat {
+	if id == "" {
+		return nil
+	}
+	for i := range sess.SideChats {
+		if sess.SideChats[i].ID == id {
+			return &sess.SideChats[i]
+		}
+	}
+	return nil
+}
+
+// ActiveSideChat returns the chat the console is showing, falling back to the
+// newest one when the pointer is stale or unset.
+func (sess *Session) ActiveSideChat() *SideChat {
+	if chat := sess.SideChatByID(sess.SideActive); chat != nil {
+		return chat
+	}
+	if len(sess.SideChats) == 0 {
+		return nil
+	}
+	return &sess.SideChats[len(sess.SideChats)-1]
+}
+
+// normalizeSide folds the one-conversation shape into the list. It runs on
+// every load, so a file written before side chats were a list keeps its
+// transcript without a migration pass: the first write persists the new shape
+// and the legacy fields fall away.
+func (sess *Session) normalizeSide() {
+	if len(sess.SideChats) == 0 && (len(sess.SideTurns) > 0 || sess.SideOperation != nil) {
+		chat := SideChat{ID: legacySideChatID, Turns: sess.SideTurns, Operation: sess.SideOperation}
+		chat.Title = sideChatTitle(chat.Turns)
+		if n := len(chat.Turns); n > 0 {
+			chat.CreatedAt = chat.Turns[0].TS
+			chat.UpdatedAt = chat.Turns[n-1].TS
+		}
+		sess.SideChats = []SideChat{chat}
+	}
+	sess.SideTurns = nil
+	sess.SideOperation = nil
+	if len(sess.SideChats) == 0 {
+		sess.SideActive = ""
+		return
+	}
+	if sess.SideChatByID(sess.SideActive) == nil {
+		sess.SideActive = sess.SideChats[len(sess.SideChats)-1].ID
+	}
+}
+
+// sideChatTitle is the first question on one line, short enough to scan in a
+// 320px list.
+func sideChatTitle(turns []SideTurn) string {
+	for _, t := range turns {
+		if t.Role != "user" {
+			continue
+		}
+		line := strings.Join(strings.Fields(t.Text), " ")
+		if line == "" {
+			continue
+		}
+		if r := []rune(line); len(r) > 40 {
+			return string(r[:40]) + "…"
+		}
+		return line
+	}
+	return ""
+}
+
+// trimSideChat keeps the newest maxSideTurns messages, dropping whole
+// exchanges so the oldest row on screen is never a question without its
+// answer.
+func trimSideChat(chat *SideChat) {
+	excess := len(chat.Turns) - maxSideTurns
+	if excess <= 0 {
+		return
+	}
+	if excess%2 == 1 {
+		excess++
+	}
+	chat.Turns = append([]SideTurn(nil), chat.Turns[excess:]...)
+}
+
+// addSideChatLocked appends a fresh, empty chat and makes it the active one.
+// The caller holds the store lock.
+func (s *Store) addSideChatLocked(sess *Session) *SideChat {
+	now := time.Now().Unix()
+	id := ""
+	for i := 0; i < 8 && id == ""; i++ {
+		uid, err := util.UUIDv7()
+		if err != nil {
+			break
+		}
+		if candidate := strings.ReplaceAll(uid, "-", ""); sess.SideChatByID(candidate) == nil {
+			id = candidate
+		}
+	}
+	if id == "" {
+		id = fmt.Sprintf("side-%d", time.Now().UnixNano())
+	}
+	sess.SideChats = append(sess.SideChats, SideChat{ID: id, CreatedAt: now})
+	sess.SideActive = id
+	return &sess.SideChats[len(sess.SideChats)-1]
+}
+
+// sideChatForLocked resolves the chat a write targets: the named one, else the
+// active one, else a new one. A named chat that is gone (deleted on another
+// device) is not a reason to fail the ask — the question lands in a fresh
+// conversation instead of being dropped.
+func (s *Store) sideChatForLocked(sess *Session, chatID string) *SideChat {
+	if chat := sess.SideChatByID(chatID); chat != nil {
+		return chat
+	}
+	if chatID == "" {
+		if chat := sess.ActiveSideChat(); chat != nil {
+			return chat
+		}
+	}
+	return s.addSideChatLocked(sess)
+}
+
+// removeSideChatLocked drops one chat and keeps the active pointer on a
+// conversation that still exists.
+func (s *Store) removeSideChatLocked(sess *Session, chatID string) (*Session, error) {
+	kept := sess.SideChats[:0]
+	for _, c := range sess.SideChats {
+		if c.ID != chatID {
+			kept = append(kept, c)
+		}
+	}
+	sess.SideChats = kept
+	if sess.SideActive == chatID {
+		sess.SideActive = ""
+		if n := len(sess.SideChats); n > 0 {
+			sess.SideActive = sess.SideChats[n-1].ID
+		}
+	}
+	if err := s.save(sess); err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
+// AppendSideTurn appends one message to the thread's active side conversation.
+// It deliberately leaves the session's UpdatedAt alone: side chatter is not
+// thread activity, and letting it reorder the console's rail would make the
+// sidebar jump every time the reader asks a side question.
 func (s *Store) AppendSideTurn(id string, turn SideTurn) (*Session, error) {
+	return s.AppendSideTurnTo(id, "", turn)
+}
+
+// AppendSideTurnTo appends one message to a named side chat ("" = the active
+// one), creating the chat when the thread has none.
+func (s *Store) AppendSideTurnTo(id, chatID string, turn SideTurn) (*Session, error) {
 	unlock, err := lockStore(s.root)
 	if err != nil {
 		return nil, fmt.Errorf("sessions: lock: %w", err)
@@ -698,28 +888,32 @@ func (s *Store) AppendSideTurn(id string, turn SideTurn) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	chat := s.sideChatForLocked(sess, chatID)
 	if turn.TS == 0 {
 		turn.TS = time.Now().Unix()
 	}
-	sess.SideTurns = append(sess.SideTurns, turn)
-	if excess := len(sess.SideTurns) - maxSideTurns; excess > 0 {
-		// Drop whole exchanges, so the oldest message on screen is never a
-		// question without its answer.
-		if excess%2 == 1 {
-			excess++
-		}
-		sess.SideTurns = append([]SideTurn(nil), sess.SideTurns[excess:]...)
+	if turn.Role == "user" && chat.Title == "" {
+		chat.Title = sideChatTitle([]SideTurn{turn})
 	}
+	chat.Turns = append(chat.Turns, turn)
+	trimSideChat(chat)
+	chat.UpdatedAt = turn.TS
+	sess.SideActive = chat.ID
 	if err := s.save(sess); err != nil {
 		return nil, err
 	}
 	return sess, nil
 }
 
-// StartSideOperation installs a new side operation generation. Like a side
-// turn, it does not touch the session's UpdatedAt: the thread's recency is its
-// own conversation, not the questions asked beside it.
+// StartSideOperation installs a new side operation generation on the active
+// chat. Like a side turn, it does not touch the session's UpdatedAt: the
+// thread's recency is its own conversation, not the questions asked beside it.
 func (s *Store) StartSideOperation(id string, op Operation) error {
+	return s.StartSideOperationFor(id, "", op)
+}
+
+// StartSideOperationFor installs a new side operation generation on one chat.
+func (s *Store) StartSideOperationFor(id, chatID string, op Operation) error {
 	unlock, err := lockStore(s.root)
 	if err != nil {
 		return fmt.Errorf("sessions: lock: %w", err)
@@ -731,15 +925,17 @@ func (s *Store) StartSideOperation(id string, op Operation) error {
 	if err != nil {
 		return err
 	}
+	chat := s.sideChatForLocked(sess, chatID)
 	op.UpdatedAt = time.Now()
-	sess.SideOperation = &op
+	chat.Operation = &op
+	sess.SideActive = chat.ID
 	return s.save(sess)
 }
 
-// SetSideOperation updates the side operation only while the stored side
-// operation still carries op.ID. Unlike SetOperation, a cleared record (the
-// pane's `+`) is not recreated: a late finalizer from a cancelled ask must not
-// resurrect a conversation the user just discarded.
+// SetSideOperation updates a side operation only while the stored record still
+// carries op.ID. Unlike SetOperation, a cleared record (the chat was deleted)
+// is not recreated: a late finalizer from a cancelled ask must not resurrect a
+// conversation the user just discarded.
 func (s *Store) SetSideOperation(id string, op Operation) (bool, error) {
 	unlock, err := lockStore(s.root)
 	if err != nil {
@@ -752,21 +948,27 @@ func (s *Store) SetSideOperation(id string, op Operation) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if sess.SideOperation == nil || sess.SideOperation.ID != op.ID {
-		return false, nil
+	// The operation id is unique per ask, so the chat that owns it is the chat
+	// this write belongs to — the reader may have switched away since.
+	for i := range sess.SideChats {
+		chat := &sess.SideChats[i]
+		if chat.Operation == nil || chat.Operation.ID != op.ID {
+			continue
+		}
+		op.UpdatedAt = time.Now()
+		chat.Operation = &op
+		if err := s.save(sess); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	op.UpdatedAt = time.Now()
-	sess.SideOperation = &op
-	if err := s.save(sess); err != nil {
-		return false, err
-	}
-	return true, nil
+	return false, nil
 }
 
 // FinishSideOperation files an answer and settles the operation in one locked
 // write. A reader must never observe "done" before the answer is on disk, and
-// an answer from an ask the user has already discarded (the pane's `+`, a newer
-// question) must not land in the new transcript.
+// an answer from an ask whose chat was deleted (or whose question was
+// superseded) must not land in another transcript.
 func (s *Store) FinishSideOperation(id, operationID string, turn SideTurn, op Operation) (bool, error) {
 	unlock, err := lockStore(s.root)
 	if err != nil {
@@ -779,28 +981,33 @@ func (s *Store) FinishSideOperation(id, operationID string, turn SideTurn, op Op
 	if err != nil {
 		return false, err
 	}
-	if sess.SideOperation == nil || sess.SideOperation.ID != operationID {
+	var chat *SideChat
+	for i := range sess.SideChats {
+		if c := &sess.SideChats[i]; c.Operation != nil && c.Operation.ID == operationID {
+			chat = c
+			break
+		}
+	}
+	if chat == nil {
 		return false, nil
 	}
 	if turn.TS == 0 {
 		turn.TS = time.Now().Unix()
 	}
-	sess.SideTurns = append(sess.SideTurns, turn)
-	if excess := len(sess.SideTurns) - maxSideTurns; excess > 0 {
-		if excess%2 == 1 {
-			excess++
-		}
-		sess.SideTurns = append([]SideTurn(nil), sess.SideTurns[excess:]...)
-	}
+	chat.Turns = append(chat.Turns, turn)
+	trimSideChat(chat)
+	chat.UpdatedAt = turn.TS
 	op.UpdatedAt = time.Now()
-	sess.SideOperation = &op
+	chat.Operation = &op
 	if err := s.save(sess); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// ResetSide clears the side conversation and its operation — the pane's `+`.
+// ResetSide discards the side conversation the pane is showing — `/side close`
+// in the TUI, and a DELETE from a console that predates the list. The other
+// conversations beside this thread are left alone.
 func (s *Store) ResetSide(id string) (*Session, error) {
 	unlock, err := lockStore(s.root)
 	if err != nil {
@@ -813,12 +1020,84 @@ func (s *Store) ResetSide(id string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	sess.SideTurns = nil
-	sess.SideOperation = nil
+	chat := sess.ActiveSideChat()
+	if chat == nil {
+		return sess, nil
+	}
+	return s.removeSideChatLocked(sess, chat.ID)
+}
+
+// NewSideChat starts another conversation beside the thread and makes it the
+// active one. Nothing with a transcript is discarded: the previous chats stay
+// in the list. An empty chat is a draft the writer never sent, so starting
+// another one replaces it instead of stacking blanks in the file.
+func (s *Store) NewSideChat(id string) (*Session, error) {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return nil, fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	kept := sess.SideChats[:0]
+	for _, c := range sess.SideChats {
+		if len(c.Turns) > 0 {
+			kept = append(kept, c)
+		}
+	}
+	sess.SideChats = kept
+	s.addSideChatLocked(sess)
 	if err := s.save(sess); err != nil {
 		return nil, err
 	}
 	return sess, nil
+}
+
+// SelectSideChat moves the active pointer to a conversation that exists. It
+// writes only that pointer: the chats' own clocks are their last message.
+func (s *Store) SelectSideChat(id, chatID string) (*Session, error) {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return nil, fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if sess.SideChatByID(chatID) == nil {
+		return nil, ErrNotFound
+	}
+	sess.SideActive = chatID
+	if err := s.save(sess); err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
+// DeleteSideChat removes one conversation beside the thread.
+func (s *Store) DeleteSideChat(id, chatID string) (*Session, error) {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return nil, fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if sess.SideChatByID(chatID) == nil {
+		return nil, ErrNotFound
+	}
+	return s.removeSideChatLocked(sess, chatID)
 }
 
 // TrimSideTurns returns the tail of a side conversation that fits budget
@@ -1139,6 +1418,10 @@ func (s *Store) load(id string) (*Session, error) {
 	if err := json.Unmarshal(data, &sess); err != nil {
 		return nil, fmt.Errorf("sessions: parse %s: %w", id, err)
 	}
+	// The single-conversation shape becomes a list of one on the way in, so
+	// every caller downstream reads one model. A file that predates the list
+	// keeps its transcript; the first write persists the new shape.
+	sess.normalizeSide()
 	return &sess, nil
 }
 

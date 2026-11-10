@@ -194,9 +194,15 @@ type Requires struct {
 
 // TaskSpecDetail captures what to do, where, and how to verify success.
 type TaskSpecDetail struct {
-	Scope             string   `json:"scope"`
-	Target            string   `json:"target"`
-	Node              string   `json:"node,omitempty"` // preferred node id/name; empty lets the scheduler choose
+	Scope  string `json:"scope"`
+	Target string `json:"target"`
+	// Node is a HARD device pin, not a preference: when non-empty the task
+	// may execute only on that node. An unreachable pin parks in task_outbox
+	// until the link returns (or fails honestly at its deadline) — it never
+	// silently runs on this node. Empty hands device selection to
+	// scheduler.RouteP; requires.abilities only filters which nodes are
+	// capable, it never expresses a device choice. See docs/routing-layers.md.
+	Node              string   `json:"node,omitempty"`
 	Constraints       []string `json:"constraints"`
 	SuccessDefinition string   `json:"success_definition"`
 	// ToolsPolicy / MaxTurns live here (not on the outer TaskSpec) because

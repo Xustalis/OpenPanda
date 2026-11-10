@@ -36,8 +36,12 @@ func TestSideTurnsStayOutOfTheThread(t *testing.T) {
 	if len(got.Turns) != 1 || got.Turns[0].Text != "main question" {
 		t.Fatalf("a side turn entered the thread: %+v", got.Turns)
 	}
-	if len(got.SideTurns) != 1 || got.SideTurns[0].Text != "side question" {
-		t.Fatalf("side turn not stored: %+v", got.SideTurns)
+	chat := got.ActiveSideChat()
+	if chat == nil || len(chat.Turns) != 1 || chat.Turns[0].Text != "side question" {
+		t.Fatalf("side turn not stored: %+v", got.SideChats)
+	}
+	if chat.Title != "side question" {
+		t.Errorf("side chat title = %q, want the first question", chat.Title)
 	}
 	if !got.UpdatedAt.Equal(updated) {
 		t.Errorf("side turn moved UpdatedAt: %v → %v", updated, got.UpdatedAt)
@@ -71,8 +75,8 @@ func TestSideOperationCASAndReset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.SideTurns) != 0 || got.SideOperation != nil {
-		t.Fatalf("reset left side state behind: turns=%+v op=%+v", got.SideTurns, got.SideOperation)
+	if len(got.SideChats) != 0 || got.SideActive != "" {
+		t.Fatalf("reset left side state behind: chats=%+v active=%q", got.SideChats, got.SideActive)
 	}
 }
 
@@ -98,11 +102,12 @@ func TestFinishSideOperationIsAtomicAndOwned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.SideTurns) != 1 || got.SideTurns[0].Text != "answer" {
-		t.Fatalf("answer not filed: %+v", got.SideTurns)
+	chat := got.ActiveSideChat()
+	if chat == nil || len(chat.Turns) != 1 || chat.Turns[0].Text != "answer" {
+		t.Fatalf("answer not filed: %+v", got.SideChats)
 	}
-	if got.SideOperation == nil || got.SideOperation.Status != "done" {
-		t.Fatalf("operation not settled: %+v", got.SideOperation)
+	if chat.Operation == nil || chat.Operation.Status != "done" {
+		t.Fatalf("operation not settled: %+v", chat.Operation)
 	}
 
 	// A late answer from a replaced operation must not enter the transcript.
@@ -113,8 +118,145 @@ func TestFinishSideOperationIsAtomicAndOwned(t *testing.T) {
 		t.Fatalf("stale finish: ok=%v err=%v", ok, err)
 	}
 	got, _ = st.Get(sess.ID)
-	if len(got.SideTurns) != 1 || got.SideTurns[0].Text != "answer" {
-		t.Fatalf("stale answer entered the transcript: %+v", got.SideTurns)
+	chat = got.ActiveSideChat()
+	if chat == nil || len(chat.Turns) != 1 || chat.Turns[0].Text != "answer" {
+		t.Fatalf("stale answer entered the transcript: %+v", got.SideChats)
+	}
+}
+
+// TestSideChatsStaySeparate pins the multi-conversation contract: a thread can
+// hold several side chats, each with its own transcript and operation, and
+// neither the question nor the answer crosses between them.
+func TestSideChatsStaySeparate(t *testing.T) {
+	st := NewStore(t.TempDir())
+	sess, err := st.Create("thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.AppendSideTurn(sess.ID, SideTurn{Role: "user", Text: "first question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstID := first.SideActive
+
+	second, err := st.NewSideChat(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.SideActive == firstID {
+		t.Fatalf("new chat did not move the active pointer: %q", second.SideActive)
+	}
+	secondID := second.SideActive
+	if _, err := st.AppendSideTurn(sess.ID, SideTurn{Role: "user", Text: "second question"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SideChats) != 2 {
+		t.Fatalf("chats = %d, want 2", len(got.SideChats))
+	}
+	one := got.SideChatByID(firstID)
+	two := got.SideChatByID(secondID)
+	if one == nil || two == nil {
+		t.Fatalf("missing chat in %+v", got.SideChats)
+	}
+	if len(one.Turns) != 1 || one.Turns[0].Text != "first question" {
+		t.Errorf("first chat = %+v", one.Turns)
+	}
+	if len(two.Turns) != 1 || two.Turns[0].Text != "second question" {
+		t.Errorf("second chat = %+v", two.Turns)
+	}
+
+	// An answer belongs to the chat that asked: the operation id names it, so
+	// a reader that switched away does not receive it in another transcript.
+	if err := st.StartSideOperationFor(sess.ID, firstID, Operation{ID: "op-a", Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartSideOperationFor(sess.ID, secondID, Operation{ID: "op-b", Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.FinishSideOperation(sess.ID, "op-a",
+		SideTurn{Role: "assistant", Text: "first answer"},
+		Operation{ID: "op-a", Status: "done"}); err != nil || !ok {
+		t.Fatalf("finish first: ok=%v err=%v", ok, err)
+	}
+	got, _ = st.Get(sess.ID)
+	if c := got.SideChatByID(firstID); len(c.Turns) != 2 || c.Turns[1].Text != "first answer" {
+		t.Errorf("first chat after its answer = %+v", c.Turns)
+	}
+	if c := got.SideChatByID(secondID); len(c.Turns) != 1 {
+		t.Errorf("the answer leaked into the other chat: %+v", c.Turns)
+	}
+
+	// Selecting moves the pointer, not the transcripts.
+	got, err = st.SelectSideChat(sess.ID, firstID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SideActive != firstID || len(got.ActiveSideChat().Turns) != 2 {
+		t.Fatalf("select did not land on the first chat: %+v", got.SideActive)
+	}
+
+	// Deleting one leaves the other, and the pointer moves off the deleted id.
+	got, err = st.DeleteSideChat(sess.ID, firstID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SideChats) != 1 || got.SideChats[0].ID != secondID {
+		t.Fatalf("delete left %+v", got.SideChats)
+	}
+	if got.SideActive != secondID {
+		t.Errorf("active pointer = %q, want the surviving chat", got.SideActive)
+	}
+}
+
+// TestLegacySideTurnsBecomeOneChat pins the migration: a file written before
+// side chats were a list keeps its transcript, and the next write persists the
+// new shape.
+func TestLegacySideTurnsBecomeOneChat(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	sess, err := st.Create("thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := &Session{
+		ID: sess.ID, Title: sess.Title, CreatedAt: sess.CreatedAt, UpdatedAt: sess.UpdatedAt,
+		Turns:         []Turn{},
+		SideTurns:     []SideTurn{{Role: "user", Text: "old question", TS: 100}, {Role: "assistant", Text: "old answer", TS: 101}},
+		SideOperation: &Operation{ID: "op-old", Status: "done"},
+	}
+	if err := st.save(legacy); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := got.ActiveSideChat()
+	if chat == nil || len(chat.Turns) != 2 || chat.Turns[0].Text != "old question" {
+		t.Fatalf("legacy transcript lost: %+v", got.SideChats)
+	}
+	if chat.ID != legacySideChatID || chat.Title != "old question" {
+		t.Errorf("legacy chat = %+v", chat)
+	}
+	if chat.Operation == nil || chat.Operation.ID != "op-old" {
+		t.Errorf("legacy operation lost: %+v", chat.Operation)
+	}
+
+	// A write persists the list and drops the legacy fields.
+	if _, err := st.AppendSideTurn(sess.ID, SideTurn{Role: "user", Text: "new question"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = st.Get(sess.ID)
+	if len(got.SideChats) != 1 || len(got.SideChats[0].Turns) != 3 {
+		t.Fatalf("post-migration chats = %+v", got.SideChats)
+	}
+	if len(got.SideTurns) != 0 {
+		t.Errorf("legacy turns survived the write: %+v", got.SideTurns)
 	}
 }
 

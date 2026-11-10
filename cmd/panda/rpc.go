@@ -308,7 +308,7 @@ func (s *rpcServer) handleAsk(req *rpcRequest) {
 		return
 	}
 	if sess != nil {
-		turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: convoSummaryOf(i18n.Detect(), out)}
+		turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: convoSummaryOf(i18n.Detect(), out), Warning: out.Warning}
 		switch out.Kind {
 		case "task":
 			turn.Ref = out.TaskID

@@ -384,3 +384,27 @@ func TestListAgentsSmoke(t *testing.T) {
 		t.Fatalf("agents = %d, want %d", len(out), len(agents.Registry()))
 	}
 }
+
+// TestBoardTaskInputDeviceIsHardPin locks the board's device-picker contract.
+// A device chosen by the operator used to be written to PreferredNode: while
+// that device was offline, RouteP could not find it among the capable online
+// rows, fell through to scored ranking, and localBias handed the task to this
+// node's own agent CLI. The UI still showed the other device as its target.
+func TestBoardTaskInputDeviceIsHardPin(t *testing.T) {
+	in := boardTaskInput(createTaskRequest{
+		Title:    "collect device status",
+		Prompt:   "report xin status",
+		Node:     "xin",
+		Requires: []string{"agent:opencode"},
+	}, []string{"agent:opencode"})
+	if in.TargetNode != "xin" {
+		t.Fatalf("TargetNode = %q, want xin (hard pin)", in.TargetNode)
+	}
+	if in.PreferredNode != "" {
+		t.Fatalf("PreferredNode = %q, want empty: the board has no soft-hint surface", in.PreferredNode)
+	}
+	empty := boardTaskInput(createTaskRequest{Title: "free routing"}, []string{"sys:info"})
+	if empty.TargetNode != "" || empty.PreferredNode != "" {
+		t.Fatalf("empty picker routed as %q / %q, want free routing", empty.TargetNode, empty.PreferredNode)
+	}
+}

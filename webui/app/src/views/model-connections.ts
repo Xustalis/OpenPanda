@@ -6,6 +6,7 @@
 // parts worth pinning, and none of them touch the document.
 
 import type { ModelEntry, ModelRefWire, ModelsResponse, ProviderInfo } from '../api/client'
+import { t } from '../i18n/index.ts'
 
 export interface Member {
   entry: ModelEntry
@@ -20,6 +21,10 @@ export interface Conn {
   id: string
   provider: string
   providerLabel: string
+  /** The tool this connection's rows were imported from, when they agree on
+   *  one. It is provenance, not routing: the card is named after it so a
+   *  relay the person never typed does not read as "custom base_url". */
+  source: string
   baseURL: string
   apiType: string
   keyHint: string
@@ -73,6 +78,56 @@ export function labelOf(providers: ProviderInfo[], id?: string): string {
   return providers.find((p) => p.id === id)?.label ?? id
 }
 
+/** The discovery collectors that can label a connection. Anything else (a
+ *  hand-written row, or a value a newer panel invented) is not a source the
+ *  card knows how to name. */
+const CONN_SOURCES = new Set(['codex', 'claude', 'opencode', 'local'])
+
+/** The card's heading.
+ *
+ *  A known vendor names itself ("ChatGPT (OpenAI)", "通义千问 (DashScope)"),
+ *  which is the best a card can do. A row imported from another tool is named
+ *  after that tool: the person never chose the address a CLI config carried,
+ *  so "自定义 / 中转站" plus a loopback port describes the plumbing instead of
+ *  the thing they imported. Only a row nobody can place keeps the generic
+ *  label — and even then it is the short one, because the catalogue's own
+ *  "自定义 / 中转站 (custom base_url)" wraps to two lines in a 232px card. */
+export function connName(c: Conn, providers: ProviderInfo[]): string {
+  const known = providers.find((p) => p.id === c.provider)
+  if (known && c.provider !== 'custom') return known.label
+  if (CONN_SOURCES.has(c.source)) return t(`models.discover.source.${c.source}`)
+  return t('models.customProvider')
+}
+
+/** Whether the card should say it was imported. Provenance is the one thing
+ *  the heading cannot show once a known vendor names itself: "ChatGPT (OpenAI)"
+ *  is a brand, and the person still deserves to know the row came from their
+ *  own Codex login rather than from a key typed into this page. */
+export function connImported(c: Conn): boolean {
+  return CONN_SOURCES.has(c.source)
+}
+
+/** Whether a base URL points at this machine. Same rule the daemon applies to
+ *  its own loopback rows, kept local so the card can decide without a request:
+ *  a port on 127.0.0.1 is plumbing, not an address a person recognises. */
+export function isLoopbackURL(url: string): boolean {
+  try {
+    const host = new URL(url.trim()).hostname.toLowerCase()
+    return host === 'localhost' || host === '::1' || host === '[::1]' || host.startsWith('127.')
+  } catch {
+    return false
+  }
+}
+
+/** The line under the heading: the host a person could recognise, or the word
+ *  for "this is on your own machine". A loopback port is deliberately not
+ *  printed — `127.0.0.1:7896` tells the reader nothing they can act on, and it
+ *  is the one piece of a relay's inner wiring this page should not leak. */
+export function connHost(c: Conn): string {
+  if (isLoopbackURL(c.baseURL)) return t('models.localEndpoint')
+  return hostOf(c.baseURL)
+}
+
 /** The host part of an endpoint, for tooltips where the scheme and the path
  *  are noise. An unparsable address is printed as-is — a half-typed one is
  *  exactly what a reader needs to see. */
@@ -120,6 +175,7 @@ export function groupConnections(data: ModelsResponse): Conn[] {
         id,
         provider: m.entry.provider ?? '',
         providerLabel: m.entry.provider_label ?? m.entry.provider ?? '',
+        source: m.entry.source ?? '',
         baseURL: m.entry.base_url,
         apiType: m.entry.api_type,
         keyHint: m.entry.key_hint ?? '',
@@ -133,6 +189,9 @@ export function groupConnections(data: ModelsResponse): Conn[] {
     if (!conn.members.some((x) => keyOf(x.entry) === keyOf(m.entry))) {
       conn.members.push(m)
     }
+    // One imported row is enough to say where the account came from: a row the
+    // person added by hand to the same account does not erase that.
+    if (!conn.source && m.entry.source) conn.source = m.entry.source
   }
   return [...byId.values()].sort((a, b) => {
     const aActive = a.members.some((m) => m.entry.active)

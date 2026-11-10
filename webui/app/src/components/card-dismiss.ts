@@ -25,12 +25,12 @@
  *  different components that already own their own state — the alternative was
  *  threading an "is any menu open" flag through the pane and every menu. */
 const ESCAPE_LAYERS =
-  '.model-panel, .attach-menu, .complete-menu, .modal-backdrop, .settings-dialog, .reminder-pop, .wd-panel, .ctx-menu, .select-menu, .ws-hidden-card'
+  '.model-panel, .attach-menu, .complete-menu, .modal-backdrop, .settings-dialog, .notif-dialog, .wd-panel, .ctx-menu, .select-menu, .ws-hidden-card'
 
 /** Whether a layer above the caller owns Escape right now.
  *
- *  `own` lets a floating layer name its own panel: the reminder pop and the
- *  workdir menu ARE in the layer list — the header cards defer to them —
+ *  `own` lets a floating layer name its own panel: the notification pop and
+ *  the workdir menu ARE in the layer list — the header cards defer to them —
  *  but their own Escape handlers must not mistake their own open panel for
  *  a layer above, or they would never be allowed to close. Document order
  *  is paint order for these fixed-position layers, so "above me" means

@@ -951,7 +951,7 @@ func (r *repl) recordOutcome(ctx context.Context, text string, out *askengine.Re
 		r.rememberTurn(text, out)
 		return
 	}
-	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: convoSummaryOf(r.loc, out)}
+	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, Text: convoSummaryOf(r.loc, out), Warning: out.Warning}
 	switch out.Kind {
 	case "task":
 		turn.Ref = out.TaskID

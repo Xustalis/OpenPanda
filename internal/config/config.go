@@ -1351,9 +1351,16 @@ const (
 type ModelConfig struct {
 	Name     string `yaml:"name,omitempty"`     // alias for /model switch; empty = model id
 	Provider string `yaml:"provider,omitempty"` // built-in provider id (internal/providers)
-	APIType  string `yaml:"api_type"`           // "anthropic" | "openai" | "responses" | "google" (default anthropic)
-	BaseURL  string `yaml:"base_url"`           // e.g. https://api.deepseek.com/anthropic
-	APIKey   string `yaml:"api_key"`            // secret; prefer env OPENPANDA_MODEL_API_KEY
+	// Source records where a row came from when nobody typed it: the id of the
+	// discovery collector that reported it ("codex" | "claude" | "opencode" |
+	// "local"). It is provenance, not routing — the client never reads it — and
+	// the console uses it to name a connection after the tool it was imported
+	// from instead of painting a relay as "custom base_url" plus a loopback
+	// port. Empty means hand-written.
+	Source  string `yaml:"source,omitempty"`
+	APIType string `yaml:"api_type"` // "anthropic" | "openai" | "responses" | "google" (default anthropic)
+	BaseURL string `yaml:"base_url"` // e.g. https://api.deepseek.com/anthropic
+	APIKey  string `yaml:"api_key"`  // secret; prefer env OPENPANDA_MODEL_API_KEY
 	// KeyEnv names an environment variable to read this row's key from at call
 	// time instead of storing it here. It exists because a registry row is a
 	// copy: importing a model from another tool's config would otherwise copy
@@ -1361,6 +1368,13 @@ type ModelConfig struct {
 	// above tells people not to do. APIKey still wins when both are set, so an
 	// explicit key on the row keeps working.
 	KeyEnv string `yaml:"key_env,omitempty"`
+	// KeyRef names a credential another application owns, spelled
+	// "ccswitch:<app_type>:<provider_id>". It is the reference counterpart of
+	// KeyEnv for secrets that live in a file rather than an environment
+	// variable: the client reads the value when it is built, so rotating the
+	// key in the owning app needs no re-import and no copy in config.yaml.
+	// APIKey still wins when both are set.
+	KeyRef string `yaml:"key_ref,omitempty"`
 	// KeyScheme selects the header this row's credential travels in. "" (or
 	// "api_key") keeps the dialect default — Bearer for OpenAI, x-api-key for
 	// Anthropic. "bearer" always sends `Authorization: Bearer`, which is what

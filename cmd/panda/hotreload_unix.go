@@ -150,33 +150,36 @@ func notifyDaemonReloadTo(out io.Writer, configPath string) {
 	case reloadSignaled:
 		fmt.Fprintf(out, "daemon (pid %d) told to reload the card — changes are live\n", pid)
 	case reloadUnverified:
-		fmt.Fprintf(out, "daemon (pid %d) could not be verified (ps unavailable), so it was not signaled — the new card is picked up when it restarts\n", pid)
+		fmt.Fprintf(out, "daemon (pid %d) could not be verified (ps unavailable); no signal sent — running instances reload the card automatically within ~1s\n", pid)
 	case reloadStranger:
-		fmt.Fprintln(out, "the recorded pid belongs to another program — the new card is picked up at the daemon's next start")
+		fmt.Fprintln(out, "the recorded pid belongs to another program — running instances reload the card automatically within ~1s")
 	case reloadSignalFailed:
-		fmt.Fprintln(out, "the daemon could not be signaled — the new card is picked up when it restarts")
+		fmt.Fprintln(out, "the daemon could not be signaled — running instances reload the card automatically within ~1s")
 	default:
-		fmt.Fprintln(out, "daemon not running — the new card is picked up at its next start")
+		fmt.Fprintln(out, "no daemon pid to signal — running instances reload the card automatically within ~1s; otherwise it applies at next start")
 	}
 }
 
-// notifyDaemonMeshTo is the peer-list counterpart of notifyDaemonReloadTo:
-// `nodes add`/`disconnect`/`pair` call it after writing network.*, and the
-// daemon's SIGHUP handler applies the fresh peers/secret/cleartext policy
-// through Core.ApplyNetworkConfig — the link forms (or drops) without a
-// restart.
+// notifyDaemonMeshTo is the peer-list counterpart of notifyDaemonReloadTo.
+// SIGHUP is the fast path when a daemon pid is available. It is NOT the only
+// path: both the daemon and the standalone web console run a 1-second
+// config.yaml observer (runNetworkSync), so a missing or unverifiable pid
+// does not mean nothing applied the change. The old "daemon not running —
+// takes effect at its next start" wording told operators to restart a
+// healthy process, which is both unnecessary and a source of identity-lock
+// races.
 func notifyDaemonMeshTo(out io.Writer, configPath string) {
 	pid, outcome := sighupDaemon(configPath)
 	switch outcome {
 	case reloadSignaled:
 		fmt.Fprintf(out, "daemon (pid %d) applied the new peer list — live now\n", pid)
 	case reloadUnverified:
-		fmt.Fprintf(out, "daemon (pid %d) could not be verified (ps unavailable), so it was not signaled — the new peer list takes effect when it restarts\n", pid)
+		fmt.Fprintf(out, "daemon (pid %d) could not be verified (ps unavailable); no signal sent — running instances reload the peer list automatically within ~1s\n", pid)
 	case reloadStranger:
-		fmt.Fprintln(out, "the recorded pid belongs to another program — the new peer list takes effect at the daemon's next start")
+		fmt.Fprintln(out, "the recorded pid belongs to another program — running instances reload the peer list automatically within ~1s")
 	case reloadSignalFailed:
-		fmt.Fprintln(out, "the daemon could not be signaled — the new peer list takes effect when it restarts")
+		fmt.Fprintln(out, "the daemon could not be signaled — running instances reload the peer list automatically within ~1s")
 	default:
-		fmt.Fprintln(out, "daemon not running — the new peer list takes effect at its next start")
+		fmt.Fprintln(out, "no daemon pid to signal — running instances reload the peer list automatically within ~1s; otherwise it applies at next start")
 	}
 }

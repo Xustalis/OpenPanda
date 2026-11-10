@@ -72,6 +72,41 @@ func TestSkillTools_ListAndShow(t *testing.T) {
 	}
 }
 
+// The execution prompt only injects this node's device skills, so the tools
+// must not advertise another device's procedure as active. Otherwise the model
+// plans around steps it will never receive.
+func TestSkillTools_DeviceScopeIsolation(t *testing.T) {
+	e, reg := newSkillTestEngine(t, "")
+	e.cfg.Node.Name = "test-node"
+	for _, sk := range []*skills.Skill{
+		{Name: "own-device-skill", Description: "This node procedure", Scope: skills.ScopeDevice,
+			Device: "test-node", Status: skills.StatusActive, Body: "OWN-DEVICE-MARKER"},
+		{Name: "other-device-skill", Description: "Another node procedure", Scope: skills.ScopeDevice,
+			Device: "other-node", Status: skills.StatusActive, Body: "OTHER-DEVICE-MARKER"},
+	} {
+		if err := e.skills.Save(sk); err != nil {
+			t.Fatalf("save %s: %v", sk.Name, err)
+		}
+	}
+
+	listOut := runSkillTool(t, reg, "skill_list", map[string]any{})
+	if !strings.Contains(listOut, "own-device-skill") {
+		t.Errorf("this node's device skill missing from list: %s", listOut)
+	}
+	if strings.Contains(listOut, "other-device-skill") {
+		t.Errorf("another device's skill advertised as active: %s", listOut)
+	}
+
+	showOut := runSkillTool(t, reg, "skill_show", map[string]any{"name": "other-device-skill"})
+	if strings.Contains(showOut, "OTHER-DEVICE-MARKER") {
+		t.Errorf("another device's procedure body was readable: %s", showOut)
+	}
+	showOut = runSkillTool(t, reg, "skill_show", map[string]any{"name": "own-device-skill"})
+	if !strings.Contains(showOut, "OWN-DEVICE-MARKER") {
+		t.Errorf("this node's device procedure not readable: %s", showOut)
+	}
+}
+
 func TestSkillTools_SearchAndDiscover(t *testing.T) {
 	mockIndex := skills.HubIndex{
 		Version: "1.0",

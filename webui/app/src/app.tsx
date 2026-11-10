@@ -27,7 +27,7 @@ import { ToastHost } from './components/toast'
 import { Icon } from './components/icons'
 import { ConfirmHost } from './components/confirm'
 import { PaletteHost, openPalette } from './components/palette'
-import { ReminderBell, openReminders } from './components/reminders'
+import { NotificationBell, openNotifications } from './components/notifications'
 import { PairRequestHost } from './components/pair-request-host'
 
 /** Re-render the subtree on locale change (the whole shell is cheap). */
@@ -87,18 +87,20 @@ export function App() {
     }
   }, [menuOpen])
 
-  // #/reminders was a tab of 设置 before the bell took over the reminder
-  // system. A bookmark saved back then still has to land somewhere useful, so
-  // it drops the reader on the thread with the card raised; the URL is
-  // rewritten because the card is state, not a destination. Keyed on the route
-  // so a hash typed into the address bar of an already-open tab works too, and
-  // gated on `authed` so a bookmark opened against the token gate keeps its
-  // meaning — consuming it before the bell mounted would lose the card.
+  // #/reminders and #/notifications are not destinations — the bell owns that
+  // surface, and a bookmark saved when it was a 设置 tab (or when it was still
+  // called 提醒) still has to land somewhere useful. It drops the reader on the
+  // thread with the card raised, and the URL is rewritten because the card is
+  // state, not a route. Keyed on the route so a hash typed into the address bar
+  // of an already-open tab works too, and gated on `authed` so a bookmark
+  // opened against the token gate keeps its meaning — consuming it before the
+  // bell mounted would lose the card.
   useEffect(() => {
     if (!authed) return
-    if (!location.hash.replace(/^#\/?/, '').startsWith('reminders')) return
+    const path = location.hash.replace(/^#\/?/, '')
+    if (!path.startsWith('reminders') && !path.startsWith('notifications')) return
     history.replaceState(null, '', '#/chat')
-    requestAnimationFrame(openReminders)
+    requestAnimationFrame(openNotifications)
   }, [route, authed])
 
   // A bookmark (or a stale tab) pointing at #/team must not open a page whose
@@ -166,10 +168,10 @@ export function App() {
             </span>
           </div>
           <div class="sidebar-head-actions">
-            {/* 提醒 and 搜索: the two things you reach for from wherever you
+            {/* 通知 and 搜索: the two things you reach for from wherever you
                 are. The bell replaced the 设置 → 提醒 tab, and it opens a card
-                rather than a page (see components/reminders.tsx). */}
-            <ReminderBell />
+                rather than a page (see components/notifications.tsx). */}
+            <NotificationBell />
             <button
               type="button"
               class="icon-btn"

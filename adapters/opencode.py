@@ -286,7 +286,12 @@ def _model_catalog(force=False):
             for entry in doc.get("data") or []:
                 if not isinstance(entry, dict):
                     continue
-                pid, mid = entry.get("providerID"), entry.get("id")
+                pid = entry.get("providerID")
+                # v2 carries the id twice: `id` is the catalogue key and
+                # `modelID` is what a run passes to --model. They agree today;
+                # resolving on modelID keeps a pinned id working if they ever
+                # diverge.
+                mid = entry.get("modelID") or entry.get("id")
                 if not isinstance(pid, str) or not pid.strip():
                     continue
                 if not isinstance(mid, str) or not mid.strip():
@@ -969,6 +974,15 @@ def main():
     base = ["opencode", "run", "--print-logs=true"] + auto
     if flags["format"]:
         base += ["--format", "json"]
+    if flags["standalone"]:
+        # opencode v2 dispatches to a long-lived background service that serves
+        # the config it started with: a provider, credential or roster change
+        # made after that start never reaches the run, and a service wedged in
+        # that state answers with no events at all — the harness sees a silent
+        # pipe and reports "no output ever received". A run that owns its
+        # server is the only shape whose config is what is on disk now, so
+        # every agent run takes it, not just the injected one.
+        base.append("--standalone")
     model = ""
     # injected marks a run whose model endpoint panda overrode. That model lives
     # on OUR provider (written above), not on the build's roster, so both roster
@@ -984,12 +998,9 @@ def main():
             model = INJECTED_PROVIDER_ID + "/" + bare
             injected = True
             _injected_provider = True
-            if flags["standalone"]:
-                # v2 dispatches to a long-lived background service that was
-                # started with the user's config; OPENCODE_CONFIG only reaches
-                # a run that owns its server, or every injected model answers
-                # "Model unavailable: panda/<id>".
-                base.append("--standalone")
+            # The private server (added above) is what makes OPENCODE_CONFIG
+            # reach this run; a shared service would answer "Model unavailable:
+            # panda/<id>" for a provider it never loaded.
             harness.progress("using injected model %s (%s)"
                              % (model, itype))
         elif bare:
@@ -1246,7 +1257,7 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
             if note:
                 harness.progress(note)
     plain = ["opencode", "run", "--print-logs=false"]
-    if injected and _cli_flags()["standalone"]:
+    if _cli_flags()["standalone"]:
         plain.append("--standalone")
     plain += auto + ["--model", model]
     if agent_face:
@@ -1307,7 +1318,9 @@ def _event_failure(ev):
             error = info.get("error")
             if not error and info.get("finish") == "error":
                 error = "opencode assistant failed"
-    elif kind in ("session.idle", "session.status"):
+    elif kind in ("session.idle", "session.status", "idle"):
+        # v2 reports the outcome on the envelope itself rather than in a
+        # status object: {"type":"idle","outcome":"failed"}.
         status = props.get("status")
         status = status if isinstance(status, dict) else props
         if status.get("outcome") in ("failed", "error"):
@@ -1324,7 +1337,11 @@ def _event_idle(ev):
     props = ev.get("properties")
     props = props if isinstance(props, dict) else ev
     status = props.get("status")
-    return ev.get("type") == "session.idle" or (
+    # 1.18 announces the end of a turn as session.idle / session.status{idle};
+    # v2 also emits a bare "idle" record (the same shape its session export
+    # carries) — and a run whose terminal idle is unrecognised keeps the pipe
+    # open to its timeout instead of returning the answer it already has.
+    return ev.get("type") in ("session.idle", "idle") or (
         ev.get("type") == "session.status" and
         isinstance(status, dict) and status.get("type") == "idle")
 
@@ -1474,6 +1491,23 @@ def _session_id(v):
     return s if s.startswith("ses") else ""
 
 
+def _tool_result_text(state):
+    """A tool part's result text, from the shape this build uses.
+
+    1.18 reports one `state.output` string. v2 reports `state.content` as a
+    list of typed parts — the same list its session export carries — so the
+    rows that show a tool result would otherwise record the call and lose what
+    it returned.
+    """
+    content = state.get("content")
+    if not isinstance(content, list):
+        return None
+    texts = [p.get("text") for p in content
+             if isinstance(p, dict) and p.get("type") == "text"
+             and isinstance(p.get("text"), str)]
+    return "\n".join(texts) if texts else None
+
+
 def _fold(ev, state):
     """Fold one opencode event into the running state (defensively: the
     event schema drifts between versions, so every access is shape-checked
@@ -1521,7 +1555,9 @@ def _fold(ev, state):
             # The event that carries a tool part is "tool_use" on current builds
             # and "message.part.updated" (or similar …updated) on older ones.
             if et == "tool_use" or et.endswith("updated"):
-                tool = str(part.get("tool") or "tool")
+                # 1.18 named the tool under `tool`; v2 moved it to `name` (the
+                # field its session export carries), so read whichever is set.
+                tool = str(part.get("name") or part.get("tool") or "tool")
                 st = part.get("state") if isinstance(part.get("state"), dict) else {}
                 arg = str(st.get("title") or st.get("input") or "")[:80]
                 # tool_use on first sighting — the transcript shows the call
@@ -1544,6 +1580,8 @@ def _fold(ev, state):
                         state["done_tool"].add(pid)
                         harness.progress(f"{tool}: {arg}" if arg else tool)
                         out = st.get("output")
+                        if out is None:
+                            out = _tool_result_text(st)
                         harness.emit_event(
                             "tool_result", tool_use_id=pid,
                             is_error=st.get("status") == "error",

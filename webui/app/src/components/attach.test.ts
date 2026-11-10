@@ -10,6 +10,7 @@ import {
   exportFilename,
   isBinaryRef,
   isImageFile,
+  splitFileRef,
   withAttachments,
 } from './attach.ts'
 import { setLocale } from '../i18n/index.ts'
@@ -143,8 +144,49 @@ test('exportMarkdown renders roles and thought details', async () => {
   assert.match(md, /<details><summary>thought<\/summary>\n\nhmm\n<\/details>/)
 })
 
+test('exportMarkdown renders a report head instead of the wire prefix', async () => {
+  await setLocale('en')
+  const md = exportMarkdown(
+    [
+      { role: 'user', text: 'test the harness' },
+      { role: 'assistant', text: '[failed] @codex · 连通性自检\n\nunexpected argument' },
+      { role: 'assistant', text: '[done] 没写代理的收尾' },
+    ],
+    {},
+  )
+  // The brackets are protocol; a reader gets a bold line naming the state.
+  assert.match(md, /\*\*failed\*\* · @codex · 连通性自检\n\nunexpected argument/)
+  assert.doesNotMatch(md, /\[failed\]/)
+  // No agent leg, only a title: still one readable line.
+  assert.match(md, /\*\*done\*\* · 没写代理的收尾/)
+  assert.doesNotMatch(md, /\[done\]/)
+})
+
+test('exportMarkdown leaves ordinary prose alone', async () => {
+  await setLocale('en')
+  const md = exportMarkdown([{ role: 'assistant', text: '[注意] 这不是状态\n第二行' }], {})
+  assert.match(md, /\[注意\] 这不是状态\n第二行/)
+})
+
 test('exportFilename sanitizes and falls back', () => {
   assert.equal(exportFilename('My Chat!'), 'My-Chat.md')
   assert.equal(exportFilename(''), 'chat.md')
   assert.equal(exportFilename(null), 'chat.md')
+})
+
+test('splitFileRef keeps the line anchor on the label, not on the @path', () => {
+  // The files dock inserts "src/app.tsx:42" when a line is focused. Sending
+  // that whole string would make expandFileRefs read a file that cannot exist.
+  assert.deepEqual(splitFileRef('src/app.tsx:42'), { path: 'src/app.tsx', label: 'app.tsx:42' })
+  assert.deepEqual(splitFileRef('pelican-bike.html'), {
+    path: 'pelican-bike.html',
+    label: 'pelican-bike.html',
+  })
+  assert.deepEqual(splitFileRef('a/b/README'), { path: 'a/b/README', label: 'README' })
+  // A Windows drive letter is a colon too, but only a trailing :digits is an
+  // anchor — the rest has to stay in the path.
+  assert.deepEqual(splitFileRef('C:\\work\\main.go:7'), {
+    path: 'C:\\work\\main.go',
+    label: 'main.go:7',
+  })
 })

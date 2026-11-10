@@ -237,3 +237,48 @@ func TestDiscoverAndInstall(t *testing.T) {
 		t.Errorf("expected error for nonexistent skill")
 	}
 }
+
+// CuratedSkills is the only source of the built-in SKILL.md bodies, but its
+// Content field is a hand-written string. A YAML typo there used to be skipped
+// silently by EnsureBuiltins: the skill simply never appeared. Pin the whole
+// catalog so every template parses and agrees with its catalog row.
+func TestCuratedSkillTemplatesAreConsistent(t *testing.T) {
+	for _, cur := range CuratedSkills {
+		sk, err := ParseSkill([]byte(cur.Content))
+		if err != nil {
+			t.Errorf("built-in %q has an invalid template: %v", cur.Name, err)
+			continue
+		}
+		if sk.Name != cur.Name || sk.Description != cur.Description {
+			t.Errorf("built-in %q template disagrees with catalog: name=%q description=%q", cur.Name, sk.Name, sk.Description)
+		}
+		if len(cur.Triggers) == 0 {
+			t.Errorf("built-in %q has no curated triggers", cur.Name)
+		}
+		if cur.Alias != "" && ResolveSkillAlias(cur.Alias) != cur.Name {
+			t.Errorf("built-in %q alias %q does not resolve back", cur.Name, cur.Alias)
+		}
+	}
+}
+
+// SearchHub used to return catalog order among entries whose text contained
+// every query token, which made DiscoverAndInstall install whichever skill
+// was listed first rather than the most relevant one.
+func TestSearchHubRanksByRelevance(t *testing.T) {
+	idx := &HubIndex{Skills: []HubSkill{
+		{Name: "k8s-helper", Description: "Misc Kubernetes helpers", Tags: []string{"k8s", "deploy"}},
+		{Name: "kubernetes-deploy", Description: "Deploy to Kubernetes", Tags: []string{"k8s", "deploy"},
+			Triggers: []string{"kubernetes", "deploy", "部署"}},
+	}}
+	res := SearchHub(idx, "kubernetes deploy")
+	if len(res) != 2 {
+		t.Fatalf("expected both candidates, got %d", len(res))
+	}
+	if res[0].Name != "kubernetes-deploy" {
+		t.Errorf("top match = %q, want the name/trigger-weighted skill", res[0].Name)
+	}
+	// Curated triggers are bilingual: a Chinese query still reaches the entry.
+	if res := SearchHub(idx, "部署"); len(res) == 0 || res[0].Name != "kubernetes-deploy" {
+		t.Errorf("Chinese trigger did not reach the catalog entry: %v", res)
+	}
+}

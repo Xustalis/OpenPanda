@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"testing"
 	"time"
 
@@ -261,5 +262,23 @@ func TestPairSASDeterministicAndBinding(t *testing.T) {
 	}
 	if c2 := pairSAS(b, a, p1, p2, n1, n2, dh); c2 == c1 {
 		t.Fatal("SAS did not bind key ordering")
+	}
+}
+
+// TestClassifyPairReadError pins the pairing expiry contract. The responder
+// closes the conn at its own TTL, before our longer context deadline, so only
+// a waited-out read failure may be called "expired"; an early dropped socket
+// must stay a transport error.
+func TestClassifyPairReadError(t *testing.T) {
+	netErr := errors.New("read tcp 10.0.0.1: i/o timeout")
+	if got := classifyPairReadError(netErr, 5*time.Second, pairSessionTTL); got != netErr {
+		t.Fatalf("early failure = %v, want the original error", got)
+	}
+	got := classifyPairReadError(netErr, pairSessionTTL, pairSessionTTL)
+	if !errors.Is(got, ErrPairExpired) || !errors.Is(got, netErr) {
+		t.Fatalf("TTL failure = %v, want ErrPairExpired wrapping its cause", got)
+	}
+	if classifyPairReadError(nil, pairSessionTTL, pairSessionTTL) != nil {
+		t.Fatal("nil error must stay nil")
 	}
 }

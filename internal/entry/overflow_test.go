@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/Xustalis/OpenPanda/internal/config"
 )
 
 // TestIsContextOverflowError pins the narrow verdict: only a 400/413/414 whose
@@ -58,5 +60,35 @@ func TestIsContextOverflowError(t *testing.T) {
 				t.Fatalf("IsContextOverflowError(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestUnknownProviderMaxTokensIsBounded pins the other half of the overflow
+// defence: a self-hosted/aggregator route with no tuning entry used to pass a
+// config-declared 125000-token completion cap straight to the provider, which
+// rejects the request before generating anything. Only the unknown-provider
+// case is bounded; a provider the tuning table knows keeps its own ceiling.
+func TestUnknownProviderMaxTokensIsBounded(t *testing.T) {
+	base := config.ModelConfig{
+		APIType: "openai", BaseURL: "https://example.invalid/v1",
+		APIKey: "sk-test", Model: "unlisted-local-model", ContextWindow: 1000000,
+	}
+	optimistic := base
+	optimistic.MaxTokens = 125000
+	c, err := NewClient(optimistic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.maxTokens != absoluteMaxTokens {
+		t.Fatalf("maxTokens = %d, want the defensive ceiling %d", c.maxTokens, absoluteMaxTokens)
+	}
+	modest := base
+	modest.MaxTokens = 8192
+	c2, err := NewClient(modest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.maxTokens != 8192 {
+		t.Fatalf("a sane configured cap was rewritten: %d", c2.maxTokens)
 	}
 }

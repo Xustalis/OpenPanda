@@ -308,23 +308,27 @@ export function DiscoverSheet(props: {
 /** The collector's reason, in the person's words. A note that is a stable
  *  token (`cli-login`) is translated; anything else is the collector's own
  *  sentence — an endpoint's refusal reads better verbatim than paraphrased. */
-function noteLabel(c: DiscoveredModel): string {
+export function noteLabel(c: DiscoveredModel): string {
   if (c.note === 'cli-login') return t('models.discover.note.cliLogin')
   if (c.note === 'no-endpoint') return t('models.discover.note.noEndpoint')
+  // The free tier is a grant inside OpenCode's own client: the API answers
+  // 429 for every outside call, so the row says that instead of "no key".
+  if (c.note === 'opencode-free') return t('models.discover.note.freeClientOnly')
   return c.note ?? ''
 }
 
 /** The long form of a note, for a row that cannot be ticked: what is missing
  *  and what to do instead. Empty for a note that already says everything. */
-function noteHint(c: DiscoveredModel): string {
+export function noteHint(c: DiscoveredModel): string {
   if (c.note === 'cli-login') return t('models.discover.note.cliLoginHint')
+  if (c.note === 'opencode-free') return t('models.discover.note.freeClientOnlyHint')
   return ''
 }
 
 /** Where a row's key comes from, in the person's words. The reference itself is
  *  a server-side name; only the env variable's name is worth showing, because
  *  that is the thing a person can go check. */
-function keyLabel(c: DiscoveredModel): string {
+export function keyLabel(c: DiscoveredModel): string {
   const ref = c.key_ref ?? ''
   // A literal from a config file that is not shaped like a secret: the row
   // still sends it (such a proxy rejects a request without the header), but it
@@ -336,7 +340,7 @@ function keyLabel(c: DiscoveredModel): string {
   return c.no_auth ? t('models.discover.key.none') : ''
 }
 
-function fmtTokens(n: number): string {
+export function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
   if (n >= 1000) return `${Math.round(n / 1000)}K`
   return String(n)

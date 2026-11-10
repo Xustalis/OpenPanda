@@ -25,7 +25,7 @@ loadLocale(locale())
   })
 
 // PWA: register the service worker for offline shell reloads and Web Push
-// (reminder notifications). The SW never caches /api/*, so live data stays
+// (approval notifications). The SW never caches /api/*, so live data stays
 // live; navigations are network-first, so a fresh deploy always wins.
 // `updateViaCache: 'none'` forces the browser to revalidate sw.js itself on
 // every update check instead of trusting its HTTP cache. Loopback is a

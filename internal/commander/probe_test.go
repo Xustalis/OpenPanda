@@ -16,6 +16,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/pyexec"
 )
 
@@ -808,5 +809,83 @@ func TestAgentUsableDeadlineDoesNotBlock(t *testing.T) {
 	})
 	if ok, reason := r.agentUsable("codex", usableAgent("codex.py")); ok {
 		t.Fatalf("a refused connect must still disqualify, got usable with reason %q", reason)
+	}
+}
+
+// TestProbeSendsProviderSessionHeader: gateways that route and cache by
+// conversation answer 400 MissingSessionID to a request without their session
+// header — OpenCode's Go surface does exactly that. A probe that omits the
+// header reported "http 400" for a perfectly working endpoint, which doctor
+// then painted green. Pin both halves: the header goes out, and the same
+// server turns reachable once it arrives.
+func TestProbeSendsProviderSessionHeader(t *testing.T) {
+	resetEndpointProbeCache()
+	orig := providerDetect
+	t.Cleanup(func() { providerDetect = orig })
+	providerDetect = func(baseURL, model string) (providers.Provider, bool) {
+		return providers.Provider{ID: "opencode-go", SessionHeader: "x-opencode-session"}, true
+	}
+
+	var gotSession string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSession = r.Header.Get("x-opencode-session")
+		if gotSession == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"type":"MissingSessionID"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	v := modelProbe(ProbeSpec{
+		Endpoint: srv.URL, APIType: config.APITypeOpenAI,
+		APIKey: "sk-test", Model: "deepseek-v4.1-flash", KeyDefinitive: true,
+	})
+	if !strings.HasPrefix(gotSession, "ses_") {
+		t.Fatalf("probe session header = %q, want a ses_ value", gotSession)
+	}
+	if !v.OK || v.Status != http.StatusOK {
+		t.Fatalf("verdict = ok:%v status:%d detail:%q, want a 200 once the header is sent",
+			v.OK, v.Status, v.Detail)
+	}
+}
+
+// TestProbeSessionHeaderDetection pins the mapping the header rides on, using
+// the endpoint that motivated it: a "custom"-shaped base URL pointed at a known
+// gateway must still be recognised. No network — this is the catalogue lookup.
+func TestProbeSessionHeaderDetection(t *testing.T) {
+	if got := probeSessionHeader(ProbeSpec{
+		Endpoint: "https://opencode.ai/zen/go/v1", Model: "deepseek-v4.1-flash",
+	}); got != "x-opencode-session" {
+		t.Fatalf("opencode-go session header = %q, want x-opencode-session", got)
+	}
+	if got := probeSessionHeader(ProbeSpec{
+		Endpoint: "https://api.example.invalid/v1", Model: "m",
+	}); got != "" {
+		t.Fatalf("unknown endpoint session header = %q, want empty", got)
+	}
+}
+
+// TestProbeClientErrorKeepsStatus: the verdict stays reachable on a 4xx (a
+// harness may run a model the probe never names), but the status must survive
+// so a diagnostic can say "answered, refused the request" instead of printing
+// a bare "http 400" next to a tick.
+func TestProbeClientErrorKeepsStatus(t *testing.T) {
+	resetEndpointProbeCache()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+
+	v := modelProbe(ProbeSpec{
+		Endpoint: srv.URL, APIType: config.APITypeOpenAI, APIKey: "sk-test",
+		Model: "m", KeyDefinitive: true,
+	})
+	if !v.OK {
+		t.Fatalf("a 400 must stay reachable for routing, got %+v", v)
+	}
+	if v.Status != http.StatusBadRequest {
+		t.Fatalf("verdict status = %d, want 400", v.Status)
 	}
 }

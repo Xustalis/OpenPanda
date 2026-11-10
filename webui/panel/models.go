@@ -34,9 +34,13 @@ import (
 // modelEntryJSON is the wire form of one registered (or active) model. The
 // API key is never returned — only whether one is stored and a masked tail.
 type modelEntryJSON struct {
-	Alias          string `json:"alias"`
-	Provider       string `json:"provider,omitempty"`
-	ProviderLabel  string `json:"provider_label,omitempty"`
+	Alias         string `json:"alias"`
+	Provider      string `json:"provider,omitempty"`
+	ProviderLabel string `json:"provider_label,omitempty"`
+	// Source is the discovery collector this row was imported from ("codex" |
+	// "claude" | "opencode" | "local"), empty for a hand-written row. The
+	// console names the connection after it and marks it as imported.
+	Source         string `json:"source,omitempty"`
 	APIType        string `json:"api_type"`
 	BaseURL        string `json:"base_url"`
 	Model          string `json:"model"`
@@ -53,6 +57,10 @@ type modelEntryJSON struct {
 	// instead of an api_key when the row was imported from another tool's
 	// config: the secret stays where it already was.
 	KeyEnv string `json:"key_env,omitempty"`
+	// KeyRef names a credential another application owns ("ccswitch:claude:<id>").
+	// Reported so the console can say where the key comes from instead of
+	// painting the row as keyless; the value itself never reaches the panel.
+	KeyRef string `json:"key_ref,omitempty"`
 	// Auth names a subscription credential (internal/auth) the row signs in
 	// with instead of a key — today only "codex", whose token is the CLI's own
 	// login. The console shows it so a row with no api_key does not read as
@@ -111,6 +119,11 @@ func fingerprintSource(mc config.ModelConfig) string {
 	if mc.APIKey != "" {
 		return mc.APIKey
 	}
+	// A reference is the row's identity too: two rows naming the same
+	// credential are one account, and the digest never needs the secret.
+	if mc.KeyRef != "" {
+		return "ref:" + mc.KeyRef
+	}
 	if mc.KeyEnv != "" {
 		return "env:" + mc.KeyEnv
 	}
@@ -130,6 +143,7 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 	e := modelEntryJSON{
 		Alias:          mc.Alias(),
 		Provider:       mc.Provider,
+		Source:         mc.Source,
 		APIType:        mc.NormalizedAPIType(),
 		BaseURL:        mc.BaseURL,
 		Model:          mc.Model,
@@ -139,10 +153,11 @@ func modelEntryOf(mc config.ModelConfig, active config.ModelConfig) modelEntryJS
 		ThinkingBudget: mc.ThinkingBudget,
 		MaxRetries:     mc.MaxRetries,
 		NoAuth:         mc.NoAuth || (known && p.NoAuth),
-		KeySet:         mc.APIKey != "" || envKeySet(mc) || mc.Auth != "",
+		KeySet:         mc.APIKey != "" || envKeySet(mc) || mc.Auth != "" || mc.KeyRef != "",
 		Auth:           mc.Auth,
 		KeyHint:        maskKey(mc.APIKey),
 		KeyEnv:         mc.KeyEnv,
+		KeyRef:         mc.KeyRef,
 		KeyFingerprint: keyFingerprint(fingerprintSource(mc)),
 		AllowPlaintext: mc.AllowPlaintext,
 		ContextAuto:    mc.ContextWindow == 0,

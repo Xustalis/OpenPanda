@@ -15,6 +15,7 @@ import { ModelPicker } from '../components/model-picker'
 import { useModalFocus } from '../components/modal-focus'
 import { ProviderCard } from '../components/provider-card'
 import { onboardingGate } from '../utils/onboarding'
+import { MODEL_SAVED_EVENT, notifyModelSaved } from '../model-events'
 import { needsPlaintextConsent } from './model-endpoint'
 import { GuideStep } from './onboarding-guide'
 
@@ -24,14 +25,6 @@ import { GuideStep } from './onboarding-guide'
 // The web console runs the same four steps in a wizard modal, persisting
 // each answer through POST /api/onboarding so a browser-first install lands
 // in the same configured state as a terminal one.
-
-/** Window event fired after a successful model-settings save — from this
- *  wizard or the settings page — so the gate re-checks and hides itself. */
-export const MODEL_SAVED_EVENT = 'openpanda:model-saved'
-
-export function notifyModelSaved(): void {
-  window.dispatchEvent(new CustomEvent(MODEL_SAVED_EVENT))
-}
 
 type Step = 'language' | 'terms' | 'guide' | 'approval' | 'model'
 const STEPS: Step[] = ['language', 'terms', 'guide', 'approval', 'model']

@@ -196,6 +196,13 @@ func runWeb(args []string) {
 	// the node looks healthy while being permanently unreachable.
 	selfID := core.RuntimeNodeID(cfg.Node.Name, cfg.Node.Kind, cfg.Node.EffectiveIdentity())
 	ensureSharedSecret(cfg, db, selfID, resolvedConfigPath(*configPath), logger)
+	// Publish the same mesh-secret evidence runDaemon does. A standalone
+	// console IS the mesh endpoint; without this line an operator comparing
+	// two startup logs sees a fingerprint on one side and nothing on the
+	// other, and mistakes an auth refusal for a network fault.
+	logger.Info("web mesh endpoint started",
+		"node", selfID, "secret_fp", core.MeshSecretFingerprint(cfg.Network.SharedSecret),
+		"listen", cfg.Network.ListenAddr, "exposure", cfg.Network.Exposure())
 
 	// Optional ask engine behind a reloadable holder — same contract as the
 	// REPL: without a model endpoint the console still serves
@@ -227,6 +234,18 @@ func runWeb(args []string) {
 		fatal("init ask engine", err)
 	}
 	defer engines.Close()
+
+	// The console writes network.peers itself (nodes add / pair), but another
+	// surface — `panda nodes add`, a hand-edited config.yaml, or a daemon that
+	// joined later — only changes the file. A standalone console is the row
+	// owner and therefore the process that must reconcile the dial set, so it
+	// needs the same file observer runDaemon has. Without it a peer added out
+	// of process shows up in the directory while the scheduler holds no track
+	// to it, and every task pinned there parks in task_outbox forever.
+	guard.Go(logger, "web: network config sync", cancel, func() {
+		runNetworkSync(ctx, logger, *configPath,
+			engineNetworkApplier{holder: engines}, cfg.Network)
+	})
 
 	// Web Push (optional): reminder notifications go straight to the browser
 	// when a subscription exists.

@@ -33,13 +33,17 @@ import {
   type AskStatusEvent,
   type ClarifyAnswer,
   type ClarifySpec,
+  type SideChatSummary,
   type SideConversation,
 } from '../api/client'
-import { t } from '../i18n'
+import { locale, t } from '../i18n'
+import { relativeTime } from '../format/time'
 import { Markdown } from '../md/render'
 import { Icon } from './icons'
 import { MessageCopyButton } from './copy'
 import { ClarifyCard } from './clarify-card'
+import { confirmDialog } from './confirm'
+import { toastError } from './toast'
 
 interface Line {
   id: number
@@ -63,6 +67,14 @@ export interface SideChatProps {
   sessionId: string | null
   /** Bumped by the panel's `+`: start a fresh conversation. */
   resetSignal?: number
+  /** `+` opened this pane for the first time, from another pane. An epoch bump
+   *  cannot be seen by a component that did not exist when it happened, so
+   *  the fresh start arrives as a mount-time flag instead. Read once. */
+  freshStart?: boolean
+  /** Bumped when the reader returns to this tab. The pane stays mounted, so
+   *  re-read the thread's stored side conversation instead of showing a stale
+   *  one. A tab switch is never a new conversation — only `+` is. */
+  reloadSignal?: number
   /** Put a reply into the composer — the one crossing back into the thread. */
   onInsert(text: string): void
   /** Open a task the side answer dispatched. */
@@ -101,6 +113,11 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
+/** The history rows carry unix seconds; relativeTime wants an ISO stamp. */
+function isoOf(ts?: number): string {
+  return ts ? new Date(ts * 1000).toISOString() : ''
+}
+
 /** Task ids are UUIDv7 strings; the first segment is enough to recognize one
  *  in a chip, and the full id stays in the title. */
 function shortId(id: string): string {
@@ -109,6 +126,12 @@ function shortId(id: string): string {
 
 export function SideChat(props: SideChatProps) {
   const [lines, setLines] = useState<Line[]>([])
+  // The conversations beside this thread, newest first, and the one on
+  // screen. The list is the pane's history: `+` adds a row, the trash drops
+  // one, and picking a row swaps the transcript without touching the thread.
+  const [chats, setChats] = useState<SideChatSummary[]>([])
+  const [activeId, setActiveId] = useState('')
+  const [listOpen, setListOpen] = useState(false)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   // attached: this pane holds the live SSE stream. When false and busy is
@@ -129,8 +152,17 @@ export function SideChat(props: SideChatProps) {
   // The side operation this pane is following, from the live stream or from the
   // stored operation on load. Stop names it to the cancel endpoint.
   const opID = useRef('')
+  // The reload effect must not read stale render state: while an answer is
+  // streaming (or being followed in the background) the pane's lines are
+  // newer than the stored transcript, so a re-read would erase them.
+  const liveState = useRef({ busy: false, attached: false, loaded: false })
+  liveState.current = { busy, attached, loaded }
 
   const applyConversation = (conv: SideConversation) => {
+    setChats(conv.chats ?? [])
+    // `chat` names the transcript in this payload; `active` is the stored
+    // pointer, which a read for a specific chat deliberately does not move.
+    setActiveId(conv.chat ?? conv.active ?? '')
     setLines((conv.turns ?? []).map((turn) => ({
       id: ++seq,
       role: turn.role,
@@ -155,25 +187,45 @@ export function SideChat(props: SideChatProps) {
     setLoaded(true)
   }
 
-  const loadSide = async (id: string) => {
+  const loadSide = async (id: string, chatID?: string) => {
     try {
-      applyConversation(await api.sideConversation(id))
+      applyConversation(await api.sideConversation(id, chatID))
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
       setLoaded(true)
     }
   }
 
-  // A new thread loads its own stored conversation; the pane's `+` clears the
-  // server-side one. The old answers were about a different thread (or a
-  // conversation the user deliberately cleared), and keeping them would be a
-  // lie about what they saw.
+  // refreshList re-reads only the history rows — the transcript on screen is
+  // newer than the stored one while an answer streams, so a full re-read here
+  // would erase the reply the reader is watching.
+  const refreshList = async (id: string) => {
+    try {
+      const conv = await api.sideConversation(id)
+      setChats(conv.chats ?? [])
+      setActiveId((cur) => cur || conv.chat || conv.active || '')
+    } catch {
+      /* the list is an index; a failed read must not disturb the transcript */
+    }
+  }
+
+  // A new thread loads its own stored conversations; the pane's `+` starts
+  // another one beside this thread. The old answers were about a different
+  // thread (or a conversation the user deliberately left), and keeping them on
+  // screen would be a lie about what they are reading.
   const seen = useRef<{ session: string | null; reset?: number }>()
+  // A `+` pressed on a tool page or the start state both opens this pane and
+  // asks for a new conversation. The epoch moves in the same render that
+  // mounts the pane, so there is no earlier value to compare it with; the
+  // mount flag is the only way to tell "new" from "reopen". Consumed once,
+  // so a later thread switch still loads that thread's stored conversation.
+  const freshOnMount = useRef(props.freshStart === true)
   useEffect(() => {
     const before = seen.current
     seen.current = { session: props.sessionId, reset: props.resetSignal }
     const sameThread = before?.session === props.sessionId
-    const reset = sameThread && before?.reset !== props.resetSignal
+    const reset = freshOnMount.current || (sameThread && before?.reset !== props.resetSignal)
+    freshOnMount.current = false
     run.current++
     abort.current?.abort()
     abort.current = null
@@ -186,13 +238,18 @@ export function SideChat(props: SideChatProps) {
     setClarify(null)
     if (!props.sessionId) {
       setLines([])
+      setChats([])
+      setActiveId('')
       setLoaded(true)
       return
     }
     if (reset) {
+      // `+` opens another conversation rather than discarding the one on
+      // screen: the transcript stays in the history list, one click away.
       setLines([])
       setLoaded(true)
-      void api.resetSideConversation(props.sessionId)
+      setListOpen(false)
+      void api.newSideChat(props.sessionId)
         .then(applyConversation)
         .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
       return
@@ -200,6 +257,21 @@ export function SideChat(props: SideChatProps) {
     setLoaded(false)
     void loadSide(props.sessionId)
   }, [props.sessionId, props.resetSignal])
+
+  // Coming back to the 对话 tab shows the conversation the pane was reading —
+  // its stored transcript, not a fresh one. `+` (resetSignal) is the only thing
+  // that starts a new side chat. Never interrupt a live answer.
+  const seenReload = useRef(props.reloadSignal)
+  const activeRef = useRef('')
+  activeRef.current = activeId
+  useEffect(() => {
+    const n = props.reloadSignal
+    if (n === undefined || n === seenReload.current) return
+    seenReload.current = n
+    const s = liveState.current
+    if (!props.sessionId || !s.loaded || s.busy || s.attached) return
+    void loadSide(props.sessionId, activeRef.current || undefined)
+  }, [props.reloadSignal, props.sessionId])
 
   // A background answer: the pane is not holding the stream, so follow the
   // stored operation until it settles and the conversation comes back whole.
@@ -226,6 +298,19 @@ export function SideChat(props: SideChatProps) {
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80
     if (near) el.scrollTop = el.scrollHeight
   }, [lines])
+
+  // The field is one line at rest and grows with the text. A fixed two-row
+  // textarea parked a short question at the top of a tall empty box while the
+  // Send button sat alone at the bottom — the footer read as two unrelated
+  // controls. Measuring on every value change also covers the starter chips
+  // and the clear after sending, which do not go through onInput.
+  const fitInput = () => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+  }
+  useEffect(fitInput, [input])
 
   const patchLast = (text: string, done = false) =>
     setLines((prev) => {
@@ -291,6 +376,10 @@ export function SideChat(props: SideChatProps) {
       await askSideStream(
         id,
         prompt,
+        // The question belongs to the conversation on screen. With none (a
+        // thread that never had a side chat) the server mints one, and the
+        // list refresh below picks up its title.
+        { chat: activeId },
         {
           onReasoning: () => {},
           onDelta: (d) => {
@@ -354,7 +443,59 @@ export function SideChat(props: SideChatProps) {
         setAttached(false)
         setStatus('')
         abort.current = null
+        // The answer changed this chat's row (title, turn count, clock) and a
+        // first question may have created it; re-read the index so the history
+        // matches what is on screen.
+        void refreshList(id)
       }
+    }
+  }
+
+  // pick swaps the transcript without disturbing the thread. A live answer in
+  // the chat being left keeps running server-side — its row says so, and
+  // coming back re-attaches to it.
+  function pick(chatID: string) {
+    setListOpen(false)
+    const id = props.sessionId
+    if (!id || chatID === activeId) return
+    run.current++
+    abort.current?.abort()
+    abort.current = null
+    opID.current = ''
+    setBusy(false)
+    setAttached(false)
+    setStatus('')
+    setErr('')
+    setClarify(null)
+    setInput('')
+    setLines([])
+    void api.selectSideChat(id, chatID)
+      .then(applyConversation)
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
+  }
+
+  // remove drops one conversation. Deleting the one on screen falls back to
+  // the next newest, which the server returns in the same response.
+  async function remove(chatID: string) {
+    const id = props.sessionId
+    if (!id) return
+    const ok = await confirmDialog({
+      title: t('side.deleteChat'),
+      message: t('side.deleteChatBody'),
+      confirmLabel: t('side.deleteChat'),
+    })
+    if (!ok) return
+    run.current++
+    abort.current?.abort()
+    abort.current = null
+    opID.current = ''
+    setBusy(false)
+    setAttached(false)
+    setStatus('')
+    try {
+      applyConversation(await api.deleteSideChat(id, chatID))
+    } catch (e) {
+      toastError(e)
     }
   }
 
@@ -403,6 +544,53 @@ export function SideChat(props: SideChatProps) {
 
   return (
     <div class="side-chat">
+      {/* The history of this thread's side conversations. It sits above the
+          transcript rather than behind a menu: a conversation you cannot find
+          again is a conversation you will not start, and the whole point of
+          the list is that `+` no longer throws the last one away. */}
+      {props.sessionId && (
+        <div class={`side-history${listOpen ? ' is-open' : ''}`}>
+          <button
+            type="button"
+            class="side-history-head"
+            aria-expanded={listOpen}
+            aria-label={t('side.history')}
+            title={t('side.history')}
+            onClick={() => setListOpen((open) => !open)}
+          >
+            <Icon name="message" size={14} />
+            <span class="side-history-label">{t('side.history')}</span>
+            <span class="side-history-count mono">{chats.length}</span>
+            <Icon name="chevron-down" size={14} class="side-history-caret" />
+          </button>
+          {listOpen && (
+            <div class="side-history-list">
+              {chats.length === 0 && <p class="side-history-empty">{t('side.historyEmpty')}</p>}
+              {chats.map((c) => (
+                <div class={`side-history-row${c.id === activeId ? ' is-active' : ''}`} key={c.id}>
+                  <button type="button" class="side-history-pick" onClick={() => pick(c.id)}>
+                    <span class="side-history-title">{c.title || t('side.untitled')}</span>
+                    <span class="side-history-meta">
+                      {c.running ? t('side.answering') : relativeTime(isoOf(c.updated_at), locale())}
+                      <span aria-hidden="true"> · </span>
+                      {t('side.turns', { n: c.turns })}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    class="side-history-del"
+                    aria-label={t('side.deleteChat')}
+                    title={t('side.deleteChat')}
+                    onClick={() => void remove(c.id)}
+                  >
+                    <Icon name="trash" size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div class="side-scroll" ref={logRef}>
         {loaded && lines.length === 0 && !busy && (
           <div class="side-empty">
@@ -443,71 +631,86 @@ export function SideChat(props: SideChatProps) {
 
         {lines.map((l, i) => (
           <div class={`side-turn is-${l.role}`} key={l.id}>
-            <div class="side-who">{l.role === 'user' ? t('side.you') : t('side.panda')}</div>
             {l.role === 'user' ? (
+              // Your own turn is a bubble on the right, with no face and no
+              // label — the same rule the thread keeps. Two voices told apart
+              // by position alone is the one distinction a reader never has
+              // to decode.
               <p class="side-q">{l.text}</p>
             ) : (
               <>
-                {l.text && !(l.error && l.text.startsWith('⚠')) ? (
-                  <Markdown text={l.text} class="side-md" streaming={Boolean(l.live)} />
-                ) : !l.live && !l.error && !l.taskId ? (
-                  <p class="side-typing dim">{t('side.thinking')}</p>
-                ) : null}
-                {l.error && <p class="side-err">{l.error}</p>}
-                {l.taskId && (
-                  <div class="side-task-row">
-                    {props.onOpenTask ? (
+                {/* The panda keeps a face. In a 320px pane the head is the
+                    only thing that still reads at a glance; a bare name in
+                    10px type did not. */}
+                <div class="side-head">
+                  <img class="side-ava" src="/panda-avatar.png?v=1" alt="" width={20} height={20} />
+                  <span class="side-name">{t('side.panda')}</span>
+                </div>
+                <div class="side-body">
+                  {l.text && !(l.error && l.text.startsWith('⚠')) ? (
+                    <Markdown text={l.text} class="side-md" streaming={Boolean(l.live)} />
+                  ) : !l.live && !l.error && !l.taskId && !(l.tools && l.tools.length) ? (
+                    // A stored answer that carried nothing but tool calls has
+                    // no prose left after the server strips its markup; its
+                    // chips are the whole record, not a missing answer.
+                    <p class="side-typing dim">{t('side.thinking')}</p>
+                  ) : null}
+                  {l.error && <p class="side-err">{l.error}</p>}
+                  {l.taskId && (
+                    <div class="side-task-row">
+                      {props.onOpenTask ? (
+                        <button
+                          type="button"
+                          class="side-task"
+                          title={l.taskId}
+                          onClick={() => props.onOpenTask?.(l.taskId!)}
+                        >
+                          {t('side.task')} <span class="side-task-id">{shortId(l.taskId)}</span>
+                        </button>
+                      ) : (
+                        <span class="side-task" title={l.taskId}>
+                          {t('side.task')} <span class="side-task-id">{shortId(l.taskId)}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {l.tools && l.tools.length > 0 && (
+                    <div class="side-tools">
+                      <span class="side-tools-label">{t('side.tools')}</span>
+                      {l.tools.map((tool, k) => (
+                        <span class="side-tool" key={k} title={tool}>
+                          {tool}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {!l.live && l.text && (
+                    <div class="side-acts">
+                      <MessageCopyButton text={l.text} markdown />
+                      <button type="button" class="link-btn" onClick={() => props.onInsert(l.text)}>
+                        {t('side.insert')}
+                      </button>
                       <button
                         type="button"
-                        class="side-task"
-                        title={l.taskId}
-                        onClick={() => props.onOpenTask?.(l.taskId!)}
+                        class="link-btn"
+                        onClick={() => {
+                          // Hand the question back, with what this channel already
+                          // found. The main thread would otherwise redo the same
+                          // reading; carrying the answer forward is the explicit
+                          // bridge back that the isolation is supposed to have.
+                          const q = lines[i - 1]?.role === 'user' ? lines[i - 1]!.text : ''
+                          if (!q) return
+                          props.onInsert(l.text ? `${q}\n\n${t('side.carry')}\n${l.text}` : q)
+                        }}
                       >
-                        {t('side.task')} <span class="side-task-id">{shortId(l.taskId)}</span>
+                        {t('side.toMain')}
                       </button>
-                    ) : (
-                      <span class="side-task" title={l.taskId}>
-                        {t('side.task')} <span class="side-task-id">{shortId(l.taskId)}</span>
-                      </span>
-                    )}
-                  </div>
-                )}
-                {l.tools && l.tools.length > 0 && (
-                  <div class="side-tools">
-                    <span class="side-tools-label">{t('side.tools')}</span>
-                    {l.tools.map((tool, k) => (
-                      <span class="side-tool" key={k} title={tool}>
-                        {tool}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {!l.live && l.text && (
-                  <div class="side-acts">
-                    <MessageCopyButton text={l.text} markdown />
-                    <button type="button" class="link-btn" onClick={() => props.onInsert(l.text)}>
-                      {t('side.insert')}
-                    </button>
-                    <button
-                      type="button"
-                      class="link-btn"
-                      onClick={() => {
-                        // Hand the question back, with what this channel already
-                        // found. The main thread would otherwise redo the same
-                        // reading; carrying the answer forward is the explicit
-                        // bridge back that the isolation is supposed to have.
-                        const q = lines[i - 1]?.role === 'user' ? lines[i - 1]!.text : ''
-                        if (!q) return
-                        props.onInsert(l.text ? `${q}\n\n${t('side.carry')}\n${l.text}` : q)
-                      }}
-                    >
-                      {t('side.toMain')}
-                    </button>
-                    {l.tokens ? (
-                      <span class="side-tokens dim">{formatTokens(l.tokens)} tokens</span>
-                    ) : null}
-                  </div>
-                )}
+                      {l.tokens ? (
+                        <span class="side-tokens dim">{formatTokens(l.tokens)} tokens</span>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -538,13 +741,13 @@ export function SideChat(props: SideChatProps) {
         }}
       >
         {/* One surface, like the main composer: the field and its button live
-            inside the same rounded box. A bare textarea beside a detached
+            inside the same rounded box. A bordered textarea beside a detached
             square made the dock's footer look like two unrelated controls. */}
         <div class="side-compose-box">
           <textarea
             ref={inputRef}
             class="side-input"
-            rows={2}
+            rows={1}
             value={input}
             placeholder={t('side.placeholder')}
             disabled={!props.sessionId}
@@ -570,7 +773,7 @@ export function SideChat(props: SideChatProps) {
               title={t('sessions.send')}
               disabled={!input.trim() || !props.sessionId}
             >
-              <Icon name="send" size={15} />
+              <Icon name="send" size={16} />
             </button>
           )}
         </div>

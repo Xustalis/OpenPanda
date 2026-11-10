@@ -77,6 +77,15 @@ const (
 	autoDialTick     = 5 * time.Second
 	autoDialCooldown = 60 * time.Second
 
+	// autoDialMaxBackoff/autoDialMaxFailures bound a candidate whose dials
+	// never become an authenticated link. DialPeer returns as soon as the
+	// hello is on the wire, so a rejected hello is invisible at the call
+	// site and the old fixed cooldown retried a wrong-secret neighbour once
+	// a minute forever (137 dials / 131 rejections in 17.5h on one LAN).
+	// A fresh successful connection still clears the candidate at once.
+	autoDialMaxBackoff  = 15 * time.Minute
+	autoDialMaxFailures = 5
+
 	// discoveryRetry paces the bind retry. A failed bind used to end discovery
 	// for the whole process lifetime, which is the worst possible failure
 	// shape for a feature whose only symptom is an empty list: the port is
@@ -145,6 +154,8 @@ type autoDialCand struct {
 	lastSeen   time.Time
 	lastDial   time.Time
 	gateWarned bool
+	// failures counts consecutive dials that produced no standing link.
+	failures int
 }
 
 // Beacon is the discovery datagram's payload. Every field is self-asserted:
@@ -624,11 +635,26 @@ func (c *Core) autoDialPass(ctx context.Context) {
 			// whose beacon still arrives is dial-worthy (its row is stale,
 			// the hint is live). Only a standing connection clears a
 			// candidate — that is the branch above.
-			if now.Sub(cand.lastDial) >= autoDialCooldown {
+			// A previous dial that left no standing connection is a failed
+			// handshake even when DialPeer returned nil: it returns once the
+			// hello is on the wire and admission lands asynchronously. Count
+			// it here, where the next pass can actually see the outcome.
+			if !cand.lastDial.IsZero() && c.connFor(id) == nil && cand.failures < autoDialMaxFailures {
+				cand.failures++
+			}
+			cooldown := autoDialCooldown
+			for i := 0; i < cand.failures && cooldown < autoDialMaxBackoff; i++ {
+				cooldown *= 2
+			}
+			if cooldown > autoDialMaxBackoff {
+				cooldown = autoDialMaxBackoff
+			}
+			if now.Sub(cand.lastDial) >= cooldown {
 				cand.lastDial = now
-				c.autoDialCands[id] = cand
 				due = append(due, id)
 			}
+			// Persist the failure count even on a pass that did not dial.
+			c.autoDialCands[id] = cand
 		}
 	}
 	c.autoDialMu.Unlock()
@@ -670,6 +696,10 @@ func (c *Core) autoDialPass(ctx context.Context) {
 		// next pass's connFor check does the "auto-connected" bookkeeping if
 		// the edge stood, and a rejected hello simply retries on cooldown
 		// while the beacon keeps the row fresh.
-		c.logger.Info("discovery: auto-dialing LAN node", "id", id, "addr", cand.addr)
+		if cand.failures >= autoDialMaxFailures {
+			c.logger.Debug("discovery: auto-dialing LAN node (backed off)", "id", id, "addr", cand.addr, "failures", cand.failures)
+		} else {
+			c.logger.Info("discovery: auto-dialing LAN node", "id", id, "addr", cand.addr)
+		}
 	}
 }

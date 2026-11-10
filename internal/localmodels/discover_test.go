@@ -562,3 +562,98 @@ func TestRowSendsABearerTokenAsAuthorization(t *testing.T) {
 		t.Errorf("secret handling changed: key=%q env=%q", mc.APIKey, mc.KeyEnv)
 	}
 }
+
+// The v2 catalogue shape: providerID/modelID, the endpoint under
+// settings.baseURL, and cost as the only evidence of tier. Fixtures copied from
+// a real `opencode api model.list` on 2.0.20.
+func TestParseOpenCodeCatalogueV2(t *testing.T) {
+	raw := []byte(`{"location":{"directory":"/tmp"},"data":[
+	  {"id":"iceman-free","modelID":"iceman-free","providerID":"opencode","name":"Iceman Free",
+	   "settings":{"baseURL":"https://opencode.ai/inference/openai/v1","provider":"opencode"},
+	   "capabilities":{"tools":true,"input":["text"],"output":["text"]},
+	   "cost":[{"input":0,"output":0,"cache":{"read":0,"write":0}}],
+	   "status":"active","enabled":true,"limit":{"context":262144,"output":131072}},
+	  {"id":"gpt-6.1-sol","modelID":"gpt-6.1-sol","providerID":"opencode","name":"GPT 6.1 Sol",
+	   "settings":{"baseURL":"https://opencode.ai/inference/openai/v1","provider":"opencode"},
+	   "cost":[{"input":2,"output":10}],"status":"active","enabled":true,
+	   "limit":{"context":1050000,"output":128000}},
+	  {"id":"no-metrics","modelID":"no-metrics","providerID":"opencode","status":"active"},
+	  {"id":"disabled","modelID":"disabled","providerID":"opencode","status":"active","enabled":false},
+	  {"id":"retired","modelID":"retired","providerID":"opencode","status":"retired"},
+	  {"id":"orphan","modelID":"orphan","providerID":"","status":"active"}
+	]}`)
+
+	got := parseOpenCodeCatalogue(raw)
+	if len(got) != 3 {
+		t.Fatalf("kept %d entries, want the three servable ones: %+v", len(got), got)
+	}
+	free := got[0]
+	if free.Model() != "iceman-free" || free.Namespace() != "opencode" {
+		t.Errorf("entry = %+v", free)
+	}
+	if free.BaseURL() != "https://opencode.ai/inference/openai/v1" {
+		t.Errorf("base url = %q", free.BaseURL())
+	}
+	if !free.FreeTier() {
+		t.Error("a zero-cost entry should read as free")
+	}
+	if got[1].FreeTier() {
+		t.Error("a priced entry must not read as free")
+	}
+	// No cost block means "unpriced, unknown" — not free. Guessing free is how
+	// a paid flagship gets selected for every task.
+	if got[2].FreeTier() {
+		t.Error("an entry without cost data must not read as free")
+	}
+}
+
+func TestParseOpenCodeCatalogueRejectsForeignOutput(t *testing.T) {
+	// A 1.x build answers the api command with an error, not JSON; reading that
+	// as an empty catalogue would hide the dump that would have worked.
+	for _, raw := range []string{
+		"ERROR\n  unknown command api\n",
+		``,
+		`{"data":"not a list"}`,
+	} {
+		if got := parseOpenCodeCatalogue([]byte(raw)); len(got) != 0 {
+			t.Errorf("parseOpenCodeCatalogue(%q) = %+v", raw, got)
+		}
+	}
+}
+
+// The 1.x record keeps its endpoint under api.url and carries no status: the
+// parser must not treat a missing status as retirement.
+func TestOpenCodeLegacyRecordShape(t *testing.T) {
+	var rec ocModel
+	raw := `{"id":"deepseek-v4.1-flash-free","providerID":"opencode","name":"DeepSeek",
+	        "api":{"url":"https://opencode.ai/zen/v1"},"limit":{"context":200000}}`
+	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Model() != "deepseek-v4.1-flash-free" || rec.Namespace() != "opencode" {
+		t.Errorf("ids = %q/%q", rec.Model(), rec.Namespace())
+	}
+	if rec.BaseURL() != "https://opencode.ai/zen/v1" {
+		t.Errorf("base url = %q", rec.BaseURL())
+	}
+	if rec.Retired() {
+		t.Error("a record without a status is not retired")
+	}
+}
+
+func TestOpenCodeGateway(t *testing.T) {
+	cases := map[string]bool{
+		"https://opencode.ai/inference/openai/v1": true,
+		"https://opencode.ai/zen/v1":              true,
+		"https://api.opencode.ai/v1":              true,
+		"http://127.0.0.1:4096/v1":                false,
+		"https://relay.example.com/v1":            false,
+		"https://notopencode.ai/v1":               false,
+		"":                                        false,
+	}
+	for base, want := range cases {
+		if got := opencodeGateway(base); got != want {
+			t.Errorf("opencodeGateway(%q) = %v, want %v", base, got, want)
+		}
+	}
+}

@@ -23,15 +23,26 @@ const MaxHelloAge = 5 * time.Minute
 // hello is only valid within the receiver's tolerance window, so it cannot be
 // replayed after that window (design §16 / P0-1).
 //
+// HelloSigLegacy computes the pre-nonce hello HMAC under a name that is not
+// deprecated. Recognising a hello minted by a peer that predates the nonce
+// field is not the same as adopting that format: VerifyHello needs this to
+// stay compatible, and the handshake diagnostics need it to explain a
+// rejection precisely. New call sites must still use HelloSigN or HelloSigB —
+// HelloSig stays deprecated so staticcheck (SA1019) catches exactly the case
+// where someone reaches for the replay-ambiguous form by accident.
+func HelloSigLegacy(secret, nodeID string, ts int64) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(nodeID + ":" + strconv.FormatInt(ts, 10)))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // Deprecated: use HelloSigN. Ts has second granularity, so two dials inside the
 // same second mint the same signature — and the receiver's single-use replay
 // cache cannot tell an honest same-second reconnect from a replay. HelloSigN
 // binds a per-dial nonce so every hello is unique; the old form is still
 // accepted by VerifyHello for peers that predate the nonce field.
 func HelloSig(secret, nodeID string, ts int64) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(nodeID + ":" + strconv.FormatInt(ts, 10)))
-	return hex.EncodeToString(mac.Sum(nil))
+	return HelloSigLegacy(secret, nodeID, ts)
 }
 
 // HelloSigN is HelloSig with a nonce bound into the signature. The nonce is a
@@ -88,7 +99,7 @@ func VerifyHello(secret, nodeID string, ts int64, sig string, now time.Time) boo
 	if secret == "" || sig == "" || !helloFresh(ts, now) {
 		return false
 	}
-	return hmac.Equal([]byte(HelloSig(secret, nodeID, ts)), []byte(sig))
+	return hmac.Equal([]byte(HelloSigLegacy(secret, nodeID, ts)), []byte(sig))
 }
 
 // VerifyHelloP verifies a hello the way the receiver does: freshness first,
@@ -140,7 +151,7 @@ func VerifyHelloP(secret, receiverID string, p HelloPayload, now time.Time) bool
 		if p.Nonce != "" {
 			member = hmac.Equal([]byte(HelloSigN(secret, p.NodeID, p.Ts, p.Nonce)), []byte(p.Sig))
 		} else {
-			member = hmac.Equal([]byte(HelloSig(secret, p.NodeID, p.Ts)), []byte(p.Sig))
+			member = hmac.Equal([]byte(HelloSigLegacy(secret, p.NodeID, p.Ts)), []byte(p.Sig))
 		}
 		if !member {
 			return false

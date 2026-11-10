@@ -25,6 +25,14 @@ func assessRecovery(r bus.TaskResultPayload) RecoveryAssessment {
 	case r.NoRetry:
 		a.Category = "non_retryable"
 		a.Strategy = "stop"
+	case commander.AdapterUnavailable(r.Stderr):
+		// The node cannot spawn the agent at all: the adapter script or its
+		// interpreter is missing. Nothing about the work was attempted, so
+		// there is no judgement to make and no retry that could differ — the
+		// fix is an install, and the row stays failed until one happens.
+		a.Category = "adapter_unavailable"
+		a.Strategy = "stop"
+		a.ReplaySafety = "safe_after_environment_fix"
 	case commander.IsAuthorizationRefusal(r.Stderr):
 		a.Category = "authorization"
 		a.Strategy = "human_review"

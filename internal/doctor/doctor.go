@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,6 +155,16 @@ func Run(configPath string) []Check {
 				add(fail("doctor.modelendpoint.rejected", "url", ep, "detail", v.Detail))
 			case v.OK && endpointProbeKeyless(v.Detail, cfg.Model.APIKey):
 				add(pass("doctor.modelendpoint.keyless", "url", ep, "ms", fmt.Sprintf("%d", time.Since(start).Milliseconds()), "detail", v.Detail))
+			case v.OK && probeRefusedRequest(v.Status):
+				// The endpoint answered, but it refused the probe's own request
+				// (a bad or missing model name, an oversized body). Routing
+				// keeps calling that alive on purpose — a harness may run a
+				// model the config never names — so this stays a pass. The
+				// wording is the fix: a bare "http 400" on a green line reads as
+				// noise, while "rejected the request, check the model name" is
+				// the actual next step, and a typo'd or retired model id is the
+				// most common way a configured endpoint turns out to be unusable.
+				add(pass("doctor.modelendpoint.refused", "url", ep, "ms", fmt.Sprintf("%d", time.Since(start).Milliseconds()), "detail", v.Detail))
 			case v.OK:
 				add(pass("doctor.modelendpoint.ok", "url", ep, "ms", fmt.Sprintf("%d", time.Since(start).Milliseconds()), "detail", v.Detail))
 			default:
@@ -235,6 +246,56 @@ func Run(configPath string) []Check {
 			}
 		}
 
+		// LAN discovery can see a signed beacon from a machine that never
+		// completed pairing. Its hint row is NOT a configured peer, so the
+		// probe loop above never looks at it: `panda status` happily prints
+		// "✓ signed beacon" while the mesh stays down and auto-dial retries
+		// a wrong-secret handshake for hours. Surface those unpaired leads
+		// here with the exact remediation. Read-only SQL on purpose —
+		// ledger.ListPending sweeps expired rows and doctor opens mode=ro.
+		unpaired := func() []string {
+			roDB, e := sql.Open("sqlite",
+				fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(2000)", escapeURIPath(cfg.Storage.DBPath)))
+			if e != nil {
+				return nil
+			}
+			defer roDB.Close()
+			rows, e := roDB.Query(`SELECT id, addr FROM pending_nodes WHERE last_seen > ? ORDER BY last_seen DESC`,
+				time.Now().Add(-2*time.Minute).Unix())
+			if e != nil {
+				return nil
+			}
+			defer rows.Close()
+			peers := cfg.Network.PeerAddrs()
+			covers := func(addr string) bool {
+				host := addr
+				if h, _, err := net.SplitHostPort(addr); err == nil {
+					host = h
+				}
+				for _, p := range peers {
+					if p == addr || (host != "" && strings.Contains(p, host)) {
+						return true
+					}
+				}
+				return false
+			}
+			var ids []string
+			for rows.Next() {
+				var id, addr string
+				if rows.Scan(&id, &addr) != nil {
+					continue
+				}
+				if !covers(addr) && !covers(id) {
+					ids = append(ids, id)
+				}
+			}
+			return ids
+		}()
+		if len(unpaired) > 0 {
+			add(fail("doctor.mesh.discovered.unpaired",
+				"count", strconv.Itoa(len(unpaired)), "nodes", strings.Join(unpaired, ", ")))
+		}
+
 		// OS sandbox: "off" is a valid choice and reports as information; a
 		// configured mode with no platform backend is a real problem — the
 		// confinement the operator asked for is silently absent.
@@ -259,8 +320,24 @@ func Run(configPath string) []Check {
 	} else {
 		add(fail("doctor.python3.no"))
 	}
-	if dir := AdaptersDir(); dir != "" {
-		add(pass("doctor.adapters.ok", "path", dir))
+	// The check reports the directory the EXECUTOR would use, not the one this
+	// probe would pick for copying: commander.resolveAdapterDir applies the
+	// dev-adapter trust gate and the cwd → ancestors → beside-the-binary
+	// order, so a daemon started from $HOME and a `panda doctor` run from a
+	// repository root can disagree. Printing this probe's answer made doctor
+	// vouch for a directory no task would ever load.
+	//
+	// A path is not evidence. resolveAdapterDir always answers with something —
+	// its last resort is "where an install would put it" — so a pass on
+	// dir != "" reported a healthy adapters tree on a machine that had none,
+	// and the resulting task failure looked like an agent bug. The check now
+	// counts the scripts the executor would actually spawn.
+	if dir := commander.AdapterDir(); dir != "" {
+		if n := adapterScriptCount(dir); n > 0 {
+			add(pass("doctor.adapters.ok", "path", dir, "count", strconv.Itoa(n)))
+		} else {
+			add(fail("doctor.adapters.empty", "path", dir))
+		}
 	} else {
 		add(fail("doctor.adapters.no"))
 	}
@@ -298,6 +375,20 @@ func endpointProbeKeyless(detail, apiKey string) bool {
 		return false
 	}
 	return n == 401 || n == 402 || n == 403 || n == 429
+}
+
+// probeRefusedRequest reports whether the probe's status is a client error
+// that refused the request itself: a bad model name (400/404), an oversized
+// body (413), or an unprocessable payload (422). Credential failures and rate
+// limits are excluded — those have their own sentences, and 429 says "busy",
+// not "wrong".
+func probeRefusedRequest(status int) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusNotFound,
+		http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return true
+	}
+	return false
 }
 
 // missingEndpointCheck explains a model that names no destination. Run only
@@ -340,11 +431,38 @@ func Problems(checks []Check) int {
 	return n
 }
 
-// AdaptersDir locates the adapters/ directory — relative to the working
-// directory first (the documented run-from-repo-root layout), then next to
-// the executable (a relocated install). A packaged install (Homebrew or the
-// one-click script) symlinks the binary onto PATH, so we follow the link to
-// the real binary and probe beside it too. Empty when not found.
+// adapterScriptCount reports how many adapter scripts the executor would find
+// in dir: the .py files it can spawn, not every file that happens to live
+// there. A directory holding only __pycache__ or a README is an install that
+// failed halfway, and calling that healthy is the same false green as the
+// empty-path check it replaces.
+func adapterScriptCount(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".py") || strings.HasPrefix(e.Name(), "_") {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// AdaptersDir locates an adapters/ directory to COPY FROM — the checkout's or
+// the install's, relative to the working directory first (the documented
+// run-from-repo-root layout), then next to the executable. `panda install` uses
+// it as the source for the install prefix.
+//
+// It is deliberately NOT the runtime answer: commander.AdapterDir applies the
+// dev-adapter trust gate and orders cwd → ancestors → beside-the-binary, so a
+// daemon started from $HOME and this probe started in a repository root can
+// name different directories. Asking this function "which adapters will a task
+// load?" is how doctor once vouched for a directory no task would ever read.
+// A packaged install (Homebrew or the one-click script) symlinks the binary
+// onto PATH, so the link is followed before probing. Empty when not found.
 func AdaptersDir() string {
 	candidates := []string{"adapters"}
 	if exe, err := os.Executable(); err == nil {

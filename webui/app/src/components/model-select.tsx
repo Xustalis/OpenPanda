@@ -4,10 +4,11 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ModelEntry } from '../api/client'
 import { useAsync } from '../hooks'
 import { t } from '../i18n'
+import { onModelSaved } from '../model-events'
 import { navigate } from '../nav'
 import { Icon } from './icons'
 import { toast, toastError } from './toast'
-import { type Conn, groupConnections, hostOf, labelOf } from '../views/model-connections'
+import { type Conn, connHost, connName, groupConnections, isLoopbackURL } from '../views/model-connections'
 
 /** The composer's model switch: the model's name and a chevron, sitting
  *  immediately left of Send, opening a card upward.
@@ -89,8 +90,17 @@ export function ModelSelect(props: { disabled?: boolean }) {
       setOpen(false)
       trigger.current?.focus()
     }
-    // A fixed card would be stranded by anything that moves the composer.
-    const onMove = () => setOpen(false)
+    // A fixed card would be stranded by anything that moves the composer —
+    // but only by things that move *it*. Both lists inside the card scroll on
+    // their own (nine models, a dozen accounts), and a capture-phase listener
+    // on window sees those events too: closing on them made the wheel dismiss
+    // the card instead of scrolling it, and every arrow-key move closed it as
+    // well, because focusing a row scrolls it into view. select.tsx and
+    // model-picker.tsx guard the same way; this one was the odd one out.
+    const onMove = (e: Event) => {
+      if (box.current?.contains(e.target as Node)) return
+      setOpen(false)
+    }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey, true)
     window.addEventListener('resize', onMove)
@@ -103,12 +113,23 @@ export function ModelSelect(props: { disabled?: boolean }) {
     }
   }, [open])
 
+  // The registry can be written from the settings dialog, which covers this
+  // composer without unmounting it: the row that was just added used to be
+  // missing from the card until the page was reloaded by hand. The write
+  // announces itself (views/models.tsx → notifyModelSaved), and `tick` is the
+  // same reload key `pick` already uses to move the active flag.
+  useEffect(() => onModelSaved(() => setTick((n) => n + 1)), [])
+
   // Opening lands on the account that owns the live model, and the model list
   // starts at its top — a card that always opens at row one hides the answer
   // you came for.
   useEffect(() => {
     if (!open) return
     place()
+    // Re-read on every open. The window event above only reaches this document;
+    // a model added from another tab, a paired device or `panda model` never
+    // fires it, and this card is exactly where that staleness shows.
+    setTick((n) => n + 1)
     setPane(liveConn?.id ?? conns[0]?.id ?? null)
     setConnsOpen(false)
     panel.current
@@ -181,14 +202,11 @@ export function ModelSelect(props: { disabled?: boolean }) {
     }
   }
 
-  /** The account's name, minus a trailing parenthetical. The registry's own
-   *  label for a relay reads "自定义 / 中转站 (custom base_url)" — the bracket
-   *  is the provider id, and this column is 168px wide. What the bracket was
-   *  reaching for (which endpoint) is the line underneath anyway. */
-  function connName(c: Conn): string {
-    const raw = c.providerLabel || labelOf(data?.providers ?? [], c.provider) || t('models.customProvider')
-    const short = raw.replace(/\s*\([^)]*\)\s*$/, '')
-    return short || raw
+  /** The account's name, from the same rule the cards use: a vendor names
+   *  itself, an imported relay names the tool it came from, and only an
+   *  unplaceable row keeps the generic label. */
+  function nameOf(c: Conn): string {
+    return connName(c, data?.providers ?? [])
   }
 
   return (
@@ -268,8 +286,12 @@ export function ModelSelect(props: { disabled?: boolean }) {
               aria-expanded={connsOpen}
               onClick={() => setConnsOpen((v) => !v)}
             >
-              <span class="model-conn-toggle-name">{current ? connName(current) : '—'}</span>
-              {current && <span class="model-conn-toggle-sub mono">{hostOf(current.baseURL)}</span>}
+              <span class="model-conn-toggle-name">{current ? nameOf(current) : '—'}</span>
+              {current && (
+                <span class={`model-conn-toggle-sub${isLoopbackURL(current.baseURL) ? '' : ' mono'}`}>
+                  {connHost(current)}
+                </span>
+              )}
               <Icon name="chevron-right" size={16} class="model-conn-toggle-caret" />
             </button>
 
@@ -291,8 +313,10 @@ export function ModelSelect(props: { disabled?: boolean }) {
                       }}
                     >
                       <span class="model-conn-row-body">
-                        <span class="model-conn-row-name">{connName(c)}</span>
-                        <span class="model-conn-row-sub mono">{hostOf(c.baseURL) || c.apiType}</span>
+                        <span class="model-conn-row-name">{nameOf(c)}</span>
+                        <span class={`model-conn-row-sub${isLoopbackURL(c.baseURL) ? '' : ' mono'}`}>
+                          {connHost(c) || c.apiType}
+                        </span>
                       </span>
                       {holdsLive && <Icon name="check" size={14} class="model-row-check" />}
                     </button>

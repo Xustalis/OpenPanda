@@ -6,6 +6,7 @@
 // every browser API it touches.
 
 import { t } from '../i18n/index.ts'
+import { splitReportHead, type ReportHead } from './report-head.ts'
 
 /** The `@path` token under the caret: [start, caret) covers `@token`, where
  *  token may be a partial path the /api/fs/files endpoint filters on. */
@@ -64,6 +65,17 @@ export function isBinaryRef(path: string): boolean {
   return BINARY_EXT.test(path)
 }
 
+/** The files dock hands 插入 a path with an optional `:line` suffix. The
+ *  suffix is a UI anchor for the file viewer, not part of the path the prompt
+ *  expands — keep it on the pill's label, drop it from the `@path` token. */
+export function splitFileRef(raw: string): { path: string; label: string } {
+  const m = /^(.*):(\d+)$/.exec(raw)
+  const path = m?.[1] || raw
+  const line = m?.[2]
+  const base = path.split(/[\\/]/).pop() || path
+  return { path, label: base + (line ? `:${line}` : '') }
+}
+
 /** Fold the composer tray's uploads into the prompt. Each one rides as an
  *  `@path` token so `expandFileRefs` sees it — text files then arrive as
  *  fenced blocks, and binary ones stay paths for the agent to open. */
@@ -113,7 +125,13 @@ export interface ExportMsg {
 }
 
 /** `/export`: serialize the transcript to Markdown — the web equivalent of
- *  the REPL writing chat-<ts>.md to disk. */
+ *  the REPL writing chat-<ts>.md to disk.
+ *
+ *  A finished task's turn starts with the finalizer's wire prefix —
+ *  `[failed] @codex · 标题` — which the thread strips and draws as a chip.
+ *  Dumped verbatim into the export it reads as console debris in an otherwise
+ *  human document, so the same split applies here: the head becomes a bold
+ *  line naming the state, the agent and the job, and only the body is prose. */
 export function exportMarkdown(
   msgs: ExportMsg[],
   meta: { project?: string | null; title?: string | null },
@@ -124,12 +142,29 @@ export function exportMarkdown(
     `_${new Date().toISOString()}${meta.project ? ` · project ${meta.project}` : ''}_`,
   ]
   for (const m of msgs) {
-    lines.push('', `## ${m.role === 'user' ? t('sessions.you') : 'Panda'}`, '', m.text.trim())
+    const head = m.role === 'user' ? null : splitReportHead(m.text ?? '')
+    lines.push('', `## ${m.role === 'user' ? t('sessions.you') : 'Panda'}`, '')
+    if (head) {
+      lines.push(reportHeadLine(head))
+      const body = head.body.trim()
+      if (body) lines.push('', body)
+    } else {
+      lines.push(m.text.trim())
+    }
     if (m.thought) {
       lines.push('', `<details><summary>thought</summary>`, '', m.thought.trim(), `</details>`)
     }
   }
   return lines.join('\n')
+}
+
+/** A report head as one Markdown line: the localized state in bold, then who
+ *  ran it and what the job was. The `[state]` brackets stay behind — they are
+ *  the protocol, not the report. */
+function reportHeadLine(head: ReportHead): string {
+  const label = t(`state.${head.state}`)
+  const rest = [head.agent ? `@${head.agent}` : '', head.title].filter(Boolean)
+  return rest.length === 0 ? `**${label}**` : `**${label}** · ${rest.join(' · ')}`
 }
 
 /** Filesystem-safe filename for the export download. */
