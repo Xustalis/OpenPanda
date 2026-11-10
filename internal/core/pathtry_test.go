@@ -510,3 +510,27 @@ func TestRelayedPunchWantReachesTheRequester(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+func TestShutdownCancelsAndJoinsReachability(t *testing.T) {
+	c := newCoreOnDB(t, openTestDB(t), "shutdown-reach")
+	started, settled := make(chan struct{}), make(chan struct{})
+	if !c.goReach(context.Background(), "test reach", func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(settled)
+	}) {
+		t.Fatal("reach work was not launched")
+	}
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	c.Shutdown(ctx)
+	select {
+	case <-settled:
+	default:
+		t.Fatal("Shutdown returned before reachability settled")
+	}
+	if c.goReach(context.Background(), "late reach", func(context.Context) { t.Error("reach launched after shutdown") }) {
+		t.Fatal("late work accepted")
+	}
+}

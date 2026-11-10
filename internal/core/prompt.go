@@ -40,8 +40,8 @@ func taskScope(specJSON string) string {
 
 // taskToolsPolicy extracts the per-task tools policy from a task's persisted
 // spec JSON (entry.TaskSpec.ToolsPolicy). Empty means "use the global
-// routing.tools_policy"; "minimal" or "extended" override the router's
-// default for this task alone. A parse failure yields empty (global default).
+// routing.tools_policy"; "minimal" can narrow extended but a task cannot
+// widen global minimal. A parse failure yields empty (global default).
 func taskToolsPolicy(specJSON string) string {
 	if specJSON == "" {
 		return ""
@@ -67,10 +67,14 @@ func taskPermissionMode(specJSON string) string {
 		return ""
 	}
 	var spec struct {
-		PermissionMode string `json:"permission_mode"`
+		Kind           entry.TaskKind `json:"task_kind"`
+		PermissionMode string         `json:"permission_mode"`
 	}
 	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
 		return ""
+	}
+	if spec.Kind == entry.TaskInvestigation || spec.Kind == entry.TaskCodeQuestion {
+		return defense.ModePlan
 	}
 	return defense.NormalizeMode(spec.PermissionMode)
 }
@@ -176,15 +180,20 @@ func taskSpecEnvelope(specJSON string) string {
 		return ""
 	}
 	var spec struct {
+		Kind              entry.TaskKind   `json:"task_kind"`
 		Scope             string           `json:"scope"`
 		SuccessDefinition string           `json:"success_definition"`
 		Constraints       []string         `json:"constraints"`
 		Acceptance        []contract.Check `json:"acceptance"`
+		PermissionMode    string           `json:"permission_mode"`
 	}
 	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
 		return ""
 	}
 	var b strings.Builder
+	if policy := spec.Kind.EvidencePolicy(); policy != "" {
+		b.WriteString("\ntask kind: " + string(spec.Kind) + "\ndelivery evidence: " + policy)
+	}
 	if spec.SuccessDefinition != "" {
 		b.WriteString("\nsuccess definition: " + spec.SuccessDefinition)
 	}
@@ -198,14 +207,22 @@ func taskSpecEnvelope(specJSON string) string {
 	}
 	for _, c := range spec.Acceptance {
 		if run := strings.TrimSpace(c.Run); run != "" {
-			b.WriteString("\nacceptance check (the orchestrator runs this after you finish): " + run)
+			if taskPermissionMode(specJSON) == defense.ModePlan {
+				b.WriteString("\nacceptance check (deferred in read-only/plan mode): " + run)
+			} else {
+				b.WriteString("\nacceptance check (the orchestrator runs this after you finish): " + run)
+			}
 		}
 		if len(c.Exists) > 0 {
 			b.WriteString("\nacceptance artifact (must exist when you finish): " + strings.Join(c.Exists, ", "))
 		}
 	}
 	if len(spec.Acceptance) > 0 {
-		b.WriteString("\nrun these acceptance checks yourself before claiming done; a claim without their output is not completion.")
+		if taskPermissionMode(specJSON) == defense.ModePlan {
+			b.WriteString("\nread-only/plan mode: these acceptance checks are deferred; do not execute them or claim they passed.")
+		} else {
+			b.WriteString("\nrun these acceptance checks yourself before claiming done; a claim without their output is not completion.")
+		}
 	}
 	if b.Len() == 0 {
 		return ""
@@ -362,23 +379,23 @@ func getAgentOutputRider(locs ...i18n.Locale) string {
 		return fmt.Sprintf(`
 
 执行约定：
-- 在 workspace 目录内工作；只在确实需要改动代码时才去读相关的源文件与文档（有源码可读就不要去反汇编二进制），不要为了"了解项目"而通读仓库。
-- 宣布完成前必须验证：用该项目自身的构建/测试方式（按其 Makefile、scripts、CI 或包管理器惯例）跑通能证明成功定义的命令；只写"应该可行"不算完成。
-- 工作区地图列出了项目的 build/verify 入口时，运行与你改动相关的那一条或几条，并在回复里给出命令与实际输出；最终回复里没有跑过任何一条，不算完成。
+- 在 workspace 目录内工作。有代码可读就不要反汇编二进制。改代码时聚焦相关文件；用户要求探索/审查代码库时，沿实际调用链调查实现和测试，不能用 README、目录或工作区地图代替源码证据。
+- 阅读型分析要给出支撑关键结论的文件与行号，区分读过的代码和跑过的测试；搜索有截断、跳过文件或仅查了局部时，不要断言全库不存在。不要为了填模板而执行无关命令。
+- 改动型任务宣布完成前必须用项目自身的构建/测试方式验证成功定义，给出实际运行的命令与结果；只写"应该可行"不算完成。无法运行时明确指出。
 - 任务产出网页或 Web 应用时，回复前用节点上的无头浏览器验证：panda browser open <url>，再看 panda browser snapshot、panda browser console、panda browser network，并截图；构建通过不等于页面可用，没有 console 报错和失败请求才算渲染完成。
 - 只改动任务范围内（scope）的文件；不要顺手重构或格式化无关代码。
-- 最终回复用%s，直接说明：改了什么、在哪个文件、如何验证（运行的命令及其结果）。有无法满足的验收标准要明确写出，不许含糊带过。
+- 最终回复用%s，直接说明：发现或改了什么、依据哪些文件、如何验证（实际运行的命令及其结果；未运行则说明）。有无法满足的验收标准要明确写出，不许含糊带过。
 - 不要使用表情符号，不要寒暄或与任务无关的自我介绍。`, outputLangName(outputLang, true))
 	}
 	return fmt.Sprintf(`
 
 Execution contract:
-- Work inside the workspace; read only the source files and docs the change actually touches — never disassemble a binary whose source is on disk, and do not survey the repository just to "understand the project".
-- Verify before claiming done: run whatever proves the success definition using the project's own build/test convention (its Makefile, scripts, CI, or package manager); reporting what "should" work is not completion.
-- When the workspace map lists the project's build/verify entries, run the one(s) that cover your change and report the command and its actual output. A final reply that never ran one is not completion.
+- Work inside the workspace; never disassemble a binary whose source is on disk. For edits, focus on the relevant files; for a requested repository investigation, trace actual implementation and tests rather than using README, directory listings or the workspace map as code evidence.
+- For read-only analysis, cite files and lines supporting important claims and distinguish inspected code from tests actually run. A truncated or partial search does not establish that something is absent; do not run unrelated checks merely to fill a template.
+- For edits, verify the success definition with the project's own build/test convention and report actual commands and results. If verification cannot run, say so; reporting what "should" work is not completion.
 - When the task produces a web page or app, verify it in the node's headless browser before reporting: panda browser open <url>, then panda browser snapshot, panda browser console and panda browser network, and take a screenshot. A build passing is not the page working; rendering without console errors or failed requests is.
 - Touch only files inside the declared scope; do not refactor or reformat unrelated code.
-- Final reply in %s, stating plainly: what changed, in which files, and how it was verified (the commands run and their outcomes). Name any acceptance criterion you could not verify — do not imply it passed.
+- Final reply in %s, stating plainly: findings or changes, supporting files, and how they were verified (actual commands and outcomes, or checks not run). Name any acceptance criterion you could not verify — do not imply it passed.
 - No emojis, no pleasantries, no meta-commentary about being an AI.`, outputLangName(outputLang, false))
 }
 
@@ -391,6 +408,10 @@ Execution contract:
 // not positive) by degrading skills to index lines when the budget is tight;
 // a context-overflow retry passes the shrunken overflowPromptBudget.
 func buildAgentPrompt(c *Core, intent, project, title, workDir string, promptBudget int, loc ...i18n.Locale) (string, []*skills.Skill) {
+	return buildAgentPromptWithEnvironment(c, intent, project, title, workDir, promptBudget, nil, loc...)
+}
+
+func buildAgentPromptWithEnvironment(c *Core, intent, project, title, workDir string, promptBudget int, environment *scout.EnvironmentSnapshot, loc ...i18n.Locale) (string, []*skills.Skill) {
 	if promptBudget <= 0 {
 		promptBudget = agentPromptBudget
 	}
@@ -429,7 +450,13 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, promptBud
 		// not. The map is deterministic orientation — repo identity, size,
 		// layout, key files and the project's declared build/verify commands —
 		// not a substitute for reading the files it names.
-		if m := scout.Cached(workDir).Render(); m != "" {
+		report := scout.Cached(workDir)
+		if environment != nil {
+			// Cached layout is navigation, not fresh repository identity.
+			report.GitKnown = false
+			frame.WriteString("\n\n" + environment.Render())
+		}
+		if m := report.Render(); m != "" {
 			frame.WriteString("\n\n" + m)
 		}
 	}

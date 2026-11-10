@@ -114,3 +114,52 @@ func TestCommandFromInputShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestVerificationRequiresExactCompletedCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name, input          string
+		result, failed, want bool
+	}{
+		{"exact", `{"command":"make test"}`, true, false, true},
+		{"argv", `{"cmd":["make","test"]}`, true, false, true},
+		{"shell wrapper", `{"cmd":["/bin/zsh","-lc","make test"]}`, true, false, true},
+		{"echo", `{"command":"echo 'make test'"}`, true, false, false},
+		{"quoted argv", `{"command":["make test"]}`, true, false, false},
+		{"unfinished", `{"command":"make test"}`, false, false, false},
+		{"failed", `{"command":"make test"}`, true, true, false},
+		{"different target", `{"command":"make test-unit"}`, true, false, false},
+		{"reordered", `{"command":"test make"}`, true, false, false},
+		{"shell composition", `{"command":"false && make test"}`, true, false, false},
+		{"comment", `{"command":"echo done # make test"}`, true, false, false},
+		{"different program", `{"command":"MAKE TEST"}`, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newExecEvidence()
+			e.observe(toolUse("verify", "Bash", tc.input))
+			if tc.result {
+				e.observe(toolResult("verify", tc.failed))
+			}
+			if got := ranVerification(e.cmds, []string{"make test"}); got != tc.want {
+				t.Fatalf("got=%v want=%v: %+v", got, tc.want, e.cmds)
+			}
+		})
+	}
+}
+
+func TestVerificationCannotUseNonCommandToolOrPartialScope(t *testing.T) {
+	e := newExecEvidence()
+	e.observe(toolUse("test", "shell", `{"command":"go test ./internal/core"}`))
+	e.observe(toolResult("test", false))
+	if ranVerification(e.cmds, []string{"go test ./..."}) {
+		t.Fatal("partial scope certified whole repository")
+	}
+}
+
+func TestVerificationDoesNotTrustCommandArgumentOnUnknownTool(t *testing.T) {
+	e := newExecEvidence()
+	e.observe(toolUse("fake", "mcp_echo", `{"command":"make test"}`))
+	e.observe(toolResult("fake", false))
+	if ranVerification(e.cmds, []string{"make test"}) {
+		t.Fatal("non-command tool counted as verification")
+	}
+}

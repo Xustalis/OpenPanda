@@ -64,6 +64,23 @@ func TestAcceptanceVerifiesCleanWork(t *testing.T) {
 	}
 }
 
+func TestPlanModeDefersExecutableAcceptance(t *testing.T) {
+	spec := `{"permission_mode":"plan","acceptance":[{"id":"build","run":"make test"}]}`
+	if got := executableAcceptance(spec); len(got) != 0 {
+		t.Fatalf("read-only task would run acceptance commands: %+v", got)
+	}
+	if got := taskAcceptance(spec); len(got) != 1 {
+		t.Fatalf("the contract itself must remain visible: %+v", got)
+	}
+	prompt := taskSpecEnvelope(spec)
+	if !strings.Contains(prompt, "checks are deferred") || strings.Contains(prompt, "run these acceptance checks yourself") {
+		t.Fatalf("read-only agent was instructed to execute checks: %s", prompt)
+	}
+	if got := executableAcceptance(`{"acceptance":[{"id":"build","run":"make test"}]}`); len(got) != 1 {
+		t.Fatalf("ordinary edit lost its acceptance check: %+v", got)
+	}
+}
+
 // TestAcceptanceFailsDishonestClaim is the P0 exit criterion: an agent that
 // says it is done while the contract fails must leave a failed task, not a
 // green one.
