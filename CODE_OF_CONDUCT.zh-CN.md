@@ -1,6 +1,8 @@
 # 贡献者公约行为准则
 
-[English](CODE_OF_CONDUCT.md)（英文版为准）· 简体中文参考译本 · [日本語](CODE_OF_CONDUCT.ja.md) · [Español](CODE_OF_CONDUCT.es.md) · [Deutsch](CODE_OF_CONDUCT.de.md)
+[English](CODE_OF_CONDUCT.md) (authoritative) · 简体中文 · [日本語](CODE_OF_CONDUCT.ja.md) · [Español](CODE_OF_CONDUCT.es.md) · [Deutsch](CODE_OF_CONDUCT.de.md)
+
+> **本文是参考译本。** 正文为英文版 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)；两者有出入时以英文正文为准。
 
 ## 我们的承诺
 

@@ -1,8 +1,9 @@
 # Contributor Covenant Verhaltenskodex
 
-Sprachen: [English](CODE_OF_CONDUCT.md) (maßgeblich) · [简体中文](CODE_OF_CONDUCT.zh-CN.md) · [日本語](CODE_OF_CONDUCT.ja.md) · [Español](CODE_OF_CONDUCT.es.md) · Deutsch
+[English](CODE_OF_CONDUCT.md) (authoritative) · [简体中文](CODE_OF_CONDUCT.zh-CN.md) · [日本語](CODE_OF_CONDUCT.ja.md) · [Español](CODE_OF_CONDUCT.es.md) · Deutsch
 
-*Diese Übersetzung dient nur der Orientierung; bei Abweichungen ist die englische Fassung maßgeblich.*
+> **Referenzübersetzung.** Maßgeblich ist der englische Text in
+> [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md); bei Abweichungen gilt er.
 
 ## Unser Versprechen
 
