@@ -494,3 +494,57 @@ func TestMemoryGraphDoesNotExtractEntitiesFromDreamReportBoilerplate(t *testing.
 		t.Fatal("dream report surface disappeared")
 	}
 }
+
+// The fingerprint describes the response, and the response is built from .md
+// files only. A directory's timestamp is not evidence of that: it moves when a
+// child appears, and NTFS applies that synchronously while APFS can defer it —
+// which is how the same tree hashed two ways across two requests on Windows and
+// one way on macOS, failing the conditional-request test there.
+func TestMemoryGraphETagIgnoresDirectoryTimestamps(t *testing.T) {
+	root := t.TempDir()
+	daily := filepath.Join(root, "daily")
+	if err := os.MkdirAll(daily, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(daily, "2026-01-02.md"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := memoryGraphETag(20, false, root)
+
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(daily, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(root, future, future); err != nil {
+		t.Fatal(err)
+	}
+	if after := memoryGraphETag(20, false, root); after != before {
+		t.Fatalf("a directory timestamp moved the fingerprint: %s -> %s", before, after)
+	}
+
+	// An added .md anywhere under the root still moves it.
+	if err := os.WriteFile(filepath.Join(daily, "2026-01-03.md"), []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if after := memoryGraphETag(20, false, root); after == before {
+		t.Fatal("an added .md did not move the fingerprint")
+	}
+
+	// A non-.md entry participates by name and type only: touching it is not a
+	// change to the response, but its presence is.
+	notes := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(notes, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withNotes := memoryGraphETag(20, false, root)
+	if again := memoryGraphETag(20, false, root); again != withNotes {
+		t.Fatalf("fingerprint is not stable across reads: %s -> %s", withNotes, again)
+	}
+	if err := os.Chtimes(notes, past, future); err != nil {
+		t.Fatal(err)
+	}
+	if after := memoryGraphETag(20, false, root); after != withNotes {
+		t.Fatalf("a non-.md timestamp moved the fingerprint: %s -> %s", withNotes, after)
+	}
+}
