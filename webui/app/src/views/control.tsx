@@ -83,19 +83,28 @@ export function ControlView({
         </div>
       </header>
 
-      {tab === 'projects' ? (
-        <ProjectsView head={false} onOpenProject={onOpenProject} onOpenQueue={onOpenQueue} />
-      ) : (
-        <QueueView
-          mode={tab === 'plans' ? 'plans' : 'board'}
-          onModeChange={(mode) => onSelectTab(mode === 'plans' ? 'plans' : 'queue')}
-          project={project}
-          focusReview={focusReview}
-          onOpen={onOpen}
-          onOpenSession={onOpenSession}
-          onNewChat={onNewChat}
-        />
-      )}
+      {/* The card's body: everything under the bar scrolls here, so the page's
+          name and its three lenses stay put while a long board or a list of
+          plans travels. Same split as a thread — a fixed head over a body that
+          scrolls — which is what makes the two views read as one family.
+          `data-tab` is what lets the body fade when the lens changes (see
+          `.control-body` in views.css); it is an attribute rather than a key
+          because re-mounting would refetch the board and drop the filters. */}
+      <div class="control-body" data-tab={tab}>
+        {tab === 'projects' ? (
+          <ProjectsView head={false} onOpenProject={onOpenProject} onOpenQueue={onOpenQueue} />
+        ) : (
+          <QueueView
+            mode={tab === 'plans' ? 'plans' : 'board'}
+            onModeChange={(mode) => onSelectTab(mode === 'plans' ? 'plans' : 'queue')}
+            project={project}
+            focusReview={focusReview}
+            onOpen={onOpen}
+            onOpenSession={onOpenSession}
+            onNewChat={onNewChat}
+          />
+        )}
+      </div>
     </section>
   )
 }

@@ -6,6 +6,7 @@ import { teamEnabled } from '../features'
 import { navigateView, navViews } from '../nav'
 import { setTheme, theme, type Theme } from '../theme'
 import { rank } from './fuzzy'
+import { Icon, type IconName } from './icons'
 import { useModalFocus } from './modal-focus'
 import { openNotifications } from './notifications'
 
@@ -25,10 +26,17 @@ export interface Command {
   group: string
   /** Localized label — the primary thing the query is matched against. */
   label: string
+  /** The row's glyph. Every command has one: a column of bare labels gave the
+   *  list no silhouette to scan, and the rest of the console leads every row
+   *  with a 16px mark. */
+  icon: IconName
   /** Extra English search terms, so `queue` finds 队列 in any locale. */
   alias?: string
   /** Right-aligned note: the current value of a setting, mostly. */
   hint?: string
+  /** This row *is* the current value (the active theme, the active locale).
+   *  Drawn as a check rather than a "✓" glyph so it matches the icon column. */
+  checked?: boolean
   run(): void
 }
 
@@ -92,6 +100,24 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
   // rather than whatever row happens to sit at the old index.
   useEffect(() => setCursor(0), [query])
 
+  const grouped = query.trim() === ''
+
+  // The unfiltered list keeps its headings; a filtered one is a single ranked
+  // run, because a section label over two hits is noise. Sections are built
+  // from `shown` and keep each row's index in it, so the cursor stays an index
+  // into the flat ranking rather than into whatever the DOM happens to show.
+  // (Above the early return: a hook may not be skipped on the closed render.)
+  const sections = useMemo(() => {
+    if (!grouped) return [{ group: '', rows: shown.map((cmd, i) => ({ cmd, i })) }]
+    const out: Array<{ group: string; rows: Array<{ cmd: Command; i: number }> }> = []
+    for (const [i, cmd] of shown.entries()) {
+      const tail = out[out.length - 1]
+      if (tail && tail.group === cmd.group) tail.rows.push({ cmd, i })
+      else out.push({ group: cmd.group, rows: [{ cmd, i }] })
+    }
+    return out
+  }, [grouped, shown])
+
   if (!open) return null
 
   function runAt(i: number) {
@@ -109,7 +135,7 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
       setCursor(next)
       // Keep the highlight on screen — the list scrolls, the selection must
       // not slide out from under the arrow keys.
-      list.current?.children[next]?.scrollIntoView({ block: 'nearest' })
+      list.current?.querySelector(`[data-idx="${next}"]`)?.scrollIntoView({ block: 'nearest' })
     }
     if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) return step(1)
     if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) return step(-1)
@@ -124,8 +150,6 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
     }
   }
 
-  const grouped = query.trim() === ''
-
   return (
     <div
       class="palette-backdrop"
@@ -134,35 +158,54 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
       }}
     >
       <div ref={dialog} class="palette" role="dialog" aria-modal="true" aria-label={t('palette.title')}>
-        <input
-          ref={input}
-          class="palette-input"
-          type="text"
-          role="combobox"
-          aria-expanded="true"
-          aria-controls="palette-list"
-          aria-autocomplete="list"
-          placeholder={t('palette.placeholder')}
-          value={query}
-          onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-          onKeyDown={onKeyDown}
-        />
+        <div class="palette-head">
+          <Icon name="search" size={16} />
+          <input
+            ref={input}
+            class="palette-input"
+            type="text"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="palette-list"
+            aria-autocomplete="list"
+            placeholder={t('palette.placeholder')}
+            value={query}
+            onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+            onKeyDown={onKeyDown}
+          />
+        </div>
         <div class="palette-list" id="palette-list" role="listbox" ref={list}>
-          {shown.map((cmd, i) => (
-            <div key={cmd.id} class="palette-row">
-              {grouped && shown[i - 1]?.group !== cmd.group && (
-                <div class="palette-group">{cmd.group}</div>
+          {sections.map((sec) => (
+            <div
+              key={sec.group || 'results'}
+              class="palette-section"
+              role="group"
+              aria-label={sec.group || undefined}
+            >
+              {sec.group && (
+                <div class="palette-group" aria-hidden="true">
+                  {sec.group}
+                </div>
               )}
-              <button
-                class={`palette-item${i === cursor ? ' active' : ''}`}
-                role="option"
-                aria-selected={i === cursor}
-                onMouseMove={() => setCursor(i)}
-                onClick={() => runAt(i)}
-              >
-                <span class="palette-label">{cmd.label}</span>
-                {cmd.hint && <span class="palette-hint">{cmd.hint}</span>}
-              </button>
+              {sec.rows.map(({ cmd, i }) => (
+                <button
+                  key={cmd.id}
+                  data-idx={i}
+                  class={`palette-item${i === cursor ? ' active' : ''}`}
+                  role="option"
+                  aria-selected={i === cursor}
+                  onMouseMove={() => setCursor(i)}
+                  onClick={() => runAt(i)}
+                >
+                  <Icon name={cmd.icon} size={16} />
+                  <span class="palette-label">{cmd.label}</span>
+                  {cmd.checked ? (
+                    <Icon name="check" size={14} class="palette-check" />
+                  ) : (
+                    cmd.hint && <span class="palette-hint">{cmd.hint}</span>
+                  )}
+                </button>
+              ))}
             </div>
           ))}
           {shown.length === 0 && <p class="palette-empty">{t('palette.noMatch')}</p>}
@@ -175,7 +218,7 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
           <span>
             <kbd>↵</kbd> {t('palette.footRun')}
           </span>
-          <span>
+          <span class="palette-foot-end">
             <kbd>esc</kbd> {t('palette.footClose')}
           </span>
         </div>
@@ -211,6 +254,21 @@ export function buildCommands(onLogout: () => void): Command[] {
     'control:plans': t('nav.plans'),
     'control:projects': t('nav.projects'),
   }
+  // The glyph each destination wears. The rail's own marks where it has one
+  // (工作空间, 队列·任务·项目, 团队, 记忆, 设置) and the board's tab marks for the
+  // two boards that are tabs rather than rows — a palette row and the row it
+  // stands for should be recognisably the same place.
+  const viewIcon: Record<string, IconName> = {
+    sessions: 'message',
+    workspace: 'devices',
+    control: 'kanban',
+    'control:plans': 'route',
+    'control:projects': 'folder',
+    team: 'users',
+    memory: 'orbit',
+    profile: 'user',
+    settings: 'gear',
+  }
   // Hiding a rail row is not enough: ⌘K is a second way into every view, and
   // a disabled feature must not stay reachable by typing "team".
   const cmds: Command[] = navViews
@@ -219,6 +277,7 @@ export function buildCommands(onLogout: () => void): Command[] {
       id: `go:${view}`,
       group: go,
       label: t(key),
+      icon: viewIcon[view] ?? 'arrow-right',
       alias: [goAliases[view] ?? view, formerName[view] ?? ''].filter(Boolean).join(' '),
       run: () => navigateView(view),
     }))
@@ -231,42 +290,47 @@ export function buildCommands(onLogout: () => void): Command[] {
     id: 'action:notifications',
     group: go,
     label: t('nav.notifications'),
+    icon: 'bell',
     alias: 'notifications notify alerts alarm inbox devices pairing reminder reminders',
     run: openNotifications,
   })
 
-  const settingsTabs: Array<{ tab: string; key: string; alias: string }> = [
-    { tab: 'models', key: 'settings.model', alias: 'models model llm config ai' },
-    { tab: 'policy', key: 'settings.policy', alias: 'policy security rules permissions' },
-    { tab: 'agents', key: 'settings.group.agents', alias: 'agents subagents roles' },
-    { tab: 'mcp', key: 'settings.mcp', alias: 'mcp tools servers integrations' },
-    { tab: 'skills', key: 'nav.skills', alias: 'skills capabilities plugins tools hub import' },
-    { tab: 'system', key: 'nav.system', alias: 'system status health audit metrics telemetry' },
+  const settingsTabs: Array<{ tab: string; key: string; icon: IconName; alias: string }> = [
+    { tab: 'models', key: 'settings.model', icon: 'cpu', alias: 'models model llm config ai' },
+    { tab: 'policy', key: 'settings.policy', icon: 'shield', alias: 'policy security rules permissions' },
+    { tab: 'agents', key: 'settings.group.agents', icon: 'bot', alias: 'agents subagents roles' },
+    { tab: 'mcp', key: 'settings.mcp', icon: 'plug', alias: 'mcp tools servers integrations' },
+    { tab: 'skills', key: 'nav.skills', icon: 'sparkles', alias: 'skills capabilities plugins tools hub import' },
+    { tab: 'system', key: 'nav.system', icon: 'activity', alias: 'system status health audit metrics telemetry' },
   ]
   for (const s of settingsTabs) {
     cmds.push({
       id: `settings:${s.tab}`,
       group: t('nav.settings'),
       label: t(s.key),
+      // The settings sheet's own rail icons, so a row here and a row there are
+      // visibly the same section.
+      icon: s.icon,
       alias: s.alias,
       run: () => navigateView(`settings:${s.tab}`),
     })
   }
 
-  const themes: Array<[Theme, string]> = [
-    ['light', 'settings.theme.light'],
-    ['dark', 'settings.theme.dark'],
-    ['auto', 'settings.theme.auto'],
+  const themes: Array<[Theme, string, IconName]> = [
+    ['light', 'settings.theme.light', 'sun'],
+    ['dark', 'settings.theme.dark', 'moon'],
+    ['auto', 'settings.theme.auto', 'monitor'],
   ]
-  for (const [value, key] of themes) {
+  for (const [value, key, icon] of themes) {
     cmds.push({
       id: `theme:${value}`,
       // Reuses the settings page's own wording — two names for one switch is
       // exactly the kind of thing that makes a console feel bigger than it is.
       group: t('settings.theme'),
       label: t(key),
+      icon,
       alias: `theme appearance ${value}`,
-      hint: theme() === value ? '✓' : undefined,
+      checked: theme() === value,
       run: () => setTheme(value),
     })
   }
@@ -276,8 +340,9 @@ export function buildCommands(onLogout: () => void): Command[] {
       id: `lang:${l}`,
       group: t('palette.group.language'),
       label: localeNames[l],
+      icon: 'globe',
       alias: `language locale ${l}`,
-      hint: locale() === l ? '✓' : undefined,
+      checked: locale() === l,
       run: () => setLocale(l as Locale),
     })
   }
@@ -286,6 +351,7 @@ export function buildCommands(onLogout: () => void): Command[] {
     id: 'session:logout',
     group: t('palette.group.account'),
     label: t('token.logout'),
+    icon: 'log-out',
     alias: 'logout sign out token',
     run: onLogout,
   })

@@ -69,6 +69,10 @@ export interface DockProps {
    *  new side conversation, the workspace root). The button is always shown
    *  while the column is open; without a handler it opens a fresh side chat. */
   onNew?(): void
+  /** A second click on the tab already showing. The side conversation uses it
+   *  to open its history; without a handler the click folds the column, which
+   *  is what every other tab still wants. */
+  onReselect?(tab: Exclude<DockTab, ''>): void
   /** Counts shown as a badge on a tab. */
   badges?: Partial<Record<Exclude<DockTab, ''>, number>>
   /** The thread's actions, parked at the far end of the head: export, the node
@@ -117,10 +121,13 @@ export function Dock(props: DockProps) {
   ]
 
   const pick = (key: Exclude<DockTab, ''>) => {
-    // A second click on the tab already showing folds the column: the rail is
-    // the map, and clicking the place you already are is how you leave it.
+    // A second click on the tab already showing is that surface's own
+    // gesture: the side conversation opens its history popover, the rest fold
+    // the column. Folding stays the default — the rail is the map, and
+    // clicking the place you already are is how you leave it.
     if (open && tab === key) {
-      onToggle()
+      if (props.onReselect) props.onReselect(key)
+      else onToggle()
       return
     }
     onTab(key)

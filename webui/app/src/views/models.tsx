@@ -1893,7 +1893,6 @@ function DraftRow(props: {
             <div class="field-group narrow">
               <label>{t('models.col.thinking')}</label>
               <Select
-                class="input"
                 value={d.thinking}
                 options={(['auto', 'on', 'off'] as const).map((v) => ({
                   value: v,

@@ -41,7 +41,7 @@ NPM_INSTALL ?= npm ci --no-fund --no-audit
 
 .PHONY: all build web web-test web-gate build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test adapter-test vet staticcheck fmt fmt-check site-check race race-focused gate gate-all run run-local measure clean icons release package release-local install-local
+        dev test adapter-test vet staticcheck fmt fmt-check site-check race race-focused gate gate-all run run-local measure clean icons winres release package release-local install-local
 
 all: build
 
@@ -329,6 +329,18 @@ gate-all: gate web-gate tui-pty-test tui-pty-exit-test tui-pty-side-test tui-pty
 # Regenerate the PWA icon set (webui/app/public/icons/) from the stdlib-only generator.
 icons:
 	$(GO) run ./scripts/genicons
+
+# Windows resource objects. deploy/windows/panda.manifest declares per-monitor
+# DPI awareness; without a manifest Windows classifies the process as
+# DPI-unaware and paints every native window at 96 DPI before stretching the
+# bitmap to the display scale, which is why the folder chooser came out blurry
+# on a 150% desktop. `go build` links *.syso automatically and the generated
+# objects are committed, so this target only needs re-running when the manifest
+# changes — a plain build never needs rsrc or network access.
+winres:
+	$(GO) run github.com/akavel/rsrc@v0.10.2 -manifest deploy/windows/panda.manifest -arch amd64 -o cmd/panda/rsrc_windows_amd64.syso
+	$(GO) run github.com/akavel/rsrc@v0.10.2 -manifest deploy/windows/panda.manifest -arch arm64 -o cmd/panda/rsrc_windows_arm64.syso
+	$(GO) run github.com/akavel/rsrc@v0.10.2 -manifest deploy/windows/panda.manifest -arch amd64 -o webui/cmd/panel/rsrc_windows_amd64.syso
 
 # Quick-start: build (if needed) and open the web console with config.yaml.
 # One command to see everything — auto token, auto browser, loopback-only.

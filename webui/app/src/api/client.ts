@@ -359,6 +359,14 @@ export interface Task {
   intent?: string
   spec?: string
   result?: string
+  /** Paths the run reported touching, from the runner's workdir snapshot.
+   *  Present on list rows too (brief reads blank `result` but keep this), and
+   *  the only change signal a thread in a non-git folder gets. */
+  files_changed?: string[]
+  /** What the run could establish about those paths without version control:
+   *  a created file carries its line count, an edit or a deletion only its
+   *  kind (there is no "before" content left to count). */
+  files_stat?: { path: string; kind: string; lines?: number }[]
   /** The delivery contract's verdict (verified|failed|partial|skipped), empty
    *  when the task carried no acceptance checks. The report fold reads it. */
   verification?: string
