@@ -49,7 +49,7 @@ func TestFastTriage(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		res := FastTriage(c.prompt, nil)
+		res := FastTriage(c.prompt)
 		if res.IsFastPath != c.wantFast {
 			t.Errorf("FastTriage(%q) = %v (reason: %s), want %v", c.prompt, res.IsFastPath, res.Reason, c.wantFast)
 		}
