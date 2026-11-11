@@ -226,7 +226,13 @@ def which_fingerprint(name):
 _LIVE_PROCS = set()
 
 
-def _popen(*args, **kw):
+def _popen(*args, **kw) -> "subprocess.Popen":
+    # The generic argument (bytes vs str pipes) is the caller's business: this
+    # wrapper only registers the proc for the cancel sweep and forwards the
+    # spawn verbatim, so it must not pin the mode. Left bare, the checker
+    # resolves it to Popen[str] from the **kw it cannot read and then rejects
+    # the binary call sites; the callers that know the mode annotate their own
+    # local (`proc: subprocess.Popen[bytes]`).
     proc = subprocess.Popen(*args, **kw)
     _LIVE_PROCS.add(proc)
     return proc
@@ -295,9 +301,16 @@ def _force_utf8_stdio():
     input byte from crashing the read path instead of being reported.
     """
     for stream in (sys.stdin, sys.stdout, sys.stderr):
+        # Duck-typed on purpose: only io.TextIOWrapper has reconfigure, and the
+        # stream can be something else entirely (pythonw leaves it None, a test
+        # harness swaps in StringIO). Probing the attribute says that in one
+        # line and keeps the type checker honest about the stdio protocol.
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
         try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError, OSError):
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
             pass
 
 
@@ -969,14 +982,25 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
         stderr=subprocess.PIPE, env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
+    # _popen takes the pipe set as **kw, so the checker cannot see that these
+    # were PIPE. Bind them once here, where the spawn is still in view, instead
+    # of touching the Optional attributes at every use — and raise here rather
+    # than as an AttributeError inside the drain thread, whose traceback would
+    # name the thread and not the spawn.
+    stdin, stdout, stderr = proc.stdin, proc.stdout, proc.stderr
+    if stdout is None or stderr is None:
+        raise RuntimeError("run_stream: stdout/stderr were not piped")
     err_chunks = []
     drain_exc = []
 
     if input is not None:
+        if stdin is None:
+            raise RuntimeError("run_stream: stdin was requested but not piped")
+
         def feed():
             try:
-                proc.stdin.write(input.encode("utf-8"))
-                proc.stdin.flush()
+                stdin.write(input.encode("utf-8"))
+                stdin.flush()
             except (BrokenPipeError, OSError, ValueError):
                 # The child exited or closed its end before reading the whole
                 # payload. Its stderr already carries the real reason; a write
@@ -984,14 +1008,14 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
                 pass
             finally:
                 try:
-                    proc.stdin.close()
+                    stdin.close()
                 except (BrokenPipeError, OSError, ValueError):
                     pass
 
         threading.Thread(target=feed, daemon=True).start()
 
     def drain():
-        for raw in iter(proc.stderr.readline, b""):
+        for raw in iter(stderr.readline, b""):
             chunk = decode_cli(raw)
             err_chunks.append(chunk)
             if on_stderr is not None:
@@ -1001,7 +1025,7 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
                     drain_exc.append(ex)
                     kill_tree(proc)
                     break
-        proc.stderr.close()
+        stderr.close()
 
     t = threading.Thread(target=drain, daemon=True)
     t.start()
@@ -1040,7 +1064,7 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
 
     timed_out = False
     try:
-        for raw_line in proc.stdout:
+        for raw_line in stdout:
             if drain_exc:
                 raise drain_exc[0]
             line = decode_cli(raw_line)
@@ -1076,7 +1100,8 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
     return proc.returncode, "".join(err_chunks), timed_out
 
 
-def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None, heartbeat_s=0):
+def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT,
+              input: "str | bytes | None" = None, heartbeat_s=0):
     """One-shot runtime: capture stdout/stderr verbatim with a hard timeout.
 
     input (optional) is piped to the child's stdin — the generic adapter's
@@ -1095,7 +1120,7 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None, heartbeat_s=0)
     adapters had around subprocess.run, so existing except branches keep
     working.
     """
-    proc = _popen(
+    proc: "subprocess.Popen[bytes]" = _popen(
         resolve_argv(cmd),
         stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -1112,10 +1137,11 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None, heartbeat_s=0)
                 progress("%s still running (%ds)" % (label, int(time.monotonic() - started)))
 
         threading.Thread(target=_beat, daemon=True).start()
+    # The child's stdin is a binary pipe (no text=True above), so keep bytes on
+    # the wire: encode a str request, pass bytes through untouched.
+    payload = input.encode("utf-8") if isinstance(input, str) else input
     try:
-        out, err = proc.communicate(
-            input=input.encode("utf-8") if isinstance(input, str) else input,
-            timeout=timeout)
+        out, err = proc.communicate(input=payload, timeout=timeout)
     except subprocess.TimeoutExpired:
         kill_tree(proc)
         proc.communicate()  # reap + drain: the closed pipes return immediately
@@ -1221,17 +1247,20 @@ def spawn(cmd, cwd=None):
     appends to (join it for diagnostics). Raises FileNotFoundError when the
     binary is missing.
     """
-    proc = _popen(
+    proc: "subprocess.Popen[str]" = _popen(
         resolve_argv(cmd), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
+    stderr = proc.stderr
+    if stderr is None:
+        raise RuntimeError("spawn: stderr was not piped")
     err_chunks = []
 
     def drain():
-        for chunk in iter(proc.stderr.readline, ""):
+        for chunk in iter(stderr.readline, ""):
             err_chunks.append(chunk)
-        proc.stderr.close()
+        stderr.close()
 
     threading.Thread(target=drain, daemon=True).start()
     return proc, err_chunks
