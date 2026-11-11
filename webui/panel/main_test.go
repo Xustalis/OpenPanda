@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMain keeps the package out of the operator's real data directory. The
@@ -54,4 +55,36 @@ func goEnv(key string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// removeTempDir deletes dir with a short retry, before t.TempDir's own cleanup
+// reaches it. Go's TempDir cleanup calls os.RemoveAll exactly once; on macOS a
+// directory under the shared temporary root can still be populated for a
+// moment after its last writer leaves, because Spotlight and the AV file
+// provider walk new directories asynchronously and an unlinkat landing in that
+// window returns ENOTEMPTY. The result is a test that passes its body and then
+// fails in cleanup with "TestX: TempDir RemoveAll cleanup: unlinkat …
+// directory not empty" — a message about the harness, not about anything the
+// code under test did.
+//
+// Fixtures call this from the same t.Cleanup that closes their engine, so it
+// runs after the Close (which already drains queue runners and artifact
+// adoptions) and before the TempDir cleanup registered earlier. Reporting the
+// survivors rather than swallowing the error keeps a genuine leftover — a
+// writer the Close path missed — visible and diagnosable.
+func removeTempDir(t *testing.T, dir string) {
+	t.Helper()
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		if err = os.RemoveAll(dir); err == nil {
+			return
+		}
+		time.Sleep(time.Duration(20*(attempt+1)) * time.Millisecond)
+	}
+	entries, _ := os.ReadDir(dir)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	t.Errorf("temp dir %s survived cleanup: %v (leftovers: %v)", dir, err, names)
 }

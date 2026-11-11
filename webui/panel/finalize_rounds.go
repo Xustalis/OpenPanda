@@ -66,14 +66,20 @@ func roundSummary(r core.AskRound, loc i18n.Locale) string {
 	return b.String()
 }
 
-func (h *handler) finalizeAskRounds(ctx context.Context) {
+// finalizeAskRounds closes out settled fan-out rounds. It reports whether the
+// store is still usable, which is what lets the finalizer retire instead of
+// re-reading a torn-down handler on every tick.
+func (h *handler) finalizeAskRounds(ctx context.Context) bool {
 	if h.store == nil || h.sessions == nil {
-		return
+		return true
 	}
 	rounds, err := h.store.SettledAskRounds(ctx)
 	if err != nil {
+		if errStoreClosed(err) {
+			return false
+		}
 		log.From(ctx).Warn("round summary scan", "err", err)
-		return
+		return true
 	}
 	// A round records the console's language when it is dispatched; the
 	// persisted ui.locale is the fallback for rounds that predate that field.
@@ -116,4 +122,5 @@ func (h *handler) finalizeAskRounds(ctx context.Context) {
 			log.From(ctx).Warn("round summary marker", "round", r.ID, "err", err)
 		}
 	}
+	return true
 }
