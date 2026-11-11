@@ -93,6 +93,7 @@ import { ComposerPet } from '../components/composer-pet'
 import { OrchestrateCard } from '../components/orchestrate'
 import { DirButton } from '../components/dir-picker'
 import { ModelSelect } from '../components/model-select'
+import { SessionRail } from '../components/session-rail'
 import { VoiceInput } from '../components/voice-input'
 import { suggestProjectName } from '../components/dir-utils'
 import { EventTimeline } from '../components/event-timeline'
@@ -2633,6 +2634,37 @@ export function SessionsView({
   // that exists already knows where it runs, and the legend has been read.
   const newChatPage = !activeId && msgs.length === 0 && !loading
 
+  // The overview card is furniture, not a preference: a thread that is open
+  // always has one, the way it always has a composer. It costs the transcript
+  // nothing (the card floats, it takes no lane) and it is the only place that
+  // answers "what changed / how full / what is running" without a scroll.
+  // The new-chat page has no thread to summarize, so it gets none.
+  //
+  // It steps aside for the side panel: the dock is the same corner answering
+  // the same question in full, and once it is open the pane has already given
+  // up 380px — a second card on top of the remainder would leave the
+  // transcript a strip. `showRail` still gates the task read below, so folding
+  // the card never silences the live employee row in the thread.
+  const showRail = !newChatPage
+
+  // "Context used" is the last request's billed total: the prompt the thread
+  // actually sent. The newest assistant turn carries it — live, while the
+  // reply streams, and again after a reload, because the panel files the
+  // number with the turn. One read answers both the footprint and the model
+  // that produced it.
+  const newestUsage = (() => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]!
+      if (m.role === 'assistant' && ((m.tokens ?? 0) > 0 || m.model)) return m
+    }
+    return null
+  })()
+  // Where this thread is pinned to run, in the same words the node picker
+  // uses: the scheduler's own answer when nothing is pinned.
+  const railMachine = nodePref
+    ? nodes.find((n) => n.id === nodePref)?.name || nodePref
+    : t('sessions.nodeAuto')
+
   // The open thread's directory, read-only: the foot row under the box keeps
   // its place on every surface — 新对话 picks a directory there, 工作空间
   // picks one, and a thread shows where it runs — so moving between them does
@@ -2660,10 +2692,16 @@ export function SessionsView({
   // A running operation counts too: a turn started elsewhere (the workspace
   // dispatcher, another tab, the TUI) has no bubble here yet, but the thread
   // must still show the employee's live row instead of a bare spinner.
+  //
+  // The session rail is the third reader: "what is still working, and where"
+  // is one of the three things that card exists to answer, and it has to
+  // answer it for work this tab never dispatched. So a thread being read with
+  // the rail open pays the same brief read a dispatched one does — one small
+  // list per change frame, which is what the card is for.
   const dispatched =
     msgs.some((m) => m.kind === 'task' || m.kind === 'plan' || Boolean(m.liveTask)) ||
     session?.operation?.status === 'running'
-  const sessionTasks = useSessionTasks(activeId, dispatched)
+  const sessionTasks = useSessionTasks(activeId, dispatched || showRail)
   const roundOpen = sessionTasks ? roundStillOpen(sessionTasks) : false
   const runSummary = busy || roundOpen ? null : trailingRunSummary(msgs)
   // The employees still working, drawn after the last turn: a running job is
@@ -2805,6 +2843,28 @@ export function SessionsView({
             )}
           </div>
         </header>
+
+        {/* The session overview: a card that floats on the pane's top-right
+            corner, not a column of its own. It answers, without scrolling,
+            what this thread changed, how full the context is and what is still
+            running — each section opening into the surface that already owns
+            the detail (the diff drawer, the task detail, the queue board), so
+            the card never becomes a second copy of the app. While it is up the
+            transcript and the composer reserve its lane (`--panel-lane`), so
+            no line ever runs underneath it. See components/session-rail.tsx. */}
+        {showRail && !dockOpen && (
+          <SessionRail
+            diff={diff}
+            tasks={sessionTasks ?? []}
+            nodes={nodes}
+            contextTokens={newestUsage?.tokens ?? 0}
+            model={newestUsage?.model ?? ''}
+            machine={railMachine}
+            onOpenDiff={() => setDiffOpen(true)}
+            onOpenTask={openTaskInPlace}
+            onOpenQueue={() => navigateView('control')}
+          />
+        )}
 
         {diffOpen && diff && (
           <div class="diff-drawer">

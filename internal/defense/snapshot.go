@@ -36,6 +36,16 @@ var snapshotMaxFiles = 100_000
 // Skipped reports how many entries the walk could not stat.
 func (s Snapshot) Skipped() int { return s.skipped }
 
+// Has reports whether the snapshot recorded this workdir-relative path. It is
+// the one question a caller needs to tell a created file from an edited one
+// without opening the tree twice: absent before and present after is a
+// creation, and only a creation has a line count that is knowable after the
+// fact (there is no "before" content left to diff an edit against).
+func (s Snapshot) Has(path string) bool {
+	_, ok := s.files[path]
+	return ok
+}
+
 // Truncated reports whether the walk stopped at the file cap.
 func (s Snapshot) Truncated() bool { return s.truncated }
 

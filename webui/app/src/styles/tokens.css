@@ -18,6 +18,12 @@
   --bg-raised: #ffffff;      /* cards float on a hairline */
   --bg-overlay: #ffffff;     /* menus, sheets */
   --bg-inset: #eeeeef;       /* wells, code surfaces, sunken fields */
+  /* The thread's overview card: a sheet lying on the reading surface, a shade
+     off white and no shadow at all. The hairline is the whole edge — a drop
+     shadow this small only ever reads as a grey band under the card. */
+  --bg-float: #e4e4e6;
+  --border-float: #d2d2d6;
+  --shadow-float: none;
   --bg-hover: #eaeaec;
   --bg-active: rgba(28, 28, 32, 0.08);
 
@@ -180,10 +186,10 @@
      counted — which is exactly what the old two-line rows bought with 56
      fewer pixels. Still well under a quarter of a 1440px transcript. */
   --sidebar-w: 280px;
-  /* Chat's session rail. Kept narrow on purpose: every pixel it costs is a
-     pixel the transcript and the hero do not get, and the rail's rows are two
-     lines — they read fine at this width. */
-  --rail-w: 244px;
+  /* Chat's overview card. Narrow on purpose: it is an annotation pinned to the
+     corner of the transcript, not a column — every pixel it takes is a pixel of
+     conversation it covers. */
+  --rail-w: 200px;
   --inspector-w: 340px;
   --content-max: 860px;
 }
@@ -205,6 +211,10 @@
   --bg-raised: #282828;
   --bg-overlay: #303030;
   --bg-inset: #181818;
+  /* The same sheet at night: a step above the page, carried by its hairline. */
+  --bg-float: #2b2b2b;
+  --border-float: #3a3a3a;
+  --shadow-float: none;
   --bg-hover: #303030;
   --bg-active: rgba(255, 255, 255, 0.1);
   /* Keep the title band continuous with the transcript, as in light mode. */
@@ -289,6 +299,10 @@
     --bg-raised: #282828;
     --bg-overlay: #303030;
     --bg-inset: #181818;
+    /* The same sheet at night: a step above the page, carried by its hairline. */
+    --bg-float: #2b2b2b;
+    --border-float: #3a3a3a;
+    --shadow-float: none;
     --bg-hover: #303030;
     --bg-active: rgba(255, 255, 255, 0.1);
     --chat-head: var(--bg);
