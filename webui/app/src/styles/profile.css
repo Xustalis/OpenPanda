@@ -4,6 +4,11 @@
    then two columns — the activity calendar in the working column and one
    tall card on the right for the build itself.
 
+   The page is one card on the shell's canvas, the same frame a thread, the
+   bench and the board get (shell.css paints the gutter): the card owns its
+   scrolling, so the masthead travels with the calendar instead of the pane
+   scrolling the whole frame off its rounded edge.
+
    The calendar keeps the reference's geometry at any width: 26 fixed columns
    of square cells with a 3px gutter, so the squares grow with the column
    instead of the grid gaining columns. The page is capped at 980px and the
@@ -12,31 +17,43 @@
    calendar take the full page width was tried and is too coarse: 26 columns
    stretched to 1000px read as tiles, not as a calendar. */
 
-/* The pane centres the page: `.main` is the scroll container, so the block is
-   centred with auto margins (not `justify-content`, which would clip the top
-   of a page taller than the pane). Auto margins take the spare width and
-   height while the page is shorter than the pane — equal whitespace on
-   left/right and top/bottom — and collapse to 0 when it is taller, so a short
-   window still scrolls from the masthead instead of hiding it. */
-.main:has(> .profile) {
+/* The card is the scroll container, and the block inside it is centred in it:
+   auto margins take the spare width and height while the page is shorter than
+   the card — equal whitespace on left/right and top/bottom — and collapse to 0
+   when it is taller, so a short window still scrolls from the masthead instead
+   of hiding it. `flex: none` keeps the column from squeezing the grid: a
+   shrunk grid would clip its own cards and leave the scroll to the wrong box. */
+.profile {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.profile {
-  width: 100%;
-  max-width: 980px;
-  margin: auto;
+  overflow-y: auto;
+  padding: var(--sp-6);
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
 .profile-body {
+  width: 100%;
+  max-width: 980px;
+  flex: none;
+  margin: auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 20px;
-  /* No page header on this page — the identity card is the masthead, so the
-     grid starts flush with .main's own padding. */
-  margin-top: 0;
   align-items: stretch;
+}
+
+/* Loading and error ride in the same card (the frame must not flash a bare
+   pane first). Their content is one short block, so it takes the centre the
+   way `.profile-body` does — auto margins again, which collapse instead of
+   clipping if a long fetch error ever wraps past the card's height. */
+.profile-pending > section {
+  margin: auto;
+  text-align: center;
 }
 
 .profile-main {

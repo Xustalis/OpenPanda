@@ -85,7 +85,9 @@ type Notice =
 export interface DockBrowserProps {
   /** A URL the transcript asked for (a link in a reply, a task's artifact). */
   request?: string | null
-  /** Bumped by the panel's `+`: close the page, keep the history. */
+  /** Bumped on a thread switch: close the page and clear the address bar.
+   *  The bar's own close button does the same in place — the dock head's `+`
+   *  is 新对话 everywhere and never resets this panel. */
   resetSignal?: number
   /** A finished task's page, already resolved by the thread. */
   artifact?: BrowserArtifact | null
@@ -214,10 +216,11 @@ export function DockBrowser(props: DockBrowserProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.request])
 
-  // `+` closes the page. The stack stays: it is where you have been, and a new
-  // page from here is a new branch of it, not a different history.
-  useEffect(() => {
-    if (!props.resetSignal) return
+  // Close the page but keep the stack: it is where you have been, and a new
+  // page from here is a new branch of it, not a different history. The dock
+  // head's `+` used to be the only way in; `+` is 新对话 in every pane now, so
+  // the bar owns the close button and a thread switch calls the same routine.
+  const closePage = () => {
     // Invalidate an artifact read still in flight: it belongs to the page this
     // reset is closing, and letting it land would put the old thread's site
     // back on screen.
@@ -232,6 +235,11 @@ export function DockBrowser(props: DockBrowserProps) {
     setPick(false)
     setNotice(null)
     shownArtifact.current = ''
+  }
+  useEffect(() => {
+    if (!props.resetSignal) return
+    closePage()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.resetSignal])
 
   const loadArtifact = useCallback(
@@ -629,6 +637,20 @@ export function DockBrowser(props: DockBrowserProps) {
             onClick={() => setPick((v) => !v)}
           >
             <Icon name="eye" size={15} />
+          </button>
+        )}
+        {/* Only while there is a page to close: a control with nothing behind
+            it is exactly how the old dock-head `+` came to look unresponsive.
+            `+` is 新对话 in every pane now; this is the browser's own reset. */}
+        {page && (
+          <button
+            type="button"
+            class="icon-btn db-nav"
+            title={t('common.close')}
+            aria-label={t('common.close')}
+            onClick={closePage}
+          >
+            <Icon name="x" size={15} />
           </button>
         )}
       </form>
