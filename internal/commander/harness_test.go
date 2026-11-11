@@ -18,12 +18,61 @@ import (
 
 // tier1Card is a test card whose agent is declared tier 1, so Execute runs
 // without authorization and the tests can focus on the harness behavior.
+// A failed session may already have changed files; it must not be replayed
+// as a fresh one-shot while losing usage and its resumable checkpoint.
+func TestAgentSessionTimeoutDoesNotReplayCompletedSideEffects(t *testing.T) {
+	dir := t.TempDir()
+	old := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = old }()
+	stub := `import json, os, sys
+req = json.loads(sys.stdin.readline())
+with open(os.path.join(req["cwd"], "launches"), "a") as f:
+    f.write("launch\n")
+if req.get("session"):
+    print(json.dumps({"ok": False, "result": "session timed out after writing output", "exit_code": 124, "session_dead": True, "tokens": 123, "session_id": "checkpoint-1"}), flush=True)
+    for _ in sys.stdin:
+        pass
+else:
+    print(json.dumps({"ok": True, "result": "replayed", "exit_code": 0}), flush=True)
+`
+	if err := os.WriteFile(filepath.Join(dir, "claude_code.py"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, pool := WithSessionPool(context.Background())
+	defer pool.CloseAll()
+	ctx = WithSessionMode(ctx)
+	res := runAdapterProcess(ctx, "claude_code.py", "write once", dir, nil)
+	launches, err := os.ReadFile(filepath.Join(dir, "launches"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := strings.Count(string(launches), "launch")
+	t.Logf("subprocess_launches=%d ok=%t exit=%d tokens=%d checkpoint=%s", count, res.OK, res.ExitCode, res.Tokens, res.SessionID)
+	if count != 1 || res.OK || res.ExitCode != 124 || res.Tokens != 123 || res.SessionID != "checkpoint-1" {
+		t.Fatalf("session timeout silently replayed/lost evidence: %+v launches=%d", res, count)
+	}
+}
+
 func tier1Card() ledger.Card {
 	card := testCard()
 	ag := card.Agents["claude_code"]
 	ag.Tier = 1
 	card.Agents["claude_code"] = ag
 	return card
+}
+
+func TestInterruptedSessionIsNotFreshFallback(t *testing.T) {
+	for _, ar := range []AgentResult{
+		{SessionDead: true, ExitCode: 124},
+		{SessionDead: true, ExitCode: 1, Tokens: 10},
+		{SessionDead: true, ExitCode: 1, SessionID: "checkpoint"},
+		{SessionDead: true, ExitCode: 1, WorkObserved: true},
+	} {
+		if agentFallbackEligible(ar) || replayableFailure(ar) {
+			t.Fatalf("interrupted work eligible for fresh replay: %+v", ar)
+		}
+	}
 }
 
 func tier1Plan(t *testing.T, r *Router) Plan {

@@ -14,6 +14,7 @@ package plan
 // out, no file access and no clock. The caller reads the file.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
@@ -34,7 +36,23 @@ type yamlResources struct {
 	DurationHint string  `yaml:"duration_hint"`
 }
 
+type yamlCheck struct {
+	ID     string   `yaml:"id"`
+	Kind   string   `yaml:"kind"`
+	Run    string   `yaml:"run"`
+	Exists []string `yaml:"exists"`
+	Expect struct {
+		Exit           *int   `yaml:"exit"`
+		StdoutContains string `yaml:"stdout_contains"`
+	} `yaml:"expect"`
+}
+
 type yamlStage struct {
+	Acceptance        []yamlCheck `yaml:"acceptance"`
+	SuccessDefinition string      `yaml:"success_definition"`
+	ToolsPolicy       string      `yaml:"tools_policy"`
+	MaxTurns          int         `yaml:"max_turns"`
+
 	ID        string        `yaml:"id"`
 	Title     string        `yaml:"title"`
 	Requires  []string      `yaml:"requires"`
@@ -79,6 +97,29 @@ func Parse(data []byte) (Plan, error) {
 
 	p := Plan{Goal: strings.TrimSpace(raw.Goal), Stages: make([]Stage, 0, len(raw.Stages))}
 	for _, s := range raw.Stages {
+		if s.ToolsPolicy != "" && s.ToolsPolicy != "minimal" && s.ToolsPolicy != "extended" {
+			return Plan{}, fmt.Errorf("plan: stage %q invalid tools_policy", s.ID)
+		}
+		if s.MaxTurns < 0 || s.MaxTurns > 200 {
+			return Plan{}, fmt.Errorf("plan: stage %q max_turns outside 0..200", s.ID)
+		}
+		var checks []contract.Check
+		for _, check := range s.Acceptance {
+			checks = append(checks, contract.Check{ID: check.ID, Kind: check.Kind, Run: check.Run, Exists: check.Exists, Expect: contract.Expect{Exit: check.Expect.Exit, StdoutContains: check.Expect.StdoutContains}})
+		}
+		checked, err := contract.Validate(checks)
+		if err != nil {
+			return Plan{}, fmt.Errorf("plan: stage %q: %w", s.ID, err)
+		}
+		checks = checked
+		specJSON := ""
+		if len(checks) > 0 || s.ToolsPolicy != "" || s.MaxTurns != 0 || s.SuccessDefinition != "" {
+			data, e := json.Marshal(entry.TaskSpecDetail{Acceptance: checks, ToolsPolicy: s.ToolsPolicy, MaxTurns: s.MaxTurns, SuccessDefinition: s.SuccessDefinition})
+			if e != nil {
+				return Plan{}, e
+			}
+			specJSON = string(data)
+		}
 		p.Stages = append(p.Stages, Stage{
 			ID:       strings.TrimSpace(s.ID),
 			Title:    strings.TrimSpace(s.Title),
@@ -86,6 +127,7 @@ func Parse(data []byte) (Plan, error) {
 			Needs:    trimAll(s.Needs),
 			Node:     strings.TrimSpace(s.Node),
 			Intent:   strings.TrimSpace(s.Intent),
+			SpecJSON: specJSON,
 			Resources: entry.ResourceProfile{
 				CPU:          s.Resources.CPU,
 				RAMGB:        s.Resources.RAMGB,

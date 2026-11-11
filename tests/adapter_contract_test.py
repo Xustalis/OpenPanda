@@ -173,6 +173,29 @@ def run_harness(body, stdin_data="", env=None, timeout=5):
 
 
 class AdapterContractTest(unittest.TestCase):
+    def test_claude_preserves_native_model_observation(self):
+        body = 'import json\nprint(json.dumps({"type":"result","is_error":False,"result":"done","modelUsage":{"native-model-v1":{"inputTokens":3}}}))'
+        out, lines, _ = run_adapter("claude_code.py", "claude", body)
+        events = [json.loads(x) for x in lines if x.startswith("{")]
+        observed = [e for e in events if e.get("ev") == "model_observed"]
+        self.assertTrue(out["ok"])
+        self.assertEqual(len(observed), 1, events)
+        self.assertEqual(json.loads(observed[0]["text"])["models"], ["native-model-v1"])
+
+    def test_claude_turn_limit_cannot_be_success_with_long_partial_text(self):
+        body = 'import json\nprint(json.dumps({"type":"result","is_error":True,"subtype":"error_max_turns","result":"partial "*20,"session_id":"checkpoint"}))'
+        out, events, _ = run_adapter("claude_code.py", "claude", body)
+        self.assertFalse(out["ok"], out)
+        self.assertNotEqual(out["exit_code"], 0)
+        self.assertIn("incomplete", out["result"])
+        self.assertEqual(out["session_id"], "checkpoint")
+
+    def test_claude_nonzero_exit_cannot_be_success_with_long_text(self):
+        body = 'import json,sys\nprint(json.dumps({"type":"result","is_error":False,"result":"partial "*20}))\nsys.exit(7)'
+        out, events, _ = run_adapter("claude_code.py", "claude", body)
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["exit_code"], 7)
+
     def test_native_model_preferences_reach_single_model_clis(self):
         cases = [
             ("codex.py", "codex", 'print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"ok"}}))'),

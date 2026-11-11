@@ -720,16 +720,18 @@ func waitState(t *testing.T, ctx context.Context, store *TaskStore, taskID, want
 	t.Fatalf("task %s state = %s, want %s", taskID, tk.State, want)
 }
 
-// parkReviewPair drives a delegated task to the exact state the supervisor
-// follow-up leaves behind: the worker executed and parked an AcceptWork
-// review, and the delegator's copy mirrors it over the wire. Returns the task
-// id both copies share.
-func parkReviewPair(t *testing.T, ctx context.Context, entry, worker *Core) string {
+// parkReviewPair normally parks completed output whose supervisor could not
+// judge it; a human may accept that work. An explicit continue verdict is
+// different: known unfinished work must never be approved into done.
+func parkReviewPair(t *testing.T, ctx context.Context, entry, worker *Core, incomplete ...bool) string {
 	t.Helper()
 	worker.SetWorkDir(t.TempDir())
 	worker.SetSuperviseRounds(1)
 	worker.SetSupervisor(newFakeSupervisor(t, func(int) string {
-		return `{"status":"continue","reason":"incomplete","followup":"finish remaining work"}`
+		if len(incomplete) > 0 && incomplete[0] {
+			return `{"status":"continue","reason":"incomplete","followup":"finish remaining work"}`
+		}
+		return "supervisor could not judge this result"
 	}))
 	var calls atomic.Int32
 	worker.router.SetAdapterRunner(agentRunner(&calls))
@@ -798,6 +800,24 @@ func TestRemoteAcceptWorkMirrorsFromExecutor(t *testing.T) {
 		t.Fatalf("worker state after accept = %s, want done", final.State)
 	}
 	waitState(t, ctx, entry.store, taskID, StateDone)
+}
+
+func TestRemoteIncompleteWorkRejectsApprovalAtBothNodes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	origin := newCore(t, "origin-incomplete")
+	worker := newSuperviseCore(t, "worker-incomplete", 1)
+	id := parkReviewPair(t, ctx, origin, worker, true)
+	for _, node := range []*Core{origin, worker} {
+		cur, err := node.store.Get(ctx, id)
+		if err != nil || !cur.NeedsFollowup() {
+			t.Fatalf("completion evidence lost on %s: %+v %v", node.nodeID, cur, err)
+		}
+		if _, _, err := node.ResumeApproved(ctx, id); !errors.Is(err, ErrApprovalNeedsFollowup) {
+			t.Fatalf("incomplete approval on %s: %v", node.nodeID, err)
+		}
+		waitState(t, ctx, node.store, id, StateReview)
+	}
 }
 
 // TestParkedAcceptFlushesOnReconnect pins the custody path for an accept

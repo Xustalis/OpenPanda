@@ -301,3 +301,40 @@ func Inputs(p Plan, id string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// CriticalPathRanks returns a bottom-level rank. Long hints count as four
+// short work units; other hints count as one. These are not seconds or a
+// guarantee of globally optimal makespan. Invalid graphs fail closed.
+func CriticalPathRanks(p Plan) (map[string]int, error) {
+	if err := Validate(p); err != nil {
+		return nil, err
+	}
+	successors := make(map[string][]string, len(p.Stages))
+	weights := make(map[string]int, len(p.Stages))
+	for _, s := range p.Stages {
+		weights[s.ID] = 1
+		if s.Resources.DurationHint == "long" {
+			weights[s.ID] = 4
+		}
+		for _, dep := range s.Needs {
+			successors[dep] = append(successors[dep], s.ID)
+		}
+	}
+	ranks := make(map[string]int, len(p.Stages))
+	var rank func(string) int
+	rank = func(id string) int {
+		if r := ranks[id]; r != 0 {
+			return r
+		}
+		tail := 0
+		for _, next := range successors[id] {
+			tail = max(tail, rank(next))
+		}
+		ranks[id] = weights[id] + tail
+		return ranks[id]
+	}
+	for _, s := range p.Stages {
+		rank(s.ID)
+	}
+	return ranks, nil
+}

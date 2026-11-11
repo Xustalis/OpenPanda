@@ -85,24 +85,27 @@ Task field specifications:
   - Native abilities use their exact ID (e.g. sys:info, build:macos, git).
   - Agent abilities use agent:<name> (e.g. agent:claude_code, agent:codex, agent:hermes, agent:opencode, agent:grok_build).
   - NEVER fabricate IDs outside the provided list.
-  - If no exact native ability matches: if the target device declares an agent, delegate to that agent (e.g. agent:claude_code). Agents possess full shell, filesystem, and tool capabilities; never downgrade to asking the user to run commands manually.
+  - If no exact native ability matches: if the target device declares an agent, delegate to that agent (e.g. agent:claude_code). Its available shell, filesystem, plugins and tools depend on the selected harness and effective policy. Delegate work it can actually perform; if evidence shows a missing external permission or runtime, report that blocker instead of promising unrestricted access or repeating the same failed operation.
 - spec.target: Restate the user's request faithfully and completely. The executing agent reads target as its instruction — a summary that drops their specifics produces wrong work. Keep names, file paths, error messages, and numbers verbatim. Write it as an order an engineer can execute without asking back: the concrete change/deliverable, where it applies, and how "done" is checked. No rhetorical framing, no "please confirm" tails.
 - spec.action_spec: REQUIRED when the task drives a physical or desktop actuator — an ability whose ID starts with "hardware:" in the device list (e.g. hardware:servo_rotate, hardware:mic_record, hardware:camera_snap, hardware:notify, hardware:screen_capture, hardware:gui_input). Emit {"target_actuator":"<the exact hardware:* ID, also placed in requires>","action":"<verb such as rotate|record|snap|notify|capture|click|type|key>","parameters":{"<name>":<scalar>}}. A screen-capture actuator needs no parameters. GUI input (hardware:gui_input) takes one "args" string matching the verb contract: move/click/dblclick → "x,y[,button]", type → the literal text, key → "ctrl+c" or "Return", scroll → "up|down[,n]", pos → "". Parameters must be scalar (number, string, or boolean) and must name the values the action implies — the driver fails loudly when a needed placeholder is missing. Omit the whole field for ordinary command/file/agent tasks.
-- tools_policy: omit or "minimal" for routine tasks. Use "extended" ONLY for high-complexity agent tasks that legitimately need the agent's full tool face (sub-agents, MCP servers, web tools).
+- tools_policy: omit or "minimal" for tasks covered by ordinary file/shell tools. Use "extended" when the user requests, or the task actually requires, the harness's native skills, plugins, MCP servers, web tools or sub-agents, even for a small task. This selects tool availability, not extra filesystem/network permission. Never claim a declared capability was loaded or used without runtime evidence.
 - max_turns: omit or 0 for the adapter default. Set higher (e.g. 60-100) only for complex multi-file build-test-debug work the 30-turn default would truncate.
 
 ═══ Kind 4: plan ═══
-When a pipeline must be split into sequential stages across DIFFERENT machines, output a multi-stage plan JSON. The sole criterion for using plan over task is: CHANGING MACHINES.
-- Sequential steps on the same machine are handled by the agent within a single task.
+Use a plan when work crosses machines OR substantial independent deliverables benefit from concurrent execution on the same machine, especially when the user explicitly requests parallel graph orchestration. Use a single task for small work, tightly coupled edits, or a purely sequential local workflow.
+- Split by independently verifiable deliverables with disjoint output paths and explicit interfaces. Do not create artificial dependencies or split trivial steps merely to use tools. Shared-file writers must serialize or integrate through a downstream join.
+- Every integration/verification stage must depend on all required producers. Preserve the user's full acceptance criteria through the final join; never equate a stage completing with the whole goal completing.
+- Native harness Skill/tool names differ from Panda-injected workflow guidance. Do not invent tool registrations or capabilities.
 
 When emitting a plan, output ONLY a single JSON object with no surrounding text:
-{"kind":"plan","plan":{"goal":"Overall user goal","stages":[{"id":"short_ascii_id","title":"Stage title","intent":"Stage instructions for executing node","requires":["ability_id"],"needs":["prior_stage_ids"],"node":"device_id_or_empty","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short|long"}}]}}
+{"kind":"plan","plan":{"goal":"Overall user goal","stages":[{"id":"short_ascii_id","title":"Stage title","intent":"Stage instructions for executing node","requires":["ability_id"],"needs":["prior_stage_ids"],"node":"device_id_or_empty","acceptance":[],"success_definition":"Concrete evidence required for this stage","tools_policy":"minimal|extended","max_turns":0,"resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short|long"}}]}}
 
 - id: Unique short ASCII identifier (e.g. develop, train, report).
 - needs: Execution order and artifact pipeline. Work directories of dependency stages are packaged and transferred. Stages with empty needs execute concurrently.
 - node: HARD PIN — when the user names a specific device for a stage ("在 Mac 上写", "on the Windows box"), set node to that device's id or display name from the Connected Devices list. The stage then runs ONLY there — never silently rerouted to another machine that happens to satisfy requires. Omit for free routing.
 - requires & resource_profile: Specified per stage following the same rules as task. requires alone NEVER expresses device choice — an ability like agent:claude_code exists on several machines; only node pins the device.
-- Keep stage count minimal; prefer 2 stages over 3 where possible. Maximum 64 stages.
+- Keep stage count minimal while preserving useful parallelism and an explicit final integration/verification stage. Maximum 64 stages.
+- acceptance, success_definition, tools_policy and max_turns have the same meaning as for a task. Declare independently executable acceptance checks for each stage. A file assertion is not sufficient for interaction, visual or runtime behavior. Avoid repeated discovery and duplicate verification across stages; perform cross-stage browser checks after integration.
 
 ═══ Clarify before acting (not after) ═══
 When the request would become a task or plan, and the outcome materially depends on a decision only the user can make — which repository/directory to touch, which approach or technology to use, whether to modify production data, an irreversible direction, or an ambiguous deliverable — ask first instead of guessing. Emit ONLY this JSON:
@@ -181,7 +184,7 @@ const taskExampleSection = `
     },
     "complexity": 0.0,
     "risk": "low|medium|high|critical",
-    "tools_policy": "minimal|extended (optional; extended only for complex agent work needing full tool face)",
+    "tools_policy": "minimal|extended (optional; extended when native skills/plugins/MCP/web/sub-agents are required)",
     "max_turns": 0,
     "resource_profile": {"cpu": 1, "ram_gb": 1, "gpu_vram_gb": 0, "duration_hint": "short|long"}
   }

@@ -182,11 +182,12 @@ export function DetailView({
   if (!task) return <p class="dim">{t('common.loading')}</p>
 
   const cancellable = !['done', 'failed', 'cancelled', 'expired'].includes(task.state)
-  // The third answer to a supervised "more work remains" park: approve would
-  // accept the half-finished work, reject would throw it away — continue
-  // spends a fresh round budget on finishing it, in the same agent session.
+  // Incomplete work can continue or be rejected; approval cannot establish
+  // a missing postcondition. Preserve the legacy verdict-only shape too.
   const needsFollowup =
-    task.state === 'review' && parseResult(task.result ?? '')?.needs_followup === true
+    task.state === 'review' &&
+    (parseResult(task.result ?? '')?.needs_followup === true ||
+      parseResult(task.result ?? '')?.verdict === 'continue')
   // A needs_changed_input park carries its failure in the review event, not in
   // result (no work was produced, so there is nothing to show there). Lift it
   // out of the timeline: a disabled Approve with no visible cause reads as a
@@ -276,8 +277,8 @@ export function DetailView({
               <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
               <button
                 class="btn primary"
-                disabled={busy || task.approval_disposition === 'needs_changed_input'}
-                title={blocked ? t('detail.needsChangedInputHint') : undefined}
+                disabled={busy || blocked || needsFollowup}
+                title={blocked ? t('detail.needsChangedInputHint') : needsFollowup ? t('detail.continueHint') : undefined}
                 onClick={() => act(() => api.approve(task.id, scope), t('detail.approvedToast'))}
               >
                 {t('detail.approve')}

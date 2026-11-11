@@ -362,60 +362,90 @@ func TestDeepRepositorySideAndFollowupRejectShallowConclusion(t *testing.T) {
 
 // Three real queue receipts plus a refused fourth submission keep lastTask in
 // the loop. Neither an ordinary answer nor budget-exhaustion convergence may
-// re-label those receipts as a completed repository investigation.
-func TestDeepRepositoryQueuedReceiptCannotBecomeCompletedAnswer(t *testing.T) {
-	for _, exhaust := range []bool{false, true} {
-		t.Run(fmt.Sprintf("exhaust=%v", exhaust), func(t *testing.T) {
-			var calls atomic.Int32
-			e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
-				n := calls.Add(1)
-				w.Header().Set("Content-Type", "application/json")
-				var response map[string]any
-				if n == 1 {
-					var tools []map[string]any
-					for i := 0; i < 4; i++ {
-						tools = append(tools, map[string]any{"type": "tool_use", "id": fmt.Sprintf("review-%d", i), "name": "task_submit", "input": map[string]any{
-							"title": fmt.Sprintf("review-%d", i), "target": fmt.Sprintf("inspect implementation section %d", i), "abilities": []string{"agent:codex"},
-						}})
+// re-label those receipts as completed work in any task domain.
+func TestQueuedReceiptCannotBecomeCompletedAnswer(t *testing.T) {
+	for _, prompt := range []string{"深入分析这个代码库", "新建一个介绍 OpenPanda 的单文件官网页面", "本地起一个静态服务器把 about.html 跑起来"} {
+		t.Run(prompt, func(t *testing.T) {
+			for _, mode := range []struct{ exhaust, streaming bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+				exhaust, streaming := mode.exhaust, mode.streaming
+				t.Run(fmt.Sprintf("exhaust=%v/streaming=%v", exhaust, streaming), func(t *testing.T) {
+					var calls atomic.Int32
+					e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
+						n := calls.Add(1)
+						var request struct {
+							Stream bool `json:"stream"`
+						}
+						_ = json.NewDecoder(r.Body).Decode(&request)
+						w.Header().Set("Content-Type", "application/json")
+						var response map[string]any
+						if n == 1 {
+							var tools []map[string]any
+							for i := 0; i < 4; i++ {
+								tools = append(tools, map[string]any{"type": "tool_use", "id": fmt.Sprintf("review-%d", i), "name": "task_submit", "input": map[string]any{
+									"title": fmt.Sprintf("review-%d", i), "target": fmt.Sprintf("inspect implementation section %d", i), "abilities": []string{"agent:codex"},
+								}})
+							}
+							response = map[string]any{"content": tools}
+						} else if exhaust && n <= 6 {
+							response = map[string]any{"content": []map[string]any{{"type": "tool_use", "id": fmt.Sprintf("list-%d", n), "name": "workspace_list", "input": map[string]any{"path": "."}}}}
+						} else {
+							response = anthropicText("fabricated completed repository audit")
+						}
+						if request.Stream {
+							w.Header().Set("Content-Type", "text/event-stream")
+							emit := func(event any) { b, _ := json.Marshal(event); _, _ = fmt.Fprintf(w, "data: %s\n\n", b) }
+							raw, _ := json.Marshal(response["content"])
+							var blocks []map[string]any
+							_ = json.Unmarshal(raw, &blocks)
+							for i, b := range blocks {
+								emit(map[string]any{"type": "content_block_start", "index": i, "content_block": b})
+								delta := map[string]any{"type": "text_delta", "text": b["text"]}
+								if b["type"] == "tool_use" {
+									input, _ := json.Marshal(b["input"])
+									delta = map[string]any{"type": "input_json_delta", "partial_json": string(input)}
+								}
+								emit(map[string]any{"type": "content_block_delta", "index": i, "delta": delta})
+							}
+							return
+						}
+						_ = json.NewEncoder(w).Encode(response)
+					})
+					var deltas strings.Builder
+					cb := StreamCallbacks{}
+					if streaming {
+						cb.OnDelta = func(s string) { deltas.WriteString(s) }
 					}
-					response = map[string]any{"content": tools}
-				} else if exhaust && n <= 6 {
-					response = map[string]any{"content": []map[string]any{{"type": "tool_use", "id": fmt.Sprintf("list-%d", n), "name": "workspace_list", "input": map[string]any{"path": "."}}}}
-				} else {
-					response = anthropicText("fabricated completed repository audit")
-				}
-				_ = json.NewEncoder(w).Encode(response)
-			})
-			var deltas strings.Builder
-			res, err := e.AskTurnsScoped(context.Background(), nil, "深入分析这个代码库", AskScope{WorkDir: t.TempDir()}, true, StreamCallbacks{OnDelta: func(s string) { deltas.WriteString(s) }})
-			if err != nil || res == nil || res.TaskID == "" || res.TaskState != core.StateQueued || res.OK {
-				t.Fatalf("lost queued receipt: %+v err=%v", res, err)
-			}
-			if strings.Contains(res.Answer+res.Report+deltas.String(), "fabricated completed") {
-				t.Fatalf("unverified completion escaped: %+v stream=%q", res, deltas.String())
-			}
-			want := int32(2)
-			if exhaust {
-				want = 6
-			}
-			if calls.Load() != want {
-				t.Fatalf("calls=%d, want %d; must not summarize a queued investigation", calls.Load(), want)
+					res, err := e.AskTurnsScoped(context.Background(), []entry.Turn{{Role: "user", Content: "Continue the requested task"}}, prompt, AskScope{WorkDir: t.TempDir()}, true, cb)
+					if err != nil || res == nil || res.TaskID == "" || res.TaskState != core.StateQueued || res.OK {
+						t.Fatalf("lost queued receipt: %+v err=%v", res, err)
+					}
+					if strings.Contains(res.Answer+res.Report+deltas.String(), "fabricated completed") {
+						t.Fatalf("unverified completion escaped: %+v", res)
+					}
+					want := int32(2)
+					if exhaust {
+						want = 6
+					}
+					if calls.Load() != want {
+						t.Fatalf("calls=%d, want %d; must not summarize an unfinished task", calls.Load(), want)
+					}
+				})
 			}
 		})
 	}
 }
 
-func TestIncompleteRepositoryTaskStates(t *testing.T) {
+func TestIncompleteTaskOutcomeStates(t *testing.T) {
 	for _, state := range []string{core.StateQueued, core.StateFailed, core.StateReview, core.StateDone} {
 		for _, ok := range []bool{false, true} {
 			task := &Result{TaskState: state, OK: ok}
 			want := state != core.StateDone || !ok
-			if incompleteRepositoryTask(true, task) != want || incompleteRepositoryTask(false, task) {
+			if incompleteTaskOutcome(task) != want {
 				t.Fatalf("state=%s ok=%v", state, ok)
 			}
 		}
 	}
-	if incompleteRepositoryTask(true, nil) {
+	if incompleteTaskOutcome(nil) {
 		t.Fatal("nil task has a separate missing-dispatch guard")
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/projects"
@@ -709,6 +710,11 @@ func (c *Core) resumeApproved(ctx context.Context, taskID string, relayUpstream 
 	}
 	switch disposition {
 	case ApprovalAcceptWork:
+		// Check before merging an isolated tree or forwarding acceptance.
+		// The store repeats this check inside its transaction.
+		if cur.NeedsFollowup() {
+			return cur, bus.TaskResultPayload{}, ErrApprovalNeedsFollowup
+		}
 		result := bus.TaskResultPayload{OK: true}
 		if cur.ResultJSON != "" {
 			if err := json.Unmarshal([]byte(cur.ResultJSON), &result); err != nil {
@@ -740,6 +746,9 @@ func (c *Core) resumeApproved(ctx context.Context, taskID string, relayUpstream 
 		// (or park it for the peer's next link): approving only the local
 		// copy left the executor's parked copy in review forever.
 		c.forwardAcceptDownstream(ctx, taskID, "")
+		if err == nil {
+			c.advanceStagePlan(ctx, final)
+		}
 		return final, result, err
 	case ApprovalNeedsChangedInput:
 		return cur, bus.TaskResultPayload{TaskID: cur.TaskID, AttemptID: cur.AttemptID, State: cur.State},
@@ -794,6 +803,9 @@ func (c *Core) resumeApproved(ctx context.Context, taskID string, relayUpstream 
 		return final, result, ctx.Err()
 	}
 	final, res, rerr := c.retryLoop(ctx, taskID, cur.Intent, cur.Requires, result, err)
+	if rerr == nil {
+		c.advanceStagePlan(ctx, final)
+	}
 	if relayUpstream {
 		// A remote-origin row approved out of a trust-zone admission park
 		// ran here; its delegator is still waiting on the verdict upstream.
@@ -808,9 +820,10 @@ func (c *Core) resumeApproved(ctx context.Context, taskID string, relayUpstream 
 // reject are already the complete set of honest answers.
 func needsFollowupResult(resultJSON string) bool {
 	var res struct {
-		NeedsFollowup bool `json:"needs_followup"`
+		NeedsFollowup bool   `json:"needs_followup"`
+		Verdict       string `json:"verdict"`
 	}
-	return json.Unmarshal([]byte(resultJSON), &res) == nil && res.NeedsFollowup
+	return json.Unmarshal([]byte(resultJSON), &res) == nil && (res.NeedsFollowup || res.Verdict == entry.VerdictContinue)
 }
 
 // ContinueReviewed requeues a task whose round budget ran out mid-work: the

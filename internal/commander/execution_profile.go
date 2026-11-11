@@ -4,6 +4,9 @@ package commander
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
@@ -20,6 +23,14 @@ type AdapterExecutionProfile struct {
 	Adapter              string               `json:"adapter"`
 	CWD                  string               `json:"cwd"`
 	Transport            string               `json:"transport"`
+	AdapterPath          string               `json:"adapter_path,omitempty"`
+	AdapterSHA256        string               `json:"adapter_sha256,omitempty"`
+	SandboxMode          string               `json:"sandbox_mode"`
+	SandboxBackend       string               `json:"sandbox_backend"`
+	SandboxNetwork       bool                 `json:"sandbox_network"`
+	ExternalToolPolicy   string               `json:"external_tool_policy"`
+	NativeToolAccess     string               `json:"native_tool_access"`
+	NativeSettings       string               `json:"native_settings_policy"`
 	ModelPreference      string               `json:"model_preference,omitempty"`
 	ModelInjection       bool                 `json:"model_injection"`
 	RequestedEffort      string               `json:"requested_effort,omitempty"`
@@ -85,6 +96,32 @@ func adapterExecutionProfile(ctx context.Context, adapter string, req AdapterReq
 		NativeConfig: "unverified", NativeVersion: "unknown",
 		ToolsPolicy: req.ToolsPolicy, Restricted: req.Restricted, Authorized: req.Authorized,
 		ResumeRequested: req.Resume != "", TimeoutS: req.TimeoutS, MaxTurns: req.MaxTurns,
+	}
+	policy := security.BasePolicy()
+	p.SandboxMode, p.SandboxNetwork = string(policy.Mode), policy.AllowNetwork
+	p.SandboxBackend = "off"
+	if policy.Mode != security.ModeOff {
+		p.SandboxBackend = security.Backend()
+		if p.SandboxBackend == "" {
+			p.SandboxBackend = "unavailable"
+		}
+	}
+	p.ExternalToolPolicy = "unknown_not_controlled_by_panda_approval"
+	p.NativeSettings = "inherited_unverified"
+	p.NativeToolAccess = "native_unverified"
+	if req.Restricted {
+		p.NativeToolAccess = "restricted"
+	} else if adapter == "claude_code.py" && req.ToolsPolicy != "extended" {
+		p.NativeToolAccess = "minimal_allowlist"
+	}
+	if adapter == "claude_code.py" && injected {
+		p.NativeSettings = "disabled_for_injection"
+	}
+	if path, err := adapterScript(adapter); err == nil {
+		p.AdapterPath = path
+		if data, err := os.ReadFile(path); err == nil {
+			p.AdapterSHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
+		}
 	}
 	if k, ok := agents.Lookup(p.Agent, adapter); ok {
 		c := k.Capabilities

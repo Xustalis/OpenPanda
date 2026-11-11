@@ -241,6 +241,17 @@ func ValidatePlanSpec(p *PlanSpec) error {
 	}
 	seen := make(map[string]bool, len(p.Stages))
 	for i, s := range p.Stages {
+		if s.ToolsPolicy != "" && s.ToolsPolicy != "minimal" && s.ToolsPolicy != "extended" {
+			return fmt.Errorf("entry: plan.stages[%d] invalid tools_policy", i)
+		}
+		if s.MaxTurns < 0 || s.MaxTurns > 200 {
+			return fmt.Errorf("entry: plan.stages[%d] max_turns outside 0..200", i)
+		}
+		checks, err := contract.Validate(s.Acceptance)
+		if err != nil {
+			return fmt.Errorf("entry: plan.stages[%d]: %w", i, err)
+		}
+		p.Stages[i].Acceptance = checks
 		if !s.Kind.Valid() {
 			return fmt.Errorf("entry: plan.stages[%d].task_kind %q invalid", i, s.Kind)
 		}

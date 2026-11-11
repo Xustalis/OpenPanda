@@ -478,6 +478,13 @@ def _result_out(final, returncode):
     over the rendered result string. subagent_stats passes through so the
     task record reports the delegation fan-out the run actually spawned.
     """
+    # Native-reported model identities are distinct from the selected
+    # harness. Only names are retained; never forward credentials/settings.
+    model_usage = final.get("modelUsage")
+    if isinstance(model_usage, dict):
+        names = sorted(k[:200] for k in model_usage if isinstance(k, str))[:16]
+        if names:
+            harness.emit_event("model_observed", text=json.dumps({"models": names, "source": "native_result"}, ensure_ascii=False))
     usage = _usage(final.get("usage"))
     tokens = usage["input_tokens"] + usage["output_tokens"]
     res_text = final.get("result") or ""
@@ -486,13 +493,13 @@ def _result_out(final, returncode):
         ans = structured.get("answer")
         if isinstance(ans, str) and ans.strip():
             res_text = ans
-    is_err = bool(final.get("is_error"))
-    # If the turn limit was reached, or if is_error is set but the model
-    # completed substantive text output (e.g. analysis report), do not treat
-    # as a fatal agent crash that discards the work.
-    if is_err and (final.get("subtype") == "error_max_turns" or final.get("terminal_reason") == "max_turns"):
-        if len(res_text.strip()) > 50:
-            is_err = False
+    # A long partial answer does not make a turn-limit or process failure
+    # successful. Preserve the checkpoint and usage, but fail closed.
+    turn_limit = (final.get("subtype") == "error_max_turns"
+                  or final.get("terminal_reason") == "max_turns")
+    is_err = bool(final.get("is_error")) or turn_limit or returncode != 0
+    if turn_limit:
+        res_text = "Agent turn limit reached; task is incomplete.\n" + res_text
     # A failed run must say why. The CLI's error envelope is not obliged to
     # carry prose: a run that stops on the turn cap reports
     # subtype=error_max_turns with an empty `result`, and the orchestrator's
@@ -508,9 +515,9 @@ def _result_out(final, returncode):
     if isinstance(stats, dict) and any(stats.values()):
         extra["subagent_stats"] = stats
     return {
-        "ok": not is_err and (returncode == 0 or (not is_err and len(res_text.strip()) > 50)),
+        "ok": not is_err,
         "result": res_text,
-        "exit_code": 0 if not is_err else returncode,
+        "exit_code": 0 if not is_err else (returncode or 1),
         "tokens": tokens or None,
         "cost": final.get("total_cost_usd"),
         "usage": usage,

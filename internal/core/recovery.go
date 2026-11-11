@@ -3,6 +3,9 @@
 package core
 
 import (
+	"encoding/json"
+	"strings"
+
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 )
@@ -47,6 +50,13 @@ func assessRecovery(r bus.TaskResultPayload) RecoveryAssessment {
 	case commander.IsAuthorizationRefusal(r.Stderr):
 		a.Category = "authorization"
 		a.Strategy = RecoveryHumanReview
+	case r.Tokens == 0 && authenticationSetupRequired(r.Stderr):
+		// Commander already tried permitted provider rescue and alternates.
+		// Re-dispatching a logged-out CLI cannot change its credentials and
+		// merely hits the dispatch-failure cooldown. Preserve the first cause.
+		a.Category = "authentication_required"
+		a.Strategy = RecoveryStop
+		a.ReplaySafety = "safe_after_environment_fix"
 	case r.ExitCode == 124 && r.AgentSessionID != "":
 		a.Category = "checkpoint"
 		a.Strategy = RecoverySessionResume
@@ -55,4 +65,54 @@ func assessRecovery(r bus.TaskResultPayload) RecoveryAssessment {
 		a.Category = "timeout_without_checkpoint"
 	}
 	return a
+}
+
+// Match a short CLI diagnostic, never a quoted phrase buried in a task report.
+func authenticationSetupRequired(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if len(s) > 512 {
+		return false
+	}
+	for _, prefix := range []string{"not logged in", "not signed in", "please run /login", "login required", "invalid api key", "invalid_api_key", "missing api key"} {
+		if s == prefix || strings.HasPrefix(s, prefix+" ") || strings.HasPrefix(s, prefix+":") {
+			return true
+		}
+	}
+	return false
+}
+
+// RecoveryPending distinguishes a transient failed row from a settled failure.
+// Readers must wait through the result->assessment write gap and retry backoff.
+func RecoveryPending(events []Event) bool {
+	for i := len(events) - 1; i >= 0; i-- {
+		switch events[i].Type {
+		case EvReview, EvExpire, EvCancel:
+			return false
+		case EvRecoveryAssessment:
+			var p struct{ Assessment RecoveryAssessment }
+			if json.Unmarshal([]byte(events[i].DataJSON), &p) == nil {
+				switch p.Assessment.Strategy {
+				case RecoveryBoundedRetry, RecoverySessionResume:
+					return true
+				case RecoveryStop, RecoveryHumanReview:
+					return false
+				}
+			}
+		case EvResult:
+			start := 0
+			for j := i - 1; j >= 0; j-- {
+				if events[j].Type == EvSubmit || events[j].Type == EvRetry {
+					start = j + 1
+					break
+				}
+			}
+			for j := start; j < i; j++ {
+				if events[j].Type == EvExecAgentStart || events[j].Type == EvSupervisionRound {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return false
 }

@@ -1268,6 +1268,7 @@ func turnCapFailure(res commander.Result) bool {
 		"turn cap",
 		"max_turns",
 		"max turns",
+		"turn limit reached",
 	} {
 		if strings.Contains(text, pattern) {
 			return true
@@ -1367,10 +1368,11 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	// then judged; a "continue" verdict re-delegates the follow-up instruction
 	// to the same plan (whose fallback chain may pick a different agent if the
 	// primary's CLI is unavailable) until the judging model accepts the work or
-	// the round budget runs out. Every non-agent plan — and every agent plan
-	// without a supervisor — converges in a single round.
+	// the round budget runs out. Every non-agent plan — and an agent without either a supervisor or checks — converges in one round.
+	// Contract-only execution may resume a turn-cap checkpoint within the same
+	// bounded round budget; successful execution still stops immediately.
 	maxRounds := 1
-	if plan.Kind == "agent" && supervisor != nil {
+	if plan.Kind == "agent" && (supervisor != nil || len(w.checks) > 0) {
 		maxRounds = c.superviseRounds
 	}
 
@@ -1693,6 +1695,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			"workdir":              workDir,
 			"prompt_bytes":         len(prompt),
 			"context_budget_bytes": agentContextBudget(task),
+			"loaded_skills":        loadedSkillEvidence(usedSkills),
 		})
 
 		// The agent runs inside an inner attempt loop so a context-window
@@ -2297,7 +2300,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// Without this, a long repo task that is simply bigger than the
 			// adapter default fails on the cap and every retry hits the same
 			// wall.
-			if plan.Kind == "agent" && round+1 < maxRounds && sessionID != "" && turnCapFailure(res) {
+			if plan.Kind == "agent" && round+1 < maxRounds && sessionID != "" && !tokenExhausted && execCtx.Err() == nil && turnCapFailure(res) {
 				c.EvTrace(execCtx, taskID, "turn_cap_continue", map[string]any{
 					"round": round + 1, "agent": res.Agent, "session": sessionID,
 				})
@@ -2306,6 +2309,23 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 						"Continue from where you stopped — do not restart completed work — and finish the task.")
 				execCtx = commander.WithMaxTurns(execCtx, turnCapContinuationTurns)
 				continue
+			}
+			// Exhausted continuation must not enter the outer generic retry loop.
+			if plan.Kind == "agent" && turnCapFailure(res) {
+				msg := "agent turn budget exhausted; task remains incomplete; revise the budget or scope before continuing"
+				if err := c.store.pauseWithResultDisposition(context.WithoutCancel(ctx), taskID, c.nodeID, map[string]any{"ok": false, "needs_followup": true, "verdict": "continue", "stderr": msg, "agent_session_id": sessionID, "agent_session_adapter": sessionAdapter}, ApprovalNeedsChangedInput, msg, attemptID); err != nil {
+					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+						return roundOutcome{}, ErrCancelled
+					}
+					return roundOutcome{}, fmt.Errorf("park turn budget: %w", err)
+				}
+				return roundOutcome{done: true, payload: bus.TaskResultPayload{
+					TaskID: taskID, AttemptID: attemptID, State: StateReview,
+					ApprovalDisposition: string(ApprovalNeedsChangedInput), OK: false, ExitCode: res.ExitCode, Stderr: msg,
+					NeedsFollowup: true, Verdict: "continue", VerdictReason: msg,
+					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+					AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter,
+				}}, nil
 			}
 			// A context-window overflow is deterministic: the same prompt will
 			// not fit on retry. The in-round compact retry above already got
@@ -2477,7 +2497,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// — Trace: supervision_round, part 2. The judge has spoken, so the
 		// round's badge can carry the verdict it actually produced — and the
 		// reviewing stage's stopwatch starts only now, not over the agent run.
-		emitRound(string(v.Status))
+		v = verdict // trace and control flow must reflect deterministic corrections
+		emitRound(v.Status)
 		if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, EvSupervise, map[string]any{
 			"round": round + 1, "status": v.Status, "reason": v.Reason, "followup": v.Followup,
 		}); err != nil {
@@ -2494,9 +2515,9 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			}
 			break
 		}
-		if v.Status == entry.VerdictReview {
-			// No verdict obtainable: stop iterating and let the review branch
-			// below hand the result to a human.
+		if v.Status == entry.VerdictReview || v.Status == entry.VerdictBlocked {
+			// An unavailable judgment or external blocker needs human input,
+			// not another identical execution in the same environment.
 			break
 		}
 
@@ -2702,15 +2723,20 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	// unverified work.
 	// Honor the attempt's verdict even if its model was cleared meanwhile.
 	if plan.Kind == "agent" &&
-		(verdict.Status == entry.VerdictContinue || verdict.Status == entry.VerdictReview) {
+		(verdict.Status == entry.VerdictContinue || verdict.Status == entry.VerdictReview || verdict.Status == entry.VerdictBlocked) {
 		wCtx, cancel := c.storeWriteCtx(ctx)
 		defer cancel()
-		if err := c.store.PauseWithResultAttempt(wCtx, taskID, c.nodeID, attemptID, map[string]any{
+		disposition := ApprovalAcceptWork
+		if verdict.Status == entry.VerdictBlocked {
+			disposition = ApprovalNeedsChangedInput
+		}
+		if err := c.store.pauseWithResultDisposition(wCtx, taskID, c.nodeID, map[string]any{
 			"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
 			"needs_followup": verdict.Status == entry.VerdictContinue,
 			"verdict":        verdict.Status, "verdict_reason": verdict.Reason,
+			"followup":      verdict.Followup,
 			"files_changed": filesChanged,
-		}); err != nil {
+		}, disposition, verdict.Reason, attemptID); err != nil {
 			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 				return bus.TaskResultPayload{}, ErrCancelled
 			}
@@ -2720,8 +2746,10 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
 			TaskID: taskID, AttemptID: attemptID, State: StateReview,
-			ApprovalDisposition: string(ApprovalAcceptWork),
-			OK:                  true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+			ApprovalDisposition: string(disposition),
+			NeedsFollowup:       verdict.Status == entry.VerdictContinue,
+			Verdict:             verdict.Status, VerdictReason: verdict.Reason, Followup: verdict.Followup,
+			OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, ScreenOutput: screenOut, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter,
 		}, nil

@@ -282,3 +282,31 @@ func TestSearchHubRanksByRelevance(t *testing.T) {
 		t.Errorf("Chinese trigger did not reach the catalog entry: %v", res)
 	}
 }
+
+func TestVisualDeliveryBuiltinLoadsOnDemand(t *testing.T) {
+	s := NewStore(t.TempDir())
+	if err := s.EnsureBuiltins(); err != nil {
+		t.Fatal(err)
+	}
+	idx, err := s.Index()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"build a responsive website", "设计一个精美的网页"} {
+		matches := MatchScopes(idx, "", nil, query, "")
+		found := false
+		for _, m := range matches {
+			if m.Name == "visual-delivery" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("visual workflow missing for %q", query)
+		}
+	}
+	for _, m := range MatchScopes(idx, "", nil, "fix database schema migration", "") {
+		if m.Name == "visual-delivery" {
+			t.Fatal("visual skill loaded for nonvisual task")
+		}
+	}
+}

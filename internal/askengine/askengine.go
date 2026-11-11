@@ -2592,7 +2592,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	var lastTask *Result
 	sourceRead := false
 	finalizeLastTask := func(t *Result) *Result {
-		if t != nil && !incompleteRepositoryTask(deepRepositoryAsk, t) && strings.TrimSpace(t.Answer) == "" && strings.TrimSpace(t.Report) == "" {
+		if t != nil && !incompleteTaskOutcome(t) && strings.TrimSpace(t.Answer) == "" && strings.TrimSpace(t.Report) == "" {
 			if report, rerr := entry.SummarizeResult(ctx, client, t.TaskTitle, "", t.OK, t.ExitCode, t.Stdout, t.Stderr, effectiveLocale); rerr == nil {
 				t.Report = report
 				e.noteDailyObservation(report)
@@ -2730,7 +2730,7 @@ rounds:
 		classify := func(c *entry.Client, ts []entry.Turn) (entry.Output, error) {
 			// Do not stream a shallow answer before the dispatch guard has
 			// accepted it. The delegated harness still streams its own progress.
-			if streaming && !((deepRepositoryAsk || repositoryQuestion && !sourceRead) && lastTask == nil) && !incompleteRepositoryTask(deepRepositoryAsk, lastTask) {
+			if streaming && !((deepRepositoryAsk || repositoryQuestion && !sourceRead) && lastTask == nil) && !incompleteTaskOutcome(lastTask) {
 				return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, reg, cb.OnDelta, trackReasoning, classifyOpts...)
 			}
 			return entry.ClassifyTurnsWithTools(ctx, c, devices, conversationMemory, ts, reg, classifyOpts...)
@@ -2787,9 +2787,9 @@ rounds:
 				return budgetAdvisory(&Result{Kind: "answer", Answer: incompleteInvestigationNotice(effectiveLocale)}), nil
 			}
 			if lastTask != nil {
-				if incompleteRepositoryTask(deepRepositoryAsk, lastTask) {
+				if incompleteTaskOutcome(lastTask) {
 					// A task receipt, approval request or failed run is not a
-					// completed investigation; preserve its real state/report.
+					// completed task; preserve its real state/report.
 					return budgetAdvisory(finalizeLastTask(lastTask)), nil
 				}
 				// The model has seen the task's outcome and is reporting it:
@@ -3090,9 +3090,9 @@ rounds:
 		return budgetAdvisory(&Result{Kind: "answer", Answer: incompleteInvestigationNotice(effectiveLocale)}), nil
 	}
 
-	if incompleteRepositoryTask(deepRepositoryAsk, lastTask) {
+	if incompleteTaskOutcome(lastTask) {
 		// Stop before final/compact convergence can manufacture a completed
-		// investigation from a queued, failed or approval-pending receipt.
+		// task from a queued, failed or approval-pending receipt.
 		return budgetAdvisory(finalizeLastTask(lastTask)), nil
 	}
 
@@ -3197,7 +3197,7 @@ rounds:
 		}
 		cb.progress(Progress{Kind: ProgressTask, Name: final.Task.Title})
 		res := e.submitTask(ctx, final.Task, prompt, authorize, scope, accumulatedReasoning.String(), cb, e.awaitQueued)
-		if !res.NeedsApproval && (!e.queueTasks || e.awaitQueued) && !incompleteRepositoryTask(deepRepositoryAsk, res) {
+		if !res.NeedsApproval && (!e.queueTasks || e.awaitQueued) && !incompleteTaskOutcome(res) {
 			// No rounds left to converge through, so produce the report in
 			// one shot rather than returning raw output.
 			if report, rerr := e.reportTaskOutcome(ctx, client, turns, devices, conversationMemory, classifyOpts, final.Task, res); rerr == nil {

@@ -24,6 +24,9 @@ func TestRecoveryNeverAssumesCrossNodeReplaySafety(t *testing.T) {
 		{bus.TaskResultPayload{ExitCode: 124}, "timeout_without_checkpoint", "bounded_same_node_retry"},
 		{bus.TaskResultPayload{ExitCode: 124, AgentSessionID: "checkpoint"}, "checkpoint", "same_node_session_resume"},
 		{bus.TaskResultPayload{ExitCode: 1, NoRetry: true}, "non_retryable", "stop"},
+		{bus.TaskResultPayload{ExitCode: 1, Stderr: "Not logged in · Please run /login"}, "authentication_required", "stop"},
+		{bus.TaskResultPayload{ExitCode: 1, Stderr: "Not logged in · Please run /login", Tokens: 100}, "execution_failure", "bounded_same_node_retry"},
+		{bus.TaskResultPayload{ExitCode: 1, Stderr: "test failed: log contains Not logged in"}, "execution_failure", "bounded_same_node_retry"},
 	} {
 		a := assessRecovery(tc.r)
 		if a.Category != tc.category || a.Strategy != tc.strategy || a.CrossNodeReplay {

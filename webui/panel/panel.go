@@ -1520,6 +1520,17 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, core.ErrApprovalNeedsChangedInput)
 		return
 	}
+	if disposition == core.ApprovalAcceptWork {
+		cur, err := h.store.Get(r.Context(), id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
+			return
+		}
+		if cur.NeedsFollowup() {
+			writeErr(w, http.StatusConflict, core.ErrApprovalNeedsFollowup)
+			return
+		}
+	}
 	// A self-merge approval runs the merge pipeline, whose final step swaps
 	// os.Executable(). In the sidecar that file is panda-webui, not the panda
 	// install target — refuse before remembering the approval so the operator

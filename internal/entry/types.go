@@ -261,12 +261,16 @@ type PlanSpec struct {
 // only run on that node — the requires match alone is a coincidence across a
 // fleet where every machine advertises the same agent.
 type PlanStageSpec struct {
-	Kind      TaskKind        `json:"task_kind,omitempty"`
-	ID        string          `json:"id"`
-	Title     string          `json:"title"`
-	Intent    string          `json:"intent"`
-	Requires  []string        `json:"requires"`
-	Needs     []string        `json:"needs"`
-	Node      string          `json:"node,omitempty"`
-	Resources ResourceProfile `json:"resource_profile"`
+	Acceptance        []contract.Check `json:"acceptance,omitempty"`
+	SuccessDefinition string           `json:"success_definition,omitempty"`
+	ToolsPolicy       string           `json:"tools_policy,omitempty"`
+	MaxTurns          int              `json:"max_turns,omitempty"`
+	Kind              TaskKind         `json:"task_kind,omitempty"`
+	ID                string           `json:"id"`
+	Title             string           `json:"title"`
+	Intent            string           `json:"intent"`
+	Requires          []string         `json:"requires"`
+	Needs             []string         `json:"needs"`
+	Node              string           `json:"node,omitempty"`
+	Resources         ResourceProfile  `json:"resource_profile"`
 }
