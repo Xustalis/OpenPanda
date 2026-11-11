@@ -40,6 +40,9 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+### 修正
+- **ツールチェーンの下限を Go 1.26.11 に引き上げ** —— GO-2026-6859 は HTTP/1 サーバーの `MaxBytesReader` ヘッダー処理におけるクラッシュで、本プロジェクトではパネルの静的ファイルハンドラー、バスの WebSocket アップグレード、そしてすべての送信 `http.Client` 呼び出しから到達し得ます。`go.mod` の `go` 指令がツールチェーンの唯一の宣言箇所であり（CI は `go-version-file` で追随）、1.26.11 へ上げれば全レグが同時に移ります。新しい下限で `govulncheck` は何も報告せず、コントリビューションガイド・二つのインストールガイド・サイトの Go 下限も 1.26.11 に揃えました。
+
 ## [0.1.5] - 2026-11-09 — "Constellation"
 
 ### Added
