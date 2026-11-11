@@ -2403,6 +2403,11 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	if scope.Mode != "" {
 		classifyOpts = append(classifyOpts, entry.WithRequestMode(scope.Mode))
 	}
+	// The thread's consent policy is part of the prompt, not just of the gate.
+	// Without it the entry model keeps ending dispatches with "是否按这个思路
+	// 开始执行？" — a question the console has already answered, either by
+	// parking the work on a card or by the user having switched bypass on.
+	classifyOpts = append(classifyOpts, entry.WithPermissionMode(defense.NormalizeMode(scope.PermissionMode)))
 	if scope.Side {
 		classifyOpts = append(classifyOpts, entry.WithSideMode())
 	}
