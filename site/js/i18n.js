@@ -882,7 +882,7 @@ export const EN = {
   'dlx.s1.r2.c3': 'Excludes your configured model and agent CLIs',
   'dlx.s1.r3.c2': '≥ 3.10',
   'dlx.s1.r3.c3': 'Needed by adapter bridges and the voice sidecar; lite builds can skip it',
-  'dlx.s1.r4.c2': '≥ 1.26.10 / ≥ 18',
+  'dlx.s1.r4.c2': '≥ 1.26.11 / ≥ 18',
   'dlx.s1.r4.c3': 'Source builds only: the kernel and the embedded web console',
   'dlx.s1.r5.c2': 'GitHub releases access at install time',
   'dlx.s1.r5.c3': 'After install, nodes talk only over your own network',

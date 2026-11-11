@@ -43,7 +43,7 @@ panda init      # auto-detects hardware; the one prompt is about the model
 panda           # the terminal TUI — or `panda web` for the console
 ```
 
-From source: `git clone` then `make build` (Go ≥ 1.26.10, no CGO). Already installed: `panda update` upgrades in place and keeps your data.
+From source: `git clone` then `make build` (Go ≥ 1.26.11, no CGO). Already installed: `panda update` upgrades in place and keeps your data.
 
 ---
 
