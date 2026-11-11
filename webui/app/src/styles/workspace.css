@@ -2,7 +2,7 @@
 
 /* 工作空间 — the device topology, laid out like a chat thread rather than a
    report: one quiet header line, the drawing filling the pane, a hairline
-   footer for the key. No card frames, no page lede — the map is the page.
+   footer for the key. No page lede — the map is the page.
    Monochrome by design: the glyph carries the machine class, the label carries
    the system, and hue is reserved for status and selection. */
 
@@ -17,6 +17,16 @@
      cards — 编排 and 设备列表 — reserve the same lane, which is what keeps the
      composer still while the reader trades one for the other. */
   --panel-lane: 0px;
+  /* The bench is a card on the shell's canvas, the same one a thread sits on
+     (see `.main:has(> .ws-page)` in shell.css): the two views trade places
+     from the rail, so a different edge or corner would make the switch read as
+     a different app. `overflow: hidden` is what turns the radius into an edge
+     the bar, the map and the composer all stop at. */
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
 }
 /* 20 (bar padding) + 360 (either card) — the same lane the chat reserves. */
 .ws-page.panel-open {
@@ -30,16 +40,6 @@
      not resize the composer underneath. */
   --panel-lane: 380px;
 }
-/* The pane owns its edges (like the chat): the map bleeds to the window. */
-.main:has(> .ws-page) {
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-.main:has(> .ws-page) > .banner,
-.main:has(> .ws-page) > .onboard-banner {
-  margin: var(--sp-3) var(--sp-4) 0;
-}
 
 /* Header: the page's mark, its name, the key for the drawing beside it, and
    the rail's toggle pushed right. Same height and type as the thread header,
@@ -49,7 +49,10 @@
   align-items: center;
   gap: 10px;
   padding: 10px var(--sp-5);
-  background: var(--bg-raised);
+  /* The same surface as the bar in a thread: the header is part of the page,
+     not a band laid over it. `--bg-raised` painted a lighter strip in dark
+     mode, which made the bench's top edge heavier than the thread's. */
+  background: var(--chat-head);
   flex: none;
   /* The orchestration card hangs out of this bar and over the map, the same
      way the chat's cards hang over the transcript. Owning a stacking context
@@ -179,7 +182,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: node-panel-in var(--dur-fast) var(--ease-enter);
 }
 /* The popover's own title row. The card on the 节点网络 page carries the same
@@ -353,7 +356,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: node-panel-in var(--dur-fast) var(--ease-enter);
 }
 /* One device's full card: wider and taller than the fleet list, because it
@@ -726,15 +729,16 @@
   text-align: right;
 }
 
-/* The composer keeps the chat's dock verbatim — the same right lane, the same
-   centring — because the reader walks between 新对话, a thread and this page,
-   and a box that shifts 14px sideways (and rides 28px wider on a narrow
-   window) reads as three different composers instead of one control in three
-   places. The lane is empty here unless a header card opens; reserving it is
-   what lands the box on the same pixel the chat's does. */
+/* The composer keeps the chat's dock verbatim — the same left rail lane, the
+   same right gutter, the same centring — because the reader walks between
+   新对话, a thread and this page, and a box that shifts 14px sideways (and
+   rides 28px wider on a narrow window) reads as three different composers
+   instead of one control in three places. The right lane is empty here unless
+   a header card opens; reserving it is what lands the box on the same pixel
+   the chat's does. */
 .ws-page .composer {
   flex: none;
-  padding-right: calc(52px + var(--panel-lane));
+  padding-right: calc(var(--sp-6) + var(--panel-lane));
   /* The lane is the same for both header cards, so swapping one for the other
      moves nothing; this transition only ever runs when a card opens or closes,
      and it is what makes the box slide rather than jump. */
@@ -790,7 +794,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: sp-panel-in var(--dur-fast) var(--ease-enter);
 }
 @keyframes sp-panel-in {
@@ -1414,7 +1418,7 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-pill);
   background: var(--bg-raised);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: ws-selbar-in var(--dur-fast) var(--ease-enter);
 }
 @keyframes ws-selbar-in {
@@ -1553,7 +1557,7 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
   background: var(--bg-raised);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: sp-panel-in var(--dur-fast) var(--ease-enter);
 }
 .ws-hidden-hd {
@@ -1673,19 +1677,8 @@
 
 /* — The pet. Same sprite as the composer's, drawn at 42px; the standing
    frame's ink stops 36px into the box, which is the line its feet stand on.
-   Cream on paper needs the four hard shadows to hold an edge; on dark the
-   rim goes transparent instead. */
-:root {
-  --panda-rim: rgba(41, 41, 41, 0.32);
-}
-:root[data-theme='dark'] {
-  --panda-rim: transparent;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
-    --panda-rim: transparent;
-  }
-}
+   Cream on paper needs the four hard shadows to hold an edge; on night the rim
+   turns mid-grey instead (tokens.css carries both). */
 /* She stands on the local panel's top edge, in CSS: no script measures the
    grid, so a re-flow moves her with the card she belongs to. 42px tall with
    the standing frame's ink 36px in, hence `top: -36px` — feet on the border. */
@@ -1702,15 +1695,26 @@
   display: block;
   width: 42px;
   height: 42px;
-  background-image: url('/panda-pet-sprites.png');
+  /* Same cache key as the composer's copy — one URL, one cache entry. */
+  background-image: url('/panda-pet-sprites.png?v=4');
   background-size: 252px 42px;
   background-repeat: no-repeat;
   background-position: 0 0;
   image-rendering: pixelated;
   transform-origin: 50% 86%;
-  filter: drop-shadow(1px 0 0 var(--panda-rim)) drop-shadow(-1px 0 0 var(--panda-rim))
-    drop-shadow(0 1px 0 var(--panda-rim)) drop-shadow(0 -1px 0 var(--panda-rim));
+  filter: drop-shadow(1px 0 0 var(--panda-sprite-rim)) drop-shadow(-1px 0 0 var(--panda-sprite-rim))
+    drop-shadow(0 1px 0 var(--panda-sprite-rim)) drop-shadow(0 -1px 0 var(--panda-sprite-rim));
   animation: ws-panda-bob 3.8s ease-in-out infinite;
+}
+/* Same reason as the composer's pet: 128px art at 42 is 0.328×, and
+   nearest-neighbour eats the detail the grey rim is meant to outline. */
+[data-theme='dark'] .ws-panda-sp {
+  image-rendering: auto;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .ws-panda-sp {
+    image-rendering: auto;
+  }
 }
 .ws-panda.cheer .ws-panda-sp {
   background-position: -168px 0;

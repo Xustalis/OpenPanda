@@ -435,7 +435,7 @@ button.mg-legend-item:hover {
   width: min(310px, calc(100% - 24px));
   max-height: calc(100% - 24px);
   overflow-y: auto;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-pop);
   border: 1px solid var(--border);
   border-left: 3px solid var(--border-strong);
   border-radius: var(--radius-lg);

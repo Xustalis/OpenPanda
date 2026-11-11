@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import type { VNode } from 'preact'
+import { createPortal } from 'preact/compat'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ModelEntry } from '../api/client'
 import { useAsync } from '../hooks'
@@ -31,7 +33,13 @@ import { type Conn, connHost, connName, groupConnections, isLoopbackURL } from '
  *  Two departures are ours: the card ends in a link to the registry (a pick
  *  can only switch, it cannot provision a model), and there is no reasoning
  *  slider — our registry has aliases, not effort tiers. */
-export function ModelSelect(props: { disabled?: boolean }) {
+/** `portal` mounts the card on `document.body` instead of beside the trigger.
+ *  The dock is its own stacking layer below the reading pane, so a card
+ *  opened from the side conversation would otherwise be painted under the
+ *  transcript. The card is fixed and measured in viewport pixels already, so
+ *  moving it in the DOM does not change where it lands. */
+export function ModelSelect(props: { disabled?: boolean; portal?: boolean }) {
+  const mount = (vnode: VNode) => (props.portal ? createPortal(vnode, document.body) : vnode)
   const [open, setOpen] = useState(false)
   const [tick, setTick] = useState(0)
   const [busy, setBusy] = useState('')
@@ -82,7 +90,12 @@ export function ModelSelect(props: { disabled?: boolean }) {
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      // A portalled card is not inside `box`; without this second check a
+      // click on a model row would count as an outside click and close the
+      // card before the pick lands.
+      if (box.current?.contains(target) || panel.current?.contains(target)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
@@ -98,7 +111,8 @@ export function ModelSelect(props: { disabled?: boolean }) {
     // well, because focusing a row scrolls it into view. select.tsx and
     // model-picker.tsx guard the same way; this one was the odd one out.
     const onMove = (e: Event) => {
-      if (box.current?.contains(e.target as Node)) return
+      const target = e.target as Node
+      if (box.current?.contains(target) || panel.current?.contains(target)) return
       setOpen(false)
     }
     document.addEventListener('mousedown', onDown)
@@ -229,7 +243,7 @@ export function ModelSelect(props: { disabled?: boolean }) {
           <Icon name="chevron-down" size={16} class="model-select-arrow" />
         </span>
       </button>
-      {open && (
+      {open && mount(
         <div
           ref={panel}
           class="model-panel"

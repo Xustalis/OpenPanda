@@ -1927,6 +1927,7 @@ const zhCN: Messages = {
   'dock.expand': '展开侧边栏',
   'dock.resize': '调整侧边栏宽度',
   'dockFiles.up': '上一级',
+  'dockFiles.home': '回到工作区根目录',
   'dockFiles.back': '返回目录',
   'dockFiles.root': '工作区',
   'dockFiles.empty': '这个目录是空的。',

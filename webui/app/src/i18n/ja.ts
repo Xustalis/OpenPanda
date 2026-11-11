@@ -1928,6 +1928,7 @@ const ja: Messages = {
   'dock.expand': 'パネルを開く',
   'dock.resize': 'パネル幅を調整',
   'dockFiles.up': '一つ上へ',
+  'dockFiles.home': 'ワークスペースのルートへ戻る',
   'dockFiles.back': 'ディレクトリに戻る',
   'dockFiles.root': 'ワークスペース',
   'dockFiles.empty': 'このディレクトリは空です。',

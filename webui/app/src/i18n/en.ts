@@ -1950,6 +1950,7 @@ const en: Messages = {
   'dock.expand': 'Expand the panel',
   'dock.resize': 'Resize the panel',
   'dockFiles.up': 'Up one level',
+  'dockFiles.home': 'Back to the workspace root',
   'dockFiles.back': 'Back to the directory',
   'dockFiles.root': 'Workspace',
   'dockFiles.empty': 'This directory is empty.',

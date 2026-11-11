@@ -1942,6 +1942,7 @@ const es: Messages = {
   'dock.expand': 'Expandir el panel',
   'dock.resize': 'Ajustar el ancho del panel',
   'dockFiles.up': 'Subir un nivel',
+  'dockFiles.home': 'Volver a la raíz del espacio de trabajo',
   'dockFiles.back': 'Volver al directorio',
   'dockFiles.root': 'Espacio de trabajo',
   'dockFiles.empty': 'Este directorio está vacío.',

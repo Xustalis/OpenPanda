@@ -1945,6 +1945,7 @@ const de: Messages = {
   'dock.expand': 'Leiste ausklappen',
   'dock.resize': 'Breite der Leiste ändern',
   'dockFiles.up': 'Eine Ebene höher',
+  'dockFiles.home': 'Zum Stammverzeichnis des Arbeitsbereichs',
   'dockFiles.back': 'Zurück zum Verzeichnis',
   'dockFiles.root': 'Arbeitsbereich',
   'dockFiles.empty': 'Dieses Verzeichnis ist leer.',
