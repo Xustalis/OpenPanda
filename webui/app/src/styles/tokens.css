@@ -18,11 +18,11 @@
   --bg-raised: #ffffff;      /* cards float on a hairline */
   --bg-overlay: #ffffff;     /* menus, sheets */
   --bg-inset: #eeeeef;       /* wells, code surfaces, sunken fields */
-  /* The thread's overview card: a sheet lying on the reading surface, a shade
-     off white and no shadow at all. The hairline is the whole edge — a drop
-     shadow this small only ever reads as a grey band under the card. */
-  --bg-float: #e4e4e6;
-  --border-float: #d2d2d6;
+  /* The thread's overview card: white paper with a drawn edge. A grey fill at
+     this size picks up the page's warmth and reads as dirty; the border does
+     the separating instead, and it is the only thing that has to be right. */
+  --bg-float: #ffffff;
+  --border-float: #dcdce1;
   --shadow-float: none;
   --bg-hover: #eaeaec;
   --bg-active: rgba(28, 28, 32, 0.08);
@@ -189,7 +189,7 @@
   /* Chat's overview card. Narrow on purpose: it is an annotation pinned to the
      corner of the transcript, not a column — every pixel it takes is a pixel of
      conversation it covers. */
-  --rail-w: 200px;
+  --rail-w: 208px;
   --inspector-w: 340px;
   --content-max: 860px;
 }

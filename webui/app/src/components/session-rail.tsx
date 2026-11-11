@@ -179,10 +179,6 @@ export function SessionRail(props: SessionRailProps) {
 
   return (
     <aside class="session-rail" aria-label={t('sessionRail.label')}>
-      <header class="rail-top">
-        <span class="rail-top-title">{t('sessionRail.label')}</span>
-      </header>
-
       <div class="rail-body">
         {/* ---- Tasks -------------------------------------------------- */}
         <section class="rail-sec">
@@ -375,7 +371,7 @@ export function SessionRail(props: SessionRailProps) {
                     return (
                       <li key={path} class="rail-file">
                         <span class={`rail-file-state mono ${status ? statusTone(status) : 'rail-none'}`}>
-                          {status ?? '·'}
+                          {status ?? <span class="rail-file-dot" />}
                         </span>
                         <span class="rail-file-path" title={path}>
                           {path}
