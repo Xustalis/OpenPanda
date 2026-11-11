@@ -497,6 +497,9 @@ type progressWriter struct {
 	// envelope could be emitted (silence watchdog, tool-call fuse, hard
 	// limit) still returns the resumable checkpoint instead of losing it.
 	lastSession string
+	// Monotonic count survives turn boundaries: any real tool call makes a
+	// silent fresh-prompt replay unsafe, even after a process crash.
+	toolCalls atomic.Int64
 }
 
 // maxProgressLine bounds partial: an event line carries bounded-but-real
@@ -620,6 +623,7 @@ func (w *progressWriter) event(b []byte) {
 	if ev.Phase != "spawn" {
 		switch ev.Ev {
 		case "tool_use":
+			w.toolCalls.Add(1)
 			w.tools.started()
 		case "tool_result":
 			w.tools.finished()
@@ -1076,7 +1080,11 @@ func modelEnvForAdapter(model config.ModelConfig, name, adapter string) []string
 		// provider for exactly those models.
 		"OPENPANDA_MODEL_API_TYPE="+injectedDialect(name, adapter, model))
 	if adapter == "claude_code.py" {
-		env = append(env, "ANTHROPIC_AUTH_TOKEN=")
+		// Native tier aliases can otherwise redirect an injected run to models
+		// from another provider even after settings sources are disabled.
+		env = append(env, "ANTHROPIC_AUTH_TOKEN=", "ANTHROPIC_DEFAULT_OPUS_MODEL=",
+			"ANTHROPIC_DEFAULT_SONNET_MODEL=", "ANTHROPIC_DEFAULT_HAIKU_MODEL=",
+			"CLAUDE_CODE_SUBAGENT_MODEL=")
 	}
 	return env
 }
@@ -1093,7 +1101,16 @@ func adapterCredentialEnv(name, adapter string) []string {
 		return nil
 	}
 	var out []string
-	for _, key := range k.CredentialEnvVars {
+	keys := append([]string(nil), k.CredentialEnvVars...)
+	if adapter == "claude_code.py" {
+		// The native endpoint and model aliases must travel with the native
+		// credentials when the sandbox builds a minimal environment. These
+		// are not evidence of credentials and must not enter the manifest.
+		keys = append(keys, "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+			"ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL")
+	}
+	for _, key := range keys {
 		if value := os.Getenv(key); value != "" {
 			out = append(out, key+"="+value)
 		}
@@ -1330,9 +1347,8 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	// (WithSessionMode), the task carries a session pool and this agent's
 	// registry entry declares the capability, the adapter process stays
 	// alive across supervision rounds — a continue turn is one stdin line
-	// instead of a spawn + session reload. Any session failure falls back
-	// to the plain spawn below (the round still has --resume semantics via
-	// req.Resume), so a too-old CLI degrades rather than fails.
+	// instead of a spawn + session reload. Only a failure before work began
+	// falls back to a plain spawn; interrupted work returns its checkpoint.
 	if SessionMode(ctx) && adapterSupportsSession(AgentName(ctx), name) {
 		if pool := sessionPoolOf(ctx); pool != nil {
 			req.Session = true
@@ -1548,15 +1564,15 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		checkpoint := stderr.session()
 		if wasStalled {
 			if wasStartup {
-				return AgentResult{OK: false, Result: fmt.Sprintf("adapter stalled: no output ever received for %v (startup grace)", adapterStartupGrace), ExitCode: 124, SessionID: checkpoint}
+				return AgentResult{OK: false, Result: fmt.Sprintf("adapter stalled: no output ever received for %v (startup grace)", adapterStartupGrace), ExitCode: 124, SessionID: checkpoint, WorkObserved: stderr.toolCalls.Load() > 0}
 			}
-			return AgentResult{OK: false, Result: fmt.Sprintf("adapter stalled: no progress or output received for %v (silence timeout)", silenceLimit), ExitCode: 124, SessionID: checkpoint}
+			return AgentResult{OK: false, Result: fmt.Sprintf("adapter stalled: no progress or output received for %v (silence timeout)", silenceLimit), ExitCode: 124, SessionID: checkpoint, WorkObserved: stderr.toolCalls.Load() > 0}
 		}
 		if wasCapped {
-			return AgentResult{OK: false, Result: "agent tool-call budget exhausted: the run kept calling tools past its fuse and was killed before it could loop indefinitely", ExitCode: 124, SessionID: checkpoint}
+			return AgentResult{OK: false, Result: "agent tool-call budget exhausted: the run kept calling tools past its fuse and was killed before it could loop indefinitely", ExitCode: 124, SessionID: checkpoint, WorkObserved: stderr.toolCalls.Load() > 0}
 		}
 		if ctx.Err() == context.DeadlineExceeded {
-			return AgentResult{OK: false, Result: "adapter timed out (hard limit)", ExitCode: 124, SessionID: checkpoint}
+			return AgentResult{OK: false, Result: "adapter timed out (hard limit)", ExitCode: 124, SessionID: checkpoint, WorkObserved: stderr.toolCalls.Load() > 0}
 		}
 		code := 1
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -1566,13 +1582,13 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		if msg == "" {
 			msg = err.Error()
 		}
-		return AgentResult{OK: false, Result: security.Redact(msg), ExitCode: code, SessionID: checkpoint}
+		return AgentResult{OK: false, Result: security.Redact(msg), ExitCode: code, SessionID: checkpoint, WorkObserved: stderr.toolCalls.Load() > 0}
 	}
 
 	var out AgentResult
 	out.ExitCode = 0
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		return AgentResult{OK: false, Result: security.Redact(fmt.Sprintf("adapter output not JSON: %s", stdout.String())), ExitCode: 1, SessionID: stderr.session()}
+		return AgentResult{OK: false, Result: security.Redact(fmt.Sprintf("adapter output not JSON: %s", stdout.String())), ExitCode: 1, SessionID: stderr.session(), WorkObserved: stderr.toolCalls.Load() > 0}
 	}
 	// A well-behaved adapter returns JSON; scrub anything secret-shaped it may
 	// have echoed into the result before it enters the task/log pipeline.
@@ -1583,6 +1599,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		// the announced handle so a follow-up round can still resume it.
 		out.SessionID = stderr.session()
 	}
+	out.WorkObserved = stderr.toolCalls.Load() > 0
 	return out
 }
 
@@ -1603,7 +1620,7 @@ var transientStatusRE = regexp.MustCompile(`\b(?:500|502|503|504)\b`)
 // output is not a provider envelope. A CLI that reports neither still falls back
 // on the text patterns below, unchanged — there is nothing better to key on.
 func replayableFailure(ar AgentResult) bool {
-	if ar.OK {
+	if ar.OK || ar.WorkObserved || ar.SessionID != "" || ar.ExitCode == 124 {
 		return false
 	}
 	if ar.Tokens > 0 {
@@ -1837,6 +1854,7 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 	turnCtx, cancel := context.WithTimeout(ctx, hard)
 	defer cancel()
 	res := s.await(turnCtx)
+	res.WorkObserved = s.stderr.toolCalls.Load() > 0
 	if ctx.Err() != nil && !s.isDead() {
 		// The caller aborted this turn while the CLI was mid-generation (a
 		// user inject's round cancel, a task cancel). The session cannot be
@@ -1863,6 +1881,13 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 		p.mu.Lock()
 		delete(p.live, key)
 		p.mu.Unlock()
+		// A timeout, checkpoint, billed work or real tool call means this
+		// is an interrupted execution, not a session compatibility probe.
+		// Return all evidence to core's bounded recovery loop; discarding it
+		// here silently replays side effects and doubles the time budget.
+		if res.ExitCode == 124 || res.SessionID != "" || s.stderr.toolCalls.Load() > 0 || !replayableFailure(res) {
+			return res, true
+		}
 		return AgentResult{}, false
 	}
 	return res, true
@@ -2061,12 +2086,20 @@ func (s *agentSession) await(ctx context.Context) AgentResult {
 	var res AgentResult
 	if err := s.dec.Decode(&res); err != nil {
 		s.dead.Store(true)
+		code := 1
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			code = 124
+		}
 		return AgentResult{
-			OK: false, ExitCode: 1,
-			Result: security.Redact("adapter session ended: " + s.stderr.diag()),
+			OK: false, ExitCode: code,
+			Result:    security.Redact("adapter session ended: " + s.stderr.diag()),
+			SessionID: s.stderr.session(),
 		}
 	}
 	res.Result = security.Redact(res.Result)
+	if res.SessionID == "" {
+		res.SessionID = s.stderr.session()
+	}
 	// diag, not String: the copier may be mid-line — a flush here would
 	// steal the partial buffer and split the line across an event boundary.
 	res.Stderr = security.Redact(s.stderr.diag())

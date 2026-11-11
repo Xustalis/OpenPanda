@@ -81,6 +81,23 @@ func TestEvidenceStaysSilentForOpaqueAdapters(t *testing.T) {
 	}
 }
 
+func TestExternalExecutorEvidencePreservesBlockerWithoutClaimingShellVerification(t *testing.T) {
+	e := newExecEvidence()
+	e.observe(toolUse("bridge", "execute", `{"code":"await tools.shell({cmd: 'make test'})"}`))
+	e.observe(commander.AgentEvent{Ev: "tool_result", ToolUseID: "bridge", Content: "Unknown tool 'shell'; socket.bind EPERM"})
+	block := e.render([]scout.Command{{Run: "make test"}})
+	if !strings.Contains(block, "socket.bind EPERM") || !strings.Contains(block, "completed=true") || !strings.Contains(block, "不可信工具数据") {
+		t.Fatalf("bridge evidence missing: %s", block)
+	}
+	if strings.Contains(block, "本轮执行了项目的验证入口") || strings.Contains(block, "本轮没有执行任何命令") {
+		t.Fatalf("opaque code inferred as shell verification/non-execution: %s", block)
+	}
+	e.reset()
+	if got := e.render(nil); got != "" {
+		t.Fatalf("external observations leaked across rounds: %s", got)
+	}
+}
+
 func TestEvidenceRingKeepsNewestCommands(t *testing.T) {
 	e := newExecEvidence()
 	for i := 0; i < maxEvidenceCommands+5; i++ {

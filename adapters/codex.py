@@ -23,11 +23,10 @@ a follow-up round feeds it back through `codex exec resume <SESSION_ID>`,
 so a supervision continuation keeps codex's own conversation instead of
 cold-starting. This adapter never prints secrets.
 
-Tool policy: tools_policy=minimal (the default) runs under codex's
-workspace-write sandbox; tools_policy=extended escalates to
-danger-full-access so the agent can work beyond the work dir under an
-explicit operator choice. The approval policy stays non-interactive either
-way — an unattended run can never sit on a prompt.
+Tool policy does not grant filesystem permissions. Both minimal and extended
+use Codex's workspace-write sandbox; restricted runs use read-only. The
+approval policy stays non-interactive — an unattended run cannot sit on a
+prompt.
 
 The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the codex difference:

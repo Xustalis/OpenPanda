@@ -53,4 +53,8 @@ print(json.dumps({"ok":True,"result":"done","exit_code":0}))
 	if len(profiles) != 1 || profiles[0].Transport != "one_shot" || profiles[0].NativeModel != "unknown" || profiles[0].Adapter != "codex.py" {
 		t.Fatalf("spoofed/missing profile: %+v", profiles)
 	}
+	p := profiles[0]
+	if p.AdapterPath != filepath.Join(dir, "codex.py") || len(p.AdapterSHA256) != 64 || p.ExternalToolPolicy != "unknown_not_controlled_by_panda_approval" {
+		t.Fatalf("missing reproducible execution boundary: %+v", p)
+	}
 }

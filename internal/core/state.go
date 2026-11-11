@@ -32,6 +32,7 @@ var (
 	// approved as-is. Its input, scope, or context must change before a new
 	// run. The message doubles as user-facing copy, so it names the action.
 	ErrApprovalNeedsChangedInput = errors.New("approval requires changed input — resubmit the task with a corrected prompt instead")
+	ErrApprovalNeedsFollowup     = fmt.Errorf("%w: work is incomplete — use panda task continue to finish it, or reject it", ErrIllegal)
 )
 
 // Task states. These strings are part of the wire protocol across nodes,

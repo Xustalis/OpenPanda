@@ -1049,6 +1049,9 @@ func agentFallbackEligible(ar AgentResult) bool {
 	if ar.OK {
 		return false
 	}
+	if ar.ExitCode == 124 || ar.Tokens > 0 || ar.SessionID != "" || ar.WorkObserved {
+		return false // interrupted work belongs to core recovery, never fresh fallback
+	}
 	if ar.SessionDead {
 		return true
 	}
@@ -1158,6 +1161,8 @@ type AgentResult struct {
 	// when the adapter kills the CLI on its way out, so a failed turn
 	// needs the in-band verdict to drive the one-shot fallback.
 	SessionDead bool `json:"session_dead,omitempty"`
+	// WorkObserved is trusted Go-side tool activity, never adapter-authored.
+	WorkObserved bool `json:"-"`
 }
 
 // runAdapterDefault shells out to a Python adapter in adapters/, injecting
@@ -1246,7 +1251,7 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// Dynamic injection fallback (Requirement 5):
 	// If the agent failed with authentication, quota, provider errors, or timeouts
 	// and PANDA had not injected its model key (because the agent declared its own credentials which failed),
-	// automatically inject PANDA's configured model API key to adapt the harness instead of discarding the task.
+	// automatically inject PANDA's configured model API key when no work or timeout was observed.
 	// The retried result REPLACES the original only when it succeeded: a
 	// different failure under injection is not more informative than the
 	// original failure — swapping it in would mask the real reason the task
@@ -1657,8 +1662,10 @@ func (r *Router) agentTarget(name string, ag ledger.Agent) ProbeSpec {
 		model = firstEnvValue(k.ModelEnv.Model)
 		keyDef = key != "" // env keys are the literal credential
 	}
-	// Env override — the same variable the run inherits.
-	if k.ModelEnv != nil && k.ModelEnv.BaseURL != "" {
+	// For non-Claude adapters retain their existing environment-override
+	// semantics: an unrelated config credential or rejection hint must not be
+	// applied to a different endpoint selected in the environment.
+	if ag.Adapter != "claude_code.py" && k.ModelEnv != nil && k.ModelEnv.BaseURL != "" {
 		if v := strings.TrimSpace(os.Getenv(k.ModelEnv.BaseURL)); v != "" {
 			return ProbeSpec{Endpoint: v, APIType: apiType, APIKey: key, Model: model, KeyDefinitive: keyDef}
 		}
@@ -1677,6 +1684,13 @@ func (r *Router) agentTarget(name string, ag ledger.Agent) ProbeSpec {
 	}
 	if model == "" {
 		model = cfg.Model
+	}
+	// An environment endpoint can coexist with a key and model in the CLI's
+	// own settings; do not drop those before probing the selected endpoint.
+	if ag.Adapter == "claude_code.py" && k.ModelEnv != nil && k.ModelEnv.BaseURL != "" {
+		if v := strings.TrimSpace(os.Getenv(k.ModelEnv.BaseURL)); v != "" {
+			return ProbeSpec{Endpoint: v, APIType: apiType, APIKey: key, Model: model, KeyDefinitive: keyDef}
+		}
 	}
 	if cfg.Endpoint != "" {
 		return ProbeSpec{Endpoint: cfg.Endpoint, APIType: apiType, APIKey: key, Model: model, KeyDefinitive: keyDef, RejectionHint: cfg.Hint}

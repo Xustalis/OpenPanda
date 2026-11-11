@@ -251,7 +251,7 @@ def _ensure_git_bash():
 
 def _injected():
     """True when PANDA injected the model endpoint (credential rescue)."""
-    return bool(os.environ.get("OPENPANDA_INJECTED_MODEL") or os.environ.get("ANTHROPIC_BASE_URL"))
+    return bool(os.environ.get("OPENPANDA_INJECTED_MODEL"))
 
 
 # What the CLI may be called on PATH. The registry probes the same list, so the
@@ -341,6 +341,10 @@ def _v2_args(req):
     return args
 
 
+def _use_model_arg(model):
+    return bool(model) and not (_injected() and model.lower().startswith(("deepseek", "openai", "gpt")))
+
+
 def _stream_argv(base, req, model, disable_settings, v2):
     cmd = base + ["--output-format", "stream-json", "--verbose"]
     if v2:
@@ -351,11 +355,10 @@ def _stream_argv(base, req, model, disable_settings, v2):
         # flag rides both stream tiers: an ancient CLI that rejects it lands
         # on plain mode, which never resends it.
         cmd += ["--setting-sources", ""]
-    # Claude Code CLI only accepts Anthropic model names. When a third-party
-    # provider (such as DeepSeek Anthropic API) is injected, foreign model names
-    # like 'deepseek-v4-flash' cause the CLI to exit with unrecognized_model.
-    # Leaving it to default lets Claude Code negotiate with the provider endpoint.
-    if model and not any(model.lower().startswith(p) for p in ("deepseek", "openai", "gpt")):
+    # Injected endpoints retain the legacy CLI alias workaround. A native
+    # custom provider may explicitly support foreign model names, however;
+    # its selected model must not be silently discarded.
+    if _use_model_arg(model):
         cmd += ["--model", model]
     return cmd
 
@@ -478,6 +481,13 @@ def _result_out(final, returncode):
     over the rendered result string. subagent_stats passes through so the
     task record reports the delegation fan-out the run actually spawned.
     """
+    # Native-reported model identities are distinct from the selected
+    # harness. Only names are retained; never forward credentials/settings.
+    model_usage = final.get("modelUsage")
+    if isinstance(model_usage, dict):
+        names = sorted(k[:200] for k in model_usage if isinstance(k, str))[:16]
+        if names:
+            harness.emit_event("model_observed", text=json.dumps({"models": names, "source": "native_result"}, ensure_ascii=False))
     usage = _usage(final.get("usage"))
     tokens = usage["input_tokens"] + usage["output_tokens"]
     res_text = final.get("result") or ""
@@ -486,13 +496,13 @@ def _result_out(final, returncode):
         ans = structured.get("answer")
         if isinstance(ans, str) and ans.strip():
             res_text = ans
-    is_err = bool(final.get("is_error"))
-    # If the turn limit was reached, or if is_error is set but the model
-    # completed substantive text output (e.g. analysis report), do not treat
-    # as a fatal agent crash that discards the work.
-    if is_err and (final.get("subtype") == "error_max_turns" or final.get("terminal_reason") == "max_turns"):
-        if len(res_text.strip()) > 50:
-            is_err = False
+    # A long partial answer does not make a turn-limit or process failure
+    # successful. Preserve the checkpoint and usage, but fail closed.
+    turn_limit = (final.get("subtype") == "error_max_turns"
+                  or final.get("terminal_reason") == "max_turns")
+    is_err = bool(final.get("is_error")) or turn_limit or returncode != 0
+    if turn_limit:
+        res_text = "Agent turn limit reached; task is incomplete.\n" + res_text
     # A failed run must say why. The CLI's error envelope is not obliged to
     # carry prose: a run that stops on the turn cap reports
     # subtype=error_max_turns with an empty `result`, and the orchestrator's
@@ -508,9 +518,9 @@ def _result_out(final, returncode):
     if isinstance(stats, dict) and any(stats.values()):
         extra["subagent_stats"] = stats
     return {
-        "ok": not is_err and (returncode == 0 or (not is_err and len(res_text.strip()) > 50)),
+        "ok": not is_err,
         "result": res_text,
-        "exit_code": 0 if not is_err else returncode,
+        "exit_code": 0 if not is_err else (returncode or 1),
         "tokens": tokens or None,
         "cost": final.get("total_cost_usd"),
         "usage": usage,
@@ -718,7 +728,7 @@ def _main_session(req, model, max_turns):
     # session id) continues that conversation instead of starting cold.
     if req.resume:
         cmd += ["--resume", req.resume]
-    if model and not any(model.lower().startswith(p) for p in ("deepseek", "openai", "gpt")):
+    if _use_model_arg(model):
         cmd += ["--model", model]
 
     try:

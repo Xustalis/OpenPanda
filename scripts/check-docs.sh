@@ -260,6 +260,17 @@ for f in $coc_files; do
 	fi
 done
 
+# Contract identifiers are language-independent. This catches missing sections,
+# not mistranslations or semantic drift, which still require human review.
+for f in docs/agent-execution.md docs/agent-execution.en.md docs/agent-execution.de.md docs/agent-execution.es.md docs/agent-execution.ja.md; do
+	for term in acceptance success_definition tools_policy max_turns blocked; do
+		if [ ! -f "$f" ] || ! grep -qF "$term" "$f"; then
+			echo "FAIL: $f missing stage contract identifier $term"
+			fail=1
+		fi
+	done
+done
+
 if [ "$fail" -ne 0 ]; then
 	echo "check-docs: FAILED"
 	exit 1

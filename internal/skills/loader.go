@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Xustalis/OpenPanda/internal/util"
@@ -40,10 +41,27 @@ type IndexEntry struct {
 	Score       int // filled in by Match/MatchScopes; zero straight from Index
 }
 
+// Cache parsed metadata only. Every lookup still stats the directory tree,
+// so additions, deletions and ordinary external edits are observed promptly.
+// Bodies are loaded separately on demand, and returned slices never alias cache.
+type cachedIndexEntry struct {
+	size     int64
+	modified time.Time
+	entry    IndexEntry
+}
+
+func cloneIndexEntry(e IndexEntry) IndexEntry {
+	e.Triggers = append([]string(nil), e.Triggers...)
+	return e
+}
+
 // Index scans the skills root and returns lightweight entries, dropping skills
 // whose frontmatter fails to parse (a corrupt skill is skipped, not fatal to
 // the whole index). It excludes expired skills from matching.
 func (s *Store) Index() ([]IndexEntry, error) {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	next := make(map[string]cachedIndexEntry)
 	var out []IndexEntry
 	err := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -52,38 +70,40 @@ func (s *Store) Index() ([]IndexEntry, error) {
 		if d.IsDir() || d.Name() != "SKILL.md" {
 			return nil
 		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		cached, ok := s.indexCache[path]
+		if ok && cached.size == info.Size() && cached.modified.Equal(info.ModTime()) {
+			out = append(out, cloneIndexEntry(cached.entry))
+			next[path] = cached
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
 		sk, err := ParseSkill(data)
 		if err != nil {
-			return nil // skip malformed skill, keep indexing the rest
+			return nil
 		}
 		triggers, always := sk.Triggers, sk.Always
 		builtin := sk.Builtin || IsBuiltinSkill(sk.Name)
 		if builtin && len(triggers) == 0 {
-			// Built-in skills seeded by an older binary (or edited by the user)
-			// carry no triggers on disk. Merge the curated table at read time:
-			// no reseed, no overwritten counters, no second source of truth.
 			triggers, always = BuiltinTriggers(sk.Name)
 		}
-		out = append(out, IndexEntry{
-			Name:        sk.Name,
-			Description: sk.Description,
-			Scope:       sk.Scope,
-			Key:         sk.keyForScope(),
-			Status:      sk.Status,
-			UseCount:    sk.UseCount,
-			Builtin:     builtin,
-			Triggers:    triggers,
-			Always:      always,
-		})
+		e := IndexEntry{Name: sk.Name, Description: sk.Description, Scope: sk.Scope,
+			Key: sk.keyForScope(), Status: sk.Status, UseCount: sk.UseCount, Builtin: builtin,
+			Triggers: triggers, Always: always}
+		next[path] = cachedIndexEntry{size: info.Size(), modified: info.ModTime(), entry: cloneIndexEntry(e)}
+		out = append(out, e)
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("skills: index: %w", err)
 	}
+	s.indexCache = next
 	return out, nil
 }
 

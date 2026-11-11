@@ -96,3 +96,17 @@ func (s *Store) mustLoad(scope Scope, key, name string) (*Skill, error) {
 	}
 	return sk, nil
 }
+
+// RecordUse reloads the current counters under a store-local lock. Parallel
+// stages must not save their stale prompt-time copy over a sibling's update.
+// This serializes users of this Store; it is not a cross-process file lock.
+func (s *Store) RecordUse(scope Scope, key, name string, success bool, now time.Time) error {
+	s.useMu.Lock()
+	defer s.useMu.Unlock()
+	sk, err := s.mustLoad(scope, key, name)
+	if err != nil {
+		return err
+	}
+	sk.RecordUse(success, now)
+	return s.Save(sk)
+}

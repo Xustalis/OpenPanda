@@ -151,9 +151,9 @@ func sourceReadEvidence(call *entry.ToolCall, result string, runErr error) bool 
 	return false
 }
 
-// incompleteRepositoryTask is shared by normal answers, streaming and the
+// incompleteTaskOutcome is shared by normal answers, streaming and the
 // tool-loop convergence boundary. A receipt is not implementation evidence;
 // neither another summarization call nor compact recovery can promote it.
-func incompleteRepositoryTask(deep bool, task *Result) bool {
-	return deep && task != nil && (task.TaskState != core.StateDone || !task.OK)
+func incompleteTaskOutcome(task *Result) bool {
+	return task != nil && (task.TaskState != core.StateDone || !task.OK)
 }

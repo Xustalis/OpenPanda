@@ -1263,7 +1263,7 @@ var messages = map[Locale]map[string]string{
 		"prompt.device.agent.best_at":           "(best at: {skills})",
 
 		// Skills and task prompts
-		"prompt.skills.available":      "Available skills (refer as needed):",
+		"prompt.skills.available":      "Panda guidance (not native Skill commands):",
 		"prompt.skills.omitted":        "(Body omitted due to prompt budget; description: {desc})",
 		"prompt.task.intent_header":    "Task Intent:",
 		"prompt.task.user_raw_request": "Original user request (context reference only, follow task instruction):",
@@ -2584,7 +2584,7 @@ var messages = map[Locale]map[string]string{
 		"prompt.device.agent.best_at":           "（最擅长：{skills}）",
 
 		// Skills and task prompts
-		"prompt.skills.available":      "可用技能（按需参考）：",
+		"prompt.skills.available":      "Panda 指导（非 Skill 命令）：",
 		"prompt.skills.omitted":        "（正文超出本次提示词预算已省略，描述：{desc}）",
 		"prompt.task.intent_header":    "任务指令：",
 		"prompt.task.user_raw_request": "用户原始请求（上下文参考，以任务指令为准）：",
@@ -2768,7 +2768,7 @@ var messages = map[Locale]map[string]string{
 		"prompt.project.workdir":                 "- 作業ディレクトリ：{dir}\n",
 		"prompt.project.memory":                  "- プロジェクトメモリ：{path}（{count} 件、{chars} 文字）— プロジェクトの背景が必要な場合は自分で読み込んでください\n",
 		"prompt.project.memempty":                "- プロジェクトメモリ：{path}（まだ内容がありません）\n",
-		"prompt.skills.available":                "利用可能なスキル（必要に応じて参照）:",
+		"prompt.skills.available":                "Panda 手順（Skill コマンドではない）:",
 		"prompt.skills.omitted":                  "（プロンプト予算のため本文は省略。説明: {desc}）",
 		"prompt.subagent.agent":                  ", エージェント/Harness: {agent}",
 		"prompt.subagent.budget_note":            "この会話ラウンドのサブエージェントタスク予算（{n} 個）は使い切りました。新しいタスクはディスパッチされません。このラウンドでさらに必要な場合は、まず task_budget で必要総数を申告してください。そうでなければ、実行済みタスクの結果に基づき直接ユーザーに報告してください。",
@@ -4078,7 +4078,7 @@ var messages = map[Locale]map[string]string{
 		"prompt.project.workdir":                 "- Directorio de trabajo: {dir}\n",
 		"prompt.project.memory":                  "- Memoria del proyecto: {path} ({count} entradas, {chars} caracteres) — léela tú mismo si la tarea necesita el contexto del proyecto\n",
 		"prompt.project.memempty":                "- Memoria del proyecto: {path} (vacía)\n",
-		"prompt.skills.available":                "Habilidades disponibles (consúltalas según sea necesario):",
+		"prompt.skills.available":                "Guías Panda (no son comandos Skill):",
 		"prompt.skills.omitted":                  "(Cuerpo omitido por presupuesto de prompt; descripción: {desc})",
 		"prompt.subagent.agent":                  ", Agente/Harness: {agent}",
 		"prompt.subagent.budget_note":            "El presupuesto de tareas de subagente de esta ronda de conversación ({n}) se ha agotado; no se despacharán nuevas tareas. Si esta ronda necesita más, llama primero a task_budget con el total necesario; de lo contrario, informa directamente al usuario basándote en los resultados de las tareas ejecutadas.",
@@ -5384,7 +5384,7 @@ var messages = map[Locale]map[string]string{
 		"prompt.project.workdir":                 "- Arbeitsverzeichnis: {dir}\n",
 		"prompt.project.memory":                  "- Projektgedächtnis: {path} ({count} Einträge, {chars} Zeichen) — lies es selbst, wenn die Aufgabe Projekthintergrund braucht\n",
 		"prompt.project.memempty":                "- Projektgedächtnis: {path} (leer)\n",
-		"prompt.skills.available":                "Verfügbare Skills (bei Bedarf referenzieren):",
+		"prompt.skills.available":                "Panda-Anweisungen (keine Skill-Befehle):",
 		"prompt.skills.omitted":                  "(Rumpf wegen Prompt-Budget weggelassen; Beschreibung: {desc})",
 		"prompt.subagent.agent":                  ", Agent/Harness: {agent}",
 		"prompt.subagent.budget_note":            "Das Subagenten-Aufgabenbudget dieser Gesprächsrunde ({n}) ist erschöpft; es werden keine neuen Aufgaben mehr verteilt. Wenn diese Runde mehr braucht, rufe zuerst task_budget mit der benötigten Gesamtzahl auf; andernfalls berichte dem Nutzer direkt auf Grundlage der ausgeführten Aufgaben.",

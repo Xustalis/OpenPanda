@@ -1375,53 +1375,7 @@ func failedAwaitingRetry(ctx context.Context, store *core.TaskStore, taskID stri
 // written after the failed result, before the retry decision — is the only
 // event that answers it, and ignoring it made `--wait` sit on a settled task
 // until the timeout expired.
-func awaitingRetry(events []core.Event) bool {
-	for i := len(events) - 1; i >= 0; i-- {
-		switch events[i].Type {
-		case core.EvReview, core.EvExpire, core.EvCancel:
-			return false
-		case core.EvRecoveryAssessment:
-			switch recoveryStrategy(events[i].DataJSON) {
-			case core.RecoveryBoundedRetry, core.RecoverySessionResume:
-				return true
-			case core.RecoveryStop, core.RecoveryHumanReview:
-				return false
-			}
-			// An assessment this code cannot read (an older row) falls through
-			// to the result rule: keep watching rather than declare a live
-			// task dead, the same way a store read error does.
-		case core.EvResult:
-			start := 0
-			for j := i - 1; j >= 0; j-- {
-				if events[j].Type == core.EvSubmit || events[j].Type == core.EvRetry {
-					start = j + 1
-					break
-				}
-			}
-			for j := start; j < i; j++ {
-				if events[j].Type == core.EvExecAgentStart || events[j].Type == core.EvSupervisionRound {
-					return true
-				}
-			}
-			return false
-		}
-	}
-	return false
-}
-
-// recoveryStrategy reads the strategy out of one assessment event. Empty means
-// "no opinion": the payload is shape-checked here, not trusted.
-func recoveryStrategy(dataJSON string) string {
-	var payload struct {
-		Assessment struct {
-			Strategy string `json:"strategy"`
-		} `json:"assessment"`
-	}
-	if json.Unmarshal([]byte(dataJSON), &payload) != nil {
-		return ""
-	}
-	return payload.Assessment.Strategy
-}
+func awaitingRetry(events []core.Event) bool { return core.RecoveryPending(events) }
 
 // waitRejectsFanout reports whether --wait can describe the batch the two
 // fan-outs would create. A single --nodes entry is one task and IS waitable;

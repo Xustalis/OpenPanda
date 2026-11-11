@@ -215,6 +215,8 @@ tui-pty-sidebar-test: build
 	fi
 
 test: adapter-test
+	python3 tests/execution_diagnostics_test.py
+	python3 tests/live_dag_metrics_test.py
 	$(GO) test ./...
 
 vet:

@@ -75,3 +75,9 @@ Estos cambios requieren desplegar el binario y los adaptadores actualizados; la 
 - La clasificación con mapa del espacio de trabajo o herramientas de lectura evita cachés persistentes basadas solo en rutas, para no reutilizar conclusiones anteriores a cambios sin commit. Las observaciones de verificación requieren resultados completados y sin error de herramientas de comandos, con coincidencia exacta del programa y argumentos. No cuentan `echo`, subcadenas, comandos pendientes o fallidos, ni se infieren rutas de composiciones shell complejas. Estas observaciones no equivalen a una aceptación independiente aprobada.
 - Side sigue siendo un canal sin despacho ni modificaciones: una petición profunda no inicia agentes automáticamente allí. Si no cumple los requisitos de investigación, informa que está incompleta y requiere ejecución en el hilo principal. El enrutamiento rápido/profundo y la configuración de razonamiento son capas distintas y no garantizan paridad con la herramienta nativa.
 - Los planes remotos conservan la memoria del proyecto sin adjuntar otro checkout; mantienen la instantánea fuente y el orden de las entradas predecesoras.
+
+## Aceptación, bloqueos y planificación de etapas
+
+- Las etapas generadas o YAML admiten `acceptance`, `success_definition`, `tools_policy` y `max_turns`. Se validan rutas, políticas y el límite de 0..200 turnos; la política de herramientas no concede autorización ni amplía una ejecución restringida.
+- El veredicto `blocked` requiere cambiar condiciones externas o entradas y deja la tarea en revisión. Aprobar no convierte trabajo incompleto conocido en terminado; hay que continuarlo o rechazarlo.
+- Las ramas independientes de una misma máquina pueden ejecutarse en paralelo, sujetas a dependencias, capacidad y bloqueos de recursos. Dentro de un plan y prioridad se ordenan por la ruta crítica ponderada restante; prevalece el orden manual de la cola.

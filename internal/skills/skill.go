@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -133,7 +134,10 @@ func splitFrontmatter(src string) (fm, body string, err error) {
 
 // Store manages SKILL.md files under a skills/ root, keyed by scope.
 type Store struct {
-	root string
+	root       string
+	indexMu    sync.Mutex
+	indexCache map[string]cachedIndexEntry
+	useMu      sync.Mutex
 }
 
 // NewStore wraps a skills/ root directory.

@@ -40,6 +40,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+- **Integrität von Abschluss und Wiederherstellung** — Bekannte unvollständige Arbeit kann nicht durch Genehmigung abgeschlossen werden; externe Blockaden benötigen geänderte Eingaben, und Teil- oder unterbrochene Arbeit wird nicht stillschweigend als Erfolg oder auf einem anderen Agenten wiederholt.
+- **Stufenverträge und Planung** — Pläne unterstützen Abnahme, Erfolgsdefinition, Werkzeugrichtlinie und Rundenlimit je Stufe; unabhängige lokale Zweige laufen parallel und bereite Stufen folgen einer gewichteten kritischen Pfadheuristik.
+- **Eigene Claude-Code-Anbieter** — Eigene Relay-Endpunkte und Einstellungen bleiben bei der Ausführung erhalten; ein offizielles Anthropic-Abonnement oder ein offizieller Schlüssel ist nicht erforderlich.
+
 ### Behoben
 - **Die Toolchain-Untergrenze ist Go 1.26.11** — GO-2026-6859 ist ein Absturz der HTTP/1-Serverseite bei der Behandlung von `MaxBytesReader`-Headern, und er ist hier über den Static-File-Handler des Panels, das WebSocket-Upgrade des Busses und jeden ausgehenden `http.Client`-Aufruf erreichbar. Die `go`-Direktive in `go.mod` ist die einzige Stelle, an der die Toolchain deklariert wird (die CI löst sie über `go-version-file` auf), das Anheben auf 1.26.11 verschiebt also alle Beine zugleich; `govulncheck` meldet mit der neuen Untergrenze nichts, und die Go-Untergrenze in den Beitragsrichtlinien, beiden Installationsanleitungen und der Website nennt jetzt 1.26.11.
 

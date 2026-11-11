@@ -26,6 +26,8 @@ func TestParseSuperviseVerdict(t *testing.T) {
 		{"prose around", "判断如下：\n{\"status\":\"continue\",\"reason\":\"漏了\",\"followup\":\"补上\"}\n完毕", "continue", "补上", false},
 		{"uppercase status", `{"status":"DONE","reason":"ok"}`, "done", "", false},
 		{"invalid status", `{"status":"maybe","reason":"x"}`, "", "", true},
+		{"external block", `{"status":"blocked","reason":"socket.bind EPERM","followup":"change external tool permissions"}`, "blocked", "change external tool permissions", false},
+		{"unsupported block", `{"status":"blocked","reason":"","followup":""}`, "", "", true},
 		{"no json", "just some prose", "", "", true},
 	}
 	for _, tt := range tests {

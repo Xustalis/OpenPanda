@@ -688,6 +688,12 @@ type TaskResultPayload struct {
 	// It is optional for wire compatibility; receivers classify legacy review
 	// results conservatively from explicit authorization-refusal evidence only.
 	ApprovalDisposition string `json:"approval_disposition,omitempty"`
+	// Preserve completion evidence across the wire. Without these fields a
+	// delegator could approve work the executor explicitly left unfinished.
+	NeedsFollowup bool   `json:"needs_followup,omitempty"`
+	Verdict       string `json:"verdict,omitempty"`
+	VerdictReason string `json:"verdict_reason,omitempty"`
+	Followup      string `json:"followup,omitempty"`
 	// Deferred marks a result that reports custody, not execution: the
 	// caller's request (a resume approval) was accepted and parked in an
 	// outbox for delivery when the executor's link returns. Surfaces must
@@ -782,6 +788,8 @@ const maxWireText = 512 << 10
 func (p TaskResultPayload) clampForWire() any {
 	p.Stdout = clampText(p.Stdout, maxWireText)
 	p.Stderr = clampText(p.Stderr, maxWireText)
+	p.VerdictReason = clampText(p.VerdictReason, maxWireText)
+	p.Followup = clampText(p.Followup, maxWireText)
 	return p
 }
 

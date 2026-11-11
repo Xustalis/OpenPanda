@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -382,7 +383,8 @@ func getAgentOutputRider(locs ...i18n.Locale) string {
 - 在 workspace 目录内工作。有代码可读就不要反汇编二进制。改代码时聚焦相关文件；用户要求探索/审查代码库时，沿实际调用链调查实现和测试，不能用 README、目录或工作区地图代替源码证据。
 - 阅读型分析要给出支撑关键结论的文件与行号，区分读过的代码和跑过的测试；搜索有截断、跳过文件或仅查了局部时，不要断言全库不存在。不要为了填模板而执行无关命令。
 - 改动型任务宣布完成前必须用项目自身的构建/测试方式验证成功定义，给出实际运行的命令与结果；只写"应该可行"不算完成。无法运行时明确指出。
-- 任务产出网页或 Web 应用时，回复前用节点上的无头浏览器验证：panda browser open <url>，再看 panda browser snapshot、panda browser console、panda browser network，并截图；构建通过不等于页面可用，没有 console 报错和失败请求才算渲染完成。
+- 任务产出网页或 Web 应用时，用实际可用的浏览器工具验证渲染、交互、控制台、网络和响应式截图；可用时使用 panda browser 或原生 harness 浏览器工具。先确认工具支持的参数，不猜测命令。构建通过不等于页面可用；浏览器不可用时明确记录未验证。
+- 同一页面的独立断言和样式读取尽量合并一次调用。检查失败后只修复相关原因并重跑受影响检查；只有改动、失败或明确新风险才扩大验证。当前阶段交付物和全部验收通过后立即交付，不重复无变化的探索，不代替下游阶段重做其职责。
 - 只改动任务范围内（scope）的文件；不要顺手重构或格式化无关代码。
 - 最终回复用%s，直接说明：发现或改了什么、依据哪些文件、如何验证（实际运行的命令及其结果；未运行则说明）。有无法满足的验收标准要明确写出，不许含糊带过。
 - 不要使用表情符号，不要寒暄或与任务无关的自我介绍。`, outputLangName(outputLang, true))
@@ -393,7 +395,8 @@ Execution contract:
 - Work inside the workspace; never disassemble a binary whose source is on disk. For edits, focus on the relevant files; for a requested repository investigation, trace actual implementation and tests rather than using README, directory listings or the workspace map as code evidence.
 - For read-only analysis, cite files and lines supporting important claims and distinguish inspected code from tests actually run. A truncated or partial search does not establish that something is absent; do not run unrelated checks merely to fill a template.
 - For edits, verify the success definition with the project's own build/test convention and report actual commands and results. If verification cannot run, say so; reporting what "should" work is not completion.
-- When the task produces a web page or app, verify it in the node's headless browser before reporting: panda browser open <url>, then panda browser snapshot, panda browser console and panda browser network, and take a screenshot. A build passing is not the page working; rendering without console errors or failed requests is.
+- When the task produces a web page or app, use an actually available browser tool to verify rendering, interactions, console, network, and responsive screenshots; use panda browser or native harness browser tools when available. Check supported arguments instead of guessing commands. A passing build does not prove the page works; explicitly record browser checks that could not run.
+- Batch independent assertions and style reads for the same page into one tool call where possible. After a failure, fix its cause and rerun affected checks; broaden verification only for changes, failures, or a concrete new concern. Once this stage's deliverables and all acceptance criteria pass, finish promptly. Do not repeat unchanged exploration or redo responsibilities assigned to downstream stages.
 - Touch only files inside the declared scope; do not refactor or reformat unrelated code.
 - Final reply in %s, stating plainly: findings or changes, supporting files, and how they were verified (actual commands and outcomes, or checks not run). Name any acceptance criterion you could not verify — do not imply it passed.
 - No emojis, no pleasantries, no meta-commentary about being an AI.`, outputLangName(outputLang, false))
@@ -626,6 +629,9 @@ func withSkills(c *Core, intent, project, query string, budget int, loc ...i18n.
 	// the mandatory intent when it leaves no room for optional context.
 	intentHeader := i18n.T(targetLoc, "prompt.task.intent_header")
 	header := i18n.T(targetLoc, "prompt.skills.available") + "\n"
+	if budget < 160 {
+		header = "Panda guidance:\n"
+	}
 	suffix := "\n" + intentHeader + "\n"
 	discovery := "panda skill list\n"
 	if budget < len(header)+len(suffix)+len(discovery) {
@@ -693,8 +699,14 @@ func (c *Core) logTask(title string, ok bool, loc ...i18n.Locale) {
 // agent's prompt, so the skill lifecycle (dormant/expired) reflects real usage.
 func recordSkillUse(c *Core, used []*skills.Skill, ok bool) {
 	for _, sk := range used {
-		sk.RecordUse(ok, time.Now())
-		if err := c.skills.Save(sk); err != nil {
+		key := ""
+		if sk.Scope == skills.ScopeProject {
+			key = sk.Project
+		}
+		if sk.Scope == skills.ScopeDevice {
+			key = sk.Device
+		}
+		if err := c.skills.RecordUse(sk.Scope, key, sk.Name, ok, time.Now()); err != nil {
 			c.logger.Warn("save skill use", "name", sk.Name, "err", err)
 		}
 	}
@@ -727,4 +739,16 @@ func (c *Core) audit(ctx context.Context, taskID, what, target, result, detail s
 	}); err != nil {
 		c.logger.Warn("audit record", "err", err)
 	}
+}
+
+// loadedSkillEvidence describes bodies actually injected, not index matches.
+// Loading is observable; compliance with their instructions is not inferred.
+func loadedSkillEvidence(used []*skills.Skill) []map[string]any {
+	out := make([]map[string]any, 0, len(used))
+	for _, sk := range used {
+		hash := sha256.Sum256([]byte(sk.Body))
+		out = append(out, map[string]any{"name": sk.Name, "scope": sk.Scope,
+			"body_sha256": fmt.Sprintf("%x", hash), "body_bytes": len(sk.Body)})
+	}
+	return out
 }

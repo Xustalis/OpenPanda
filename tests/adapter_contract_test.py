@@ -173,6 +173,29 @@ def run_harness(body, stdin_data="", env=None, timeout=5):
 
 
 class AdapterContractTest(unittest.TestCase):
+    def test_claude_preserves_native_model_observation(self):
+        body = 'import json\nprint(json.dumps({"type":"result","is_error":False,"result":"done","modelUsage":{"native-model-v1":{"inputTokens":3}}}))'
+        out, lines, _ = run_adapter("claude_code.py", "claude", body)
+        events = [json.loads(x) for x in lines if x.startswith("{")]
+        observed = [e for e in events if e.get("ev") == "model_observed"]
+        self.assertTrue(out["ok"])
+        self.assertEqual(len(observed), 1, events)
+        self.assertEqual(json.loads(observed[0]["text"])["models"], ["native-model-v1"])
+
+    def test_claude_turn_limit_cannot_be_success_with_long_partial_text(self):
+        body = 'import json\nprint(json.dumps({"type":"result","is_error":True,"subtype":"error_max_turns","result":"partial "*20,"session_id":"checkpoint"}))'
+        out, events, _ = run_adapter("claude_code.py", "claude", body)
+        self.assertFalse(out["ok"], out)
+        self.assertNotEqual(out["exit_code"], 0)
+        self.assertIn("incomplete", out["result"])
+        self.assertEqual(out["session_id"], "checkpoint")
+
+    def test_claude_nonzero_exit_cannot_be_success_with_long_text(self):
+        body = 'import json,sys\nprint(json.dumps({"type":"result","is_error":False,"result":"partial "*20}))\nsys.exit(7)'
+        out, events, _ = run_adapter("claude_code.py", "claude", body)
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["exit_code"], 7)
+
     def test_native_model_preferences_reach_single_model_clis(self):
         cases = [
             ("codex.py", "codex", 'print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":"ok"}}))'),
@@ -711,6 +734,45 @@ if sys.argv[1:2] == ["run"]:
             self.assertEqual(lines.count("help"), 1, lines)
             self.assertEqual(lines.count("models"), 1, lines)
             self.assertEqual(lines.count("catalog"), 1, lines)
+
+    def test_claude_native_custom_endpoint_keeps_settings(self):
+        # A native relay URL is not Panda injection: its key/model may live
+        # in settings.json, including when the adapter uses session mode.
+        for session in (False, True):
+            with self.subTest(session=session):
+                payload, _, _ = run_adapter(
+                    "claude_code.py", "claude", r'''
+import json, os, sys
+assert "--setting-sources" not in sys.argv, sys.argv
+assert os.environ["ANTHROPIC_BASE_URL"] == "https://relay.example"
+if "--input-format" in sys.argv:
+    json.loads(sys.stdin.readline())
+print(json.dumps({"type":"result", "is_error":False, "result":"native relay"}), flush=True)
+''',
+                    env={"ANTHROPIC_BASE_URL": "https://relay.example"},
+                    extra_request={"session": session},
+                )
+                self.assertTrue(payload["ok"], payload)
+                self.assertEqual(payload["result"], "native relay")
+
+    def test_claude_custom_model_preference_and_injected_isolation(self):
+        for session in (False, True):
+            for injected in (False, True):
+                with self.subTest(session=session, injected=injected):
+                    payload, _, _ = run_adapter(
+                        "claude_code.py", "claude", r'''
+import json, os, sys
+args = sys.argv[1:]
+injected = os.environ.get("OPENPANDA_INJECTED_MODEL") == "1"
+assert ("--model" not in args) if injected else (args[args.index("--model") + 1] == "deepseek-custom")
+if "--input-format" in args:
+    json.loads(sys.stdin.readline())
+print(json.dumps({"type":"result", "is_error":False, "result":"ok"}), flush=True)
+''',
+                        env={"ANTHROPIC_MODEL": "deepseek-custom", **({"OPENPANDA_INJECTED_MODEL": "1"} if injected else {})},
+                        extra_request={"session": session},
+                    )
+                    self.assertTrue(payload["ok"], payload)
 
     def test_claude_injected_model_strips_settings_on_stream_only(self):
         # Credential rescue: an injected model/base URL disables the user's

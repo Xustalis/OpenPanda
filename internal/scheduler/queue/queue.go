@@ -46,11 +46,13 @@ type ReadyTask struct {
 	// (the pin forbids local fallback — the forward parks or fails), so
 	// holding a local project/scope key against it serializes remote work
 	// behind unrelated local runs for nothing.
-	Pin          string
-	Priority     int
-	Seq          int64
-	CreatedAt    int64
-	ResourceKeys []string
+	Pin              string
+	Priority         int
+	Seq              int64
+	CreatedAt        int64
+	ResourceKeys     []string
+	PlanID           string
+	CriticalPathRank int
 }
 
 // Store is the persistence surface the scheduler needs. Implemented by the
@@ -158,6 +160,30 @@ func sortReady(ts []ReadyTask) {
 		}
 		return a.CreatedAt < b.CreatedAt
 	})
+	// Reorder only existing sibling slots in one plan/priority band. A
+	// conditional cross-plan comparator would be non-transitive. Preserving
+	// slots also protects unrelated older work and manual drag order.
+	type group struct {
+		plan     string
+		priority int
+	}
+	groups := make(map[group][]int)
+	for i, t := range ts {
+		if t.Seq == 0 && t.PlanID != "" {
+			k := group{t.PlanID, t.Priority}
+			groups[k] = append(groups[k], i)
+		}
+	}
+	for _, positions := range groups {
+		siblings := make([]ReadyTask, len(positions))
+		for j, i := range positions {
+			siblings[j] = ts[i]
+		}
+		sort.SliceStable(siblings, func(i, j int) bool { return siblings[i].CriticalPathRank > siblings[j].CriticalPathRank })
+		for j, i := range positions {
+			ts[i] = siblings[j]
+		}
+	}
 }
 
 // ResourceRegistry is the resource lock table. A task may hold several keys

@@ -105,3 +105,15 @@ func TestPlanTurnKeepsTaskLayer(t *testing.T) {
 		t.Error("a started plan did not attach the task layer")
 	}
 }
+
+func TestPlanStageContractValidation(t *testing.T) {
+	for _, raw := range []string{
+		"{\"kind\":\"plan\",\"plan\":{\"goal\":\"g\",\"stages\":[{\"id\":\"a\",\"intent\":\"i\",\"max_turns\":-1}]}}",
+		"{\"kind\":\"plan\",\"plan\":{\"goal\":\"g\",\"stages\":[{\"id\":\"a\",\"intent\":\"i\",\"tools_policy\":\"unrestricted\"}]}}",
+		"{\"kind\":\"plan\",\"plan\":{\"goal\":\"g\",\"stages\":[{\"id\":\"a\",\"intent\":\"i\",\"acceptance\":[{\"exists\":[\"../secret\"]}]}]}}",
+	} {
+		if _, err := ParseOutput(raw); err == nil {
+			t.Fatalf("invalid contract accepted: %s", raw)
+		}
+	}
+}

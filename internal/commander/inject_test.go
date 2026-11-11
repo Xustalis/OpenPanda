@@ -607,8 +607,8 @@ func TestInjectionNeverBlocksRescue(t *testing.T) {
 // contains "timeout". Re-running that under the injected model can only
 // stall again on the same bound, and it would repeat any side effects the
 // first attempt already performed, so the rescue must stay out of commander
-// kills. An adapter that exits 124 on its own for a provider timeout is not a
-// commander kill and still gets the rescue.
+// kills. An adapter timeout is equally ambiguous about side effects and now
+// also returns to core recovery instead of spending a second full budget.
 func TestInjectionRescueSkipsCommanderKill(t *testing.T) {
 	cleanCredentialEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "agent-own-key")
@@ -633,8 +633,7 @@ func TestInjectionRescueSkipsCommanderKill(t *testing.T) {
 			t.Fatalf("%q: verdict replaced with %q", verdict, res.Result)
 		}
 	}
-	// Control: exit 124 reported by the adapter itself is still a timeout the
-	// rescue may answer.
+	// The adapter's own deadline does not prove that no work happened.
 	r := injectionRouter(flashModel, config.InjectionModelAuto)
 	attempts := 0
 	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
@@ -644,8 +643,8 @@ func TestInjectionRescueSkipsCommanderKill(t *testing.T) {
 		}
 		return AgentResult{OK: true, Result: "rescued", ExitCode: 0}
 	})
-	if res := r.runAdapterDefault(context.Background(), "claude_code.py", "p", ""); !res.OK || attempts != 2 {
-		t.Fatalf("an adapter-side timeout must still be rescued: ok=%v attempts=%d", res.OK, attempts)
+	if res := r.runAdapterDefault(context.Background(), "claude_code.py", "p", ""); res.OK || res.ExitCode != 124 || attempts != 1 {
+		t.Fatalf("adapter timeout must return intact to recovery: result=%+v attempts=%d", res, attempts)
 	}
 }
 

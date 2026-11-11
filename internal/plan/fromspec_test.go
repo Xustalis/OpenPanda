@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
@@ -117,5 +118,24 @@ func TestFromSpecPreservesTaskKind(t *testing.T) {
 	_, err := FromSpec(entry.PlanSpec{Goal: "g", Stages: []entry.PlanStageSpec{{ID: "a", Intent: "inspect", Kind: "unknown"}}})
 	if err == nil || !strings.Contains(err.Error(), "task_kind") {
 		t.Fatalf("invalid kind accepted: %v", err)
+	}
+}
+
+func TestFromSpecPreservesStageAcceptanceAndBudgets(t *testing.T) {
+	spec := entry.PlanSpec{Goal: "g", Stages: []entry.PlanStageSpec{{ID: "a", Intent: "build", ToolsPolicy: "extended", MaxTurns: 75, SuccessDefinition: "real output", Acceptance: []contract.Check{{ID: "test", Run: "node --check app.js"}}}}}
+	p, err := FromSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail entry.TaskSpecDetail
+	if err = json.Unmarshal([]byte(p.Stages[0].SpecJSON), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.MaxTurns != 75 || detail.ToolsPolicy != "extended" || len(detail.Acceptance) != 1 || detail.SuccessDefinition != "real output" {
+		t.Fatalf("contract lost: %+v", detail)
+	}
+	spec.Stages[0].Acceptance = []contract.Check{{Exists: []string{"../escape"}}}
+	if _, err = FromSpec(spec); err == nil {
+		t.Fatal("unsafe artifact accepted")
 	}
 }

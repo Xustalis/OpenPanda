@@ -298,3 +298,17 @@ func TestContinueTaskEndpoint(t *testing.T) {
 		t.Fatalf("engineless continue: %d, want 503", rr.Code)
 	}
 }
+
+func TestApproveUnfinishedTaskReturnsConflict(t *testing.T) {
+	engine := newQueueEngine(t)
+	store := engine.TaskStore()
+	h := New(Deps{Store: store, Engine: engine, StaticDir: t.TempDir(), Token: testToken})
+	nodeID := core.RuntimeNodeID("panel-test", "vm", config.PhysicalIdentity())
+	id := parkFollowupTask(t, store, nodeID, "not yet running", true)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks/"+id+"/approve", nil))
+	cur, err := store.Get(context.Background(), id)
+	if rr.Code != http.StatusConflict || err != nil || cur.State != core.StateReview {
+		t.Fatalf("incomplete approval code=%d state=%s err=%v body=%s", rr.Code, cur.State, err, rr.Body.String())
+	}
+}

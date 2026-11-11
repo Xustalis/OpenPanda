@@ -1510,6 +1510,16 @@ func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
 				WHERE task_id=? AND state=?`,
 				StateQueued, s.now(), taskID, StateReview)
 		} else {
+			// Consent cannot prove a missing postcondition. Read inside the
+			// same transaction as the terminal update so a re-park cannot race
+			// a stale approval into done. Legacy verdict-only rows count too.
+			var resultJSON string
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(result_json, '') FROM tasks WHERE task_id=?`, taskID).Scan(&resultJSON); err != nil {
+				return err
+			}
+			if needsFollowupResult(resultJSON) {
+				return ErrApprovalNeedsFollowup
+			}
 			res, err = tx.ExecContext(ctx, `
 				UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
 				WHERE task_id=? AND state=?`,
@@ -2240,7 +2250,9 @@ func (s *TaskStore) ListReadySummaries(ctx context.Context) ([]queue.ReadyTask, 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT task_id, project, priority, seq, created_at, resource_keys_json, work_dir,
 			CASE WHEN json_valid(spec_json)
-				 THEN COALESCE(json_extract(spec_json, '$.node'), '') ELSE '' END
+				 THEN COALESCE(json_extract(spec_json, '$.node'), '') ELSE '' END,
+         COALESCE(plan_id, ''),
+         CASE WHEN json_valid(resource_json) THEN COALESCE(json_extract(resource_json, '$.critical_path_rank'), 0) ELSE 0 END
 		 FROM tasks WHERE state = ? AND scheduled = 1`, StateQueued)
 	if err != nil {
 		return nil, err
@@ -2254,7 +2266,7 @@ func (s *TaskStore) ListReadySummaries(ctx context.Context) ([]queue.ReadyTask, 
 		// pinned (or written by an older build) carries NULL, and scanning it
 		// into a string failed the whole ready set — which stops the queue
 		// scheduler outright, since it treats "cannot list" as "nothing to run".
-		if err := rows.Scan(&t.ID, &t.Project, &t.Priority, &t.Seq, &t.CreatedAt, &keysJSON, &workDir, &t.Pin); err != nil {
+		if err := rows.Scan(&t.ID, &t.Project, &t.Priority, &t.Seq, &t.CreatedAt, &keysJSON, &workDir, &t.Pin, &t.PlanID, &t.CriticalPathRank); err != nil {
 			return nil, err
 		}
 		t.WorkDir = workDir.String

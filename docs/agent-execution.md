@@ -78,3 +78,65 @@ API: `GET /api/settings/execution`, `PUT /api/settings/execution` (Bearer token)
 - 带工作区目录图或读取工具的分类不复用仅按路径建立的持久缓存，避免未提交修改后返回旧判断。验证证据只认已完成且未标错的命令工具结果及精确匹配的程序/参数，不认 `echo`、子串、未完成或失败命令；复杂 shell 组合不猜执行路径。该记录不代替独立验收通过。
 - Side 仍是禁止派发和修改的侧问通道，不会为了深度检查自动启动 agent；无法满足调查要求时明确报告未完成，需回到主线程执行。快答/深度路由和模型自身推理配置是独立层，不能据此保证与原生工具相同的推理行为。
 - 远端计划继续携带项目记忆，但不重复附加 project checkout；源快照及前置阶段输入顺序保持不变。
+
+## Graph priority and evidence
+
+Ready stages remain constrained by dependencies, node capacity, agent limits and
+resource locks. Within a plan and priority band, unsequenced siblings prefer the
+largest remaining weighted path (long duration hints count as four work units,
+other hints as one). Manual queue order takes precedence. Other plans retain
+their existing queue positions. This is a critical-path heuristic, not a promise
+of globally shortest resource-constrained execution or a time estimate.
+
+The derived rank is persisted in each stage's resource_json as
+critical_path_rank; legacy plans without it retain FIFO behavior. The execution
+trace's loaded_skills records names, scopes, body sizes and SHA256 hashes for
+full skill bodies actually injected into the prompt. This proves loading, not
+that the model obeyed the skill or invoked a native harness Skill tool.
+Unchanged skill metadata is cached after stat checks; bodies still load only on
+demand. Usage updates are serialized within one skill Store (not across separate
+processes). The built-in visual-delivery skill provides responsive, interaction,
+semantic and screenshot acceptance guidance for visual tasks.
+
+Real model verification is opt-in and can incur provider charges. The
+scripts/live-dag-verify command executes a supplied model-generated plan through
+the production Core in a fresh isolated database, using the real Claude adapter,
+artifact handoff and independently supplied acceptance validator. It refuses to
+reuse an existing database. Its output explicitly distinguishes command-contract
+verification from model supervision. Do not substitute this runner's test
+results for a production daemon rollout or a cross-device verification.
+
+Model-generated plans and YAML plans can also carry acceptance,
+success_definition, tools_policy and max_turns on each stage. These contracts
+survive conversion into task spec_json; invalid paths, unsupported tool policies
+and turn limits outside 0..200 are rejected. Tool policy never grants consent or
+widens a restricted run. Independent same-machine branches are valid plans;
+small or tightly coupled local edits stay single tasks.
+
+A contract-only agent run can resume a native turn-cap checkpoint within the
+configured supervision-round budget, without adding a model judge call. If that
+budget is exhausted it parks as incomplete/needs_changed_input; the generic
+failure retry loop must not replenish it. Native error_max_turns and nonzero
+process exits remain failures even when the CLI returns a long partial answer.
+
+### Checkpoint and dependency integrity
+
+A local native session resumes against its existing workspace. Upstream artifact
+inputs are not extracted over local checkpoint edits; a missing checkpoint tree
+is an error, not permission to silently reconstruct a different workspace.
+Approval/resume completion immediately reconsiders dependent stages. A transient
+failed row awaiting bounded retry or same-node checkpoint recovery does not cancel
+its dependents; settled failures still propagate. Review events say review,
+not completed. CLI wait and the opt-in real-DAG verifier share the kernel's
+recovery-pending predicate.
+
+Browser verification uses available native tools, batches independent assertions,
+and stops exploring unchanged work once the current stage's declared acceptance
+passes. This guidance does not replace machine checks or impose an arbitrary
+low tool cap on a genuinely complex task.
+
+## 阶段验收、阻塞与调度
+
+- 生成的计划和 YAML 阶段可设置 `acceptance`、`success_definition`、`tools_policy`、`max_turns`；路径、工具策略和 0..200 的轮次上限会校验，工具策略不能代替授权或扩大受限权限。
+- 监督结果 `blocked` 表示需要改变外部环境或输入，任务进入需要改变输入的审核，不会因批准就视为完成；已知未完成的工作需要继续或拒绝。
+- 同机独立分支允许并行，仍受依赖、容量与资源锁限制；同一计划和优先级内按剩余加权关键路径排序，人工队列顺序优先。

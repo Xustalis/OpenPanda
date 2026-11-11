@@ -133,3 +133,17 @@ func TestOrderFansOut(t *testing.T) {
 		t.Errorf("Ready after root = %d stages, want 2 (left and right in parallel)", len(ready))
 	}
 }
+
+func TestYAMLStageCarriesAcceptanceContract(t *testing.T) {
+	raw := "goal: verify\nstages:\n- id: a\n  intent: build\n  tools_policy: extended\n  max_turns: 65\n  acceptance:\n  - id: test\n    run: node --check app.js\n    expect:\n      exit: 0\n      stdout_contains: valid\n"
+	p, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.Stages[0].SpecJSON, "stdout_contains") || !strings.Contains(p.Stages[0].SpecJSON, "65") {
+		t.Fatalf("contract lost: %s", p.Stages[0].SpecJSON)
+	}
+	if _, err = Parse([]byte(strings.Replace(raw, "node --check app.js", "", 1))); err == nil {
+		t.Fatal("empty command accepted")
+	}
+}

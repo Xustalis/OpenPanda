@@ -889,3 +889,40 @@ func TestProbeClientErrorKeepsStatus(t *testing.T) {
 		t.Fatalf("verdict status = %d, want 400", v.Status)
 	}
 }
+
+func TestClaudeEnvironmentEndpointUsesSettingsCredentials(t *testing.T) {
+	home := t.TempDir()
+	oldHome := homeDir
+	homeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { homeDir = oldHome })
+	t.Setenv("ANTHROPIC_BASE_URL", "https://relay.example")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_MODEL", "")
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(`{"env":{"ANTHROPIC_API_KEY":"relay-key","ANTHROPIC_MODEL":"relay-model"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := &Router{}
+	spec := r.agentTarget("claude_code", ledger.Agent{Adapter: "claude_code.py"})
+	if spec.Endpoint != "https://relay.example" || spec.APIKey != "relay-key" || spec.Model != "relay-model" || !spec.KeyDefinitive {
+		t.Fatalf("unexpected probe target: %+v", spec)
+	}
+}
+
+func TestCodexEnvironmentEndpointDoesNotBorrowConfigCredential(t *testing.T) {
+	home := cleanCredentialEnv(t)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), `model_provider = "relay"
+[model_providers.relay]
+base_url = "https://configured.example/v1"
+wire_api = "responses"
+experimental_bearer_token = "private-config-token"
+`)
+	t.Setenv("OPENAI_BASE_URL", "https://override.example/v1")
+	spec := probeRouter(config.ModelConfig{}).agentTarget("codex", usableAgent("codex.py"))
+	if spec.Endpoint != "https://override.example/v1" || spec.APIKey != "" || spec.APIType != config.APITypeOpenAI {
+		t.Fatalf("unexpected probe target: %+v", spec)
+	}
+}

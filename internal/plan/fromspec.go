@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
@@ -34,7 +35,18 @@ func FromSpec(spec entry.PlanSpec) (Plan, error) {
 		if !s.Kind.Valid() {
 			return Plan{}, fmt.Errorf("plan: stage %q task_kind %q is invalid", s.ID, s.Kind)
 		}
-		detail, err := json.Marshal(entry.TaskSpecDetail{Kind: s.Kind})
+		if s.ToolsPolicy != "" && s.ToolsPolicy != "minimal" && s.ToolsPolicy != "extended" {
+			return Plan{}, fmt.Errorf("plan: stage %q invalid tools_policy", s.ID)
+		}
+		if s.MaxTurns < 0 || s.MaxTurns > 200 {
+			return Plan{}, fmt.Errorf("plan: stage %q max_turns outside 0..200", s.ID)
+		}
+		checks, err := contract.Validate(s.Acceptance)
+		if err != nil {
+			return Plan{}, fmt.Errorf("plan: stage %q: %w", s.ID, err)
+		}
+		detail, err := json.Marshal(entry.TaskSpecDetail{Kind: s.Kind, Acceptance: checks,
+			SuccessDefinition: s.SuccessDefinition, ToolsPolicy: s.ToolsPolicy, MaxTurns: s.MaxTurns})
 		if err != nil {
 			return Plan{}, err
 		}

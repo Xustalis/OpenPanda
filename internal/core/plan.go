@@ -303,8 +303,16 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			}
 		}
 	}
+	ranks, err := plan.CriticalPathRanks(p)
+	if err != nil {
+		return "", err
+	}
 	for _, st := range p.Stages {
-		resourceJSON, err := json.Marshal(st.Resources)
+		// Persist rank once, keeping queue polling a narrow projection.
+		resourceJSON, err := json.Marshal(struct {
+			entry.ResourceProfile
+			CriticalPathRank int `json:"critical_path_rank"`
+		}{st.Resources, ranks[st.ID]})
 		if err != nil {
 			abandon()
 			return "", fmt.Errorf("marshal stage %s resources: %w", st.ID, err)
@@ -434,7 +442,15 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 		switch t.State {
 		case StateDone:
 			done[t.StageID] = true
-		case StateFailed, StateCancelled, StateExpired:
+		case StateFailed:
+			events, err := c.store.Events(ctx, t.TaskID)
+			if err != nil {
+				return fmt.Errorf("read stage recovery: %w", err)
+			}
+			if !RecoveryPending(events) {
+				failed[t.StageID] = true
+			}
+		case StateCancelled, StateExpired:
 			failed[t.StageID] = true
 		}
 	}
@@ -788,6 +804,17 @@ func (c *Core) fetchStageInputs(ctx context.Context, t Task, workDir string) err
 	if len(t.Inputs) == 0 {
 		return nil
 	}
+	// A local native checkpoint refers to the workspace as the agent left it.
+	// Re-extracting upstream inputs here silently rolls back edits to shared
+	// filenames (for example integrate/app.js), while resuming a conversation
+	// which still believes those edits exist. Never hydrate over that state.
+	if t.AgentSessionID != "" && (t.AgentSessionNode == "" || scheduler.SameRuntimeIdentity(t.AgentSessionNode, c.nodeID)) {
+		if !dirHasFiles(workDir) {
+			return fmt.Errorf("local checkpoint workspace is missing or empty; refusing to replace it with upstream inputs: %s", workDir)
+		}
+		c.EvTrace(ctx, t.TaskID, "checkpoint_workspace_preserved", map[string]any{"stage": t.StageID, "inputs": len(t.Inputs)})
+		return nil
+	}
 	if c.artifacts == nil {
 		return errors.New("stage has artifact inputs but this node has no artifact pool")
 	}
@@ -954,8 +981,10 @@ func (c *Core) advanceStagePlan(ctx context.Context, t Task) {
 	// emits the dependent-side "failed" events with their reasons.
 	transition := ""
 	switch t.State {
-	case StateDone, StateReview:
+	case StateDone:
 		transition = "completed"
+	case StateReview:
+		transition = "review"
 	case StateCancelled:
 		transition = "cancelled"
 	case StateFailed, StateExpired:
