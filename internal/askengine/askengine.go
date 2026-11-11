@@ -2479,7 +2479,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// workspace tools and its boundary rider exactly when the user asked it to
 	// check something. The saved round is not worth an answer from hearsay.
 	if len(history) == 0 && !scope.Side && scope.Mode == "" && !repositoryQuestion {
-		if triage := entry.FastTriage(prompt, history); triage.IsFastPath {
+		if triage := entry.FastTriage(prompt); triage.IsFastPath {
 			fastSystem := entry.FastPathPrompt(e.replyASCII, effectiveLocale)
 			if conversationMemory != "" {
 				fastSystem += "\n\n═══ User Memory ═══\n" + conversationMemory
