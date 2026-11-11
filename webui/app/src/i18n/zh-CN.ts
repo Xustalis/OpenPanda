@@ -1433,6 +1433,7 @@ const zhCN: Messages = {
   'models.discover.imported': '已导入 {n} 个模型。',
   'models.discover.importing': '导入中…',
   'models.discover.import': '导入 {n} 个模型',
+  'models.discover.importNone': '导入',
   'models.discover.scanning': '正在扫描本机…',
   'models.discover.sub': '扫描本机已配置的 Codex、Claude Code、OpenCode 和本机推理服务，勾选要加入注册表的模型。',
   'models.discover.title': '从本机发现模型',

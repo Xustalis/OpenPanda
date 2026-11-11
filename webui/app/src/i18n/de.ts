@@ -1420,6 +1420,7 @@ const de: Messages = {
   'models.discover.imported': '{n} Modell(e) übernommen.',
   'models.discover.importing': 'Übernehme…',
   'models.discover.import': '{n} Modell(e) übernehmen',
+  'models.discover.importNone': 'Übernehmen',
   'models.discover.scanning': 'Rechner wird durchsucht…',
   'models.discover.sub': 'Durchsucht die Konfigurationen von Codex, Claude Code und OpenCode sowie lokale Inferenzserver und trägt die gewählten Modelle ein.',
   'models.discover.title': 'Modelle auf diesem Rechner finden',

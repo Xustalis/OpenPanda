@@ -1417,6 +1417,7 @@ const es: Messages = {
   'models.discover.imported': 'Se importaron {n} modelo(s).',
   'models.discover.importing': 'Importando…',
   'models.discover.import': 'Importar {n} modelo(s)',
+  'models.discover.importNone': 'Importar',
   'models.discover.scanning': 'Explorando el equipo…',
   'models.discover.sub': 'Explora las configuraciones de Codex, Claude Code y OpenCode y los servidores de inferencia locales, y registra los modelos que elijas.',
   'models.discover.title': 'Buscar modelos en este equipo',

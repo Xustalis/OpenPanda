@@ -1405,6 +1405,7 @@ const ja: Messages = {
   'models.discover.imported': '{n} 件のモデルを追加しました。',
   'models.discover.importing': 'インポート中…',
   'models.discover.import': '{n} 件をインポート',
+  'models.discover.importNone': 'インポート',
   'models.discover.scanning': 'スキャン中…',
   'models.discover.sub': 'Codex・Claude Code・OpenCode の設定と、ループバックで動く推論サーバーを走査し、登録するモデルを選びます。',
   'models.discover.title': 'このマシンからモデルを検出',

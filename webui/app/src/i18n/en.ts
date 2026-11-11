@@ -1451,6 +1451,7 @@ const en: Messages = {
   'models.discover.imported': 'Imported {n} model(s).',
   'models.discover.importing': 'Importing…',
   'models.discover.import': 'Import {n} model(s)',
+  'models.discover.importNone': 'Import',
   'models.discover.scanning': 'Scanning this machine…',
   'models.discover.sub': 'Scan the Codex, Claude Code and OpenCode configs plus any inference server on loopback, then pick the models to register.',
   'models.discover.title': 'Discover models on this machine',
