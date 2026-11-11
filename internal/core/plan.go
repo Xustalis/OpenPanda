@@ -215,9 +215,9 @@ func (s *TaskStore) ArtifactIndexedFor(ctx context.Context, hash, taskID string)
 //
 // Every stage is created as a queued-scheduler task with no work dir: a path
 // from the machine that wrote the plan is meaningless on the machine that runs
-// the stage, so each executor derives its own (stageWorkDir). No stage carries
-// tier-2 consent either — an irreversible stage parks in review for the user,
-// which is exactly the pending-approval behaviour a plan should have.
+// the stage, so each executor derives its own (stageWorkDir). WorkDir is a
+// bounded source snapshot only. Each stage retains its own spec_json contract
+// and the caller's resolved tier-2 consent; plan/read-only contracts still win.
 func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string, error) {
 	if err := plan.Validate(p); err != nil {
 		return "", fmt.Errorf("invalid plan: %w", err)
@@ -241,6 +241,50 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		case !res.found:
 			return "", fmt.Errorf("stage %s: pinned node %q is not in the directory (run `panda nodes` for the fleet)", st.ID, st.Node)
 		}
+	}
+	// Every stage starts from the same bounded source snapshot, then overlays
+	// its predecessor artifacts. The executor always extracts in a node-local
+	// scratch directory: a submitter's absolute path is never sent to peers.
+	// Fail before creating any rows if the requested source cannot be shipped;
+	// silently running against an empty tree would certify fictitious work.
+	var source []bus.ArtifactRef
+	// partial records a readable-but-incomplete snapshot: the same lenient pack
+	// backs a single task, where a skipped entry becomes context_degraded and
+	// the run continues. Refusing the plan instead made one locked directory
+	// the difference between a project that runs as a task and one that cannot
+	// start a plan at all.
+	var partial []string
+	if q.WorkDir == "" && q.Project != "" {
+		q.WorkDir = c.projectDir(q.Project)
+		if q.WorkDir == "" {
+			return "", fmt.Errorf("plan project %q has no usable source workspace", q.Project)
+		}
+	}
+	if q.WorkDir != "" {
+		if err := projects.ValidateWorkDir(q.WorkDir); err != nil {
+			return "", fmt.Errorf("plan source workspace: %w", err)
+		}
+		if c.artifacts == nil {
+			return "", errors.New("plan source workspace requires an artifact pool")
+		}
+		m, err := c.artifacts.PackSourceDirExceptPaths(q.WorkDir, worktreeSkipDirs, c.hostStatePrune(q.WorkDir), worktreeAttachLimit)
+		if err != nil {
+			return "", fmt.Errorf("pack plan source workspace: %w", err)
+		}
+		// A snapshot smaller than the workspace is a lie the stage cannot see:
+		// it extracts what arrived and believes it is the source. So a pack that
+		// dropped entries and shipped nothing is refused. An empty directory is
+		// not that case — nothing was withheld, and a plan for a project that
+		// has no files yet is an ordinary request, so it starts with an empty
+		// snapshot rather than a made-up one.
+		if len(m.Entries) == 0 && len(m.PackSkipped) != 0 {
+			return "", fmt.Errorf("plan source workspace %s has no readable entry (skipped %v)", q.WorkDir, m.PackSkipped)
+		}
+		partial = m.PackSkipped
+		if len(partial) != 0 {
+			c.logger.Warn("plan: source snapshot is partial", "dir", q.WorkDir, "skipped", partial)
+		}
+		source = []bus.ArtifactRef{{Stage: worktreeArtifactStage, Hash: m.Hash, Source: c.nodeID}}
 	}
 	planID, err := newUUID()
 	if err != nil {
@@ -271,7 +315,9 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		}
 		t, _, _, err := c.createTask(ctx, TaskInput{
 			Title:        title,
+			Project:      q.Project,
 			Intent:       st.Intent,
+			SpecJSON:     st.SpecJSON,
 			Requires:     st.Requires,
 			ResourceJSON: string(resourceJSON),
 			// Stages inherit the plan's conversation: the whole plan is one
@@ -310,7 +356,7 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		}
 		// Physical actuators are exclusive regardless of the plan key: two
 		// stages from different plans driving one servo must serialize.
-		keys = mergeActuatorKeys(keys, st.Requires, "")
+		keys = mergeActuatorKeys(keys, st.Requires, st.SpecJSON)
 		if err := c.store.SetQueueMeta(ctx, t.TaskID, q.Priority, q.SessionID, "", keys); err != nil {
 			abandon()
 			return "", fmt.Errorf("queue meta for stage %s: %w", st.ID, err)
@@ -318,6 +364,23 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		if err := c.store.SetStage(ctx, t.TaskID, planID, st.ID, st.Needs); err != nil {
 			abandon()
 			return "", fmt.Errorf("stamp stage %s: %w", st.ID, err)
+		}
+		if len(source) > 0 {
+			if err := c.store.SetStageInputs(ctx, t.TaskID, source); err != nil {
+				abandon()
+				return "", fmt.Errorf("source input for stage %s: %w", st.ID, err)
+			}
+		}
+		// The snapshot is shared by every stage, so each one carries the same
+		// note: its input tree is intact but smaller than the workspace. The
+		// naming matches notePackSkipped's, so both pack paths read the same
+		// way on the audit trail.
+		if len(partial) > 0 {
+			if err := c.store.RecordEvent(ctx, t.TaskID, EvContextDegraded, map[string]any{
+				"stage": "plan_source_partial", "dir": q.WorkDir, "skipped": partial,
+			}); err != nil {
+				c.logger.Debug("record partial plan source event", "task", t.TaskID, "err", err)
+			}
 		}
 		// — Trace: the entry model classified this sentence as a plan, one
 		// event per stage task, fired at stage creation — before AdvancePlan
@@ -434,6 +497,12 @@ func (c *Core) AdvancePlan(ctx context.Context, planID string) error {
 			continue // already released, running, or terminal
 		}
 		inputs, err := c.planStageInputs(ctx, t, byStage, plan.Inputs(p, st.ID))
+		// Keep the initial source snapshot in every stage, including the
+		// successors that also consume predecessor trees. Dependency outputs
+		// overlay the source in deterministic plan.Inputs order.
+		if err == nil && len(t.Inputs) > 0 {
+			inputs = append(append([]bus.ArtifactRef(nil), t.Inputs...), inputs...)
+		}
 		if err != nil {
 			// A missing input is not something waiting longer can fix: the
 			// predecessor is done and produced nothing fetchable, so the stage

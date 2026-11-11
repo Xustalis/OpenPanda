@@ -1081,6 +1081,15 @@ func runTaskAdd(args []string) {
 	// requires path unchanged.
 	agentList := parseAgentList(*agents)
 	nodeList := parseAgentList(*nodes)
+	// --mode describes how a fan-out runs and nothing else, but it used to be
+	// validated only on the fan-out path: `--mode plan` with one agent was
+	// accepted and then ignored, so a user who meant "read only" got a writable
+	// task and an executed acceptance contract. Refuse the vocabulary
+	// everywhere; a value that is valid but inapplicable still only applies to
+	// a fan-out, which is what the flag's help says.
+	if err := validateAgentMode(*mode); err != nil {
+		fail(2, i18n.Tf(loc, "cli.task.add.badMode", "mode", *mode))
+	}
 	// --wait watches one row; a fan-out creates several, so a single exit
 	// code could never describe the batch. Judging by the raw --nodes string
 	// refused a single pinned node too (one task, perfectly waitable) with a
@@ -1345,20 +1354,42 @@ func waitTask(ctx context.Context, store *core.TaskStore, taskID string) (core.T
 }
 
 // failedAwaitingRetry reports whether the row's newest failure came from an
-// agent round, which the supervisor retries after a backoff (or parks in
-// review when the budget is spent). A failure with no exec/supervision event
-// since the last submit/retry never started work and has no retry behind it.
-// A rejected or expired review is final by definition. A store read error
-// fails safe: keep watching rather than declaring a live task dead.
+// agent round the supervisor still means to retry. The recovery assessment it
+// wrote decides that; only a row without one (an older binary, a crash between
+// the result and the assessment) falls back to "an exec round ran, so a retry
+// is behind it". A rejected or expired review is final by definition. A store
+// read error fails safe: keep watching rather than declaring a live task dead.
 func failedAwaitingRetry(ctx context.Context, store *core.TaskStore, taskID string) bool {
 	events, err := store.Events(ctx, taskID)
 	if err != nil {
 		return true
 	}
+	return awaitingRetry(events)
+}
+
+// awaitingRetry is the retry rule itself, separated from the store so it can be
+// tested against the event sequences production actually writes.
+//
+// A failed row says nothing about intent: the same state means "the supervisor
+// will try again in 30 seconds" and "this is over". The recovery assessment —
+// written after the failed result, before the retry decision — is the only
+// event that answers it, and ignoring it made `--wait` sit on a settled task
+// until the timeout expired.
+func awaitingRetry(events []core.Event) bool {
 	for i := len(events) - 1; i >= 0; i-- {
 		switch events[i].Type {
 		case core.EvReview, core.EvExpire, core.EvCancel:
 			return false
+		case core.EvRecoveryAssessment:
+			switch recoveryStrategy(events[i].DataJSON) {
+			case core.RecoveryBoundedRetry, core.RecoverySessionResume:
+				return true
+			case core.RecoveryStop, core.RecoveryHumanReview:
+				return false
+			}
+			// An assessment this code cannot read (an older row) falls through
+			// to the result rule: keep watching rather than declare a live
+			// task dead, the same way a store read error does.
 		case core.EvResult:
 			start := 0
 			for j := i - 1; j >= 0; j-- {
@@ -1376,6 +1407,20 @@ func failedAwaitingRetry(ctx context.Context, store *core.TaskStore, taskID stri
 		}
 	}
 	return false
+}
+
+// recoveryStrategy reads the strategy out of one assessment event. Empty means
+// "no opinion": the payload is shape-checked here, not trusted.
+func recoveryStrategy(dataJSON string) string {
+	var payload struct {
+		Assessment struct {
+			Strategy string `json:"strategy"`
+		} `json:"assessment"`
+	}
+	if json.Unmarshal([]byte(dataJSON), &payload) != nil {
+		return ""
+	}
+	return payload.Assessment.Strategy
 }
 
 // waitRejectsFanout reports whether --wait can describe the batch the two
@@ -1975,10 +2020,10 @@ var errBadAgentMode = errors.New("bad agents mode")
 // requirement, so routing lands the stage on a node that actually has it —
 // which is the existing plan/DAG machinery, not a special path.
 func buildMultiAgentPlan(agents []string, mode, title, prompt string, requires []string, requiresExplicit bool) (plan.Plan, error) {
-	serial := mode == "serial" || mode == "chain" || mode == "sequential"
-	if !serial && mode != "parallel" {
-		return plan.Plan{}, fmt.Errorf("%w: %s", errBadAgentMode, mode)
+	if err := validateAgentMode(mode); err != nil {
+		return plan.Plan{}, err
 	}
+	serial := agentModeSerial(mode)
 	p := plan.Plan{Goal: title}
 	prev := ""
 	for i, a := range agents {
@@ -1999,6 +2044,22 @@ func buildMultiAgentPlan(agents []string, mode, title, prompt string, requires [
 		prev = st.ID
 	}
 	return p, plan.Validate(p)
+}
+
+// validateAgentMode accepts the fan-out shapes `task add --mode` documents.
+func validateAgentMode(mode string) error {
+	switch mode {
+	case "parallel", "serial", "chain", "sequential":
+		return nil
+	}
+	return fmt.Errorf("%w: %s", errBadAgentMode, mode)
+}
+
+// agentModeSerial reports whether the stages chain on each other rather than
+// starting together. "chain" and "sequential" are the spellings the usage line
+// has accepted since before the flag was validated.
+func agentModeSerial(mode string) bool {
+	return mode == "serial" || mode == "chain" || mode == "sequential"
 }
 
 // stageIDName maps an agent harness name into the [A-Za-z0-9_-] alphabet a

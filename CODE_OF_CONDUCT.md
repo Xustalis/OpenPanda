@@ -2,6 +2,9 @@
 
 English (authoritative) · [简体中文](CODE_OF_CONDUCT.zh-CN.md) · [日本語](CODE_OF_CONDUCT.ja.md) · [Español](CODE_OF_CONDUCT.es.md) · [Deutsch](CODE_OF_CONDUCT.de.md)
 
+> **This file is the authoritative version.** The other language versions are
+> reference translations; where one differs from this file, this file governs.
+
 ## Our Pledge
 
 We as members, contributors, and leaders pledge to make participation in our

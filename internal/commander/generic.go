@@ -234,6 +234,7 @@ func runGenericNative(ctx context.Context, agentName, prompt, cwd string, env []
 		adapterSandboxPolicy(agentName, agents.GenericNativeAdapter, cwd), env...); err != nil {
 		return AgentResult{ExitCode: 127, Result: security.Redact(err.Error())}
 	}
+	emitExecutionProfile(ctx, adapterExecutionProfile(ctx, agents.GenericNativeAdapter, req, cmd.Env, "native_generic"))
 	err := cmd.Run()
 	res := AgentResult{ExitCode: 0}
 	res.Result = strings.TrimSpace(stdout.String())

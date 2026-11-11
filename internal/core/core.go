@@ -2234,6 +2234,7 @@ func (c *Core) List(status, name string) ([]ledger.Node, error) { return c.node.
 
 // Shutdown marks the node offline and closes peers.
 func (c *Core) Shutdown(ctx context.Context) {
+	c.stopReachability(ctx)
 	c.mu.Lock()
 	for id, p := range c.peers {
 		_ = p.conn.Close()

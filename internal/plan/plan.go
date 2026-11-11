@@ -78,6 +78,9 @@ type Stage struct {
 	Resources entry.ResourceProfile
 	// Intent is what the executing node is actually asked to do.
 	Intent string
+	// SpecJSON persists a stage's delivery and permission contract. A CLI
+	// plan without one retains the legacy default.
+	SpecJSON string
 }
 
 // Plan is a goal decomposed into stages. The stage list carries the dependency

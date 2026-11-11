@@ -72,6 +72,7 @@ func registerWebTools(reg *entry.Registry, cfg *config.Config) {
 
 	reg.Register(entry.Tool{
 		Name:        "web_search",
+		ReadOnly:    true,
 		Description: "Search the web for up-to-date information beyond the training cutoff. Must be called when the user asks about latest/recent news, version releases, prices, match scores, or any time-sensitive question; also use it to verify uncertain facts. query = search keywords (including a year improves recency). Returns titles/links/snippets — open a link with web_fetch for the full text. / 联网搜索网页，获取最新内容。当用户询问最新/近期新闻、版本发布、价格、赛事比分、或任何超出训练数据的时效性问题时必须调用；对拿不准的事实也用它查证。query 填搜索关键词（可含年份提高时效）。返回标题/链接/摘要，需看全文再用 web_fetch 打开链接。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -92,6 +93,7 @@ func registerWebTools(reg *entry.Registry, cfg *config.Config) {
 
 	reg.Register(entry.Tool{
 		Name:        "web_fetch",
+		ReadOnly:    true,
 		Description: "Fetch a public https page and return its text content (truncated when too long). Use it to open links returned by web_search or a user-given URL for details; never probe intranet/local services — public addresses only. / 抓取一个公网 https 网页并返回正文纯文本（超长会截断）。用于打开 web_search 返回的链接或用户给出的 URL 读取详情；不要拿它探测内网/本机服务——仅限公网地址。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{

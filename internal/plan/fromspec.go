@@ -15,6 +15,8 @@ package plan
 // hand-written one, before any stage becomes a task row.
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/entry"
@@ -29,6 +31,13 @@ func FromSpec(spec entry.PlanSpec) (Plan, error) {
 		Stages: make([]Stage, 0, len(spec.Stages)),
 	}
 	for _, s := range spec.Stages {
+		if !s.Kind.Valid() {
+			return Plan{}, fmt.Errorf("plan: stage %q task_kind %q is invalid", s.ID, s.Kind)
+		}
+		detail, err := json.Marshal(entry.TaskSpecDetail{Kind: s.Kind})
+		if err != nil {
+			return Plan{}, err
+		}
 		intent := strings.TrimSpace(s.Intent)
 		title := truncateTitle(strings.TrimSpace(s.Title))
 		if title == "" {
@@ -41,6 +50,7 @@ func FromSpec(spec entry.PlanSpec) (Plan, error) {
 			Needs:     trimAll(s.Needs),
 			Node:      strings.TrimSpace(s.Node),
 			Intent:    intent,
+			SpecJSON:  string(detail),
 			Resources: s.Resources,
 		})
 	}

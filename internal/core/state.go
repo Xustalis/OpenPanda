@@ -112,6 +112,13 @@ const (
 	// superior's reasoning behind a re-delegation or a review parking.
 	EvSupervise = "supervise"
 
+	// EvRecoveryAssessment records what the supervisor intends to do about a
+	// failed attempt (retry, session resume, human review, stop). It is written
+	// after the failed result and before the retry decision, so it is the only
+	// event that says whether a "failed" row will move again — the row alone
+	// cannot tell a task that is about to be retried from one that is finished.
+	EvRecoveryAssessment = "recovery_assessment"
+
 	// EvRecover records that a daemon restart normalized a task left in an
 	// active state by the previous process instance: running/waiting_context
 	// become failed (their execution is gone), dispatched/submitted return to

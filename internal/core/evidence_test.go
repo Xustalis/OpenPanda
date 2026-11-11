@@ -114,3 +114,100 @@ func TestCommandFromInputShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestVerificationRequiresExactCompletedCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name, input          string
+		result, failed, want bool
+	}{
+		{"exact", `{"command":"make test"}`, true, false, true},
+		{"argv", `{"cmd":["make","test"]}`, true, false, true},
+		{"shell wrapper", `{"cmd":["/bin/zsh","-lc","make test"]}`, true, false, true},
+		{"echo", `{"command":"echo 'make test'"}`, true, false, false},
+		{"quoted argv", `{"command":["make test"]}`, true, false, false},
+		{"unfinished", `{"command":"make test"}`, false, false, false},
+		{"failed", `{"command":"make test"}`, true, true, false},
+		{"different target", `{"command":"make test-unit"}`, true, false, false},
+		{"reordered", `{"command":"test make"}`, true, false, false},
+		{"shell composition", `{"command":"false && make test"}`, true, false, false},
+		{"comment", `{"command":"echo done # make test"}`, true, false, false},
+		{"different program", `{"command":"MAKE TEST"}`, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newExecEvidence()
+			e.observe(toolUse("verify", "Bash", tc.input))
+			if tc.result {
+				e.observe(toolResult("verify", tc.failed))
+			}
+			if got := ranVerification(e.cmds, []string{"make test"}); got != tc.want {
+				t.Fatalf("got=%v want=%v: %+v", got, tc.want, e.cmds)
+			}
+		})
+	}
+}
+
+func TestVerificationCannotUseNonCommandToolOrPartialScope(t *testing.T) {
+	e := newExecEvidence()
+	e.observe(toolUse("test", "shell", `{"command":"go test ./internal/core"}`))
+	e.observe(toolResult("test", false))
+	if ranVerification(e.cmds, []string{"go test ./..."}) {
+		t.Fatal("partial scope certified whole repository")
+	}
+}
+
+// An execution that covers the declared entry is that entry having run. A
+// package-scoped entry is met by the repository-wide run, and -v/-race add
+// detail instead of removing coverage. The reverse — a narrower run — is still
+// not evidence, which TestVerificationCannotUseNonCommandToolOrPartialScope
+// pins from the other side.
+func TestVerificationAcceptsCoveringExecution(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, entry string
+		want               bool
+	}{
+		{"exact", `{"command":"go test ./internal/core"}`, "go test ./internal/core", true},
+		{"verbosity", `{"command":"go test -v ./internal/core"}`, "go test ./internal/core", true},
+		{"race", `{"command":"go test -race ./internal/core"}`, "go test ./internal/core", true},
+		{"repository wide", `{"command":"go test ./..."}`, "go test ./internal/core", true},
+		{"subtree wildcard", `{"command":"go test ./internal/..."}`, "go test ./internal/core", true},
+		{"extra package", `{"command":"go test ./internal/core ./internal/entry"}`, "go test ./internal/core", true},
+		{"extra target", `{"command":"make test lint"}`, "make test", true},
+		{"subset package", `{"command":"go test ./internal/core"}`, "go test ./internal/...", false},
+		{"sibling package", `{"command":"go test ./internal/entry"}`, "go test ./internal/core", false},
+		{"different target", `{"command":"make test-unit"}`, "make test", false},
+		{"different program", `{"command":"gotest ./..."}`, "go test ./...", false},
+		{"reordered", `{"command":"test go ./internal/core"}`, "go test ./internal/core", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newExecEvidence()
+			e.observe(toolUse("verify", "Bash", tc.input))
+			e.observe(toolResult("verify", false))
+			if got := ranVerification(e.cmds, []string{tc.entry}); got != tc.want {
+				t.Fatalf("got=%v want=%v entry=%q argv=%+v", got, tc.want, tc.entry, e.cmds)
+			}
+		})
+	}
+}
+
+// The judge reads the rendered line, not the matcher: a repository-wide run
+// has to render as "the entry ran" for a package-scoped entry. Before the fix
+// it rendered as "no declared entry matched", which is what pushed an
+// already-verified run into review.
+func TestEvidenceBlockCreditsCoveringVerification(t *testing.T) {
+	e := newExecEvidence()
+	e.observe(toolUse("t1", "Bash", `{"command":"go test -race ./..."}`))
+	e.observe(toolResult("t1", false))
+	block := e.render([]scout.Command{{Run: "go test ./internal/core"}})
+	if !strings.Contains(block, "本轮执行了项目的验证入口") || strings.Contains(block, "没有匹配到项目声明的验证入口") {
+		t.Fatalf("covering run not credited:\n%s", block)
+	}
+}
+
+func TestVerificationDoesNotTrustCommandArgumentOnUnknownTool(t *testing.T) {
+	e := newExecEvidence()
+	e.observe(toolUse("fake", "mcp_echo", `{"command":"make test"}`))
+	e.observe(toolResult("fake", false))
+	if ranVerification(e.cmds, []string{"make test"}) {
+		t.Fatal("non-command tool counted as verification")
+	}
+}

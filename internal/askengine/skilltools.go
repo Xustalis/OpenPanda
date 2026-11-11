@@ -20,6 +20,7 @@ import (
 func registerSkillTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "skill_search",
+		ReadOnly:    true,
 		Description: "Search the Skills Hub and the local skill library for skills. Call it when the user asks whether a skill exists, when a task needs specific dev/ops conventions, or when you want to find a new skill yourself. query = keywords like 'k8s', 'python', 'docker', 'test', 'review'. / 在 Skills Hub（技能集市）与本地技能库中搜索技能。当用户询问是否有某项技能、需要特定开发/运维规范指导，或你要自主寻找新技能执行任务时调用。query 填关键词，如 'k8s', 'python', 'docker', 'test', 'review' 等。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -73,6 +74,7 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "skill_list",
+		ReadOnly:    true,
 		Description: "List all installed and active skills — the workflows, coding conventions and diagnostic procedures currently available. / 列出当前已安装且生效的所有技能，了解已掌握的工作流、代码规范与诊断规程。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -86,6 +88,7 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "skill_show",
+		ReadOnly:    true,
 		Description: "Show an installed skill's full operating procedure (the SKILL.md body). name = the skill's name. / 查看已安装技能的完整操作规程与步骤内容（SKILL.md 正文）。name 填技能名称。",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
@@ -111,6 +114,21 @@ func (e *Engine) getSkillsStore() *skills.Store {
 		_ = st.EnsureBuiltins()
 		e.skills = st
 		return st
+	}
+	return nil
+}
+
+// Plan-mode observation must not seed built-ins as a hidden side effect of
+// lazy initialization. A not-yet-created store is observed as-is.
+func (e *Engine) skillStoreForRead(ctx context.Context) *skills.Store {
+	if ctx.Value(readOnlyEntryToolsKey{}) != true {
+		return e.getSkillsStore()
+	}
+	if e.skills != nil {
+		return e.skills
+	}
+	if e.cfg != nil && e.cfg.Storage.SkillsPath != "" {
+		return skills.NewStore(e.cfg.Storage.SkillsPath)
 	}
 	return nil
 }
@@ -144,7 +162,7 @@ func (e *Engine) toolSkillSearch(ctx context.Context, query string) (string, err
 	if query == "" {
 		return "", fmt.Errorf("query 不能为空")
 	}
-	st := e.getSkillsStore()
+	st := e.skillStoreForRead(ctx)
 	idx, err := skills.FetchHubIndex(ctx, e.getHubURL())
 	if err != nil {
 		return "", fmt.Errorf("获取 Skills Hub 失败: %w", err)
@@ -247,7 +265,7 @@ func (e *Engine) toolSkillInstall(ctx context.Context, target string, force bool
 }
 
 func (e *Engine) toolSkillList(ctx context.Context) (string, error) {
-	st := e.getSkillsStore()
+	st := e.skillStoreForRead(ctx)
 	if st == nil {
 		return "", fmt.Errorf("技能存储未配置")
 	}
@@ -306,7 +324,7 @@ func (e *Engine) toolSkillShow(ctx context.Context, name string) (string, error)
 	if name == "" {
 		return "", fmt.Errorf("技能名称不能为空")
 	}
-	st := e.getSkillsStore()
+	st := e.skillStoreForRead(ctx)
 	if st == nil {
 		return "", fmt.Errorf("技能存储未配置")
 	}

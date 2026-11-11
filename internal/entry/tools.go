@@ -22,7 +22,10 @@ type Tool struct {
 	// tools declare Tier 1; tools that mutate node/card/task state declare
 	// Tier 2 and run only under an explicit authorization for the ask.
 	Tier int
-	Run  func(ctx context.Context, args map[string]any) (string, error)
+	// ReadOnly is an explicit promise from the tool implementer that Run
+	// cannot mutate persistent state. Plan mode denies unknown tools by default.
+	ReadOnly bool
+	Run      func(ctx context.Context, args map[string]any) (string, error)
 }
 
 // spec converts the tool to its wire form (the Messages API tool schema).

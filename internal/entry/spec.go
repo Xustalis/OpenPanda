@@ -51,6 +51,9 @@ func ValidateTaskSpec(t *TaskSpec) error {
 	if t.ToolsPolicy != "" && t.ToolsPolicy != "minimal" && t.ToolsPolicy != "extended" {
 		return fmt.Errorf("entry: task.tools_policy %q invalid (must be minimal or extended)", t.ToolsPolicy)
 	}
+	if !t.Spec.Kind.Valid() {
+		return fmt.Errorf("entry: task.spec.task_kind %q invalid", t.Spec.Kind)
+	}
 	if err := validateActionSpec(t.Spec.ActionSpec); err != nil {
 		return err
 	}
@@ -238,6 +241,9 @@ func ValidatePlanSpec(p *PlanSpec) error {
 	}
 	seen := make(map[string]bool, len(p.Stages))
 	for i, s := range p.Stages {
+		if !s.Kind.Valid() {
+			return fmt.Errorf("entry: plan.stages[%d].task_kind %q invalid", i, s.Kind)
+		}
 		if s.ID == "" {
 			return fmt.Errorf("entry: plan.stages[%d].id is required", i)
 		}

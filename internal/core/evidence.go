@@ -4,6 +4,7 @@ package core
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,9 +22,11 @@ const maxEvidenceCommands = 40
 // evidenceCommand is one shell command an agent ran this round, plus whether
 // its tool result came back as an error.
 type evidenceCommand struct {
-	text   string
-	id     string
-	failed bool
+	text     string
+	id       string
+	failed   bool
+	finished bool
+	argv     []string // parsed from the original input, never from clipped display text
 }
 
 // execEvidence accumulates what an agent ACTUALLY did in one round — the
@@ -82,15 +85,18 @@ func (e *execEvidence) observe(ev commander.AgentEvent) {
 	case "tool_use":
 		e.toolUse(ev)
 	case "tool_result":
-		if ev.IsError {
-			e.toolFailed(ev.ToolUseID)
-		}
+		e.toolFinished(ev.ToolUseID, ev.IsError)
 	}
 }
 
 func (e *execEvidence) toolUse(ev commander.AgentEvent) {
 	name := strings.ToLower(ev.Name)
 	cmd := commandFromInput(ev.Input)
+	var argv []string
+	switch name {
+	case "bash", "shell", "exec", "exec_command", "command", "command_execution", "run_shell_command", "terminal":
+		argv = evidenceArgv(ev.Input)
+	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -121,10 +127,10 @@ func (e *execEvidence) toolUse(ev commander.AgentEvent) {
 		}
 	}
 	e.byID[ev.ID] = len(e.cmds)
-	e.cmds = append(e.cmds, evidenceCommand{text: cmd, id: ev.ID})
+	e.cmds = append(e.cmds, evidenceCommand{text: cmd, id: ev.ID, argv: argv})
 }
 
-func (e *execEvidence) toolFailed(id string) {
+func (e *execEvidence) toolFinished(id string, failed bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	idx, ok := e.byID[id]
@@ -133,8 +139,13 @@ func (e *execEvidence) toolFailed(id string) {
 		// Read): the verdict must not accuse a command that never existed.
 		return
 	}
-	e.cmds[idx].failed = true
-	e.failed++
+	// A started call is not a completed verification. Count a repeated
+	// result at most once, while retaining an error if any result failed.
+	e.cmds[idx].finished = true
+	if failed && !e.cmds[idx].failed {
+		e.cmds[idx].failed = true
+		e.failed++
+	}
 }
 
 // render builds the judge-facing evidence block. verify lists the project's
@@ -180,6 +191,8 @@ func (e *execEvidence) render(verify []scout.Command) string {
 			b.WriteString(c.text)
 			if c.failed {
 				b.WriteString("  [失败]")
+			} else if !c.finished {
+				b.WriteString("  [未观察到完成结果]")
 			}
 		}
 	} else {
@@ -206,7 +219,7 @@ func (e *execEvidence) render(verify []scout.Command) string {
 			case len(cmds) == 0:
 				b.WriteString("\n[验证证据] 本轮没有执行任何命令，无法证明验证入口跑过")
 			case ranVerification(cmds, entries):
-				b.WriteString("\n[验证证据] 本轮执行了项目的验证入口")
+				b.WriteString("\n[验证证据] 本轮执行了项目的验证入口并收到未标错的工具完成结果；这不是独立验收通过的证明")
 			default:
 				b.WriteString("\n[验证证据] 本轮执行了命令，但没有匹配到项目声明的验证入口")
 			}
@@ -245,37 +258,138 @@ func baselineEvidence(results []contract.Result) string {
 	return b.String()
 }
 
-// ranVerification reports whether any executed command names one of the
-// project's verification entries. The match is deliberately loose — an agent
-// may run `make -j8 test` or `go test ./internal/...` where the entry is
-// `make test` / `go test ./...` — so an entry matches when its full text
-// appears, or when every token of the entry's leading command appears in the
-// executed command.
+// ranVerification requires an observed, non-error tool result that covers a
+// declared entry: the same program, every declared word present in order, and
+// an execution at least as wide. Text mentions, reordered tokens, a narrower
+// package scope, a rewritten target and an unfinished call are not
+// verification. Shell composition is deliberately left unconfirmed instead of
+// guessed from a substring.
 func ranVerification(cmds []evidenceCommand, entries []string) bool {
 	for _, c := range cmds {
-		cmd := strings.ToLower(c.text)
+		if !c.finished || c.failed || len(c.argv) == 0 {
+			continue
+		}
 		for _, entry := range entries {
-			e := strings.ToLower(entry)
-			if strings.Contains(cmd, e) {
-				return true
-			}
-			tokens := strings.Fields(e)
-			if len(tokens) < 2 {
-				continue
-			}
-			all := true
-			for _, tok := range tokens {
-				if !strings.Contains(cmd, tok) {
-					all = false
-					break
-				}
-			}
-			if all {
+			argv, err := contract.SplitCommand(entry)
+			if err == nil && verificationCovers(argv, c.argv) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// verificationCovers reports whether executed is the declared entry with more
+// scope. The program must be the same token (so "echo make test" and a
+// differently-cased "MAKE TEST" stay out), each declared word must be matched
+// in order by an equal word or by a package pattern that contains it, and a
+// declared flag must appear verbatim — its meaning belongs to the program, so
+// guessing that a different token is the same flag is the substring match this
+// matcher exists to avoid.
+func verificationCovers(declared, executed []string) bool {
+	if len(declared) == 0 || len(executed) == 0 || declared[0] != executed[0] {
+		return false
+	}
+	pos := 0
+	for _, word := range declared {
+		matched := false
+		for j := pos; j < len(executed); j++ {
+			switch {
+			case executed[j] == word:
+			case strings.HasPrefix(word, "-"), strings.HasPrefix(executed[j], "-"):
+				// A flag only matches itself, in either position: flags are
+				// consumed before scope words so "-v ./a" still covers "-v
+				// -race ./a", but never stands in for a path.
+				continue
+			case packageCovers(word, executed[j]):
+			default:
+				continue
+			}
+			pos = j + 1
+			matched = true
+			break
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// packageCovers reports whether the executed argument covers the declared one:
+// go's "all" and "..." cover every package, and "./sub/..." covers everything
+// under ./sub. The relation is one-way — a concrete package never covers a
+// wildcard — which is what keeps a partial run from certifying a full entry.
+func packageCovers(declared, executed string) bool {
+	if executed == "all" || executed == "..." {
+		return isPackagePath(declared)
+	}
+	base, ok := strings.CutSuffix(executed, "/...")
+	if !ok {
+		return false
+	}
+	// "./..." trims to "." and covers every relative package; "./internals"
+	// must not be read as sitting under "./internal".
+	if base == "." {
+		return isPackagePath(declared)
+	}
+	return declared == base || strings.HasPrefix(declared, base+"/")
+}
+
+// isPackagePath keeps the wildcard rule out of command words: "all" as a make
+// target is not go's meta-package.
+func isPackagePath(s string) bool {
+	return s == "." || strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") || strings.HasPrefix(s, "/")
+}
+
+// evidenceArgv preserves argv token boundaries and only unwraps known shell
+// launchers. Unknown/interpolated/composed syntax stays unconfirmed. This is a
+// conservative evidence matcher, never an authorization or shell evaluator.
+func evidenceArgv(raw json.RawMessage) []string {
+	var input struct {
+		Command json.RawMessage `json:"command"`
+		Cmd     json.RawMessage `json:"cmd"`
+		Script  string          `json:"script"`
+	}
+	if json.Unmarshal(raw, &input) != nil {
+		return nil
+	}
+	for _, field := range []json.RawMessage{input.Command, input.Cmd} {
+		if len(field) == 0 {
+			continue
+		}
+		var argv []string
+		if json.Unmarshal(field, &argv) == nil {
+			return unwrapEvidenceShell(argv)
+		}
+		var command string
+		if json.Unmarshal(field, &command) == nil {
+			argv, err := contract.SplitCommand(command)
+			if err != nil {
+				return nil
+			}
+			return unwrapEvidenceShell(argv)
+		}
+	}
+	argv, err := contract.SplitCommand(input.Script)
+	if err != nil {
+		return nil
+	}
+	return unwrapEvidenceShell(argv)
+}
+
+func unwrapEvidenceShell(argv []string) []string {
+	if len(argv) == 3 && (argv[1] == "-c" || argv[1] == "-lc") {
+		switch filepath.Base(argv[0]) {
+		case "sh", "bash", "zsh":
+			inner, err := contract.SplitCommand(argv[2])
+			if err != nil {
+				return nil
+			}
+			return inner
+		}
+	}
+	return argv
 }
 
 // commandFromInput extracts the shell command from a tool_use input blob.

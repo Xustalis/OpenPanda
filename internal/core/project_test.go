@@ -333,3 +333,31 @@ func TestLandProjectPackRejectsOversize(t *testing.T) {
 		t.Fatal("oversized project pack was accepted")
 	}
 }
+
+// A plan already has a source snapshot plus dependency artifacts. Carry only
+// its project knowledge; a second checkout attachment would replace that tree.
+func TestAttachProjectMemoryPreservesPlanInputs(t *testing.T) {
+	c, ps, root := projectCore(t)
+	tree := writeRepoTree(t)
+	if _, err := ps.Create("demo", tree, "d"); err != nil {
+		t.Fatal(err)
+	}
+	memDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "MEMORY.md"), []byte("project knowledge"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := bus.TaskDelegatePayload{TaskID: "plan-stage", Project: "demo", Inputs: []bus.ArtifactRef{
+		{Stage: worktreeArtifactStage, Hash: "source", Source: "origin"},
+		{Stage: "predecessor", Hash: "output", Source: "peer"},
+	}}
+	c.attachProjectMemory(context.Background(), &p, "demo")
+	if len(p.ProjectPack) == 0 {
+		t.Fatal("memory was not attached")
+	}
+	if p.ProjectDir != "" || len(p.Inputs) != 2 || p.Inputs[0].Hash != "source" || p.Inputs[1].Hash != "output" {
+		t.Fatalf("memory attachment altered plan workspace: %+v", p)
+	}
+}

@@ -22,9 +22,12 @@ import (
 // the normal-priority defaults so a zero struct is never submitted by
 // accident (PriorityHigh is 0).
 type QueueSpec struct {
-	Priority     int
-	SessionID    string
-	WorkDir      string
+	Priority  int
+	SessionID string
+	WorkDir   string
+	// Project identifies the plan's source project. WorkDir is a source tree
+	// for stage snapshots, never a path carried to a remote executor.
+	Project      string
 	ResourceKeys []string
 	// Authorized carries the submitter's tier-2 consent into the created
 	// task. Enqueue callers resolve it through the approval policy (the
@@ -658,7 +661,14 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 	}
 	// Same project carriage as the synchronous path: a queued task delegated to a
 	// peer must arrive with its project context or the peer cannot use it.
-	c.attachProject(ctx, &p, t.Project)
+	// A plan stage already carries its source snapshot and predecessor inputs.
+	// Attaching a project tree again could overwrite that source with a
+	// different checkout (or add a submitter's absolute path on the wire).
+	if t.PlanID == "" {
+		c.attachProject(ctx, &p, t.Project)
+	} else {
+		c.attachProjectMemory(ctx, &p, t.Project)
+	}
 	// The ad-hoc sibling of the same rule: a queued file task ships its work
 	// tree or it does not ship at all — a forwarded blind copy loses to just
 	// running it here.

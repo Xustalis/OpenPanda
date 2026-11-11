@@ -19,6 +19,8 @@ import (
 type LocalAction struct {
 	// ID names the action for tests and telemetry.
 	ID string
+	// ReadOnly allows this action in plan mode; starting services does not qualify.
+	ReadOnly bool
 	// Argv is what to run, excluding the binary itself.
 	Argv []string
 	// ExitStatusIsReport marks an action whose non-zero exit is content, not
@@ -58,11 +60,11 @@ var localActionTable = []struct {
 	// Self-diagnostics and node status: both read-only, both bounded, and both
 	// report through their exit status — "3 checks failed" is the answer.
 	{
-		action: LocalAction{ID: "doctor", Argv: []string{"doctor"}, ExitStatusIsReport: true},
+		action: LocalAction{ID: "doctor", ReadOnly: true, Argv: []string{"doctor"}, ExitStatusIsReport: true},
 		re:     regexp.MustCompile(`^(?:跑一下|执行|运行|run)?(?:doctor|自检|体检|诊断)$`),
 	},
 	{
-		action: LocalAction{ID: "status", Argv: []string{"status"}, ExitStatusIsReport: true},
+		action: LocalAction{ID: "status", ReadOnly: true, Argv: []string{"status"}, ExitStatusIsReport: true},
 		re:     regexp.MustCompile(`^(?:看|看看|查看|show|check)?(?:status|状态|运行状态|节点状态)$`),
 	},
 }

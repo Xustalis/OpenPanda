@@ -54,7 +54,10 @@ var queryPatterns = []*regexp.Regexp{
 
 // FastTriage analyzes user prompt to check if it's a simple query that does not
 // require cluster device topology scanning, heavy JSON task schema, or external tools.
-func FastTriage(prompt string, history []Turn) TriageResult {
+// The verdict is a function of this prompt alone: the caller only offers the
+// fast path to a first turn (empty history), so a history parameter here would
+// read as conversation-awareness the function does not have.
+func FastTriage(prompt string) TriageResult {
 	trimmed := strings.TrimSpace(prompt)
 	if trimmed == "" {
 		// Nothing conversational to answer; keep the pre-fast-path behavior

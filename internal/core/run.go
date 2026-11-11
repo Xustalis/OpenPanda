@@ -299,6 +299,21 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	execCtx, execCleanup = c.decorateExecCtx(execCtx, ctx, taskID, task, plan, evidence, supervisor != nil)
 	defer execCleanup()
 
+	var environment *scout.EnvironmentSnapshot
+	if plan.Kind == "agent" && prep.workDir != "" {
+		snapshot := scout.CaptureEnvironment(execCtx, prep.workDir)
+		environment = &snapshot
+		var spec entry.TaskSpecDetail
+		_ = json.Unmarshal([]byte(task.SpecJSON), &spec)
+		if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, "execution_environment", map[string]any{
+			"attempt_id": attemptID, "task_kind": spec.Kind,
+			"permission_mode": taskPermissionMode(task.SpecJSON), "scope": spec.Scope,
+			"environment": snapshot,
+		}); err != nil {
+			c.logger.Warn("record execution environment", "task", taskID, "err", err)
+		}
+	}
+
 	// Delivery contract (P0): run the declared acceptance checks before the
 	// agent touches the tree. The baseline is evidence, not a gate — it is
 	// what lets the final verdict say "this was already failing" instead of
@@ -306,7 +321,10 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	var acceptanceChecks []contract.Check
 	var acceptanceBaseline []contract.Result
 	if plan.Kind == "agent" || plan.Kind == "native" {
-		acceptanceChecks = taskAcceptance(task.SpecJSON)
+		// A plan-mode investigation is read-only. Even a project's normal
+		// build/test entry can write caches or generated files; do not execute
+		// acceptance commands outside the agent's restricted tool face.
+		acceptanceChecks = executableAcceptance(task.SpecJSON)
 		if len(acceptanceChecks) > 0 {
 			c.EvTrace(execCtx, taskID, EvContractSet, map[string]any{"checks": acceptanceChecks})
 			acceptanceBaseline = c.runAcceptance(execCtx, taskID, acceptancePhaseBaseline, prep.workDir, acceptanceChecks)
@@ -322,7 +340,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		before: prep.before, beforeOK: prep.beforeOK,
 		shadowConflicts: prep.shadowConflicts,
 		checks:          acceptanceChecks, baseline: acceptanceBaseline,
-		evidence: evidence,
+		evidence: evidence, environment: environment,
 	}
 	outcome, err := work.executeRounds(ctx)
 	if err != nil {
@@ -611,6 +629,9 @@ func (c *Core) resolveRunPlanWithRouter(ctx context.Context, taskID string, requ
 		}
 	}
 	perm := defense.NormalizeMode(spec.PermissionMode)
+	if spec.Kind == entry.TaskInvestigation || spec.Kind == entry.TaskCodeQuestion {
+		perm = defense.ModePlan
+	}
 	tightenForPermission(&plan, perm)
 	if perm == defense.ModePlan && plan.Kind == "agent" {
 		was := plan.Agent
@@ -1107,6 +1128,13 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 		// not just a progress line. The count is bounded: a pathological
 		// adapter cannot grow the task's event table without limit, and past
 		// the cap one truncation marker records that the stream was cut.
+		execCtx = commander.WithExecutionProfiles(execCtx, func(profile commander.AdapterExecutionProfile) {
+			if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, "adapter_execution_profile", map[string]any{
+				"attempt_id": task.AttemptID, "profile": profile,
+			}); err != nil {
+				c.logger.Warn("record adapter execution profile", "task", taskID, "err", err)
+			}
+		})
 		var evCount atomic.Int64
 		execCtx = commander.WithAgentEvents(execCtx, func(ev commander.AgentEvent) {
 			if ev.Ev == "session" && ev.ID != "" {
@@ -1206,11 +1234,8 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 		} else if _, d := derivedAgentBudget(task); d > commander.AgentTimeout() {
 			execCtx = commander.WithAgentTimeout(execCtx, d)
 		}
-		// Per-task tools policy: the entry model can request "extended"
-		// for high-complexity tasks that need the agent's full capability
-		// set (native skills, MCP, sub-agents). A task-level override wins
-		// over the router's global policy: the Router applies its global
-		// policy only when the context carries no task-level policy yet.
+		// Per-task tools policy is a requested ceiling. The Router intersects
+		// it with the operator's global policy at the execution boundary.
 		if tp := taskToolsPolicy(task.SpecJSON); tp != "" {
 			execCtx = commander.WithToolsPolicy(execCtx, tp)
 		}
@@ -1301,7 +1326,8 @@ type runWork struct {
 	// evidence is what the round's agent actually did with its tools; the
 	// completion judge reads it so "done" is judged against commands and
 	// results, not only the agent's own summary.
-	evidence *execEvidence
+	evidence    *execEvidence
+	environment *scout.EnvironmentSnapshot
 }
 
 // executeRounds is the supervision loop: an agent task under a supervisor
@@ -1595,7 +1621,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// is withheld from a read-only run, so the builder needs the verdict,
 		// not just the trace and the adapter request do.
 		remoteOrigin := task.Remote || (len(task.Chain) > 0 && task.Chain[0] != c.nodeID)
-		restricted := remoteOrigin && !task.Authorized
+		restricted := commander.Restricted(execCtx) || (remoteOrigin && !task.Authorized)
 
 		// The node's own CLI surface is part of every round's prompt, so its
 		// bytes are reserved before the budget reaches buildAgentPrompt: the
@@ -1641,7 +1667,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// markers are what the agent acts on, the catalog is what it looks
 			// things up in.
 			p += selfSection
-			base, used := buildAgentPrompt(c, fullIntent(), task.Project, task.Title, workDir, promptBudgetFor(promptBudget, len(p)), promptLang, outputLang)
+			base, used := buildAgentPromptWithEnvironment(c, fullIntent(), task.Project, task.Title, workDir, promptBudgetFor(promptBudget, len(p)), w.environment, promptLang, outputLang)
 			usedSkills = used
 			return base + p
 		}
@@ -1661,7 +1687,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			"adapter":              plan.Adapter,
 			"model":                activeModel,
 			"node_name":            scheduler.NodeNamePart(c.nodeID),
-			"authorized":           task.Authorized,
+			"authorized":           task.Authorized && !restricted,
 			"restricted":           restricted,
 			"tier":                 plan.Tier,
 			"workdir":              workDir,
@@ -1722,7 +1748,14 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				roundCtx, roundCancel = context.WithCancel(runCtx)
 				c.registerInterrupt(taskID, roundCancel)
 			}
-			res = router.Execute(roundCtx, *plan, prompt, workDir, task.Authorized)
+			roundAuthorized := task.Authorized
+			if taskPermissionMode(task.SpecJSON) == defense.ModePlan {
+				// A persisted/remote consent bit cannot widen a read-only
+				// contract, including native commands (which have no sandbox).
+				roundAuthorized = false
+				roundCtx = commander.WithRestricted(roundCtx)
+			}
+			res = router.Execute(roundCtx, *plan, prompt, workDir, roundAuthorized)
 			if steerable {
 				c.clearInterrupt(taskID)
 				interrupted = roundCtx.Err() != nil && c.steerUnseen(execCtx, taskID, boardSeen)

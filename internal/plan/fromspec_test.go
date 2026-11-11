@@ -3,6 +3,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -96,5 +97,25 @@ func TestFromSpecTitleTruncation(t *testing.T) {
 	}
 	if n := len([]rune(p.Stages[0].Title)); n > titleMax {
 		t.Errorf("provided title is %d runes, limit is %d", n, titleMax)
+	}
+}
+
+func TestFromSpecPreservesTaskKind(t *testing.T) {
+	for _, kind := range []entry.TaskKind{"", entry.TaskCodeQuestion, entry.TaskInvestigation, entry.TaskEdit, entry.TaskOperations} {
+		p, err := FromSpec(entry.PlanSpec{Goal: "g", Stages: []entry.PlanStageSpec{{ID: "a", Intent: "inspect", Kind: kind}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var spec entry.TaskSpecDetail
+		if err := json.Unmarshal([]byte(p.Stages[0].SpecJSON), &spec); err != nil {
+			t.Fatal(err)
+		}
+		if spec.Kind != kind {
+			t.Fatalf("kind = %q, want %q", spec.Kind, kind)
+		}
+	}
+	_, err := FromSpec(entry.PlanSpec{Goal: "g", Stages: []entry.PlanStageSpec{{ID: "a", Intent: "inspect", Kind: "unknown"}}})
+	if err == nil || !strings.Contains(err.Error(), "task_kind") {
+		t.Fatalf("invalid kind accepted: %v", err)
 	}
 }

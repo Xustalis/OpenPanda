@@ -47,16 +47,10 @@ def main():
     prompt, timeout, cwd = req
 
     # PANDA's sandbox is a cwd/env boundary, not OS isolation. Keep Codex's
-    # own workspace policy on top: restricted (unconsented remote task) pins
-    # the run to read-only — no writes, and codex's sandbox is what stands
-    # between the remote prompt and the filesystem, so restricted outranks
-    # tools_policy. Otherwise minimal stays workspace-write and extended
-    # lifts the filesystem scope (explicit operator choice, mirroring the
-    # claude adapter's extended tool face).
-    if req.restricted:
-        sandbox = "read-only"
-    else:
-        sandbox = "danger-full-access" if req.tools_policy == "extended" else "workspace-write"
+    # own workspace policy on top: restricted runs read-only. The tool-face
+    # policy controls native tools, not filesystem access: extended must not
+    # silently turn a workspace-scoped run into danger-full-access.
+    sandbox = "read-only" if req.restricted else "workspace-write"
 
     # Non-interactive headless exec; a follow-up round resumes the previous
     # run's session (its plan history and approvals survive) instead of
@@ -232,7 +226,8 @@ def _emit_item_events(line, started):
         status = str(item.get("status") or "")
         harness.emit_event("tool_result", tool_use_id=iid,
                            is_error=status in ("failed", "error")
-                           or bool(item.get("is_error")),
+                           or bool(item.get("is_error"))
+                           or (it == "command_execution" and item.get("exit_code") not in (None, 0)),
                            content=str(out))
 
 
