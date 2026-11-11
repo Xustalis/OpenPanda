@@ -40,6 +40,9 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+### 问题修复
+- **工具链下限升到 Go 1.26.11** —— GO-2026-6859 是 HTTP/1 服务端 `MaxBytesReader` 头处理中的崩溃，在本项目里经控制台的静态文件处理器、总线的 WebSocket 升级以及每一处出站 `http.Client` 调用可达。`go.mod` 的 `go` 指令是工具链唯一的声明处（CI 用 `go-version-file` 跟随），因此把它抬到 1.26.11 即整体切换；新下限上 `govulncheck` 无命中，贡献指南、两份安装指南与官网的 Go 下限同步改为 1.26.11。
+
 ## [0.1.5] - 2026-11-09 — "Constellation"
 
 ### Added

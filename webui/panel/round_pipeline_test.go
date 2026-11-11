@@ -75,7 +75,7 @@ func TestRoundPipelineBatchedToolsExecuteAndSummarize(t *testing.T) {
 	for _, turn := range got.Turns {
 		if turn.RoundID != "" {
 			count++
-			if !strings.Contains(turn.Text, "2 completed") {
+			if !strings.Contains(turn.Text, "Round result: 2 tasks") {
 				t.Fatalf("incomplete round: %s", turn.Text)
 			}
 		}

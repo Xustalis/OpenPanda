@@ -46,6 +46,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Fixed
+- **The toolchain floor is Go 1.26.11** — GO-2026-6859 is a crash in the HTTP/1 server's `MaxBytesReader` header handling, and it is reachable here from the panel's static-file handler, the bus's WebSocket upgrade and every outbound `http.Client` call. `go.mod`'s `go` directive is the only place the toolchain is declared (CI resolves it with `go-version-file`), so raising it to 1.26.11 moves every leg at once; `govulncheck` reports nothing on the new floor, and the Go floor in the contributing guides, both install guides and the site now reads 1.26.11.
+
 ## [0.1.5] - 2026-11-09 — "Constellation"
 
 ### Added

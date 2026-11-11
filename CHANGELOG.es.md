@@ -40,6 +40,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Corregido
+- **El mínimo de toolchain pasa a Go 1.26.11** — GO-2026-6859 es un fallo del servidor HTTP/1 al manejar las cabeceras de `MaxBytesReader`, y aquí es alcanzable desde el manejador de ficheros estáticos del panel, el upgrade WebSocket del bus y toda llamada saliente de `http.Client`. La directiva `go` de `go.mod` es el único lugar donde se declara el toolchain (la CI la resuelve con `go-version-file`), así que subirla a 1.26.11 mueve todas las piernas a la vez; `govulncheck` no informa de nada con el nuevo mínimo, y el mínimo de Go en las guías de contribución, ambas guías de instalación y el sitio ya indica 1.26.11.
+
 ## [0.1.5] - 2026-11-09 — "Constellation"
 
 ### Added

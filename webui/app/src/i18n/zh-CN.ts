@@ -1912,6 +1912,28 @@ const zhCN: Messages = {
   'models.copy': '复制',
   'models.copied': '已复制 {alias}。',
 
+  // ---- 会话概览 ----
+  'sessionRail.label': '会话概览',
+  'sessionRail.changes': '变更',
+  'sessionRail.noChanges': '工作树没有改动',
+  'sessionRail.noWorktree': '这个目录不是 git 仓库，只看任务报告的改动',
+  'sessionRail.noReported': '任务没有报告文件改动',
+  'sessionRail.files': '{n} 个文件',
+  'sessionRail.openDiff': '查看差异',
+  'sessionRail.moreFiles': '查看其余 {n} 个',
+  'sessionRail.context': '上下文',
+  'sessionRail.contextNote': '{model} · 按上一轮请求计',
+  'sessionRail.contextNoWindow': '这个模型没有登记上下文窗口，只显示用量。',
+  'sessionRail.contextUnder1': '<1%',
+  'sessionRail.contextUnknown': '上下文用量未知',
+  'sessionRail.tasks': '任务',
+  'sessionRail.running': '{n} 个在跑',
+  'sessionRail.idle': '空闲',
+  'sessionRail.idleWhere': '空闲 · 在 {machine} 上运行',
+  'sessionRail.thisMachine': '本机',
+  'sessionRail.kids': '{n} 个子任务',
+  'sessionRail.openQueue': '打开队列',
+
   // ---- 侧边栏 ----
   'dock.label': '侧边栏',
   'dock.start': '从这里开始',

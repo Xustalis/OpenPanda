@@ -8,7 +8,7 @@ convenciones que mantienen el código legible a medida que crece.
 
 | Herramienta | Versión | Usada para                                    |
 | ----------- | ------- | --------------------------------------------- |
-| Go          | ≥ 1.26.10 | kernel, CLI, panel, tests                     |
+| Go          | ≥ 1.26.11 | kernel, CLI, panel, tests                     |
 | Node.js     | ≥ 18    | consola web (`webui/app`)                     |
 | Python      | ≥ 3.10  | sidecar de voz, adaptadores de agentes        |
 

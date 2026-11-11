@@ -462,6 +462,15 @@
   line-height: 1.55;
 }
 
+/* A JSON envelope that arrived as a reply is data, not code read line by line:
+   its long values are Chinese sentences, and `pre` would push them behind a
+   horizontal scrollbar inside a 620px bubble. Wrap it — the indentation still
+   carries the structure, and every value stays on screen. */
+.md-code code[data-lang='json'] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* tables */
 
 .md-table-wrap {

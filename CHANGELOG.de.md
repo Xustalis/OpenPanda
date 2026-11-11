@@ -40,6 +40,9 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Behoben
+- **Die Toolchain-Untergrenze ist Go 1.26.11** — GO-2026-6859 ist ein Absturz der HTTP/1-Serverseite bei der Behandlung von `MaxBytesReader`-Headern, und er ist hier über den Static-File-Handler des Panels, das WebSocket-Upgrade des Busses und jeden ausgehenden `http.Client`-Aufruf erreichbar. Die `go`-Direktive in `go.mod` ist die einzige Stelle, an der die Toolchain deklariert wird (die CI löst sie über `go-version-file` auf), das Anheben auf 1.26.11 verschiebt also alle Beine zugleich; `govulncheck` meldet mit der neuen Untergrenze nichts, und die Go-Untergrenze in den Beitragsrichtlinien, beiden Installationsanleitungen und der Website nennt jetzt 1.26.11.
+
 ## [0.1.5] - 2026-11-09 — "Constellation"
 
 ### Added
