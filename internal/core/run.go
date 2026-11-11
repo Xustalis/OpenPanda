@@ -3,12 +3,14 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -350,7 +352,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		return outcome.payload, nil
 	}
 	return c.finalizeRun(ctx, taskID, task, work.plan, required, attemptID, prep.workDir,
-		outcome.res, outcome.lastChanged, outcome.filesTruncated, outcome.verdict, outcome.unverified,
+		outcome.res, outcome.lastChanged, outcome.lastStats, outcome.filesTruncated, outcome.verdict, outcome.unverified,
 		outcome.sessionID, outcome.sessionAdapter,
 		acceptanceChecks, acceptanceBaseline)
 }
@@ -1286,6 +1288,7 @@ type roundOutcome struct {
 	done           bool
 	res            commander.Result
 	lastChanged    []string
+	lastStats      []fileStat
 	filesTruncated bool
 	verdict        entry.SuperviseVerdict
 	// unverified marks an agent run that nothing checked: no supervisor to
@@ -1436,6 +1439,10 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	// to snapshot fully: the diff covers only the lexical prefix, which the
 	// result flags so consumers don't read partial evidence as "no work".
 	var lastChanged []string
+	// lastStats annotates the same paths with what is knowable without
+	// version control (see fileLineStats): the card's line counts for a run in
+	// a plain folder, where there is no worktree diff to count lines from.
+	var lastStats []fileStat
 	var filesTruncated bool
 	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
 	// delegations bounds how many PANDA_DELEGATE promotions one task may make
@@ -1951,6 +1958,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					if after, serr := defense.SnapshotDir(workDir); serr == nil {
 						filesTruncated = after.Truncated()
 						lastChanged = c.filterHostDrift(workDir, defense.DropVCSBookkeeping(before.Changed(after)))
+						lastStats = fileLineStats(workDir, before, after, lastChanged)
 					}
 				}
 				specJSON := ""
@@ -1960,7 +1968,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					}
 				}
 				park := map[string]any{
-					"question": q, "stdout": res.Stdout, "files_changed": lastChanged,
+					"question": q, "stdout": res.Stdout, "files_changed": lastChanged, "files_stat": lastStats,
 				}
 				if specJSON != "" {
 					park["question_spec"] = specJSON
@@ -2228,6 +2236,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 						"truncated", after.Truncated(), "skipped", after.Skipped())
 				}
 				lastChanged = c.filterHostDrift(workDir, defense.DropVCSBookkeeping(before.Changed(after)))
+				lastStats = fileLineStats(workDir, before, after, lastChanged)
 			}
 		}
 
@@ -2581,7 +2590,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			res.Stdout += "\n\n[delegated child results]\n" + strings.Join(notes, "\n")
 		}
 	}
-	return roundOutcome{res: res, lastChanged: lastChanged, filesTruncated: filesTruncated,
+	return roundOutcome{res: res, lastChanged: lastChanged, lastStats: lastStats, filesTruncated: filesTruncated,
 		verdict: verdict, unverified: unverified, sessionID: sessionID, sessionAdapter: sessionAdapter}, nil
 }
 
@@ -2611,7 +2620,7 @@ func annotateAgentSubstitution(plan commander.Plan, res commander.Result) comman
 // Tier-2) or done. Every return is already the wire payload run reports.
 func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan commander.Plan,
 	required []string, attemptID, workDir string, res commander.Result,
-	lastChanged []string, filesTruncated bool, verdict entry.SuperviseVerdict, unverified bool,
+	lastChanged []string, lastStats []fileStat, filesTruncated bool, verdict entry.SuperviseVerdict, unverified bool,
 	sessionID, sessionAdapter string,
 	checks []contract.Check, baseline []contract.Result) (bus.TaskResultPayload, error) {
 	// A stage hands its work-dir to its successors as a content-addressed
@@ -2624,8 +2633,10 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	// reports the workdir-relative paths the last completed round changed, so
 	// the delegator sees what was touched instead of trusting the agent's prose.
 	filesChanged := lastChanged
+	filesStat := lastStats
 	if len(filesChanged) > maxFilesChangedReport {
 		filesChanged = filesChanged[:maxFilesChangedReport]
+		filesStat = filesStat[:min(len(filesStat), maxFilesChangedReport)]
 	}
 	res = annotateAgentSubstitution(plan, res)
 	var outputArtifact string
@@ -2709,7 +2720,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 			"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
 			"needs_followup": verdict.Status == entry.VerdictContinue,
 			"verdict":        verdict.Status, "verdict_reason": verdict.Reason,
-			"files_changed": filesChanged,
+			"files_changed": filesChanged, "files_stat": filesStat,
 		}); err != nil {
 			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 				return bus.TaskResultPayload{}, ErrCancelled
@@ -2808,7 +2819,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 			defer cancel()
 			if err := c.store.PauseWithResultAttempt(wCtx, taskID, c.nodeID, attemptID, map[string]any{
 				"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
-				"files_changed": filesChanged,
+				"files_changed": filesChanged, "files_stat": filesStat,
 			}); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 					return bus.TaskResultPayload{}, ErrCancelled
@@ -2850,7 +2861,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	wCtx, cancel := c.storeWriteCtx(ctx)
 	defer cancel()
 	if err := c.store.CompleteAttempt(wCtx, taskID, c.nodeID, attemptID, map[string]any{
-		"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "files_changed": filesChanged,
+		"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "files_changed": filesChanged, "files_stat": filesStat,
 		// Who actually ran the work rides the row, not only the wire payload:
 		// a fallback can swap the agent, and `panda task show` (or the panel)
 		// must be able to name the one that executed instead of reporting the
@@ -2907,4 +2918,72 @@ func applyStructuredFailure(res *commander.Result, sr *structuredAgentResult) {
 		reason = "agent reported status: failed"
 	}
 	res.Stderr = reason
+}
+
+// fileStat is what a run can honestly say about one changed path without
+// version control: whether it created the file (and then how many lines it
+// holds), removed it, or edited it in place. Only a creation carries a
+// countable delta — the "before" content of an edit is gone by the time the
+// round ends, and a made-up number would be worse than none.
+type fileStat struct {
+	Path  string `json:"path"`
+	Kind  string `json:"kind"` // added | removed | modified
+	Lines int    `json:"lines,omitempty"`
+}
+
+// maxStatFileBytes bounds the file the line counter reads. A workdir can hold
+// a multi-gigabyte blob; counting its lines is not worth the read.
+const maxStatFileBytes = 4 << 20
+
+// fileLineStats annotates the paths from a round's workdir diff. Every failure
+// is silent: this is decoration on the result, never a reason to fail a task.
+func fileLineStats(workDir string, before, after defense.Snapshot, paths []string) []fileStat {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]fileStat, 0, len(paths))
+	for _, path := range paths {
+		stat := fileStat{Path: path, Kind: "modified"}
+		switch {
+		case !before.Has(path) && after.Has(path):
+			stat.Kind = "added"
+			stat.Lines = countFileLines(filepath.Join(workDir, filepath.FromSlash(path)))
+		case before.Has(path) && !after.Has(path):
+			stat.Kind = "removed"
+		}
+		out = append(out, stat)
+	}
+	return out
+}
+
+// countFileLines counts newlines up to maxStatFileBytes. A file without a
+// trailing newline still counts its last partial line, the way every editor
+// numbers it.
+func countFileLines(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	buf := make([]byte, 32*1024)
+	lines, total := 0, 0
+	last := byte('\n')
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			total += n
+			lines += bytes.Count(buf[:n], []byte{'\n'})
+			last = buf[n-1]
+			if total >= maxStatFileBytes {
+				return lines
+			}
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	if total > 0 && last != '\n' {
+		lines++
+	}
+	return lines
 }

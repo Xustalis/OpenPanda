@@ -750,17 +750,29 @@ type taskJSON struct {
 	// SpawnDepth is the task's generation inside a delegation tree (0 root,
 	// 1 child, 2 grandchild); omitted for standalone rows so the kanban only
 	// badges cards that belong to a sub-agent fan-out.
-	SpawnDepth   int    `json:"spawn_depth,omitempty"`
-	Project      string `json:"project"`
-	Title        string `json:"title"`
-	State        string `json:"state"`
-	Owner        string `json:"owner"`
-	AttemptID    string `json:"attempt_id"`
-	Intent       string `json:"intent,omitempty"`
-	Spec         string `json:"spec,omitempty"`
-	Result       string `json:"result,omitempty"`
-	Verification string `json:"verification,omitempty"`
-	Risk         string `json:"risk,omitempty"`
+	SpawnDepth int    `json:"spawn_depth,omitempty"`
+	Project    string `json:"project"`
+	Title      string `json:"title"`
+	State      string `json:"state"`
+	Owner      string `json:"owner"`
+	AttemptID  string `json:"attempt_id"`
+	Intent     string `json:"intent,omitempty"`
+	Spec       string `json:"spec,omitempty"`
+	Result     string `json:"result,omitempty"`
+	// FilesChanged is the run's own report of what it touched: a snapshot
+	// diff of its working directory, so it works in a plain folder where
+	// there is no worktree to diff. Lifted out of Result because brief reads
+	// blank that column (it carries the run's stdout) while the session card
+	// still needs this list — for a project that is not a git repository it
+	// is the only change signal that exists.
+	FilesChanged []string `json:"files_changed,omitempty"`
+	// FilesStat annotates those paths with what the run could establish
+	// without version control: a created file carries its line count, so the
+	// card can print `+N -0` where a worktree diff would have. Edits and
+	// deletions carry the kind only — their "before" content is gone.
+	FilesStat    []fileStatJSON `json:"files_stat,omitempty"`
+	Verification string         `json:"verification,omitempty"`
+	Risk         string         `json:"risk,omitempty"`
 	// Agent is the adapter that ran (or is running) this task, bare of its
 	// file extension ("claude_code", not "claude_code.py"). It is the same
 	// affinity key the agent handle is pinned to, and it is what lets the
@@ -911,6 +923,45 @@ type tier2OpJSON struct {
 	Risk   string `json:"risk"` // "high" | "medium" | "low"
 }
 
+// resultFilesChanged pulls files_changed out of a stored run result. The
+// column is JSON written by the runner; anything else (an empty row, a
+// hand-written result) simply has no list, and a malformed one must not cost
+// the caller the rest of the task.
+func resultFilesChanged(result string) []string {
+	if result == "" {
+		return nil
+	}
+	var parsed struct {
+		FilesChanged []string `json:"files_changed"`
+	}
+	if json.Unmarshal([]byte(result), &parsed) != nil {
+		return nil
+	}
+	return parsed.FilesChanged
+}
+
+// fileStatJSON is one changed path with what the run could establish about it.
+type fileStatJSON struct {
+	Path  string `json:"path"`
+	Kind  string `json:"kind"` // added | removed | modified
+	Lines int    `json:"lines,omitempty"`
+}
+
+// resultFilesStat pulls files_stat out of a stored run result, with the same
+// tolerance as resultFilesChanged: an older row simply has none.
+func resultFilesStat(result string) []fileStatJSON {
+	if result == "" {
+		return nil
+	}
+	var parsed struct {
+		FilesStat []fileStatJSON `json:"files_stat"`
+	}
+	if json.Unmarshal([]byte(result), &parsed) != nil {
+		return nil
+	}
+	return parsed.FilesStat
+}
+
 func (h *handler) toTaskJSON(t core.Task) taskJSON {
 	out := taskJSON{
 		ID:           t.TaskID,
@@ -924,6 +975,8 @@ func (h *handler) toTaskJSON(t core.Task) taskJSON {
 		Intent:       t.Intent,
 		Spec:         t.SpecJSON,
 		Result:       t.ResultJSON,
+		FilesChanged: resultFilesChanged(t.ResultJSON),
+		FilesStat:    resultFilesStat(t.ResultJSON),
 		Verification: t.Verification,
 		Risk:         t.Risk,
 		Agent:        strings.TrimSuffix(t.AgentSessionAdapter, ".py"),
