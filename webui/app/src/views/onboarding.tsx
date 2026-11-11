@@ -14,6 +14,7 @@ import { TermsContent } from '../components/terms'
 import { ModelPicker } from '../components/model-picker'
 import { useModalFocus } from '../components/modal-focus'
 import { ProviderCard } from '../components/provider-card'
+import { navigate } from '../nav'
 import { onboardingGate } from '../utils/onboarding'
 import { MODEL_SAVED_EVENT, notifyModelSaved } from '../model-events'
 import { needsPlaintextConsent } from './model-endpoint'
@@ -55,7 +56,6 @@ export function OnboardingBanner() {
 
   const gate = state ? onboardingGate(state) : null
   const termsOnly = gate?.termsOnly ?? false
-  const needsWizard = gate?.needsWizard ?? false
   const banner = gate?.banner ?? 'none'
   // Only a genuinely fresh install opens without a click. A recorded install
   // with stale consent gets the banner; opening the modal every launch was
@@ -76,6 +76,12 @@ export function OnboardingBanner() {
   }
 
   const showBanner = !open && banner !== 'none'
+  // The model banner points at the page that owns models: 设置 → 模型. It used
+  // to raise the wizard on its model step, which is a second, narrower copy of
+  // that page — the provider grid without the connections already registered,
+  // the key reuse, CC Switch or discovery beside it. Only the consent banner
+  // still opens the wizard: language → terms → guide → approval has no home in
+  // the settings sheet.
   return (
     <>
       {showBanner && (
@@ -83,15 +89,23 @@ export function OnboardingBanner() {
           <span class="onboarding-banner-text">
             {t(banner === 'terms' ? 'onboarding.termsBanner' : 'onboarding.banner')}
           </span>
-          <button class="btn primary small" onClick={() => setOpen(true)}>
-            {t(banner === 'terms' ? 'onboarding.termsCta' : 'onboarding.cta')}
-          </button>
+          {banner === 'terms' ? (
+            <button class="btn primary small" onClick={() => setOpen(true)}>
+              {t('onboarding.termsCta')}
+            </button>
+          ) : (
+            <button
+              class="btn primary small"
+              onClick={() => navigate({ view: 'settings', tab: 'models' })}
+            >
+              {t('onboarding.cta')}
+            </button>
+          )}
         </div>
       )}
       {open && (
         <OnboardingWizard
           state={state}
-          modelOnly={!needsWizard}
           termsOnly={termsOnly}
           onClose={dismiss}
           onDone={() => {
@@ -104,24 +118,20 @@ export function OnboardingBanner() {
   )
 }
 
-/** The four-step wizard. `modelOnly` jumps straight to the model step for
- *  the "already onboarded, still no model" banner path; `termsOnly` shows
- *  just the license step for installs that accepted a stale terms revision
- *  (the MIT→AGPL change) — accepting completes the wizard. */
+/** The four-step wizard, plus the terms-only pass. The model step lives at the
+ *  end of the tour (a fresh install has no other place to land), but it is not
+ *  a standalone destination: "already onboarded, still no model" is a settings
+ *  job, and its banner CTA opens 设置 → 模型 instead of this modal. */
 function OnboardingWizard(props: {
   state: OnboardingState
-  modelOnly: boolean
   termsOnly: boolean
   onClose(): void
   onDone(): void
 }) {
   useLocaleRerender()
   // Re-consent (termsOnly) must not re-run the tour: the install was already
-  // configured, and this pass only collects a signature. modelOnly is the
-  // "configured but still no model" banner path — it lands straight on the
-  // model step, so its progress strip should read one step, not four empty
-  // dots.
-  const steps: Step[] = props.termsOnly ? ['terms'] : props.modelOnly ? ['model'] : STEPS
+  // configured, and this pass only collects a signature.
+  const steps: Step[] = props.termsOnly ? ['terms'] : STEPS
   const [stepIdx, setStepIdx] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
