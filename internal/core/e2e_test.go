@@ -1360,6 +1360,41 @@ func linkPair(t *testing.T, ctx context.Context, entry, worker *Core, workerAddr
 	// so wait until both directions see a live conn.
 	waitPeer(t, entry, worker.node.id)
 	waitPeer(t, worker, entry.node.id)
+	// A live conn is not yet a routable peer. ensurePeer registers the
+	// connection before the hello handler ingests the card, so a test that
+	// submits the moment connFor() turns non-nil can route against a node whose
+	// abilities have not been written yet: it fails as "no capability matches
+	// required: code:modify" with nothing wrong in the code under test. That is
+	// what the race job hit on TestClarificationCrossDevice while ten local
+	// runs passed — the window is a few microseconds wide on a fast machine.
+	waitPeerCard(t, entry, worker.node.id)
+	waitPeerCard(t, worker, entry.node.id)
+}
+
+// waitPeerCard blocks until the peer's advertised card is in this core's
+// directory. UpsertRemote writes the row in one statement, so the row existing
+// means the card landed; before that the peer is connected but unknown.
+//
+// A session-shaped id is skipped: hello and heartbeat both refuse to store a
+// client seat's card on purpose (one ghost row per session otherwise), so a
+// wait on it can only time out.
+func waitPeerCard(t *testing.T, c *Core, id string) {
+	t.Helper()
+	if ledger.SessionRowID(id) {
+		return
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var one int
+		err := c.db.QueryRow(`SELECT 1 FROM employee_cache WHERE id = ?`, id).Scan(&one)
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("peer %s never advertised a card: %v", id, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // startPair boots two cores and wires them together, failing the test on
