@@ -5,7 +5,6 @@ package core
 import (
 	"encoding/json"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -259,10 +258,12 @@ func baselineEvidence(results []contract.Result) string {
 	return b.String()
 }
 
-// ranVerification requires an observed, non-error tool result and the exact
-// declared program/arguments. Text mentions, reordered tokens, partial package
-// coverage and an unfinished call are not verification. Shell composition is
-// deliberately left unconfirmed instead of guessed from a substring.
+// ranVerification requires an observed, non-error tool result that covers a
+// declared entry: the same program, every declared word present in order, and
+// an execution at least as wide. Text mentions, reordered tokens, a narrower
+// package scope, a rewritten target and an unfinished call are not
+// verification. Shell composition is deliberately left unconfirmed instead of
+// guessed from a substring.
 func ranVerification(cmds []evidenceCommand, entries []string) bool {
 	for _, c := range cmds {
 		if !c.finished || c.failed || len(c.argv) == 0 {
@@ -270,12 +271,75 @@ func ranVerification(cmds []evidenceCommand, entries []string) bool {
 		}
 		for _, entry := range entries {
 			argv, err := contract.SplitCommand(entry)
-			if err == nil && slices.Equal(c.argv, argv) {
+			if err == nil && verificationCovers(argv, c.argv) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// verificationCovers reports whether executed is the declared entry with more
+// scope. The program must be the same token (so "echo make test" and a
+// differently-cased "MAKE TEST" stay out), each declared word must be matched
+// in order by an equal word or by a package pattern that contains it, and a
+// declared flag must appear verbatim — its meaning belongs to the program, so
+// guessing that a different token is the same flag is the substring match this
+// matcher exists to avoid.
+func verificationCovers(declared, executed []string) bool {
+	if len(declared) == 0 || len(executed) == 0 || declared[0] != executed[0] {
+		return false
+	}
+	pos := 0
+	for _, word := range declared {
+		matched := false
+		for j := pos; j < len(executed); j++ {
+			switch {
+			case executed[j] == word:
+			case strings.HasPrefix(word, "-"), strings.HasPrefix(executed[j], "-"):
+				// A flag only matches itself, in either position: flags are
+				// consumed before scope words so "-v ./a" still covers "-v
+				// -race ./a", but never stands in for a path.
+				continue
+			case packageCovers(word, executed[j]):
+			default:
+				continue
+			}
+			pos = j + 1
+			matched = true
+			break
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// packageCovers reports whether the executed argument covers the declared one:
+// go's "all" and "..." cover every package, and "./sub/..." covers everything
+// under ./sub. The relation is one-way — a concrete package never covers a
+// wildcard — which is what keeps a partial run from certifying a full entry.
+func packageCovers(declared, executed string) bool {
+	if executed == "all" || executed == "..." {
+		return isPackagePath(declared)
+	}
+	base, ok := strings.CutSuffix(executed, "/...")
+	if !ok {
+		return false
+	}
+	// "./..." trims to "." and covers every relative package; "./internals"
+	// must not be read as sitting under "./internal".
+	if base == "." {
+		return isPackagePath(declared)
+	}
+	return declared == base || strings.HasPrefix(declared, base+"/")
+}
+
+// isPackagePath keeps the wildcard rule out of command words: "all" as a make
+// target is not go's meta-package.
+func isPackagePath(s string) bool {
+	return s == "." || strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") || strings.HasPrefix(s, "/")
 }
 
 // evidenceArgv preserves argv token boundaries and only unwraps known shell
