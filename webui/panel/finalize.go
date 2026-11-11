@@ -43,10 +43,24 @@ func (h *handler) startSessionFinalizer(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				h.finalizeSessionSweep(ctx)
+				if !h.finalizeSessionSweep(ctx) {
+					// The store is gone: this handler's lifetime is over, and
+					// every further tick would only re-log that fact.
+					return
+				}
 			}
 		}
 	})
+}
+
+// errStoreClosed reports the error database/sql returns once its DB is closed.
+// The finalizer treats it as a retirement signal rather than a fault: every
+// New(deps) starts one for the process lifetime, so a handler whose store was
+// torn down under it — a test fixture, or a process past its shutdown — would
+// otherwise re-log the same warning on every tick and keep probing a store
+// that can never answer again.
+func errStoreClosed(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "database is closed")
 }
 
 // finalizeSessionSweep appends the summary turn for every terminal task
@@ -55,11 +69,16 @@ func (h *handler) startSessionFinalizer(ctx context.Context) {
 // marker); the former shape loaded every task row and then every task's full
 // event timeline on every pass, so a board of already-summarized tasks was
 // re-read forever.
-func (h *handler) finalizeSessionSweep(ctx context.Context) {
-	defer h.finalizeAskRounds(ctx)
+//
+// The return value says whether another sweep is worth running: false means
+// the store is closed and the caller should stop ticking.
+func (h *handler) finalizeSessionSweep(ctx context.Context) bool {
 	tasks, err := h.store.TerminalSessionTasksWithoutEvent(ctx, evSessionSummary)
 	if err != nil {
-		return
+		if errStoreClosed(err) {
+			return false
+		}
+		return h.finalizeAskRounds(ctx)
 	}
 	for _, t := range tasks {
 		summary := h.taskSummary(ctx, t)
@@ -97,6 +116,7 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) {
 			log.From(ctx).Warn("session summary marker", "task", t.TaskID, "session", t.SessionID, "err", err)
 		}
 	}
+	return h.finalizeAskRounds(ctx)
 }
 
 // taskSummaryKey is stable across sweeps and process restarts, but rotates

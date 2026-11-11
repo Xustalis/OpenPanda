@@ -72,7 +72,10 @@ func newQueueEngine(t *testing.T) *askengine.Engine {
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
-	t.Cleanup(engine.Close)
+	t.Cleanup(func() {
+		engine.Close()
+		removeTempDir(t, dir)
+	})
 	return engine
 }
 
@@ -124,7 +127,10 @@ capacity:
 	if err != nil {
 		t.Fatalf("new approval engine: %v", err)
 	}
-	t.Cleanup(engine.Close)
+	t.Cleanup(func() {
+		engine.Close()
+		removeTempDir(t, dir)
+	})
 	return engine, counter
 }
 
