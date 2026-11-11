@@ -42,7 +42,7 @@ func finalizeWith(t *testing.T, c *Core, task Task, plan commander.Plan, unverif
 	t.Helper()
 	ctx := context.Background()
 	payload, err := c.finalizeRun(ctx, task.TaskID, task, plan, nil, task.AttemptID, t.TempDir(),
-		commander.Result{ExitCode: 0, Stdout: "did the work", Agent: "claude"}, nil, false,
+		commander.Result{ExitCode: 0, Stdout: "did the work", Agent: "claude"}, nil, nil, false,
 		entry.SuperviseVerdict{Status: entry.VerdictDone}, unverified,
 		"", "", nil, nil)
 	if err != nil {

@@ -93,6 +93,7 @@ import { ComposerPet } from '../components/composer-pet'
 import { OrchestrateCard } from '../components/orchestrate'
 import { DirButton } from '../components/dir-picker'
 import { ModelSelect } from '../components/model-select'
+import { SessionRail } from '../components/session-rail'
 import { VoiceInput } from '../components/voice-input'
 import { suggestProjectName } from '../components/dir-utils'
 import { EventTimeline } from '../components/event-timeline'
@@ -399,6 +400,9 @@ interface CompletionItem {
   id: string
   label: string
   hint?: string
+  /** The palette marks the live value with a check icon instead of a hint;
+   *  here it degrades to the same ✓ the hint used to carry. */
+  checked?: boolean
   group?: string
   run(arg?: string): void
 }
@@ -684,16 +688,27 @@ export function SessionsView({
       // storage blocked; the width still works for this session
     }
   }, [dockW])
+  // The panels are thread-scoped: switching threads bumps this clock so the
+  // next thread cannot reopen onto the last thread's page, file or side
+  // question (see the effect keyed on activeId). It is NOT the head's `+` —
+  // sharing the two is how starting a new page once silently wiped the side
+  // chat history. `+` only ever moves sideEpoch below.
   const [dockEpoch, setDockEpoch] = useState(0)
-  // The side conversation keeps its own clock. `+` there is a genuine new
-  // chat — a server-side reset — while `+` in files/browser only resets that
-  // panel. Sharing one epoch meant starting a new page silently wiped the
-  // thread's side chat history.
+  // `+` has one meaning now: a new conversation beside the thread. It used to
+  // double as "reset whichever panel is showing" (files → root, browser →
+  // close the page), so a button labelled 新对话 did something else half the
+  // time — and nothing visible at all when that panel was already at its start
+  // state. Those two panels own their own start-over buttons now.
   const [sideEpoch, setSideEpoch] = useState(0)
   // Bumped when the reader comes back to the 对话 tab. The pane stays mounted
   // behind a hidden tab, so re-read the thread's stored side conversation
   // rather than showing a stale one.
   const [sideReload, setSideReload] = useState(0)
+  // A second click on the 对话 tab. The pane no longer keeps a history bar
+  // above the transcript — a permanent row for a list that is usually one
+  // item long — so the tab is the only door to it: the button that opened the
+  // pane opens the list of the other conversations.
+  const [sideHistory, setSideHistory] = useState(0)
   // The head's `+` is always mounted now. When it opens the side conversation
   // from a tool page or the start state, that pane may be mounting in the same
   // render as the epoch bump — it needs a mount-time flag to know the new
@@ -1438,9 +1453,13 @@ export function SessionsView({
   }, [input])
 
   // Follow the newest message while streaming — but only while pinned.
+  // `instant` on purpose: `.chat-log` sets `scroll-behavior: smooth`, and a
+  // smooth scroll re-targeted every frame never settles. The view lags a line
+  // or two behind the stream, then slides the rest of the way when the last
+  // chunk lands — the reply appears to jump the moment it finishes.
   useEffect(() => {
     if (!pinned.current) return
-    scroller.current?.scrollTo({ top: scroller.current.scrollHeight })
+    scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'instant' })
   }, [msgs])
 
   // A thread that just loaded is parked at its newest message, which is the
@@ -2632,6 +2651,42 @@ export function SessionsView({
   // pick and the keyboard legend are that page's furniture only — a thread
   // that exists already knows where it runs, and the legend has been read.
   const newChatPage = !activeId && msgs.length === 0 && !loading
+  // 新对话页没有右侧栏。这一页还没有线程：栏里的每一页（文件、页面、侧聊）都无从
+  // 谈起，而唯一与这一页有关的那个决定 —— 在哪台机器上跑 —— 原本也锁在栏的工具
+  // 页后面。所以这一页把节点按钮直接摆到头部（见下），栏本身不出现，连折叠按钮
+  // 也不留（没有栏可折）。线程一存在就恢复原样：栏、栏的按钮、它记住的那一页。
+  const dockShown = dockOpen && !newChatPage
+
+  // The overview card is furniture, not a preference: a thread that is open
+  // always has one, the way it always has a composer. It costs the transcript
+  // nothing (the card floats, it takes no lane) and it is the only place that
+  // answers "what changed / how full / what is running" without a scroll.
+  // The new-chat page has no thread to summarize, so it gets none.
+  //
+  // It steps aside for the side panel: the dock is the same corner answering
+  // the same question in full, and once it is open the pane has already given
+  // up 380px — a second card on top of the remainder would leave the
+  // transcript a strip. `showRail` still gates the task read below, so folding
+  // the card never silences the live employee row in the thread.
+  const showRail = !newChatPage
+
+  // "Context used" is the last request's billed total: the prompt the thread
+  // actually sent. The newest assistant turn carries it — live, while the
+  // reply streams, and again after a reload, because the panel files the
+  // number with the turn. One read answers both the footprint and the model
+  // that produced it.
+  const newestUsage = (() => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]!
+      if (m.role === 'assistant' && ((m.tokens ?? 0) > 0 || m.model)) return m
+    }
+    return null
+  })()
+  // Where this thread is pinned to run, in the same words the node picker
+  // uses: the scheduler's own answer when nothing is pinned.
+  const railMachine = nodePref
+    ? nodes.find((n) => n.id === nodePref)?.name || nodePref
+    : t('sessions.nodeAuto')
 
   // The open thread's directory, read-only: the foot row under the box keeps
   // its place on every surface — 新对话 picks a directory there, 工作空间
@@ -2660,10 +2715,16 @@ export function SessionsView({
   // A running operation counts too: a turn started elsewhere (the workspace
   // dispatcher, another tab, the TUI) has no bubble here yet, but the thread
   // must still show the employee's live row instead of a bare spinner.
+  //
+  // The session rail is the third reader: "what is still working, and where"
+  // is one of the three things that card exists to answer, and it has to
+  // answer it for work this tab never dispatched. So a thread being read with
+  // the rail open pays the same brief read a dispatched one does — one small
+  // list per change frame, which is what the card is for.
   const dispatched =
     msgs.some((m) => m.kind === 'task' || m.kind === 'plan' || Boolean(m.liveTask)) ||
     session?.operation?.status === 'running'
-  const sessionTasks = useSessionTasks(activeId, dispatched)
+  const sessionTasks = useSessionTasks(activeId, dispatched || showRail)
   const roundOpen = sessionTasks ? roundStillOpen(sessionTasks) : false
   const runSummary = busy || roundOpen ? null : trailingRunSummary(msgs)
   // The employees still working, drawn after the last turn: a running job is
@@ -2714,8 +2775,8 @@ export function SessionsView({
     <FileViewContext.Provider value={fileOpener}>
     <ComposerContext.Provider value={composerInsert}>
     <section
-      class={`chat${dockOpen ? ' dock-open' : ''}`}
-      style={dockOpen ? `--dock-w:${dockW}px` : undefined}
+      class={`chat${dockShown ? ' dock-open' : ''}`}
+      style={dockShown ? `--dock-w:${dockW}px` : undefined}
     >
       <div class="chat-pane">
         {/* The header is unconditional so the drawer toggle is reachable even
@@ -2784,27 +2845,55 @@ export function SessionsView({
               ± {diff.changes.length} {t('sessions.changes')}
             </button>
           )}
-          {/* The head keeps one control: the door into the side dock. 导出、节点
-              和编排卡都搬进了 dock 的头部，所以这条 bar 只剩标题与一个入口。
-              新对话页也保留它 —— 节点选择现在就在这扇门后面。 */}
+          {/* 头部只留一个控件。线程里它是右侧栏的门 —— 导出、节点和编排卡都搬进了
+              栏的头部，所以这条 bar 只剩标题与一个入口。新对话页反过来：那一页没有
+              栏（见 dockShown），而这一页唯一要答的问题是"在哪台机器上跑"，所以这里
+              站的是节点按钮本身 —— 设备不再锁在栏的工具页后面，也没有一个点了会打开
+              空栏的折叠按钮。选中的节点由 nodePref 带着，线程一开就跟上去。 */}
           <div class="chat-head-tools">
-            {/* Open, the column carries the fold control in its own head, so
-                this one steps aside: two `panel-right` glyphs on the same row
-                were the same button twice. */}
-            {!dockOpen && (
-              <button
-                type="button"
-                class="icon-btn tip-down"
-                data-tip={t('dock.expand')}
-                aria-label={t('dock.expand')}
-                aria-expanded={false}
-                onClick={() => setDockOpen(true)}
-              >
-                <Icon name="panel-right" size={19} />
-              </button>
+            {newChatPage ? (
+              <NodePicker nodes={nodes} value={nodePref} onPick={setNodePref} />
+            ) : (
+              /* Open, the column carries the fold control in its own head, so
+                 this one steps aside: two `panel-right` glyphs on the same row
+                 were the same button twice. */
+              !dockShown && (
+                <button
+                  type="button"
+                  class="icon-btn tip-down"
+                  data-tip={t('dock.expand')}
+                  aria-label={t('dock.expand')}
+                  aria-expanded={false}
+                  onClick={() => setDockOpen(true)}
+                >
+                  <Icon name="panel-right" size={19} />
+                </button>
+              )
             )}
           </div>
         </header>
+
+        {/* The session overview: a card that floats on the pane's top-right
+            corner, not a column of its own. It answers, without scrolling,
+            what this thread changed, how full the context is and what is still
+            running — each section opening into the surface that already owns
+            the detail (the diff drawer, the task detail, the queue board), so
+            the card never becomes a second copy of the app. While it is up the
+            transcript and the composer reserve its lane (`--panel-lane`), so
+            no line ever runs underneath it. See components/session-rail.tsx. */}
+        {showRail && !dockOpen && (
+          <SessionRail
+            diff={diff}
+            tasks={sessionTasks ?? []}
+            nodes={nodes}
+            contextTokens={newestUsage?.tokens ?? 0}
+            model={newestUsage?.model ?? ''}
+            machine={railMachine}
+            onOpenDiff={() => setDiffOpen(true)}
+            onOpenTask={openTaskInPlace}
+            onOpenQueue={() => navigateView('control')}
+          />
+        )}
 
         {diffOpen && diff && (
           <div class="diff-drawer">
@@ -2940,8 +3029,8 @@ export function SessionsView({
                       jumpToPrompt(i)
                     }}
                   >
-                    <span class="chat-rail-item-text">{p.label}</span>
                     <span class="chat-rail-item-tick" aria-hidden="true" />
+                    <span class="chat-rail-item-text">{p.label}</span>
                   </button>
                 ))}
               </div>
@@ -3214,7 +3303,9 @@ export function SessionsView({
                     onClick={() => acceptCompletion(c)}
                   >
                     <span class="complete-label">{c.label}</span>
-                    <span class="complete-hint">{c.hint ?? c.group}</span>
+                    <span class="complete-hint">
+                      {c.hint ?? (c.checked ? '✓' : c.group)}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -3468,6 +3559,7 @@ export function SessionsView({
         {loadError && <p class="gate-error composer-error">{loadError}</p>}
       </div>
 
+
       {/* The side dock: a sibling of the pane, not a layer over it. It is the
           second column of `.chat`'s grid, so opening it narrows the reading
           pane the way a flex split does — the transcript, the composer and the
@@ -3477,7 +3569,7 @@ export function SessionsView({
           The panels stay mounted once visited, so switching tabs returns to
           the same file, the same page, the same side conversation. */}
       <Dock
-        open={dockOpen}
+        open={dockShown}
         tab={dockTab}
         width={dockW}
         tools={
@@ -3529,22 +3621,21 @@ export function SessionsView({
           if (next === 'side') setSideReload((n) => n + 1)
         }}
         onToggle={() => setDockOpen((v) => !v)}
+        onReselect={(key) => {
+          // Only the side conversation has a second-level surface to open;
+          // every other tab keeps the fold-it-away behaviour.
+          if (key === 'side') setSideHistory((n) => n + 1)
+          else setDockOpen(false)
+        }}
         onNew={() => {
-          // Files and the browser keep their own "fresh one of whatever is
-          // showing": the file panel goes back to the workspace root, the
-          // page starts over. Neither may touch the side conversations — a
-          // new chat beside the thread is a separate pane's business.
-          if (dockTab === 'files') {
-            setFileRef(null)
-            return
-          }
-          if (dockTab === 'browser') {
-            setDockEpoch((n) => n + 1)
-            return
-          }
-          // Everywhere else `+` is 新对话: another conversation beside the
-          // thread. The ones already there stay in the pane's history list,
-          // one click away — `+` no longer throws the last one away.
+          // `+` is 新对话 in every pane now — including files and the browser.
+          // It lands on the side conversation; the ones already there stay in
+          // that pane's history list, one click away, so `+` never throws the
+          // last one away. The two panels keep their own start-over controls
+          // (workspace root / close page) in their own bars. Switching the tab
+          // here is also the visible answer to the click: from files or a page
+          // the reader sees the conversation they just started, not a panel
+          // that quietly reset itself.
           const sideMounted = dockSeen.includes('side')
           setSideFresh(!sideMounted)
           setDockTab('side')
@@ -3596,6 +3687,11 @@ export function SessionsView({
               inline
               sessionId={session?.id ?? null}
               open
+              /* The picked task's card is portalled out of this pane, so it
+                 cannot inherit the `hidden` on a pane that is not showing: the
+                 column being folded and the tab being switched away both have
+                 to put the card away with it. */
+              shown={dockShown && dockTab === 'orch'}
               onOpenChange={(open) => {
                 if (!open) setDockTab('')
               }}
@@ -3632,6 +3728,7 @@ export function SessionsView({
               sessionId={session?.id ?? null}
               resetSignal={sideEpoch}
               reloadSignal={sideReload}
+              historySignal={sideHistory}
               freshStart={sideFresh}
               onInsert={composerInsert}
               onOpenTask={openTaskInPlace}

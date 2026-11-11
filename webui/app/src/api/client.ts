@@ -4,6 +4,10 @@
 // localStorage (entered once at the token gate); a 401 clears it and fires
 // `unauthorized` so the app shell can drop back to the gate.
 
+// Explicit path and extension: this module is loaded by `node --test` too,
+// which resolves neither a directory import nor an extensionless one.
+import { locale } from '../i18n/index.ts'
+
 const TOKEN_KEY = 'openpanda.token'
 
 export class ApiError extends Error {
@@ -355,6 +359,14 @@ export interface Task {
   intent?: string
   spec?: string
   result?: string
+  /** Paths the run reported touching, from the runner's workdir snapshot.
+   *  Present on list rows too (brief reads blank `result` but keep this), and
+   *  the only change signal a thread in a non-git folder gets. */
+  files_changed?: string[]
+  /** What the run could establish about those paths without version control:
+   *  a created file carries its line count, an edit or a deletion only its
+   *  kind (there is no "before" content left to count). */
+  files_stat?: { path: string; kind: string; lines?: number }[]
   /** The delivery contract's verdict (verified|failed|partial|skipped), empty
    *  when the task carried no acceptance checks. The report fold reads it. */
   verification?: string
@@ -2860,6 +2872,10 @@ export async function askSessionStream(
       agents,
       permission_mode: permissionMode || undefined,
       resume_queued: resumeQueued || undefined,
+      // Server-written prose for this round (its closing summary) is read
+      // back here, so the round records the console's language instead of
+      // the engine's.
+      locale: locale(),
     },
     signal,
     onEvent: (event, data) => dispatchAskEvent(event, data, h),
@@ -2965,7 +2981,14 @@ export async function askSideStream(
 ): Promise<void> {
   await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
     method: 'POST',
-    body: { prompt, authorize: false, side: true, side_chat: opts.chat ?? '', side_new: !!opts.fresh },
+    body: {
+      prompt,
+      authorize: false,
+      side: true,
+      side_chat: opts.chat ?? '',
+      side_new: !!opts.fresh,
+      locale: locale(),
+    },
     signal,
     onEvent: (event, data) => dispatchAskEvent(event, data, h),
   })

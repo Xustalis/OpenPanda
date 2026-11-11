@@ -957,6 +957,12 @@ type sessionAskRequest struct {
 	// and a second device sees the same history. The field stays on the wire
 	// so an older console does not fail to decode its own request.
 	SideTurns []entry.Turn `json:"side_turns"`
+	// Locale is the console's own UI language. Server-written prose for this
+	// round (the closing summary) is read back in that console, so it must not
+	// borrow the engine's locale — only the CLI sets that, and a console that
+	// never did used to get English round results in a Chinese thread. Absent
+	// falls back to the persisted ui.locale, then the engine.
+	Locale string `json:"locale"`
 }
 
 // statusEventOf is the JSON one progress event becomes on the SSE stream.
@@ -1359,7 +1365,18 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// Persist the dispatch boundary before the entry model can submit work.
 	// A unique operation, rather than session ID, separates overlapping asks.
 	roundID := op.operationID
-	if err := h.store.BeginAskRound(execCtx, roundID, sess.ID, string(eng.Locale())); err != nil {
+	// The round is read back in this console, so it records the console's
+	// language: the client sends its own, the persisted ui.locale is the
+	// fallback for a client that predates the field, and the engine locale —
+	// the CLI's — is the last resort.
+	roundLocale := i18n.Parse(req.Locale)
+	if roundLocale == "" {
+		roundLocale = h.locale()
+	}
+	if roundLocale == "" {
+		roundLocale = eng.Locale()
+	}
+	if err := h.store.BeginAskRound(execCtx, roundID, sess.ID, string(roundLocale)); err != nil {
 		send("error", map[string]string{"message": "create round failed"})
 		h.unregisterSessionAsk(opKey, op)
 		return

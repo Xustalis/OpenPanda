@@ -59,19 +59,28 @@ export function ProfileView() {
   // "nothing recorded" instead of taking the page down with it.
   const { data: stats, error: statsError } = useAsync(() => api.stats(), [], change + tick)
 
+  // The frame is the page, so it is up before the first byte of data: the
+  // loading and error states ride inside the same card instead of flashing a
+  // bare pane that snaps into a card when the request lands.
   if (error) {
     return (
-      <ErrorState
-        head={false}
-        title={t('profile.title')}
-        sub={t('profile.subtitle')}
-        error={error}
-        onRetry={() => setTick((v) => v + 1)}
-      />
+      <section class="profile profile-pending" aria-label={t('profile.title')}>
+        <ErrorState
+          head={false}
+          title={t('profile.title')}
+          sub={t('profile.subtitle')}
+          error={error}
+          onRetry={() => setTick((v) => v + 1)}
+        />
+      </section>
     )
   }
   if (!self) {
-    return <LoadingState head={false} title={t('profile.title')} sub={t('profile.subtitle')} />
+    return (
+      <section class="profile profile-pending" aria-label={t('profile.title')}>
+        <LoadingState head={false} title={t('profile.title')} sub={t('profile.subtitle')} />
+      </section>
+    )
   }
 
   return (

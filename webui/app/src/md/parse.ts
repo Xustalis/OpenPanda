@@ -198,21 +198,66 @@ function parseLines(lines: string[], depth: number): Block[] {
     }
 
     // Paragraph: consume until a blank line or the start of another block.
+    // The raw lines are kept as well as the trimmed ones: a reply that turns
+    // out to be JSON has to reach the code surface with its indentation
+    // intact, and trimming is what would flatten it.
     const para: string[] = []
+    const raw: string[] = []
     while (i < lines.length && line(lines, i).trim() !== '' && !startsBlock(lines, i)) {
+      raw.push(line(lines, i))
       para.push(line(lines, i).trim())
       i++
     }
     if (para.length === 0) {
       // startsBlock matched on the very first line but no branch above
       // claimed it — keep it as text rather than looping forever.
+      raw.push(line(lines, i))
       para.push(line(lines, i).trim())
       i++
+    }
+    const json = asJSONBlock(raw)
+    if (json) {
+      out.push(json)
+      continue
     }
     out.push({ t: 'para', kids: parseInline(para.join('\n')) })
   }
 
   return out
+}
+
+/** A paragraph that is nothing but a JSON object or array is code, not prose.
+ *
+ *  Models that cannot reach a native tool_use sometimes answer with the call
+ *  envelope as text — {"action":…, "tool":{…}} — and the console used to set
+ *  it as a paragraph: quotes in a proportional face, every indent trimmed
+ *  away, Chinese prose folded into the middle of a brace. It is still a
+ *  failed call, but it is JSON, and a fenced block is the one surface that
+ *  tells the truth about it. Narrow on purpose: the paragraph must open with
+ *  { or [ and the whole of it must parse — anything else stays prose. */
+function asJSONBlock(raw: string[]): Block | null {
+  const text = raw.join('\n').trimEnd()
+  if (text.length < 2) return null
+  const first = text[0]
+  const last = text[text.length - 1]
+  if (first !== '{' && first !== '[') return null
+  if ((first === '{' && last === '}') || (first === '[' && last === ']')) {
+    try {
+      JSON.parse(text)
+    } catch {
+      return null
+    }
+    return { t: 'code', lang: 'json', text }
+  }
+  // Still arriving. A block whose first line is a bare brace, and that has not
+  // closed yet, is the envelope mid-flight — take it as code from the first
+  // chunk, or the bubble sets it as a paragraph and re-flows the moment the
+  // closing brace lands. A closer anywhere inside means the JSON ended and
+  // something followed it; that stays prose, whole.
+  const head = raw[0]?.trim() ?? ''
+  if (head !== '{' && head !== '[') return null
+  if (raw.some((l) => l.trim() === '}' || l.trim() === ']')) return null
+  return { t: 'code', lang: 'json', text }
 }
 
 function isTableStart(lines: string[], i: number): boolean {
