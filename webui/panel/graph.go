@@ -515,6 +515,19 @@ const edgeWeightCap = 50
 // happens. Every writer in this package replaces files atomically, so a
 // content change always moves mtime or size. The query options join the
 // fingerprint because they change the response body.
+//
+// Two exclusions keep it stable without letting it go stale. Directories are
+// left out entirely: a directory's mtime moves when one of its children is
+// added or removed, and the platforms disagree about when that lands — NTFS
+// applies it synchronously, APFS may defer it — so the same tree hashed two
+// ways on Windows and one way on macOS. That is how
+// TestMemoryGraphDefaultViewAndETag failed on the Windows runner
+// ("conditional request status = 200, want 304") while passing locally. Entries
+// that are not .md keep their path and type but no timestamp: the graph never
+// reads them, yet a file planted where a reader expects a directory is a read
+// error, and a 304 minted from before that break would certify a body the node
+// can no longer produce. An added or removed .md still moves the hash because
+// its own full line appears or disappears.
 func memoryGraphETag(entityLimit int, includeCo bool, roots ...string) string {
 	h := fnv.New64a()
 	fmt.Fprintf(h, "entities=%d;co=%t;", entityLimit, includeCo)
@@ -527,7 +540,17 @@ func memoryGraphETag(entityLimit int, includeCo bool, roots ...string) string {
 				fmt.Fprintf(h, "error:%s|%v;", path, err)
 				return nil
 			}
-			if !d.IsDir() && !strings.HasSuffix(d.Name(), ".md") {
+			if d.IsDir() {
+				return nil
+			}
+			if !strings.HasSuffix(d.Name(), ".md") {
+				// The graph does not read this entry, but its presence still
+				// describes the response: a plain file planted where a reader
+				// expects a directory is a read error, and a 304 minted from
+				// before that break would certify a body the node can no longer
+				// produce. Name and type only — no timestamp, which is the part
+				// that moves for reasons neither reader nor writer caused.
+				fmt.Fprintf(h, "%s|%s;", path, d.Type())
 				return nil
 			}
 			fi, err := d.Info()
