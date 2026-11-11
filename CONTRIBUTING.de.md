@@ -8,7 +8,7 @@ und die Konventionen, die den Code auch bei wachsendem Umfang lesbar halten.
 
 | Werkzeug | Version | Benötigt für                               |
 | -------- | ------- | ------------------------------------------ |
-| Go       | ≥ 1.26.10 | Kernel, CLI, Panel, Tests                  |
+| Go       | ≥ 1.26.11 | Kernel, CLI, Panel, Tests                  |
 | Node.js  | ≥ 18    | Web-Konsole (`webui/app`)                  |
 | Python   | ≥ 3.10  | Voice-Sidecar, Agent-Adapter               |
 
