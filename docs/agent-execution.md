@@ -134,3 +134,9 @@ Browser verification uses available native tools, batches independent assertions
 and stops exploring unchanged work once the current stage's declared acceptance
 passes. This guidance does not replace machine checks or impose an arbitrary
 low tool cap on a genuinely complex task.
+
+## 阶段验收、阻塞与调度
+
+- 生成的计划和 YAML 阶段可设置 `acceptance`、`success_definition`、`tools_policy`、`max_turns`；路径、工具策略和 0..200 的轮次上限会校验，工具策略不能代替授权或扩大受限权限。
+- 监督结果 `blocked` 表示需要改变外部环境或输入，任务进入需要改变输入的审核，不会因批准就视为完成；已知未完成的工作需要继续或拒绝。
+- 同机独立分支允许并行，仍受依赖、容量与资源锁限制；同一计划和优先级内按剩余加权关键路径排序，人工队列顺序优先。

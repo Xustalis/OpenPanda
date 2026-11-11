@@ -139,6 +139,10 @@ jobs:
           python-version: '3.x'
       - name: Adapter contract tests
         run: make adapter-test
+      - name: Execution diagnostics and DAG metrics regressions
+        run: |
+          python3 tests/execution_diagnostics_test.py
+          python3 tests/live_dag_metrics_test.py
 
   # The TUI's mouse-ownership contract lives in the bytes the binary writes to
   # the tty, which no unit test can see: whether it asks the terminal for

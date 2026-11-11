@@ -251,7 +251,7 @@ def _ensure_git_bash():
 
 def _injected():
     """True when PANDA injected the model endpoint (credential rescue)."""
-    return bool(os.environ.get("OPENPANDA_INJECTED_MODEL") or os.environ.get("ANTHROPIC_BASE_URL"))
+    return bool(os.environ.get("OPENPANDA_INJECTED_MODEL"))
 
 
 # What the CLI may be called on PATH. The registry probes the same list, so the
@@ -341,6 +341,10 @@ def _v2_args(req):
     return args
 
 
+def _use_model_arg(model):
+    return bool(model) and not (_injected() and model.lower().startswith(("deepseek", "openai", "gpt")))
+
+
 def _stream_argv(base, req, model, disable_settings, v2):
     cmd = base + ["--output-format", "stream-json", "--verbose"]
     if v2:
@@ -351,11 +355,10 @@ def _stream_argv(base, req, model, disable_settings, v2):
         # flag rides both stream tiers: an ancient CLI that rejects it lands
         # on plain mode, which never resends it.
         cmd += ["--setting-sources", ""]
-    # Claude Code CLI only accepts Anthropic model names. When a third-party
-    # provider (such as DeepSeek Anthropic API) is injected, foreign model names
-    # like 'deepseek-v4-flash' cause the CLI to exit with unrecognized_model.
-    # Leaving it to default lets Claude Code negotiate with the provider endpoint.
-    if model and not any(model.lower().startswith(p) for p in ("deepseek", "openai", "gpt")):
+    # Injected endpoints retain the legacy CLI alias workaround. A native
+    # custom provider may explicitly support foreign model names, however;
+    # its selected model must not be silently discarded.
+    if _use_model_arg(model):
         cmd += ["--model", model]
     return cmd
 
@@ -725,7 +728,7 @@ def _main_session(req, model, max_turns):
     # session id) continues that conversation instead of starting cold.
     if req.resume:
         cmd += ["--resume", req.resume]
-    if model and not any(model.lower().startswith(p) for p in ("deepseek", "openai", "gpt")):
+    if _use_model_arg(model):
         cmd += ["--model", model]
 
     try:

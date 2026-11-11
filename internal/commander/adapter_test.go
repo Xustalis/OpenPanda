@@ -1027,3 +1027,25 @@ func TestAdapterUnavailableClassifier(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeNativeProviderEnvironmentSurvivesSandbox(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "native-key")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://relay.example")
+	t.Setenv("ANTHROPIC_MODEL", "custom-model")
+	t.Setenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "custom-sonnet")
+	t.Setenv("OPENAI_API_KEY", "unrelated")
+	got := adapterCredentialEnv("claude_code", "claude_code.py")
+	assertEnv(t, got, map[string]string{"ANTHROPIC_API_KEY": "native-key", "ANTHROPIC_BASE_URL": "https://relay.example", "ANTHROPIC_MODEL": "custom-model", "ANTHROPIC_DEFAULT_SONNET_MODEL": "custom-sonnet"})
+	for _, entry := range got {
+		if strings.HasPrefix(entry, "OPENAI_API_KEY=") {
+			t.Fatal("unrelated credential forwarded")
+		}
+	}
+}
+
+func TestClaudeInjectionClearsNativeModelAliases(t *testing.T) {
+	native := []string{"ANTHROPIC_AUTH_TOKEN=native", "ANTHROPIC_DEFAULT_OPUS_MODEL=native", "ANTHROPIC_DEFAULT_SONNET_MODEL=native", "ANTHROPIC_DEFAULT_HAIKU_MODEL=native", "CLAUDE_CODE_SUBAGENT_MODEL=native"}
+	injected := modelEnv(config.ModelConfig{BaseURL: "https://api.deepseek.com/anthropic", APIKey: "new-key", Model: "deepseek-chat"})
+	merged := mergeAdapterEnv(native, injected)
+	assertEnv(t, merged, map[string]string{"ANTHROPIC_AUTH_TOKEN": "", "ANTHROPIC_DEFAULT_OPUS_MODEL": "", "ANTHROPIC_DEFAULT_SONNET_MODEL": "", "ANTHROPIC_DEFAULT_HAIKU_MODEL": "", "CLAUDE_CODE_SUBAGENT_MODEL": "", "OPENPANDA_INJECTED_MODEL": "1"})
+}

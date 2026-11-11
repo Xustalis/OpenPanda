@@ -735,6 +735,45 @@ if sys.argv[1:2] == ["run"]:
             self.assertEqual(lines.count("models"), 1, lines)
             self.assertEqual(lines.count("catalog"), 1, lines)
 
+    def test_claude_native_custom_endpoint_keeps_settings(self):
+        # A native relay URL is not Panda injection: its key/model may live
+        # in settings.json, including when the adapter uses session mode.
+        for session in (False, True):
+            with self.subTest(session=session):
+                payload, _, _ = run_adapter(
+                    "claude_code.py", "claude", r'''
+import json, os, sys
+assert "--setting-sources" not in sys.argv, sys.argv
+assert os.environ["ANTHROPIC_BASE_URL"] == "https://relay.example"
+if "--input-format" in sys.argv:
+    json.loads(sys.stdin.readline())
+print(json.dumps({"type":"result", "is_error":False, "result":"native relay"}), flush=True)
+''',
+                    env={"ANTHROPIC_BASE_URL": "https://relay.example"},
+                    extra_request={"session": session},
+                )
+                self.assertTrue(payload["ok"], payload)
+                self.assertEqual(payload["result"], "native relay")
+
+    def test_claude_custom_model_preference_and_injected_isolation(self):
+        for session in (False, True):
+            for injected in (False, True):
+                with self.subTest(session=session, injected=injected):
+                    payload, _, _ = run_adapter(
+                        "claude_code.py", "claude", r'''
+import json, os, sys
+args = sys.argv[1:]
+injected = os.environ.get("OPENPANDA_INJECTED_MODEL") == "1"
+assert ("--model" not in args) if injected else (args[args.index("--model") + 1] == "deepseek-custom")
+if "--input-format" in args:
+    json.loads(sys.stdin.readline())
+print(json.dumps({"type":"result", "is_error":False, "result":"ok"}), flush=True)
+''',
+                        env={"ANTHROPIC_MODEL": "deepseek-custom", **({"OPENPANDA_INJECTED_MODEL": "1"} if injected else {})},
+                        extra_request={"session": session},
+                    )
+                    self.assertTrue(payload["ok"], payload)
+
     def test_claude_injected_model_strips_settings_on_stream_only(self):
         # Credential rescue: an injected model/base URL disables the user's
         # settings sources on the stream path…

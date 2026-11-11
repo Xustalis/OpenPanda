@@ -78,3 +78,9 @@ Deploy the updated binary and adapters to activate these changes; config hot rel
 - Workspace-aware classification (directory map or read tools) bypasses path-only persistent caches so uncommitted edits cannot reuse stale judgments. Verification observations require completed, non-error command-tool results and exact program/argument matches, not `echo`, substrings, unfinished or failed commands. Complex shell compositions are not inferred. These observations are not an independent acceptance pass.
 - Side remains a non-dispatching, non-mutating channel; deep requests do not automatically launch agents there. If investigation requirements cannot be met, it reports incomplete work for execution in the main thread. Fast/deep routing and model reasoning configuration are separate layers, not a guarantee of native-tool reasoning parity.
 - Remote plans still carry project memory without attaching another project checkout; source snapshots and predecessor-input ordering remain intact.
+
+## Stage acceptance, blockers and scheduling
+
+- Generated and YAML stages may specify `acceptance`, `success_definition`, `tools_policy` and `max_turns`; paths, policies and the 0..200 turn limit are validated. Tool policy never grants authorization or widens a restricted run.
+- A supervisor `blocked` verdict means external conditions or input must change; the task parks for changed input and approval cannot make known unfinished work complete. Continue or reject it.
+- Independent same-machine branches may run concurrently subject to dependencies, capacity and resource locks. Within a plan and priority band the remaining weighted critical path determines order; manual queue order wins.

@@ -1080,7 +1080,11 @@ func modelEnvForAdapter(model config.ModelConfig, name, adapter string) []string
 		// provider for exactly those models.
 		"OPENPANDA_MODEL_API_TYPE="+injectedDialect(name, adapter, model))
 	if adapter == "claude_code.py" {
-		env = append(env, "ANTHROPIC_AUTH_TOKEN=")
+		// Native tier aliases can otherwise redirect an injected run to models
+		// from another provider even after settings sources are disabled.
+		env = append(env, "ANTHROPIC_AUTH_TOKEN=", "ANTHROPIC_DEFAULT_OPUS_MODEL=",
+			"ANTHROPIC_DEFAULT_SONNET_MODEL=", "ANTHROPIC_DEFAULT_HAIKU_MODEL=",
+			"CLAUDE_CODE_SUBAGENT_MODEL=")
 	}
 	return env
 }
@@ -1097,7 +1101,16 @@ func adapterCredentialEnv(name, adapter string) []string {
 		return nil
 	}
 	var out []string
-	for _, key := range k.CredentialEnvVars {
+	keys := append([]string(nil), k.CredentialEnvVars...)
+	if adapter == "claude_code.py" {
+		// The native endpoint and model aliases must travel with the native
+		// credentials when the sandbox builds a minimal environment. These
+		// are not evidence of credentials and must not enter the manifest.
+		keys = append(keys, "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+			"ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL")
+	}
+	for _, key := range keys {
 		if value := os.Getenv(key); value != "" {
 			out = append(out, key+"="+value)
 		}

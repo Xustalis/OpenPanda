@@ -1662,8 +1662,10 @@ func (r *Router) agentTarget(name string, ag ledger.Agent) ProbeSpec {
 		model = firstEnvValue(k.ModelEnv.Model)
 		keyDef = key != "" // env keys are the literal credential
 	}
-	// Env override — the same variable the run inherits.
-	if k.ModelEnv != nil && k.ModelEnv.BaseURL != "" {
+	// For non-Claude adapters retain their existing environment-override
+	// semantics: an unrelated config credential or rejection hint must not be
+	// applied to a different endpoint selected in the environment.
+	if ag.Adapter != "claude_code.py" && k.ModelEnv != nil && k.ModelEnv.BaseURL != "" {
 		if v := strings.TrimSpace(os.Getenv(k.ModelEnv.BaseURL)); v != "" {
 			return ProbeSpec{Endpoint: v, APIType: apiType, APIKey: key, Model: model, KeyDefinitive: keyDef}
 		}
@@ -1682,6 +1684,13 @@ func (r *Router) agentTarget(name string, ag ledger.Agent) ProbeSpec {
 	}
 	if model == "" {
 		model = cfg.Model
+	}
+	// An environment endpoint can coexist with a key and model in the CLI's
+	// own settings; do not drop those before probing the selected endpoint.
+	if ag.Adapter == "claude_code.py" && k.ModelEnv != nil && k.ModelEnv.BaseURL != "" {
+		if v := strings.TrimSpace(os.Getenv(k.ModelEnv.BaseURL)); v != "" {
+			return ProbeSpec{Endpoint: v, APIType: apiType, APIKey: key, Model: model, KeyDefinitive: keyDef}
+		}
 	}
 	if cfg.Endpoint != "" {
 		return ProbeSpec{Endpoint: cfg.Endpoint, APIType: apiType, APIKey: key, Model: model, KeyDefinitive: keyDef, RejectionHint: cfg.Hint}

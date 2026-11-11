@@ -40,6 +40,10 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+- **Integridad de finalización y recuperación** — Aprobar no termina trabajo incompleto conocido; los bloqueos externos requieren cambiar entradas y el trabajo parcial o interrumpido no se declara exitoso ni se repite silenciosamente con otro agente.
+- **Contratos y planificación por etapa** — Los planes admiten aceptación, definición de éxito, política de herramientas y límite de turnos; las ramas locales independientes pueden ejecutarse en paralelo y las etapas listas usan una heurística de ruta crítica ponderada.
+- **Proveedores personalizados de Claude Code** — La ejecución conserva los endpoints y ajustes propios, sin exigir una suscripción o clave oficial de Anthropic.
+
 ### Corregido
 - **El mínimo de toolchain pasa a Go 1.26.11** — GO-2026-6859 es un fallo del servidor HTTP/1 al manejar las cabeceras de `MaxBytesReader`, y aquí es alcanzable desde el manejador de ficheros estáticos del panel, el upgrade WebSocket del bus y toda llamada saliente de `http.Client`. La directiva `go` de `go.mod` es el único lugar donde se declara el toolchain (la CI la resuelve con `go-version-file`), así que subirla a 1.26.11 mueve todas las piernas a la vez; `govulncheck` no informa de nada con el nuevo mínimo, y el mínimo de Go en las guías de contribución, ambas guías de instalación y el sitio ya indica 1.26.11.
 
