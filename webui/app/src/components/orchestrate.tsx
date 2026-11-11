@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { createPortal } from 'preact/compat'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type Task } from '../api/client'
 import { useAsync, useChangeSignal } from '../hooks'
@@ -61,11 +62,13 @@ import { toast, toastError } from './toast'
  *  `.orch-sec-slot`), so the three strips read as one table and the card does
  *  not jump when a task arrives or leaves.
  *
- *  A task opens *under the strips*, in the same card, and the strips stay where
- *  they are: the detail is a reading pane, not a page. Trading the rows for a
- *  detail view meant a back arrow for every look, and the whole point of
- *  reading tasks from here is that nothing has to be left behind. Clicking the
- *  same task again (or the × on the detail) puts both panes away. */
+ *  A task opens *beside the strips*, never under them: the detail is a reading
+ *  pane, not a page, and the list it came from stays exactly where it was.
+ *  Trading the rows for a detail view meant a back arrow for every look, and
+ *  the whole point of reading tasks from here is that nothing has to be left
+ *  behind. In the dock that card leaves the column altogether — see the
+ *  `inline` branch below. Clicking the same task again (or the × on the
+ *  detail) puts the card away. */
 export function OrchestrateCard(props: {
   /** The thread whose tasks are shown; null before a new chat is saved. */
   sessionId?: string | null
@@ -95,6 +98,12 @@ export function OrchestrateCard(props: {
    *  floating flyout are rendered. Omitted, this stays the header popover
    *  the workspace page uses. */
   inline?: boolean
+  /** Whether the surface hosting this card is on screen. The dock keeps every
+   *  pane mounted and hides the inactive ones; the picked task's card is
+   *  portalled out of that pane (see `floatHost`), so it does not inherit the
+   *  `hidden` and has to be told. Defaults to true — a popover only renders
+   *  while it is open. */
+  shown?: boolean
 }) {
   const [picked, setPicked] = useState<string | null>(null)
   // Local nudge after an action: the shared change feed usually arrives a beat
@@ -104,6 +113,21 @@ export function OrchestrateCard(props: {
   const [busy, setBusy] = useState('')
   const tick = useChangeSignal()
   const box = useRef<HTMLDivElement>(null)
+
+  // In the dock the picked task's card is mounted outside the dock's column:
+  // the column clips (rounded corners) and it is only 380px of a pane that is
+  // already narrow, so a second card *under* the list cost the list its height
+  // and read as more of the same column. `.chat` is the box that owns both the
+  // dock's track and the reading pane, so it is the card's containing block —
+  // pinned to the left of the dock, level with the list, by CSS alone (see
+  // `.orch-orch-card.is-float` in dock.css). Found from the DOM rather than
+  // passed down: the card is one component in three hosts, and only this one
+  // has a dock to sit beside.
+  const [floatHost, setFloatHost] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!props.inline) return
+    setFloatHost((box.current?.closest('.chat') as HTMLElement | null) ?? null)
+  }, [props.inline])
 
   // Fetch only while the card is up: closed, there is nothing to paint, and
   // the header button carries no count that would need the data early.
@@ -229,6 +253,27 @@ export function OrchestrateCard(props: {
     onRun: () => void act(task, 'run'),
   })
 
+  // The picked task's card, built once and placed in one of two spots: in the
+  // flyout row beside the list (the popover, and the dock until `.chat` is
+  // known) or portalled out of the dock to sit beside it.
+  const floating = Boolean(props.inline && floatHost)
+  const detailCard = picked && focused ? (
+    <OrchTask
+      /* Keyed by task: switching tasks remounts the card, so its scroll
+         starts at the top and the section panel starts on this task's first
+         one rather than inheriting the previous task's state. */
+      key={`task-${focused.id}`}
+      task={focused}
+      busy={busy.startsWith(`${focused.id}:`)}
+      floating={floating}
+      onlineNodeCount={props.onlineNodeCount}
+      selfNodeId={props.selfNodeId}
+      onClose={() => setPicked(null)}
+      onCancel={() => void act(focused, 'cancel')}
+      onRun={() => void act(focused, 'run')}
+    />
+  ) : null
+
   return (
     <div class="orch-picker" ref={box}>
       {!props.inline && (
@@ -295,24 +340,14 @@ export function OrchestrateCard(props: {
           </div>
           {/* Second in the DOM, first on screen: the row is `row-reverse`, so
               the picked task sits to the left of the list and a narrow pane
-              wraps it *under* the list rather than off the left edge. */}
-          {picked && focused && (
-            <OrchTask
-              /* Keyed by task: switching tasks remounts the card, so its scroll
-                 starts at the top and the orbit starts expanded for this task
-                 rather than inheriting the previous one's state. */
-              key={`task-${focused.id}`}
-              task={focused}
-              busy={busy.startsWith(`${focused.id}:`)}
-              onlineNodeCount={props.onlineNodeCount}
-              selfNodeId={props.selfNodeId}
-              onClose={() => setPicked(null)}
-              onCancel={() => void act(focused, 'cancel')}
-              onRun={() => void act(focused, 'run')}
-            />
-          )}
+              wraps it *under* the list rather than off the left edge. In the
+              dock there is no row to sit in: the card is portalled beside the
+              column instead, so this slot stays empty. */}
+          {detailCard && !floating && detailCard}
         </div>
       )}
+      {detailCard && floating && props.shown !== false && floatHost &&
+        createPortal(detailCard, floatHost)}
     </div>
   )
 }
@@ -457,6 +492,9 @@ function OrchChip(props: {
 function OrchTask(props: {
   task: Task
   busy: boolean
+  /** Portalled out of the dock and pinned beside it. Only the geometry
+   *  changes — one class, and the card is a layer instead of a column. */
+  floating?: boolean
   onlineNodeCount?: number
   selfNodeId?: string
   onClose(): void
@@ -480,7 +518,12 @@ function OrchTask(props: {
   const openTab = tabs.find((x) => x.key === tab) ?? null
 
   return (
-    <aside class="orch-orch-card" id="orch-detail" role="region" aria-label={t('orch.detail')}>
+    <aside
+      class={`orch-orch-card${props.floating ? ' is-float' : ''}`}
+      id="orch-detail"
+      role="region"
+      aria-label={t('orch.detail')}
+    >
       <div class="orch-detail-head">
         <p class="orch-detail-title">{task.title || task.id}</p>
         <button

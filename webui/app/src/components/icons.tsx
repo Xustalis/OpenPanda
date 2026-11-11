@@ -52,9 +52,12 @@ export type IconName =
   | 'lightbulb'
   | 'globe'
   | 'list-checks'
+  | 'log-out'
   | 'menu'
   | 'message'
   | 'mic'
+  | 'monitor'
+  | 'moon'
   | 'more-horizontal'
   | 'network'
   | 'orbit'
@@ -72,7 +75,9 @@ export type IconName =
   | 'shield'
   | 'sparkles'
   | 'square-pen'
+  | 'sun'
   | 'trash'
+  | 'user'
   | 'users'
   | 'wifi'
   | 'x'
@@ -332,6 +337,17 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M13 18h8" />
     </>
   ),
+  // The palette's 连接 group: the one row that ends the session rather than
+  // opening something. A door with an arrow leaving it — the shape every
+  // console uses for "sign out", and the only row in the palette that is a
+  // verb pointed away from the app.
+  'log-out': (
+    <>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="M16 17l5-5-5-5" />
+      <path d="M21 12H9" />
+    </>
+  ),
   menu: (
     <>
       <path d="M4 6h16" />
@@ -347,6 +363,18 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M12 19v3" />
     </>
   ),
+  // Appearance, as the three things a theme can be: a screen on a stand for
+  // "follow the system", a sun, a moon. The palette's 主题 rows are the only
+  // place that asks the question, so the marks live here rather than being
+  // drawn as text glyphs that render at a different weight per platform.
+  monitor: (
+    <>
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <path d="M8 21h8" />
+      <path d="M12 17v4" />
+    </>
+  ),
+  moon: <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />,
   'more-horizontal': (
     <>
       <circle cx="12" cy="12" r="1" />
@@ -496,6 +524,19 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
     </>
   ),
+  sun: (
+    <>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.93 4.93 1.41 1.41" />
+      <path d="m17.66 17.66 1.41 1.41" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m6.34 17.66-1.41 1.41" />
+      <path d="m19.07 4.93-1.41 1.41" />
+    </>
+  ),
   trash: (
     <>
       <path d="M3 6h18" />
@@ -503,6 +544,14 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
       <path d="M10 11v6" />
       <path d="M14 11v6" />
+    </>
+  ),
+  // 个人资料's mark: one head, not two — the palette's row for your own
+  // identity, told apart from 团队's roster at a glance.
+  user: (
+    <>
+      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
     </>
   ),
   // Lucide's users: two heads, the near one solid-lined and the far one drawn

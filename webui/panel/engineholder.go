@@ -251,6 +251,15 @@ func (h *handler) readCfg(fn func(*config.Config)) {
 		eng.ReadConfig(fn)
 		return
 	}
+	// A hand-built handler (tests, tooling) can carry a bare cfg without the
+	// lock that normally guards it. Reading it unlocked is still correct: no
+	// other goroutine holds it.
+	if h.cfgMu == nil {
+		if h.cfg != nil {
+			fn(h.cfg)
+		}
+		return
+	}
 	h.cfgMu.RLock()
 	defer h.cfgMu.RUnlock()
 	if h.cfg != nil {

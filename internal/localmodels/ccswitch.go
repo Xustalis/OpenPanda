@@ -175,7 +175,7 @@ func ccSwitchCandidates(providers []ccswitch.Provider) ([]Candidate, int) {
 			apiType = "anthropic"
 		}
 		for _, model := range g.models {
-			out = append(out, Candidate{
+			cand := Candidate{
 				Source:     SourceCCSwitch,
 				Provider:   providerID,
 				Model:      model,
@@ -187,7 +187,14 @@ func ccSwitchCandidates(providers []ccswitch.Provider) ([]Candidate, int) {
 				Suggested:  g.current,
 				Importable: true,
 				Note:       "cc-switch: " + label,
-			})
+			}
+			// The console keeps one tick set for all four rosters, keyed by
+			// ID. The app type is part of it because the same relay is often
+			// saved under both Claude Code and Codex: two rows there are two
+			// rows to the person, and an ID that ignored the roster would tick
+			// both from either tab.
+			cand.ID = candidateID(cand) + "|" + g.rep.AppType
+			out = append(out, cand)
 		}
 	}
 	return out, skipped

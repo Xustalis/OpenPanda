@@ -23,6 +23,24 @@ const TeamView = lazy(() => import('./views/team').then((m) => ({ default: m.Tea
 const MemoryView = lazy(() => import('./views/memory').then((m) => ({ default: m.MemoryView })))
 const ProfileView = lazy(() => import('./views/profile').then((m) => ({ default: m.ProfileView })))
 const SettingsView = lazy(() => import('./views/settings').then((m) => ({ default: m.SettingsView })))
+// The same chunks, warm. A lazy view is fetched the instant the reader picks a
+// destination — which means the outgoing page is already gone while the module
+// is still on the wire, and the canvas sits empty for the length of a round
+// trip (measured at ~90-150ms on a loopback node; a real link is worse). That
+// gap, not the fade after it, is what made the rail feel sticky. Warming the
+// chunks while the console is idle keeps the split intact — nothing joins the
+// first paint — and lets a switch land on the next frame. The imports share
+// the module registry with the `lazy()` calls above, so a warm view resolves
+// without a second request.
+const ROUTE_CHUNKS: Array<() => Promise<unknown>> = [
+  () => import('./views/control'),
+  () => import('./views/workspace'),
+  () => import('./views/memory'),
+  () => import('./views/profile'),
+  () => import('./views/settings'),
+  () => import('./views/detail'),
+  () => import('./views/team'),
+]
 import { ToastHost } from './components/toast'
 import { Icon } from './components/icons'
 import { ConfirmHost } from './components/confirm'
@@ -34,6 +52,33 @@ import { PairRequestHost } from './components/pair-request-host'
 function useLocaleRerender(): void {
   const [, force] = useState(0)
   useEffect(() => onLocaleChange(() => force((v) => v + 1)), [])
+}
+
+/** Fetch every route chunk once the console is idle (see ROUTE_CHUNKS).
+ *  Failures are swallowed: a prefetch that misses is just the old lazy
+ *  behaviour, and the view will ask for its chunk again when it is opened. */
+function useWarmRouteChunks(): void {
+  useEffect(() => {
+    let cancelled = false
+    const warm = () => {
+      if (cancelled) return
+      for (const load of ROUTE_CHUNKS) void load().catch(() => {})
+    }
+    // Not every engine has requestIdleCallback (Safari); a timeout after the
+    // first paint carries the same intent without a polyfill.
+    if (typeof requestIdleCallback === 'function') {
+      const id = requestIdleCallback(warm, { timeout: 2000 })
+      return () => {
+        cancelled = true
+        cancelIdleCallback(id)
+      }
+    }
+    const t = setTimeout(warm, 1200)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [])
 }
 
 /** Hash-based routing: back/forward work, deep links to a task work. */
@@ -49,6 +94,7 @@ function useRoute(): Route {
 
 export function App() {
   useLocaleRerender()
+  useWarmRouteChunks()
   // 团队 is an opt-in feature: its rail row, palette command and page all
   // follow the switch in 设置 → 偏好 → 团队 (features.ts).
   const teamOn = useTeamEnabled()

@@ -33,7 +33,8 @@ const coreRules = `You are OpenPanda, the master orchestrator and conductor for 
 For informational, conversational, or conceptual requests with no external side effects, respond in natural language.
 - A request to investigate THIS workspace or draw conclusions about its implementation is not a conceptual question. Do not infer code behavior or the absence of tests from README, a directory listing, a workspace map, or a truncated search. For a narrow code question, use the workspace tools and read the relevant implementation; for a broad/deep repository investigation, dispatch an available coding agent as a task. If none is available, state the limitation instead of claiming a deep review.
 - Provide direct answers without meta-commentary, hesitation, or unprompted reasoning.
-- Keep output concise, readable, and structured. Use lists only for enumeration.
+- Keep output concise, readable, and structured. Use lists only for enumeration, and give each enumerated item its own line: never run "1）…；2）…" together inside one sentence. A lead-in sentence, the items, and a closing sentence are separate paragraphs — the console sets prose at a reading measure, and a list folded into one Hanzi sentence becomes an unreadable block.
+- When you need details from the user before acting, ask for them as a numbered list — one missing item per line, a blank line before and after the list — instead of packing the questions into one sentence.
 - Respond in the language requested by the user (e.g., reply in Chinese if the user asked in Chinese), unless restricted by environment constraints.
 
 ═══ Kind 2: tool_call ═══
@@ -76,6 +77,7 @@ When emitting a task, output ONLY a single JSON object with no surrounding comme
 Task field specifications:
 - spec.scope: Comma-separated relative paths (e.g. "src/api,webui/app.tsx"). Do not write prose descriptions; leave empty ("") if uncertain or the entire work directory is allowed.
 - spec.acceptance: OPTIONAL, and only when an "Acceptance Candidates" section is present. Copy 1-3 checks from that list as {"id":"<id>","run":"<run>"}. Never invent a command; omit the field when none of the candidates prove this task's success.
+- The only JSON you emit is the task object above (or a plan). Never answer with another harness's tool-call envelope — {"action":"review","tool":{"mcpServer":…,"name":…,"args":{…}}} and its relatives: nothing here executes it, so it reaches the user as raw text instead of running. To run a command, emit a task; if no task fits, say in words what you would run.
 - resource_profile: Hard routing filters (硬性路由条件). Nodes with declared hardware below requirements are disqualified:
   - gpu_vram_gb: Non-zero ONLY for actual GPU workloads (model training, fine-tuning, local LLM inference, CUDA). For coding, scripts, tests, config, set to 0.
   - cpu / ram_gb: Fill according to actual needs (e.g., cpu 8, ram_gb 16 for heavy compilation; 1 / 1 for lightweight tasks).
@@ -328,6 +330,10 @@ type PromptOptions struct {
 	// and turn cap in the real tree instead of a guess from the request text.
 	// Empty means no workspace in view.
 	WorkspaceMap string
+	// PermissionMode is the thread's consent policy (defense.Mode*: auto,
+	// manual, edits, plan, bypass). Empty means the caller did not say, and no
+	// approval section is rendered.
+	PermissionMode string
 	// UsageObserver is delivered to the streaming call this prompt is sent
 	// through; see WithStreamUsage. It takes no part in building the prompt.
 	UsageObserver func(Usage)
@@ -368,6 +374,19 @@ func WithRequestMode(mode string) ClassifyOption {
 		switch mode {
 		case "goal", "plan", "spec":
 			p.RequestMode = mode
+		}
+	}
+}
+
+// WithPermissionMode records the thread's consent policy (defense.Mode*). The
+// model has to know it: without it the prompt's "ask when unsure" framing reads
+// as licence to end every dispatch with "是否按这个思路执行？", which is a
+// question the user already answered by flipping the composer's switch.
+func WithPermissionMode(mode string) ClassifyOption {
+	return func(p *PromptOptions) {
+		switch mode {
+		case "auto", "manual", "edits", "plan", "bypass":
+			p.PermissionMode = mode
 		}
 	}
 }
@@ -482,6 +501,36 @@ var requestModeSections = map[string]string{
 		"question. Do not delegate execution.",
 }
 
+// approvalLead is the half of the approval section every mode shares: the
+// console holds the gate, so prose must not. A model that closes with
+// "是否按这个思路开始执行？" has asked the user to authorize what the permission
+// switch already authorized (or already parked on a card), and the turn stalls
+// on a question the user cannot answer better than by clicking send again.
+const approvalLead = "\n\n═══ Approval ═══\n" +
+	"Consent belongs to the console, not to your prose: anything irreversible parks " +
+	"on an approval card the user answers with one click. Never end a turn by asking " +
+	"whether to proceed (\"是否按这个思路开始执行？\", \"shall I go ahead?\") — if you have " +
+	"what you need, dispatch the task in this same turn. Ask only for facts you cannot " +
+	"obtain yourself.\n"
+
+// permissionModeSections states the thread's consent policy, keyed by
+// defense.Mode*. It rides the volatile tail next to the request-mode sections:
+// the user can flip the switch mid-thread, and a policy that changes the answer
+// must not sit in the cached prefix.
+var permissionModeSections = map[string]string{
+	"auto": approvalLead +
+		"This thread's policy is auto: reversible operations run, irreversible ones wait on the card.",
+	"manual": approvalLead +
+		"This thread's policy is manual: every state-changing operation waits on the card.",
+	"edits": approvalLead +
+		"This thread's policy is edits: file edits run; shell commands and deletions wait on the card.",
+	"plan": approvalLead +
+		"This thread's policy is plan: nothing that writes runs. Hand back a plan instead of executing.",
+	"bypass": approvalLead +
+		"This thread's policy is bypass: nothing will ask, irreversible operations included, and every " +
+		"action is still audited. Approval is already granted — do not mention it, do not hedge, execute.",
+}
+
 // sideModeSection is the closing rider on a side channel ask. The history above
 // it is a real conversation with real work in it, which is exactly the trap:
 // a model that reads it as its own context resumes plans, answers questions it
@@ -560,6 +609,9 @@ func BuildPrompt(opts PromptOptions) string {
 	}
 	b.WriteString("\n\n═══ User Memory (Context Reference Only) ═══\n")
 	b.WriteString(memory)
+	if section, ok := permissionModeSections[opts.PermissionMode]; ok {
+		b.WriteString(section)
+	}
 	if section, ok := requestModeSections[opts.RequestMode]; ok {
 		b.WriteString(section)
 	}

@@ -10,6 +10,15 @@
      back is the pane head's side-panel button — one control that opens to
      whichever panel was last showing. */
   grid-template-columns: minmax(0, 1fr);
+  /* The dock's head line (see `.dock-head`). It lives here because the picked
+     task's card is portalled into `.chat` and pinned level with the task list
+     inside the dock's body — the card is a sibling of the column, not a child,
+     so it cannot read a variable set on the column itself. */
+  --dock-head-h: 56px;
+  /* Where that body starts, from the top of the pane: the head, the column's
+     own 1px hairline, and the tool page's 12px padding. This is the line the
+     floating task card aligns to. */
+  --dock-body-top: calc(var(--dock-head-h) + 13px);
   gap: 10px;
   flex: 1;
   min-height: 0;
@@ -89,7 +98,7 @@
    nothing darker to move to on hover — and the thread rows directly beneath
    already answer a pointer with --bg-hover, so this matches them. */
 .thread-group-head:hover {
-  background: var(--bg-hover);
+  background: var(--surface-alpha-sm);
 }
 /* The directory name ellipsises: a deep path must not push the header wider
    than the rail. */
@@ -196,7 +205,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: thread-menu-in var(--dur-fast) var(--ease-enter);
 }
 @keyframes thread-menu-in {
@@ -352,15 +361,16 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .thread-item:hover {
-  background: var(--bg-hover);
+  background: var(--surface-alpha-sm);
   color: var(--text);
 }
 .thread-item.active {
-  background: var(--bg-active);
+  background: var(--surface-alpha-md);
   color: var(--text);
   /* A simple rounded bar is the whole selection — no leading accent edge, no
      second mark in a column that is all text. */
   border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--hairline-xs);
 }
 .thread-item-main {
   flex: 1;
@@ -498,6 +508,7 @@
   background: var(--bg);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
   overflow: hidden;
   /* The lane a header card takes on the right when one is open: 0 closed, 380px
      of card + header padding when open (see `.panel-open` below). The log, the
@@ -533,7 +544,7 @@
   min-height: 0;
   background: var(--bg-raised);
   border-left: 1px solid var(--border-soft);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
   animation: task-rail-in var(--dur-fast) var(--ease-enter);
 }
 @keyframes task-rail-in {
@@ -643,12 +654,9 @@
 .task-rail-empty {
   margin: 12px 6px;
 }
-/* A phone has no room for a lane: the rail covers the transcript, and the
-   close button is the way back. */
+/* A phone has no room for a column: the task rail covers the transcript, and
+   the close button is the way back. */
 @media (max-width: 720px) {
-  .chat-pane.rail-open {
-    --panel-lane: 0px;
-  }
   .task-rail {
     width: 100%;
   }
@@ -689,7 +697,7 @@
    header reads as one line rather than a title floating in a bar. */
 .chat-head-icon {
   flex: none;
-  color: var(--text);
+  color: var(--text-secondary);
 }
 .chat-title-group {
   display: flex;
@@ -777,17 +785,24 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* 52px on the right is the prompt rail's lane (see `.chat-rail`). It is
+  /* 52px on the left is the prompt rail's lane (see `.chat-rail`). It is
      reserved whether or not the rail is drawn so the column never shifts when
      a thread grows its second question. The composer carries the same number:
      the two must agree or the column and the box under it stop lining up.
-     `--panel-lane` adds a header card's lane on top of it while one is open —
-     the transition is what makes the column slide rather than jump, and it
-     only ever runs when a card opens or closes, never when the open card is
-     swapped for the other one (both share the same lane). */
-  padding: var(--sp-6) calc(52px + var(--panel-lane)) var(--sp-4) var(--sp-6);
+     The right gutter is the base one; `--panel-lane` adds a header card's lane
+     on top of it while one is open — the transition is what makes the column
+     slide rather than jump, and it only ever runs when a card opens or closes,
+     never when the open card is swapped for the other one (both share the same
+     lane). */
+  padding: var(--sp-6) calc(var(--sp-6) + var(--panel-lane)) var(--sp-4) 52px;
   transition: padding-right var(--dur-med) var(--ease-standard);
   scroll-behavior: smooth;
+  /* A reply that grows past the viewport used to summon the scrollbar and
+     lose its lane to it: the centred column shifted sideways the instant the
+     last line arrived, which reads as the whole answer being re-laid out.
+     Reserve the lane up front — the same fix the settings rail already
+     carries. */
+  scrollbar-gutter: stable;
 }
 .chat-log > * {
   max-width: 900px;
@@ -824,7 +839,7 @@
      column when the node card pushes that column left. The padding cannot sit
      on the button's own containing block (`left: 50%` measures the padding
      box), hence the inner column below. */
-  padding: 0 calc(52px + var(--panel-lane)) 0 var(--sp-6);
+  padding: 0 calc(var(--sp-6) + var(--panel-lane)) 0 52px;
   transition: padding-right var(--dur-med) var(--ease-standard);
 }
 .scroll-bottom-inner {
@@ -860,24 +875,24 @@
   color: var(--text);
   border-color: var(--border);
   background: var(--bg-hover);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
-/* Prompt rail: one tick per question you asked, down the right edge of the
+/* Prompt rail: one tick per question you asked, down the left edge of the
    pane. A long thread scrolls past dozens of replies, and the only way back to
    a particular question was to scroll and read. The ticks are that map — a
    tick is a question, the filled one is where you are.
    Only the ticks are painted; the rail itself is a transparent hit area so it
-   never draws a border beside the text. Ticks grow leftwards on hover (the
-   column is right-aligned) so the right edge stays flush. */
+   never draws a border beside the text. Ticks grow rightwards on hover (the
+   column is left-aligned) so the left edge stays flush. */
 /* The wrapper owns the geometry the ticks used to carry, and holds the hover
    for the rail *and* its list: pointing at the rail opens the list, and moving
    into it must not close it — so the two are siblings inside one hit area. */
 .chat-rail-wrap {
   position: absolute;
-  /* Clear of the log's scrollbar: the ticks sit beside the transcript, not on
-     top of the control that also moves it. */
-  right: 18px;
+  /* 18px in from the pane's edge, inside the 52px lane `.chat-log` keeps for
+     it: the ticks sit beside the transcript, never on top of a line. */
+  left: 18px;
   /* Spans the log only. `top: 50%` would centre the ticks on the whole pane,
      which counts the header and the composer and therefore lands the rail
      under the last reply instead of in the middle of the transcript. 56 is the
@@ -886,20 +901,13 @@
   bottom: 200px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   z-index: 4;
-  transition: opacity var(--dur-fast) var(--ease);
-}
-/* The header card owns this corner while it is open: the ticks would sit under
-   its shadow, half-lit and unclickable. They come back with the card. */
-.chat-pane.panel-open .chat-rail-wrap {
-  opacity: 0;
-  pointer-events: none;
 }
 .chat-rail {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: center;
   gap: 5px;
   padding: 6px 2px;
@@ -914,13 +922,14 @@
 /* The map, opened: every question as a row, the one you are reading in bold,
    each carrying the tick the rail draws. A 13px bar names nothing and a
    one-line tooltip cannot hold a paragraph, so the list is the tooltip.
-   Absolute and flush to the rail's edge: it opens *over* the ticks, so the
-   column of ticks and the column of rows never read as two of the same thing.
+   Absolute and flush to the rail's edge: it opens *over* the ticks and grows
+   rightwards into the transcript, so the column of ticks and the column of
+   rows never read as two of the same thing.
    Hover survives because the panel is a descendant of the wrapper that owns
    it — moving the pointer into it is not leaving the rail. */
 .chat-rail-preview {
   position: absolute;
-  right: 0;
+  left: 0;
   top: 0;
   bottom: 0;
   /* Centre it without a transform, so the entrance animation can use one. */
@@ -938,13 +947,13 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: rail-list-in var(--dur-med) var(--ease-enter);
 }
 @keyframes rail-list-in {
   from {
     opacity: 0;
-    transform: translateX(6px);
+    transform: translateX(-6px);
   }
   to {
     opacity: 1;
@@ -965,9 +974,9 @@
      they do not reproduce them. */
   font-size: var(--text-sm);
   line-height: 1.35;
-  /* Right-aligned like the rail it mirrors: the text runs into its tick, not
-     away from it. */
-  text-align: right;
+  /* Left-aligned like the rail it mirrors: the tick starts the row and the
+     text runs away from it, into the transcript. */
+  text-align: left;
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
@@ -1052,11 +1061,37 @@
    is a face, a name, what that speaker is doing here, and a bubble — the four
    things a chat message has. Who is speaking is derived in
    components/chat-speaker.ts; the faces live in components/chat-cast.tsx. */
+/* One column of reading, but the reply reaches left of it by the face's lane:
+   the bubble starts on the column's own left edge — the composer's, since both
+   are that same 900px column — and the face hangs in the margin beside it.
+   The alternative (the face inside the column, the bubble indented after it)
+   put every answer 42px inside the box you type into, which read as two
+   layouts stacked.
+   The reach is bounded by the room actually available: `--msg-gutter` is the
+   space either side of the column inside the log, and `--msg-out` is that
+   space capped at the lane. On a wide pane the reply outdents the full 42px
+   and the face sits in the margin; as the pane narrows the outdent shrinks
+   with it, the face stops at the log's padding edge instead of being clipped,
+   and the bubble keeps a shrinking residual indent. No breakpoint: a hard
+   switch between the two looks would land in the middle of a resize. */
 .msg {
+  /* 32px face + the 10px between it and the name. */
+  --msg-lane: 42px;
+  --msg-gutter: max(0px, calc(50% - 450px));
+  --msg-out: min(var(--msg-lane), var(--msg-gutter));
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr);
   align-items: start;
   gap: 10px;
+  /* 900 plus the lane, so the body keeps the whole column width even though
+     the row itself reaches 42px further left. */
+  max-width: calc(900px + var(--msg-lane));
+  /* The measure a bubble is allowed to reach — forty Hanzi at the reading
+     size. The column stays 900 so the header, the rail and the composer keep
+     their alignment; only the words stop short. */
+  --msg-measure: 620px;
+  margin-left: calc(var(--msg-gutter) - var(--msg-out));
+  margin-right: var(--msg-gutter);
   margin-bottom: var(--sp-5);
   animation: msg-in var(--dur-med) var(--ease-enter);
 }
@@ -1066,10 +1101,13 @@
 }
 /* Your own turn sits on the other side: the bubble hugs the right edge, the
    way every group chat you have used does it. No face on this side — your own
-   avatar is the one thing a transcript never needs to tell you, and the 32px
-   lane it used to hold is what kept your bubbles off the edge. */
+   avatar is the one thing a transcript never needs to tell you, and the lane
+   it used to hold is what kept your bubbles off the edge. */
 .msg.user {
   grid-template-columns: minmax(0, 1fr);
+  max-width: 900px;
+  margin-left: var(--msg-gutter);
+  margin-right: var(--msg-gutter);
 }
 .msg-body {
   grid-column: 2;
@@ -1214,7 +1252,12 @@
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  max-width: 100%;
+  /* The transcript column is 900px, but a bubble is a paragraph to be read,
+     not a page to be filled: at 15px a full-width line runs to sixty Hanzi,
+     and the eye loses the start of the next line on the way back. 620px is
+     the app's own wide-message width and lands at forty — the measure the
+     dock's document column already reads at. */
+  max-width: min(100%, var(--msg-measure));
   padding: 9px 13px;
   border-radius: 12px;
   border: 1px solid var(--border-soft);
@@ -1229,7 +1272,7 @@
    card, the cast line and the jump link need a column of their own, or the
    whole message collapses into a strip two words wide. */
 .msg-bubble.is-wide {
-  width: min(100%, 620px);
+  width: min(100%, var(--msg-measure));
 }
 /* One reply that handed out several jobs: the cards share the panda's face and
    clock, so they are told apart by rhythm — a hairline between blocks — rather
@@ -1314,9 +1357,12 @@
 /* The node pick's old slot in the composer row is now the "+" that adds
    context. Send keeps the far edge. */
 .msg-text {
-  line-height: var(--leading-normal);
+  line-height: var(--leading-read);
   white-space: pre-wrap;
   word-break: break-word;
+  /* A Chinese reply that ends on a single orphaned character under a full
+     line is the one break the browser will happily make; ask it not to. */
+  text-wrap: pretty;
   margin: 0;
   font-size: var(--text-lg);
 }
@@ -1861,55 +1907,69 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--sp-4);
+  gap: 14px;
   padding: var(--sp-6) var(--sp-4);
 }
 .chat-empty-cta h1 {
-  font-size: 30px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
   margin: 0;
-  line-height: 1.15;
+  line-height: 1.2;
   color: var(--text-primary);
 }
 .chat-empty-hint {
-  max-width: 52ch;
+  max-width: 48ch;
   margin: 0;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   font-size: var(--text-md);
-  line-height: var(--leading-normal);
+  line-height: 1.65;
   text-wrap: pretty;
 }
 .chat-starters {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: var(--sp-2);
-  margin-top: var(--sp-2);
+  gap: 10px;
+  margin-top: 10px;
 }
 .chat-starter {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
+  gap: 7px;
+  padding: 8px 13px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
   background: var(--bg-raised);
   color: var(--text-secondary);
+  box-shadow: var(--shadow-xs);
   font-size: var(--text-sm);
   line-height: 1.4;
   transition:
     color var(--dur-fast) var(--ease),
     background var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
 }
 .chat-starter:hover {
   color: var(--text);
   background: var(--bg-hover);
-  border-color: var(--border-strong);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+.chat-starter:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-xs);
 }
 .chat-starter svg {
   color: var(--text-tertiary);
+  transition: color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.chat-starter:hover svg {
+  color: var(--text-secondary);
+  transform: translateX(2px);
 }
 .chat-hero {
   text-align: center;
@@ -1917,14 +1977,15 @@
 
 .composer {
   flex: none;
-  /* Same 52px lane on the right as `.chat-log`, plus the node card's lane when
-     it is open: the box's edges land on the column's, closed and open alike.
+  /* Same 52px lane on the left as `.chat-log`, plus the node card's lane on
+     the right when it is open: the box's edges land on the column's, closed
+     and open alike.
      The top edge is 26, not the 16 of the grid: the pet stands on the box's
      top border and is 38px tall above it, so the composer has to give back 22
      of those to keep the pet out of the transcript's last line (the log's own
      bottom padding is the other 16). The box itself does not move — the
      composer is bottom-docked, so this padding is taken from the log above. */
-  padding: 26px calc(52px + var(--panel-lane)) var(--sp-5) var(--sp-6);
+  padding: 26px calc(var(--sp-6) + var(--panel-lane)) var(--sp-5) 52px;
   transition: padding-right var(--dur-med) var(--ease-standard);
   border-top: none;
   background: transparent;
@@ -2004,26 +2065,14 @@
    dots where the ears and limbs are, which reads as a rendering bug, and was
    reported as one. Four hard drop-shadows draw a 1px rim around the ink; a
    blurred shadow would smudge a 44px sprite, and an outline is what the art
-   already implies. Dark theme needs none of it — cream reads on #151515 by
-   itself — so the rim colour goes transparent rather than the filter going
-   away, which keeps it to one rule for both themes. */
-:root {
-  --panda-rim: rgba(41, 41, 41, 0.34);
-}
-[data-theme='dark'] {
-  --panda-rim: transparent;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
-    --panda-rim: transparent;
-  }
-}
+   already implies. The rim colours live in tokens.css with the other theme
+   forks: paper outlines in ink, night in mid-grey (see `--panda-sprite-rim`). */
 .composer-panda-sprite {
   display: block;
   width: 44px;
   height: 44px;
-  filter: drop-shadow(1px 0 0 var(--panda-rim)) drop-shadow(-1px 0 0 var(--panda-rim))
-    drop-shadow(0 1px 0 var(--panda-rim)) drop-shadow(0 -1px 0 var(--panda-rim));
+  filter: drop-shadow(1px 0 0 var(--panda-sprite-rim)) drop-shadow(-1px 0 0 var(--panda-sprite-rim))
+    drop-shadow(0 1px 0 var(--panda-sprite-rim)) drop-shadow(0 -1px 0 var(--panda-sprite-rim));
   /* The `?v=` is a cache key, not decoration: this file is not content-hashed
      like everything under /assets/, and the service worker serves static
      assets cache-first, so a browser that fetched an older sprite keeps that
@@ -2037,6 +2086,19 @@
   background-repeat: no-repeat;
   image-rendering: pixelated;
   animation: panda-bob 3.8s ease-in-out infinite;
+}
+/* On night the sprite drops `pixelated` too. The sheet is 128px art drawn at
+   44 — 0.344×, not a whole number — so nearest-neighbour throws away two
+   pixels in three: the ears come out stepped, the eye highlights collapse into
+   slivers, and the grey rim above ends up tracing that staircase. The
+   browser's own downscale is softer but keeps the shape. */
+[data-theme='dark'] .composer-panda-sprite {
+  image-rendering: auto;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .composer-panda-sprite {
+    image-rendering: auto;
+  }
 }
 /* The press: a jelly toy answering a poke. The sprite flattens against the
    border, snaps up tall, then rings down through two smaller bounces — and the
@@ -2242,7 +2304,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: node-panel-in var(--dur-fast) var(--ease-enter);
 }
 @keyframes node-panel-in {
@@ -2426,7 +2488,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: node-panel-in var(--dur-fast) var(--ease-enter);
 }
 /* The strips: natural height, no box of their own to scroll — the card does
@@ -2468,7 +2530,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: node-panel-in var(--dur-fast) var(--ease-enter);
 }
 /* The five sections as one control.
@@ -2891,7 +2953,7 @@
 }
 .composer-box {
   position: relative;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   /* 20px, not the 10px card radius: at this height a card radius reads square,
      and the composer is the roundest object on the page on purpose. */
   border-radius: 20px;
@@ -2899,15 +2961,13 @@
   box-shadow: var(--shadow-sm);
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
   /* 6px, not 8: the row below takes the rest, see .composer-actions. */
-  padding: 10px 14px 6px;
+  padding: 12px 14px 8px;
 }
 .composer-box:focus-within {
-  /* Neutral focus: the accent ring and border coloured the whole composer
-     green the moment the caret landed in it, which made the page read as
-     "green box plus green button". A deepening grey says "focused" without
-     spending the one accent again. */
+  /* Neutral focus: a deeper hairline and a close, low-opacity halo make the
+     active field feel precise without introducing another accent colour. */
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-sm), 0 0 0 3px var(--surface-alpha-sm);
 }
 .composer-box.composer-running {
   border-color: var(--border-strong);
@@ -2954,28 +3014,31 @@
   /* No divider: a hairline here read as the box's own bottom edge, so the row
      of context picks looked like a toolbar sitting outside the composer
      instead of its footer. One surface, no seam. */
-  /* 20/0 with a 6px box floor, not 12/6 with 8. The box is docked to the pane's
-     bottom, so growing it only pushes the row *up*; the one way to move the
-     controls down is to take the space out from under them. Moving the 6px of
-     row padding to the top and trimming 2px off the box floor drops the row
-     8px — from 15px clear of the bottom edge to 7 — and costs the box nothing,
-     which matters because 141px is the height it was tuned to. Past ~10px the
-     send button starts reading as welded to the border. */
-  padding: 20px 10px 0;
+  /* The top gap separates the writing area from the tools without drawing a
+     divider. The composer's own bottom padding keeps the row off the border. */
+  padding: 16px 10px 0;
 }
-/* Send is tonal for the same reason the rail's "new chat" is: the page's one
-   accent already lives in the nav and the active thread, so a solid primary
-   block read as the loudest thing on a screen whose job is to invite typing. */
+/* Send stays quiet while the field is empty, then becomes the one solid action
+   once there is something to submit. The state change carries the hierarchy. */
 .composer-actions .btn.primary {
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-border);
-  color: var(--accent-strong);
+  min-height: 32px;
+  padding: 5px 13px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--surface-alpha-sm);
+  color: var(--text-secondary);
   box-shadow: none;
+}
+.composer-actions .btn.primary:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: var(--shadow-xs);
 }
 .composer-actions .btn.primary:hover:not(:disabled) {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  box-shadow: none;
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  box-shadow: var(--shadow-xs);
 }
 /* The trailing pair owns the right edge — the model switch and Send (or Stop
    while a reply streams). The auto margin sits on the pair's first element,
@@ -3048,7 +3111,7 @@
   padding: 2px 10px 2px 8px;
   border: 1px solid var(--border-soft);
   border-radius: 999px;
-  background: var(--bg-hover);
+  background: var(--surface-alpha-xs);
   color: var(--text-secondary);
   font: inherit;
   font-size: var(--text-xs);
@@ -3228,7 +3291,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: wd-panel-in var(--dur-fast) var(--ease-enter);
 }
 @keyframes wd-panel-in {
@@ -3387,7 +3450,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: wd-panel-in var(--dur-fast) var(--ease-enter);
 }
 .team-panel-label {
@@ -3898,7 +3961,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: 14px;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   pointer-events: none;
   transform-origin: bottom right;
   animation: model-panel-in 150ms var(--ease-enter);
@@ -3974,7 +4037,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: 20px;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   /* Three bands stacked from the bottom edge up: the section label, the
      models, the account footer. Making it a column is what lets the model
      list give height back when the window is short, instead of the card
@@ -4394,7 +4457,7 @@
   border-radius: var(--radius-md);
   border: 1px solid var(--border-strong);
   background: var(--bg-overlay);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-pop);
 }
 .attach-item {
   display: flex;
@@ -4569,7 +4632,7 @@
   border-radius: var(--radius-md);
   border: 1px solid var(--border-strong);
   background: var(--bg-overlay);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   z-index: 20;
   animation: palette-in var(--dur-fast) var(--ease);
 }
@@ -4639,10 +4702,10 @@
      here. It is the transcript that gives it back, and only while a note is
      waiting. */
   height: 24px;
-  /* Same lanes as the log and the composer: 52px of prompt rail on the right,
-     plus the header card's lane while one is open, so the bubbles slide with
-     the column instead of hanging off it. */
-  padding: 0 calc(52px + var(--panel-lane)) 0 var(--sp-6);
+  /* Same lanes as the log and the composer: 52px of prompt rail on the left,
+     plus the header card's lane on the right while one is open, so the bubbles
+     slide with the column instead of hanging off it. */
+  padding: 0 calc(var(--sp-6) + var(--panel-lane)) 0 52px;
   /* Where the trail starts, measured from the composer's content box. The pet
      is 18px in and 44px wide, so 54 puts the first bubble just past the head's
      right edge and lets the trail climb away from it — the thought is the
@@ -4770,7 +4833,7 @@
   /* Raised this time: a popover floats over the page, and the recessed well
      that read as a shelf behind the composer reads as a hole in the air. */
   background: var(--bg-raised);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-pop);
   overflow: hidden;
 }
 /* The list is capped by height rather than by row count: the popover is
@@ -5015,7 +5078,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background: var(--bg-raised);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
 }
 .perm-menu-head {
   margin: 1px 6px 3px;
@@ -5084,3 +5147,351 @@
   line-height: 1.45;
   color: var(--text-tertiary);
 }
+
+/* ---- Session overview card ------------------------------------------------
+   A card that floats on the pane's top-right corner. It is deliberately NOT a
+   third column: the thread is one card on the canvas, and a separate track
+   turned reading a conversation into reading a dashboard. It answers three
+   questions at a glance — what changed, how full the context is, what is
+   still running — and folds down to three summary rows.
+
+   It borrows the header cards' lane (`--panel-lane`) rather than inventing a
+   second mechanism: the log, the composer and the jump arrow already reserve
+   that lane, so no line of the transcript ever runs underneath the card.
+   Width comes from `--rail-w` (tokens.css, 200) plus 10 of edge and 8 of
+   breathing room.
+
+   Two surfaces own this corner when they are up and the card steps aside for
+   both: a header card (380px, same corner, would sit under it) and the task
+   rail (360px, the full-height twin of the same information). */
+/* The card takes no lane: the transcript keeps its centred column and the
+   card simply sits on the corner. Reserving 262px for a summary moved every
+   line of the conversation left, which read worse than the overlap — the
+   column is the thing being read, the card is an annotation on it.
+   It does step aside for the three surfaces that own that corner outright: a
+   header card (380px, same corner), the task rail (360px, the full-height
+   twin of the same information) and the diff drawer (its own actions live on
+   the right edge, exactly where the card would sit). */
+.chat-pane.panel-open .session-rail,
+.chat-pane:has(.task-rail) .session-rail,
+.chat-pane:has(.diff-drawer) .session-rail {
+  display: none;
+}
+/* While the card is up, its Changes section is the change count. The pane
+   head's `± N 处变更` pill opened the same drawer, so the two read as the same
+   control printed twice. */
+.chat-pane:has(.session-rail) .changes-btn {
+  display: none;
+}
+
+.session-rail {
+  position: absolute;
+  /* Below the pane head (56) plus the transcript's own top padding, so the
+     card starts level with the first line of the conversation instead of
+     hugging the header's hairline. */
+  top: 88px;
+  right: 10px;
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  width: var(--rail-w);
+  /* A summary, not a second transcript: it never grows past the reading area
+     it annotates, and scrolls inside when the change list is long. */
+  max-height: min(58%, 520px);
+  min-height: 0;
+  overflow: hidden;
+  /* A sticky note: warm paper, a hairline a shade darker than the fill, and
+     the smallest lift that still reads as "laid on top" (`--shadow-float`).
+     The corner is tighter than the page cards' — a note is cut, not moulded. */
+  background: var(--bg-float);
+  border: 1px solid var(--border-float);
+  border-radius: 12px;
+  box-shadow: var(--shadow-float);
+  animation: fade-in var(--dur-fast) var(--ease);
+}
+
+.rail-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 3px 0;
+}
+
+/* A section is a header row plus an optional body. Collapsed, the header
+   still carries the number that made you look — folding costs the reader
+   nothing they were reading for. */
+/* The separator has to be darker than the card, not lighter: on a grey sheet
+   a hairline in the page's border colour reads as a groove. */
+.rail-sec + .rail-sec {
+  border-top: 1px solid var(--border-float);
+}
+.rail-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-head:hover {
+  background: var(--bg-active);
+}
+.rail-head:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
+}
+/* 12.5 at 600 in the secondary ink, not the reading ink: these are labels on
+   a summary, and pure black at this size turns the card into a form. */
+/* Small and dark, not big and grey. The label carries the row's identity, so
+   it keeps the reading ink; 12px at the regular weight (YaHei has no 500 face)
+   is what stops it shouting — not a paler colour, which just made the whole
+   card look washed out. */
+.rail-title {
+  flex: none;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+.rail-sum {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.rail-chev {
+  flex: none;
+  color: var(--text-disabled);
+}
+.rail-sec-body {
+  padding: 0 0 4px;
+}
+.rail-none {
+  color: var(--text-tertiary);
+}
+.rail-add {
+  color: var(--semantic-good);
+}
+.rail-del {
+  color: var(--semantic-danger);
+}
+
+/* ---- Changes ---- */
+.rail-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rail-file {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 3px 10px;
+}
+.rail-file:hover {
+  background: var(--bg-active);
+}
+/* One fixed column for the porcelain token, so the paths line up whether the
+   row says M, MM or ??. */
+.rail-file-state {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  width: 12px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+.rail-file-state.is-edit {
+  color: var(--semantic-warn);
+}
+.rail-file-state.is-new {
+  color: var(--semantic-good);
+}
+.rail-file-state.is-gone {
+  color: var(--semantic-danger);
+}
+.rail-file-state.is-moved {
+  color: var(--semantic-info);
+}
+/* The path, not the directory, is what identifies a row: it starts at the
+   left and the directory is what gets the ellipsis. `title` carries the
+   whole path for the rows that had to be cut. */
+.rail-file-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.rail-file-stat {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+/* The reported-but-unknown marker: a dot sized to the status column, so rows
+   without a letter still line up with the ones that have one. */
+.rail-file-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-left: 3px;
+  border-radius: 50%;
+  background: var(--text-disabled);
+}
+.rail-more {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+.rail-more:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* ---- Context ---- */
+.rail-pct {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.rail-pct.is-high {
+  color: var(--semantic-warn);
+}
+.rail-meter {
+  height: 5px;
+  margin: 2px 10px 6px;
+  border-radius: 3px;
+  /* `--bg-inset` is within a hair of the card in both themes, and a 5px track
+     that reads as a hairline is not a meter. The border tone is the lightest
+     grey that still says "this is a container with something in it". */
+  background: var(--border-soft);
+  overflow: hidden;
+}
+.rail-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--text-tertiary);
+  transition: width var(--dur-med) var(--ease-standard);
+}
+.rail-meter.is-high .rail-meter-fill {
+  background: var(--semantic-warn);
+}
+.rail-ctx-nums {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 10px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.rail-dim {
+  color: var(--text-tertiary);
+}
+.rail-note {
+  margin: 2px 0 0;
+  padding: 0 10px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+/* ---- Tasks ---- */
+.rail-live {
+  color: var(--semantic-warn);
+  font-weight: 600;
+}
+.rail-tasks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rail-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-task:hover {
+  background: var(--bg-hover);
+}
+.rail-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--semantic-warn);
+  animation: rail-pulse 1.8s var(--ease-standard) infinite;
+}
+@keyframes rail-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-dot {
+    animation: none;
+  }
+}
+.rail-task-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.rail-task-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+.rail-task-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+

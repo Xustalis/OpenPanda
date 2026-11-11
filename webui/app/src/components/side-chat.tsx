@@ -43,6 +43,7 @@ import { Icon } from './icons'
 import { MessageCopyButton } from './copy'
 import { ClarifyCard } from './clarify-card'
 import { confirmDialog } from './confirm'
+import { ModelSelect } from './model-select'
 import { toastError } from './toast'
 
 interface Line {
@@ -75,6 +76,9 @@ export interface SideChatProps {
    *  re-read the thread's stored side conversation instead of showing a stale
    *  one. A tab switch is never a new conversation — only `+` is. */
   reloadSignal?: number
+  /** Bumped by a second click on the 对话 tab: toggle the history popover.
+   *  The pane keeps no permanent history bar, so this is its only door. */
+  historySignal?: number
   /** Put a reply into the composer — the one crossing back into the thread. */
   onInsert(text: string): void
   /** Open a task the side answer dispatched. */
@@ -131,7 +135,9 @@ export function SideChat(props: SideChatProps) {
   // one, and picking a row swaps the transcript without touching the thread.
   const [chats, setChats] = useState<SideChatSummary[]>([])
   const [activeId, setActiveId] = useState('')
-  const [listOpen, setListOpen] = useState(false)
+  // The history is a popover opened from the dock's 对话 tab, not a bar over
+  // the transcript: it is a place you go on purpose, not a permanent row.
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   // attached: this pane holds the live SSE stream. When false and busy is
@@ -145,6 +151,8 @@ export function SideChat(props: SideChatProps) {
   const abort = useRef<AbortController | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  // The history popover, for the outside-click check.
+  const popRef = useRef<HTMLDivElement>(null)
   // Which ask the visible conversation belongs to. Switching threads (or
   // clearing the pane) bumps it, so callbacks from an aborted ask cannot
   // append their late deltas to the conversation now on screen.
@@ -236,6 +244,9 @@ export function SideChat(props: SideChatProps) {
     setStatus('')
     setErr('')
     setClarify(null)
+    // A thread switch or a fresh conversation is not the history of the one
+    // that was on screen.
+    setHistoryOpen(false)
     if (!props.sessionId) {
       setLines([])
       setChats([])
@@ -248,7 +259,11 @@ export function SideChat(props: SideChatProps) {
       // screen: the transcript stays in the history list, one click away.
       setLines([])
       setLoaded(true)
-      setListOpen(false)
+      setHistoryOpen(false)
+      // A fresh, empty conversation looks exactly like the empty one it
+      // replaced. Put the caret in the composer so the click always has a
+      // visible answer, even on a thread whose last side chat was blank.
+      inputRef.current?.focus()
       void api.newSideChat(props.sessionId)
         .then(applyConversation)
         .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
@@ -268,10 +283,49 @@ export function SideChat(props: SideChatProps) {
     const n = props.reloadSignal
     if (n === undefined || n === seenReload.current) return
     seenReload.current = n
+    // Coming back to the tab means reading the conversation, not the index:
+    // the popover is a detour, and it should not still be hanging there.
+    setHistoryOpen(false)
     const s = liveState.current
     if (!props.sessionId || !s.loaded || s.busy || s.attached) return
     void loadSide(props.sessionId, activeRef.current || undefined)
   }, [props.reloadSignal, props.sessionId])
+
+  // A second click on the lit 对话 tab toggles the history. That tab is the
+  // pane's only door to it now; the same click closes what it opened.
+  const seenHistory = useRef(props.historySignal)
+  useEffect(() => {
+    const n = props.historySignal
+    if (n === undefined || n === seenHistory.current) return
+    seenHistory.current = n
+    if (!props.sessionId) return
+    setHistoryOpen((open) => !open)
+  }, [props.historySignal, props.sessionId])
+
+  // Clicking anywhere else closes the list. The dock's tab strip is exempt:
+  // that click is the toggle above, and closing here first would make a
+  // second click on 对话 reopen the list instead of closing it.
+  useEffect(() => {
+    if (!historyOpen) return
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Element | null
+      if (!target) return
+      if (popRef.current?.contains(target)) return
+      if (target.closest?.('.dock-tabs')) return
+      setHistoryOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      setHistoryOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [historyOpen])
 
   // A background answer: the pane is not holding the stream, so follow the
   // stored operation until it settles and the conversation comes back whole.
@@ -455,7 +509,7 @@ export function SideChat(props: SideChatProps) {
   // the chat being left keeps running server-side — its row says so, and
   // coming back re-attaches to it.
   function pick(chatID: string) {
-    setListOpen(false)
+    setHistoryOpen(false)
     const id = props.sessionId
     if (!id || chatID === activeId) return
     run.current++
@@ -544,70 +598,69 @@ export function SideChat(props: SideChatProps) {
 
   return (
     <div class="side-chat">
-      {/* The history of this thread's side conversations. It sits above the
-          transcript rather than behind a menu: a conversation you cannot find
-          again is a conversation you will not start, and the whole point of
-          the list is that `+` no longer throws the last one away. */}
-      {props.sessionId && (
-        <div class={`side-history${listOpen ? ' is-open' : ''}`}>
-          <button
-            type="button"
-            class="side-history-head"
-            aria-expanded={listOpen}
-            aria-label={t('side.history')}
-            title={t('side.history')}
-            onClick={() => setListOpen((open) => !open)}
-          >
-            <Icon name="message" size={14} />
-            <span class="side-history-label">{t('side.history')}</span>
+      {/* The history, on request: a second click on the 对话 tab opens it.
+          It floats over the transcript instead of taking a row above it —
+          the list is usually one item, and a permanent bar spent the pane's
+          scarcest axis on a place the reader visits occasionally. */}
+      {props.sessionId && historyOpen && (
+        <div class="side-history-pop" ref={popRef} role="dialog" aria-label={t('side.history')}>
+          <div class="side-history-pop-head">
+            <Icon name="message" size={13} />
+            <span>{t('side.history')}</span>
             <span class="side-history-count mono">{chats.length}</span>
-            <Icon name="chevron-down" size={14} class="side-history-caret" />
-          </button>
-          {listOpen && (
-            <div class="side-history-list">
-              {chats.length === 0 && <p class="side-history-empty">{t('side.historyEmpty')}</p>}
-              {chats.map((c) => (
-                <div class={`side-history-row${c.id === activeId ? ' is-active' : ''}`} key={c.id}>
-                  <button type="button" class="side-history-pick" onClick={() => pick(c.id)}>
-                    <span class="side-history-title">{c.title || t('side.untitled')}</span>
-                    <span class="side-history-meta">
-                      {c.running ? t('side.answering') : relativeTime(isoOf(c.updated_at), locale())}
-                      <span aria-hidden="true"> · </span>
-                      {t('side.turns', { n: c.turns })}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    class="side-history-del"
-                    aria-label={t('side.deleteChat')}
-                    title={t('side.deleteChat')}
-                    onClick={() => void remove(c.id)}
-                  >
-                    <Icon name="trash" size={13} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+            <button
+              type="button"
+              class="side-history-close"
+              aria-label={t('common.close')}
+              title={t('common.close')}
+              onClick={() => setHistoryOpen(false)}
+            >
+              <Icon name="x" size={13} />
+            </button>
+          </div>
+          <div class="side-history-list">
+            {chats.length === 0 && <p class="side-history-empty">{t('side.historyEmpty')}</p>}
+            {chats.map((c) => (
+              <div class={`side-history-row${c.id === activeId ? ' is-active' : ''}`} key={c.id}>
+                <button type="button" class="side-history-pick" onClick={() => pick(c.id)}>
+                  <span class="side-history-title">{c.title || t('side.untitled')}</span>
+                  <span class="side-history-meta">
+                    {c.running ? t('side.answering') : relativeTime(isoOf(c.updated_at), locale())}
+                    <span aria-hidden="true"> · </span>
+                    {t('side.turns', { n: c.turns })}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  class="side-history-del"
+                  aria-label={t('side.deleteChat')}
+                  title={t('side.deleteChat')}
+                  onClick={() => void remove(c.id)}
+                >
+                  <Icon name="trash" size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       <div class="side-scroll" ref={logRef}>
         {loaded && lines.length === 0 && !busy && (
           <div class="side-empty">
-            <Icon name="message" size={20} />
+            <span class="side-empty-icon"><Icon name="message" size={18} /></span>
             {/* A thread with no id has nothing to attach to, so the pane is
                 missing its anchor — say that instead of offering a box whose
                 send button never lights up. */}
             {props.sessionId ? (
               <>
-                <p>{t('side.empty')}</p>
-                <p class="dim">{t('side.readonly')}</p>
-                <p class="dim">{t('side.context')}</p>
+                <p class="side-empty-lead">{t('side.empty')}</p>
+                <p class="side-empty-note">{t('side.readonly')}</p>
+                <p class="side-empty-note">{t('side.context')}</p>
                 {/* The channel is most useful with a question that names what
                     it can check. These fill the composer rather than sending:
                     the reader edits them to this thread's own words. */}
                 <div class="side-starters">
-                  <span class="dim">{t('side.starters')}</span>
+                  <span class="side-starters-label">{t('side.starters')}</span>
                   {(['status', 'summary', 'files'] as const).map((k) => (
                     <button
                       type="button"
@@ -624,7 +677,7 @@ export function SideChat(props: SideChatProps) {
                 </div>
               </>
             ) : (
-              <p>{t('side.noThread')}</p>
+              <p class="side-empty-lead">{t('side.noThread')}</p>
             )}
           </div>
         )}
@@ -740,9 +793,10 @@ export function SideChat(props: SideChatProps) {
           void send()
         }}
       >
-        {/* One surface, like the main composer: the field and its button live
-            inside the same rounded box. A bordered textarea beside a detached
-            square made the dock's footer look like two unrelated controls. */}
+        {/* One surface, like the main composer: the field, the model that
+            will answer and Send all live inside the same rounded box. A
+            bordered textarea beside a detached square made the dock's footer
+            look like two unrelated controls. */}
         <div class="side-compose-box">
           <textarea
             ref={inputRef}
@@ -761,21 +815,27 @@ export function SideChat(props: SideChatProps) {
               }
             }}
           />
-          {busy ? (
-            <button type="button" class="btn small side-stop" onClick={stop}>
-              {t('common.stop')}
-            </button>
-          ) : (
-            <button
-              type="submit"
-              class="btn small primary side-send"
-              aria-label={t('sessions.send')}
-              title={t('sessions.send')}
-              disabled={!input.trim() || !props.sessionId}
-            >
-              <Icon name="send" size={16} />
-            </button>
-          )}
+          <div class="side-compose-actions">
+            {/* The same switch the main composer carries, not a second
+                registry: `api.useModel` sets the node's active alias, so the
+                side channel answers with whatever the thread is using. */}
+            <ModelSelect portal disabled={!props.sessionId || busy} />
+            {busy ? (
+              <button type="button" class="btn small side-stop" onClick={stop}>
+                {t('common.stop')}
+              </button>
+            ) : (
+              <button
+                type="submit"
+                class="btn small primary side-send"
+                aria-label={t('sessions.send')}
+                title={t('sessions.send')}
+                disabled={!input.trim() || !props.sessionId}
+              >
+                <Icon name="send" size={16} />
+              </button>
+            )}
+          </div>
         </div>
       </form>
     </div>

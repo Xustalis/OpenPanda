@@ -100,6 +100,20 @@ func TestCCSwitchGroupsMergesByEndpoint(t *testing.T) {
 			t.Errorf("%s note = %q, want the live name and the merge count", c.Model, c.Note)
 		}
 	}
+	// The console keeps one tick set keyed by ID across all four rosters, so an
+	// empty or repeated ID ticks every row at once.
+	seen := map[string]bool{}
+	for _, g := range groups {
+		for _, c := range g.Candidates {
+			if c.ID == "" {
+				t.Fatalf("%s has no id: the console cannot tell the rows apart", c.Model)
+			}
+			if seen[c.ID] {
+				t.Fatalf("%s reuses id %q", c.Model, c.ID)
+			}
+			seen[c.ID] = true
+		}
+	}
 }
 
 func TestCCSwitchGroupsMissingStore(t *testing.T) {
