@@ -101,4 +101,37 @@ func jsPad(n int) []byte {
 	return b
 }
 
+// TestGzipAssetsCachePolicy pins the two halves of the policy: the HTML entry
+// point is revalidated on every load, because a cached index.html points at
+// bundle names a new binary no longer ships — the console then keeps painting
+// the old UI after a rebuild, which is indistinguishable from "the build did
+// not run". Everything under /assets/ is content-hashed and can be cached
+// forever.
+func TestGzipAssetsCachePolicy(t *testing.T) {
+	fsys := fstest.MapFS{
+		"index.html":          {Data: []byte("<html><body>" + string(jsPad(600)) + "</body></html>")},
+		"assets/index-abc.js": {Data: []byte("var x=1;" + string(jsPad(600)))},
+		"app.js":              {Data: []byte("var y=2;" + string(jsPad(600)))},
+	}
+	h := gzipAssets(fsys)
+
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"/", "no-cache"},
+		{"/index.html", "no-cache"},
+		{"/assets/index-abc.js", "public, max-age=31536000, immutable"},
+		{"/app.js", ""}, // neither the entry point nor a hashed asset
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if got := rec.Result().Header.Get("Cache-Control"); got != tc.want {
+			t.Errorf("%s: Cache-Control = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
 var _ fs.FS = fstest.MapFS{} // keep fstest honest
