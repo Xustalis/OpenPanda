@@ -267,3 +267,61 @@ test('text that is still streaming is never cached', () => {
   assert.notEqual(a, b, 'uncached parses are independent')
   assert.deepEqual(a, b)
 })
+
+// A model that cannot reach a native tool_use sometimes answers with the call
+// envelope as text. Set as a paragraph it read as broken prose — proportional
+// quotes, every indent trimmed. It is JSON; it gets the code surface, with its
+// own indentation intact.
+test('a reply that is only JSON renders as a code block', () => {
+  const src = [
+    '{',
+    '  "action": "review",',
+    '  "thinking": "先查看目录清单",',
+    '  "tool": {',
+    '    "name": "execute_command",',
+    '    "args": { "command": "dir D:////d" }',
+    '  }',
+    '}',
+  ].join('\n')
+  const bs = parseBlocks(src, false)
+  assert.deepEqual(kinds(bs), ['code'])
+  const code = bs[0] as Extract<Block, { t: 'code' }>
+  assert.equal(code.lang, 'json')
+  assert.equal(code.text, src, 'indentation survives verbatim')
+})
+
+test('prose that merely starts with a brace stays prose', () => {
+  const bs = parseBlocks('{不是 JSON} 这是正文', false)
+  assert.deepEqual(kinds(bs), ['para'])
+})
+
+test('JSON followed by a sentence stays prose', () => {
+  const bs = parseBlocks('{"a":1}\n见上', false)
+  assert.deepEqual(kinds(bs), ['para'])
+})
+
+// Streaming the same envelope: the first chunk already looks like JSON, so it
+// must be code from that chunk on — flipping from prose to a code block when
+// the closing brace arrives is the end-of-stream reflow the console just fixed.
+test('an unfinished JSON envelope is code while it streams', () => {
+  const partial = '{\n  "action": "review",\n  "tool": {'
+  const bs = parseBlocks(partial, false)
+  assert.deepEqual(kinds(bs), ['code'])
+  assert.equal((bs[0] as Extract<Block, { t: 'code' }>).lang, 'json')
+})
+
+// A closer inside the block means the JSON already ended and prose followed it
+// on the next line with no blank between: the whole thing stays prose rather
+// than swallowing the sentence into a code fence.
+test('a closed envelope followed by prose is not swallowed', () => {
+  const bs = parseBlocks('{\n  "a": 1\n}\n以上是调用', false)
+  assert.deepEqual(kinds(bs), ['para'])
+})
+
+// A closer inside the block means the JSON already ended and prose followed it
+// on the next line with no blank between: the whole thing stays prose rather
+// than swallowing the sentence into a code fence.
+test('a closed envelope followed by prose is not swallowed', () => {
+  const bs = parseBlocks('{\n  "a": 1\n}\n以上是调用', false)
+  assert.deepEqual(kinds(bs), ['para'])
+})
