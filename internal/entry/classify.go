@@ -101,6 +101,11 @@ func classifyCacheKey(po PromptOptions, model string, registry *Registry) (k1, k
 	b.WriteString(model)
 	b.WriteString("\nmode:")
 	b.WriteString(po.RequestMode)
+	// The consent policy is prompt content too: a verdict reached under bypass
+	// ("just dispatch it") must not be replayed into a manual thread, where the
+	// same request has to wait on a card.
+	b.WriteString("\nperm:")
+	b.WriteString(po.PermissionMode)
 	b.WriteString("\nlocale:")
 	b.WriteString(string(promptLocale(po)))
 	if po.ASCIIOnly {
