@@ -105,12 +105,22 @@
   --radius-pill: 999px;
   --radius: var(--radius-md);
 
-  /* — Elevation: neutral shadows sit on white instead of floating. */
-  --shadow-xs: 0 1px 2px rgba(28, 28, 32, 0.06);
-  --shadow-sm: 0 1px 2px rgba(28, 28, 32, 0.05), 0 4px 12px rgba(28, 28, 32, 0.07);
-  --shadow-md: 0 2px 4px rgba(28, 28, 32, 0.05), 0 10px 28px rgba(28, 28, 32, 0.09);
-  --shadow-lg: 0 4px 8px rgba(28, 28, 32, 0.06), 0 18px 44px rgba(28, 28, 32, 0.12);
-  --shadow-xl: 0 8px 16px rgba(28, 28, 32, 0.08), 0 28px 64px rgba(28, 28, 32, 0.16);
+  /* — Elevation: neutral shadows sit on white instead of floating.
+     The ladder is deliberately short. A card that is part of the page gets
+     `xs`; a card the pointer lifts gets `sm`; a menu or a popover gets `pop`.
+     `md`/`lg`/`xl` are for surfaces that genuinely leave the page (a dragged
+     card, a modal, a lightbox), and each step only adds reach — never
+     darkness. A 44px halo at 12% under a 360px card read as a cloud, not as
+     a card sitting one hair above the paper. */
+  --shadow-xs: 0 1px 2px rgba(28, 28, 32, 0.05);
+  --shadow-sm: 0 1px 2px rgba(28, 28, 32, 0.04), 0 3px 8px rgba(28, 28, 32, 0.05);
+  --shadow-md: 0 2px 4px rgba(28, 28, 32, 0.04), 0 8px 20px rgba(28, 28, 32, 0.07);
+  --shadow-lg: 0 3px 6px rgba(28, 28, 32, 0.05), 0 14px 32px rgba(28, 28, 32, 0.09);
+  --shadow-xl: 0 6px 14px rgba(28, 28, 32, 0.06), 0 22px 48px rgba(28, 28, 32, 0.12);
+  /* Popovers that hang off a bar (the node card, the task cards, the fleet
+     rail) open over a page you are still reading: they need a defined edge,
+     not a cloud under them. One step below the modal scale, on purpose. */
+  --shadow-pop: 0 1px 2px rgba(28, 28, 32, 0.04), 0 5px 14px rgba(28, 28, 32, 0.055);
   --shadow-accent: 0 1px 2px rgba(47, 43, 34, 0.14), 0 4px 16px rgba(47, 43, 34, 0.18);
   /* Glows are intentionally inert: ambient colour bloom is the one effect
      that reads as decoration rather than structure, so the tokens resolve
@@ -172,6 +182,11 @@
 
   --leading-tight: 1.25;
   --leading-normal: 1.55;
+  /* Prose that is read rather than scanned. Chinese and Japanese glyphs fill
+     their em box, so a Latin leading of 1.55 leaves barely a third of an em
+     between lines and a paragraph of Hanzi turns into one grey block; the
+     reading column asks for a line of air. Latin prose is happy at either. */
+  --leading-read: 1.68;
 
   /* — Motion. */
   --dur-fast: 110ms;
@@ -269,11 +284,17 @@
   --danger-solid-hover: #d94943;
   --danger-ink: #ffffff;
 
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.34), 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.22);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.46), 0 4px 10px rgba(0, 0, 0, 0.26);
-  --shadow-xl: 0 20px 56px rgba(0, 0, 0, 0.56), 0 6px 16px rgba(0, 0, 0, 0.3);
+  /* Same ladder as the light block, in black. On a dark page the shadow is
+     the *edge*, not the subject: past ~0.4 the card grows a smudge instead of
+     a silhouette. */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22), 0 3px 8px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.26), 0 8px 20px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 3px 6px rgba(0, 0, 0, 0.3), 0 14px 32px rgba(0, 0, 0, 0.36);
+  --shadow-xl: 0 6px 14px rgba(0, 0, 0, 0.34), 0 22px 48px rgba(0, 0, 0, 0.4);
+  /* Same popover step as the light block: a dark card on a dark page needs the
+     edge, not a black bloom around it. */
+  --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.22), 0 5px 14px rgba(0, 0, 0, 0.26);
   --shadow-accent: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(255, 255, 255, 0.06);
   --shadow-glow-1: 0 0 0 transparent;
   --shadow-glow-2: 0 0 0 transparent;
@@ -348,11 +369,12 @@
     --danger-solid: #c9403a;
     --danger-solid-hover: #d94943;
     --danger-ink: #ffffff;
-    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.34), 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.22);
-    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.46), 0 4px 10px rgba(0, 0, 0, 0.26);
-    --shadow-xl: 0 20px 56px rgba(0, 0, 0, 0.56), 0 6px 16px rgba(0, 0, 0, 0.3);
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.28);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22), 0 3px 8px rgba(0, 0, 0, 0.28);
+    --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.26), 0 8px 20px rgba(0, 0, 0, 0.32);
+    --shadow-lg: 0 3px 6px rgba(0, 0, 0, 0.3), 0 14px 32px rgba(0, 0, 0, 0.36);
+    --shadow-xl: 0 6px 14px rgba(0, 0, 0, 0.34), 0 22px 48px rgba(0, 0, 0, 0.4);
+    --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.22), 0 5px 14px rgba(0, 0, 0, 0.26);
     --shadow-accent: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(255, 255, 255, 0.06);
     --shadow-glow-1: 0 0 0 transparent;
     --shadow-glow-2: 0 0 0 transparent;
@@ -527,5 +549,36 @@
     --mg-label: #d0d0d5;
     --mg-label-strong: #f2f2f2;
     --mg-halo: rgba(255, 255, 255, 0.2);
+  }
+}
+
+/* The mascot's rims. The art is cream on transparency, so its edge is whatever
+   the surface behind it is not — which is why it needs an outline in both
+   themes, and why the two outlines are not the same colour.
+
+   `--panda-rim` is the small faces: the thread avatar (30px) and the side
+   chat's (20px). On paper the cream body would vanish into the page, so it
+   wears a 1px ink rim. On night it wears nothing: those crops are mostly face,
+   and the dark parts of a face are bounded by cream on the inside, so the
+   contrast that carries the shape is internal and survives a #1e1e1e page.
+
+   `--panda-sprite-rim` is the 42/44px pets, and night needs one there for the
+   opposite reason: a standing body has ears, forearms and feet whose outer
+   edge is the only edge they have. The art's black is #292929, eleven steps
+   above the page — 1.15:1, i.e. gone — so those limbs dissolve and the pet
+   reads as two cream patches. A 1px mid-grey rim draws them back without
+   recolouring the art; lifting the black instead would turn the panda grey. */
+:root {
+  --panda-rim: rgba(41, 41, 41, 0.34);
+  --panda-sprite-rim: var(--panda-rim);
+}
+:root[data-theme='dark'] {
+  --panda-rim: transparent;
+  --panda-sprite-rim: rgba(130, 130, 130, 0.55);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --panda-rim: transparent;
+    --panda-sprite-rim: rgba(130, 130, 130, 0.55);
   }
 }

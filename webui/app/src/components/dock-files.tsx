@@ -42,7 +42,9 @@ export interface DockFilesProps {
   /** A file the transcript asked for. Changing it opens that file; the panel
    *  keeps its own directory otherwise. */
   request: { path: string; line: number } | null
-  /** Bumped by the panel's `+`: back to the workspace root. */
+  /** Bumped on a thread switch: back to the workspace root, nothing open.
+   *  The panel's own start-over button does the same in place — the dock
+   *  head's `+` is 新对话 everywhere and never resets this panel. */
   resetSignal?: number
   /** Put a reference back into the composer; absent leaves the action out. */
   onInsert?: (ref: string) => void
@@ -61,7 +63,8 @@ export function DockFiles(props: DockFilesProps) {
     if (props.request) setFile(props.request)
   }, [props.request])
 
-  // The panel's `+` is "start over here": root of the tree, nothing open.
+  // A thread switch starts over here: root of the tree, nothing open. The
+  // bar's own button does the same by hand (see .df-root below).
   useEffect(() => {
     if (!props.resetSignal) return
     setFile(null)
@@ -122,6 +125,20 @@ export function DockFiles(props: DockFilesProps) {
           onClick={() => setDir(parentOf(dir))}
         >
           <Icon name="arrow-up" size={15} />
+        </button>
+        {/* Back to the workspace root in one step. This used to be what the
+            dock head's `+` did on this pane; `+` is 新对话 in every pane now,
+            so the panel owns its own start-over control. Disabled at the root
+            rather than shown live with nothing to do. */}
+        <button
+          type="button"
+          class="icon-btn df-root"
+          title={t('dockFiles.home')}
+          aria-label={t('dockFiles.home')}
+          disabled={dir === ''}
+          onClick={() => setDir('')}
+        >
+          <Icon name="folder" size={15} />
         </button>
         <span class="df-cwd mono" title={dir || root}>
           {dir || root || t('dockFiles.root')}

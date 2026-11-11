@@ -228,7 +228,7 @@ select.input {
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: ctx-menu-in var(--dur-fast) var(--ease-enter);
 }
 .select-menu:focus {
@@ -345,7 +345,7 @@ select.input {
   background: var(--bg-overlay);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
 }
 .model-picker-list:focus {
   outline: none;
@@ -643,7 +643,7 @@ input[type='checkbox'].check,
   background: var(--bg-overlay);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-lg);
   padding: var(--sp-6);
   animation: modal-in var(--dur-med) var(--ease);
 }
@@ -794,7 +794,7 @@ dialog.confirm-modal::backdrop {
   border-radius: var(--radius-md);
   background: var(--bg-overlay);
   border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   font-size: var(--text-md);
   animation: toast-in var(--dur-med) var(--ease);
 }
@@ -857,7 +857,7 @@ dialog.confirm-modal::backdrop {
   color: var(--text);
   font-size: var(--text-xs);
   white-space: nowrap;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-pop);
   z-index: 200;
   pointer-events: none;
 }
@@ -970,7 +970,7 @@ dialog.confirm-modal::backdrop {
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: ctx-menu-in var(--dur-fast) var(--ease-enter);
 }
 @keyframes ctx-menu-in {
@@ -1144,7 +1144,7 @@ dialog.confirm-modal::backdrop {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-overlay);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   /* The panel's height is capped to the scrollport at runtime; let its body
      scroll rather than clipping the last field off at the edge. */
   overflow: auto;
