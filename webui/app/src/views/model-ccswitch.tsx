@@ -25,11 +25,11 @@ export function CCSwitchSheet(props: {
   const [groups, setGroups] = useState<DiscoverSource[] | null>(null)
   const [error, setError] = useState('')
   const [tab, setTab] = useState('')
+  // Nothing is ticked on open. A CC Switch roster is somebody's list of saved
+  // relays, not a shopping list: the sheet starts blank so the footer's "N
+  // selected" is always a number the person chose. Ticking a whole roster is
+  // one click away, which is the right cost for "import all of these".
   const [picked, setPicked] = useState<Set<string>>(new Set())
-  // Ids the person unticked themselves. Opening another roster auto-ticks its
-  // live entries, but it must never re-tick something that was deliberately
-  // cleared — that reads as the click being ignored.
-  const [touched, setTouched] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   useModalFocus(box, true)
@@ -37,7 +37,6 @@ export function CCSwitchSheet(props: {
   function load() {
     setError('')
     setGroups(null)
-    setTouched(new Set())
     api
       .ccswitchGroups()
       .then((r) => {
@@ -47,43 +46,18 @@ export function CCSwitchSheet(props: {
         // taking the opening screen.
         const first = r.groups.find((g) => g.candidates.some(importable)) ?? r.groups[0]
         setTab(first?.id ?? '')
-        // The default tick is scoped to the roster on screen: ticking a hidden
-        // group's entries would make the footer count disagree with the rows
-        // the person can see.
-        const next = new Set<string>()
-        for (const c of first?.candidates ?? []) {
-          if (importable(c) && c.suggested) next.add(c.id)
-        }
-        setPicked(next)
+        setPicked(new Set())
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
   }
 
   useEffect(load, [])
 
-  function openTab(id: string) {
-    setTab(id)
-    const g = groups?.find((x) => x.id === id)
-    if (!g) return
-    setPicked((cur) => {
-      const next = new Set(cur)
-      for (const c of g.candidates) {
-        if (importable(c) && c.suggested && !touched.has(c.id)) next.add(c.id)
-      }
-      return next
-    })
-  }
-
   function importable(c: DiscoveredModel): boolean {
     return c.importable && !c.existing
   }
 
   function toggle(id: string) {
-    setTouched((cur) => {
-      const next = new Set(cur)
-      next.add(id)
-      return next
-    })
     setPicked((cur) => {
       const next = new Set(cur)
       if (next.has(id)) next.delete(id)
@@ -128,6 +102,21 @@ export function CCSwitchSheet(props: {
   // say where the rest of it lives — otherwise "5 selected" next to one ticked
   // row reads as a bug.
   const here = current ? current.candidates.filter((c) => importable(c) && picked.has(c.id)).length : 0
+  const hereIds = current ? current.candidates.filter(importable).map((c) => c.id) : []
+  const allHere = hereIds.length > 0 && hereIds.every((id) => picked.has(id))
+
+  // Roster-wide tick. Scoped to the open tab on purpose: the rows the person
+  // cannot see must not change under a click they aimed at the ones they can.
+  function toggleRoster() {
+    setPicked((cur) => {
+      const next = new Set(cur)
+      for (const id of hereIds) {
+        if (allHere) next.delete(id)
+        else next.add(id)
+      }
+      return next
+    })
+  }
 
   return (
     <div class="modal-backdrop" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
@@ -187,7 +176,7 @@ export function CCSwitchSheet(props: {
                       role="tab"
                       aria-selected={on}
                       class={`ccswitch-tab${on ? ' on' : ''}${usable === 0 ? ' bare' : ''}`}
-                      onClick={() => openTab(g.id)}
+                      onClick={() => setTab(g.id)}
                     >
                       <span class="ccswitch-tab-name">{g.label}</span>
                       <span class="ccswitch-tab-count">{usable}</span>
@@ -199,10 +188,19 @@ export function CCSwitchSheet(props: {
 
             {current && (
               <>
-                {current.detail && (
-                  <p class="discover-hint ccswitch-detail" title={current.detail}>
-                    {current.detail}
-                  </p>
+                {(current.detail || hereIds.length > 0) && (
+                  <div class="ccswitch-bar">
+                    {current.detail && (
+                      <p class="discover-hint ccswitch-detail" title={current.detail}>
+                        {current.detail}
+                      </p>
+                    )}
+                    {hereIds.length > 0 && (
+                      <button type="button" class="discover-all" onClick={toggleRoster}>
+                        {allHere ? t('models.discover.clearAll') : t('models.discover.selectAll')}
+                      </button>
+                    )}
+                  </div>
                 )}
                 {current.candidates.filter(importable).length === 0 && (
                   <p class="discover-none">
@@ -257,7 +255,11 @@ export function CCSwitchSheet(props: {
               disabled={count === 0 || busy}
               onClick={() => void submit()}
             >
-              {busy ? t('models.discover.importing') : t('models.discover.import', { n: count })}
+              {busy
+                ? t('models.discover.importing')
+                : count === 0
+                  ? t('models.discover.importNone')
+                  : t('models.discover.import', { n: count })}
             </button>
           </footer>
         </div>

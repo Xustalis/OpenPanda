@@ -38,6 +38,9 @@ export function Select(props: {
   /** The control's name for assistive tech — the field shows the value, not
    *  what the list is for. */
   ariaLabel: string
+  /** Extra classes for the wrapper, which is layout only. The field's own
+   *  chrome — `.input`, its height, its padding — belongs to the trigger
+   *  inside it; passing `.input` here wraps the field in a second box. */
   class?: string
   disabled?: boolean
   id?: string

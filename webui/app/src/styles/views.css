@@ -9162,6 +9162,20 @@ button.project-stat:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The roster's own sentence plus its 全选. The sheet opens with nothing
+   ticked, so "take all of this roster" has to be one click rather than
+   twenty — and it stays scoped to the tab on screen. */
+.ccswitch-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 2px;
+}
+.ccswitch-bar .ccswitch-detail {
+  flex: 1;
+  min-width: 0;
+  margin: 6px 0 2px 6px;
+}
 .model-discover {
   flex: none;
   gap: 7px;
