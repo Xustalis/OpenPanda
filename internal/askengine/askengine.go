@@ -2234,7 +2234,10 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	workDir := scope.WorkDir
 	// Broad reviews require a harness; narrow code questions need actual
 	// source evidence. Follow-ups and side asks obey the same quality gate.
-	repositoryQuestion, deepRepositoryAsk := repositoryRequest(prompt, append(append([]entry.Turn(nil), history...), scope.SideTurns...), workDir != "")
+	// The gate is armed only where the read tool exists: a workspace the breadth
+	// rule refuses registers no workspace tools, so demanding evidence there
+	// would guarantee a dead end rather than a verified answer.
+	repositoryQuestion, deepRepositoryAsk := repositoryRequest(prompt, append(append([]entry.Turn(nil), history...), scope.SideTurns...), workspaceReadable(workDir))
 	if deepRepositoryAsk && repositoryInvestigationReadOnly(prompt) {
 		scope.PermissionMode = defense.ModePlan
 	}
@@ -3422,10 +3425,16 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 		return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error())}, nil
 	}
 	q := core.DefaultQueueSpec()
-	q.Project, _ = e.scopeProject(scope)
+	project, projectDir := e.scopeProject(scope)
+	q.Project = project
+	// A pinned work dir wins. Otherwise the ambient project's tree is the
+	// stage source: core.StartPlan packs it as the plan snapshot, and an empty
+	// value would start every stage from nothing. scopeProject only returns a
+	// directory for the ambient case, so an explicitly named project relies on
+	// StartPlan resolving it — that is not a missing branch.
 	q.WorkDir = scope.WorkDir
-	if q.WorkDir == "" && q.Project != "" {
-		_, q.WorkDir = e.scopeProject(scope)
+	if q.WorkDir == "" {
+		q.WorkDir = projectDir
 	}
 	// A stage has its own task row and spec_json; do not discard the
 	// conversation's roster, read-only mode and delivery contract at the

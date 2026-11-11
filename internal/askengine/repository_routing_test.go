@@ -192,6 +192,105 @@ func TestDeepRepositoryRejectedAnswerNeverStreams(t *testing.T) {
 	}
 }
 
+// A request that both reviews and changes must not be answered in plan mode.
+// "审查…并调整一下" was read as analysis because the verb list only held the
+// unambiguous 修复/修改 family and matched English only; the run then held no
+// write permission, so the change the user asked for silently became advice.
+func TestRepositoryInvestigationReadOnlyKeepsTheChangeHalf(t *testing.T) {
+	for _, prompt := range []string{
+		"审查这个仓库的日志配置并调整一下",
+		"深入分析这个代码库然后把过时的注释清理掉",
+		"全面审查这个仓库并统一日志字段",
+		"审查这个项目，顺手把重复的解析函数合并",
+		"审查这个代码库并重命名不一致的字段",
+		"审计这个项目，然后升级依赖里过期的版本",
+	} {
+		if repositoryInvestigationReadOnly(prompt) {
+			t.Errorf("change request must not run read-only: %q", prompt)
+		}
+	}
+	// The same verbs as nouns stay analysis: no imperative connective, so the
+	// review is of a change that already exists.
+	for _, prompt := range []string{
+		"审查这次的日志调整",
+		"深入分析这个仓库的依赖升级方案",
+		"审查这个仓库上次的配置合并",
+		"Review this repository's logging refactor",
+		"深入分析这个代码库的清理逻辑",
+		// An instruction to report is not an instruction to change: the
+		// connective rule must not read "and explain" as "and edit".
+		"审查这个仓库的架构并说明理由",
+		"深入审查这个项目并列出风险",
+		"审计这个代码库并总结问题",
+		"审查这个仓库并给出改进建议",
+		"Review this repository and summarize the findings",
+		"Analyze this repository and report the risks",
+	} {
+		if !repositoryInvestigationReadOnly(prompt) {
+			t.Errorf("review of an existing change must stay read-only: %q", prompt)
+		}
+	}
+}
+
+// The evidence gate asks a model to open a source file. Where the breadth rule
+// refuses the work dir, no workspace tool is registered, so the gate can only
+// end in "not investigated" no matter what the model answers.
+func TestRefusedWorkspaceDisarmsTheEvidenceGate(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory in this environment")
+	}
+	if workspaceReadable(home) {
+		t.Skipf("home directory is an accepted workspace here: %s", home)
+	}
+	if q, deep := repositoryRequest("深入分析这个代码库并给出问题清单", nil, workspaceReadable(home)); q || deep {
+		t.Fatalf("gate armed without a readable workspace: question=%v deep=%v", q, deep)
+	}
+	root := t.TempDir()
+	if q, deep := repositoryRequest("深入分析这个代码库并给出问题清单", nil, workspaceReadable(root)); !q || !deep {
+		t.Fatalf("readable workspace lost the gate: question=%v deep=%v", q, deep)
+	}
+}
+
+// End to end at the ask boundary: the same prompt that is refused a workspace
+// must return the model's answer. Before the fix it was replaced by the
+// "investigation not completed" notice on every single run.
+func TestRefusedWorkspaceAskDeliversTheAnswer(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory in this environment")
+	}
+	if workspaceReadable(home) {
+		t.Skipf("home directory is an accepted workspace here: %s", home)
+	}
+	var mu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		if strings.Contains(string(body), "workspace_read") {
+			t.Errorf("no workspace tool may be offered for a refused root")
+		}
+		writeAnswer(w, "this workspace cannot be read")
+	}))
+	defer srv.Close()
+	e := newGuardTestEngine(t, srv, entry.NewRegistry(), 200000)
+	res, err := e.AskTurnsScoped(context.Background(), nil, "深入分析这个代码库", AskScope{WorkDir: home}, true, StreamCallbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res == nil || res.Answer != "this workspace cannot be read" {
+		t.Fatalf("answer replaced by the gate: %+v", res)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("calls=%d, want 1: the gate must not re-ask a question it cannot verify", calls)
+	}
+}
+
 func TestRepositoryRequestResolvesFollowupsAndSymbols(t *testing.T) {
 	history := []entry.Turn{{Role: "user", Content: "请分析这个代码库"}, {Role: "assistant", Content: "overview"}}
 	for _, tc := range []struct {
