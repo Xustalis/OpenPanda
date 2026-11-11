@@ -21,12 +21,23 @@ body {
   line-height: var(--leading-normal);
   color: var(--text);
   background: var(--bg);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
+  /* No font-smoothing override on purpose. `antialiased` is a macOS switch
+     that throws away the subpixel weight CoreText gives Hanzi, and on Windows
+     it is inert — the console's CJK is most of its text, so the platform's own
+     rasterisation wins. `optimizeLegibility` is Latin-only theatre: it buys
+     nothing here and pulls CJK through the shaping path for no gain. */
   font-feature-settings: "cv02", "cv03", "cv04", "tnum" 0;
   letter-spacing: -0.011em;
   overflow: hidden;
+}
+
+/* The tracking above is a Latin correction — Segoe UI and SF set a shade wide
+   at 13.5px. Hanzi are drawn to fill their em box, so the same pull-in crowds
+   the strokes together and makes a dense paragraph read as a grey smear. Give
+   CJK back its natural width; the rule cascades to every child. */
+body:lang(zh),
+body:lang(ja) {
+  letter-spacing: normal;
 }
 
 #app {

@@ -568,7 +568,7 @@
    when the node card has pushed that column left. */
 .clarify-dock {
   flex: none;
-  padding: 0 calc(52px + var(--panel-lane)) 0 var(--sp-6);
+  padding: 0 calc(var(--sp-6) + var(--panel-lane)) 0 52px;
   transition: padding-right var(--dur-med) var(--ease-standard);
 }
 
@@ -2696,7 +2696,7 @@ code.md-file:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-raised);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   animation: pair-req-in var(--dur-fast) var(--ease-enter);
 }
 
@@ -3574,7 +3574,7 @@ code.md-file:focus-visible {
   border-radius: var(--radius-xl);
   background: var(--bg);
   color: var(--text);
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
 
@@ -4894,14 +4894,21 @@ code.md-file:focus-visible {
    lenses at the right, one line tall. This replaced a 26px display title over
    a one-line description with a rule under it — a headline for a page whose
    whole job is a board, and a sentence that repeated what the tabs and the
-   four columns already say. */
+   four columns already say.
+   The bar is the card's head, so it carries the same padding as `.chat-head`
+   and no rule under it: a divider would draw a seam across a card that is one
+   surface, and the board below already starts on a fresh line. */
 .control-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: var(--sp-4);
-  padding-bottom: var(--sp-3);
-  border-bottom: 1px solid var(--border-soft);
+  padding: 10px var(--sp-5);
+  /* The bar is the card's own surface in every theme, exactly like the thread
+     header — it is part of the page, not a band laid over it. */
+  background: var(--chat-head);
+  flex: none;
+  position: relative;
+  z-index: 8;
 }
 
 .control-head-icon {
@@ -4923,8 +4930,61 @@ code.md-file:focus-visible {
   margin-left: auto;
 }
 
+/* The card on the shell's canvas — the same frame a thread and the bench get
+   (shell.css paints the gutter). The bar stays put and this body scrolls, so
+   a long board or a list of plans travels under a fixed head instead of
+   dragging the page's name off the top. */
 .control-section {
   min-width: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+}
+
+.control-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+  /* Switching lenses swaps the body under a bar that never moves. Three lenses
+     that look alike used to swap in a single frame, which read as a flicker on
+     a page you were already reading; a short fade makes it legible as a change
+     of view rather than a repaint.
+     Three names, one keyframe: a running animation restarts when its name
+     changes, and that is the only hook a persistent element offers. Remounting
+     the body to replay a single keyframe would refetch the board and drop the
+     reader's project and device filters — a worse trade than this duplication. */
+  animation: lens-queue var(--dur-fast) var(--ease);
+}
+
+.control-body[data-tab='plans'] {
+  animation-name: lens-plans;
+}
+
+.control-body[data-tab='projects'] {
+  animation-name: lens-projects;
+}
+
+@keyframes lens-queue {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes lens-plans {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes lens-projects {
+  from {
+    opacity: 0;
+  }
 }
 
 .control-tabs .seg {
@@ -4932,6 +4992,28 @@ code.md-file:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 6px;
+}
+
+/* A phone cannot hold the page's name and its three lenses on one line inside
+   the card's padding. The lenses drop to their own row and stretch: the tab
+   strip is the page's only navigation, so it keeps its labels and becomes the
+   easier target rather than running off the rounded edge. */
+@media (max-width: 520px) {
+  .control-head {
+    flex-wrap: wrap;
+    row-gap: var(--sp-2);
+    padding: 10px var(--sp-4);
+  }
+  .control-tabs {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+  .control-tabs .seg {
+    flex: 1;
+  }
+  .control-body {
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  }
 }
 
 /* ---- Task kanban (queue view, design §11.2) ---- */
@@ -5167,7 +5249,7 @@ code.md-file:focus-visible {
 
 .kanban-card:hover {
   border-color: var(--accent-2-border);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-sm);
   transform: translateY(-1px);
 }
 
@@ -5187,7 +5269,7 @@ code.md-file:focus-visible {
   outline: 2px solid var(--accent-2);
   outline-offset: 2px;
   border-color: var(--accent-2-border);
-  box-shadow: var(--shadow-md), var(--shadow-glow-2);
+  box-shadow: var(--shadow-sm), var(--shadow-glow-2);
 }
 
 .kanban-card.finished {
@@ -6129,7 +6211,7 @@ code.md-file:focus-visible {
   border-radius: var(--radius-xl);
   background: var(--bg);
   color: var(--text);
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
 .settings-dialog[open] {
@@ -7532,8 +7614,6 @@ code.md-file:focus-visible {
 body {
   transition: background-color var(--dur-slow) var(--ease-standard),
               color var(--dur-slow) var(--ease-standard);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
 }
 
 ::selection {
@@ -7719,7 +7799,7 @@ pre,
   flex-direction: column;
   padding: var(--sp-4);
   gap: var(--sp-3);
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-lg);
 }
 
 .dir-browser-header {
@@ -8143,7 +8223,7 @@ pre,
   /* Transparent by design: a white plate behind a transparent PNG breaks
      the dark overlay and stays white when the console switches themes. */
   background: transparent;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.34);
 }
 
 .img-lightbox-bar {
@@ -11652,7 +11732,7 @@ main .pipeline-chip {
    controls read in a clear order instead of one continuous list. */
 .settings-dialog {
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-lg);
 }
 .settings-rail {
   gap: 14px;

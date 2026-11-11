@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Embedded into panda.exe / panda-webui.exe as RT_MANIFEST by the
+  rsrc_windows_*.syso objects next to each main package (regenerate with
+  `make winres`).
+
+  The dpiAware/dpiAwareness pair is the reason this file exists. Go links no
+  manifest by default, so Windows classified the process as DPI-unaware and
+  painted every native window at 96 DPI before stretching the bitmap to the
+  display scale. The folder chooser webui/panel raises through IFileDialog came
+  out visibly soft on a 150% display for exactly that reason; a process that
+  declares per-monitor awareness gets the shell's own DPI-correct rendering.
+
+  Both keys are required. dpiAwareness is what Windows 10 1703+ reads; dpiAware
+  is what Windows 7/8.1 reads, and newer builds ignore it. `true/pm` is the
+  per-monitor value those older builds understand.
+
+  asInvoker keeps the elevation behaviour Go has without a manifest: the
+  process never asks for administrator rights, so an install under %LOCALAPPDATA%
+  still starts without a UAC prompt.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="Xustalis.OpenPanda" version="1.0.0.0" processorArchitecture="*"/>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and Windows 11. Without it the shim engine applies
+           compatibility defaults meant for pre-Vista software. -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>

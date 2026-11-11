@@ -76,7 +76,7 @@
   align-items: center;
   gap: 6px;
   padding: 0 10px;
-  height: 56px;
+  height: var(--dock-head-h, 56px);
   border-bottom: 1px solid var(--border-soft);
 }
 .dock-new,
@@ -171,6 +171,34 @@
   box-shadow: none;
   animation: none;
 }
+/* ---- The picked task, beside the dock, not inside it ----------------------
+   The detail card used to grow the column: a click on a chip put a full-width
+   card *under* the strips, so the list scrolled up to make room and the task
+   was then read in the same 380px a second time, below the list it was picked
+   from. It is portalled into `.chat` instead (see `orchestrate.tsx`) and
+   pinned to the left of the dock, level with the list that opened it: the list
+   never moves, and the transcript gives up its right edge for as long as the
+   card is up.
+
+   Pure CSS, nothing measured: `--dock-w` is already on `.chat` (sessions.tsx
+   writes it there for the grid track) and `--dock-head-h` with it, so dragging
+   the seam takes the card along and the top stays on the task list's first
+   pixel — the head, plus the inline page's 12px padding. */
+.orch-orch-card.is-float {
+  position: absolute;
+  /* Above the transcript, below every menu and popover the pane opens (20/30):
+     a task being read must not cover the control the reader just pressed. */
+  z-index: 24;
+  top: var(--dock-body-top, 69px);
+  /* The dock's track plus the gutter, so the card's right edge lands on the
+     reading pane's: a layer of the pane, not a third column wedged between
+     the two cards. */
+  right: calc(var(--dock-w, 380px) + 10px);
+  width: min(420px, calc(100% - var(--dock-w, 380px) - 22px));
+  /* The bottom edge stops where the pane does — the card scrolls, the page
+     behind it does not. */
+  max-height: calc(100% - var(--dock-body-top, 69px) - 10px);
+}
 /* The export page: the same Markdown the下载 button writes, shown before the
    reader commits to a file. One scrollable reading surface plus a foot action. */
 .dock-export {
@@ -229,6 +257,12 @@
    with a hairline edge reads as a button rather than as a fourth tab; the
    tabs' well is the only sunken surface in the row. */
 .dock-head .icon-btn.dock-new {
+  /* The 12px resize grip spans the whole card at z-index 3, and the head's
+     10px padding put the first 2px of this button underneath it. A click on
+     that edge started a drag instead of opening a new conversation. Lift just
+     this button above the grip; the rest of the seam stays draggable. */
+  position: relative;
+  z-index: 4;
   box-sizing: border-box;
   color: var(--text-secondary);
   background: var(--bg-raised);
@@ -428,62 +462,77 @@
   flex-direction: column;
 }
 
-/* The history of this thread's side conversations: one collapsed bar above the
-   transcript, expanded into a list. It is a list rather than a popover because
-   the dock is a narrow column — a floating menu would clip against its edge,
-   and the rows are the point, not a detail behind a menu. */
-.side-history {
-  flex: none;
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-inset);
+/* The history, on request. A second click on the dock's 对话 tab opens this
+   popover over the transcript; it is not a permanent bar, because the list is
+   usually one item and the pane's vertical space belongs to the conversation.
+   Floating also leaves the transcript's height and scroll position untouched
+   when the list opens. */
+.side-chat {
+  position: relative;
 }
-.side-history-head {
+.side-history-pop {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  right: 8px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  max-height: min(360px, 72%);
+  padding: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+.side-history-pop-head {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
-  padding: 6px 12px;
-  background: none;
-  border: 0;
-  color: var(--text-secondary);
+  padding: 4px 4px 6px 6px;
+  color: var(--text-tertiary);
   font-size: var(--text-xs);
-  cursor: pointer;
-}
-.side-history-head:hover,
-.side-history-head:focus-visible {
-  color: var(--text);
-}
-.side-history-label {
   font-weight: 600;
-  letter-spacing: 0.01em;
 }
 .side-history-count {
   color: var(--text-tertiary);
   font-size: 10px;
-  line-height: 15px;
-  padding: 0 5px;
+  font-weight: 400;
+  line-height: 16px;
+  padding: 0 6px;
   border-radius: 999px;
-  border: 1px solid var(--border-soft);
   background: var(--surface-alpha-sm);
 }
-.side-history-caret {
+.side-history-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
   margin-left: auto;
-  transition: transform var(--dur-fast) var(--ease-enter);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
 }
-.side-history.is-open .side-history-caret {
-  transform: rotate(180deg);
+.side-history-close:hover {
+  background: var(--surface-alpha-sm);
+  color: var(--text);
 }
 .side-history-list {
-  max-height: 180px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 0 8px 6px;
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 .side-history-empty {
   margin: 0;
-  padding: 4px 4px 8px;
+  padding: 6px 6px 10px;
   color: var(--text-tertiary);
   font-size: var(--text-xs);
   line-height: 1.5;
@@ -563,7 +612,8 @@
   border-bottom: 1px solid var(--border-soft);
   min-height: 40px;
 }
-.df-up {
+.df-up,
+.df-root {
   flex: none;
 }
 .df-cwd {
@@ -1057,7 +1107,7 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-overlay);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
   overflow: hidden;
 }
 .df-lightbox-head {
@@ -1342,15 +1392,35 @@
   color: var(--text-secondary);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 5px;
 }
-.side-empty svg {
+.side-empty-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 5px;
+  border-radius: 10px;
+  background: var(--surface-alpha-sm);
   color: var(--text-tertiary);
 }
 .side-empty p {
   margin: 0;
+}
+/* One lead sentence, then the caveats in smaller type. Four paragraphs at the
+   same size made the empty pane read as a wall of instructions floating in a
+   column of whitespace. */
+.side-empty-lead {
+  color: var(--text);
   font-size: var(--text-sm);
-  line-height: 1.6;
+  font-weight: 600;
+  line-height: 1.55;
+}
+.side-empty-note {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 /* Two voices, told apart by position and shape before any label is read:
    your turn is a bubble hugging the right edge, the panda's is a face plus
@@ -1498,26 +1568,30 @@
 .side-starters {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 2px;
+  gap: 5px;
+  width: 100%;
+  margin-top: 12px;
 }
-.side-starters > span {
+.side-starters-label {
+  color: var(--text-tertiary);
   font-size: var(--text-xs);
 }
 .side-starter {
   text-align: left;
-  padding: 7px 9px;
+  padding: 7px 10px;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm, 6px);
-  background: transparent;
+  border-radius: var(--radius-md);
+  background: var(--bg);
   color: var(--text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   line-height: 1.5;
   cursor: pointer;
+  transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .side-starter:hover {
   background: var(--bg-inset);
-  color: var(--text-primary);
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 .side-error {
   display: flex;
@@ -1576,10 +1650,9 @@ button.side-task:hover {
 }
 /* The side conversation's composer. The dock is already a bordered card, so a
    bordered `<textarea class="input">` inside another rounded card drew two
-   thick outlines around one line of text, with a square button stranded beside
-   it. One quiet surface at the foot of the pane: the field and Send share its
-   edge, the field grows from a single line, and neither focus nor an empty
-   input adds another box. */
+   thick outlines around one line of text. One quiet surface at the foot of the
+   pane: the field, the model switch and Send share its edge; the field grows
+   from a single line, and neither focus nor an empty input adds another box. */
 .side-compose {
   flex: none;
   /* No divider: the box's own edge is the boundary. A hairline above it made
@@ -1588,9 +1661,10 @@ button.side-task:hover {
 }
 .side-compose-box {
   display: flex;
-  align-items: flex-end;
-  gap: 6px;
-  padding: 5px 5px 5px 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px 6px 6px 12px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-xl);
   background: var(--bg-raised);
@@ -1605,11 +1679,13 @@ button.side-task:hover {
   border-color: var(--border-strong);
 }
 .side-input {
-  flex: 1;
+  /* flex: 1 would let the field eat the box's height now that the box is a
+     column; fitInput() owns the height instead. */
+  flex: none;
+  width: 100%;
   min-width: 0;
-  /* One line at rest: 20px of text in a 32px field, so the first line and the
-     32px Send button share a centre. fitInput() grows it to 120px; no resize
-     grip, because the box is the field. */
+  /* One line at rest, growing to 120px; no resize grip, the box is the field
+     and the actions row sits under it on a second line. */
   min-height: 32px;
   max-height: 120px;
   padding: 6px 0;
@@ -1634,11 +1710,35 @@ button.side-task:hover {
 .side-input:focus-visible {
   box-shadow: none;
 }
-/* Send and Stop share one 32px slot at the field's bottom-right corner. An
-   enabled Send is the one saturated object in the dock; an empty field leaves
-   a quiet outline instead of a greyed-out button that still reads clickable. */
+/* The model switch and Send share a 32px row under the field — the same pair
+   the main composer keeps, scaled to a 320px column. The switch owns the
+   left, Send the right; a long alias is cut rather than pushing Send out. */
+.side-compose-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+}
+/* chat.css pushes the switch to the far right of the main composer's row;
+   here it is the row's left anchor instead. */
+.side-compose-actions .model-select {
+  margin-left: 0;
+  flex: 1;
+  min-width: 0;
+}
+.side-compose-actions .model-select-btn {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.side-compose-actions .model-select-name {
+  max-width: 12em;
+}
+/* Send and Stop share one 32px slot at the row's right edge. An enabled Send
+   is the one saturated object in the dock; an empty field leaves a quiet
+   outline instead of a greyed-out button that still reads clickable. */
 .side-compose-box .side-send {
   flex: none;
+  margin-left: auto;
   width: 32px;
   height: 32px;
   padding: 0;
@@ -1664,6 +1764,7 @@ button.side-task:hover {
 }
 .side-compose-box .side-stop {
   flex: none;
+  margin-left: auto;
   height: 32px;
   border-radius: var(--radius-md);
   background: var(--accent-soft);
@@ -1698,7 +1799,7 @@ button.side-task:hover {
     z-index: 30;
     /* A layer needs an edge: without the shadow the page behind reads as a
        broken layout rather than a panel on top of it. */
-    box-shadow: -18px 0 40px -18px rgb(0 0 0 / 28%), var(--shadow-xl);
+    box-shadow: -14px 0 32px -18px rgb(0 0 0 / 18%), var(--shadow-lg);
   }
   /* And the page behind has to recede, or "on top" is indistinguishable from
      "next to" — the same two white cards, now with their corners crossing. */
@@ -1710,5 +1811,15 @@ button.side-task:hover {
     border-radius: var(--radius-xl);
     background: rgb(12 14 16 / 14%);
     pointer-events: none;
+  }
+  /* There is no track to sit beside here — the dock is a layer — so the task
+     card takes the layer's place at the layer's width, one step above it. The
+     10px is the layer's own inset: its body starts that much lower than the
+     pane's, and the card keeps the list's first line. */
+  .orch-orch-card.is-float {
+    top: calc(var(--dock-body-top, 69px) + 10px);
+    right: 10px;
+    width: min(420px, calc(100% - 20px));
+    z-index: 31;
   }
 }
