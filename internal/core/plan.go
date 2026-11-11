@@ -248,6 +248,12 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 	// Fail before creating any rows if the requested source cannot be shipped;
 	// silently running against an empty tree would certify fictitious work.
 	var source []bus.ArtifactRef
+	// partial records a readable-but-incomplete snapshot: the same lenient pack
+	// backs a single task, where a skipped entry becomes context_degraded and
+	// the run continues. Refusing the plan instead made one locked directory
+	// the difference between a project that runs as a task and one that cannot
+	// start a plan at all.
+	var partial []string
 	if q.WorkDir == "" && q.Project != "" {
 		q.WorkDir = c.projectDir(q.Project)
 		if q.WorkDir == "" {
@@ -265,8 +271,18 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		if err != nil {
 			return "", fmt.Errorf("pack plan source workspace: %w", err)
 		}
-		if len(m.PackSkipped) != 0 {
-			return "", fmt.Errorf("plan source workspace snapshot incomplete: %v", m.PackSkipped)
+		// A snapshot smaller than the workspace is a lie the stage cannot see:
+		// it extracts what arrived and believes it is the source. So a pack that
+		// dropped entries and shipped nothing is refused. An empty directory is
+		// not that case — nothing was withheld, and a plan for a project that
+		// has no files yet is an ordinary request, so it starts with an empty
+		// snapshot rather than a made-up one.
+		if len(m.Entries) == 0 && len(m.PackSkipped) != 0 {
+			return "", fmt.Errorf("plan source workspace %s has no readable entry (skipped %v)", q.WorkDir, m.PackSkipped)
+		}
+		partial = m.PackSkipped
+		if len(partial) != 0 {
+			c.logger.Warn("plan: source snapshot is partial", "dir", q.WorkDir, "skipped", partial)
 		}
 		source = []bus.ArtifactRef{{Stage: worktreeArtifactStage, Hash: m.Hash, Source: c.nodeID}}
 	}
@@ -353,6 +369,17 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			if err := c.store.SetStageInputs(ctx, t.TaskID, source); err != nil {
 				abandon()
 				return "", fmt.Errorf("source input for stage %s: %w", st.ID, err)
+			}
+		}
+		// The snapshot is shared by every stage, so each one carries the same
+		// note: its input tree is intact but smaller than the workspace. The
+		// naming matches notePackSkipped's, so both pack paths read the same
+		// way on the audit trail.
+		if len(partial) > 0 {
+			if err := c.store.RecordEvent(ctx, t.TaskID, EvContextDegraded, map[string]any{
+				"stage": "plan_source_partial", "dir": q.WorkDir, "skipped": partial,
+			}); err != nil {
+				c.logger.Debug("record partial plan source event", "task", t.TaskID, "err", err)
 			}
 		}
 		// — Trace: the entry model classified this sentence as a plan, one
