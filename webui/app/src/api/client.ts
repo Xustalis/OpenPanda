@@ -4,6 +4,10 @@
 // localStorage (entered once at the token gate); a 401 clears it and fires
 // `unauthorized` so the app shell can drop back to the gate.
 
+// Explicit path and extension: this module is loaded by `node --test` too,
+// which resolves neither a directory import nor an extensionless one.
+import { locale } from '../i18n/index.ts'
+
 const TOKEN_KEY = 'openpanda.token'
 
 export class ApiError extends Error {
@@ -2868,6 +2872,10 @@ export async function askSessionStream(
       agents,
       permission_mode: permissionMode || undefined,
       resume_queued: resumeQueued || undefined,
+      // Server-written prose for this round (its closing summary) is read
+      // back here, so the round records the console's language instead of
+      // the engine's.
+      locale: locale(),
     },
     signal,
     onEvent: (event, data) => dispatchAskEvent(event, data, h),
@@ -2973,7 +2981,14 @@ export async function askSideStream(
 ): Promise<void> {
   await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
     method: 'POST',
-    body: { prompt, authorize: false, side: true, side_chat: opts.chat ?? '', side_new: !!opts.fresh },
+    body: {
+      prompt,
+      authorize: false,
+      side: true,
+      side_chat: opts.chat ?? '',
+      side_new: !!opts.fresh,
+      locale: locale(),
+    },
     signal,
     onEvent: (event, data) => dispatchAskEvent(event, data, h),
   })

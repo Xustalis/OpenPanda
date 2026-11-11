@@ -190,7 +190,7 @@ option for option: `-Version` / `-Prefix` / `-Yes` / `-NoService` /
 ## 4. From source / Go
 
 ```bash
-# Source build (requires Go 1.26.10+; run `make web` first to embed the Web console)
+# Source build (requires Go 1.26.11+; run `make web` first to embed the Web console)
 make build            # → bin/panda
 go install github.com/Xustalis/OpenPanda/cmd/panda@latest
 ```
