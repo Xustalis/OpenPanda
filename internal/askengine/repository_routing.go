@@ -40,13 +40,42 @@ func repositoryInvestigationReadOnly(prompt string) bool {
 	// combined execution wins; this fallback is not a substitute for the
 	// structured task_kind contract.
 	if hasAnyPhrase(s, "建议", "方案", "计划", "如何", "recommend", "proposal", "how to") &&
-		!hasAnyPhrase(s, "并修复", "并修改", "并重构", "并实现", "直接修复", "直接修改", "and fix", "and edit", "and implement") {
+		!hasMixedExecution(s) {
 		return true
 	}
-	return !hasAnyPhrase(s, "修复", "修改", "重构", "并实现", "优化", "改进", "编写", "新增", "删除", "编辑", "开发") && !repositoryEditWords.MatchString(s)
+	// The default is read-only: a deep investigation with no change verb is an
+	// investigation, and this is the direction that fails safe — a missed edit
+	// verb costs a follow-up turn, while a false "edit" hands write permission
+	// to a thread that only asked for a review.
+	return !hasAnyPhrase(s, editIntentPhrases...) && !editFollowUpRe.MatchString(s) && !repositoryEditWords.MatchString(s)
 }
 
-var repositoryEditWords = regexp.MustCompile(`\b(?:fix|edit|refactor|implement|improve|optimize)\b`)
+// editIntentPhrases name a change with no plausible noun reading. The
+// ambiguous verbs — 调整, 清理, 升级, 迁移, 合并 — are handled by
+// editFollowUpRe instead: "审查这次的配置调整" is a review of a change, while
+// "审查…并调整" is the change itself.
+var editIntentPhrases = []string{
+	"修复", "修改", "改动", "重构", "并实现", "优化", "改进", "编写", "新增", "删除", "编辑", "开发",
+	"重命名", "替换成", "替换掉", "清理掉", "拆分", "改写", "精简", "补齐", "去掉", "改成", "改为",
+	"调整成", "调整为", "调整一下",
+}
+
+// editFollowUpRe catches an instruction joined to the investigation by an
+// imperative connective. Keeping it separate is what stops a bare noun from
+// reading as permission to write.
+var editFollowUpRe = regexp.MustCompile(`(?:并|然后|再|顺手|顺便|同时)[^。;；\n]{0,12}?(?:调整|清理|升级|迁移|合并|统一|替换|拆分|改写|重命名|删|改|抽成|拆出|内联|补上|加上)`)
+
+// hasMixedExecution reports an explicitly combined "analyse and then change"
+// request, which keeps its change half.
+func hasMixedExecution(s string) bool {
+	return hasAnyPhrase(s, "并修复", "并修改", "并重构", "并实现", "直接修复", "直接修改", "and fix", "and edit", "and implement")
+}
+
+// repositoryEditWords holds the English side of the same rule: a change verb
+// counts only where English puts an instruction — after a connective or a
+// politeness marker, or directly governing an object. A bare verb is as likely
+// to be the noun in "review this repository's logging refactor".
+var repositoryEditWords = regexp.MustCompile(`(?:\b(?:please|and|then|also|now|next|first|just)\s+)(?:fix|edit|refactor|implement|improve|optimize|change|update|rename|remove|delete)\b|\b(?:fix|refactor|implement|rename|remove|delete|rewrite|replace|add|edit)\s+(?:the|this|that|these|those|it|them|all|any|every)\b`)
 
 func hasAnyPhrase(s string, phrases ...string) bool {
 	for _, p := range phrases {
@@ -66,6 +95,16 @@ func investigationRouteReminder(loc i18n.Locale) string {
 
 func incompleteInvestigationNotice(loc i18n.Locale) string {
 	return i18n.T(loc, "ask.investigation.incomplete")
+}
+
+// workspaceReadable reports whether this ask can actually read its workspace.
+// The evidence guard asks a model to open a source file, so it may only be
+// armed where that is possible: a refused root (a home directory, a volume
+// root) registers no workspace tools at all, and "not read yet" could then
+// never become "read" — the ask would end in a refusal with no way forward.
+func workspaceReadable(workDir string) bool {
+	_, ok := workspaceRoot(workDir)
+	return ok
 }
 
 // repositoryRequest uses the current turn's intent and bounded user history
