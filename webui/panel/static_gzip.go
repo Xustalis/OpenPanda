@@ -71,11 +71,12 @@ func gzipAssets(fsys fs.FS) http.Handler {
 // ask for it.
 func (g *gzHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Vary", "Accept-Encoding")
+	p := r.URL.Path
+	if p == "" || p == "/" {
+		p = "/index.html"
+	}
+	setAssetCache(w, p)
 	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-		p := r.URL.Path
-		if p == "" || p == "/" {
-			p = "/index.html"
-		}
 		if e, ok := g.gz[p]; ok {
 			if e.mime != "" {
 				w.Header().Set("Content-Type", e.mime)
@@ -86,6 +87,21 @@ func (g *gzHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	g.srv.ServeHTTP(w, r)
+}
+
+// setAssetCache pins the cache policy the build already implies. The HTML
+// entry point is revalidated on every load: a cached index.html points at
+// bundle names the new binary no longer ships, and the console keeps painting
+// the old UI after a rebuild — indistinguishable from "the build did not
+// run". The content-hashed files under /assets/ never change for a given
+// name, so they can be cached for as long as the browser likes.
+func setAssetCache(w http.ResponseWriter, p string) {
+	switch {
+	case strings.HasPrefix(p, "/assets/"):
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	case strings.HasSuffix(p, ".html"):
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 }
 
 // compressibleAsset picks the files worth a gzip copy: textual formats,

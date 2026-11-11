@@ -108,7 +108,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force    # 强制降级�
 ## 4. 从源码 / Go
 
 ```bash
-# 源码构建（需要 Go 1.26.10+；先 make web 以嵌入 Web 控制台）
+# 源码构建（需要 Go 1.26.11+；先 make web 以嵌入 Web 控制台）
 make build            # → bin/panda
 go install github.com/Xustalis/OpenPanda/cmd/panda@latest
 ```
