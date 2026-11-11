@@ -1005,7 +1005,7 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 		// A machine-readable explanation for recovery diagnostics, including
 		// skipped retries. No stderr/endpoint/credential is persisted here.
 		if result.AttemptID == "" || final.AttemptID == result.AttemptID {
-			_ = c.store.RecordEvent(ctx, taskID, "recovery_assessment", map[string]any{
+			_ = c.store.RecordEvent(ctx, taskID, EvRecoveryAssessment, map[string]any{
 				"attempt_id": result.AttemptID, "node": c.nodeID, "assessment": assessRecovery(result),
 			})
 		}
