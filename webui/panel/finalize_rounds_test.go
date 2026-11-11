@@ -52,6 +52,7 @@ func TestRoundSummarySeparatesOverlappingDispatches(t *testing.T) {
 	a := addRoundTask(t, f, "round-a", "first task")
 	b := addRoundTask(t, f, "round-a", "second task")
 	c := addRoundTask(t, f, "round-b", "unrelated task")
+	d := addRoundTask(t, f, "round-b", "another unrelated task")
 	if err := f.h.store.Cancel(ctx, a.TaskID); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +70,12 @@ func TestRoundSummarySeparatesOverlappingDispatches(t *testing.T) {
 	turns := roundTurns(t, f)
 	if len(turns) != 1 || turns[0].RoundID != "round-a" || !strings.Contains(turns[0].Text, "2 个任务") || strings.Contains(turns[0].Text, c.TaskID) {
 		t.Fatalf("wrong round: %+v", turns)
+	}
+	// The bullets carry a readable state word and the job's own title; the
+	// task id stays out of the transcript (a uuid is not a thing a person
+	// reads, and the card is the link).
+	if !strings.Contains(turns[0].Text, "- 已取消 · first task") || strings.Contains(turns[0].Text, "[cancelled]") {
+		t.Fatalf("unreadable round bullets: %q", turns[0].Text)
 	}
 	// New handler/store simulates restart, then concurrent sweeps stay idempotent.
 	f.h = &handler{store: core.NewTaskStore(f.db, nil), sessions: sessions.NewStore(f.root)}
@@ -91,6 +98,9 @@ func TestRoundSummarySeparatesOverlappingDispatches(t *testing.T) {
 	if err := f.h.store.Cancel(ctx, c.TaskID); err != nil {
 		t.Fatal(err)
 	}
+	if err := f.h.store.Cancel(ctx, d.TaskID); err != nil {
+		t.Fatal(err)
+	}
 	f.h.finalizeAskRounds(ctx)
 	turns = roundTurns(t, f)
 	if len(turns) != 2 || !strings.Contains(turns[1].Text, "不代表已取消排队任务") {
@@ -98,33 +108,67 @@ func TestRoundSummarySeparatesOverlappingDispatches(t *testing.T) {
 	}
 }
 
-func TestRoundSummaryReportsReviewAndLaterResolution(t *testing.T) {
+// A round that handed out one job has nothing to add: the job's own report is
+// already in the thread, and a second turn restating its title and outcome
+// reads like a log line between two chat messages. The round is still marked
+// reported so the sweep stops re-reading it.
+func TestRoundSummarySkipsSingleTaskRound(t *testing.T) {
 	f := newSummaryDeliveryFixture(t, false)
 	ctx := context.Background()
-	if err := f.h.store.BeginAskRound(ctx, "round-review", f.sessionID, "en"); err != nil {
+	if err := f.h.store.BeginAskRound(ctx, "round-one", f.sessionID, "zh-CN"); err != nil {
 		t.Fatal(err)
 	}
-	a := addRoundTask(t, f, "round-review", "needs human")
+	a := addRoundTask(t, f, "round-one", "the only job")
+	if err := f.h.store.Cancel(ctx, a.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.h.store.CloseAskRound(ctx, "round-one", "closed"); err != nil {
+		t.Fatal(err)
+	}
+	f.h.finalizeAskRounds(ctx)
+	if turns := roundTurns(t, f); len(turns) != 0 {
+		t.Fatalf("single-task round was summarized: %+v", turns)
+	}
+	rounds, err := f.h.store.SettledAskRounds(ctx)
+	if err != nil || len(rounds) != 0 {
+		t.Fatalf("skipped round not acknowledged: %+v %v", rounds, err)
+	}
+}
+
+// A review is a wait for a human, not an outcome: the round is not over while
+// a decision is outstanding, so the transcript must not announce "1 need
+// review" as a result and then announce the same round again once it is
+// resolved.
+func TestRoundSummaryWaitsForReviewResolution(t *testing.T) {
+	f := newSummaryDeliveryFixture(t, false)
+	ctx := context.Background()
+	if err := f.h.store.BeginAskRound(ctx, "round-review", f.sessionID, "zh-CN"); err != nil {
+		t.Fatal(err)
+	}
+	a := addRoundTask(t, f, "round-review", "finished job")
+	b := addRoundTask(t, f, "round-review", "needs human")
+	if err := f.h.store.Cancel(ctx, a.TaskID); err != nil {
+		t.Fatal(err)
+	}
 	// Simulate executor settlement; task lifecycle legality is covered by core tests.
-	if _, err := f.db.Exec(`UPDATE tasks SET state=?,state_version=state_version+1 WHERE task_id=?`, core.StateReview, a.TaskID); err != nil {
+	if _, err := f.db.Exec(`UPDATE tasks SET state=?,state_version=state_version+1 WHERE task_id=?`, core.StateReview, b.TaskID); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.h.store.CloseAskRound(ctx, "round-review", "closed"); err != nil {
 		t.Fatal(err)
 	}
 	f.h.finalizeAskRounds(ctx)
-	turns := roundTurns(t, f)
-	if len(turns) != 1 || !strings.Contains(turns[0].Text, "1 need review") {
-		t.Fatalf("review missing: %+v", turns)
+	if turns := roundTurns(t, f); len(turns) != 0 {
+		t.Fatalf("parked review reported as a result: %+v", turns)
 	}
-	if _, err := f.db.Exec(`UPDATE tasks SET state=?,attempt_id='retried-attempt',state_version=state_version+1 WHERE task_id=?`, core.StateDone, a.TaskID); err != nil {
+	if _, err := f.db.Exec(`UPDATE tasks SET state=?,attempt_id='retried-attempt',state_version=state_version+1 WHERE task_id=?`, core.StateDone, b.TaskID); err != nil {
 		t.Fatal(err)
 	}
 	f.h.finalizeAskRounds(ctx)
 	f.h.finalizeAskRounds(ctx)
-	turns = roundTurns(t, f)
-	if len(turns) != 2 || !strings.Contains(turns[1].Text, "1 completed") || turns[0].IdempotencyKey == turns[1].IdempotencyKey {
-		t.Fatalf("resolution suppressed: %+v", turns)
+	turns := roundTurns(t, f)
+	if len(turns) != 1 || !strings.Contains(turns[0].Text, "2 个任务") || !strings.Contains(turns[0].Text, "- 完成 · needs human") {
+		t.Fatalf("resolved round not reported once: %+v", turns)
 	}
 }
 
@@ -135,7 +179,11 @@ func TestRoundSummaryRecoversExpiredObserverAndMarkerFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := addRoundTask(t, f, "abandoned", "orphaned request")
+	b := addRoundTask(t, f, "abandoned", "second orphan")
 	if err := f.h.store.Cancel(ctx, a.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.h.store.Cancel(ctx, b.TaskID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.db.Exec(`UPDATE ask_rounds SET lease_until=0 WHERE round_id='abandoned'`); err != nil {
@@ -188,7 +236,11 @@ func TestRoundSummaryRetriesTranscriptFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := addRoundTask(t, f, "transcript-fault", "finished job")
+	other := addRoundTask(t, f, "transcript-fault", "another job")
 	if err := f.h.store.Cancel(ctx, task.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.h.store.Cancel(ctx, other.TaskID); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.h.store.CloseAskRound(ctx, "transcript-fault", "closed"); err != nil {

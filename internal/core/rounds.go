@@ -75,6 +75,12 @@ func (s *TaskStore) attachAskRoundTx(ctx context.Context, tx *sql.Tx, taskID str
 // SettledAskRounds also reclaims abandoned dispatches by lease. It never
 // declares a still-running task cancelled and never merges unrelated asks
 // solely because they share a session.
+//
+// A review-parked task is not settled: a human still owes it a decision, so
+// the round has no outcome to report yet. Reporting it here is what made the
+// transcript announce "1 need review" as a result, and then announce the same
+// round again once the review was resolved. The task card and the queue
+// already say a task is waiting; the round speaks when it is over.
 func (s *TaskStore) SettledAskRounds(ctx context.Context) ([]AskRound, error) {
 	if _, err := s.db.ExecContext(ctx, `UPDATE ask_rounds SET status='interrupted', closed_at=? WHERE status='open' AND lease_until<?`, s.now(), s.now()); err != nil {
 		return nil, err
@@ -82,7 +88,7 @@ func (s *TaskStore) SettledAskRounds(ctx context.Context) ([]AskRound, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT round_id,session_id,locale,status,created_at FROM ask_rounds r
   WHERE status!='open' AND reported_version != (`+askRoundVersionSQL+`) AND EXISTS(SELECT 1 FROM ask_round_tasks m WHERE m.round_id=r.round_id)
   AND NOT EXISTS(SELECT 1 FROM ask_round_tasks m JOIN tasks t ON t.task_id=m.task_id
-   WHERE m.round_id=r.round_id AND t.state NOT IN (?,?,?,?,?)) ORDER BY r.created_at,r.round_id`, StateDone, StateFailed, StateCancelled, StateExpired, StateReview)
+   WHERE m.round_id=r.round_id AND t.state NOT IN (?,?,?,?)) ORDER BY r.created_at,r.round_id`, StateDone, StateFailed, StateCancelled, StateExpired)
 	if err != nil {
 		return nil, err
 	}
