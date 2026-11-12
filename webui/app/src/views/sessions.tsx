@@ -2657,17 +2657,17 @@ export function SessionsView({
   // 也不留（没有栏可折）。线程一存在就恢复原样：栏、栏的按钮、它记住的那一页。
   const dockShown = dockOpen && !newChatPage
 
-  // The overview card is furniture, not a preference: a thread that is open
-  // always has one, the way it always has a composer. It costs the transcript
-  // nothing (the card floats, it takes no lane) and it is the only place that
-  // answers "what changed / how full / what is running" without a scroll.
-  // The new-chat page has no thread to summarize, so it gets none.
+  // The overview is furniture, not a preference: a thread that is open always
+  // has one, the way it always has a composer. It lives in the pane head now,
+  // so its resting state costs the transcript nothing; only the panel the
+  // reader opens borrows a lane. The new-chat page has no thread to summarize,
+  // so it gets none.
   //
-  // It steps aside for the side panel: the dock is the same corner answering
-  // the same question in full, and once it is open the pane has already given
-  // up 380px — a second card on top of the remainder would leave the
-  // transcript a strip. `showRail` still gates the task read below, so folding
-  // the card never silences the live employee row in the thread.
+  // It steps aside for the side panel: the dock is the same information in
+  // full, and once it is open the pane has already given up 380px — a second
+  // panel on top of the remainder would leave the transcript a strip.
+  // `showRail` still gates the task read below, so folding the overview never
+  // silences the live employee row in the thread.
   const showRail = !newChatPage
 
   // "Context used" is the last request's billed total: the prompt the thread
@@ -2845,11 +2845,14 @@ export function SessionsView({
               ± {diff.changes.length} {t('sessions.changes')}
             </button>
           )}
-          {/* 头部只留一个控件。线程里它是右侧栏的门 —— 导出、节点和编排卡都搬进了
-              栏的头部，所以这条 bar 只剩标题与一个入口。新对话页反过来：那一页没有
-              栏（见 dockShown），而这一页唯一要答的问题是"在哪台机器上跑"，所以这里
-              站的是节点按钮本身 —— 设备不再锁在栏的工具页后面，也没有一个点了会打开
-              空栏的折叠按钮。选中的节点由 nodePref 带着，线程一开就跟上去。 */}
+          {/* 头部右侧两件东西：侧栏的门，以及会话概览的一行摘要（点开成面板，
+              暂时向正文借一条 lane）。概览必须是最右的一件：面板贴着触发按钮
+              的右缘向下展开，只有它顶到头部右边界，`--panel-lane` 让出的宽度
+              才正好等于面板占的宽度。导出、节点和编排卡都搬进了栏的头部，所以
+              这条 bar 不再重复它们。新对话页反过来：那一页没有栏，也没有线程
+              可概览，唯一要答的问题是"在哪台机器上跑"，所以这里站的是节点按钮
+              本身 —— 设备不再锁在栏的工具页后面，也没有一个点了会打开空栏的
+              折叠按钮。 */}
           <div class="chat-head-tools">
             {newChatPage ? (
               <NodePicker nodes={nodes} value={nodePref} onPick={setNodePref} />
@@ -2870,30 +2873,21 @@ export function SessionsView({
                 </button>
               )
             )}
+            {showRail && !dockOpen && (
+              <SessionRail
+                diff={diff}
+                tasks={sessionTasks ?? []}
+                nodes={nodes}
+                contextTokens={newestUsage?.tokens ?? 0}
+                model={newestUsage?.model ?? ''}
+                machine={railMachine}
+                onOpenDiff={() => setDiffOpen(true)}
+                onOpenTask={openTaskInPlace}
+                onOpenQueue={() => navigateView('control')}
+              />
+            )}
           </div>
         </header>
-
-        {/* The session overview: a card that floats on the pane's top-right
-            corner, not a column of its own. It answers, without scrolling,
-            what this thread changed, how full the context is and what is still
-            running — each section opening into the surface that already owns
-            the detail (the diff drawer, the task detail, the queue board), so
-            the card never becomes a second copy of the app. While it is up the
-            transcript and the composer reserve its lane (`--panel-lane`), so
-            no line ever runs underneath it. See components/session-rail.tsx. */}
-        {showRail && !dockOpen && (
-          <SessionRail
-            diff={diff}
-            tasks={sessionTasks ?? []}
-            nodes={nodes}
-            contextTokens={newestUsage?.tokens ?? 0}
-            model={newestUsage?.model ?? ''}
-            machine={railMachine}
-            onOpenDiff={() => setDiffOpen(true)}
-            onOpenTask={openTaskInPlace}
-            onOpenQueue={() => navigateView('control')}
-          />
-        )}
 
         {diffOpen && diff && (
           <div class="diff-drawer">

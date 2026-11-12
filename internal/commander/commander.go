@@ -1592,6 +1592,16 @@ func (r *Router) agentUsable(name string, ag ledger.Agent) (usable bool, reason 
 		// deadline to fail on.
 		if v := r.endpointProbe(spec); !v.OK && !v.Unknown {
 			if v.Rejected {
+				// The probe is a request panda built: its own User-Agent, headers
+				// and model name. Relays that admit only the genuine client answer
+				// it 401 while answering the harness 200, so a refusal of that
+				// request is no verdict on a credential the harness carries itself.
+				// Only a credential panda injected (the run sends exactly that key)
+				// or one the harness's own state recorded as failed (RejectionHint)
+				// is conclusive. Transport failures below stay disqualifying.
+				if spec.RejectionHint == "" && !r.InjectionDecision(name, ag.Adapter).Inject {
+					return true, ""
+				}
 				return false, "model credentials/quota rejected by " + spec.Endpoint + " (" + v.Detail + ")"
 			}
 			reason := "model endpoint unreachable: " + spec.Endpoint

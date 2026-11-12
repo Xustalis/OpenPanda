@@ -201,10 +201,6 @@
      counted — which is exactly what the old two-line rows bought with 56
      fewer pixels. Still well under a quarter of a 1440px transcript. */
   --sidebar-w: 280px;
-  /* Chat's overview card. Narrow on purpose: it is an annotation pinned to the
-     corner of the transcript, not a column — every pixel it takes is a pixel of
-     conversation it covers. */
-  --rail-w: 208px;
   --inspector-w: 340px;
   --content-max: 860px;
 }
