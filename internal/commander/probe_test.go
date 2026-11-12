@@ -300,6 +300,30 @@ func TestAgentUsableEndpointReachable(t *testing.T) {
 	}
 }
 
+// TestAgentUsableHarnessOwnCredentialRejectedByProbeStillUsable: when the
+// harness carries its own credential (no panda injection), a 401 to panda's
+// probe request is not evidence the harness fails — relays that admit only the
+// genuine client refuse the probe's User-Agent while serving the real CLI. The
+// gate must not disqualify an agent that works when run directly.
+func TestAgentUsableHarnessOwnCredentialRejectedByProbeStillUsable(t *testing.T) {
+	cleanCredentialEnv(t)
+	if !pyexec.Available() {
+		t.Skip("no python interpreter on this host")
+	}
+	resetEndpointProbeCache()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("ANTHROPIC_BASE_URL", srv.URL)
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "harness-own-token")
+	r := probeRouter(config.ModelConfig{})
+	ok, reason := r.agentUsable("claude_code", usableAgent("claude_code.py"))
+	if !ok {
+		t.Fatalf("agentUsable = %v, %q — harness-owned credential must not be disqualified by the probe", ok, reason)
+	}
+}
+
 // TestAgentUsableCredentialsRejected: an injected model whose endpoint
 // refuses the key (expired token, empty quota) is unusable — the run would
 // send the same credential and fail identically.
