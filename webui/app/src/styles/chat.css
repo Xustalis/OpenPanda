@@ -510,21 +510,12 @@
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-xs);
   overflow: hidden;
-  /* The lane a header card takes on the right when one is open: 0 closed, 380px
-     of card + header padding when open (see `.panel-open` below). The log, the
-     composer and the jump arrow all read this one number, so opening a card
-     slides the whole reading block left together instead of letting the card
-     cover the ends of the last reply's lines. */
+  /* The right-hand lane a floating header card would take. Nothing raises it
+     today — the session overview is a popover that covers the corner rather
+     than sliding the reading column — but the log, the composer, the jump
+     arrow and the clarify dock all read it, so a future surface that does need
+     a lane has one number to set instead of four paddings to find. */
   --panel-lane: 0px;
-}
-/* One lane for both header cards. They are the same kind of popover hanging off
-   the same corner, so switching between them has to leave the reading column
-   exactly where it is: two lane values meant every switch slid the transcript,
-   the composer and the jump arrow sideways — a flinch you could see, for no
-   reason. Both cards are now the same 360px box on the same right edge, so one
-   lane covers either: 20 (bar padding) + 360 = 380. */
-.chat-pane.panel-open {
-  --panel-lane: 380px;
 }
 
 /* ---- The thread's task rail ---------------------------------------------
@@ -5157,22 +5148,18 @@
    any pane narrower than ~1364px the card covered the question that started
    the turn. A permanent lane was rejected earlier: it slid every line of the
    conversation left. Moving the summary into the head costs nothing in the
-   resting state; only the expanded panel borrows a lane, and only while it is
-   up (`--panel-lane`, the number the log, the composer and the jump arrow
-   already read, so the whole reading block moves as one piece). The lane is
-   keyed off the panel's presence in the DOM rather than a mirrored React
-   state: a rail that unmounts while open cannot leave a width reserved.
+   resting state.
+
+   The expanded panel is a popover, not a lane: opening it does not move the
+   log, the composer or the jump arrow, so nothing the reader is mid-sentence
+   on shifts sideways. The cost is that it covers ~280px on the right, and it
+   only exists while the reader asked for it — an earlier lane would have slid
+   the whole reading column for a panel most threads never open. The panel's
+   right edge aligns with its trigger, so it unfolds from the control rather
+   than from the pane's edge.
 
    The panel steps aside for the surfaces that own that corner outright: the
    side dock, the task rail and the diff drawer. */
-.chat-pane:has(.rail-pop):not(.panel-open):not(:has(.task-rail)):not(:has(.diff-drawer)) {
-  /* 280px of panel + 20 of the head's right padding — the panel's right edge
-     sits on that padding, so its left edge is 300px from the pane's right.
-     `--panel-lane` adds to the log's own 24px gutter, giving the reading
-     column 24px of clear air before the panel begins. Smaller than a header
-     card's 380 because this panel has no editing controls to make room for. */
-  --panel-lane: 300px;
-}
 .chat-pane.panel-open .rail-dock,
 .chat-pane:has(.task-rail) .rail-dock,
 .chat-pane:has(.diff-drawer) .rail-dock {
@@ -5271,9 +5258,13 @@
   max-height: min(60vh, 460px);
   min-height: 0;
   overflow: hidden;
-  /* The same sticky-note surface the old floating card used, so the panel
-     still reads as a note laid over the page rather than a third column. */
+  /* A sticky note laid over the page, not a third column: the surface stays
+     almost opaque so its own type keeps full contrast, and the blur keeps the
+     transcript underneath from reading as two layers of text fighting. The
+     first `background` is the fallback for engines without color-mix. */
   background: var(--bg-float);
+  background: color-mix(in srgb, var(--bg-float) 94%, transparent);
+  backdrop-filter: blur(12px) saturate(1.1);
   border: 1px solid var(--border-float);
   border-radius: 12px;
   box-shadow: var(--shadow-float);
