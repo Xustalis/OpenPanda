@@ -27,6 +27,7 @@ package main
 //	/nodes invite                 print the join guide for the other machine
 
 import (
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -125,7 +126,7 @@ func (r *repl) cardRescan(rest []string) {
 	old, err := ledger.LoadCard(path)
 	created := false
 	if err != nil {
-		if !os.IsNotExist(underlyingErr(err)) {
+		if !errors.Is(err, os.ErrNotExist) {
 			r.outln(i18n.Tf(r.loc, "repl.card.loadFail", "err", err.Error()))
 			return
 		}

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/version"
@@ -122,9 +123,12 @@ func (m *Manager) AcquireWorktreeLock(ctx context.Context) (func(), error) {
 					}
 				}
 			}()
+			var releaseOnce sync.Once
 			return func() {
-				close(stop)
-				_ = os.Remove(path)
+				releaseOnce.Do(func() {
+					close(stop)
+					_ = os.Remove(path)
+				})
 			}, nil
 		}
 		if !os.IsExist(err) {
@@ -132,9 +136,17 @@ func (m *Manager) AcquireWorktreeLock(ctx context.Context) (func(), error) {
 		}
 		st, serr := os.Stat(path)
 		if serr == nil && time.Since(st.ModTime()) > mergeLockStale {
-			// A crashed holder's lock: the heartbeat stopped.
-			_ = os.Remove(path)
-			continue
+			// A crashed holder's lock: the heartbeat stopped. Claim it with
+			// an atomic rename instead of unlinking the path. Two processes
+			// that both see a stale file can only one of them rename it away;
+			// the loser retries O_EXCL. An unlink here could delete a *fresh*
+			// lock written at the same path in the meantime, letting both
+			// processes into the merge worktree at once.
+			claim := fmt.Sprintf("%s.stale.%d.%d", path, os.Getpid(), time.Now().UnixNano())
+			if err := os.Rename(path, claim); err == nil {
+				_ = os.Remove(claim)
+				continue
+			}
 		}
 		return nil, fmt.Errorf("%w (%s) — another merge/rebase is running", ErrWorktreeBusy, path)
 	}

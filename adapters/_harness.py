@@ -57,6 +57,61 @@ import time
 
 DEFAULT_TIMEOUT = 600
 
+# Upper bound on captured stderr, in bytes. The Go side caps its own capture
+# (internal/executil/capture.go); a session adapter can stay alive for many
+# turns and a chatty CLI can otherwise emit gigabytes inside one 600 s
+# timeout window.
+STDERR_CAPTURE_LIMIT = 256 * 1024
+_STDERR_TRUNCATED = "[stderr truncated: %d bytes dropped]\n"
+
+
+class BoundedChunks(list):
+    """Captured stderr chunks with a fixed byte budget.
+
+    Oldest chunks are dropped first: a CLI's actual failure reason lives at
+    the tail. A marker is kept so the diagnostic never pretends to be complete.
+    This stays a list subclass so callers keep using ``"".join(err_chunks)`` —
+    the drain thread is the only writer, and iteration returns a locked
+    snapshot so a join cannot race an append.
+    """
+
+    def __init__(self, limit=STDERR_CAPTURE_LIMIT):
+        super().__init__()
+        self.limit = limit
+        self._bytes = 0
+        self._dropped = 0
+        self._head = 0  # index of the first real chunk; the marker sits at 0
+        self._lock = threading.Lock()
+
+    def append(self, chunk):
+        text = chunk if isinstance(chunk, str) else str(chunk)
+        n = len(text.encode("utf-8", "replace"))
+        if n > self.limit:
+            # One enormous line: keep its tail, where the error usually is.
+            text = text[-self.limit:]
+            n = len(text.encode("utf-8", "replace"))
+        with self._lock:
+            while self._bytes + n > self.limit and len(self) > self._head:
+                old = list.pop(self, self._head)
+                old_n = len(old.encode("utf-8", "replace"))
+                self._bytes -= old_n
+                self._dropped += old_n
+            if self._dropped:
+                marker = _STDERR_TRUNCATED % self._dropped
+                if self._head == 0:
+                    list.insert(self, 0, marker)
+                    self._head = 1
+                else:
+                    list.__setitem__(self, 0, marker)
+            list.append(self, text)
+            self._bytes += n
+
+    def __iter__(self):
+        # Build the snapshot by indexing: list(self) would call this method
+        # again and recurse forever.
+        with self._lock:
+            return iter([self[i] for i in range(len(self))])
+
 
 # ---- cross-process probe cache -------------------------------------------
 #
@@ -990,7 +1045,7 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
     stdin, stdout, stderr = proc.stdin, proc.stdout, proc.stderr
     if stdout is None or stderr is None:
         raise RuntimeError("run_stream: stdout/stderr were not piped")
-    err_chunks = []
+    err_chunks = BoundedChunks()
     drain_exc = []
 
     if input is not None:
@@ -1243,9 +1298,9 @@ def spawn(cmd, cwd=None):
     """Spawn cmd with stdin/stdout pipes and a background stderr drain.
 
     Unlike run_stream the stdin stays open for the session's whole life.
-    Returns (proc, err_chunks): err_chunks is the live list the drain thread
-    appends to (join it for diagnostics). Raises FileNotFoundError when the
-    binary is missing.
+    Returns (proc, err_chunks): err_chunks is the live, byte-bounded list the
+    drain thread appends to (join it for diagnostics). Raises
+    FileNotFoundError when the binary is missing.
     """
     proc: "subprocess.Popen[str]" = _popen(
         resolve_argv(cmd), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -1255,7 +1310,7 @@ def spawn(cmd, cwd=None):
     stderr = proc.stderr
     if stderr is None:
         raise RuntimeError("spawn: stderr was not piped")
-    err_chunks = []
+    err_chunks = BoundedChunks()
 
     def drain():
         for chunk in iter(stderr.readline, ""):
@@ -1286,24 +1341,37 @@ class TurnDeadline:
     start() arms a timer that kills the process tree after `seconds`; the
     caller cancels it when the turn's result event lands. A dead process
     ends the session — the loop's next read sees EOF.
+
+    A generation stamp guards the cancel race: Timer.cancel() cannot stop a
+    callback already dispatched to the timer thread, and the session reuses
+    one proc across turns. Without the stamp, a result landing at the same
+    instant as the deadline let the old callback kill turn N+1's process.
     """
 
     def __init__(self, proc):
         self._proc = proc
         self._timer = None
+        self._gen = 0
 
     def start(self, seconds):
         self.cancel()
-        self._timer = threading.Timer(seconds, self._fire)
+        self._gen += 1
+        gen = self._gen
+        self._timer = threading.Timer(seconds, self._fire, args=(gen,))
         self._timer.daemon = True
         self._timer.start()
 
     def cancel(self):
+        # Invalidate the outstanding callback even when it has already been
+        # dispatched — the generation check in _fire is the real cancel.
+        self._gen += 1
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
 
-    def _fire(self):
+    def _fire(self, gen):
+        if gen != self._gen:
+            return
         kill_tree(self._proc)
 
 
