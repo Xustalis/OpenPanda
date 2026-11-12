@@ -17,9 +17,9 @@
  *  So the summary moved where the rest of the pane's chrome already lives —
  *  the head. Resting state is one line of text (idle or running, context
  *  share, change count) and costs the transcript nothing. Opening it is an
- *  explicit act, and while the panel is up the pane reserves its lane
- *  (`:has(.rail-pop)` in chat.css), so the panel does not sit on a line of
- *  the reply either.
+ *  explicit act, and the panel is a popover: while it is up it covers the
+ *  right edge, but the log, the composer and the jump arrow keep their width,
+ *  and the next click outside folds it away again.
  *
  *  Deliberately NOT here: a per-category context breakdown. The panel reports
  *  a turn's billed tokens, not what composed the prompt, so a breakdown would
@@ -98,10 +98,10 @@ export function SessionRail(props: SessionRailProps) {
     return () => window.clearInterval(id)
   }, [expanded, live.length])
 
-  // The lane the panel borrows is derived from the panel's own presence in
-  // the DOM (`:has(.rail-pop)` in chat.css), not lifted into the thread view:
-  // a rail that unmounts while open cannot leave a stale lane behind, and
-  // there is no second state to keep in step with this one.
+  // Open/closed lives here rather than in the thread view: the panel unmounts
+  // with its trigger (the dock opens, the task rail appears), so a state
+  // lifted upward would reopen it on the next mount. An outside click is
+  // decided by containment in this node, so the panel needs no scrim.
   useEffect(() => {
     if (!expanded) return
     const onDown = (event: PointerEvent) => {

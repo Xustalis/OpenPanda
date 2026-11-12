@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState } from 'preact/hooks'
+import { useMemo, useState } from 'preact/hooks'
 import type { TaskEvent } from '../api/client'
 import { Markdown } from '../md/render'
 import { blockDepth, formatTaskEvent, imageRefOf, toolArgSummary, type AgentBlock, type ImageRef } from './event-parser'
@@ -29,14 +29,19 @@ export function EventTimeline({
   defaultOpenThought = false,
   suppressResultBody = false,
 }: EventTimelineProps) {
-  if (!events || events.length === 0) {
+  // Hooks must run before any early return: an empty log takes a different
+  // branch, and Preact still expects the same hook count on every render.
+  // useTaskEvents keeps the events array reference stable between frames
+  // (a poll with no new events does not call setEvents), so this memo is
+  // skipped on every re-render except the one that appends events.
+  const rows = useMemo(() => buildRows(events ?? []), [events])
+  if (rows.length === 0) {
     return <p class="dim chain-empty">{t('sessions.chainEmpty')}</p>
   }
 
   const depths = new Map<string, number>()
   // Pre-format once: lifecycle plumbing events are grouped into a single
   // pipeline row, so the render loop works on groups, not raw events.
-  const rows = buildRows(events)
   // Which row's result body the caller already renders elsewhere. Found by
   // scanning back for the newest row that carries a result — the page's own
   // section mirrors that one, not necessarily the final row of the log (a
