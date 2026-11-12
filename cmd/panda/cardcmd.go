@@ -28,6 +28,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -206,7 +207,7 @@ func runCardRescan(args []string) {
 	old, err := ledger.LoadCard(path)
 	created := false
 	if err != nil {
-		if !os.IsNotExist(underlyingErr(err)) {
+		if !errors.Is(err, os.ErrNotExist) {
 			// A card that exists but does not parse must not be silently
 			// replaced by a scan — that is the one case where "fix it for you"
 			// would destroy hand-written content.
@@ -253,18 +254,6 @@ func runCardRescan(args []string) {
 		fmt.Printf("%s updated (%d change(s))\n", path, len(diffs))
 		notifyDaemonReload(cliConfigPath)
 	}
-}
-
-// underlyingErr unwraps one level of fmt.Errorf %w so os.IsNotExist can see the
-// syscall error LoadCard wrapped.
-func underlyingErr(err error) error {
-	type unwrapper interface{ Unwrap() error }
-	if u, ok := err.(unwrapper); ok {
-		if inner := u.Unwrap(); inner != nil {
-			return inner
-		}
-	}
-	return err
 }
 
 // runCardEdit opens the card in the user's editor and installs it only if it

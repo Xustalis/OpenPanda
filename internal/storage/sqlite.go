@@ -70,14 +70,67 @@ func Open(path string) (*sql.DB, error) {
 	// The database holds task payloads, session transcripts and memory — the
 	// same secret-adjacent material config.yaml gets hardened to 0600 for.
 	// A driver-created file lands at the umask (typically 0644), so tighten
-	// it here; the WAL/shm sidecars carry the same rows. Best-effort: a
-	// read-only filesystem or a foreign-ownership file must not break Open.
+	// it here; the WAL/shm sidecars carry the same rows.
+	//
+	// SQLite creates -wal/-shm on the first *write*, not when journal_mode(WAL)
+	// is switched, and removes them when the last connection closes. Chmod'ing
+	// them straight after Ping therefore used to hit nothing, leaving the very
+	// files that hold the newest rows world-readable. Force one
+	// content-neutral write so they exist before hardening. Best-effort
+	// throughout: a read-only filesystem or a foreign-ownership file must not
+	// break Open.
 	if path != ":memory:" {
-		for _, f := range []string{path, path + "-wal", path + "-shm"} {
-			_ = os.Chmod(f, 0o600)
-		}
+		forceWALSidecars(db)
+		hardenDBFiles(path)
 	}
 	return db, nil
+}
+
+// forceWALSidecars performs a content-neutral write so SQLite materialises
+// -wal/-shm. Rewriting user_version to its current value changes no data but
+// is a real write transaction; any failure is ignored because hardening is
+// best-effort and the database is otherwise usable.
+func forceWALSidecars(db *sql.DB) {
+	var v int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		return
+	}
+	_, _ = db.Exec(fmt.Sprintf("PRAGMA user_version = %d", v))
+}
+
+// hardenDBFiles tightens the database and its WAL sidecars to 0600. Missing
+// sidecars are skipped silently — SQLite creates and removes them as
+// connections come and go. On Windows os.Chmod only controls the read-only
+// bit; POSIX deployments are the ones this protects.
+func hardenDBFiles(path string) {
+	if path == "" || path == ":memory:" {
+		return
+	}
+	for _, f := range []string{path, path + "-wal", path + "-shm"} {
+		_ = os.Chmod(f, 0o600)
+	}
+}
+
+// mainDBPath reads the "main" database file from SQLite itself. Checkpoint's
+// signature stays unchanged (it is called from several shutdown paths) while
+// still letting the post-checkpoint hardening find the files.
+func mainDBPath(ctx context.Context, db *sql.DB) string {
+	rows, err := db.QueryContext(ctx, "PRAGMA database_list")
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seq int
+		var name, file string
+		if err := rows.Scan(&seq, &name, &file); err != nil {
+			return ""
+		}
+		if name == "main" {
+			return file
+		}
+	}
+	return ""
 }
 
 // Checkpoint executes PRAGMA wal_checkpoint with the given mode ("PASSIVE",
@@ -98,7 +151,13 @@ func Checkpoint(ctx context.Context, db *sql.DB, mode string) error {
 		return fmt.Errorf("storage: unknown wal_checkpoint mode %q", mode)
 	}
 	_, err := db.ExecContext(ctx, fmt.Sprintf("PRAGMA wal_checkpoint(%s)", mode))
-	return err
+	if err != nil {
+		return err
+	}
+	// TRUNCATE/RESTART can recreate the sidecars; re-harden after a successful
+	// checkpoint so their mode never regresses to the process umask.
+	hardenDBFiles(mainDBPath(ctx, db))
+	return nil
 }
 
 // escapeDBPath percent-encodes the characters that would otherwise terminate
