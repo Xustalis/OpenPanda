@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -54,12 +55,16 @@ func (g *NetworkGuard) CheckURL(rawurl string) error {
 	if err != nil {
 		return fmt.Errorf("network guard: parse endpoint: %w", err)
 	}
-	if u.Scheme != "https" && u.Hostname() != "localhost" && !isLoopback(u.Hostname()) && !g.plaintext {
+	// Hostnames are case-insensitive and a trailing dot is the same host;
+	// normalise before the loopback exemption or "LOCALHOST." would be
+	// rejected for a plaintext URL that is plainly local.
+	hostName := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if u.Scheme != "https" && hostName != "localhost" && !isLoopback(hostName) && !g.plaintext {
 		return fmt.Errorf("network guard: model endpoint must be https (got %q) — "+
 			"a plaintext endpoint needs allow_plaintext on that model", u.Scheme)
 	}
 	host := strings.ToLower(u.Host)
-	if g.allowed[host] || g.allowed[strings.ToLower(u.Hostname())] {
+	if g.allowed[host] || g.allowed[hostName] {
 		return nil
 	}
 	if len(g.allowed) == 0 {
@@ -70,14 +75,45 @@ func (g *NetworkGuard) CheckURL(rawurl string) error {
 	return fmt.Errorf("network guard: host %q not in allowlist", u.Host)
 }
 
-// CheckModelEndpoint is the one call the model paths make: pin the guard to
-// this endpoint's own host and honour the model's plaintext opt-in. A model
-// that never opted in keeps the https rule, so the waiver has to be asked for
-// in the model's own config rather than inferred from the URL.
-func CheckModelEndpoint(rawurl string, allowPlaintext bool) error {
-	g := NewNetworkGuard(EndpointHost(rawurl))
+// ModelAllowedHostsEnv is an out-of-band host allowlist for model endpoints,
+// as a comma-separated list of hostnames (host:port is accepted too). It is
+// read from the process environment — a different trust source from the
+// agent-writable config file that supplies base_url — so an operator can pin
+// which hosts a model endpoint is allowed to name. When it is unset the
+// legacy self-pinned behaviour applies and no existing deployment changes.
+const ModelAllowedHostsEnv = "OPENPANDA_MODEL_ALLOWED_HOSTS"
+
+// CheckModelEndpointPinned validates rawurl against an explicit allowlist.
+// Deriving the pin from the URL being checked proves nothing about the URL,
+// so a non-empty list replaces that self-pin; an empty list falls back to it
+// for compatibility. The https rule (and the per-model plaintext opt-in) is
+// enforced in both cases.
+func CheckModelEndpointPinned(rawurl string, allowPlaintext bool, allowedHosts []string) error {
+	var hosts []string
+	for _, h := range allowedHosts {
+		if h = strings.TrimSpace(h); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	if len(hosts) == 0 {
+		hosts = []string{EndpointHost(rawurl)}
+	}
+	g := NewNetworkGuard(hosts...)
 	g.plaintext = allowPlaintext
 	return g.CheckURL(rawurl)
+}
+
+// CheckModelEndpoint is the one call the model paths make. It honours the
+// model's plaintext opt-in and, when ModelAllowedHostsEnv is set, an
+// operator-supplied allowlist; otherwise it pins the guard to this endpoint's
+// own host as before. A model that never opted in keeps the https rule, so the
+// waiver has to be asked for in the model's own config rather than inferred
+// from the URL.
+func CheckModelEndpoint(rawurl string, allowPlaintext bool) error {
+	explicit := strings.FieldsFunc(os.Getenv(ModelAllowedHostsEnv), func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	return CheckModelEndpointPinned(rawurl, allowPlaintext, explicit)
 }
 
 // isLoopback reports whether host parses as a loopback IP — covering ::1 and
