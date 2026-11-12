@@ -2346,7 +2346,10 @@ export function SessionsView({
   ]
 
   // @file completion: the caret sits on an @token → list matching paths.
+  // The token is typed relative to the thread's own workspace, so the listing
+  // is too — without the session it would enumerate the node's data tree.
   const atTok = atQuery(input, caret)
+  const atSession = session?.id
   useEffect(() => {
     if (!atTok) {
       setAtFiles([])
@@ -2355,7 +2358,7 @@ export function SessionsView({
     let alive = true
     const timer = setTimeout(() => {
       api
-        .fsFiles(atTok.token)
+        .fsFiles(atTok.token, atSession)
         .then((r) => alive && setAtFiles(r.entries.slice(0, 12)))
         .catch(() => alive && setAtFiles([]))
     }, 120)
@@ -2363,7 +2366,7 @@ export function SessionsView({
       alive = false
       clearTimeout(timer)
     }
-  }, [atTok?.token])
+  }, [atTok?.token, atSession])
 
   // Not memoized for the same reason as chatCommands — insertAtRef splices
   // the token against the live input/caret, and a memoized item captures
@@ -2845,15 +2848,29 @@ export function SessionsView({
               ± {diff.changes.length} {t('sessions.changes')}
             </button>
           )}
-          {/* 头部右侧两件东西：侧栏的门，以及会话概览的一行摘要（点开成面板，
-              暂时向正文借一条 lane）。概览必须是最右的一件：面板贴着触发按钮
-              的右缘向下展开，只有它顶到头部右边界，`--panel-lane` 让出的宽度
-              才正好等于面板占的宽度。导出、节点和编排卡都搬进了栏的头部，所以
-              这条 bar 不再重复它们。新对话页反过来：那一页没有栏，也没有线程
-              可概览，唯一要答的问题是"在哪台机器上跑"，所以这里站的是节点按钮
-              本身 —— 设备不再锁在栏的工具页后面，也没有一个点了会打开空栏的
-              折叠按钮。 */}
+          {/* 头部右侧两件东西：会话概览的一行摘要（点开成浮层面板），以及
+              最右的侧栏门。门放在最右，因为它开的就是右边缘那一栏，按钮贴
+              着它要打开的东西。概览的面板挂在触发按钮下方、右缘与按钮对齐，
+              浮在正文之上而不推挤阅读区——展开时 log、输入框和跳转箭头都不
+              动，代价是盖住右侧约 280px，且只在用户主动点开时发生。导出、
+              节点和编排卡都搬进了栏的头部，所以这条 bar 不再重复它们。新对
+              话页反过来：那一页没有栏，也没有线程可概览，唯一要答的问题是
+              "在哪台机器上跑"，所以这里站的是节点按钮本身 —— 设备不再锁在
+              栏的工具页后面，也没有一个点了会打开空栏的折叠按钮。 */}
           <div class="chat-head-tools">
+            {showRail && !dockOpen && (
+              <SessionRail
+                diff={diff}
+                tasks={sessionTasks ?? []}
+                nodes={nodes}
+                contextTokens={newestUsage?.tokens ?? 0}
+                model={newestUsage?.model ?? ''}
+                machine={railMachine}
+                onOpenDiff={() => setDiffOpen(true)}
+                onOpenTask={openTaskInPlace}
+                onOpenQueue={() => navigateView('control')}
+              />
+            )}
             {newChatPage ? (
               <NodePicker nodes={nodes} value={nodePref} onPick={setNodePref} />
             ) : (
@@ -2872,19 +2889,6 @@ export function SessionsView({
                   <Icon name="panel-right" size={19} />
                 </button>
               )
-            )}
-            {showRail && !dockOpen && (
-              <SessionRail
-                diff={diff}
-                tasks={sessionTasks ?? []}
-                nodes={nodes}
-                contextTokens={newestUsage?.tokens ?? 0}
-                model={newestUsage?.model ?? ''}
-                machine={railMachine}
-                onOpenDiff={() => setDiffOpen(true)}
-                onOpenTask={openTaskInPlace}
-                onOpenQueue={() => navigateView('control')}
-              />
             )}
           </div>
         </header>

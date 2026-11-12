@@ -83,8 +83,9 @@ func (h *handler) viewFile(w http.ResponseWriter, r *http.Request) {
 
 	// The thread's own workspace is the base for a relative path: a path in a
 	// chat is the path the agent used, and the agent runs in the session's
-	// worktree, not in whatever directory the daemon started in.
-	workDir := h.sessionWorkDir(q.Get("session"))
+	// worktree (or its project's work dir), not in whatever directory the
+	// daemon started in.
+	workDir := h.sessionCwd(q.Get("session"))
 	if workDir != "" {
 		// Resolve the base once, up front: the path below is resolved before
 		// the root check, and comparing a resolved child against an unresolved
@@ -164,9 +165,37 @@ func (h *handler) sessionWorkDir(id string) string {
 	return sess.Worktree
 }
 
+// sessionCwd returns the directory a thread actually works in: its own
+// worktree when the project is a git repository, the project's work dir
+// otherwise. "" means the thread has no directory of its own and the caller
+// should fall back to the node's work path.
+//
+// This is the same ladder the ask path walks to pin a turn's cwd, so the file
+// panel and the transcript agree on what "here" means. Without the project
+// step a non-git thread — the common case — would resolve every path against
+// work_path, the node's data tree, which holds none of its files.
+func (h *handler) sessionCwd(id string) string {
+	if wt := h.sessionWorkDir(id); wt != "" {
+		return wt
+	}
+	id = strings.TrimSpace(id)
+	if id == "" || h.sessions == nil || h.projectStore == nil {
+		return ""
+	}
+	sess, err := h.sessions.Get(id)
+	if err != nil || sess.Project == "" {
+		return ""
+	}
+	if p, err := h.projectStore.Get(sess.Project); err == nil {
+		return p.UsableWorkDir()
+	}
+	return ""
+}
+
 // resolveViewPath turns a request path into an absolute one and reports the
 // workspace it was anchored at. ~ expands; a relative path anchors at the
-// session worktree when there is one, and at the node's work path otherwise.
+// thread's workspace (its worktree, or its project's work dir) when it has
+// one, and at the node's work path otherwise.
 // The base is returned for the caller's relative-name rendering — an absolute
 // request inside the workspace still deserves a short, recognisable name.
 func (h *handler) resolveViewPath(reqPath, workDir string) (abs, base string, err error) {
