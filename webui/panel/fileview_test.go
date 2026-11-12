@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"gopkg.in/yaml.v3"
@@ -310,5 +311,121 @@ func TestViewFileRefusesSymlinkOutsideRoot(t *testing.T) {
 	code, _ = doJSON(t, h, authedReq(http.MethodGet, "/api/fs/file?path=escape.txt", nil))
 	if code != http.StatusForbidden {
 		t.Fatalf("outside symlink view status = %d", code)
+	}
+}
+
+// TestListFilesRootsAtSessionWorkspace pins the dock's file tree to the
+// thread's own directory. An empty path used to mean work_path — the node's
+// data tree — so the panel opened on openpanda.db and a handful of storage
+// folders while the files the thread was actually working on sat elsewhere.
+func TestListFilesRootsAtSessionWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	work := filepath.Join(tmp, "work")
+	proj := filepath.Join(tmp, "proj")
+	for _, d := range []string{work, filepath.Join(proj, "src")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, body := range map[string]string{
+		filepath.Join(work, "openpanda.db"):  "state",
+		filepath.Join(proj, "main.go"):       "package main",
+		filepath.Join(proj, "src", "app.go"): "package app",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := config.Default()
+	cfg.Storage.WorkPath = work
+	cfg.Storage.MemoryPath = filepath.Join(tmp, "memory")
+	cfg.Storage.ProjectsPath = filepath.Join(tmp, "projects")
+	configPath := filepath.Join(tmp, "config.yaml")
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	ps := projectstore.NewStore(db)
+	if _, err := ps.Create("proj", proj, ""); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	store := sessions.NewStore(filepath.Join(tmp, "sessions"))
+	sess, err := store.Create("thread", "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(Deps{
+		Store:        newTestStore(t),
+		DB:           db,
+		Cfg:          cfg,
+		ConfigPath:   configPath,
+		StaticDir:    t.TempDir(),
+		Token:        testToken,
+		Sessions:     store,
+		ProjectStore: ps,
+	})
+
+	// The resolved root may be spelled differently than the temp path (8.3
+	// short names, symlinked temp trees), so compare the resolved form.
+	resolved := func(p string) string {
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			return real
+		}
+		return p
+	}
+	namesOf := func(out map[string]any) map[string]bool {
+		names := map[string]bool{}
+		for _, e := range out["entries"].([]any) {
+			names[e.(map[string]any)["name"].(string)] = true
+		}
+		return names
+	}
+
+	code, out := doJSON(t, h, authedReq(http.MethodGet, "/api/fs/files?session="+sess.ID, nil))
+	if code != http.StatusOK {
+		t.Fatalf("session list status = %d", code)
+	}
+	if out["current"] != resolved(proj) {
+		t.Errorf("current = %v, want the project work dir %s", out["current"], proj)
+	}
+	names := namesOf(out)
+	if !names["main.go"] || !names["src"] {
+		t.Errorf("project files missing from listing: %v", names)
+	}
+	if names["openpanda.db"] {
+		t.Errorf("listing leaked the node's data tree: %v", names)
+	}
+
+	// A relative path anchors at the same workspace: the composer's @token is
+	// typed relative to the thread's files, not to the daemon's data dir.
+	code, out = doJSON(t, h, authedReq(http.MethodGet,
+		"/api/fs/files?session="+sess.ID+"&path=src", nil))
+	if code != http.StatusOK {
+		t.Fatalf("relative list status = %d", code)
+	}
+	if out["current"] != resolved(filepath.Join(proj, "src")) {
+		t.Errorf("relative current = %v", out["current"])
+	}
+
+	// No session: callers with no thread (an embedder, a thread that has not
+	// started) still get the node's work path.
+	code, out = doJSON(t, h, authedReq(http.MethodGet, "/api/fs/files", nil))
+	if code != http.StatusOK {
+		t.Fatalf("root list status = %d", code)
+	}
+	if out["current"] != resolved(work) {
+		t.Errorf("sessionless current = %v, want %s", out["current"], work)
 	}
 }

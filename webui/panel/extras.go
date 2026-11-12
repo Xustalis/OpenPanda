@@ -113,17 +113,30 @@ func underRoot(root, abs string) bool {
 // relative to the workspace, and the panel's own cwd is wherever the daemon
 // happened to start.
 func (h *handler) resolveFsPath(reqPath string) (string, error) {
+	return h.resolveFsPathIn(reqPath, "")
+}
+
+// resolveFsPathIn is resolveFsPath with an explicit anchor for a relative
+// path. The file panel browses a thread's own workspace, so "src" there means
+// <workspace>/src and not <work_path>/src — work_path is the node's data tree
+// and has none of the thread's files in it.
+func (h *handler) resolveFsPathIn(reqPath, base string) (string, error) {
 	if strings.HasPrefix(reqPath, "~") {
 		if home, err := os.UserHomeDir(); err == nil {
 			reqPath = filepath.Join(home, strings.TrimPrefix(reqPath, "~"))
 		}
 	}
 	if !filepath.IsAbs(reqPath) {
-		h.readCfg(func(c *config.Config) {
-			if c.Storage.WorkPath != "" {
-				reqPath = filepath.Join(c.Storage.WorkPath, reqPath)
-			}
-		})
+		if base == "" {
+			h.readCfg(func(c *config.Config) {
+				if c.Storage.WorkPath != "" {
+					base = c.Storage.WorkPath
+				}
+			})
+		}
+		if base != "" {
+			reqPath = filepath.Join(base, reqPath)
+		}
 	}
 	return filepath.Abs(reqPath)
 }
@@ -137,20 +150,29 @@ type fsFileEntry struct {
 	ModTS int64  `json:"mod_ts,omitempty"`
 }
 
-// listFiles serves GET /api/fs/files?path= — directories AND files, the
-// browsing half of the composer's @file completion. Unlike
-// /api/fs/directories (which only lists dirs for the project-workdir
-// picker), this includes regular files and is rooted at work_path when no
-// path is given.
+// listFiles serves GET /api/fs/files?path=&session= — directories AND files,
+// the browsing half of the composer's @file completion and the whole of the
+// dock's file panel. Unlike /api/fs/directories (which only lists dirs for the
+// project-workdir picker), this includes regular files.
+//
+// With a session, an empty path is the thread's own workspace — its worktree,
+// or its project's work dir — so the panel opens on the files the thread is
+// about. Without one (a thread that has not started, an embedder with no
+// session store) it stays rooted at work_path.
 func (h *handler) listFiles(w http.ResponseWriter, r *http.Request) {
-	reqPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	q := r.URL.Query()
+	base := h.sessionCwd(q.Get("session"))
+	reqPath := strings.TrimSpace(q.Get("path"))
+	if reqPath == "" {
+		reqPath = base
+	}
 	if reqPath == "" {
 		h.readCfg(func(c *config.Config) { reqPath = c.Storage.WorkPath })
 		if reqPath == "" {
 			reqPath, _ = os.Getwd()
 		}
 	}
-	absPath, err := h.resolveFsPath(reqPath)
+	absPath, err := h.resolveFsPathIn(reqPath, base)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid path"))
 		return
@@ -173,7 +195,7 @@ func (h *handler) listFiles(w http.ResponseWriter, r *http.Request) {
 	if real, err := filepath.EvalSymlinks(absPath); err == nil {
 		absPath = real
 	}
-	dir, _, err := h.openReadDir(absPath)
+	dir, _, err := h.openReadDir(absPath, base)
 	if err != nil {
 		if errors.Is(err, errOutsideReadRoots) {
 			writeErr(w, http.StatusForbidden, errors.New("path is outside the workspace and memory roots"))

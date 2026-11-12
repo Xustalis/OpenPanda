@@ -69,17 +69,29 @@ export function DockFiles(props: DockFilesProps) {
     if (!props.resetSignal) return
     setFile(null)
     setDir('')
+    setRoot('')
   }, [props.resetSignal])
+
+  // The tree is the thread's own workspace, so a different thread is a
+  // different root. Clearing both here — not just the directory — keeps the
+  // previous thread's path from sitting in the bar until the new listing
+  // lands, which would name a workspace this thread never worked in.
+  useEffect(() => {
+    setDir('')
+    setRoot('')
+  }, [props.session])
 
   useEffect(() => {
     let live = true
     setErr('')
     api
-      .fsFiles(dir || undefined)
+      .fsFiles(dir || undefined, props.session ?? undefined)
       .then((r) => {
         if (!live) return
         setEntries(r.entries ?? [])
-        setRoot((prev) => prev || r.current)
+        // The bar names the workspace, not wherever the reader walked to:
+        // `dir` below the root is shown in place of it.
+        if (!dir) setRoot(r.current)
       })
       .catch((e: unknown) => {
         if (!live) return
@@ -89,12 +101,27 @@ export function DockFiles(props: DockFilesProps) {
     return () => {
       live = false
     }
-  }, [dir])
+  }, [dir, props.session])
 
   const parentOf = (path: string): string => {
-    const clean = path.replace(/\/+$/, '')
-    const i = clean.lastIndexOf('/')
+    const clean = path.replace(/[\\/]+$/, '')
+    const i = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'))
     return i <= 0 ? '' : clean.slice(0, i)
+  }
+
+  // Walking up stops at the workspace root. Past it the server refuses the
+  // listing (403, it is outside the owned roots) and the panel would show an
+  // error where the reader expected the parent directory — or, on Windows,
+  // "D:" — so the last step goes back to the root view instead.
+  const upFrom = (path: string): string => {
+    const parent = parentOf(path)
+    if (parent === '') return ''
+    if (!root) return parent
+    const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    const base = norm(root)
+    const next = norm(parent)
+    if (next === base || next.startsWith(`${base}/`)) return parent
+    return ''
   }
 
   const dirs = useMemo(() => (entries ?? []).filter((e) => e.dir), [entries])
@@ -122,7 +149,7 @@ export function DockFiles(props: DockFilesProps) {
           title={t('dockFiles.up')}
           aria-label={t('dockFiles.up')}
           disabled={dir === ''}
-          onClick={() => setDir(parentOf(dir))}
+          onClick={() => setDir(upFrom(dir))}
         >
           <Icon name="arrow-up" size={15} />
         </button>
