@@ -101,3 +101,44 @@ func TestNetworkGuardPinsToEndpointHost(t *testing.T) {
 		t.Fatalf("non-configured host must be rejected")
 	}
 }
+
+func TestCheckModelEndpointExplicitAllowlist(t *testing.T) {
+	// A pin derived from the URL being checked proves nothing; an explicit
+	// one must actually reject a different host.
+	if err := CheckModelEndpointPinned("https://evil.example.com/anthropic", false,
+		[]string{"api.deepseek.com"}); err == nil {
+		t.Fatal("explicit allowlist must reject a host outside the pin")
+	}
+	if err := CheckModelEndpointPinned("https://api.deepseek.com/anthropic", false,
+		[]string{"api.deepseek.com"}); err != nil {
+		t.Fatalf("a listed host should pass: %v", err)
+	}
+	// Empty list is the legacy self-pin: deployments that never set a policy
+	// keep their old behaviour exactly.
+	if err := CheckModelEndpointPinned("https://evil.example.com/anthropic", false, nil); err != nil {
+		t.Fatalf("empty pin must fall back to the legacy self-pin: %v", err)
+	}
+}
+
+func TestCheckModelEndpointEnvAllowlist(t *testing.T) {
+	t.Setenv(ModelAllowedHostsEnv, "")
+	if err := CheckModelEndpoint("https://evil.example.com/anthropic", false); err != nil {
+		t.Fatalf("empty policy keeps the legacy behaviour: %v", err)
+	}
+	t.Setenv(ModelAllowedHostsEnv, "api.deepseek.com, localhost")
+	if err := CheckModelEndpoint("https://evil.example.com/anthropic", false); err == nil {
+		t.Fatal("the environment allowlist must reject an unlisted host")
+	}
+	if err := CheckModelEndpoint("https://api.deepseek.com/anthropic", false); err != nil {
+		t.Fatalf("a listed host should pass: %v", err)
+	}
+}
+
+func TestCheckURLLoopbackHostNormalisation(t *testing.T) {
+	g := NewNetworkGuard()
+	for _, raw := range []string{"http://LOCALHOST:11434/v1", "http://localhost.:11434/v1"} {
+		if err := g.CheckURL(raw); err != nil {
+			t.Fatalf("%q is loopback and must not need the plaintext opt-in: %v", raw, err)
+		}
+	}
+}
