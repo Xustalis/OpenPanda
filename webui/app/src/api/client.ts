@@ -1983,9 +1983,15 @@ export const api = {
     return request('POST', `/api/tasks/${encodeURIComponent(id)}/artifact/fetch`, {}, { timeoutMs: 30 * 60_000 })
   },
 
-  fsFiles(path?: string): Promise<FsFilesResult> {
-    const q = path ? `?path=${encodeURIComponent(path)}` : ''
-    return request('GET', `/api/fs/files${q}`)
+  /** One directory of the thread's workspace. `session` is what makes an empty
+   *  path mean "where this thread works" — its worktree, or its project's work
+   *  dir — instead of the node's own data tree. */
+  fsFiles(path?: string, session?: string): Promise<FsFilesResult> {
+    const q = new URLSearchParams()
+    if (path) q.set('path', path)
+    if (session) q.set('session', session)
+    const qs = q.toString()
+    return request('GET', `/api/fs/files${qs ? `?${qs}` : ''}`)
   },
 
   /** Ask the node to open `path` in the desktop's file manager. The panel
