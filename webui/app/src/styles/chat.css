@@ -5148,61 +5148,131 @@
   color: var(--text-tertiary);
 }
 
-/* ---- Session overview card ------------------------------------------------
-   A card that floats on the pane's top-right corner. It is deliberately NOT a
-   third column: the thread is one card on the canvas, and a separate track
-   turned reading a conversation into reading a dashboard. It answers three
-   questions at a glance — what changed, how full the context is, what is
-   still running — and folds down to three summary rows.
+/* ---- Session overview ----------------------------------------------------
+   Three answers a running thread raises — what changed, how full the context
+   is, what is still working — folded into one control in the pane head.
 
-   It borrows the header cards' lane (`--panel-lane`) rather than inventing a
-   second mechanism: the log, the composer and the jump arrow already reserve
-   that lane, so no line of the transcript ever runs underneath the card.
-   Width comes from `--rail-w` (tokens.css, 200) plus 10 of edge and 8 of
-   breathing room.
+   It used to be a card pinned to the transcript's top-right corner. That
+   corner is exactly where a short thread's right-aligned question ends, so on
+   any pane narrower than ~1364px the card covered the question that started
+   the turn. A permanent lane was rejected earlier: it slid every line of the
+   conversation left. Moving the summary into the head costs nothing in the
+   resting state; only the expanded panel borrows a lane, and only while it is
+   up (`--panel-lane`, the number the log, the composer and the jump arrow
+   already read, so the whole reading block moves as one piece). The lane is
+   keyed off the panel's presence in the DOM rather than a mirrored React
+   state: a rail that unmounts while open cannot leave a width reserved.
 
-   Two surfaces own this corner when they are up and the card steps aside for
-   both: a header card (380px, same corner, would sit under it) and the task
-   rail (360px, the full-height twin of the same information). */
-/* The card takes no lane: the transcript keeps its centred column and the
-   card simply sits on the corner. Reserving 262px for a summary moved every
-   line of the conversation left, which read worse than the overlap — the
-   column is the thing being read, the card is an annotation on it.
-   It does step aside for the three surfaces that own that corner outright: a
-   header card (380px, same corner), the task rail (360px, the full-height
-   twin of the same information) and the diff drawer (its own actions live on
-   the right edge, exactly where the card would sit). */
-.chat-pane.panel-open .session-rail,
-.chat-pane:has(.task-rail) .session-rail,
-.chat-pane:has(.diff-drawer) .session-rail {
+   The panel steps aside for the surfaces that own that corner outright: the
+   side dock, the task rail and the diff drawer. */
+.chat-pane:has(.rail-pop):not(.panel-open):not(:has(.task-rail)):not(:has(.diff-drawer)) {
+  /* 280px of panel + 20 of the head's right padding — the panel's right edge
+     sits on that padding, so its left edge is 300px from the pane's right.
+     `--panel-lane` adds to the log's own 24px gutter, giving the reading
+     column 24px of clear air before the panel begins. Smaller than a header
+     card's 380 because this panel has no editing controls to make room for. */
+  --panel-lane: 300px;
+}
+.chat-pane.panel-open .rail-dock,
+.chat-pane:has(.task-rail) .rail-dock,
+.chat-pane:has(.diff-drawer) .rail-dock {
   display: none;
 }
-/* While the card is up, its Changes section is the change count. The pane
-   head's `± N 处变更` pill opened the same drawer, so the two read as the same
+/* While the summary is up, its Changes row is the change count. The head's
+   `± N 处变更` pill opened the same drawer, so the two read as the same
    control printed twice. */
-.chat-pane:has(.session-rail) .changes-btn {
+.chat-pane:has(.rail-dock) .changes-btn {
   display: none;
 }
 
-.session-rail {
+.rail-dock {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+/* One line in the head, not a card on the canvas: idle/running, context
+   share, change count. The numbers are the ones the panel expands, so the
+   resting state never hides something the reader would have opened it for. */
+.rail-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--head-tool);
+  max-width: 250px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.rail-trigger:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.rail-trigger.is-open {
+  background: var(--bg-active);
+  border-color: var(--border-float);
+  color: var(--text);
+}
+.rail-trigger:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+.rail-trigger-icon {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.rail-trigger.is-live .rail-trigger-icon {
+  color: var(--semantic-good);
+}
+.rail-trigger-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.rail-trigger-sep {
+  flex: none;
+  color: var(--text-disabled);
+}
+.rail-trigger-diff {
+  display: inline-flex;
+  gap: 3px;
+}
+.rail-trigger-text .is-high {
+  color: var(--semantic-warn);
+}
+.rail-pop {
   position: absolute;
-  /* Below the pane head (56) plus the transcript's own top padding, so the
-     card starts level with the first line of the conversation instead of
-     hugging the header's hairline. */
-  top: 88px;
-  right: 10px;
-  z-index: 16;
+  /* Below the trigger, not below the whole header: the trigger is the anchor
+     the reader just pressed, and a panel starting at the header's bottom edge
+     reads as detached from it. The trigger is vertically centred in a 56px
+     head and is 36px tall, so 10px of gap lands the panel exactly on the
+     head's bottom edge — not two pixels up inside it. */
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 30;
   display: flex;
   flex-direction: column;
-  width: var(--rail-w);
+  width: 280px;
   /* A summary, not a second transcript: it never grows past the reading area
      it annotates, and scrolls inside when the change list is long. */
-  max-height: min(58%, 520px);
+  max-height: min(60vh, 460px);
   min-height: 0;
   overflow: hidden;
-  /* A sticky note: warm paper, a hairline a shade darker than the fill, and
-     the smallest lift that still reads as "laid on top" (`--shadow-float`).
-     The corner is tighter than the page cards' — a note is cut, not moulded. */
+  /* The same sticky-note surface the old floating card used, so the panel
+     still reads as a note laid over the page rather than a third column. */
   background: var(--bg-float);
   border: 1px solid var(--border-float);
   border-radius: 12px;
@@ -5217,36 +5287,22 @@
   padding: 3px 0;
 }
 
-/* A section is a header row plus an optional body. Collapsed, the header
-   still carries the number that made you look — folding costs the reader
-   nothing they were reading for. */
+/* A section is a title row plus a body. The panel itself is the fold now, so
+   the titles are static text — asking the reader to open each section a
+   second time was one click too many. */
 /* The separator has to be darker than the card, not lighter: on a grey sheet
    a hairline in the page's border colour reads as a groove. */
 .rail-sec + .rail-sec {
   border-top: 1px solid var(--border-float);
 }
-.rail-head {
+.rail-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
-  padding: 6px 10px;
-  border: 0;
-  background: none;
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
+  /* 10px is the card's content inset — every list row, note and button below
+     uses it, so the titles have to start on the same line as their body. */
+  padding: 7px 10px;
 }
-.rail-head:hover {
-  background: var(--bg-active);
-}
-.rail-head:focus-visible {
-  outline: 2px solid var(--accent-border);
-  outline-offset: -2px;
-}
-/* 12.5 at 600 in the secondary ink, not the reading ink: these are labels on
-   a summary, and pure black at this size turns the card into a form. */
 /* Small and dark, not big and grey. The label carries the row's identity, so
    it keeps the reading ink; 12px at the regular weight (YaHei has no 500 face)
    is what stops it shouting — not a paler colour, which just made the whole
@@ -5270,12 +5326,8 @@
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
-.rail-chev {
-  flex: none;
-  color: var(--text-disabled);
-}
 .rail-sec-body {
-  padding: 0 0 4px;
+  padding: 0 0 6px;
 }
 .rail-none {
   color: var(--text-tertiary);
