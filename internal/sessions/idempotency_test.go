@@ -92,17 +92,17 @@ func TestIdempotencySurvivesCompactionAndFork(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := store.CompactHistory(context.Background(), sess.ID, 25, func(context.Context, []Turn) (string, error) { return "Earlier task completed.", nil })
-	if err != nil || len(got.Turns) != 2 || len(got.CompactedTurnKeys) != 1 {
+	if err != nil || len(got.Turns) != 4 || len(got.ReplayTurns()) != 2 || len(got.CompactedTurnKeys) != 1 {
 		t.Fatalf("compaction lost key: %+v %v", got, err)
 	}
 	if _, err := NewStore(root).AppendTurn(sess.ID, report); err != nil {
 		t.Fatal(err)
 	}
 	got, err = store.Get(sess.ID)
-	if err != nil || len(got.Turns) != 2 {
+	if err != nil || len(got.Turns) != 4 {
 		t.Fatalf("compacted report resurrected: %+v %v", got, err)
 	}
-	child, err := store.Fork(sess.ID, 2)
+	child, err := store.Fork(sess.ID, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestIdempotencySurvivesCompactionAndFork(t *testing.T) {
 		t.Fatal(err)
 	}
 	child, err = store.Get(child.ID)
-	if err != nil || len(child.Turns) != 2 || child.Summary == "" {
+	if err != nil || len(child.Turns) != 4 || child.Summary == "" {
 		t.Fatalf("fork forgot inherited acknowledgement: %+v %v", child, err)
 	}
 }

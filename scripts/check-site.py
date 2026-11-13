@@ -335,6 +335,13 @@ check('security.html states all five deployment red lines', redlines == 5,
 faq_items = len(re.findall(r'<details class="pg-faq">', pages['faq.html']))
 check('faq.html carries all 29 questions', faq_items == 29, f'found {faq_items}')
 adapter_rows = re.findall(r'<code>([a-z_]+\.py)</code>', pages['docs.html'])
+# A prepared release must not strand first-time users on a stale tag URL.
+check('download entry follows the published stable channel',
+      'href="https://github.com/Xustalis/OpenPanda/releases/latest"' in pages['download.html'])
+check('docs include an addressable first-task acceptance and recovery guide',
+      'id="first-task"' in pages['docs.html'] and 'href="#first-task"' in pages['docs.html']
+      and all(f'data-i18n="docs.first.{part}"' in pages['docs.html']
+              for part in ['model', 'agent', 'run', 'watch', 'accept', 'recover', 'upgrade']))
 check('docs.html lists the eleven adapter scripts', len(adapter_rows) == 11,
       f'found {adapter_rows}')
 check('community.html documents the local gates',

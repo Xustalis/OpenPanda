@@ -85,6 +85,8 @@ def main():
             cmd += [
                 "-c", 'model_provider="custom"',
                 "-c", f'model_providers.custom.base_url="{base_url}"',
+                "-c", 'model_providers.custom.name="OpenPanda"',
+                "-c", 'model_providers.custom.wire_api="responses"',
             ]
             # The key never rides argv. `-c` values land in the process list
             # and in codex's own transcript, and a provider token in either is

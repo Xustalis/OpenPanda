@@ -57,7 +57,8 @@ type responsesTool struct {
 // responsesReasoning carries the reasoning-effort knob; the Responses API has
 // no thinking/enable_thinking flag.
 type responsesReasoning struct {
-	Effort string `json:"effort,omitempty"` // low | medium | high
+	Effort  string `json:"effort,omitempty"`  // low | medium | high
+	Summary string `json:"summary,omitempty"` // request provider-returned summaries, e.g. auto
 }
 
 // responsesMessage is one role-tagged input item. Assistant history uses
@@ -187,6 +188,9 @@ func (c *Client) applyResponsesThinking(req *responsesRequest) {
 		effort = "low"
 	}
 	req.Reasoning = &responsesReasoning{Effort: effort}
+	if c.thinking != "off" {
+		req.Reasoning.Summary = "auto"
+	}
 }
 
 // turnsToResponses converts the internal history into Responses input items:

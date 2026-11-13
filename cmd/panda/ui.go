@@ -72,6 +72,8 @@ func (t *thoughtPreview) feed(chunk string) string {
 func progressNote(loc i18n.Locale, p askengine.Progress) string {
 	var note string
 	switch p.Kind {
+	case askengine.ProgressModel:
+		note = i18n.Tf(loc, "cli.progress.model", "name", p.Name)
 	case askengine.ProgressTask:
 		note = i18n.Tf(loc, "cli.progress.task", "title", p.Name)
 	case askengine.ProgressPlan:

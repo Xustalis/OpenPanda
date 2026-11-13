@@ -179,13 +179,29 @@ func TestTypedInvestigationDispatchWithoutRepositoryKeywords(t *testing.T) {
 }
 
 func TestDeepRepositoryRejectedAnswerNeverStreams(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { writeAnswer(w, "unsupported finding") }))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"checking evidence\"}}]}\n\n")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"unsupported finding\"}}]}\n\ndata: [DONE]\n\n")
+	}))
 	defer srv.Close()
 	e := newGuardTestEngine(t, srv, entry.NewRegistry(), 200000)
-	var deltas strings.Builder
-	res, err := e.AskTurnsScoped(context.Background(), nil, "深入分析这个代码库", AskScope{WorkDir: t.TempDir()}, true, StreamCallbacks{OnDelta: func(s string) { deltas.WriteString(s) }})
+	var deltas, reasoning strings.Builder
+	var modelProgress int
+	res, err := e.AskTurnsScoped(context.Background(), nil, "深入分析这个代码库", AskScope{WorkDir: t.TempDir()}, true, StreamCallbacks{
+		OnDelta:     func(s string) { deltas.WriteString(s) },
+		OnReasoning: func(s string) { reasoning.WriteString(s) },
+		OnProgress: func(p Progress) {
+			if p.Kind == ProgressModel {
+				modelProgress++
+			}
+		},
+	})
 	if err != nil || res == nil || !strings.Contains(res.Answer, "尚未完成") {
 		t.Fatalf("result: %+v %v", res, err)
+	}
+	if !strings.Contains(reasoning.String(), "checking evidence") || modelProgress == 0 {
+		t.Fatal("guard hid model activity")
 	}
 	if strings.Contains(deltas.String(), "unsupported finding") {
 		t.Fatalf("unaccepted conclusion streamed: %q", deltas.String())

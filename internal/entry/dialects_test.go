@@ -497,7 +497,7 @@ func TestGoogleListModels(t *testing.T) {
 func TestAggregatorThinking(t *testing.T) {
 	on := &Client{model: "gpt-6.1-sol", maxTokens: 1024, thinking: "on"}
 	req := on.buildResponsesRequest("sys", []Turn{{Role: "user", Content: "hi"}}, nil, false)
-	if req.Reasoning == nil || req.Reasoning.Effort != "high" {
+	if req.Reasoning == nil || req.Reasoning.Effort != "high" || req.Reasoning.Summary != "auto" {
 		t.Fatalf("responses thinking = %+v", req.Reasoning)
 	}
 

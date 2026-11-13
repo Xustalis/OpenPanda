@@ -54,7 +54,7 @@ import { MessageCopyButton } from '../components/copy'
 import { ClarifyCard } from '../components/clarify-card'
 import { buildCommands, type Command } from '../components/palette'
 import { rank } from '../components/fuzzy'
-import { mergeTailTurn, patchStreaming, slashQuery } from '../components/chatstate'
+import { reconcileTranscript, runningOperation, patchStreaming, slashQuery } from '../components/chatstate'
 import { atQuery, expandFileRefs, exportMarkdown, exportFilename, isImageFile, splitFileRef, withAttachments } from '../components/attach'
 import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
@@ -77,7 +77,7 @@ import {
   ChatAvatar,
   PlanCast,
   TaskCast,
-  TaskProcess,
+  TaskDelivery,
   TaskProgress,
   usePlanBrief,
   useTaskBrief,
@@ -345,10 +345,7 @@ interface ChatMsg extends SessionTurn {
   streaming?: boolean
   status?: string
   result?: AskResult
-  /** Chain-of-thought for this reply. It streams on its own event and is
-   *  display-only (D14): it is never merged into the answer, and it is not
-   *  persisted with the turn, so a thread reloaded from disk comes back
-   *  without it. */
+  /** Provider-supplied reasoning/summary, kept separate from answer replay. */
   thought?: string
   /** Newest delta/reasoning/usage/status timestamp (epoch ms). The live
    *  header uses it to tell a quiet turn from a stalled one. */
@@ -412,6 +409,7 @@ interface CompletionItem {
 // locale ("retrying in 3s · 2/6") instead of the server's English fallback;
 // every other kind keeps the wire text.
 function statusNote(text: string, ev?: AskStatusEvent): string {
+  if (ev?.kind === 'model') return t('sessions.modelWaiting', { name: ev.name || '' })
   if (ev?.kind === 'retry') {
     const reason = ev.http_status ? `HTTP ${ev.http_status}` : t('sessions.retry.transport')
     return t('sessions.retry', {
@@ -899,7 +897,8 @@ export function SessionsView({
     setNotes([])
     setNotesOpen(false)
   }, [activeId])
-  const [busy, setBusy] = useState(false)
+  const [localBusy, setBusy] = useState(false)
+  const busy = localBusy || Boolean(runningOperation(activeId, session))
   // The pre-execution question the running turn is parked on. Cleared when the
   // browser answers, when the turn ends, or when the user cancels it.
   const [clarify, setClarify] = useState<{
@@ -998,6 +997,7 @@ export function SessionsView({
   // Exact server-issued operation identity for the current ask. Stop is scoped
   // to this id; it never scans old transcript task references.
   const inflightOperation = useRef<string | null>(null)
+  const stopRequested = useRef(false)
   // Notes the finished turn never read, as the server reported them. They are
   // parked server-side, so this is only the trigger to open the continuation
   // turn — the text itself is drained by the server, which is what keeps a
@@ -1266,6 +1266,13 @@ export function SessionsView({
   // paints its own transcript and must not be clobbered by the server's
   // shorter view.
   useEffect(() => {
+    if (activeId && inflight.current && inflightSid.current === activeId) return
+    inflight.current?.abort()
+    inflight.current = null
+    inflightSid.current = null
+    inflightOperation.current = null
+    stopRequested.current = false
+    setBusy(false)
     if (!activeId) {
       setSession(null)
       setMsgs([])
@@ -1283,11 +1290,6 @@ export function SessionsView({
       setLoading(false)
       return
     }
-    if (inflight.current && inflightSid.current === activeId) return
-    inflight.current?.abort()
-    inflight.current = null
-    inflightSid.current = null
-    inflightOperation.current = null
     setLoading(true)
     // A stale transcript and a sticky error belong to the thread we are
     // leaving, not the one being opened. Without these resets a failed load
@@ -1346,36 +1348,34 @@ export function SessionsView({
     // poll below would fight the stream for the transcript.
     if (inflight.current && inflightSid.current === activeId) return
     const key = `op-${op.id}`
-    setMsgs((ms) =>
-      ms.some((m) => m.k === key)
-        ? ms
-        : [...ms, { role: 'assistant', text: '', streaming: true, k: key }],
-    )
-    // The clock belongs to the turn, not to when this pane opened it.
-    const startedAt = Date.parse(op.updated_at)
+    const restore = (s: Session) => {
+      const current = s.operation
+      const rows = hydrateTurns(s.turns ?? [], (i) => `srv-${i}`)
+      if (current?.id === op.id && current.status === 'running') {
+        rows.push({
+          role: 'assistant', text: current.text || '', thought: current.thought,
+          lastActivity: current.last_activity ? Date.parse(current.last_activity) : undefined,
+          tokens: current.tokens, tokensEstimated: current.estimated,
+          status: current.progress ? statusNote(current.progress.text || '', current.progress) : undefined,
+          streaming: true, k: key, liveTask: current.task_id,
+        })
+      }
+      setMsgs(rows)
+    }
+    restore(session)
+    const startedAt = Date.parse(op.started_at || op.updated_at)
     if (Number.isFinite(startedAt) && startedAt > 0) setLiveFrom(startedAt)
     let cancelled = false
-    // A killed process leaves its operation at "running" forever (the row is
-    // only cleared when the ask returns). Following such a ghost would pin a
-    // thinking bubble to the transcript indefinitely, so stop after a budget
-    // that comfortably covers a slow classify/answer and fall back to the
-    // persisted transcript.
-    const deadline = startedAt > 0 ? startedAt + RECOVER_WATCH_MS : Date.now() + RECOVER_WATCH_MS
     const poll = async () => {
       while (!cancelled) {
         await new Promise((r) => setTimeout(r, 2000))
         if (cancelled) return
-        if (Date.now() > deadline) {
-          setMsgs((ms) => ms.filter((m) => m.k !== key))
-          return
-        }
         try {
           const s = await api.session(activeId)
           if (cancelled) return
-          if (s.operation?.id === op.id && s.operation.status === 'running') continue
           setSession(s)
-          setMsgs(hydrateTurns(s.turns ?? [], (i) => `srv-${i}`))
-          return
+          restore(s)
+          if (s.operation?.id !== op.id || s.operation.status !== 'running') return
         } catch {
           // A transient read failure is not the end of the turn; keep
           // following it rather than leaving the placeholder stranded.
@@ -1646,15 +1646,24 @@ export function SessionsView({
 
 
 
-  /** Abort local rendering and cancel only the exact active server operation. */
-  function stop() {
+  /** Stop the exact operation, including one recovered after a reload. */
+  async function stop() {
     const ctrl = inflight.current
-    const targetSid = inflightSid.current
-    const operationID = inflightOperation.current
-    ctrl?.abort()
-    if (targetSid && operationID) {
-      api.cancelSession(targetSid, operationID).catch(() => {})
+    const targetSid = inflightSid.current || activeId
+    const operationID = inflightOperation.current ||
+      (session?.id === targetSid && session.operation?.status === 'running' ? session.operation.id : '')
+    if (!targetSid || !operationID) {
+      // Do not detach an accepted ask before its operation frame arrives:
+      // that loses the only identity the explicit cancellation API can use.
+      if (ctrl) stopRequested.current = true
+      return
     }
+    try {
+      await api.cancelSession(targetSid, operationID)
+      ctrl?.abort()
+      const s = await api.session(targetSid)
+      if (activeIdRef.current === targetSid) setSession(s)
+    } catch (e) { toastError(e) }
   }
 
   /** Type into the turn that is already streaming. Enter while busy used to be
@@ -1821,6 +1830,8 @@ export function SessionsView({
     // the /api/fs/read round-trips must not start a parallel ask.
     const ctrl = new AbortController()
     inflight.current = ctrl
+    inflightOperation.current = null
+    stopRequested.current = false
     let id = activeId
     const keepAlive = acquireKeepAlive()
     let patch: (fn: (m: ChatMsg) => ChatMsg) => void = () => {}
@@ -1963,6 +1974,7 @@ export function SessionsView({
       inflightSid.current = sid
       const live = () => isLiveSession(sid, activeIdRef.current)
       setBusy(true)
+      const replyKey = localMsgId()
       if (live()) {
         // A continuation has no composer draft behind it: the text came from
         // the parked notes, and whatever is in the editor now was typed after
@@ -1991,7 +2003,7 @@ export function SessionsView({
             ts: Math.floor(Date.now() / 1000),
             k: localMsgId(),
           },
-          { role: 'assistant', text: '', streaming: true, k: localMsgId() },
+          { role: 'assistant', text: '', streaming: true, k: replyKey },
         ])
         announced = true
       }
@@ -2002,7 +2014,7 @@ export function SessionsView({
       // session guard rides along: a backgrounded reply patches nothing.
       patch = (fn: (m: ChatMsg) => ChatMsg) => {
         if (!live()) return
-        setMsgs((ms) => patchStreaming(ms, fn))
+        setMsgs((ms) => patchStreaming(ms, fn, replyKey))
       }
 
       await askSessionStream(
@@ -2056,6 +2068,10 @@ export function SessionsView({
           onOperation: (operationID) => {
             if (inflight.current === ctrl && inflightSid.current === sid) {
               inflightOperation.current = operationID
+              patch((m) => ({ ...m, operation_id: operationID }))
+              if (stopRequested.current) {
+                void api.cancelSession(sid, operationID).then(() => ctrl.abort()).catch(toastError)
+              }
             }
           },
           // A task row exists for this turn. Adopt its id as a side channel —
@@ -2103,6 +2119,7 @@ export function SessionsView({
                 ...task,
                 ...plan,
                 result: r,
+                thought: m.thought || r.thought,
                 status: undefined,
                 text,
                 liveTask: undefined,
@@ -2162,14 +2179,12 @@ export function SessionsView({
           // Stopped on purpose: mark the turn done and note why, rather than
           // painting the user's own action as a failure. Aimed at the bubble
           // that was streaming — same target rule as the deltas above.
-          setMsgs((ms) =>
-            patchStreaming(ms, (m) => ({
+          patch((m) => ({
               ...m,
               streaming: false,
               status: undefined,
               text: m.text || `· ${t('sessions.stopped')}`,
-            })),
-          )
+            }))
           // A stop still took the time it took — say so rather than leaving
           // the foot of the bubble blank.
           finishTurn()
@@ -2238,20 +2253,22 @@ export function SessionsView({
       // (or stop) has nowhere to render. The persisted transcript stands.
     } finally {
       keepAlive.release()
-      setClarify(null)
-      if (inflight.current === ctrl) {
+      const ownsFlight = inflight.current === ctrl
+      if (ownsFlight) {
+        setClarify(null)
         inflight.current = null
         inflightSid.current = null
+        inflightOperation.current = null
+        stopRequested.current = false
+        setBusy(false)
       }
-      setBusy(false)
       // Persisted transcript is server-side truth; refresh title + turns.
       if (id) {
-        const stillActive = isLiveSession(id, activeIdRef.current)
         api.session(id).then((s) => {
           // The rail entry's title is worth refreshing either way; the pane
           // belongs to whichever thread is active now.
           setSessions((ls) => ls.map((x) => (x.id === s.id ? s : x)))
-          if (stillActive) {
+          if (isLiveSession(id, activeIdRef.current) && !inflight.current) {
             setSession(s)
             // …and the pane follows it. The change feed skipped this turn
             // while the ask was in flight (it must not paint over a live
@@ -2261,12 +2278,7 @@ export function SessionsView({
             // frame, one turn per task — so the surplus rows are adopted here
             // rather than waiting for a reload.
             setMsgs((ms) =>
-              // mergeTailTurn widens the adopted row to TurnLike; the rows it
-              // inserts are assistant task turns, so the cast only carries
-              // the transcript's narrower kind through the same hydrator.
-              mergeTailTurn(ms, s.turns ?? [], (turn) =>
-                hydrateTurns([turn as SessionTurn], () => localMsgId())[0]!,
-              ),
+              reconcileTranscript(ms, hydrateTurns(s.turns ?? [], (i) => `srv-${i}`), s.operation?.id),
             )
           }
         }).catch(() => {})
@@ -2276,8 +2288,8 @@ export function SessionsView({
       // composer used to print "queued" and then let them vanish at the end of
       // the answer. A stopped turn is the one exception: the user asked for
       // quiet, so the notes stay parked for the next thing they send.
-      const owed = queuedTurn.current
-      queuedTurn.current = ''
+      const owed = ownsFlight ? queuedTurn.current : ''
+      if (ownsFlight) queuedTurn.current = ''
       if (
         owed &&
         !ctrl.signal.aborted &&
@@ -2861,6 +2873,7 @@ export function SessionsView({
             {showRail && !dockOpen && (
               <SessionRail
                 diff={diff}
+                working={busy}
                 tasks={sessionTasks ?? []}
                 nodes={nodes}
                 contextTokens={newestUsage?.tokens ?? 0}
@@ -4328,7 +4341,7 @@ function ChatBubble(props: {
 
         <div
           class={`msg-bubble${speaker.who === 'user' ? ' is-you' : ''}${
-            isTaskKind || isPlanKind ? ' is-wide' : ''
+            isTaskKind || isPlanKind || report ? ' is-wide' : ''
           }`}
         >
           {/* — what the panda is thinking on its way to a plan. It streamed
@@ -4352,8 +4365,11 @@ function ChatBubble(props: {
             // paragraph under it. The state is on the head's chip.
             <>
               {report.title && <p class="msg-subject">{report.title}</p>}
-              {report.body && <Markdown text={report.body} class="msg-text" />}
-              {(msg.ref || fallbackRef) && <TaskProcess taskId={(msg.ref || fallbackRef)!} />}
+              {(msg.ref || fallbackRef) ? <TaskDelivery
+                taskId={(msg.ref || fallbackRef)!} delivery={msg.delivery}
+                truncated={msg.delivery_truncated} summary={report.body} state={report.state}
+                attemptId={msg.delivery_attempt_id} reportedAt={msg.ts}
+              /> : report.body && <Markdown text={report.body} class="msg-text" />}
             </>
           ) : isTaskKind ? (
             // The orchestration: who got the job, which stage, how it stands —
@@ -4416,7 +4432,7 @@ function ChatBubble(props: {
           {/* — the live state, at the foot of the bubble: thinking, or what the
                 turn is doing right now. */}
           {(hasThinking || hasTaskStatus) && (
-            <div class="bubble-slot-row slot-status">
+            <div class="bubble-slot-row slot-status" role="status" aria-live="polite" aria-atomic="true">
               {hasThinking && (
                 <span class="status-line u-color-tert">
                   <span class="spinner" aria-hidden="true" />
@@ -4439,7 +4455,7 @@ function ChatBubble(props: {
             the turn is still streaming: half an answer is not the message. */}
         {msg.text && !msg.streaming && (
           <div class="msg-foot">
-            <MessageCopyButton text={msg.text} markdown={msg.kind !== 'error'} />
+            <MessageCopyButton text={msg.delivery ? `${msg.text.split('\n', 1)[0]}\n\n${msg.delivery}` : msg.text} markdown={msg.kind !== 'error'} />
             {/* A task's own card already carries the employee in its cast
                 line; this is the plain-answer case. */}
             {!isTaskKind && speaker.who === 'panda' && replyModel && (

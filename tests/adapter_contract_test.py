@@ -421,6 +421,8 @@ assert "sk-injected" not in joined, args
 assert "experimental_bearer_token" not in joined, args
 assert 'model_provider="custom"' in args
 assert 'model_providers.custom.base_url="https://relay.example.com/v1"' in args
+assert 'model_providers.custom.name="OpenPanda"' in args
+assert 'model_providers.custom.wire_api="responses"' in args
 assert 'model_providers.custom.env_key="PANDA_CODEX_TOKEN"' in args
 assert 'model="injected-model"' in args
 assert os.environ.get("PANDA_CODEX_TOKEN") == "sk-injected"

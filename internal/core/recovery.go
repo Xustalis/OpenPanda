@@ -57,6 +57,10 @@ func assessRecovery(r bus.TaskResultPayload) RecoveryAssessment {
 		a.Category = "authentication_required"
 		a.Strategy = RecoveryStop
 		a.ReplaySafety = "safe_after_environment_fix"
+	case providerBillingRequired(r.Stderr):
+		a.Category = "provider_billing_required"
+		a.Strategy = RecoveryStop
+		a.ReplaySafety = "safe_after_environment_fix"
 	case r.ExitCode == 124 && r.AgentSessionID != "":
 		a.Category = "checkpoint"
 		a.Strategy = RecoverySessionResume
@@ -65,6 +69,21 @@ func assessRecovery(r bus.TaskResultPayload) RecoveryAssessment {
 		a.Category = "timeout_without_checkpoint"
 	}
 	return a
+}
+
+// Commander has already attempted allowed provider rescue. Replaying an
+// exhausted account cannot replenish it and blocks other queued tasks.
+func providerBillingRequired(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if len(s) > 2048 || !strings.HasPrefix(s, "provider failure:") {
+		return false
+	}
+	for _, phrase := range []string{"insufficient balance", "insufficient account funds", "insufficient_quota", "credit balance", "out of credits", "payment required"} {
+		if strings.Contains(s, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // Match a short CLI diagnostic, never a quoted phrase buried in a task report.

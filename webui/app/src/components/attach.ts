@@ -119,6 +119,8 @@ export async function expandFileRefs(
 }
 
 export interface ExportMsg {
+  delivery?: string
+  delivery_truncated?: boolean
   role: string
   text: string
   thought?: string
@@ -146,7 +148,8 @@ export function exportMarkdown(
     lines.push('', `## ${m.role === 'user' ? t('sessions.you') : 'Panda'}`, '')
     if (head) {
       lines.push(reportHeadLine(head))
-      const body = head.body.trim()
+      const body = (m.delivery || head.body).trim()
+      if (m.delivery_truncated) lines.push('', t('sessions.deliveryTruncated'))
       if (body) lines.push('', body)
     } else {
       lines.push(m.text.trim())

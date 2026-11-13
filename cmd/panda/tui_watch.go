@@ -114,7 +114,21 @@ func (m tuiModel) onWatch(msg watchMsg) (tea.Model, tea.Cmd) {
 	}
 	raised := false
 	for _, ev := range msg.events {
-		note(ev.note)
+		if ev.completed {
+			body, remaining := taskHandoff(ev.task, m.loc)
+			cmds = append(cmds, m.printBlock(block{
+				kind: blockTask, ok: ev.task.State == core.StateDone,
+				taskRef: ev.task.TaskID, title: ev.task.Title, taskState: ev.task.State,
+				body: body, remaining: remaining, stages: ev.steps,
+				verification: ev.task.Verification,
+			}))
+			// Keep the actionable approval hint in addition to the report.
+			if ev.review {
+				note(ev.note)
+			}
+		} else {
+			note(ev.note)
+		}
 		if !ev.review || raised || m.mode != modeIdle || m.pending != nil {
 			continue
 		}

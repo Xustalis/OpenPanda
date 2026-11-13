@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +101,25 @@ func TestSessionStaleUnregisterPreservesNewGeneration(t *testing.T) {
 	case <-newCtx.Done():
 	case <-time.After(2 * time.Second):
 		t.Fatal("new generation was not cancelled")
+	}
+}
+
+func TestSessionCancelOrphanedMainOperation(t *testing.T) {
+	store := sessions.NewStore(t.TempDir())
+	sess, _ := store.Create("orphan")
+	_ = store.StartOperation(sess.ID, sessions.Operation{ID: "current", Status: "running", Text: "partial answer", Thought: "provider summary"})
+	h := &handler{sessions: store, activeAsks: map[string]sessionOperation{}}
+	for _, id := range []string{"stale", "current", "current"} {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"operation_id":"`+id+`"}`))
+		req.SetPathValue("id", sess.ID)
+		rr := httptest.NewRecorder()
+		h.sessionCancel(rr, req)
+		got, _ := store.Get(sess.ID)
+		if id == "stale" && got.Operation.Status != "running" {
+			t.Fatal("stale stop hit new generation")
+		}
+		if id == "current" && (got.Operation.Status != "cancelled" || len(got.Turns) != 1 || got.Turns[0].Text != "partial answer" || got.Turns[0].Thought != "provider summary") {
+			t.Fatal("orphan cannot stop without losing/duplicating partial display", got)
+		}
 	}
 }

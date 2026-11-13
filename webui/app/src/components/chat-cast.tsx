@@ -29,6 +29,8 @@ import { clock, liveStepOf, mergeLive, type LiveStep } from './task-live'
 import { AgentFace } from './team-picker'
 import { castPending, dispatchAgent, prettyAgent, type Speaker } from './chat-speaker'
 import { Icon } from './icons'
+import { Markdown } from '../md/render'
+import { deliveryFacts, deliveryMatchesTask, deliveryPreview, deliverySteps, deliveryText } from './task-delivery'
 import { t } from '../i18n'
 
 /** One shared empty list: `task.traces` is absent until the row has started,
@@ -235,98 +237,82 @@ export function TaskProgress({ task }: { task: Task }) {
   )
 }
 
-/** The detailed process folded under a finished task's report.
- *
- *  A running task narrates itself in `TaskProgress`; once it settles that row
- *  disappears and the report above says what happened. The process itself is
- *  still valuable — which commands ran, what failed, where the agent turned —
- *  but it must not push the conversation down. So it lives in a closed
- *  `<details>`: the summary is one line of facts, and opening it replays the
- *  same event stream the live row showed, with fuller text. */
-export function TaskProcess({ taskId }: { taskId: string }) {
-  const task = useTaskBrief(taskId)
-  const [open, setOpen] = useState(false)
-  if (!task) return null
-  const files = resultFiles(task)
-  const created = Date.parse(task.created_at)
-  const updated = Date.parse(task.updated_at)
-  const duration = Number.isFinite(created) && Number.isFinite(updated) ? Math.max(0, updated - created) : 0
+/** A durable handoff: outcome first, then visible evidence and honest gaps.
+ * Legacy turns recover their full report from the task instead of retaining
+ * the old last-paragraph-only display forever. */
+export function TaskDelivery({ taskId, delivery, truncated, summary, state, attemptId, reportedAt }: {
+  taskId: string; delivery?: string; truncated?: boolean; summary: string; state: string; attemptId?: string; reportedAt?: number
+}) {
+  const currentTask = useTaskBrief(taskId)
+  const task = currentTask && deliveryMatchesTask(currentTask, attemptId, reportedAt, state) ? currentTask : null
+  const [expanded, setExpanded] = useState(false)
+  const full = delivery || deliveryText(task?.result) || summary
+  const preview = deliveryPreview(full)
   return (
-    <details
-      class="task-run"
-      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
-    >
-      <summary class="task-run-head">
-        <StateChip state={task.state} />
-        <span class="task-run-title">{t('sessions.processTitle')}</span>
-        <span class="task-run-meta">
-          {duration > 0 ? formatDuration(duration) : ''}
-          {duration > 0 && files > 0 ? ' · ' : ''}
-          {files > 0 ? t('sessions.processFiles', { n: String(files) }) : ''}
-        </span>
-        <span class="task-run-caret" aria-hidden="true">▾</span>
-      </summary>
-      {open && <TaskProcessBody taskId={taskId} task={task} files={files} />}
-    </details>
-  )
-}
-
-/** The process body is a component of its own so a closed fold costs one
- *  small task read, not a 200-event timeline per report in the thread. */
-function TaskProcessBody({ taskId, task, files }: { taskId: string; task: Task; files: number }) {
-  const change = useChangeSignal()
-  const { events } = useTaskEvents(taskId, change, 200)
-  const steps: LiveStep[] = []
-  for (const ev of mergeLive(events, EMPTY_TRACES)) {
-    const step = liveStepOf(ev, true)
-    if (!step) continue
-    const prev = steps[steps.length - 1]
-    if (prev && prev.label === step.label && prev.summary === step.summary) continue
-    steps.push(step)
-  }
-  const shown = steps.slice(-120)
-  return (
-    <div class="task-run-body">
-      {(task.verification || files > 0) && (
-        <div class="task-run-facts">
-          {task.verification && (
-            <span>{t('sessions.processVerification', { status: task.verification })}</span>
-          )}
-          {files > 0 && <span>{t('sessions.processFiles', { n: String(files) })}</span>}
-        </div>
+    <section class="task-delivery" aria-label={t('sessions.deliveryTitle')}>
+      <h4 class="task-delivery-label">{t('sessions.deliveryTitle')}</h4>
+      {full ? <Markdown text={expanded ? full : preview.text} class="msg-text" /> : (
+        <p class="task-run-empty">{t(state === 'done' ? 'sessions.deliveryEmpty' : 'sessions.deliveryFailedEmpty')}</p>
       )}
-      {shown.length === 0 ? (
-        <p class="task-run-empty">{t('sessions.processEmpty')}</p>
-      ) : (
-        <ol class="task-run-timeline">
-          {shown.map((step) => (
-            <li key={step.key} class={`task-run-step tone-${step.tone}`}>
-              <span class="task-run-time">{clock(step.ts)}</span>
-              <div class="task-run-main">
-                <span class="task-run-label">{step.label}</span>
-                {step.summary && <div class="task-run-text">{step.summary}</div>}
-              </div>
-            </li>
-          ))}
-        </ol>
-      )}
+      {preview.more && <button class="task-delivery-toggle" type="button" aria-expanded={expanded}
+        onClick={() => setExpanded(value => !value)}>
+        {t(expanded ? 'sessions.deliveryLess' : 'sessions.deliveryMore')}
+      </button>}
+      {truncated && <p class="task-run-empty">{t('sessions.deliveryTruncated')}</p>}
+      {task ? <TaskProcessBody taskId={taskId} task={task} /> : <p class="task-run-empty">{t('sessions.deliveryEvidenceUnavailable')}</p>}
       <a class="task-run-open" href={`#/task/${encodeURIComponent(taskId)}`}>
         {t('sessions.liveOpen')} →
       </a>
-    </div>
+    </section>
   )
 }
 
-/** How many files the task's own result says it changed. A result without the
- *  field (a native command, a failed route) counts as zero, not as unknown. */
-function resultFiles(task: Task): number {
-  if (!task.result) return 0
-  try {
-    const parsed = JSON.parse(task.result) as { files_changed?: unknown }
-    return Array.isArray(parsed.files_changed) ? parsed.files_changed.length : 0
-  } catch {
-    return 0
-  }
+function TaskProcessBody({ taskId, task }: { taskId: string; task: Task }) {
+  const change = useChangeSignal()
+  const { events, error } = useTaskEvents(taskId, change, 200)
+  const steps = deliverySteps(events)
+  const shown = steps.slice(-5)
+  const facts = deliveryFacts(task)
+  return (
+    <>
+      <div class="task-delivery-facts">
+        <div>
+          <h4 class="task-delivery-label">{t('sessions.deliveryVerification')}</h4>
+          <span class={`task-delivery-verdict is-${facts.verification}`}>
+            {t(`sessions.deliveryVerification.${facts.verification}`)}
+          </span>
+        </div>
+        {facts.files.length > 0 && <div>
+          <h4 class="task-delivery-label">{t('sessions.processFiles', { n: String(facts.files.length) })}</h4>
+          <ul class="task-delivery-files">{facts.files.slice(0, 5).map(path => <li key={path}><code>{path}</code></li>)}</ul>
+          {facts.files.length > 5 && <span class="task-run-empty">{t('sessions.deliveryFilesMore', { n: facts.files.length - 5 })}</span>}
+        </div>}
+      </div>
+      <h4 class="task-delivery-label">{t('sessions.processTitle')}</h4>
+      {shown.length === 0 ? <p class="task-run-empty" role={error ? 'status' : undefined}>
+        {t(error ? 'sessions.deliveryStepsUnavailable' : 'sessions.processEmpty')}
+      </p> : <TaskStepList steps={shown} />}
+      {steps.length > shown.length && <details class="task-run task-delivery-history">
+        <summary class="task-run-head">{t('sessions.deliveryStepsMore', { n: steps.length })}</summary>
+        <div class="task-run-body"><TaskStepList steps={steps.slice(-120)} /></div>
+      </details>}
+      <div class={`task-delivery-remaining is-${facts.remaining}`}>
+        <h4 class="task-delivery-label">{t('sessions.deliveryRemaining')}</h4>
+        <p>{facts.followup || t(`sessions.deliveryRemaining.${facts.remaining}`)}</p>
+      </div>
+    </>
+  )
+}
+
+function TaskStepList({ steps }: { steps: LiveStep[] }) {
+  return <ol class="task-run-timeline">
+    {steps.map(step => <li key={step.key} class={`task-run-step tone-${step.tone}`}>
+      <span class="task-run-time">{clock(step.ts)}</span>
+      <div class="task-run-main"><span class="task-run-label">{step.label}</span>
+        {step.summary && <div class="task-run-text">{step.summary}</div>}
+      </div>
+    </li>)}
+  </ol>
 }
 
 /** Loads the task behind a dispatch turn. The transcript only stores the id,

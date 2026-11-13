@@ -70,7 +70,15 @@ func ReplayBudget(contextWindowTokens int) int {
 
 // Turn is one stored conversation message.
 type Turn struct {
-	RoundID string `json:"round_id,omitempty"`
+	// Delivery is the agent's display-only handoff report. Text remains the
+	// bounded conversational digest; replay must never include this payload.
+	DeliveryAttemptID string `json:"delivery_attempt_id,omitempty"`
+	Delivery          string `json:"delivery,omitempty"`
+	DeliveryTruncated bool   `json:"delivery_truncated,omitempty"`
+	// Thought is provider-supplied reasoning/summary, display-only, never replayed.
+	Thought     string `json:"thought,omitempty"`
+	RoundID     string `json:"round_id,omitempty"`
+	OperationID string `json:"operation_id,omitempty"`
 	// IdempotencyKey lets durable producers safely replay an append after a
 	// crash or a bookkeeping failure. Empty keeps ordinary append semantics;
 	// non-empty keys are unique within the session, first writer wins.
@@ -138,16 +146,17 @@ type Session struct {
 	// ParentID marks a root thread.
 	ParentID  string `json:"parent_id,omitempty"`
 	ForkIndex int    `json:"fork_index,omitempty"`
-	// Summary is a model-written digest of evicted turns. Compaction moves
-	// the oldest exchanges here instead of dropping them, so replays keep
-	// early context within the replay budget.
+	// Summary is a model-written digest of the compacted prefix. Original
+	// turns remain in Turns; replay skips SummaryTurns to avoid duplication.
 	// CompactedTurnKeys preserves exactly-once delivery after keyed turns
 	// have been folded into Summary. A digest must not erase acknowledgements.
-	CompactedTurnKeys []string          `json:"compacted_turn_keys,omitempty"`
-	Summary           string            `json:"summary,omitempty"`
-	Turns             []Turn            `json:"turns"`
-	AgentSessions     map[string]string `json:"agent_sessions,omitempty"`
-	Operation         *Operation        `json:"operation,omitempty"`
+	CompactedTurnKeys []string `json:"compacted_turn_keys,omitempty"`
+	Summary           string   `json:"summary,omitempty"`
+	// SummaryTurns is the preserved transcript prefix already represented in Summary.
+	SummaryTurns  int               `json:"summary_turns,omitempty"`
+	Turns         []Turn            `json:"turns"`
+	AgentSessions map[string]string `json:"agent_sessions,omitempty"`
+	Operation     *Operation        `json:"operation,omitempty"`
 	// Pinned keeps a session at the top of List regardless of recency. It is
 	// a user-facing ordering flag only — it does not protect the session
 	// from deletion.
@@ -231,11 +240,18 @@ type SideTurn struct {
 // client reconnect after its SSE response disappears and observe the exact
 // generation it started instead of inferring completion from transcript shape.
 type Operation struct {
-	ID        string    `json:"id"`
-	Status    string    `json:"status"`
-	TaskID    string    `json:"task_id,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	LastActivity time.Time      `json:"last_activity,omitempty"`
+	Tokens       int64          `json:"tokens,omitempty"`
+	Estimated    bool           `json:"estimated,omitempty"`
+	StartedAt    time.Time      `json:"started_at,omitempty"`
+	Text         string         `json:"text,omitempty"`
+	Thought      string         `json:"thought,omitempty"`
+	Progress     map[string]any `json:"progress,omitempty"`
+	ID           string         `json:"id"`
+	Status       string         `json:"status"`
+	TaskID       string         `json:"task_id,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // Store persists sessions as JSON files under root (created on demand).
@@ -331,11 +347,15 @@ func (s *Store) Fork(id string, atTurn int) (*Session, error) {
 		ParentID:          parent.ID,
 		ForkIndex:         atTurn,
 		Summary:           parent.Summary,
+		SummaryTurns:      parent.SummaryTurns,
 		CompactedTurnKeys: append([]string(nil), parent.CompactedTurnKeys...),
 		Team:              append([]string(nil), parent.Team...),
 		Turns:             append([]Turn(nil), parent.Turns[:atTurn]...),
 		CreatedAt:         now,
 		UpdatedAt:         now,
+	}
+	if atTurn < child.SummaryTurns {
+		child.Summary, child.SummaryTurns = "", 0
 	}
 	if err := s.save(child); err != nil {
 		return nil, err
@@ -574,6 +594,13 @@ func SplitForBudget(turns []Turn, budget int) (evicted, kept []Turn) {
 	return evicted, kept
 }
 
+// ReplayTurns excludes the prefix already represented in Summary without
+// deleting it from the user's durable transcript. Older compacted files have
+// SummaryTurns=0 because their prefix was already removed by older versions.
+func (s *Session) ReplayTurns() []Turn {
+	return s.Turns[min(max(s.SummaryTurns, 0), len(s.Turns)):]
+}
+
 // CompactHistory auto-compacts one session: while the thread exceeds budget,
 // the oldest exchanges are folded into the session's Summary by summarize
 // (the previous digest is prepended so the model merges it forward). It
@@ -594,8 +621,9 @@ func (s *Store) CompactHistory(ctx context.Context, id string, budget int, summa
 		s.mu.Unlock()
 		return nil, err
 	}
-	evicted, _ := SplitForBudget(sess.Turns, budget)
+	evicted, _ := SplitForBudget(sess.ReplayTurns(), budget)
 	priorSummary := sess.Summary
+	priorCount := sess.SummaryTurns
 	s.mu.Unlock()
 	if len(evicted) == 0 || summarize == nil {
 		return sess, nil
@@ -627,7 +655,7 @@ func (s *Store) CompactHistory(ctx context.Context, id string, budget int, summa
 	if err != nil {
 		return nil, err
 	}
-	if fresh.Summary != priorSummary {
+	if fresh.Summary != priorSummary || fresh.SummaryTurns != priorCount {
 		return fresh, nil // another compaction published meanwhile
 	}
 	if len(fresh.Turns) < len(evicted) {
@@ -638,24 +666,24 @@ func (s *Store) CompactHistory(ctx context.Context, id string, budget int, summa
 	}
 	// Turns only ever change by append (or by a compaction the CAS above
 	// already caught), so the evicted set is still a strict prefix of the
-	// stored thread: everything past it was not summarized and must be kept.
+	// replay tail: everything past it was not summarized and must be kept.
 	// The thread may sit slightly over budget until the next compaction —
 	// a soft overshoot, never a silent drop of unsummarized turns.
-	kept2 := append([]Turn(nil), fresh.Turns[len(evicted):]...)
+	summarized := priorCount + len(evicted)
 	// Archive the producer keys in the same atomic save as the compaction.
 	// A crash/replayed finalizer then cannot resurrect a summarized message.
 	keys := make(map[string]bool, len(fresh.CompactedTurnKeys))
 	for _, key := range fresh.CompactedTurnKeys {
 		keys[key] = true
 	}
-	for _, turn := range fresh.Turns[:len(evicted)] {
+	for _, turn := range evicted {
 		if key := turn.IdempotencyKey; key != "" && !keys[key] {
 			fresh.CompactedTurnKeys = append(fresh.CompactedTurnKeys, key)
 			keys[key] = true
 		}
 	}
 	fresh.Summary = strings.TrimSpace(digest)
-	fresh.Turns = kept2
+	fresh.SummaryTurns = summarized
 	fresh.UpdatedAt = time.Now()
 	if err := s.save(fresh); err != nil {
 		return nil, err
@@ -680,6 +708,9 @@ func (s *Store) SetOperation(id string, op Operation) (bool, error) {
 	}
 	if sess.Operation != nil && sess.Operation.ID != op.ID {
 		return false, nil
+	}
+	if op.StartedAt.IsZero() && sess.Operation != nil && sess.Operation.ID == op.ID {
+		op.StartedAt = sess.Operation.StartedAt
 	}
 	op.UpdatedAt = time.Now()
 	sess.Operation = &op

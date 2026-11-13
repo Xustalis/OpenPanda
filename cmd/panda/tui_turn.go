@@ -97,7 +97,7 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 		if m.liveTask != nil {
 			m.liveTask.say(p.Detail)
 		}
-	case askengine.ProgressRetry, askengine.ProgressOffline:
+	case askengine.ProgressModel, askengine.ProgressRetry, askengine.ProgressOffline:
 		// A model retry (or an outage being waited out) belongs on the status
 		// line only — folding it into the delegated-task card's trail would
 		// masquerade as a lifecycle stage.
@@ -305,8 +305,14 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 	// Stamp the row id once here rather than at each of the five construction
 	// sites: every task block is addressable by id, and the rail's locate
 	// action reads exactly that.
-	if b.kind == blockTask && out.TaskID != "" {
+	if b.kind == blockTask {
 		b.taskRef = out.TaskID
+		b.files = out.FilesChanged
+		if isTerminalState(out.TaskState) {
+			b.taskState = out.TaskState
+		} else if out.OK {
+			b.taskState = "done"
+		}
 	}
 	return b
 }

@@ -77,9 +77,11 @@ func (r *repl) watchTasks(ctx context.Context) {
 // card; the classic loop prints the /approve · /reject line) instead of
 // letting it rot in the queue with nobody asked.
 type watchEvent struct {
-	note   string
-	task   core.Task
-	review bool
+	note      string
+	task      core.Task
+	review    bool
+	completed bool
+	steps     []string
 }
 
 // pollCompletions reads the task store once and returns an event for every task
@@ -121,10 +123,13 @@ func (r *repl) pollCompletions(ctx context.Context) []watchEvent {
 			if err != nil {
 				continue // row left under us (retention, a clear): no note to build
 			}
+			timeline, _ := r.store.Events(ctx, id)
 			events = append(events, watchEvent{
-				note:   r.completionNote(t, allIDs),
-				task:   t,
-				review: t.State == core.StateReview,
+				completed: true,
+				steps:     taskHandoffSteps(timeline),
+				note:      r.completionNote(t, allIDs),
+				task:      t,
+				review:    t.State == core.StateReview,
 			})
 			// The transition just announced this review — start the reminder
 			// clock now so it does not immediately repeat as a "stall".
