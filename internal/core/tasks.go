@@ -1348,21 +1348,40 @@ func (s *TaskStore) PauseWithResult(ctx context.Context, taskID, owner string, r
 }
 
 // PauseDrift parks a running task whose agent overstepped its declared scope.
-// The drift message and the strayed paths are preserved as the result so the
-// human reviewing sees exactly what left the scope, and the disposition is
-// AcceptWork: approving accepts the work as done (the reviewer saw the diff),
-// rejecting fails it. The old NeedsChangedInput disposition made approve
-// error out — a finished task with no route to done.
+// The drift message is preserved as the result so the human reviewing sees
+// exactly what left the scope, and the disposition is AcceptWork: approving
+// accepts the work as done (the reviewer saw the diff), rejecting fails it.
+// The old NeedsChangedInput disposition made approve error out — a finished
+// task with no route to done.
+//
+// changed is the round's FULL workdir footprint, not the strayed subset. A
+// reviewer deciding whether to accept a drift needs the work the agent did in
+// scope as much as the file that left it — recording only the stray paths left
+// the task page reporting a run that changed nothing but its build artifact,
+// and the conversation's "改动 N 个文件" counting the wrong files.
 //
 // ok:true in the stored result: the agent's run succeeded and drift is a
 // policy intercept, not an execution failure — an approving human accepts the
 // work, so the approve receipt must not report (and exit) as a failure.
-func (s *TaskStore) PauseDrift(ctx context.Context, taskID, owner, reason string, files []string) error {
+func (s *TaskStore) PauseDrift(ctx context.Context, taskID, owner, reason string, changed []string, stats []fileStat) error {
+	return s.pauseDrift(ctx, taskID, owner, reason, changed, stats)
+}
+
+// PauseDriftAttempt is PauseDrift scoped to one attempt — see
+// ReviewWithDispositionAttempt for why the runner passes its attempt id.
+func (s *TaskStore) PauseDriftAttempt(ctx context.Context, taskID, owner, attemptID, reason string, changed []string, stats []fileStat) error {
+	return s.pauseDrift(ctx, taskID, owner, reason, changed, stats, attemptID)
+}
+
+func (s *TaskStore) pauseDrift(ctx context.Context, taskID, owner, reason string, changed []string, stats []fileStat, expectAttempt ...string) error {
 	result := map[string]any{"drift": true, "ok": true, "stderr": reason}
-	if len(files) > 0 {
-		result["files_changed"] = files
+	if len(changed) > 0 {
+		result["files_changed"] = changed
 	}
-	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork, reason)
+	if len(stats) > 0 {
+		result["files_stat"] = stats
+	}
+	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork, reason, expectAttempt...)
 }
 
 // PauseForAnswer parks a running task in review on an agent's clarification
@@ -1376,14 +1395,6 @@ func (s *TaskStore) PauseForAnswer(ctx context.Context, taskID, owner string, re
 // Attempt-scoped runner variants — see CompleteAttempt.
 func (s *TaskStore) PauseWithResultAttempt(ctx context.Context, taskID, owner, attemptID string, result any) error {
 	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork, "awaiting approval", attemptID)
-}
-
-func (s *TaskStore) PauseDriftAttempt(ctx context.Context, taskID, owner, attemptID, reason string, files []string) error {
-	result := map[string]any{"drift": true, "ok": true, "stderr": reason}
-	if len(files) > 0 {
-		result["files_changed"] = files
-	}
-	return s.pauseWithResultDisposition(ctx, taskID, owner, result, ApprovalAcceptWork, reason, attemptID)
 }
 
 func (s *TaskStore) PauseForAnswerAttempt(ctx context.Context, taskID, owner, attemptID string, result any) error {

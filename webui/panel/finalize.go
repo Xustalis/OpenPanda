@@ -137,7 +137,43 @@ func (h *handler) taskSummary(ctx context.Context, t core.Task) string {
 	}
 	agent := h.taskAgent(ctx, t)
 	from, why := h.substitutedFrom(ctx, t.TaskID, agent)
-	return summaryText(t, reason, agent, from, why)
+	return summaryText(t, reason, agent, from, why, h.reviewVerdict(ctx, t.TaskID))
+}
+
+// reviewVerdict reports whether a human already decided the newest review on
+// this task: "approved", "rejected", or "" when the newest review is still the
+// park itself. A settled row's report must not ask for a decision that has been
+// made — a scope drift accepted into `done` is exactly the case that used to
+// come back as "needs your attention / approve or reject".
+//
+// Key presence, not truthiness: a rejection with an empty reason still records
+// {"rejected": ""}, and that is a decision.
+func (h *handler) reviewVerdict(ctx context.Context, taskID string) string {
+	events, err := h.store.Events(ctx, taskID)
+	if err != nil {
+		return ""
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != core.EvReview {
+			continue
+		}
+		var payload map[string]json.RawMessage
+		if json.Unmarshal([]byte(events[i].DataJSON), &payload) != nil {
+			return ""
+		}
+		if _, ok := payload["rejected"]; ok {
+			return "rejected"
+		}
+		if raw, ok := payload["approved"]; ok {
+			var approved bool
+			if json.Unmarshal(raw, &approved) == nil && approved {
+				return "approved"
+			}
+		}
+		// The newest review is the park itself: nothing has answered it yet.
+		return ""
+	}
+	return ""
 }
 
 // substitutedFrom names the agent the plan had chosen when the executor could
@@ -201,10 +237,19 @@ func taskDelivery(resultJSON string) (string, bool) {
 // more: the orchestration line — state, the employee that ran it, the job it
 // was given — and then that employee's own closing paragraph.
 //
+// The thread is a conversation, not a log. It used to carry the entire
+// adapter payload: a 2 000-word agent reply, its "变更 / 验证" sections and
+// the code fences inside them, printed whole under a `[done]` tag. What a
+// reader wants from the transcript is who did the work and how it ended; the
+// play-by-play is one click away on the task page, and replaying the dump
+// into the model's own history spent the context window on its own past
+// prose. One conclusion paragraph is the summary — the sections above it are
+// the evidence behind it.
+//
 // This short version is replayed to the model. The full display report is
 // stored in Turn.Delivery, so preserving changes, verification and open items
 // for the user no longer consumes the next request's context window.
-func summaryText(t core.Task, reason, agent, substituted, substitutedWhy string) string {
+func summaryText(t core.Task, reason, agent, substituted, substitutedWhy, verdict string) string {
 	// A failed run's own reason is its conclusion: there is no adapter answer
 	// to take a closing paragraph from, and the reason is what the reader
 	// needs. A done run never shows a stale reason from an earlier attempt.
@@ -214,15 +259,15 @@ func summaryText(t core.Task, reason, agent, substituted, substitutedWhy string)
 		body = conclusionOf(reason)
 	}
 	rawBody := body
-	body = compactScopeDrift(loc, body)
-	// A review always needs a person. A scope drift does too, even when the
-	// row itself says done: the agent's own report is warning that it touched
-	// files outside the task, and the transcript must not bury that under a
-	// green header. The report head carries the verdict the reader should act
-	// on; the task page still shows the row's own state.
-	needsAttention := t.State == core.StateReview || body != rawBody
+	body = compactScopeDrift(loc, body, verdict)
+	// A review always needs a person. So does a drift nothing has answered —
+	// the supervisor closing a row whose own report says it overstepped is not
+	// a decision about the drift. A drift a human already accepted or rejected
+	// is neither: the report owes the reader the outcome, not the question.
+	undecidedDrift := body != rawBody && verdict == ""
+	needsAttention := t.State == core.StateReview || undecidedDrift
 	stateLabel := t.State
-	if needsAttention && stateLabel == core.StateDone {
+	if undecidedDrift && stateLabel == core.StateDone {
 		stateLabel = core.StateReview
 	}
 
@@ -261,8 +306,11 @@ func summaryText(t core.Task, reason, agent, substituted, substitutedWhy string)
 // compactScopeDrift turns the scope intercept's raw file list into a summary
 // a person can read in a chat bubble. The full list stays on the task's
 // execution chain: the transcript owes the reader the count, the first few
-// paths, and what to do next — not a 700-character path dump.
-func compactScopeDrift(loc i18n.Locale, body string) string {
+// paths, and — depending on who closed the row — either what to do next or
+// what was decided. An undecided drift keeps the "approve or reject"
+// instruction; an accepted or rejected one must not, because by the time this
+// report is written the decision already happened.
+func compactScopeDrift(loc i18n.Locale, body, verdict string) string {
 	const prefix = "scope drift: agent changed files outside declared scope: "
 	if !strings.HasPrefix(body, prefix) {
 		return body
@@ -284,7 +332,14 @@ func compactScopeDrift(loc i18n.Locale, body string) string {
 	if len(paths) > len(shown) {
 		list += " …"
 	}
-	return i18n.Tf(loc, "web.session.scopeDrift", "n", strconv.Itoa(len(paths)), "paths", list)
+	key := "web.session.scopeDrift"
+	switch verdict {
+	case "approved":
+		key = "web.session.scopeDriftAccepted"
+	case "rejected":
+		key = "web.session.scopeDriftRejected"
+	}
+	return i18n.Tf(loc, key, "n", strconv.Itoa(len(paths)), "paths", list)
 }
 
 // maxSubstitutionWhy bounds the cause printed inside the swap note. The note
