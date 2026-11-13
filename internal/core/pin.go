@@ -352,9 +352,18 @@ func (c *Core) routePinned(ctx context.Context, ref string, chain []string,
 		// contains this node is the normal origin-queued case, not a loop to
 		// refuse (revisiting via delegation is rejected upstream by
 		// AppendChain before this resolver runs).
-		if len(requires) > 0 && !c.localMatch()(requires) {
-			return scheduler.Decision{Action: scheduler.ActionDecline,
-				Reason: fmt.Sprintf("pinned node %q (this node) cannot satisfy requires %v", ref, requires)}
+		if len(requires) > 0 {
+			if ok, why := c.localMatchReason(requires); !ok {
+				// Name the failing check, not just the requirement: "cannot
+				// satisfy [agent:claude_code]" is true of a missing CLI, an
+				// unconfigured model and a dead relay alike, and the operator
+				// cannot tell which of the three to go fix.
+				reason := fmt.Sprintf("pinned node %q (this node) cannot satisfy requires %v", ref, requires)
+				if why != "" {
+					reason += " — " + why
+				}
+				return scheduler.Decision{Action: scheduler.ActionDecline, Reason: reason}
+			}
 		}
 		// The same honesty a remote pin gets: the user's destination is
 		// fixed, but a declared profile this node positively cannot fit is

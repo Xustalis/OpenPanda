@@ -145,6 +145,31 @@ func (r *Router) InjectionDecision(name, adapter string) InjectionDecision {
 			BaseURL: effectiveBaseURLFor(name, adapter, m),
 		}
 	}
+	// auto: an explicit injection.agents.<name> entry is the operator naming
+	// the model this agent should run on, so it outranks "the CLI has its own
+	// credentials". That is the whole point of the entry when the agent's own
+	// subscription is the unreliable half — a relay out of quota, a provider
+	// that geo-blocks — and it turns the failure-time rescue into a dispatch
+	// decision: the run starts on panda's model instead of hanging on a dead
+	// endpoint until the timeout.
+	if key := r.injectionPinKey(name, adapter); key != "" {
+		switch {
+		case !modelConfigured(m):
+			return InjectionDecision{Inject: false, Reason: "injection.agents." + key + " pins this agent but no model is configured"}
+		case m.APIKey == "":
+			return InjectionDecision{Inject: false, Reason: "injection.agents." + key + " pins this agent but no model key is configured"}
+		}
+		if blocker := injectionBlocker(name, adapter, m); blocker != "" {
+			return InjectionDecision{Inject: false, Reason: "model injection refused: " + blocker}
+		}
+		return InjectionDecision{
+			Inject:  true,
+			Reason:  "injection.agents." + key + " pins this agent to panda's model",
+			Kind:    InjectionKindAlways,
+			Model:   effectiveModelNameFor(name, adapter, m),
+			BaseURL: effectiveBaseURLFor(name, adapter, m),
+		}
+	}
 	// auto: an agent that ships its own model (OpenCode's free tier) is
 	// self-sufficient. Injecting panda's endpoint would override the model the
 	// agent is built around — and opencode.py substitutes a request outside its
@@ -190,6 +215,23 @@ func (r *Router) InjectionDecision(name, adapter string) InjectionDecision {
 		Model:   effectiveModelNameFor(name, adapter, m),
 		BaseURL: effectiveBaseURLFor(name, adapter, m),
 	}
+}
+
+// injectionPinKey returns the injection.agents key that names this agent, or
+// "" when the operator did not pin one. Both the card key and the adapter file
+// name resolve, the same two spellings injectionModelFor accepts — a reason
+// string has to name the key the operator actually wrote.
+func (r *Router) injectionPinKey(name, adapter string) string {
+	if len(r.injectionAgents) == 0 {
+		return ""
+	}
+	if _, ok := r.injectionAgents[name]; ok {
+		return name
+	}
+	if _, ok := r.injectionAgents[adapter]; ok {
+		return adapter
+	}
+	return ""
 }
 
 // modelConfigured reports whether the config names a real endpoint — a
@@ -256,9 +298,14 @@ func injectionBlocker(name, adapter string, model config.ModelConfig) string {
 			" only accepts " + k.ModelEnv.APIType +
 			"; set injection.agents." + name + ".api_type to match the endpoint"
 	}
-	if adapter == "claude_code.py" && !isDeepSeekEndpoint(base) {
-		return "claude_code injection targets DeepSeek endpoints only"
-	}
+	// claude_code used to be pinned to api.deepseek.com here, from back when
+	// DeepSeek's Anthropic endpoint was the only one this adapter had been
+	// proved against. The dialect rule above already refuses anything the CLI
+	// cannot speak, and the adapter now passes the model id through to a
+	// non-DeepSeek endpoint (see claude_code.py `_use_model_arg`), so a local
+	// relay or a self-hosted gateway is injectable like any other Anthropic
+	// surface. Keeping the old rule refused exactly the setup an operator
+	// reaches for when their subscription's own endpoint is the broken part.
 	return ""
 }
 

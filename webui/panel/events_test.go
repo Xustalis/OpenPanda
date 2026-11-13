@@ -796,3 +796,72 @@ func TestListTasksBriefDropsHeavyColumns(t *testing.T) {
 		t.Fatalf("brief row lost the fields the chat renders: %+v", brief)
 	}
 }
+
+// A park's cause rides the task JSON so the board and the chat card can name
+// the fix. The disposition alone says consent cannot help; it does not say why,
+// and needs_changed_input reads as "the prompt is wrong" even when the endpoint
+// refused the agent's own model configuration. Both read paths must agree, and
+// the newest review event is the one that counts — a row can park twice.
+func TestReviewCauseClassifiesModelConfigParks(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	// The two readers under test only touch db; the HTTP wrapper New returns
+	// would hide them behind http.Handler.
+	h := &handler{store: store, db: db}
+	ctx := context.Background()
+
+	model, err := store.Create(ctx, "", "proj", "model park", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// An earlier park that says nothing about the model, then the provider's
+	// refusal: the newest event is the one the card explains.
+	if err := store.RecordEvent(ctx, model.TaskID, core.EvReview,
+		map[string]any{"reason": "verification failed: tests did not pass"}); err != nil {
+		t.Fatalf("record first review: %v", err)
+	}
+	if err := store.RecordEvent(ctx, model.TaskID, core.EvReview,
+		map[string]any{"reason": `provider failure: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}`}); err != nil {
+		t.Fatalf("record provider review: %v", err)
+	}
+
+	other, err := store.Create(ctx, "", "proj", "ordinary park", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.RecordEvent(ctx, other.TaskID, core.EvReview,
+		map[string]any{"reason": "verification failed: tests did not pass"}); err != nil {
+		t.Fatalf("record review: %v", err)
+	}
+
+	// The brief's single-row read and the board's batched one answer the same.
+	if got := h.reviewCause(ctx, model.TaskID); got != "model_config" {
+		t.Fatalf("reviewCause(model park) = %q, want model_config", got)
+	}
+	if got := h.reviewCause(ctx, other.TaskID); got != "" {
+		t.Fatalf("reviewCause(ordinary park) = %q, want empty", got)
+	}
+
+	rows := []taskJSON{
+		{ID: model.TaskID, State: core.StateReview},
+		{ID: other.TaskID, State: core.StateReview},
+		{ID: model.TaskID + "-done", State: core.StateDone},
+	}
+	h.attachReviewCauses(ctx, rows)
+	if rows[0].ReviewCause != "model_config" {
+		t.Fatalf("batched cause(model park) = %q, want model_config", rows[0].ReviewCause)
+	}
+	if rows[1].ReviewCause != "" {
+		t.Fatalf("batched cause(ordinary park) = %q, want empty", rows[1].ReviewCause)
+	}
+	if rows[2].ReviewCause != "" {
+		t.Fatalf("batched cause(done row) = %q, want empty", rows[2].ReviewCause)
+	}
+}

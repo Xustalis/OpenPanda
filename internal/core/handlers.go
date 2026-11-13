@@ -896,22 +896,38 @@ func resourceRequirement(resourceJSON string) ledger.ResourceProfile {
 // abilities locally. A nil router (no capability card) matches nothing.
 func (c *Core) localMatch() func([]string) bool {
 	return func(required []string) bool {
-		router := c.currentRouter()
-		if router == nil {
-			return false
-		}
-		plan, err := router.Route(required)
-		if err != nil {
-			return false
-		}
-		// A static ability match is not dispatch readiness: the plan must
-		// also have a usable executor. Without this gate a node whose
-		// harnesses are all installed-but-unconfigured — or whose model
-		// endpoint is down — still claims the task, accepts it, and blocks
-		// inside the adapter instead of letting the scheduler fail over to
-		// a healthy peer.
-		return router.PlanUsable(plan)
+		ok, _ := c.localMatchReason(required)
+		return ok
 	}
+}
+
+// localMatchReason is localMatch with the diagnosis attached: the same
+// decision, plus the per-candidate reason PlanUnusableReason already computes
+// (missing CLI, no model, endpoint unreachable). A decline that names only the
+// requirement sends the operator back to the task text; the reason names the
+// failing check, which is the thing that can be fixed.
+func (c *Core) localMatchReason(required []string) (bool, string) {
+	router := c.currentRouter()
+	if router == nil {
+		return false, "no router on this node"
+	}
+	plan, err := router.Route(required)
+	if err != nil {
+		return false, err.Error()
+	}
+	// A static ability match is not dispatch readiness: the plan must
+	// also have a usable executor. Without this gate a node whose
+	// harnesses are all installed-but-unconfigured — or whose model
+	// endpoint is down — still claims the task, accepts it, and blocks
+	// inside the adapter instead of letting the scheduler fail over to
+	// a healthy peer.
+	if router.PlanUsable(plan) {
+		return true, ""
+	}
+	if why := router.PlanUnusableReason(plan); why != "" {
+		return false, why
+	}
+	return false, "no usable executor for the plan"
 }
 
 // onlineEmployees returns the known online nodes (self included) from the
