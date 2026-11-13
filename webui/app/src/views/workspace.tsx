@@ -36,6 +36,7 @@ import { autoGrow, editorClear, editorPlain, editorTextOf, insertTextAtCaret, ra
 import { DeviceGlyph, type Form as FormKind } from '../components/device-glyph'
 import { WorkspacePanels, panelAgents, tileKey } from './workspace-panels'
 import { clampZoom } from './workspace-zoom'
+import { isLocal } from './workspace-local'
 import { agentLogo } from '../format/agent-logo'
 import { agentInitial } from '../format/agent-role'
 import {
@@ -175,17 +176,6 @@ function kindLabel(kind: string): string {
 function workStateLabel(d: Device): string {
   if (!d.online) return t('workspace.offline')
   return d.busy ? t('workspace.state.working') : t('workspace.state.idle')
-}
-
-
-
-function isLocal(self: SelfInfo | null, n: NodeInfo): boolean {
-  if (n.is_local) return true
-  if (!self) return false
-  if (self.node_id && self.node_id === n.id) return true
-  if (self.node && self.node.id === n.id) return true
-  const name = self.node_name || self.hostname
-  return name !== '' && (n.name === name || n.id === name)
 }
 
 /** States that mean the node is actually executing: `queued` is work waiting
