@@ -547,3 +547,46 @@ func TestCLIPlanExample(t *testing.T) {
 		t.Fatalf("plan example does not look like a plan:\n%s", r.stdout)
 	}
 }
+
+// TestCLICardInvokeWithoutAction pins the bare invoke form: an actuator whose
+// command takes no verb and no parameters (`hardware:screen_capture`) is
+// invoked with the id alone, and `pos[2:]` on a one-element positional list
+// panicked before the argv was ever resolved — the CLI's computer-use entry
+// point crashed instead of capturing.
+func TestCLICardInvokeWithoutAction(t *testing.T) {
+	home := t.TempDir()
+	_, cardPath := initNode(t, home)
+	card := `device: invoke-test
+resource_class: Standard
+actuators:
+  - id: hardware:screen_capture
+    type: software
+    category: screen_sensing
+    interface: desktop
+    tier: 1
+    command: echo
+    args:
+      - capture
+`
+	if err := os.WriteFile(cardPath, []byte(card), 0o600); err != nil {
+		t.Fatalf("write card: %v", err)
+	}
+
+	got := runCLI(t, home, "card", "invoke", "hardware:screen_capture", "--card", cardPath, "--dry-run")
+	if strings.Contains(got.output(), "panic:") {
+		t.Fatalf("card invoke panicked: %s", got.output())
+	}
+	if got.code != 0 {
+		t.Fatalf("card invoke exited %d: %s", got.code, got.output())
+	}
+	if !strings.Contains(got.stdout, "capture") {
+		t.Fatalf("resolved argv missing the actuator command: %q", got.stdout)
+	}
+
+	// An action with no parameters must still work — the params loop only
+	// starts once a second positional exists.
+	withAction := runCLI(t, home, "card", "invoke", "hardware:screen_capture", "now", "--card", cardPath, "--dry-run")
+	if withAction.code != 0 {
+		t.Fatalf("card invoke with action exited %d: %s", withAction.code, withAction.output())
+	}
+}

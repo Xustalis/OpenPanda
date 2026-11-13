@@ -707,6 +707,34 @@ func TestSubstitutionReasonPeelsTheWrapper(t *testing.T) {
 	}
 }
 
+// A provider answer that names the model itself is the one 400 no retry can
+// improve: the CLI sends the same id to the same endpoint on every attempt.
+// Matching the provider's vocabulary (not the bare status) keeps a malformed
+// request or a context overflow — different causes, different fixes — out.
+func TestModelConfigFailureIsDeterministic(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		// The exact codex answer: a ChatGPT account asked for a third-party id.
+		{`provider failure: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}`, true},
+		{"400 model_not_found", true},
+		{"unrecognized_model: gpt-9", true},
+		{"The model `gpt-5-codex` does not exist or you do not have access to it", true},
+		{"unsupported model: claude-opus-9", true},
+		// A 400 that is about the request or the input, not the model.
+		{"400 invalid_request_error: messages: field required", false},
+		{"context_length_exceeded: too many tokens", false},
+		{"connection refused", false},
+		{"the model file was renamed", false},
+	}
+	for _, c := range cases {
+		if got := IsModelConfigFailure(c.text); got != c.want {
+			t.Fatalf("IsModelConfigFailure(%q) = %v, want %v", c.text, got, c.want)
+		}
+	}
+}
+
 // A CLI's own wording for "you are not logged in" is a credential failure, not
 // a task failure: the rescue injection is what turns it into a working run
 // instead of a substitute answering the task. grok says "Not signed in. To

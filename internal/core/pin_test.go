@@ -1206,3 +1206,42 @@ func TestRoutePinnedDiscoveredHint(t *testing.T) {
 		t.Fatalf("decline for an unknown ref gives no fleet hint: %q", d2.Reason)
 	}
 }
+
+// A pin that names this node but a capability it cannot serve must say WHY.
+// "cannot satisfy requires [agent:claude_code]" is true of a missing CLI, an
+// unconfigured model and a dead relay alike; the operator had nowhere to go
+// from it. The router already computes the per-candidate reason — the decline
+// has to carry it.
+func TestRoutePinnedNamesTheFailingCheck(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	card := ledger.Card{
+		Device:        "pin-unusable",
+		ResourceClass: "Standard",
+		Agents: map[string]ledger.Agent{
+			"claude_code": {Adapter: "claude_code.py", Capabilities: []string{"coding"}, Tier: 1},
+		},
+		Capacity: ledger.Capacity{CPUCores: 8, RAMGB: 16, MaxConcurrent: 3},
+	}
+	c := NewCore(db, "pin-unusable", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
+	c.SetSharedSecret(testSharedSecret)
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// The agent is on the card but this node cannot dispatch it (no CLI, no
+	// model, endpoint down — the exact check does not matter here, only that
+	// the decline reports which candidate failed).
+	c.router.SetAgentProber(func(string, ledger.Agent) bool { return false })
+
+	d := c.routePinned(ctx, "pin-unusable", []string{"pin-unusable"}, []string{"agent:claude_code"}, ledger.ResourceProfile{})
+	if d.Action != scheduler.ActionDecline {
+		t.Fatalf("routePinned = %+v, want decline", d)
+	}
+	if !strings.Contains(d.Reason, "cannot satisfy requires [agent:claude_code]") {
+		t.Fatalf("reason = %q, want the requirement named", d.Reason)
+	}
+	if !strings.Contains(d.Reason, "claude_code: ") {
+		t.Fatalf("reason = %q, want the failing candidate named", d.Reason)
+	}
+}

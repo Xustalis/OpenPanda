@@ -341,8 +341,27 @@ def _v2_args(req):
     return args
 
 
+def _deepseek_endpoint():
+    """True when the injected base URL is DeepSeek's own Anthropic endpoint."""
+    return "api.deepseek.com" in (os.environ.get("ANTHROPIC_BASE_URL") or "")
+
+
 def _use_model_arg(model):
-    return bool(model) and not (_injected() and model.lower().startswith(("deepseek", "openai", "gpt")))
+    """Whether the CLI is handed --model.
+
+    The alias workaround below is DeepSeek-specific: DeepSeek's Anthropic
+    endpoint maps the CLI's claude-* aliases onto its own models, so the flag
+    would carry an id it does not serve. Every other injected endpoint — a
+    local relay, a self-hosted gateway — wants the real model name and 404s on
+    the alias, so the flag stays.
+    """
+    if not model:
+        return False
+    if not _injected():
+        return True
+    if not model.lower().startswith(("deepseek", "openai", "gpt")):
+        return True
+    return not _deepseek_endpoint()
 
 
 def _stream_argv(base, req, model, disable_settings, v2):

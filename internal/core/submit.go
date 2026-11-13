@@ -1049,6 +1049,24 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			// different attempt that owns its verdict — stand down.
 			return final, result, nil
 		}
+		// A provider answer that names the model itself (400 model_not_found,
+		// an id the credential's plan does not serve) is as deterministic as
+		// the authorization refusal below: the same CLI sends the same id to
+		// the same endpoint, so every attempt collects the same 400. Retrying
+		// spends the budget and buries the real fix — the agent's own model
+		// configuration — under a park that reads as "the prompt needs
+		// changing". Park once, with the provider's words as the reason.
+		if commander.IsModelConfigFailure(result.Stderr) {
+			if rerr := c.store.ReviewAttempt(ctx, taskID, c.nodeID, result.AttemptID, result.Stderr); rerr != nil {
+				c.logger.Error("failed to park task on a model configuration failure", "task", taskID, "err", rerr)
+			}
+			c.reviewReset(taskID)
+			final, err = c.store.Get(ctx, taskID)
+			if err != nil {
+				return Task{}, result, err
+			}
+			return final, result, nil
+		}
 		// A tier-2 authorization refusal is deterministic policy, not a
 		// failed attempt: retrying cannot produce consent, so the task goes
 		// straight to review with the actionable reason instead of burning
