@@ -764,11 +764,6 @@
   outline: none;
   font-weight: 500;
 }
-.changes-btn {
-  flex: none;
-  font-size: 13px;
-  padding: 4px 12px;
-}
 
 /* ---- Log ----------------------------------------------------------------- */
 
@@ -1356,6 +1351,64 @@
   text-wrap: pretty;
   margin: 0;
   font-size: var(--text-lg);
+}
+
+/* — the files a turn carried, under the words it carried them with. A picture
+     keeps its pixels — the same bounded frame a tool row draws, one click from
+     full screen — and everything else is a chip naming the file. Without this
+     row a pasted screenshot vanished the moment the turn was refiled. */
+.msg-files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+/* The frame brings its own top margin from the timeline, where it sits under a
+   tool row's path; here the row's gap already spaces it. */
+.msg-files .img-preview {
+  margin-top: 0;
+}
+/* — the files a turn carried: one pill per file, riding in the sentence. The
+     composer showed them this way while typing, and the transcript keeps the
+     same shape — a pasted screenshot reads as context for the question, not as
+     content of its own. The picture is one hover (floating copy) and one click
+     (lightbox) away; see ImagePill in image-preview.tsx. */
+.msg-files {
+  display: inline;
+}
+.msg-files .attach-chip {
+  margin-right: 6px;
+  vertical-align: baseline;
+}
+/* A button wearing the chip's clothes: it needs the page's type, and it is the
+   one chip in the row that opens something. */
+.msg-file-pill {
+  font-family: inherit;
+  cursor: zoom-in;
+}
+.msg-file-pill:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+/* A pasted screenshot is named by a 32-character hash often enough that the
+   name needs a ceiling; the hover copy and the lightbox carry the full value. */
+.msg-files .msg-file-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The image glyph is the one bit of colour in the row — it is what tells a
+   picture from a document at a glance. */
+.msg-file-pill-ico {
+  color: var(--accent-2);
+}
+.msg-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 
 /* ---- The cast, the state, and the round's closing line --------------------- */
@@ -5159,16 +5212,9 @@
    than from the pane's edge.
 
    The panel steps aside for the surfaces that own that corner outright: the
-   side dock, the task rail and the diff drawer. */
+   side dock and the task rail. */
 .chat-pane.panel-open .rail-dock,
-.chat-pane:has(.task-rail) .rail-dock,
-.chat-pane:has(.diff-drawer) .rail-dock {
-  display: none;
-}
-/* While the summary is up, its Changes row is the change count. The head's
-   `± N 处变更` pill opened the same drawer, so the two read as the same
-   control printed twice. */
-.chat-pane:has(.rail-dock) .changes-btn {
+.chat-pane:has(.task-rail) .rail-dock {
   display: none;
 }
 

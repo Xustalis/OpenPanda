@@ -1128,7 +1128,10 @@ function KanbanCard({
                   : undefined
               }
             >
-              {t(`detail.reviewKind.${task.approval_disposition}`)}
+              {task.approval_disposition === 'needs_changed_input' &&
+              task.review_cause === 'model_config'
+                ? t('detail.reviewCauseModelConfig')
+                : t(`detail.reviewKind.${task.approval_disposition}`)}
             </span>
           )}
           <ScopeSelect value={scope} onChange={setScope} disabled={busy} />

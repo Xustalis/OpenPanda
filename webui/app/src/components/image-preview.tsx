@@ -8,7 +8,7 @@
 // Bytes move through fetchBlob: an <img src> cannot carry the Bearer token, so
 // the console fetches /api/fs/image itself and hands the <img> an object URL.
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { fetchBlob } from '../api/client'
 import { t } from '../i18n'
 import { Icon } from './icons'
@@ -24,13 +24,17 @@ export interface ImagePreviewProps {
   path?: string
   /** Bytes the adapter already inlined — shown without a round trip. */
   dataUrl?: string
+  /** What to print under the frame. A transcript caption defaults to the
+   *  file's base name; a caller that already knows the reader's name for it
+   *  (a user turn's upload stamp, say) passes that instead. */
+  label?: string
   className?: string
 }
 
 /** A bounded thumbnail plus the lightbox it opens. Rendering the picture is
  *  best-effort by design: a path outside the readable roots (or a file the
  *  agent already deleted) leaves one dim line, never a broken image icon. */
-export function ImagePreview({ path, dataUrl, className = '' }: ImagePreviewProps) {
+export function ImagePreview({ path, dataUrl, label, className = '' }: ImagePreviewProps) {
   const [url, setUrl] = useState(dataUrl ?? '')
   const [failed, setFailed] = useState(false)
   const [zoom, setZoom] = useState(false)
@@ -96,9 +100,9 @@ export function ImagePreview({ path, dataUrl, className = '' }: ImagePreviewProp
     return <div class={`img-skel ${className}`} aria-hidden="true" ref={holder} />
   }
 
-  const name = path ? baseName(path) : 'image'
+  const name = label || (path ? baseName(path) : 'image')
   return (
-    <div class={`img-preview ${className}`}>
+    <div class={`img-preview ${className}`} ref={holder}>
       <button
         type="button"
         class="img-preview-btn"
@@ -112,7 +116,134 @@ export function ImagePreview({ path, dataUrl, className = '' }: ImagePreviewProp
         </span>
       </button>
       {path && <span class="img-preview-name">{name}</span>}
-      {zoom && <Lightbox src={url} path={path} onClose={() => setZoom(false)} />}
+      {zoom && <Lightbox src={url} path={path} label={label} onClose={() => setZoom(false)} />}
+    </div>
+  )
+}
+
+/** A picture as an attachment pill — the composer's own shape, carried into the
+ *  transcript.
+ *
+ *  A pasted screenshot is context for the sentence, not content of its own: as
+ *  a thumbnail it pushed the bubble out to the picture's width and turned a
+ *  short question into an image block. The pill keeps the sentence the subject,
+ *  and the picture stays one hover (a floating copy) and one click (the
+ *  lightbox) away. Bytes are fetched on first hover, not on mount: a thread can
+ *  hold dozens of pasted screenshots and most are never opened. */
+export function ImagePill({ path, label }: { path: string; label: string }) {
+  const [url, setUrl] = useState('')
+  const [zoom, setZoom] = useState(false)
+  const [anchor, setAnchor] = useState<DOMRect | null>(null)
+  const pill = useRef<HTMLButtonElement>(null)
+  const dwell = useRef<number | undefined>(undefined)
+  const made = useRef('')
+  const alive = useRef(true)
+
+  useEffect(
+    () => () => {
+      alive.current = false
+      window.clearTimeout(dwell.current)
+      if (made.current) URL.revokeObjectURL(made.current)
+    },
+    [],
+  )
+
+  /** The object URL for this picture, fetched at most once. */
+  async function bytes(): Promise<string> {
+    if (url) return url
+    const blob = await fetchBlob(`/api/fs/image?path=${encodeURIComponent(path)}`)
+    if (!alive.current) throw new Error('unmounted')
+    made.current = URL.createObjectURL(blob)
+    setUrl(made.current)
+    return made.current
+  }
+
+  function enter() {
+    window.clearTimeout(dwell.current)
+    dwell.current = window.setTimeout(() => {
+      const rect = pill.current?.getBoundingClientRect()
+      if (!rect) return
+      // Place the copy now, fill it when the bytes land: the frame appears
+      // under the pointer in one beat instead of after a round trip.
+      setAnchor(rect)
+      void bytes().catch(() => setAnchor(null))
+    }, 160)
+  }
+
+  function leave() {
+    window.clearTimeout(dwell.current)
+    setAnchor(null)
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        class="attach-chip msg-file-pill"
+        ref={pill}
+        // No native tooltip: the floating copy already names the file, and a
+        // system tooltip would sit on top of it.
+        onMouseEnter={enter}
+        onMouseLeave={leave}
+        onClick={() => {
+          void bytes()
+            .then(() => setZoom(true))
+            .catch(() => {
+              /* unreadable path: the pill simply does not open */
+            })
+        }}
+      >
+        <Icon name="image" size={12} class="msg-file-pill-ico" />{' '}
+        <span class="msg-file-name">{label}</span>
+      </button>
+      {url && anchor && !zoom && <HoverPreview src={url} name={label} anchor={anchor} />}
+      {url && zoom && <Lightbox src={url} path={path} label={label} onClose={() => setZoom(false)} />}
+    </>
+  )
+}
+
+/** A larger copy of the picture, floating over the page while the pointer
+ *  rests on a small frame.
+ *
+ *  `pointer-events: none` is the whole trick: this is a preview, not a
+ *  surface. The click that opens the lightbox still belongs to the thumbnail
+ *  underneath, and moving toward the floating copy cannot make it flicker
+ *  away. Placement is measured after the first paint because the copy's size
+ *  comes from the picture, not from a constant. */
+function HoverPreview({ src, name, anchor }: { src: string; name: string; anchor: DOMRect }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    const gap = 10
+    // Above the frame by default: a transcript reads downward, so the room
+    // that stays free is the one above. Below when the top edge is close.
+    let top = anchor.top - h - gap
+    if (top < 8) top = Math.min(anchor.bottom + gap, window.innerHeight - h - 8)
+    let left = anchor.left + anchor.width / 2 - w / 2
+    left = Math.max(8, Math.min(left, window.innerWidth - w - 8))
+    setPos({ left, top })
+  }, [anchor, src])
+
+  return (
+    <div
+      ref={box}
+      class="img-hover"
+      aria-hidden="true"
+      style={
+        pos
+          ? { left: `${pos.left}px`, top: `${pos.top}px` }
+          : { left: '0px', top: '0px', visibility: 'hidden' }
+      }
+    >
+      <img src={src} alt={name} />
+      {/* The thumbnail carries no caption, so the floating copy names the file
+          — the one place a reader asks "which screenshot is this?". */}
+      <span class="img-hover-name">{name}</span>
     </div>
   )
 }
@@ -120,7 +251,17 @@ export function ImagePreview({ path, dataUrl, className = '' }: ImagePreviewProp
 /** Full-screen view. Rendered inline with position:fixed — the same overlay
  *  convention the confirm dialog and the todo sheet use — and it closes on
  *  Esc, on the × button, and on a click outside the picture. */
-function Lightbox({ src, path, onClose }: { src: string; path?: string; onClose: () => void }) {
+function Lightbox({
+  src,
+  path,
+  label,
+  onClose,
+}: {
+  src: string
+  path?: string
+  label?: string
+  onClose: () => void
+}) {
   const box = useRef<HTMLDivElement>(null)
   useModalFocus(box, true)
 
@@ -135,7 +276,7 @@ function Lightbox({ src, path, onClose }: { src: string; path?: string; onClose:
     return () => document.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
-  const name = path ? baseName(path) : 'image'
+  const name = label || (path ? baseName(path) : 'image')
   return (
     <div
       class="img-lightbox"

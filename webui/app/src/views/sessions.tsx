@@ -26,11 +26,11 @@ import {
   type Task,
 } from '../api/client'
 import { Icon } from '../components/icons'
-import { DiffViewer } from '../components/diff-viewer'
-import { Dock, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH, type DockTab } from '../components/dock'
+import { Dock, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH, type DockEnv, type DockTab } from '../components/dock'
 import { DockBrowser, type BrowserArtifact, type BrowserPageRequest } from '../components/dock-browser'
 import { scanArtifacts } from '../components/auto-preview'
 import { DockFiles } from '../components/dock-files'
+import { DockChanges } from '../components/dock-changes'
 import { SideChat } from '../components/side-chat'
 import { ArtifactSection } from '../components/artifact'
 import { FileViewContext, type FileOpener, type FileRef } from '../components/file-link'
@@ -55,11 +55,12 @@ import { ClarifyCard } from '../components/clarify-card'
 import { buildCommands, type Command } from '../components/palette'
 import { rank } from '../components/fuzzy'
 import { reconcileTranscript, runningOperation, patchStreaming, slashQuery } from '../components/chatstate'
-import { atQuery, expandFileRefs, exportMarkdown, exportFilename, isImageFile, splitFileRef, withAttachments } from '../components/attach'
+import { atQuery, expandFileRefs, exportMarkdown, exportFilename, fileLabel, isImageFile, splitFileRef, withAttachments } from '../components/attach'
 import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
 import { splitReportHead } from '../components/report-head'
 import { displayUserTurn } from '../components/turn-display'
+import { UserFiles } from '../components/msg-files'
 import { liveTaskIds } from '../components/task-activity'
 import { groupDispatches } from './chat-batch.ts'
 import {
@@ -872,6 +873,13 @@ export function SessionsView({
     setDockTab(key)
     setDockOpen(true)
   }
+  /** The change list has one home now: the dock's 改动 tab. The rail's change
+   *  line, the panel's tab and the start row all land on it. */
+  function openChanges() {
+    setDockTab('changes')
+    setDockOpen(true)
+    void refreshDiff(activeId)
+  }
   // A dock page belongs to the thread it was opened in. Switching threads
   // closes it: the pages are remounted per session.
   useEffect(() => {
@@ -898,6 +906,9 @@ export function SessionsView({
     setNotesOpen(false)
   }, [activeId])
   const [localBusy, setBusy] = useState(false)
+  // A reload loses the local streaming flag, but the session still carries the
+  // server's running operation. Keep the Stop button until that operation
+  // settles instead of swapping it for Send while the model is answering.
   const busy = localBusy || Boolean(runningOperation(activeId, session))
   // The pre-execution question the running turn is parked on. Cleared when the
   // browser answers, when the turn ends, or when the user cancels it.
@@ -982,7 +993,6 @@ export function SessionsView({
   // its shape instead of an empty box (or worse, the "new chat" hero).
   const [loading, setLoading] = useState(false)
   const [diff, setDiff] = useState<SessionDiff | null>(null)
-  const [diffOpen, setDiffOpen] = useState(false)
   const [diffError, setDiffError] = useState('')
   const [merging, setMerging] = useState(false)
   const [reverting, setReverting] = useState(false)
@@ -1480,7 +1490,7 @@ export function SessionsView({
       k: m.k,
       label: promptLabel(
         m.text.trim() ||
-          (m.files ?? []).map((f) => f.split('/').pop()).join(' ') ||
+          (m.files ?? []).map(fileLabel).join(' ') ||
           '…',
       ),
     }))
@@ -1661,6 +1671,7 @@ export function SessionsView({
     try {
       await api.cancelSession(targetSid, operationID)
       ctrl?.abort()
+      // Re-read the session so its operation row clears and Stop becomes Send.
       const s = await api.session(targetSid)
       if (activeIdRef.current === targetSid) setSession(s)
     } catch (e) { toastError(e) }
@@ -1932,18 +1943,18 @@ export function SessionsView({
         (p) => api.fsRead(p),
       )
       prompt = expanded.prompt
-      // The bubble lists what rode along: the refs the prompt expanded, plus
-      // the tray's own files under the name the user knows them by. The tray's
-      // mentions are dropped from the first group — they resolve to the same
-      // file under its stamped upload name, and listing both showed every
-      // pasted file twice.
-      // A reference pill already lists its file under the name the reader
-      // knows; drop the expanded path too, or the bubble shows it twice.
+      // The bubble lists what rode along, under paths the panel can resolve:
+      // an upload's mention (its stamped name keeps the author's name at the
+      // tail — see msg-files.tsx) and a reference pill's workspace path. The
+      // tray's display names are not used: a bare name is not a path, so the
+      // bubble could not draw a pasted picture with it. Both groups are
+      // dropped from the expanded list, or every file would show twice.
       const trayMentions = new Set([...mentions, ...refs])
       attached = [
         ...new Set([
           ...expanded.attached.filter((a) => !trayMentions.has(a)),
-          ...tray.map((p) => p.name),
+          ...mentions,
+          ...refs,
         ]),
       ]
       // No thread yet: create one titled after the first prompt.
@@ -2673,16 +2684,13 @@ export function SessionsView({
   const dockShown = dockOpen && !newChatPage
 
   // The overview is furniture, not a preference: a thread that is open always
-  // has one, the way it always has a composer. It lives in the pane head now,
-  // so its resting state costs the transcript nothing; only the panel the
-  // reader opens borrows a lane. The new-chat page has no thread to summarize,
-  // so it gets none.
+  // has one, the way it always has a composer. It is a single line in the pane
+  // head now — no panel to open — so it costs the transcript nothing and stays
+  // up even when the side dock takes the right edge. The new-chat page has no
+  // thread to summarize, so it gets none.
   //
-  // It steps aside for the side panel: the dock is the same information in
-  // full, and once it is open the pane has already given up 380px — a second
-  // panel on top of the remainder would leave the transcript a strip.
-  // `showRail` still gates the task read below, so folding the overview never
-  // silences the live employee row in the thread.
+  // `showRail` also gates the task read below: the status line and the live
+  // employee row in the thread share the same subscription.
   const showRail = !newChatPage
 
   // "Context used" is the last request's billed total: the prompt the thread
@@ -2703,6 +2711,14 @@ export function SessionsView({
     ? nodes.find((n) => n.id === nodePref)?.name || nodePref
     : t('sessions.nodeAuto')
 
+  // The model registry is read once for the two surfaces that print the
+  // context share — the pane head's status line and the dock's start pane.
+  // Reading it in each of them put two identical requests on every page load.
+  const modelRegistry = useAsync(() => api.models().catch(() => null), [])
+  const activeModel = modelRegistry.data?.active
+  const contextWindow = activeModel?.context_window ?? 0
+  const modelName = activeModel?.alias || newestUsage?.model || ''
+
   // The open thread's directory, read-only: the foot row under the box keeps
   // its place on every surface — 新对话 picks a directory there, 工作空间
   // picks one, and a thread shows where it runs — so moving between them does
@@ -2716,6 +2732,26 @@ export function SessionsView({
     const hit = threadProjects.find((d) => d.name === name)
     return hit?.work_dir || name
   })()
+
+  // What the dock's start pane says before anything is picked: where this
+  // thread runs, how much window the last turn carried, and how many files it
+  // changed. The worktree is the real path the transcript's file links resolve
+  // against; a thread without one runs in its project's directory.
+  const dockEnv: DockEnv = {
+    machine: railMachine,
+    path: session?.worktree || threadDir,
+    branch: session?.branch || '',
+    contextTokens: newestUsage?.tokens ?? 0,
+    contextWindow,
+    model: modelName,
+    changes: diff
+      ? {
+          files: diff.changes.length,
+          insertions: diff.stat?.insertions ?? 0,
+          deletions: diff.stat?.deletions ?? 0,
+        }
+      : undefined,
+  }
 
   // The panda closes a round once it is over: it dispatched, the employees
   // reported, and nothing has been said since. Derived from the turns already
@@ -2855,11 +2891,6 @@ export function SessionsView({
               ⎇ {session.branch}
             </span>
           )}
-          {diff && diff.changes.length > 0 && (
-            <button class="btn changes-btn" onClick={() => setDiffOpen(!diffOpen)}>
-              ± {diff.changes.length} {t('sessions.changes')}
-            </button>
-          )}
           {/* 头部右侧两件东西：会话概览的一行摘要（点开成浮层面板），以及
               最右的侧栏门。门放在最右，因为它开的就是右边缘那一栏，按钮贴
               着它要打开的东西。概览的面板挂在触发按钮下方、右缘与按钮对齐，
@@ -2868,7 +2899,9 @@ export function SessionsView({
               节点和编排卡都搬进了栏的头部，所以这条 bar 不再重复它们。新对
               话页反过来：那一页没有栏，也没有线程可概览，唯一要答的问题是
               "在哪台机器上跑"，所以这里站的是节点按钮本身 —— 设备不再锁在
-              栏的工具页后面，也没有一个点了会打开空栏的折叠按钮。 */}
+              栏的工具页后面，也没有一个点了会打开空栏的折叠按钮。
+              概览里的改动一行现在开的是侧栏的「改动」页，而不是旧的下拉抽屉：
+              改动清单只有一个家，栏的页签、起始页的行动行和概览都落在同一处。 */}
           <div class="chat-head-tools">
             {showRail && !dockOpen && (
               <SessionRail
@@ -2879,7 +2912,7 @@ export function SessionsView({
                 contextTokens={newestUsage?.tokens ?? 0}
                 model={newestUsage?.model ?? ''}
                 machine={railMachine}
-                onOpenDiff={() => setDiffOpen(true)}
+                onOpenDiff={openChanges}
                 onOpenTask={openTaskInPlace}
                 onOpenQueue={() => navigateView('control')}
               />
@@ -2905,60 +2938,6 @@ export function SessionsView({
             )}
           </div>
         </header>
-
-        {diffOpen && diff && (
-          <div class="diff-drawer">
-            <div class="diff-drawer-head">
-              <strong>
-                {t('sessions.worktreeChanges')} — {diff.branch}
-              </strong>
-              <span>
-                <button class="btn danger" disabled={reverting || merging} onClick={revertMerge}>
-                  {reverting ? t('sessions.reverting') : t('sessions.revert')}
-                </button>
-                <button class="btn primary" disabled={merging || reverting} onClick={mergeChanges}>
-                  {merging ? t('sessions.merging') : t('sessions.merge')}
-                </button>
-                <button class="btn" onClick={() => setDiffOpen(false)}>
-                  ×
-                </button>
-              </span>
-            </div>
-            {diff.stat && (diff.stat.files_changed > 0 || diff.stat.untracked > 0) && (
-              <p class="dim diff-stat">
-                {t('sessions.diffStat', {
-                  files: String(diff.stat.files_changed),
-                  ins: String(diff.stat.insertions),
-                  del: String(diff.stat.deletions),
-                })}
-                {diff.stat.untracked > 0 &&
-                  ` · ${t('sessions.diffUntracked', { n: String(diff.stat.untracked) })}`}
-              </p>
-            )}
-            {diff.stat && diff.stat.sensitive && diff.stat.sensitive.length > 0 && (
-              <p class="gate-error">
-                {t('sessions.sensitiveFiles')}: <span class="mono">{diff.stat.sensitive.join(', ')}</span>
-              </p>
-            )}
-            {diff.stat && diff.stat.binary && diff.stat.binary.length > 0 && (
-              <p class="dim">
-                {t('sessions.binaryFiles')}: <span class="mono">{diff.stat.binary.join(', ')}</span>
-              </p>
-            )}
-            {diffError && <p class="gate-error">{diffError}</p>}
-            <ul class="diff-files">
-              {diff.changes.map((c) => (
-                <li key={c.path}>
-                  <span class={`badge ${c.status === 'D' ? 'red' : c.status === '??' ? 'blue' : 'yellow'}`}>
-                    {c.status}
-                  </span>
-                  <span class="mono">{c.path}</span>
-                </li>
-              ))}
-            </ul>
-            {diff.patch && <DiffViewer patch={diff.patch} />}
-          </div>
-        )}
 
         <div
           class="chat-log"
@@ -3583,6 +3562,8 @@ export function SessionsView({
         open={dockShown}
         tab={dockTab}
         width={dockW}
+        env={dockEnv}
+        badges={{ changes: diff?.changes.length ?? 0 }}
         tools={
           <>
             {!newChatPage && session && msgs.length > 0 && (
@@ -3624,12 +3605,20 @@ export function SessionsView({
           </>
         }
         onWidth={setDockW}
+        /* Back to the overview. Every pane keeps its own state while the start
+           pane is showing, so this is a step aside, not a reset: returning to
+           files lands on the same file, and the side conversation keeps its
+           place. */
+        onHome={() => setDockTab('')}
         onTab={(next) => {
           setDockTab(next)
           setDockOpen(true)
           // Coming back to 对话 re-reads this thread's history. Clicking the
           // tab is never a new conversation — only `+` is.
           if (next === 'side') setSideReload((n) => n + 1)
+          // The change list is a snapshot of the worktree, and the worktree
+          // moves while the reader is elsewhere. Every visit re-reads it.
+          if (next === 'changes') void refreshDiff(activeId)
         }}
         onToggle={() => setDockOpen((v) => !v)}
         onReselect={(key) => {
@@ -3709,6 +3698,26 @@ export function SessionsView({
               onlineNodeCount={onlineNodeCount}
               selfNodeId={selfNodeId}
               focusTask={focusTask}
+            />
+          </div>
+        )}
+        {dockSeen.includes('changes') && (
+          <div class="dock-pane" hidden={dockTab !== 'changes'}>
+            <DockChanges
+              session={session?.id ?? null}
+              diff={diff}
+              error={diffError}
+              merging={merging}
+              reverting={reverting}
+              onRefresh={() => refreshDiff(activeId)}
+              onMerge={mergeChanges}
+              onRevert={revertMerge}
+              /* The file itself, not another diff: the panel hands the path to
+                 the files pane and lands on the first changed line. */
+              onOpenFile={(path, line) => {
+                setDockTab('files')
+                setFileRef({ path, line })
+              }}
             />
           </div>
         )}
@@ -4357,7 +4366,15 @@ function ChatBubble(props: {
           )}
 
           {msg.role === 'user' ? (
-            <p class="msg-text">{msg.text}</p>
+            // The attachments ride in the sentence, the way the composer
+            // showed them while typing — a pill before the words it belongs
+            // to, never a block of its own.
+            (msg.text || msg.files) && (
+              <p class="msg-text">
+                {msg.files && <UserFiles files={msg.files} />}
+                {msg.text}
+              </p>
+            )
           ) : msg.kind === 'error' ? (
             <p class="msg-text">{msg.text}</p>
           ) : report ? (
@@ -4810,13 +4827,21 @@ function TaskApproval({
   // "it won't let me approve" report this card kept generating. The line below
   // the buttons says why, and what the two working exits are.
   const blocked = task.approval_disposition === 'needs_changed_input'
+  // ...and one of those failures is not about the prompt at all: the server
+  // classified a park whose reason is the agent's own model configuration
+  // (the endpoint refused its model id or login). Rewording the request
+  // cannot fix that, so the card names the configuration instead of asking
+  // for new input.
+  const modelConfig = blocked && task.review_cause === 'model_config'
 
   return (
     <div class="task-approval" data-testid="chat-task-approval">
       <span class="badge yellow">{t('state.review')}</span>
       {task.approval_disposition && (
         <span class="dim review-kind">
-          {t(`detail.reviewKind.${task.approval_disposition}`)}
+          {modelConfig
+            ? t('detail.reviewCauseModelConfig')
+            : t(`detail.reviewKind.${task.approval_disposition}`)}
         </span>
       )}
       <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
@@ -4834,7 +4859,11 @@ function TaskApproval({
       >
         {t('detail.reject')}
       </button>
-      {blocked && <p class="gate-hint">{t('detail.approveBlocked')}</p>}
+      {blocked && (
+        <p class="gate-hint">
+          {modelConfig ? t('detail.approveBlockedModelConfig') : t('detail.approveBlocked')}
+        </p>
+      )}
       {error && <p class="gate-error">{error}</p>}
     </div>
   )

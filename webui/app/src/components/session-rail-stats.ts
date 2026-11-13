@@ -26,10 +26,8 @@ export interface PatchFileStat {
 const TRUNCATED = '… (diff truncated)'
 
 /** Git prints a path either bare (`+++ b/src/a.ts`) or C-quoted when it holds
- *  a space or a control character (`+++ "b/src/a b.ts"`). Undo both, then drop
- *  the side prefix: the rest of the console keys paths the way `git status
- *  --porcelain` prints them. */
-function cleanPath(raw: string): string {
+ *  a space or a control character (`+++ "b/src/a b.ts"`). Undo the quoting. */
+function unquote(raw: string): string {
   let p = raw.trim()
   if (p.length > 1 && p.startsWith('"') && p.endsWith('"')) {
     p = p
@@ -38,15 +36,88 @@ function cleanPath(raw: string): string {
       .replace(/\\t/g, '\t')
       .replace(/\\n/g, '\n')
   }
-  if (p.startsWith('a/') || p.startsWith('b/')) p = p.slice(2)
   return p
 }
 
-/** Path → line counts, for every file the patch has a hunk for.
+/** A patch header's path, without the synthetic `a/` or `b/` side. */
+function cleanPath(raw: string): string {
+  const p = unquote(raw)
+  return p.startsWith('a/') || p.startsWith('b/') ? p.slice(2) : p
+}
+
+/** A `git status --porcelain` path split into its two sides. A rename or copy
+ *  prints `old -> new`; everything else has the same path on both sides.
+ *  Deliberately does NOT strip a leading `a/` or `b/` — unlike a patch header,
+ *  a status path is the real repo-relative one, and a file may legitimately
+ *  live under `a/`. */
+export interface PorcelainPath {
+  from: string
+  to: string
+}
+
+export function porcelainParts(raw: string): PorcelainPath {
+  const p = raw.trim()
+  const arrow = p.lastIndexOf(' -> ')
+  if (arrow < 0) {
+    const one = unquote(p)
+    return { from: one, to: one }
+  }
+  return { from: unquote(p.slice(0, arrow)), to: unquote(p.slice(arrow + 4)) }
+}
+
+/** The destination side — the path the file has now, and the one a patch
+ *  header names. */
+export function porcelainPath(raw: string): string {
+  return porcelainParts(raw).to
+}
+
+/** One file's block in a unified diff, header lines included. */
+interface PatchSection {
+  path: string
+  lines: string[]
+}
+
+/** Split a unified diff into one block per file, named the way `git status`
+ *  names it (the `+++` side, falling back to `---` for a deletion).
  *
  *  Only the `+++`/`---` pair *before* the first `@@` names a file: inside a
- *  hunk an added line can itself start with `++`, and counting that as a
- *  header would silently split the file in two.
+ *  hunk an added line can itself start with `++`, and reading that as a
+ *  header would silently split the file in two. */
+function patchSections(patch: string): PatchSection[] {
+  const out: PatchSection[] = []
+  let cur: PatchSection | null = null
+  let inHunk = false
+  let named = false
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      if (cur && cur.path) out.push(cur)
+      cur = { path: '', lines: [line] }
+      inHunk = false
+      named = false
+      continue
+    }
+    if (!cur) continue
+    cur.lines.push(line)
+    if (inHunk) continue
+    if (line.startsWith('+++ ')) {
+      const p = cleanPath(line.slice(4))
+      // A deletion's target side is /dev/null; the `---` line named it.
+      if (p !== '/dev/null') {
+        cur.path = p
+        named = true
+      }
+    } else if (line.startsWith('--- ') && !named) {
+      const p = cleanPath(line.slice(4))
+      if (p !== '/dev/null') cur.path = p
+    } else if (line.startsWith('@@')) {
+      inHunk = true
+    }
+  }
+  if (cur && cur.path) out.push(cur)
+  return out
+}
+
+/** Path → line counts, for every file the patch has a hunk for.
  *
  *  The block the cap cut through is dropped. Its count is a partial one, and
  *  a partial `+12` under a diff that stopped at 128 KiB reads as the file's
@@ -54,41 +125,51 @@ function cleanPath(raw: string): string {
 export function patchFileStats(patch: string): Map<string, PatchFileStat> {
   const out = new Map<string, PatchFileStat>()
   if (!patch) return out
-  let key = ''
-  let current: PatchFileStat | null = null
-  let inHunk = false
-  for (const line of patch.split('\n')) {
-    if (line.startsWith('diff --git ')) {
-      key = ''
-      current = null
-      inHunk = false
-      continue
-    }
-    if (!inHunk && line.startsWith('+++ ')) {
-      const p = cleanPath(line.slice(4))
-      // A deletion's target side is /dev/null; the `---` line named it.
-      if (p !== '/dev/null') key = p
-      continue
-    }
-    if (!inHunk && line.startsWith('--- ')) {
-      const p = cleanPath(line.slice(4))
-      if (!key && p !== '/dev/null') key = p
-      continue
-    }
-    if (line.startsWith('@@')) {
-      if (key && !current) {
-        current = { insertions: 0, deletions: 0 }
-        out.set(key, current)
+  const sections = patchSections(patch)
+  const cut = patch.includes(TRUNCATED)
+  sections.forEach((section, index) => {
+    if (cut && index === sections.length - 1) return
+    let hasHunk = false
+    const stat: PatchFileStat = { insertions: 0, deletions: 0 }
+    for (const line of section.lines) {
+      if (line.startsWith('@@')) {
+        hasHunk = true
+        continue
       }
-      inHunk = true
-      continue
+      if (!hasHunk) continue
+      if (line.startsWith('+')) stat.insertions++
+      else if (line.startsWith('-')) stat.deletions++
     }
-    if (!inHunk || !current) continue
-    if (line.startsWith('+')) current.insertions++
-    else if (line.startsWith('-')) current.deletions++
-  }
-  if (key && patch.includes(TRUNCATED)) out.delete(key)
+    if (hasHunk) out.set(section.path, stat)
+  })
   return out
+}
+
+export interface FilePatch {
+  /** The file's own block, header lines included. Empty when the cap cut
+   *  through it — a half hunk reads as a complete one. */
+  patch: string
+  /** This was the block the 128 KiB cap cut through. */
+  truncated: boolean
+}
+
+/** One file's diff out of the session's whole patch, or null when the patch
+ *  has no block for that path (binary, mode-only change, or a patch that
+ *  stopped before reaching it). */
+export function patchForFile(patch: string, path: string): FilePatch | null {
+  const sections = patchSections(patch)
+  const at = sections.findIndex((s) => s.path === path)
+  if (at < 0) return null
+  const cut = patch.includes(TRUNCATED) && at === sections.length - 1
+  return { patch: cut ? '' : sections[at]!.lines.join('\n'), truncated: cut }
+}
+
+/** The first new-side line a patch touches, so "open the file" lands on the
+ *  change instead of the top of a 600-line file. 0 when the block has no hunk
+ *  (binary, rename, mode change). */
+export function firstChangedLine(patch: string): number {
+  const m = /^@@ -\d+(?:,\d+)? \+(\d+)/m.exec(patch)
+  return m ? Number(m[1]) : 0
 }
 
 /** How full the context window is, in whole percent, or null when the window

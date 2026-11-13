@@ -194,6 +194,10 @@ export function DetailView({
   // broken button — the user clicks it, nothing happens, and the reason sits
   // hundreds of pixels below the fold.
   const blocked = task.state === 'review' && task.approval_disposition === 'needs_changed_input'
+  // A park whose reason is the agent's own model configuration: no reworded
+  // prompt and no approval can move it, so the banner names that
+  // configuration rather than repeating "needs changed input".
+  const modelConfig = blocked && task.review_cause === 'model_config'
   // Read for every review state, not only the blocked banner: the verdict
   // block falls back to it when the result carries no reason of its own.
   const parkReason = task.state === 'review' ? reviewReason(task.events ?? []) : ''
@@ -255,7 +259,11 @@ export function DetailView({
             </button>
           )}
           {task.state === 'review' && task.approval_disposition && (
-            <span class="dim review-kind">{t(`detail.reviewKind.${task.approval_disposition}`)}</span>
+            <span class="dim review-kind">
+              {modelConfig
+                ? t('detail.reviewCauseModelConfig')
+                : t(`detail.reviewKind.${task.approval_disposition}`)}
+            </span>
           )}
           {task.state === 'review' && !rejecting && (
             <>
@@ -343,7 +351,11 @@ export function DetailView({
         // block, so it is not printed a second time here.
         <div class="dt-blocked">
           <div class="dt-blocked-head">
-            <span class="badge yellow">{t('detail.reviewKind.needs_changed_input')}</span>
+            <span class="badge yellow">
+              {modelConfig
+                ? t('detail.reviewCauseModelConfig')
+                : t('detail.reviewKind.needs_changed_input')}
+            </span>
             <span class="dim">{t('detail.needsChangedInputHint')}</span>
           </div>
         </div>
