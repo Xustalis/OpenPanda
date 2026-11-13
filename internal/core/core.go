@@ -536,6 +536,10 @@ type Core struct {
 	// execution (see renewLease), so it bounds silence rather than runtime.
 	// Guarded by mu; SetTimeouts keeps it above the agent hard timeout.
 	leaseTimeout time.Duration
+	// dirSweepEvery paces RunDirMonitor's directory sweep. A field rather than
+	// a constant so a test can watch a sweep land without sleeping five
+	// seconds; production never changes it.
+	dirSweepEvery time.Duration
 	// reviewHolds tracks in-flight upstream keepalives for admission-parked
 	// tasks (keyed by task id) so holdReviewUpstream cannot stack a second
 	// beat loop on a row already held — e.g. a restart-resumed hold racing a
@@ -727,6 +731,7 @@ func NewCore(db *sql.DB, nodeID string, card ledger.Card, tier int, logger *slog
 		superviseRounds: defaultSuperviseRounds,
 		leaseTimeout:    defaultDelegateTimeout,
 		retryBackoff:    time.Second,
+		dirSweepEvery:   5 * time.Second,
 
 		peerLivenessWindow: bus.KeepaliveTimeout(),
 	}
@@ -1872,6 +1877,37 @@ func (c *Core) RunTaskMonitor(ctx context.Context) {
 			return
 		case <-t.C:
 			c.taskSweeps(ctx)
+		}
+	}
+}
+
+// RunDirMonitor runs the peer-directory half of the monitor for an embedded
+// surface that owns the mesh — `panda web` and the standalone sidecar hold
+// the identity lock, the listener and the peer set, so expiring rows for
+// peers that went silent is their duty by the same rule that makes it the
+// daemon's. RunTaskMonitor deliberately leaves this out (a borrowed engine
+// marking peers offline from a connection set it does not own would fight
+// the real node's heartbeats), which left a console-only node with no
+// directory sweep at all: every dead peer stayed `online` for the life of
+// the console, routing kept aiming ghosts, and neither `panda nodes remove`
+// nor DELETE /api/nodes/{id} would delete a row that claims to be up.
+func (c *Core) RunDirMonitor(ctx context.Context) {
+	every := c.dirSweepEvery
+	if every <= 0 {
+		every = 5 * time.Second
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			// S1-4: directory rows for silently-dead peers stay online
+			// forever without this sweep. The rendezvous election, dial
+			// checks and outbox flushes stay daemon-only: they belong to
+			// the routing role, not to the row's liveness.
+			c.sweepStalePeers(ctx)
 		}
 	}
 }
