@@ -4,8 +4,10 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,6 +79,8 @@ func TestScopeDriftPausesAgent(t *testing.T) {
 	c.SetWorkDir(work)
 
 	c.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
+		_ = os.MkdirAll(filepath.Join(cwd, "allowed"), 0o755)
+		_ = os.WriteFile(filepath.Join(cwd, "allowed", "in-scope.txt"), []byte("x"), 0o644)
 		_ = os.WriteFile(filepath.Join(cwd, "out-of-scope.txt"), []byte("x"), 0o644)
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
 	})
@@ -99,6 +103,28 @@ func TestScopeDriftPausesAgent(t *testing.T) {
 	}
 	if !strings.Contains(result.Stderr, "scope drift") {
 		t.Fatalf("stderr = %q, want scope drift message", result.Stderr)
+	}
+	// The park records the round's whole footprint. The strayed path names the
+	// offence; the in-scope edit is the work the reviewer is being asked to
+	// accept, and dropping it made the task page report a run that changed
+	// nothing but whatever artifact the agent happened to leave outside.
+	if !strings.Contains(result.Stderr, "out-of-scope.txt") {
+		t.Fatalf("stderr = %q, want the strayed path", result.Stderr)
+	}
+	var parked struct {
+		FilesChanged []string `json:"files_changed"`
+	}
+	if err := json.Unmarshal([]byte(task.ResultJSON), &parked); err != nil {
+		t.Fatalf("decode parked result: %v", err)
+	}
+	// The snapshot reports slash-separated paths relative to the work dir, on
+	// every platform — that is the form the result JSON carries to the console.
+	inScope := "allowed/in-scope.txt"
+	if !slices.Contains(parked.FilesChanged, inScope) {
+		t.Fatalf("parked files_changed = %v, want the in-scope edit %q", parked.FilesChanged, inScope)
+	}
+	if slices.Contains(parked.FilesChanged, "") {
+		t.Fatalf("parked files_changed carries an empty path: %v", parked.FilesChanged)
 	}
 }
 

@@ -2261,7 +2261,10 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if drift := scope.DriftUnder(workDir, lastChanged); len(drift) > 0 {
 				msg := "scope drift: agent changed files outside declared scope: " + strings.Join(drift, ", ")
 				c.audit(ctx, taskID, "scope:drift", plan.Agent, "denied", msg)
-				if err := c.store.PauseDriftAttempt(ctx, taskID, c.nodeID, attemptID, msg, drift); err != nil {
+				// The park records the round's whole footprint: the strayed
+				// paths name the offence in msg, and the reviewer still needs
+				// to see what the agent changed inside its scope.
+				if err := c.store.PauseDriftAttempt(ctx, taskID, c.nodeID, attemptID, msg, lastChanged, lastStats); err != nil {
 					if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 						return roundOutcome{}, ErrCancelled
 					}
@@ -2269,10 +2272,15 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				}
 				c.logTask(task.Title, false)
 				trackTask(c, task.Project, required, task.Title, false)
+				fc := lastChanged
+				if len(fc) > maxFilesChangedReport {
+					fc = fc[:maxFilesChangedReport]
+				}
 				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
 					ApprovalDisposition: string(ApprovalAcceptWork),
 					OK:                  false, ExitCode: 1, Stderr: msg,
+					FilesChanged: fc, FilesTruncated: filesTruncated,
 					Tokens: res.Tokens, Cost: res.Cost, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				}}, nil
 			}
