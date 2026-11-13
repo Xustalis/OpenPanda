@@ -1737,9 +1737,10 @@ type StreamCallbacks struct {
 type ProgressKind string
 
 const (
-	ProgressTask ProgressKind = "task" // submitting a classified task
-	ProgressPlan ProgressKind = "plan" // starting a multi-stage plan
-	ProgressTool ProgressKind = "tool" // running a tool
+	ProgressModel ProgressKind = "model" // waiting for a model response
+	ProgressTask  ProgressKind = "task"  // submitting a classified task
+	ProgressPlan  ProgressKind = "plan"  // starting a multi-stage plan
+	ProgressTool  ProgressKind = "tool"  // running a tool
 	// ProgressClarify means the ask is waiting on the user's choice card.
 	// This is the one kind with no localized progress wording: the card
 	// itself (Result.Kind == "clarify") is the UI, and a second status row
@@ -1871,6 +1872,8 @@ func (cb StreamCallbacks) progress(p Progress) {
 // wire text the panel re-localizes for the browser from the same event.
 func StatusText(p Progress) string {
 	switch p.Kind {
+	case ProgressModel:
+		return fmt.Sprintf("waiting for model %s (round %d)…", p.Name, p.Round)
 	case ProgressTask:
 		return fmt.Sprintf("submitting task: %s", p.Name)
 	case ProgressPlan:
@@ -2500,6 +2503,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 					cb.OnDelta(chunk)
 				}
 			}
+			cb.progress(Progress{Kind: ProgressModel, Name: client.ModelName(), Round: 1})
 			if cb.OnDelta != nil || cb.OnReasoning != nil {
 				resp, rerr = client.StreamTurnsWithTools(ctx, fastSystem, turns, nil, wrapDelta, cb.OnReasoning, entry.WithUsageObserver(tracker.observe))
 			} else {
@@ -2733,10 +2737,17 @@ rounds:
 		}
 		streaming := cb.OnDelta != nil || cb.OnReasoning != nil
 		classify := func(c *entry.Client, ts []entry.Turn) (entry.Output, error) {
+			cb.progress(Progress{Kind: ProgressModel, Name: c.ModelName(), Round: round + 1})
 			// Do not stream a shallow answer before the dispatch guard has
 			// accepted it. The delegated harness still streams its own progress.
-			if streaming && !((deepRepositoryAsk || repositoryQuestion && !sourceRead) && lastTask == nil) && !incompleteTaskOutcome(lastTask) {
-				return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, reg, cb.OnDelta, trackReasoning, classifyOpts...)
+			if streaming {
+				delta := cb.OnDelta
+				if ((deepRepositoryAsk || repositoryQuestion && !sourceRead) && lastTask == nil) || incompleteTaskOutcome(lastTask) {
+					// Hold unverified prose, not provider reasoning or usage. A
+					// non-streaming guard hid all activity for an entire model call.
+					delta = nil
+				}
+				return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, reg, delta, trackReasoning, classifyOpts...)
 			}
 			return entry.ClassifyTurnsWithTools(ctx, c, devices, conversationMemory, ts, reg, classifyOpts...)
 		}
@@ -3107,6 +3118,7 @@ rounds:
 	// in the turns — so the ask converges to something useful instead of
 	// surfacing a loop error to the user.
 	finalClassify := func(c *entry.Client, ts []entry.Turn) (entry.Output, error) {
+		cb.progress(Progress{Kind: ProgressModel, Name: c.ModelName(), Round: maxRounds + 1})
 		if cb.OnDelta != nil || cb.OnReasoning != nil {
 			return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, nil, cb.OnDelta, cb.OnReasoning, classifyOpts...)
 		}

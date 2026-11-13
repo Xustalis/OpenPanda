@@ -4,25 +4,20 @@
 // the streaming-target races that garbled transcripts can be tested head-on
 // (see chatstate.test.ts).
 
-/** Apply fn to the bubble the stream is actually writing to: the newest
- *  message still marked streaming — never blindly the last message. A
- *  transcript refetch racing the stream can leave a stale message at the
- *  tail, and a patch aimed there writes the reply into the user's own
- *  bubble. With nothing streaming (the closing patch after an error), fall
- *  back to the last message as before. */
-export function patchStreaming<T extends { streaming?: boolean }>(
+/** Patch an identified assistant bubble. Never redirect a late frame into a
+ * user message (or another operation) when its original target disappeared. */
+export function patchStreaming<T extends { role?: string; streaming?: boolean; k?: string }>(
   msgs: T[],
   fn: (m: T) => T,
+  key?: string,
 ): T[] {
-  if (msgs.length === 0) return msgs
   let idx = -1
   for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i]?.streaming) {
-      idx = i
-      break
-    }
+    const m = msgs[i]!
+    if (m.role === 'user') continue
+    if (key ? m.k === key : m.streaming) { idx = i; break }
   }
-  if (idx === -1) idx = msgs.length - 1
+  if (idx === -1) return msgs
   return msgs.map((m, i) => (i === idx ? fn(m) : m))
 }
 
@@ -88,4 +83,36 @@ export function mergeTailTurn<T extends TurnLike>(
   if (!adopt) return [...msgs.slice(0, i), tail]
   const inserted = turns.slice(turns.length - 1 - extra, turns.length - 1).map(adopt)
   return [...msgs.slice(0, i), ...inserted, tail]
+}
+
+/** Install persisted rows by identity, not by tail position. A task finalizer
+ * may append a report before the ask refetch returns; that report must become
+ * a new row, never replace the dispatch/user bubble carrying live metadata. */
+export function reconcileTranscript<T extends TurnLike & { k: string; operation_id?: string }>(
+  local: T[], stored: T[], retainOperation?: string,
+): T[] {
+  const used = new Set<string>()
+  const reconciled = stored.map(turn => {
+    const match = local.find(m => !used.has(m.k) && m.role === turn.role && (
+      turn.operation_id
+        ? m.operation_id === turn.operation_id && (m.ref || '') === (turn.ref || '') &&
+          (m.kind || 'answer') === (turn.kind || 'answer')
+        : m.text === turn.text && (m.ref || '') === (turn.ref || '')
+    ))
+    if (!match) return turn
+    used.add(match.k)
+    return { ...match, ...turn, k: match.k }
+  })
+  // A failed bookkeeping write must not erase the only streamed copy. This
+  // exception is limited to the generation the server is reconciling.
+  return [...reconciled, ...local.filter(m => retainOperation && m.operation_id === retainOperation &&
+    !stored.some(t => t.operation_id === retainOperation && t.role === m.role))]
+}
+
+export function runningOperation(
+  activeId: string | null,
+  session: { id: string; operation?: { id: string; status: string } } | null,
+): string | null {
+  return session?.id === activeId && session.operation?.status === 'running'
+    ? session.operation.id : null
 }

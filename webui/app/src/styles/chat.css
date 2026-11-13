@@ -5538,3 +5538,65 @@
 }
 
 
+
+/* Handoff stays in the conversation: calm paper, clear headings, real evidence.
+   Only the long report and full timeline fold; verification never hides. */
+.task-delivery { min-width: 0; }
+.task-delivery-label {
+  margin: 16px 0 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.task-delivery > .task-delivery-label:first-child { margin-top: 8px; }
+.task-delivery-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 4px 20px;
+  margin-top: 14px;
+  padding: 0 0 12px;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+.task-delivery-verdict { font-size: var(--text-sm); color: var(--text-secondary); }
+.task-delivery-verdict.is-verified { color: var(--good); }
+.task-delivery-verdict.is-failed { color: var(--danger); }
+.task-delivery-verdict.is-partial { color: var(--warn); }
+.task-delivery-files { margin: 0; padding-left: 16px; color: var(--text-secondary); }
+.task-delivery-files li { overflow-wrap: anywhere; font-size: var(--text-xs); line-height: 1.7; }
+.task-delivery-remaining { margin-top: 12px; padding: 0 12px 10px; border-left: 2px solid var(--border); }
+.task-delivery-remaining.is-failed { border-color: var(--danger); }
+.task-delivery-remaining.is-review,
+.task-delivery-remaining.is-followup { border-color: var(--warn); }
+.task-delivery-remaining p { margin: 0; font-size: var(--text-sm); line-height: 1.6; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-delivery-toggle { min-height: 36px; padding: 6px 0; border: 0; background: none; color: var(--text-secondary); cursor: pointer; font: inherit; font-size: var(--text-xs); text-decoration: underline; text-underline-offset: 3px; }
+.task-delivery-toggle:hover { color: var(--text-primary); }
+.task-delivery-toggle:focus-visible,
+.task-delivery-history > summary:focus-visible,
+.task-delivery > .task-run-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.task-delivery-history > summary { min-height: 36px; cursor: pointer; }
+.task-delivery > .task-run-open { min-height: 36px; display: inline-flex; align-items: center; }
+
+@media (max-width: 760px) {
+  /* The prompt rail is hidden at this width. Do not keep its 52px desktop
+     gutter: it needlessly squeezes the report and the composer on phones. */
+  .chat-log,
+  .composer,
+  .scroll-bottom-slot,
+  .note-strip { padding-left: 12px; padding-right: calc(12px + var(--panel-lane)); }
+}
+
+@media (max-width: 520px) {
+  /* Keep Send/Stop at the same trailing edge on a small screen, including
+     when a long localized permission label makes the tools wrap. */
+  .composer-actions { gap: 4px; padding: 12px 0 0; }
+  .composer-actions .model-select { flex: 1; min-width: 28px; }
+  .composer-actions .model-select-btn { width: 100%; min-height: 40px; justify-content: flex-end; }
+  .composer-actions .model-select-name { max-width: 100%; }
+  .composer-actions .attach-btn,
+  .composer-actions .voice-input { width: 36px; height: 40px; }
+  .composer-actions .perm-trigger { min-height: 40px; }
+  .composer-actions .btn.primary,
+  .composer-actions .btn.stop-btn { min-height: 40px; margin-left: auto; flex: none; }
+}

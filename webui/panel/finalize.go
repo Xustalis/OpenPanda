@@ -82,6 +82,7 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) bool {
 	}
 	for _, t := range tasks {
 		summary := h.taskSummary(ctx, t)
+		delivery, truncated := taskDelivery(t.ResultJSON)
 		// A task turn measures the task, not the dispatch: the row's own
 		// timestamps are the only clock that spans queue wait plus execution,
 		// and the console prints the number above the summary. Guarded because
@@ -99,11 +100,14 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) bool {
 			// already carries the card and the jump link; this one is just
 			// what happened. Ref still travels so the report can fold the
 			// task's own process under it without drawing a second card.
-			Kind:           "answer",
-			Ref:            t.TaskID,
-			Text:           summary,
-			DurationMS:     durationMS,
-			IdempotencyKey: taskSummaryKey(t),
+			Kind:              "answer",
+			Ref:               t.TaskID,
+			Text:              summary,
+			Delivery:          delivery,
+			DeliveryTruncated: truncated,
+			DeliveryAttemptID: t.AttemptID,
+			DurationMS:        durationMS,
+			IdempotencyKey:    taskSummaryKey(t),
 		}); err != nil {
 			log.From(ctx).Warn("session summary append", "task", t.TaskID, "session", t.SessionID, "err", err)
 			continue
@@ -180,18 +184,26 @@ func (h *handler) substitutedFrom(ctx context.Context, taskID, agent string) (st
 	return "", ""
 }
 
+// taskDelivery preserves the actual handoff separately from the replay digest.
+// Bound the display copy, not the underlying task result: very large outputs
+// remain accessible on the task page without growing every session replay.
+const maxDeliveryRunes = 24000
+
+func taskDelivery(resultJSON string) (string, bool) {
+	text := extractResultText(resultJSON)
+	if utf8.RuneCountInString(text) <= maxDeliveryRunes {
+		return text, false
+	}
+	return string([]rune(text)[:maxDeliveryRunes]), true
+}
+
 // summaryText is the pure composition of the report, in two parts and no
 // more: the orchestration line — state, the employee that ran it, the job it
 // was given — and then that employee's own closing paragraph.
 //
-// The thread is a conversation, not a log. It used to carry the entire
-// adapter payload: a 2 000-word agent reply, its "变更 / 验证" sections and
-// the code fences inside them, printed whole under a `[done]` tag. What a
-// reader wants from the transcript is who did the work and how it ended; the
-// play-by-play is one click away on the task page, and replaying the dump
-// into the model's own history spent the context window on its own past
-// prose. One conclusion paragraph is the summary — the sections above it are
-// the evidence behind it.
+// This short version is replayed to the model. The full display report is
+// stored in Turn.Delivery, so preserving changes, verification and open items
+// for the user no longer consumes the next request's context window.
 func summaryText(t core.Task, reason, agent, substituted, substitutedWhy string) string {
 	// A failed run's own reason is its conclusion: there is no adapter answer
 	// to take a closing paragraph from, and the reason is what the reader

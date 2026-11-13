@@ -1293,15 +1293,35 @@ func registerAndListen(t *testing.T, ctx context.Context, c *Core, addr string) 
 	// ephemeral listener and still know where to dial.
 	if strings.HasSuffix(addr, ":0") {
 		deadline := time.Now().Add(10 * time.Second)
-		for c.ListenAddr() == addr || c.ListenAddr() == "" {
+		for {
+			// Read once: Listen first publishes the requested ":0", then
+			// OnBound publishes the real address. Two reads in one condition
+			// could straddle that first store and incorrectly accept port 0.
+			bound := c.ListenAddr()
+			if bound != "" && !strings.HasSuffix(bound, ":0") {
+				addr = bound
+				break
+			}
 			if time.Now().After(deadline) {
-				t.Fatalf("core never published the port chosen for %s", addr)
+				t.Fatalf("core never published the port chosen for %s (last published %q)", addr, bound)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		addr = c.ListenAddr()
 	}
 	return done, addr
+}
+
+// The paired-node fixture must return a bound port, never the intermediate
+// requested address published by Listen before OnBound runs.
+func TestRegisterAndListenPublishesEphemeralPort(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newCore(t, "register-ephemeral-node")
+	_, bound := registerAndListen(t, ctx, c, "127.0.0.1:0")
+	if bound == "" || strings.HasSuffix(bound, ":0") {
+		t.Fatalf("registerAndListen returned unbound address %q", bound)
+	}
+	waitListening(t, bound)
 }
 
 // linkPair dials entry → workerAddr and waits until both directions see a

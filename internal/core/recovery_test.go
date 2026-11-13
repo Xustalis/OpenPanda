@@ -19,6 +19,9 @@ func TestRecoveryNeverAssumesCrossNodeReplaySafety(t *testing.T) {
 		r                  bus.TaskResultPayload
 		category, strategy string
 	}{
+		{bus.TaskResultPayload{ExitCode: 1, Stderr: "provider failure: Insufficient balance. Top up the account."}, "provider_billing_required", "stop"},
+		{bus.TaskResultPayload{ExitCode: 1, Stderr: "provider failure: rate limit exceeded"}, "execution_failure", "bounded_same_node_retry"},
+		{bus.TaskResultPayload{ExitCode: 1, Stderr: "test failed: provider failure: Insufficient balance"}, "execution_failure", "bounded_same_node_retry"},
 		{bus.TaskResultPayload{ExitCode: 1}, "execution_failure", "bounded_same_node_retry"},
 		{bus.TaskResultPayload{ExitCode: 127}, "execution_failure", "bounded_same_node_retry"},
 		{bus.TaskResultPayload{ExitCode: 124}, "timeout_without_checkpoint", "bounded_same_node_retry"},

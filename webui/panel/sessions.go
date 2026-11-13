@@ -636,6 +636,28 @@ func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 		// operation id names the chat it belongs to, so the write lands on the
 		// conversation that is actually stuck.
 		if sess, err := h.sessions.Get(id); err == nil {
+			if sess.Operation != nil && sess.Operation.ID == req.OperationID && sess.Operation.Status == core.StateRunning {
+				orphan := *sess.Operation
+				alreadyFiled := false
+				for _, turn := range sess.Turns {
+					if turn.Role == "assistant" && turn.OperationID == orphan.ID {
+						alreadyFiled = true
+						break
+					}
+				}
+				if !alreadyFiled && (orphan.Text != "" || orphan.Thought != "") {
+					_, err := h.sessions.AppendTurn(id, sessions.Turn{
+						Role: "assistant", Kind: "answer", Text: orphan.Text, Thought: orphan.Thought,
+						OperationID: orphan.ID, IdempotencyKey: "ask:" + orphan.ID + ":reply",
+					})
+					if err != nil {
+						writeErr(w, http.StatusInternalServerError, err)
+						return
+					}
+				}
+				orphan.Status, orphan.Error = core.StateCancelled, "cancelled"
+				cancelled, _ = h.sessions.SetOperation(id, orphan)
+			}
 			for _, chat := range sess.SideChats {
 				if chat.Operation == nil || chat.Operation.ID != req.OperationID ||
 					chat.Operation.Status != core.StateRunning {
@@ -972,6 +994,9 @@ type sessionAskRequest struct {
 // used to look like.
 func statusEventOf(p askengine.Progress) map[string]any {
 	ev := map[string]any{"text": askengine.StatusText(p), "kind": string(p.Kind)}
+	if p.Kind == askengine.ProgressModel {
+		ev["name"], ev["round"] = p.Name, p.Round
+	}
 	if p.Kind == askengine.ProgressRetry {
 		ev["attempt"] = p.Attempt
 		ev["max"] = p.MaxAttempt
@@ -1022,9 +1047,8 @@ func statusEventOf(p askengine.Progress) map[string]any {
 // "result" (the final askResult), "error".
 //
 // Reasoning travels on its own event so the console can show it apart from the
-// answer. It is display-only — D14 keeps it out of the answer text, out of the
-// stored turn and out of the task result — so a thread reloaded from disk shows
-// the reply without the reasoning that produced it.
+// answer. Provider-supplied reasoning is persisted separately for display and
+// reconnect, never mixed into answer text or replayed to the model.
 func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -1217,62 +1241,23 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 
-	// History is the thread as it stands, auto-compacted when it overflows
-	// the replay budget (the compacted prefix survives as sess.Summary and
-	// replays as a leading context note). The user turn is persisted first
-	// (a failed ask still leaves the question in the thread, like codex/claude
-	// code) but excluded from the replay: AskTurns carries the prompt itself,
-	// so replaying the persisted copy too would send two consecutive user
-	// messages — a 400 from strict providers.
-	var history []entry.Turn
-	budget := sessions.ReplayBudget(eng.ContextWindow())
-	// Compaction rewrites the stored thread, so a side ask leaves it alone: its
-	// replay is a snapshot, and a snapshot must not change what it copies. A
-	// thread long enough to need compaction still replays its budget-bounded
-	// tail below.
-	if !side {
-		if updated, err := h.sessions.CompactHistory(r.Context(), sess.ID, budget,
-			func(ctx context.Context, evicted []sessions.Turn) (string, error) {
-				turns := make([]entry.Turn, 0, len(evicted))
-				for _, t := range evicted {
-					turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
-				}
-				return eng.SummarizeTurns(ctx, turns)
-			}); err == nil {
-			sess = updated
-		}
-	}
-	if sess.Summary != "" {
-		history = append(history, entry.Turn{Role: "user", Content: sessions.SummaryMarker + "\n" + sess.Summary})
-	}
-	// The replay stays budget-bounded even when compaction could not run
-	// (summarize failed or thread fits): the stored thread keeps every turn,
-	// only the model's view is trimmed to the tail that fits.
-	_, kept := sessions.SplitForBudget(sess.Turns, budget)
-	for _, t := range kept {
-		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
-	}
-	if !side {
-		if _, err := h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: req.Prompt}); err != nil {
-			send("error", map[string]string{"message": "save turn failed"})
-			return
-		}
-	}
-
-	var streamed strings.Builder
+	var progress askProgress
 	// The answer's evidence trail: a side turn keeps the tool calls behind it,
 	// so a reloaded pane shows what was checked, not only what was said. It is
 	// display-only and never replayed to the model.
 	var sideTrace []string
 	cb := askengine.StreamCallbacks{
-		OnReasoning: func(text string) { send("reasoning", map[string]string{"text": text}) },
+		OnReasoning: func(text string) {
+			progress.delta(text, true)
+			send("reasoning", map[string]string{"text": text})
+		},
 		OnDelta: func(text string) {
 			// The streamed prose is the only copy of a reply that a cancelled
 			// turn will ever have: once execCtx dies the model is never asked
 			// again, so a turn that stops mid-answer used to persist the error
 			// line alone and lose everything the user had already read. Keep
 			// it here and file it with the stopped turn below.
-			streamed.WriteString(text)
+			progress.delta(text, false)
 			send("delta", map[string]string{"text": text})
 		},
 		// OnProgress (not OnStatus) so the structured event survives: the
@@ -1292,12 +1277,15 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if p.Kind == askengine.ProgressUsage {
+				progress.usage(p.InputTokens+p.OutputTokens, p.Estimated)
 				send("usage", map[string]any{
 					"input": p.InputTokens, "output": p.OutputTokens, "estimated": p.Estimated,
 				})
 				return
 			}
-			send("status", statusEventOf(p))
+			ev := statusEventOf(p)
+			progress.status(ev)
+			send("status", ev)
 		},
 		// The task row exists now — name it on the wire immediately. This turn
 		// does not finish until the task settles (askengine follows the row to
@@ -1306,6 +1294,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// line of status. With it the thread renders the employee's live
 		// progress row from the moment the job is dispatched.
 		OnTaskRow: func(taskID string) {
+			progress.task(taskID)
 			send("task", map[string]string{"task_id": taskID})
 		},
 		// What the user types while this turn streams. The queue is drained at
@@ -1362,6 +1351,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		send("error", map[string]string{"message": "create operation failed"})
 		return
 	}
+	askStarted := time.Now()
 	// Persist the dispatch boundary before the entry model can submit work.
 	// A unique operation, rather than session ID, separates overlapping asks.
 	roundID := op.operationID
@@ -1421,18 +1411,100 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	if side {
 		if err := h.sessions.StartSideOperationFor(sess.ID, sideChatID, sessions.Operation{
-			ID: op.operationID, Status: core.StateRunning,
+			ID: op.operationID, Status: core.StateRunning, StartedAt: askStarted,
 		}); err != nil {
 			send("error", map[string]string{"message": "save side operation failed"})
 			return
 		}
 	} else {
 		if err := h.sessions.StartOperation(sess.ID, sessions.Operation{
-			ID: op.operationID, Status: core.StateRunning,
+			ID: op.operationID, Status: core.StateRunning, StartedAt: askStarted,
 		}); err != nil {
 			send("error", map[string]string{"message": "save operation failed"})
 			return
 		}
+	}
+
+	finalOperation := sessions.Operation{ID: op.operationID, Status: core.StateFailed, Error: "ask interrupted before model execution"}
+	defer func() {
+		if !side {
+			_, _ = h.sessions.SetOperation(sess.ID, finalOperation)
+		}
+	}()
+	if !side {
+		if _, err := h.sessions.AppendTurn(sess.ID, sessions.Turn{OperationID: roundID, Role: "user", Text: req.Prompt}); err != nil {
+			send("error", map[string]string{"message": "save turn failed"})
+			return
+		}
+	}
+
+	// Persist a bounded-cadence display checkpoint while the HTTP stream is
+	// detached. Refresh observes real progress and the same operation identity.
+	progressSessionID := sess.ID
+	checkpointDone, checkpointStopped := make(chan struct{}), make(chan struct{})
+	guard.Go(nil, "panel: ask progress", nil, func() {
+		defer close(checkpointStopped)
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-checkpointDone:
+				return
+			case <-tick.C:
+				if !side {
+					_, _ = h.sessions.SetOperation(progressSessionID, progress.snapshot(sessions.Operation{
+						ID: op.operationID, Status: core.StateRunning,
+					}))
+				}
+			}
+		}
+	})
+	var stopCheckpointOnce sync.Once
+	stopCheckpoint := func() { stopCheckpointOnce.Do(func() { close(checkpointDone); <-checkpointStopped }) }
+	defer stopCheckpoint()
+
+	// History is the thread as it stands, auto-compacted when it overflows
+	// the replay budget (the compacted prefix survives as sess.Summary and
+	// replays as a leading context note). The user turn is persisted first
+	// (a failed ask still leaves the question in the thread, like codex/claude
+	// code) but excluded from the replay: AskTurns carries the prompt itself,
+	// so replaying the persisted copy too would send two consecutive user
+	// messages — a 400 from strict providers.
+	var history []entry.Turn
+	budget := sessions.ReplayBudget(eng.ContextWindow())
+	// Compaction rewrites the stored thread, so a side ask leaves it alone: its
+	// replay is a snapshot, and a snapshot must not change what it copies. A
+	// thread long enough to need compaction still replays its budget-bounded
+	// tail below.
+	if !side {
+		if evicted, _ := sessions.SplitForBudget(sess.ReplayTurns(), budget); len(evicted) > 0 {
+			cb.OnProgress(askengine.Progress{Kind: askengine.ProgressTool, Name: "conversation_compact"})
+		}
+		compactCtx, compactCancel := context.WithTimeout(execCtx, 30*time.Second)
+		defer compactCancel()
+		if updated, err := h.sessions.CompactHistory(compactCtx, sess.ID, budget,
+			func(ctx context.Context, evicted []sessions.Turn) (string, error) {
+				turns := make([]entry.Turn, 0, len(evicted))
+				for _, t := range evicted {
+					turns = append(turns, entry.Turn{Role: t.Role, Content: t.Text})
+				}
+				return eng.SummarizeTurns(ctx, turns)
+			}); err == nil {
+			sess = updated
+		}
+	}
+	if sess.Summary != "" {
+		history = append(history, entry.Turn{Role: "user", Content: sessions.SummaryMarker + "\n" + sess.Summary})
+	}
+	// The replay stays budget-bounded even when compaction could not run
+	// (summarize failed or thread fits): the stored thread keeps every turn,
+	// only the model's view is trimmed to the tail that fits.
+	_, kept := sessions.SplitForBudget(sess.ReplayTurns(), budget)
+	for _, t := range kept {
+		if t.OperationID == roundID && t.Role == "user" {
+			continue
+		}
+		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
 	}
 
 	// Pre-execution questions (entry clarify + the large-task plan card) park
@@ -1461,10 +1533,8 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// The clock starts here rather than at the top of the handler: setup above
-	// (history replay, compaction) is not the turn, and a duration that
-	// included it would overstate a fast reply.
-	askStarted := time.Now()
+	// Duration includes accepted setup/compaction as well as inference: that
+	// wait is visible to the user and must not vanish after a reload.
 	// A side ask binds remembered approvals to its own bucket: a "session"
 	// grant given beside the thread must not silently answer for the thread.
 	approvalSession := sess.ID
@@ -1487,6 +1557,11 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		roundStatus = "stopped"
 	}
 	askDuration := time.Since(askStarted).Milliseconds()
+	stopCheckpoint()
+	finalProgress := progress.snapshot(sessions.Operation{})
+	if out != nil && finalProgress.Thought == "" {
+		finalProgress.Thought = out.Thought
+	}
 	if err != nil {
 		msg := err.Error()
 		status := core.StateFailed
@@ -1526,9 +1601,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// FinishSideOperation below, so a reader never sees "done" before the
 		// turn is on disk. The main thread keeps its own two-step order.
 		if !side {
-			_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
-				ID: op.operationID, Status: status, Error: msg,
-			})
+			finalOperation = sessions.Operation{ID: op.operationID, Status: status, Error: msg}
 		}
 		send("error", errPayload)
 		// The failed turn carries its duration too: "it died after 40 seconds"
@@ -1541,9 +1614,12 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// along, rather than the other way round.
 		text := "⚠ " + msg
 		kind := "error"
+		if status != core.StateCancelled && finalProgress.Text != "" {
+			text = strings.TrimRight(finalProgress.Text, " \t\r\n") + "\n\n" + text
+		}
 		if status == core.StateCancelled {
 			kind = "answer"
-			text = strings.TrimRight(streamed.String(), " \t\r\n")
+			text = strings.TrimRight(finalProgress.Text, " \t\r\n")
 			if text == "" {
 				text = msg
 			}
@@ -1555,7 +1631,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			}, sessions.Operation{ID: op.operationID, Status: status, Error: msg})
 		} else {
 			_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{
-				Role: "assistant", Text: text, Kind: kind, Code: code,
+				IdempotencyKey: "ask:" + roundID + ":reply", OperationID: roundID, Thought: finalProgress.Thought, Role: "assistant", Text: text, Kind: kind, Code: code,
 				ErrKind: errKind, ErrDetail: errDetail,
 				DurationMS: askDuration,
 				// A stopped turn still consumed tokens up to the cut, and the
@@ -1575,11 +1651,13 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// FinishSideOperation below: a poller that sees "done" can read the turn in
 	// the same breath.
 	if !side {
-		_, _ = h.sessions.SetOperation(sess.ID, sessions.Operation{
-			ID: op.operationID, Status: operationStatus, TaskID: out.TaskID, Error: out.Stderr,
-		})
+		finalOperation = sessions.Operation{ID: op.operationID, Status: operationStatus, TaskID: out.TaskID, Error: out.Stderr}
 	}
-	send("result", res)
+	saveFailure := func() {
+		msg := i18n.T(h.locale(), "web.session.saveFailed")
+		finalOperation.Status, finalOperation.Error = core.StateFailed, msg
+		send("error", map[string]string{"message": msg, "code": "persistence"})
+	}
 
 	// Queue redesign: bind a spawned task back to this session so the board
 	// card can jump into it and the session streams the task's progress. A
@@ -1598,33 +1676,41 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// link. The model's own answer, when it wrote one, keeps the single-turn
 	// path: prose plus a batch of receipts has no place in one bubble.
 	if !side && out.Kind == "task" && len(out.Dispatched) > 1 && out.Answer == "" {
+		var turns []sessions.Turn
 		for i, d := range out.Dispatched {
 			batch := sessions.Turn{
-				Role: "assistant",
-				Kind: "task",
-				Text: i18n.Tf(h.locale(), "web.session.dispatched", "title", d.TaskTitle, "id", d.TaskID),
-				Ref:  d.TaskID,
+				IdempotencyKey: "ask:" + roundID + ":dispatch:" + d.TaskID,
+				OperationID:    roundID,
+				Role:           "assistant",
+				Kind:           "task",
+				Text:           i18n.Tf(h.locale(), "web.session.dispatched", "title", d.TaskTitle, "id", d.TaskID),
+				Ref:            d.TaskID,
 			}
 			// The clock belongs to the ask, not to each row: only the last
 			// receipt carries it, so the thread does not print the same
 			// duration three times.
 			if i == len(out.Dispatched)-1 {
+				batch.Thought = finalProgress.Thought
 				batch.DurationMS = askDuration
 				batch.Model = out.EntryModel
 			}
-			if _, err := h.sessions.AppendTurn(sess.ID, batch); err != nil {
-				// The reply already streamed; a failed bookkeeping write is
-				// not worth killing the stream over.
-				_ = err
-			}
+			turns = append(turns, batch)
 		}
+		if _, err := h.sessions.AppendTurns(sess.ID, turns...); err != nil {
+			saveFailure()
+			return
+		}
+		send("result", res)
 		return
 	}
 
 	turn := sessions.Turn{
-		Role:       "assistant",
-		Kind:       out.Kind,
-		DurationMS: askDuration,
+		IdempotencyKey: "ask:" + roundID + ":reply",
+		OperationID:    roundID,
+		Thought:        finalProgress.Thought,
+		Role:           "assistant",
+		Kind:           out.Kind,
+		DurationMS:     askDuration,
 		// The model that answered, filed with the turn: the console prints it
 		// beside the reply's copy button, and `out` only exists for the live
 		// stream — a reloaded thread reads this instead.
@@ -1684,7 +1770,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		if turn.Kind == "error" {
 			errText = strings.TrimPrefix(turn.Text, "⚠ ")
 		}
-		_, _ = h.sessions.FinishSideOperation(sess.ID, op.operationID, sessions.SideTurn{
+		ok, err := h.sessions.FinishSideOperation(sess.ID, op.operationID, sessions.SideTurn{
 			Role: "assistant", Text: turn.Text, Tools: sideTrace, TaskID: out.TaskID,
 			Tokens: turn.Tokens, DurationMS: turn.DurationMS, Error: errText,
 		}, sessions.Operation{
@@ -1693,13 +1779,17 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			// queued or running.
 			ID: op.operationID, Status: core.StateDone, TaskID: out.TaskID, Error: out.Stderr,
 		})
+		if err != nil || !ok {
+			saveFailure()
+			return
+		}
 	} else {
 		if _, err := h.sessions.AppendTurn(sess.ID, turn); err != nil {
-			// The reply already streamed; a failed bookkeeping write is not worth
-			// killing the stream over.
-			_ = err
+			saveFailure()
+			return
 		}
 	}
+	send("result", res)
 }
 
 // ---- Session uploads ----

@@ -8,8 +8,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
@@ -172,5 +175,40 @@ func TestFinalizerReportsRetriedAttemptSeparately(t *testing.T) {
 	}
 	if sess.Turns[0].IdempotencyKey == sess.Turns[1].IdempotencyKey {
 		t.Fatal("new attempt reused the failed attempt's summary key")
+	}
+}
+
+func TestFinalizerPreservesDeliveryOutsideReplayDigest(t *testing.T) {
+	f := newSummaryDeliveryFixture(t, false)
+	report := "## Changes\nFixed request handling.\n\n## Verification\ngo test ./... passed.\n\n## Remaining\nManual deployment is still required."
+	if _, err := f.db.Exec("UPDATE tasks SET result_json = ? WHERE task_id = ?", `{"stdout":`+strconv.Quote(report)+`}`, f.task.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	f.h.finalizeSessionSweep(context.Background())
+	f.h.finalizeSessionSweep(context.Background())
+	sess, err := sessions.NewStore(f.root).Get(f.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.Turns) != 1 || sess.Turns[0].Delivery != report {
+		t.Fatalf("delivery was lost or duplicated: %+v", sess.Turns)
+	}
+	if strings.Contains(sess.Turns[0].Text, "go test ./...") {
+		t.Fatal("display payload leaked into replay digest")
+	}
+}
+
+func TestTaskDeliveryBoundsRunesWithoutLosingResult(t *testing.T) {
+	report := strings.Repeat("验证", maxDeliveryRunes)
+	payload := `{"result":` + strconv.Quote(report) + `}`
+	got, clipped := taskDelivery(payload)
+	if !clipped || utf8.RuneCountInString(got) != maxDeliveryRunes || !utf8.ValidString(got) {
+		t.Fatalf("invalid bounded delivery: runes=%d clipped=%v", utf8.RuneCountInString(got), clipped)
+	}
+	if extractResultText(payload) != report {
+		t.Fatal("original task output was truncated")
+	}
+	if got, clipped := taskDelivery(`{"stdout":""}`); got != "" || clipped {
+		t.Fatalf("empty delivery fabricated output: %q %v", got, clipped)
 	}
 }

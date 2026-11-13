@@ -337,8 +337,8 @@ func TestCompactHistoryFoldsIntoSummary(t *testing.T) {
 	if updated.Summary == "" {
 		t.Fatal("Summary empty after compaction")
 	}
-	if len(updated.Turns) >= 20 {
-		t.Fatalf("turns not trimmed: %d", len(updated.Turns))
+	if len(updated.Turns) != 20 || len(updated.ReplayTurns()) >= 20 {
+		t.Fatalf("transcript/replay not separated: %d/%d", len(updated.Turns), len(updated.ReplayTurns()))
 	}
 	// Pair-aligned: kept thread must start on a user turn.
 	if len(updated.Turns) > 0 && updated.Turns[0].Role != "user" {

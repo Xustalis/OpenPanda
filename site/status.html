@@ -135,7 +135,7 @@
         <h2 data-i18n="st.s3.t">已知限制</h2>
         <ul class="pg-list pg-list-todo">
           <li data-i18n="st.s3.a">信任模型与沙箱在 docs/status.md 的「已知限制」里仍有未关闭的 P2 条目。</li>
-          <li data-i18n="st.s3.b">/rewind 快照仍在调用方 goroutine 上同步生成；上下文压缩后轮次编号会漂移。</li>
+          <li data-i18n="st.s3.b">/rewind 快照仍在调用方 goroutine 上同步生成。上下文压缩现保留原始消息及轮次；旧版本已经删除的历史无法重建。</li>
           <li data-i18n="st.s3.c">产物预览的跨节点拉取、文件查看器的符号链接窗口尚未收口。</li>
         </ul>
       </section>
@@ -201,27 +201,39 @@
       </tr></thead><tbody>
       <tr>
       <td data-i18n="stx.s2.r1.c1">make gate</td>
-      <td data-i18n="stx.s2.r1.c2">fmt-check、vet、build、adapter-test、test、race-focused 全绿；race-focused 覆盖 core / trust / bus / storage</td>
+      <td data-i18n="stx.s2.r1.c2">2026-11-13：fmt-check、vet、staticcheck、vuln、build、114 项适配器契约与完整 Go 测试通过；race-focused 覆盖 core / commander / bus / storage / askengine / scheduler / webui-panel</td>
       </tr>
       <tr>
       <td data-i18n="stx.s2.r2.c1">make gate-all</td>
-      <td data-i18n="stx.s2.r2.c2">gate 之外加 web-gate 与两个 TUI PTY 契约，全绿</td>
+      <td data-i18n="stx.s2.r2.c2">2026-11-13：gate、web-gate 与四个 TUI PTY 契约完整重跑通过（鼠标、退出、Side、任务侧栏）</td>
       </tr>
       <tr>
       <td data-i18n="stx.s2.r3.c1">Web typecheck + 单测 + vite build</td>
-      <td data-i18n="stx.s2.r3.c2">exit 0（79 个前端测试）</td>
+      <td data-i18n="stx.s2.r3.c2">exit 0（427 个前端测试，2026-11-13）</td>
       </tr>
       <tr>
       <td data-i18n="stx.s2.r4.c1">三设备真机流水线</td>
-      <td data-i18n="stx.s2.r4.c2">macOS ↔ Windows ↔ Linux SBC 实机跑通多跳委派、硬钉选、两跳流水线、执行中杀节点与断线重连</td>
+      <td data-i18n="stx.s2.r4.c2">历史真机回归（v0.0.11-preview）：macOS ↔ Windows ↔ Linux SBC 跑通多跳委派、硬钉选、两跳流水线、执行中杀节点与断线重连；非本轮重新实测</td>
       </tr>
       <tr>
       <td data-i18n="stx.s2.r5.c1">跨网项目树回传</td>
-      <td data-i18n="stx.s2.r5.c2">Mac → 中继 → 云主机，3 MiB 项目树哈希一致</td>
+      <td data-i18n="stx.s2.r5.c2">历史跨网回归：Mac → 中继 → 云主机，3 MiB 项目树哈希一致；非本轮重新实测</td>
       </tr>
       <tr>
       <td data-i18n="stx.s2.r6.c1">语音链路真机</td>
       <td data-i18n="stx.s2.r6.c2">未验：只验了缺驱动时正确报错并退出的降级路径</td>
+      </tr>
+      <tr>
+      <td data-i18n="stx.s2.r7.c1">原生 Codex 真实调用</td>
+      <td data-i18n="stx.s2.r7.c2">2026-11-13：官方端点冒烟与真实文件写入/回读 exit 0，产物校验通过；不代表全部服务商或 CLI 都已实测</td>
+      </tr>
+      <tr>
+      <td data-i18n="stx.s2.r8.c1">Web 交付、刷新与首次上手</td>
+      <td data-i18n="stx.s2.r8.c2">2026-11-13：隔离面板验证记录/停止恢复与交付，桌面和手机亮暗主题复查；48 项站点检查及文档检查通过。只更新源码与本地预览，现有服务和公网官网尚未部署</td>
+      </tr>
+      <tr>
+      <td data-i18n="stx.s2.r9.c1">发布编译矩阵</td>
+      <td data-i18n="stx.s2.r9.c2">2026-11-13：固定最终前端资源后，原生、lite 全包、六个系统/架构目标与三个 Linux lite 目标全部编译通过；编译通过不等于各平台本轮真机运行通过</td>
       </tr>
       </tbody></table></div>
       </section>
@@ -243,7 +255,7 @@
       </div>
       <div class="pg-fact">
       <h3 data-i18n="stx.s3.f4.t">契约测试</h3>
-      <p data-i18n="stx.s3.f4.d">适配器线协议由假 CLI 断言 argv、环境、进度与超时；TUI 的两条 PTY 契约钉住输入过滤与退出行为。</p>
+      <p data-i18n="stx.s3.f4.d">适配器线协议由假 CLI 断言 argv、环境、进度与超时；四条 TUI PTY 契约覆盖鼠标、退出、侧边对话和任务侧栏。</p>
       </div>
       </div>
       <p class="pg-note" data-i18n="stx.s3.note">发版顺序是硬约束：先推 main，等该 SHA 的发版门禁全绿，再打 tag。给 feature 分支打 tag 不会触发发版管线。</p>
@@ -264,7 +276,7 @@
         <span>Open<b>Panda</b></span>
       </a>
       <p class="footer-tag" data-i18n="foot.tag">Local-first, forever.</p>
-      <p class="footer-version"><b>v0.1.6 Constellation</b> <span>· stable</span></p>
+      <p class="footer-version"><b>v0.1.6 Constellation</b> <span data-i18n="foot.channel">· 发布准备中</span></p>
     </div>
     <div class="footer-col">
       <h4 data-i18n="foot.product">产品</h4>
@@ -301,7 +313,7 @@
     <span class="status-pill"><i aria-hidden="true"></i><span data-i18n="foot.green">main 分支全绿才允许合并</span></span>
     <span class="status-sep" aria-hidden="true">·</span>
     <span data-i18n="foot.checks">10 项必过检查 · 6 个发布目标 · 每周安全扫描</span>
-    <a class="status-link" href="download.html" data-i18n="foot.latest">最新版本 v0.1.6 Constellation <span aria-hidden="true">→</span></a>
+    <a class="status-link" href="download.html" data-i18n="foot.latest">v0.1.6 发布准备 <span aria-hidden="true">→</span></a>
   </div>
   <div class="wrap footer-bottom">
     <p class="footer-credit" data-i18n="foot.credit">影像：<a href="https://www.eso.org/public/images/eso0932a/" target="_blank" rel="noopener">ESO/S. Brunier 银河全景</a>（<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>；已裁剪、调色并与程序星点合成）；NASA Blue Marble、Black Marble DNB 与地球云层影像（公有领域）。代码以 AGPL-3.0-or-later 发布；闭源嵌入与托管修改可另行授权。</p>

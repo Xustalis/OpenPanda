@@ -256,6 +256,9 @@ func (s *Store) Rewind(ctx context.Context, id string, turn int) (*RewindResult,
 		return nil, fmt.Errorf("%w: %d", ErrBadTurn, turn)
 	}
 	sess.Turns = sess.Turns[:turn]
+	if turn < sess.SummaryTurns {
+		sess.Summary, sess.SummaryTurns = "", 0
+	}
 	sess.UpdatedAt = time.Now()
 	if err := s.save(sess); err != nil {
 		return nil, err

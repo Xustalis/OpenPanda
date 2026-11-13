@@ -57,6 +57,8 @@ function nodeName(nodes: NodeInfo[], id: string): string {
 }
 
 export interface SessionRailProps {
+  /** Entry-model work exists before a dispatched task row does. */
+  working?: boolean
   /** The thread's worktree changes, or null before one exists. */
   diff: SessionDiff | null
   /** The thread's tasks, live rows included. */
@@ -183,6 +185,8 @@ export function SessionRail(props: SessionRailProps) {
   const taskSummary: ComponentChildren =
     live.length > 0 ? (
       <span class="rail-live">{t('sessionRail.running', { n: String(live.length) })}</span>
+    ) : props.working ? (
+      <span class="rail-live">{t('sessionRail.modelRunning')}</span>
     ) : (
       <span class="rail-none">{t('sessionRail.idle')}</span>
     )
@@ -221,7 +225,7 @@ export function SessionRail(props: SessionRailProps) {
     <div class="rail-dock" ref={dock}>
       <button
         type="button"
-        class={`rail-trigger${expanded ? ' is-open' : ''}${live.length > 0 ? ' is-live' : ''}`}
+        class={`rail-trigger${expanded ? ' is-open' : ''}${live.length > 0 || props.working ? ' is-live' : ''}`}
         aria-expanded={expanded}
         aria-haspopup="dialog"
         aria-label={t('sessionRail.label')}
@@ -251,15 +255,11 @@ export function SessionRail(props: SessionRailProps) {
             <section class="rail-sec">
               {row(
                 t('sessionRail.tasks'),
-                live.length > 0 ? (
-                  <span class="rail-live">{t('sessionRail.running', { n: String(live.length) })}</span>
-                ) : (
-                  <span class="rail-none">{t('sessionRail.idle')}</span>
-                ),
+                taskSummary,
               )}
               <div class="rail-sec-body">
                 {live.length === 0 ? (
-                  <p class="rail-note">{t('sessionRail.idleWhere', { machine: props.machine })}</p>
+                  <p class="rail-note">{props.working ? t('sessionRail.modelRunning') : t('sessionRail.idleWhere', { machine: props.machine })}</p>
                 ) : (
                   <ul class="rail-tasks">
                     {live.map((task) => {

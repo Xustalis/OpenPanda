@@ -326,7 +326,7 @@ func sessionHistory(ctx context.Context, store *sessions.Store, sess *sessions.S
 	if sess.Summary != "" {
 		history = append(history, entry.Turn{Role: "user", Content: sessions.SummaryMarker + "\n" + sess.Summary})
 	}
-	_, kept := sessions.SplitForBudget(sess.Turns, budget)
+	_, kept := sessions.SplitForBudget(sess.ReplayTurns(), budget)
 	for _, t := range kept {
 		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
 	}

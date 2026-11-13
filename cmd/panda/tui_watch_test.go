@@ -289,3 +289,21 @@ func TestWatcherSilentDuringAsk(t *testing.T) {
 		t.Error("commit should clear the live card")
 	}
 }
+
+func TestOnWatchDeliversCompletedTaskInsteadOfOnlyNotification(t *testing.T) {
+	m := newTestTUI(t)
+	_, cmd := m.onWatch(watchMsg{events: []watchEvent{{
+		completed: true, task: core.Task{TaskID: "task-delivery", Title: "Repair request handling", State: core.StateDone,
+			ResultJSON: `{"stdout":"## Changes\nFixed requests.\n\n## Verification\nTests passed.\n\n## Remaining\nRestart the service."}`},
+		steps: []string{"Bash · go test ./..."},
+	}}})
+	printed := collectPrinted(cmd)
+	for _, want := range []string{"Fixed requests.", "Tests passed.", "Restart the service.", "go test ./...", "No independent verification", "Remaining work"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("handoff missing %q: %s", want, printed)
+		}
+	}
+	if len(m.chatHistory.blocks) != 1 || m.chatHistory.blocks[0].taskRef != "task-delivery" {
+		t.Fatalf("completion was not retained as an addressable task block: %+v", m.chatHistory.blocks)
+	}
+}

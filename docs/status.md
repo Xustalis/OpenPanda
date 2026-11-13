@@ -1,5 +1,7 @@
 # 项目现状
 
+> 2026-11-13 更新（归入 `v0.1.6` 的可靠性与交付验收，尚未打 tag：入口模型阶段与服务商实际返回的思考摘要可见；回答、进度和停止身份持久化，刷新后能恢复当前操作，迟到事件不会覆盖用户消息或另一次请求。自动压缩只缩短模型回放，不再删原始记录；旧版本已经删去的历史无法凭空恢复。Codex 注入补齐 Responses 服务商配置，原生官方和兼容端点配置继续保留；余额耗尽在允许的挽救失败后停止，不无限重放。Web/TUI 完成任务后展示交付、真实步骤、验证状态和待确认事项，未知或部分验证不冒充通过；Web 复制和导出保留交付文本，手机端去掉闲置桌面栏位。官网补齐首次任务、验收和恢复指引，下载跟随实际稳定通道，区分源码准备与已发布。验证范围见下表；未重启现有服务、未部署公网官网，也未新增真实多机或全部服务商验收。）
+
 > 2026-11-12 更新（`v0.1.6` 发布物料，待打 tag：完成判定与恢复不再声称机器没做过的工作——批准不能收口已知未完成的执行，外部阻塞要求改变输入，部分或中断的运行既不报成功也不静默换 agent 重放，恢复策略显式命名，原生检查点在受限续跑与依赖释放中保留；计划阶段把 `acceptance`、`success_definition`、`tools_policy`、`max_turns` 与 `blocked` 带过转换，独立分支并行、就绪阶段按加权关键路径排序；模型发现只读接入 CC Switch 等 Claude Code 中转并保留节点原生端点，任务声明是否可写、仓库问答要求源码证据；`--nodes`/设备选择器/`task_submit.node` 是硬 pin，`--preferred` 是留 `route_fallback` 的软提示，握手失败细分共享密钥/时钟/身份；控制台把侧边会话、概览与通知收进一个界面。诊断面：adapter 启动配置入日志、对端配置一秒文件轮询、`install-local` 同步 `~/.local/adapters`、探针带服务商会话头、adapter 起不来直接终态 failed。工具链下限抬到 Go 1.26.11 以避开 GO-2026-6859，另修 Windows DPI、控制台重载、队列与探针边界。配置、存储数据与线协议不变，schema 仍停在 v67，无迁移、无新帧。未做：UPnP/NAT-PMP、punch/dir 源签名收敛、daemon→面板 mesh 指标 IPC。本轮待打 tag。）
 
 > 2026-11-09 更新（`v0.1.5`「Constellation」发布：官网从单页扩成九页产品站（概览/能力/文档/下载/更新日志/现状/安全/社区/FAQ），03 节换成实机控制台截图与 81 秒录屏，`scripts/check-site.py` 校验链接、锚点、canonical 与版本字面量；执行侧把 `routing.agent_models`/`subagent_models`/`agent_concurrency` 与委派上限做成有校验、可热重载的设置（`docs/agent-execution.*` 五语说明），给工具循环加输入上限（单条 12,000 runes、整段 12,000–64,000 runes，按模型窗口推导）、溢出定向恢复与 panic 兜底，ask 轮次落库（`ask_rounds`，schema v67）、摘要投递可重试、turn 写入跨 store/压缩/fork 幂等，MCP stdio 传输加 4 MiB 响应、100 页分页、2,048 字符错误文本与 4 KiB 脱敏 stderr 上限；记忆面一轮加固（日志拒绝 symlink、dream 提升收据、中文短查询排序、项目会话隔离个人记忆、控制台编辑乐观锁与 ETag、图谱来源证据）；控制台补首次向导引导、团队入口 opt-in 开关、Obsidian 风格记忆图、dock 文档视图与按连接分组的模型卡；`sandbox.mode` 成为设置页、TUI 与 CLI 三处同源的可写设置；配对请求在控制台、TUI 与 `panda status` 三端通知，LAN 发现新增 doctor 端口探测与 /24 主动扫描（只证可达，准入仍走共享密钥与签名 hello），Windows `WSAEADDRINUSE` 按端口占用解读；`make build` 改用固定签名身份，避免 launchd 守护进程每次重建都丢掉 macOS 本地网络授权。未做：UPnP/NAT-PMP、punch/dir 源签名收敛、daemon→面板 mesh 指标 IPC。schema 到 67，0.1.4 的二进制打不开 v0.1.5 写过的库，回退需先还原备份。）
@@ -136,9 +138,13 @@ panda voice                              # 同一条路径，改成说出来
 
 | 检查 | 结果 |
 |---|---|
-| `make gate`（fmt-check + vet + build + adapter-test + test + race-focused） | exit 0（2026-10-15 复验，含 computer-use 驱动/产物回传/截屏信任闸；race-focused 覆盖 core/trust/bus/storage） |
-| `make gate-all`（+ web-gate + 两个 TUI PTY 契约） | exit 0（2026-10-07 复验；修复了两个 PTY 夹具缺 `terms_version` 被条款重授权门拦截的问题） |
-| Web typecheck + 单测 + vite build | exit 0（79 tests，2026-10-07） |
+| `make gate`（fmt-check + vet + staticcheck + vuln + build + adapter-test + test + race-focused） | exit 0（2026-11-13；114 项适配器契约与完整 Go 测试通过；race-focused 覆盖 core/commander/bus/storage/askengine/scheduler/webui-panel；漏洞扫描未发现可达漏洞） |
+| `make gate-all`（+ web-gate + 四个 TUI PTY 契约） | exit 0（2026-11-13；鼠标、退出与失败记录、Side、任务侧栏全部通过。首次组合运行暴露测试夹具的端口就绪逻辑竞态，修复并做 8 轮重点 race 重复后，完整组合门禁重跑通过） |
+| Web typecheck + 单测 + vite build | exit 0（427 项测试，2026-11-13） |
+| 原生 Codex 真实适配器调用与文件任务 | exit 0（2026-11-13；官方端点冒烟约 9.8 秒；真实文件写入/回读约 15.1 秒，产物内容校验通过；不代表所有服务商或所有 CLI 都做过真实调用） |
+| Web 刷新与交付展示 | 单机隔离面板实测通过（2026-11-13）：思考摘要/部分文本/停止恢复、后续消息与历史保留；桌面与手机亮/暗主题交付报告、真实步骤、部分验证和待确认事项刷新后仍在。未重启生产服务；夹具缺少可选子系统时返回 HTTP 400/404/503 |
+| 发布编译矩阵 | exit 0（2026-11-13；最终前端资源固定后，原生、`lite` 全包、Darwin/Linux/Windows × amd64/arm64 六目标与 Linux lite amd64/arm64/armv7 三目标编译通过；不代表这些系统均做过本轮真机运行验收） |
+| 站点与文档契约 | exit 0（2026-11-13；48 项站点检查、文档同步检查；中英首任务指引与 390px/1440px 页面宽度实测；仅本地源码与预览，未部署公网） |
 | P0 安全发现（路径穿越、结果送达、TUI 退出） | ✅ 已关闭 |
 | P1 安全加固（默认回环、context_fetch 授权、supervisor 不可达） | ✅ 已落地 |
 | 2026-08-31 审查修复（后端稳定性 + 前端竞态/可访问性） | ✅ 代码落地，单测全绿；后端稳定性面由 v0.0.11-preview 三设备实机回归覆盖（委派/杀进程/重连/重放），前端竞态修复属单设备面 |

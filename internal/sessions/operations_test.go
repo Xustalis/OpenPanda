@@ -3,7 +3,10 @@
 package sessions
 
 import (
+	"context"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestOperationGenerations pins the durable compare-and-set contract: a
@@ -109,5 +112,57 @@ func TestMetadataSetters(t *testing.T) {
 	// Setters on a missing session must error, not silently create.
 	if err := store.SetTitle("missing", "x"); err == nil {
 		t.Error("SetTitle on missing session succeeded")
+	}
+}
+
+func TestOperationProgressAndReasoningSurviveReload(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root)
+	sess, err := store.Create("progress")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Truncate(time.Millisecond)
+	if err := store.StartOperation(sess.ID, Operation{ID: "op", Status: "running", StartedAt: started}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.SetOperation(sess.ID, Operation{ID: "op", Status: "running", Text: "partial answer", Thought: "provider summary", Progress: map[string]any{"kind": "model", "text": "waiting"}}); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	got, err := NewStore(root).Get(sess.ID)
+	if err != nil || got.Operation.Text != "partial answer" || got.Operation.Thought != "provider summary" || !got.Operation.StartedAt.Equal(started) {
+		t.Fatalf("reload: %+v %v", got, err)
+	}
+	if _, err := store.AppendTurn(sess.ID, Turn{Role: "assistant", Text: "final answer", Thought: "provider summary", OperationID: "op"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = NewStore(root).Get(sess.ID)
+	if got.Turns[0].Thought != "provider summary" || got.Turns[0].Text != "final answer" {
+		t.Fatal(got.Turns)
+	}
+}
+
+func TestCompactionKeepsTranscriptAndReplayCursorAcrossReload(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(root)
+	sess, _ := store.Create("history")
+	for i := 0; i < 6; i++ {
+		_, _ = store.AppendTurns(sess.ID, Turn{Role: "user", Text: strings.Repeat("q", 200)}, Turn{Role: "assistant", Text: strings.Repeat("a", 200)})
+	}
+	_, err := store.CompactHistory(context.Background(), sess.ID, 200, func(context.Context, []Turn) (string, error) { return "digest", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := NewStore(root).Get(sess.ID)
+	if len(got.Turns) != 12 || got.SummaryTurns == 0 || len(got.ReplayTurns()) >= 12 {
+		t.Fatalf("history=%d replay=%d", len(got.Turns), len(got.ReplayTurns()))
+	}
+	child, err := store.Fork(sess.ID, 2)
+	if err != nil || len(child.Turns) != 2 || child.Summary != "" || child.SummaryTurns != 0 {
+		t.Fatalf("early fork leaked future summary: %+v %v", child, err)
+	}
+	legacy := &Session{Summary: "old digest", Turns: []Turn{{Role: "user", Text: "kept by older version"}}}
+	if len(legacy.ReplayTurns()) != 1 {
+		t.Fatal("legacy replay lost")
 	}
 }

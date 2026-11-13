@@ -2557,6 +2557,13 @@ export interface MemoryGraph {
 }
 
 export interface SessionTurn {
+  /** Display-only agent handoff, separate from the bounded replay digest. */
+  delivery_attempt_id?: string
+  delivery?: string
+  delivery_truncated?: boolean
+  /** Provider-supplied reasoning summary, never replayed as answer text. */
+  thought?: string
+  operation_id?: string
   role: 'user' | 'assistant'
   text: string
   /** `plan` is the multi-stage receipt the panel files when the ask started a
@@ -2594,6 +2601,13 @@ export interface SessionTurn {
 }
 
 export interface SessionOperation {
+  last_activity?: string
+  tokens?: number
+  estimated?: boolean
+  started_at?: string
+  text?: string
+  thought?: string
+  progress?: AskStatusEvent
   id: string
   status: 'running' | 'done' | 'review' | 'failed' | 'cancelled' | 'expired' | string
   task_id?: string

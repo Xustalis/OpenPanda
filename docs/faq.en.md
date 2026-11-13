@@ -36,10 +36,11 @@ remote-delegation shape.
 
 **Which model services are supported?**
 
-Any OpenAI-compatible or Anthropic-compatible endpoint. Set `api_type`
-to `anthropic` (Messages protocol) or `openai` (Chat Completions
-protocol). DeepSeek is recommended (default `deepseek-flash`, over
-`https://api.deepseek.com/anthropic`).
+Official and compatible endpoints are supported. `api_type` can be
+`anthropic` (Messages), `openai` (Chat Completions), `responses` (OpenAI
+Responses), or `google` (Gemini). Choose your own endpoint, credentials and
+model at setup; no vendor is required by default. Native agent CLI
+authentication is separate from entry-model configuration.
 
 **Error "model API key not configured"?**
 
@@ -323,12 +324,36 @@ keeping the token out of browser history and proxy logs.
 Terminal conversations and the web console share one session store: each
 thread lives under `<data>/sessions/`, and a launch continues the project's
 most recently updated thread (`panda --resume <id>` picks one, `--new`
-starts fresh). When the 24k-character budget overflows, historical turns are
-folded into a model-written running digest first (automatic compression), and
-only when the model is unreachable does it degrade to trimming the oldest.
+starts fresh). When the replay budget overflows, earlier turns are represented by a
+model-written running digest (automatic compaction), while the original
+transcript is retained. If summarization is unavailable, only the current
+model replay is bounded; stored messages are not deleted.
 `/new` starts a new conversation (the old thread is kept), `/history` views,
 `/sessions` switches, `panda ask --continue` continues; long threads can also
 `panda session fork` at any turn. Legacy
 `~/.local/state/openpanda/conversations/*.json` files are imported into
 sessions once on first launch and renamed to `.json.migrated` (the original
 is kept).
+
+
+**The model is quiet for a long time. What should I check?**
+
+Read the current phase, elapsed time, last activity and task details to
+distinguish entry-model waits from executor work and external network or
+authentication failures. Provider-supplied reasoning summaries are separate
+from answers; models that return no summary still get phase feedback, not
+fabricated reasoning. Refresh restores saved progress, partial answers and
+Stop for the same operation ID. Fix authentication, balance or endpoint
+errors before retrying. Never-saved reasoning and previously deleted
+messages cannot be recovered.
+
+**Where do I accept a completed task?**
+
+Stay in the original conversation to inspect the handoff report, recent
+recorded actions, changed files, verification and attention items. Expand a
+long report or the full process as needed. `done` is not independent
+verification; missing checks are labelled and empty output is not presented
+as a complete delivery. Background TUI completions also leave result blocks.
+Markdown exports retain the saved handoff body. After updating source,
+rebuild and restart the actual service; old processes do not load fixes
+automatically.

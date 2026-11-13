@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mergeTailTurn, patchStreaming, slashQuery } from './chatstate.ts'
+import { reconcileTranscript, runningOperation, mergeTailTurn, patchStreaming, slashQuery } from './chatstate.ts'
 
 interface Msg {
   role: 'user' | 'assistant'
@@ -21,6 +21,7 @@ interface Msg {
   /** Display-only fields the transcript never keeps (see mergeTailTurn). */
   result?: unknown
   thought?: string
+  operation_id?: string
   k?: string
 }
 
@@ -47,13 +48,13 @@ test('patchStreaming survives a trailing non-streaming message', () => {
   assert.equal(got[2]!.text, 'stray')
 })
 
-test('patchStreaming falls back to the last message when nothing streams', () => {
+test('patchStreaming ignores an absent streaming target', () => {
   const msgs: Msg[] = [
     { role: 'user', text: 'q' },
     { role: 'assistant', text: '' },
   ]
   const got = patchStreaming(msgs, (m) => ({ ...m, text: 'done' }))
-  assert.equal(got[1]!.text, 'done')
+  assert.equal(got[1]!.text, '')
 })
 
 test('patchStreaming on an empty transcript is a no-op', () => {
@@ -164,4 +165,54 @@ test('mergeTailTurn reconciles only the tail when no adopter is given', () => {
   const got = mergeTailTurn(msgs, turns)
   assert.equal(got.length, 2)
   assert.equal(got[1]!.ref, 't2')
+})
+
+test('late frames never overwrite a user message or a different operation', () => {
+  const msgs: Msg[] = [
+    { role: 'assistant', text: 'other operation', streaming: true, k: 'other' },
+    { role: 'user', text: 'original question', k: 'user' },
+  ]
+  assert.deepEqual(patchStreaming(msgs, m => ({ ...m, text: 'wrong' }), 'lost'), msgs)
+  assert.deepEqual(patchStreaming(msgs, m => ({ ...m, text: 'wrong' }), 'user'), msgs)
+  assert.deepEqual(patchStreaming([msgs[1]!], m => ({ ...m, text: 'wrong' })), [msgs[1]!])
+})
+
+test('identified assistant remains patchable after its closing frame', () => {
+  const msgs: Msg[] = [{ role: 'assistant', text: 'partial', streaming: false, k: 'reply' }]
+  assert.equal(patchStreaming(msgs, m => ({ ...m, text: 'complete' }), 'reply')[0]!.text, 'complete')
+})
+
+test('a finalizer report is not pasted into the dispatch or user row', () => {
+  const local = [
+    { role: 'user' as const, text: 'question', k: 'q' },
+    { role: 'assistant' as const, text: '', kind: 'task', ref: 't1', operation_id: 'r1', thought: 'summary', k: 'reply' },
+  ]
+  const stored = [
+    { role: 'user' as const, text: 'question', k: 'srv0' },
+    { role: 'assistant' as const, text: 'dispatched', kind: 'task', ref: 't1', operation_id: 'r1', k: 'srv1' },
+    { role: 'assistant' as const, text: '[done] report', kind: 'answer', k: 'srv2' },
+  ]
+  const got = reconcileTranscript(local, stored)
+  assert.equal(got[0]!.text, 'question')
+  assert.equal(got[1]!.k, 'reply')
+  assert.equal((got[1] as Msg).thought, 'summary')
+  assert.equal(got[2]!.text, '[done] report')
+  assert.equal(got[2]!.k, 'srv2')
+})
+
+test('refresh and thread switch resolve the exact running operation', () => {
+  const s = { id: 's1', operation: { id: 'op1', status: 'running' } }
+  assert.equal(runningOperation('s1', s), 'op1')
+  assert.equal(runningOperation('s2', s), null)
+  assert.equal(runningOperation('s1', { ...s, operation: { id: 'op1', status: 'done' } }), null)
+  assert.equal(runningOperation('s1', null), null)
+})
+
+test('failed persistence keeps the current streamed reply, not unrelated rows', () => {
+  const local = [
+    { role: 'assistant' as const, text: 'only wire copy', k: 'new', operation_id: 'op' },
+    { role: 'assistant' as const, text: 'stale', k: 'old', operation_id: 'old' },
+  ]
+  assert.deepEqual(reconcileTranscript(local, [], 'op').map(m => m.text), ['only wire copy'])
+  assert.deepEqual(reconcileTranscript(local, []).map(m => m.text), [])
 })

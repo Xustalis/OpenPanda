@@ -62,7 +62,7 @@ func TestSummaryRepairDoesNotResurrectCompactedResults(t *testing.T) {
 		t.Fatalf("compaction: %+v %v", compacted, err)
 	}
 	rows, err := f.h.auditSessionSummaries(ctx, f.sessionID, true)
-	if err != nil || len(rows) != 1 || rows[0].Status != "compacted" {
+	if err != nil || len(rows) != 1 || rows[0].Status != "present" {
 		t.Fatalf("unsafe repair: %+v %v", rows, err)
 	}
 	f.assertTurns(t, len(compacted.Turns))

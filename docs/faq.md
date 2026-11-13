@@ -22,7 +22,7 @@ panda web       # 或者打开 Web 控制台（自动登录）
 
 **支持哪些模型服务？**
 
-任何 OpenAI 兼容或 Anthropic 兼容端点。`api_type` 填 `anthropic`（Messages 协议）或 `openai`（Chat Completions 协议）。推荐 DeepSeek（默认 `deepseek-flash`，走 `https://api.deepseek.com/anthropic`）。
+支持官方及兼容端点。`api_type` 可选 `anthropic`（Messages）、`openai`（Chat Completions）、`responses`（OpenAI Responses）或 `google`（Gemini）。初始化时自行选择服务、凭据和模型名，不内置要求使用某一家供应商；agent CLI 的原生认证与入口模型配置分开。
 
 **报错「未配置模型 API key」？**
 
@@ -165,4 +165,13 @@ Web 控制台默认只绑 `127.0.0.1:7840`，公网访问不到。`network.expos
 
 **REPL 里会话上下文能存多久？**
 
-终端对话和 Web 控制台是同一套会话：按线程保存在 `<data>/sessions/`，启动时自动接上当前项目最近更新的那条（`panda --resume <id>` 指定、`--new` 开新对话）；24k 字符预算超出时优先把溢出的历史折叠成模型写的 running digest（自动压缩），模型不可达才退化为直接裁剪最旧内容。`/new` 开始新对话（旧线程保留），`/history` 查看，`/sessions` 切换，`panda ask --continue` 接续；长线程还可用 `panda session fork` 在任意轮次分叉。旧版 `~/.local/state/openpanda/conversations/*.json` 在首次启动时导入成会话并改名为 `.json.migrated`，原文件保留。
+终端对话和 Web 控制台是同一套会话：按线程保存在 `<data>/sessions/`，启动时自动接上当前项目最近更新的那条（`panda --resume <id>` 指定、`--new` 开新对话）；回放预算超出时把较早历史归纳为 running digest（自动压缩），原始消息仍保留在会话中；模型不可达时只裁剪本次模型回放，不删除原始记录。`/new` 开始新对话（旧线程保留），`/history` 查看，`/sessions` 切换，`panda ask --continue` 接续；长线程还可用 `panda session fork` 在任意轮次分叉。旧版 `~/.local/state/openpanda/conversations/*.json` 在首次启动时导入成会话并改名为 `.json.migrated`，原文件保留。
+
+
+**模型长时间没有输出，应该怎么办？**
+
+先看对话中的当前阶段、耗时、最后活动及任务详情，区分入口模型等待、执行器运行和外部网络/认证错误。供应商提供的思考摘要单独展示；不返回摘要的模型也会显示调用阶段，但不会伪造思维链。刷新可恢复已保存的进度、部分回答与停止按钮；停止针对同一个操作 ID。认证、余额或端点错误应先修复环境，再重试。旧版本未保存的摘要或已删除的消息无法补回。
+
+**任务结束后在哪里验收？**
+
+留在原对话查看交付报告、最近的真实执行步骤、变更文件、验收状态及待确认事项，长报告和完整过程可以展开。`done` 不等于独立验收通过，没有验收记录会标注；空报告不会被伪装成完整交付。TUI 的后台完成也会留下结果块。导出 Markdown 保留已保存的交付正文。升级源码后仍需构建并重启实际运行的服务；旧进程不会自动加载修复。

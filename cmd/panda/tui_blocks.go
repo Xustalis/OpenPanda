@@ -51,13 +51,16 @@ type block struct {
 	taskRef string
 	// Task-block state (kind == blockTask): what was delegated and the lifecycle
 	// trail it went through, so the transcript keeps the evidence the live card showed.
-	title    string
-	stages   []string
-	meta     string
-	agent    string
-	model    string
-	injected bool
-	executor string
+	title     string
+	taskState string // terminal handoffs get explicit evidence and open-item sections
+	files     []string
+	remaining string
+	stages    []string
+	meta      string
+	agent     string
+	model     string
+	injected  bool
+	executor  string
 	// routeFallback names the peer the run was routed to before its link
 	// failed and the task executed locally — "meant for the Mac, ran here".
 	routeFallback string
@@ -247,6 +250,12 @@ func (b block) renderTask(t theme, width int) string {
 	}
 	var sb strings.Builder
 	sb.WriteString(head)
+	if len(b.stages) > 0 || b.taskState != "" {
+		sb.WriteString("\n" + t.heading.Render(i18n.T(t.loc, "tui.task.steps")))
+		if len(b.stages) == 0 {
+			sb.WriteString("\n" + t.muted.Render("  "+i18n.T(t.loc, "tui.task.noSteps")))
+		}
+	}
 	for _, st := range b.stages {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+st))
 	}
@@ -271,11 +280,28 @@ func (b block) renderTask(t theme, width int) string {
 	}
 	if b.verification != "" {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+i18n.Tf(t.loc, "tui.task.verification", "status", b.verification)))
+	} else if b.taskState != "" {
+		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+i18n.T(t.loc, "tui.task.unverified")))
+	}
+	if len(b.files) > 0 {
+		sb.WriteString("\n" + t.heading.Render(i18n.T(t.loc, "tui.task.files")))
+		for i, path := range b.files {
+			if i == 5 {
+				break
+			}
+			sb.WriteString("\n  " + arm + "  " + path)
+		}
+		if len(b.files) > 5 {
+			sb.WriteString("\n  …")
+		}
 	}
 	if b.meta != "" {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+b.meta))
 	}
 	if b.body != "" {
+		if b.taskState != "" {
+			sb.WriteString("\n\n" + t.heading.Render(i18n.T(t.loc, "tui.task.outcome")))
+		}
 		taskBody := b.body
 		if t.color {
 			renderWidth := width
@@ -291,6 +317,13 @@ func (b block) renderTask(t theme, width int) string {
 		} else {
 			sb.WriteString("\n\n" + t.danger.Render(taskBody))
 		}
+	}
+	if b.taskState != "" {
+		note := b.remaining
+		if note == "" {
+			note = taskRemainingNote(t.loc, b.taskState, b.verification)
+		}
+		sb.WriteString("\n\n" + t.heading.Render(i18n.T(t.loc, "tui.task.remaining")) + "\n" + note)
 	}
 	return sb.String()
 }
