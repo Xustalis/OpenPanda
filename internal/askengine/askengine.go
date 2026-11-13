@@ -1581,6 +1581,17 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		e.goBG("askengine: heartbeat", func() { sched.RunHeartbeat(ownCtx) })
 	}
 
+	// A mesh-owning engine is the node's peer-connection owner, so the
+	// directory liveness sweep is its duty too — the task monitor below only
+	// settles task rows. Without it a console-only node keeps every dead
+	// peer's row `online` for its whole lifetime: no daemon sweep is coming,
+	// and a row that claims to be up is exactly what both remove paths
+	// (`panda nodes remove`, DELETE /api/nodes/{id}) refuse to delete. A
+	// borrowed engine skips it for the reason RunTaskMonitor documents.
+	if ownsRow && e.meshNode {
+		e.goBG("askengine: dir monitor", func() { sched.RunDirMonitor(ownCtx) })
+	}
+
 	// Only queue-mode surfaces own a background consumer, and only the row
 	// owner's engine may be it: a borrowed engine that also drained the shared
 	// queue would race the daemon's claims and run two work pipelines for one
