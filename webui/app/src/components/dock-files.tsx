@@ -65,8 +65,16 @@ export function DockFiles(props: DockFilesProps) {
 
   // A thread switch starts over here: root of the tree, nothing open. The
   // bar's own button does the same by hand (see .df-root below).
+  //
+  // The first run is skipped: a pane mounting *because* something asked for a
+  // file (the change panel's 打开文件, a transcript click) arrives with a
+  // request in the same render, and the reset would wipe it. A fresh mount is
+  // already at the root with nothing open, so there is nothing to reset.
+  const seenReset = useRef(props.resetSignal ?? 0)
   useEffect(() => {
-    if (!props.resetSignal) return
+    const signal = props.resetSignal ?? 0
+    if (signal === seenReset.current) return
+    seenReset.current = signal
     setFile(null)
     setDir('')
     setRoot('')

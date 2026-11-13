@@ -39,6 +39,7 @@ export type IconName =
   | 'external'
   | 'eye'
   | 'eye-off'
+  | 'file-diff'
   | 'file-text'
   | 'folder'
   | 'folder-closed'
@@ -223,6 +224,18 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M6.6 6.6A17.6 17.6 0 0 0 2 12s3 7 10 7a10.9 10.9 0 0 0 5.4-1.4" />
       <path d="M14.1 14.1a3 3 0 1 1-4.2-4.2" />
       <path d="m2 2 20 20" />
+    </>
+  ),
+  // The change list's tab: a file with one line added and one removed. The
+  // two marks are drawn as strokes, not a filled plus/minus, so at 18px the
+  // glyph keeps the same weight as the folder and globe beside it.
+  'file-diff': (
+    <>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 2v6h6" />
+      <path d="M9 12h4" />
+      <path d="M11 10v4" />
+      <path d="M9 17h4" />
     </>
   ),
   // A written document in the file tree: the folded corner says "file", the

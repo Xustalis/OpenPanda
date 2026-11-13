@@ -171,8 +171,8 @@ func (h *handler) listPair(w http.ResponseWriter, r *http.Request) {
 		listenAddr = c.Network.ListenAddr
 	})
 	view.SelfName = selfName
-	if ips := localIPv4Strings(); len(ips) > 0 {
-		view.SelfAddr = net.JoinHostPort(ips[0], strconv.Itoa(meshPortFromListenAddr(listenAddr)))
+	if ip, ok := selfIPv4(); ok {
+		view.SelfAddr = net.JoinHostPort(ip.String(), strconv.Itoa(meshPortFromListenAddr(listenAddr)))
 	}
 	_ = h.db.QueryRow(
 		`SELECT COUNT(1) FROM employee_cache WHERE status='online' AND last_seen > ? AND id != ?`,

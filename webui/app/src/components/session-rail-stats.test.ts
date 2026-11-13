@@ -2,7 +2,14 @@
 
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { contextShare, patchFileStats } from './session-rail-stats.ts'
+import {
+  contextShare,
+  firstChangedLine,
+  patchFileStats,
+  patchForFile,
+  porcelainParts,
+  porcelainPath,
+} from './session-rail-stats.ts'
 
 describe('patchFileStats', () => {
   it('counts additions and deletions per file', () => {
@@ -105,6 +112,99 @@ describe('patchFileStats', () => {
 
   it('returns nothing for an empty patch', () => {
     assert.equal(patchFileStats('').size, 0)
+  })
+})
+
+describe('patchForFile', () => {
+  const patch = [
+    'diff --git a/src/a.ts b/src/a.ts',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -1,3 +1,4 @@',
+    ' const keep = 1',
+    '+const added = 2',
+    '-const gone = 3',
+    'diff --git a/src/b.ts b/src/b.ts',
+    '--- a/src/b.ts',
+    '+++ b/src/b.ts',
+    '@@ -7 +7 @@',
+    '-old',
+    '+new',
+    '',
+  ].join('\n')
+
+  it('returns only the block for the requested file', () => {
+    const got = patchForFile(patch, 'src/b.ts')
+    assert.equal(got?.truncated, false)
+    assert.match(got!.patch, /^diff --git a\/src\/b\.ts/)
+    assert.doesNotMatch(got!.patch, /src\/a\.ts/)
+    assert.equal(firstChangedLine(got!.patch), 7)
+  })
+
+  it('names a renamed file by its new side', () => {
+    const renamed = [
+      'diff --git a/old name.ts b/new name.ts',
+      'similarity index 50%',
+      'rename from old name.ts',
+      'rename to new name.ts',
+      '--- a/old name.ts\t',
+      '+++ b/new name.ts\t',
+      '@@ -1 +1 @@',
+      '-a',
+      '+b',
+      '',
+    ].join('\n')
+    const got = patchForFile(renamed, 'new name.ts')
+    assert.ok(got && !got.truncated)
+    assert.equal(got!.patch, renamed)
+  })
+
+  it('has no block for a path the patch does not mention', () => {
+    assert.equal(patchForFile(patch, 'src/nope.ts'), null)
+  })
+
+  it('does not hand back a block the cap cut through', () => {
+    const cut = [
+      'diff --git a/first.ts b/first.ts',
+      '--- a/first.ts',
+      '+++ b/first.ts',
+      '@@ -1 +1 @@',
+      '-a',
+      '+b',
+      'diff --git a/last.ts b/last.ts',
+      '--- a/last.ts',
+      '+++ b/last.ts',
+      '@@ -1 +1 @@',
+      '-a',
+      '+b',
+      '… (diff truncated)',
+      '',
+    ].join('\n')
+    assert.equal(patchForFile(cut, 'first.ts')?.truncated, false)
+    assert.deepEqual(patchForFile(cut, 'last.ts'), { patch: '', truncated: true })
+  })
+})
+
+describe('porcelainPath', () => {
+  it('takes the destination side of a rename', () => {
+    assert.equal(porcelainPath('"b space.txt" -> "c space.txt"'), 'c space.txt')
+  })
+
+  it('keeps both sides of a rename', () => {
+    assert.deepEqual(porcelainParts('"b space.txt" -> "c space.txt"'), {
+      from: 'b space.txt',
+      to: 'c space.txt',
+    })
+    assert.deepEqual(porcelainParts('src/a.ts'), { from: 'src/a.ts', to: 'src/a.ts' })
+  })
+
+  it('unquotes a path with a space', () => {
+    assert.equal(porcelainPath('"my file.ts"'), 'my file.ts')
+  })
+
+  it('leaves a bare path alone, including a leading a/ or b/', () => {
+    assert.equal(porcelainPath('src/a.ts'), 'src/a.ts')
+    assert.equal(porcelainPath('a/file.ts'), 'a/file.ts')
   })
 })
 

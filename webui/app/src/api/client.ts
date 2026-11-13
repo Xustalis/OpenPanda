@@ -392,6 +392,12 @@ export interface Task {
    *  resume_execution (parked before running, approve re-runs it), or
    *  needs_changed_input (approve alone cannot help). */
   approval_disposition?: 'accept_work' | 'resume_execution' | 'needs_changed_input'
+  /** Review rows only: the server's classification of why the task parked.
+   *  `model_config` means the endpoint refused the agent's own model id (or
+   *  login) — a re-run and a reworded prompt both fail the same way, so the
+   *  card names that agent's configuration instead of asking for new input.
+   *  Empty for every other park; callers fall back to the disposition. */
+  review_cause?: 'model_config' | ''
   /** Review rows only: the clarification the agent parked on, and the
    *  bounded option set as a ClarifySpec JSON string when it offered one.
    *  Computed server-side so the client never parses the whole result JSON

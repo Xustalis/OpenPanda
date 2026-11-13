@@ -76,6 +76,17 @@ export function splitFileRef(raw: string): { path: string; label: string } {
   return { path, label: base + (line ? `:${line}` : '') }
 }
 
+/** The name a reader knows an attached file by.
+ *
+ *  An upload lands on disk as `<unix-millis>-<original name>` so two pastes of
+ *  the same name cannot overwrite each other (panel/sessions.go); the stamp is
+ *  bookkeeping, not part of the name, and the bubble would otherwise show a
+ *  thirteen-digit number in front of every screenshot. */
+export function fileLabel(path: string): string {
+  const base = path.split(/[\\/]/).pop() || path
+  return base.replace(/^\d{13}-/, '')
+}
+
 /** Fold the composer tray's uploads into the prompt. Each one rides as an
  *  `@path` token so `expandFileRefs` sees it — text files then arrive as
  *  fenced blocks, and binary ones stay paths for the agent to open. */

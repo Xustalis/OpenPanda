@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -129,20 +130,86 @@ func meshPortFromListenAddr(addr string) int {
 	return n
 }
 
-// localIPv4Nets lists this host's usable IPv4 interfaces: up, not loopback,
-// not link-local (169.254/16 — nothing pairs there).
+// localAddr is one of this host's IPv4 addresses plus the rank that decides
+// whether the pairing panel may print it as "this device".
+type localAddr struct {
+	ipnet *net.IPNet
+	rank  int
+}
+
+const (
+	// addrRankPhysical is a NIC on a real broadcast domain — Wi-Fi, ethernet,
+	// a phone hotspot. This is the address the operator can read out loud and
+	// type at the other machine.
+	addrRankPhysical = 0
+	// addrRankVirtual is a host-only bridge (Hyper-V vEthernet, Docker, VMware).
+	// It is a LAN to this host alone, so it only wins over a tunnel.
+	addrRankVirtual = 1
+	// addrRankTunnel is point-to-point. The address exists inside the tunnel
+	// and nothing on the physical LAN can dial it back.
+	addrRankTunnel = 2
+)
+
+// tunnelName catches the tunnel adapters whose flags already say so, for the
+// platforms that report them as plain point-to-point links.
+func tunnelName(name string) bool {
+	for _, p := range []string{"wg", "tun", "tap", "utun", "ppp", "ipsec", "wireguard", "tailscale", "nordlynx", "zerotier", "zt"} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// virtualName catches host-only bridges that do report a broadcast domain.
+// Names are a supplement, never the primary test: Windows lets the operator
+// name a tunnel anything, and this host's WireGuard adapter is called
+// "xin-laptop".
+func virtualName(name string) bool {
+	for _, s := range []string{"vethernet", "vmnet", "virtualbox", "vbox", "docker", "veth", "virbr", "br-", "hyper-v", "wsl", "npcap", "bluetooth"} {
+		if strings.Contains(name, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// rankInterface orders interfaces by how reachable their address is from
+// another machine on the same segment.
+//
+// The broadcast flag is the load-bearing test. A tunnel — WireGuard, OpenVPN's
+// tun, macOS utun — is point-to-point and reports no broadcast domain, while
+// every real NIC does; that holds on all three platforms and survives a tunnel
+// the operator renamed. On Windows this matters: the WireGuard adapter
+// enumerates *ahead* of the physical NICs, so taking the first address handed
+// the pairing panel 10.66.66.2:7836 — an address only the tunnel's own peers
+// can dial — to an operator standing next to a machine on the same Wi-Fi.
+func rankInterface(ifc net.Interface) int {
+	name := strings.ToLower(ifc.Name)
+	if tunnelName(name) || ifc.Flags&net.FlagBroadcast == 0 {
+		return addrRankTunnel
+	}
+	if virtualName(name) || len(ifc.HardwareAddr) == 0 {
+		return addrRankVirtual
+	}
+	return addrRankPhysical
+}
+
+// localIPv4Addrs lists this host's usable IPv4 addresses, in interface order:
+// up, not loopback, not link-local (169.254/16 — nothing pairs there).
 //
 // One walker feeds two answers that must agree. The sweep needs the set to
 // skip its own addresses; the pairing panel needs one address to print as
-// "this device", because that is what the operator reads out loud while
-// standing at the other machine. Two independent enumerations would drift into
-// advertising an address the sweep never probes from.
-func localIPv4Nets() []*net.IPNet {
+// "this device". Two independent enumerations would drift into advertising an
+// address the sweep never probes from — so the panel picks from this list
+// instead of enumerating again, and any address it can print is one the sweep
+// also walks.
+func localIPv4Addrs() []localAddr {
 	ifs, err := net.Interfaces()
 	if err != nil {
 		return nil
 	}
-	var out []*net.IPNet
+	var out []localAddr
 	for _, ifc := range ifs {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
 			continue
@@ -151,6 +218,7 @@ func localIPv4Nets() []*net.IPNet {
 		if err != nil {
 			continue
 		}
+		rank := rankInterface(ifc)
 		for _, a := range addrs {
 			ipn, ok := a.(*net.IPNet)
 			if !ok {
@@ -160,22 +228,73 @@ func localIPv4Nets() []*net.IPNet {
 			if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
 				continue
 			}
-			out = append(out, &net.IPNet{IP: ip4, Mask: ipn.Mask})
+			out = append(out, localAddr{ipnet: &net.IPNet{IP: ip4, Mask: ipn.Mask}, rank: rank})
 		}
 	}
 	return out
 }
 
-// localIPv4Strings is localIPv4Nets as plain addresses, in interface order.
-// The first entry is the one a human is most likely to recognise as "this
-// machine" (Wi-Fi before virtual bridges on macOS, ethernet first on Linux).
-func localIPv4Strings() []string {
-	nets := localIPv4Nets()
-	out := make([]string, 0, len(nets))
-	for _, n := range nets {
-		out = append(out, n.IP.String())
+// localIPv4Nets is localIPv4Addrs without the ranking, for the sweep.
+func localIPv4Nets() []*net.IPNet {
+	addrs := localIPv4Addrs()
+	out := make([]*net.IPNet, 0, len(addrs))
+	for _, a := range addrs {
+		out = append(out, a.ipnet)
 	}
 	return out
+}
+
+// routedIPv4 returns the source address the kernel would put on a packet
+// leaving for an off-link destination — the address this machine actually
+// uses to reach the network. Dialing UDP sends nothing; it only asks the
+// routing table to resolve a source address, so this is cheap enough to run
+// on every panel poll. 192.0.2.1 is TEST-NET-1: guaranteed not to be a real
+// peer, while still following the default route.
+func routedIPv4() net.IP {
+	conn, err := net.Dial("udp4", "192.0.2.1:9")
+	if err != nil {
+		return nil
+	}
+	defer conn.Close()
+	if ua, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+		return ua.IP.To4()
+	}
+	return nil
+}
+
+// pickSelfAddr chooses the address the pairing panel prints, given the ranked
+// candidates and the routed address (nil when the host has no default route).
+//
+// Rank decides first, because a tunnel address is worse than useless here.
+// Within the winning rank the routed address wins: when a machine has both
+// Wi-Fi and ethernet up, the one carrying the default route is the one a peer
+// is most likely to reach back on. A routed address from a *worse* tier is
+// ignored rather than promoted — a host-only bridge can own the default route
+// (WSL's NAT does) while still being unreachable from the LAN. Ties fall back
+// to interface order, the best guess left when the routing table says nothing.
+func pickSelfAddr(addrs []localAddr, routed net.IP) (net.IP, bool) {
+	if len(addrs) == 0 {
+		return nil, false
+	}
+	best := 0
+	for i := range addrs {
+		if addrs[i].rank < addrs[best].rank {
+			best = i
+		}
+	}
+	if routed != nil && addrs[best].rank < addrRankTunnel {
+		for _, a := range addrs {
+			if a.rank == addrs[best].rank && a.ipnet.IP.Equal(routed) {
+				return a.ipnet.IP, true
+			}
+		}
+	}
+	return addrs[best].ipnet.IP, true
+}
+
+// selfIPv4 is the address the pairing panel prints as "this device".
+func selfIPv4() (net.IP, bool) {
+	return pickSelfAddr(localIPv4Addrs(), routedIPv4())
 }
 
 // lanScanTargets returns the host:port pairs to probe and the subnet labels

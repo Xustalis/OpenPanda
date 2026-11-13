@@ -384,10 +384,14 @@
 }
 
 .md :not(pre) > code {
-  background: var(--bg-raised);
-  border: 1px solid var(--border-soft);
-  border-radius: 5px;
-  padding: 0.08em 0.34em;
+  /* A wash of the surface's own ink, not a second surface. `--bg-raised` is
+     pure white in light mode, so a bordered white pill inside a grey bubble
+     read as a sticker laid over the sentence; mixing the ink down keeps the
+     span a shade of whatever it sits on, in both themes. */
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 0;
+  border-radius: 4px;
+  padding: 0.05em 0.36em;
   font-size: 0.9em;
   /* An inline code span must not carry the container's pre-wrap: a wrapped
      identifier should break like text, not keep its source newline. */
@@ -397,8 +401,10 @@
 /* fenced code */
 
 .md-code {
-  margin: 2px 0;
-  border: 1px solid var(--border-soft);
+  margin: 4px 0;
+  /* `--border`, not `--border-soft`: the fill sits only a shade under the
+     bubble, so the drawn edge is what says "this is a block". */
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-inset);
   overflow: hidden;
@@ -409,9 +415,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 5px 8px 5px 12px;
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-raised);
+  /* Left padding matches the pre's, so the label sits over the code's first
+     column instead of two pixels off it. */
+  padding: 6px 8px 6px 13px;
+  /* The head shares the block's surface. A raised bar on top of a well read
+     as two stacked cards — white on grey in light mode, a lighter band in
+     dark — and the block is one object. The hairline does the separating. */
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  background: transparent;
 }
 
 .md-code-lang {
@@ -425,14 +436,17 @@
 .md-copy {
   border: 1px solid transparent;
   background: transparent;
-  color: var(--text-dim);
-  border-radius: var(--radius-sm);
-  padding: 2px 8px;
+  color: var(--text-tertiary);
+  border-radius: 5px;
+  padding: 1px 7px;
   font-size: var(--text-sm);
+  line-height: 1.4;
   cursor: pointer;
   /* Held at low contrast until the block is hovered or the button focused:
-     a copy affordance per code block would otherwise dominate the reply. */
-  opacity: 0.55;
+     a copy affordance per code block would otherwise dominate the reply.
+     0.85 rather than 0.55 — the label is always in the DOM, and at 0.55 it
+     fell to about 2:1 on the light theme's grey. */
+  opacity: 0.85;
   transition: opacity 0.15s, color 0.15s, border-color 0.15s, background 0.15s;
 }
 
@@ -449,7 +463,7 @@
 
 .md-code pre {
   margin: 0;
-  padding: 10px 12px;
+  padding: 11px 13px;
   overflow-x: auto;
   background: none;
   border: 0;
@@ -459,7 +473,7 @@
 .md-code code {
   white-space: pre;
   font-size: var(--text-sm);
-  line-height: 1.55;
+  line-height: 1.6;
 }
 
 /* A JSON envelope that arrived as a reply is data, not code read line by line:
@@ -575,7 +589,7 @@
 .clarify-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
   max-width: 900px;
   /* A long question with four long options must not push the transcript out
      of the pane; the card scrolls on its own instead. */
@@ -583,11 +597,15 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   margin: 0 auto var(--sp-2);
-  padding: 8px 10px;
-  border: 1px solid var(--border-soft);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
+  /* The card is the one surface in the transcript that is asking for an
+     answer, so it carries a full hairline and the static shadow instead of
+     the old 3px ink rail: a rail reads as a quotation of the turn, a framed
+     sheet reads as the thing to act on. */
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   background: var(--bg-raised);
+  box-shadow: var(--shadow-xs);
   animation: clarify-in var(--dur-med) var(--ease-standard);
 }
 
@@ -610,12 +628,36 @@
   flex-wrap: wrap;
 }
 
+/* The title is a quiet kicker, not a badge: one ink dot and tracked small
+   caps say "before we start" without a second pill competing with the
+   recommended tag down in the options. */
+.clarify-head .badge {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.clarify-head .badge::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.85;
+}
+
 /* One tick per question, the current one in ink: the counter alone reads as
-   metadata, the ticks show how much of the round is left. */
+   metadata, the ticks show how much of the round is left. They sit with the
+   counter on the right so the head has two groups, not three. */
 .clarify-steps {
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  margin-left: auto;
 }
 
 .clarify-step {
@@ -624,7 +666,8 @@
   height: 3px;
   border-radius: 999px;
   background: var(--border);
-  transition: background var(--dur-fast) var(--ease);
+  transition: width var(--dur-med) var(--ease-standard),
+    background var(--dur-fast) var(--ease);
 }
 
 .clarify-step.is-done {
@@ -632,29 +675,30 @@
 }
 
 .clarify-step.is-on {
+  width: 22px;
   background: var(--accent);
 }
 
 .clarify-progress {
-  margin-left: auto;
   font-size: var(--fs-caption);
   font-variant-numeric: tabular-nums;
-  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
 }
 
 /* The proposed plan reads as a quotation of the task, not a second card:
    a hairline rail and no well, so the question below stays the loudest line. */
 .clarify-plan {
   white-space: pre-wrap;
-  font-size: var(--fs-caption);
-  line-height: 1.45;
+  font-size: var(--text-sm);
+  line-height: 1.6;
   color: var(--text-secondary);
   /* Three full lines plus a little: a paragraph that merely rounds past the
      third line renders whole instead of losing its last words. */
-  max-height: calc(1.45em * 3.4);
+  max-height: calc(1.6em * 3.4);
   overflow: hidden;
-  padding: 1px 0 1px 8px;
-  border-left: 2px solid var(--border);
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--border-soft);
   transition: max-height var(--dur-med) var(--ease-standard);
 }
 
@@ -691,21 +735,38 @@
   text-decoration: underline;
 }
 
+/* The question is the loudest line on the card: the model's own header is a
+   kicker above it, and the sentence itself steps up to 15px. */
 .clarify-question {
-  font-weight: 600;
-  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .clarify-header {
-  color: var(--accent);
+  font-size: var(--text-xs);
   font-weight: 500;
-  margin-right: 4px;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
 }
 
+.clarify-qtext {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+}
+
+/* Options are one list, not three loose boxes: a single hairline frame with
+   row dividers keeps a four-option question from reading as a stack of
+   unrelated cards. */
 .clarify-options {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  overflow: hidden;
 }
 
 /* Options and the focused option's preview share a row on a wide screen; the
@@ -727,16 +788,19 @@
   flex-basis: 100%;
 }
 
+/* The focused option's preview is quoted material, not a control: a soft
+   chrome well sets it apart from the white option list without the grey of an
+   input field. */
 .clarify-preview {
   flex: 1 1 45%;
   min-width: 0;
   max-height: 26vh;
   overflow: auto;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-size: var(--fs-caption);
+  border-radius: var(--radius-md);
+  background: var(--bg-chrome);
+  font-size: var(--text-sm);
 }
 
 @media (max-width: 720px) {
@@ -752,95 +816,167 @@
 
 .clarify-option {
   position: relative;
-  display: flex;
-  flex-flow: row wrap;
-  align-items: baseline;
-  gap: 2px 8px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
   width: 100%;
-  padding: 5px 8px;
+  padding: 8px 10px;
   text-align: left;
   font: inherit;
   color: inherit;
-  background: var(--bg);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border-soft);
   cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.clarify-option:first-child {
+  border-top: none;
 }
 
 .clarify-option:hover {
-  border-color: var(--border-strong);
   background: var(--bg-hover);
 }
 
+/* The keyboard owns this card, so the focused row has to be visible without
+   the pointer. It reuses the hover fill and adds an inner hairline rather
+   than the page's ring, which would draw a second frame inside the list. */
+.clarify-option:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
 .clarify-option.is-picked {
-  border-color: var(--accent-border);
   background: var(--accent-soft);
 }
 
-/* The recommended option carries a short ink rail rather than a filled badge:
-   it marks the default without competing with the selected state. */
-.clarify-option.is-recommended::before {
+/* The rail marks the answer, the fill only tints the row: on paper the two
+   greys (accent-soft and the hover fill) are too close to carry the state
+   alone. */
+.clarify-option.is-picked::before {
   content: '';
   position: absolute;
-  left: -1px;
-  top: 5px;
-  bottom: 5px;
+  left: 0;
+  top: 0;
+  bottom: 0;
   width: 2px;
-  border-radius: 999px;
   background: var(--accent);
 }
 
-/* Number-key hint. Hidden on narrow screens, where options stack and the
-   keyboard is not the primary input anyway. */
+/* The recommended option is marked by its tag, not by a fill: a tinted row
+   would read as "already chosen" next to a genuinely picked one. Only the
+   key badge picks up the accent, so the default is legible at a glance. */
+.clarify-option.is-recommended .clarify-option-key {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+/* Number-key hint, drawn as a keycap: the option row is a button, and the
+   keycap is the only part of it that looks like one. */
 .clarify-option-key {
-  min-width: 14px;
-  font-size: var(--fs-caption);
-  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  background: var(--bg-raised);
   color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
 }
 
 .clarify-option:hover .clarify-option-key,
 .clarify-option.is-picked .clarify-option-key {
-  color: var(--text-secondary);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* Label and description stack: a description that trails the label on the
+   same line ragged-wraps at every column width, while a second line lines up
+   under the label and scans as one item. */
+.clarify-option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .clarify-option-label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-weight: 500;
-}
-
-.clarify-check {
-  display: inline-block;
-  width: 1em;
-  color: var(--accent);
+  gap: 7px;
+  flex-wrap: wrap;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
 .clarify-recommended {
-  font-size: var(--fs-caption);
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
   color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: nowrap;
 }
 
 .clarify-option-desc {
-  font-size: var(--fs-caption);
-  line-height: 1.4;
+  font-size: var(--text-sm);
+  line-height: 1.5;
   color: var(--text-secondary);
+}
+
+/* Multi-select's checkbox, in the row's trailing slot. Single-select rows
+   leave the slot empty; the whole row is the control. */
+.clarify-option-tick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: transparent;
+  transition: background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.clarify-option-tick.is-on {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+
+.clarify-option-tick .ico {
+  width: 11px;
+  height: 11px;
 }
 
 /* Narrow screens cannot fit a label and its description on one line; stacking
    them keeps each option readable instead of wrapping mid-sentence. This sits
-   after the base rule on purpose: same specificity, so source order decides. */
+   after the base rule on purpose: same specificity, so source order decides.
+   The keycap leaves the grid rather than just being hidden — a hidden first
+   column would still hold its 20px and push the label out of alignment. */
 @media (max-width: 720px) {
   .clarify-option {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 10px;
     /* A finger needs a bigger target than a pointer: the compact desktop row
        is 33px, below what a touch screen should ask the user to hit. */
-    padding: 8px 10px;
+    padding: 9px 10px;
   }
 
   .clarify-option-key {
@@ -859,16 +995,27 @@
   font: inherit;
   color: inherit;
   background: var(--bg);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 7px 10px;
 }
 
+.clarify-other input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* The action row is separated by a hairline: the options are the answer and
+   the buttons are the way around it, so the two should not read as one block
+   of equally-weighted controls. */
 .clarify-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
 }
 
 /* Cancel is the way out, not a peer of the answer: it sits at the far right,
@@ -890,6 +1037,7 @@
   padding: 0;
   border: none;
   background: transparent;
+  box-shadow: none;
   animation: none;
   max-height: none;
   overflow: visible;
@@ -1734,39 +1882,10 @@ code.md-file:focus-visible {
   outline: none;
 }
 
-/* ---- Session worktree diff drawer ---- */
-
-
-
-.diff-drawer {
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-inset);
-  padding: 14px 24px;
-  max-height: 45%;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.diff-drawer-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  font-size: var(--text-md);
-}
-
-.diff-drawer-head span {
-  display: flex;
-  gap: 6px;
-}
-
-.diff-stat {
-  margin: 0;
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-}
+/* ---- Session worktree diff ----------------------------------------------
+   The list is shared with the task detail's patch set; the drawer that used to
+   open over the transcript is gone — the dock's 改动 pane owns the worktree
+   diff now (see dock.css). */
 
 .diff-files {
   list-style: none;
@@ -1801,6 +1920,26 @@ code.md-file:focus-visible {
 .diff-line {
   padding: 0 12px;
   white-space: pre;
+}
+
+/* Two gutters for one file's diff (the dock's change pane). A whole-patch view
+   keeps the single column: numbering across blocks that jump between files
+   would number nothing. */
+.diff-patch.is-numbered .diff-line {
+  display: flex;
+  padding: 0 10px 0 0;
+}
+.diff-num {
+  flex: none;
+  width: 40px;
+  padding-right: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+.diff-patch.is-numbered .diff-line-content {
+  flex: none;
 }
 
 .diff-line-add {
@@ -8197,6 +8336,44 @@ pre,
   font-size: 0.78rem;
 }
 
+/* The larger copy a small frame shows while the pointer rests on it. Fixed and
+   outside the flow, so a transcript's scroller cannot clip it; pointer-events
+   stay off, because this is a preview and the click belongs to the thumbnail
+   underneath (see image-preview.tsx). */
+.img-hover {
+  position: fixed;
+  z-index: 1150;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+  pointer-events: none;
+}
+.img-hover img {
+  display: block;
+  width: auto;
+  height: auto;
+  /* A look, not a second message: the copy stays well under the lightbox's
+     full-screen size, so it annotates the transcript instead of covering it. */
+  max-width: min(440px, 62vw);
+  max-height: min(320px, 55vh);
+  border-radius: var(--radius-sm);
+}
+/* The name under the floating copy. The thumbnail itself has no caption, so
+   this is where a picture says which file it is. */
+.img-hover-name {
+  display: block;
+  margin-top: 5px;
+  max-width: min(440px, 62vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  color: var(--text-tertiary);
+}
+
 /* Full-screen view. Fixed rather than portalled — the same overlay convention
    the confirm dialog and the todo sheet follow. */
 .img-lightbox {
@@ -10567,10 +10744,9 @@ input.switch:focus-visible {
 
 /* ---- Chat extras: attachments ---- */
 
-.msg-files {
-  gap: 6px;
-  flex-wrap: wrap;
-}
+/* The chip a transcript row uses to name a file. The bubble's own row — and
+   the picture frame that replaces the chip for an image — lives in chat.css
+   (`.msg-files`), next to the rest of the message chrome. */
 .attach-chip {
   display: inline-flex;
   align-items: center;

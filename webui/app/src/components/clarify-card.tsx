@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import type { ClarifyAnswer, ClarifySpec } from '../api/client'
 import { t } from '../i18n'
 import { Markdown } from '../md/render'
+import { Icon } from './icons'
 
 function labelHasMarker(label: string, marker: string): boolean {
   const bare = marker.replace(/[()（）\s]/g, '')
@@ -66,6 +67,10 @@ export function ClarifyCard({
   if (!q) return null
   const preview = q.multi_select ? '' : (q.options[focused]?.preview ?? '').trim()
   const recMarker = t('clarify.recommended')
+  // The marker ships with its own brackets ("（推荐）" / "(Recommended)") for
+  // the CLI's plain-text card; the web card draws it as a tag, where the
+  // brackets only add width.
+  const recTag = recMarker.replace(/[()（）\s]/g, '') || recMarker
   // A spec that already offers a Cancel choice (the runtime's plan-confirm
   // card does) must not render a second Cancel in the action row: the option
   // is the answer, the action would be a different way to abort the turn.
@@ -189,7 +194,8 @@ export function ClarifyCard({
         </>
       )}
       <div class="clarify-question">
-        <span class="clarify-header">{q.header}</span> {q.question}
+        {q.header && <span class="clarify-header">{q.header}</span>}
+        <span class="clarify-qtext">{q.question}</span>
       </div>
       <div class="clarify-body">
         <div class="clarify-options">
@@ -206,14 +212,20 @@ export function ClarifyCard({
                 onClick={() => choose(o.label)}
               >
                 <span class="clarify-option-key" aria-hidden="true">{i + 1}</span>
-                <span class="clarify-option-label">
-                  {q.multi_select && <span class="clarify-check">{on ? '✓' : ''}</span>}
-                  {o.label}
-                  {recommended && !labelHasMarker(o.label, recMarker) && (
-                    <span class="clarify-recommended">{recMarker}</span>
-                  )}
+                <span class="clarify-option-main">
+                  <span class="clarify-option-label">
+                    {o.label}
+                    {recommended && !labelHasMarker(o.label, recMarker) && (
+                      <span class="clarify-recommended">{recTag}</span>
+                    )}
+                  </span>
+                  {o.description && <span class="clarify-option-desc">{o.description}</span>}
                 </span>
-                {o.description && <span class="clarify-option-desc">{o.description}</span>}
+                {q.multi_select && (
+                  <span class={`clarify-option-tick${on ? ' is-on' : ''}`} aria-hidden="true">
+                    {on && <Icon name="check" size={11} />}
+                  </span>
+                )}
               </button>
             )
           })}

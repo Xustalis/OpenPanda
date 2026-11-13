@@ -18,7 +18,7 @@
 // composer and the jump arrow left together — the same promise the header cards
 // keep, with one number instead of three.
 //
-// One head line, not two: `+`, the three places, the thread's tools and the
+// One head line, not two: `+`, the four places, the thread's tools and the
 // fold control sit in the same row. A second rail would cost a column of width
 // in a panel whose whole job is showing content beside the reading column.
 //
@@ -32,23 +32,55 @@
 // Tabs keep their own state. Switching from files to a side conversation and
 // back must land on the same file, scrolled where it was; that is the whole
 // reason the panels stay mounted instead of being swapped out.
+//
+// The way back to the start pane is a crumb above the panel, not a fifth tab:
+// `''` is not a place, and the head is already full at the column's floor. It
+// is a step aside rather than a reset — the panels stay mounted, so nothing is
+// thrown away on the way home.
+//
+// The empty column used to be three rows and a lot of white space. It now
+// answers the three questions a thread's panel is opened to ask: where this
+// runs, how full the window was on the last turn, and where to go next. The
+// first two are one card of facts — the pane's only material step — and the
+// four places sit under it, spelled out because a bare icon row does not say
+// what a first-time reader should do. Nothing in the card is a control except
+// the path's copy button: the panel is not a settings form.
 
 import type { ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { compactNumber } from '../format/number'
 import { t } from '../i18n'
 import { Icon, type IconName } from './icons'
+import { contextShare } from './session-rail-stats'
 
 /** What the column can show. The first three are the thread's tools, reached
- *  from the left group in the head; the last three are the places a tab opens.
- *  All six own a pane in the body — none of them is a floating layer over it.
+ *  from the left group in the head; the last four are the places a tab opens.
+ *  All seven own a pane in the body — none of them is a floating layer over it.
  *  `''` means it is open but nothing is picked, the "start from here" state. */
-export type DockTab = 'export' | 'node' | 'orch' | 'files' | 'browser' | 'side' | ''
+export type DockTab = 'export' | 'node' | 'orch' | 'files' | 'changes' | 'browser' | 'side' | ''
 
 /** Narrower than this and a line of code wraps on every scroll; wider and the
  *  transcript stops being the page. Exported so the state that owns the width
  *  can restore a stored value inside the same bounds. */
 export const DOCK_MIN_WIDTH = 320
 export const DOCK_MAX_WIDTH = 760
+
+/** The facts the start pane prints about the thread it belongs to. Every field
+ *  is optional: a thread with no worktree, no branch and no turn yet still
+ *  gets the "start from here" rows, just without the sections above them. */
+export interface DockEnv {
+  /** Where the turn will run, in the node picker's words. */
+  machine: string
+  /** The thread's worktree, or its project's directory. */
+  path: string
+  branch?: string
+  /** Billed tokens of the newest turn, and the model's window when known. */
+  contextTokens?: number
+  contextWindow?: number
+  model?: string
+  /** The worktree's change roll-up, when it has one. */
+  changes?: { files: number; insertions: number; deletions: number }
+}
 
 interface TabSpec {
   key: Exclude<DockTab, ''>
@@ -63,8 +95,14 @@ export interface DockProps {
   tab: DockTab
   width: number
   onTab(tab: Exclude<DockTab, ''>): void
+  /** Back to the start pane — the thread's overview. A pane replaces those
+   *  rows, and `''` is not a place, so this is a step back rather than a
+   *  fifth tab. */
+  onHome(): void
   onToggle(): void
   onWidth(width: number): void
+  /** What the start pane says about this thread. */
+  env?: DockEnv
   /** The `+` in the head: a fresh object in the current panel (a new page, a
    *  new side conversation, the workspace root). The button is always shown
    *  while the column is open; without a handler it opens a fresh side chat. */
@@ -87,6 +125,8 @@ export interface DockProps {
 export function Dock(props: DockProps) {
   const { open, tab, width, onTab, onToggle, onWidth } = props
   const [dragging, setDragging] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<number | undefined>(undefined)
   const start = useRef<{ x: number; w: number } | null>(null)
 
   // The drag is owned by the window: the handle is a hairline and the pointer
@@ -116,6 +156,7 @@ export function Dock(props: DockProps) {
 
   const tabs: TabSpec[] = [
     { key: 'files', icon: 'folder', label: t('dock.files') },
+    { key: 'changes', icon: 'file-diff', label: t('dock.changes') },
     { key: 'browser', icon: 'globe', label: t('dock.browser') },
     { key: 'side', icon: 'message', label: t('dock.side') },
   ]
@@ -138,24 +179,137 @@ export function Dock(props: DockProps) {
   // file at the same scroll offset, and a fold is not a reason to throw the
   // reader's place away. Visibility is the only thing that changes.
   const showBody = tab !== ''
+  const env = props.env
+  const tokens = env?.contextTokens ?? 0
+  const share = contextShare(tokens, env?.contextWindow ?? 0)
+  const used = tokens > 0 ? compactNumber(tokens) : ''
+  const windowLabel = (env?.contextWindow ?? 0) > 0 ? compactNumber(env!.contextWindow!) : ''
+  const changeHint =
+    env?.changes && env.changes.files > 0
+      ? t('dock.changesHintCount', {
+          n: String(env.changes.files),
+          ins: String(env.changes.insertions),
+          del: String(env.changes.deletions),
+        })
+      : t('dock.changesHint')
+
+  async function copyPath(path: string) {
+    try {
+      await navigator.clipboard.writeText(path)
+      setCopied(true)
+      if (copyTimer.current !== undefined) window.clearTimeout(copyTimer.current)
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1400)
+    } catch {
+      // Clipboard denied: the path stays selectable in the row.
+    }
+  }
+
+  useEffect(
+    () => () => {
+      if (copyTimer.current !== undefined) window.clearTimeout(copyTimer.current)
+    },
+    [],
+  )
+
   const startPane = open && !showBody ? (
     <div class="dock-start">
-      <p class="dock-start-title">{t('dock.start')}</p>
-      <button type="button" class="dock-start-row" onClick={() => onTab('files')}>
-        <Icon name="folder" size={18} />
-        <span class="dock-start-name">{t('dock.files')}</span>
-        <span class="dock-start-hint">{t('dock.filesHint')}</span>
-      </button>
-      <button type="button" class="dock-start-row" onClick={() => onTab('browser')}>
-        <Icon name="globe" size={18} />
-        <span class="dock-start-name">{t('dock.browser')}</span>
-        <span class="dock-start-hint">{t('dock.browserHint')}</span>
-      </button>
-      <button type="button" class="dock-start-row" onClick={() => onTab('side')}>
-        <Icon name="message" size={18} />
-        <span class="dock-start-name">{t('dock.side')}</span>
-        <span class="dock-start-hint">{t('dock.sideHint')}</span>
-      </button>
+      {/* Where this thread runs. Claude's panel opens with the environment for
+          the same reason: a conversation is pinned to a machine and a
+          directory, and both are invisible everywhere else in the pane. */}
+      {((env && (env.machine || env.path || env.branch)) || tokens > 0) && (
+        <section class="dock-facts">
+          {env?.machine && <p class="dock-facts-title">{env.machine}</p>}
+          {env?.path && (
+            <div class="dock-facts-row">
+              <span class="mono" title={env.path}>
+                {env.path}
+              </span>
+              <button
+                type="button"
+                class="icon-btn dock-facts-copy"
+                title={copied ? t('dock.copied') : t('fileView.copy')}
+                aria-label={t('dock.copyPath')}
+                onClick={() => void copyPath(env.path)}
+              >
+                <Icon name={copied ? 'check' : 'copy'} size={13} />
+              </button>
+            </div>
+          )}
+          {env?.branch && (
+            <div class="dock-facts-row" title={env.branch}>
+              <span class="mono">{env.branch}</span>
+            </div>
+          )}
+
+          {/* How full the window was on the last request: the one display
+              number in the pane, a hairline gauge under it, and the raw counts
+              with the model as captions. The share is omitted when the model
+              row has no catalogue window — a made-up denominator would be
+              worse than the count alone. */}
+          {tokens > 0 && (
+            <>
+              {(env?.machine || env?.path || env?.branch) && <div class="dock-facts-rule" />}
+              <div
+                class="dock-ctx"
+                title={share === null ? t('dock.contextNoWindow') : t('dock.contextNote')}
+              >
+                <div class="dock-ctx-head">
+                  <span class="dock-ctx-label">{t('dock.context')}</span>
+                  <span class={`dock-ctx-pct${share !== null && share >= 80 ? ' is-high' : ''}`}>
+                    {share === null ? '—' : `${share}%`}
+                  </span>
+                </div>
+                <span class="dock-ctx-meter" aria-hidden="true">
+                  <i style={`width:${share ?? 0}%`} />
+                </span>
+                <div class="dock-ctx-foot">
+                  <span class="dock-ctx-num mono">
+                    {used}
+                    {windowLabel ? ` / ${windowLabel}` : ''}
+                  </span>
+                  {env?.model && (
+                    <span class="dock-ctx-model" title={env.model}>
+                      {env.model}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
+      <section class="dock-acts">
+        <p class="dock-acts-label">{t('dock.start')}</p>
+        <button type="button" class="dock-start-row" onClick={() => onTab('files')}>
+          <Icon name="folder" size={16} />
+          <span class="dock-start-text">
+            <span class="dock-start-name">{t('dock.files')}</span>
+            <span class="dock-start-hint">{t('dock.filesHint')}</span>
+          </span>
+        </button>
+        <button type="button" class="dock-start-row" onClick={() => onTab('changes')}>
+          <Icon name="file-diff" size={16} />
+          <span class="dock-start-text">
+            <span class="dock-start-name">{t('dock.changes')}</span>
+            <span class="dock-start-hint">{changeHint}</span>
+          </span>
+        </button>
+        <button type="button" class="dock-start-row" onClick={() => onTab('browser')}>
+          <Icon name="globe" size={16} />
+          <span class="dock-start-text">
+            <span class="dock-start-name">{t('dock.browser')}</span>
+            <span class="dock-start-hint">{t('dock.browserHint')}</span>
+          </span>
+        </button>
+        <button type="button" class="dock-start-row" onClick={() => onTab('side')}>
+          <Icon name="message" size={16} />
+          <span class="dock-start-text">
+            <span class="dock-start-name">{t('dock.side')}</span>
+            <span class="dock-start-hint">{t('dock.sideHint')}</span>
+          </span>
+        </button>
+      </section>
     </div>
   ) : null
 
@@ -197,10 +351,10 @@ export function Dock(props: DockProps) {
           </button>
         )}
 
-        {/* The three places share one segmented well: files, the page being
-            read, and the conversation beside this one. Keeping them together
-            makes the lit tab read as "where you are" rather than as one of six
-            equally weighted glyphs. */}
+        {/* The four places share one segmented well: files, the thread's
+            changes, the page being read, and the conversation beside this
+            one. Keeping them together makes the lit tab read as "where you
+            are" rather than as one of seven equally weighted glyphs. */}
         {open && (
           <nav class="dock-tabs" aria-label={t('dock.label')}>
             {tabs.map(({ key, icon, label }) => {
@@ -242,6 +396,18 @@ export function Dock(props: DockProps) {
       </header>
 
       <div class="dock-body" data-tab={tab} hidden={!open || !showBody}>
+        {/* The step back to the start pane. A pane replaces the rows that open
+            the thread's places, and the head cannot take a fifth square: at the
+            320px floor the four 28px tabs, the three tools and the fold already
+            fill the line. So the way home is the body's first line — above the
+            pane's own bar, not in it, because every panel owns its header and
+            each of them is a different place to come back from. */}
+        <div class="dock-back">
+          <button type="button" class="dock-back-btn" onClick={() => props.onHome()}>
+            <Icon name="arrow-left" size={14} />
+            <span>{t('dock.overview')}</span>
+          </button>
+        </div>
         {props.children}
       </div>
       {startPane}
