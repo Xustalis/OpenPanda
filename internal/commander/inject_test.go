@@ -252,19 +252,28 @@ func TestDeepSeekInjectionSkippedWhenAgentHasKey(t *testing.T) {
 	}
 }
 
-// TestDeepSeekInjectionSkippedForNonDeepSeekEndpoint: a base_url that does
-// not point at api.deepseek.com is not injected.
-func TestDeepSeekInjectionSkippedForNonDeepSeekEndpoint(t *testing.T) {
+// TestNonDeepSeekAnthropicRelayIsInjected: the host is not the CLI's business.
+// A relay that speaks the Messages dialect is injectable like DeepSeek's own
+// endpoint, and the env carries the relay's base URL and the model id the
+// operator configured. This replaces the old "api.deepseek.com only" rule,
+// which refused exactly the setup an operator reaches for when their
+// subscription's own endpoint is the broken half.
+func TestNonDeepSeekAnthropicRelayIsInjected(t *testing.T) {
 	cleanCredentialEnv(t)
-	other := flashModel
-	other.BaseURL = "https://api.anthropic.com"
-	r := injectionRouter(other, config.InjectionModelAuto)
-	if d := r.InjectionDecision("claude_code", "claude_code.py"); d.Inject {
-		t.Fatalf("non-DeepSeek base_url must not be injected: %+v", d)
+	relay := flashModel
+	relay.BaseURL = "http://127.0.0.1:3065"
+	relay.APIKey = "sk-relay-test"
+	relay.AllowPlaintext = true
+	r := injectionRouter(relay, config.InjectionModelAuto)
+	if d := r.InjectionDecision("claude_code", "claude_code.py"); !d.Inject {
+		t.Fatalf("an Anthropic relay must be injected: %+v", d)
 	}
-	if env := modelEnvForAdapter(other, "claude_code", "claude_code.py"); len(env) != 0 {
-		t.Fatalf("non-DeepSeek base_url must produce no env override: %v", env)
-	}
+	env := modelEnvForAdapter(relay, "claude_code", "claude_code.py")
+	assertEnv(t, env, map[string]string{
+		"ANTHROPIC_BASE_URL": "http://127.0.0.1:3065",
+		"ANTHROPIC_API_KEY":  "sk-relay-test",
+		"ANTHROPIC_MODEL":    "deepseek-v4-flash",
+	})
 }
 
 // TestDeepSeekProModelNeverInjected: the hard cost constraint — no path ever
@@ -1343,5 +1352,67 @@ func TestInjectionPerAgentModelInheritsTheEndpoint(t *testing.T) {
 	// An unpinned agent keeps the node dialect.
 	if cx := r.InjectionDecision("codex", "codex.py"); !cx.Inject {
 		t.Fatalf("codex must stay injectable: %+v", cx)
+	}
+}
+
+// A local relay is as injectable as DeepSeek's own endpoint. claude_code used
+// to be pinned to api.deepseek.com, which refused exactly the setup an
+// operator reaches for when their subscription's endpoint is the broken half —
+// a self-hosted Anthropic-compatible gateway. The dialect rule still refuses a
+// model the CLI cannot speak; the host is not the CLI's business.
+func TestClaudeCodeAcceptsAnyAnthropicRelay(t *testing.T) {
+	cleanCredentialEnv(t)
+	relay := config.ModelConfig{
+		APIType: config.APITypeAnthropic,
+		BaseURL: "http://127.0.0.1:3065",
+		APIKey:  "sk-relay-test",
+		Model:   "deepseek-v4.1-flash-max",
+	}
+	if why := injectionBlocker("claude_code", "claude_code.py", relay); why != "" {
+		t.Fatalf("anthropic relay refused: %q", why)
+	}
+	// The dialect gate is what protects the adapter now: an OpenAI-dialect
+	// model still cannot be handed to a Messages-only CLI.
+	openaiModel := relay
+	openaiModel.APIType = config.APITypeOpenAI
+	if why := injectionBlocker("claude_code", "claude_code.py", openaiModel); !strings.Contains(why, "only accepts anthropic") {
+		t.Fatalf("openai-dialect model = %q, want the dialect refusal", why)
+	}
+}
+
+// An explicit injection.agents entry is the operator naming the model this
+// agent runs on, so it outranks the CLI's own credentials. Without that, an
+// agent whose subscription is out of quota keeps winning plans and hanging on
+// its own dead endpoint instead of starting on panda's model.
+func TestInjectionAgentsPinOutranksOwnCredentials(t *testing.T) {
+	cleanCredentialEnv(t)
+	// The CLI has a credential of its own: without the pin this is the
+	// "agent carries its own model credentials" branch.
+	t.Setenv("ANTHROPIC_API_KEY", "agent-own-key")
+
+	pinned := config.ModelConfig{
+		APIType: config.APITypeAnthropic,
+		BaseURL: "http://127.0.0.1:3065",
+		APIKey:  "sk-relay-test",
+		Model:   "deepseek-v4.1-flash-max",
+	}
+	r := NewRouter(testCard(), NewExecutor(), testModel,
+		config.InjectionConfig{Model: config.InjectionModelAuto,
+			Agents: map[string]config.ModelConfig{"claude_code": pinned}},
+		config.RoutingConfig{})
+
+	d := r.InjectionDecision("claude_code", "claude_code.py")
+	if !d.Inject {
+		t.Fatalf("pinned agent not injected: %+v", d)
+	}
+	if !strings.Contains(d.Reason, "injection.agents.claude_code") {
+		t.Fatalf("reason = %q, want the pin named", d.Reason)
+	}
+	if d.BaseURL != "http://127.0.0.1:3065" || d.Model != "deepseek-v4.1-flash-max" {
+		t.Fatalf("decision = %+v, want the pinned endpoint and model", d)
+	}
+	// An agent without a pin keeps its own credentials.
+	if other := r.InjectionDecision("codex", "codex.py"); other.Inject {
+		t.Fatalf("unpinned agent must keep its own model: %+v", other)
 	}
 }

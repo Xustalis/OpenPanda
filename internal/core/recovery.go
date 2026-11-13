@@ -47,6 +47,15 @@ func assessRecovery(r bus.TaskResultPayload) RecoveryAssessment {
 		a.Category = "adapter_unavailable"
 		a.Strategy = RecoveryStop
 		a.ReplaySafety = "safe_after_environment_fix"
+	case commander.IsModelConfigFailure(r.Stderr):
+		// The endpoint refused the model id itself (or the plan behind the
+		// CLI's login does not serve it). Nothing about the work was
+		// attempted, and a re-run sends the identical id to the identical
+		// endpoint: the fix is in the agent's own model configuration, so the
+		// row stops here with the provider's own words as the reason.
+		a.Category = "model_config"
+		a.Strategy = RecoveryStop
+		a.ReplaySafety = "safe_after_environment_fix"
 	case commander.IsAuthorizationRefusal(r.Stderr):
 		a.Category = "authorization"
 		a.Strategy = RecoveryHumanReview

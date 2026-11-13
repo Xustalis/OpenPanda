@@ -290,6 +290,8 @@ var messages = map[Locale]map[string]string{
 		"web.session.reviewNeedsAttention": "Needs your attention",
 		"web.session.scopeDrift":           "scope drift: {n} files changed outside the declared scope\n{paths}\nOpen the task for the full list and approve or reject.",
 		"web.session.saveFailed":           "Could not save this reply. Copy it before reloading.",
+		"web.session.scopeDriftAccepted":   "scope drift: {n} files changed outside the declared scope\n{paths}\nApproved — the drift was accepted and the task closed as done.",
+		"web.session.scopeDriftRejected":   "scope drift: {n} files changed outside the declared scope\n{paths}\nRejected — the task closed without this work.",
 		"web.session.dispatched":           "Dispatched: {title} ({id})",
 		"web.session.injectNoAbort":        "queued for the next round — an answer turn cannot abort its own model call; the text leads that round instead",
 
@@ -1626,6 +1628,8 @@ var messages = map[Locale]map[string]string{
 		"web.session.reviewNeedsAttention": "需要你处理",
 		"web.session.scopeDrift":           "范围越界：{n} 个文件超出任务声明范围\n{paths}\n打开任务查看完整清单并批准或拒绝。",
 		"web.session.saveFailed":           "回复未能保存，请在刷新前复制这条回复。",
+		"web.session.scopeDriftAccepted":   "范围越界：{n} 个文件超出任务声明范围\n{paths}\n已批准接受这次越界，任务按完成处理。",
+		"web.session.scopeDriftRejected":   "范围越界：{n} 个文件超出任务声明范围\n{paths}\n已拒绝，任务未按完成处理。",
 		"web.session.dispatched":           "已派发任务：{title}（{id}）",
 		"web.session.injectNoAbort":        "已排队到下一轮——回答型 turn 无法中止自身的模型调用，文本将作为下一轮的首指令",
 		"web.started":                      "Web 控制台已监听 — {url}",
@@ -3048,6 +3052,8 @@ var messages = map[Locale]map[string]string{
 		"web.session.reviewNeedsAttention": "対応が必要です",
 		"web.session.scopeDrift":           "スコープ逸脱：宣言された範囲外のファイルが {n} 個あります\n{paths}\nタスクを開いて完全な一覧を確認し、承認または拒否してください。",
 		"web.session.saveFailed":           "回答を保存できませんでした。再読み込み前にコピーしてください。",
+		"web.session.scopeDriftAccepted":   "スコープ逸脱：宣言された範囲外のファイルが {n} 個あります\n{paths}\n承認済み — この逸脱を受け入れてタスクを完了としました。",
+		"web.session.scopeDriftRejected":   "スコープ逸脱：宣言された範囲外のファイルが {n} 個あります\n{paths}\n拒否済み — この作業を採用せずにタスクを閉じました。",
 		"web.session.dispatched":           "タスクを派遣しました：{title}（{id}）",
 		"web.session.injectNoAbort":        "次のラウンドにキューしました — 回答ターンは自身のモデル呼び出しを中止できないため、テキストはそのラウンドの先頭指令になります",
 
@@ -4371,6 +4377,8 @@ var messages = map[Locale]map[string]string{
 		"web.session.reviewNeedsAttention": "Necesita tu atención",
 		"web.session.scopeDrift":           "desviación de alcance: {n} archivos fuera del alcance declarado\n{paths}\nAbre la tarea para ver la lista completa y aprobar o rechazar.",
 		"web.session.saveFailed":           "No se pudo guardar la respuesta. Cópiala antes de recargar.",
+		"web.session.scopeDriftAccepted":   "desviación de alcance: {n} archivos fuera del alcance declarado\n{paths}\nAprobada: se aceptó la desviación y la tarea se cerró como completada.",
+		"web.session.scopeDriftRejected":   "desviación de alcance: {n} archivos fuera del alcance declarado\n{paths}\nRechazada: la tarea se cerró sin este trabajo.",
 		"web.session.dispatched":           "Tarea despachada: {title} ({id})",
 		"web.session.injectNoAbort":        "en cola para la próxima ronda — un turno de respuesta no puede abortar su propia llamada al modelo; el texto lidera esa ronda",
 
@@ -5690,6 +5698,8 @@ var messages = map[Locale]map[string]string{
 		"web.session.reviewNeedsAttention": "Deine Aufmerksamkeit ist nötig",
 		"web.session.scopeDrift":           "Scope-Abweichung: {n} Dateien außerhalb des deklarierten Bereichs\n{paths}\nÖffne die Aufgabe für die vollständige Liste und gib sie frei oder lehne sie ab.",
 		"web.session.saveFailed":           "Die Antwort konnte nicht gespeichert werden. Bitte vor dem Neuladen kopieren.",
+		"web.session.scopeDriftAccepted":   "Scope-Abweichung: {n} Dateien außerhalb des deklarierten Bereichs\n{paths}\nGenehmigt — die Abweichung wurde akzeptiert und die Aufgabe als erledigt geschlossen.",
+		"web.session.scopeDriftRejected":   "Scope-Abweichung: {n} Dateien außerhalb des deklarierten Bereichs\n{paths}\nAbgelehnt — die Aufgabe wurde ohne diese Arbeit geschlossen.",
 		"web.session.dispatched":           "Aufgabe gesendet: {title} ({id})",
 		"web.session.injectNoAbort":        "für die nächste Runde eingereiht — ein Antwort-Turn kann seinen eigenen Modellaufruf nicht abbrechen; der Text führt diese Runde an",
 

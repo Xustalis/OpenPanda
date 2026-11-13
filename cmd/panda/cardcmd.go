@@ -632,12 +632,18 @@ func runCardInvoke(args []string) {
 		action = pos[1]
 	}
 	params := map[string]any{}
-	for _, kv := range pos[2:] {
-		k, v, ok := strings.Cut(kv, "=")
-		if !ok || k == "" {
-			failf(2, "panda: bad parameter %q (want name=value)\n", kv)
+	// pos[2:] needs at least two positionals before it means anything: the
+	// bare form (`card invoke hardware:screen_capture`) is the normal way to
+	// fire an actuator whose command takes no verb and no parameters, and
+	// slicing at 2 used to panic before it could resolve the argv.
+	if len(pos) > 2 {
+		for _, kv := range pos[2:] {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok || k == "" {
+				failf(2, "panda: bad parameter %q (want name=value)\n", kv)
+			}
+			params[k] = parseInvokeScalar(v)
 		}
-		params[k] = parseInvokeScalar(v)
 	}
 	spec := &ledger.ActionSpec{TargetActuator: act.ID, Action: action, Parameters: params}
 	tier := defense.TierFromCommand(act.Command, act.Args...)

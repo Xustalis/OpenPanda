@@ -23,6 +23,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
 	"github.com/Xustalis/OpenPanda/internal/askengine"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/devserver"
@@ -806,6 +807,14 @@ type taskJSON struct {
 	// accept_work / resume_execution / needs_changed_input — so the board can
 	// label the pending decision instead of a bare "awaiting approval".
 	ApprovalDisposition string `json:"approval_disposition,omitempty"`
+	// ReviewCause classifies the newest review event's reason for the surfaces
+	// that have to explain a park. The disposition says consent cannot help;
+	// it does not say why, and `needs_changed_input` reads as "the prompt is
+	// wrong" even when the agent's own model configuration is what the
+	// endpoint refused. `model_config` is that class (classified server-side
+	// from the same signature the retry loop uses, so the two cannot drift).
+	// Empty for every other park — callers fall back to the disposition.
+	ReviewCause string `json:"review_cause,omitempty"`
 	// Question/QuestionSpec surface a parked clarification without making the
 	// client parse the whole result JSON (which also carries the run's
 	// stdout): Question is the plain text, QuestionSpec the ClarifySpec JSON
@@ -1155,7 +1164,75 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.attachLastEvents(r.Context(), out)
+	// The board explains a park with the same words the chat card uses, so the
+	// cause rides the list too — one query for every parked row, not one per
+	// row on the page that polls fastest.
+	h.attachReviewCauses(r.Context(), out)
 	writeJSON(w, out)
+}
+
+// attachReviewCauses stamps every parked row with the classification of its
+// newest review event, mirroring attachLastEvents: the board's disposition
+// label has to agree with the chat card's, and a per-row read would put one
+// query per parked row on the page that polls fastest. Rows outside review
+// are skipped before the query — a task that is not parked has no park to
+// explain.
+func (h *handler) attachReviewCauses(ctx context.Context, tasks []taskJSON) {
+	if h.db == nil {
+		return
+	}
+	parked := make([]taskJSON, 0, len(tasks))
+	for _, t := range tasks {
+		if t.State == core.StateReview {
+			parked = append(parked, t)
+		}
+	}
+	if len(parked) == 0 {
+		return
+	}
+	causes := make(map[string]string, len(parked))
+	const batch = 400
+	for start := 0; start < len(parked); start += batch {
+		h.reviewCausesBatch(ctx, parked[start:min(start+batch, len(parked))], causes)
+	}
+	for i := range tasks {
+		if cause, ok := causes[tasks[i].ID]; ok {
+			tasks[i].ReviewCause = cause
+		}
+	}
+}
+
+// reviewCausesBatch fills `causes` with one batch's park classifications. The
+// raw data_json is read here, not the clipped projection lastEventsBatch keeps:
+// the signature sits at the end of a provider payload, which is exactly what
+// the clip would cut off.
+func (h *handler) reviewCausesBatch(ctx context.Context, tasks []taskJSON, causes map[string]string) {
+	marks := make([]string, len(tasks))
+	args := make([]any, len(tasks))
+	for i, t := range tasks {
+		marks[i] = "?"
+		args[i] = t.ID
+	}
+	rows, err := h.db.QueryContext(ctx,
+		`SELECT task_id, COALESCE(data_json, '')
+		   FROM task_events
+		  WHERE id IN (SELECT MAX(id) FROM task_events
+		                WHERE task_id IN (`+strings.Join(marks, ",")+`)
+		                  AND type = ?
+		                GROUP BY task_id)`, append(args, core.EvReview)...)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var taskID, dataRaw string
+		if err := rows.Scan(&taskID, &dataRaw); err != nil {
+			return
+		}
+		if cause := classifyReviewCause(dataRaw); cause != "" {
+			causes[taskID] = cause
+		}
+	}
 }
 
 // attachLastEvents stamps every listed task with its newest task_events row
@@ -1264,6 +1341,42 @@ func (h *handler) newestEvent(ctx context.Context, taskID, typ string) *traceEve
 	return &te
 }
 
+// reviewCause classifies the newest review event's reason for the surfaces
+// that explain a park. It reads the raw data_json rather than newestEvent's
+// clipped projection: the signature sits at the end of a provider payload
+// ("...is not supported when using Codex with a ChatGPT account"), and the
+// clip is exactly what would cut it off. Unknown or unreadable rows answer ""
+// — the caller falls back to the disposition's own wording.
+func (h *handler) reviewCause(ctx context.Context, taskID string) string {
+	if h.db == nil {
+		return ""
+	}
+	var dataRaw string
+	if err := h.db.QueryRowContext(ctx,
+		`SELECT COALESCE(data_json, '') FROM task_events
+		  WHERE task_id = ? AND type = ? ORDER BY id DESC LIMIT 1`,
+		taskID, core.EvReview).Scan(&dataRaw); err != nil || dataRaw == "" {
+		return ""
+	}
+	return classifyReviewCause(dataRaw)
+}
+
+// classifyReviewCause maps a review event's data_json to the cause vocabulary
+// the task JSON carries. One function for the single-row and batched reads so
+// the chat card and the board cannot disagree about the same park.
+func classifyReviewCause(dataRaw string) string {
+	var payload struct {
+		Reason string `json:"reason"`
+	}
+	if json.Unmarshal([]byte(dataRaw), &payload) != nil {
+		return ""
+	}
+	if commander.IsModelConfigFailure(payload.Reason) {
+		return "model_config"
+	}
+	return ""
+}
+
 // visibleTraceTypes is the track set the decision-orbit component paints.
 // Mirrors the map in events.go (same package, kept here so getTask's filter
 // is obvious without chasing a separate file). user_msg belongs here: the
@@ -1309,6 +1422,14 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := h.toTaskJSON(t)
+	// A parked row's cause lives on its newest review event, not on the row.
+	// Filled here rather than per-surface: the chat card, the board and the
+	// detail banner all explain the same park and must agree on what the fix
+	// is. Review rows are rare, so the extra row read costs nothing on the
+	// list path (which never calls this).
+	if t.State == core.StateReview {
+		out.ReviewCause = h.reviewCause(r.Context(), id)
+	}
 	h.enrichPlanMeta(r.Context(), &out, t)
 	// ?after=<eventID> is the poll loop's cursor: the row and its rollups stay
 	// complete, but only the timeline past that id goes on the wire. A page

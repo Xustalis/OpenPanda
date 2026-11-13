@@ -758,20 +758,38 @@ print(json.dumps({"type":"result", "is_error":False, "result":"native relay"}), 
                 self.assertEqual(payload["result"], "native relay")
 
     def test_claude_custom_model_preference_and_injected_isolation(self):
+        # The alias workaround is DeepSeek-specific: its Anthropic endpoint maps
+        # the CLI's claude-* aliases onto its own models, so a --model carrying
+        # an id it does not serve would 404. Every other endpoint — a local
+        # relay, a self-hosted gateway — wants the real model name and 404s on
+        # the alias, so the flag stays. (injected, base_url, --model absent)
+        cases = (
+            (False, "", False),
+            (True, "https://api.deepseek.com/anthropic", True),
+            (True, "http://127.0.0.1:3065", False),
+        )
         for session in (False, True):
-            for injected in (False, True):
-                with self.subTest(session=session, injected=injected):
+            for injected, base, absent in cases:
+                with self.subTest(session=session, injected=injected, base=base):
+                    env = {"ANTHROPIC_MODEL": "deepseek-custom",
+                           "EXPECT_NO_MODEL": "1" if absent else "0"}
+                    if injected:
+                        env["OPENPANDA_INJECTED_MODEL"] = "1"
+                    if base:
+                        env["ANTHROPIC_BASE_URL"] = base
                     payload, _, _ = run_adapter(
                         "claude_code.py", "claude", r'''
 import json, os, sys
 args = sys.argv[1:]
-injected = os.environ.get("OPENPANDA_INJECTED_MODEL") == "1"
-assert ("--model" not in args) if injected else (args[args.index("--model") + 1] == "deepseek-custom")
+if os.environ.get("EXPECT_NO_MODEL") == "1":
+    assert "--model" not in args, args
+else:
+    assert args[args.index("--model") + 1] == "deepseek-custom", args
 if "--input-format" in args:
     json.loads(sys.stdin.readline())
 print(json.dumps({"type":"result", "is_error":False, "result":"ok"}), flush=True)
 ''',
-                        env={"ANTHROPIC_MODEL": "deepseek-custom", **({"OPENPANDA_INJECTED_MODEL": "1"} if injected else {})},
+                        env=env,
                         extra_request={"session": session},
                     )
                     self.assertTrue(payload["ok"], payload)

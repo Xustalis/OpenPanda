@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -263,5 +265,72 @@ func TestWaitRemoteResultExpiresLapsedLease(t *testing.T) {
 	}
 	if got.State != StateFailed {
 		t.Fatalf("state = %s, want failed after lease lapse", got.State)
+	}
+}
+
+// TestModelConfigFailureParksWithoutRetrying pins the deterministic half of a
+// provider failure: an endpoint that refuses the model id answers the same way
+// to every attempt, so the retry budget must not spend itself on it. The row
+// parks once, in review, carrying the provider's own words — the same shape the
+// authorization refusal takes, because the fix is configuration, not a re-run.
+func TestModelConfigFailureParksWithoutRetrying(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreWithAgent(t, "model-config-park")
+	c.sleep = func(time.Duration) {}
+
+	const reason = `provider failure: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}`
+	var calls atomic.Int32
+	c.router.SetAdapterRunner(func(context.Context, string, string, string) commander.AgentResult {
+		calls.Add(1)
+		return commander.AgentResult{OK: false, Result: reason, Stderr: reason, ExitCode: 1}
+	})
+
+	task, result, err := c.SubmitLocal(ctx, TaskInput{
+		Title:       "edit the greeting",
+		Project:     "proj",
+		ContextType: "command",
+		Intent:      "add a line to the greeting",
+		Requires:    []string{"code:modify"},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("agent ran %d times, want 1 (a refused model id cannot answer differently)", n)
+	}
+	if task.State != StateReview {
+		t.Fatalf("state = %s, want review (the park carries the reason)", task.State)
+	}
+	if task.ApprovalDisposition != ApprovalNeedsChangedInput {
+		t.Fatalf("disposition = %s, want needs_changed_input (consent cannot serve a model the endpoint refuses)", task.ApprovalDisposition)
+	}
+	if !commander.IsModelConfigFailure(result.Stderr) {
+		t.Fatalf("result stderr = %q, want the provider's model refusal", result.Stderr)
+	}
+
+	// The assessment has to say "stop": a reader that only sees the event log
+	// would otherwise wait for a retry that is never coming.
+	events, err := c.store.Events(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	seen := false
+	for _, e := range events {
+		if e.Type != EvRecoveryAssessment {
+			continue
+		}
+		seen = true
+		var data struct {
+			Assessment RecoveryAssessment `json:"assessment"`
+		}
+		if err := json.Unmarshal([]byte(e.DataJSON), &data); err != nil {
+			t.Fatalf("assessment: %v", err)
+		}
+		if data.Assessment.Category != "model_config" || data.Assessment.Strategy != RecoveryStop {
+			t.Fatalf("assessment = %+v, want model_config/stop", data.Assessment)
+		}
+	}
+	if !seen {
+		t.Fatal("no recovery_assessment event on a model-configuration park")
 	}
 }

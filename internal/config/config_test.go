@@ -3,7 +3,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -921,5 +923,33 @@ func TestDelegationEnabledFlag(t *testing.T) {
 	}
 	if cfg2.Delegation.Enabled == nil || *cfg2.Delegation.Enabled {
 		t.Fatalf("enabled=false parsed as %+v", cfg2.Delegation.Enabled)
+	}
+}
+
+// The secret warning is advice, not a per-load event. On Windows the mode
+// check can never short-circuit — FileMode.Perm() reports 0666 for every
+// writable file whatever the ACL says — so the config watcher, which loads
+// once a second, wrote this line twice a second and a node grew a 120 MB log
+// out of it.
+func TestSecretWarningIsSaidOnce(t *testing.T) {
+	body := []byte(`network:
+  panel_token: secret
+`)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	// Process-wide guard: reset it so this test owns the count.
+	secretPermsWarned.Store(false)
+
+	hardenSecretPerms(path, body)
+	hardenSecretPerms(path, body)
+
+	if n := strings.Count(buf.String(), "prefer env vars"); n != 1 {
+		t.Fatalf("warnings = %d, want 1 (got %q)", n, buf.String())
 	}
 }

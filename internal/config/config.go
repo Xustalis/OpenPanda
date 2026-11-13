@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/executil"
@@ -2991,6 +2992,21 @@ func hardenSecretPerms(path string, data []byte) {
 		return
 	}
 
+	// Windows has no POSIX mode bits: Perm() reports 0666 for every writable
+	// file whatever ACL actually protects it, so the check below could never
+	// short-circuit and every load re-warned and re-chmod'ed the same file.
+	// The config watcher loads once a second, which is how this warning grew
+	// a 120 MB log on a Windows node. Chmod there only toggles the read-only
+	// attribute and protects nothing, so the advice is worth saying once and
+	// the chmod is not worth doing at all — the profile ACL is the guard.
+	if runtime.GOOS == "windows" {
+		if secretPermsWarned.CompareAndSwap(false, true) {
+			slog.Warn("config file contains secrets; prefer env vars "+
+				"(OPENPANDA_SHARED_SECRET / OPENPANDA_PANEL_TOKEN / OPENPANDA_MODEL_API_KEY)", "path", path)
+		}
+		return
+	}
+
 	st, err := os.Stat(path)
 	if err != nil {
 		return
@@ -3009,6 +3025,11 @@ func hardenSecretPerms(path string, data []byte) {
 	}
 	slog.Warn("tightened config file permissions to 0600 (contains secrets)", "path", path)
 }
+
+// secretPermsWarned keeps the Windows advice to one line per process — the
+// config is loaded from several places, and a warning repeated on a hot path
+// is noise, not a reminder.
+var secretPermsWarned atomic.Bool
 
 // marshalYAML emits YAML at the 2-space indent every hand-written config
 // in this repo uses — yaml.Marshal's 4-space default used to reformat the
