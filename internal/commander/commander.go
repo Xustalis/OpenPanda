@@ -1342,6 +1342,36 @@ func isProviderFailureOrAuth(text string) bool {
 	return providerStatusRE.MatchString(low) || providerTimeoutRE.MatchString(low)
 }
 
+// IsModelConfigFailure reports a provider answer that names the model itself:
+// the endpoint does not serve this id to the credential the CLI is configured
+// with. It is the one class of 400 a blind re-run cannot improve — the CLI,
+// the endpoint and the model id are unchanged, so the answer is identical —
+// and the fix lives in the agent's own model configuration (a CLI config file,
+// a provider switch), never in the task text. Callers use it to skip the retry
+// budget and to say so in the review card instead of filing the park as "the
+// prompt needs changing".
+//
+// Matched on the provider's own vocabulary rather than the HTTP status: a bare
+// 400 also covers malformed requests and context overflows, which are a
+// different story with a different fix.
+func IsModelConfigFailure(text string) bool {
+	low := strings.ToLower(text)
+	for _, p := range []string{
+		"model_not_found", "unrecognized_model", "model not found",
+		"unsupported model", "model is not supported",
+		"not supported when using codex",
+		// OpenAI's older wording for the same refusal ("The model `x` does not
+		// exist or you do not have access to it"): long enough to be
+		// unambiguous, unlike a bare "does not exist".
+		"does not exist or you do not have access",
+	} {
+		if strings.Contains(low, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // commanderKill reports a run this package ended itself — the silence
 // watchdog, the tool-call fuse, or the hard deadline. All three carry exit
 // 124 and a verdict phrased as a timeout, so isProviderFailureOrAuth would

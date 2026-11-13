@@ -30,6 +30,13 @@ func TestRecoveryNeverAssumesCrossNodeReplaySafety(t *testing.T) {
 		{bus.TaskResultPayload{ExitCode: 1, Stderr: "Not logged in · Please run /login"}, "authentication_required", "stop"},
 		{bus.TaskResultPayload{ExitCode: 1, Stderr: "Not logged in · Please run /login", Tokens: 100}, "execution_failure", "bounded_same_node_retry"},
 		{bus.TaskResultPayload{ExitCode: 1, Stderr: "test failed: log contains Not logged in"}, "execution_failure", "bounded_same_node_retry"},
+		// A model id the credential's plan does not serve: the fix is the
+		// agent's configuration, so the row stops instead of spending the
+		// retry budget on the identical 400.
+		{bus.TaskResultPayload{ExitCode: 1, Stderr: `provider failure: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}`}, "model_config", "stop"},
+		// A 400 about the request itself is not the model's fault: the
+		// ordinary retry path stays, and so does its category.
+		{bus.TaskResultPayload{ExitCode: 1, Stderr: "400 invalid_request_error: messages: field required"}, "execution_failure", "bounded_same_node_retry"},
 	} {
 		a := assessRecovery(tc.r)
 		if a.Category != tc.category || a.Strategy != tc.strategy || a.CrossNodeReplay {
