@@ -92,6 +92,9 @@ var errExecLockBusy = errors.New("exec lock busy")
 // the rest.
 func execLockKeys(task Task, actuatorID string) []string {
 	keys := slices.Clone(queue.DefaultKeys(task.ResourceKeys, task.Project, task.WorkDir, task.TaskID))
+	if task.Isolate && task.Project != "" && len(task.ResourceKeys) == 0 {
+		keys = childResourceKeys(task.TaskID, TaskInput{Project: task.Project, Isolate: true, Requires: task.Requires, SpecJSON: task.SpecJSON})
+	}
 	if actuatorID != "" && !slices.Contains(keys, actuatorID) {
 		keys = append(keys, actuatorID)
 	}
@@ -289,12 +292,18 @@ func (s *TaskStore) ReleaseExecLocksKeys(ctx context.Context, taskID, runID stri
 func liveExecHolder(ctx context.Context, tx *sql.Tx, taskID string, now int64) (bool, error) {
 	var state string
 	var lease sql.NullInt64
-	err := tx.QueryRowContext(ctx, `SELECT state, lease_expires_at FROM tasks WHERE task_id=?`, taskID).Scan(&state, &lease)
+	var merging bool
+	err := tx.QueryRowContext(ctx, `SELECT state, lease_expires_at, EXISTS(
+ SELECT 1 FROM task_merge_leases m WHERE m.task_id=tasks.task_id AND m.attempt_id=tasks.attempt_id AND m.expires_at>?)
+ FROM tasks WHERE task_id=?`, now, taskID).Scan(&state, &lease, &merging)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("read exec lock holder %s: %w", taskID, err)
+	}
+	if merging && (state == StateRunning || state == StateReview) {
+		return true, nil
 	}
 	switch state {
 	case StateDispatched, StateRunning, StateWaitingCtx:

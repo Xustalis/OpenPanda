@@ -724,11 +724,33 @@ func (c *Core) resumeApproved(ctx context.Context, taskID string, relayUpstream 
 		// An isolated child parked for review keeps its workspace untouched:
 		// approving its work is the decision that lets those changes land on
 		// the shared tree — merge here, since this path bypasses run()'s
-		// terminal merge. On a node that never held the workspace the merge
-		// is a no-op; the executor's own accept (mirrored downstream) is the
-		// one that lands it.
+		// terminal merge. An origin without the workspace waits for the
+		// executor's delivery receipt.
 		if cur.Isolate && cur.Project != "" && cur.PlanID == "" {
-			if note := c.mergeIsolatedRun(ctx, cur); note != "" {
+			if c.remoteIsolatedExecutor(ctx, cur) {
+				if err := c.store.acceptPendingDelivery(ctx, cur); err != nil {
+					return cur, result, err
+				}
+				cur, err = c.store.Get(ctx, taskID)
+				if err != nil {
+					return cur, result, err
+				}
+				c.forwardAcceptDownstream(ctx, taskID, "")
+				result.TaskID, result.AttemptID, result.State = cur.TaskID, cur.AttemptID, StateReview
+				return cur, result, nil
+			}
+			merge := c.mergeIsolatedRun(ctx, cur)
+			if merge.Blocked {
+				result.TaskID, result.AttemptID = cur.TaskID, cur.AttemptID
+				result.State, result.OK, result.Verdict, result.Stderr = StateReview, false, "blocked", merge.Note
+				result.ApprovalDisposition = string(ApprovalNeedsChangedInput)
+				if err := c.store.blockReviewDelivery(ctx, cur, result); err != nil {
+					return cur, result, err
+				}
+				cur, _ = c.store.Get(ctx, taskID)
+				return cur, result, nil
+			}
+			if note := merge.Note; note != "" {
 				if result.Stdout != "" {
 					result.Stdout += "\n"
 				}

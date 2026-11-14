@@ -170,10 +170,12 @@ type ManualAbility struct {
 
 // Capacity describes current resource availability.
 type Capacity struct {
-	CPUCores      int `yaml:"cpu_cores" json:"cpu_cores"`
-	RAMGB         int `yaml:"ram_gb" json:"ram_gb"`
-	MaxConcurrent int `yaml:"max_concurrent_tasks" json:"max_concurrent_tasks"`
-	CurrentTasks  int `yaml:"current_tasks" json:"current_tasks"`
+	// Runtime protocol fact; never accepted from capabilities.yaml.
+	ArtifactMergeVersion int `yaml:"-" json:"artifact_merge_version,omitempty"`
+	CPUCores             int `yaml:"cpu_cores" json:"cpu_cores"`
+	RAMGB                int `yaml:"ram_gb" json:"ram_gb"`
+	MaxConcurrent        int `yaml:"max_concurrent_tasks" json:"max_concurrent_tasks"`
+	CurrentTasks         int `yaml:"current_tasks" json:"current_tasks"`
 	// QueuedTasks is the backlog depth — tasks accepted locally and waiting
 	// for a free slot (v0.0.10 Track 3). CurrentTasks alone understates load:
 	// two nodes both at max in-flight differ enormously when one holds a

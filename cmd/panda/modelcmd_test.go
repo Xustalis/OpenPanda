@@ -281,8 +281,8 @@ func TestModelSwitchPrefersAliasMatch(t *testing.T) {
 
 // TestModelAddCustomVerifies exercises the connectivity probe: a custom relay
 // entry is only persisted when the endpoint actually answers. The httptest
-// server speaks the OpenAI dialect; the second half proves a dead endpoint is
-// rejected (and --force bypasses the probe).
+// server speaks the OpenAI dialect; the second half proves a failed probe
+// prevents persistence (and --force bypasses the probe).
 func TestModelAddCustomVerifies(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
@@ -308,11 +308,12 @@ func TestModelAddCustomVerifies(t *testing.T) {
 		t.Fatalf("custom default should be openai dialect, got %q", m.APIType)
 	}
 
-	// Dead endpoint: nothing is persisted without --force.
+	// A definitive rejection must not persist without --force. Retryable
+	// failures are covered in internal/entry, without sleeping its real backoff.
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
-	dead.Close() // connection refused — the probe must fail fast
+	defer dead.Close()
 
 	before := len(r.cfg.Models)
 	r.modelAdd([]string{"custom", dead.URL, "x", "sk-anything"})

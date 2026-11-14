@@ -292,7 +292,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 		&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 		&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
 		&agentSession, &agentSessionNode, &agentSessionAdapter, &t.AuthSig, &t.AuthPub, &t.AuthTs,
-		&remote, &screenOut, &t.SpawnDepth, &t.SpawnCap, &scopePathsJSON, &isolated, &verification); err != nil {
+		&remote, &screenOut, &t.SpawnDepth, &t.SpawnCap, &scopePathsJSON, &isolated, &verification, &t.DeliveryAcceptAttempt); err != nil {
 		return Task{}, err
 	}
 	t.ParentID = parentID.String
@@ -1099,7 +1099,8 @@ func (s *TaskStore) CompleteAttempt(ctx context.Context, taskID, owner, attemptI
 // ended on its own. Converging there keeps a one-sided approval from
 // stranding this copy in review forever (the headless-delegator case).
 func reviewProtected(t Task) bool {
-	return t.State == StateReview && t.ApprovalDisposition == ApprovalAcceptWork
+	return t.State == StateReview && t.ApprovalDisposition == ApprovalAcceptWork &&
+		!(t.Isolate && t.DeliveryAcceptAttempt != "" && t.DeliveryAcceptAttempt == t.AttemptID)
 }
 
 // CompleteFromRemote records a remote executor's final result on the
@@ -1148,7 +1149,7 @@ func (s *TaskStore) ReviewFromRemote(ctx context.Context, taskID, owner string, 
 	if Terminal(cur.State) {
 		return nil
 	}
-	if cur.State == StateReview && cur.ApprovalDisposition == ApprovalAcceptWork {
+	if reviewProtected(cur) {
 		return nil // do not let a late result redefine the finished work a human is judging
 	}
 	// A consent/question park receiving a fresh remote review means the
@@ -2055,7 +2056,7 @@ func (s *TaskStore) SpendTokens(ctx context.Context, taskID string, n int64) (in
 func (s *TaskStore) CountActive(ctx context.Context, owner string) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tasks WHERE owner_node=? AND state IN ('running','waiting_context')`,
+		`SELECT COUNT(*) FROM tasks WHERE owner_node=? AND state IN ('running','waiting_context') AND (children_wait_attempt='' OR children_wait_attempt != attempt_id)`,
 		owner).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("count active tasks: %w", err)
@@ -2089,7 +2090,7 @@ func (s *TaskStore) CountScheduledActive(ctx context.Context, self string) (int,
 	var n int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM tasks t
-		WHERE (t.state IN ('running','waiting_context') AND t.owner_node = ?)
+		WHERE (t.state IN ('running','waiting_context') AND t.owner_node = ? AND (t.children_wait_attempt='' OR t.children_wait_attempt != t.attempt_id))
 		  OR (t.scheduled=1 AND t.state = 'dispatched' AND COALESCE(
 		           (SELECT json_extract(e.data_json, '$.target')
 		            FROM task_events e
@@ -2294,9 +2295,18 @@ func (s *TaskStore) ListReadySummaries(ctx context.Context) ([]queue.ReadyTask, 
 // the task: scheduled tasks are a node-local pool any running scheduler
 // instance may adopt (e.g. after a panel restart left them queued). The
 // state-guarded UPDATE is the race arbiter — exactly one claimant wins.
-func (s *TaskStore) ClaimLocal(ctx context.Context, taskID, node string) error {
+func (s *TaskStore) ClaimLocal(ctx context.Context, taskID, node string, capacity ...int) error {
 	now := s.now()
 	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if len(capacity) > 0 && capacity[0] > 0 {
+			n, err := countExecutionSlots(ctx, tx, node)
+			if err != nil {
+				return err
+			}
+			if n >= capacity[0] {
+				return ErrConflict
+			}
+		}
 		res, err := tx.ExecContext(ctx, `
 			UPDATE tasks SET state=?, owner_node=?, state_version=state_version+1, updated_at=?
 			WHERE task_id=? AND state=?`,
@@ -3939,7 +3949,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	priority, seq, session_id, resource_keys_json, work_dir, exec_work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
 	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
-	agent_session_adapter, auth_sig, auth_pub, auth_ts, remote, screen_output, spawn_depth, spawn_cap, scope_paths_json, isolate, verification`
+	agent_session_adapter, auth_sig, auth_pub, auth_ts, remote, screen_output, spawn_depth, spawn_cap, scope_paths_json, isolate, verification, delivery_accept_attempt`
 
 func (s *TaskStore) scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task

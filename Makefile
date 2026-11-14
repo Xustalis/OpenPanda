@@ -271,10 +271,9 @@ site-check:
 	python3 scripts/check-site.py
 
 # The per-package test timeout is raised for the race legs. Under -race the
-# core package's e2e suite (real loopback websockets, real timers) runs for
-# about nine minutes on a workstation — past Go's 10-minute default on a
-# shared CI runner, which then fails the leg on the clock instead of on a
-# defect. The CI job's own budget is 20 minutes, so 15m leaves room.
+# e2e suite uses real loopback websockets and timers; shared CI runners can
+# stall those even though application fixtures now clone a migrated schema.
+# The CI job's own budget is 20 minutes, so 15m leaves room.
 race:
 	CGO_ENABLED=1 $(GO) test -race -timeout 15m ./...
 

@@ -102,6 +102,7 @@ var migrations = []Migration{
 	{Version: 65, Name: "index_tasks_by_session", Apply: migrateV65},
 	{Version: 66, Name: "add_intake_seen", Apply: migrateV66},
 	{Version: 67, Name: "add_ask_rounds", Apply: migrateV67},
+	{Version: 68, Name: "add_children_wait_attempt", Apply: migrateV68},
 }
 
 // migrateV62 adds employee_cache.dir_signer: the Ed25519 key that SIGNED a
@@ -1627,4 +1628,41 @@ func migrateV67(tx MigrationExec) error {
 		}
 	}
 	return nil
+}
+
+// migrateV68 scopes a capacity yield to one live attempt. Every transition
+// out of running (including recovery) clears it in the same transaction.
+func migrateV68(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "tasks", "children_wait_attempt", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "tasks", "delivery_accept_attempt", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE TRIGGER IF NOT EXISTS tasks_delivery_accept_gc
+ AFTER UPDATE OF state,attempt_id,approval_disposition ON tasks
+ WHEN NEW.state!='review' OR NEW.attempt_id!=OLD.attempt_id OR NEW.approval_disposition!='accept_work'
+ BEGIN UPDATE tasks SET delivery_accept_attempt='' WHERE task_id=NEW.task_id; END`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS task_artifact_inputs (
+ task_id TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE CASCADE,
+ plan_id TEXT NOT NULL, metadata_json TEXT NOT NULL, landed_modes_json TEXT NOT NULL DEFAULT '{}')`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS task_merge_leases (
+ task_id TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE CASCADE,
+ attempt_id TEXT NOT NULL, run_id TEXT NOT NULL, expires_at INTEGER NOT NULL,
+ delivered INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`CREATE TRIGGER IF NOT EXISTS tasks_children_wait_gc
+ AFTER UPDATE OF state, attempt_id, owner_node ON tasks
+ WHEN NEW.state != 'running' OR NEW.attempt_id != OLD.attempt_id OR NEW.owner_node != OLD.owner_node
+ BEGIN UPDATE tasks SET children_wait_attempt='' WHERE task_id=NEW.task_id; END`)
+	return err
 }
