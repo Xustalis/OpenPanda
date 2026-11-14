@@ -30,7 +30,7 @@ func TestToolAddLosesNothingUnderConcurrency(t *testing.T) {
 			defer wg.Done()
 			entry := fmt.Sprintf("entry-%02d", i)
 			if _, err := tool.Execute(ToolAdd, map[string]any{
-				"target": "memory", "entry": entry,
+				"target": "memory", "entry": entry, "category": "convention", "key": entry,
 			}); err != nil {
 				errs <- fmt.Errorf("%s: %w", entry, err)
 			}
@@ -50,7 +50,11 @@ func TestToolAddLosesNothingUnderConcurrency(t *testing.T) {
 	}
 	seen := make(map[string]bool, len(m.Entries))
 	for _, e := range m.Entries {
-		seen[e] = true
+		fact, err := ClassifyFact(e, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[fact.Text] = true
 	}
 	var missing []string
 	for i := 0; i < n; i++ {

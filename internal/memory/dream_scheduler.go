@@ -32,11 +32,12 @@ const pruneInterval = 24 * time.Hour
 // each tick additionally enforces the daily-log retention windows at most once
 // per day — the production wiring of daily.Prune (A4).
 type Scheduler struct {
-	dreamer *Dreamer
-	diary   *DreamDiary
-	daily   *Daily
-	idle    func() bool
-	every   time.Duration
+	dreamer  *Dreamer
+	diary    *DreamDiary
+	daily    *Daily
+	projects *Projects
+	idle     func() bool
+	every    time.Duration
 	// OnError, when set, receives sweep failures so the daemon can log them
 	// rather than have them swallowed silently.
 	OnError func(error)
@@ -55,6 +56,10 @@ func (s *Scheduler) WithDaily(d *Daily) *Scheduler {
 	s.daily = d
 	return s
 }
+
+// WithProjects applies the same daily retention windows to isolated project
+// histories without ever feeding those histories to personal dreaming.
+func (s *Scheduler) WithProjects(p *Projects) *Scheduler { s.projects = p; return s }
 
 // Run ticks until ctx is done. A failed sweep is reported to OnError (if set)
 // and retried on the next tick rather than aborting the loop.
@@ -197,7 +202,7 @@ func (s *Scheduler) finishPending(pending pendingDream) error {
 // last run in .dreams/last-prune (a separate stamp from last-deep so a dream
 // neither triggers nor suppresses a prune). No Daily attached: no-op.
 func (s *Scheduler) pruneIfDue(now time.Time) error {
-	if s.daily == nil {
+	if s.daily == nil && s.projects == nil {
 		return nil
 	}
 	last, err := s.readState("last-prune")
@@ -207,8 +212,29 @@ func (s *Scheduler) pruneIfDue(now time.Time) error {
 	if now.Sub(last) < pruneInterval {
 		return nil
 	}
-	if err := s.daily.Prune(now); err != nil {
-		return fmt.Errorf("memory: prune daily logs: %w", err)
+	if s.daily != nil {
+		if err := s.daily.Prune(now); err != nil {
+			return fmt.Errorf("memory: prune daily logs: %w", err)
+		}
+	}
+	if s.projects != nil {
+		names, err := s.projects.List()
+		if err != nil {
+			return err
+		}
+		for _, name := range names {
+			daily, err := s.projects.Daily(name)
+			if err != nil {
+				return err
+			}
+			// Avoid creating a daily directory on projects without history.
+			if _, err := os.Stat(daily.dir); os.IsNotExist(err) {
+				continue
+			}
+			if err := daily.Prune(now); err != nil {
+				return fmt.Errorf("memory: prune project %q: %w", name, err)
+			}
+		}
 	}
 	return s.writeState("last-prune", now)
 }

@@ -52,14 +52,16 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 
 	reg.Register(entry.Tool{
 		Name:        memory.ToolAdd,
-		Description: "Remember a new memory / 记住一条新记忆。target: user (preferences/styles), memory (facts/conventions/corrections), project (project conventions)。",
+		Description: "Remember only confirmed, reusable long-term facts; upsert by stable key. No task outcomes, temporary requests or guesses. user: identity/preference/personal; memory: environment/convention; project: project knowledge. Read before correcting legacy entries.",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":  targetEnum,
-				"entry":   map[string]any{"type": "string", "description": "Content to remember / 要记住的内容"},
-				"project": projectArg,
+				"target":   targetEnum,
+				"entry":    map[string]any{"type": "string", "description": "Content to remember / 要记住的内容"},
+				"project":  projectArg,
+				"category": map[string]any{"type": "string", "enum": []string{"identity", "preference", "personal", "environment", "convention", "project"}},
+				"key":      map[string]any{"type": "string", "description": "Stable attribute key, independent of value; reuse it for changes (user.name, preference.language, build.command). Required together with category for facts that cannot be inferred."},
 			},
 			"required": []string{"target", "entry"},
 		},
@@ -75,10 +77,12 @@ func buildToolRegistry(e *Engine, hermes *memory.Hermes, projects *memory.Projec
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":  targetEnum,
-				"old":     map[string]any{"type": "string", "description": "Unique substring to match / 能唯一匹配待替换条目的子串"},
-				"new":     map[string]any{"type": "string", "description": "Replacement content / 替换后的内容"},
-				"project": projectArg,
+				"target":   targetEnum,
+				"old":      map[string]any{"type": "string", "description": "Unique substring to match / 能唯一匹配待替换条目的子串"},
+				"new":      map[string]any{"type": "string", "description": "Replacement content / 替换后的内容"},
+				"project":  projectArg,
+				"category": map[string]any{"type": "string", "enum": []string{"identity", "preference", "personal", "environment", "convention", "project"}},
+				"key":      map[string]any{"type": "string", "description": "Stable attribute key; preserve the existing key when correcting its value."},
 			},
 			"required": []string{"target", "old", "new"},
 		},

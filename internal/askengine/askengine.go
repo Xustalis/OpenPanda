@@ -158,10 +158,8 @@ type Engine struct {
 	hermes   *memory.Hermes
 	projects *memory.Projects
 	// daily is the warm-layer diary the Dreaming engine consolidates from.
-	// Task summaries land here as *trusted* lines (the model's own words,
-	// not verbatim user text — see noteDailyObservation), which is what
-	// makes a Deep-phase promotion possible at all: task titles are written
-	// with AppendExternal and can never open the provenance gate alone.
+	// Task summaries are external operational history; only separately
+	// validated durable observations can feed trusted dream candidates.
 	daily  *memory.Daily
 	remind *reminders.Store
 	skills *skills.Store
@@ -2615,7 +2613,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		if t != nil && !incompleteTaskOutcome(t) && strings.TrimSpace(t.Answer) == "" && strings.TrimSpace(t.Report) == "" {
 			if report, rerr := entry.SummarizeResult(ctx, client, t.TaskTitle, "", t.OK, t.ExitCode, t.Stdout, t.Stderr, effectiveLocale); rerr == nil {
 				t.Report = report
-				e.noteDailyObservation(report)
+				e.noteTaskDailyObservation(ctx, t.TaskID, report)
 			}
 		}
 		return t
@@ -3836,7 +3834,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 			sumClient, _ := e.healthyClient()
 			if report, rerr := entry.SummarizeResult(ctx, sumClient, resumed.TaskTitle, in.Intent, resumed.OK, resumed.ExitCode, resumed.Stdout, resumed.Stderr, targetLoc); rerr == nil {
 				resumed.Report = report
-				e.noteDailyObservation(report)
+				e.noteDailyObservation(memory.WithScopeProject(ctx, task.Project), report)
 			}
 			return resumed
 		}
@@ -4320,28 +4318,53 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 	loc, _ := e.localeNow()
 	if report, rerr := entry.SummarizeResult(ctx, sumClient, res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr, loc); rerr == nil {
 		res.Report = report
-		e.noteDailyObservation(report)
+		e.noteTaskDailyObservation(ctx, res.TaskID, report)
 	}
 	return res
 }
 
-// noteDailyObservation records an agent-authored digest into the warm-layer
-// daily log as a trusted line (Daily.Append, not AppendExternal). The digest
-// is the model's own summary of a task outcome — "the agent's own
-// observation" in the Dreaming taint model (design §17.3) — and it is the
-// only trusted writer in the system: without it every candidate carries an
-// external provenance and Deep can never promote. A failed append is logged,
-// never fatal to the answer path.
-func (e *Engine) noteDailyObservation(text string) {
-	if e.daily == nil || strings.TrimSpace(text) == "" {
+// noteTaskDailyObservation resolves the persisted task scope rather than the
+// currently focused conversation, which may have changed while work ran.
+func (e *Engine) noteTaskDailyObservation(ctx context.Context, taskID, text string) {
+	if e.db == nil {
 		return
 	}
-	// The daily log is durable and feeds Dreaming, so a credential echoed by
-	// a task must not ride into it. SummarizeResult already redacts; this is
-	// the last gate before persistence, covering callers that build a digest
-	// by another route.
+	task, err := e.TaskStore().Get(ctx, taskID)
+	if err != nil {
+		if e.logger != nil {
+			e.logger.Warn("resolve daily task scope", "err", err)
+		}
+		return
+	}
+	e.noteDailyObservation(memory.WithScopeProject(ctx, task.Project), text)
+}
+
+// noteDailyObservation records redacted operational history. A model-generated
+// summary is not an independent observation of a lasting user fact and must
+// never open the Dreamer's trusted-provenance gate.
+func (e *Engine) noteDailyObservation(ctx context.Context, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	daily := e.daily
+	if project, _ := memory.ScopeProject(ctx); project != "" {
+		if e.projects == nil {
+			return
+		}
+		var err error
+		daily, err = e.projects.Daily(project)
+		if err != nil {
+			if e.logger != nil {
+				e.logger.Warn("project daily log", "err", err)
+			}
+			return
+		}
+	}
+	if daily == nil {
+		return
+	}
 	text = security.Redact(text)
-	if err := e.daily.Append(time.Now(), text); err != nil && e.logger != nil {
+	if err := daily.AppendExternal(time.Now(), text); err != nil && e.logger != nil {
 		e.logger.Warn("append daily observation", "err", err)
 	}
 }

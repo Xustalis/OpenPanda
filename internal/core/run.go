@@ -1546,7 +1546,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				}
 				return roundOutcome{}, fmt.Errorf("pause on token exhaustion: %w", err)
 			}
-			c.logTask(task.Title, false)
+			c.logProjectTask(task.Title, false, task.Project)
 			trackTask(c, task.Project, required, task.Title, false)
 			return roundOutcome{done: true, payload: bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -1991,7 +1991,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				c.EvTrace(execCtx, taskID, EvClarification, map[string]any{
 					"question": q, "round": round + 1, "agent": res.Agent,
 				})
-				c.logTask(task.Title, false)
+				c.logProjectTask(task.Title, false, task.Project)
 				trackTask(c, task.Project, required, task.Title, false)
 				fc := lastChanged
 				if len(fc) > maxFilesChangedReport {
@@ -2270,7 +2270,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					}
 					return roundOutcome{}, fmt.Errorf("pause on scope drift: %w", err)
 				}
-				c.logTask(task.Title, false)
+				c.logProjectTask(task.Title, false, task.Project)
 				trackTask(c, task.Project, required, task.Title, false)
 				fc := lastChanged
 				if len(fc) > maxFilesChangedReport {
@@ -2299,7 +2299,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				}
 				return roundOutcome{}, fmt.Errorf("pause manual: %w", err)
 			}
-			c.logTask(task.Title, false)
+			c.logProjectTask(task.Title, false, task.Project)
 			trackTask(c, task.Project, required, task.Title, false)
 			return roundOutcome{done: true, payload: bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -2369,7 +2369,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					}
 					return roundOutcome{}, fmt.Errorf("park overflowed task: %w", err)
 				}
-				c.logTask(task.Title, false)
+				c.logProjectTask(task.Title, false, task.Project)
 				trackTask(c, task.Project, required, task.Title, false)
 				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -2400,7 +2400,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					}
 					return roundOutcome{}, fmt.Errorf("park refused task: %w", err)
 				}
-				c.logTask(task.Title, false)
+				c.logProjectTask(task.Title, false, task.Project)
 				trackTask(c, task.Project, required, task.Title, false)
 				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -2417,7 +2417,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				}
 				return roundOutcome{}, fmt.Errorf("fail: %w", err)
 			}
-			c.logTask(task.Title, false)
+			c.logProjectTask(task.Title, false, task.Project)
 			trackTask(c, task.Project, required, task.Title, false)
 			return roundOutcome{done: true, payload: bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateFailed, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
@@ -2761,7 +2761,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 			}
 			return bus.TaskResultPayload{}, fmt.Errorf("pause for follow-up: %w", err)
 		}
-		c.logTask(task.Title, false)
+		c.logProjectTask(task.Title, false, task.Project)
 		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
 			TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -2816,7 +2816,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 				}
 				return bus.TaskResultPayload{}, fmt.Errorf("fail on acceptance: %w", err)
 			}
-			c.logTask(task.Title, false)
+			c.logProjectTask(task.Title, false, task.Project)
 			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateFailed,
@@ -2862,7 +2862,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 				}
 				return bus.TaskResultPayload{}, fmt.Errorf("pause for approval: %w", err)
 			}
-			c.logTask(task.Title, true)
+			c.logProjectTask(task.Title, true, task.Project)
 			trackTask(c, task.Project, required, task.Title, true)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -2915,7 +2915,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	// A finished run's session handle is dead weight: the adapter may purge
 	// it, and a later re-run must start fresh rather than resume a stale id.
 	_ = c.store.SetAgentSessionID(wCtx, taskID, "")
-	c.logTask(task.Title, true)
+	c.logProjectTask(task.Title, true, task.Project)
 	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,

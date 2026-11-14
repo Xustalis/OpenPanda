@@ -154,11 +154,14 @@ const memoryRulesSection = `
 ═══ Memory Governance Rules ═══
 What to remember (active memory without user prompting):
 - User preferences ("I prefer TypeScript"), communication styles → record to user tier
-- Environment facts ("Server is Ubuntu 24.04"), global conventions, corrections ("Do not use sudo, user is in docker group"), completed work → record to memory tier
+- Stable environment facts ("Server is Ubuntu 24.04"), global conventions and lasting corrections → record to memory tier
 - Project conventions ("All backend APIs must be stateless") → record to project tier
-- Explicit user requests ("Remember that X")
+- Confirmed identity and key personal facts (name, time zone, long-term needs) → user tier
+- Explicit user requests only when the content has lasting value; "remember" does not make temporary information durable.
+- Supply category and a stable key independent of its value (user.name, preference.language, build.command). Reuse that key when information changes; memory_add updates the existing fact. For unclassified legacy entries read first and use memory_replace with a unique text match.
 What NOT to remember:
-- Trivial/obvious facts, easily queryable information, raw data dumps, temporary session notes.
+- Task outcomes, completed work, tool output, one-time requests, schedules, weather, temporary session notes, raw data dumps, guesses, hypothetical examples, trivial/obvious or easily queryable facts.
+- Personal facts in project memory, or project knowledge in personal memory. Task history belongs in daily logs; project history stays in its project.
 Maintenance: When approaching memory capacity, use memory_read first, consolidate with memory_replace, delete obsolete items with memory_remove, then add.`
 
 // taskExampleSection is the verbose task layer: the full JSON example with

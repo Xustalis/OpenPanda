@@ -15,7 +15,7 @@ import (
 func TestDreamPromotesRecurringCandidate(t *testing.T) {
 	hermes := NewHermes(t.TempDir())
 	d := NewDaily(hermes.WarmDir())
-	text := "user prefers dark mode in the UI"
+	text := "[fact:preference:preference.theme] user prefers dark mode in the UI"
 
 	for _, day := range []string{"2026-08-10", "2026-08-11", "2026-08-12"} {
 		ts, _ := time.Parse("2006-01-02", day)
@@ -34,7 +34,7 @@ func TestDreamPromotesRecurringCandidate(t *testing.T) {
 	if len(report.Promoted) != 1 || report.Promoted[0] != text {
 		t.Fatalf("promoted = %v, want [%s]", report.Promoted, text)
 	}
-	mem, err := hermes.LoadMemory()
+	mem, err := hermes.LoadUser()
 	if err != nil {
 		t.Fatalf("load memory: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestDreamSkipsAlreadyPromotedCandidate(t *testing.T) {
 	if err := hermes.SaveMemory(MemFile{Entries: []string{old}}); err != nil {
 		t.Fatalf("save memory: %v", err)
 	}
-	newFact := "user uses a standing desk on Fridays"
+	newFact := "[fact:preference:desk] user uses a standing desk on Fridays"
 
 	for _, day := range []string{"2026-08-10", "2026-08-11", "2026-08-12"} {
 		ts, _ := time.Parse("2006-01-02", day)
@@ -360,7 +360,7 @@ func TestLightSkipsVanishedFile(t *testing.T) {
 	}
 	d := NewDaily(dir)
 	day := time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC)
-	if err := d.Append(day, "a durable observation worth remembering"); err != nil {
+	if err := d.Append(day, "用户偏好简洁的回答"); err != nil {
 		t.Fatal(err)
 	}
 	// The vanished sibling: valid daily name, target does not exist.
@@ -386,7 +386,7 @@ func TestLightOrderIsDeterministic(t *testing.T) {
 	hermes := NewHermes(root)
 	d := NewDaily(hermes.WarmDir())
 	day := time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC)
-	for _, text := range []string{"zebra fact about the zoo", "alpha fact about the lab"} {
+	for _, text := range []string{"user prefers zebra themed wallpaper", "user prefers alpha themed wallpaper"} {
 		for i := 0; i < 2; i++ {
 			if err := d.Append(day, text); err != nil {
 				t.Fatal(err)
@@ -398,15 +398,15 @@ func TestLightOrderIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cands) != 2 || cands[0].Text != "alpha fact about the lab" || cands[1].Text != "zebra fact about the zoo" {
-		t.Fatalf("order = %v, want alpha first then zebra", []string{cands[0].Text, cands[1].Text})
+	if len(cands) != 2 || cands[0].Text != "user prefers alpha themed wallpaper" || cands[1].Text != "user prefers zebra themed wallpaper" {
+		t.Fatalf("order = %v, want alpha first then zebra", cands)
 	}
 }
 
 // TestMinCandidateCharsCountsRunes pins the length gate to runes: a 6-rune
 // Chinese line is 18 bytes — len() would have let it through, RuneCount
 // correctly drops it as too short to carry a durable fact.
-func TestMinCandidateCharsCountsRunes(t *testing.T) {
+func TestLightAdmitsShortIdentityButRejectsUnclassifiedNoise(t *testing.T) {
 	root := t.TempDir()
 	hermes := NewHermes(root)
 	d := NewDaily(hermes.WarmDir())
@@ -414,7 +414,7 @@ func TestMinCandidateCharsCountsRunes(t *testing.T) {
 	if err := d.Append(day, "很短的中文行"); err != nil { // 6 runes / 18 bytes
 		t.Fatal(err)
 	}
-	if err := d.Append(day, "一条足够长的中文候选行内容"); err != nil { // 13 runes
+	if err := d.Append(day, "姓名：张三"); err != nil { // 13 runes
 		t.Fatal(err)
 	}
 	dreamer := NewDreamer(hermes)
@@ -490,7 +490,7 @@ func TestSchedulerCorruptStateRecovers(t *testing.T) {
 func TestSchedulerRecoversPromotionReceiptAfterDiaryFailure(t *testing.T) {
 	hermes := NewHermes(t.TempDir())
 	daily := NewDaily(hermes.WarmDir())
-	text := "user prefers dark mode in the UI"
+	text := "[fact:preference:preference.theme] user prefers dark mode in the UI"
 	for _, day := range []string{"2026-08-10", "2026-08-11", "2026-08-12"} {
 		at, _ := time.Parse(dailyLayout, day)
 		if err := daily.Append(at, text); err != nil {
@@ -508,7 +508,7 @@ func TestSchedulerRecoversPromotionReceiptAfterDiaryFailure(t *testing.T) {
 	if ran, err := s.tick(now); err == nil || ran {
 		t.Fatalf("diary failure must be reported: ran=%v err=%v", ran, err)
 	}
-	mem, err := hermes.LoadMemory()
+	mem, err := hermes.LoadUser()
 	if err != nil || len(mem.Entries) != 1 || mem.Entries[0] != text {
 		t.Fatalf("promoted memory must persist: %v, %v", mem.Entries, err)
 	}
@@ -605,12 +605,12 @@ func TestDreamScanNormalizesWhitespaceWithoutLosingTaint(t *testing.T) {
 	d := NewDaily(hermes.WarmDir())
 	for _, day := range []string{"2026-08-10", "2026-08-11", "2026-08-12"} {
 		at, _ := time.Parse(dailyLayout, day)
-		if err := d.Append(at, "verified build uses Go 1.26"); err != nil {
+		if err := d.Append(at, "Server is Ubuntu 24.04"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	path := d.PathFor(time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC))
-	if err := os.WriteFile(path, []byte("- 00:00:00 verified  build uses Go 1.26\n- 00:00:00 [ext] verified  build uses Go 1.26\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("- 00:00:00 Server  is Ubuntu 24.04\n- 00:00:00 [ext] Server  is Ubuntu 24.04\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// The extra-space line and trusted lines coalesce, but the [ext] sighting

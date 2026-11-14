@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -178,6 +179,33 @@ func TestProjectCRUDAndActive(t *testing.T) {
 	}
 	if name, _ := ps.Active(); name != "" {
 		t.Fatalf("active still %q after deleting it", name)
+	}
+}
+
+func TestProjectRenameMemoryFailurePreservesMetadata(t *testing.T) {
+	h, ps, mem, _ := projectHandler(t)
+	if _, err := ps.Create("old", "/tmp/old", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.SetActive("old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.Save("old", memory.MemFile{Entries: []string{"project uses Go"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(mem.Root(), "taken"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodPatch, "/api/projects/old", strings.NewReader(`{"name":"taken"}`)))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("rename = %d: %s", rr.Code, rr.Body.String())
+	}
+	if _, err := ps.Get("old"); err != nil {
+		t.Fatalf("failed rename changed metadata: %v", err)
+	}
+	if name, _ := ps.Active(); name != "old" {
+		t.Fatalf("failed rename changed active project: %q", name)
 	}
 }
 
