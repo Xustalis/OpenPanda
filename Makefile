@@ -344,6 +344,7 @@ winres:
 	$(GO) run github.com/akavel/rsrc@v0.10.2 -manifest deploy/windows/panda.manifest -arch amd64 -o cmd/panda/rsrc_windows_amd64.syso
 	$(GO) run github.com/akavel/rsrc@v0.10.2 -manifest deploy/windows/panda.manifest -arch arm64 -o cmd/panda/rsrc_windows_arm64.syso
 	$(GO) run github.com/akavel/rsrc@v0.10.2 -manifest deploy/windows/panda.manifest -arch amd64 -o webui/cmd/panel/rsrc_windows_amd64.syso
+	$(GO) run github.com/akavel/rsrc@v0.10.2 -manifest deploy/windows/panda.manifest -arch arm64 -o webui/cmd/panel/rsrc_windows_arm64.syso
 
 # Quick-start: build (if needed) and open the web console with config.yaml.
 # One command to see everything — auto token, auto browser, loopback-only.
