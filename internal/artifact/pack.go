@@ -31,6 +31,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -72,9 +73,12 @@ var ErrInvalid = errors.New("artifact: invalid advertisement")
 // EntryMeta describes one file in an artifact. Paths are slash-separated and
 // relative to the artifact root, so a manifest reads the same on every OS.
 type EntryMeta struct {
-	Path string      `json:"path"`
-	Mode os.FileMode `json:"mode"`
-	Size int64       `json:"size"`
+	Path   string      `json:"path"`
+	Mode   os.FileMode `json:"mode"`
+	Size   int64       `json:"size"`
+	SHA256 string      `json:"sha256,omitempty"`
+	// ArchiveMode is the requested mode on extraction, before host umask.
+	ArchiveMode os.FileMode `json:"-"`
 }
 
 // Manifest is what an artifact is, independently of where its bytes live: the
@@ -142,7 +146,7 @@ func pack(root string, w io.Writer, limit int64, skipped *[]string) (Manifest, e
 // pass over a file that fails to open — the walk read it moments ago, so a
 // refusal now is a permissions boundary or a race, either of which records
 // the entry rather than abandoning the whole artifact.
-func packEntries(entries []entry, root string, w io.Writer, limit int64, skipped *[]string) (Manifest, error) {
+func packEntries(entries []entry, root string, w io.Writer, limit int64, skipped *[]string, metadata ...MetadataBuilder) (Manifest, error) {
 	// Hash what we write, as we write it: one pass, and the hash covers exactly
 	// the bytes the receiver will verify.
 	h := sha256.New()
@@ -169,11 +173,31 @@ func packEntries(entries []entry, root string, w io.Writer, limit int64, skipped
 				continue
 			}
 		}
-		if err := writeEntry(tw, e, f); err != nil {
+		var fileHash hash.Hash
+		if len(metadata) > 0 && metadata[0] != nil && !e.dir {
+			fileHash = sha256.New()
+		}
+		if err := writeEntry(tw, e, f, fileHash); err != nil {
 			return Manifest{}, err
 		}
 		if !e.dir {
-			meta = append(meta, EntryMeta{Path: e.rel, Mode: e.mode, Size: e.size})
+			m := EntryMeta{Path: e.rel, Mode: e.mode, Size: e.size}
+			if fileHash != nil {
+				m.SHA256 = hex.EncodeToString(fileHash.Sum(nil))
+			}
+			meta = append(meta, m)
+		}
+	}
+	if len(metadata) > 0 && metadata[0] != nil {
+		raw, err := metadata[0](meta)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: KernelMetadataFile, Mode: 0600, Size: int64(len(raw)), ModTime: epoch, Typeflag: tar.TypeReg, Format: tar.FormatPAX}); err != nil {
+			return Manifest{}, err
+		}
+		if _, err := tw.Write(raw); err != nil {
+			return Manifest{}, err
 		}
 	}
 	if err := tw.Close(); err != nil {
@@ -316,7 +340,7 @@ func walkExcept(root string, limit int64, dirSkip map[string]bool, absSkip map[s
 // the archive depends on the tree's content and layout and nothing else. f is
 // the already-open regular file to stream (nil for a directory entry); it is
 // closed here before return.
-func writeEntry(tw *tar.Writer, e entry, f *os.File) error {
+func writeEntry(tw *tar.Writer, e entry, f *os.File, digest io.Writer) error {
 	hdr := &tar.Header{
 		Name:     e.rel,
 		Mode:     int64(e.mode.Perm()),
@@ -345,7 +369,11 @@ func writeEntry(tw *tar.Writer, e entry, f *os.File) error {
 	defer f.Close()
 	// Copy exactly the size declared in the header: a file that grew between
 	// the walk and now would otherwise corrupt the stream.
-	n, err := io.Copy(tw, io.LimitReader(f, e.size))
+	var dst io.Writer = tw
+	if digest != nil {
+		dst = io.MultiWriter(tw, digest)
+	}
+	n, err := io.Copy(dst, io.LimitReader(f, e.size))
 	if err != nil {
 		return fmt.Errorf("artifact: copy %s: %w", e.rel, err)
 	}
@@ -367,3 +395,9 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	c.n += int64(n)
 	return n, err
 }
+
+// KernelMetadataFile is reserved for hash-bound execution metadata, produced
+// by the packer after hashing the exact bytes written to the archive.
+const KernelMetadataFile = ".openpanda-causal-v1.json"
+
+type MetadataBuilder func([]EntryMeta) ([]byte, error)

@@ -16,7 +16,8 @@ package main
 //
 // The binary is built once per `go test` run. Each case gets its own HOME, so
 // config, database, skills and pid files stay inside the test's temp dir and
-// never touch the developer's real node.
+// never touch the developer's real node. The cases run in parallel under Go's
+// -parallel limit; only the immutable executable is shared.
 
 import (
 	"bytes"
@@ -63,7 +64,7 @@ func cliBinary(t *testing.T) string {
 		cliBuildPath = out
 	})
 	if cliBuildErr != nil {
-		t.Skipf("cannot build the panda binary here: %v", cliBuildErr)
+		t.Fatalf("build panda CLI: %v", cliBuildErr)
 	}
 	return cliBuildPath
 }
@@ -159,6 +160,7 @@ func initNode(t *testing.T, home string) (configPath, cardPath string) {
 }
 
 func TestCLIVersion(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	r := runCLI(t, home, "version")
 	if r.code != 0 {
@@ -170,6 +172,7 @@ func TestCLIVersion(t *testing.T) {
 }
 
 func TestCLIVersionJSON(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	r := runCLI(t, home, "--json", "version")
 	if r.code != 0 {
@@ -187,6 +190,7 @@ func TestCLIVersionJSON(t *testing.T) {
 }
 
 func TestCLIHelp(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	r := runCLI(t, home, "help")
 	if r.code != 0 {
@@ -202,6 +206,7 @@ func TestCLIHelp(t *testing.T) {
 }
 
 func TestCLIInitIsIdempotentAndForceBacksUp(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	configPath, cardPath := initNode(t, home)
 
@@ -228,6 +233,7 @@ func TestCLIInitIsIdempotentAndForceBacksUp(t *testing.T) {
 }
 
 func TestCLIConfigModelRoundTrip(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	configPath, _ := initNode(t, home)
 
@@ -262,6 +268,7 @@ func TestCLIConfigModelRoundTrip(t *testing.T) {
 }
 
 func TestCLIModelAddSubcommandFlags(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	configPath, _ := initNode(t, home)
 
@@ -286,6 +293,7 @@ func TestCLIModelAddSubcommandFlags(t *testing.T) {
 }
 
 func TestCLIConfigRoutingAgentModels(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	configPath, _ := initNode(t, home)
 
@@ -329,6 +337,7 @@ func TestCLIConfigRoutingAgentModels(t *testing.T) {
 }
 
 func TestCLICardAgentRoundTrip(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	configPath, cardPath := initNode(t, home)
 
@@ -364,6 +373,7 @@ func TestCLICardAgentRoundTrip(t *testing.T) {
 }
 
 func TestCLITodoLifecycle(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	configPath, _ := initNode(t, home)
 
@@ -433,6 +443,7 @@ func TestCLITodoLifecycle(t *testing.T) {
 // with the same fields. This is the path automation uses; a stray advisory on
 // stdout would break every consumer of it.
 func TestCLITaskAddAndShow(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	configPath, _ := initNode(t, home)
 
@@ -481,6 +492,7 @@ func TestCLITaskAddAndShow(t *testing.T) {
 // record a route_fallback — "prefer my laptop" behaved identically to
 // --nodes, which is the one thing its help text promises it does not do.
 func TestCLITaskAddPreferredIsSoftHint(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	configPath, _ := initNode(t, home)
 
@@ -525,6 +537,7 @@ func TestCLITaskAddPreferredIsSoftHint(t *testing.T) {
 }
 
 func TestCLICompletion(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		r := runCLI(t, home, "completion", shell)
@@ -538,6 +551,7 @@ func TestCLICompletion(t *testing.T) {
 }
 
 func TestCLIPlanExample(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	r := runCLI(t, home, "plan", "example")
 	if r.code != 0 {
@@ -554,6 +568,7 @@ func TestCLIPlanExample(t *testing.T) {
 // panicked before the argv was ever resolved — the CLI's computer-use entry
 // point crashed instead of capturing.
 func TestCLICardInvokeWithoutAction(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	_, cardPath := initNode(t, home)
 	card := `device: invoke-test

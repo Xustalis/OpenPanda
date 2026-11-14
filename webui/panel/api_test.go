@@ -15,7 +15,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
@@ -134,15 +134,7 @@ func TestTaskLogs(t *testing.T) {
 // newTestDB opens an in-memory migrated database for ledger-backed endpoints.
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
-	return db
+	return testdb.Open(t)
 }
 
 func TestListNodes(t *testing.T) {

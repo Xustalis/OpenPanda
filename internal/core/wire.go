@@ -1053,8 +1053,16 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	if p.Accept {
+		// Isolated acceptance can authorize a filesystem delivery. An old
+		// executor receipt must never certify a newer attempt's workspace.
+		if t.Isolate && p.AttemptID != "" && t.AttemptID != "" &&
+			t.AttemptID != p.AttemptID && attemptIsNewer(t.AttemptID, p.AttemptID) {
+			c.logger.Info("stale isolated acceptance ignored", "task", p.TaskID,
+				"stored", t.AttemptID, "got", p.AttemptID)
+			return
+		}
 		// An accept mirrors a finished verdict — it is not consent scoped to
-		// a run, so the attempt gate a re-run needs does not apply. Sibling
+		// a run for non-isolated work, so its attempt gate does not apply. Sibling
 		// copies legitimately diverge in attempt order (each side rotates
 		// independently and adopts lazily); dropping on a mismatch would
 		// lose the mirror and strand the parked copy in review forever.
@@ -1238,9 +1246,9 @@ func (c *Core) resumeOutcomeFor(ctx context.Context, t Task) bus.TaskResultPaylo
 //
 // Authorization: the sender must be this copy's chain predecessor (the
 // delegator) or the dispatch target (the executor) — the two nodes that hold
-// the sibling copies. A task that changed attempts since the decision is still
-// closed: an accept mirrors a finished result, not consent scoped to a run,
-// so the attempt guard a re-run needs does not apply.
+// the sibling copies. Non-isolated copies can mirror a finished verdict after
+// their attempts diverge. handleResume fences stale isolated acceptance first,
+// because it can authorize delivery from an attempt-specific workspace.
 func (c *Core) handleAcceptWork(ctx context.Context, env bus.Envelope, t Task) {
 	parent := scheduler.Predecessor(t.Chain, c.nodeID)
 	target, _ := c.store.DispatchTarget(ctx, t.TaskID)
@@ -1273,9 +1281,47 @@ func (c *Core) handleAcceptWork(ctx context.Context, env bus.Envelope, t Task) {
 	// the changes, exactly as resumeApproved does locally. Skipping this left
 	// an accepted isolated subtask with its work still inside the private
 	// workspace while both copies read "done".
+	if t.Isolate && t.Project != "" && t.PlanID == "" && c.remoteIsolatedExecutor(ctx, t) {
+		if fromParent {
+			if err := c.store.acceptPendingDelivery(ctx, t); err != nil {
+				c.logger.Warn("accept pending delivery", "err", err)
+				return
+			}
+			c.forwardAcceptDownstream(ctx, t.TaskID, env.From)
+			return
+		}
+		// The actual executor sends acceptance only after its merge succeeds.
+		if fromTarget {
+			if err := c.store.acceptPendingDelivery(ctx, t); err != nil {
+				return
+			}
+			result := bus.TaskResultPayload{TaskID: t.TaskID, AttemptID: t.AttemptID, State: StateDone, OK: true}
+			if t.ResultJSON != "" {
+				_ = json.Unmarshal([]byte(t.ResultJSON), &result)
+				result.State, result.OK = StateDone, true
+			}
+			if err := c.store.CompleteFromRemote(ctx, t.TaskID, c.nodeID, result, t.AttemptID); err != nil {
+				c.logger.Warn("record executor delivery", "err", err)
+				return
+			}
+			c.forwardAcceptDownstream(ctx, t.TaskID, env.From)
+			c.advanceStagePlan(ctx, t)
+			return
+		}
+	}
 	mergeNote := ""
 	if t.Isolate && t.Project != "" && t.PlanID == "" {
-		mergeNote = c.mergeIsolatedRun(ctx, t)
+		merge := c.mergeIsolatedRun(ctx, t)
+		if merge.Blocked {
+			result := bus.TaskResultPayload{TaskID: t.TaskID, AttemptID: t.AttemptID, State: StateReview, OK: false, Verdict: "blocked", Stderr: merge.Note, ApprovalDisposition: string(ApprovalNeedsChangedInput)}
+			if err := c.store.blockReviewDelivery(ctx, t, result); err != nil {
+				c.logger.Warn("block accepted merge", "task", t.TaskID, "err", err)
+				return
+			}
+			c.replyResult(ctx, env, result)
+			return
+		}
+		mergeNote = merge.Note
 	}
 	if err := c.store.Approve(ctx, t.TaskID); err != nil {
 		c.logger.Warn("accept approve failed", "task", t.TaskID, "err", err)

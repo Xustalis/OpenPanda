@@ -4,7 +4,6 @@ package panel
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -26,28 +25,12 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
-	"github.com/Xustalis/OpenPanda/internal/storage"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 	"gopkg.in/yaml.v3"
 	"log/slog"
 )
 
 // ---- shared helpers ----
-
-// newMigratedDB opens an in-memory migrated database for stores that need a
-// raw *sql.DB (reminders, audit) rather than the wrapped TaskStore.
-func newMigratedDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
-	return db
-}
 
 // newEnginePanel builds a panel wired to a real ask engine (bogus model
 // endpoint, temp storage) plus a seeded config file, so the settings
@@ -358,7 +341,7 @@ func TestSessionProjectRepoGetsWorktree(t *testing.T) {
 		t.Skip("git not installed")
 	}
 	repo := newPanelGitRepo(t)
-	db := newMigratedDB(t)
+	db := newTestDB(t)
 	ps := projectstore.NewStore(db)
 	if _, err := ps.Create("repo-demo", repo, ""); err != nil {
 		t.Fatalf("create project: %v", err)
@@ -1183,7 +1166,7 @@ func TestSkillsHubAndImportAPI(t *testing.T) {
 func TestRemindersCRUD(t *testing.T) {
 	h := New(Deps{
 		Store:     newTestStore(t),
-		Reminders: reminders.NewStore(newMigratedDB(t)),
+		Reminders: reminders.NewStore(newTestDB(t)),
 		StaticDir: t.TempDir(),
 		Token:     testToken,
 	})
@@ -1238,7 +1221,7 @@ func TestRemindersCRUD(t *testing.T) {
 // ---- system endpoints ----
 
 func TestSystemEndpoints(t *testing.T) {
-	db := newMigratedDB(t)
+	db := newTestDB(t)
 	h := New(Deps{Store: newTestStore(t), DB: db, StaticDir: t.TempDir(), Token: testToken})
 
 	// Version mirrors the internal version string and build provenance.
@@ -1410,7 +1393,7 @@ func TestAgentListCache(t *testing.T) {
 // it); an online node is refused (its next hello re-registers it); an
 // unknown id is a 404.
 func TestRemoveNode(t *testing.T) {
-	db := newMigratedDB(t)
+	db := newTestDB(t)
 	cfg := config.Default()
 	h := New(Deps{Store: newTestStore(t), DB: db, Cfg: cfg, StaticDir: t.TempDir(), Token: testToken})
 

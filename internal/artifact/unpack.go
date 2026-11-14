@@ -156,7 +156,7 @@ func unpack(r io.Reader, dst string, limit, minFree int64, skip map[string]bool)
 			if err != nil {
 				return Manifest{}, fmt.Errorf("artifact: write %s: %w", rel, err)
 			}
-			meta = append(meta, EntryMeta{Path: filepath.ToSlash(rel), Mode: landed, Size: hdr.Size})
+			meta = append(meta, EntryMeta{Path: filepath.ToSlash(rel), Mode: landed, ArchiveMode: fileMode(hdr), Size: hdr.Size})
 		case tar.TypeSymlink:
 			if err := checkLinkTarget(root, rel, hdr.Linkname); err != nil {
 				return Manifest{}, err

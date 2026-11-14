@@ -145,6 +145,11 @@ The web console needs node/npm only when rebuilding it (`make web`,
 install, then typecheck + unit tests + build). The Go binary embeds a
 prebuilt copy; only a placeholder `dist/index.html` is committed.
 
+Application tests can use `internal/testdb.Open(t)` for a private in-memory
+database cloned from the current migrations. It migrates once per test process;
+the storage suite still tests migration history directly. CI runs the four PTY
+targets in one make invocation so they share one binary build.
+
 ## Layout
 
 Directory map: CLI, runtime packages, adapters, console, marketing site,
@@ -249,8 +254,8 @@ packages by subsystem.
 - **Memory & skills**: `memory` (USER.md/MEMORY.md layers, isolation
   wall, daily logs, Dreaming consolidation engine, context injector),
   `skills` (SKILL.md progressive loading + self-evolution).
-- **Data & platform**: `storage` (SQLite WAL + migrations; schema 67 adds
-  the `ask_rounds` table), `ctxstore`,
+- **Data & platform**: `storage` (SQLite WAL + migrations; schema 68 adds
+  attempt-scoped child waits and durable artifact merge baselines), `ctxstore`,
   `sessions`, `projects`, `config` (plus `execution.go` for per-agent
   model and concurrency defaults), `configsync` (polls the shared config
   and database so a model change in one process reaches the others —

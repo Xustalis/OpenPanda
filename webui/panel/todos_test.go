@@ -18,7 +18,7 @@ import (
 func TestTodosCRUD(t *testing.T) {
 	h := New(Deps{
 		Store:     newTestStore(t),
-		Todos:     todos.NewStore(newMigratedDB(t)),
+		Todos:     todos.NewStore(newTestDB(t)),
 		StaticDir: t.TempDir(),
 		Token:     testToken,
 	})

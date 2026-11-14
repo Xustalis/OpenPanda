@@ -27,14 +27,7 @@ import (
 
 func newTestStore(t *testing.T) *core.TaskStore {
 	t.Helper()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := newTestDB(t)
 	return core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 }
 
