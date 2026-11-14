@@ -20,20 +20,10 @@ import {
   type LayerMode,
 } from './graph-layout'
 
-/** The memory knowledge graph: two layers over the same evidence. Provenance
- *  ("file") nodes are the memory surfaces and skills; knowledge ("entity")
- *  nodes are terms literally recurring inside them. Edges are recorded
- *  promotions, name references, entity mentions and co-occurrence — every one
- *  of them a string the files actually contain.
- *
- *  Visual language follows Obsidian's graph view: one quiet dot per node, its
- *  caption always beneath it, straight hairline edges, and hierarchy carried
- *  by size, ink weight and focus — not by glows, gradients, pills or dashed
- *  territory rings. Hovering a node lights its neighbourhood and dims the
- *  rest, the same way Obsidian isolates a note's links. Rendering remains
- *  dependency-free SVG over the graph-layout module; all filters, the
- *  first-seen timeline, wheel zoom, drag-to-pan, search and detail card are
- *  unchanged. */
+/** Long-term facts and the files that retain them. Each fact has a stable
+ *  attribute ID and an explicit source edge. Daily logs, task output and skill
+ *  descriptions are excluded by the server. Pan, zoom, search and the detail
+ *  card work with both current fact graphs and older server responses. */
 
 interface View {
   k: number // zoom scale
@@ -77,8 +67,7 @@ export function MemoryGraphView({
   const [selected, setSelected] = useState<string | null>(null)
   const [view, setView] = useState<View>(VIEW_HOME)
   const [panning, setPanning] = useState(false)
-  // Start with both evidence and its terms, but keep the high-density skills
-  // and statistical co-occurrence links opt-in.
+  // Show facts together with their sources; keep legacy noisy layers hidden.
   const [layer, setLayer] = useState<LayerMode>('all')
   const [hiddenKinds, setHiddenKinds] = useState<ReadonlySet<string>>(new Set(['skill']))
   const [hiddenEdges, setHiddenEdges] = useState<ReadonlySet<string>>(new Set(['co']))
@@ -233,9 +222,8 @@ export function MemoryGraphView({
 
   const hasEntities = useMemo(() => graph.nodes.some(isEntity), [graph])
   const hasFiles = useMemo(() => graph.nodes.some((n) => !isEntity(n)), [graph])
-  const edgeLegend = hasEntities
-    ? (['promotion', 'reference', 'mention', 'co'] as const)
-    : (['promotion', 'reference'] as const)
+  const edgeLegend = (['promotion', 'reference', 'mention', 'co'] as const)
+    .filter((kind) => graph.edges.some((edge) => edge.kind === kind))
 
   const now = Date.now()
   const viewDirty = Math.abs(view.k - 1) > 0.01 || Math.abs(view.x) > 1 || Math.abs(view.y) > 1
@@ -575,7 +563,7 @@ export function MemoryGraphView({
               <div class="mg-detail-head">
                 <span class={`mg-kind-chip ${KIND_CLASS[sel.kind] ?? 'mg-core'}`}>
                   <i />
-                  {t(`memory.graph.${sel.kind}`, sel.kind)}
+                  {sel.category ? t(`memory.category.${sel.category}`) : t(`memory.graph.${sel.kind}`, sel.kind)}
                 </span>
                 <strong class="mono">{sel.label}</strong>
                 {sel.status && <span class="badge yellow">{sel.status}</span>}

@@ -291,7 +291,7 @@ func TestDreamWhitelistPromotesRepeatedEmphasis(t *testing.T) {
 	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
 	dreamer.now = func() time.Time { return now }
 
-	text := "user always commits before lunch"
+	text := "user prefers committing before lunch"
 	c := &Candidate{
 		Text:  text,
 		Days:  []time.Time{time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)},
@@ -314,11 +314,12 @@ func TestDreamWhitelistPromotesRepeatedEmphasis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deep: %v", err)
 	}
-	want := text + " " + PromotionSourceTag
+	fact, _ := ClassifyFact(text, "", "")
+	want := fact.Entry() + " " + PromotionSourceTag
 	if len(promoted) != 1 || promoted[0] != want {
 		t.Fatalf("promoted = %v, want [%s]", promoted, want)
 	}
-	mem, _ := hermes.LoadMemory()
+	mem, _ := hermes.LoadUser()
 	if len(mem.Entries) != 1 || mem.Entries[0] != want {
 		t.Errorf("MEMORY.md = %v, want [%s]", mem.Entries, want)
 	}

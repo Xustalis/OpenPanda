@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // Deep-phase thresholds, matching OpenClaw's documented defaults (design
@@ -21,10 +20,6 @@ const (
 	defaultMinScore   = 0.8
 	defaultMinRecall  = 3
 	defaultMinQueries = 3
-	// minCandidateChars drops daily-log lines too short to carry a durable
-	// fact. Measured in runes: with len() a CJK line of ~4 ideographs would
-	// already pass the byte count, which is far below the intended bar.
-	minCandidateChars = 10
 	// A corrupted or untrusted daily path must not make one sweep read an
 	// unbounded file into memory. Oversized logs fail visibly, not partially.
 	maxDailyDreamBytes = 2 << 20
@@ -60,8 +55,7 @@ type Candidate struct {
 // Dreamer runs the three-phase memory consolidation (design §17.3), aligned
 // with OpenClaw: Light dedupes daily-log lines into candidates, REM groups them
 // into themes, and Deep scores them on six signals and promotes the ones that
-// clear the threshold + provenance gates into MEMORY.md. It never touches the
-// personal USER.md.
+// clear the threshold + provenance gates into MEMORY.md. Profile facts go to USER.md and reusable environment knowledge to MEMORY.md.
 type Dreamer struct {
 	hermes     *Hermes
 	now        func() time.Time // injectable clock for tests
@@ -69,7 +63,7 @@ type Dreamer struct {
 	minRecall  int
 	minQueries int
 	// OnPromotion, when set, is invoked for every entry promoted into
-	// MEMORY.md (A4 visibility): the daemon records an audit/event
+	// the personal store (A4 visibility): the daemon records an audit/event
 	// (core.EvMemoryPromotion) so the console can show what the Dreaming
 	// engine memorized and let the user correct or delete it. viaWhitelist
 	// reports whether the entry came through the repeated-emphasis channel.
@@ -95,7 +89,7 @@ type Report struct {
 }
 
 // Dream runs one full Light→REM→Deep sweep over the warm layer and returns a
-// report. Promotion writes MEMORY.md only.
+// report. Only admitted long-term facts can be promoted.
 func (d *Dreamer) Dream() (Report, error) {
 	candidates, err := d.light()
 	if err != nil {
@@ -137,7 +131,7 @@ func (d *Dreamer) light() ([]*Candidate, error) {
 			continue // archive/, symlinks, and special files are not daily logs
 		}
 		date, ok := parseDailyName(e.Name())
-		if !ok {
+		if !ok || date.Format(dailyLayout) > d.now().Format(dailyLayout) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
@@ -172,8 +166,8 @@ func (d *Dreamer) light() ([]*Candidate, error) {
 				text = rest
 			}
 			text = sanitizeEntry(text)
-			if text == "" {
-				continue
+			if _, err := ClassifyFact(text, "", ""); err != nil {
+				continue // recurrence cannot turn operational noise into knowledge
 			}
 			c := byText[text]
 			if c == nil {
@@ -190,9 +184,7 @@ func (d *Dreamer) light() ([]*Candidate, error) {
 
 	out := make([]*Candidate, 0, len(byText))
 	for _, c := range byText {
-		if utf8.RuneCountInString(c.Text) >= minCandidateChars {
-			out = append(out, c)
-		}
+		out = append(out, c)
 	}
 	// Deterministic order: count first (strongest signal), text as the
 	// tiebreak so equal-count candidates promote in a stable sequence —
@@ -217,10 +209,10 @@ func rem(candidates []*Candidate) map[string]int {
 	return themes
 }
 
-// deep scores each candidate on six signals and promotes the ones that clear
-// the threshold and provenance gates into MEMORY.md. Promotion is additive —
-// each promoted text becomes one entry, and an over-limit add is skipped (the
-// agent consolidates MEMORY.md via the memory tool, per the Hermes workflow).
+// deep admits durable facts before applying the six ranking signals and
+// provenance gates. Profile facts go to USER.md; environment/convention facts
+// go to MEMORY.md. Existing assertions win over weaker historical candidates;
+// updates use the memory tools with stable keys. Over-limit promotions skip.
 //
 // A4 gates, in order:
 //  1. A candidate carrying external daily-log sources gets its score halved
@@ -235,103 +227,111 @@ func rem(candidates []*Candidate) map[string]int {
 //     the channel (stored prompt injection stays closed, P1-22).
 func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
 	now := d.now()
-	type promotion struct {
-		entry        string
-		viaWhitelist bool
+	// A newer observation of an attribute suppresses an older value, even
+	// when that older value has more repetitions. Ties with different values
+	// are ambiguous and are left for an explicit memory-tool correction.
+	latest := map[string]*Candidate{}
+	ambiguous := map[string]bool{}
+	for _, c := range candidates {
+		fact, err := ClassifyFact(c.Text, "", "")
+		if err != nil || len(c.Days) == 0 || fact.Target() == targetProject {
+			continue
+		}
+		_, last := dayRange(c.Days)
+		if last.Format(dailyLayout) > now.Format(dailyLayout) {
+			continue
+		}
+		if previous := latest[fact.ID()]; previous != nil {
+			_, prevLast := dayRange(previous.Days)
+			if last.Before(prevLast) {
+				continue
+			}
+			if last.Equal(prevLast) {
+				prevFact, _ := ClassifyFact(previous.Text, "", "")
+				ambiguous[fact.ID()] = ambiguous[fact.ID()] || prevFact.Text != fact.Text
+				continue
+			}
+		}
+		latest[fact.ID()] = c
+		ambiguous[fact.ID()] = false
 	}
-	var promoted []string
-	var announce []promotion
 
-	// The scoring decisions below are made against MEMORY.md's current
-	// entries (novelty, coveredBy), so the read and the write have to be one
-	// critical section: a sweep that loaded the file and then wrote it back
-	// would drop whatever an agent added in between. The audit line is held
-	// back until the write lands — announcing a promotion the next line could
-	// still fail to persist is a claim the log cannot back up.
-	err := d.hermes.UpdateMemory(func(mem *MemFile) error {
+	type promotion struct {
+		entry     string
+		whitelist bool
+	}
+	var announce []promotion
+	err := d.hermes.updatePersonalFiles(0, func(files []personalFile) error {
 		for _, c := range candidates {
 			if len(c.Days) == 0 {
 				continue
 			}
+			fact, classifyErr := ClassifyFact(c.Text, "", "")
+			destination := 1
+			if fact.Target() == targetUser {
+				destination = 0
+			}
+			mem := &files[destination].mem
 			first, last := dayRange(c.Days)
-			score := scoreCandidate(
-				noveltySignal(c.Text, mem.Entries),
-				frequencySignal(c.Count),
-				queryDiversitySignal(len(c.Days)),
-				recencySignal(last, now),
-				consolidationSignal(first, last),
-				conceptualSignal(c.Text),
-			)
+			score := scoreCandidate(noveltySignal(c.Text, mem.Entries), frequencySignal(c.Count), queryDiversitySignal(len(c.Days)), recencySignal(last, now), consolidationSignal(first, last), conceptualSignal(c.Text))
 			trusted := Sources(c.Sources).Trusted()
 			if !trusted {
-				// A4 low weight: daily-log lines carrying external input are weak
-				// evidence — discount before the threshold gates (see the weight
-				// system in signals.go; this discount rides beside it).
 				score *= dailyExternalDiscount
 			}
 			c.Score = score
+			if classifyErr != nil || fact.Target() == targetProject || latest[fact.ID()] != c || ambiguous[fact.ID()] {
+				continue
+			}
 			if c.Count < d.minRecall || len(c.Days) < d.minQueries {
 				continue
 			}
-			// Substance dedup: a candidate already covered by an existing entry
-			// (same text embedded in a longer note) would pile a near-duplicate
-			// onto MEMORY.md on every sweep it recurs.
-			if coveredBy(mem.Entries, c.Text) {
+			if trusted && score < d.minScore {
 				continue
 			}
-			entry := c.Text
-			viaWhitelist := false
-			if trusted {
-				if score < d.minScore {
-					continue
+			if !trusted && trustedDaysWithin(c, now, emphasizeWindowDays*24*time.Hour) < emphasizeMinDays {
+				continue
+			}
+			exists := false
+			for _, file := range files {
+				for _, entry := range file.mem.Entries {
+					prior, e := ClassifyFact(entry, "", "")
+					if (e == nil && prior.ID() == fact.ID()) || strings.Contains(entry, fact.Text) {
+						exists = true
+						break
+					}
 				}
-			} else {
-				// Provenance taint gate with the repeated-emphasis whitelist
-				// channel: only the agent's own repeated observations open it.
-				if trustedDaysWithin(c, now, emphasizeWindowDays*24*time.Hour) < emphasizeMinDays {
-					continue
+				if exists {
+					break
 				}
-				entry = c.Text + " " + PromotionSourceTag
-				viaWhitelist = true
+			}
+			if exists {
+				continue
+			}
+			entry := fact.Entry()
+			if !trusted {
+				entry += " " + PromotionSourceTag
 			}
 			if err := mem.Add(entry); err != nil {
-				// A candidate already promoted into MEMORY.md (and still present in
-				// the warm daily logs) is not an error — skip it, don't abort the
-				// whole sweep. An over-limit add likewise leaves consolidation to
-				// the agent rather than failing the dream, and a line carrying the
-				// § delimiter simply can never be a memory entry.
 				if errors.Is(err, ErrOverLimit) || errors.Is(err, ErrDuplicate) || errors.Is(err, ErrSeparator) {
 					continue
 				}
 				return err
 			}
-			promoted = append(promoted, entry)
-			announce = append(announce, promotion{entry: entry, viaWhitelist: viaWhitelist})
+			announce = append(announce, promotion{entry, !trusted})
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if d.OnPromotion != nil {
-		for _, p := range announce {
-			d.OnPromotion(p.entry, p.viaWhitelist)
+	var promoted []string
+	for _, p := range announce {
+		promoted = append(promoted, p.entry)
+		if d.OnPromotion != nil {
+			d.OnPromotion(p.entry, p.whitelist)
 		}
 	}
 	return promoted, nil
-}
-
-// coveredBy reports whether some existing entry already contains text
-// verbatim — the cheap half of near-duplicate suppression (the reverse
-// direction, a longer candidate superseding a short entry, stays the agent's
-// consolidation call via memory_replace).
-func coveredBy(entries []string, text string) bool {
-	for _, e := range entries {
-		if strings.Contains(e, text) {
-			return true
-		}
-	}
-	return false
 }
 
 // trustedDaysWithin counts the distinct days a candidate was observed by a
@@ -340,14 +340,17 @@ func coveredBy(entries []string, text string) bool {
 // user/wire text repeating itself is exactly the injection pattern the
 // provenance gate exists to stop.
 func trustedDaysWithin(c *Candidate, now time.Time, window time.Duration) int {
-	cutoff := now.Add(-window)
+	// Filenames describe local calendar days, not UTC instants. Normalize
+	// the current local date to the same representation as parseDailyName.
+	dayNow, _ := time.Parse(dailyLayout, now.Format(dailyLayout))
+	cutoff := dayNow.Add(-window)
 	var days []time.Time
 	for _, s := range c.Sources {
 		if !s.Trusted {
 			continue
 		}
 		date, ok := parseDailyName(s.Path)
-		if !ok || date.Before(cutoff) {
+		if !ok || date.Before(cutoff) || date.After(dayNow) {
 			continue
 		}
 		if !containsDay(days, date) {

@@ -198,11 +198,20 @@ func (h *handler) patchProject(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusBadRequest, errors.New("invalid project name"))
 				return
 			}
-			if _, rerr := store.Rename(name, newName); rerr != nil {
+			renameMetadata := func() error {
+				_, err := store.Rename(name, newName)
+				return err
+			}
+			var renameErr error
+			if h.projects != nil {
+				renameErr = h.projects.RenameWith(name, newName, renameMetadata)
+			} else {
+				renameErr = renameMetadata()
+			}
+			if renameErr != nil {
 				writeErr(w, http.StatusConflict, errors.New("rename failed"))
 				return
 			}
-			h.renameProjectMemory(name, newName)
 			if h.sessions != nil {
 				_, _ = h.sessions.RenameProject(name, newName)
 			}
@@ -308,17 +317,6 @@ func (h *handler) clearProjectApproval(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, projectView{Project: p, Active: p.Name == active, Entries: entries, Chars: chars, Sessions: sessCount, Tasks: h.projectTaskCounts(r.Context())[name]})
-}
-
-// renameProjectMemory moves a project's memory directory. Copy-then-drop rather
-// than move, so a failure leaves the old file intact instead of losing the
-// memory; the store holds its lock across the pair so an entry added mid-rename
-// is neither copied stale nor dropped.
-func (h *handler) renameProjectMemory(oldName, newName string) {
-	if h.projects == nil {
-		return
-	}
-	_ = h.projects.Rename(oldName, newName)
 }
 
 // deleteProject serves DELETE /api/projects/{name}. ?keep_memory=1 leaves the

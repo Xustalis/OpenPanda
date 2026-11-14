@@ -4,6 +4,8 @@ OpenPanda project docs that are intentionally part of the public source tree.
 
 ## User guides
 
+- [memory-lifecycle.md](memory-lifecycle.md) — long-term admission, categories, stable-key updates, memory graph, daily history, dreaming and project isolation. (中文 · [English](memory-lifecycle.en.md))
+
 - [`release-v0.1.6.md`](release-v0.1.6.md) — v0.1.6 local testing, installation, restart/rollback, release checks and coverage boundaries. (中文 · [English](release-v0.1.6.en.md))
 
 - [`agent-execution.md`](agent-execution.md) — agent/subagent native model selection, concurrency/delegation limits, hot reload and safe parallel scope rules. Ships in `v0.1.6`; the settings it describes are in the release line. (中文 · [English](agent-execution.en.md) · [日本語](agent-execution.ja.md) · [Español](agent-execution.es.md) · [Deutsch](agent-execution.de.md))

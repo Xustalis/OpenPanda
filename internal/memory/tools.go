@@ -170,13 +170,28 @@ func (t *Tool) readPersonal() (string, error) {
 	return formatEntries("user", user) + "\n" + formatEntries("memory", mem), nil
 }
 
-// add appends one entry to a layer, enforcing that layer's character cap.
+// add admits a durable fact and upserts its stable attribute in one store lock.
 func (t *Tool) add(ctx context.Context, args map[string]any) (string, error) {
 	target, entry, err := targetEntry(args)
 	if err != nil {
 		return "", err
 	}
-	if err := t.mutate(ctx, target, args, func(m *MemFile) error { return m.Add(entry) }); err != nil {
+	if target != targetProject && t.hermes != nil && (target == targetUser || target == targetMemory) {
+		fact, err := toolFact(entry, target, args)
+		if err != nil {
+			return "", err
+		}
+		if err := t.hermes.Remember(fact, target, ""); err != nil {
+			return "", err
+		}
+	} else if err := t.mutate(ctx, target, args, func(m *MemFile) error {
+		fact, err := toolFact(entry, target, args)
+		if err != nil {
+			return err
+		}
+		_, err = m.UpsertFact(fact)
+		return err
+	}); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("已记住（%s）：%s", target, entry), nil
@@ -197,7 +212,45 @@ func (t *Tool) replace(ctx context.Context, args map[string]any) (string, error)
 	if err != nil {
 		return "", err
 	}
-	if err := t.mutate(ctx, target, args, func(m *MemFile) error { return m.Replace(old, new) }); err != nil {
+	if strings.TrimSpace(old) == "" {
+		return "", fmt.Errorf("memory: old must not be empty")
+	}
+	fact, err := factFromArgs(new, args)
+	if err != nil {
+		return "", err
+	}
+	if (target == targetProject) != (fact.Target() == targetProject) {
+		return "", fmt.Errorf("%w: category %s belongs to target %s", ErrNotDurable, fact.Category, fact.Target())
+	}
+	// A legacy personal fact may be stored in the historical MEMORY.md layer.
+	// Explicit and inferred classifications both move it to its canonical target.
+	if target != targetProject && t.hermes != nil && (target == targetUser || target == targetMemory) {
+		if err := t.hermes.Remember(fact, target, old); err != nil {
+			return "", err
+		}
+	} else if err := t.mutate(ctx, target, args, func(m *MemFile) error {
+		idx, ok := matchAssertion(*m, old)
+		if !ok {
+			return fmt.Errorf("memory: %q matches no unique entry", old)
+		}
+		prior, priorErr := ClassifyFact(m.Entries[idx], "", "")
+		var entries []string
+		for i, entry := range m.Entries {
+			duplicate := false
+			if candidate, e := ClassifyFact(entry, "", ""); e == nil && priorErr == nil {
+				duplicate = candidate.ID() == prior.ID()
+			}
+			if i != idx && !duplicate {
+				entries = append(entries, entry)
+			}
+		}
+		next := MemFile{Entries: entries, Limit: m.Limit}
+		if _, err := next.UpsertFact(fact); err != nil {
+			return err
+		}
+		*m = next
+		return nil
+	}); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("已更新（%s）：%s", target, new), nil
@@ -213,7 +266,27 @@ func (t *Tool) remove(ctx context.Context, args map[string]any) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	if err := t.mutate(ctx, target, args, func(m *MemFile) error { return m.Remove(old) }); err != nil {
+	if (target == targetUser || target == targetMemory) && t.hermes != nil {
+		if err := t.hermes.Forget(target, old); err != nil {
+			return "", err
+		}
+	} else if err := t.mutate(ctx, target, args, func(m *MemFile) error {
+		idx, ok := matchAssertion(*m, old)
+		if !ok {
+			return fmt.Errorf("memory: %q matches no unique entry", old)
+		}
+		selected, selectedErr := ClassifyFact(m.Entries[idx], "", "")
+		var keep []string
+		for i, entry := range m.Entries {
+			fact, err := ClassifyFact(entry, "", "")
+			if i == idx || (selectedErr == nil && err == nil && fact.ID() == selected.ID()) {
+				continue
+			}
+			keep = append(keep, entry)
+		}
+		m.Entries = keep
+		return nil
+	}); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("已删除（%s）：%s", target, old), nil
@@ -312,4 +385,33 @@ func formatEntries(label string, m MemFile) string {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, e)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// toolFact requires paired metadata when inference cannot identify an attribute.
+func toolFact(text, target string, args map[string]any) (Fact, error) {
+	fact, err := factFromArgs(text, args)
+	if err != nil {
+		return Fact{}, err
+	}
+	if fact.Target() != target {
+		return Fact{}, fmt.Errorf("%w: category %s belongs to target %s", ErrNotDurable, fact.Category, fact.Target())
+	}
+	return fact, nil
+}
+
+func factFromArgs(text string, args map[string]any) (Fact, error) {
+	category, key := "", ""
+	for _, arg := range []struct {
+		name string
+		dst  *string
+	}{{"category", &category}, {"key", &key}} {
+		if value, exists := args[arg.name]; exists {
+			s, ok := value.(string)
+			if !ok {
+				return Fact{}, fmt.Errorf("memory: argument %q must be a string", arg.name)
+			}
+			*arg.dst = s
+		}
+	}
+	return ClassifyFact(text, category, key)
 }

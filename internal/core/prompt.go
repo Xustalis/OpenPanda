@@ -675,10 +675,25 @@ func withSkills(c *Core, intent, project, query string, budget int, loc ...i18n.
 }
 
 // logTask appends one daily-log line recording a task outcome. The daily log is
-// the warm layer the Dreaming engine (design §17.3) consolidates from, so this
-// is the point where task history becomes candidate long-term memory.
+// operational warm layer. External task history never opens a promotion gate.
 func (c *Core) logTask(title string, ok bool, loc ...i18n.Locale) {
-	if c.daily == nil {
+	c.logProjectTask(title, ok, "", loc...)
+}
+
+func (c *Core) logProjectTask(title string, ok bool, project string, loc ...i18n.Locale) {
+	daily := c.daily
+	if project != "" {
+		if c.projectsRoot == "" {
+			return
+		}
+		var err error
+		daily, err = memory.NewProjects(c.projectsRoot).Daily(project)
+		if err != nil {
+			c.logger.Warn("project daily log", "err", err)
+			return
+		}
+	}
+	if daily == nil {
 		return
 	}
 	targetLoc := i18n.ChineseSimp
@@ -690,7 +705,7 @@ func (c *Core) logTask(title string, ok bool, loc ...i18n.Locale) {
 		status = i18n.T(targetLoc, "prompt.task.status.fail")
 	}
 	line := i18n.Tf(targetLoc, "prompt.task.log_format", "title", title, "status", status)
-	if err := c.daily.AppendExternal(time.Now(), line); err != nil {
+	if err := daily.AppendExternal(time.Now(), security.Redact(line)); err != nil {
 		c.logger.Warn("append daily log", "err", err)
 	}
 }

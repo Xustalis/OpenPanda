@@ -28,7 +28,7 @@
   align-items: center;
   gap: var(--sp-2);
   flex-wrap: wrap;
-  padding: 9px var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--border-soft);
   background: var(--bg-raised);
 }
@@ -59,7 +59,8 @@
   color: inherit;
   background: var(--bg-inset);
   border: 1px solid transparent;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-md);
+  min-width: 0;
   outline: none;
   transition: border-color var(--dur-fast) var(--ease);
 }
@@ -229,6 +230,7 @@
   stroke: var(--mg-ink-muted);
 }
 .mg-node:hover .mg-dot,
+.mg-node:focus-visible .mg-dot,
 .mg-node.sel .mg-dot {
   fill: var(--mg-ink-strong);
   stroke: var(--mg-ink-strong);
@@ -263,6 +265,7 @@
   font-weight: 400;
 }
 .mg-node:hover .mg-label,
+.mg-node:focus-visible .mg-label,
 .mg-node.sel .mg-label {
   fill: var(--mg-label-strong);
   font-weight: 600;
@@ -481,8 +484,9 @@ button.mg-legend-item:hover {
 .mg-detail-head strong {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  line-height: 1.6;
 }
 .mg-detail-edges {
   list-style: none;
@@ -497,6 +501,7 @@ button.mg-legend-item:hover {
   display: flex;
   gap: 6px;
   align-items: baseline;
+  flex-wrap: wrap;
 }
 .mg-neighbor {
   background: none;
@@ -505,6 +510,8 @@ button.mg-legend-item:hover {
   font: inherit;
   color: var(--accent);
   cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
 }
 .mg-neighbor:hover {
   text-decoration: underline;
@@ -531,9 +538,35 @@ button.mg-legend-item:hover {
   background: var(--bg-inset);
   border-radius: var(--radius-sm);
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.45;
-  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .mg-toolbar { gap: var(--sp-2); padding: var(--sp-3); }
+  .mg-layers { width: 100%; }
+  .mg-layers .seg { flex: 1; }
+  .mg-search { flex: 1; width: auto; }
+  .mg-stats { margin-left: 0; }
+  .mg-toolbar-right { gap: var(--sp-2); }
+  .mg-detail {
+    position: relative;
+    inset: auto;
+    width: auto;
+    max-height: none;
+    margin: var(--sp-3);
+    box-shadow: var(--shadow-xs);
+  }
+  .mg-stage:has(.mg-detail) .mg-hint-chip { display: none; }
+  .mg-detail-head { flex-wrap: wrap; }
+}
+@media (hover: none), (pointer: coarse) {
+  .mg-toolbar :is(.btn, .seg, .mg-search),
+  .mg-legend-item, .mg-play { min-height: 44px; }
+  .mg-toolbar-right .btn { min-width: 44px; }
+  .mg-search { font-size: 16px; }
+  .mg-detail .icon-btn { width: 44px; height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

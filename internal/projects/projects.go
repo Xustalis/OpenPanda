@@ -490,10 +490,14 @@ func (s *Store) Rename(oldName, newName string) (Project, error) {
 		newName, activeKey, oldName); err != nil {
 		return Project{}, err
 	}
+	p, err := scanProject(tx.QueryRow(`SELECT `+projectColumns+` FROM projects WHERE name = ?`, newName))
+	if err != nil {
+		return Project{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return Project{}, err
 	}
-	return s.Get(newName)
+	return p, nil
 }
 
 // Delete removes a project's metadata and clears the active pointer when it named

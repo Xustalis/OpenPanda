@@ -309,3 +309,22 @@ func TestBuildAgentPromptBudgetAccommodatesLargeChineseIntent(t *testing.T) {
 		t.Fatalf("skill body content missing: %s", prompt)
 	}
 }
+
+func TestProjectTaskHistoryStaysOutsidePersonalDaily(t *testing.T) {
+	root := t.TempDir()
+	daily := memory.NewDaily(filepath.Join(root, "personal", "daily"))
+	projectsRoot := filepath.Join(root, "projects")
+	c := &Core{logger: testLogger(), daily: daily, projectsRoot: projectsRoot}
+	c.logProjectTask("deploy panda", true, "alpha")
+	if _, err := os.Stat(filepath.Join(root, "personal", "daily")); !os.IsNotExist(err) {
+		t.Fatal("project task touched personal daily")
+	}
+	files, err := filepath.Glob(filepath.Join(projectsRoot, "alpha", "daily", "*.md"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("project history: %v %v", files, err)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil || !strings.Contains(string(data), memory.ExternalMarker) || !strings.Contains(string(data), "deploy panda") {
+		t.Fatalf("task history: %s %v", data, err)
+	}
+}
