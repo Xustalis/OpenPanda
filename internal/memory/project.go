@@ -4,6 +4,7 @@ package memory
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -175,16 +176,18 @@ func (p *Projects) saveLocked(name, path string, m MemFile) error {
 	return nil
 }
 
-// Rename carries a project's memory over to a new name: copy, then drop the
-// old directory. It is copy-then-drop rather than a directory move so a failure
-// part-way leaves the old file intact — losing the memory is the one outcome
-// worth paying an extra write to avoid.
-//
-// The whole sequence holds the store's lock, because the alternative is a
-// read-write-delete triple with two windows in it: an entry added between the
-// read and the copy would be copied stale, and one added between the copy and
-// the drop would be erased by the drop.
+// Rename moves all project memory, including daily history and scoped skills.
+// Both names share a parent filesystem, so a single directory rename keeps the
+// source intact on failure and avoids copying only MEMORY.md before deleting
+// its sibling history. The store lock serializes memory writers.
 func (p *Projects) Rename(oldName, newName string) error {
+	return p.RenameWith(oldName, newName, nil)
+}
+
+// RenameWith carries project files and applies an associated metadata rename
+// while writers are locked out. If apply fails, the files move back. apply must
+// leave its own state unchanged on failure and must not call this memory store.
+func (p *Projects) RenameWith(oldName, newName string, apply func() error) error {
 	if err := ValidateName(oldName); err != nil {
 		return err
 	}
@@ -192,6 +195,9 @@ func (p *Projects) Rename(oldName, newName string) error {
 		return err
 	}
 	if oldName == newName {
+		if apply != nil {
+			return apply()
+		}
 		return nil
 	}
 	path, err := p.Path(newName)
@@ -205,25 +211,45 @@ func (p *Projects) Rename(oldName, newName string) error {
 	defer release()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	// Refuse an existing target: saveLocked would write over that project's
-	// memory and the RemoveAll below would erase the source, so a rename onto
-	// a name already in use loses both. The check is inside the lock so a
-	// concurrent create cannot slip between it and the write.
+	// Refuse an existing target, including an empty directory or a symlink.
 	newDir := filepath.Join(p.root, newName)
-	if _, statErr := os.Stat(newDir); statErr == nil {
+	if _, statErr := os.Lstat(newDir); statErr == nil {
 		return fmt.Errorf("memory: project %q already exists", newName)
 	} else if !os.IsNotExist(statErr) {
 		return fmt.Errorf("memory: check project %q: %w", newName, statErr)
 	}
-	m, err := p.Load(oldName)
+	oldDir := filepath.Join(p.root, oldName)
+	info, err := os.Lstat(oldDir)
+	if os.IsNotExist(err) {
+		// Preserve the historical behavior for projects without any memory.
+		if err := p.saveLocked(newName, path, MemFile{}); err != nil {
+			return err
+		}
+		if apply != nil {
+			if err := apply(); err != nil {
+				return errors.Join(err, os.Remove(path), os.Remove(newDir))
+			}
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if err := p.saveLocked(newName, path, m); err != nil {
-		return err
+	if !info.IsDir() {
+		return fmt.Errorf("memory: project %q is not a directory", oldName)
 	}
-	if err := os.RemoveAll(filepath.Join(p.root, oldName)); err != nil {
-		return fmt.Errorf("memory: remove project %q after rename: %w", oldName, err)
+	// Projects.Daily takes the same outer root lock, so no daily file handle
+	// is open during this rename (also required by Windows file sharing).
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return fmt.Errorf("memory: rename project %q: %w", oldName, err)
+	}
+	if apply != nil {
+		if err := apply(); err != nil {
+			if rollbackErr := os.Rename(newDir, oldDir); rollbackErr != nil {
+				return errors.Join(err, fmt.Errorf("memory: restore project %q: %w", oldName, rollbackErr))
+			}
+			return err
+		}
 	}
 	return nil
 }
@@ -254,4 +280,15 @@ func (p *Projects) Delete(name string) error {
 		return fmt.Errorf("memory: remove project %q: %w", name, err)
 	}
 	return nil
+}
+
+// Daily keeps operational project history outside the personal warm layer.
+func (p *Projects) Daily(name string) (*Daily, error) {
+	path, err := p.Path(name)
+	if err != nil {
+		return nil, err
+	}
+	daily := NewDaily(filepath.Join(filepath.Dir(path), "daily"))
+	daily.projectRoot = p.root
+	return daily, nil
 }

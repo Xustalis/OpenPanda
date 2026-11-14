@@ -510,15 +510,21 @@ func TestDailyReadErrorsAreNotEmptyMemory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "daily"), []byte("broken"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/api/memory", "/api/memory/graph"} {
+	for _, path := range []string{"/api/memory"} {
 		rr := httptest.NewRecorder()
 		req := authedReq(http.MethodGet, path, nil)
-		if path == "/api/memory/graph" {
-			req.Header.Set("If-None-Match", before.Header().Get("ETag"))
-		}
 		h.ServeHTTP(rr, req)
 		if rr.Code != http.StatusInternalServerError {
 			t.Errorf("%s status = %d, want read error, not empty memory", path, rr.Code)
 		}
+	}
+	// The graph depends only on long-term facts. A corrupt daily surface
+	// still fails the diary API, but does not invalidate the cached graph.
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodGet, "/api/memory/graph", nil)
+	req.Header.Set("If-None-Match", before.Header().Get("ETag"))
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotModified {
+		t.Fatalf("daily history affected long-term graph: %d", rr.Code)
 	}
 }

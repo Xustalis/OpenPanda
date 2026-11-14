@@ -16,7 +16,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // newNoteTUI builds a model whose repl owns a real board store and, unless
@@ -50,14 +50,7 @@ func newNoteTUI(t *testing.T, withEngine bool) (tuiModel, *core.TaskStore, strin
 		Model: config.ModelConfig{BaseURL: "http://127.0.0.1:9", Model: "test-model"},
 		UI:    config.UIConfig{Locale: "en"},
 	}
-	db, err := storage.Open(cfg.Storage.DBPath)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, cfg.Storage.DBPath)
 	st := core.NewTaskStore(db, nil)
 
 	r := &repl{loc: i18n.Locale("en"), cfg: cfg, store: st, interactive: true}

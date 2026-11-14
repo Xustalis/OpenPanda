@@ -9,7 +9,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // newApprovalTestEngine builds an engine with a real project store over
@@ -17,14 +17,7 @@ import (
 // no model: the gate is pure policy.
 func newApprovalTestEngine(t *testing.T, mode string) *Engine {
 	t.Helper()
-	db, err := storage.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(t.TempDir(), "t.db"))
 	return &Engine{
 		cfg:       &config.Config{Approval: config.ApprovalConfig{Mode: mode}},
 		projStore: projectstore.NewStore(db),

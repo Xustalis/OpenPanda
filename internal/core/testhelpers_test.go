@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // testLogger returns a silent logger for tests.
@@ -23,19 +23,10 @@ func verboseTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stdout, nil))
 }
 
-// openTestDB returns an in-memory SQLite DB with the Phase 0 schema applied.
-// The driver is registered via storage.Open.
-func openTestDB(t *testing.T) *sql.DB {
+// openTestDB returns a private database with the current migrated schema.
+func openTestDB(t testing.TB) *sql.DB {
 	t.Helper()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open test db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate test db: %v", err)
-	}
-	return db
+	return testdb.Open(t)
 }
 
 // waitLocalTasksSettled polls a core's store until no task sits in a

@@ -16,19 +16,13 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 func TestModelSyncAcrossIndependentRuntimes(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	db, err := storage.Open(filepath.Join(t.TempDir(), "runtime.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(t.TempDir(), "runtime.db"))
 	var daemon, sidecar config.ModelConfig
 	a := New(db, path, "daemon", func() config.ModelConfig { return daemon }, func(m config.ModelConfig) error { daemon = m; return nil })
 	b := New(db, path, "engine", func() config.ModelConfig { return sidecar }, func(m config.ModelConfig) error { sidecar = m; return nil })
@@ -89,14 +83,7 @@ func TestModelSyncAcrossIndependentRuntimes(t *testing.T) {
 func TestModelSyncRejectsInvalidAndFailedApply(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	db, err := storage.Open(filepath.Join(t.TempDir(), "runtime.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(t.TempDir(), "runtime.db"))
 	current := config.ModelConfig{Model: "last-good"}
 	reject := false
 	w := New(db, path, "daemon", func() config.ModelConfig { return current }, func(mc config.ModelConfig) error {
@@ -149,9 +136,6 @@ func TestModelSyncSubprocessHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
 	var current config.ModelConfig
 	w := New(db, path, "helper-daemon", func() config.ModelConfig { return current }, func(mc config.ModelConfig) error { current = mc; return nil })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -172,14 +156,7 @@ func TestModelSyncAcrossOSProcesses(t *testing.T) {
 	if err := os.WriteFile(path, []byte("node:\n  name: subprocess-sync\nmodel:\n  provider: deepseek\n  model: first\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	db, err := storage.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.OpenFile(t, dbPath)
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

@@ -85,6 +85,7 @@ func NewNode(db *sql.DB, id string, card ledger.Card, tier int, logger *slog.Log
 	if logger == nil {
 		logger = slog.Default()
 	}
+	card.Capacity.ArtifactMergeVersion = artifactMergeVersion
 	return &Node{
 		db:     db,
 		id:     id,
@@ -112,7 +113,10 @@ func (n *Node) Register(ctx context.Context) error {
 // SetCard swaps the card a reload just installed, so the next Register or
 // capacity snapshot reflects it. The daemon serializes reloads; this method is
 // only the node-local half of Core.ReloadCard.
-func (n *Node) SetCard(card ledger.Card) { n.card = card }
+func (n *Node) SetCard(card ledger.Card) {
+	card.Capacity.ArtifactMergeVersion = artifactMergeVersion
+	n.card = card
+}
 
 // RunHeartbeat starts a ticker that updates last_seen + capacity until ctx
 // is done. It is safe to call concurrently with other core loops.
@@ -191,7 +195,7 @@ func (n *Node) capacitySnapshot(ctx context.Context) (string, float64) {
 	capacity := n.card.Capacity
 	var active int
 	if err := n.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tasks WHERE state IN ('running','waiting_context')`).Scan(&active); err != nil {
+		`SELECT COUNT(*) FROM tasks WHERE owner_node=? AND state IN ('running','waiting_context') AND (children_wait_attempt='' OR children_wait_attempt != attempt_id)`, n.id).Scan(&active); err != nil {
 		n.logger.Warn("count active tasks for heartbeat", "err", err)
 	} else {
 		capacity.CurrentTasks = active

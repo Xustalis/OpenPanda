@@ -28,6 +28,8 @@ func TestProbeModelEndpoint(t *testing.T) {
 		BaseURL:  ok.URL,
 		Model:    "mock",
 		APIKey:   "test-key",
+		// Retry timing is covered in internal/entry; this tests probe results.
+		MaxRetries: -1,
 	}
 	reply, err := probeModelEndpoint(mc)
 	if err != nil {

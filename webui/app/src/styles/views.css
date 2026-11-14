@@ -12073,13 +12073,58 @@ main .pipeline-chip {
 }
 
 /* ---- Memory page: one bar, one strip, one drawing ------------------------ */
+.memory-context {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+  padding: var(--sp-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-chrome);
+}
+.memory-context-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+}
+.memory-context h2 {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.memory-context p {
+  margin: 0;
+  max-width: 78ch;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+}
+.memory-fact-category {
+  display: table;
+  margin-top: var(--sp-1);
+  padding: 1px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-chrome);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
 .memory-head {
   margin-bottom: var(--sp-5);
   padding-bottom: var(--sp-4);
 }
 .memory-head-icon {
-  width: 16px;
-  height: 16px;
+  width: 32px;
+  height: 32px;
   padding: 6px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
@@ -12099,7 +12144,43 @@ main .pipeline-chip {
   gap: 3px;
 }
 .memory-tabs .seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 6px 14px;
+  min-height: 36px;
+}
+.memory-tabs .seg svg { flex: none; }
+.memory-entry { padding-block: var(--sp-4); }
+.memory-card-head { padding-block: var(--sp-3); background: var(--bg-chrome); }
+.memory-entry-actions .icon-btn { width: 30px; height: 30px; }
+.memory-card .memory-counter { font-size: var(--text-xs); }
+.memory-page :is(button, input, textarea):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.memory-page [role="tabpanel"]:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 4px;
+}
+@media (max-width: 640px) {
+  .memory-head { flex-wrap: wrap; gap: var(--sp-2); padding-bottom: 0; }
+  .memory-head-meta { flex-basis: calc(100% - 48px); order: 3; white-space: normal; line-height: 1.6; }
+  .memory-clock { display: none; }
+  .memory-tabs .seg { min-height: 44px; }
+  .memory-context { padding: var(--sp-3); }
+  .memory-entry { padding: var(--sp-3); gap: var(--sp-2); }
+}
+@media (hover: none), (pointer: coarse) {
+  .memory-entry-actions, .memory-file-del { opacity: 1; pointer-events: auto; }
+  .memory-entry-actions .icon-btn { width: 44px; height: 44px; }
+  .memory-file-del { min-width: 44px; min-height: 44px; }
+  .memory-page :is(.input, .btn, .memory-file-item) { min-height: 44px; }
+  .memory-page :is(input, textarea) { font-size: max(16px, 1em); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .memory-entry.fresh { animation: none; }
 }
 
 /* Narrow sheets: keep the per-item menus inside the viewport. */

@@ -13,7 +13,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/projects"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // projectCore builds a Core with the project plane attached: a projects table, a
@@ -21,14 +21,7 @@ import (
 func projectCore(t *testing.T) (*Core, *projects.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := storage.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(dir, "test.db"))
 	c := &Core{db: db, nodeID: "node-a", logger: testLogger()}
 	c.store = NewTaskStore(db, testLogger())
 	c.workDir = filepath.Join(dir, "work")

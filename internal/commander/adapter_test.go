@@ -823,7 +823,7 @@ print(json.dumps({"ok": True, "result": "done", "exit_code": 0}))
 `
 
 // TestAdapterKillPathsKeepAnnouncedSession: a run killed before its result
-// envelope — silence watchdog here — must still report the session the
+// envelope — startup watchdog here — must still report the session the
 // adapter announced mid-stream. Without the latch the checkpoint was dropped
 // and the orchestrator's retry cold-started, re-burning the whole run.
 func TestAdapterKillPathsKeepAnnouncedSession(t *testing.T) {
@@ -837,10 +837,17 @@ func TestAdapterKillPathsKeepAnnouncedSession(t *testing.T) {
 	oldSilence := silenceTimeout
 	silenceTimeout = 200 * time.Millisecond
 	defer func() { silenceTimeout = oldSilence }()
+	// A session announcement is liveness, not model output. The startup grace
+	// still applies; leaving its production value here made this test wait 180s.
+	oldGrace := adapterStartupGrace
+	adapterStartupGrace = 600 * time.Millisecond
+	defer func() { adapterStartupGrace = oldGrace }()
 
-	res := runAdapterProcess(context.Background(), "ann.py", "p", "", nil)
-	if res.OK || res.ExitCode != 124 {
-		t.Fatalf("killed run = %+v, want failed 124", res)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res := runAdapterProcess(ctx, "ann.py", "p", "", nil)
+	if res.OK || res.ExitCode != 124 || !strings.Contains(res.Result, "startup grace") {
+		t.Fatalf("killed run = %+v, want startup watchdog failure 124", res)
 	}
 	if res.SessionID != "ses_ann123" {
 		t.Fatalf("session = %q, want the announced ses_ann123", res.SessionID)

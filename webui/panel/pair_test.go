@@ -22,7 +22,7 @@ import (
 // a ready pair_sessions row surfaces as an inbound request, and a
 // pending_nodes row surfaces as a discovered device.
 func TestPairListSeedsRequestsAndDiscovered(t *testing.T) {
-	db := newMigratedDB(t)
+	db := newTestDB(t)
 	h := New(Deps{Store: newTestStore(t), DB: db, Cfg: config.Default(), StaticDir: t.TempDir(), Token: testToken})
 
 	now := time.Now().Unix()
@@ -70,7 +70,7 @@ func TestPairListSeedsRequestsAndDiscovered(t *testing.T) {
 // the row out of ready so the daemon's session goroutine can pick it up;
 // reject lands terminal.
 func TestPairAnswerFlipsSession(t *testing.T) {
-	db := newMigratedDB(t)
+	db := newTestDB(t)
 	h := New(Deps{Store: newTestStore(t), DB: db, Cfg: config.Default(), StaticDir: t.TempDir(), Token: testToken})
 
 	now := time.Now().Unix()
@@ -115,7 +115,7 @@ func TestPairInitiateEndToEnd(t *testing.T) {
 	defer cancel()
 
 	// The responder daemon: a real core listening on loopback.
-	respDB := newMigratedDB(t)
+	respDB := newTestDB(t)
 	resp := core.NewCore(respDB, "resp-node", ledger.Card{Device: "resp-node"}, 5,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), config.ModelConfig{})
 	resp.SetSharedSecret("mesh-secret-xyz")
@@ -138,7 +138,7 @@ func TestPairInitiateEndToEnd(t *testing.T) {
 	if err := os.WriteFile(cfgPath, cfgYAML, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	panelDB := newMigratedDB(t)
+	panelDB := newTestDB(t)
 	h := New(Deps{
 		Store: newTestStore(t), DB: panelDB, Cfg: cfg,
 		ConfigPath: cfgPath, StaticDir: t.TempDir(), Token: testToken,

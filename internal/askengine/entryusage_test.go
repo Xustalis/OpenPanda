@@ -17,7 +17,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/providers"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // TestAskRecordsEntryUsage verifies the ask engine bills the entry (commander)
@@ -42,14 +42,7 @@ func TestAskRecordsEntryUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.SetPricing(providers.Pricing{InputPerMillion: 10.0, OutputPerMillion: 20.0})
-	db, err := storage.Open(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(root, "test.db"))
 
 	hermes := memory.NewHermes(root)
 	e := &Engine{

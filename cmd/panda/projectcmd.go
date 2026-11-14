@@ -502,19 +502,14 @@ func runProjectRename(args []string) {
 	store, mem, tasks, closeDB := projectStores(*configPath)
 	defer closeDB()
 
-	pr, err := store.Rename(oldName, newName)
+	var pr projects.Project
+	err := mem.RenameWith(oldName, newName, func() error {
+		var err error
+		pr, err = store.Rename(oldName, newName)
+		return err
+	})
 	if err != nil {
 		fatal("rename project", err)
-	}
-	// The memory file carries the name too. Copy-then-drop rather than move, so a
-	// failure leaves the old file intact instead of losing the memory entirely.
-	if m, lerr := mem.Load(oldName); lerr == nil {
-		if serr := mem.Save(newName, m); serr != nil {
-			fatal("move project memory", serr)
-		}
-		if derr := mem.Delete(oldName); derr != nil {
-			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.project.memoryLeft", "name", oldName))
-		}
 	}
 	renamed, rerr := tasks.RenameProject(context.Background(), oldName, newName)
 	if rerr != nil {

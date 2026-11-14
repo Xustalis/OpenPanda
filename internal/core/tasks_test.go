@@ -16,6 +16,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 func newTestStore(t *testing.T) *TaskStore {
@@ -431,22 +432,12 @@ func TestCancelCascadeSkipsTerminalRoot(t *testing.T) {
 func TestCancelRetriesAfterConcurrentAccept(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "cancel.db")
-	db1, err := storage.Open(path)
-	if err != nil {
-		t.Fatalf("open db1: %v", err)
-	}
-	defer db1.Close()
-	if err := storage.Migrate(db1); err != nil {
-		t.Fatalf("migrate db1: %v", err)
-	}
+	db1 := testdb.OpenFile(t, path)
 	db2, err := storage.Open(path)
 	if err != nil {
 		t.Fatalf("open db2: %v", err)
 	}
 	defer db2.Close()
-	if err := storage.Migrate(db2); err != nil {
-		t.Fatalf("migrate db2: %v", err)
-	}
 
 	canceller := NewTaskStore(db1, testLogger()) // the node cancelling
 	executor := NewTaskStore(db2, testLogger())  // the node accepting
@@ -496,22 +487,12 @@ func TestCancelRetriesAfterConcurrentAccept(t *testing.T) {
 func TestCancelIdempotentWhenConcurrentlyClosed(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "closed.db")
-	db1, err := storage.Open(path)
-	if err != nil {
-		t.Fatalf("open db1: %v", err)
-	}
-	defer db1.Close()
-	if err := storage.Migrate(db1); err != nil {
-		t.Fatalf("migrate db1: %v", err)
-	}
+	db1 := testdb.OpenFile(t, path)
 	db2, err := storage.Open(path)
 	if err != nil {
 		t.Fatalf("open db2: %v", err)
 	}
 	defer db2.Close()
-	if err := storage.Migrate(db2); err != nil {
-		t.Fatalf("migrate db2: %v", err)
-	}
 
 	canceller := NewTaskStore(db1, testLogger())
 	executor := NewTaskStore(db2, testLogger())

@@ -15,7 +15,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -479,14 +479,7 @@ func TestTUIAuthorizeAndTasksClearGuards(t *testing.T) {
 	}
 
 	// With a task on the board, /tasks clear raises the confirm card.
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	st := core.NewTaskStore(db, nil)
 	if _, err := st.Create(context.Background(), "", "", "wipe me", "node-a", nil); err != nil {
 		t.Fatalf("create: %v", err)
@@ -721,14 +714,7 @@ func TestEverySlashCommandResponds(t *testing.T) {
 // drawn frame, not every 2s snapshot concatenated.
 func TestTasksWatchRoutesToBoard(t *testing.T) {
 	m := newIsolatedTUI(t)
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	st := core.NewTaskStore(db, nil)
 	if _, err := st.Create(context.Background(), "", "", "watchable task", "node-a", nil); err != nil {
 		t.Fatalf("create: %v", err)

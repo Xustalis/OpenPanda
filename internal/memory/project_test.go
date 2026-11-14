@@ -4,10 +4,12 @@ package memory
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateName(t *testing.T) {
@@ -43,9 +45,7 @@ func TestProjectsSaveLoad(t *testing.T) {
 	}
 }
 
-// TestProjectsRenameRefusesExistingTarget pins the guard: the copy-then-drop
-// sequence would otherwise overwrite the target project's memory and then
-// delete the source's, losing both in one call.
+// TestProjectsRenameRefusesExistingTarget pins the destination guard.
 func TestProjectsRenameRefusesExistingTarget(t *testing.T) {
 	p := NewProjects(t.TempDir())
 	if err := p.Save("old", MemFile{Entries: []string{"old entry"}}); err != nil {
@@ -126,10 +126,8 @@ func TestProjectsSaveEnforcesCap(t *testing.T) {
 	}
 }
 
-// TestProjectsRenameCarriesMemory pins the copy-then-drop contract: the new
-// name has the entries, the old directory is gone, and a failed copy leaves the
-// old one in place (the failure case is covered by the containment check
-// below — an invalid new name must not touch the source).
+// TestProjectsRenameCarriesMemory pins the directory move contract: the new
+// name has the entries, and an invalid new name must not touch the source.
 func TestProjectsRenameCarriesMemory(t *testing.T) {
 	p := NewProjects(t.TempDir())
 	if err := p.Save("old", MemFile{Entries: []string{"one", "two"}}); err != nil {
@@ -181,5 +179,95 @@ func TestProjectsRenameSameNameIsNoop(t *testing.T) {
 	}
 	if len(got.Entries) != 1 || got.Entries[0] != "entry-1" {
 		t.Fatalf("entries lost by same-name rename: %v", got.Entries)
+	}
+}
+
+func TestProjectsRenameWithRollsBackOnMetadataFailure(t *testing.T) {
+	for _, withMemory := range []bool{false, true} {
+		t.Run(fmt.Sprint(withMemory), func(t *testing.T) {
+			p := NewProjects(t.TempDir())
+			if withMemory {
+				if err := p.Save("old", MemFile{Entries: []string{"project uses Go"}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := errors.New("metadata rejected rename")
+			if err := p.RenameWith("old", "new", func() error { return want }); !errors.Is(err, want) {
+				t.Fatalf("rename = %v, want %v", err, want)
+			}
+			if _, err := os.Stat(filepath.Join(p.root, "new")); !os.IsNotExist(err) {
+				t.Fatalf("failed rename left destination: %v", err)
+			}
+			m, err := p.Load("old")
+			if err != nil || (withMemory && len(m.Entries) != 1) || (!withMemory && len(m.Entries) != 0) {
+				t.Fatalf("source changed: %v, %v", m.Entries, err)
+			}
+		})
+	}
+}
+
+func TestProjectsRenamePreservesDailyHistoryAndSkills(t *testing.T) {
+	p := NewProjects(t.TempDir())
+	daily, err := p.Daily("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	if err := daily.AppendExternal(at, "project history"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Save("old", MemFile{Entries: []string{"project uses Go"}}); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(p.root, "old", "skills", "build")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("build guide"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Rename("old", "new"); err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := p.Daily("new")
+	data, err := os.ReadFile(moved.PathFor(at))
+	if err != nil || !strings.Contains(string(data), "[ext] project history") {
+		t.Fatalf("daily history lost: %s %v", data, err)
+	}
+	data, err = os.ReadFile(filepath.Join(p.root, "new", "skills", "build", "SKILL.md"))
+	if err != nil || string(data) != "build guide" {
+		t.Fatalf("skill lost: %s %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(p.root, "old")); !os.IsNotExist(err) {
+		t.Fatalf("old directory remains: %v", err)
+	}
+}
+
+func TestProjectDailyUsesProjectMutationLock(t *testing.T) {
+	p := NewProjects(t.TempDir())
+	daily, err := p.Daily("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := lockRoot(p.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	done := make(chan error, 1)
+	go func() { done <- daily.AppendExternal(time.Now(), "task history") }()
+	select {
+	case err := <-done:
+		t.Fatalf("daily write bypassed project mutation lock: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("daily write did not resume after project mutation")
 	}
 }

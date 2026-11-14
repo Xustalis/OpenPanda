@@ -372,3 +372,205 @@ func (h *Hermes) WarmDir() string { return filepath.Join(h.root, "daily") }
 // ColdDir is the .dreams/ directory holding Dreaming engine state (OpenClaw's
 // machine-state location, Sprint 3.2).
 func (h *Hermes) ColdDir() string { return filepath.Join(h.root, ".dreams") }
+
+// Remember reconciles one personal attribute across the core and topic files.
+// The root lock covers discovery, validation and persistence. The destination
+// is written first, so an interrupted cleanup retains the new assertion; the
+// graph gives core profile facts precedence over any remaining legacy copy.
+// On an ordinary I/O failure, already-written files are restored from snapshots.
+func (h *Hermes) Remember(fact Fact, target, old string) error {
+	if target != targetUser && target != targetMemory {
+		return ErrNotDurable
+	}
+	checked, err := ClassifyFact(fact.Entry(), "", "")
+	if err != nil || checked.Target() == targetProject {
+		return ErrNotDurable
+	}
+	fact = checked
+	destination := 1
+	if fact.Target() == targetUser {
+		destination = 0
+	}
+	return h.updatePersonalFiles(destination, func(files []personalFile) error {
+		// Replacement is still an exact unique substring operation against the
+		// requested layer. Metadata is never part of the searchable assertion.
+		var replaced string
+		replacedID := ""
+		if old != "" {
+			source := 1
+			if target == targetUser {
+				source = 0
+			}
+			idx, found := matchAssertion(files[source].mem, old)
+			if !found {
+				return fmt.Errorf("memory: %q matches no unique entry", old)
+			}
+			replaced = files[source].mem.Entries[idx]
+			if prior, err := ClassifyFact(replaced, "", ""); err == nil {
+				replacedID = prior.ID()
+			}
+		}
+		for i := range files {
+			var keep []string
+			for _, entry := range files[i].mem.Entries {
+				prior, e := ClassifyFact(entry, "", "")
+				if (e == nil && (prior.ID() == fact.ID() || prior.ID() == replacedID)) || (old != "" && entry == replaced && ((target == targetUser && i == 0) || (target == targetMemory && i == 1))) {
+					continue
+				}
+				keep = append(keep, entry)
+			}
+			files[i].mem.Entries = keep
+		}
+		if err := files[destination].mem.Add(fact.Entry()); err != nil {
+			return err
+		}
+		// Stable order: preserve the original position for a fact in its target.
+		before := files[destination].before
+		for idx, entry := range before.Entries {
+			prior, e := ClassifyFact(entry, "", "")
+			if e == nil && prior.ID() == fact.ID() {
+				entries := files[destination].mem.Entries
+				value := entries[len(entries)-1]
+				entries = entries[:len(entries)-1]
+				idx = min(idx, len(entries))
+				entries = append(entries, "")
+				copy(entries[idx+1:], entries[idx:])
+				entries[idx] = value
+				files[destination].mem.Entries = entries
+				break
+			}
+		}
+		return nil
+	})
+}
+
+type personalFile struct {
+	path       string
+	mem        MemFile
+	before     MemFile
+	beforeData []byte
+	existed    bool
+}
+
+// updatePersonalFiles reconciles all personal surfaces under one root lock.
+// Validation completes before any write; ordinary write failures roll back
+// already committed files before returning an error to the caller.
+func (h *Hermes) updatePersonalFiles(preferred int, fn func([]personalFile) error) error {
+	release, err := lockRoot(h.root)
+	if err != nil {
+		return err
+	}
+	defer release()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	files := []personalFile{{path: UserPath(h.root)}, {path: MemoryPath(h.root)}}
+	names, err := h.ListTopics()
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		path, _ := h.TopicPath(name)
+		files = append(files, personalFile{path: path})
+	}
+	for i := range files {
+		limit := h.limits.memory()
+		if i == 0 {
+			limit = h.limits.user()
+		}
+		data, readErr := os.ReadFile(files[i].path)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return fmt.Errorf("memory: read %s: %w", filepath.Base(files[i].path), readErr)
+		}
+		files[i].beforeData = data
+		files[i].existed = readErr == nil
+		files[i].mem = ParseMem(data)
+		files[i].mem.Limit = limit
+		files[i].before = MemFile{Entries: append([]string(nil), files[i].mem.Entries...), Limit: limit}
+	}
+	if err := fn(files); err != nil {
+		return err
+	}
+	for _, f := range files {
+		if bytes.Equal(f.mem.Bytes(), f.before.Bytes()) {
+			continue
+		}
+		if f.mem.Limit > 0 && f.mem.Chars() > f.mem.Limit {
+			return ErrOverLimit
+		}
+		for _, entry := range f.mem.Entries {
+			if strings.ContainsRune(entry, '§') {
+				return ErrSeparator
+			}
+		}
+	}
+	order := []int{preferred}
+	for i := range files {
+		if i != preferred {
+			order = append(order, i)
+		}
+	}
+	var written []int
+	for _, i := range order {
+		f := files[i]
+		if bytes.Equal(f.mem.Bytes(), f.before.Bytes()) {
+			continue
+		}
+		if err := h.saveLocked(f.path, f.mem, f.mem.Limit); err != nil {
+			failures := []error{err}
+			for j := len(written) - 1; j >= 0; j-- {
+				previous := files[written[j]]
+				// Restore exact bytes even when an existing legacy file exceeds
+				// today's cap. A rollback must not itself apply admission limits.
+				var restoreErr error
+				if previous.existed {
+					restoreErr = util.WriteFileAtomic(previous.path, previous.beforeData, 0o600)
+				} else {
+					restoreErr = os.Remove(previous.path)
+					if os.IsNotExist(restoreErr) {
+						restoreErr = nil
+					}
+				}
+				if restoreErr != nil {
+					failures = append(failures, fmt.Errorf("memory: restore %s: %w", filepath.Base(previous.path), restoreErr))
+				}
+			}
+			return errors.Join(failures...)
+		}
+		written = append(written, i)
+	}
+	return nil
+}
+
+// Forget removes a uniquely selected assertion and its classified duplicates.
+// Legacy prose without an attribute identity is removed only from its source.
+func (h *Hermes) Forget(target, old string) error {
+	source := 1
+	if target == targetUser {
+		source = 0
+	} else if target != targetMemory {
+		return ErrNotDurable
+	}
+	return h.updatePersonalFiles(source, func(files []personalFile) error {
+		idx, ok := matchAssertion(files[source].mem, old)
+		if !ok {
+			return fmt.Errorf("memory: %q matches no unique entry", old)
+		}
+		selected := files[source].mem.Entries[idx]
+		fact, err := ClassifyFact(selected, "", "")
+		for i := range files {
+			var keep []string
+			for j, entry := range files[i].mem.Entries {
+				duplicate := false
+				if candidate, e := ClassifyFact(entry, "", ""); e == nil && err == nil {
+					duplicate = candidate.ID() == fact.ID()
+				}
+				if (i == source && j == idx) || duplicate {
+					continue
+				}
+				keep = append(keep, entry)
+			}
+			files[i].mem.Entries = keep
+		}
+		return nil
+	})
+}

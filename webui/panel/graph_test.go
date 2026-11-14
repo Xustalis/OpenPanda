@@ -73,105 +73,6 @@ func TestMemoryGraphEmptyMemory(t *testing.T) {
 	}
 }
 
-// Promotion tags and literal name mentions must become edges — the two
-// honest edge kinds the view promises.
-func TestMemoryGraphEdges(t *testing.T) {
-	_, cfg := newMemoryPanel(t)
-	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memory.Limits{})
-	if err := hermes.SaveUser(memory.MemFile{Entries: []string{"private profile"}}); err != nil {
-		t.Fatal(err)
-	}
-
-	// MEMORY.md carries dreamer-promoted entries; one names a topic twice and
-	// one points back at USER.md (a core-file mention is a reference edge too).
-	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{
-		"team ships fridays " + memory.PromotionSourceTag,
-		"deploys moved " + memory.PromotionSourceTag,
-		"see work and the work calendar",
-		"profile fields live in USER.md",
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := hermes.SaveTopic("work", memory.MemFile{Entries: []string{"friday deploys"}}); err != nil {
-		t.Fatal(err)
-	}
-	// A daily file gives the diary node real mass.
-	dailyDir := hermes.WarmDir()
-	if err := os.MkdirAll(dailyDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dailyDir, "2026-01-02.md"), []byte("# diary\nshipped a thing"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := memory.NewDreamDiary(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md")).Append(memory.Report{Promoted: []string{
-		"team ships fridays " + memory.PromotionSourceTag,
-		"deploys moved " + memory.PromotionSourceTag,
-	}}, time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatal(err)
-	}
-	// A pending skill renders dimmed; status must round-trip. Rebuild the
-	// panel with a skill store wired in.
-	skillStore := skills.NewStore(t.TempDir())
-	if err := skillStore.Save(&skills.Skill{Name: "deploy-check", Description: "verify deploys", Status: skills.StatusPending, Body: "x"}); err != nil {
-		t.Fatal(err)
-	}
-	// A skill whose description names a topic earns a skill→topic reference.
-	if err := skillStore.Save(&skills.Skill{Name: "work-report", Description: "summarize the work log", Status: skills.StatusActive, Body: "x"}); err != nil {
-		t.Fatal(err)
-	}
-	h := New(Deps{
-		Store:      newTestStore(t),
-		Projects:   memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memory.Limits{}),
-		Cfg:        cfg,
-		SkillStore: skillStore,
-		StaticDir:  t.TempDir(),
-		Token:      testToken,
-	})
-
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/memory/graph", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
-	}
-	var out map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
-		t.Fatal(err)
-	}
-	ids := graphNodeIDs(t, out)
-	for _, want := range []string{"topic:work", "skill:deploy-check", "daily"} {
-		if !ids[want] {
-			t.Errorf("missing node %s", want)
-		}
-	}
-	// Only entries present in both the dream receipt and long-term memory count.
-	if w := graphEdgeWeight(out, "core:dreams", "core:memory", "promotion"); w != 2 {
-		t.Errorf("promotion weight = %d, want 2: %v", w, out["edges"])
-	}
-	// MEMORY.md naming "work" twice is a reference edge with weight 2.
-	if w := graphEdgeWeight(out, "core:memory", "topic:work", "reference"); w != 2 {
-		t.Errorf("reference weight = %d, want 2: %v", w, out["edges"])
-	}
-	// A surface naming a core file is an honest reference edge.
-	if !graphHasEdge(out, "core:memory", "core:user", "reference") {
-		t.Errorf("reference edge core:memory→core:user missing: %v", out["edges"])
-	}
-	// A skill's description naming a topic links skill→topic.
-	if !graphHasEdge(out, "skill:work-report", "topic:work", "reference") {
-		t.Errorf("reference edge skill:work-report→topic:work missing: %v", out["edges"])
-	}
-}
-
-func TestDreamPromotionCountRejectsUnverifiedTags(t *testing.T) {
-	if got := dreamPromotionCount("", "manually tagged "+memory.PromotionSourceTag); got != 0 {
-		t.Fatalf("forged marker count = %d", got)
-	}
-	if got := dreamPromotionCount("## 2026-01-03\n- Promoted to long-term memory / 提升到长期记忆：\n  - trusted fact\n", "trusted fact"); got != 1 {
-		t.Fatalf("trusted promotion count = %d", got)
-	}
-}
-
-// graphNode returns the node map with the given id, failing the test when the
-// node is missing.
 func graphNode(t *testing.T, out map[string]any, id string) map[string]any {
 	t.Helper()
 	raw, _ := out["nodes"].([]any)
@@ -184,367 +85,277 @@ func graphNode(t *testing.T, out map[string]any, id string) map[string]any {
 	return nil
 }
 
-// The knowledge layer: recurring terms become entity nodes with dated
-// evidence, tied to the surfaces containing them by mention edges and to each
-// other by co-occurrence edges. Names already carrying a node stay out.
-func TestMemoryGraphEntities(t *testing.T) {
-	_, cfg := newMemoryPanel(t)
-	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memory.Limits{})
-	if err := hermes.SaveTopic("work", memory.MemFile{Entries: []string{"friday deploys"}}); err != nil {
-		t.Fatal(err)
-	}
-	dailyDir := hermes.WarmDir()
-	if err := os.MkdirAll(dailyDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	day := func(name, content string) {
-		if err := os.WriteFile(filepath.Join(dailyDir, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	day("2026-01-02.md", "巡护链路 只读排查\n巡护链路 只读排查\n巡护链路 只读排查\n")
-	day("2026-01-03.md", "巡护链路 只读排查\ndog dog\n")
-	h := New(Deps{
-		Store:     newTestStore(t),
-		Projects:  memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memory.Limits{}),
-		Cfg:       cfg,
-		StaticDir: t.TempDir(),
-		Token:     testToken,
-	})
-
-	// The full term cloud is opt-in; this case exercises the co-occurrence
-	// and cap logic that the default view deliberately leaves out.
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/memory/graph?co=1&entities=60", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
-	}
-	var out map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
-		t.Fatal(err)
-	}
-	ids := graphNodeIDs(t, out)
-	for _, want := range []string{"entity:巡护链路", "entity:只读排查", "entity:dog"} {
-		if !ids[want] {
-			t.Errorf("missing entity node %s", want)
-		}
-	}
-	if ids["entity:work"] {
-		t.Errorf("a topic name must not duplicate into the knowledge layer")
-	}
-	n := graphNode(t, out, "entity:巡护链路")
-	if n["layer"] != "entity" || n["kind"] != "entity" {
-		t.Errorf("entity layer/kind = %v/%v, want entity/entity", n["layer"], n["kind"])
-	}
-	if w, _ := n["weight"].(float64); int(w) != 4 {
-		t.Errorf("entity weight = %v, want 4", n["weight"])
-	}
-	if n["first_seen"] != "2026-01-02" || n["last_seen"] != "2026-01-03" {
-		t.Errorf("entity dates = %v..%v, want 2026-01-02..2026-01-03", n["first_seen"], n["last_seen"])
-	}
-	// Mention: the diary contains the phrase four times across two days.
-	if w := graphEdgeWeight(out, "daily", "entity:巡护链路", "mention"); w != 4 {
-		t.Errorf("mention weight = %d, want 4", w)
-	}
-	// Co-occurrence: the two phrases share all four lines.
-	if w := graphEdgeWeight(out, "entity:只读排查", "entity:巡护链路", "co"); w != 4 {
-		t.Errorf("co weight = %d, want 4", w)
-	}
-	// The diary node carries the filename dates, not the file mtime.
-	d := graphNode(t, out, "daily")
-	if d["first_seen"] != "2026-01-02" || d["last_seen"] != "2026-01-03" {
-		t.Errorf("daily dates = %v..%v, want 2026-01-02..2026-01-03", d["first_seen"], d["last_seen"])
-	}
-	// Surfaces carry the provenance layer flag.
-	if m := graphNode(t, out, "topic:work"); m["layer"] != "file" {
-		t.Errorf("topic node layer = %v, want file", m["layer"])
-	}
-}
-
-// The default graph is the readable one: no statistical co-occurrence
-// chords, and a conditional request short-circuits before the n-gram scan.
-func TestMemoryGraphDefaultViewAndETag(t *testing.T) {
-	_, cfg := newMemoryPanel(t)
-	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memory.Limits{})
-	dailyDir := hermes.WarmDir()
-	if err := os.MkdirAll(dailyDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range map[string]string{
-		"2026-01-02.md": "巡护链路 只读排查\n巡护链路 只读排查\n巡护链路 只读排查\n",
-		"2026-01-03.md": "巡护链路 只读排查\ndog dog\n",
-	} {
-		if err := os.WriteFile(filepath.Join(dailyDir, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h := New(Deps{
-		Store:     newTestStore(t),
-		Projects:  memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memory.Limits{}),
-		Cfg:       cfg,
-		StaticDir: t.TempDir(),
-		Token:     testToken,
-	})
-
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/memory/graph", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
-	}
-	etag := rr.Header().Get("ETag")
-	if etag == "" {
-		t.Fatal("graph response has no ETag")
-	}
-	if rr.Header().Get("Cache-Control") != "no-cache" {
-		t.Errorf("Cache-Control = %q, want no-cache", rr.Header().Get("Cache-Control"))
-	}
-	var out map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
-		t.Fatal(err)
-	}
-	if w := graphEdgeWeight(out, "entity:只读排查", "entity:巡护链路", "co"); w != 0 {
-		t.Errorf("default view must omit co edges, got weight %d", w)
-	}
-
-	req := authedReq(http.MethodGet, "/api/memory/graph", nil)
-	req.Header.Set("If-None-Match", etag)
-	rr304 := httptest.NewRecorder()
-	h.ServeHTTP(rr304, req)
-	if rr304.Code != http.StatusNotModified {
-		t.Errorf("conditional request status = %d, want 304", rr304.Code)
-	}
-	if rr304.Body.Len() != 0 {
-		t.Errorf("304 carried %d bytes of body", rr304.Body.Len())
-	}
-
-	// A new source file changes the fingerprint, and so do the query options.
-	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "EXTRA.md"), []byte("§ new fact\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	rrChanged := httptest.NewRecorder()
-	h.ServeHTTP(rrChanged, authedReq(http.MethodGet, "/api/memory/graph", nil))
-	if rrChanged.Header().Get("ETag") == etag {
-		t.Error("ETag did not change after a memory file was added")
-	}
-	rrOpts := httptest.NewRecorder()
-	h.ServeHTTP(rrOpts, authedReq(http.MethodGet, "/api/memory/graph?co=1", nil))
-	if rrOpts.Header().Get("ETag") == etag {
-		t.Error("ETag did not change for a different query")
-	}
-}
-
-// The dream diary is dated by its own section headers, not the file mtime.
-func TestMemoryGraphDreamDates(t *testing.T) {
-	_, cfg := newMemoryPanel(t)
-	content := "## 2026-01-01\n- scanned 1\n## 2026-01-04\n- promoted 2\n"
-	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	h := New(Deps{
-		Store:     newTestStore(t),
-		Projects:  memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memory.Limits{}),
-		Cfg:       cfg,
-		StaticDir: t.TempDir(),
-		Token:     testToken,
-	})
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/memory/graph", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
-	}
-	var out map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
-		t.Fatal(err)
-	}
-	n := graphNode(t, out, "core:dreams")
-	if n["first_seen"] != "2026-01-01" || n["last_seen"] != "2026-01-04" {
-		t.Errorf("dream dates = %v..%v, want 2026-01-01..2026-01-04", n["first_seen"], n["last_seen"])
-	}
-}
-
-// The response must be byte-identical across requests — edges dedup through a
-// map, so any ordering leak would surface as flaky diffs in the UI and tests.
-func TestMemoryGraphDeterministic(t *testing.T) {
-	h, cfg := newMemoryPanel(t)
-	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memory.Limits{})
-	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{
-		"alpha " + memory.PromotionSourceTag,
-		"mentions beta-topic",
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := hermes.SaveTopic("beta-topic", memory.MemFile{Entries: []string{"x"}}); err != nil {
-		t.Fatal(err)
-	}
-	// Entity-rich diary text exercises the knowledge layer's maps (terms,
-	// mentions, co-occurrence) under the same byte-identity check.
-	dailyDir := hermes.WarmDir()
-	if err := os.MkdirAll(dailyDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dailyDir, "2026-01-02.md"), []byte("巡检链路 部署巡检\n巡检链路 部署巡检\ndog dog\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var first []byte
-	for i := 0; i < 5; i++ {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, authedReq(http.MethodGet, "/api/memory/graph", nil))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-		if first == nil {
-			first = append([]byte(nil), rec.Body.Bytes()...)
-			continue
-		}
-		if !bytes.Equal(first, rec.Body.Bytes()) {
-			t.Fatalf("request %d returned different bytes:\n%s\n%s", i, first, rec.Body.Bytes())
-		}
-	}
-}
-
-// mentionsName is the mention scanner: word-boundary-aware for ASCII so
-// "go" in "golang" does not link; plain substring for CJK.
-func TestMentionsName(t *testing.T) {
-	cases := []struct {
-		content, name string
-		want          bool
-	}{
-		{"the work calendar", "work", true},
-		{"see golang docs", "go", false},
-		{"uses go.", "go", true},
-		{"go is great", "go", true},
-		{"the deploy-check runs", "deploy-check", true},
-		{"deploy-checks daily", "deploy-check", false},
-		{"提到工作主题", "工作", true},
-	}
-	for _, c := range cases {
-		if got := mentionsName(c.content, c.name); got != c.want {
-			t.Errorf("mentionsName(%q, %q) = %v, want %v", c.content, c.name, got, c.want)
-		}
-	}
-	if mentionable("ab") || !mentionable("abc") {
-		t.Error("mentionable: names under 3 runes must be skipped")
-	}
-}
-
-func TestMemoryGraphPromotionSurvivesDiaryPreviewAndDailyPrune(t *testing.T) {
+func TestMemoryGraphOnlyRetainedDurableFacts(t *testing.T) {
 	_, cfg := newMemoryPanel(t)
 	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
-	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{"retained fact"}}); err != nil {
+	if err := hermes.SaveUser(memory.MemFile{Entries: []string{"姓名：张三", "用户偏好中文回答", "今天想喝奶茶", "hello"}}); err != nil {
 		t.Fatal(err)
 	}
-	content := "## 2026-01-01\n" + strings.Repeat("- routine note\n", 6000) +
-		"## 2026-02-02\n- Promoted to long-term memory / 提升到长期记忆：\n  - retained fact\n"
-	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"), []byte(content), 0o600); err != nil {
+	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{"Server is Ubuntu 24.04", "task completed successfully"}}); err != nil {
 		t.Fatal(err)
 	}
-	h := New(Deps{Store: newTestStore(t), Cfg: cfg, StaticDir: t.TempDir(), Token: testToken})
-	_, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
-	if w := graphEdgeWeight(out, "core:dreams", "core:memory", "promotion"); w != 1 {
-		t.Errorf("promotion after daily prune and 64 KiB: %d, want 1", w)
+	if err := memory.NewDaily(hermes.WarmDir()).Append(time.Now(), "QuantumNoise QuantumNoise QuantumNoise"); err != nil {
+		t.Fatal(err)
 	}
-	n := graphNode(t, out, "core:dreams")
-	if n["first_seen"] != "2026-01-01" || n["last_seen"] != "2026-02-02" {
-		t.Errorf("full diary dates: %v", n)
+	store := skills.NewStore(t.TempDir())
+	if err := store.Save(&skills.Skill{Name: "noise-skill", Description: "QuantumNoise", Body: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	h := New(Deps{Store: newTestStore(t), Cfg: cfg, SkillStore: store, StaticDir: t.TempDir(), Token: testToken})
+	status, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph?co=1", nil))
+	if status != http.StatusOK {
+		t.Fatalf("graph: %d %v", status, out)
+	}
+	ids := graphNodeIDs(t, out)
+	for _, id := range []string{"core:user", "core:memory", "entity:core:user:identity:user.name", "entity:core:user:preference:preference.language", "entity:core:memory:environment:environment.os"} {
+		if !ids[id] {
+			t.Errorf("missing %s: %v", id, out)
+		}
+	}
+	if len(ids) != 5 {
+		t.Fatalf("noise entered graph: %v", out)
+	}
+	n := graphNode(t, out, "entity:core:user:identity:user.name")
+	if n["label"] != "姓名：张三" || n["category"] != "identity" {
+		t.Fatalf("identity: %v", n)
+	}
+	if !graphHasEdge(out, "core:user", "entity:core:user:identity:user.name", "mention") {
+		t.Fatal("missing fact provenance")
+	}
+	// Projection preserves legacy source files for manual review.
+	raw, _ := os.ReadFile(memory.UserPath(cfg.Storage.MemoryPath))
+	if !strings.Contains(string(raw), "今天想喝奶茶") {
+		t.Fatal("graph mutated source data")
 	}
 }
 
-func TestMemoryGraphETagTracksActualSkillStore(t *testing.T) {
+func TestMemoryGraphUpdatesSameNodeAndReconcilesLegacyCopies(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
+	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{"用户偏好中文回答"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hermes.SaveTopic("preferences", memory.MemFile{Entries: []string{"用户偏好中文回答"}}); err != nil {
+		t.Fatal(err)
+	}
+	tool := memory.NewTool(hermes, nil)
+	add := func(text string) {
+		t.Helper()
+		if _, err := tool.Execute(memory.ToolAdd, map[string]any{"target": "user", "entry": text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("用户偏好英文回答")
+	_, first := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	id := "entity:core:user:preference:preference.language"
+	if graphNode(t, first, id)["label"] != "用户偏好英文回答" {
+		t.Fatal(first)
+	}
+	add("用户偏好中文回答")
+	_, second := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if graphNode(t, second, id)["label"] != "用户偏好中文回答" || len(graphNodeIDs(t, second)) != 2 {
+		t.Fatal(second)
+	}
+	mem, _ := hermes.LoadMemory()
+	topic, _ := hermes.LoadTopic("preferences")
+	if len(mem.Entries) != 0 || len(topic.Entries) != 0 {
+		t.Fatalf("stale copies: %v %v", mem, topic)
+	}
+	if _, err := tool.Execute(memory.ToolRemove, map[string]any{"target": "user", "old": "用户偏好中文"}); err != nil {
+		t.Fatal(err)
+	}
+	_, empty := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if len(graphNodeIDs(t, empty)) != 0 {
+		t.Fatalf("forgotten fact remains: %v", empty)
+	}
+}
+
+func TestMemoryGraphSeparatesProjectAttributes(t *testing.T) {
 	_, cfg := newMemoryPanel(t)
-	store := skills.NewStore(t.TempDir()) // deliberately different from config
-	h := New(Deps{Store: newTestStore(t), Cfg: cfg, SkillStore: store, StaticDir: t.TempDir(), Token: testToken})
+	projects := memory.NewProjects(cfg.Storage.ProjectsPath)
+	for name, command := range map[string]string{"alpha": "go test ./...", "beta": "npm test"} {
+		fact := memory.Fact{Category: "project", Key: "test.command", Text: command}
+		if err := projects.Save(name, memory.MemFile{Entries: []string{fact.Entry(), "今天修复测试", "用户偏好中文"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := New(Deps{Store: newTestStore(t), Cfg: cfg, Projects: projects, StaticDir: t.TempDir(), Token: testToken})
+	_, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if len(graphNodeIDs(t, out)) != 4 {
+		t.Fatal(out)
+	}
+	if graphNode(t, out, "entity:project:alpha:project:test.command")["label"] != "go test ./..." {
+		t.Fatal(out)
+	}
+	if graphNode(t, out, "entity:project:beta:project:test.command")["label"] != "npm test" {
+		t.Fatal(out)
+	}
+}
+
+func TestMemoryGraphReceiptRequiresRetainedFact(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
+	fact := memory.Fact{Category: "preference", Key: "preference.language", Text: "用户偏好中文回答"}
+	if err := hermes.SaveUser(memory.MemFile{Entries: []string{fact.Entry()}}); err != nil {
+		t.Fatal(err)
+	}
+	diary := memory.NewDreamDiary(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"))
+	if err := diary.Append(memory.Report{Promoted: []string{fact.Entry(), "task completed"}}, time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	_, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if graphEdgeWeight(out, "core:dreams", "core:user", "promotion") != 1 {
+		t.Fatal(out)
+	}
+	node := graphNode(t, out, "core:dreams")
+	if node["first_seen"] != "2026-01-03" {
+		t.Fatal(node)
+	}
+	if err := hermes.SaveUser(memory.MemFile{}); err != nil {
+		t.Fatal(err)
+	}
+	_, out = doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if len(graphNodeIDs(t, out)) != 0 {
+		t.Fatalf("obsolete receipt: %v", out)
+	}
+}
+
+func TestMemoryGraphReceiptBeyondPreview(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
+	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{"Server is Ubuntu 24.04"}}); err != nil {
+		t.Fatal(err)
+	}
+	content := "## 2026-01-01\n" + strings.Repeat("- routine note\n", 6000) + "## 2026-02-02\n- Promoted to long-term memory / 提升到长期记忆：\n  - Server is Ubuntu 24.04\n"
+	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if graphEdgeWeight(out, "core:dreams", "core:memory", "promotion") != 1 {
+		t.Fatal(out)
+	}
+}
+
+func TestMemoryGraphReceiptUsesSelectedCanonicalSurface(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
+	current, old := "用户偏好英文回答", "用户偏好中文回答"
+	if err := hermes.SaveUser(memory.MemFile{Entries: []string{current}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{old}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hermes.SaveTopic("prefs", memory.MemFile{Entries: []string{current}}); err != nil {
+		t.Fatal(err)
+	}
+	diary := memory.NewDreamDiary(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"))
+	if err := diary.Append(memory.Report{Promoted: []string{old, current}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	status, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	ids := graphNodeIDs(t, out)
+	if status != http.StatusOK || len(ids) != 3 || graphEdgeWeight(out, "core:dreams", "core:user", "promotion") != 1 {
+		t.Fatalf("canonical receipt missing: %d %v", status, out)
+	}
+	for _, raw := range out["edges"].([]any) {
+		edge := raw.(map[string]any)
+		if !ids[edge["from"].(string)] || !ids[edge["to"].(string)] {
+			t.Fatalf("receipt links to a suppressed copy: %v", edge)
+		}
+	}
+}
+
+func TestMemoryGraphCachingAndDeterminism(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	hermes := memory.NewHermes(cfg.Storage.MemoryPath)
+	if err := hermes.SaveUser(memory.MemFile{Entries: []string{"姓名：张三"}}); err != nil {
+		t.Fatal(err)
+	}
 	first := httptest.NewRecorder()
 	h.ServeHTTP(first, authedReq(http.MethodGet, "/api/memory/graph", nil))
-	if first.Code != http.StatusOK {
-		t.Fatalf("first graph: %d", first.Code)
+	etag := first.Header().Get("ETag")
+	if etag == "" || first.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatal(first.Header())
 	}
-	if err := store.Save(&skills.Skill{Name: "new-skill", Description: "changed", Status: skills.StatusActive, Body: "x"}); err != nil {
+	for i := 0; i < 3; i++ {
+		next := httptest.NewRecorder()
+		h.ServeHTTP(next, authedReq(http.MethodGet, "/api/memory/graph", nil))
+		if !bytes.Equal(first.Body.Bytes(), next.Body.Bytes()) {
+			t.Fatal("nondeterministic graph")
+		}
+	}
+	if err := memory.NewDaily(hermes.WarmDir()).Append(time.Now(), "task finished"); err != nil {
 		t.Fatal(err)
 	}
 	req := authedReq(http.MethodGet, "/api/memory/graph", nil)
-	req.Header.Set("If-None-Match", first.Header().Get("ETag"))
-	second := httptest.NewRecorder()
-	h.ServeHTTP(second, req)
-	if second.Code != http.StatusOK {
-		t.Fatalf("changed skill graph was cached: %d", second.Code)
+	req.Header.Set("If-None-Match", etag)
+	cached := httptest.NewRecorder()
+	h.ServeHTTP(cached, req)
+	if cached.Code != http.StatusNotModified || cached.Body.Len() != 0 {
+		t.Fatalf("daily log invalidated graph: %d", cached.Code)
 	}
-	var out map[string]any
-	if err := json.Unmarshal(second.Body.Bytes(), &out); err != nil {
+	if err := hermes.SaveUser(memory.MemFile{Entries: []string{"姓名：李四"}}); err != nil {
 		t.Fatal(err)
 	}
-	if !graphNodeIDs(t, out)["skill:new-skill"] {
-		t.Error("new skill not visible in graph")
+	changed := httptest.NewRecorder()
+	h.ServeHTTP(changed, req)
+	if changed.Code != http.StatusOK || changed.Header().Get("ETag") == etag {
+		t.Fatal("fact change cached")
 	}
 }
 
-func TestMemoryGraphDoesNotExtractEntitiesFromDreamReportBoilerplate(t *testing.T) {
-	_, cfg := newMemoryPanel(t)
-	content := strings.Repeat("## 2026-01-01\n- Scanned 1 candidates / 扫描候选：1 条\n- Promoted to long-term memory / 提升到长期记忆：无 none\n", 4)
-	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"), []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h := New(Deps{Store: newTestStore(t), Cfg: cfg, StaticDir: t.TempDir(), Token: testToken})
-	_, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph?co=1", nil))
-	for id := range graphNodeIDs(t, out) {
-		if strings.HasPrefix(id, "entity:") {
-			t.Fatalf("report boilerplate became a knowledge entity: %s", id)
-		}
-	}
-	if !graphNodeIDs(t, out)["core:dreams"] {
-		t.Fatal("dream report surface disappeared")
-	}
-}
-
-// The fingerprint describes the response, and the response is built from .md
-// files only. A directory's timestamp is not evidence of that: it moves when a
-// child appears, and NTFS applies that synchronously while APFS can defer it —
-// which is how the same tree hashed two ways across two requests on Windows and
-// one way on macOS, failing the conditional-request test there.
 func TestMemoryGraphETagIgnoresDirectoryTimestamps(t *testing.T) {
 	root := t.TempDir()
-	daily := filepath.Join(root, "daily")
-	if err := os.MkdirAll(daily, 0o755); err != nil {
+	hermes := memory.NewHermes(root)
+	if err := hermes.SaveMemory(memory.MemFile{Entries: []string{"Server is Ubuntu 24.04"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(daily, "2026-01-02.md"), []byte("a\n"), 0o644); err != nil {
+	first := memoryGraphETag(20, false, root)
+	past := time.Unix(1, 0)
+	if err := os.Chtimes(root, past, past); err != nil {
 		t.Fatal(err)
 	}
-	before := memoryGraphETag(20, false, root)
+	if next := memoryGraphETag(20, false, root); next != first {
+		t.Fatal("directory timestamps changed ETag")
+	}
+	if err := hermes.SaveTopic("ops", memory.MemFile{Entries: []string{"Server is Debian"}}); err != nil {
+		t.Fatal(err)
+	}
+	if next := memoryGraphETag(20, false, root); next == first {
+		t.Fatal("new source did not change ETag")
+	}
+}
 
-	past := time.Now().Add(-time.Hour)
-	future := time.Now().Add(time.Hour)
-	if err := os.Chtimes(daily, past, past); err != nil {
-		t.Fatal(err)
+func TestDreamPromotionCountRejectsUnverifiedTags(t *testing.T) {
+	if n := dreamPromotionCount("", "manual "+memory.PromotionSourceTag); n != 0 {
+		t.Fatal(n)
 	}
-	if err := os.Chtimes(root, future, future); err != nil {
-		t.Fatal(err)
+	if n := dreamPromotionCount("## 2026-01-03\n- Promoted to long-term memory / 提升到长期记忆：\n  - trusted fact\n", "trusted fact"); n != 1 {
+		t.Fatal(n)
 	}
-	if after := memoryGraphETag(20, false, root); after != before {
-		t.Fatalf("a directory timestamp moved the fingerprint: %s -> %s", before, after)
-	}
+}
 
-	// An added .md anywhere under the root still moves it.
-	if err := os.WriteFile(filepath.Join(daily, "2026-01-03.md"), []byte("b\n"), 0o644); err != nil {
+func TestMemoryGraphDoesNotTruncateOrHideUnreadableFacts(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	text := "[fact:convention:large] " + strings.Repeat("retain ", 10000)
+	if err := os.WriteFile(memory.MemoryPath(cfg.Storage.MemoryPath), []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if after := memoryGraphETag(20, false, root); after == before {
-		t.Fatal("an added .md did not move the fingerprint")
+	_, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	node := graphNode(t, out, "entity:core:memory:convention:large")
+	if node["label"] != strings.TrimSpace(strings.TrimPrefix(text, "[fact:convention:large] ")) {
+		t.Fatal("retained assertion was truncated")
 	}
-
-	// A non-.md entry participates by name and type only: touching it is not a
-	// change to the response, but its presence is.
-	notes := filepath.Join(root, "notes.txt")
-	if err := os.WriteFile(notes, []byte("x\n"), 0o644); err != nil {
+	if err := os.Remove(memory.MemoryPath(cfg.Storage.MemoryPath)); err != nil {
 		t.Fatal(err)
 	}
-	withNotes := memoryGraphETag(20, false, root)
-	if again := memoryGraphETag(20, false, root); again != withNotes {
-		t.Fatalf("fingerprint is not stable across reads: %s -> %s", withNotes, again)
-	}
-	if err := os.Chtimes(notes, past, future); err != nil {
+	if err := os.Mkdir(memory.MemoryPath(cfg.Storage.MemoryPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if after := memoryGraphETag(20, false, root); after != withNotes {
-		t.Fatalf("a non-.md timestamp moved the fingerprint: %s -> %s", withNotes, after)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("corrupt memory treated as empty: %d", rr.Code)
 	}
 }

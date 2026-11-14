@@ -11,7 +11,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // TestElidePathKeepsTail pins the workspace column's shortening: the tail —
@@ -41,14 +41,7 @@ func TestElidePathKeepsTail(t *testing.T) {
 // old numerator let an inbound-only node (reachable, never configured) make a
 // dead configured peer read as "1/1 online".
 func TestMeshLineCountsConfiguredPeersOnly(t *testing.T) {
-	db, err := storage.Open(filepath.Join(t.TempDir(), "mesh.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(t.TempDir(), "mesh.db"))
 
 	self := ledger.Node{ID: "self-node", Status: "online", Neighbors: []string{"node-b"}}
 	inbound := ledger.Node{ID: "node-c", Status: "online"}

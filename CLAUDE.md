@@ -98,6 +98,8 @@ packaging. Everything goes through the Makefile:
 ```bash
 make build        # native binary (fmt-check + vet run first as prerequisites)
 make test         # unit/integration suite (adapter-test runs first as a prerequisite)
+make test-go      # Go suite only, for the local edit/test loop
+make test-python  # adapter, install, diagnostics and metrics contracts
 make race         # race detector, whole tree (pre-release superset check)
 make race-focused # race detector on concurrency-heavy packages only:
                   # core/commander/bus/storage/askengine/scheduler/webui-panel
@@ -144,6 +146,13 @@ The web console needs node/npm only when rebuilding it (`make web`,
 `make web-test`; `make web-gate` runs the whole leg as CI does — one
 install, then typecheck + unit tests + build). The Go binary embeds a
 prebuilt copy; only a placeholder `dist/index.html` is committed.
+
+Application tests can use `internal/testdb.Open(t)` for a private in-memory
+database cloned from the current migrations. For file-backed WAL, multiple
+handles or subprocesses, use the same package's OpenFile(t, path) with a new
+path, then reopen it through storage.Open. The helpers migrate once per test
+process; storage and legacy-upgrade tests still test migrations directly. CI
+runs the four PTY targets in one make invocation so they share one binary build.
 
 ## Layout
 
@@ -249,8 +258,8 @@ packages by subsystem.
 - **Memory & skills**: `memory` (USER.md/MEMORY.md layers, isolation
   wall, daily logs, Dreaming consolidation engine, context injector),
   `skills` (SKILL.md progressive loading + self-evolution).
-- **Data & platform**: `storage` (SQLite WAL + migrations; schema 67 adds
-  the `ask_rounds` table), `ctxstore`,
+- **Data & platform**: `storage` (SQLite WAL + migrations; schema 68 adds
+  attempt-scoped child waits and durable artifact merge baselines), `ctxstore`,
   `sessions`, `projects`, `config` (plus `execution.go` for per-agent
   model and concurrency defaults), `configsync` (polls the shared config
   and database so a model change in one process reaches the others —

@@ -580,10 +580,14 @@ func runDaemon(args []string) {
 		if viaWhitelist {
 			channel = "whitelist"
 		}
+		target := "MEMORY.md"
+		if fact, err := memory.ClassifyFact(entry, "", ""); err == nil && fact.Target() == "user" {
+			target = "USER.md"
+		}
 		if err := audit.Record(ctx, security.Entry{
 			Who:    cfg.Node.Name,
 			What:   core.EvMemoryPromotion,
-			Target: "MEMORY.md",
+			Target: target,
 			Result: "ok",
 			Detail: channel + ": " + entry,
 		}); err != nil {
@@ -595,7 +599,7 @@ func runDaemon(args []string) {
 		memory.NewDreamDiary(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md")),
 		func() bool { return coreNode.Idle(ctx) },
 		5*time.Minute,
-	).WithDaily(daily)
+	).WithDaily(daily).WithProjects(projects)
 	dreamSched.OnError = func(err error) { logger.Warn("dreaming sweep", "err", err) }
 	guard.Go(logger, "daemon: dream scheduler", cancel, func() { dreamSched.Run(ctx) })
 

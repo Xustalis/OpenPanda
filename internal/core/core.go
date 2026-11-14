@@ -3653,6 +3653,7 @@ func (c *Core) signalResult(taskID string, p bus.TaskResultPayload) {
 // executable commands themselves.
 func (c *Core) summary() ledger.CapabilitySummary {
 	card := c.Card()
+	card.Capacity.ArtifactMergeVersion = artifactMergeVersion
 	router := c.currentRouter()
 	s := ledger.CapabilitySummary{
 		Device:          card.Device,

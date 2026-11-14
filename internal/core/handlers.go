@@ -1075,6 +1075,9 @@ func (c *Core) tokenBudgetWire(ctx context.Context, taskID string, wireBudget in
 // e.g. a declined task being re-routed (P1-5), where Decline already moved it
 // dispatched -> queued and a second queue transition would conflict.
 func (c *Core) dispatchDelegated(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload, chain []string, awaitRevival bool) error {
+	if err := c.requireArtifactProtocol(ctx, target, p.SpecJSON); err != nil {
+		return err
+	}
 	// Trust-zone send ceiling (experimental): clamp the payload to what this
 	// next hop's tier may receive, BEFORE any budget is spent or the dispatch
 	// is recorded. A target whose ceiling strips a need the task cannot run

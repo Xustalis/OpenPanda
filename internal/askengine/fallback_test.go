@@ -16,7 +16,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/memory"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 func TestAskModelFallback(t *testing.T) {
@@ -67,14 +67,7 @@ func TestAskModelFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := storage.Open(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(root, "test.db"))
 
 	hermes := memory.NewHermes(root)
 	e := &Engine{
@@ -156,14 +149,7 @@ func TestCircuitBreakerFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := storage.Open(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(root, "test.db"))
 
 	hermes := memory.NewHermes(root)
 	e := &Engine{

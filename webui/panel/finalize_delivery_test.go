@@ -16,7 +16,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 type summaryDeliveryFixture struct {
@@ -31,14 +31,7 @@ func newSummaryDeliveryFixture(t *testing.T, failed bool) summaryDeliveryFixture
 	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
-	db, err := storage.Open(filepath.Join(root, "tasks.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(root, "tasks.db"))
 	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 	root = filepath.Join(root, "sessions")
 	sessStore := sessions.NewStore(root)

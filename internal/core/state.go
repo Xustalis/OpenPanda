@@ -169,18 +169,19 @@ const (
 
 // Task is the persisted task row (Phase 0 subset of the schema).
 type Task struct {
-	TaskID       string
-	ParentID     string
-	Project      string
-	Title        string
-	State        string
-	OwnerNode    string
-	AttemptID    string
-	StateVersion int
-	Chain        []string
-	Intent       string
-	SpecJSON     string
-	ResultJSON   string
+	TaskID                string
+	ParentID              string
+	Project               string
+	Title                 string
+	State                 string
+	OwnerNode             string
+	AttemptID             string
+	DeliveryAcceptAttempt string // human accepted; executor delivery remains pending
+	StateVersion          int
+	Chain                 []string
+	Intent                string
+	SpecJSON              string
+	ResultJSON            string
 	// Verification is the contract verdict: "verified", "failed", "partial",
 	// "skipped", or "" when the task carried no acceptance checks. It is a
 	// property of the outcome, not a state: a task can be done and unverified
