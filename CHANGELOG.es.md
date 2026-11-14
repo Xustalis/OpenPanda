@@ -40,7 +40,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-## [0.1.6] - 2026-11-12 — "Constellation"
+## [0.1.6] - 2026-11-14 — "Constellation"
 
 El parche que obliga a una ejecución a ser honesta sobre lo que terminó — nombre en clave **Constellation**: la finalización, la recuperación y los contratos de etapa siguen el trabajo que la máquina hizo realmente; las ejecuciones de solo lectura declaran su límite y las respuestas sobre el repositorio aportan evidencia del código; la consola reúne conversaciones laterales, resumen y notificaciones en una sola superficie; y un pin duro de dispositivo sigue siendo un pin y no se diluye en una preferencia. Configuración, datos almacenados y protocolo no cambian, y el esquema sigue en v67 — sin migración y sin tramas nuevas.
 
@@ -68,6 +68,9 @@ El parche que obliga a una ejecución a ser honesta sobre lo que terminó — no
 - **Instalación desde fuentes y verificación de versiones** — La instalación local compila primero la consola Web, crea el directorio de PATH y sustituye atómicamente el binario, adaptadores, auxiliares de voz y controladores. El empaquetado y la verificación usan la versión del código por defecto y exigen los seis paquetes completos y los tres Linux lite. Una compilación en preparación ya no muestra una fecha de publicación.
 - **Las respuestas literales siguen siendo conversación** — Pedir explícitamente repetir un identificador como HELLO_WORLD ya no activa una investigación del código por sus guiones bajos o camelCase. Las preguntas sobre implementaciones y las solicitudes que incluyen revisar el repositorio siguen exigiendo evidencia.
 - **Las pruebas del instalador no sustituyen el daemon del usuario** — Un HOME temporal no aísla launchctl ni systemctl. Las pruebas registran la activación mediante comandos aislados en PATH y siguen verificando los archivos del servicio sin controlar servicios reales.
+
+- **Despacho y descubrimiento de nodos** — La configuración del modelo del agente se resuelve al despachar y conserva los endpoints nativos del relay. Una consola con mesh recorre el directorio de nodos y distingue máquinas virtuales homónimas por identidad. Las invocaciones de actuadores sin argumentos devuelven un error de validación sin provocar un panic.
+- **Un lugar para los cambios del hilo** — El dock muestra archivos, cambios, diffs y vistas de imágenes del hilo actual; sus contadores proceden del mismo hilo. Una revisión de desvío de alcance ya decidida deja de preguntar y la advertencia de configuración de Windows aparece una sola vez.
 
 ## [0.1.5] - 2026-11-09 — "Constellation"
 

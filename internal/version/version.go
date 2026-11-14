@@ -33,7 +33,7 @@ var Codename = "Constellation"
 // Version and Codename when a release is cut, and left empty for ad-hoc
 // builds that never had a release day. The console's profile page prints it
 // as "发布于 …" and falls back to omitting the line when it is empty.
-var ReleaseDate = "" // v0.1.6 is in preparation; set the actual date at release.
+var ReleaseDate = "2026-11-14"
 
 // Build provenance classes — which channel produced a binary. They ride the
 // wire as hello/heartbeat `prov`. The unset default normalizes to

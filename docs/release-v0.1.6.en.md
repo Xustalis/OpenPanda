@@ -2,7 +2,7 @@
 
 [中文](release-v0.1.6.md) · [Install](install.en.md) · [Status](status.en.md)
 
-v0.1.6 is the source release target. A matching `panda version` proves neither publication nor that a resident process has switched to this source. Fill in the actual release date when cutting the release; until then the changelog date is a planned date.
+v0.1.6 “Constellation” is dated 2026-11-14. GitHub Release provides official assets, checksums and signatures. The version number neither proves that a resident process has switched nor distinguishes same-version source builds.
 
 ## Findings and fixes
 
@@ -13,7 +13,7 @@ v0.1.6 is the source release target. A matching `panda version` proves neither p
 | A fresh HOME or spaces in its path | A missing PATH directory or unquoted path could fail installation. Paths are quoted and directories created |
 | Upgrade only the binary and adapters | Voice helpers and drivers could remain stale. They are now synced too; replacements are atomic per file, copy errors fail the command, and config/data/custom helpers are preserved |
 | Verify only the six full archives | Missing lite archives could pass. Verification now requires all nine targets and checksum entries |
-| A preparation build has a prefilled ship date | It could claim publication prematurely. The date is now empty until release |
+| A preparation build has a prefilled ship date | It could claim publication prematurely. The date was empty during preparation and is set to 2026-11-14 for release |
 
 Literal token replies in a workspace were also reproduced failing the source-evidence guard. Explicit literal reproduction is now exempt; implementation questions still require evidence. Installer tests now isolate service-manager calls because temporary HOME alone does not isolate the logged-in user's launchctl/systemctl.
 
