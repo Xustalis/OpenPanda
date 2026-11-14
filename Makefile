@@ -41,7 +41,7 @@ NPM_INSTALL ?= npm ci --no-fund --no-audit
 
 .PHONY: all build web web-test web-gate build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test adapter-test vet staticcheck fmt fmt-check site-check race race-focused gate gate-all run run-local measure clean icons winres release package release-local install-local
+        dev test test-go test-python adapter-test vet staticcheck fmt fmt-check site-check race race-focused gate gate-all run run-local measure clean icons winres release package release-local install-local
 
 all: build
 
@@ -214,10 +214,16 @@ tui-pty-sidebar-test: build
 		echo "tui-pty-sidebar-test: skipped — this platform has no pty (run it on macOS/Linux)"; \
 	fi
 
-test: adapter-test
+# Use test-go for the local Go edit/test loop. test composes both language
+# suites, and gate-all adds race, web and PTY checks for the final pass.
+test: test-python test-go
+
+test-python: adapter-test
 	python3 tests/local_install_test.py
 	python3 tests/execution_diagnostics_test.py
 	python3 tests/live_dag_metrics_test.py
+
+test-go:
 	$(GO) test ./...
 
 vet:
@@ -283,7 +289,7 @@ race:
 # goroutine-free packages buy no detections. CGO is forced on because -race
 # requires it and some runners leave it disabled.
 race-focused:
-	CGO_ENABLED=1 $(GO) test -race -timeout 15m ./internal/core/... ./internal/commander/... ./internal/bus/... ./internal/storage/... ./internal/askengine/... ./internal/scheduler/... ./webui/panel/...
+	CGO_ENABLED=1 $(GO) test -race -timeout 15m ./internal/core/... ./internal/commander/... ./internal/bus/... ./internal/storage/... ./internal/testdb/... ./internal/askengine/... ./internal/scheduler/... ./webui/panel/...
 
 # ============================================================================
 # CI Gate 清单化 (§稳定性 P1)
@@ -320,7 +326,7 @@ race-focused:
 #   - 版本号从 internal/version/version.go 提取，禁止在 Makefile 中
 #     写死 VERSION 默认值，避免版本漂移。
 # ============================================================================
-gate: fmt-check vet staticcheck vuln build adapter-test test race-focused
+gate: fmt-check vet staticcheck vuln build test race-focused
 
 # gate-all is gate + the web pipeline (one install, then typecheck + ui build +
 # web tests) + the TUI pty check. CI runs these as separate jobs (see

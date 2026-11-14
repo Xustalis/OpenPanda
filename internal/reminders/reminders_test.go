@@ -10,23 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
-// testDB opens a temporary SQLite database and runs all migrations so the
-// reminders table (v8) is available. The caller must close the returned *sql.DB.
+// testDB returns a private file-backed database with the current schema.
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := storage.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := storage.Migrate(db); err != nil {
-		db.Close()
-		t.Fatalf("migrate: %v", err)
-	}
-	return db
+	return testdb.OpenFile(t, filepath.Join(dir, "test.db"))
 }
 
 func TestAdd_EmptyMessage(t *testing.T) {

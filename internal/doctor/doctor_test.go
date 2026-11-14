@@ -13,19 +13,16 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // newTestDB builds a migrated, empty database the growth check can count.
 func newTestDB(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "panda.db")
-	db, err := storage.Open(path)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
+	db := testdb.OpenFile(t, path)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
 	return path
 }

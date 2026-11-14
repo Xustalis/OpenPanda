@@ -8,6 +8,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -75,4 +77,46 @@ func Open(t testing.TB) *sql.DB {
 		t.Fatalf("restore test schema: %v", err)
 	}
 	return db
+}
+
+// OpenFile creates a fully migrated database at a new path. Unlike Open, it
+// retains storage.Open's file-backed WAL and connection pool behavior. Other
+// handles and subprocesses can reopen it with storage.Open without migrating.
+// The caller owns the directory (normally t.TempDir); an existing file is never
+// replaced, so accidentally reinitializing a shared fixture fails immediately.
+func OpenFile(t testing.TB, path string) *sql.DB {
+	t.Helper()
+	image, err := testDBImage()
+	if err != nil {
+		t.Fatalf("prepare test schema: %v", err)
+	}
+	if err := writeImage(path, image); err != nil {
+		t.Fatalf("create test db: %v", err)
+	}
+	db, err := storage.Open(path)
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func writeImage(path string, image []byte) error {
+	if path == "" || path == ":memory:" {
+		return fmt.Errorf("expected a new file path, got %q", path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := f.Write(image)
+	closeErr := f.Close()
+	if writeErr != nil {
+		_ = os.Remove(path)
+		return writeErr
+	}
+	return closeErr
 }

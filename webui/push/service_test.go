@@ -16,19 +16,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 func newTestService(t *testing.T) (*Service, *Store) {
 	t.Helper()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Open(t)
 	keys, err := GenerateVAPIDKeys("mailto:test@example.com")
 	if err != nil {
 		t.Fatal(err)

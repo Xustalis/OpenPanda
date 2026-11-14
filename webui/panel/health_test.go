@@ -10,20 +10,13 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/core"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 	"github.com/Xustalis/OpenPanda/webui/panel"
 )
 
 func TestHealthzEndpoint(t *testing.T) {
 	root := t.TempDir()
-	db, err := storage.Open(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(root, "test.db"))
 
 	store := core.NewTaskStore(db, nil)
 	h := panel.New(panel.Deps{

@@ -12,7 +12,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/skills"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // selfDeps builds the tool dependencies against a throwaway DB + skills
@@ -20,14 +20,7 @@ import (
 func selfDeps(t *testing.T) *selfToolsDeps {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := storage.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(dir, "test.db"))
 	return &selfToolsDeps{
 		cfg: &config.Config{
 			Node:    config.NodeConfig{Name: "test-node", Kind: "physical"},

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // TestOwnerMeshEngineSweepsTheDirectory pins the wiring that was missing for
@@ -49,13 +49,7 @@ capacity:
 
 	// Seed the ghost before the engine exists: the sweep's first tick fires
 	// inside New, so a row filed afterwards would cost a whole extra tick.
-	db, err := storage.Open(cfg.Storage.DBPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, cfg.Storage.DBPath)
 	// The shape a killed peer leaves behind: online, but silent for an hour.
 	old := time.Now().Add(-time.Hour).Unix()
 	if _, err := db.Exec(

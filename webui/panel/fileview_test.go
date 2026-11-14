@@ -13,7 +13,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,14 +40,7 @@ func newFileViewPanel(t *testing.T) (http.Handler, string, *sessions.Store) {
 		t.Fatal(err)
 	}
 
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 
 	store := sessions.NewStore(filepath.Join(tmp, "sessions"))
 	h := New(Deps{
@@ -349,14 +342,7 @@ func TestListFilesRootsAtSessionWorkspace(t *testing.T) {
 	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	ps := projectstore.NewStore(db)
 	if _, err := ps.Create("proj", proj, ""); err != nil {
 		t.Fatalf("create project: %v", err)

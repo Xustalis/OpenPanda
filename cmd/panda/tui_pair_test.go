@@ -14,7 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // newPairTUI builds a model whose repl owns a real database — the store the
@@ -32,14 +32,7 @@ func newPairTUI(t *testing.T) (tuiModel, *sql.DB) {
 			DBPath: filepath.Join(dir, "panda.db"),
 		},
 	}
-	db, err := storage.Open(cfg.Storage.DBPath)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, cfg.Storage.DBPath)
 	r := &repl{loc: i18n.English, cfg: cfg, db: db, interactive: true}
 	m := newTUIModel(r)
 	m.mode = modeIdle

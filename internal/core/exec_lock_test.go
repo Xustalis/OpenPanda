@@ -15,6 +15,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // TestExecLockKeys pins the key derivation: the queue registry's set (explicit
@@ -49,6 +50,7 @@ func TestExecLockKeys(t *testing.T) {
 func TestExecLocksStore(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "exec.db")
+	first := testdb.OpenFile(t, path)
 	openShared := func() *sql.DB {
 		t.Helper()
 		db, err := storage.Open(path)
@@ -56,12 +58,9 @@ func TestExecLocksStore(t *testing.T) {
 			t.Fatalf("open %s: %v", path, err)
 		}
 		t.Cleanup(func() { db.Close() })
-		if err := storage.Migrate(db); err != nil {
-			t.Fatalf("migrate: %v", err)
-		}
 		return db
 	}
-	s1 := NewTaskStore(openShared(), testLogger())
+	s1 := NewTaskStore(first, testLogger())
 	s2 := NewTaskStore(openShared(), testLogger())
 	keys := []string{"project:proj"}
 	must := func(err error) {
@@ -236,14 +235,7 @@ func TestDuplicateRunYieldsToInFlight(t *testing.T) {
 // queued.
 func TestExecLocksGCTrigger(t *testing.T) {
 	ctx := context.Background()
-	db, err := storage.Open(filepath.Join(t.TempDir(), "gc.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(t.TempDir(), "gc.db"))
 	s := NewTaskStore(db, testLogger())
 	keys := []string{"project:gc"}
 	must := func(err error) {
@@ -312,14 +304,7 @@ func TestExecLocksGCTrigger(t *testing.T) {
 // believing it holds locks it no longer does — two writers, one worktree.
 func TestStaleReleaseKeepsReacquiredRows(t *testing.T) {
 	ctx := context.Background()
-	db, err := storage.Open(filepath.Join(t.TempDir(), "stale.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(t.TempDir(), "stale.db"))
 	s := NewTaskStore(db, testLogger())
 	keys := []string{"project:stale"}
 	must := func(err error) {
@@ -534,14 +519,7 @@ func TestHeartbeatWaitLeaseSemantics(t *testing.T) {
 func TestExecLockBlockers(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "blockers.db")
-	db, err := storage.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.OpenFile(t, path)
 	s := NewTaskStore(db, testLogger())
 
 	h := createTask(t, s, "", "holder", "n1")

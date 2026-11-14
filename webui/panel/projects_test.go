@@ -17,21 +17,14 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // projectHandler builds a panel handler with the project metadata table attached
 // — the console's project surface is only more than a list of names when it is.
 func projectHandler(t *testing.T) (http.Handler, *projectstore.Store, *memory.Projects, *sessions.Store) {
 	t.Helper()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	ps := projectstore.NewStore(db)
 	mem := memory.NewProjects(t.TempDir())
 	sessStore := sessions.NewStore(t.TempDir())
@@ -408,14 +401,7 @@ func TestProjectSessionsAssociationAndDeletion(t *testing.T) {
 // detail rows carry the project's task states, counted per state, so the
 // console can show "2 in flight · 1 to review" without a second round trip.
 func TestProjectViewTaskCounts(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	ps := projectstore.NewStore(db)
 	h := New(Deps{
 		Store:        core.NewTaskStore(db, slog.New(slog.DiscardHandler)),

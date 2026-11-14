@@ -5,20 +5,14 @@ package main
 import (
 	"testing"
 
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // TestSchemaFloorFailsClosed pins the rollback guard's input: an unreadable
 // store must be an error, never the zero floor that means "nothing to
 // protect". Turning a failed read into 0 was a fail-open rollback.
 func TestSchemaFloorFailsClosed(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	floor, err := schemaFloor(db)
 	if err != nil || floor <= 0 {
 		t.Fatalf("schemaFloor = %d, %v; want a positive floor", floor, err)
