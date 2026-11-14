@@ -215,6 +215,7 @@ tui-pty-sidebar-test: build
 	fi
 
 test: adapter-test
+	python3 tests/local_install_test.py
 	python3 tests/execution_diagnostics_test.py
 	python3 tests/live_dag_metrics_test.py
 	$(GO) test ./...
@@ -361,48 +362,10 @@ run-local:
 # prefix (~/.local/share/openpanda/bin). A stale copy left behind still opens
 # the shared data directory, and an older-schema binary dies at startup with
 # "schema version newer than binary" — syncing both keeps one habit safe.
-install-local: build
-	@# Atomic rename, not cp-over: overwriting a running daemon's binary in
-	@# place taints the vnode's code signature on macOS and every subsequent
-	@# exec of that path dies with SIGKILL ("Killed: 9").
-	@# Codesign before the mv when a signing identity is present: an ad-hoc
-	@# signature embeds the cdhash, so each rebuild becomes a new TCC Local
-	@# Network identity and the launchd daemon silently loses its grant
-	@# (peer dials die with EHOSTUNREACH). A stable cert identity keeps the
-	@# grant across rebuilds.
-	@# When the release-prefix install exists (~/.local/share/openpanda/bin),
-	@# the binary goes there and ~/.local/bin/panda stays a SYMLINK to it —
-	@# the same layout install.sh ships. Keeping the PATH entry a real file
-	@# would fork the two copies: `panda update` resolves symlinks and swaps
-	@# only the file it was invoked through, so a real-file PATH entry leaves
-	@# the supervised daemon running the stale image forever.
-	@if [ -d "$(HOME)/.local/share/openpanda/bin" ]; then \
-		tmp=$$(mktemp "$(HOME)/.local/share/openpanda/bin/.panda.XXXXXX") && \
-		cp $(BIN) $$tmp && chmod 755 $$tmp && \
-		(codesign -s "OpenPanda Local Development" --identifier com.openpanda.node --force $$tmp 2>/dev/null || true) && \
-		mv $$tmp "$(HOME)/.local/share/openpanda/bin/panda" && \
-		mkdir -p "$(HOME)/.local/bin" && \
-		ln -sf "$(HOME)/.local/share/openpanda/bin/panda" "$(HOME)/.local/bin/panda" && \
-		echo "installed $(HOME)/.local/share/openpanda/bin/panda (+ ~/.local/bin/panda symlink)"; \
-	else \
-		tmp=$$(mktemp $(HOME)/.local/bin/.panda.XXXXXX) && cp $(BIN) $$tmp && chmod 755 $$tmp && \
-		(codesign -s "OpenPanda Local Development" --identifier com.openpanda.node --force $$tmp 2>/dev/null || true) && \
-		mv $$tmp $(HOME)/.local/bin/panda; \
-	fi
-	@# The agent adapters are Python scripts, and the daemon loads them from
-	@# the install prefix (adapters/ beside the PATH entry or the release
-	@# prefix) — NOT from this checkout. Syncing only the binary, which is all
-	@# this target used to do, left ~/.local/adapters frozen at whatever
-	@# `panda install` last wrote, so a fix to adapters/*.py never reached a
-	@# running node: the daemon kept spawning the old script from a path no
-	@# test covers, and the failure looked like a product bug. Copy after the
-	@# mv so a failed build cannot leave adapters newer than the binary.
-	@for d in "$(HOME)/.local/adapters" "$(HOME)/.local/share/openpanda/adapters"; do \
-		mkdir -p "$$d" && \
-		( command -v rsync >/dev/null 2>&1 && rsync -a --delete "$(CURDIR)/adapters/" "$$d/" \
-			|| cp -R "$(CURDIR)/adapters/." "$$d/" ) && \
-		echo "synced adapters → $$d"; \
-	done
+# Keep web generation and Go embedding ordered even under make -j.
+install-local: web
+	$(MAKE) build
+	sh scripts/install-local.sh "$(CURDIR)" "$(HOME)"
 
 # Measure steady-state RSS: start core, sample after 2s, stop.
 measure:

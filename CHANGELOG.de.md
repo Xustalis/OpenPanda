@@ -65,6 +65,9 @@ Das Patch, das eine Ausführung ehrlich darüber macht, was sie abgeschlossen ha
 - **Zuverlässige Gespräche** — Modellaufrufe zeigen ihren Fortschritt; geschützte Codeanalysen übertragen Anbieter-Zusammenfassungen und Verbrauch, ohne ungeprüfte Aussagen auszugeben. Zusammenfassungen, Teilantworten und die identische Stoppsteuerung bleiben nach dem Neuladen erhalten.
 - **Vollständiger Verlauf** — Verspätete Ereignisse überschreiben keine Benutzertexte oder fremden Antworten. Die Komprimierung begrenzt nur den Modellkontext und bewahrt den Originalverlauf; Aufgabenberichte erhalten eigene Einträge.
 - **Agent-Ausführung** — Die Codex-Injektion setzt das Responses-Protokoll ausdrücklich, ohne native Einstellungen zu ändern. Guthabenfehler stoppen nach erlaubten Rettungsversuchen, statt die Warteschlange wiederholt zu belegen.
+- **Quellinstallation und Release-Prüfung** — Die lokale Installation baut zuerst die Webkonsole, erstellt das PATH-Verzeichnis und ersetzt Binärdatei, Adapter, Sprachhelfer und Treiber atomar. Paketierung und Prüfung verwenden standardmäßig die Quellversion und verlangen neben sechs Vollversionen alle drei Linux-lite-Archive. Ein Build in Vorbereitung zeigt kein Veröffentlichungsdatum mehr an.
+- **Wörtliche Antworten bleiben Gespräch** — Die ausdrückliche Bitte, ein Token wie HELLO_WORLD zu wiederholen, löst im Arbeitsverzeichnis allein durch Unterstriche oder camelCase keine Quellprüfung mehr aus. Implementierungsfragen und kombinierte Repository-Prüfungen benötigen weiterhin Belege.
+- **Installertests ersetzen keinen Benutzer-Daemon** — Ein temporäres HOME isoliert launchctl und systemctl nicht. Die Tests protokollieren Dienstaufrufe über isolierte PATH-Kommandos und prüfen weiterhin die erzeugten Dienstdateien, ohne echte Benutzerdienste zu steuern.
 
 ## [0.1.5] - 2026-11-09 — "Constellation"
 

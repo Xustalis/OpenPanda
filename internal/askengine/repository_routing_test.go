@@ -47,6 +47,46 @@ func TestRepositoryInvestigationRoutingIsNarrow(t *testing.T) {
 	}
 }
 
+func TestLiteralReplyInWorkspaceDoesNotRequireSourceEvidence(t *testing.T) {
+	for _, prompt := range []string{
+		"Reply with exactly PANDA_V016_ENTRY_OK. Do not use tools or create tasks.",
+		"Please respond only with HELLO_WORLD",
+		"Say helloWorld",
+		"Return exactly `HELLO_WORLD`",
+		"只回复：\"HELLO_WORLD\"",
+		"只回复 PANDA_V016_ENTRY_OK，不要调用工具或创建任务。",
+	} {
+		t.Run(prompt, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				writeAnswer(w, "PANDA_V016_ENTRY_OK")
+			}))
+			defer srv.Close()
+			e := newGuardTestEngine(t, srv, entry.NewRegistry(), 200000)
+			res, err := e.AskTurnsScoped(context.Background(), nil, prompt, AskScope{WorkDir: t.TempDir()}, true, StreamCallbacks{})
+			if err != nil || res == nil || res.Answer != "PANDA_V016_ENTRY_OK" || calls.Load() != 1 {
+				t.Fatalf("literal reply became an investigation: result=%+v err=%v calls=%d", res, err, calls.Load())
+			}
+		})
+	}
+}
+
+func TestLiteralReplyExceptionKeepsRepositoryEvidenceGuard(t *testing.T) {
+	for _, prompt := range []string{
+		"Explain parse_config in this repository",
+		"Reply with exactly the implementation of parse_config",
+		"只回复 parse_config 的实现",
+		"Reply with exactly HELLO_WORLD. Then review this repository.",
+		"Echo internal/config.go",
+	} {
+		question, _ := repositoryRequest(prompt, nil, true)
+		if !question {
+			t.Errorf("repository request bypassed evidence: %q", prompt)
+		}
+	}
+}
+
 // Four batches of directory listing cannot support a completed code review.
 // The first bogus answer gets one dispatch correction; another is surfaced as
 // incomplete rather than passed to the user as a deep investigation.

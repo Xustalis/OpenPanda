@@ -4,6 +4,8 @@ OpenPanda project docs that are intentionally part of the public source tree.
 
 ## User guides
 
+- [`release-v0.1.6.md`](release-v0.1.6.md) — v0.1.6 local testing, installation, restart/rollback, release checks and coverage boundaries. (中文 · [English](release-v0.1.6.en.md))
+
 - [`agent-execution.md`](agent-execution.md) — agent/subagent native model selection, concurrency/delegation limits, hot reload and safe parallel scope rules. Ships in `v0.1.6`; the settings it describes are in the release line. (中文 · [English](agent-execution.en.md) · [日本語](agent-execution.ja.md) · [Español](agent-execution.es.md) · [Deutsch](agent-execution.de.md))
 
 - [`status.md`](status.md) — where the project stands: capability-by-capability status, what is verified vs. only built, the two plan entry points, and the known limits (trust model, i18n, actuator real-hardware validation, multi-hop). The 2026-11-12 entry records the `v0.1.6` work (completion integrity, stage contracts, relay discovery, hard device pins, the Go 1.26.11 floor); the 2026-11-09 entry records the work after `v0.1.4` (nine-page site, agent execution settings, tool-loop budgets, ask rounds, MCP hardening, pairing discovery); the 2026-11-02 entry covers the v0.1.4 run loop (workspace scout, evidence-based completion, clarification) and interaction surface (side channel, rewind, task rail, lifecycle hooks). (中文 · [English](status.en.md))

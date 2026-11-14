@@ -65,6 +65,9 @@ El parche que obliga a una ejecución a ser honesta sobre lo que terminó — no
 - **Fiabilidad de las conversaciones** — Las llamadas al modelo muestran su progreso; la investigación protegida transmite los resúmenes de razonamiento y el uso sin publicar conclusiones sin verificar. Los resúmenes, respuestas parciales y controles de parada se recuperan tras recargar.
 - **Integridad del historial** — Los eventos tardíos no sobrescriben mensajes del usuario ni otras respuestas. La compactación conserva la conversación original y limita solo el contexto reproducido; los informes de tareas mantienen sus propias filas.
 - **Ejecución de agentes** — La inyección de Codex declara el protocolo Responses sin cambiar la configuración nativa. Los errores de saldo agotado se detienen después del rescate permitido, sin ocupar repetidamente la cola.
+- **Instalación desde fuentes y verificación de versiones** — La instalación local compila primero la consola Web, crea el directorio de PATH y sustituye atómicamente el binario, adaptadores, auxiliares de voz y controladores. El empaquetado y la verificación usan la versión del código por defecto y exigen los seis paquetes completos y los tres Linux lite. Una compilación en preparación ya no muestra una fecha de publicación.
+- **Las respuestas literales siguen siendo conversación** — Pedir explícitamente repetir un identificador como HELLO_WORLD ya no activa una investigación del código por sus guiones bajos o camelCase. Las preguntas sobre implementaciones y las solicitudes que incluyen revisar el repositorio siguen exigiendo evidencia.
+- **Las pruebas del instalador no sustituyen el daemon del usuario** — Un HOME temporal no aísla launchctl ni systemctl. Las pruebas registran la activación mediante comandos aislados en PATH y siguen verificando los archivos del servicio sin controlar servicios reales.
 
 ## [0.1.5] - 2026-11-09 — "Constellation"
 

@@ -42,6 +42,21 @@ ARCHIVE="panda-$VERSION-$TARGET.tar.gz"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# HOME redirects service files, but launchctl/systemctl still control the real
+# logged-in user's service manager. Never activate or unload their services
+# from an installer fixture. Exercise service-file generation with recorders.
+SERVICE_TOOLS="$WORK/service-tools"
+mkdir -p "$SERVICE_TOOLS"
+for manager in launchctl systemctl; do
+    cat > "$SERVICE_TOOLS/$manager" <<'MANAGER'
+#!/bin/sh
+printf '%s\n' "$0 $*" >> "$HOME/service-activation.log"
+exit 0
+MANAGER
+    chmod +x "$SERVICE_TOOLS/$manager"
+done
+TEST_PATH="$SERVICE_TOOLS:${PATH:-/usr/bin:/bin}"
+
 pass=0
 fail=0
 skip=0
@@ -82,7 +97,7 @@ run_installer() { # <extra args...>
     # aborted inside its own systemd warning path (`set -u`, "USER: parameter
     # not set") on the very branch that exists to warn and continue.
     env -i \
-        PATH="${PATH:-/usr/bin:/bin}" \
+        PATH="$TEST_PATH" \
         HOME="$HOME_DIR" \
         OPENPANDA_RELEASE_BASE="file://$WORK/dist" \
         OPENPANDA_RELEASE_API="file://$WORK/dist/latest.json" \
@@ -244,6 +259,11 @@ if [ -f "$unit" ] && grep -qF "$want" "$unit"; then
     ok "service definition points at the installed binary"
 else
     bad "service definition does not reference $want"
+fi
+if [ -s "$HOME_DIR/service-activation.log" ]; then
+    ok "service activation stayed inside the test recorder"
+else
+    bad "service manager recorder was not invoked"
 fi
 
 # ── 7. A release older than the data directory must be refused ──────────────

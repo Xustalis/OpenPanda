@@ -190,10 +190,15 @@ option for option: `-Version` / `-Prefix` / `-Yes` / `-NoService` /
 ## 4. From source / Go
 
 ```bash
-# Source build (requires Go 1.26.11+; run `make web` first to embed the Web console)
-make build            # → bin/panda
-go install github.com/Xustalis/OpenPanda/cmd/panda@latest
+# Source build (Go 1.26.11+, Node.js/npm and Python 3)
+make web              # generate the current Web console
+make build            # → bin/panda, embedding that console
+
+# Install this checkout to local PATH (builds Web, then Go automatically)
+make install-local    # ~/.local/bin/panda + adapters, voice helpers and drivers
 ```
+
+Installation uses atomic renames and preserves personal config/data; an existing release prefix keeps its PATH symlink. It does not edit shell startup files or restart processes. If needed, run `export PATH="$HOME/.local/bin:$PATH"`. The version number alone cannot distinguish two source builds; verify the installed bytes and restart an existing daemon when idle. See the [v0.1.6 test and release checklist](release-v0.1.6.en.md).
 
 ## After install
 
@@ -307,16 +312,14 @@ from "manual control" once more.
 
 `network.exposure_mode` decides what faces outward: a fresh install defaults to
 `loopback`, where the bus and console both bind `127.0.0.1` (`7836` / `7840`)
-and the UDP plane and LAN discovery stay off. `lan` binds the bus to
+and the UDP plane binds loopback on the bus port (unless `udp_listen: "off"`), while LAN discovery stays off. `lan` defaults the bus to
 `0.0.0.0:7836` and discovery to `:7837` with the console still on loopback;
 `public` additionally requires a stable `shared_secret` and `panel_token`,
 disables discovery and refuses cleartext dials. A config that already declares
 `listen_addr` / `panel_addr` / `udp_listen` is treated as `legacy` and keeps
 its pre-0.1.5 binds, so upgrading never moves a port.
 
-A daemon generates and persists a `shared_secret` at boot, so on any mode other
-than `loopback` those ports are always listening. An unknown device can open
-the port but cannot pass the HMAC membership check or submit a task. Holding
+A daemon generates and persists a `shared_secret` at boot and listens on the configured bus address. Whether an unknown device can connect depends on the bind and network policy; even if it connects, it cannot pass the HMAC membership check or submit a task. Holding
 the shared secret is `mesh` membership, which accepts delegated tasks
 automatically (remote execution). There is no per-device or
 per-authorized-user admission list in this release.
@@ -333,15 +336,16 @@ Configuration order:
    overlay interface; set `udp_listen: "off"`, `discovery_addr: "off"` and
    `discovery_auto_dial: false`.
 2. Allow only the overlay subnet and port inbound in the security group. The
-   ports below are what a default node listens on; none should be open to
+   table distinguishes fresh installs from explicit networking; none should be open to
    `0.0.0.0/0`.
 
-   | Port | Purpose | Default bind |
-   | --- | --- | --- |
-   | 7836 | inter-node WebSocket bus | `0.0.0.0` |
-   | 7837 | UDP datagram plane / LAN discovery beacon | `0.0.0.0` |
-   | 7840 | web console | `127.0.0.1` (`0.0.0.0` after `--lan`) |
-   | dynamic | artifact preview and project devservers | `0.0.0.0` with `--lan` |
+   | Port | Purpose | Fresh loopback install | Explicit networking |
+   | --- | --- | --- | --- |
+   | 7836/TCP | inter-node WebSocket bus | `127.0.0.1` | lan/public use `listen_addr`, default `0.0.0.0` |
+   | 7836/UDP | datagram plane (same port as bus by default) | loopback, or off | `udp_listen`; empty follows the bus, or off |
+   | 7837/UDP | LAN discovery | off | lan defaults to `:7837`; public disables it |
+   | 7840/TCP | web console | `127.0.0.1` | `0.0.0.0` with `--lan` |
+   | dynamic | artifact preview and project devservers | loopback | `0.0.0.0` with `--lan` |
 
 3. Keep the console on `127.0.0.1` behind an nginx / Caddy TLS reverse proxy;
    write peers that cross a public link as `wss://host:port`, not `ws://`.
