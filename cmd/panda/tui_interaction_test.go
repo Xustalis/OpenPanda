@@ -19,7 +19,7 @@ import (
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -139,14 +139,7 @@ func TestTUIListCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Open(t)
 	projStore := projectstore.NewStore(db)
 	projWorkDir := filepath.Join(t.TempDir(), "openpanda")
 	os.MkdirAll(projWorkDir, 0o755)

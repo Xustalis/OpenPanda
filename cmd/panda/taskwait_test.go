@@ -10,20 +10,13 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/core"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // newWaitStore builds a real in-memory task store for waitTask tests.
 func newWaitStore(t *testing.T) *core.TaskStore {
 	t.Helper()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	return core.NewTaskStore(db, nil)
 }
 

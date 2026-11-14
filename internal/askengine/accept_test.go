@@ -13,7 +13,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // TestEngineAcceptMirrorsViaScheduler pins acceptReviewedWork's scheduler
@@ -25,14 +25,7 @@ import (
 func TestEngineAcceptMirrorsViaScheduler(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	db, err := storage.Open(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(root, "test.db"))
 
 	card := ledger.Card{
 		Device:   "test-node",
@@ -95,14 +88,7 @@ func TestEngineAcceptMirrorsViaScheduler(t *testing.T) {
 func TestEngineDeferredResumeSkipsSummarize(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	db, err := storage.Open(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(root, "test.db"))
 
 	card := ledger.Card{
 		Device:   "test-node",
@@ -167,14 +153,7 @@ func newStageTestEngine(t *testing.T) (*Engine, *core.TaskStore, context.Context
 	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
-	db, err := storage.Open(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(root, "test.db"))
 	card := ledger.Card{
 		Device:   "test-node",
 		NodeKind: "physical",

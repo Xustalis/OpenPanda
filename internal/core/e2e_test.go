@@ -34,7 +34,9 @@ func TestDelegateIdempotent(t *testing.T) {
 	if err := entry.sendTo("worker-idem", env); err != nil {
 		t.Fatalf("send 1: %v", err)
 	}
-	time.Sleep(300 * time.Millisecond)
+	// Wait for the real postcondition: a loaded Windows runner may need more
+	// than a fixed 300ms to launch and finish the native command.
+	waitState(t, ctx, worker.store, "idem-task", StateDone)
 
 	// Re-send the same task_id with a different msg_id.
 	env2, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-idem", "m2", bus.TaskDelegatePayload{

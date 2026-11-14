@@ -14,7 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Xustalis/OpenPanda/internal/core"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // collectPrinted flattens a command (possibly a batch) into the text its
@@ -57,14 +57,7 @@ func TestOnWatchCommitsNotes(t *testing.T) {
 // real store: a task that fails after the baseline was taken is reported once, and
 // a second poll with nothing new is silent.
 func TestPollCompletionsReportsTerminalTransitions(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	ctx := context.Background()
 	st := core.NewTaskStore(db, nil)
 	task, err := st.Create(ctx, "", "", "build docs", "node-a", nil)
@@ -161,14 +154,7 @@ func TestOnWatchNeverStealsAnActiveTurn(t *testing.T) {
 // remind again. A stuck task must surface in the foreground; silence is the
 // failure mode under test.
 func TestPollCompletionsFlagsStalls(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	ctx := context.Background()
 	st := core.NewTaskStore(db, nil)
 	now := time.Now().Unix()

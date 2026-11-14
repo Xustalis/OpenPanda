@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,14 +40,7 @@ func newFsPanel(t *testing.T) (http.Handler, string, *sql.DB) {
 	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	h := New(Deps{
 		Store:      newTestStore(t),
 		DB:         db,

@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/core"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // withTestCache swaps the package-wide SSE fingerprint cache for one driven by
@@ -255,13 +255,7 @@ func TestTaskFingerprintSharedAcrossHandlers(t *testing.T) {
 func TestCachedTaskFingerprintPropagatesStoreError(t *testing.T) {
 	clock := withTestCache(t)
 	// Build the store by hand so the test owns the DB handle and can kill it.
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 	h := &handler{store: store}
 	r := httptest.NewRequest(http.MethodGet, "/api/events", nil)
@@ -354,14 +348,7 @@ func TestTraceEventTypesCoverAgentActivity(t *testing.T) {
 // listTasks stamps each task's newest event so the board can narrate a
 // mid-flight task on first paint — before the SSE trace stream's first frame.
 func TestListTasksStampsLastEvent(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
 
@@ -429,14 +416,7 @@ func TestListTasksStampsLastEvent(t *testing.T) {
 // event timeline, which every bubble would otherwise re-pull on every change
 // frame.
 func TestGetTaskBriefCarriesNoTimeline(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
 
@@ -506,14 +486,7 @@ func TestGetTaskBriefCarriesNoTimeline(t *testing.T) {
 // One board poll must stamp every row it lists. The ids ride an IN list split
 // into batches, so the seam between batches is the thing worth pinning.
 func TestAttachLastEventsCoversEveryBatch(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 	// The concrete handler: these two helpers are internal, and New() hands
 	// back the wrapped http.Handler.
@@ -545,14 +518,7 @@ func TestAttachLastEventsCoversEveryBatch(t *testing.T) {
 // fixed per-tick LIMIT was a ceiling, not a bound: an agent writing faster than
 // it pushed the watermark further behind every second for the whole run.
 func TestPushNewTracesDrainsABurst(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 	h := &handler{db: db}
 	ctx := context.Background()
@@ -590,14 +556,7 @@ func TestPushNewTracesDrainsABurst(t *testing.T) {
 // complete, the timeline is incremental. A poll that re-sent the whole history
 // grew with the run and ran once per change frame.
 func TestGetTaskAfterReturnsOnlyNewEvents(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
 	ctx := context.Background()
@@ -677,14 +636,7 @@ func TestGetTaskAfterReturnsOnlyNewEvents(t *testing.T) {
 
 // The chain panel follows the same cursor through /logs.
 func TestTaskLogsAfterReturnsOnlyNewEvents(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
 	ctx := context.Background()
@@ -745,14 +697,7 @@ func TestTaskLogsAfterReturnsOnlyNewEvents(t *testing.T) {
 // that read. Spec and result are the row's heaviest columns and nothing in the
 // chat renders them, so they must not ride along.
 func TestListTasksBriefDropsHeavyColumns(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
 	ctx := context.Background()
@@ -803,14 +748,7 @@ func TestListTasksBriefDropsHeavyColumns(t *testing.T) {
 // refused the agent's own model configuration. Both read paths must agree, and
 // the newest review event is the one that counts — a row can park twice.
 func TestReviewCauseClassifiesModelConfigParks(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 	// The two readers under test only touch db; the HTTP wrapper New returns
 	// would hide them behind http.Handler.

@@ -10,11 +10,13 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 func openKernelStores(t *testing.T) (*TaskStore, *TaskStore) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "kernel.db")
+	first := testdb.OpenFile(t, path)
 	open := func() *sql.DB {
 		t.Helper()
 		db, err := storage.Open(path)
@@ -22,12 +24,9 @@ func openKernelStores(t *testing.T) (*TaskStore, *TaskStore) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = db.Close() })
-		if err := storage.Migrate(db); err != nil {
-			t.Fatal(err)
-		}
 		return db
 	}
-	return NewTaskStore(open(), testLogger()), NewTaskStore(open(), testLogger())
+	return NewTaskStore(first, testLogger()), NewTaskStore(open(), testLogger())
 }
 
 func TestReviewMergeLeaseFencesOtherProcesses(t *testing.T) {

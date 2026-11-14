@@ -9,7 +9,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/projects"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // TestAdoptRefusesHome pins the root cause of the "every task fails with work
@@ -58,14 +58,7 @@ func TestProjectForDirSkipsTooBroadRow(t *testing.T) {
 	if err != nil || home == "" {
 		t.Skipf("no home directory to test with: %v", err)
 	}
-	db, err := storage.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(t.TempDir(), "test.db"))
 	s := projects.NewStore(db)
 	// The row is written straight into the table the way a pre-rule build left
 	// it; Store.Create refuses this path today.

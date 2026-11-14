@@ -12,19 +12,12 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 	"github.com/Xustalis/OpenPanda/internal/todos"
 )
 
 func TestTodoCRUD(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	out, errW := &bytes.Buffer{}, &bytes.Buffer{}
 	env := todoEnv{out: out, errW: errW, loc: i18n.English}
 	ctx := context.Background()
@@ -92,14 +85,7 @@ func TestTodoCRUD(t *testing.T) {
 // TestTodoValidation: bad ids, lanes, priorities and due dates are refused
 // before they can reach the store.
 func TestTodoValidation(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	env := todoEnv{out: &bytes.Buffer{}, errW: &bytes.Buffer{}, loc: i18n.English}
 	ctx := context.Background()
 
@@ -121,21 +107,14 @@ func TestTodoValidation(t *testing.T) {
 // TestTodoStartWithoutEngine: 开始 needs a model; the refusal names the way
 // out instead of creating a task nobody can run.
 func TestTodoStartWithoutEngine(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	out := &bytes.Buffer{}
 	env := todoEnv{out: out, errW: &bytes.Buffer{}, loc: i18n.English}
 	ctx := context.Background()
 	if err := todoMain(ctx, db, env, []string{"add", "ship the release"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	err = todoMain(ctx, db, env, []string{"start", "1"})
+	err := todoMain(ctx, db, env, []string{"start", "1"})
 	if err == nil {
 		t.Fatal("start without a model must fail")
 	}
@@ -149,14 +128,7 @@ func TestTodoStartWithoutEngine(t *testing.T) {
 // back as a bare `flag: help requested`: `panda todo --help` exited 2 instead
 // of printing usage.
 func TestTodoHelpFlags(t *testing.T) {
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	ctx := context.Background()
 
 	for _, args := range [][]string{
