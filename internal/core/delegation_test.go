@@ -55,10 +55,15 @@ func startChain(t *testing.T, ctx context.Context) (root, mid, leaf *Core) {
 // executes, and the result flows back up the chain. Every node's copy of the
 // task must end done, and the root must hold a non-empty result.
 func TestThreeNodeForward(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Three fresh databases and the mesh handshake consume most of a five
+	// second budget under -race on shared runners. Bound fixture lifetime
+	// separately so Submit receives its full execution budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	root, mid, leaf := startChain(t, ctx)
+	ctx, cancelSubmit := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelSubmit()
 
 	in := TaskInput{Title: "read gpio", Intent: "read gpio", Requires: []string{"gpio:read"}}
 	task, result, err := root.Submit(ctx, in)
@@ -93,10 +98,13 @@ func TestThreeNodeForward(t *testing.T) {
 // done via the relayed result (not local execution) — its native abilities do
 // not include gpio:read.
 func TestResultRelay(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Keep database/handshake setup out of the task's execution budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	root, mid, _ := startChain(t, ctx)
+	ctx, cancelSubmit := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelSubmit()
 
 	in := TaskInput{Title: "relay", Intent: "relay", Requires: []string{"gpio:read"}}
 	task, result, err := root.Submit(ctx, in)
