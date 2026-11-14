@@ -108,10 +108,15 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Force    # 强制降级�
 ## 4. 从源码 / Go
 
 ```bash
-# 源码构建（需要 Go 1.26.11+；先 make web 以嵌入 Web 控制台）
-make build            # → bin/panda
-go install github.com/Xustalis/OpenPanda/cmd/panda@latest
+# 源码构建（Go 1.26.11+、Node.js/npm、Python 3）
+make web              # 生成当前 Web 控制台
+make build            # → bin/panda，嵌入刚生成的控制台
+
+# 安装当前 checkout 到本地 PATH（自动依次构建 Web 与 Go）
+make install-local    # ~/.local/bin/panda + 适配器、语音脚本和驱动
 ```
+
+安装使用原子重命名，保留个人配置和数据；已有发行目录会继续使用 PATH 软链。此命令不修改 shell 配置，也不重启现有进程。若命令找不到，先执行 `export PATH="$HOME/.local/bin:$PATH"`。同一个版本号可能对应不同源码，测试前应确认安装文件，运行中的 daemon 需要空闲后另行重启。详见 [v0.1.6 测试与发布清单](release-v0.1.6.md)。
 
 ## 安装后
 
@@ -186,14 +191,13 @@ panda uninstall --backup-only
 ## 云服务器 / 公网 IP 部署
 
 `network.exposure_mode` 决定对外面：新装默认 `loopback`，总线与控制台都只在
-`127.0.0.1`（`7836` / `7840`），UDP 数据面与 LAN 发现关闭。改成 `lan` 后总线绑
+`127.0.0.1`（`7836` / `7840`），UDP 数据面绑定回环的总线同号端口（可用 `udp_listen: "off"` 关闭），LAN 发现关闭。改成 `lan` 后总线默认绑
 `0.0.0.0:7836`、发现绑 `:7837`，控制台仍在回环；`public` 额外强制稳定
 `shared_secret` 与 `panel_token`、关闭发现、拒绝明文拨号。已有配置只要显式写过
 `listen_addr` / `panel_addr` / `udp_listen`，就按 `legacy` 保持 0.1.5 之前的绑定，
 升级不会挪端口。
 
-daemon 启动会自动生成并写回 `shared_secret`，所以只要不是 `loopback`，总线端口
-一定在监听。陌生设备连得上端口，但过不了 HMAC 成员校验、下发不了任务；持有共享
+daemon 启动会自动生成并写回 `shared_secret`，然后在配置指定的地址监听总线。陌生设备能否连接取决于监听与网络策略；即使连得上端口，也过不了 HMAC 成员校验、下发不了任务；持有共享
 密钥即为 `mesh` 成员，可自动委派任务（等价于远程执行）。当前版本没有按设备或被
 授权人的准入名单。
 
@@ -205,15 +209,16 @@ daemon 启动会自动生成并写回 `shared_secret`，所以只要不是 `loop
 1. 设 `network.exposure_mode: public`（云主机）或 `lan`（只有私网），再把
    `network.listen_addr` 绑到 Tailscale / WireGuard 的 overlay 网卡地址；
    `udp_listen: "off"`、`discovery_addr: "off"`、`discovery_auto_dial: false`。
-2. 安全组入站只放行 overlay 网段与端口。下表是默认会监听的端口，均不对
+2. 安全组入站只放行 overlay 网段与端口。下表区分全新安装与显式组网，均不对
    `0.0.0.0/0` 开放。
 
-   | 端口 | 用途 | 默认绑定 |
-   | --- | --- | --- |
-   | 7836 | 节点间 WebSocket 总线 | `0.0.0.0` |
-   | 7837 | UDP 数据面 / LAN 发现信标 | `0.0.0.0` |
-   | 7840 | Web 控制台 | `127.0.0.1`（`--lan` 后变 `0.0.0.0`） |
-   | 动态 | 产物预览、项目开发服务器 | 随 `--lan` 变 `0.0.0.0` |
+   | 端口 | 用途 | 全新 loopback 安装 | 显式组网 |
+   | --- | --- | --- | --- |
+   | 7836/TCP | 节点间 WebSocket 总线 | `127.0.0.1` | lan/public 按 `listen_addr`，默认 `0.0.0.0` |
+   | 7836/UDP | 数据面（默认与总线同号） | `127.0.0.1`，可关闭 | 按 `udp_listen`，留空随总线，可关闭 |
+   | 7837/UDP | LAN 发现信标 | 关闭 | lan 默认 `:7837`；public 关闭 |
+   | 7840/TCP | Web 控制台 | `127.0.0.1` | `--lan` 后为 `0.0.0.0` |
+   | 动态 | 产物预览、项目开发服务器 | 回环 | 随 `--lan` 变 `0.0.0.0` |
 
 3. 控制台保持 `127.0.0.1`，由 nginx / Caddy 终结 TLS 再转发；跨公网对端写成
    `wss://host:port`，不要用 `ws://`。

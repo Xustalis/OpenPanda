@@ -73,9 +73,9 @@ it coordinates the agent CLIs already on each device (Claude Code,
 Codex, and friends) plus direct shell execution and human-approved
 tasks.
 
-Requires Go 1.26.10+ (the patch level is a security floor: 1.26.10 is
-where GO-2026-6809, reachable through crypto/x509 in the bus TLS path, is
-fixed). The build deliberately avoids CGO: even SQLite comes from
+Requires Go 1.26.11+ (the security floor in go.mod includes the
+GO-2026-6809 crypto/x509 fix and GO-2026-6859 HTTP fix). The build deliberately
+avoids CGO: even SQLite comes from
 `modernc.org/sqlite`, so cross-compilation is just `GOOS/GOARCH`.
 
 ## Licensing
@@ -122,7 +122,7 @@ make dev          # build + open the web console against config.yaml (loopback, 
 make run          # run daemon from source
 make run-local    # daemon + webui sidecar via scripts/run-local.sh
 make install-local
-                  # sync a fresh build over ~/.local/bin and the release prefix
+                  # rebuild Web then Go; sync binary, adapters, voice helpers and drivers
 make measure      # steady-state RSS measurement
 make icons        # regenerate the PWA icon set (scripts/genicons)
 make clean        # rm -rf bin dist

@@ -1,5 +1,7 @@
 # Project status
 
+> 2026-11-14 pre-release audit: fixed stale Web assets in source installs, fresh-HOME installation, missing voice/driver sync, old default packaging versions and omitted lite archive checks. A real entry call reproduced and verified the fix for literal replies being mistaken for source investigations. Installer tests now isolate service-manager calls so temporary HOME cannot affect real user services. Added the bilingual [v0.1.6 local test and release checklist](release-v0.1.6.en.md) and corrected loopback TCP/UDP/discovery documentation. Read coverage in the table below and local test evidence separately.
+
 > 2026-11-13 (v0.1.6 reliability and delivery acceptance, tag not cut yet: entry-model phases and provider-returned reasoning summaries are visible. Answer text, progress and Stop identity are durable across refresh; late events cannot overwrite a user message or another operation. Compaction bounds model replay instead of deleting the original transcript; history already deleted by older versions cannot be reconstructed. Codex injection includes its Responses provider configuration while native official and compatible endpoint settings remain supported. Exhausted billing stops after permitted rescue rather than replaying forever. Web/TUI handoffs show the report, recorded steps, verification status and remaining work; unknown or partial verification is not reported as a pass. Web copy/export retain the report and mobile reading no longer reserves an unused desktop lane. The site adds first-task, acceptance and recovery guidance and separates source preparation from published stable downloads. See the validation table for coverage. Existing services were not restarted, the public site was not deployed, and this round does not claim fresh multi-device or every-provider runtime acceptance.)
 
 > 2026-11-12 (v0.1.6 release material, pending tag: completion and recovery no longer claim work the machine did not do — approval cannot close a run already known to be unfinished, an external blocker requires changed input, and a partial or interrupted run is neither reported as success nor silently replayed on another agent; recovery names its strategy and native checkpoints survive bounded continuation and dependency release. A plan stage carries `acceptance`, `success_definition`, `tools_policy`, `max_turns` and a `blocked` outcome through conversion, independent branches run in parallel and ready stages are ordered by a weighted critical-path heuristic. Model discovery reads CC Switch and other Claude Code relays read-only while dispatch keeps the node's native relay endpoint; a task declares whether it may write and repository answers require source evidence. `--nodes`, the device selector and `task_submit.node` pin a node hard, `--preferred` stays a soft hint with `route_fallback`, and a failed handshake names the secret, clock or identity mismatch. The console folds side conversations, the overview and notifications into one surface. Diagnostics: the adapter launch profile is logged, peer config changes are observed on a one-second file poll, `install-local` syncs `~/.local/adapters`, probes send the provider session header, and an adapter that cannot start goes straight to a terminal `failed`. The Go floor rises to 1.26.11 for GO-2026-6859, alongside Windows DPI, console reload, queue and probe fixes. Configuration, stored data and the wire are unchanged and the schema stays at v67 — no migration, no new frame. Not done: UPnP/NAT-PMP, source-signature convergence for punch/dir frames, daemon→panel mesh metrics. This work is unreleased.)
@@ -421,6 +423,19 @@ sentence". Consent to a shell command is not consent to a three-machine
 pipeline — and something a microphone heard is even less.
 
 ## Verified to what degree
+
+### 2026-11-14 local pre-release recheck
+
+| Check | Result and boundary |
+| --- | --- |
+| Final-source make gate-all | Exit 0: 114 adapter contracts, 6 install/packaging regressions, full Go tests, 427 frontend tests and four PTY checks. Changed askengine/panel race tests ran again; unchanged core and other packages reused the same day's passing cache (core race had taken 655.3 seconds) |
+| Installer | 24 passed, 0 skipped on macOS arm64. Service calls use isolated recorders; this checks service-file generation without activating real user services |
+| Release packages | Six full and three Linux lite targets actually cross-compiled, archived and checksum-verified. Local archives are unsigned; this proves neither publication nor runtime acceptance on nine platforms |
+| PATH installation | make install-local passed; binary and 50 helper files across both layouts match source builds, signature verification passed, config content stayed unchanged, and the idle resident daemon restarted normally and is online |
+| Installed-version smoke | Doctor passed. Isolated HTTP panel, embedded JS and version API passed. The configured entry provider returned the expected token in a real call (8.3 seconds); this does not validate real task completion on every agent CLI |
+| Docs and site | Docs drift, 48 site contracts and module tidiness passed. No public-site publication or release tag was performed |
+
+The previous and historical evidence below retain their own dates and hardware coverage.
 
 | Check | Result |
 |---|---|

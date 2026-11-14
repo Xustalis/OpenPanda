@@ -5,8 +5,10 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="${OPENPANDA_DIST_DIR:-$ROOT/dist}"
-VERSION="${1:-0.1.5}"
+SOURCE_VERSION="$(sed -n 's/^var Version = "\(.*\)"/\1/p' "$ROOT/internal/version/version.go")"
+VERSION="${1:-${VERSION:-$SOURCE_VERSION}}"
 VERSION="${VERSION#v}"
+[ -n "$VERSION" ] || { echo "cannot determine source version" >&2; exit 1; }
 
 set -- \
   "panda-$VERSION-darwin-amd64.tar.gz" \
@@ -14,7 +16,10 @@ set -- \
   "panda-$VERSION-linux-amd64.tar.gz" \
   "panda-$VERSION-linux-arm64.tar.gz" \
   "panda-$VERSION-windows-amd64.zip" \
-  "panda-$VERSION-windows-arm64.zip"
+  "panda-$VERSION-windows-arm64.zip" \
+  "panda-$VERSION-lite-linux-amd64.tar.gz" \
+  "panda-$VERSION-lite-linux-arm64.tar.gz" \
+  "panda-$VERSION-lite-linux-armv7.tar.gz"
 
 [ -f "$DIST/checksums.txt" ] || { echo "missing dist/checksums.txt" >&2; exit 1; }
 for archive in "$@"; do

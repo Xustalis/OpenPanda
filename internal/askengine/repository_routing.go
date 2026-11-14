@@ -111,7 +111,7 @@ func workspaceReadable(workDir string) bool {
 // to resolve repository follow-ups. The side channel uses the same policy;
 // reference history supplies an object, never an instruction to execute.
 func repositoryRequest(prompt string, history []entry.Turn, workspace bool) (question, deep bool) {
-	if !workspace {
+	if !workspace || literalReplyRequest.MatchString(strings.TrimSpace(prompt)) {
 		return false, false
 	}
 	explicit := refersToRepository(prompt) || repositoryCodeReference.MatchString(prompt)
@@ -133,6 +133,14 @@ func repositoryRequest(prompt string, history []entry.Turn, workspace bool) (que
 		"investigat", "explor", "audit", "review", "deep", "thorough", "issues", "problems"))
 	return question, deep
 }
+
+// Repeating a literal token does not make a claim about source code, even
+// when the token looks like snake_case or camelCase. Match the whole request
+// narrowly: an explanation, path read or additional repository instruction
+// still needs evidence. The optional suffix only forbids tools/task creation.
+var literalReplyRequest = regexp.MustCompile(`(?i)^(?:(?:please\s+)?(?:reply|respond|answer|return|output|print)\s+(?:(?:with|only|exactly|just)\s+)+|(?:please\s+)?(?:say|echo|repeat)\s+|(?:请)?(?:只|仅)(?:回复|输出|返回|重复)[：:\s]*)` +
+	`(?:\x60[a-z0-9_-]{1,128}\x60|"[a-z0-9_-]{1,128}"|'[a-z0-9_-]{1,128}'|[a-z0-9_-]{1,128})[.!。！，,]?` +
+	`(?:\s*(?:do not|don't) use tools(?: or create tasks)?[.!]?|\s*不要(?:使用|调用)工具(?:或创建任务)?[。！]?)?$`)
 
 // A code identifier/path is concrete workspace context, not a conceptual
 // explanation. This only vetoes the no-tools fast path; narrow questions can

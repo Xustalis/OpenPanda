@@ -71,6 +71,9 @@ The patch that keeps a run honest about what it finished — codename **Constell
 - **Conversation reliability** — Model calls announce their round; guarded repository investigation keeps provider reasoning/usage streaming while withholding unverified conclusions. Provider reasoning summaries, partial answers and operation progress survive console refreshes, and Stop targets the same operation before and after reconnect.
 - **Transcript integrity** — Late stream frames cannot overwrite user messages or another reply. Context compaction preserves the original transcript and trims only model replay; task reports are reconciled as their own rows instead of replacing the latest bubble.
 - **Agent execution** — Injected Codex providers explicitly select the Responses wire contract without changing native CLI configuration. Exhausted-provider billing errors stop after permitted rescue rather than repeatedly occupying the execution queue.
+- **Source installs and release checks** — Local installation builds the current Web console before embedding it, creates a missing PATH directory and updates adapters, voice helpers and drivers with atomic file replacement. Packaging and verification default to the source version; verification requires all three Linux lite archives as well as the six full builds. Local preparation no longer claims a release date.
+- **Literal replies stay conversational** — In a workspace, an explicit request to repeat a token such as HELLO_WORLD no longer becomes a source investigation just because it contains underscores or camelCase. Implementation questions and combined repository-review requests still require evidence.
+- **Installer tests cannot replace the user daemon** — A temporary HOME does not isolate launchctl or systemctl. Installer fixtures now record service activation through PATH shims while still verifying generated service files.
 
 ## [0.1.5] - 2026-11-09 — "Constellation"
 

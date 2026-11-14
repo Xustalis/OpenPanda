@@ -15,7 +15,7 @@
 #
 # Run `make web` first so the embedded web console is baked in.
 #
-# Usage: scripts/package.sh [version]   (default: $VERSION or 0.1.5)
+# Usage: scripts/package.sh [version]   (default: $VERSION or source version)
 #
 # Env:
 #   OPENPANDA_PACKAGE_TARGETS  space-separated "os-arch" list to build instead
@@ -42,8 +42,10 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${1:-${VERSION:-0.1.5}}"
+SOURCE_VERSION="$(sed -n 's/^var Version = "\(.*\)"/\1/p' "$ROOT/internal/version/version.go")"
+VERSION="${1:-${VERSION:-$SOURCE_VERSION}}"
 VERSION="${VERSION#v}"
+[ -n "$VERSION" ] || { echo "cannot determine source version" >&2; exit 1; }
 VERSION_PKG="github.com/Xustalis/OpenPanda/internal/version"
 LDFLAGS="-s -w -X ${VERSION_PKG}.Version=${VERSION} -X ${VERSION_PKG}.Provenance=release"
 
@@ -73,7 +75,7 @@ if [ -n "$RELEASE_PUBKEY" ]; then
     LDFLAGS="$LDFLAGS -X ${VERSION_PKG}.ReleasePubKey=${RELEASE_PUBKEY}"
     echo "→ release key pinned: ${RELEASE_PUBKEY%????????????????????????????????}…"
 else
-    echo "package.sh: no OPENPANDA_RELEASE_KEY/_PUBKEY — binaries will accept checksum-only releases" >&2
+    echo "package.sh: using the compiled-in release verification key; checksum signing skipped" >&2
 fi
 
 TARGETS="${OPENPANDA_PACKAGE_TARGETS:-darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64 lite-linux-amd64 lite-linux-arm64 lite-linux-armv7}"
