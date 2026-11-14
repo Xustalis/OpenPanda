@@ -88,7 +88,7 @@
       <p class="mono-label pg-kicker">RELEASE NOTES</p>
       <h1 class="pg-title" data-i18n="cl.h1">发布记录</h1>
       <p class="pg-lede" data-i18n="cl.lede">0.1.x 是发布级版本线。以下是逐版摘要，五语完整日志留在仓库里。</p>
-      <p class="pg-meta">6 RELEASES + 1 CANDIDATE · 0.1.0 → 0.1.6</p>
+      <p class="pg-meta">7 RELEASES · 0.1.0 → 0.1.6</p>
     </div>
   </header>
   <div class="wrap pg-layout">
@@ -128,13 +128,15 @@
       </section>
 
       <article class="pg-release pg-release-current" id="v016">
-        <div class="pg-release-head"><span class="pg-release-ver">v0.1.6</span><span>2026-11-12</span><b>CONSTELLATION</b><em data-i18n="cl.current">发布准备中</em></div>
+        <div class="pg-release-head"><span class="pg-release-ver">v0.1.6</span><span>2026-11-14</span><b>CONSTELLATION</b><em data-i18n="cl.current">当前稳定版</em></div>
         <ul>
           <li data-i18n="cl.v016.a">完成判定、恢复与阶段契约跟着机器实际做过的工作走：已知未完成的工作不能靠批准收口，外部阻塞要改输入，部分或中断的执行既不报成功也不静默换 agent 重放；恢复策略有自己的名字，原生检查点在受限续跑与依赖释放中保留下来。</li>
           <li data-i18n="cl.v016.b">计划阶段带 acceptance、success_definition、tools_policy、max_turns 与 blocked 结果，独立分支并行、就绪阶段按加权关键路径排序；模型发现只读接入 CC Switch 等 Claude Code 中转，调度保留节点原生端点与设置；只读执行声明边界，关于仓库的回答必须有源码证据。</li>
           <li data-i18n="cl.v016.c">--nodes、控制台设备选择器与 task_submit.node 是硬 pin，--preferred 仍是允许回退并留下 route_fallback 的软提示，握手失败会指出是密钥、时钟还是节点身份对不上；控制台把侧边会话、概览与通知收进同一个界面。</li>
           <li data-i18n="cl.v016.d">工具链下限抬到 Go 1.26.11 以避开 GO-2026-6859，另修 Windows DPI、控制台重载与队列、adapter 探针等边界。配置、存储数据与线协议不变，schema 仍是 v67：无迁移、无新帧。</li>
           <li data-i18n="cl.v016.e">会话与交付可靠性也在本版：模型调用显示轮次与供应商返回的思考摘要，回答、进度和停止身份在刷新后保留，迟到事件不覆盖已有消息，压缩只缩减模型回放；完成任务默认给出交付报告、真实步骤、验证状态与待确认事项，TUI 后台完成也留下结果块。Codex 注入显式选择 Responses 协议，余额耗尽在允许的救援后停止。</li>
+          <li data-i18n="cl.v016.f">本地安装先重建 Web，再同步二进制、适配器、语音和驱动；打包默认跟随源码版本并校验九个目标，安装器测试隔离服务管理。明确要求复述字面 token 时不再误触发源码调查。</li>
+          <li data-i18n="cl.v016.g">合入模型派发配置、节点目录扫描和同名虚拟机身份修复；Dock 统一当前线程的文件、变更与预览，已裁决的范围漂移不再重复询问。</li>
         </ul>
         <a href="download.html" data-i18n="cl.more">下载这一版 →</a>
       </article>
@@ -262,7 +264,7 @@
         <span>Open<b>Panda</b></span>
       </a>
       <p class="footer-tag" data-i18n="foot.tag">Local-first, forever.</p>
-      <p class="footer-version"><b>v0.1.6 Constellation</b> <span data-i18n="foot.channel">· 发布准备中</span></p>
+      <p class="footer-version"><b>v0.1.6 Constellation</b> <span data-i18n="foot.channel">· 稳定版</span></p>
     </div>
     <div class="footer-col">
       <h4 data-i18n="foot.product">产品</h4>
@@ -299,7 +301,7 @@
     <span class="status-pill"><i aria-hidden="true"></i><span data-i18n="foot.green">main 分支全绿才允许合并</span></span>
     <span class="status-sep" aria-hidden="true">·</span>
     <span data-i18n="foot.checks">10 项必过检查 · 6 个发布目标 · 每周安全扫描</span>
-    <a class="status-link" href="download.html" data-i18n="foot.latest">v0.1.6 发布准备 <span aria-hidden="true">→</span></a>
+    <a class="status-link" href="download.html" data-i18n="foot.latest">v0.1.6 稳定版 <span aria-hidden="true">→</span></a>
   </div>
   <div class="wrap footer-bottom">
     <p class="footer-credit" data-i18n="foot.credit">影像：<a href="https://www.eso.org/public/images/eso0932a/" target="_blank" rel="noopener">ESO/S. Brunier 银河全景</a>（<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>；已裁剪、调色并与程序星点合成）；NASA Blue Marble、Black Marble DNB 与地球云层影像（公有领域）。代码以 AGPL-3.0-or-later 发布；闭源嵌入与托管修改可另行授权。</p>

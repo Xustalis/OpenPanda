@@ -244,7 +244,7 @@ export const EN = {
   /* ── 08 · roadmap ──────────────────────────────────────────────────── */
   's8.label': 'TRAJECTORY',
   's8.title': 'Flight plan.',
-  "s8.lede": "v0.1.6 Constellation is completing release acceptance. The installer uses the actual latest stable channel, never an unpublished version.",
+  "s8.lede": "v0.1.6 Constellation is the stable release dated 2026-11-14. The installer follows the latest stable channel; upgrades preserve personal configuration and data.",
   's8.m1.name': 'Apoapsis',
   's8.m1.d': 'Cross-node delegation, worktree following, actuator dispatch.',
   's8.m1.state': 'Released',
@@ -254,7 +254,7 @@ export const EN = {
   's8.m3.name': 'Constellation',
   's8.m3.d':
     'The current cut of the release-grade line: cross-network mesh, same-project parallelism, audit close-out, one integrated console, plus native dialects, the terminal roster and per-task work directories.',
-  "s8.m3.state": "Release acceptance",
+  "s8.m3.state": "Stable release published",
   's8.m4.name': 'Assistant',
   's8.m4.d':
     'Desktop shell (tray residency, global hotkeys, self-update), dense mesh layer, honest status reporting.',
@@ -310,7 +310,7 @@ export const EN = {
   'faq.q4.a':
     'Six release targets: macOS, Linux and Windows × amd64 / arm64, plus a lite-linux variant. Eleven adapters today — Claude Code, Codex, Antigravity, OpenCode, Grok Build, Hermes, OpenClaw, Pi, DeepSeek Harness, ZCode, and a generic one that takes any other headless CLI.',
   'faq.q5.q': 'Can I use it in production?',
-  "faq.q5.a": "v0.1.6 is undergoing release-grade acceptance; unpublished fixes do not appear automatically in installed versions. Existing release-grade builds are intended for self-use and internal tools. See <a href=\"https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md\" target=\"_blank\" rel=\"noopener\">status.md</a> for the scope and dates of multi-device and cross-network tests and outstanding work; a historical pass is not a fresh rerun. Public hosting is not advised yet.",
+  "faq.q5.a": "v0.1.6 has passed the release gates and is intended for self-use and internal tools. Upgrade to this version for session recovery and task delivery fixes. See <a href=\"https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md\" target=\"_blank\" rel=\"noopener\">status.md</a> for the scope and dates of multi-device and cross-network tests and outstanding work; a historical pass is not a fresh rerun. Public hosting is not advised yet.",
   'faq.q6.q': 'Is it free? How does licensing work?',
   'faq.q6.a':
     'Personal, study and internal company use cost nothing. Only when you distribute or host a modified version does <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL</a> require you to open your changes; if you would rather not, that is when a commercial licence comes in — just <a href="mailto:fing2024@outlook.com">email</a>.',
@@ -355,7 +355,7 @@ export const EN = {
   'foot.invest': 'Partnership / investment',
   'foot.green': 'main must be all green to merge',
   'foot.checks': '10 required checks · 6 release targets · weekly security scan',
-  "foot.latest": "v0.1.6 release preparation <span aria-hidden=\"true\">→</span>",
+  "foot.latest": "v0.1.6 stable release <span aria-hidden=\"true\">→</span>",
   'foot.credit':
     'Imagery: <a href="https://www.eso.org/public/images/eso0932a/" target="_blank" rel="noopener">ESO/S. Brunier Milky Way panorama</a> (<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>; cropped, colour-graded and composited with procedural stars); NASA Blue Marble, Black Marble DNB and Earth cloud imagery (public domain). Code released under AGPL-3.0-or-later; closed-source embedding and hosted modifications are licensable separately.',
   'foot.built': 'Built for machines you own.',
@@ -369,7 +369,7 @@ export const EN = {
   'pal.open': 'open',
 
   /* ── site pages: docs / download / changelog / status ────────────────── */
-  "cl.current": "Release preparation",
+  "cl.current": "Current stable",
   'cl.first': 'Release-grade start',
   'cl.h1': 'Release notes',
   'cl.lede': 'The 0.1.x line is release-grade. Each entry below is a summary; the full changelog in five languages lives in the repository.',
@@ -405,6 +405,8 @@ export const EN = {
   'cl.v014.d': 'Agents can drive a real headless browser through panda browser and the panda_browser_* tools; project dev servers preview live through a same-origin reverse proxy.',
   'cl.v014.t': 'v0.1.4',
   'cl.v015.t': 'v0.1.5',
+  'cl.v016.f': 'Local installation rebuilds the Web console before syncing the binary, adapters, voice helpers and drivers. Packaging follows the source version and verifies nine targets; installer tests isolate service managers. Explicit literal-token replies no longer trigger source investigation.',
+  'cl.v016.g': 'Includes model-dispatch configuration, node-directory scanning and same-named VM identity fixes. The dock consolidates the current thread’s files, changes and previews; decided scope-drift reviews stop asking again.',
   'cl.v016.t': 'v0.1.6',
   'cl.v016.a': 'Completion, recovery and stage contracts follow what the machine actually did: known unfinished work cannot be closed by approval, an external blocker requires changed input, and a partial or interrupted run is neither reported as success nor silently replayed on another agent. Recovery names its strategy, and native checkpoints survive bounded continuation and dependency release.',
   'cl.v016.b': 'A plan stage carries acceptance, success_definition, tools_policy, max_turns and a blocked outcome; independent branches run in parallel and ready stages are ordered by a weighted critical-path heuristic. Model discovery reads CC Switch and other Claude Code relays read-only while dispatch keeps the node’s native relay endpoint and settings. Read-only runs declare their boundary, and repository answers require source evidence.',
@@ -415,7 +417,7 @@ export const EN = {
   'cl.v015.b': 'A bare imperative such as "open the web console" or "start the web service" now runs locally and answers with its output — no model call, no task row, no agent. Agent model and concurrency settings, writable sandbox mode, pairing notifications and the nine-page site ship in the same release; configuration, stored data and the wire format are unchanged.',
   'cl.v015.c': 'A delegated run no longer dies with the peer\'s link, concurrent waiters on one task all receive the result, and a delegated child no longer leaks a waiter. An agent run with no supervisor and no contract is labelled unverified, and a silent success parks for review.',
   'dl.h1': 'Download OpenPanda',
-  "dl.lede": "v0.1.6 “Constellation” is in release preparation. Install and download links follow published stable releases. The six release targets and three lite variants for v0.1.6 become available after acceptance.",
+  "dl.lede": "v0.1.6 “Constellation” is the stable release. Six full builds for macOS, Linux and Windows and three Linux lite variants ship with SHA-256 checksums and Ed25519 release signatures. Installation follows the latest stable channel.",
   'dl.s1.brew': 'Same release channel as the tap',
   'dl.s1.d': 'The installer resolves the right archive for your platform, so these are the only commands most people need.',
   'dl.s1.t': 'One-line install',
@@ -454,8 +456,8 @@ export const EN = {
   "docs.first.accept": "After execution, inspect the handoff report, real steps, changed paths, verification and attention items. done means execution ended, not independently verified; missing checks are explicitly labelled.",
   "docs.first.recover": "On failure, inspect the task reason, then fix networking, authentication, balance or executor configuration before retrying. Do not repeatedly replay a known failure. Stopping retains partial answers so you can continue in the same conversation.",
   "docs.first.upgrade": "After a source update, rebuild and restart the actual Panda service, then refresh the browser. An old process does not acquire new logic automatically. Back up configuration and data before upgrading.",
-  "foot.channel": "· Release preparation",
-  "dl.channel": "Release preparation",
+  "foot.channel": "· Stable release",
+  "dl.channel": "Current stable",
   'docs.h1': 'Documentation',
   'docs.lede': 'Installation, commands and architecture for v0.1.6, kept on the site instead of behind a repository link.',
   'docs.s1.c1': 'Initialise the node, model provider and capability cards.',

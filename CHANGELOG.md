@@ -46,7 +46,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-## [0.1.6] - 2026-11-12 — "Constellation"
+## [0.1.6] - 2026-11-14 — "Constellation"
 
 The patch that keeps a run honest about what it finished — codename **Constellation**: completion, recovery and stage contracts follow the work the machine actually did; read-only runs declare their boundary and repository answers carry source evidence; the console folds side conversations, an overview and notifications into one surface; and a hard device pin stays a pin instead of drifting into a preference. Configuration, stored data and the wire are unchanged, and the schema stays at v67 — no migration and no new frame.
 
@@ -63,6 +63,8 @@ The patch that keeps a run honest about what it finished — codename **Constell
 - **Diagnostics follow the process boundary** — The commander records the adapter launch profile at spawn, the daemon observes peer config changes on a one-second file poll and `install-local` syncs `~/.local/adapters`, `panda doctor` names refused endpoints in all five locales, and model probes send the provider's session header. An adapter that cannot start goes straight to a terminal `failed` instead of burning the retry budget.
 
 ### Fixed
+- **Dispatch and node discovery** — Agent model configuration is resolved at dispatch while preserving native relay endpoints. A mesh-owning console sweeps the node directory; same-named virtual machines are distinguished by identity. Bare actuator invocations return a validation error instead of panicking.
+- **One home for thread changes** — The dock opens on the current thread's files and changes, consolidates diffs and image previews, and derives overview counts from that thread. A decided scope-drift review stops asking again; the Windows configuration warning is shown once.
 - **The toolchain floor is Go 1.26.11** — GO-2026-6859 is a crash in the HTTP/1 server's `MaxBytesReader` header handling, and it is reachable here from the panel's static-file handler, the bus's WebSocket upgrade and every outbound `http.Client` call. `go.mod`'s `go` directive is the only place the toolchain is declared (CI resolves it with `go-version-file`), so raising it to 1.26.11 moves every leg at once; `govulncheck` reports nothing on the new floor, and the Go floor in the contributing guides, both install guides and the site now reads 1.26.11. The go-modules dependency group moved with it.
 - **Windows and console correctness** — A per-monitor DPI manifest is embedded in the Windows binary; `index.html` is revalidated while hashed assets are cached indefinitely; a reloaded turn shows what the author typed instead of the inlined files; the composer's model card follows registry writes; a round closes with the batch rather than a tally; a foreign tool-call envelope renders as JSON; directory timestamps stay out of the graph ETag; the first-run banner routes to Settings → Models; and the roster ticks deliberately.
 - **Queue and CLI edges** — A `--wait` call no longer burns its timeout on a settled failure, a NULL `work_dir` no longer blinds the ready queue, and the summary finalizer retires when its store is gone.

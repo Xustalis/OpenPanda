@@ -40,7 +40,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
-## [0.1.6] - 2026-11-12 — "Constellation"
+## [0.1.6] - 2026-11-14 — "Constellation"
 
 Das Patch, das eine Ausführung ehrlich darüber macht, was sie abgeschlossen hat — Codename **Constellation**: Abschluss, Wiederherstellung und Stufenverträge richten sich nach der Arbeit, die die Maschine tatsächlich geleistet hat; Read-only-Läufe nennen ihre Grenze und Antworten zum Repository belegen sich mit Quellcode; die Konsole führt Seitenunterhaltungen, Übersicht und Benachrichtigungen auf einer Fläche zusammen; und ein harter Geräte-Pin bleibt ein Pin, statt zu einer Präferenz zu werden. Konfiguration, gespeicherte Daten und Wire-Format bleiben unverändert, das Schema bleibt bei v67 — keine Migration und kein neues Frame.
 
@@ -68,6 +68,9 @@ Das Patch, das eine Ausführung ehrlich darüber macht, was sie abgeschlossen ha
 - **Quellinstallation und Release-Prüfung** — Die lokale Installation baut zuerst die Webkonsole, erstellt das PATH-Verzeichnis und ersetzt Binärdatei, Adapter, Sprachhelfer und Treiber atomar. Paketierung und Prüfung verwenden standardmäßig die Quellversion und verlangen neben sechs Vollversionen alle drei Linux-lite-Archive. Ein Build in Vorbereitung zeigt kein Veröffentlichungsdatum mehr an.
 - **Wörtliche Antworten bleiben Gespräch** — Die ausdrückliche Bitte, ein Token wie HELLO_WORLD zu wiederholen, löst im Arbeitsverzeichnis allein durch Unterstriche oder camelCase keine Quellprüfung mehr aus. Implementierungsfragen und kombinierte Repository-Prüfungen benötigen weiterhin Belege.
 - **Installertests ersetzen keinen Benutzer-Daemon** — Ein temporäres HOME isoliert launchctl und systemctl nicht. Die Tests protokollieren Dienstaufrufe über isolierte PATH-Kommandos und prüfen weiterhin die erzeugten Dienstdateien, ohne echte Benutzerdienste zu steuern.
+
+- **Dispatch und Knotenerkennung** — Die Agentenmodellkonfiguration wird beim Dispatch aufgelöst, native Relay-Endpunkte bleiben erhalten. Eine Konsole mit Mesh durchsucht das Knotenverzeichnis und unterscheidet gleichnamige virtuelle Maschinen anhand ihrer Identität. Aktuatoraufrufe ohne Argumente liefern einen Validierungsfehler statt eines Panic.
+- **Ein Ort für Änderungen des Threads** — Das Dock zeigt Dateien, Änderungen, Diffs und Bildvorschauen des aktuellen Threads; auch die Übersicht zählt dessen Daten. Eine entschiedene Prüfung einer Bereichsabweichung fragt nicht erneut, und die Windows-Konfigurationswarnung erscheint nur einmal.
 
 ## [0.1.5] - 2026-11-09 — "Constellation"
 
