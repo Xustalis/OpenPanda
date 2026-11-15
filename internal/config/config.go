@@ -565,7 +565,25 @@ type NodeConfig struct {
 type PeerEntry struct {
 	Addr  string `yaml:"addr"`
 	Trust string `yaml:"trust,omitempty"`
+	// RelayPriority marks this peer as a designated fallback relay: when a
+	// destination has failed two punch windows (nat_suspect) and the frame
+	// has to leave through transit, this peer is tried as the hop BEFORE
+	// the automatic relay election. Empty (the default) means "no opinion —
+	// elect as usual".
+	//
+	// It is a purely local preference, held by the node that sends: nothing
+	// about it is advertised, gossiped or imposed on anyone else, and it
+	// grants the peer no scheduling weight. Several entries are allowed and
+	// are tried in config order — a second relay is a backup for the first,
+	// not a second route table.
+	RelayPriority string `yaml:"relay_priority,omitempty"`
 }
+
+// RelayPriorityFallback is the only non-empty relay_priority value: "use
+// this peer first when a suspected-symmetric-NAT destination must be
+// relayed". Spelled out as a constant so the config, the core policy and
+// the doctor rendering cannot drift on the literal.
+const RelayPriorityFallback = "fallback"
 
 // UnmarshalYAML accepts the legacy scalar (a bare address) alongside the
 // structured {addr, trust} mapping, so existing configs parse unchanged.
@@ -573,22 +591,26 @@ func (e *PeerEntry) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind == yaml.ScalarNode {
 		e.Addr = value.Value
 		e.Trust = ""
+		e.RelayPriority = ""
 		return nil
 	}
 	type plain PeerEntry
 	return value.Decode((*plain)(e))
 }
 
-// MarshalYAML writes the scalar form when no trust tier is set, so files
-// that never opted into zones keep their original shape on rewrite.
+// MarshalYAML writes the scalar form only when the entry carries no
+// structured fields, so files that never opted into zones keep their
+// original shape on rewrite — and a peer marked as a fallback relay keeps
+// that mark through `panda nodes trust`'s config rewrite.
 func (e PeerEntry) MarshalYAML() (any, error) {
-	if e.Trust == "" {
+	if e.Trust == "" && e.RelayPriority == "" {
 		return e.Addr, nil
 	}
 	return struct {
-		Addr  string `yaml:"addr"`
-		Trust string `yaml:"trust"`
-	}{Addr: e.Addr, Trust: e.Trust}, nil
+		Addr          string `yaml:"addr"`
+		Trust         string `yaml:"trust,omitempty"`
+		RelayPriority string `yaml:"relay_priority,omitempty"`
+	}{Addr: e.Addr, Trust: e.Trust, RelayPriority: e.RelayPriority}, nil
 }
 
 // TrustSendPolicy is the operator-tunable half of the guarded outbound
@@ -832,6 +854,23 @@ func (n NetworkConfig) PeerTrustHints() map[string]string {
 	return out
 }
 
+// RelayFallbackAddrs lists the peers marked relay_priority: fallback, in
+// config order. The order IS the preference order — the first one that is
+// connected and advertises transit relaying is the hop a nat_suspect
+// destination's frames leave on.
+func (n NetworkConfig) RelayFallbackAddrs() []string {
+	var out []string
+	for _, p := range n.Peers {
+		if p.RelayPriority != RelayPriorityFallback {
+			continue
+		}
+		if a := strings.TrimSpace(p.Addr); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // NetworkConfig controls the WebSocket listener and manual peers. PanelAddr and
 // PanelToken are read only by the optional webui sidecar (webui/cmd/panel), not
 // by the kernel daemon.
@@ -843,7 +882,7 @@ type NetworkConfig struct {
 	PanelAddr           string      `yaml:"panel_addr"`             // webui sidecar HTTP listener; loopback by default (P1-24)
 	PanelToken          string      `yaml:"panel_token"`            // Bearer token guarding /api/* in the webui sidecar
 	SharedSecret        string      `yaml:"shared_secret"`          // HMAC secret authenticating node-to-node hellos; the WS listener refuses to start without it
-	Peers               []PeerEntry `yaml:"peers"`                  // scalar "worker-1:7836" / "punch:<id>", or {addr, trust} for a zoned peer
+	Peers               []PeerEntry `yaml:"peers"`                  // scalar "worker-1:7836" / "punch:<id>", or {addr, trust, relay_priority} for a zoned peer
 	Trust               TrustConfig `yaml:"trust"`                  // trust-zone policy tables; empty means every peer is mesh (pre-feature behaviour)
 	MaxConnections      int         `yaml:"max_connections"`        // global concurrent WS connection limit (0 = unlimited)
 	MaxConnectionsPerIP int         `yaml:"max_connections_per_ip"` // per-remote-IP concurrent WS connection limit (0 = unlimited)
@@ -1071,9 +1110,9 @@ type LogConfig struct {
 //	            locations (~/.ssh, ~/.aws, agent credential dirs belonging
 //	            to a different adapter, …) and deny_read_paths.
 //
-//	mode: standard/strict is a no-op on a platform with no backend
-//	  (seatbelt on macOS, bubblewrap on Linux); the daemon logs which
-//	  backend took effect at startup.
+//	mode: standard/strict refuses subprocess launches without a backend
+//	  (seatbelt on macOS, bubblewrap on Linux). Off explicitly permits
+//	  running without OS confinement; it is never an automatic fallback.
 //
 // Path lists accept absolute paths, "~"-relative paths, and bare names
 // (resolved against $HOME), so they match the spelling credential manifests
@@ -1678,8 +1717,22 @@ func (c *Config) Validate() error {
 		if err := ValidatePeerAddr(peer.Addr); err != nil {
 			return fmt.Errorf("config: network.peers[%d] %q: %w", i, peer.Addr, err)
 		}
-		if _, err := trust.ParseLevel(peer.Trust); err != nil {
+		level, err := trust.ParseLevel(peer.Trust)
+		if err != nil {
 			return fmt.Errorf("config: network.peers[%d] %q: %w", i, peer.Addr, err)
+		}
+		switch peer.RelayPriority {
+		case "", RelayPriorityFallback:
+		default:
+			return fmt.Errorf("config: network.peers[%d] %q: relay_priority %q is invalid (want \"\" or %q)",
+				i, peer.Addr, peer.RelayPriority, RelayPriorityFallback)
+		}
+		if peer.RelayPriority == RelayPriorityFallback && level == trust.Open {
+			// Open peers never receive a delegate and never serve a relay
+			// (trust.RelayServeFor), so the mark would be dead config that
+			// reads as a working fallback in the file and never gets used.
+			return fmt.Errorf("config: network.peers[%d] %q: relay_priority %q cannot ride an \"open\" trust tier — that tier may not serve transit",
+				i, peer.Addr, RelayPriorityFallback)
 		}
 	}
 	if err := c.Network.Trust.Validate(); err != nil {

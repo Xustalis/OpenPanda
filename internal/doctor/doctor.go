@@ -109,6 +109,12 @@ func Run(configPath string) []Check {
 			if c := checkMesh(cfg); c.Key != "" {
 				add(c)
 			}
+			// Who carries a suspected-symmetric-NAT peer's frames, once the
+			// punch windows are spent: one line per configured fallback
+			// relay, so "it falls back somewhere" stops being a black box.
+			for _, c := range checkRelayFallback(cfg) {
+				add(c)
+			}
 			// Discovery is checked last among the network rows: its verdict
 			// ("nobody is listening for beacons") only makes sense once the
 			// mesh and database states above are known.

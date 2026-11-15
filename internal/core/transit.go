@@ -198,7 +198,18 @@ func (c *Core) sendViaTransit(ctx context.Context, id string, env bus.Envelope) 
 		return err
 	}
 	tenv.To = dest
-	hop := c.transitNextHop(ctx, dest, nil)
+	// A destination parked as nat_suspect has already proven the direct path
+	// cannot be built: two full punch windows ended with no route. That is
+	// the moment the operator's designated fallback relay (relay_priority:
+	// fallback) becomes the first hop instead of an election that may pick a
+	// node with no onward path. The preference is local to this node — it
+	// rides no frame, is not advertised, and grants the relay nothing on the
+	// scheduling side.
+	// The mark is keyed on whatever sendTo was handed — an instance id, a
+	// stable key, or the host of a session id — so both spellings are
+	// consulted before deciding the destination is a lost cause.
+	prefer := c.transitFallbackPrefer(id, target)
+	hop := c.transitNextHopPreferred(ctx, dest, nil, prefer)
 	if hop == "" {
 		return errNoRoute
 	}
@@ -351,16 +362,67 @@ func (c *Core) handleTransit(ctx context.Context, conn *bus.Conn, env bus.Envelo
 // punched datagram route tops out at 1400-byte datagrams and cannot carry a
 // transit frame.
 func (c *Core) transitNextHop(ctx context.Context, destKey string, exclude map[string]bool) string {
+	return c.transitNextHopPreferred(ctx, destKey, exclude, nil)
+}
+
+// transitFallbackPrefer answers "should this send consult the operator's
+// designated fallback relays". A destination inside its nat_suspect window
+// has already spent two full punch windows without a route, which is exactly
+// the case the mark exists for; everything else keeps automatic election.
+// Both spellings of the destination are checked because the mark is keyed on
+// whatever sendTo was handed (instance id, stable key, or a session's host).
+func (c *Core) transitFallbackPrefer(id, target string) []string {
+	if !c.peerNatSuspect(id) && !c.peerNatSuspect(target) {
+		return nil
+	}
+	return c.fallbackRelays()
+}
+
+// transitNextHopPreferred is transitNextHop with an operator-designated
+// candidate list spliced in ahead of the unordered trnz pool. prefer names
+// peers the operator marked relay_priority: fallback (resolved to instance
+// ids by fallbackRelays); the first one that is connected, advertises trnz
+// and passes the outbound serve gate wins. An empty list is exactly the
+// pre-feature behaviour: automatic election over the connected trnz peers.
+//
+// The list is only consulted by the ORIGIN side (sendViaTransit). A relay
+// forwarding somebody else's frame passes nil — the relay's own fallback
+// preference is about its own egress, not about where a third party's frame
+// should go.
+func (c *Core) transitNextHopPreferred(ctx context.Context, destKey string, exclude map[string]bool, prefer []string) string {
 	excluded := func(id string) bool { return exclude[id] }
 	// Candidates are collected under the peer lock and filtered outside it:
 	// the serve gate resolves each candidate's trust tier, which is a store
 	// read, and holding c.mu across a query would stall every heartbeat and
 	// conn registration behind it.
+	inst := c.instanceForStable(ctx, destKey)
+	if excluded(inst) {
+		inst = ""
+	}
 	var candidates []string
-	if inst := c.instanceForStable(ctx, destKey); inst != "" && !excluded(inst) {
+	directDest := false
+	if inst != "" {
 		if conn := c.connFor(inst); conn != nil && conn.Supports(bus.CapTransitRelay) {
 			candidates = append(candidates, inst)
-		} else if hop, _ := c.dtnNextHop(ctx, inst, exclude, 0, 0); hop != "" && !excluded(hop) {
+			directDest = true
+		}
+	}
+	// The designated fallback relays, in config order. They come before the
+	// link-state hop on purpose: the operator named them because the
+	// automatic machinery is what failed, so a graph path that merely claims
+	// to reach the destination must not quietly outrank the explicit choice.
+	for _, id := range prefer {
+		if id == "" || excluded(id) {
+			continue
+		}
+		if conn := c.connFor(id); conn != nil && conn.Supports(bus.CapTransitRelay) {
+			candidates = append(candidates, id)
+		}
+	}
+	// The link-state first hop toward the destination, when the destination
+	// itself is not already the last hop.
+	if inst != "" && !directDest {
+		if hop, _ := c.dtnNextHop(ctx, inst, exclude, 0, 0); hop != "" && !excluded(hop) {
 			if conn := c.connFor(hop); conn != nil && conn.Supports(bus.CapTransitRelay) {
 				candidates = append(candidates, hop)
 			}
