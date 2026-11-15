@@ -303,8 +303,8 @@ func Run(configPath string) []Check {
 		}
 
 		// OS sandbox: "off" is a valid choice and reports as information; a
-		// configured mode with no platform backend is a real problem — the
-		// confinement the operator asked for is silently absent.
+		// configured mode with no platform backend blocks task subprocesses:
+		// the operator's requested boundary must exist before they may start.
 		switch m := cfg.Sandbox.NormalizedMode(); {
 		case m == "off":
 			add(pass("doctor.sandbox.off"))

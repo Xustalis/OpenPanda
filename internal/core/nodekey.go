@@ -30,7 +30,8 @@ import (
 //
 // The scheme is deliberately additive: peers that predate keys send no
 // PubKey/EdSig and verify exactly as before, so a mixed-version mesh keeps
-// working — signed content simply cannot be minted or verified for them.
+// working. Their tasks cannot inherit unsigned consent: high-risk work still
+// needs approval on the executing node.
 const nodeKeySetting = "node_ed25519_priv"
 
 // nodeXKeySetting is the X25519 half of the dual-key identity (cross-network
@@ -398,36 +399,16 @@ func (c *Core) grantConsentFor(t Task, p *bus.TaskDelegatePayload) {
 	p.AuthSig, p.AuthPub, p.AuthTs = t.AuthSig, t.AuthPub, t.AuthTs
 }
 
-// consentGrantValid decides whether the Authorized flag on an inbound delegate
-// may be adopted. The grant is a single object: a payload that carries some
-// but not all of (AuthSig, AuthPub, AuthTs) is a torn grant — fields stripped
-// in transit — and fails closed rather than degrading to "legacy". The
-// surviving shapes:
-//
-//   - Fully unsigned AND the origin has no key in the directory: a genuinely
-//     legacy peer — adopt; the authenticated bus is still their boundary.
-//   - Fully unsigned but the origin's key IS recorded: the origin is
-//     key-capable, so a bare flag is a stripped grant — refuse. Otherwise a
-//     relay could launder any signed consent back to unsigned by deleting
-//     three fields.
-//   - Signed by the task's origin (chain[0]) with a key matching the hello-
-//     recorded directory entry and a signature that verifies over the task's
-//     ConsentDigest: adopt and persist the grant so later hops re-emit it.
-//   - Signed but wrong: claimed origin's recorded key does not match, or the
-//     signature does not verify over the received content. Fail closed —
-//     consent is dropped, never laundered: a relay that could mint
-//     "authorized" for another node's task is exactly the hole this exists
-//     to close (P2-8).
-//
-// A signed grant whose origin is unknown to the directory (never helloed this
-// node, or a pre-key peer relayed across hops) cannot be verified; it degrades
-// to the legacy flag path rather than breaking relayed consents the mesh
-// cannot prove.
+// consentGrantValid permits an inbound Authorized flag only when a complete
+// grant verifies under the origin's recorded identity key. Mesh membership
+// authenticates the sender, not the origin's consent: neither a legacy bare
+// flag nor a grant from an unknown origin may bypass local approval. A relay
+// may forward a valid grant unchanged, but cannot supply its own trust anchor.
+// Missing keys (including failed lookups), incomplete grants and invalid
+// signatures drop consent; the task itself can still proceed under local policy.
 func (c *Core) consentGrantValid(p bus.TaskDelegatePayload, sender string) bool {
-	anyAuth := p.AuthSig != "" || p.AuthPub != "" || p.AuthTs != 0
-	signed := p.AuthSig != "" && p.AuthPub != "" && p.AuthTs != 0
-	if anyAuth && !signed {
-		return false // torn grant: the block was written, then partly erased
+	if p.AuthSig == "" || p.AuthPub == "" || p.AuthTs == 0 {
+		return false
 	}
 	origin := sender
 	if len(p.Chain) > 0 {
@@ -437,19 +418,10 @@ func (c *Core) consentGrantValid(p bus.TaskDelegatePayload, sender string) bool 
 		return false
 	}
 	stored, ok := c.peerPubKey(origin)
-	if !anyAuth {
-		return !ok // bare flag is legacy only from a genuinely key-less origin
-	}
 	if !ok {
-		// Signed, but the claimed origin's key is not in the directory —
-		// typically a multi-hop relay whose origin this node never helloed.
-		// Adoption keeps relayed consents working (a compatibility choice:
-		// refusing would stall every relayed tier-2 task), but it is also
-		// the one path where a mesh member can assert another node's
-		// consent unverified, so surface it loudly for the operator.
-		c.logger.Warn("adopting consent grant with unverifiable origin key",
+		c.logger.Warn("rejecting consent grant with unverifiable origin key",
 			"task", p.TaskID, "origin", origin, "sender", sender)
-		return true
+		return false
 	}
 	presented, err := hex.DecodeString(p.AuthPub)
 	if err != nil || !bytes.Equal(presented, stored) {

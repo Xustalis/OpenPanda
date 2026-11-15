@@ -1543,7 +1543,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	// sandbox mode is on — wraps the adapter in the OS confinement profile:
 	// workdir+toolchain writable, this agent's credential dirs writable,
 	// foreign credential dirs and OS secrets read-denied under strict. A
-	// refusal (strict mode, no backend) is reported as the run's failure
+	// refusal (standard/strict, no backend) is reported as the run's failure
 	// rather than run unconfined.
 	if err := security.NewSandbox(cwd).ApplyPolicy(cmd,
 		adapterSandboxPolicy(AgentName(ctx), name, cwd), env...); err != nil {

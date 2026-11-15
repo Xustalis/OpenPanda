@@ -163,8 +163,8 @@ func TestPeerKeyTofuLifecycle(t *testing.T) {
 
 // TestConsentGrantVerification pins the P2-8 fix: a consent grant minted by
 // the origin's key verifies, while a grant signed by another key, presented
-// under the wrong public key, or bound to a different task is rejected — and
-// an unsigned legacy flag still passes for mixed-version meshes.
+// under the wrong public key, or bound to a different task is rejected.
+// Legacy peers may delegate tasks, but unsigned consent grants never pass.
 func TestConsentGrantVerification(t *testing.T) {
 	origin := newCore(t, "origin")
 	exec := newCore(t, "exec")
@@ -240,10 +240,10 @@ func TestConsentGrantVerification(t *testing.T) {
 	if exec.consentGrantValid(torn, "origin") {
 		t.Fatal("a half-present grant must be rejected, not treated as legacy")
 	}
-	// Genuinely legacy: origin has no recorded key anywhere.
+	// A key-less legacy origin cannot prove that its user approved the task.
 	legacy := bus.TaskDelegatePayload{TaskID: "t-legacy", Authorized: true, Chain: []string{"oldtimer"}}
-	if !exec.consentGrantValid(legacy, "oldtimer") {
-		t.Fatal("an unsigned legacy consent from a key-less origin must still pass")
+	if exec.consentGrantValid(legacy, "oldtimer") {
+		t.Fatal("an unsigned legacy consent must require the executor's approval")
 	}
 }
 

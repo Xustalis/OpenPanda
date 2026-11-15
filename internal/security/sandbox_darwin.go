@@ -24,7 +24,7 @@ func platformBackend() string {
 // the profile denies fails at exec time inside the child (EPERM), which the
 // caller's stderr capture surfaces the same way it surfaces any tool error.
 // When the mode is off the command is left untouched; when sandbox-exec is
-// missing a strict policy is refused rather than run unconfined (backendMissing).
+// missing a standard or strict policy is refused (backendMissing).
 func wrapSubprocess(cmd *exec.Cmd, p Policy) error {
 	if p.Mode == ModeOff {
 		return nil
