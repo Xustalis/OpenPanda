@@ -87,7 +87,7 @@ func (e *Executor) Run(ctx context.Context, command string, args ...string) Nati
 	// secrets (P1-1). ApplyPolicy also wraps the process under the OS sandbox
 	// (seatbelt/bwrap) when the configured mode asks for it — the policy
 	// confines a bare command tighter than an adapter, which owns its own
-	// credential dirs. A refusal (strict mode with no backend) must not run
+	// credential dirs. A refusal (standard/strict with no backend) must not run
 	// the command unconfined.
 	if err := security.NewSandbox(e.dir).ApplyPolicy(cmd, nativeSandboxPolicy(e.dir), e.env...); err != nil {
 		return NativeResult{ExitCode: 127, Stderr: security.Redact(err.Error())}

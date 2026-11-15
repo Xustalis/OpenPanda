@@ -228,7 +228,7 @@ func runGenericNative(ctx context.Context, agentName, prompt, cwd string, env []
 	// WaitDelay matches the adapter path: a detached grandchild holding the
 	// pipes must not wedge Wait forever.
 	cmd.WaitDelay = 5 * time.Second
-	// A refused policy (strict mode with no backend) must not fall through to
+	// A refused policy (standard/strict with no backend) must not fall through to
 	// an unconfined run: the agent gets the reason as its result instead.
 	if err := security.NewSandbox(cwd).ApplyPolicy(cmd,
 		adapterSandboxPolicy(agentName, agents.GenericNativeAdapter, cwd), env...); err != nil {

@@ -92,8 +92,8 @@ func DefaultPolicy(workDir string) Policy {
 
 // Backend names the OS confinement the platform implements: "seatbelt" on
 // macOS (sandbox-exec), "bwrap" on Linux (bubblewrap), "" elsewhere or when
-// the tool is absent — in which case a non-off mode is a no-op and callers
-// should surface that rather than pretend isolation exists.
+// the tool is absent. Standard and strict refuse subprocess launches when
+// it is empty; callers report that condition instead of implying isolation.
 func Backend() string { return platformBackend() }
 
 // homeRelative resolves a policy path: absolute stays absolute, "~/…" and bare

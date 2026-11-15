@@ -14,8 +14,8 @@ import (
 )
 
 // End-to-end: the native executor under the configured OS sandbox. Skipped on
-// platforms without a backend so the suite stays green where the mode
-// degrades to env filtering.
+// platforms without a backend, where separate launch-refusal tests verify
+// that standard and strict do not start an unconfined task.
 func TestNativeExecutorSandboxE2E(t *testing.T) {
 	protected := t.TempDir()
 	work := t.TempDir()

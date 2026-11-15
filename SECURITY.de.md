@@ -26,16 +26,24 @@ roten Linien beim Deployment und den Meldeweg für Sicherheitslücken.
   (`internal/core/nodekey.go`); abgestreifte oder manipulierte
   Signaturen werden schlicht abgelehnt. `panda nodes verify` pinnt
   Knoten-Fingerprints manuell, und ein umschlüsseltes hello eines
-  gepinnten Knotens wird verweigert. **Verbleibende Lücke:** Ein Inhaber
-  des gemeinsamen Geheimnisses kann weiterhin Zustimmung „von einem
-  Knoten, dessen öffentlichen Schlüssel der Empfänger nie gesehen hat"
-  fälschen (eine inhärente Grenze von Multi-Hop-Relay + TOFU — dieser
-  Pfad gibt eine Warnung aus), und ungepinnte Identitäten werden bei
-  Erstkontakt vertraut. Daher gilt die Invariante „irreversible
-  Operationen erfordern meine Freigabe" nur auf **einem einzelnen Rechner
-  oder einem vollständig vertrauten LAN**; sie hört auf zu gelten,
-  sobald das Netzwerk einen Knoten enthält, dem Sie nicht vollständig
-  vertrauen.
+  gepinnten Knotens wird verweigert. **Zustimmungsprüfung:** Unvollständige
+  Signaturen, unbekannte Ursprungsschlüssel und fehlgeschlagene Schlüsselabfragen
+  verwerfen die entfernte Zustimmung. Aufgaben können weiterhin empfangen werden;
+  riskante Operationen unterliegen der lokalen Freigaberichtlinie des ausführenden
+  Knotens. Unsignierte Zustimmung älterer Knoten wird ebenfalls nicht übernommen.
+  Bei mehreren Hops muss der ausführende Knoten zuerst den öffentlichen Schlüssel
+  des Ursprungs speichern, um dessen Zustimmung zu prüfen und zu übernehmen.
+  **Verbleibende Grenze:** Ungepinnte Identitäten werden weiterhin beim Erstkontakt
+  vertraut (TOFU), und das Mitgliedschaftsgeheimnis bleibt netzwerkweit geteilt.
+  Verwenden Sie die Standard-Vertrauensstufe `mesh` nur für vollständig vertraute
+  Geräte und prüfen Sie Knoten-Fingerprints manuell.
+- **OS-Aufgaben-Sandbox.** `sandbox.mode: off` filtert die Umgebung und setzt
+  das Arbeitsverzeichnis, ohne OS-Isolation. `standard` und `strict` benötigen
+  ein verfügbares Backend (seatbelt unter macOS, bubblewrap unter Linux).
+  Fehlt es, werden Aufgaben-Unterprozesse nicht gestartet; es gibt keine
+  automatische Herabstufung. Ein natives Windows-Backend ist nicht implementiert,
+  daher blockieren diese Modi unter Windows. Nur die ausdrückliche Wahl von
+  `off` erlaubt die Ausführung ohne OS-Isolation.
 - **Grenze der Transportverschlüsselung.** Seit v0.0.11 rüstet die
   Verbindung direkt nach dem Handshake eine AES-256-GCM-Verbindung je
   Verbindung auf, wenn beide Peers die Fähigkeit `sessaead` in `hello`
