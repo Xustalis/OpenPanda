@@ -332,16 +332,17 @@ select.input {
 /* Fixed and anchored by the component's own measurement: the field sits in the
  * add-model sheet, whose scrolling body clips an absolutely positioned list —
  * a 21-model roster was cut at the sheet footer after two ids. Coordinates,
- * width and max-height arrive inline; this block only owns the look. */
+ * width and max-height arrive inline; this block only owns the look.
+ *
+ * The panel is a column, not a scroller: the search row stays put while the
+ * body below it scrolls, so the one control that makes a 463-id roster usable
+ * never leaves the screen. */
 .model-picker-list {
   position: fixed;
   z-index: 70;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 4px;
+  overflow: hidden;
   background: var(--bg-overlay);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -349,6 +350,107 @@ select.input {
 }
 .model-picker-list:focus {
   outline: none;
+}
+/* The way in once the roster runs past a screenful. It is a text field, not a
+ * filter chip: every keystroke narrows the list in place. */
+.model-picker-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-tertiary);
+}
+.model-picker-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+.model-picker-search input:focus {
+  outline: none;
+}
+/* The search field takes focus the moment the list opens, so the console's
+ * keyboard ring would draw a permanent halo around it. Focus is shown the way
+ * the fields beside it show it — the rule under the row turns accent and the
+ * glyph with it — instead of a box the reader did not ask for. */
+.model-picker-search:focus-within {
+  border-bottom-color: var(--accent-border);
+  color: var(--accent);
+}
+.model-picker-search input:focus-visible {
+  box-shadow: none;
+}
+.model-picker-search input::placeholder {
+  color: var(--text-tertiary);
+}
+.model-picker-search-clear {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.model-picker-search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.model-picker-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Keeps a row scrolled to by the keyboard off the panel's hard edge. */
+  scroll-padding-block: 4px;
+}
+.model-picker-group {
+  padding: 0 4px;
+}
+.model-picker-group:last-child {
+  padding-bottom: 4px;
+}
+/* Pinned under the search row while its own rows scroll past: the heading is
+ * how the reader knows where they are in a 463-row list, so it cannot scroll
+ * away. The negative side margin lets its fill reach the panel edges, and the
+ * downward fill extends the mask past the text box — without it the row above
+ * shows through as a cut-off sliver of letters right under the heading.
+ *
+ * It has to read as a caption, not as another row: model ids are lowercase and
+ * mono, so the heading is uppercase, letter-spaced, a size down and indented
+ * less than the rows it governs. Without those three differences the heading
+ * and the single id under it look like two entries ("advanced" /
+ * "advanced custom"). */
+.model-picker-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 -4px;
+  padding: 8px 9px 3px;
+  background: var(--bg-overlay);
+  box-shadow: 0 4px 0 var(--bg-overlay);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+/* A rule between groups, drawn on the heading that opens the next one. It
+ * scrolls with the heading, which is what makes the pin read as "a new group
+ * starts here" instead of a floating caption. */
+.model-picker-group + .model-picker-group .model-picker-group-head {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 7px;
 }
 .model-picker-item {
   display: block;
@@ -362,13 +464,24 @@ select.input {
   font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.model-picker-item:hover {
-  background: var(--accent-soft);
+.model-picker-item:hover,
+.model-picker-item.cursor {
+  background: var(--bg-hover);
 }
 .model-picker-item.on {
   color: var(--accent);
   font-weight: 600;
+}
+.model-picker-empty {
+  margin: 0;
+  padding: 18px 12px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  text-align: center;
 }
 
 textarea.input {

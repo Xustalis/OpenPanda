@@ -2,11 +2,11 @@
 
 /** Mouse-driven scrolling for a strip that runs off its own edge.
  *
- *  The orchestration card's strips hold more tasks than their width shows: a
- *  narrow dock keeps two 156px tiles in view and leaves the rest off its right
- *  edge; a wider dock simply reveals more of them. A trackpad swipes that, and
- *  touch scrolls it for free — a plain mouse had nothing, which is why the
- *  strip carries a thin scrollbar as well: a target, not an affordance.
+ *  The orchestration card's strips hold more tasks than their box shows: a
+ *  section keeps four rows in view and the rest are one wheel-notch below. A
+ *  trackpad swipes that, and touch scrolls it for free — a plain mouse had
+ *  nothing, which is why the strip carries a thin scrollbar as well: a target,
+ *  not an affordance.
  *
  *  This binds the two gestures a mouse actually has:
  *

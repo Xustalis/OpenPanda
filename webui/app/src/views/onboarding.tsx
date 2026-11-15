@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
+  type ModelRoster,
   type OnboardingPatch,
   type OnboardingState,
   type ProviderInfo,
@@ -350,7 +351,7 @@ function ModelStep(props: { onSaved(): void }) {
   const [allowPlaintext, setAllowPlaintext] = useState(false)
   const plaintextEndpoint = needsPlaintextConsent(baseUrl)
   const [maxTokens, setMaxTokens] = useState(0)
-  const [remoteModels, setRemoteModels] = useState<string[] | null>(null)
+  const [remoteModels, setRemoteModels] = useState<ModelRoster | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [testResult, setTestResult] = useState<{
@@ -437,7 +438,7 @@ function ModelStep(props: { onSaved(): void }) {
     setError('')
     try {
       const r = await api.fetchModels(refPayload())
-      if (r.ok && r.models) setRemoteModels(r.models)
+      if (r.ok && r.models) setRemoteModels({ ids: r.models, owners: r.owners ?? {} })
       else setError(r.error ?? t('models.fetchFail'))
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
@@ -590,7 +591,8 @@ function ModelStep(props: { onSaved(): void }) {
               setModel(v)
               setTestResult(null)
             }}
-            options={remoteModels ?? []}
+            options={remoteModels?.ids ?? []}
+            owners={remoteModels?.owners}
             placeholder={provider.default_model || EXAMPLES[apiType].model}
             required={provider.id === 'custom'}
           />
@@ -598,7 +600,7 @@ function ModelStep(props: { onSaved(): void }) {
             {busy === 'fetch' ? '…' : t('models.fetch')}
           </button>
         </div>
-        {remoteModels && <p class="hint">{t('models.fetched', { n: remoteModels.length })}</p>}
+        {remoteModels && <p class="hint">{t('models.fetched', { n: remoteModels.ids.length })}</p>}
       </div>
 
       {!provider.no_auth && (

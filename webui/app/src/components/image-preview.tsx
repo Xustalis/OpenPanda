@@ -209,10 +209,14 @@ export function ImagePill({ path, label }: { path: string; label: string }) {
  *  surface. The click that opens the lightbox still belongs to the thumbnail
  *  underneath, and moving toward the floating copy cannot make it flicker
  *  away. Placement is measured after the first paint because the copy's size
- *  comes from the picture, not from a constant. */
-function HoverPreview({ src, name, anchor }: { src: string; name: string; anchor: DOMRect }) {
+ *  comes from the picture, not from a constant — and measured again when the
+ *  bytes land: an <img> with no decoded frame is zero tall, so a copy placed
+ *  on the first pass was positioned as if it were a caption and grew
+ *  downward, over the composer, once the picture arrived. */
+export function HoverPreview({ src, name, anchor }: { src: string; name: string; anchor: DOMRect }) {
   const box = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  const [decoded, setDecoded] = useState(0)
 
   useLayoutEffect(() => {
     const el = box.current
@@ -227,7 +231,7 @@ function HoverPreview({ src, name, anchor }: { src: string; name: string; anchor
     let left = anchor.left + anchor.width / 2 - w / 2
     left = Math.max(8, Math.min(left, window.innerWidth - w - 8))
     setPos({ left, top })
-  }, [anchor, src])
+  }, [anchor, src, decoded])
 
   return (
     <div
@@ -240,7 +244,7 @@ function HoverPreview({ src, name, anchor }: { src: string; name: string; anchor
           : { left: '0px', top: '0px', visibility: 'hidden' }
       }
     >
-      <img src={src} alt={name} />
+      <img src={src} alt={name} onLoad={() => setDecoded((n) => n + 1)} />
       {/* The thumbnail carries no caption, so the floating copy names the file
           — the one place a reader asks "which screenshot is this?". */}
       <span class="img-hover-name">{name}</span>
@@ -251,7 +255,7 @@ function HoverPreview({ src, name, anchor }: { src: string; name: string; anchor
 /** Full-screen view. Rendered inline with position:fixed — the same overlay
  *  convention the confirm dialog and the todo sheet use — and it closes on
  *  Esc, on the × button, and on a click outside the picture. */
-function Lightbox({
+export function Lightbox({
   src,
   path,
   label,
@@ -288,9 +292,11 @@ function Lightbox({
     >
       <img class="img-lightbox-img" src={src} alt={name} onClick={(e) => e.stopPropagation()} />
       <div class="img-lightbox-bar" onClick={(e) => e.stopPropagation()}>
-        {path && (
+        {/* A pending upload has no path yet — it is still a File in the
+            composer — so the bar names the file instead of going blank. */}
+        {(path || label) && (
           <span class="img-lightbox-path" title={path}>
-            {path}
+            {path ?? label}
           </span>
         )}
         <button

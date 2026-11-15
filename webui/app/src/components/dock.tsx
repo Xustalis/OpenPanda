@@ -97,7 +97,7 @@ export interface DockProps {
   onTab(tab: Exclude<DockTab, ''>): void
   /** Back to the start pane — the thread's overview. A pane replaces those
    *  rows, and `''` is not a place, so this is a step back rather than a
-   *  fifth tab. */
+   *  fifth tab. The button lives in the head, beside `+`. */
   onHome(): void
   onToggle(): void
   onWidth(width: number): void
@@ -351,6 +351,27 @@ export function Dock(props: DockProps) {
           </button>
         )}
 
+        {/* The way home sits beside `+`, not in a crumb line of its own: the
+            overview is where `+` and the four places both start, and the crumb
+            it used to be cost every pane a 30px row above its own header. It
+            is a house, not an arrow — the destination is fixed, so it should
+            not read as "one step back" in a history. Greyed while the start
+            pane is showing — there is nothing behind it then — rather than
+            coming and going, which would slide the four places sideways on
+            every tab click. */}
+        {open && (
+          <button
+            type="button"
+            class="icon-btn dock-home"
+            title={t('dock.overview')}
+            aria-label={t('dock.overview')}
+            disabled={!showBody}
+            onClick={() => props.onHome()}
+          >
+            <Icon name="home" size={16} />
+          </button>
+        )}
+
         {/* The four places share one segmented well: files, the thread's
             changes, the page being read, and the conversation beside this
             one. Keeping them together makes the lit tab read as "where you
@@ -396,18 +417,6 @@ export function Dock(props: DockProps) {
       </header>
 
       <div class="dock-body" data-tab={tab} hidden={!open || !showBody}>
-        {/* The step back to the start pane. A pane replaces the rows that open
-            the thread's places, and the head cannot take a fifth square: at the
-            320px floor the four 28px tabs, the three tools and the fold already
-            fill the line. So the way home is the body's first line — above the
-            pane's own bar, not in it, because every panel owns its header and
-            each of them is a different place to come back from. */}
-        <div class="dock-back">
-          <button type="button" class="dock-back-btn" onClick={() => props.onHome()}>
-            <Icon name="arrow-left" size={14} />
-            <span>{t('dock.overview')}</span>
-          </button>
-        </div>
         {props.children}
       </div>
       {startPane}

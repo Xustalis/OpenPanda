@@ -222,14 +222,17 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 // its branch) plus the stored thread.
 func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	sess, err := h.sessions.Get(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such session"))
+		return
+	}
 	// The thread is going away: its waiting notes and any parked carry have no
 	// turn left to open, so release them with it instead of leaking a map entry
 	// per deleted thread.
 	h.dropSteer(id)
-	if sess, gerr := h.sessions.Get(id); gerr == nil {
-		if wt := h.sessionWorktrees(sess); wt != nil {
-			_ = wt.Remove(r.Context(), id)
-		}
+	if wt := h.sessionWorktrees(sess); wt != nil {
+		_ = wt.Remove(r.Context(), id)
 	}
 	h.removeSessionUploads(id)
 	if err := h.sessions.Delete(id); err != nil {
@@ -354,10 +357,14 @@ func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seen[id] = true
-		if sess, gerr := h.sessions.Get(id); gerr == nil {
-			if wt := h.sessionWorktrees(sess); wt != nil {
-				_ = wt.Remove(r.Context(), id)
-			}
+		sess, err := h.sessions.Get(id)
+		if err != nil {
+			failed = append(failed, failure{ID: id, Error: err.Error()})
+			continue
+		}
+		h.dropSteer(id)
+		if wt := h.sessionWorktrees(sess); wt != nil {
+			_ = wt.Remove(r.Context(), id)
 		}
 		h.removeSessionUploads(id)
 		if err := h.sessions.Delete(id); err != nil {
@@ -1297,20 +1304,20 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			progress.task(taskID)
 			send("task", map[string]string{"task_id": taskID})
 		},
-		// What the user types while this turn streams. The queue is drained at
-		// every round boundary, so the note lands in the round after the one
-		// that was running when it was typed — the same contract the TUI's
-		// steer channel gives, and the only channel a task-less turn has.
-		GetSteer: func() string {
+	}
+	// Only the main ask owns the thread's queue. A side ask has its own
+	// transcript and must not consume or acknowledge the main ask's notes.
+	if !side {
+		cb.GetSteer = func() string {
 			text, _ := h.drainSteer(sess.ID)
 			return text
-		},
+		}
 		// The proof the note actually reached the model: a queued channel write
 		// alone cannot distinguish "delivered next round" from "the turn ended
 		// first". The console upgrades its "queued" note on this event.
-		OnSteerConsumed: func(text string, round int) {
+		cb.OnSteerConsumed = func(text string, round int) {
 			send("steer", map[string]any{"text": text, "round": round})
-		},
+		}
 	}
 
 	// Every panel session is a workspace conversation: repo sessions run in
@@ -1837,6 +1844,11 @@ func (h *handler) sessionUploadDir(sess *sessions.Session) (string, error) {
 // non-repo case, where uploads would otherwise outlive the thread. The
 // worktree case is handled by removing the worktree itself.
 func (h *handler) removeSessionUploads(id string) {
+	// Validate again at the filesystem boundary, including callers that do
+	// not load a session first. An id must name exactly one child directory.
+	if !sessions.ValidID(id) {
+		return
+	}
 	var workPath string
 	h.readCfg(func(c *config.Config) { workPath = c.Storage.WorkPath })
 	if workPath == "" {
