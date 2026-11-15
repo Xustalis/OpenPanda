@@ -1,0 +1,45 @@
+{
+  "testSeedHex": "0707070707070707070707070707070707070707070707070707070707070707",
+  "publicKey": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+  "cases": [
+    {
+      "kind": "device",
+      "input": {
+        "challenge": "challenge-123",
+        "sourceHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "requestId": "00000000-0000-0000-0000-000000000001"
+      },
+      "messageUtf8": "[\"tsync-device-v1\",\"openpanda\",\"challenge-123\",\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"00000000-0000-0000-0000-000000000001\"]",
+      "signature": "02d8e36cc99d64e7d10fe94130cac238e0d9dfbc3ecd79b2fc7a2b7ed7bf6c97c2d9949d2e80a91bc3aa3fe794cdd06961e48b61e15705890c5facfd04c5e703"
+    },
+    {
+      "kind": "refresh",
+      "input": {
+        "sourceHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "requestId": "00000000-0000-0000-0000-000000000001"
+      },
+      "messageUtf8": "[\"tsync-refresh-v1\",\"openpanda\",\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"00000000-0000-0000-0000-000000000001\"]",
+      "signature": "75616101e86a996a3dc2e5a4f6794f1b90e77215282d3cec17da349629a785b725c06aa697eb91455cead7959a52d9af9bf2f7be27f5a5d67c5552041c73ce07"
+    },
+    {
+      "kind": "consent",
+      "input": {
+        "accountId": "00000000-0000-0000-0000-000000000002",
+        "deviceId": "00000000-0000-0000-0000-000000000003",
+        "executionId": "00000000-0000-0000-0000-000000000004",
+        "deliveryId": "00000000-0000-0000-0000-000000000005",
+        "deliveryRevision": 2,
+        "decision": "accept",
+        "inputRevision": "目标-2",
+        "assignmentRevision": "assignee-3",
+        "automationGeneration": 4,
+        "scopeHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "issuedAt": "2026-11-15T00:00:00.000Z",
+        "expiresAt": "2026-11-15T00:05:00.000Z",
+        "nonce": "00000000-0000-0000-0000-000000000006"
+      },
+      "messageUtf8": "[\"00000000-0000-0000-0000-000000000002\",\"00000000-0000-0000-0000-000000000003\",\"00000000-0000-0000-0000-000000000004\",\"00000000-0000-0000-0000-000000000005\",2,\"accept\",\"目标-2\",\"assignee-3\",4,\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\",\"2026-11-15T00:00:00.000Z\",\"2026-11-15T00:05:00.000Z\",\"00000000-0000-0000-0000-000000000006\"]",
+      "signature": "c852021a8cf0e790900c67bb8d486dc9a8a2954580e558d88347a1a67ce8b2ec517b0d36284387646d1d30c524e6352834592d57c9ef29c2adfb9d4308f66c0a"
+    }
+  ]
+}

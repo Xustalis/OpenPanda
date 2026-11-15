@@ -106,6 +106,7 @@ var migrations = []Migration{
 	{Version: 69, Name: "add_business_task_hub", Apply: migrateV69},
 	{Version: 70, Name: "add_business_mutation_identity", Apply: migrateV70},
 	{Version: 71, Name: "add_business_request_recovery", Apply: migrateV71},
+	{Version: 72, Name: "add_task_sync_runtime", Apply: migrateV72},
 }
 
 // migrateV62 adds employee_cache.dir_signer: the Ed25519 key that SIGNED a
