@@ -17,6 +17,7 @@
 package fslock
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -31,6 +32,40 @@ import (
 // uses blocking mode instead.
 var ErrHeld = errors.New("fslock: lock held by another process")
 
+var ErrUnsupported = errors.New("fslock: filesystem locking unavailable")
+
+// TryAcquireStrict refuses both contention and unsupported/no-op locking.
+func TryAcquireStrict(path string) (func(), error) {
+	if path == "" {
+		return nil, fs.ErrInvalid
+	}
+	return acquire(path, false, true)
+}
+
+// AcquireStrict waits cancellably and refuses a no-op lock. Credential rotation
+// and runtime ownership cannot safely fall back to independent writers.
+func AcquireStrict(ctx context.Context, path string) (func(), error) {
+	if path == "" {
+		return nil, fs.ErrInvalid
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		release, err := acquire(path, false, true)
+		if !errors.Is(err, ErrHeld) {
+			return release, err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 // Acquire takes an exclusive advisory lock on path, creating the file and its
 // directory as needed. blocking=false returns ErrHeld instead of waiting.
 //
@@ -43,6 +78,10 @@ var ErrHeld = errors.New("fslock: lock held by another process")
 // error (a permission, a bad handle) is returned: those are the caller's
 // problem to surface.
 func Acquire(path string, blocking bool) (release func(), err error) {
+	return acquire(path, blocking, false)
+}
+
+func acquire(path string, blocking, strict bool) (release func(), err error) {
 	if path == "" {
 		return func() {}, nil
 	}
@@ -59,6 +98,9 @@ func Acquire(path string, blocking bool) (release func(), err error) {
 		// No lock primitive here: the store still works, one writer at a time
 		// per process. Reported by the platform shim, not an error.
 		_ = f.Close()
+		if strict {
+			return nil, ErrUnsupported
+		}
 		return func() {}, nil
 	case err != nil:
 		_ = f.Close()
