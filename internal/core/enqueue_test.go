@@ -82,7 +82,7 @@ func TestEnqueuePersistsQueueMeta(t *testing.T) {
 	q := DefaultQueueSpec()
 	q.Priority = PriorityHigh
 	q.SessionID = "sess-1"
-	q.WorkDir = "/tmp/wt"
+	q.WorkDir = t.TempDir()
 	q.ResourceKeys = []string{"node:opi"}
 	tk, err := c.Enqueue(ctx, TaskInput{Title: "meta", Intent: "x", Requires: []string{"sys:info"}}, q)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestEnqueuePersistsQueueMeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.Priority != PriorityHigh || got.SessionID != "sess-1" || got.WorkDir != "/tmp/wt" || !got.Scheduled {
+	if got.Priority != PriorityHigh || got.SessionID != "sess-1" || got.WorkDir != q.WorkDir || !got.Scheduled {
 		t.Fatalf("queue meta = %+v", got)
 	}
 	if len(got.ResourceKeys) != 1 || got.ResourceKeys[0] != "node:opi" {
