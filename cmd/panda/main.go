@@ -45,6 +45,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/self"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/taskflow"
 	"github.com/Xustalis/OpenPanda/internal/updater"
 	versionpkg "github.com/Xustalis/OpenPanda/internal/version"
 )
@@ -554,6 +555,13 @@ func runDaemon(args []string) {
 	// Task recovery FIRST, then the queue scheduler: the order is
 	// load-bearing (see recoverThenStartQueue).
 	recoverThenStartQueue(ctx, logger, coreNode)
+	flow := taskflow.New(db, cfg.Storage.DBPath)
+	flowDone := make(chan struct{})
+	guard.Go(logger, "daemon: task integration", cancel, func() {
+		defer close(flowDone)
+		_ = flow.Run(ctx)
+	})
+	defer func() { cancel(); <-flowDone }()
 
 	// Inbound events (intake.*): the webhook listener starts after the queue,
 	// because an admitted event is immediately queued and must not wait for a

@@ -83,6 +83,10 @@ func dispatchSub(sub string, args []string) {
 		runReminder(args)
 	case "todo", "todos":
 		runTodo(args)
+	case "work":
+		runWork(args)
+	case "connection":
+		runConnection(args)
 	case "detect":
 		runDetect(args)
 	case "card":

@@ -31,6 +31,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/taskhub"
 	"github.com/Xustalis/OpenPanda/internal/todos"
 )
 
@@ -533,13 +534,6 @@ func todoStart(ctx context.Context, store *todos.Store, env todoEnv, args []stri
 	if err != nil {
 		return err
 	}
-	t, err := store.Get(ctx, id)
-	if err != nil {
-		return todoErr(env.loc, err, id)
-	}
-	if t.TaskID != "" {
-		return errors.New(i18n.Tf(env.loc, "cli.todo.alreadyStarted", "id", strconv.FormatInt(id, 10), "task", t.TaskID))
-	}
 	eng, closeEng, err := env.engineFor(ctx)
 	if err != nil {
 		return err
@@ -547,42 +541,35 @@ func todoStart(ctx context.Context, store *todos.Store, env todoEnv, args []stri
 	if closeEng {
 		defer eng.Close()
 	}
-	prompt := strings.TrimSpace(t.Description)
-	if prompt == "" {
-		prompt = t.Title
-	}
-	prio, _ := parseCLIPriority(t.Priority)
-	q := core.DefaultQueueSpec()
-	q.Priority = prio
-	in := core.TaskInput{
-		Title:    t.Title,
-		Intent:   prompt,
-		Project:  t.Project,
-		Requires: []string{"coding"},
-	}
-	task, warn, err := eng.EnqueueTask(ctx, in, q)
+	result, err := taskhub.New(store.DB()).StartLocal(ctx, eng, id, taskhub.RunOptions{})
 	if err != nil {
-		return err
+		return todoErr(env.loc, err, id)
 	}
-	if warn != "" {
-		env.errf("⚠ %s\n", warn)
+	sessionID := result.Task.SessionID
+	if !result.AlreadyStarted && env.cfg != nil && result.Todo != nil {
+		t := result.Todo
+		prompt := strings.TrimSpace(t.Description)
+		if prompt == "" {
+			prompt = t.Title
+		}
+		sessionID = linkTaskSessionIn(env.cfg, result.Task.TaskID, t.Title, prompt, t.Project)
 	}
-	sessionID := ""
-	if env.cfg != nil {
-		sessionID = linkTaskSessionIn(env.cfg, task.TaskID, t.Title, prompt, t.Project)
+	if result.Warning != "" {
+		env.errf("⚠ %s\n", result.Warning)
 	}
-	running := todos.StatusRunning
-	tid := task.TaskID
-	updated, perr := store.Patch(ctx, id, todos.Patch{Status: &running, TaskID: &tid})
 	if env.jsonOut {
-		return writeTodoJSON(env, todoStartJSON(task, sessionID, warn, updated, perr))
+		payload := todoStartJSON(result.Task, sessionID, result.Warning, *result.Todo, nil)
+		payload["alreadyStarted"] = result.AlreadyStarted
+		payload["requestId"] = result.RequestID
+		return writeTodoJSON(env, payload)
 	}
-	env.outln(i18n.Tf(env.loc, "cli.todo.started", "id", strconv.FormatInt(id, 10), "task", task.TaskID, "state", task.State))
+	key := "cli.todo.started"
+	if result.AlreadyStarted {
+		key = "cli.todo.alreadyStarted"
+	}
+	env.outln(i18n.Tf(env.loc, key, "id", strconv.FormatInt(id, 10), "task", result.Task.TaskID, "state", result.Task.State))
 	if sessionID != "" {
 		env.outln(i18n.Tf(env.loc, "cli.task.add.session", "id", sessionID))
-	}
-	if perr != nil {
-		env.outln(i18n.Tf(env.loc, "cli.todo.linkFail", "task", task.TaskID, "err", perr.Error()))
 	}
 	return nil
 }
