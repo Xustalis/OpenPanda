@@ -345,7 +345,12 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 	// its task_result completes the local row via handleResult, so there is
 	// nothing left to run here. Queued tasks are first-class network
 	// citizens, not local-only work.
-	if c.forwardScheduled(ctx, t) {
+	remoteBusiness, businessErr := c.isRemoteBusiness(ctx, taskID)
+	if businessErr != nil {
+		c.failLocal(ctx, taskID, businessErr, t.AttemptID)
+		return
+	}
+	if !remoteBusiness && c.forwardScheduled(ctx, t) {
 		return
 	}
 	// Fail closed for an explicit device pin. forwardScheduled owns every
@@ -372,6 +377,14 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 			"task", taskID, "preferred", ref)
 	}
 	result, err := c.run(ctx, taskID, t.Intent, t.Requires, nil)
+	if remoteBusiness {
+		// A remote request is recovered by its cloud fence and business
+		// ledger. Kernel retry must not silently create another action.
+		if err != nil {
+			c.logger.Warn("business preparation stopped", "task", taskID, "err", err)
+		}
+		return
+	}
 	final, _, rerr := c.retryLoop(ctx, taskID, t.Intent, t.Requires, result, err)
 	if rerr != nil && !errors.Is(rerr, ErrCancelled) {
 		c.logger.Warn("queue: task run error", "task", taskID, "err", rerr)

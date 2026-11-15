@@ -149,6 +149,28 @@ func (s *TaskStore) bindExecutionTx(ctx context.Context, tx *sql.Tx, req *Execut
 		return errors.New("cannot publish an empty execution")
 	}
 	now := s.now()
+	if req.ConnectionID != "" {
+		var valid int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_flow_runs f
+ JOIN task_connections c ON c.connection_id=f.connection_id AND c.account_id=f.account_id
+ JOIN task_policies p ON p.connection_id=f.connection_id AND p.account_id=f.account_id
+ AND p.space_id=json_extract(f.snapshot_json,'$.key.spaceId') AND p.policy_json=f.policy_json
+ JOIN task_snapshots s ON s.connection_id=f.connection_id AND s.account_id=f.account_id AND s.task_key=f.task_key
+ WHERE f.request_id=? AND f.connection_id=? AND f.account_id=? AND f.task_key=?
+ AND f.trigger_key=? AND f.input_revision=? AND f.state='leased' AND f.deadline>?
+ AND f.lease_owner!='' AND c.state='connected' AND c.auth_epoch=f.auth_epoch
+	AND c.generation=f.connection_generation AND s.auth_epoch=f.auth_epoch
+	AND json_extract(s.snapshot_json,'$.inputRevision')=f.input_revision
+	AND json_extract(s.snapshot_json,'$.assignmentRevision')=f.assignment_revision
+	AND json_extract(s.snapshot_json,'$.automationGeneration')=f.automation_generation
+	AND json_extract(p.policy_json,'$.execute')=1 AND json_extract(p.policy_json,'$.expiresAt')>?`, req.RequestID, req.ConnectionID, req.AccountID,
+			req.TaskKey, req.TriggerKey, req.InputRevision, now, now).Scan(&valid); err != nil {
+			return err
+		}
+		if valid != 1 {
+			return fmt.Errorf("%w: remote execution has no current lease", ErrConflict)
+		}
+	}
 	// The publication lock also protects the business-task slot. Distinct
 	// request IDs (including explicit reruns) must not publish overlapping work.
 	var active int
@@ -196,6 +218,9 @@ func (s *TaskStore) bindExecutionTx(ctx context.Context, tx *sql.Tx, req *Execut
 // EnqueueRequest returns the original execution when the same logical request
 // is retried. Preparation performs no task-row writes; publication is atomic.
 func (c *Core) EnqueueRequest(ctx context.Context, req ExecutionRequest, in TaskInput, q QueueSpec) (EnqueueResult, error) {
+	if req.ConnectionID != "" && (req.AccountID == "" || in.Authorized || q.Authorized) {
+		return EnqueueResult{}, fmt.Errorf("%w: business assignment does not grant unrestricted operations", ErrConflict)
+	}
 	// Conversation IDs are display associations, not execution identity.
 	identityInput, identityQueue := in, q
 	identityInput.SessionID, identityQueue.SessionID = "", ""

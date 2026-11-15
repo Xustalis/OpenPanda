@@ -1499,6 +1499,9 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 
 	if e.schedCancel != nil {
 		e.schedCancel()
+		if err := e.taskFlow.Wait(context.Background()); err != nil {
+			return err
+		}
 	}
 	schedCtx, cancel := context.WithCancel(context.Background())
 	e.schedCtx = schedCtx
@@ -1612,7 +1615,21 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// ask/REPL engines submit inline and must not unexpectedly drain
 	// persisted work either way.
 	if e.queueTasks && ownsRow {
-		e.goBG("askengine: task integration", func() { _ = e.taskFlow.Run(ownCtx) })
+		e.taskFlow.ConfigureExecution(sched, taskflow.AutomationOptions{
+			Model: func() taskflow.AuxiliaryModel {
+				if client := e.client.Load(); client != nil {
+					return client
+				}
+				return nil
+			},
+			PrivateMemory: func() ([]string, error) { m, err := e.hermes.LoadMemory(); return m.Entries, err },
+			ProjectMemory: func(name string) ([]string, error) { m, err := e.projects.Load(name); return m.Entries, err },
+		})
+		if err := e.taskFlow.Start(ownCtx); err != nil {
+			cancel()
+			return fmt.Errorf("start business runtime: %w", err)
+		}
+		e.goBG("askengine: task integration", func() { _ = e.taskFlow.Wait(context.Background()) })
 		sched.StartQueueScheduler(ownCtx)
 		// A queue engine executes tasks off the shared store, so it also owns
 		// the task-lifecycle sweeps: without them a waiting_context park never

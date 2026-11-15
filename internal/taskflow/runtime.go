@@ -92,9 +92,30 @@ func (s *Service) withOwner(ctx context.Context, blocking bool, fn func(context.
 // Run belongs to the node owner, not to a browser request or borrowed front
 // end. Closing any page leaves this duty running; cancelling ownership stops
 // requests and joins the lease heartbeat before returning.
-func (s *Service) Run(ctx context.Context) error {
+func (s *Service) Run(ctx context.Context) error { return s.run(ctx, nil) }
+
+func (s *Service) run(ctx context.Context, ready chan<- error) error {
+	var once sync.Once
+	signal := func(err error) {
+		if ready != nil {
+			once.Do(func() { ready <- err })
+		}
+	}
+	defer func() { signal(ctx.Err()) }()
 	for ctx.Err() == nil {
 		err := s.withOwner(ctx, true, func(owned context.Context, owner string) error {
+			owned, cancel := context.WithCancel(owned)
+			defer cancel()
+			if e := s.execution(); e != nil {
+				if err := e.recover(owned, owner); err != nil {
+					signal(err)
+					return err
+				}
+				done := make(chan struct{})
+				go func() { defer close(done); e.loop(owned, owner) }()
+				defer func() { cancel(); <-done }()
+			}
+			signal(nil)
 			for owned.Err() == nil {
 				conns, e := s.List(owned)
 				if e != nil {
@@ -111,6 +132,10 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 			return owned.Err()
 		})
+		if ready != nil && err != nil {
+			signal(err)
+			return err
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
