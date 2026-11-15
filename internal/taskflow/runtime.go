@@ -115,6 +115,17 @@ func (s *Service) run(ctx context.Context, ready chan<- error) error {
 				go func() { defer close(done); e.loop(owned, owner) }()
 				defer func() { cancel(); <-done }()
 			}
+			resultDone := make(chan struct{})
+			go func() {
+				defer close(resultDone)
+				for owned.Err() == nil {
+					s.flushPendingResults(owned, owner)
+					if wait(owned, 5*time.Second) != nil {
+						return
+					}
+				}
+			}()
+			defer func() { cancel(); <-resultDone }()
 			signal(nil)
 			for owned.Err() == nil {
 				conns, e := s.List(owned)

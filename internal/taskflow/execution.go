@@ -143,6 +143,9 @@ func (e *executionRuntime) recover(ctx context.Context, owner string) error {
 	if _, err := e.service.db.ExecContext(ctx, `UPDATE final_actions SET state='unknown',updated_at=? WHERE state='dispatching'`, e.service.now().UnixMilli()); err != nil {
 		return err
 	}
+	if err := e.service.reconcileLocalReceipts(ctx); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	e.owner = owner
 	e.mu.Unlock()
@@ -171,7 +174,7 @@ func (e *executionRuntime) loop(ctx context.Context, owner string) {
 	}()
 	for ctx.Err() == nil {
 		_ = e.discover(ctx, owner)
-		rows, err := e.service.db.QueryContext(ctx, `SELECT request_id FROM task_flow_runs WHERE state IN ('claiming','leased','running','recovering','lease_lost') AND next_at<=? ORDER BY created_at LIMIT 64`, e.service.now().UnixMilli())
+		rows, err := e.service.db.QueryContext(ctx, `SELECT request_id FROM task_flow_runs WHERE (state IN ('claiming','leased','running','recovering','lease_lost') OR (state='needs_reconciliation' AND prepared_json!='')) AND next_at<=? ORDER BY created_at LIMIT 64`, e.service.now().UnixMilli())
 		if err == nil {
 			var ids []string
 			for rows.Next() {
@@ -248,7 +251,7 @@ func (e *executionRuntime) discover(ctx context.Context, owner string) error {
 				return err
 			}
 			var count int
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_flow_runs WHERE connection_id=? AND account_id=? AND state IN ('claiming','leased','running','recovering','lease_lost')`, c.ID, c.AccountID).Scan(&count); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_flow_runs WHERE connection_id=? AND account_id=? AND state IN ('claiming','leased','running','recovering','lease_lost','needs_reconciliation')`, c.ID, c.AccountID).Scan(&count); err != nil {
 				return err
 			}
 			if count >= p.MaxConcurrent {
@@ -283,6 +286,9 @@ func (m *managedExecution) authority(ctx context.Context, fresh bool) (flowRun, 
 	f, err := s.flow(ctx, m.id)
 	if err != nil {
 		return f, Connection{}, err
+	}
+	if f.State == "paused" || f.State == "cancelled" || f.State == "superseded" || f.State == "succeeded" {
+		return f, Connection{}, taskproviders.ErrAuthorizationChanged
 	}
 	c, err := s.Get(ctx, f.ConnectionID)
 	if err != nil {
@@ -398,7 +404,7 @@ func (m *managedExecution) persistLease(ctx context.Context, f flowRun, r tsync.
 	if r.RequestID != f.ID || r.TaskKey != f.Snapshot.Key || r.AccountID != f.AccountID || r.DeviceID != f.Claim.DeviceID || r.TriggerKey != f.Trigger || r.Versions.Input != f.Input || r.Versions.Assignment != f.Assignment || fmt.Sprint(r.Versions.Generation) != f.Automation {
 		return errors.New("execution lease identity changed")
 	}
-	if r.Status != taskproviders.Queued && r.Status != taskproviders.Running {
+	if !completionAuthority(f, r) {
 		return errors.New("execution has no running authority")
 	}
 	if r.Mode != f.Claim.Mode || r.Purpose != f.Claim.Purpose || r.Scope.FullGoal != f.Claim.Scope.FullGoal || !slices.Equal(r.Scope.Objectives, f.Claim.Scope.Objectives) {
@@ -406,7 +412,7 @@ func (m *managedExecution) persistLease(ctx context.Context, f flowRun, r tsync.
 	}
 	raw, _ := json.Marshal(r)
 	now := m.runtime.service.now()
-	result, err := m.runtime.service.db.ExecContext(ctx, `UPDATE task_flow_runs SET execution_id=?,record_json=?,lease_owner=?,deadline=?,state='leased',error_code='',updated_at=? WHERE request_id=? AND state IN ('claiming','leased','running','recovering','lease_lost') AND EXISTS(SELECT 1 FROM task_runtime_leases WHERE lease_key='sync' AND owner_id=? AND expires_at>?)`, r.ExecutionID, string(raw), m.owner, now.Add(remaining).UnixMilli(), now.UnixMilli(), m.id, m.owner, now.UnixMilli())
+	result, err := m.runtime.service.db.ExecContext(ctx, `UPDATE task_flow_runs SET execution_id=?,record_json=?,lease_owner=?,deadline=?,state='leased',error_code='',updated_at=? WHERE request_id=? AND state IN ('claiming','leased','running','recovering','lease_lost','needs_reconciliation') AND EXISTS(SELECT 1 FROM task_runtime_leases WHERE lease_key='sync' AND owner_id=? AND expires_at>?)`, r.ExecutionID, string(raw), m.owner, now.Add(remaining).UnixMilli(), now.UnixMilli(), m.id, m.owner, now.UnixMilli())
 	if err == nil {
 		err = requireOne(result)
 	}
@@ -439,10 +445,10 @@ func (m *managedExecution) acquire() error {
 	}
 	// A response confirms acquisition identity but grants no local authority
 	// until a new heartbeat succeeds. Preserve it for reconciliation/recovery.
-	if _, err = m.runtime.service.db.ExecContext(m.ctx, `UPDATE task_flow_runs SET execution_id=?,record_json=? WHERE request_id=? AND state IN ('claiming','leased','running','recovering','lease_lost')`, r.ExecutionID, string(raw), f.ID); err != nil {
+	if _, err = m.runtime.service.db.ExecContext(m.ctx, `UPDATE task_flow_runs SET execution_id=?,record_json=? WHERE request_id=? AND state IN ('claiming','leased','running','recovering','lease_lost','needs_reconciliation')`, r.ExecutionID, string(raw), f.ID); err != nil {
 		return err
 	}
-	if r.Status != taskproviders.Queued && r.Status != taskproviders.Running {
+	if !completionAuthority(f, r) {
 		_, err = m.runtime.service.db.ExecContext(m.ctx, `UPDATE task_flow_runs SET state=?,error_code='remote_execution_stopped',deadline=0,lease_owner='' WHERE request_id=?`, string(r.Status), f.ID)
 		if err != nil {
 			return err
@@ -538,7 +544,15 @@ func (m *managedExecution) guard(done chan<- error) {
 }
 func (m *managedExecution) coordinate() {
 	s := m.runtime.service
-	err := m.acquire()
+	done, err := m.observeCompleted()
+	if done {
+		m.acquireErr = err
+		close(m.ready)
+		return
+	}
+	if err == nil {
+		err = m.acquire()
+	}
 	m.acquireErr = err
 	close(m.ready)
 	if err != nil {
@@ -551,6 +565,12 @@ func (m *managedExecution) coordinate() {
 	f, _, err := m.authority(m.ctx, true)
 	if err != nil {
 		m.lose(err)
+		return
+	}
+	if f.Prepared != "" {
+		if err = m.finishPrepared(m.ctx); err != nil {
+			m.lose(err)
+		}
 		return
 	}
 	q := core.DefaultQueueSpec()
@@ -574,11 +594,7 @@ func (m *managedExecution) coordinate() {
 			return
 		}
 		if f.Prepared != "" {
-			reason := "awaiting_submit"
-			if f.Policy.Mode == taskproviders.AfterExecution {
-				reason = "awaiting_acceptance"
-			}
-			if err = m.release(reason); err != nil {
+			if err = m.finishPrepared(m.ctx); err != nil {
 				m.lose(err)
 			}
 			return
@@ -643,6 +659,14 @@ func (m *managedExecution) lose(cause error) {
 	if f.Record.Status == taskproviders.NeedsReconciliation {
 		state, code = "needs_reconciliation", "remote_action_unresolved"
 	}
+	var unresolved, verified int
+	_ = s.db.QueryRowContext(cleanup, `SELECT COUNT(*) FROM final_actions WHERE request_id=? AND state IN ('dispatching','unknown')`, f.ID).Scan(&unresolved)
+	_ = s.db.QueryRowContext(cleanup, `SELECT COUNT(*) FROM final_actions WHERE request_id=? AND state='verified'`, f.ID).Scan(&verified)
+	if unresolved > 0 {
+		state, code = "needs_reconciliation", "final_action_unresolved"
+	} else if verified > 0 {
+		state, code = "recovering", "completed_pending_sync"
+	}
 	// Reacquisition retains the logical request but must use a new claim key.
 	claimID := f.ClaimID
 	if f.ExecutionID != "" {
@@ -650,7 +674,7 @@ func (m *managedExecution) lose(cause error) {
 			claimID = next
 		}
 	}
-	_, _ = s.db.ExecContext(cleanup, `UPDATE task_flow_runs SET state=?,error_code=?,deadline=0,lease_owner='',claim_id=?,next_at=?,updated_at=? WHERE request_id=? AND state IN ('claiming','leased','running','recovering','lease_lost')`, state, code, claimID, s.now().Add(30*time.Second).UnixMilli(), s.now().UnixMilli(), m.id)
+	_, _ = s.db.ExecContext(cleanup, `UPDATE task_flow_runs SET state=?,error_code=?,deadline=0,lease_owner='',claim_id=?,next_at=?,updated_at=? WHERE request_id=? AND state IN ('claiming','leased','running','recovering','lease_lost','needs_reconciliation')`, state, code, claimID, s.now().Add(30*time.Second).UnixMilli(), s.now().UnixMilli(), m.id)
 }
 
 func (e *executionRuntime) Prepare(ctx context.Context, t core.Task) (string, error) {

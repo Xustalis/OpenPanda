@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/taskflow/finalaction"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders/tsync"
 )
@@ -30,6 +32,17 @@ type Policy struct {
 	TaskIDs           []string                   `json:"taskIds"`
 	ProjectID         string                     `json:"projectId"`
 	Capabilities      []string                   `json:"capabilities"`
+	Publication       *FilePublication           `json:"publication,omitempty"`
+}
+
+// FilePublication is explicit local authorization. The model cannot choose a
+// directory or filename. FullGoal is a separate human assertion of coverage;
+// it defaults to false, keeping a published draft from completing the task.
+type FilePublication struct {
+	Directory         string `json:"directory"`
+	DirectoryIdentity string `json:"directoryIdentity,omitempty"`
+	Filename          string `json:"filename"`
+	FullGoal          bool   `json:"fullGoal"`
 }
 
 func (p Policy) validate(now time.Time) error {
@@ -46,7 +59,7 @@ func (p Policy) validate(now time.Time) error {
 		return errors.New("explicit approval mode required")
 	}
 	for _, capability := range p.Capabilities {
-		if capability != "draft" {
+		if capability != "draft" && capability != "file_publish" {
 			return errors.New("unsupported operation capability")
 		}
 	}
@@ -54,7 +67,23 @@ func (p Policy) validate(now time.Time) error {
 		return errors.New("draft operation authorization required")
 	}
 	if p.FinalAction {
-		return errors.New("no final action adapter configured")
+		if !p.Execute || !slices.Contains(p.Capabilities, "file_publish") || p.Publication == nil {
+			return errors.New("file publication requires explicit operation authorization and destination")
+		}
+		if err := finalaction.ValidateDestination(p.Publication.Directory, strings.ReplaceAll(p.Publication.Filename, "{request}", "request")); err != nil {
+			return err
+		}
+		if p.Publication.DirectoryIdentity != "" {
+			id, err := finalaction.DirectoryIdentity(p.Publication.Directory)
+			if err != nil {
+				return err
+			}
+			if id != p.Publication.DirectoryIdentity {
+				return errors.New("publication directory changed")
+			}
+		}
+	} else if p.Publication != nil {
+		return errors.New("publication requires final action authorization")
 	}
 	return nil
 }
@@ -62,6 +91,15 @@ func (p Policy) validate(now time.Time) error {
 func (s *Service) SetPolicy(ctx context.Context, connection, space string, p Policy) error {
 	if err := p.validate(s.now()); err != nil {
 		return err
+	}
+	if p.FinalAction {
+		publication := *p.Publication
+		var err error
+		publication.DirectoryIdentity, err = finalaction.DirectoryIdentity(publication.Directory)
+		if err != nil {
+			return err
+		}
+		p.Publication = &publication
 	}
 	c, err := s.Get(ctx, connection)
 	if err != nil {
