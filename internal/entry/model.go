@@ -135,8 +135,10 @@ type Client struct {
 	// every successful call, so callers (the metrics path) can bill the
 	// commander model's own cost without threading usage through every
 	// signature.
-	usageIn  atomic.Int64
-	usageOut atomic.Int64
+	usageIn         atomic.Int64
+	usageOut        atomic.Int64
+	usageCacheRead  atomic.Int64
+	usageCacheWrite atomic.Int64
 
 	// provider is the built-in catalogue id (internal/providers) when the
 	// config named one; empty for a bare custom endpoint. It drives per-vendor
@@ -781,6 +783,9 @@ func (c *Client) EstimateCost(in, out int64) float64 {
 type Usage struct {
 	InputTokens  int64 `json:"input_tokens"`
 	OutputTokens int64 `json:"output_tokens"`
+	// CachedInputTokens is included in InputTokens, never an extra charge count.
+	CachedInputTokens   int64 `json:"cached_input_tokens,omitempty"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
 }
 
 // Total is the combined input+output token count.
@@ -790,8 +795,10 @@ func (u Usage) Total() int64 { return u.InputTokens + u.OutputTokens }
 // that happened between two Usage snapshots.
 func (u Usage) Sub(other Usage) Usage {
 	return Usage{
-		InputTokens:  max(u.InputTokens-other.InputTokens, 0),
-		OutputTokens: max(u.OutputTokens-other.OutputTokens, 0),
+		InputTokens:         max(u.InputTokens-other.InputTokens, 0),
+		OutputTokens:        max(u.OutputTokens-other.OutputTokens, 0),
+		CachedInputTokens:   max(u.CachedInputTokens-other.CachedInputTokens, 0),
+		CacheCreationTokens: max(u.CacheCreationTokens-other.CacheCreationTokens, 0),
 	}
 }
 
@@ -799,11 +806,17 @@ func (u Usage) Sub(other Usage) Usage {
 // successful call since construction. Providers that do not report usage
 // contribute zero.
 func (c *Client) Usage() Usage {
-	return Usage{InputTokens: c.usageIn.Load(), OutputTokens: c.usageOut.Load()}
+	return Usage{InputTokens: c.usageIn.Load(), OutputTokens: c.usageOut.Load(), CachedInputTokens: c.usageCacheRead.Load(), CacheCreationTokens: c.usageCacheWrite.Load()}
 }
 
 // addUsage accumulates one reported usage block.
-func (c *Client) addUsage(in, out int64) {
+func (c *Client) addUsage(in, out int64, cache ...int64) {
+	if len(cache) > 0 && cache[0] > 0 {
+		c.usageCacheRead.Add(cache[0])
+	}
+	if len(cache) > 1 && cache[1] > 0 {
+		c.usageCacheWrite.Add(cache[1])
+	}
 	if in > 0 {
 		c.usageIn.Add(in)
 	}
@@ -975,6 +988,8 @@ type messagesResponse struct {
 type anthropicUsage struct {
 	InputTokens  int64 `json:"input_tokens"`
 	OutputTokens int64 `json:"output_tokens"`
+	CacheRead    int64 `json:"cache_read_input_tokens"`
+	CacheWrite   int64 `json:"cache_creation_input_tokens"`
 }
 
 type apiError struct {
@@ -1223,7 +1238,7 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 		return Response{}, inBandError(or.Error.Type, or.Error.Message)
 	}
 	if or.Usage != nil {
-		c.addUsage(or.Usage.PromptTokens, or.Usage.CompletionTokens)
+		c.addUsage(or.Usage.PromptTokens, or.Usage.CompletionTokens, or.Usage.PromptDetails.CachedTokens)
 	}
 	return parseOpenAIResponse(&or), nil
 }
@@ -1474,7 +1489,7 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 		return Response{}, inBandError(mr.Error.Type, mr.Error.Message)
 	}
 	if mr.Usage != nil {
-		c.addUsage(mr.Usage.InputTokens, mr.Usage.OutputTokens)
+		c.addUsage(mr.Usage.InputTokens+mr.Usage.CacheRead+mr.Usage.CacheWrite, mr.Usage.OutputTokens, mr.Usage.CacheRead, mr.Usage.CacheWrite)
 	}
 	return parseResponse(&mr), nil
 }

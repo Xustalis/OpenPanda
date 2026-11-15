@@ -1250,7 +1250,7 @@ func buildAdapterRequest(ctx context.Context, name, prompt, cwd string) (Adapter
 	if d, ok := ctx.Value(timeoutKey{}).(time.Duration); ok && d > 0 {
 		timeout = int(d / time.Second)
 	}
-	req := AdapterRequest{Prompt: prompt, TimeoutS: timeout, CWD: cwd}
+	req := AdapterRequest{Prompt: promptForAdapter(ctx, name, prompt), TimeoutS: timeout, CWD: cwd}
 	req.Model, _ = ctx.Value(selectedModelKey{}).(string)
 	if ref, ok := ctx.Value(resumeKey{}).(resumeRef); ok && (ref.Adapter == "" || ref.Adapter == name) {
 		req.Resume = ref.ID
@@ -1343,6 +1343,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		}
 		env = forward
 	}
+	env = withNodeConfigEnv(ctx, env)
 	// Session mode: when the orchestration layer asked for it
 	// (WithSessionMode), the task carries a session pool and this agent's
 	// registry entry declares the capability, the adapter process stays

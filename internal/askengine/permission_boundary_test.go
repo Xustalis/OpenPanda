@@ -103,7 +103,7 @@ func TestClassifiedPlanPreservesScopeAndSource(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	spec := &entry.PlanSpec{Goal: "repository audit", Stages: []entry.PlanStageSpec{
+	spec := &entry.PlanSpec{Goal: "repository audit", FinalStage: "report", Stages: []entry.PlanStageSpec{
 		{ID: "inspect", Intent: "inspect implementation", Kind: entry.TaskEdit},
 		{ID: "report", Intent: "report findings", Needs: []string{"inspect"}},
 	}}

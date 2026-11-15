@@ -38,7 +38,8 @@ const ToolNameTaskBudget = "task_budget"
 // task rather than cached as a conceptual answer.
 // v7: task_kind persists the task-specific delivery evidence contract.
 // v8: workspace classifications bypass cache until content revisions are keyed.
-const classificationCacheVersion = "v8"
+// v9: include the exposed tool schemas, including discovery changes.
+const classificationCacheVersion = "v9"
 
 // classificationCacheable reports whether a classified Output may be replayed
 // from the disk cache. Kinds that materialize durable work — a task row, or a
@@ -152,10 +153,8 @@ func classifyCacheKey(po PromptOptions, model string, registry *Registry) (k1, k
 		b.WriteString(po.WorkspaceMap)
 	}
 	if registry != nil {
-		for _, s := range registry.Specs() {
-			b.WriteString("\ntool:")
-			b.WriteString(s.Name)
-		}
+		schemas, _ := json.Marshal(registry.Specs())
+		b.Write(schemas)
 	}
 	return hashString(b.String()), hashString(summarizeDevicesCached(po.Devices, promptLocale(po)))
 }

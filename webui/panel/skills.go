@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -71,7 +72,9 @@ func (h *handler) resetSkill(w http.ResponseWriter, r *http.Request) {
 
 // skillActionRequest is the body of POST /api/skills/approve|reject.
 type skillActionRequest struct {
-	Name string `json:"name"`
+	Name  string `json:"name"`
+	Scope string `json:"scope,omitempty"`
+	Key   string `json:"key,omitempty"`
 }
 
 // approveSkill and rejectSkill serve the skill approval flow — the web
@@ -99,7 +102,7 @@ func (h *handler) skillAction(approve bool) http.HandlerFunc {
 		}
 		var entry *skills.IndexEntry
 		for i := range index {
-			if index[i].Name == req.Name {
+			if index[i].Name == req.Name && (req.Scope == "" || (string(index[i].Scope) == req.Scope && index[i].Key == req.Key)) {
 				if entry != nil {
 					writeErr(w, http.StatusConflict, errors.New("multiple skills with that name; rename to make it unique"))
 					return
@@ -351,4 +354,21 @@ func (h *handler) discoverSkill(w http.ResponseWriter, r *http.Request) {
 		"status":      sk.Status,
 		"is_new":      isNew,
 	})
+}
+
+// readSkill is foreground inspection, including pending procedures. Reading
+// here does not mark an agent use or activate the procedure.
+func (h *handler) readSkill(w http.ResponseWriter, r *http.Request) {
+	if h.skillStore == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("skill store not configured"))
+		return
+	}
+	q := r.URL.Query()
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	result, err := h.skillStore.Read(skills.Access{All: true, Inactive: true}, skills.ReadRequest{Name: q.Get("name"), Scope: skills.Scope(q.Get("scope")), Key: q.Get("key"), Path: q.Get("path"), Offset: offset, SHA256: q.Get("sha256")})
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, result)
 }

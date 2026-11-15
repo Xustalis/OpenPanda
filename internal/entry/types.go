@@ -233,6 +233,10 @@ type TaskSpecDetail struct {
 	// wire, so a delegated task is verified by the same criteria on the
 	// executor. Empty means no contract: the task cannot be "verified".
 	Acceptance []contract.Check `json:"acceptance,omitempty"`
+	// PlanFinal identifies the task responsible for the plan's delivered answer.
+	// It is assigned by the plan boundary after validating the full graph.
+	PlanFinal    bool `json:"plan_final,omitempty"`
+	StageReports bool `json:"stage_reports,omitempty"`
 }
 
 // ResourceProfile is a coarse resource hint, not a safety rating (design doc
@@ -250,8 +254,9 @@ type ResourceProfile struct {
 // entry.ResourceProfile), so the dependency can only run one way. The plan
 // package converts a validated PlanSpec into its own Plan.
 type PlanSpec struct {
-	Goal   string          `json:"goal"`
-	Stages []PlanStageSpec `json:"stages"`
+	Goal       string          `json:"goal"`
+	FinalStage string          `json:"final_stage,omitempty"`
+	Stages     []PlanStageSpec `json:"stages"`
 }
 
 // PlanStageSpec is one stage of a model-emitted plan. Requires and Resources are

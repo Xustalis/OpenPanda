@@ -336,11 +336,11 @@ func TestResumeApprovedAcceptsCompletedWorkWithEmptyResultJSON(t *testing.T) {
 }
 
 // TestQueueAskKeepsQueueTools guards the roster's other side: a queue
-// question must still see the taskq_* family — and task_submit stays offered
-// there too (no intent gating anywhere).
+// question can discover the taskq_* family, while task_submit is always offered.
 func TestQueueAskKeepsQueueTools(t *testing.T) {
 	var mu sync.Mutex
 	var toolNames []string
+	requests := 0
 	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Tools []struct {
@@ -353,8 +353,14 @@ func TestQueueAskKeepsQueueTools(t *testing.T) {
 		for _, tool := range req.Tools {
 			toolNames = append(toolNames, tool.Name)
 		}
+		requests++
+		first := requests == 1
 		mu.Unlock()
 		w.Header().Set("content-type", "application/json")
+		if first {
+			_, _ = io.WriteString(w, `{"content":[{"type":"tool_use","id":"find-priority","name":"tool_search","input":{"query":"taskq_priority"}}]}`)
+			return
+		}
 		b, _ := json.Marshal(anthropicText("队列里有 1 个排队任务。"))
 		_, _ = w.Write(b)
 	})
@@ -378,6 +384,9 @@ func TestQueueAskKeepsQueueTools(t *testing.T) {
 	}
 	if !foundSubmit {
 		t.Fatalf("task_submit must be offered on every ask; tools = %v", toolNames)
+	}
+	if requests != 2 {
+		t.Fatalf("queue schema discovery did not converge: %d requests", requests)
 	}
 }
 

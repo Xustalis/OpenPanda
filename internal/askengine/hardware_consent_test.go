@@ -30,7 +30,7 @@ func TestHardwarePlanConsentPersistsForAllStages(t *testing.T) {
 			if tc.marked {
 				ctx = WithHardwarePlanConsent(ctx)
 			}
-			spec := &entry.PlanSpec{Goal: "two-stage fixture", Stages: []entry.PlanStageSpec{
+			spec := &entry.PlanSpec{Goal: "two-stage fixture", FinalStage: "later", Stages: []entry.PlanStageSpec{
 				{ID: "first", Intent: "produce fixture"},
 				{ID: "later", Intent: "consume fixture", Needs: []string{"first"}},
 			}}

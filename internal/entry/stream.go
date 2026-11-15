@@ -580,13 +580,15 @@ type anthropicDelta struct {
 // surfaced live via the reasoning sink and returned on Response.Reasoning,
 // never joined into Response.Text.
 type anthAccumulator struct {
-	reasoning []string
-	blocks    map[int]*ContentBlock    // by stream index
-	rawArgs   map[int]*strings.Builder // tool_use partial_json, by index
-	order     []int
-	truncated bool
-	usageIn   int64
-	usageOut  int64
+	reasoning       []string
+	blocks          map[int]*ContentBlock    // by stream index
+	rawArgs         map[int]*strings.Builder // tool_use partial_json, by index
+	order           []int
+	truncated       bool
+	usageIn         int64
+	usageOut        int64
+	usageCacheRead  int64
+	usageCacheWrite int64
 }
 
 // noteUsage records a usage-bearing event: message_start carries the
@@ -604,9 +606,11 @@ func (a *anthAccumulator) noteUsage(ev *anthropicStreamEvent) {
 	if u == nil {
 		return
 	}
-	if u.InputTokens > a.usageIn {
-		a.usageIn = u.InputTokens
+	if in := u.InputTokens + u.CacheRead + u.CacheWrite; in > a.usageIn {
+		a.usageIn = in
 	}
+	a.usageCacheRead = max(a.usageCacheRead, u.CacheRead)
+	a.usageCacheWrite = max(a.usageCacheWrite, u.CacheWrite)
 	if u.OutputTokens > a.usageOut {
 		a.usageOut = u.OutputTokens
 	}
@@ -758,14 +762,19 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 	em.emit(acc.usage(c), true)
 	// Bill this attempt's usage only on success: a failed attempt that got
 	// replaced by a retry must not be counted.
-	c.addUsage(acc.usageIn, acc.usageOut)
+	c.addUsage(acc.usageIn, acc.usageOut, acc.usageCacheRead, acc.usageCacheWrite)
 	return acc.result(), nil
 }
 
 // usage is the client's cumulative token total including this attempt's
 // counts, which are folded into the client only once the stream succeeds.
 func (a *anthAccumulator) usage(c *Client) Usage {
-	return Usage{InputTokens: c.usageIn.Load() + a.usageIn, OutputTokens: c.usageOut.Load() + a.usageOut}
+	u := c.Usage()
+	u.InputTokens += a.usageIn
+	u.OutputTokens += a.usageOut
+	u.CachedInputTokens += a.usageCacheRead
+	u.CacheCreationTokens += a.usageCacheWrite
+	return u
 }
 
 // googleErrorKind maps a Gemini error envelope onto the kind names
@@ -994,12 +1003,17 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 	em.emit(acc.usage(c), true)
 	// Bill this attempt's usage only on success: a failed attempt that got
 	// replaced by a retry must not be counted.
-	c.addUsage(acc.usageIn, acc.usageOut)
+	c.addUsage(acc.usageIn, acc.usageOut, acc.usageCacheRead, acc.usageCacheWrite)
 	return acc.result(), nil
 }
 
 // usage is the client's cumulative token total including this attempt's
 // counts, which are folded into the client only once the stream succeeds.
 func (a *oaiAccumulator) usage(c *Client) Usage {
-	return Usage{InputTokens: c.usageIn.Load() + a.usageIn, OutputTokens: c.usageOut.Load() + a.usageOut}
+	u := c.Usage()
+	u.InputTokens += a.usageIn
+	u.OutputTokens += a.usageOut
+	u.CachedInputTokens += a.usageCacheRead
+	u.CacheCreationTokens += a.usageCacheWrite
+	return u
 }

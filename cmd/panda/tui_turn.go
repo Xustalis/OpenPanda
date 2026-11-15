@@ -381,6 +381,9 @@ func buildResultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale)
 		if !out.OK {
 			return block{kind: blockError, body: i18n.Tf(loc, "cli.plan.stageFailed", "err", out.Stderr)}
 		}
+		if out.Answer != "" {
+			return block{kind: blockAnswer, body: planSummaryLine(out) + "\n\n" + out.Answer, meta: resultCostMeta(out)}
+		}
 		return block{kind: blockInfo, body: planSummaryLine(out)}
 	default: // answer
 		// Whatever the live stream withheld still lands: the parsed Answer

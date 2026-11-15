@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -206,6 +207,11 @@ func (r *Router) SetMCPPassthrough(command string) {
 // falls back to the same default discovery every CLI command uses.
 func (r *Router) SetSelfConfigPath(path string) {
 	r.selfConfigPath = strings.TrimSpace(path)
+	if r.selfConfigPath != "" {
+		if absolute, err := filepath.Abs(r.selfConfigPath); err == nil {
+			r.selfConfigPath = absolute
+		}
+	}
 }
 
 // ToolsPolicy reports the normalized agent tools policy the router runs
@@ -865,6 +871,7 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// check belongs at the final router boundary: forwarded and resumed
 		// tasks can carry untrusted spec_json independently of askengine.
 		runCtx := WithAgentName(ctx, name)
+		runCtx = withNodeConfigPath(runCtx, r.selfConfigPath)
 		policy, _ := ctx.Value(toolsPolicyKey{}).(string)
 		if r.toolsPolicy != config.ToolsPolicyExtended || policy != config.ToolsPolicyMinimal {
 			policy = r.toolsPolicy
@@ -877,6 +884,15 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// the request (no .mcp.json in the work dir); project-discovery CLIs
 		// keep the materialize-and-remove file path.
 		runCtx, cleanupMCP := r.wireMCPPassthrough(runCtx, name, ag.Adapter, cwd)
+		fullPrompt := runPrompt
+		runPrompt = promptForAdapter(runCtx, ag.Adapter, runPrompt)
+		if observe, ok := ctx.Value(promptObserverKey{}).(PromptObserver); ok && observe != nil {
+			mode := "full"
+			if runPrompt != fullPrompt {
+				mode = "delta"
+			}
+			observe(ag.Adapter, mode, len(runPrompt), len(fullPrompt))
+		}
 		ar := runAdapter(runCtx, ag.Adapter, runPrompt, cwd)
 		// One bounded retry on provider-side turbulence (rate limit /
 		// overload / 5xx): these resolve in seconds, and the narrow
@@ -912,20 +928,21 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		}
 
 		res := Result{
-			OK:            ar.OK,
-			ExitCode:      ar.ExitCode,
-			Stdout:        ar.Result,
-			Stderr:        stderr,
-			Tokens:        ar.Tokens,
-			Cost:          ar.Cost,
-			Agent:         name,
-			Adapter:       ag.Adapter,
-			Usage:         ar.Usage,
-			SessionID:     ar.SessionID,
-			Model:         ar.Model,
-			Injected:      ar.Injected,
-			Structured:    ar.Structured,
-			SubagentStats: ar.SubagentStats,
+			OK:             ar.OK,
+			ExitCode:       ar.ExitCode,
+			Stdout:         ar.Result,
+			Stderr:         stderr,
+			Tokens:         ar.Tokens,
+			Cost:           ar.Cost,
+			Agent:          name,
+			Adapter:        ag.Adapter,
+			Usage:          ar.Usage,
+			SessionID:      ar.SessionID,
+			Model:          ar.Model,
+			Injected:       ar.Injected,
+			Structured:     ar.Structured,
+			SubagentStats:  ar.SubagentStats,
+			ResumeRejected: rejectedResume(runCtx, ag.Adapter, ar),
 		}
 		lastExecRes = &res
 
@@ -1100,6 +1117,9 @@ type Result struct {
 	Tokens     int
 	Cost       float64
 	NeedManual bool
+	// ResumeRejected is computed at the adapter boundary, never trusted from
+	// adapter-authored JSON. It permits one full-input cold recovery.
+	ResumeRejected bool
 	// Agent is the agent that actually executed (may differ from the plan's
 	// primary when the fallback chain kicked in). Empty for non-agent plans
 	// and when no candidate was usable at all.

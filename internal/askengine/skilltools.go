@@ -5,6 +5,7 @@ package askengine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -21,7 +22,7 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "skill_search",
 		ReadOnly:    true,
-		Description: "Search the Skills Hub and the local skill library for skills. Call it when the user asks whether a skill exists, when a task needs specific dev/ops conventions, or when you want to find a new skill yourself. query = keywords like 'k8s', 'python', 'docker', 'test', 'review'. / 在 Skills Hub（技能集市）与本地技能库中搜索技能。当用户询问是否有某项技能、需要特定开发/运维规范指导，或你要自主寻找新技能执行任务时调用。query 填关键词，如 'k8s', 'python', 'docker', 'test', 'review' 等。",
+		Description: "Find relevant skills locally first (works offline); search the hub only if none match. Proactively use for task guidance.",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
@@ -38,7 +39,7 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "skill_discover",
-		Description: "Autonomously find and install a skill: searches the hub for the best match from a need description or technical keyword and installs it. Installed skills stay pending until the user approves them in the foreground (panda skill approve or the web Skills page) — they cannot guide tasks before that. For requests like \"find and install a skill about X\". / 智能自主寻找并安装技能：根据需求描述或技术关键词，自动在技能集市中搜索最匹配的技能并完成安装。技能安装后为 pending 待批准状态，不会自动生效——需用户在前台批准（panda skill approve 或 Web 技能页）后方可指导任务。适用于‘帮我找找并安装关于 X 的技能’。",
+		Description: "Find and install a hub skill as pending; user approval activates newly downloaded procedures.",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
@@ -55,7 +56,7 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 
 	reg.Register(entry.Tool{
 		Name:        "skill_install",
-		Description: "Install a specific skill locally. target = a Skills Hub skill name (e.g. 'docker-compose'), an HTTP/HTTPS direct URL (e.g. a SKILL.md on GitHub), or a local path. Installed skills stay pending until the user approves them in the foreground (panda skill approve or the web Skills page) before they take effect on later tasks. / 自主安装指定技能到本地。target 支持填写 Skills Hub 技能名称（如 'docker-compose'），或者填入 HTTP/HTTPS 网络直链（如 GitHub 上的 SKILL.md）及本地路径。安装后为 pending 待批准状态，需用户在前台批准（panda skill approve 或 Web 技能页）后才会在后续任务中生效。",
+		Description: "Install a hub skill, URL or local bundle as pending. Existing active skills need no approval to use.",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
@@ -75,7 +76,7 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "skill_list",
 		ReadOnly:    true,
-		Description: "List all installed and active skills — the workflows, coding conventions and diagnostic procedures currently available. / 列出当前已安装且生效的所有技能，了解已掌握的工作流、代码规范与诊断规程。",
+		Description: "List visible installed skills and approval status. Read active procedures with skill_show when useful.",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type":       "object",
@@ -89,18 +90,23 @@ func registerSkillTools(reg *entry.Registry, e *Engine) {
 	reg.Register(entry.Tool{
 		Name:        "skill_show",
 		ReadOnly:    true,
-		Description: "Show an installed skill's full operating procedure (the SKILL.md body). name = the skill's name. / 查看已安装技能的完整操作规程与步骤内容（SKILL.md 正文）。name 填技能名称。",
+		Description: "Read an active skill or referenced resource on demand, including mid-task. Page with next_offset; never execute unread scripts.",
 		Tier:        defense.TierReversible,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "Skill name / 技能名称"},
+				"name":   map[string]any{"type": "string"},
+				"scope":  map[string]any{"type": "string", "enum": []string{"global", "project", "device"}},
+				"key":    map[string]any{"type": "string"},
+				"path":   map[string]any{"type": "string", "description": "Relative resource path; default SKILL.md"},
+				"offset": map[string]any{"type": "integer", "minimum": 0},
+				"sha256": map[string]any{"type": "string", "description": "Previous page hash; detects changed resources"},
+				"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 16000},
 			},
 			"required": []string{"name"},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
-			name, _ := args["name"].(string)
-			return e.toolSkillShow(ctx, strings.TrimSpace(name))
+			return e.toolSkillRead(ctx, args)
 		},
 	})
 }
@@ -163,6 +169,20 @@ func (e *Engine) toolSkillSearch(ctx context.Context, query string) (string, err
 		return "", fmt.Errorf("query 不能为空")
 	}
 	st := e.skillStoreForRead(ctx)
+	if st != nil {
+		local, err := st.Search(e.skillAccess(ctx), query, 20)
+		if err != nil {
+			return "", err
+		}
+		if len(local) > 0 {
+			items := make([]map[string]any, 0, len(local))
+			for _, e := range local {
+				items = append(items, map[string]any{"name": e.Name, "description": e.Description, "scope": e.Scope, "key": e.Key, "status": e.Status, "installed": true})
+			}
+			data, _ := json.Marshal(items)
+			return string(data), nil
+		}
+	}
 	idx, err := skills.FetchHubIndex(ctx, e.getHubURL())
 	if err != nil {
 		return "", fmt.Errorf("获取 Skills Hub 失败: %w", err)
@@ -320,51 +340,28 @@ func (e *Engine) toolSkillList(ctx context.Context) (string, error) {
 	return string(data), nil
 }
 
-func (e *Engine) toolSkillShow(ctx context.Context, name string) (string, error) {
-	if name == "" {
-		return "", fmt.Errorf("技能名称不能为空")
-	}
+func (e *Engine) skillAccess(ctx context.Context) skills.Access {
+	project, _ := memory.ScopeProject(ctx)
+	return skills.Access{Project: project, Devices: e.deviceSkillKeys()}
+}
+
+func (e *Engine) toolSkillRead(ctx context.Context, args map[string]any) (string, error) {
 	st := e.skillStoreForRead(ctx)
 	if st == nil {
-		return "", fmt.Errorf("技能存储未配置")
+		return "", fmt.Errorf("skill store not configured")
 	}
-	sk, err := st.Load(skills.ScopeGlobal, "", name)
-	if err != nil {
-		return "", fmt.Errorf("加载技能 %s 失败: %w", name, err)
+	raw, _ := json.Marshal(args)
+	var req skills.ReadRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return "", err
 	}
-	if sk == nil {
-		index, _ := st.Index()
-		scopeProj, pinned := memory.ScopeProject(ctx)
-		deviceKeys := e.deviceSkillKeys()
-		for _, entry := range index {
-			if !strings.EqualFold(entry.Name, name) {
-				continue
-			}
-			switch entry.Scope {
-			case skills.ScopeGlobal:
-				sk, _ = st.Load(entry.Scope, entry.Key, entry.Name)
-			case skills.ScopeDevice:
-				if skills.MatchKey(entry.Key, deviceKeys) {
-					sk, _ = st.Load(entry.Scope, entry.Key, entry.Name)
-				}
-			case skills.ScopeProject:
-				// Same boundary as skill_list: another project's procedure is
-				// not this conversation's to load.
-				if pinned && scopeProj != "" && strings.EqualFold(entry.Key, scopeProj) {
-					sk, _ = st.Load(entry.Scope, entry.Key, entry.Name)
-				}
-			}
-			if sk != nil {
-				break
-			}
-		}
+	result, err := st.Read(e.skillAccess(ctx), req)
+	if errors.Is(err, skills.ErrUnavailable) {
+		return "未找到可用技能: " + err.Error(), nil
 	}
-	if sk == nil {
-		return fmt.Sprintf("未找到名为 %q 的技能。", name), nil
-	}
-	bytes, err := sk.Bytes()
 	if err != nil {
 		return "", err
 	}
-	return string(bytes), nil
+	data, err := json.Marshal(result)
+	return string(data), err
 }

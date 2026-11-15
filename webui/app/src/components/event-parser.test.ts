@@ -369,3 +369,16 @@ describe('buildRows pipeline grouping', () => {
     assert.equal(imageRefOf({ ev: 'tool_result', content: 'data:text/plain;base64,aGk=' }), null)
   })
 })
+
+it('shows delivered skill resources and actual context size without treating matches as loads', async () => {
+  await setLocale('en')
+  const load = formatTaskEvent('skill_load', JSON.stringify({ name: 'incident-guide', path: 'references/logs.md', bytes: 200 }))
+  assert.equal(load.label, 'Read skill resource')
+  assert.deepEqual(load.tags, [{ key: 'Skill', value: 'incident-guide' }, { key: 'Resource', value: 'references/logs.md' }, { key: 'Prompt bytes', value: '200 B' }])
+  const context = formatTaskEvent('prompt_context', JSON.stringify({ mode: 'delta', bytes: 120, full_bytes: 12000 }))
+  assert.ok(context.tags.some((tag) => tag.value === 'New instructions only'))
+  assert.ok(context.tags.some((tag) => tag.value === '120 / 12000 B'))
+  const exec = formatTaskEvent('exec_agent_start', JSON.stringify({ agent: 'codex', matched_skills: ['suggested'], loaded_skills: [{ name: 'read-guide' }], prompt_bytes: 12000 }))
+  assert.ok(exec.tags.some((tag) => tag.value === 'read-guide'))
+  assert.ok(!exec.tags.some((tag) => tag.value.includes('suggested')))
+})

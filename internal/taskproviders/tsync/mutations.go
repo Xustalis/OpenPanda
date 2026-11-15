@@ -172,7 +172,10 @@ func taskPatch(raw json.RawMessage) (map[string]any, error) {
 			if json.Unmarshal(value, &text) != nil || string(value) == "null" {
 				return nil, errors.New("invalid task text field")
 			}
-			if name == "projectId" && text == "" { out[name] = nil; continue }
+			if name == "projectId" && text == "" {
+				out[name] = nil
+				continue
+			}
 			if name == "title" && (strings.TrimSpace(text) == "" || len(text) > 4096) || name == "description" && len(text) > 200000 {
 				return nil, errors.New("invalid task title or body")
 			}

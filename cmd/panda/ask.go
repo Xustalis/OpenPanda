@@ -413,6 +413,9 @@ func printAskPlan(loc i18n.Locale, out *askengine.Result) {
 	fmt.Printf("goal:   %s\n", out.PlanGoal)
 	fmt.Printf("stages: %d\n", len(out.PlanStages))
 	printPlanStages(out.PlanStages)
+	if out.Answer != "" {
+		fmt.Println(renderCliMd(out.Answer))
+	}
 	if out.Warning != "" {
 		fmt.Fprintln(os.Stderr, out.Warning)
 	}

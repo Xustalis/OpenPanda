@@ -177,3 +177,14 @@ func (s EnvironmentSnapshot) Render() string {
 	b.WriteString("Root rule references are not loaded instructions; read applicable rules, including ancestor/nested rules. Dependencies and declared checks are not verified by this snapshot.")
 	return b.String()
 }
+
+// RootRulesFingerprint detects changed standing instructions before reusing a
+// conversation's context. Ancestor/nested rules remain the harness's boundary.
+func RootRulesFingerprint(root string) string {
+	h := sha256.New()
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		ref, exists := rootRule(root, name)
+		fmt.Fprintf(h, "%s:%t:%s:%s\n", name, exists, ref.Status, ref.SHA256)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}

@@ -72,7 +72,7 @@ export function useTaskTrace(task: Task): TraceModel {
 
   const classifyEv = useMemo(() => firstEvent(traces, 'classify_result'), [traces])
   const routeEv = useMemo(() => firstEvent(traces, 'route_decision'), [traces])
-  const execEv = useMemo(() => firstEvent(traces, 'exec_agent_start'), [traces])
+  const execEv = useMemo(() => lastEvent(traces, 'exec_agent_start'), [traces])
   const classify = (classifyEv?.data ?? null) as ClassifyData | null
   const route = (routeEv?.data ?? null) as RouteData | null
   const exec = (execEv?.data ?? null) as ExecData | null
@@ -310,6 +310,8 @@ export function TraceDetail({ model }: { model: TraceModel }) {
         <KV k={t('detail.trace.tier')} v={tierOf(exec)} />
         <KV k={t('detail.trace.access')} v={accessOf(exec)} />
         <KV k={t('detail.workdir')} v={exec?.workdir} mono />
+        <KV k={t('events.tag.promptBytes')} v={exec?.prompt_bytes === undefined ? '' : String(exec.prompt_bytes) + ' B'} mono />
+        <KV k={t('events.tag.loadedSkills')} v={exec?.loaded_skills?.map((s) => s.name).join(', ')} />
         {/* The round is on the strip's own top line (`.tt-tail`), beside the
             live status — repeating it down here put the same "轮次 1/5" twice
             in one card, one under the other. */}
@@ -479,6 +481,8 @@ interface RouteData {
  *  Everything here was already on the wire; the panel used to read only the
  *  first two fields of it. */
 interface ExecData {
+  prompt_bytes?: number
+  loaded_skills?: { name: string }[]
   agent?: string
   node_name?: string
   model?: string
@@ -565,5 +569,10 @@ function lastData<T>(traces: TraceEvent[], type: TraceEvent['type']): T | null {
     const e = traces[i]
     if (e?.type === type) return (e.data ?? null) as T | null
   }
+  return null
+}
+
+function lastEvent(traces: TraceEvent[], type: string): TraceEvent | null {
+  for (let i = traces.length - 1; i >= 0; i--) { const event = traces[i]; if (event?.type === type) return event }
   return null
 }

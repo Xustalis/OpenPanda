@@ -492,6 +492,11 @@ func TestChooseLayers(t *testing.T) {
 	if l := ChooseLayers(old); l.TaskExample {
 		t.Fatalf("stale task marker = %+v, want no TaskExample", l)
 	}
+	old[0] = memTurn
+	if l := ChooseLayers(old); l.MemoryRules {
+		t.Fatalf("stale memory activity stayed resident: %+v", l)
+	}
+
 }
 
 func TestBuildPromptLayerInjection(t *testing.T) {

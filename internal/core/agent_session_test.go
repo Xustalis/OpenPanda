@@ -5,7 +5,10 @@ package core
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -417,5 +420,77 @@ func TestSessionAffinityPromotesMintingAdapter(t *testing.T) {
 	}
 	if plan2.Agent != "claude_code" {
 		t.Fatalf("plan2.Agent = %q, want scored primary kept (no candidate owns gone.py)", plan2.Agent)
+	}
+}
+
+func TestAgentIncrementalContinuationAndRecovery(t *testing.T) {
+	for _, mode := range []string{"delta", "changed_rules", "missing_session"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			c := newSuperviseCore(t, "incremental-"+mode, 1)
+			dir := t.TempDir()
+			c.SetWorkDir(dir)
+			c.SetSuperviseRounds(2)
+			if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("initial rules"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c.SetSupervisor(newFakeSupervisor(t, func(call int) string {
+				if call == 1 {
+					return `{"status":"continue","reason":"continue","followup":"NEW_FOLLOWUP"}`
+				}
+				return `{"status":"done","reason":"done"}`
+			}))
+			var prompts, resumes []string
+			c.router.SetAdapterRunner(func(runCtx context.Context, adapter, prompt, cwd string) commander.AgentResult {
+				prompts = append(prompts, prompt)
+				resumes = append(resumes, commander.ResumeID(runCtx))
+				if len(prompts) == 1 && mode == "changed_rules" {
+					if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("changed rules"), 0o600); err != nil {
+						t.Error(err)
+					}
+				}
+				if len(prompts) == 2 && mode == "missing_session" {
+					return commander.AgentResult{OK: false, Result: "Session not found: checkpoint", ExitCode: 1}
+				}
+				return commander.AgentResult{OK: true, Result: "done", ExitCode: 0, SessionID: "checkpoint"}
+			})
+			task, _, err := c.SubmitLocal(ctx, TaskInput{Title: "incremental test", ContextType: "command", WorkDir: dir, Intent: "ORIGINAL_REQUIREMENT " + strings.Repeat("constraint ", 300), Requires: []string{"code:modify"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if task.State != StateDone {
+				t.Fatalf("state=%s", task.State)
+			}
+			if len(prompts) < 2 {
+				t.Fatalf("rounds=%d", len(prompts))
+			}
+			if !strings.Contains(prompts[0], "ORIGINAL_REQUIREMENT") {
+				t.Fatal("initial context lost")
+			}
+			if mode == "changed_rules" {
+				if !strings.Contains(prompts[1], "ORIGINAL_REQUIREMENT") {
+					t.Fatal("changed rules reused old context")
+				}
+				return
+			}
+			if strings.Contains(prompts[1], "ORIGINAL_REQUIREMENT") || !strings.Contains(prompts[1], "NEW_FOLLOWUP") {
+				t.Fatalf("followup was not incremental: %q", prompts[1])
+			}
+			if mode == "missing_session" {
+				if len(prompts) != 3 || !strings.Contains(prompts[2], "ORIGINAL_REQUIREMENT") || !strings.Contains(prompts[2], "NEW_FOLLOWUP") || resumes[2] != "" {
+					t.Fatalf("bad full recovery: prompts=%v resumes=%v", prompts, resumes)
+				}
+			}
+			events, _ := c.store.Events(ctx, task.TaskID)
+			sawDelta := false
+			for _, ev := range events {
+				if ev.Type == EvPromptContext && strings.Contains(ev.DataJSON, `"mode":"delta"`) {
+					sawDelta = true
+				}
+			}
+			if !sawDelta {
+				t.Fatal("delta delivery was invisible")
+			}
+		})
 	}
 }

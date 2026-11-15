@@ -117,7 +117,7 @@ func TestWithSkills(t *testing.T) {
 
 	// A deploy title matches the global skill.
 	got, used := withSkills(c, "deploy the release", "other-project", "deploy", agentPromptBudget)
-	if !strings.Contains(got, "deploy-panda") || len(used) != 1 {
+	if !strings.Contains(got, "deploy-panda") || len(used) != 0 {
 		t.Errorf("should match global skill, got %q used=%d", got, len(used))
 	}
 	// A build title in the wrong project must not surface the panda skill.
@@ -166,10 +166,10 @@ func TestWithSkillsBudgetDegrades(t *testing.T) {
 		t.Fatalf("index line lost the description: %q", got)
 	}
 
-	// Roomy budget: the full body rides.
+	// A larger budget still loads ordinary procedures progressively.
 	got, _ = withSkills(c, "run the playbook", "", "playbook", agentPromptBudget)
-	if !strings.Contains(got, "playbook line\nplaybook line") {
-		t.Fatalf("roomy budget should keep the full body (%d bytes)", len(got))
+	if strings.Contains(got, "playbook line\nplaybook line") {
+		t.Fatalf("ordinary body should remain on demand (%d bytes)", len(got))
 	}
 }
 
@@ -201,7 +201,7 @@ func TestWithSkillsChineseTriggerAndDeviceScope(t *testing.T) {
 	c := &Core{logger: testLogger(), skills: store, nodeID: "node-a"}
 
 	got, _ := withSkills(c, "排查登录失败的根因", "", "排查登录失败的根因", agentPromptBudget)
-	if !strings.Contains(got, "REPRODUCE-MARKER") {
+	if !strings.Contains(got, "root-cause-debugging") {
 		t.Errorf("Chinese trigger did not load the debugging procedure: %q", got)
 	}
 	if strings.Contains(got, "DEVICE-BUILD-MARKER") {
@@ -209,7 +209,7 @@ func TestWithSkillsChineseTriggerAndDeviceScope(t *testing.T) {
 	}
 
 	got, _ = withSkills(c, "编译构建失败", "", "编译构建失败", agentPromptBudget)
-	if !strings.Contains(got, "DEVICE-BUILD-MARKER") {
+	if !strings.Contains(got, "node-build") {
 		t.Errorf("this device's skill was not injected: %q", got)
 	}
 	if strings.Contains(got, "OTHER-DEVICE-MARKER") {
@@ -232,7 +232,7 @@ func TestWithSkillsChineseTriggerAndDeviceScope(t *testing.T) {
 	c2 := &Core{logger: testLogger(), skills: store, nodeID: "runtime-id"}
 	c2.card.Device = "device-label"
 	got, _ = withSkills(c2, "编译构建失败", "", "编译构建失败", agentPromptBudget)
-	if !strings.Contains(got, "LABELED-DEVICE-MARKER") {
+	if !strings.Contains(got, "labeled-device-build") {
 		t.Errorf("card device label did not reach the skill: %q", got)
 	}
 	if strings.Contains(got, "DEVICE-BUILD-MARKER") {
@@ -280,13 +280,14 @@ func TestLogTask(t *testing.T) {
 }
 
 // TestBuildAgentPromptBudgetAccommodatesLargeChineseIntent verifies that a multi-kilobyte
-// Chinese intent does not prematurely degrade skill bodies to index lines under the 128KB budget.
+// Chinese intent preserves a small always-loaded procedure within the budget.
 func TestBuildAgentPromptBudgetAccommodatesLargeChineseIntent(t *testing.T) {
 	root := t.TempDir()
 	store := skills.NewStore(filepath.Join(root, "skills"))
 	sk := &skills.Skill{
 		Name:        "k8s-deploy",
 		Description: "Kubernetes 部署规范",
+		Always:      true,
 		Scope:       skills.ScopeGlobal,
 		Status:      skills.StatusActive,
 		Body:        "## 详细部署指南\n1. 检查集群状态\n2. 应用 yaml 配置\n3. 验证 Pod 存活探针\n",

@@ -64,7 +64,7 @@ func (r *Router) mcpPassthroughServers() map[string]serverSpec {
 	// submission as MCP tools instead of scraping raw `panda` CLI output.
 	if r.pandaTools {
 		if exe, err := os.Executable(); err == nil && exe != "" {
-			args := []string{"mcp"}
+			args := []string{"mcp", "--compact"}
 			if r.selfConfigPath != "" {
 				args = append(args, "--config", r.selfConfigPath)
 			}

@@ -51,6 +51,7 @@ const maxSelfToolOut = 8192
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	configPath := fs.String("config", cliConfigPath, "path to config.yaml (default: discovered)")
+	compact := fs.Bool("compact", false, "expose essential tools and on-demand tool discovery")
 	fs.Parse(reorderFlags(fs, args))
 	rejectExtraArgs(fs, "usage: panda mcp")
 
@@ -79,7 +80,13 @@ func runMCP(args []string) {
 	}
 	self.browser = browser.NewClient(
 		browser.StateDirFor(filepath.Dir(cfg.Storage.DBPath)), self.exe)
-	srv := mcpserve.New("openpanda", version, selfTools(&self))
+	tools := selfTools(&self)
+	if *compact {
+		tools = mcpserve.Compact(tools, func(name string) bool {
+			return name == "panda_skill_search" || name == "panda_skill_read" || name == "panda_subtask_spawn" || name == "panda_subtask_await"
+		})
+	}
+	srv := mcpserve.New("openpanda", version, tools)
 	// Stdout is the JSON-RPC channel: anything that writes to it corrupts the
 	// stream, so this command never logs to stdout and fatal() stays on
 	// stderr.
@@ -181,6 +188,26 @@ func selfTools(d *selfToolsDeps) []mcpserve.Tool {
 			Description: "List installed procedural skills (name, scope, status, builtin flag).",
 			InputSchema: mcpserve.SchemaObject(nil),
 			Handle:      d.toolSkillList,
+		},
+		{
+			Name:        "panda_skill_search",
+			Description: "Find usable local skills for this task. Proactively discover guidance as needs emerge; no user invocation required.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{"query": mcpserve.StringProp("keywords; empty lists available skills")}),
+			Handle:      d.toolSkillSearch,
+		},
+		{
+			Name:        "panda_skill_read",
+			Description: "Read a usable skill or relative reference/script on demand. Returns bounded content, resources and next_offset. Read scripts before executing them.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{
+				"name":   mcpserve.StringProp("installed skill name"),
+				"scope":  mcpserve.StringProp("global|project|device; use with key if ambiguous"),
+				"key":    mcpserve.StringProp("scope key"),
+				"path":   mcpserve.StringProp("relative resource path; default SKILL.md"),
+				"offset": mcpserve.IntProp("next_offset from previous page"),
+				"sha256": mcpserve.StringProp("sha256 from previous page; detects changes"),
+				"limit":  mcpserve.IntProp("maximum content bytes; default 6000"),
+			}, "name"),
+			Handle: d.toolSkillRead,
 		},
 		{
 			Name:        "panda_skill_install",
@@ -670,10 +697,16 @@ func (d *selfToolsDeps) toolSubtaskAwait(ctx context.Context, args map[string]an
 }
 
 func (d *selfToolsDeps) toolSkillList(ctx context.Context, _ map[string]any) (string, error) {
-	index, err := d.skills.Index()
+	access, _, err := runtimeSkillAccess(ctx, d.cfg, d.tasks)
 	if err != nil {
-		return "", fmt.Errorf("skill index: %w", err)
+		return "", err
 	}
+	access.Inactive = true
+	index, err := d.skills.Search(access, "", 100)
+	if err != nil {
+		return "", err
+	}
+
 	type view struct {
 		Name        string `json:"name"`
 		Description string `json:"description,omitempty"`
@@ -773,4 +806,36 @@ func clipSelfOut(s string) string {
 		return s[:maxSelfToolOut] + "…[truncated]"
 	}
 	return s
+}
+
+func (d *selfToolsDeps) toolSkillSearch(ctx context.Context, args map[string]any) (string, error) {
+	access, _, err := runtimeSkillAccess(ctx, d.cfg, d.tasks)
+	if err != nil {
+		return "", err
+	}
+	results, err := d.skills.Search(access, mcpserve.Arg(args, "query"), 20)
+	if err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(results)
+	return string(b), err
+}
+
+func (d *selfToolsDeps) toolSkillRead(ctx context.Context, args map[string]any) (string, error) {
+	access, taskID, err := runtimeSkillAccess(ctx, d.cfg, d.tasks)
+	if err != nil {
+		return "", err
+	}
+	b, _ := json.Marshal(args)
+	var req skills.ReadRequest
+	if err := json.Unmarshal(b, &req); err != nil {
+		return "", err
+	}
+	result, err := d.skills.Read(access, req)
+	if err != nil {
+		return "", err
+	}
+	recordSkillRead(ctx, d.tasks, d.skills, taskID, result, "mcp")
+	b, err = json.Marshal(result)
+	return string(b), err
 }

@@ -49,6 +49,8 @@ var traceEventTypes = map[string]bool{
 	"route_decision":     true,
 	"delegation_hop":     true,
 	"exec_agent_start":   true,
+	"skill_load":         true,
+	"prompt_context":     true,
 	"supervision_round":  true,
 	"tier2_triggered":    true,
 	"plan_stage_changed": true,

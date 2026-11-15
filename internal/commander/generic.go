@@ -212,6 +212,7 @@ func runGenericNative(ctx context.Context, agentName, prompt, cwd string, env []
 		time.Duration(timeout)*time.Second+hardTimeoutGrace)
 	defer cancel()
 
+	env = withNodeConfigEnv(ctx, env)
 	if tid := TaskID(ctx); tid != "" {
 		env = append(append([]string(nil), env...), "PANDA_TASK_ID="+tid)
 	}

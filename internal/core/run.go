@@ -1415,6 +1415,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	// separate from baseIntent so a context-overflow retry can compress
 	// the accretion (compactRunNotes) without touching the spec itself.
 	var intentSteers, intentNotes []string
+	var deliveredSteers, deliveredNotes int
+	var deliveredStatic, deliveredSession, deliveredAdapter, deliveredRules string
 	fullIntent := func() string {
 		var b strings.Builder
 		for _, s := range intentSteers {
@@ -1663,7 +1665,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// assemblePrompt builds this round's prompt; a context-overflow retry
 		// rebuilds it under the shrunken overflowPromptBudget so every matched
 		// skill degrades to its index line.
-		assemblePrompt := func(promptBudget int) string {
+		assemblePrompt := func(currentIntent string, promptBudget int) string {
 			var p string
 			// §4.2 Sub-MainAgent protocol hint: only a task with depth budget
 			// left learns the marker format — a task at delegation.max_depth
@@ -1697,11 +1699,28 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// markers are what the agent acts on, the catalog is what it looks
 			// things up in.
 			p += selfSection
-			base, used := buildAgentPromptWithEnvironment(c, fullIntent(), task.Project, task.Title, workDir, promptBudgetFor(promptBudget, len(p)), w.environment, promptLang, outputLang)
+			base, used := buildAgentPromptWithEnvironment(c, currentIntent, task.Project, task.Title, workDir, promptBudgetFor(promptBudget, len(p)), w.environment, promptLang, outputLang)
 			usedSkills = used
 			return base + p
 		}
-		prompt := assemblePrompt(agentContextBudget(task))
+		rulesFingerprint := scout.RootRulesFingerprint(workDir)
+		staticPrompt := assemblePrompt(baseIntent, agentContextBudget(task))
+		prompt := assemblePrompt(fullIntent(), agentContextBudget(task))
+		delta := ""
+		if deliveredSession != "" && sessionID == deliveredSession && sessionAdapter == deliveredAdapter && staticPrompt == deliveredStatic && rulesFingerprint == deliveredRules && deliveredSteers <= len(intentSteers) && deliveredNotes <= len(intentNotes) {
+			var updates []string
+			updates = append(updates, intentSteers[:len(intentSteers)-deliveredSteers]...)
+			updates = append(updates, intentNotes[deliveredNotes:]...)
+			if len(updates) > 0 {
+				delta = "[Continuation of this task; prior task, constraints and guidance remain in effect]\n" + strings.Join(updates, "\n\n")
+			}
+		}
+		sentSteers, sentNotes := len(intentSteers), len(intentNotes)
+		preparedSkills := usedSkills
+		startSkills := usedSkills
+		if delta != "" {
+			startSkills = nil
+		}
 
 		// — Trace: exec_agent_start (orbit Step-3 "starting this stage on N").
 		// We report before Execute so the orbit paints the stage bar as
@@ -1723,7 +1742,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			"workdir":              workDir,
 			"prompt_bytes":         len(prompt),
 			"context_budget_bytes": agentContextBudget(task),
-			"loaded_skills":        loadedSkillEvidence(usedSkills),
+			"loaded_skills":        loadedSkillEvidence(startSkills),
 		})
 
 		// The agent runs inside an inner attempt loop so a context-window
@@ -1732,6 +1751,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// session — its transcript replayed into the window — ours to drop.
 		interrupted := false
 		overflowRetried := false
+		resumeRetried := false
 		var extraTokens int
 		var extraCost float64
 		for {
@@ -1748,6 +1768,16 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if sessionID != "" {
 				runCtx = commander.WithResume(execCtx, sessionID, sessionAdapter)
 			}
+			if delta != "" && !overflowRetried && !resumeRetried {
+				runCtx = commander.WithIncrementalPrompt(runCtx, prompt, delta, deliveredSession, deliveredAdapter)
+			}
+			runCtx = commander.WithPromptObserver(runCtx, func(adapter, mode string, bytes, fullBytes int) {
+				usedSkills = preparedSkills
+				if mode == "delta" {
+					usedSkills = nil
+				}
+				c.EvTrace(execCtx, taskID, EvPromptContext, map[string]any{"adapter": adapter, "mode": mode, "bytes": bytes, "full_bytes": fullBytes, "round": round + 1, "loaded_skills": loadedSkillEvidence(usedSkills)})
+			})
 			if remoteOrigin {
 				runCtx = commander.WithRemoteTask(runCtx)
 			}
@@ -1795,6 +1825,18 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if interrupted {
 				break
 			}
+			if res.ResumeRejected && sessionID != "" && !resumeRetried {
+				resumeRetried = true
+				extraTokens += res.Tokens
+				extraCost += res.Cost
+				sessionID, sessionAdapter = "", ""
+				deliveredSession, deliveredStatic = "", ""
+				commander.DropAgentSession(execCtx, res.Agent, res.Adapter)
+				_ = c.store.SetAgentSession(context.WithoutCancel(execCtx), taskID, "", "", "")
+				c.EvTrace(execCtx, taskID, EvPromptContext, map[string]any{"mode": "full_recovery", "reason": "resume_not_found", "round": round + 1})
+				continue
+			}
+
 			// A context-window overflow cannot be retried verbatim, but the
 			// prompt is ours to shrink: compress the folded run notes, drop
 			// the resumed session (its replayed transcript is the usual bulk),
@@ -1822,7 +1864,9 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				// the next interruption and fail identically.
 				_ = c.store.SetAgentSession(context.WithoutCancel(execCtx), taskID, "", "", "")
 				intentNotes = c.compactRunNotesWithSupervisor(execCtx, intentNotes, supervisor)
-				prompt = assemblePrompt(min(overflowPromptBudget, agentContextBudget(task)/2))
+				prompt = assemblePrompt(fullIntent(), min(overflowPromptBudget, agentContextBudget(task)/2))
+				preparedSkills = usedSkills
+				deliveredSession, deliveredStatic = "", ""
 				continue
 			}
 			break
@@ -1837,6 +1881,11 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			c.EvTrace(execCtx, taskID, "user_inject_interrupt", map[string]any{"round": round + 1})
 			continue
 		}
+		if res.OK && res.SessionID != "" && !overflowRetried {
+			deliveredSteers, deliveredNotes = sentSteers, sentNotes
+			deliveredStatic, deliveredSession, deliveredAdapter, deliveredRules = staticPrompt, res.SessionID, res.Adapter, rulesFingerprint
+		}
+
 		structured := parseStructuredResult(res.Structured)
 		// The schema's status field is the model's self-report. question and
 		// delegate are consumed below; "failed" is honored as a failure rather
@@ -2689,6 +2738,9 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		filesStat = filesStat[:min(len(filesStat), maxFilesChangedReport)]
 	}
 	res = annotateAgentSubstitution(plan, res)
+	if err := writeStageReport(task, workDir, c.nodeID, res, verdict); err != nil {
+		return bus.TaskResultPayload{}, fmt.Errorf("write stage report: %w", err)
+	}
 	var outputArtifact string
 	if task.PlanID != "" {
 		var perr error

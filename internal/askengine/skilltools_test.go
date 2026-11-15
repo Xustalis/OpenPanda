@@ -189,7 +189,7 @@ scope: global
 	}))
 	defer ts.Close()
 
-	_, reg := newSkillTestEngine(t, ts.URL)
+	e, reg := newSkillTestEngine(t, ts.URL)
 
 	instOut := runSkillTool(t, reg, "skill_install", map[string]any{"target": "kafka-tuning"})
 	if !strings.Contains(instOut, "已从 Skills Hub 安装技能 kafka-tuning") || !strings.Contains(instOut, "待批准") {
@@ -204,7 +204,29 @@ scope: global
 	}
 
 	showOut := runSkillTool(t, reg, "skill_show", map[string]any{"name": "kafka-tuning"})
+	if strings.Contains(showOut, "Kafka Tuning Steps") {
+		t.Fatal("pending procedure reached the model")
+	}
+	if err := e.skills.Approve(skills.ScopeGlobal, "", "kafka-tuning"); err != nil {
+		t.Fatal(err)
+	}
+	showOut = runSkillTool(t, reg, "skill_show", map[string]any{"name": "kafka-tuning"})
 	if !strings.Contains(showOut, "Kafka Tuning Steps") {
-		t.Fatalf("expected kafka tuning content, got: %s", showOut)
+		t.Fatalf("approved skill unreadable: %s", showOut)
+	}
+}
+
+func TestSkillSearchUsesLocalLibraryOffline(t *testing.T) {
+	e, reg := newSkillTestEngine(t, "http://127.0.0.1:1/offline")
+	if err := e.skills.Save(&skills.Skill{Name: "offline-guide", Description: "incident recovery", Scope: skills.ScopeGlobal, Status: skills.StatusActive, Body: "read logs first"}); err != nil {
+		t.Fatal(err)
+	}
+	got := runSkillTool(t, reg, "skill_search", map[string]any{"query": "incident recovery"})
+	if !strings.Contains(got, "offline-guide") || !strings.Contains(got, `"installed":true`) {
+		t.Fatalf("offline local search failed: %s", got)
+	}
+	got = runSkillTool(t, reg, "skill_show", map[string]any{"name": "offline-guide"})
+	if !strings.Contains(got, "read logs first") {
+		t.Fatal(got)
 	}
 }

@@ -16,10 +16,13 @@ package panel
 // where it already worked, on /api/ask.
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
 // planStageJSON is one stage of a plan: an ordinary task plus its place in the
@@ -32,6 +35,9 @@ type planStageJSON struct {
 	Title    string             `json:"title,omitempty"`
 	State    string             `json:"state"`
 	Owner    string             `json:"owner,omitempty"`
+	Executor string             `json:"executor,omitempty"`
+	Target   string             `json:"target,omitempty"`
+	Final    bool               `json:"final,omitempty"`
 	Needs    []string           `json:"needs,omitempty"`
 	Inputs   []planArtifactJSON `json:"inputs,omitempty"`
 	Output   string             `json:"output_artifact,omitempty"`
@@ -80,6 +86,18 @@ func (h *handler) getPlan(w http.ResponseWriter, r *http.Request) {
 			Stage: t.StageID, TaskID: t.TaskID, Title: t.Title, State: t.State,
 			Owner: t.OwnerNode, Needs: t.Needs, Output: t.OutputArtifact,
 			Created: t.CreatedAt, Updated: t.UpdatedAt, Priority: priorityLabel(t.Priority),
+		}
+		var result bus.TaskResultPayload
+		if json.Unmarshal([]byte(t.ResultJSON), &result) == nil {
+			st.Executor = result.Executor
+		}
+		var detail entry.TaskSpecDetail
+		if json.Unmarshal([]byte(t.SpecJSON), &detail) == nil {
+			st.Final = detail.PlanFinal
+			st.Target = detail.Node
+		}
+		if st.Target == "" {
+			st.Target, _ = h.store.DispatchTarget(r.Context(), t.TaskID)
 		}
 		for _, in := range t.Inputs {
 			st.Inputs = append(st.Inputs, planArtifactJSON{Stage: in.Stage, Hash: in.Hash, Source: in.Source})

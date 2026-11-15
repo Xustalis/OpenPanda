@@ -22,7 +22,7 @@ const sideTaskJSON = `{"kind":"task","task":{"title":"修改配置文件","conte
 // transcript, not a crippled tool set — a channel that can only look cannot
 // finish the small piece of work the user asked for.
 func TestSideAskHasFullToolFace(t *testing.T) {
-	names := make(chan []string, 1)
+	names := make(chan []string, 2)
 	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Tools []struct {
@@ -40,6 +40,10 @@ func TestSideAskHasFullToolFace(t *testing.T) {
 		default:
 		}
 		w.Header().Set("content-type", "application/json")
+		if len(names) == 1 {
+			_, _ = io.WriteString(w, `{"content":[{"type":"tool_use","id":"find-status","name":"tool_search","input":{"query":"system_status"}}]}`)
+			return
+		}
 		b, _ := json.Marshal(anthropicText("这是一个侧边回答。"))
 		_, _ = w.Write(b)
 	})
@@ -52,13 +56,20 @@ func TestSideAskHasFullToolFace(t *testing.T) {
 		t.Fatalf("side ask should answer, got %+v", res)
 	}
 	seen := map[string]bool{}
-	for _, name := range <-names {
-		seen[name] = true
+	for i := 0; i < 2; i++ {
+		select {
+		case page := <-names:
+			for _, name := range page {
+				seen[name] = true
+			}
+		default:
+			t.Fatal("side tool discovery did not return a second schema page")
+		}
 	}
 	if len(seen) == 0 {
 		t.Fatal("the side ask sent no tool list")
 	}
-	for _, want := range []string{entry.ToolNameTaskSubmit, "task_budget", "workspace_read", "system_status"} {
+	for _, want := range []string{entry.ToolNameTaskSubmit, "task_budget", "workspace_read", "system_status", "tool_search"} {
 		if !seen[want] {
 			t.Errorf("side ask is missing tool %q; tools seen: %v", want, seen)
 		}

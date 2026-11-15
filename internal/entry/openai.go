@@ -119,6 +119,9 @@ type oaiStreamOptions struct {
 type oaiUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
+	PromptDetails    struct {
+		CachedTokens int64 `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
 }
 
 // oaiMessage is one Chat Completions message: a plain system/user/assistant
@@ -325,19 +328,22 @@ func parseOpenAIResponse(r *oaiResponse) Response {
 // chunk, and is accumulated per attempt (the caller bills it only when the
 // stream completes, so a retried attempt is never double-counted).
 type oaiAccumulator struct {
-	texts     []string
-	reasoning []string
-	calls     map[int]oaiToolCall
-	order     []int
-	truncated bool
-	usageIn   int64
-	usageOut  int64
+	texts           []string
+	reasoning       []string
+	calls           map[int]oaiToolCall
+	order           []int
+	truncated       bool
+	usageIn         int64
+	usageOut        int64
+	usageCacheRead  int64
+	usageCacheWrite int64
 }
 
 func (a *oaiAccumulator) feed(chunk *oaiChunk, onDelta func(string), onReasoning func(string)) {
 	if chunk.Usage != nil {
 		a.usageIn = chunk.Usage.PromptTokens
 		a.usageOut = chunk.Usage.CompletionTokens
+		a.usageCacheRead = chunk.Usage.PromptDetails.CachedTokens
 	}
 	if len(chunk.Choices) == 0 {
 		return

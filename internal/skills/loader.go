@@ -67,7 +67,10 @@ func (s *Store) Index() ([]IndexEntry, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || d.Name() != "SKILL.md" {
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+			return fs.SkipDir
+		}
+		if d.IsDir() || d.Type()&os.ModeSymlink != 0 || d.Name() != "SKILL.md" {
 			return nil
 		}
 		info, err := d.Info()
@@ -165,6 +168,10 @@ func MatchKey(key string, keys []string) bool {
 // task title) is weighted twice the secondary one (a bounded slice of the
 // intent), so a short specific title still dominates a long generic body.
 func matchRanked(index []IndexEntry, allowed func(IndexEntry) bool, primary, secondary string) []IndexEntry {
+	return matchRankedLimit(index, allowed, primary, secondary, MaxSkillMatches)
+}
+
+func matchRankedLimit(index []IndexEntry, allowed func(IndexEntry) bool, primary, secondary string, limit int) []IndexEntry {
 	var candidates []IndexEntry
 	for _, e := range index {
 		if e.Status == StatusExpired || e.Status == StatusPending {
@@ -213,7 +220,7 @@ func matchRanked(index []IndexEntry, allowed func(IndexEntry) bool, primary, sec
 	})
 	out := make([]IndexEntry, 0, len(ranked))
 	for i, r := range ranked {
-		if i >= MaxSkillMatches {
+		if i >= limit {
 			break
 		}
 		out = append(out, r.entry)
