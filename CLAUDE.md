@@ -285,8 +285,7 @@ on which event, the release order and the identity CLA checks.
 
 - `main` is protected by a GitHub ruleset: deletion and force-push are
   disabled, and every change lands through a PR with all required checks
-  green. Merge with `gh pr merge <n> --rebase`; the project does not keep
-  merge commits.
+  green.
 - Workflow triggers are not interchangeable, so a green PR is not proof that
   every leg ran: `gate.yml` runs on PRs, pushes to `main` and manual dispatch;
   `installers.yml` only on pushes to `main` (skipping Markdown and `docs/**`);
