@@ -114,6 +114,61 @@ func TestApplyDirRowSignedLands(t *testing.T) {
 	}
 }
 
+// TestApplyDirRowExpiredOnArrival pins the door rule for gossip that is
+// already past its shelf life. PruneOffline deletes unpinned offline rows whose
+// seen_at is older than dirRowTTL, and a pull is allowed to CREATE a missing
+// row — so storing an expired row starts an endless loop: the sweep deletes it,
+// the peer's next pull puts it back, and the console paints a dead machine for
+// a few seconds every sync window. A row that would not survive the sweep must
+// not be stored at all.
+func TestApplyDirRowExpiredOnArrival(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Unix()
+	c := newCoreOnDB(t, openTestDB(t), "node-a")
+	rows := func() int {
+		var n int
+		if err := c.db.QueryRow(`SELECT COUNT(*) FROM employee_cache WHERE id LIKE 'verify-%'`).Scan(&n); err != nil {
+			t.Fatalf("count rows: %v", err)
+		}
+		return n
+	}
+	expired := now - int64(dirRowTTL.Seconds()) - 60
+
+	// Signed, but long past the TTL: the sweep would delete it on its next
+	// pass, so the frame is refused rather than stored for deletion.
+	raw, _ := mintDirRow(t, "verify-log@vm-805eed2f664a", expired, nil)
+	if c.applyDirRow(ctx, raw, "peer") {
+		t.Fatal("row expired on arrival was stored")
+	}
+	// The real shape of the loop: a legacy peer forwards rows with no seen_at
+	// at all (0), unsigned, so last_seen stays 0 and every sweep prunes them.
+	zero, _ := mintDirRow(t, "verify-inject@vm-7f07a623f5e1", 0, nil)
+	zero = stripSig(t, zero, func(r *bus.DirRow) { r.Sig = "" })
+	if c.applyDirRow(ctx, zero, "peer") {
+		t.Fatal("unsigned row with no seen_at was stored")
+	}
+	if got := rows(); got != 0 {
+		t.Fatalf("expired rows landed in the directory: %d rows", got)
+	}
+
+	// A fresh row still lands.
+	fresh, _ := mintDirRow(t, "fresh", now, nil)
+	if !c.applyDirRow(ctx, fresh, "peer") {
+		t.Fatal("fresh row rejected")
+	}
+	// A stale row whose id self-certifies is exempt: the frame pins its key,
+	// so the sweep keeps it and there is no loop to break.
+	pub, priv, err := bus.GenerateNodeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable := &bus.DirRow{ID: stableIDPrefix + hex.EncodeToString(pub), PubKey: hex.EncodeToString(pub), SeenAt: expired}
+	bus.SignDirRow(priv, stable)
+	if !c.applyDirRow(ctx, bus.CanonicalDirRowBytes(stable), "peer") {
+		t.Fatal("stale self-certifying row rejected")
+	}
+}
+
 // TestApplyDirRowIdentityBinding pins the two identity rules: gossip cannot
 // establish a first pin for a non-stable id, and a k:<pub> row must be signed
 // by that same pub. Both close the impersonation path where a member binds a

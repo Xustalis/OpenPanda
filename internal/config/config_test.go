@@ -170,6 +170,80 @@ network:
 	}
 }
 
+// TestPeerRelayPriorityFallback covers the symmetric-NAT fallback relay
+// mark: it parses off a peer entry, keeps config order (the order the core
+// tries the relays), rejects anything but the one documented value, refuses
+// a tier that can never serve transit, and survives the config rewrite
+// `panda nodes trust` performs.
+func TestPeerRelayPriorityFallback(t *testing.T) {
+	p := writeTemp(t, `
+node:
+  name: "n"
+network:
+  peers:
+    - "plain:7836"
+    - addr: "vps:7836"
+      relay_priority: "fallback"
+    - addr: "backup:7836"
+      trust: "guarded"
+      relay_priority: "fallback"
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := cfg.Network.Peers[1].RelayPriority; got != RelayPriorityFallback {
+		t.Fatalf("relay_priority = %q", got)
+	}
+	addrs := cfg.Network.RelayFallbackAddrs()
+	if len(addrs) != 2 || addrs[0] != "vps:7836" || addrs[1] != "backup:7836" {
+		t.Fatalf("RelayFallbackAddrs = %v, want config order", addrs)
+	}
+	if got := (NetworkConfig{}).RelayFallbackAddrs(); len(got) != 0 {
+		t.Errorf("no peers → %v, want none", got)
+	}
+
+	bad := writeTemp(t, `
+node:
+  name: "n"
+network:
+  peers:
+    - addr: "vps:7836"
+      relay_priority: "primary"
+`)
+	if _, err := Load(bad); err == nil {
+		t.Fatal("unknown relay_priority must fail validation")
+	}
+
+	open := writeTemp(t, `
+node:
+  name: "n"
+network:
+  peers:
+    - addr: "vps:7836"
+      trust: "open"
+      relay_priority: "fallback"
+`)
+	if _, err := Load(open); err == nil {
+		t.Fatal("an open-tier peer cannot serve transit, so the mark must be refused")
+	}
+
+	// The mark alone must force the mapping form: a scalar rewrite would
+	// silently drop it, and `panda nodes trust` rewrites this section.
+	v, err := (PeerEntry{Addr: "h:3", RelayPriority: RelayPriorityFallback}).MarshalYAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := yaml.Marshal(map[string]any{"peers": []any{v}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(out); !strings.Contains(text, "addr: h:3") ||
+		!strings.Contains(text, "relay_priority: fallback") {
+		t.Fatalf("mapping marshal lost the mark:\n%s", text)
+	}
+}
+
 // TestTrustConfigOverrides: network.trust.* overrides only the guarded tier;
 // mesh and open keep their built-in tables whatever the file says.
 func TestTrustConfigOverrides(t *testing.T) {

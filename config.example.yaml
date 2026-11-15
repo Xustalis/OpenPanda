@@ -150,6 +150,25 @@ network:
     # - "punch:laptop-home"      # node behind NAT — coordinate UDP hole
     #                            # punching through the mesh; needs no
     #                            # reachable listen_addr on either side
+    #
+    # ── Fallback relay (symmetric NAT) ─────────────────────────────────
+    # When punching a peer fails twice, this node parks it as nat_suspect
+    # for ten minutes and falls back to transit — but WHICH relay carries
+    # those frames is normally decided by automatic election (any connected
+    # peer that advertises trnz). Marking one peer relay_priority: fallback
+    # names the relay instead: for a suspected destination, that peer is
+    # tried as the hop first, and only if it is unreachable does the
+    # automatic election run. Several marks are allowed and are tried in
+    # this order.
+    #
+    # This is a local preference of the SENDING node, not a mesh-wide
+    # route: nothing about it is advertised, other nodes keep their own
+    # choices, and the peer gains no scheduling weight — it only ferries
+    # sealed bytes it cannot read. Point it at a box with a public or
+    # always-reachable address (a VPS on the tailnet is the usual choice).
+    # - addr: "tencent-cvm.your-tailnet.ts.net:7836"
+    #   trust: "mesh"
+    #   relay_priority: "fallback"  # "" (default, auto election) | "fallback"
 
   # ── Trust zones (experimental) ─────────────────────────────────────────
   # Every peer defaults to "mesh" — the pre-feature full-trust behaviour.
