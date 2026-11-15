@@ -22,6 +22,12 @@ type planRequestPayload struct {
 // StartPlanRequest binds every stage and the durable business request in the
 // publication transaction. Source IO and Plan validation happen outside it.
 func (c *Core) StartPlanRequest(ctx context.Context, req ExecutionRequest, p plan.Plan, q QueueSpec) (PlanRequestResult, error) {
+	if req.ConnectionID != "" {
+		// Business preparation is currently a single bounded operation. A Plan
+		// may carry arbitrary stage contracts, pins and mesh routes; reject it
+		// until those can enforce the same scoped operation authorization.
+		return PlanRequestResult{}, errors.New("remote business Plans require a constrained Plan executor")
+	}
 	identityQueue := q
 	identityQueue.SessionID = ""
 	r, err := c.store.reserveExecution(ctx, req, planRequestPayload{p, identityQueue}, "plan", planRequestPayload{p, q})

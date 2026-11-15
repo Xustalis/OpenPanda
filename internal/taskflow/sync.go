@@ -164,6 +164,9 @@ func (s *Service) identity(ctx context.Context, owner string, c Connection, caps
 	})
 }
 func deleteSpace(ctx context.Context, tx *sql.Tx, c Connection, space taskproviders.Space) error {
+	if err := invalidateAutomation(ctx, tx, c.ID, space.SpaceID); err != nil {
+		return err
+	}
 	prefix := c.InstanceID + "/" + space.WorkspaceID + "/" + space.SpaceID + "/"
 	if _, err := tx.ExecContext(ctx, `DELETE FROM task_snapshots WHERE connection_id=? AND account_id=? AND substr(task_key,1,length(?))=?`, c.ID, c.AccountID, prefix, prefix); err != nil {
 		return err

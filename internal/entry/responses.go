@@ -719,6 +719,11 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 	if err != nil {
 		return Response{}, err
 	}
+	return c.readResponsesStream(ctx, body, onDelta, onReasoning, em)
+}
+
+// readResponsesStream consumes one response without issuing another request.
+func (c *Client) readResponsesStream(ctx context.Context, body io.ReadCloser, onDelta, onReasoning func(string), em *usageEmitter) (Response, error) {
 	defer body.Close()
 
 	acc := &responsesAccumulator{calls: map[string]*responsesCall{}}

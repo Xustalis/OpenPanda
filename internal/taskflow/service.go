@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/fslock"
@@ -58,6 +59,12 @@ type Service struct {
 	// A fresh provider pins identity for each round. The seam also permits
 	// deterministic fault tests without sending credentials anywhere.
 	source func(Connection) (taskproviders.TaskProvider, func() error, error)
+	runMu  sync.Mutex
+	done   chan struct{}
+	execMu sync.Mutex
+	exec   *executionRuntime
+	// executionClient never exposes a token to a task or a model.
+	executionClient func(Connection) (*tsync.Client, error)
 }
 
 func New(db *sql.DB, dbPath string) *Service {
@@ -69,6 +76,13 @@ func New(db *sql.DB, dbPath string) *Service {
 		}
 	}
 	s := &Service{db: db, dir: dir, now: time.Now}
+	s.executionClient = func(c Connection) (*tsync.Client, error) {
+		client, device, err := s.device(c)
+		if err == nil {
+			client.Token = device.AccessToken
+		}
+		return client, err
+	}
 	s.source = func(c Connection) (taskproviders.TaskProvider, func() error, error) {
 		client, device, err := s.device(c)
 		if err != nil {
@@ -333,6 +347,9 @@ func requireOne(result sql.Result) error {
 	return nil
 }
 func clearConnection(ctx context.Context, tx *sql.Tx, id string) error {
+	if err := invalidateAutomation(ctx, tx, id, ""); err != nil {
+		return err
+	}
 	for _, table := range []string{"task_snapshots", "task_directories", "task_space_cursors", "task_sync_events", "task_policies", "task_project_bindings"} {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE connection_id=?`, id); err != nil {
 			return err

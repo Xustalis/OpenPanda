@@ -119,6 +119,17 @@ func (c *Core) lockActuator(id string) func() {
 // early exit the defer releases it instead, so a run that never reaches running
 // still frees its slot.
 func (c *Core) run(ctx context.Context, taskID, intent string, required []string, releaseSlot func()) (out bus.TaskResultPayload, rerr error) {
+	if remote, err := c.isRemoteBusiness(ctx, taskID); err != nil {
+		if releaseSlot != nil {
+			releaseSlot()
+		}
+		return out, err
+	} else if remote {
+		if releaseSlot != nil {
+			defer releaseSlot()
+		}
+		return c.runBusiness(ctx, taskID)
+	}
 	if releaseSlot == nil {
 		releaseSlot = func() {}
 	}

@@ -554,14 +554,21 @@ func runDaemon(args []string) {
 
 	// Task recovery FIRST, then the queue scheduler: the order is
 	// load-bearing (see recoverThenStartQueue).
-	recoverThenStartQueue(ctx, logger, coreNode)
 	flow := taskflow.New(db, cfg.Storage.DBPath)
-	flowDone := make(chan struct{})
-	guard.Go(logger, "daemon: task integration", cancel, func() {
-		defer close(flowDone)
-		_ = flow.Run(ctx)
+	flow.ConfigureExecution(coreNode, taskflow.AutomationOptions{
+		Model: func() taskflow.AuxiliaryModel {
+			if client := coreNode.BusinessModel(); client != nil {
+				return client
+			}
+			return nil
+		},
+		PrivateMemory: func() ([]string, error) { m, err := hermes.LoadMemory(); return m.Entries, err },
+		ProjectMemory: func(name string) ([]string, error) { m, err := projects.Load(name); return m.Entries, err },
 	})
-	defer func() { cancel(); <-flowDone }()
+	if err := recoverThenStartQueue(ctx, logger, coreNode, flow.Start); err != nil {
+		fatal("recover business runtime", err)
+	}
+	defer func() { cancel(); _ = flow.Wait(context.Background()) }()
 
 	// Inbound events (intake.*): the webhook listener starts after the queue,
 	// because an admitted event is immediately queued and must not wait for a
@@ -871,15 +878,21 @@ func fatal(step string, err error) {
 // this process. And the runner reclaims its own claim if recovery lands
 // inside the claim→run window anyway (internal/core's ReclaimClaimed), so
 // the invariant holds even if the two steps are reordered.
-func recoverThenStartQueue(ctx context.Context, logger *slog.Logger, c *core.Core) {
+func recoverThenStartQueue(ctx context.Context, logger *slog.Logger, c *core.Core, barriers ...func(context.Context) error) error {
 	if n, err := c.Recover(ctx); err != nil {
-		logger.Warn("task recovery failed", "err", err)
+		return fmt.Errorf("task recovery failed: %w", err)
 	} else if n > 0 {
 		logger.Info("recovered tasks from previous run", "count", n)
+	}
+	for _, barrier := range barriers {
+		if err := barrier(ctx); err != nil {
+			return err
+		}
 	}
 	// StartQueueScheduler spawns its loop internally; a panic there still
 	// crashes the process (internal/core is not wrapped here by design).
 	c.StartQueueScheduler(ctx)
+	return nil
 }
 
 // fatalMsg is fatal for a rejected argument rather than a failed operation:

@@ -66,6 +66,7 @@ type Peer struct {
 // Core wires the node lifecycle, task store, and WebSocket transport into a
 // running daemon. It is the root type for the Phase 0 loop.
 type Core struct {
+	businessExecutor BusinessExecutor // mu
 	agentConcurrency *commander.AgentConcurrency
 
 	db     *sql.DB
