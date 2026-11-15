@@ -51,6 +51,7 @@ var ErrNotFound = errors.New("no such todo")
 // Todo is one row of the board.
 type Todo struct {
 	ID          int64    `json:"id"`
+	Revision    int64    `json:"revision"`
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
 	Status      string   `json:"status"`
@@ -75,10 +76,13 @@ type Store struct {
 // NewStore wraps db for todo CRUD.
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
+// DB exposes the shared store for transactional business-task services.
+func (s *Store) DB() *sql.DB { return s.db }
+
 // todoCols is the single SELECT list — adding a column means touching one
 // place, so a scan can never drift from the schema.
 const todoCols = `id, title, description, status, priority, due_at, started_at, done_at,
-	tags, project, task_id, seq, created_at, updated_at`
+	tags, project, task_id, seq, created_at, updated_at, work_revision`
 
 // NormalizeStatus maps empty/unknown input onto a real lane. An unknown status
 // from an old client falls back to pending rather than hiding the row.
@@ -158,7 +162,7 @@ func scanTodo(sc interface{ Scan(...any) error }) (Todo, error) {
 	)
 	err := sc.Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority,
 		&t.DueAt, &t.StartedAt, &t.DoneAt, &tags, &t.Project, &t.TaskID,
-		&t.Seq, &t.CreatedAt, &t.UpdatedAt)
+		&t.Seq, &t.CreatedAt, &t.UpdatedAt, &t.Revision)
 	if err != nil {
 		return Todo{}, err
 	}
@@ -281,19 +285,33 @@ func (s *Store) Get(ctx context.Context, id int64) (Todo, error) {
 
 // CreateInput is the POST body, already parsed.
 type CreateInput struct {
-	Title       string
-	Description string
-	Status      string
-	Priority    string
-	DueAt       int64
-	Tags        []string
-	Project     string
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Status      string   `json:"status"`
+	Priority    string   `json:"priority"`
+	DueAt       int64    `json:"due_at"`
+	Tags        []string `json:"tags"`
+	Project     string   `json:"project"`
 }
 
 // Create inserts a todo. An empty status starts it in the pending lane; a
 // status of running/done stamps the matching timestamp, so a row created
 // straight into a lane reads consistently.
 func (s *Store) Create(ctx context.Context, in CreateInput) (Todo, error) {
+	return createWith(ctx, s.db, in)
+}
+
+type todoDB interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// CreateTx participates in a business mutation's idempotency transaction.
+func CreateTx(ctx context.Context, tx *sql.Tx, in CreateInput) (Todo, error) {
+	return createWith(ctx, tx, in)
+}
+
+func createWith(ctx context.Context, db todoDB, in CreateInput) (Todo, error) {
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		return Todo{}, errors.New("title must not be empty")
@@ -309,6 +327,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Todo, error) {
 		Project:     strings.TrimSpace(in.Project),
 		CreatedAt:   now,
 		UpdatedAt:   now,
+		Revision:    1,
 	}
 	if t.Status == StatusRunning {
 		t.StartedAt = now
@@ -316,7 +335,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Todo, error) {
 	if t.Status == StatusDone || t.Status == StatusCancelled {
 		t.DoneAt = now
 	}
-	err := s.db.QueryRowContext(ctx, `
+	err := db.QueryRowContext(ctx, `
 		INSERT INTO todos (title, description, status, priority, due_at, started_at,
 			done_at, tags, project, task_id, seq, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?, ?) RETURNING id`,
@@ -351,7 +370,21 @@ type Patch struct {
 // Reordering (Seq) does not count as an edit of the content, but it still
 // bumps updated_at — the console sorts "recently touched" by it.
 func (s *Store) Patch(ctx context.Context, id int64, p Patch) (Todo, error) {
-	cur, err := s.Get(ctx, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Todo{}, err
+	}
+	defer tx.Rollback()
+	t, err := PatchTx(ctx, tx, id, p)
+	if err != nil {
+		return Todo{}, err
+	}
+	return t, tx.Commit()
+}
+
+// PatchTx keeps the read, partial update and resulting revision together.
+func PatchTx(ctx context.Context, tx *sql.Tx, id int64, p Patch) (Todo, error) {
+	cur, err := ReadTx(ctx, tx, id)
 	if err != nil {
 		return Todo{}, err
 	}
@@ -421,7 +454,7 @@ func (s *Store) Patch(ctx context.Context, id int64, p Patch) (Todo, error) {
 	}
 
 	args = append(args, id)
-	res, err := s.db.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`UPDATE todos SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
 	if err != nil {
 		return Todo{}, fmt.Errorf("patch todo: %w", err)
@@ -429,7 +462,7 @@ func (s *Store) Patch(ctx context.Context, id int64, p Patch) (Todo, error) {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return Todo{}, ErrNotFound
 	}
-	return s.Get(ctx, id)
+	return ReadTx(ctx, tx, id)
 }
 
 // Delete removes a todo. A started todo's task is untouched — deleting the
