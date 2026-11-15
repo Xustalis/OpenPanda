@@ -67,18 +67,26 @@ func (e *executionRuntime) reserveBudget(ctx context.Context, owner string, c Co
 	return claimed, err
 }
 
-func (e *executionRuntime) boundProjectMemory(ctx context.Context, f flowRun) ([]string, error) {
+func (e *executionRuntime) boundProject(ctx context.Context, f flowRun) (string, error) {
 	// A remote project name is never a local memory binding. Only an explicit
 	// account-scoped project mapping can supply project memory.
-	if e.options.ProjectMemory == nil {
-		return nil, nil
-	}
 	var local string
 	err := e.service.db.QueryRowContext(ctx, `SELECT local_project FROM task_project_bindings WHERE connection_id=? AND account_id=? AND workspace_id=? AND space_id=? AND remote_project_id IN (?, '') ORDER BY CASE WHEN remote_project_id=? THEN 0 ELSE 1 END LIMIT 1`, f.ConnectionID, f.AccountID, f.Snapshot.Key.WorkspaceID, f.Snapshot.Key.SpaceID, f.Snapshot.ProjectID, f.Snapshot.ProjectID).Scan(&local)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return "", nil
 	}
 	if err != nil {
+		return "", err
+	}
+	return local, nil
+}
+
+func (e *executionRuntime) boundProjectMemory(ctx context.Context, f flowRun) ([]string, error) {
+	if e.options.ProjectMemory == nil {
+		return nil, nil
+	}
+	local, err := e.boundProject(ctx, f)
+	if err != nil || local == "" {
 		return nil, err
 	}
 	return e.options.ProjectMemory(local)

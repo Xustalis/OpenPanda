@@ -207,6 +207,7 @@ func selfTools(d *selfToolsDeps) []mcpserve.Tool {
 			Handle:      d.toolCard,
 		},
 	}
+	tools = append(tools, workTools(d)...)
 	return append(tools, browserTools(d)...)
 }
 

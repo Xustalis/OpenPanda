@@ -181,3 +181,5 @@ panda work pause REQUEST
 响应丢失或重启后，dispatching/unknown 动作只核对回执，不直接再次发送。持久 outbox 只重投事实；成果完成但远端尚未确认时显示待同步。连接状态及成果同步诊断提供错误信息。设备收到撤权、账号或输入变化后，使派生工作失效并清除页面中不可读的私有内容；已离线复制的数据无法远程擦除。回滚前先暂停新请求并保存执行/outbox 检查点，旧二进制可能拒绝新 schema，不能用旧库覆盖之后的新事实。
 
 远端新增/编辑需要服务协商 taskWrite，并同时授予连接与空间 tasks:write。使用 work add --connection team --space SPACE --title 标题 --remote-priority 2，编辑时通过完整任务键和 --if-match 指定来源版本。--remote-project 指来源项目 ID，空字符串可移除项目。--start-at/--due-at 接受含 kind、value 和可选 timezone 的类型化 JSON，null 用于清除；浮动时间不推导设备时区。远端 work run --connection team 仅申请当前代次，遵守现有本地策略且先持久化请求；不接受本地 Plan，不能自行增加云端代次。远端重做须由用户在 TaskSync 创建新代次。相同 --request 重试复用原请求，写入响应只触发后台同步，不直接覆盖 feed 缓存。
+
+MCP 提供 panda_work_list、panda_work_show、panda_work_history、panda_work_request 和 panda_work_result。项目 agent 只能查询当前本地项目及显式绑定的远端任务，调用方不能指定其他项目扩大范围。成果读取还校验执行时的本地项目，重新绑定不会泄露旧项目上下文。结果按字节分页，后续页使用 nextOffset 和 sha256；未知执行上下文拒绝读取。MCP 不提供策略修改、签名、最终同意、成果验收或私有预研入口。

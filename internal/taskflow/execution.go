@@ -562,7 +562,12 @@ func (m *managedExecution) coordinate() {
 		q.Priority = core.PriorityHigh
 	}
 	req := core.ExecutionRequest{RequestID: f.ID, ConnectionID: f.ConnectionID, AccountID: f.AccountID, TaskKey: f.Key, TriggerKey: f.Trigger, InputRevision: f.Input, Purpose: "execute", ApprovalMode: string(f.Policy.Mode)}
-	published, err := m.runtime.core.EnqueueRequest(m.ctx, req, core.TaskInput{Title: f.Snapshot.Title, Intent: f.Snapshot.Description}, q)
+	project, err := m.runtime.boundProject(m.ctx, f)
+	if err != nil {
+		m.lose(err)
+		return
+	}
+	published, err := m.runtime.core.EnqueueRequest(m.ctx, req, core.TaskInput{Title: f.Snapshot.Title, Intent: f.Snapshot.Description, Project: project}, q)
 	if err != nil {
 		m.lose(err)
 		return
