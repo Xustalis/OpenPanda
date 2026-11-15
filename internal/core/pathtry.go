@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,12 @@ const (
 	natSuspectWindow = 10 * time.Minute
 	// natSuspectAfter is the failed-window count that raises suspicion.
 	natSuspectAfter = 2
+	// relayFallbackTTL bounds how often the addr→identity bindings are
+	// re-read while resolving the configured fallback relays. The bindings
+	// only change when a peer's signed hello lands, so half a minute of
+	// staleness costs at most one send through the previously elected hop —
+	// and keeps a chatty sender from querying the table per frame.
+	relayFallbackTTL = 30 * time.Second
 )
 
 // pathState holds the reachability ladder's bookkeeping.
@@ -84,6 +91,13 @@ type pathState struct {
 	// (settings key natStateSetting). It is lazy rather than wired into
 	// NewCore so embedders that never punch never touch the store.
 	loaded bool
+	// fallbackAt / fallbackIDs cache the resolution of the configured
+	// relay_priority: fallback peers to live instance ids. See
+	// fallbackRelays — the addr→id binding is a store read, so it is
+	// refreshed on a short TTL rather than per send.
+	fallbackAt       time.Time
+	fallbackIDs      []string
+	fallbackRevision uint64
 }
 
 // natStateSetting is the settings key carrying the nat_suspect bookkeeping
@@ -560,6 +574,76 @@ func (c *Core) notePunchAttempt(id string) {
 	if changed {
 		c.saveNatState(context.Background(), snapshot)
 	}
+}
+
+// peerNatSuspect reports whether id sits inside the no-punch window raised
+// by two failed punch windows. This is the signal the fallback-relay
+// preference keys on: once the direct path has been proven unbuildable, the
+// operator's designated relay is a better first hop than an election that
+// may pick a node with no onward path to the destination.
+func (c *Core) peerNatSuspect(id string) bool {
+	if id == "" {
+		return false
+	}
+	c.path.mu.Lock()
+	defer c.path.mu.Unlock()
+	until, ok := c.path.natSuspect[id]
+	return ok && time.Now().Before(until)
+}
+
+// fallbackRelays resolves the peers marked relay_priority: fallback to the
+// instance ids this node currently knows for them, in config order. The
+// resolution is the peer_addrs binding a signed hello wrote — the same
+// authority `panda nodes` uses to map a configured address to a node — so a
+// stranger's claim never becomes a relay choice.
+//
+// A `punch:<id>` entry needs no binding: the entry already names the node.
+// Everything else is best-effort: an unbound or offline relay simply drops
+// out of the list, and the caller falls back to the automatic election.
+func (c *Core) fallbackRelays() []string {
+	pol := c.netPolicy()
+	addrs := pol.relayFallback
+	if len(addrs) == 0 {
+		return nil
+	}
+	c.path.mu.Lock()
+	if c.path.fallbackRevision == pol.revision && !c.path.fallbackAt.IsZero() && time.Since(c.path.fallbackAt) < relayFallbackTTL {
+		ids := append([]string(nil), c.path.fallbackIDs...)
+		c.path.mu.Unlock()
+		return ids
+	}
+	c.path.mu.Unlock()
+	if c.db == nil {
+		return nil
+	}
+	bindings, err := ledger.PeerAddrBindings(c.db)
+	if err != nil {
+		// One busy read must not erase the operator's preference for the
+		// next half minute: answer "no preference this time" and leave the
+		// cache untouched so the next send retries the table instead of
+		// serving an empty list until the TTL expires.
+		return nil
+	}
+	ids := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		if id, ok := strings.CutPrefix(addr, "punch:"); ok {
+			if id = strings.TrimSpace(id); id != "" {
+				ids = append(ids, id)
+			}
+			continue
+		}
+		if id := bindings[NormalizeDialAddr(addr)]; id != "" {
+			ids = append(ids, id)
+		}
+	}
+	c.path.mu.Lock()
+	c.path.fallbackAt = time.Now()
+	c.path.fallbackIDs = ids
+	// A resolver that started before reload may finish last. Its result must
+	// never become a cache hit for the policy installed in the meantime.
+	c.path.fallbackRevision = pol.revision
+	c.path.mu.Unlock()
+	return append([]string(nil), ids...)
 }
 
 // sendPunchWant routes a punch_want hint to the elected offerer.

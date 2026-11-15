@@ -13,6 +13,9 @@ import (
 // constants compiled into the transport. The zero value is not a valid
 // policy: defaultNetworkPolicy is what an unconfigured node runs.
 type networkPolicy struct {
+	// revision keeps cached resolutions tied to the policy they read, even
+	// when an older store query finishes after a hot reload.
+	revision uint64
 	// bootstrapEdges is the rendezvous-edge target K (0 = manual mode).
 	bootstrapEdges int
 	// autoPunch arms the ladder's hole-punch rung.
@@ -21,6 +24,11 @@ type networkPolicy struct {
 	transit bool
 	// rendezvous is this node's own serving role: auto|always|never.
 	rendezvous string
+	// relayFallback is the ordered list of configured peers marked
+	// relay_priority: fallback. It is the operator's local preference for
+	// the hop a suspected-symmetric-NAT destination's frames leave on —
+	// consulted before automatic relay election, never advertised.
+	relayFallback []string
 }
 
 // defaultNetworkPolicy mirrors config.Default()'s network block. Keeping the
@@ -45,11 +53,13 @@ func (c *Core) SetNetworkPolicy(n config.NetworkConfig) {
 		autoPunch:      n.AutoPunch,
 		transit:        n.Transit,
 		rendezvous:     n.Rendezvous,
+		relayFallback:  n.RelayFallbackAddrs(),
 	}
 	if pol.rendezvous == "" {
 		pol.rendezvous = "auto"
 	}
 	c.polMu.Lock()
+	pol.revision = c.netPol.revision + 1
 	c.netPol = pol
 	c.polSet = true
 	c.polMu.Unlock()

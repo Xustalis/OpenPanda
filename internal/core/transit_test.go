@@ -221,6 +221,374 @@ func TestTransitDeliveryE2E(t *testing.T) {
 	}
 }
 
+// TestFallbackRelayCarriesSuspectedPeer is the three-node contract behind
+// relay_priority: fallback. A cannot reach B (the mark stands in for a
+// symmetric NAT that spent two punch windows), two relays are connected and
+// both advertise trnz, and only F has a path to B. Automatic election would
+// hand the frame to either one; the operator's mark must make A choose F,
+// and B must receive the frame — Z has no route, so delivery can only have
+// come through F.
+func TestFallbackRelayCarriesSuspectedPeer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	a := newCore(t, "ta")
+	f := newCore(t, "tf")
+	z := newCore(t, "tz")
+	b := newCore(t, "tb")
+
+	fd, fAddr := registerAndListen(t, ctx, f, "127.0.0.1:0")
+	zd, zAddr := registerAndListen(t, ctx, z, "127.0.0.1:0")
+	ad, _ := registerAndListen(t, ctx, a, "127.0.0.1:0")
+	linkPair(t, ctx, a, f, fAddr, ad, fd)
+	linkPair(t, ctx, a, z, zAddr, ad, zd)
+	bd, _ := registerAndListen(t, ctx, b, "127.0.0.1:0")
+	linkPair(t, ctx, b, f, fAddr, bd, fd)
+
+	if a.connFor("tb") != nil || b.connFor("ta") != nil {
+		t.Fatal("fixture produced a direct A↔B edge; the relay path is untested")
+	}
+	if z.connFor("tb") != nil {
+		t.Fatal("the decoy relay must have no path to B, or delivery proves nothing")
+	}
+	if a.connFor("tf") == nil || a.connFor("tz") == nil {
+		t.Fatal("fixture lost one of the two relay candidates")
+	}
+
+	// A's local mark: F, by the address A actually dials (peer_addrs binds
+	// the configured address to the id that answered it at hello).
+	a.SetNetworkPolicy(config.NetworkConfig{
+		Transit: true, AutoPunch: true, BootstrapEdges: 2,
+		Peers: []config.PeerEntry{{Addr: fAddr, RelayPriority: config.RelayPriorityFallback}},
+	})
+	if got := a.fallbackRelays(); len(got) != 1 || got[0] != "tf" {
+		t.Fatalf("fallback relay resolved to %v, want [tf]", got)
+	}
+
+	// Identities: A must know B's keys to seal the inner frame, B must know
+	// A's to verify the attestation. This is what the signed hellos would
+	// have left behind; the seed keeps the test on the relay decision.
+	bpub, _, _ := b.nodeKeyPair()
+	_, bxpub, _ := b.nodeXKey()
+	if _, err := a.db.Exec(
+		`INSERT INTO employee_cache (id, pub_key, x_pub, status, last_seen)
+		 VALUES ('tb', ?, ?, 'online', ?)`,
+		hex.EncodeToString(bpub), hex.EncodeToString(bxpub.Bytes()), time.Now().Unix()); err != nil {
+		t.Fatalf("seed B row on A: %v", err)
+	}
+	apub, _, _ := a.nodeKeyPair()
+	if _, err := b.db.Exec(
+		`INSERT INTO employee_cache (id, pub_key, status, last_seen)
+		 VALUES ('ta', ?, 'offline', ?)`,
+		hex.EncodeToString(apub), time.Now().Add(-time.Hour).Unix()); err != nil {
+		t.Fatalf("seed A row on B: %v", err)
+	}
+
+	// The link-state graph is given a plausible-but-wrong path to B through
+	// the decoy: this is the case the mark exists for, and the explicit
+	// fallback must outrank it. Without the ordering pin a graph hop that
+	// merely claims to reach B would quietly shadow the operator's choice.
+	if _, err := a.db.Exec(
+		`UPDATE employee_cache SET neighbors_json='["tz"]' WHERE id='ta'`); err != nil {
+		t.Fatalf("seed self adjacency: %v", err)
+	}
+	if _, err := a.db.Exec(
+		`UPDATE employee_cache SET neighbors_json='["ta","tb"]' WHERE id='tz'`); err != nil {
+		t.Fatalf("seed decoy adjacency: %v", err)
+	}
+	// The graph only routes through an intermediate that can hold custody,
+	// so the decoy has to look online for the shadowing path to exist.
+	if _, err := a.db.Exec(
+		`UPDATE employee_cache SET status='online', last_seen=? WHERE id='tz'`, time.Now().Unix()); err != nil {
+		t.Fatalf("mark decoy online: %v", err)
+	}
+	if hop, _ := a.dtnNextHop(ctx, "tb", nil, 0, 0); hop != "tz" {
+		t.Fatalf("graph first hop = %q, want the decoy tz — fixture lost its point", hop)
+	}
+
+	// Two failed punch windows: the trigger the fallback preference keys on.
+	a.notePunchAttempt("tb")
+	a.notePunchAttempt("tb")
+	if !a.peerNatSuspect("tb") {
+		t.Fatal("peer not marked nat_suspect after two failed windows")
+	}
+	// The decision itself, not just its outcome: with both relays connected
+	// and trnz-capable, the marked one must win the hop — the unordered pool
+	// below would otherwise pick either.
+	if hop := a.transitNextHopPreferred(ctx, "tb", nil, a.transitFallbackPrefer("tb", "tb")); hop != "tf" {
+		t.Fatalf("hop = %q, want the designated fallback relay tf", hop)
+	}
+
+	env, err := bus.NewEnvelope(bus.MsgHeartbeat, "ta", "hb-fallback-1", bus.HeartbeatPayload{Status: "online"})
+	if err != nil {
+		t.Fatalf("envelope: %v", err)
+	}
+	if err := a.sendTo("tb", env); err != nil {
+		t.Fatalf("sendTo via the fallback relay failed: %v", err)
+	}
+
+	// B's row for A flips online only if the heartbeat arrived — and it can
+	// only have arrived through F.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var status string
+		err := b.db.QueryRow(`SELECT COALESCE(status,'') FROM employee_cache WHERE id='ta'`).Scan(&status)
+		if err == nil && status == "online" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("B never received A's heartbeat over the fallback relay (err=%v status=%q)", err, status)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestFallbackRelayOfflineFallsBackToElection is the negative twin of
+// TestFallbackRelayCarriesSuspectedPeer: the operator's designated relay is
+// configured but never connects, so it can never appear in
+// transitNextHopPreferred's candidate list (it requires a live *bus.Conn).
+// The decision must fall through to the automatic election (the link-state
+// hop here) rather than returning no route at all — an offline preference
+// is a missed first choice, not a dead end for the send.
+func TestFallbackRelayOfflineFallsBackToElection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	a := newCore(t, "oa")
+	z := newCore(t, "oz") // the only relay actually online — plays both
+	// "the graph's honest first hop" and "what election must still reach".
+	b := newCore(t, "ob")
+
+	zd, zAddr := registerAndListen(t, ctx, z, "127.0.0.1:0")
+	ad, _ := registerAndListen(t, ctx, a, "127.0.0.1:0")
+	linkPair(t, ctx, a, z, zAddr, ad, zd)
+	bd, _ := registerAndListen(t, ctx, b, "127.0.0.1:0")
+	linkPair(t, ctx, b, z, zAddr, bd, zd)
+
+	if a.connFor("ob") != nil {
+		t.Fatal("fixture produced a direct A↔B edge; the fallback path is untested")
+	}
+
+	// A's preference names a relay that never dials in — "offline-relay" is
+	// not a resolvable node at all, so fallbackRelays' own addr→id lookup
+	// already drops it; the point here is that an UNRESOLVABLE preference
+	// must not make the whole hop selection come up empty.
+	a.SetNetworkPolicy(config.NetworkConfig{
+		Transit: true, AutoPunch: true, BootstrapEdges: 2,
+		Peers: []config.PeerEntry{
+			{Addr: "offline-relay.invalid:7836", RelayPriority: config.RelayPriorityFallback},
+		},
+	})
+	if got := a.fallbackRelays(); len(got) != 0 {
+		t.Fatalf("an unbound fallback address resolved to %v, want none", got)
+	}
+
+	bpub, _, _ := b.nodeKeyPair()
+	_, bxpub, _ := b.nodeXKey()
+	if _, err := a.db.Exec(
+		`INSERT INTO employee_cache (id, pub_key, x_pub, status, last_seen)
+		 VALUES ('ob', ?, ?, 'online', ?)`,
+		hex.EncodeToString(bpub), hex.EncodeToString(bxpub.Bytes()), time.Now().Unix()); err != nil {
+		t.Fatalf("seed B row on A: %v", err)
+	}
+	apub, _, _ := a.nodeKeyPair()
+	if _, err := b.db.Exec(
+		`INSERT INTO employee_cache (id, pub_key, status, last_seen)
+		 VALUES ('oa', ?, 'offline', ?)`,
+		hex.EncodeToString(apub), time.Now().Add(-time.Hour).Unix()); err != nil {
+		t.Fatalf("seed A row on B: %v", err)
+	}
+	if _, err := a.db.Exec(
+		`UPDATE employee_cache SET neighbors_json='["oz"]' WHERE id='oa'`); err != nil {
+		t.Fatalf("seed self adjacency: %v", err)
+	}
+	if _, err := a.db.Exec(
+		`UPDATE employee_cache SET neighbors_json='["oa","ob"]', status='online', last_seen=? WHERE id='oz'`,
+		time.Now().Unix()); err != nil {
+		t.Fatalf("seed relay adjacency: %v", err)
+	}
+	if hop, _ := a.dtnNextHop(ctx, "ob", nil, 0, 0); hop != "oz" {
+		t.Fatalf("graph first hop = %q, want oz — fixture lost its point", hop)
+	}
+
+	a.notePunchAttempt("ob")
+	a.notePunchAttempt("ob")
+	if !a.peerNatSuspect("ob") {
+		t.Fatal("peer not marked nat_suspect after two failed windows")
+	}
+	// The preference list is non-empty in shape (one configured address) but
+	// resolves to zero live ids — fallbackRelays already filtered it. The hop
+	// selection must still find oz through the ordinary election, not return
+	// "" because a configured-but-dead preference poisoned the candidate walk.
+	prefer := a.transitFallbackPrefer("ob", "ob")
+	if len(prefer) != 0 {
+		t.Fatalf("prefer = %v, want empty — the configured relay never bound an id", prefer)
+	}
+	if hop := a.transitNextHopPreferred(ctx, "ob", nil, prefer); hop != "oz" {
+		t.Fatalf("hop = %q, want the elected graph hop oz when the designated relay is unresolvable", hop)
+	}
+
+	env, err := bus.NewEnvelope(bus.MsgHeartbeat, "oa", "hb-fallback-offline-1", bus.HeartbeatPayload{Status: "online"})
+	if err != nil {
+		t.Fatalf("envelope: %v", err)
+	}
+	if err := a.sendTo("ob", env); err != nil {
+		t.Fatalf("sendTo via the elected relay failed: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var status string
+		err := b.db.QueryRow(`SELECT COALESCE(status,'') FROM employee_cache WHERE id='oa'`).Scan(&status)
+		if err == nil && status == "online" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("B never received A's heartbeat (err=%v status=%q)", err, status)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestFallbackRelaySkipsSecondChoiceWhenFirstIsLive is the ordering half of
+// the offline test above: TWO fallback addresses are configured, both
+// resolve to live, connected, trnz-capable peers. The FIRST one in config
+// order must win — a second relay is a backup for the first, not a second
+// route table the hop walk is free to prefer.
+func TestFallbackRelaySkipsSecondChoiceWhenFirstIsLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	a := newCore(t, "pa")
+	first := newCore(t, "pf")  // listed FIRST in config — must win
+	second := newCore(t, "ps") // listed second — connected too, must lose
+	b := newCore(t, "pb")
+
+	fd, fAddr := registerAndListen(t, ctx, first, "127.0.0.1:0")
+	sd, sAddr := registerAndListen(t, ctx, second, "127.0.0.1:0")
+	ad, _ := registerAndListen(t, ctx, a, "127.0.0.1:0")
+	linkPair(t, ctx, a, first, fAddr, ad, fd)
+	linkPair(t, ctx, a, second, sAddr, ad, sd)
+	bd, _ := registerAndListen(t, ctx, b, "127.0.0.1:0")
+	linkPair(t, ctx, b, first, fAddr, bd, fd)
+	linkPair(t, ctx, b, second, sAddr, bd, sd)
+
+	a.SetNetworkPolicy(config.NetworkConfig{
+		Transit: true, AutoPunch: true, BootstrapEdges: 2,
+		Peers: []config.PeerEntry{
+			{Addr: fAddr, RelayPriority: config.RelayPriorityFallback},
+			{Addr: sAddr, RelayPriority: config.RelayPriorityFallback},
+		},
+	})
+	got := a.fallbackRelays()
+	if len(got) != 2 || got[0] != "pf" || got[1] != "ps" {
+		t.Fatalf("fallback relays = %v, want [pf ps] in config order", got)
+	}
+
+	bpub, _, _ := b.nodeKeyPair()
+	_, bxpub, _ := b.nodeXKey()
+	if _, err := a.db.Exec(
+		`INSERT INTO employee_cache (id, pub_key, x_pub, status, last_seen)
+		 VALUES ('pb', ?, ?, 'online', ?)`,
+		hex.EncodeToString(bpub), hex.EncodeToString(bxpub.Bytes()), time.Now().Unix()); err != nil {
+		t.Fatalf("seed B row on A: %v", err)
+	}
+
+	a.notePunchAttempt("pb")
+	a.notePunchAttempt("pb")
+	if !a.peerNatSuspect("pb") {
+		t.Fatal("peer not marked nat_suspect after two failed windows")
+	}
+	prefer := a.transitFallbackPrefer("pb", "pb")
+	if hop := a.transitNextHopPreferred(ctx, "pb", nil, prefer); hop != "pf" {
+		t.Fatalf("hop = %q, want the FIRST configured fallback pf, not the second ps", hop)
+	}
+}
+
+// TestFallbackRelayDeniedByRuntimeTrustIsSkipped exercises the second,
+// independent guard on the fallback mark: config.Validate() already refuses
+// relay_priority: fallback on a trust: open peer at load time, but trust can
+// also be demoted at RUNTIME (`panda nodes trust <id> open`, a key-change
+// demotion, SetPeerTrustHints) without ever touching the file. The hop
+// selection calls relayServeAllowed per candidate for exactly this reason —
+// prove a runtime demotion actually closes the loophole the load-time check
+// cannot see.
+func TestFallbackRelayDeniedByRuntimeTrustIsSkipped(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	a := newCore(t, "ra")
+	demoted := newCore(t, "rd") // configured as fallback, then demoted to open at runtime
+	elected := newCore(t, "re") // the honest election's only path to B
+	b := newCore(t, "rb")
+
+	dd, dAddr := registerAndListen(t, ctx, demoted, "127.0.0.1:0")
+	ed, eAddr := registerAndListen(t, ctx, elected, "127.0.0.1:0")
+	ad, _ := registerAndListen(t, ctx, a, "127.0.0.1:0")
+	linkPair(t, ctx, a, demoted, dAddr, ad, dd)
+	linkPair(t, ctx, a, elected, eAddr, ad, ed)
+	bd, _ := registerAndListen(t, ctx, b, "127.0.0.1:0")
+	linkPair(t, ctx, b, elected, eAddr, bd, ed)
+
+	a.SetNetworkPolicy(config.NetworkConfig{
+		Transit: true, AutoPunch: true, BootstrapEdges: 2,
+		Peers: []config.PeerEntry{{Addr: dAddr, RelayPriority: config.RelayPriorityFallback}},
+	})
+	if got := a.fallbackRelays(); len(got) != 1 || got[0] != "rd" {
+		t.Fatalf("fallback relay resolved to %v, want [rd]", got)
+	}
+
+	bpub, _, _ := b.nodeKeyPair()
+	_, bxpub, _ := b.nodeXKey()
+	if _, err := a.db.Exec(
+		`INSERT INTO employee_cache (id, pub_key, x_pub, status, last_seen)
+		 VALUES ('rb', ?, ?, 'online', ?)`,
+		hex.EncodeToString(bpub), hex.EncodeToString(bxpub.Bytes()), time.Now().Unix()); err != nil {
+		t.Fatalf("seed B row on A: %v", err)
+	}
+	// The graph's only path to B goes through "elected" — the honest fallback
+	// once "demoted" is disqualified.
+	if _, err := a.db.Exec(
+		`UPDATE employee_cache SET neighbors_json='["re"]' WHERE id='ra'`); err != nil {
+		t.Fatalf("seed self adjacency: %v", err)
+	}
+	if _, err := a.db.Exec(
+		`UPDATE employee_cache SET neighbors_json='["ra","rb"]', status='online', last_seen=? WHERE id='re'`,
+		time.Now().Unix()); err != nil {
+		t.Fatalf("seed elected-hop adjacency: %v", err)
+	}
+
+	a.notePunchAttempt("rb")
+	a.notePunchAttempt("rb")
+	if !a.peerNatSuspect("rb") {
+		t.Fatal("peer not marked nat_suspect after two failed windows")
+	}
+	prefer := a.transitFallbackPrefer("rb", "rb")
+	if len(prefer) != 1 || prefer[0] != "rd" {
+		t.Fatalf("prefer = %v, want [rd] before the demotion", prefer)
+	}
+
+	// BEFORE demotion: the designated relay wins, same as the happy-path test
+	// — confirms the fixture is sound before the demotion is what changes
+	// the outcome.
+	if hop := a.transitNextHopPreferred(ctx, "rb", nil, prefer); hop != "rd" {
+		t.Fatalf("hop (pre-demotion) = %q, want the designated relay rd", hop)
+	}
+
+	// Demote at runtime — no config reload, no file touched. SetPeerTrustHints
+	// is exactly what `panda nodes trust rd open` drives.
+	a.SetPeerTrustHints(map[string]string{dAddr: "open"})
+
+	// AFTER demotion: relayServeAllowed must now refuse "rd" as a serve-through
+	// hop, and the walk must fall through to the honest election (re) rather
+	// than either wedging on the disqualified preference or returning "".
+	if got := a.relayServeAllowed(ctx, "rd"); got {
+		t.Fatal("relayServeAllowed still permits the open-demoted relay")
+	}
+	if hop := a.transitNextHopPreferred(ctx, "rb", nil, prefer); hop != "re" {
+		t.Fatalf("hop (post-demotion) = %q, want the fallthrough election re, not the demoted rd", hop)
+	}
+}
+
 // TestTransitTTLExhaustion pins the loop bound: a frame that arrives at a
 // relay with one hop left dies there — it is neither delivered locally
 // (the dest is not us) nor forwarded.

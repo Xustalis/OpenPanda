@@ -942,6 +942,20 @@ func (c *Core) applyDirRowLimited(ctx context.Context, raw json.RawMessage, via 
 			return false
 		}
 	}
+	// A row that arrives already past dirRowTTL is born dead: PruneOffline
+	// deletes unpinned offline rows whose last_seen and seen_at are older than
+	// that TTL, and the peer that gossiped the row re-sends the same bytes on
+	// its next pull. The directory then oscillates between "the fleet" and
+	// "the fleet plus the same dead cards" on every sync window — the console
+	// paints them, the sweep deletes them, and the loop never ends because a
+	// missing row is exactly what a pull is allowed to create. Refuse the row
+	// at the door instead of storing it for the sweeper to delete again.
+	// Stable ids are exempt: they self-certify, so the frame itself pins the
+	// key and the sweep leaves the row alone.
+	if !found && !strings.HasPrefix(row.ID, stableIDPrefix) && seenAt < now-int64(dirRowTTL.Seconds()) {
+		c.logger.Debug("dir row expired on arrival", "id", row.ID, "via", via, "seen_at", seenAt)
+		return false
+	}
 	// A new id consumes one slot from this frame's budget. Existing rows
 	// (card/addrs refreshes) are free — the cap bounds the table, not churn.
 	if !found && room != nil {
