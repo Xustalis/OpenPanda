@@ -122,7 +122,7 @@ jobs:
       # compile per run that could only ever report what the test step was
       # about to report anyway.
       - name: Test
-        run: go test ./...
+        run: make test-go
 
   # The bundled Python adapters have a Go-invisible surface: their subprocess
   # argv, env, progress stream and timeout behavior are pinned by the
@@ -137,12 +137,8 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.x'
-      - name: Adapter contract tests
-        run: make adapter-test
-      - name: Execution diagnostics and DAG metrics regressions
-        run: |
-          python3 tests/execution_diagnostics_test.py
-          python3 tests/live_dag_metrics_test.py
+      - name: Python contracts and diagnostics
+        run: make test-python
 
   # The TUI's mouse-ownership contract lives in the bytes the binary writes to
   # the tty, which no unit test can see: whether it asks the terminal for
@@ -176,14 +172,9 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.x'
-      - name: TUI mouse ownership (pty)
-        run: make tui-pty-test
-      - name: TUI exit visibility (pty)
-        run: make tui-pty-exit-test
-      - name: TUI side channel (pty)
-        run: make tui-pty-side-test
-      - name: TUI task rail (pty)
-        run: make tui-pty-sidebar-test
+      # One make invocation builds once and then runs all four contracts.
+      - name: TUI contracts (pty)
+        run: make tui-pty-test tui-pty-exit-test tui-pty-side-test tui-pty-sidebar-test
 
   # The review ruleset requires the bare `tui-pty` context, but a matrix job's
   # check names carry their axis value ("tui-pty (macos-15)"), so the required
@@ -295,12 +286,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # Kept as its own step here, unlike in the Linux `test` job: on these two
-      # OSes a compile-only break is worth separating from a test failure,
-      # because the failure output that follows it is otherwise easy to
-      # misread as a flaky test rather than a platform-specific build error.
-      - name: Build
-        run: go build ./...
+      # go test compiles every package before running it and reports build
+      # failures distinctly; a preceding go build repeats that work.
       # The internal/core e2e tests poll real loopback websockets on fixed
       # ports, and shared-CPU macOS/Windows runners stall them often enough
       # to flake dependabot PRs twice in a row (TestPlanThreeStagesThreeNodes,

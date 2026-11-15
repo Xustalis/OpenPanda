@@ -21,20 +21,13 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 	"github.com/Xustalis/OpenPanda/webui/push"
 )
 
 func newTestStore(t *testing.T) *core.TaskStore {
 	t.Helper()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := newTestDB(t)
 	return core.NewTaskStore(db, slog.New(slog.DiscardHandler))
 }
 
@@ -344,14 +337,7 @@ func TestApproveNonReviewConflicts(t *testing.T) {
 
 func newTestPushService(t *testing.T) *push.Service {
 	t.Helper()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate db: %v", err)
-	}
+	db := testdb.Open(t)
 	keys, err := push.GenerateVAPIDKeys("mailto:test@example.com")
 	if err != nil {
 		t.Fatal(err)

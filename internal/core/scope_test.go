@@ -14,7 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 func TestNormalizeScopePaths(t *testing.T) {
@@ -236,14 +236,7 @@ func TestScopedProjectChildrenRunInParallel(t *testing.T) {
 func TestExecLocksScopePrefixConflict(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "scope.db")
-	db, err := storage.Open(path)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, path)
 	s := NewTaskStore(db, testLogger())
 
 	must := func(err error) {

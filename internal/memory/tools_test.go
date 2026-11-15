@@ -11,7 +11,7 @@ import (
 
 func TestProjectTurnCannotReadOrWritePersonalMemory(t *testing.T) {
 	tool := NewTool(NewHermes(t.TempDir()), NewProjects(t.TempDir()))
-	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "user", "entry": "private preference"}); err != nil {
+	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "user", "entry": "user prefers concise answers"}); err != nil {
 		t.Fatal(err)
 	}
 	projectCtx := WithScopeProject(context.Background(), "work")
@@ -30,14 +30,14 @@ func TestProjectTurnCannotReadOrWritePersonalMemory(t *testing.T) {
 			t.Errorf("%s %+v returned %q in project context", tc.name, tc.args, out)
 		}
 	}
-	if _, err := tool.ExecuteCtx(projectCtx, ToolAdd, map[string]any{"target": "project", "entry": "project fact"}); err != nil {
+	if _, err := tool.ExecuteCtx(projectCtx, ToolAdd, map[string]any{"target": "project", "entry": "项目约定：使用 Go"}); err != nil {
 		t.Fatal(err)
 	}
 	workspaceCtx := WithoutPersonalMemory(WithScopeProject(context.Background(), ""))
 	if _, err := tool.ExecuteCtx(workspaceCtx, ToolRead, map[string]any{"target": "user"}); err == nil {
 		t.Fatal("unnamed workspace can read personal memory")
 	}
-	if out, err := tool.ExecuteCtx(WithScopeProject(context.Background(), ""), ToolRead, map[string]any{"target": "user"}); err != nil || !strings.Contains(out, "private preference") {
+	if out, err := tool.ExecuteCtx(WithScopeProject(context.Background(), ""), ToolRead, map[string]any{"target": "user"}); err != nil || !strings.Contains(out, "user prefers concise answers") {
 		t.Fatalf("project-free personal read: %q, %v", out, err)
 	}
 }
@@ -49,7 +49,7 @@ func TestToolAddReadRoundTrip(t *testing.T) {
 	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "user", "entry": "prefers dark mode"}); err != nil {
 		t.Fatalf("add user: %v", err)
 	}
-	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "memory", "entry": "core is Go"}); err != nil {
+	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "memory", "entry": "Server is Ubuntu 24.04"}); err != nil {
 		t.Fatalf("add memory: %v", err)
 	}
 
@@ -57,7 +57,7 @@ func TestToolAddReadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if !strings.Contains(out, "prefers dark mode") || !strings.Contains(out, "core is Go") {
+	if !strings.Contains(out, "prefers dark mode") || !strings.Contains(out, "Server is Ubuntu 24.04") {
 		t.Errorf("read should list both layers, got %q", out)
 	}
 }
@@ -81,7 +81,7 @@ func TestToolReplaceRemove(t *testing.T) {
 
 func TestToolProjectTarget(t *testing.T) {
 	tool := NewTool(nil, NewProjects(t.TempDir()))
-	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "project", "project": "panda", "entry": "Go core + Python glue"}); err != nil {
+	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "project", "project": "panda", "entry": "项目架构：Go core + Python glue"}); err != nil {
 		t.Fatalf("add project: %v", err)
 	}
 	// A project target without a project name must fail.
@@ -91,6 +91,27 @@ func TestToolProjectTarget(t *testing.T) {
 	out, err := tool.Execute(ToolRead, map[string]any{"target": "project", "project": "panda"})
 	if err != nil || !strings.Contains(out, "Go core") {
 		t.Errorf("read project: got %q err=%v", out, err)
+	}
+}
+
+func TestToolProjectRemoveClearsAttributeCopies(t *testing.T) {
+	projects := NewProjects(t.TempDir())
+	if err := projects.Save("alpha", MemFile{Entries: []string{
+		"[fact:project:test.command] test command: go test ./old",
+		"[fact:project:test.command] test command: go test ./...",
+		"[fact:project:build.command] build command: go build ./...",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewTool(nil, projects)
+	if _, err := tool.Execute(ToolRemove, map[string]any{
+		"target": "project", "project": "alpha", "old": "go test ./...",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := projects.Load("alpha")
+	if err != nil || len(got.Entries) != 1 || !strings.Contains(got.Entries[0], "go build") {
+		t.Fatalf("removed attribute resurfaced: %v, %v", got.Entries, err)
 	}
 }
 
@@ -112,7 +133,7 @@ func TestToolUnknownAndMalformed(t *testing.T) {
 
 func TestToolAddOverLimit(t *testing.T) {
 	tool := NewTool(NewHermes(t.TempDir()), nil)
-	big := strings.Repeat("x", MemoryCharLimit+10)
+	big := "Server is " + strings.Repeat("x", MemoryCharLimit+10)
 	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "memory", "entry": big}); !errors.Is(err, ErrOverLimit) {
 		t.Fatalf("over-limit add: got %v, want ErrOverLimit", err)
 	}
@@ -133,21 +154,21 @@ func TestToolReadHonorsTarget(t *testing.T) {
 	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "user", "entry": "prefers dark mode"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "memory", "entry": "core is Go"}); err != nil {
+	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "memory", "entry": "Server is Ubuntu 24.04"}); err != nil {
 		t.Fatal(err)
 	}
 	out, err := tool.Execute(ToolRead, map[string]any{"target": "user"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "prefers dark mode") || strings.Contains(out, "core is Go") {
+	if !strings.Contains(out, "prefers dark mode") || strings.Contains(out, "Server is Ubuntu 24.04") {
 		t.Errorf("target=user must list only the user layer, got %q", out)
 	}
 	out, err = tool.Execute(ToolRead, map[string]any{"target": "memory"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "core is Go") || strings.Contains(out, "prefers dark mode") {
+	if !strings.Contains(out, "Server is Ubuntu 24.04") || strings.Contains(out, "prefers dark mode") {
 		t.Errorf("target=memory must list only the memory layer, got %q", out)
 	}
 }

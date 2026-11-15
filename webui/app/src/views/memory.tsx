@@ -4,7 +4,7 @@ import type { ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   api,
-	ApiError,
+  ApiError,
   type MemoryFiles,
   type MemoryGraphNode,
   type ProjectDetail,
@@ -28,6 +28,15 @@ function memorySaveError(error: unknown) {
 }
 
 const TABS: Tab[] = ['graph', 'user', 'memory', 'dreams', 'topics', 'daily', 'projects']
+const TAB_ICON: Record<Tab, IconName> = {
+  graph: 'orbit',
+  user: 'user',
+  memory: 'lightbulb',
+  dreams: 'moon',
+  topics: 'folder',
+  daily: 'clock',
+  projects: 'layout',
+}
 
 /** Real file names, so a card always says which file it is editing. */
 const FILE_NAME: Record<'user' | 'memory', string> = { user: 'USER.md', memory: 'MEMORY.md' }
@@ -125,17 +134,36 @@ export function MemoryView(props: { initialTab?: string }) {
     <section class="memory-page">
       <MemoryHead summary={summary} nodeOffset={nodeOffset} onRefresh={reload} />
 
-      <div class="segmented memory-tabs" role="tablist">
+      <div class="segmented memory-tabs" role="tablist" aria-label={t('memory.title')}>
         {TABS.map((k) => {
           const n = tabCount(k, counts)
           return (
             <button
               key={k}
               role="tab"
+              id={`memory-tab-${k}`}
+              aria-controls="memory-panel"
               aria-selected={tab === k}
+              tabIndex={tab === k ? 0 : -1}
               class={`seg${tab === k ? ' on' : ''}`}
               onClick={() => { setGraphTarget(null); setTab(k) }}
+              onKeyDown={(e) => {
+                const idx = TABS.indexOf(k)
+                let next: Tab | undefined
+                switch (e.key) {
+                  case 'ArrowRight': next = TABS[(idx + 1) % TABS.length]; break
+                  case 'ArrowLeft': next = TABS[(idx + TABS.length - 1) % TABS.length]; break
+                  case 'Home': next = TABS[0]; break
+                  case 'End': next = TABS[TABS.length - 1]; break
+                }
+                if (!next) return
+                e.preventDefault()
+                setGraphTarget(null)
+                setTab(next)
+                document.getElementById(`memory-tab-${next}`)?.focus()
+              }}
             >
+              <Icon name={TAB_ICON[k]} size={14} />
               {t(`memory.${k}`)}
               {n != null && <span class="memory-tab-n mono">{n}</span>}
             </button>
@@ -143,31 +171,37 @@ export function MemoryView(props: { initialTab?: string }) {
         })}
       </div>
 
-      {tab === 'graph' && <GraphTab onOpen={(next, name) => { setGraphTarget({ tab: next, name }); setTab(next) }} />}
-      {tab === 'user' && (
-        <MemoryFileView
-          file="user"
-          content={data.user}
-          version={data.versions.user}
-          fresh={freshEntries('user', data.user)}
-          limit={data.user_limit}
-          reload={reload}
-        />
-      )}
-      {tab === 'memory' && (
-        <MemoryFileView
-          file="memory"
-          content={data.memory}
-          version={data.versions.memory}
-          fresh={freshEntries('memory', data.memory)}
-          limit={data.mem_limit}
-          reload={reload}
-        />
-      )}
-      {tab === 'dreams' && <DreamsView content={data.dreams} version={data.versions.dreams} truncated={data.dreams_truncated} reload={reload} />}
-      {tab === 'topics' && <TopicsView topics={data.topics} selectedName={graphTarget?.tab === 'topics' ? graphTarget.name : undefined} limit={data.mem_limit} reload={reload} />}
-      {tab === 'daily' && <DailyView daily={data.daily} selectedName={graphTarget?.tab === 'daily' ? graphTarget.name : undefined} reload={reload} />}
-      {tab === 'projects' && <ProjectsView selectedName={graphTarget?.tab === 'projects' ? graphTarget.name : undefined} defaultLimit={data.project_limit} reload={reload} />}
+      <div id="memory-panel" role="tabpanel" aria-labelledby={`memory-tab-${tab}`} tabIndex={0}>
+        <div class="memory-context">
+          <span class="memory-context-mark"><Icon name={TAB_ICON[tab]} size={18} /></span>
+          <div><h2>{t(`memory.${tab}`)}</h2><p>{t(`memory.guide.${tab}`)}</p></div>
+        </div>
+        {tab === 'graph' && <GraphTab refreshKey={tick} onOpen={(next, name) => { setGraphTarget({ tab: next, name }); setTab(next) }} />}
+        {tab === 'user' && (
+          <MemoryFileView
+            file="user"
+            content={data.user}
+            version={data.versions.user}
+            fresh={freshEntries('user', data.user)}
+            limit={data.user_limit}
+            reload={reload}
+          />
+        )}
+        {tab === 'memory' && (
+          <MemoryFileView
+            file="memory"
+            content={data.memory}
+            version={data.versions.memory}
+            fresh={freshEntries('memory', data.memory)}
+            limit={data.mem_limit}
+            reload={reload}
+          />
+        )}
+        {tab === 'dreams' && <DreamsView content={data.dreams} version={data.versions.dreams} truncated={data.dreams_truncated} reload={reload} />}
+        {tab === 'topics' && <TopicsView topics={data.topics} selectedName={graphTarget?.tab === 'topics' ? graphTarget.name : undefined} limit={data.mem_limit} reload={reload} />}
+        {tab === 'daily' && <DailyView daily={data.daily} selectedName={graphTarget?.tab === 'daily' ? graphTarget.name : undefined} reload={reload} />}
+        {tab === 'projects' && <ProjectsView refreshKey={tick} selectedName={graphTarget?.tab === 'projects' ? graphTarget.name : undefined} defaultLimit={data.project_limit} reload={reload} />}
+      </div>
     </section>
   )
 }
@@ -388,6 +422,7 @@ function MemoryEditor({
       </div>
       <textarea
         class="input memory-textarea mono"
+        aria-label={`${t('memory.edit')} ${name}`}
         value={value}
         onInput={(e) => onInput((e.target as HTMLTextAreaElement).value)}
         rows={Math.min(22, Math.max(10, value.split('\n').length + 2))}
@@ -482,6 +517,7 @@ function MemoryFileCard({
               <Icon name="search" size={13} />
               <input
                 type="search"
+                aria-label={t('memory.search')}
                 placeholder={t('memory.search')}
                 value={query}
                 onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
@@ -503,6 +539,7 @@ function MemoryFileCard({
         <ul class="memory-entries">
           {visible.map(({ e, i }) => {
             const fromLog = fromLogSource(e)
+            const category = e.match(/^\[fact:(identity|preference|personal|environment|convention|project):/)?.[1]
             return (
               <li key={i} class={`memory-entry${fresh?.has(e) ? ' fresh' : ''}`}>
                 <span class="memory-entry-idx mono" aria-hidden="true">
@@ -513,6 +550,7 @@ function MemoryFileCard({
                     <>
                       <textarea
                         class="input memory-entry-editbox mono"
+                        aria-label={t('memory.edit')}
                         rows={3}
                         value={fixDraft}
                         onInput={(ev) => setFixDraft((ev.target as HTMLTextAreaElement).value)}
@@ -528,10 +566,11 @@ function MemoryFileCard({
                       </div>
                     </>
                   ) : (
-                    <span class="memory-entry-text" title={e}>
+                    <span class="memory-entry-text" title={stripFromMarker(e)}>
                       {stripFromMarker(e)}
                     </span>
                   )}
+                  {category && fixIdx !== i && <span class="memory-fact-category">{t(`memory.category.${category}`)}</span>}
                   {fromLog && fixIdx !== i && (
                     <span class="badge from-log" title={t('memory.fromLogTip')}>
                       {t('memory.fromLog')}
@@ -572,6 +611,7 @@ function MemoryFileCard({
           class="input"
           type="text"
           placeholder={t('memory.addPlaceholder')}
+          aria-label={t('memory.add')}
           value={newEntry}
           onInput={(e) => setNewEntry((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => {
@@ -865,6 +905,7 @@ function TopicsView({ topics, selectedName, limit, reload }: { topics: TopicFile
           />
         ) : (
           <MemoryFileCard
+            key={current.name}
             name={`topics/${current.name}.md`}
             entries={parseEntries(current.content)}
             persist={persistEntries}
@@ -1000,7 +1041,7 @@ function DailyView({ daily, selectedName, reload }: { daily: TopicFile[]; select
 
 /** Per-project MEMORY.md: pick a project, read or rewrite its memory with
  *  the configured project cap. */
-function ProjectsView({ selectedName, defaultLimit, reload }: { selectedName?: string; defaultLimit: number; reload(): void }) {
+function ProjectsView({ selectedName, defaultLimit, refreshKey, reload }: { selectedName?: string; defaultLimit: number; refreshKey: number; reload(): void }) {
   const [list, setList] = useState<ProjectDetail[] | null>(null)
   const [selected, setSelected] = useState(selectedName ?? '')
   useEffect(() => { if (selectedName) setSelected(selectedName) }, [selectedName])
@@ -1011,11 +1052,13 @@ function ProjectsView({ selectedName, defaultLimit, reload }: { selectedName?: s
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
+    let alive = true
     api
       .projects()
-      .then((p) => setList(p.detail?.length ? p.detail : p.projects.map((name) => ({ name }) as ProjectDetail)))
-      .catch((e: unknown) => setLoadErr(e instanceof Error ? e.message : String(e)))
-  }, [])
+      .then((p) => { if (alive) setList(p.detail?.length ? p.detail : p.projects.map((name) => ({ name }) as ProjectDetail)) })
+      .catch((e: unknown) => { if (alive) setLoadErr(e instanceof Error ? e.message : String(e)) })
+    return () => { alive = false }
+  }, [refreshKey])
 
   const current = useMemo(
     () => list?.find((p) => p.name === selected) ?? list?.[0] ?? null,
@@ -1029,12 +1072,15 @@ function ProjectsView({ selectedName, defaultLimit, reload }: { selectedName?: s
       return
     }
     setMem(null)
+    setLoadErr('')
     setEditing(false)
+    let alive = true
     api
       .projectMemory(name)
-      .then(setMem)
-      .catch((e: unknown) => setLoadErr(e instanceof Error ? e.message : String(e)))
-  }, [current?.name])
+      .then((value) => { if (alive) setMem(value) })
+      .catch((e: unknown) => { if (alive) setLoadErr(e instanceof Error ? e.message : String(e)) })
+    return () => { alive = false }
+  }, [current?.name, refreshKey])
 
   async function save() {
     if (saving || !current) return
@@ -1044,8 +1090,6 @@ function ProjectsView({ selectedName, defaultLimit, reload }: { selectedName?: s
       toast(t('memory.saved'), 'success')
       setEditing(false)
       reload()
-      const re = await api.projectMemory(current.name)
-      setMem(re)
     } catch (e) {
       memorySaveError(e)
     } finally {
@@ -1059,8 +1103,7 @@ function ProjectsView({ selectedName, defaultLimit, reload }: { selectedName?: s
     try {
       await api.saveProjectMemory(current.name, next.join('\n§\n'), mem?.version)
       toast(t('memory.saved'), 'success')
-      const re = await api.projectMemory(current.name)
-      setMem(re)
+      reload()
       return true
     } catch (e) {
       memorySaveError(e)
@@ -1114,6 +1157,7 @@ function ProjectsView({ selectedName, defaultLimit, reload }: { selectedName?: s
           />
         ) : (
           <MemoryFileCard
+            key={current.name}
             name={current.name}
             entries={parseEntries(mem.content)}
             persist={persistEntries}
@@ -1130,16 +1174,12 @@ function ProjectsView({ selectedName, defaultLimit, reload }: { selectedName?: s
   )
 }
 
-/** The knowledge-graph tab: an at-a-glance answer to "what does the agent
- *  know, and how did it learn it". Edges are honest — a promotion marker the
- *  Dreamer wrote, or a literal name mention — so the picture never invents
- *  structure. Clicking a node lists its connections and jumps to the owning
- *  surface. */
-function GraphTab({ onOpen }: { onOpen(tab: Tab, name: string): void }) {
+/** Retained long-term facts with stable IDs and explicit owning files. */
+function GraphTab({ onOpen, refreshKey }: { onOpen(tab: Tab, name: string): void; refreshKey: number }) {
   useLocaleRerender()
   const change = useChangeSignal()
   const [tick, setTick] = useState(0)
-  const { data: graph, error } = useAsync(() => api.memoryGraph(), [tick], change)
+  const { data: graph, error } = useAsync(() => api.memoryGraph(), [tick, refreshKey], change)
 
   function openNode(n: MemoryGraphNode) {
     // Topics / projects / daily are tabs of this very page, so they switch
@@ -1164,7 +1204,7 @@ function GraphTab({ onOpen }: { onOpen(tab: Tab, name: string): void }) {
       />
     )
   if (!graph) return <LoadingState head={false} title={t('memory.graphTitle')} sub="" />
-  if (graph.nodes.length === 0) return <p class="dim">{t('memory.graphEmpty')}</p>
+  if (graph.nodes.length === 0) return <MemoryPlaceholder icon="orbit" text={t('memory.graphEmpty')} />
   return <MemoryGraphView graph={graph} onOpen={openNode} />
 }
 
@@ -1178,7 +1218,7 @@ function fromLogSource(entry: string): string | null {
 /** The marker is provenance, not prose: the row shows it as a badge, so the
  *  text itself is rendered without it. */
 function stripFromMarker(entry: string): string {
-  return entry.replace(/^\[from:[^\]]+\]\s*/, '')
+  return entry.replace(/^\[fact:[a-z]+:[a-z0-9_.-]+\]\s*/, '').replace(/\s*\[from:[^\]]+\]/g, '')
 }
 
 /** Diary lines: the warm-layer files are bullet lists, so the useful count is

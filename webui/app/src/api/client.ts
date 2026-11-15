@@ -1740,8 +1740,7 @@ export const api = {
     return request('PUT', `/api/projects/${encodeURIComponent(name)}/memory`, { content, version })
   },
 
-  /** The knowledge graph over every memory surface plus the skill index:
-   *  edges are provenance ([from:日志] promotions) or literal name mentions. */
+  /** Retained long-term facts, their source files and valid promotion receipts. */
   memoryGraph(): Promise<MemoryGraph> {
     return request('GET', '/api/memory/graph?co=1')
   },
@@ -2523,17 +2522,17 @@ export interface MemoryFiles {
   daily: TopicFile[] // warm-layer diary (read-only, newest first)
 }
 
-/** GET /api/memory/graph — two layers over the same evidence. Provenance
- *  ("file") nodes are the memory surfaces and skills; knowledge ("entity")
- *  nodes are terms literally recurring inside them. Edges are provenance
- *  (promotion receipts in DREAMS.md), literal name mentions between
- *  surfaces, entity mentions (surface → entity), or entity co-occurrence. */
+/** GET /api/memory/graph — admitted long-term facts and their owning files.
+ *  Stable fact IDs survive value changes. Daily history and skill text are
+ *  excluded. Promotion edges require a diary receipt for a retained fact. */
 export interface MemoryGraphNode {
   id: string
   kind: 'core' | 'topic' | 'project' | 'daily' | 'skill' | 'entity' | string
-  /** Provenance surfaces vs extracted knowledge terms. */
+  /** Owning files vs classified long-term facts. */
   layer?: 'file' | 'entity' | string
   label: string
+  category?: 'identity' | 'preference' | 'personal' | 'environment' | 'convention' | 'project'
+  key?: string
   chars?: number
   entries?: number // §-entry count (entry-shaped surfaces)
   files?: number // diary node: daily-log count
@@ -2545,7 +2544,7 @@ export interface MemoryGraphNode {
    *  means "always visible" on the timeline. */
   first_seen?: string
   last_seen?: string
-  /** Literal source lines the term appears in (entity nodes only) — the
+  /** Retained assertion text (fact nodes only) — the
    *  detail card shows them so a node explains itself. */
   evidence?: string[]
 }

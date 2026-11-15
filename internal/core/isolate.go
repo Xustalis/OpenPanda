@@ -71,10 +71,7 @@ func (c *Core) setupIsolatedWorkDir(ctx context.Context, task Task, source strin
 	if repoRoot := gitRepoRootOf(ctx, source); repoRoot != "" {
 		if err := gitWorktreeAdd(ctx, repoRoot, dir); err == nil {
 			if oerr := overlayDirtyFiles(ctx, source, dir); oerr != nil {
-				// Degraded, not fatal: the worktree is a clean HEAD checkout —
-				// the child may miss uncommitted changes, and the operator sees
-				// why in the log.
-				c.logger.Warn("isolated overlay", "task", task.TaskID, "err", oerr)
+				return "", fmt.Errorf("populate isolated dirty tree: %w", oerr)
 			}
 			populated = true
 		} else {
@@ -440,13 +437,28 @@ func loadIsolatedBaseline(dir string) (map[string]string, error) {
 // never interleave with it — and reports conflicts instead of guessing:
 // conflicting paths keep the main tree's bytes, and the workspace is kept so
 // the child's versions stay recoverable.
-func (c *Core) mergeIsolatedRun(ctx context.Context, task Task) string {
+type isolatedMergeResult struct {
+	Note      string
+	Blocked   bool
+	Conflicts []string
+}
+
+func (c *Core) mergeIsolatedRun(ctx context.Context, task Task) isolatedMergeResult {
+	blocked := func(note string) isolatedMergeResult { return isolatedMergeResult{Note: note, Blocked: true} }
+	ctx, run, delivered, stop, err := c.holdMergeLease(ctx, task)
+	if err != nil {
+		return blocked(fmt.Sprintf("[isolated] merge lease unavailable: %v; work retained", err))
+	}
+	defer stop()
+	if delivered {
+		return isolatedMergeResult{Note: "[isolated] workspace already delivered for this attempt"}
+	}
 	dir, err := c.attachedWorkDir(task.TaskID)
 	if err != nil {
-		return ""
+		return blocked("[isolated] merge baseline or workspace unavailable; work retained")
 	}
 	if _, err := os.Stat(filepath.Join(dir, isolatedBaselineFile)); err != nil {
-		return "" // never isolated (or already merged and cleaned)
+		return blocked("[isolated] merge baseline or workspace unavailable; work retained") // never isolated (or already merged and cleaned)
 	}
 	// The merge lands where the workspace was populated from: the pinned dir
 	// when the task carried one, else the project's working directory —
@@ -457,17 +469,27 @@ func (c *Core) mergeIsolatedRun(ctx context.Context, task Task) string {
 		var perr error
 		main, perr = c.projectWorkDir(task.Project)
 		if perr != nil {
-			return fmt.Sprintf("[isolated] merge skipped: project dir unavailable: %v — workspace kept at %s", perr, dir)
+			return blocked(fmt.Sprintf("[isolated] merge skipped: project dir unavailable: %v — workspace kept at %s", perr, dir))
 		}
 	}
-	release, err := c.acquireMergeLocks(ctx, task)
+	baseline, after, err := c.isolatedChanges(dir)
 	if err != nil {
-		return fmt.Sprintf("[isolated] merge skipped: %v — workspace kept at %s", err, dir)
+		return blocked(fmt.Sprintf("[isolated] merge failed: %v — workspace kept at %s", err, dir))
 	}
-	merged, conflicts, err := c.mergeIsolatedWork(dir, main)
-	release()
+	// Inline isolated runs can hold the shared key under their execution
+	// nonce. Release workspace keys before acquiring the merge nonce.
+	c.execReleaseFor(task.TaskID)
+	release, err := c.acquireMergeLocks(ctx, task, run)
 	if err != nil {
-		return fmt.Sprintf("[isolated] merge failed: %v — workspace kept at %s", err, dir)
+		return blocked(fmt.Sprintf("[isolated] merge skipped: %v — workspace kept at %s", err, dir))
+	}
+	defer release()
+	if err := c.store.renewMergeLease(ctx, task, run, false); err != nil {
+		return blocked(fmt.Sprintf("[isolated] merge lease lost: %v; work retained", err))
+	}
+	merged, conflicts, err := c.applyIsolatedChangesContext(ctx, dir, main, baseline, after)
+	if err != nil {
+		return blocked(fmt.Sprintf("[isolated] merge failed: %v — workspace kept at %s", err, dir))
 	}
 	c.EvTrace(context.WithoutCancel(ctx), task.TaskID, "isolated_merge", map[string]any{
 		"workspace": dir, "project_dir": main, "merged": merged, "conflicts": conflicts,
@@ -490,13 +512,16 @@ func (c *Core) mergeIsolatedRun(ctx context.Context, task Task) string {
 				c.logger.Debug("post merge conflicts", "task", task.TaskID, "err", derr)
 			}
 		}
-		return note
+		return isolatedMergeResult{Note: note, Blocked: true, Conflicts: conflicts}
+	}
+	if err := c.store.renewMergeLease(ctx, task, run, true); err != nil {
+		return blocked(fmt.Sprintf("[isolated] delivery receipt failed: %v; workspace kept at %s", err, dir))
 	}
 	c.cleanupIsolatedDir(ctx, dir)
 	if merged > 0 {
-		return fmt.Sprintf("[isolated] merged %d file(s) into the project tree", merged)
+		return isolatedMergeResult{Note: fmt.Sprintf("[isolated] merged %d file(s) into the project tree", merged)}
 	}
-	return ""
+	return isolatedMergeResult{}
 }
 
 // acquireMergeLocks takes the merge target's whole-tree exec locks on
@@ -505,17 +530,13 @@ func (c *Core) mergeIsolatedRun(ctx context.Context, task Task) string {
 // shared-tree writer (the parent's later rounds included). A pinned work
 // dir adds its dir key on top: a writer pinned to the same tree locks
 // dir:<path>, not the project key, and the merge must wait it out too.
-func (c *Core) acquireMergeLocks(ctx context.Context, task Task) (func(), error) {
+func (c *Core) acquireMergeLocks(ctx context.Context, task Task, runID string) (func(), error) {
 	keys := queue.DefaultKeys(nil, task.Project, task.WorkDir, task.TaskID)
 	if wd := queue.WorkDirKey(task.WorkDir); wd != "" && !slices.Contains(keys, "dir:"+wd) {
 		keys = append(keys, "dir:"+wd)
 	}
 	if len(keys) == 0 {
 		return func() {}, nil
-	}
-	runID, err := newUUID()
-	if err != nil {
-		return nil, err
 	}
 	tick := time.NewTicker(execLockPollEvery)
 	defer tick.Stop()
@@ -548,18 +569,30 @@ func (c *Core) acquireMergeLocks(ctx context.Context, task Task) (func(), error)
 // child, and report a conflict when both sides diverged. Returns the applied
 // count and the sorted conflicting paths.
 func (c *Core) mergeIsolatedWork(isoDir, mainDir string) (int, []string, error) {
-	baseline, err := loadIsolatedBaseline(isoDir)
+	baseline, after, err := c.isolatedChanges(isoDir)
 	if err != nil {
-		return 0, nil, fmt.Errorf("baseline unreadable: %w", err)
+		return 0, nil, err
 	}
-	after, err := c.hashWorkTree(isoDir)
+	return c.applyIsolatedChanges(isoDir, mainDir, baseline, after)
+}
+
+func (c *Core) isolatedChanges(dir string) (map[string]string, map[string]string, error) {
+	baseline, err := loadIsolatedBaseline(dir)
 	if err != nil {
-		return 0, nil, fmt.Errorf("hash workspace: %w", err)
+		return nil, nil, fmt.Errorf("baseline unreadable: %w", err)
 	}
-	main, err := c.hashWorkTree(mainDir)
+	after, err := c.hashWorkTree(dir)
 	if err != nil {
-		return 0, nil, fmt.Errorf("hash project tree: %w", err)
+		return nil, nil, fmt.Errorf("hash workspace: %w", err)
 	}
+	return baseline, after, nil
+}
+
+func (c *Core) applyIsolatedChanges(isoDir, mainDir string, baseline, after map[string]string) (int, []string, error) {
+	return c.applyIsolatedChangesContext(context.Background(), isoDir, mainDir, baseline, after)
+}
+
+func (c *Core) applyIsolatedChangesContext(ctx context.Context, isoDir, mainDir string, baseline, after map[string]string) (int, []string, error) {
 	paths := make(map[string]bool, len(baseline)+len(after))
 	for p := range baseline {
 		paths[p] = true
@@ -569,12 +602,34 @@ func (c *Core) mergeIsolatedWork(isoDir, mainDir string) (int, []string, error) 
 	}
 	merged := 0
 	var conflicts []string
+	ordered := make([]string, 0, len(paths))
 	for p := range paths {
+		ordered = append(ordered, p)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		// Deletions first, deepest first, before file/directory replacements.
+		di, dj := after[ordered[i]] == "", after[ordered[j]] == ""
+		if di != dj {
+			return di
+		}
+		if di && len(ordered[i]) != len(ordered[j]) {
+			return len(ordered[i]) > len(ordered[j])
+		}
+		return ordered[i] < ordered[j]
+	})
+	for _, p := range ordered {
+		if err := ctx.Err(); err != nil {
+			return merged, conflicts, err
+		}
 		b, a := baseline[p], after[p]
 		if a == b {
 			continue // the child never touched it
 		}
-		m := main[p]
+		m, err := isolatedPathHash(mainDir, p)
+		if err != nil {
+			conflicts = append(conflicts, p)
+			continue
+		}
 		if m == b {
 			// The main tree still matches the fork: the child's state wins —
 			// its bytes when it changed or added the path, deletion when it
@@ -607,6 +662,19 @@ func applyIsolatedPath(isoDir, mainDir, rel string, present bool) error {
 		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("delete %s: %w", rel, err)
 		}
+		// Directories are not baseline entries. Remove only empty ancestors
+		// so a child can replace a deleted subtree with a file. A concurrent
+		// addition keeps the directory nonempty and therefore blocks replacement.
+		for d := filepath.Dir(filepath.FromSlash(rel)); d != "."; d = filepath.Dir(d) {
+			p := filepath.Join(mainDir, d)
+			st, err := os.Lstat(p)
+			if err != nil || !st.IsDir() {
+				break
+			}
+			if err := os.Remove(p); err != nil {
+				break
+			}
+		}
 		return nil
 	}
 	src := filepath.Join(isoDir, filepath.FromSlash(rel))
@@ -623,6 +691,11 @@ func applyIsolatedPath(isoDir, mainDir, rel string, present bool) error {
 			return fmt.Errorf("apply %s: %w", rel, err)
 		}
 		return nil
+	}
+	if old, err := os.Lstat(dst); err == nil && old.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(dst); err != nil {
+			return err
+		}
 	}
 	if err := copyRegularFile(src, dst, st.Mode()); err != nil {
 		return fmt.Errorf("apply %s: %w", rel, err)
@@ -677,4 +750,43 @@ func gitMainRepoRoot(ctx context.Context, dir string) string {
 		return ""
 	}
 	return filepath.Dir(gd)
+}
+
+// Read only changed target paths while holding the shared-tree lease.
+func isolatedPathHash(root, rel string) (string, error) {
+	if !filepath.IsLocal(filepath.FromSlash(rel)) {
+		return "", fmt.Errorf("unsafe merge path %q", rel)
+	}
+	// Never traverse a target symlink ancestor when applying a child path.
+	for d := filepath.Dir(filepath.FromSlash(rel)); d != "."; d = filepath.Dir(d) {
+		st, err := os.Lstat(filepath.Join(root, d))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if !st.IsDir() {
+			return "", fmt.Errorf("merge ancestor is not a directory: %s", d)
+		}
+	}
+	p := filepath.Join(root, filepath.FromSlash(rel))
+	st, err := os.Lstat(p)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if st.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		return hashLinkTarget(target), nil
+	}
+	if !st.Mode().IsRegular() {
+		return "", fmt.Errorf("merge target is not a file: %s", rel)
+	}
+	return sha256File(p)
 }

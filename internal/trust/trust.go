@@ -251,6 +251,7 @@ func DefaultAccept(l Level) AcceptPolicy {
 // shrink. Eligibility is judged from needs — a task that would run degraded
 // under a peer's ceiling is re-routed instead of lobotomized on the wire.
 type Needs struct {
+	MinArtifactMergeVersion int
 	// Pack: the delegate ships (or names) a project — its pack and tree.
 	Pack bool
 	// Inputs: artifact references ride the payload (worktree, stage inputs).

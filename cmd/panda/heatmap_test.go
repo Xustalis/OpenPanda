@@ -16,7 +16,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // TestHeatLevel pins the bucketing rule: empty days are level 0, the busiest
@@ -175,14 +175,7 @@ func TestHeatStreak(t *testing.T) {
 // "now" — enough rows for the heatmap to light today's cell.
 func newActivityStore(t *testing.T) *core.TaskStore {
 	t.Helper()
-	db, err := storage.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.Open(t)
 	st := core.NewTaskStore(db, nil)
 	if _, err := st.Create(context.Background(), "", "", "seed", "node-a", nil); err != nil {
 		t.Fatalf("create: %v", err)

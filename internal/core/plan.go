@@ -43,6 +43,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Xustalis/OpenPanda/internal/artifact"
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/plan"
@@ -290,117 +291,73 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 	if err != nil {
 		return "", fmt.Errorf("mint plan id: %w", err)
 	}
-	// The stages are created one row at a time, so a mid-loop failure would
-	// leave the earlier ones parked in submitted under a plan id nobody
-	// holds — and PendingPlans would sweep that id into a run nobody asked
-	// for. Cancel the strays on the way out so the plan either starts whole
-	// or not at all.
-	var created []string
-	abandon := func() {
-		for _, id := range created {
-			if cerr := c.store.Cancel(ctx, id); cerr != nil {
-				c.logger.Warn("plan: abandon unstarted stage", "task", id, "err", cerr)
-			}
-		}
-	}
 	ranks, err := plan.CriticalPathRanks(p)
 	if err != nil {
 		return "", err
 	}
+	c.mu.RLock()
+	budget := c.taskTokenBudget
+	c.mu.RUnlock()
+	prepared := make([]Task, 0, len(p.Stages))
 	for _, st := range p.Stages {
-		// Persist rank once, keeping queue polling a narrow projection.
 		resourceJSON, err := json.Marshal(struct {
 			entry.ResourceProfile
 			CriticalPathRank int `json:"critical_path_rank"`
 		}{st.Resources, ranks[st.ID]})
 		if err != nil {
-			abandon()
-			return "", fmt.Errorf("marshal stage %s resources: %w", st.ID, err)
+			return "", err
 		}
 		title := st.Title
 		if title == "" {
 			title = st.ID
 		}
-		t, _, _, err := c.createTask(ctx, TaskInput{
-			Title:        title,
-			Project:      q.Project,
-			Intent:       st.Intent,
-			SpecJSON:     st.SpecJSON,
-			Requires:     st.Requires,
-			ResourceJSON: string(resourceJSON),
-			// Stages inherit the plan's conversation: the whole plan is one
-			// lane, and its stages still parallelize among themselves through
-			// their declared scope paths (disjoint leaves under that lane).
-			SessionID: q.SessionID,
-			// The stage's hard pin travels into spec.node so every hop of the
-			// pinned route re-checks it — the queue scheduler, the claim, and
-			// the receiving node all see the same destination.
-			TargetNode: st.Node,
-			// Consent resolved by the caller's approval policy (the
-			// askengine's verdict gate): a stage must carry the same
-			// tier-2 authorization an equivalent `task add` would, or its
-			// remote run is clamped to the restricted read-only face.
-			Authorized: q.Authorized,
-		})
+		in := TaskInput{Title: title, Project: q.Project, Intent: st.Intent, SpecJSON: st.SpecJSON, Requires: st.Requires, ResourceJSON: string(resourceJSON), SessionID: q.SessionID, TargetNode: st.Node, Authorized: q.Authorized}
+		hash, _, err := c.packContext(ctx, in)
 		if err != nil {
-			abandon()
-			return "", fmt.Errorf("create stage %s: %w", st.ID, err)
+			return "", fmt.Errorf("stage %s context: %w", st.ID, err)
 		}
-		created = append(created, t.TaskID)
-		// No work dir: the executor derives one per stage. Resource keys are the
-		// plan's when the caller named any, so two plans that touch the same
-		// resource still serialize; otherwise each stage gets a key of its own.
-		//
-		// That default matters: without a per-stage key, DefaultKeys would fall
-		// through to the stage's own task id — which would work too, since each
-		// stage derives its own directory (stageWorkDir) — but the explicit
-		// plan:<id>:<stage> key keeps the exclusion readable and lets two
-		// submissions of the same stage id collide rather than duplicate.
-		// Concurrency stays bounded by MaxConcurrent, and ordering by the
-		// dependency graph.
+		d := in.detail()
+		var spec map[string]any
+		if d.SpecJSON != "" {
+			if err := json.Unmarshal([]byte(d.SpecJSON), &spec); err != nil || spec == nil {
+				return "", fmt.Errorf("stage %s spec must be an object", st.ID)
+			}
+		}
+		if spec == nil {
+			spec = map[string]any{}
+		}
+		spec["artifact_merge_version"] = artifactMergeVersion
+		encoded, err := json.Marshal(spec)
+		if err != nil {
+			return "", err
+		}
+		d.SpecJSON = string(encoded)
+		id, err := newUUID()
+		if err != nil {
+			return "", err
+		}
+		attempt, err := newUUID()
+		if err != nil {
+			return "", err
+		}
 		keys := q.ResourceKeys
 		if len(keys) == 0 {
 			keys = []string{"plan:" + planID + ":" + st.ID}
 		}
-		// Physical actuators are exclusive regardless of the plan key: two
-		// stages from different plans driving one servo must serialize.
 		keys = mergeActuatorKeys(keys, st.Requires, st.SpecJSON)
-		if err := c.store.SetQueueMeta(ctx, t.TaskID, q.Priority, q.SessionID, "", keys); err != nil {
-			abandon()
-			return "", fmt.Errorf("queue meta for stage %s: %w", st.ID, err)
+		prepared = append(prepared, Task{TaskID: id, AttemptID: attempt, Title: title, Project: q.Project, State: StateSubmitted, OwnerNode: c.nodeID, Chain: []string{c.nodeID}, Intent: d.Intent, SpecJSON: d.SpecJSON, ContextType: d.ContextType, ContextHash: hash, ResourceJSON: d.ResourceJSON, Requires: d.Requires, Authorized: q.Authorized, Priority: q.Priority, SessionID: q.SessionID, ResourceKeys: keys, Scheduled: true, PlanID: planID, StageID: st.ID, Needs: st.Needs, Inputs: source, TokenBudget: max(0, budget)})
+	}
+	// A scheduler can see either no rows or the fully configured graph.
+	if err := c.store.createPlanStages(ctx, prepared, p.Goal, partial, q.WorkDir); err != nil {
+		return "", fmt.Errorf("publish plan: %w", err)
+	}
+	if c.projects != nil && q.Project != "" {
+		if err := c.projects.Touch(q.Project); err != nil {
+			c.logger.Debug("touch plan project", "err", err)
 		}
-		if err := c.store.SetStage(ctx, t.TaskID, planID, st.ID, st.Needs); err != nil {
-			abandon()
-			return "", fmt.Errorf("stamp stage %s: %w", st.ID, err)
-		}
-		if len(source) > 0 {
-			if err := c.store.SetStageInputs(ctx, t.TaskID, source); err != nil {
-				abandon()
-				return "", fmt.Errorf("source input for stage %s: %w", st.ID, err)
-			}
-		}
-		// The snapshot is shared by every stage, so each one carries the same
-		// note: its input tree is intact but smaller than the workspace. The
-		// naming matches notePackSkipped's, so both pack paths read the same
-		// way on the audit trail.
-		if len(partial) > 0 {
-			if err := c.store.RecordEvent(ctx, t.TaskID, EvContextDegraded, map[string]any{
-				"stage": "plan_source_partial", "dir": q.WorkDir, "skipped": partial,
-			}); err != nil {
-				c.logger.Debug("record partial plan source event", "task", t.TaskID, "err", err)
-			}
-		}
-		// — Trace: the entry model classified this sentence as a plan, one
-		// event per stage task, fired at stage creation — before AdvancePlan
-		// releases anything, so the orbit's "plan · stage i/N" chip leads the
-		// stage's own execution events (design doc §3.1.1).
-		c.EvTrace(ctx, t.TaskID, EvClassifyResult, map[string]any{
-			"kind":         "plan",
-			"note":         p.Goal,
-			"plan_goal":    p.Goal,
-			"stages_count": len(p.Stages),
-			"stage_id":     st.ID,
-		})
+	}
+	for _, t := range prepared {
+		notifyTaskCreated(ctx, t)
 	}
 	c.logger.Info("plan started", "plan", planID, "stages", len(p.Stages), "goal", p.Goal)
 	if err := c.AdvancePlan(ctx, planID); err != nil {
@@ -795,11 +752,8 @@ func (c *Core) attachedWorkDir(taskID string) (string, error) {
 	return dir, nil
 }
 
-// fetchStageInputs pulls and extracts every input a stage declares. All inputs
-// unpack into the work-dir root in ref order, so the linear chain accumulates
-// like a workspace (the training stage sees the script the coding stage wrote)
-// and a fan-in is deterministic (a later input wins a collision, identically on
-// every node).
+// fetchStageInputs fetches verified artifacts before hydrating a stage through
+// a causal merge. Standalone legacy attachments retain their extraction path.
 func (c *Core) fetchStageInputs(ctx context.Context, t Task, workDir string) error {
 	if len(t.Inputs) == 0 {
 		return nil
@@ -878,11 +832,16 @@ func (c *Core) fetchStageInputs(ctx context.Context, t Task, workDir string) err
 				}
 			}
 		}
-		if _, err := c.artifacts.Extract(in.Hash, workDir); err != nil {
-			return fmt.Errorf("extract input %s: %w", in.Hash, err)
+		if t.PlanID == "" {
+			if _, err := c.artifacts.Extract(in.Hash, workDir); err != nil {
+				return fmt.Errorf("extract input %s: %w", in.Hash, err)
+			}
 		}
 		c.logger.Info("stage input ready", "task", t.TaskID, "stage", t.StageID,
 			"from_stage", in.Stage, "hash", in.Hash)
+	}
+	if t.PlanID != "" {
+		return c.hydrateCausalInputs(ctx, t, workDir)
 	}
 	return nil
 }
@@ -939,7 +898,17 @@ func (c *Core) packStageOutput(ctx context.Context, t Task, workDir string) (str
 			filepath.Join(workDir, isolatedBaselineFile),
 			filepath.Join(workDir, ".git"))
 	}
-	m, err := c.artifacts.PackDirExceptPaths(workDir, outputSkipDirs, prune, 0)
+	var m artifact.Manifest
+	var err error
+	if t.PlanID != "" {
+		var build artifact.MetadataBuilder
+		build, err = c.causalOutputBuilder(ctx, t)
+		if err == nil {
+			m, err = c.artifacts.PackCausalDir(workDir, outputSkipDirs, prune, build)
+		}
+	} else {
+		m, err = c.artifacts.PackDirExceptPaths(workDir, outputSkipDirs, prune, 0)
+	}
 	if err != nil {
 		return "", fmt.Errorf("pack stage output: %w", err)
 	}
@@ -1258,7 +1227,10 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 	// inside the queue meta writer: a scoped claim becomes leaf keys so
 	// disjoint siblings run in parallel, an unscoped one falls back to the
 	// project serialization.
-	if err := c.store.SetQueueMeta(ctx, child.TaskID, PriorityNormal, in.SessionID, "", childResourceKeys(child.TaskID, in)); err != nil {
+	if err := c.seedDelegateSnapshot(ctx, child, in); err != nil {
+		return fmt.Errorf("seed isolated sibling: %w", err)
+	}
+	if err := c.store.SetQueueMeta(ctx, child.TaskID, PriorityNormal, in.SessionID, in.WorkDir, childResourceKeys(child.TaskID, in)); err != nil {
 		return fmt.Errorf("queue meta for child: %w", err)
 	}
 	if err := c.store.Queue(ctx, child.TaskID, c.nodeID); err != nil {
@@ -1772,24 +1744,21 @@ func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegate
 	// The cross-process exec lease (execlock.go) mirrors the same dance: a
 	// child that must take the parent's project key in exec_locks would
 	// otherwise wait on the parent that waits on it.
-	keys := queue.DefaultKeys(parent.ResourceKeys, parent.Project, parent.WorkDir, parent.TaskID)
-	held := c.queueReleaseFor(parent.TaskID)
-	dbKeys, dbHeld := c.execReleaseFor(parent.TaskID)
-	defer func() {
-		if held {
-			c.queueAcquireFor(ctx, parent.TaskID, keys)
-		}
-		if dbHeld {
-			if err := c.execAcquireFor(ctx, parent.TaskID, dbKeys); err != nil {
-				c.logger.Warn("re-acquire exec locks after delegate wait", "task", parent.TaskID, "err", err)
-			}
-		}
-	}()
+	fanout := min(c.delegateLimits().FanOut, len(drs))
+	drs = parallelDelegateBatch(parent.Project, fanout, drs)
+	ctx, cleanup, err := c.snapshotDelegateBatch(ctx, parent, drs)
+	if err != nil {
+		return []string{"delegation snapshot failed: " + err.Error()}
+	}
+	defer cleanup()
+	resume, err := c.yieldForChildren(ctx, parent)
+	if err != nil {
+		return []string{"delegation failed: " + err.Error()}
+	}
+	defer resume()
 
 	notes := make([]string, len(drs))
 	// Bound workers as well as active children; keep results in request order.
-	fanout := min(c.delegateLimits().FanOut, len(drs))
-	drs = parallelDelegateBatch(parent.Project, fanout, drs)
 	jobs := make(chan int)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -2203,6 +2172,11 @@ func (c *Core) reportLateChildResult(ctx context.Context, taskID string) {
 // when nothing alive remains — a parked or silent child annotates rather
 // than blocks, since a dead link can outlast any deadline.
 func (c *Core) awaitPendingChildren(ctx context.Context, parent Task, pending []pendingChild) []string {
+	resume, err := c.yieldForChildren(ctx, parent)
+	if err != nil {
+		return []string{"child wait failed: " + err.Error()}
+	}
+	defer resume()
 	slice := c.lease() / leaseRenewDivisor
 	if slice < time.Second {
 		slice = time.Second

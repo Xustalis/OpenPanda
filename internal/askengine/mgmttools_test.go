@@ -19,7 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -29,14 +29,7 @@ import (
 func newMgmtTestEngine(t *testing.T) (*Engine, *entry.Registry) {
 	t.Helper()
 	root := t.TempDir()
-	db, err := storage.Open(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(root, "test.db"))
 
 	card := ledger.Card{
 		Device:   "test-node",
@@ -830,14 +823,7 @@ func TestReminderDelete(t *testing.T) {
 
 func TestCardAgentAddAutoInit(t *testing.T) {
 	root := t.TempDir()
-	db, err := storage.Open(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(root, "test.db"))
 
 	cfg := &config.Config{}
 	cfg.Node.Name = "test-auto-node"
@@ -1001,14 +987,7 @@ func TestCardRescanRegistersInstalledAgents(t *testing.T) {
 	t.Setenv("PATH", fakeBin+string(filepath.ListSeparator)+os.Getenv("PATH"))
 	// The rescan hot-reloads the card, so the engine needs the store the
 	// scheduler is built from — the same setup TestCardAgentAddAutoInit uses.
-	db, err := storage.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(dir, "test.db"))
 	cfg := &config.Config{}
 	cfg.Node.Name = "test-rescan-node"
 	cfg.Node.Kind = "physical"

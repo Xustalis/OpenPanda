@@ -363,7 +363,7 @@ func (a queueStoreAdapter) CountActive(ctx context.Context) (int, error) {
 }
 
 func (a queueStoreAdapter) Claim(ctx context.Context, taskID string) error {
-	return a.c.store.ClaimLocal(ctx, taskID, a.c.nodeID)
+	return a.c.store.ClaimLocal(ctx, taskID, a.c.nodeID, a.c.executionConcurrency())
 }
 
 // queueRunnerAdapter implements queue.Runner: run one claimed task to a
@@ -735,6 +735,9 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 // authenticates the peer's result/decline) and stamps a lease so a dead
 // executor is detected (D3).
 func (c *Core) sendClaimedDelegate(ctx context.Context, taskID, target string, p bus.TaskDelegatePayload, awaitRevival ...bool) error {
+	if err := c.requireArtifactProtocol(ctx, target, p.SpecJSON); err != nil {
+		return err
+	}
 	// Trust-zone send ceiling (experimental): the queue forward is a second
 	// wire path beside dispatchDelegated, so the same clamp applies here —
 	// refuse a target whose tier strips a need rather than ship the lobotomized

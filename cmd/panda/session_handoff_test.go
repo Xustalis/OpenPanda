@@ -25,7 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 	"github.com/Xustalis/OpenPanda/webui/panel"
 )
 
@@ -36,15 +36,7 @@ func handoffEnv(t *testing.T) (*config.Config, *sql.DB, *core.TaskStore, *sessio
 	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	db, err := storage.Open(cfg.Storage.DBPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := storage.Migrate(db); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db := testdb.OpenFile(t, cfg.Storage.DBPath)
 	return cfg, db, core.NewSigningTaskStore(db, nil), sessions.NewStore(sessionStoreRoot(cfg))
 }
 

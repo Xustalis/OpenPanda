@@ -330,6 +330,9 @@ type delegateAdmission struct {
 // an unreachable or unparsable classifier parks the task rather than
 // silently admitting it.
 func (c *Core) admitDelegate(ctx context.Context, taskID string, p bus.TaskDelegatePayload, chain []string, sender string) delegateAdmission {
+	if artifactProtocolOf(p.SpecJSON) > artifactMergeVersion {
+		return delegateAdmission{reason: "unsupported artifact merge protocol"}
+	}
 	tier := c.admissionTier(ctx, chain, sender)
 	if tier == trust.Mesh {
 		return delegateAdmission{admit: true}
@@ -492,6 +495,9 @@ func (c *Core) recordTrustVerdict(ctx context.Context, taskID string, tier trust
 func (c *Core) eligibleForSend(ctx context.Context, needs trust.Needs, nodes []ledger.Node) []ledger.Node {
 	out := make([]ledger.Node, 0, len(nodes))
 	for _, n := range nodes {
+		if !scheduler.IsSelfRow(n.ID, c.nodeID) && n.Capacity.ArtifactMergeVersion < needs.MinArtifactMergeVersion {
+			continue
+		}
 		if scheduler.IsSelfRow(n.ID, c.nodeID) ||
 			c.sendPolicyFor(c.peerTrustOf(ctx, n.ID)).ExecutorOK(needs) {
 			out = append(out, n)
@@ -548,8 +554,9 @@ func (c *Core) reputationScores(ctx context.Context) map[string]float64 {
 // level are clampable so they never need listing here.
 func needsForTask(t Task) trust.Needs {
 	return trust.Needs{
-		Pack:   t.Project != "",
-		Inputs: len(t.Inputs) > 0 || t.ContextType == "file" || t.Project != "",
+		MinArtifactMergeVersion: artifactProtocolOf(t.SpecJSON),
+		Pack:                    t.Project != "",
+		Inputs:                  len(t.Inputs) > 0 || t.ContextType == "file" || t.Project != "",
 		// A row already stamped screen_output, or one whose inputs carry the
 		// provenance mark, stays inside the mesh-only ceiling on re-route.
 		Screen: t.ScreenOutput || trust.ScreenSensitiveSpec(t.Requires, t.SpecJSON) ||

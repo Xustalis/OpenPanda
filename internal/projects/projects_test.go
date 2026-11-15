@@ -9,19 +9,12 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	db, err := storage.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, filepath.Join(t.TempDir(), "test.db"))
 	return NewStore(db)
 }
 

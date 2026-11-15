@@ -290,7 +290,7 @@ func (s *Store) PackDirExceptPaths(tree string, skip map[string]bool, absSkip []
 // packDir is the shared pack body. fileSkip prunes individual file names on
 // top of dirSkip (nil = none); lenient switches the walk and the per-file
 // open to record-and-continue instead of fail-fast (see PackSkipped).
-func (s *Store) packDir(tree string, skip map[string]bool, fileSkip func(string) bool, absSkip []string, ignores []ignoreRule, limit int64, lenient bool) (Manifest, error) {
+func (s *Store) packDir(tree string, skip map[string]bool, fileSkip func(string) bool, absSkip []string, ignores []ignoreRule, limit int64, lenient bool, metadata ...MetadataBuilder) (Manifest, error) {
 	var prune map[string]bool
 	for _, p := range absSkip {
 		if p == "" {
@@ -337,7 +337,7 @@ func (s *Store) packDir(tree string, skip map[string]bool, fileSkip func(string)
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after a successful rename
 
-	m, err := packEntries(ents, tree, tmp, max, skipOut)
+	m, err := packEntries(ents, tree, tmp, max, skipOut, metadata...)
 	if err != nil {
 		tmp.Close()
 		return Manifest{}, err
@@ -675,4 +675,18 @@ func validHash(hash string) bool {
 		}
 	}
 	return true
+}
+
+// PackCausalDir excludes any agent-authored reserved file and appends metadata
+// generated from the actual archived file digests, under the same artifact hash.
+func (s *Store) PackCausalDir(tree string, skip map[string]bool, absSkip []string, build MetadataBuilder) (Manifest, error) {
+	absSkip = append(append([]string(nil), absSkip...), filepath.Join(tree, KernelMetadataFile))
+	dirSkip := make(map[string]bool, len(skip)+len(sourcePrivateDirs))
+	for k, v := range skip {
+		dirSkip[k] = v
+	}
+	for k, v := range sourcePrivateDirs {
+		dirSkip[k] = v
+	}
+	return s.packDir(tree, dirSkip, sourcePrivateFile, absSkip, nil, 0, false, build)
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
-	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
 // TestRecoveredTaskSurvivesStartup pins the daemon's startup order.
@@ -40,14 +40,7 @@ func TestRecoveredTaskSurvivesStartup(t *testing.T) {
 
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "node.db")
-	db, err := storage.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
-	if err := storage.Migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testdb.OpenFile(t, dbPath)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	nodeID := "recovery-order-node"

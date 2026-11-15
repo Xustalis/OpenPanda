@@ -282,6 +282,16 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 
 	prep, err := c.prepareRunDir(execCtx, ctx, task, taskID, plan)
 	if err != nil {
+		var blocked *artifactMergeError
+		if errors.As(err, &blocked) {
+			result := bus.TaskResultPayload{TaskID: taskID, AttemptID: attemptID, State: StateReview, OK: false, ApprovalDisposition: string(ApprovalNeedsChangedInput), Verdict: "blocked", Stderr: err.Error()}
+			wCtx, cancel := c.storeWriteCtx(ctx)
+			defer cancel()
+			if perr := c.store.pauseWithResultDisposition(wCtx, taskID, c.nodeID, result, ApprovalNeedsChangedInput, err.Error(), attemptID); perr != nil {
+				return bus.TaskResultPayload{}, perr
+			}
+			return result, nil
+		}
 		return bus.TaskResultPayload{}, err
 	}
 	execWorkDir = prep.workDir
@@ -1546,7 +1556,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				}
 				return roundOutcome{}, fmt.Errorf("pause on token exhaustion: %w", err)
 			}
-			c.logTask(task.Title, false)
+			c.logProjectTask(task.Title, false, task.Project)
 			trackTask(c, task.Project, required, task.Title, false)
 			return roundOutcome{done: true, payload: bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -1991,7 +2001,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				c.EvTrace(execCtx, taskID, EvClarification, map[string]any{
 					"question": q, "round": round + 1, "agent": res.Agent,
 				})
-				c.logTask(task.Title, false)
+				c.logProjectTask(task.Title, false, task.Project)
 				trackTask(c, task.Project, required, task.Title, false)
 				fc := lastChanged
 				if len(fc) > maxFilesChangedReport {
@@ -2270,7 +2280,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					}
 					return roundOutcome{}, fmt.Errorf("pause on scope drift: %w", err)
 				}
-				c.logTask(task.Title, false)
+				c.logProjectTask(task.Title, false, task.Project)
 				trackTask(c, task.Project, required, task.Title, false)
 				fc := lastChanged
 				if len(fc) > maxFilesChangedReport {
@@ -2299,7 +2309,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				}
 				return roundOutcome{}, fmt.Errorf("pause manual: %w", err)
 			}
-			c.logTask(task.Title, false)
+			c.logProjectTask(task.Title, false, task.Project)
 			trackTask(c, task.Project, required, task.Title, false)
 			return roundOutcome{done: true, payload: bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -2369,7 +2379,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					}
 					return roundOutcome{}, fmt.Errorf("park overflowed task: %w", err)
 				}
-				c.logTask(task.Title, false)
+				c.logProjectTask(task.Title, false, task.Project)
 				trackTask(c, task.Project, required, task.Title, false)
 				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -2400,7 +2410,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					}
 					return roundOutcome{}, fmt.Errorf("park refused task: %w", err)
 				}
-				c.logTask(task.Title, false)
+				c.logProjectTask(task.Title, false, task.Project)
 				trackTask(c, task.Project, required, task.Title, false)
 				return roundOutcome{done: true, payload: bus.TaskResultPayload{
 					TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -2417,7 +2427,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 				}
 				return roundOutcome{}, fmt.Errorf("fail: %w", err)
 			}
-			c.logTask(task.Title, false)
+			c.logProjectTask(task.Title, false, task.Project)
 			trackTask(c, task.Project, required, task.Title, false)
 			return roundOutcome{done: true, payload: bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateFailed, OK: false, ExitCode: res.ExitCode, Stderr: res.Stderr,
@@ -2674,6 +2684,13 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		if outputArtifact, perr = c.packStageOutput(ctx, task, workDir); perr != nil {
 			return bus.TaskResultPayload{}, perr
 		}
+	} else if task.Isolate && task.Project != "" && c.artifacts != nil {
+		// Preserve the private result before any delivery or cleanup. A failed
+		// pack leaves the workspace intact and must not certify delivery.
+		var perr error
+		if outputArtifact, perr = c.packStageOutput(ctx, task, workDir); perr != nil {
+			return bus.TaskResultPayload{}, perr
+		}
 	} else if projectInputs(task) || attachedInputs(task) {
 		// A task executed on someone else's behalf hands its tree back the
 		// same way a stage does, so the changes it made reach the machine that
@@ -2761,7 +2778,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 			}
 			return bus.TaskResultPayload{}, fmt.Errorf("pause for follow-up: %w", err)
 		}
-		c.logTask(task.Title, false)
+		c.logProjectTask(task.Title, false, task.Project)
 		trackTask(c, task.Project, required, task.Title, false)
 		return bus.TaskResultPayload{
 			TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -2816,7 +2833,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 				}
 				return bus.TaskResultPayload{}, fmt.Errorf("fail on acceptance: %w", err)
 			}
-			c.logTask(task.Title, false)
+			c.logProjectTask(task.Title, false, task.Project)
 			trackTask(c, task.Project, required, task.Title, false)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateFailed,
@@ -2862,7 +2879,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 				}
 				return bus.TaskResultPayload{}, fmt.Errorf("pause for approval: %w", err)
 			}
-			c.logTask(task.Title, true)
+			c.logProjectTask(task.Title, true, task.Project)
 			trackTask(c, task.Project, required, task.Title, true)
 			return bus.TaskResultPayload{
 				TaskID: taskID, AttemptID: attemptID, State: StateReview,
@@ -2886,11 +2903,21 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	// project's bytes. Placement matters: after the output artifact above
 	// packed the workspace, before Complete so the row's stdout is final.
 	if task.Isolate && task.Project != "" && task.PlanID == "" {
-		if note := c.mergeIsolatedRun(ctx, task); note != "" {
+		merge := c.mergeIsolatedRun(ctx, task)
+		if note := merge.Note; note != "" {
 			if res.Stdout != "" {
 				res.Stdout += "\n"
 			}
 			res.Stdout += note
+		}
+		if merge.Blocked {
+			wCtx, cancel := c.storeWriteCtx(ctx)
+			defer cancel()
+			result := bus.TaskResultPayload{TaskID: taskID, AttemptID: attemptID, State: StateReview, ApprovalDisposition: string(ApprovalNeedsChangedInput), OK: false, ExitCode: res.ExitCode, Verdict: "blocked", VerdictReason: merge.Note, Stdout: res.Stdout, Stderr: merge.Note, Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, ScreenOutput: screenOut, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected, AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter, Verification: verificationStatus}
+			if err := c.store.pauseWithResultDisposition(wCtx, taskID, c.nodeID, result, ApprovalNeedsChangedInput, merge.Note, attemptID); err != nil {
+				return bus.TaskResultPayload{}, err
+			}
+			return result, nil
 		}
 	}
 
@@ -2915,7 +2942,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	// A finished run's session handle is dead weight: the adapter may purge
 	// it, and a later re-run must start fresh rather than resume a stale id.
 	_ = c.store.SetAgentSessionID(wCtx, taskID, "")
-	c.logTask(task.Title, true)
+	c.logProjectTask(task.Title, true, task.Project)
 	trackTask(c, task.Project, required, task.Title, true)
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,

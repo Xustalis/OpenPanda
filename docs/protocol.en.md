@@ -592,3 +592,5 @@ both sides + AES-256-GCM sealed delivery of the shared secret — the
 shared secret never crosses the network in cleartext, and comparing the
 pairing code blocks a MITM relay (different DH on the two ends yields
 different codes).
+
+Stage artifacts contain kernel-generated causal metadata in .openpanda-causal-v1.json, covered by the same archive hash as the file bytes. Plans with spec_json.artifact_merge_version=1 only dispatch to nodes advertising capacity.artifact_merge_version>=1; the runtime sets this capability, not YAML cards. Joins merge per-path causal writers and preserve deletions. Conflicts, corrupt metadata and multiple legacy inputs without trustworthy baselines block execution. DAG outputs remain artifacts and do not automatically write back to the submitter checkout.
