@@ -105,6 +105,8 @@ Connect with `panda connection connect --root https://example.com/tsync/ --id te
 
 Connections only synchronize until an expiring local space policy enables research, execution or final action. Set it in the Web space disclosure or with `panda work policy --connection team --space SPACE --file policy.json`; omit `--file` to inspect it. Policies bind to the account and explicit task/project IDs, with separate token and concurrency limits. An unassigned task can receive a small private research brief, never a claim or state change. `panda work research INSTANCE/WORKSPACE/SPACE/TASK --connection team` reads the current authorized brief. Personal research memory is not passed into project execution.
 
+Use the space disclosure or CLI work binding to explicitly bind remote project memory. --connection and --space select the scope; --remote-project selects a project, or omit it for the whole space. Omit --local-project to list mappings; pass an explicitly empty value to remove one. Project-specific bindings take precedence over space bindings. Names never create a binding. Changing a mapping pauses existing work and clears private briefs; it grants no directory or action permission.
+
 The first controlled final-action adapter publishes an exact text file to an explicitly authorized absolute directory. It pins directory identity and never overwrites an existing file. Other agent/shell/browser tools are preparation-only for this workflow; this policy grants them no final-action authority. A file draft alone does not complete the goal: full-goal coverage is a separate explicit human assertion. Browser identity/login and extension workflows have their own later acceptance gate.
 
 ```sh

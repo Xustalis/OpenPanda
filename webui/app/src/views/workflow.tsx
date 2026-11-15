@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState } from 'preact/hooks'
-import { api, type WorkConnection, type WorkPolicy, type WorkRun } from '../api/client'
+import { api, type WorkConnection, type WorkPolicy, type WorkRun, type WorkProjectBinding } from '../api/client'
 import { useWorkRead } from './work-read'
 import { t } from '../i18n'
 
@@ -126,7 +126,37 @@ export function SpacePolicy({ connection, space, name, tick, reload }: { connect
   return <details class="work-space-policy" onToggle={e => setOpen(e.currentTarget.open)}><summary>{name} · {t('work.automationPolicy')}</summary>
     {policy.error && <p class="work-error" role="alert">{policy.error}</p>}
     {policy.data && <PolicyForm key={JSON.stringify([connection.connectionId, space, open, policy.data])} connection={connection.connectionId} space={space} initial={policy.data} reload={reload} />}
+    {open && <ProjectBindings key={`${connection.connectionId}/${connection.authEpoch}/${space}`} connection={connection.connectionId} space={space} tick={tick} reload={reload} />}
   </details>
+}
+
+function ProjectBindings({ connection, space, tick, reload }: { connection: string; space: string; tick: number; reload(): void }) {
+  const bindings = useWorkRead(async () => {
+    const [items, projects] = await Promise.all([api.workBindings(connection, space), api.projects()])
+    return { items, projects: projects.projects }
+  }, [connection, space], tick)
+  const [remote, setRemote] = useState('')
+  const [local, setLocal] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const save = async (binding: WorkProjectBinding) => {
+    if (busy) return
+    setBusy(true); setError('')
+    try { await api.setWorkBinding(connection, space, binding); reload() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+  }
+  return <section class="work-form"><h3>{t('work.projectBindings')}</h3>
+    <p class="hint">{t('work.projectBindingsHint')}</p>
+    {(error || bindings.error) && <p class="work-error" role="alert">{error || bindings.error}</p>}
+    {bindings.data && <>
+      {bindings.data.items.length === 0 && <p class="hint">{t('work.noBindings')}</p>}
+      <ul>{bindings.data.items.map(b => <li key={b.remoteProjectId} class="work-actions"><span>{b.remoteProjectId || t('work.wholeSpace')} → {b.localProject}</span><button class="btn" disabled={busy} onClick={() => void save({ ...b, localProject: '' })}>{t('work.removeBinding')}</button></li>)}</ul>
+      <form class="work-form" onSubmit={e => { e.preventDefault(); void save({ remoteProjectId: remote, localProject: local }) }}>
+        <label>{t('work.remoteProjectId')}<input value={remote} onInput={e => setRemote(e.currentTarget.value.trim())} /></label>
+        <label>{t('work.localProject')}<select required value={local} onChange={e => setLocal(e.currentTarget.value)}><option value="">{t('work.chooseProject')}</option>{bindings.data.projects.map(name => <option key={name} value={name}>{name}</option>)}</select></label>
+        <button class="btn" type="submit" disabled={busy || !local}>{t('common.save')}</button>
+      </form>
+    </>}
+  </section>
 }
 
 function PolicyForm({ connection, space, initial, reload }: { connection: string; space: string; initial: WorkPolicy; reload(): void }) {

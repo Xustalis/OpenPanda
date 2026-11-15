@@ -82,6 +82,10 @@ export interface WorkAuthorization {
   interval: number
 }
 
+export interface WorkProjectBinding {
+  remoteProjectId: string
+  localProject: string
+}
 export interface WorkPolicy {
   research: boolean; execute: boolean; finalAction: boolean
   mode: 'before_submit' | 'after_execution' | ''
@@ -1202,6 +1206,12 @@ export const api = {
   },
   workPolicy(id: string, space: string): Promise<WorkPolicy> {
     return request('GET', `/api/work/connections/${encodeURIComponent(id)}/spaces/${encodeURIComponent(space)}/policy`)
+  },
+  workBindings(id: string, space: string): Promise<WorkProjectBinding[]> {
+    return request('GET', `/api/work/connections/${encodeURIComponent(id)}/spaces/${encodeURIComponent(space)}/bindings`)
+  },
+  setWorkBinding(id: string, space: string, binding: WorkProjectBinding): Promise<WorkProjectBinding[]> {
+    return request('PUT', `/api/work/connections/${encodeURIComponent(id)}/spaces/${encodeURIComponent(space)}/bindings`, binding)
   },
   setWorkPolicy(id: string, space: string, policy: WorkPolicy): Promise<WorkPolicy> {
     return request('PUT', `/api/work/connections/${encodeURIComponent(id)}/spaces/${encodeURIComponent(space)}/policy`, policy)

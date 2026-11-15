@@ -8,6 +8,26 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/taskflow"
 )
 
+func (h *handler) workBindings(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPut {
+		var b taskflow.ProjectBinding
+		if err := decodeWorkJSON(w, r, &b, false); err != nil {
+			writeWorkError(w, err)
+			return
+		}
+		if err := h.taskFlow.SetBinding(r.Context(), r.PathValue("id"), r.PathValue("space"), b); err != nil {
+			writeWorkError(w, err)
+			return
+		}
+	}
+	b, err := h.taskFlow.Bindings(r.Context(), r.PathValue("id"), r.PathValue("space"))
+	if err != nil {
+		writeWorkError(w, err)
+		return
+	}
+	writeJSON(w, b)
+}
+
 func (h *handler) workPolicy(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPut {
 		var p taskflow.Policy

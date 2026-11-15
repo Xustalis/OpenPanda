@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/taskflow"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders"
 )
@@ -34,6 +35,37 @@ func workflowHTTP(t *testing.T) (*sql.DB, http.Handler) {
 		t.Fatal(err)
 	}
 	return db, New(Deps{DB: db, Store: core.NewTaskStore(db, nil), TaskFlow: taskflow.New(db, ""), Token: testToken, StaticDir: t.TempDir()})
+}
+
+func TestWorkflowHTTPExplicitBindings(t *testing.T) {
+	db, h := workflowHTTP(t)
+	if _, err := projects.NewStore(db).Create("local-context", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	do := func(method, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, authedReq(method, "/api/work/connections/c/spaces/s/bindings", strings.NewReader(body)))
+		return w
+	}
+	if w := do("GET", ""); w.Code != 200 || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("default=%d %s", w.Code, w.Body)
+	}
+	for _, raw := range []string{"null", "[]", `{} {}`, `{"authorized":true}`} {
+		if w := do("PUT", raw); w.Code != 400 {
+			t.Fatalf("strict=%d %s", w.Code, w.Body)
+		}
+	}
+	if w := do("PUT", `{"remoteProjectId":"remote","localProject":"local-context"}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"local-context"`) {
+		t.Fatalf("set=%d %s", w.Code, w.Body)
+	}
+	if _, err := db.Exec(`UPDATE task_connections SET spaces_json='[]'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{"GET", "PUT"} {
+		if w := do(method, `{"remoteProjectId":"remote","localProject":"local-context"}`); w.Code != 403 || strings.Contains(w.Body.String(), `"local-context"`) {
+			t.Fatalf("revoked=%d %s", w.Code, w.Body)
+		}
+	}
 }
 
 func TestWorkflowHTTPRefreshExportAndRevocation(t *testing.T) {
