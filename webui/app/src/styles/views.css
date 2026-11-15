@@ -11499,10 +11499,7 @@ main .pipeline-chip {
   text-decoration: underline;
 }
 
-/* ---- 团队 (views/team.tsx) ----
-   A destination that exists before its features do. The header is the whole
-   page on purpose; the only thing under it is a sentence saying there is
-   nothing here, so nobody goes hunting for a button that was never drawn. */
+/* ---- Tasks and collaboration (views/team.tsx) ---- */
 
 .tm-page {
   /* `.main` is a flex row, so a flex item shrinks to its content unless it asks
@@ -11522,6 +11519,63 @@ main .pipeline-chip {
   gap: 2px;
   min-width: 0;
 }
+
+.work-head, .work-toolbar, .work-actions, .work-card-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.work-head > div, .work-toolbar input { flex: 1; min-width: 0; }
+.work-actions { justify-content: flex-start; }
+.work-tabs { align-self: flex-start; max-width: 100%; flex-wrap: wrap; }
+.work-tabs button, .work-actions button, .work-toolbar button { min-height: 44px; }
+.work-grid, .work-history {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: var(--sp-4);
+}
+.work-page .card { min-width: 0; padding: var(--sp-4); }
+.work-title {
+  display: block;
+  padding: var(--sp-2) 0;
+  min-height: 44px;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.work-title:hover { color: var(--accent); }
+.work-title:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 3px; }
+.work-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0;
+}
+.work-facts dt { color: var(--text-secondary); font-size: var(--fs-caption); }
+.work-facts dd { margin: var(--sp-1) 0 0; overflow-wrap: anywhere; }
+.work-description { white-space: pre-wrap; overflow-wrap: anywhere; }
+.work-form, .work-form label { display: flex; flex-direction: column; gap: var(--sp-2); }
+.work-form { gap: var(--sp-4); }
+.work-form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: var(--sp-3);
+}
+.work-form input, .work-form select, .work-form textarea, .work-toolbar input {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+.work-form button { align-self: flex-start; min-height: 44px; }
+.work-error { color: var(--semantic-danger); overflow-wrap: anywhere; }
 
 /* Dashed, not a card: a card would read as content that failed to load. The
    dashed edge says "reserved", which is what this area actually is. Capped in

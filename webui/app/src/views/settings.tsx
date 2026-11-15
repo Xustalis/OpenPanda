@@ -16,7 +16,6 @@ import { agentLogo } from '../format/agent-logo'
 import { agentInitial } from '../format/agent-role'
 import { t } from '../i18n'
 import { locale, localeNames, locales, setLocale } from '../i18n'
-import { setTeamEnabled, useTeamEnabled } from '../features'
 import { Select } from '../components/select'
 import { TermsModal } from '../components/terms'
 import { onThemeChange, setTheme, theme } from '../theme'
@@ -334,29 +333,13 @@ function GeneralSection(props: { onLogout(): void }) {
   )
 }
 
-/** 团队 (偏好 → 团队): the one switch that decides whether the 团队
- *  destination exists in the console at all. It has its own row in the
- *  settings rail so the feature can be found by its name; the checkbox is
- *  browser-local (features.ts), which is why it sits with the other
- *  preferences rather than with the node's policies. */
+/** Task connections and automation have explicit node policies. */
 function TeamSection() {
-  const teamOn = useTeamEnabled()
-
   return (
     <div class="card settings-card">
       <p class="hint">{t('team.subtitle')}</p>
-      <div class="field-group">
-        <label for="team-feature">{t('settings.teamFeature')}</label>
-        <input
-          id="team-feature"
-          class="switch"
-          type="checkbox"
-          checked={teamOn}
-          aria-label={t('settings.teamFeature')}
-          onChange={(e) => setTeamEnabled((e.target as HTMLInputElement).checked)}
-        />
-        <p class="hint">{t('settings.teamFeatureHelp')}</p>
-      </div>
+      <p class="hint">{t('work.policyHint')}</p>
+      <a class="btn" href="#/work">{t('nav.team')}</a>
     </div>
   )
 }

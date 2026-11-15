@@ -235,6 +235,7 @@ export function DetailView({
               #{shortId(task.id)}
             </span>
             {task.project && <span class="dt-meta-item">{task.project}</span>}
+            {task.work_source && <a class="dt-meta-link" href={`#/work/tasks/${encodeURIComponent(task.work_source.taskKey)}?connection=${encodeURIComponent(task.work_source.connectionId)}`}>{t('work.sourceTask')}</a>}
             {task.owner && <span class="dt-meta-item">{task.owner}</span>}
             {task.plan_meta?.plan_id && (
               <button

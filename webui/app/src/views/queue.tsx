@@ -1075,6 +1075,7 @@ function KanbanCard({
           {t(`queue.priority.${task.priority ?? 'normal'}`)}
         </button>
         {task.project && <span class="kanban-project">{task.project}</span>}
+        {task.work_source && <a href={`#/work/tasks/${encodeURIComponent(task.work_source.taskKey)}?connection=${encodeURIComponent(task.work_source.connectionId)}`} onClick={e => e.stopPropagation()}>{t('work.sourceTask')}</a>}
         {task.owner && <span class="kanban-owner">@{task.owner}</span>}
         {/* Foreign origin: the device this task CAME FROM (chain[0]). Local
             rows stay unmarked — the default reading of an unmarked card is

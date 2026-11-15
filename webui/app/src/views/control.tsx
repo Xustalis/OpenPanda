@@ -25,9 +25,9 @@ const TAB_ICON: Record<ControlTab, IconName> = {
 // The board is named 看板 here, not 任务: "任务" beside "任务中心" would name
 // the page twice.
 const TAB_LABEL: Record<ControlTab, string> = {
-  queue: 'queue.board',
-  plans: 'nav.plans',
-  projects: 'nav.projects',
+  queue: 'work.executionQueue',
+  plans: 'work.executionPlans',
+  projects: 'work.localProjects',
 }
 
 export function ControlView({

@@ -20,6 +20,67 @@ export interface ModelRoster {
   owners: Record<string, string>
 }
 
+export interface WorkInput {
+  title: string
+  description?: string
+  status?: string
+  priority?: 'high' | 'normal' | 'low'
+  project?: string
+  due_at?: number
+  tags?: string[]
+}
+export interface WorkTask {
+  connectionId: string
+  accountId: string
+  snapshot: {
+    key: { instanceId: string; workspaceId: string; spaceId: string; taskId: string }
+    title: string
+    description: string
+    status: string
+    priority: number
+    spaceName: string
+    projectName: string
+    assigneeAccountIds: string[] | null
+    sourceRef: { provider: string; id: string; url?: string }
+    dueAt?: { kind: string; value: string } | null
+    taskRevision: string
+    inputRevision: string
+    permissions: { read: boolean; edit: boolean; execute: boolean }
+  }
+  local?: { id: number; task_id: string; priority: 'high' | 'normal' | 'low' }
+}
+export interface WorkHistory {
+  requestId: string
+  taskId: string
+  planId: string
+  stageId: string
+  state: string
+  executionState: string
+  createdAt: number
+}
+export function workTaskKey(task: WorkTask): string {
+  const k = task.snapshot.key
+  return [k.instanceId, k.workspaceId, k.spaceId, k.taskId].join('/')
+}
+
+export interface WorkConnection {
+  connectionId: string
+  rootUrl: string
+  accountId: string
+  state: string
+  lastError: string
+  syncedAt: number
+  scopes: string[]
+  spaces: { spaceId: string; workspaceId: string; name: string; scopes: string[] }[]
+}
+export interface WorkAuthorization {
+  userCode: string
+  verificationUri: string
+  verificationUriComplete: string
+  expiresAt: number
+  interval: number
+}
+
 export class ApiError extends Error {
   readonly status: number
   constructor(status: number, message: string) {
@@ -126,9 +187,9 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  opts?: { timeoutMs?: number },
+  opts?: { timeoutMs?: number; headers?: Record<string, string> },
 ): Promise<T> {
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = { ...opts?.headers }
   const token = currentToken()
   if (token) headers.Authorization = `Bearer ${token}`
   if (body !== undefined) headers['Content-Type'] = 'application/json'
@@ -356,6 +417,7 @@ export interface TaskChild {
 }
 
 export interface Task {
+  work_source?: { connectionId: string; taskKey: string; requestId: string }
   id: string
   parent_id: string
   /** Sub-agent generation inside a delegation tree: 1 = direct child,
@@ -1086,6 +1148,43 @@ export interface HealthStatus {
 // ---- Endpoints ----
 
 export const api = {
+  workConnections(): Promise<WorkConnection[]> {
+    return request('GET', '/api/work/connections')
+  },
+  connectWork(body: { connectionId: string; rootUrl: string }): Promise<{ connection: WorkConnection; authorization: WorkAuthorization }> {
+    return request('POST', '/api/work/connections', body)
+  },
+  syncWorkConnection(id: string): Promise<{ queued: boolean }> {
+    return request('POST', `/api/work/connections/${encodeURIComponent(id)}/sync`)
+  },
+  disconnectWork(id: string): Promise<{ disconnected: boolean }> {
+    return request('POST', `/api/work/connections/${encodeURIComponent(id)}/disconnect`)
+  },
+  workMembers(id: string, space: string): Promise<{ accountId: string; name: string; role: string }[]> {
+    return request('GET', `/api/work/connections/${encodeURIComponent(id)}/spaces/${encodeURIComponent(space)}/members`)
+  },
+  workTasks(connection?: string): Promise<WorkTask[]> {
+    return request('GET', `/api/work/tasks${connection ? `?connection=${encodeURIComponent(connection)}` : ''}`)
+  },
+  workTask(key: string, connection = 'local'): Promise<WorkTask> {
+    return request('GET', `/api/work/tasks/${encodeURIComponent(key)}?connection=${encodeURIComponent(connection)}`)
+  },
+  workHistory(key: string, connection = 'local'): Promise<WorkHistory[]> {
+    return request('GET', `/api/work/tasks/${encodeURIComponent(key)}/history?connection=${encodeURIComponent(connection)}`)
+  },
+  createWork(body: WorkInput, idempotencyKey: string): Promise<WorkTask> {
+    return request('POST', '/api/work/tasks', body, { headers: { 'Idempotency-Key': idempotencyKey } })
+  },
+  patchWork(key: string, revision: string, body: Partial<WorkInput>, idempotencyKey: string): Promise<WorkTask> {
+    return request('PATCH', `/api/work/tasks/${encodeURIComponent(key)}`, body, {
+      headers: { 'Idempotency-Key': idempotencyKey, 'If-Match': JSON.stringify(revision) },
+    })
+  },
+  runWork(key: string, requestId: string): Promise<{ task: Task; requestId: string; alreadyStarted: boolean; warning: string }> {
+    return request('POST', `/api/work/tasks/${encodeURIComponent(key)}/run`, { requestId, purpose: 'rerun' }, {
+      headers: { 'Idempotency-Key': requestId },
+    })
+  },
   health(): Promise<HealthStatus> {
     return request('GET', '/api/healthz')
   },
