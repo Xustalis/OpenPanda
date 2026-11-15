@@ -11,7 +11,29 @@ import (
 // All source IO and context packing precede this transaction. No stage is
 // visible to PendingPlans until every dependency and input is durable.
 func (s *TaskStore) createPlanStages(ctx context.Context, stages []Task, goal string, partial []string, sourceDir string) error {
-	return s.withTx(ctx, func(tx *sql.Tx) error {
+	_, _, err := s.createPlanStagesForRequest(ctx, stages, goal, partial, sourceDir, nil)
+	return err
+}
+
+func (s *TaskStore) createPlanStagesForRequest(ctx context.Context, stages []Task, goal string, partial []string, sourceDir string, req *ExecutionRequest) (string, bool, error) {
+	var publishedID string
+	var existing bool
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		taskID, planID, err := s.requestPublishedTx(ctx, tx, req)
+		if err != nil {
+			return err
+		}
+		if taskID != "" {
+			if planID == "" {
+				return ErrConflict
+			}
+			publishedID, existing = planID, true
+			return nil
+		}
+		if len(stages) == 0 {
+			return ErrConflict
+		}
+		publishedID = stages[0].PlanID
 		for i := range stages {
 			t := &stages[i]
 			chain, _ := json.Marshal(t.Chain)
@@ -49,6 +71,7 @@ func (s *TaskStore) createPlanStages(ctx context.Context, stages []Task, goal st
 				return err
 			}
 		}
-		return nil
+		return s.bindExecutionTx(ctx, tx, req, stages, publishedID)
 	})
+	return publishedID, existing, err
 }

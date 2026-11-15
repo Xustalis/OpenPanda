@@ -220,11 +220,16 @@ func (s *TaskStore) ArtifactIndexedFor(ctx context.Context, hash, taskID string)
 // bounded source snapshot only. Each stage retains its own spec_json contract
 // and the caller's resolved tier-2 consent; plan/read-only contracts still win.
 func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string, error) {
+	id, _, err := c.startPlan(ctx, p, q, nil)
+	return id, err
+}
+
+func (c *Core) startPlan(ctx context.Context, p plan.Plan, q QueueSpec, req *ExecutionRequest) (string, bool, error) {
 	if err := plan.Validate(p); err != nil {
-		return "", fmt.Errorf("invalid plan: %w", err)
+		return "", false, fmt.Errorf("invalid plan: %w", err)
 	}
 	if q.Priority < PriorityHigh || q.Priority > PriorityLow {
-		return "", fmt.Errorf("queue priority %d out of range", q.Priority)
+		return "", false, fmt.Errorf("queue priority %d out of range", q.Priority)
 	}
 	// Early pin check: a stage hard-pinned to a node this directory cannot
 	// resolve fails the whole plan BEFORE any stage row exists — the pin is
@@ -238,9 +243,9 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		res := c.resolvePin(ctx, st.Node)
 		switch {
 		case res.ambiguous:
-			return "", fmt.Errorf("stage %s: pinned node %q matches multiple online rows — pin by node id or k:<pubkey>", st.ID, st.Node)
+			return "", false, fmt.Errorf("stage %s: pinned node %q matches multiple online rows — pin by node id or k:<pubkey>", st.ID, st.Node)
 		case !res.found:
-			return "", fmt.Errorf("stage %s: pinned node %q is not in the directory (run `panda nodes` for the fleet)", st.ID, st.Node)
+			return "", false, fmt.Errorf("stage %s: pinned node %q is not in the directory (run `panda nodes` for the fleet)", st.ID, st.Node)
 		}
 	}
 	// Every stage starts from the same bounded source snapshot, then overlays
@@ -258,19 +263,19 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 	if q.WorkDir == "" && q.Project != "" {
 		q.WorkDir = c.projectDir(q.Project)
 		if q.WorkDir == "" {
-			return "", fmt.Errorf("plan project %q has no usable source workspace", q.Project)
+			return "", false, fmt.Errorf("plan project %q has no usable source workspace", q.Project)
 		}
 	}
 	if q.WorkDir != "" {
 		if err := projects.ValidateWorkDir(q.WorkDir); err != nil {
-			return "", fmt.Errorf("plan source workspace: %w", err)
+			return "", false, fmt.Errorf("plan source workspace: %w", err)
 		}
 		if c.artifacts == nil {
-			return "", errors.New("plan source workspace requires an artifact pool")
+			return "", false, errors.New("plan source workspace requires an artifact pool")
 		}
 		m, err := c.artifacts.PackSourceDirExceptPaths(q.WorkDir, worktreeSkipDirs, c.hostStatePrune(q.WorkDir), worktreeAttachLimit)
 		if err != nil {
-			return "", fmt.Errorf("pack plan source workspace: %w", err)
+			return "", false, fmt.Errorf("pack plan source workspace: %w", err)
 		}
 		// A snapshot smaller than the workspace is a lie the stage cannot see:
 		// it extracts what arrived and believes it is the source. So a pack that
@@ -279,7 +284,7 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		// has no files yet is an ordinary request, so it starts with an empty
 		// snapshot rather than a made-up one.
 		if len(m.Entries) == 0 && len(m.PackSkipped) != 0 {
-			return "", fmt.Errorf("plan source workspace %s has no readable entry (skipped %v)", q.WorkDir, m.PackSkipped)
+			return "", false, fmt.Errorf("plan source workspace %s has no readable entry (skipped %v)", q.WorkDir, m.PackSkipped)
 		}
 		partial = m.PackSkipped
 		if len(partial) != 0 {
@@ -289,11 +294,11 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 	}
 	planID, err := newUUID()
 	if err != nil {
-		return "", fmt.Errorf("mint plan id: %w", err)
+		return "", false, fmt.Errorf("mint plan id: %w", err)
 	}
 	ranks, err := plan.CriticalPathRanks(p)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	c.mu.RLock()
 	budget := c.taskTokenBudget
@@ -305,7 +310,7 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 			CriticalPathRank int `json:"critical_path_rank"`
 		}{st.Resources, ranks[st.ID]})
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		title := st.Title
 		if title == "" {
@@ -314,13 +319,13 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		in := TaskInput{Title: title, Project: q.Project, Intent: st.Intent, SpecJSON: st.SpecJSON, Requires: st.Requires, ResourceJSON: string(resourceJSON), SessionID: q.SessionID, TargetNode: st.Node, Authorized: q.Authorized}
 		hash, _, err := c.packContext(ctx, in)
 		if err != nil {
-			return "", fmt.Errorf("stage %s context: %w", st.ID, err)
+			return "", false, fmt.Errorf("stage %s context: %w", st.ID, err)
 		}
 		d := in.detail()
 		var spec map[string]any
 		if d.SpecJSON != "" {
 			if err := json.Unmarshal([]byte(d.SpecJSON), &spec); err != nil || spec == nil {
-				return "", fmt.Errorf("stage %s spec must be an object", st.ID)
+				return "", false, fmt.Errorf("stage %s spec must be an object", st.ID)
 			}
 		}
 		if spec == nil {
@@ -329,16 +334,16 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		spec["artifact_merge_version"] = artifactMergeVersion
 		encoded, err := json.Marshal(spec)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		d.SpecJSON = string(encoded)
 		id, err := newUUID()
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		attempt, err := newUUID()
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		keys := q.ResourceKeys
 		if len(keys) == 0 {
@@ -348,8 +353,12 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		prepared = append(prepared, Task{TaskID: id, AttemptID: attempt, Title: title, Project: q.Project, State: StateSubmitted, OwnerNode: c.nodeID, Chain: []string{c.nodeID}, Intent: d.Intent, SpecJSON: d.SpecJSON, ContextType: d.ContextType, ContextHash: hash, ResourceJSON: d.ResourceJSON, Requires: d.Requires, Authorized: q.Authorized, Priority: q.Priority, SessionID: q.SessionID, ResourceKeys: keys, Scheduled: true, PlanID: planID, StageID: st.ID, Needs: st.Needs, Inputs: source, TokenBudget: max(0, budget)})
 	}
 	// A scheduler can see either no rows or the fully configured graph.
-	if err := c.store.createPlanStages(ctx, prepared, p.Goal, partial, q.WorkDir); err != nil {
-		return "", fmt.Errorf("publish plan: %w", err)
+	publishedID, existing, err := c.store.createPlanStagesForRequest(ctx, prepared, p.Goal, partial, q.WorkDir, req)
+	if err != nil {
+		return "", false, fmt.Errorf("publish plan: %w", err)
+	}
+	if existing {
+		return publishedID, true, nil
 	}
 	if c.projects != nil && q.Project != "" {
 		if err := c.projects.Touch(q.Project); err != nil {
@@ -364,9 +373,9 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		// The plan id is still returned: the stages exist and stay submitted, so
 		// the PendingPlans sweep retries the release and the caller can inspect
 		// what happened instead of losing track of a half-born plan.
-		return planID, fmt.Errorf("release first stages: %w", err)
+		return planID, false, fmt.Errorf("release first stages: %w", err)
 	}
-	return planID, nil
+	return planID, false, nil
 }
 
 // AdvancePlan releases every stage whose dependencies are now satisfied. It is
