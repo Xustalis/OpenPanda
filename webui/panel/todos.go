@@ -11,7 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/sessions"
+	"github.com/Xustalis/OpenPanda/internal/taskhub"
 	"github.com/Xustalis/OpenPanda/internal/todos"
 )
 
@@ -233,74 +234,41 @@ func (h *handler) reorderTodos(w http.ResponseWriter, r *http.Request) {
 // the task is a normal board task (same requirements, same linked session), so
 // it shows up in 队列·任务·项目 like any other.
 //
-// A second start is refused rather than silently minting a duplicate task: the
-// card's button becomes a link to the running task once task_id is set.
+// startTodo retains the old response fields and uses the shared atomic service.
 func (h *handler) startTodo(w http.ResponseWriter, r *http.Request) {
 	if h.todos == nil {
-		writeErr(w, http.StatusServiceUnavailable, errors.New("to-do board not configured"))
+		writeErr(w, 503, errors.New("to-do board not configured"))
 		return
 	}
 	id, err := todoID(r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	t, err := h.todos.Get(r.Context(), id)
-	if errors.Is(err, todos.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if t.TaskID != "" {
-		writeErr(w, http.StatusConflict, errors.New("this todo already has a task"))
+		writeErr(w, 400, err)
 		return
 	}
 	eng := h.currentEngine()
 	if eng == nil {
-		writeErr(w, http.StatusServiceUnavailable, errors.New("task creation not configured (set model.base_url to enable)"))
+		writeErr(w, 503, errors.New("task execution is not configured"))
 		return
 	}
-	// The todo's description is the task's intent — that is the whole point of
-	// writing it down. A todo with no description still carries a usable
-	// title, which the queue falls back to.
-	prompt := strings.TrimSpace(t.Description)
-	if prompt == "" {
-		prompt = t.Title
-	}
-	priority, ok := parsePriority(t.Priority)
-	if !ok {
-		priority = core.PriorityNormal
-	}
-	req := createTaskRequest{
-		Title:    t.Title,
-		Prompt:   prompt,
-		Project:  t.Project,
-		Requires: defaultBoardRequires,
-	}
-	taskID, sessionID, state, warn, err := h.enqueueBoardTask(r.Context(), eng, req, priority)
+	result, err := taskhub.New(h.todos.DB()).StartLocal(r.Context(), eng, id, taskhub.RunOptions{})
 	if err != nil {
-		writeEnqueueErr(w, err)
+		writeWorkError(w, err)
 		return
 	}
-	running := todos.StatusRunning
-	tid := taskID
-	updated, err := h.todos.Patch(r.Context(), id, todos.Patch{Status: &running, TaskID: &tid})
-	if err != nil {
-		// The task exists and will run; the link is the only thing missing.
-		// Report the task rather than a 500 — the board can retry the tick.
-		writeJSON(w, map[string]any{
-			"task_id": taskID, "session_id": sessionID, "state": state,
-			"warning": warn, "link_error": err.Error(),
-		})
-		return
+	sessionID := result.Task.SessionID
+	if !result.AlreadyStarted && h.sessions != nil && result.Todo != nil {
+		t := result.Todo
+		if sess, serr := h.sessions.Create(t.Title, t.Project); serr == nil {
+			sessionID = sess.ID
+			prompt := strings.TrimSpace(t.Description)
+			if prompt == "" {
+				prompt = t.Title
+			}
+			_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: prompt})
+			_ = h.store.SetSessionID(r.Context(), result.Task.TaskID, sess.ID)
+		}
 	}
-	writeJSON(w, map[string]any{
-		"todo": updated, "task_id": taskID, "session_id": sessionID,
-		"state": state, "warning": warn,
-	})
+	writeJSON(w, map[string]any{"todo": result.Todo, "task_id": result.Task.TaskID, "session_id": sessionID, "state": result.Task.State, "warning": result.Warning, "alreadyStarted": result.AlreadyStarted, "requestId": result.RequestID})
 }
 
 // cachedTodoFingerprint digests the board for the SSE change feed, behind the

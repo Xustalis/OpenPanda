@@ -51,6 +51,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/self"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
+	"github.com/Xustalis/OpenPanda/internal/taskflow"
 )
 
 // Options tunes how the engine is built.
@@ -186,6 +187,7 @@ type Engine struct {
 	schedMu     sync.Mutex
 	schedCtx    context.Context
 	schedCancel context.CancelFunc
+	taskFlow    *taskflow.Service
 	// bg tracks the long-lived duties this engine starts (heartbeat, task
 	// monitor, reconcile, discovery, ws listen, peer dials, the node-row
 	// watch). Close waits on it before closing the DB: cancelling schedCtx
@@ -1159,6 +1161,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		cfg:              cfg,
 		appliedRuntime:   cfg.RuntimeConfig(),
 		db:               db,
+		taskFlow:         taskflow.New(db, cfg.Storage.DBPath),
 		injector:         injector,
 		hermes:           hermes,
 		daily:            memory.NewDaily(hermes.WarmDir()),
@@ -1482,6 +1485,18 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	sched.SetMessageBudget(e.cfg.Messages.Budget)
 	sched.SetRetentionDays(e.cfg.Storage.EffectiveTaskRetentionDays())
 
+	// Standalone queue surfaces have the same durable startup boundary as the
+	// daemon. Recover before publishing the core or starting any consumer. A
+	// borrowed engine must never normalize the lock holder's live executions.
+	if e.queueTasks && ownsRow && e.sched.Load() == nil {
+		if n, err := sched.Recover(context.Background()); err != nil {
+			sched.Shutdown(context.Background())
+			return fmt.Errorf("recover queued work: %w", err)
+		} else if n > 0 {
+			e.logger.Info("recovered work from previous process", "count", n)
+		}
+	}
+
 	if e.schedCancel != nil {
 		e.schedCancel()
 	}
@@ -1597,6 +1612,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// ask/REPL engines submit inline and must not unexpectedly drain
 	// persisted work either way.
 	if e.queueTasks && ownsRow {
+		e.goBG("askengine: task integration", func() { _ = e.taskFlow.Run(ownCtx) })
 		sched.StartQueueScheduler(ownCtx)
 		// A queue engine executes tasks off the shared store, so it also owns
 		// the task-lifecycle sweeps: without them a waiting_context park never
