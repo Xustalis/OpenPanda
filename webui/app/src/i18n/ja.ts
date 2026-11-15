@@ -852,7 +852,7 @@ const ja: Messages = {
   'onboarding.guide.nav.newChat': '新しいスレッドを始めます。セッションは最初のメッセージで作られます。',
   'onboarding.guide.nav.workspace': 'デバイスと Agent の地図。ホイールで拡大、選択で接続線。',
   'onboarding.guide.nav.control': 'キュー・計画・プロジェクト。3つのボードが同じタスクを見ます。',
-  'onboarding.guide.nav.team': 'このスレッドの担当。パンダを1回押して開くのと同じカード。',
+  'onboarding.guide.nav.team': '業務タスク、チームスペース、確認待ちの項目を表示します。',
   'onboarding.guide.nav.memory': 'このノードが学んだこと。読む・直す・消す。',
   'onboarding.guide.nav.settings': 'モデル、ポリシー、Agents、MCP、スキル、システム。',
   'onboarding.guide.panda': '隅のパンダ',

@@ -857,7 +857,7 @@ const de: Messages = {
     'Geräte und Agenten auf einer Karte. Rad zoomt, Klick zeigt die Kanten.',
   'onboarding.guide.nav.control':
     'Warteschlange, Pläne, Projekte — drei Boards über denselben Aufgaben.',
-  'onboarding.guide.nav.team': 'Wer an diesem Thread arbeitet — dieselbe Karte, die der Panda öffnet.',
+  'onboarding.guide.nav.team': 'Geschäftsaufgaben, Team-Bereiche und ausstehende Bestätigungen anzeigen.',
   'onboarding.guide.nav.memory': 'Was dieser Knoten gelernt hat. Lesen, ändern, löschen.',
   'onboarding.guide.nav.settings': 'Modelle, Richtlinien, Agenten, MCP, Skills, System.',
   'onboarding.guide.panda': 'Der Panda in der Ecke',
