@@ -109,6 +109,12 @@ func Run(configPath string) []Check {
 			if c := checkMesh(cfg); c.Key != "" {
 				add(c)
 			}
+			// Who carries a suspected-symmetric-NAT peer's frames, once the
+			// punch windows are spent: one line per configured fallback
+			// relay, so "it falls back somewhere" stops being a black box.
+			for _, c := range checkRelayFallback(cfg) {
+				add(c)
+			}
 			// Discovery is checked last among the network rows: its verdict
 			// ("nobody is listening for beacons") only makes sense once the
 			// mesh and database states above are known.
@@ -297,8 +303,8 @@ func Run(configPath string) []Check {
 		}
 
 		// OS sandbox: "off" is a valid choice and reports as information; a
-		// configured mode with no platform backend is a real problem — the
-		// confinement the operator asked for is silently absent.
+		// configured mode with no platform backend blocks task subprocesses:
+		// the operator's requested boundary must exist before they may start.
 		switch m := cfg.Sandbox.NormalizedMode(); {
 		case m == "off":
 			add(pass("doctor.sandbox.off"))

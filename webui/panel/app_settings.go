@@ -53,8 +53,8 @@ type sandboxJSON struct {
 	Mode     string `json:"mode"`
 	Backend  string `json:"backend"`
 	// Active is true only when a non-off mode meets a real platform backend.
-	// mode=standard with Backend()=="" is configured-but-unenforced — the UI
-	// must render that as "not in effect", not as a weaker kind of on.
+	// A non-off mode with Backend()=="" blocks task subprocess launches. The
+	// UI reports that failure rather than implying unconfined execution.
 	Active bool `json:"active"`
 }
 

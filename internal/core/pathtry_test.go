@@ -246,6 +246,58 @@ func TestNatSuspectWindow(t *testing.T) {
 	}
 }
 
+// TestNatSuspectFallsBackToConfiguredRelay pins the decision that sits
+// between the existing nat_suspect mark and the relay election: while a
+// destination is not suspected the send path keeps automatic election, and
+// the moment two failed windows park it the operator's designated fallback
+// relay becomes the preferred hop. It also pins the two resolution rules —
+// a configured address resolves through the hello binding, a punch:<id>
+// entry needs none — and that a policy reload drops the cached answer.
+func TestNatSuspectFallsBackToConfiguredRelay(t *testing.T) {
+	c := newCoreOnDB(t, openTestDB(t), "aa")
+	setFallback := func(addrs ...string) {
+		t.Helper()
+		peers := make([]config.PeerEntry, 0, len(addrs))
+		for _, a := range addrs {
+			peers = append(peers, config.PeerEntry{Addr: a, RelayPriority: config.RelayPriorityFallback})
+		}
+		c.SetNetworkPolicy(config.NetworkConfig{
+			Transit: true, AutoPunch: true, BootstrapEdges: 2, Peers: peers,
+		})
+	}
+	setFallback("vps.example.com:7836")
+	// The binding a signed hello writes: configured address → node id. Until
+	// it exists the mark is inert — a stranger's claim never becomes a relay.
+	if err := ledger.RecordPeerAddr(c.db, "vps.example.com:7836", "vps-node"); err != nil {
+		t.Fatalf("record binding: %v", err)
+	}
+	if got := c.transitFallbackPrefer("zz", "zz"); len(got) != 0 {
+		t.Fatalf("preference applied before any failure: %v", got)
+	}
+
+	// Two failed punch windows raise the mark (TestNatSuspectWindow owns the
+	// counter itself; here it is the trigger, not the subject).
+	c.notePunchAttempt("zz")
+	c.notePunchAttempt("zz")
+	if !c.peerNatSuspect("zz") {
+		t.Fatal("peer not marked nat_suspect after two failed windows")
+	}
+	if got := c.transitFallbackPrefer("zz", "zz"); len(got) != 1 || got[0] != "vps-node" {
+		t.Fatalf("preferred hops = %v, want [vps-node]", got)
+	}
+
+	// A punch: entry already names its node, so it resolves without a binding.
+	setFallback("punch:vps-node")
+	if got := c.fallbackRelays(); len(got) != 1 || got[0] != "vps-node" {
+		t.Fatalf("punch: fallback resolved to %v, want [vps-node]", got)
+	}
+	// Reload with no marks: the cached id must not survive the policy swap.
+	setFallback()
+	if got := c.transitFallbackPrefer("zz", "zz"); len(got) != 0 {
+		t.Fatalf("stale fallback survived a policy reload: %v", got)
+	}
+}
+
 func TestSeedPunchCandidates(t *testing.T) {
 	ctx := context.Background()
 	c := newCoreOnDB(t, openTestDB(t), "aa")

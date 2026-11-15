@@ -21,12 +21,12 @@ import (
 // Sandbox sets an adapter subprocess's working directory and replaces its
 // inherited environment with a fixed allow-list (plan P3-29).
 //
-// Apply stays the historical shape: environment filtering and cwd only, no OS
-// boundary — the child can still read and write any path its uid can, starting
-// with $HOME (deliberately forwarded because agent CLIs keep credentials and
-// config there). ApplyPolicy layers the real confinement on top: a deny-default
-// sandbox-exec profile on macOS or a bubblewrap bind-mount jail on Linux, driven
-// by Policy (see policy.go). What both share: the child starts in the task
+// Apply uses the process-wide policy; ApplyPolicy accepts an explicit one.
+// ModeOff only filters the environment and sets cwd — the child can still read
+// and write any path its uid can, including $HOME (deliberately forwarded
+// because agent CLIs keep credentials and config there). Standard and strict
+// add a deny-default sandbox-exec profile on macOS or a bubblewrap bind-mount
+// jail on Linux, driven by Policy (see policy.go). The child starts in the task
 // directory instead of wherever the daemon happens to run, and it does not
 // inherit the parent's arbitrary environment, so an unrelated secret in the
 // daemon's env does not silently reach a third-party agent CLI.
@@ -89,7 +89,8 @@ func (s *Sandbox) Env(extra ...string) []string {
 	return append(env, extra...)
 }
 
-// Apply configures cmd with the sandboxed working directory and environment.
+// Apply configures cmd with the working directory, filtered environment and
+// process-wide OS confinement policy.
 func (s *Sandbox) Apply(cmd *exec.Cmd, extra ...string) error {
 	return s.ApplyPolicy(cmd, DefaultPolicy(s.dir), extra...)
 }
@@ -99,11 +100,9 @@ func (s *Sandbox) Apply(cmd *exec.Cmd, extra ...string) error {
 // sandbox mechanism when the policy's mode asks for one. With ModeOff it
 // degenerates to the plain Apply behavior.
 //
-// It returns an error for a strict policy on a host with no backend: that mode
-// exists to deny reads of credential paths, and running the child anyway would
-// leave the operator believing in a boundary that is not there. Standard mode
-// keeps running (bubblewrap is a separate package on most Linux distributions)
-// and reports the same missing backend as a failure in doctor.
+// Both standard and strict return an error on a host with no backend: the
+// requested OS boundary must exist before the child may start. ModeOff is
+// the explicit choice to run with environment filtering and cwd only.
 func (s *Sandbox) ApplyPolicy(cmd *exec.Cmd, p Policy, extra ...string) error {
 	cmd.Dir = p.resolveWorkDir()
 	cmd.Env = s.Env(extra...)
@@ -114,12 +113,11 @@ func (s *Sandbox) ApplyPolicy(cmd *exec.Cmd, p Policy, extra ...string) error {
 // cannot provide.
 var ErrSandboxUnavailable = errors.New("security: sandbox backend unavailable")
 
-// backendMissing decides what a policy without a backend means. strict fails
-// closed; standard proceeds (see ApplyPolicy), and doctor flags the same
-// condition so the degradation is never silent.
+// backendMissing refuses every configured confinement mode when its backend
+// is missing. Neither standard nor strict may degrade to an unconfined run.
 func backendMissing(mode Mode, why string) error {
-	if mode == ModeStrict {
-		return fmt.Errorf("%w: sandbox.mode is %q but %s", ErrSandboxUnavailable, mode, why)
+	if mode == ModeStandard || mode == ModeStrict {
+		return fmt.Errorf("%w: sandbox.mode is %q but %s; refusing to start subprocess", ErrSandboxUnavailable, mode, why)
 	}
 	return nil
 }

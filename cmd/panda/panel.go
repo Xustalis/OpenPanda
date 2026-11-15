@@ -284,6 +284,9 @@ func runStatus(args []string) {
 func printMeshLineTo(w io.Writer, loc i18n.Locale, cfg *config.Config, db *sql.DB, views []nodeStatusView) {
 	p := pal()
 	peersOnline := 0
+	// The configured fallback remains useful even without a live daemon or
+	// a readable address binding: report it as down until links prove it up.
+	fallbackPeer, fallbackUp := relayFallbackState(cfg, nil, nil)
 	if len(cfg.Network.Peers) > 0 {
 		// Live ids come from the local row's link-state advertisement, which
 		// the daemon refreshes on its monitor tick. A daemon that is not
@@ -306,6 +309,7 @@ func printMeshLineTo(w io.Writer, loc i18n.Locale, cfg *config.Config, db *sql.D
 						peersOnline++
 					}
 				}
+				fallbackPeer, fallbackUp = relayFallbackState(cfg, bindings, live)
 			}
 		}
 	}
@@ -333,6 +337,40 @@ func printMeshLineTo(w io.Writer, loc i18n.Locale, cfg *config.Config, db *sql.D
 		"listen", cfg.Network.ListenAddr, "state", state,
 		"online", strconv.Itoa(peersOnline), "configured", strconv.Itoa(len(cfg.Network.Peers)),
 		"secret", secret)))
+	// The fallback relay gets its own line rather than a segment inside the
+	// one above: it answers a different question ("when punching fails, who
+	// carries it?") and is only meaningful when the operator marked a peer.
+	if fallbackPeer != "" {
+		relayState := i18n.T(loc, "cli.status.mesh.down")
+		if fallbackUp {
+			relayState = i18n.T(loc, "cli.status.mesh.up")
+		}
+		fmt.Fprintln(w, p.Muted(i18n.Tf(loc, "cli.status.mesh.fallback",
+			"peer", fallbackPeer, "state", relayState)))
+	}
+}
+
+// relayFallbackState picks the peer `status` should name for the fallback
+// relay: the first configured relay that is actually linked, else the first
+// configured one — the operator still wants to see WHAT the node would fall
+// back to when it is not up yet. Empty means no peer carries the mark.
+func relayFallbackState(cfg *config.Config, bindings map[string]string, live map[string]bool) (peer string, up bool) {
+	addrs := cfg.Network.RelayFallbackAddrs()
+	if len(addrs) == 0 {
+		return "", false
+	}
+	resolve := func(addr string) string {
+		if id, ok := strings.CutPrefix(addr, "punch:"); ok {
+			return strings.TrimSpace(id)
+		}
+		return bindings[core.NormalizeDialAddr(addr)]
+	}
+	for _, addr := range addrs {
+		if id := resolve(addr); id != "" && live[id] {
+			return addr, true
+		}
+	}
+	return addrs[0], false
 }
 
 // printPendingTo appends the LAN-discovery hint list: nodes broadcasting on

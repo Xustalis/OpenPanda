@@ -133,7 +133,8 @@ injection:
 #   strict   —— standard + 拒读系统凭证位（~/.ssh、~/.aws、其它 agent 的凭证目录、
 #               shell 历史……）和 deny_read_paths
 # 后端：macOS 用 sandbox-exec（seatbelt），Linux 用 bubblewrap（需安装 bwrap），
-# 无后端的平台配置 mode 为空转并在启动时告警。
+# standard/strict 在后端缺失时拒绝启动任务子进程（含当前的 Windows）。
+# 只有显式 off 才允许无 OS 隔离运行；不会自动降级。
 # sandbox:
 #   mode: "standard"
 #   # 完全切断子进程出网（默认允许 —— 端点白名单由 network guard 管）

@@ -100,21 +100,24 @@ func TestSandboxApplySetsDirAndEnv(t *testing.T) {
 }
 
 // TestBackendMissingFailsClosed pins what a missing backend means per mode:
-// strict promises denied reads of credential paths, so it must refuse rather
-// than run the child unconfined; standard keeps the historical behaviour, and
-// doctor reports the same condition as a failure.
+// both standard and strict promise OS confinement and must refuse to run the
+// child without it. Only off permits an unconfined subprocess.
 func TestBackendMissingFailsClosed(t *testing.T) {
-	if err := backendMissing(ModeStandard, "bwrap is not on PATH"); err != nil {
-		t.Fatalf("standard must keep running: %v", err)
-	}
-	err := backendMissing(ModeStrict, "bwrap is not on PATH")
-	if err == nil {
-		t.Fatal("strict must refuse a host without a backend")
-	}
-	if !errors.Is(err, ErrSandboxUnavailable) {
-		t.Fatalf("err = %v, want ErrSandboxUnavailable", err)
-	}
-	if !strings.Contains(err.Error(), "bwrap") {
-		t.Fatalf("err = %v, want the missing binary named", err)
+	for _, mode := range []Mode{ModeOff, ModeStandard, ModeStrict} {
+		t.Run(string(mode), func(t *testing.T) {
+			err := backendMissing(mode, "bwrap is not on PATH")
+			if mode == ModeOff {
+				if err != nil {
+					t.Fatalf("off must remain usable without a backend: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrSandboxUnavailable) {
+				t.Fatalf("err = %v, want ErrSandboxUnavailable", err)
+			}
+			if !strings.Contains(err.Error(), "bwrap") || !strings.Contains(err.Error(), string(mode)) {
+				t.Fatalf("err = %v, want the requested mode and missing binary named", err)
+			}
+		})
 	}
 }

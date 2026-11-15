@@ -64,8 +64,8 @@ func (r *repl) sandboxCommand(arg string) (string, error) {
 		})
 	}
 	out := i18n.Tf(r.loc, "repl.sandbox.saved", "mode", mode) + "\n" + r.sandboxReport()
-	// A configured mode with no backend is not an error — it is a fact the
-	// operator has to hear, because nothing is being confined.
+	// The policy can be saved before a backend is installed, but task
+	// subprocesses are blocked until one is available or the mode is off.
 	if mode != config.SandboxModeOff && backend == "" {
 		out += "\n" + i18n.T(r.loc, "repl.sandbox.noBackend")
 	}

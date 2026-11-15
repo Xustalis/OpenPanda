@@ -6,9 +6,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
 // checkMesh answers the cross-network question a doctor run can answer from
@@ -94,4 +97,74 @@ func checkMesh(cfg *config.Config) Check {
 		"k", k, "rendezvous", fmt.Sprintf("%d", rendezvous),
 		"rows", fmt.Sprintf("%d", total), "addrs", fmt.Sprintf("%d", withAddrs),
 		"suspect", fmt.Sprintf("%d", suspect))
+}
+
+// checkRelayFallback reports each peer marked relay_priority: fallback — the
+// explicit answer to "when punching fails, WHO carries the frames?". Without
+// this line the operator sees only the nat_suspect count above and has to
+// guess which relay the node actually falls back to; with it the designated
+// node and its current reachability are on the same screen.
+//
+// One line per configured fallback, in config order (the order the core
+// tries them). The state is read from the store alone — the addr→identity
+// binding a signed hello wrote, plus the peer's last-seen row — so this
+// stays a read-only check with no daemon dependency. A configured fallback
+// that is not linked yet is reported, not failed: doctor's per-peer probe
+// already owns reachability, and a sleeping relay is a normal state for a
+// laptop-backed mesh.
+func checkRelayFallback(cfg *config.Config) []Check {
+	addrs := cfg.Network.RelayFallbackAddrs()
+	if len(addrs) == 0 {
+		return nil
+	}
+	db, err := sql.Open("sqlite",
+		fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(2000)", escapeURIPath(cfg.Storage.DBPath)))
+	if err != nil {
+		return nil
+	}
+	defer db.Close()
+
+	bindings, err := ledger.PeerAddrBindings(db)
+	if err != nil {
+		return nil
+	}
+	online := map[string]bool{}
+	rows, err := db.Query(`SELECT id, COALESCE(status,''), COALESCE(last_seen,0) FROM employee_cache`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	now := time.Now().Unix()
+	for rows.Next() {
+		var id, status string
+		var lastSeen int64
+		if err := rows.Scan(&id, &status, &lastSeen); err != nil {
+			return nil
+		}
+		online[id] = status == "online" && lastSeen > 0 && now-lastSeen <= 90
+	}
+	if err := rows.Err(); err != nil {
+		return nil
+	}
+
+	out := make([]Check, 0, len(addrs))
+	for _, addr := range addrs {
+		id := ""
+		if punchID, ok := strings.CutPrefix(addr, "punch:"); ok {
+			// A punch: entry already names its node; no binding needed.
+			id = strings.TrimSpace(punchID)
+		} else {
+			id = bindings[core.NormalizeDialAddr(addr)]
+		}
+		if id == "" {
+			out = append(out, pass("doctor.relay.fallback.unbound", "peer", addr))
+			continue
+		}
+		if online[id] {
+			out = append(out, pass("doctor.relay.fallback.ok", "peer", addr, "id", id))
+			continue
+		}
+		out = append(out, pass("doctor.relay.fallback.off", "peer", addr, "id", id))
+	}
+	return out
 }

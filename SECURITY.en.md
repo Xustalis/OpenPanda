@@ -23,13 +23,21 @@ network.**
   recorded in its directory (`internal/core/nodekey.go`); stripped or tampered
   signatures are rejected outright. `panda nodes verify` pins node
   fingerprints manually, and a re-keyed hello from a pinned node is refused.
-  **Remaining gap:** a holder of the shared secret can still forge consent
-  "from a node whose public key the receiver has never seen" (an inherent
-  boundary of multi-hop relay + TOFU — that path prints a warning), and
-  unpinned identities are trusted on first use. Therefore the invariant
-  "irreversible operations require my approval" only holds on **a single
-  machine or a fully trusted LAN**; it stops holding the moment the network
-  contains a node you do not fully trust.
+  **Consent verification:** incomplete signatures, unknown origin keys and
+  failed key lookups always drop remote consent. Tasks may still be received;
+  high-risk operations follow the executor's local approval policy. Unsigned
+  consent from legacy peers is not inherited either. A multi-hop executor must
+  first record the origin's public key before it can verify and inherit consent.
+  **Remaining boundary:** unpinned identities still use trust on first use
+  (TOFU), and the membership secret remains shared across the network. Reserve
+  the default `mesh` trust tier for fully trusted devices and verify node
+  fingerprints manually.
+- **OS task sandbox.** `sandbox.mode: off` filters the environment and sets a
+  working directory without OS isolation. Both `standard` and `strict` require
+  an available backend (seatbelt on macOS, bubblewrap on Linux). Without one,
+  task subprocess launches are refused; there is no automatic downgrade.
+  A native Windows backend is not implemented, so these modes block execution
+  on Windows. Explicitly selecting `off` permits execution without OS isolation.
 - **Transport-encryption boundary.** Since v0.0.11, when both peers advertise
   the `sessaead` capability in `hello` and a shared secret exists, the
   connection arms a per-connection AES-256-GCM right after the handshake —

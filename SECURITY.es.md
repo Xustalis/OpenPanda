@@ -24,15 +24,23 @@ vulnerabilidades. **Léalo antes de conectar cualquier nodo a una red.**
   registrada en su directorio (`internal/core/nodekey.go`); las firmas
   extraídas o manipuladas se rechazan directamente. `panda nodes verify`
   fija manualmente las huellas de los nodos, y un hello con clave nueva
-  de un nodo fijado se rechaza. **Brecha restante:** quien posee el
-  secreto compartido aún puede falsificar consentimiento «de un nodo cuya
-  clave pública el receptor nunca vio» (límite inherente al relé
-  multi-salto + TOFU — esa ruta imprime una advertencia), y las
-  identidades sin fijar se aceptan en el primer uso. Por tanto, el
-  invariante «las operaciones irreversibles requieren mi aprobación»
-  solo se mantiene en **una sola máquina o una LAN plenamente
-  confiable**; deja de mantenerse en cuanto la red contiene un nodo en
-  el que usted no confía plenamente.
+  de un nodo fijado se rechaza. **Verificación del consentimiento:** las firmas
+  incompletas, las claves de origen desconocidas y los errores de consulta de claves
+  descartan el consentimiento remoto. Las tareas aún pueden recibirse; las
+  operaciones de alto riesgo siguen la política de aprobación local del ejecutor.
+  Tampoco se hereda el consentimiento sin firma de nodos antiguos. En varios saltos,
+  el ejecutor debe registrar primero la clave pública del origen para verificar y
+  heredar su consentimiento. **Límite restante:** las identidades sin fijar siguen
+  usando confianza en el primer uso (TOFU), y la credencial de pertenencia continúa
+  compartida en toda la red. Reserve el nivel predeterminado `mesh` para dispositivos
+  plenamente confiables y verifique manualmente las huellas de los nodos.
+- **Sandbox de tareas del SO.** `sandbox.mode: off` filtra el entorno y fija
+  el directorio de trabajo sin aislamiento del SO. `standard` y `strict`
+  requieren un backend disponible (seatbelt en macOS, bubblewrap en Linux).
+  Sin él, se rechaza el inicio de subprocesos de tareas, sin degradación
+  automática. No hay backend nativo de Windows, por lo que estos modos bloquean
+  la ejecución en Windows. Solo seleccionar explícitamente `off` permite
+  ejecutar sin aislamiento del SO.
 - **Límite del cifrado de transporte.** Desde v0.0.11, cuando ambos pares
   anuncian la capacidad `sessaead` en `hello` y existe un secreto
   compartido, la conexión activa un AES-256-GCM por conexión justo tras

@@ -484,14 +484,22 @@ task as `Ed25519(taskID, authorized, ts, ConsentDigest)`, the executor
 verifies it against the origin public key recorded in its directory,
 and stripped/tampered/re-keyed signatures are refused outright;
 `panda nodes verify` pins fingerprints and a re-keyed hello from a
-pinned node is refused. **Remaining gap**: a shared-secret holder can
-still forge consent "from a node whose public key the receiver has
-never seen" (an inherent boundary of multi-hop relay + TOFU — that path
-now prints a warning); unpinned identities are still trusted on first
-use. Therefore "irreversible operations need my approval" holds on a
-single machine and a trusted LAN, and stops holding once the network
-contains a node you do not fully trust. The real fix is per-node key
-distribution/admission — a trust-model change, not a patch.
+  pinned node is refused. **Unknown-origin consent is now refused**:
+  incomplete signatures, unknown origin keys and failed key lookups drop
+  remote consent. Legacy unsigned peers and multi-hop tasks may still be
+  received; high-risk steps follow the executor's local approval policy.
+  A multi-hop executor must first record the origin key before it can
+  verify and inherit consent. **Remaining boundary**: unpinned identities
+  still use TOFU, and the membership secret remains shared across the
+  network. Reserve default `mesh` trust for fully trusted devices.
+  Per-node key distribution/admission remains unimplemented.
+
+**Missing OS sandbox backends block execution.** Both `standard` and `strict`
+require an available backend and refuse task subprocess launches without it.
+Only `off` permits execution with environment filtering and cwd but no OS
+isolation. A native Windows isolation backend remains unimplemented, so these
+modes block execution on Windows. Settings, the TUI and doctor report the
+blocking condition; this change does not add Windows filesystem isolation.
 
 **Cross-node hello replay is closed, except on the legacy path.** A captured
 hello cannot be replayed at a different node: a hello can bind its receiver
@@ -633,7 +641,7 @@ unbuilt.
    with v0.0.11-preview, but the project pack end-to-end is still
    unverified on its own.
 4. Trust-surface wrap-up: P2-8 per-node key distribution/admission
-   (closing the "consent from an unknown origin" path); P2-9 external
+   (unknown-origin consent is refused; trusted key distribution still needs work); P2-9 external
    attestation of the audit chain head.
 5. Trust-zone wrap-up (merged with v0.0.11-preview, Experimental):
    guarded/open-tier behavior, signed `task_accept`, and reputation
