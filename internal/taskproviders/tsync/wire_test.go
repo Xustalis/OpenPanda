@@ -57,8 +57,11 @@ func TestCanonicalContracts(t *testing.T) {
 			TestSeedHex string
 			PublicKey   string
 			Cases       []struct {
-				Kind                   string
-				Input                  struct{ Challenge, SourceHash, RequestID string }
+				Kind  string
+				Input struct {
+					Challenge, SourceHash, RequestID string
+					ConsentPayload
+				}
 				MessageUtf8, Signature string
 			}
 		}
@@ -78,10 +81,13 @@ func TestCanonicalContracts(t *testing.T) {
 			t.Fatal("public key differs")
 		}
 		for _, c := range fixture.Cases {
+			var b []byte
+			var err error
 			if c.Kind == "consent" {
-				continue
+				b, err = ConsentMessage(c.Input.ConsentPayload)
+			} else {
+				b, err = proofMessage(c.Kind, c.Input.Challenge, c.Input.SourceHash, c.Input.RequestID)
 			}
-			b, err := proofMessage(c.Kind, c.Input.Challenge, c.Input.SourceHash, c.Input.RequestID)
 			if err != nil {
 				t.Fatal(err)
 			}
