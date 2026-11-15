@@ -179,3 +179,5 @@ panda work pause REQUEST
 `before_submit` 在发布前要求本地同意具体内容、目标、账号、尝试及输入版本；`after_execution` 先有明确预授权，再由本人验收指定交付版本。退回成果不会撤销已发生动作。Web 与 REPL `/work` 使用同一份持久成果和决定，内核操作授权仍单独处理。
 
 响应丢失或重启后，dispatching/unknown 动作只核对回执，不直接再次发送。持久 outbox 只重投事实；成果完成但远端尚未确认时显示待同步。连接状态及成果同步诊断提供错误信息。设备收到撤权、账号或输入变化后，使派生工作失效并清除页面中不可读的私有内容；已离线复制的数据无法远程擦除。回滚前先暂停新请求并保存执行/outbox 检查点，旧二进制可能拒绝新 schema，不能用旧库覆盖之后的新事实。
+
+远端新增/编辑需要服务协商 taskWrite，并同时授予连接与空间 tasks:write。使用 work add --connection team --space SPACE --title 标题 --remote-priority 2，编辑时通过完整任务键和 --if-match 指定来源版本。--remote-project 指来源项目 ID，空字符串可移除项目。--start-at/--due-at 接受含 kind、value 和可选 timezone 的类型化 JSON，null 用于清除；浮动时间不推导设备时区。远端 work run --connection team 仅申请当前代次，遵守现有本地策略且先持久化请求；不接受本地 Plan，不能自行增加云端代次。远端重做须由用户在 TaskSync 创建新代次。相同 --request 重试复用原请求，写入响应只触发后台同步，不直接覆盖 feed 缓存。

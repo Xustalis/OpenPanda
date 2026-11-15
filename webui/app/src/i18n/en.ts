@@ -5,6 +5,11 @@ import type { Messages } from './index'
 // English is the fallback dictionary: every key used anywhere in the app
 // must exist here (the other locales may lag behind and fall back gracefully).
 const en: Messages = {
+  'work.addRemote': 'Add remote task',
+  'work.remoteMutationHint': 'Changes use the source revision. Refresh after a conflict; available operations depend on service capabilities and your grant.',
+  'work.sourcePriority': 'Source priority (0–4)',
+  'work.requestExecution': 'Request execution',
+  'work.requestExecutionHint': 'Requests the current generation under your local policy. To rerun, create a new generation in TaskSync.',
   // Business results, local consent and automation policies
   "work.results": "Results and decisions",
   "work.noResults": "No business results yet.",

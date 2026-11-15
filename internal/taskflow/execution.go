@@ -226,14 +226,6 @@ func (e *executionRuntime) discover(ctx context.Context, owner string) error {
 		if err != nil || eligible(c, p, t.Snapshot, e.service.now()) != nil {
 			continue
 		}
-		var wire tsync.Task
-		if json.Unmarshal(t.Snapshot.ProviderData, &wire) != nil {
-			continue
-		}
-		trigger, err := wire.TriggerKey("execute")
-		if err != nil {
-			continue
-		}
 		id, err := util.UUIDv7()
 		if err != nil {
 			return err
@@ -242,23 +234,11 @@ func (e *executionRuntime) discover(ctx context.Context, owner string) error {
 		if err != nil {
 			return err
 		}
-		claim := tsync.ExecutionRequest{RequestID: id, TriggerKey: trigger, InputRevision: wire.Versions.Input, AssignmentRevision: wire.Versions.Assignment, Generation: wire.Versions.Generation, Purpose: "execute", Scope: tsync.ExecutionScope{FullGoal: true, Objectives: []string{}}, Mode: p.Mode, DeviceID: c.DeviceID}
-		snap, _ := json.Marshal(t.Snapshot)
-		policy, _ := json.Marshal(p)
-		body, _ := tsync.JSONBytes(claim)
 		err = e.service.write(ctx, owner, c, func(tx *sql.Tx) error {
 			if err := e.service.automationSnapshotTx(ctx, tx, c, p, t.Snapshot); err != nil {
 				return err
 			}
-			var count int
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_flow_runs WHERE connection_id=? AND account_id=? AND state IN ('claiming','leased','running','recovering','lease_lost','needs_reconciliation')`, c.ID, c.AccountID).Scan(&count); err != nil {
-				return err
-			}
-			if count >= p.MaxConcurrent {
-				return nil
-			}
-			now := e.service.now().UnixMilli()
-			_, err := tx.ExecContext(ctx, `INSERT INTO task_flow_runs(request_id,connection_id,account_id,task_key,trigger_key,auth_epoch,connection_generation,input_revision,assignment_revision,automation_generation,snapshot_json,policy_json,claim_json,claim_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(connection_id,account_id,task_key,trigger_key) DO NOTHING`, id, c.ID, c.AccountID, t.Snapshot.Key.String(), trigger, c.AuthEpoch, c.Generation, wire.Versions.Input, wire.Versions.Assignment, t.Snapshot.AutomationGeneration, string(snap), string(policy), string(body), command, now, now)
+			_, _, err := e.service.persistExecutionTx(ctx, tx, c, p, t.Snapshot, id, command)
 			return err
 		})
 		if err != nil {

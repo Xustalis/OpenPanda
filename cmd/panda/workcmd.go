@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -44,8 +45,8 @@ func runWork(args []string) {
 }
 
 // Business commands share the HTTP service and provider mutation boundaries.
-// In particular, work run is an explicit new request, while todo start keeps
-// its original compatibility execution.
+// Local work run requests a new execution; remote work run requests the
+// current canonical generation. todo start keeps its compatibility execution.
 func workMain(ctx context.Context, db *sql.DB, env todoEnv, args []string) error {
 	if todoHelpRequested(args) {
 		env.outln(i18n.T(env.loc, "cli.work.usage"))
@@ -65,6 +66,11 @@ func workMain(ctx context.Context, db *sql.DB, env todoEnv, args []string) error
 	fs := flag.NewFlagSet("work "+verb, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	connection := fs.String("connection", "local", "task connection")
+	space := fs.String("space", "", "remote space ID")
+	remoteProject := fs.String("remote-project", "", "remote project ID")
+	remotePriority := fs.Int("remote-priority", 2, "source priority 0..4")
+	startAt := fs.String("start-at", "", "typed time JSON")
+	dueAt := fs.String("due-at", "", "typed time JSON")
 	requestID := fs.String("request", "", "idempotency key")
 	revision := fs.String("if-match", "", "task revision")
 	title := fs.String("title", "", "title")
@@ -121,15 +127,86 @@ func workMain(ctx context.Context, db *sql.DB, env todoEnv, args []string) error
 		}
 		return writeTodoJSON(env, x)
 	}
-	if *connection != "local" {
-		return taskproviders.ErrUnsupported
-	}
 	if *requestID == "" {
 		var err error
 		*requestID, err = util.UUIDv7()
 		if err != nil {
 			return err
 		}
+	}
+	if *connection != "local" {
+		path := ""
+		if env.cfg != nil {
+			path = env.cfg.Storage.DBPath
+		}
+		service := taskflow.New(db, path)
+		if verb == "run" {
+			if *planFile != "" {
+				return taskproviders.ErrUnsupported
+			}
+			k, err := taskproviders.ParseKey(key)
+			if err != nil {
+				return err
+			}
+			result, err := service.RequestExecution(ctx, *connection, k, *requestID)
+			if err != nil {
+				return err
+			}
+			return writeTodoJSON(env, result)
+		}
+		if *priority != "" || *project != "" {
+			return errors.New("remote tasks use --remote-priority and --remote-project")
+		}
+		if verb == "add" {
+			var start, due *taskproviders.TypedTime
+			if *startAt != "" {
+				if err := json.Unmarshal([]byte(*startAt), &start); err != nil {
+					return err
+				}
+			}
+			if *dueAt != "" {
+				if err := json.Unmarshal([]byte(*dueAt), &due); err != nil {
+					return err
+				}
+			}
+			result, err := service.CreateTask(ctx, *connection, *space, taskproviders.Snapshot{Title: *title, Description: *description, Status: *status, Priority: *remotePriority, ProjectID: *remoteProject, StartAt: start, DueAt: due}, *requestID)
+			if err != nil {
+				return err
+			}
+			return writeTodoJSON(env, taskhub.Task{ConnectionID: *connection, Snapshot: result})
+		}
+		patch := map[string]any{}
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "title":
+				patch["title"] = *title
+			case "description":
+				patch["description"] = *description
+			case "status":
+				patch["status"] = *status
+			case "remote-priority":
+				patch["priority"] = *remotePriority
+			case "remote-project":
+				patch["projectId"] = *remoteProject
+			case "start-at":
+				patch["startAt"] = json.RawMessage(*startAt)
+			case "due-at":
+				patch["dueAt"] = json.RawMessage(*dueAt)
+			}
+		})
+		raw, err := json.Marshal(patch)
+		if err != nil {
+			return err
+		}
+		k, err := taskproviders.ParseKey(key)
+		if err != nil {
+			return err
+		}
+		result, err := service.PatchTask(ctx, *connection, k, *revision, raw, *requestID)
+		if err != nil {
+			return err
+		}
+		return writeTodoJSON(env, taskhub.Task{ConnectionID: *connection, Snapshot: result})
 	}
 	provider := taskproviders.Local{Store: hub.Todos}
 	if verb == "add" {

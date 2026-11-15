@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
@@ -17,6 +18,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/taskflow"
 	"github.com/Xustalis/OpenPanda/internal/taskhub"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders"
+	"github.com/Xustalis/OpenPanda/internal/taskproviders/tsync"
 	"github.com/Xustalis/OpenPanda/internal/todos"
 )
 
@@ -41,6 +43,16 @@ func writeWorkError(w http.ResponseWriter, err error) {
 		code = 501
 	case errors.Is(err, taskproviders.ErrPrecondition):
 		code = 428
+	}
+	var remote *tsync.HTTPError
+	if errors.As(err, &remote) {
+		switch remote.Status {
+		case 401, 403, 404, 409, 410, 428, 429, 503:
+			code = remote.Status
+		}
+		if remote.RetryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.FormatInt(int64(remote.RetryAfter.Seconds())+1, 10))
+		}
 	}
 	writeErr(w, code, err)
 }
@@ -115,18 +127,10 @@ func (h *handler) runWork(w http.ResponseWriter, r *http.Request) {
 		writeWorkError(w, err)
 		return
 	}
-	id, err := taskproviders.LocalID(key)
-	if err != nil {
-		writeWorkError(w, taskproviders.ErrUnsupported)
-		return
-	}
 	var opts taskhub.RunOptions
 	if err = decodeWorkJSON(w, r, &opts, true); err != nil {
 		writeWorkError(w, err)
 		return
-	}
-	if opts.Purpose == "" {
-		opts.Purpose = "rerun"
 	}
 	if key := r.Header.Get("Idempotency-Key"); key != "" {
 		if opts.RequestID != "" && opts.RequestID != key {
@@ -138,6 +142,27 @@ func (h *handler) runWork(w http.ResponseWriter, r *http.Request) {
 	if opts.RequestID == "" {
 		writeWorkError(w, taskproviders.ErrPrecondition)
 		return
+	}
+	if key.InstanceID != "local" {
+		if h.taskFlow == nil || opts.Plan != nil || opts.ApprovalMode != "" || opts.Purpose != "" && opts.Purpose != "execute" {
+			writeWorkError(w, taskproviders.ErrUnsupported)
+			return
+		}
+		x, err := h.taskFlow.RequestExecution(r.Context(), r.URL.Query().Get("connection"), key, opts.RequestID)
+		if err != nil {
+			writeWorkError(w, err)
+			return
+		}
+		writeJSON(w, x)
+		return
+	}
+	id, err := taskproviders.LocalID(key)
+	if err != nil {
+		writeWorkError(w, err)
+		return
+	}
+	if opts.Purpose == "" {
+		opts.Purpose = "rerun"
 	}
 	eng := h.currentEngine()
 	if eng == nil {
@@ -171,6 +196,16 @@ func (h *handler) patchWork(w http.ResponseWriter, r *http.Request) {
 		writeWorkError(w, err)
 		return
 	}
+	revision := r.Header.Get("If-Match")
+	if revision != "" && (!strings.HasPrefix(revision, `"`) || !strings.HasSuffix(revision, `"`) || strings.ContainsAny(strings.Trim(revision, `"`), `",`)) {
+		writeWorkError(w, taskproviders.ErrConflict)
+		return
+	}
+	revision = strings.Trim(revision, `"`)
+	if k.InstanceID != "local" {
+		h.patchRemoteWork(w, r, k, revision)
+		return
+	}
 	id, err := taskproviders.LocalID(k)
 	if err != nil {
 		writeWorkError(w, taskproviders.ErrUnsupported)
@@ -189,12 +224,6 @@ func (h *handler) patchWork(w http.ResponseWriter, r *http.Request) {
 		writeWorkError(w, err)
 		return
 	}
-	revision := r.Header.Get("If-Match")
-	if revision != "" && (!strings.HasPrefix(revision, `"`) || !strings.HasSuffix(revision, `"`) || strings.ContainsAny(strings.Trim(revision, `"`), `",`)) {
-		writeWorkError(w, taskproviders.ErrConflict)
-		return
-	}
-	revision = strings.Trim(revision, `"`)
 	t, err := (taskproviders.Local{Store: h.workStore().Todos}).PatchLocal(r.Context(), id, revision, todos.Patch{Title: in.Title, Description: in.Description, Status: in.Status, Priority: in.Priority, Project: in.Project, DueAt: in.DueAt, Tags: in.Tags}, r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		writeWorkError(w, err)
