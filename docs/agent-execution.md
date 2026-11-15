@@ -152,3 +152,28 @@ low tool cap on a genuinely complex task.
 - 等待子任务期间，父任务会释放队列执行额度和工作树锁，保留心跳、取消和设备互斥；恢复前重新取得额度与锁。等待标记绑定当前 attempt，重试、取消和重启恢复不会继承旧标记。
 - 隔离合并失败、基线缺失或文件冲突会阻塞在需要修改输入的审核状态，保留工作区，不能仅通过批准宣告交付完成。同一批兄弟任务复用不可变源快照，显式工作目录保持原有含义。
 - DAG 计划一次事务发布完整依赖图。阶段产物携带内核生成的版本化因果元数据，保留修改与删除，后代覆盖祖先，不同并发修改产生冲突；相同结果可合并。新计划只发送给声明兼容协议的节点；缺少可信基线的多份旧快照会明确阻塞。计划产物不会自动写回原始 checkout。
+
+## 业务任务、TaskSync 与受控交付
+
+`work` 管理业务目标及其历史，内核 `task` 仍代表执行记录。Web「任务与协作」展示本地任务、团队空间和待确认事项。`todo start` 复用已关联执行，`work run` 显式建立新请求。本地 todo 是事实来源，远端任务只保留按账号隔离的授权缓存。
+
+使用 `panda connection connect --root https://example.com/tsync/ --id team` 连接，并在外部浏览器授权，Panda 不收集 TaskSync 密码。默认权限为 `tasks:read,members:read`；执行另需 `execution:read,execution:claim,execution:report`，交付需 `delivery:write`，代报本人验收需 `delivery:report-decision`。需要新增权限时，重连并通过 `--scopes` 明确申请。凭据与签名密钥保存在数据库旁的受限文件中，不出现在连接输出和成果导出中。
+
+连接后只同步，预研、执行和最终动作由有期限的本地空间策略分别开启。可在 Web 空间详情设置，或运行 `panda work policy --connection team --space SPACE --file policy.json`；省略 `--file` 查看策略。策略绑定账号及明确的任务/项目 ID，并限制 token 和并发。未认领任务只生成少量私有预研，不认领、不改业务状态。通过 `panda work research INSTANCE/WORKSPACE/SPACE/TASK --connection team` 读取当前授权简报。个人预研记忆不会注入项目执行。
+
+首个受控最终动作 adapter 将具体文本发布到显式授权的本机绝对目录，固定目录身份且不覆盖已有文件。此工作流中的其他 agent、shell 和浏览器工具仅用于准备，策略不授予其最终动作权限。文件草稿本身不代表完整目标完成，覆盖完整目标需要人类单独明确确认。浏览器身份、登录交接与扩展流程仍有后续独立验收门槛。
+
+```sh
+panda work runs --connection team
+panda work result REQUEST
+panda work export REQUEST
+panda work approve ACTION --fingerprint HASH
+panda work reject ACTION --fingerprint HASH
+panda work accept DELIVERY --revision 1
+panda work return DELIVERY --revision 1 --reason '需要更多核验'
+panda work pause REQUEST
+```
+
+`before_submit` 在发布前要求本地同意具体内容、目标、账号、尝试及输入版本；`after_execution` 先有明确预授权，再由本人验收指定交付版本。退回成果不会撤销已发生动作。Web 与 REPL `/work` 使用同一份持久成果和决定，内核操作授权仍单独处理。
+
+响应丢失或重启后，dispatching/unknown 动作只核对回执，不直接再次发送。持久 outbox 只重投事实；成果完成但远端尚未确认时显示待同步。连接状态及成果同步诊断提供错误信息。设备收到撤权、账号或输入变化后，使派生工作失效并清除页面中不可读的私有内容；已离线复制的数据无法远程擦除。回滚前先暂停新请求并保存执行/outbox 检查点，旧二进制可能拒绝新 schema，不能用旧库覆盖之后的新事实。

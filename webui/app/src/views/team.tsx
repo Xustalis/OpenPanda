@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, workTaskKey, type WorkAuthorization, type WorkConnection, type WorkInput, type WorkTask } from '../api/client'
-import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
+import { useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { navigate } from '../nav'
 import { t } from '../i18n'
+import { PrivateResearch, SpacePolicy, WorkResults } from './workflow'
+import { useWorkRead } from './work-read'
 
 /** Business intentions and their execution history share one source with CLI. */
 export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
@@ -15,10 +17,10 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
   const reload = () => setTick(v => v + 1)
   const signal = useChangeSignal()
   useVisibleInterval(reload, 15_000)
-  const list = useAsync(() => api.workTasks(), [], tick + signal)
-  const detail = useAsync(() => taskKey ? api.workTask(taskKey, connection) : Promise.resolve(null), [taskKey, connection], tick + signal)
-  const history = useAsync(() => taskKey ? api.workHistory(taskKey, connection) : Promise.resolve([]), [taskKey, connection], tick + signal)
-  const reviews = useAsync(() => tab === 'review' ? api.tasks({ state: 'review', brief: true }) : Promise.resolve([]), [tab], tick + signal)
+  const list = useWorkRead(() => api.workTasks(), [], tick + signal)
+  const detail = useWorkRead(() => taskKey ? api.workTask(taskKey, connection) : Promise.resolve(null), [taskKey, connection], tick + signal)
+  const history = useWorkRead(() => taskKey ? api.workHistory(taskKey, connection) : Promise.resolve([]), [taskKey, connection], tick + signal)
+  const reviews = useWorkRead(() => tab === 'review' ? api.tasks({ state: 'review', brief: true }) : Promise.resolve([]), [tab], tick + signal)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -58,6 +60,10 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
         </div>
         {editing && <WorkForm key={taskKey + current.snapshot.taskRevision} task={current} busy={busy} onSave={body => mutate(JSON.stringify([taskKey, current.snapshot.taskRevision, body]), key => api.patchWork(taskKey, current.snapshot.taskRevision, body, key))} />}
         <p class="work-description">{current.snapshot.description}</p>
+        {!current.local && <>
+          {(current.snapshot.assigneeAccountIds || []).length === 0 && <PrivateResearch connection={connection} taskKey={taskKey} tick={tick + signal} />}
+          <WorkResults connection={connection} taskKey={taskKey} tick={tick + signal} reload={reload} />
+        </>}
         <h2>{t('work.history')}</h2>
         <p class="hint">{t('work.completionHint')}</p>
         {history.data?.length === 0 && <p class="hint">{t('work.noHistory')}</p>}
@@ -81,6 +87,7 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
       {tasks.some(v => v.connectionId !== 'local') ? <div class="work-grid">{tasks.filter(v => v.connectionId !== 'local').map(task => <article class="card" key={`${task.connectionId}:${workTaskKey(task)}`}><button class="work-title" onClick={() => open(task)}>{task.snapshot.title}</button><TaskFacts task={task} /></article>)}</div> : <p class="hint">{t('work.noConnections')}</p>}
     </> : <>
       <p class="hint">{t('work.reviewHint')}</p>
+      <WorkResults tick={tick + signal} reload={reload} />
       <h2>{t('work.operationReview')}</h2>
       {reviews.data?.length === 0 && <p class="hint">{t('work.noReview')}</p>}
       <div class="work-grid">{reviews.data?.map(task => <article class="card" key={task.id}><a href={`#/task/${encodeURIComponent(task.id)}`}>{task.title || task.id}</a></article>)}</div>
@@ -89,8 +96,9 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
 }
 
 function ConnectionManager({ tick, reload }: { tick: number; reload(): void }) {
-  const connections = useAsync(() => api.workConnections(), [], tick)
+  const connections = useWorkRead(() => api.workConnections(), [], tick)
   const [root, setRoot] = useState('')
+  const [scopes, setScopes] = useState(['tasks:read', 'members:read'])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [grant, setGrant] = useState<{ id: string; auth: WorkAuthorization } | null>(null)
@@ -105,7 +113,7 @@ function ConnectionManager({ tick, reload }: { tick: number; reload(): void }) {
   }
   const connect = (url: string, id?: string) => perform(async () => {
     if (!id && pending.current?.root !== url) pending.current = { root: url, id: crypto.randomUUID() }
-    const result = await api.connectWork({ rootUrl: url, connectionId: id || pending.current!.id })
+    const result = await api.connectWork({ rootUrl: url, connectionId: id || pending.current!.id, scopes })
     grantList.current = connections.data
     setGrant({ id: result.connection.connectionId, auth: result.authorization })
     pending.current = null
@@ -118,6 +126,9 @@ function ConnectionManager({ tick, reload }: { tick: number; reload(): void }) {
     <form class="card work-form" onSubmit={e => { e.preventDefault(); void connect(root.trim()) }}>
       <label>{t('work.serviceRoot')}<input type="url" required value={root} placeholder="https://example.com/tsync/" onInput={e => setRoot(e.currentTarget.value)} /></label>
       <p class="hint">{t('work.connectHint')}</p>
+      <fieldset><legend>{t('work.connectionScopes')}</legend><p class="hint">{t('work.scopeHint')}</p>
+        {['tasks:read', 'members:read', 'execution:read', 'execution:claim', 'execution:report', 'delivery:write', 'delivery:report-decision'].map(scope => <label class="work-check"><input type="checkbox" checked={scopes.includes(scope)} onChange={e => setScopes(v => e.currentTarget.checked ? [...v, scope] : v.filter(s => s !== scope))} />{scope}</label>)}
+      </fieldset>
       <button class="btn primary" disabled={busy} type="submit">{t('work.connect')}</button>
     </form>
     {(error || connections.error) && <p role="alert" class="work-error">{error || connections.error}</p>}
@@ -137,13 +148,14 @@ function ConnectionManager({ tick, reload }: { tick: number; reload(): void }) {
         {c.state !== 'disconnected' && <button class="btn" disabled={busy} onClick={() => void perform(() => api.disconnectWork(c.connectionId))}>{t('work.disconnect')}</button>}
       </div>
       {c.state === 'connected' && c.scopes.includes('members:read') && c.spaces?.filter(space => space.scopes.includes('members:read')).map(space => <MemberDirectory key={space.spaceId} connection={c} space={space.spaceId} name={space.name} tick={tick} />)}
+      {c.state === 'connected' && c.spaces?.map(space => <SpacePolicy key={space.spaceId} connection={c} space={space.spaceId} name={space.name} tick={tick} reload={reload} />)}
     </article>)}</div>
   </div>
 }
 
 function MemberDirectory({ connection, space, name, tick }: { connection: WorkConnection; space: string; name: string; tick: number }) {
   const [open, setOpen] = useState(false)
-  const members = useAsync(() => open ? api.workMembers(connection.connectionId, space) : Promise.resolve([]), [connection.connectionId, space, open], tick)
+  const members = useWorkRead(() => open ? api.workMembers(connection.connectionId, space) : Promise.resolve([]), [connection.connectionId, space, open], tick)
   return <details onToggle={e => setOpen(e.currentTarget.open)}>
     <summary>{name} · {t('work.members')}</summary>
     {members.error ? <p class="hint">{t('work.membersUnavailable')}</p> : <ul>{members.data?.map(m => <li key={m.accountId}>{m.name || m.accountId} · {m.role}</li>)}</ul>}

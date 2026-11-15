@@ -93,3 +93,28 @@ Nach Abschluss bleibt ein eigener Übergabebericht im ursprünglichen Gespräch 
 - Während sie auf Kinder warten, geben Eltern Ausführungskapazität und Arbeitsverzeichnissperren frei. Heartbeat, Abbruch und Geräteausschluss bleiben aktiv. Vor der Fortsetzung werden Kapazität und Sperren erneut erworben. Der Wartestatus gilt für einen Versuch und wird bei Wiederholung, Abbruch oder Wiederherstellung nach Neustart gelöscht.
 - Fehler beim isolierten Zusammenführen, fehlende Ausgangsdaten und Konflikte blockieren die Aufgabe zur Prüfung mit geänderter Eingabe; das Arbeitsverzeichnis bleibt erhalten. Eine Freigabe allein bestätigt keine Lieferung. Geschwister teilen pro Stapel einen unveränderlichen Quellstand; explizite Arbeitsverzeichnisse behalten ihre Bedeutung.
 - Der vollständige Aufgabengraph wird in einer Transaktion veröffentlicht. Vom Kern erzeugte kausale Metadaten erhalten Änderungen und Löschungen. Nachfahren haben Vorrang vor Vorfahren; unterschiedliche gleichzeitige Änderungen erzeugen Konflikte, gleiche Ergebnisse werden zusammengeführt. Neue Pläne gehen nur an Knoten mit angekündigter Protokollunterstützung. Mehrere alte Snapshots ohne verlässliche Basis werden blockiert. Planausgaben werden nicht automatisch in den ursprünglichen Checkout zurückgeschrieben.
+
+## Arbeitsaufgaben, TaskSync und kontrollierte Lieferung
+
+`work` verwaltet Ziele und Verlauf; `task` bleibt ein Ausführungsdatensatz des Kernels. Die Web-Seite für Aufgaben und Zusammenarbeit zeigt lokale Aufgaben, Teamräume und Entscheidungen. `todo start` verwendet die verknüpfte Ausführung erneut; `work run` erstellt ausdrücklich eine neue Anfrage. Lokale Todos bleiben die Datenquelle, Remote-Aufgaben ein pro Konto autorisierter Cache.
+
+Verbinde mit `panda connection connect --root https://example.com/tsync/ --id team` und autorisiere im externen Browser. Panda erfasst kein TaskSync-Passwort. Standardrechte sind `tasks:read,members:read`. Ausführung benötigt zusätzlich `execution:read,execution:claim,execution:report`, Lieferung `delivery:write` und persönliche Abnahmeberichte `delivery:report-decision`. Zusätzliche Rechte werden beim erneuten Verbinden mit `--scopes` beantragt. Zugangsdaten und Signaturschlüssel liegen in geschützten Dateien neben der Datenbank und erscheinen nicht in Ausgaben oder Exporten.
+
+Verbindungen synchronisieren nur, bis eine befristete lokale Raumrichtlinie Vorrecherche, Ausführung oder abschließende Aktionen erlaubt. Bearbeite sie im Web oder mit `panda work policy --connection team --space SPACE --file policy.json`; ohne `--file` wird sie angezeigt. Sie bindet Konto und explizite Aufgaben-/Projekt-IDs mit Token- und Parallelitätsgrenzen. Nicht zugewiesene Aufgaben erhalten nur eine kleine private Vorrecherche, ohne Übernahme oder Statusänderung. `panda work research INSTANCE/WORKSPACE/SPACE/TASK --connection team` zeigt sie. Persönliche Rechercheerinnerungen gelangen nicht in Projektausführungen.
+
+Der erste kontrollierte Aktionsadapter veröffentlicht eine genaue Textdatei in einem ausdrücklich erlaubten absoluten Verzeichnis. Dessen Identität wird fixiert; vorhandene Dateien werden nie überschrieben. Andere Agenten-, Shell- und Browserwerkzeuge dienen in diesem Ablauf nur der Vorbereitung. Ein Entwurf allein erfüllt kein Gesamtziel; volle Zielabdeckung braucht eine gesonderte menschliche Bestätigung. Browseridentität, Anmeldung und Erweiterung haben eine spätere eigene Abnahme.
+
+```sh
+panda work runs --connection team
+panda work result REQUEST
+panda work export REQUEST
+panda work approve ACTION --fingerprint HASH
+panda work reject ACTION --fingerprint HASH
+panda work accept DELIVERY --revision 1
+panda work return DELIVERY --revision 1 --reason 'Weitere Nachweise erforderlich'
+panda work pause REQUEST
+```
+
+`before_submit` verlangt vor Veröffentlichung lokale Zustimmung zu genauem Inhalt, Ziel, Konto, Versuch und Eingabeversion. `after_execution` verlangt ausdrückliche Vorabgenehmigung und danach persönliche Abnahme einer Ergebnisversion. Eine Rückgabe macht ausgeführte Aktionen nicht rückgängig. Web und `/work` im REPL teilen persistierte Ergebnisse und Entscheidungen; Kernel-Operationsrechte bleiben getrennt.
+
+Nach verlorener Antwort oder Neustart werden dispatching/unknown-Aktionen anhand von Belegen abgeglichen, statt erneut gesendet. Die dauerhafte Outbox wiederholt nur Faktenberichte; fertige Ergebnisse ohne Remote-Bestätigung erscheinen als ausstehende Synchronisierung. Verbindungsstatus und Ergebnisdiagnostik zeigen Fehler. Empfangene Rechteentzüge sowie Konto-/Eingabewechsel entwerten abgeleitete Arbeit und entfernen unlesbare Inhalte aus der Ansicht. Offline-Kopien können nicht fern gelöscht werden. Vor einem Rollback neue Anfragen pausieren und Ausführungs-/Outbox-Checkpoints sichern. Ältere Programme können das neue Schema ablehnen; neue Fakten nicht mit einer alten Datenbank überschreiben.

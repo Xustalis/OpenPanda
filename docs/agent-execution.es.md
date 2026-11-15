@@ -93,3 +93,28 @@ Al terminar, la conversación original guarda un informe de entrega separado (ha
 - Mientras esperan hijos, los padres liberan capacidad de ejecución y bloqueos del árbol, conservando latidos, cancelación y exclusión del dispositivo. Recuperan capacidad y bloqueos antes de continuar. La espera pertenece a un intento y se limpia al reintentar, cancelar o recuperar tras un reinicio.
 - Los errores de integración aislada, las bases ausentes y los conflictos bloquean la tarea en revisión con cambios de entrada necesarios y conservan el espacio de trabajo. Aprobar no certifica la entrega. Los hermanos comparten una instantánea inmutable por lote y respetan los directorios explícitos.
 - El grafo completo se publica en una transacción. Los artefactos llevan metadatos causales generados por el núcleo: conservan cambios y eliminaciones, los descendientes prevalecen sobre sus ancestros, los cambios concurrentes diferentes entran en conflicto y los iguales se integran. Los planes nuevos solo se envían a nodos que anuncian compatibilidad; varias instantáneas antiguas sin una base fiable se bloquean. Las salidas del plan no se escriben automáticamente en el checkout original.
+
+## Tareas de trabajo, TaskSync y entrega controlada
+
+`work` gestiona objetivos e historial; `task` sigue representando una ejecución del núcleo. La página Web de tareas y colaboración muestra tareas locales, espacios y decisiones. `todo start` reutiliza su ejecución vinculada; `work run` crea una solicitud nueva. Los todos locales son la fuente de verdad y las tareas remotas son una caché autorizada por cuenta.
+
+Conecta con `panda connection connect --root https://example.com/tsync/ --id team` y autoriza en el navegador externo. Panda no recoge contraseñas de TaskSync. Los permisos iniciales son `tasks:read,members:read`. Ejecutar requiere además `execution:read,execution:claim,execution:report`; entregar requiere `delivery:write` y comunicar la aceptación personal requiere `delivery:report-decision`. Solicita permisos adicionales al reconectar con `--scopes`. Credenciales y claves de firma quedan en archivos restringidos junto a la base de datos y no aparecen en las salidas ni exportaciones.
+
+La conexión solo sincroniza hasta que una política local con caducidad habilita investigación, ejecución o acción final. Configúrala en Web o con `panda work policy --connection team --space SPACE --file policy.json`; omite `--file` para consultarla. Vincula cuenta e IDs explícitos de tareas/proyectos, con límites de tokens y concurrencia. Una tarea sin asignar solo recibe investigación privada limitada, sin reclamarla ni cambiar su estado. Consulta con `panda work research INSTANCE/WORKSPACE/SPACE/TASK --connection team`. La memoria personal de investigación no se inyecta en ejecuciones de proyecto.
+
+El primer adaptador de acción final publica un texto exacto en un directorio absoluto autorizado, fija la identidad del directorio y nunca sobrescribe archivos. Los demás agentes, shell y herramientas de navegador son solo de preparación en este flujo. Un borrador no completa el objetivo; la cobertura total exige una afirmación humana separada. Identidad, inicio de sesión y extensión del navegador tienen su propia aceptación posterior.
+
+```sh
+panda work runs --connection team
+panda work result REQUEST
+panda work export REQUEST
+panda work approve ACTION --fingerprint HASH
+panda work reject ACTION --fingerprint HASH
+panda work accept DELIVERY --revision 1
+panda work return DELIVERY --revision 1 --reason 'Faltan pruebas'
+panda work pause REQUEST
+```
+
+`before_submit` pide consentimiento local al contenido, destino, cuenta, intento y versión de entrada exactos antes de publicar. `after_execution` exige preautorización explícita y después aceptación personal de una versión de entrega. Devolverla no deshace acciones realizadas. Web y `/work` del REPL comparten resultados persistidos y decisiones, separados de las autorizaciones de operaciones del núcleo.
+
+Tras una respuesta perdida o reinicio, las acciones dispatching/unknown se concilian mediante comprobantes, sin enviarlas de nuevo. El outbox persistente solo reintenta hechos; los resultados completados pendientes de confirmación aparecen pendientes de sincronizar. Consulta el estado de conexión y diagnósticos de resultados. Al recibir revocaciones o cambios de cuenta/entrada se invalida el trabajo derivado y se limpia el contenido ya no legible. No se puede borrar remotamente una copia sin conexión. Antes de revertir, pausa solicitudes nuevas y conserva puntos de control de ejecución y outbox. Un binario antiguo puede rechazar el nuevo esquema; no sobrescribas hechos nuevos con una base antigua.

@@ -2,6 +2,7 @@
 
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import en from './en.ts'
 import zhCN from './zh-CN.ts'
@@ -40,6 +41,20 @@ describe('i18n parity', () => {
       for (const [k, v] of Object.entries(dict)) {
         assert.ok(typeof v === 'string' && v.length > 0, `${name}.${k}`)
       }
+    }
+  })
+
+  it('task collaboration references resolve in every locale', () => {
+    // Comparing dictionaries alone misses a new page whose keys are absent
+    // from every dictionary. Check the page's references as well.
+    const source = ['team.tsx', 'workflow.tsx'].map(file => readFileSync(new URL(`../views/${file}`, import.meta.url), 'utf8')).join('\n')
+    const keys = [...source.matchAll(/\bt\('([^']+)'\)/g)].map(m => m[1]!)
+    keys.push(...['mine', 'spaces', 'review', 'executionQueue', 'executionPlans', 'localProjects'].map(k => `work.${k}`))
+    keys.push(...['pending', 'running', 'paused', 'done', 'cancelled'].map(k => `todos.status.${k}`))
+    keys.push(...['low', 'normal', 'high'].map(k => `todos.priority.${k}`))
+    keys.push(...['claiming', 'leased', 'queued', 'running', 'recovering', 'lease_lost', 'waiting_context', 'waiting_login', 'awaiting_submit', 'awaiting_acceptance', 'needs_reconciliation', 'paused', 'succeeded', 'failed', 'cancelled', 'superseded', 'prepared', 'approved', 'dispatching', 'unknown', 'verified', 'rejected'].map(k => `work.state.${k}`))
+    for (const [name, dict] of Object.entries({ en, ...dictionaries })) {
+      for (const key of keys) assert.ok(dict[key], `${name} is missing ${key}`)
     }
   })
 
