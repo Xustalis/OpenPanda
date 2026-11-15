@@ -3,6 +3,11 @@
 import type { Messages } from './index'
 
 const es: Messages = {
+  'work.addRemote': 'Añadir tarea remota',
+  'work.remoteMutationHint': 'Los cambios usan la revisión del origen. Actualiza tras un conflicto; las operaciones dependen de las capacidades del servicio y de tus permisos.',
+  'work.sourcePriority': 'Prioridad de origen (0–4)',
+  'work.requestExecution': 'Solicitar ejecución',
+  'work.requestExecutionHint': 'Solicita la generación actual según la política local. Para repetirla, crea una nueva generación en TaskSync.',
   // Business results, local consent and automation policies
   "work.results": "Resultados y decisiones",
   "work.noResults": "Aún no hay resultados.",

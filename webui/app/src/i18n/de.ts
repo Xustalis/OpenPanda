@@ -3,6 +3,11 @@
 import type { Messages } from './index'
 
 const de: Messages = {
+  'work.addRemote': 'Remote-Aufgabe hinzufügen',
+  'work.remoteMutationHint': 'Änderungen verwenden die Quellrevision. Nach einem Konflikt neu laden; verfügbare Aktionen richten sich nach Dienstfunktionen und Berechtigungen.',
+  'work.sourcePriority': 'Quellpriorität (0–4)',
+  'work.requestExecution': 'Ausführung anfordern',
+  'work.requestExecutionHint': 'Fordert die aktuelle Generation gemäß der lokalen Richtlinie an. Für eine Wiederholung eine neue Generation in TaskSync erstellen.',
   // Business results, local consent and automation policies
   "work.results": "Ergebnisse und Entscheidungen",
   "work.noResults": "Noch keine Ergebnisse.",

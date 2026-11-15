@@ -40,6 +40,7 @@ export interface WorkTask {
     priority: number
     spaceName: string
     projectName: string
+    projectId: string
     assigneeAccountIds: string[] | null
     sourceRef: { provider: string; id: string; url?: string }
     dueAt?: { kind: string; value: string } | null
@@ -72,6 +73,7 @@ export interface WorkConnection {
   lastError: string
   syncedAt: number
   scopes: string[]
+  capabilities?: { capabilities: string[] }
   spaces: { spaceId: string; workspaceId: string; name: string; scopes: string[] }[]
 }
 export interface WorkAuthorization {
@@ -85,6 +87,9 @@ export interface WorkAuthorization {
 export interface WorkProjectBinding {
   remoteProjectId: string
   localProject: string
+}
+export interface RemoteWorkInput {
+  title: string; description: string; priority: number; projectId: string
 }
 export interface WorkPolicy {
   research: boolean; execute: boolean; finalAction: boolean
@@ -1242,6 +1247,15 @@ export const api = {
   },
   createWork(body: WorkInput, idempotencyKey: string): Promise<WorkTask> {
     return request('POST', '/api/work/tasks', body, { headers: { 'Idempotency-Key': idempotencyKey } })
+  },
+  createRemoteWork(connection: string, space: string, body: RemoteWorkInput, key: string): Promise<WorkTask> {
+    return request('POST', `/api/work/connections/${encodeURIComponent(connection)}/spaces/${encodeURIComponent(space)}/tasks`, body, { headers: { 'Idempotency-Key': key } })
+  },
+  patchRemoteWork(connection: string, task: WorkTask, body: RemoteWorkInput, key: string): Promise<WorkTask> {
+    return request('PATCH', `/api/work/tasks/${encodeURIComponent(workTaskKey(task))}?connection=${encodeURIComponent(connection)}`, body, { headers: { 'Idempotency-Key': key, 'If-Match': JSON.stringify(task.snapshot.taskRevision) } })
+  },
+  requestWork(connection: string, taskKey: string, requestId: string): Promise<{ requestId: string; alreadyStarted: boolean; state: string }> {
+    return request('POST', `/api/work/tasks/${encodeURIComponent(taskKey)}/run?connection=${encodeURIComponent(connection)}`, { requestId, purpose: 'execute' }, { headers: { 'Idempotency-Key': requestId } })
   },
   patchWork(key: string, revision: string, body: Partial<WorkInput>, idempotencyKey: string): Promise<WorkTask> {
     return request('PATCH', `/api/work/tasks/${encodeURIComponent(key)}`, body, {

@@ -31,7 +31,7 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("task integration HTTP %d (%s)", e.Status, e.Code)
 }
 func (e *HTTPError) Is(target error) bool {
-	return e.Status == 401 && target == taskproviders.ErrReconnect || e.Status == 410 && target == ErrCursorExpired || e.Status == 409 && target == taskproviders.ErrConflict
+	return e.Status == 401 && target == taskproviders.ErrReconnect || e.Status == 410 && target == ErrCursorExpired || e.Status == 409 && target == taskproviders.ErrConflict || e.Status == 403 && target == taskproviders.ErrAuthorizationChanged || e.Status == 428 && target == taskproviders.ErrPrecondition
 }
 
 type Client struct {

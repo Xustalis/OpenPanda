@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,12 +25,12 @@ type syncSource struct {
 	page     func(string) (taskproviders.SnapshotPage, error)
 	changes  func(string, string) (taskproviders.Changes, error)
 	fail     error
-	calls    int
+	calls    atomic.Int64
 	disabled bool
 }
 
 func (p *syncSource) Capabilities(context.Context) (taskproviders.Capabilities, error) {
-	p.calls++
+	p.calls.Add(1)
 	return p.caps, p.fail
 }
 func (p *syncSource) Me(context.Context) (taskproviders.Account, error)     { return p.account, nil }
@@ -231,11 +232,11 @@ func TestReconnectStopsRetriesAndClearsAuthorization(t *testing.T) {
 	if !p.disabled {
 		t.Fatal("credential still enabled")
 	}
-	calls := p.calls
+	calls := p.calls.Load()
 	if err := s.SyncNow(context.Background(), "c"); !errors.Is(err, ErrStale) {
 		t.Fatal(err)
 	}
-	if p.calls != calls {
+	if p.calls.Load() != calls {
 		t.Fatal("retried after 401")
 	}
 	if got := scalar(t, s.db, `SELECT count(*) FROM task_snapshots`); got != "0" {

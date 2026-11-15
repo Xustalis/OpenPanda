@@ -3,6 +3,11 @@
 import type { Messages } from './index'
 
 const zhCN: Messages = {
+  'work.addRemote': '新增远端任务',
+  'work.remoteMutationHint': '修改使用来源版本，发生冲突后请刷新。可用操作受服务能力和当前授权限制。',
+  'work.sourcePriority': '来源优先级（0–4）',
+  'work.requestExecution': '申请执行',
+  'work.requestExecutionHint': '按本地策略申请执行当前代次。需要重做时，请在 TaskSync 中创建新代次。',
   // Business results, local consent and automation policies
   "work.results": "成果与确认",
   "work.noResults": "暂无业务执行成果。",

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState } from 'preact/hooks'
-import { api, type WorkConnection, type WorkPolicy, type WorkRun, type WorkProjectBinding } from '../api/client'
+import { useRef, useState } from 'preact/hooks'
+import { api, type WorkConnection, type WorkPolicy, type WorkRun, type WorkProjectBinding, type WorkTask } from '../api/client'
 import { useWorkRead } from './work-read'
 import { t } from '../i18n'
 
@@ -127,7 +127,39 @@ export function SpacePolicy({ connection, space, name, tick, reload }: { connect
     {policy.error && <p class="work-error" role="alert">{policy.error}</p>}
     {policy.data && <PolicyForm key={JSON.stringify([connection.connectionId, space, open, policy.data])} connection={connection.connectionId} space={space} initial={policy.data} reload={reload} />}
     {open && <ProjectBindings key={`${connection.connectionId}/${connection.authEpoch}/${space}`} connection={connection.connectionId} space={space} tick={tick} reload={reload} />}
+    {open && connection.capabilities?.capabilities.includes('taskWrite') && connection.scopes.includes('tasks:write') && connection.spaces.find(s => s.spaceId === space)?.scopes.includes('tasks:write') && <details><summary>{t('work.addRemote')}</summary><RemoteTaskForm connection={connection.connectionId} space={space} onSaved={reload} /></details>}
   </details>
+}
+
+export function RemoteTaskForm({ connection, space, task, onSaved }: { connection: string; space: string; task?: WorkTask; onSaved(): void }) {
+  const [title, setTitle] = useState(task?.snapshot.title || '')
+  const [description, setDescription] = useState(task?.snapshot.description || '')
+  const [projectId, setProject] = useState(task?.snapshot.projectId || '')
+  const [priority, setPriority] = useState(task?.snapshot.priority ?? 2)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const pending = useRef<{ signature: string; key: string } | null>(null)
+  const save = async () => {
+    if (busy) return
+    const body = { title, description, projectId, priority }
+    const signature = JSON.stringify([connection, space, task?.snapshot.taskRevision, body])
+    if (pending.current?.signature !== signature) pending.current = { signature, key: crypto.randomUUID() }
+    setBusy(true); setError('')
+    try {
+      if (task) await api.patchRemoteWork(connection, task, body, pending.current.key)
+      else await api.createRemoteWork(connection, space, body, pending.current.key)
+      pending.current = null; onSaved()
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+  }
+  return <form class="card work-form" onSubmit={e => { e.preventDefault(); void save() }}>
+    <p class="hint">{t('work.remoteMutationHint')}</p>
+    <label>{t('work.title')}<input value={title} maxLength={4096} required onInput={e => setTitle(e.currentTarget.value)} /></label>
+    <label>{t('work.description')}<textarea value={description} onInput={e => setDescription(e.currentTarget.value)} /></label>
+    <label>{t('work.remoteProjectId')}<input value={projectId} onInput={e => setProject(e.currentTarget.value.trim())} /></label>
+    <label>{t('work.sourcePriority')}<select value={priority} onChange={e => setPriority(Number(e.currentTarget.value))}>{[0, 1, 2, 3, 4].map(v => <option value={v}>{v}</option>)}</select></label>
+    <button class="btn primary" type="submit" disabled={busy || !title.trim()}>{t('common.save')}</button>
+    {error && <p class="work-error" role="alert">{error}</p>}
+  </form>
 }
 
 function ProjectBindings({ connection, space, tick, reload }: { connection: string; space: string; tick: number; reload(): void }) {

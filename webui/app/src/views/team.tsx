@@ -5,7 +5,7 @@ import { api, workTaskKey, type WorkAuthorization, type WorkConnection, type Wor
 import { useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { navigate } from '../nav'
 import { t } from '../i18n'
-import { PrivateResearch, SpacePolicy, WorkResults } from './workflow'
+import { PrivateResearch, SpacePolicy, WorkResults, RemoteTaskForm } from './workflow'
 import { useWorkRead } from './work-read'
 
 /** Business intentions and their execution history share one source with CLI. */
@@ -20,6 +20,7 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
   const list = useWorkRead(() => api.workTasks(), [], tick + signal)
   const detail = useWorkRead(() => taskKey ? api.workTask(taskKey, connection) : Promise.resolve(null), [taskKey, connection], tick + signal)
   const history = useWorkRead(() => taskKey ? api.workHistory(taskKey, connection) : Promise.resolve([]), [taskKey, connection], tick + signal)
+  const grants = useWorkRead(() => taskKey && connection !== 'local' ? api.workConnections() : Promise.resolve([]), [taskKey, connection], tick + signal)
   const reviews = useWorkRead(() => tab === 'review' ? api.tasks({ state: 'review', brief: true }) : Promise.resolve([]), [tab], tick + signal)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -37,10 +38,15 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
     finally { setBusy(false) }
   }
   const current = detail.data
+  const grant = grants.data?.find(c => c.connectionId === connection && c.state === 'connected')
+  const space = grant?.spaces.find(s => s.spaceId === current?.snapshot.key.spaceId && s.workspaceId === current?.snapshot.key.workspaceId)
+  const supported = (feature: string, scopes: string[]) => !!grant?.capabilities?.capabilities.includes(feature) && scopes.every(scope => grant.scopes.includes(scope) && space?.scopes.includes(scope))
+  const canEdit = !!current?.snapshot.permissions.edit && (!!current.local || supported('taskWrite', ['tasks:read', 'tasks:write']))
+  const canRequest = !!current && !current.local && current.snapshot.permissions.execute && supported('executions', ['tasks:read', 'execution:read', 'execution:claim', 'execution:report'])
   const tasks = list.data || []
   const mine = tasks.filter(task => task.connectionId === 'local' || (task.snapshot.assigneeAccountIds || []).includes(task.accountId))
   const open = (task: WorkTask) => navigate({ view: 'work', key: workTaskKey(task), connection: task.connectionId })
-  const failure = error || list.error || detail.error || history.error || reviews.error
+  const failure = error || list.error || detail.error || history.error || grants.error || reviews.error
   return <section class="tm-page work-page" aria-busy={busy}>
     <header class="tm-head work-head">
       <div><h1 class="page-title">{current?.snapshot.title || t('nav.team')}</h1><p class="page-sub">{t('team.subtitle')}</p></div>
@@ -55,10 +61,11 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
       {current && <>
         <TaskFacts task={current} />
         <div class="work-actions">
-          {current.local && current.snapshot.permissions.edit && <button class="btn" disabled={busy} onClick={() => setEditing(!editing)}>{t('work.edit')}</button>}
+          {canEdit && <button class="btn" disabled={busy} onClick={() => setEditing(!editing)}>{t('work.edit')}</button>}
           {current.local && current.snapshot.permissions.execute && <button class="btn primary" disabled={busy} onClick={() => mutate(`run:${taskKey}`, async key => { const result = await api.runWork(taskKey, key); if (result.warning) setError(result.warning) })}>{t('work.run')}</button>}
         </div>
-        {editing && <WorkForm key={taskKey + current.snapshot.taskRevision} task={current} busy={busy} onSave={body => mutate(JSON.stringify([taskKey, current.snapshot.taskRevision, body]), key => api.patchWork(taskKey, current.snapshot.taskRevision, body, key))} />}
+        {editing && canEdit && (current.local ? <WorkForm key={taskKey + current.snapshot.taskRevision} task={current} busy={busy} onSave={body => mutate(JSON.stringify([taskKey, current.snapshot.taskRevision, body]), key => api.patchWork(taskKey, current.snapshot.taskRevision, body, key))} /> : <RemoteTaskForm key={taskKey + current.snapshot.taskRevision} task={current} connection={connection} space={current.snapshot.key.spaceId} onSaved={() => { setEditing(false); reload() }} />)}
+        {canRequest && <><button class="btn" disabled={busy} onClick={() => void mutate('request:' + taskKey, key => api.requestWork(connection, taskKey, key))}>{t('work.requestExecution')}</button><p class="hint">{t('work.requestExecutionHint')}</p></>}
         <p class="work-description">{current.snapshot.description}</p>
         {!current.local && <>
           {(current.snapshot.assigneeAccountIds || []).length === 0 && <PrivateResearch connection={connection} taskKey={taskKey} tick={tick + signal} />}
@@ -127,7 +134,7 @@ function ConnectionManager({ tick, reload }: { tick: number; reload(): void }) {
       <label>{t('work.serviceRoot')}<input type="url" required value={root} placeholder="https://example.com/tsync/" onInput={e => setRoot(e.currentTarget.value)} /></label>
       <p class="hint">{t('work.connectHint')}</p>
       <fieldset><legend>{t('work.connectionScopes')}</legend><p class="hint">{t('work.scopeHint')}</p>
-        {['tasks:read', 'members:read', 'execution:read', 'execution:claim', 'execution:report', 'delivery:write', 'delivery:report-decision'].map(scope => <label class="work-check"><input type="checkbox" checked={scopes.includes(scope)} onChange={e => setScopes(v => e.currentTarget.checked ? [...v, scope] : v.filter(s => s !== scope))} />{scope}</label>)}
+        {['tasks:read', 'tasks:write', 'members:read', 'execution:read', 'execution:claim', 'execution:report', 'delivery:write', 'delivery:report-decision'].map(scope => <label class="work-check"><input type="checkbox" checked={scopes.includes(scope)} onChange={e => setScopes(v => e.currentTarget.checked ? [...v, scope] : v.filter(s => s !== scope))} />{scope}</label>)}
       </fieldset>
       <button class="btn primary" disabled={busy} type="submit">{t('work.connect')}</button>
     </form>

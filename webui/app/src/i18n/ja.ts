@@ -3,6 +3,11 @@
 import type { Messages } from './index'
 
 const ja: Messages = {
+  'work.addRemote': 'リモートタスクを追加',
+  'work.remoteMutationHint': '更新には取得元のリビジョンを使用します。競合した場合は再読み込みしてください。操作はサービスの機能と現在の権限に従います。',
+  'work.sourcePriority': '取得元の優先度（0〜4）',
+  'work.requestExecution': '実行を申請',
+  'work.requestExecutionHint': 'ローカルポリシーに従い現在の世代の実行を申請します。再実行するには TaskSync で新しい世代を作成してください。',
   // Business results, local consent and automation policies
   "work.results": "成果と確認",
   "work.noResults": "業務の成果はまだありません。",
