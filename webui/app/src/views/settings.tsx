@@ -196,6 +196,11 @@ export function SettingsView(props: {
       class="settings-dialog"
       aria-label={t('settings.title')}
       onCancel={(e) => e.preventDefault()}
+      onKeyDown={(e) => {
+        // Repeated Escape can force-close a native dialog after a cancelled
+        // close request. This sheet is dismissed only by its close button.
+        if (e.key === 'Escape' && !e.isComposing) e.preventDefault()
+      }}
     >
       <div class="settings-shell">
         <aside class="settings-rail">

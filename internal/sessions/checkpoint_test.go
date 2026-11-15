@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -114,6 +115,68 @@ func TestCheckpointAndRewindRestoresFiles(t *testing.T) {
 	}
 	if len(stored.Turns) != 2 {
 		t.Errorf("turns = %d, want 2", len(stored.Turns))
+	}
+}
+
+func TestRewindPreservesUntrackedFilenames(t *testing.T) {
+	repo := newGitRepo(t)
+	worktrees, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(t.TempDir())
+	sess, err := store.Create("filename rewind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, err := worktrees.Ensure(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetWorktree(sess.ID, wt, Branch(sess.ID)); err != nil {
+		t.Fatal(err)
+	}
+	// Keep both Unicode and leading whitespace intact when looking up paths
+	// in the snapshot as well as when removing paths absent from it.
+	kept := []string{"保留文件.txt", " leading space.txt"}
+	removed := []string{"new-file.txt", "新增文件.txt", " another leading space.txt"}
+	if runtime.GOOS != "windows" {
+		removed = append(removed, "tab\tfile.txt", "line\nbreak.txt", `quote"file.txt`)
+	}
+	for _, name := range kept {
+		mustWrite(t, wt, name, "first")
+	}
+	mustAppend(t, store, sess.ID, Turn{Role: "user", Text: "first"})
+	mustAppend(t, store, sess.ID, Turn{Role: "assistant", Text: "done"})
+	for _, name := range kept {
+		mustWrite(t, wt, name, "second")
+	}
+	for _, name := range removed {
+		mustWrite(t, wt, name, "new")
+	}
+	mustAppend(t, store, sess.ID, Turn{Role: "user", Text: "second"})
+	mustAppend(t, store, sess.ID, Turn{Role: "assistant", Text: "done"})
+	res, err := store.Rewind(context.Background(), sess.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range kept {
+		data, err := os.ReadFile(filepath.Join(wt, name))
+		if err != nil || string(data) != "first" {
+			t.Errorf("restored %q = %q, %v", name, data, err)
+		}
+	}
+	for _, name := range removed {
+		if _, err := os.Stat(filepath.Join(wt, name)); !os.IsNotExist(err) {
+			t.Errorf("%q survived rewind: %v", name, err)
+		}
+		found := false
+		for _, path := range res.Removed {
+			found = found || path == name
+		}
+		if !found {
+			t.Errorf("removed paths %q did not name %q", res.Removed, name)
+		}
 	}
 }
 

@@ -274,10 +274,10 @@ var ErrNotFound = errors.New("sessions: no such session")
 // a parent traversal, or a drive/anchor is not a session — this is the store
 // layer's guard against callers (HTTP path values included) smuggling a path.
 func ValidID(id string) bool {
-	if id == "" || strings.Contains(id, "..") || strings.ContainsAny(id, "/\\") {
+	if id == "." || strings.Contains(id, "..") || strings.ContainsAny(id, "/\\") {
 		return false
 	}
-	return !filepath.IsAbs(id)
+	return filepath.IsLocal(id)
 }
 
 // Create starts a new session titled after the first prompt (the title is
@@ -350,6 +350,7 @@ func (s *Store) Fork(id string, atTurn int) (*Session, error) {
 		SummaryTurns:      parent.SummaryTurns,
 		CompactedTurnKeys: append([]string(nil), parent.CompactedTurnKeys...),
 		Team:              append([]string(nil), parent.Team...),
+		PermissionMode:    parent.PermissionMode,
 		Turns:             append([]Turn(nil), parent.Turns[:atTurn]...),
 		CreatedAt:         now,
 		UpdatedAt:         now,

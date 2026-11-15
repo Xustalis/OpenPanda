@@ -1455,10 +1455,21 @@ func (h *handler) fetchModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ids := make([]string, 0, len(models))
+	// The vendor map is a sibling of the flat list, not a replacement for it:
+	// every existing caller wants ids, and a row whose catalogue omits
+	// owned_by simply has no entry here.
+	owners := make(map[string]string)
 	for _, m := range models {
 		ids = append(ids, m.ID)
+		if v := strings.TrimSpace(m.OwnedBy); v != "" {
+			owners[m.ID] = v
+		}
 	}
-	writeJSON(w, map[string]any{"ok": true, "alias": mc.Alias(), "models": ids})
+	resp := map[string]any{"ok": true, "alias": mc.Alias(), "models": ids}
+	if len(owners) > 0 {
+		resp["owners"] = owners
+	}
+	writeJSON(w, resp)
 }
 
 // testModel serves POST /api/models/test — a one-word completion against the

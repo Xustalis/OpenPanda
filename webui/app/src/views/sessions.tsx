@@ -5,6 +5,7 @@ import {
   api,
   ApiError,
   askSessionStream,
+  fetchBlob,
   isAbort,
   isTaskStalled,
   type ApprovalScope,
@@ -61,6 +62,7 @@ import { sortSessions, turnsChanged } from '../components/session-list'
 import { splitReportHead } from '../components/report-head'
 import { displayUserTurn } from '../components/turn-display'
 import { UserFiles } from '../components/msg-files'
+import { HoverPreview, Lightbox } from '../components/image-preview'
 import { liveTaskIds } from '../components/task-activity'
 import { groupDispatches } from './chat-batch.ts'
 import {
@@ -278,9 +280,19 @@ function chipMarkup(image: boolean): string {
     + '</svg>'
 }
 
-/** A pill for a pending attachment, inserted at the caret. A pill is atomic:
- *  the caret steps over it as one unit, and clicking it removes the file from
- *  the turn — the same contract WorkBuddy's chip has. */
+/** The pill's own controls, drawn the same way and for the same reason as
+ *  `chipMarkup` above: these nodes live in the editable, outside the
+ *  framework. `search` and `x` mirror components/icons.tsx. 14px: at 13 the
+ *  two glyphs read a size under the name beside them and looked like debris
+ *  rather than controls. */
+function chipActMarkup(kind: 'zoom' | 'x'): string {
+  const open = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  return kind === 'zoom'
+    ? `${open}<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`
+    : `${open}<path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`
+}
+
 /** One file waiting in the composer's attachment pills.
  *
  *  The File is kept rather than uploaded on arrival — the pill needs no
@@ -298,18 +310,54 @@ interface PendingAttachment {
   ref?: string
 }
 
+/** A pill for a pending attachment, inserted at the caret.
+ *
+ *  A pill is atomic: the caret steps over it as one unit. It carries its own
+ *  two controls — enlarge, then remove — the way the reference chip carries
+ *  its ×. The enlarge glyph is the extension: a picture in the composer had
+ *  no way to be looked at closely before sending, and a 23px pill is not a
+ *  preview. Clicking the pill's body means "show me the picture"; taking the
+ *  file back out has its own button beside it, so a mis-aimed click no longer
+ *  throws an attachment away.
+ *
+ *  Both controls hold their space at rest. A control that materialises under
+ *  the pointer widens the pill, which shoves the rest of the sentence — and
+ *  the caret — sideways while the pointer is only passing through. */
 function makeChipNode(p: PendingAttachment): HTMLElement {
   const chip = document.createElement('span')
-  chip.className = 'attach-pill'
+  chip.className = p.image ? 'attach-pill is-image' : 'attach-pill'
   chip.setAttribute('data-pk', p.key)
   chip.setAttribute('contenteditable', 'false')
-  chip.setAttribute('title', p.ref ?? p.name)
-  chip.textContent = p.name
+  // A picture names itself in the floating copy, and a native tooltip would
+  // sit on top of it. A text reference has no copy, so the path stays here.
+  if (!p.image) chip.setAttribute('title', p.ref ?? p.name)
+
   const ico = document.createElement('span')
   ico.className = p.image ? 'attach-pill-ico img' : 'attach-pill-ico'
   ico.setAttribute('aria-hidden', 'true')
   ico.innerHTML = chipMarkup(p.image)
-  chip.insertBefore(ico, chip.firstChild)
+  chip.appendChild(ico)
+
+  const name = document.createElement('span')
+  name.className = 'attach-pill-name'
+  name.textContent = p.name
+  chip.appendChild(name)
+
+  const acts = document.createElement('span')
+  acts.className = 'attach-pill-acts'
+  const buttons: Array<['zoom' | 'x', string]> = p.image
+    ? [['zoom', t('events.imageOpen')], ['x', t('sessions.attachRemove')]]
+    : [['x', t('sessions.attachRemove')]]
+  for (const [kind, label] of buttons) {
+    const act = document.createElement('span')
+    act.className = `attach-pill-act attach-pill-${kind}`
+    act.setAttribute('role', 'button')
+    act.setAttribute('title', label)
+    act.setAttribute('aria-label', label)
+    act.innerHTML = chipActMarkup(kind)
+    acts.appendChild(act)
+  }
+  chip.appendChild(acts)
   return chip
 }
 
@@ -642,6 +690,18 @@ export function SessionsView({
   const [noteDraft, setNoteDraft] = useState('')
   // True while a file is over the composer, so the box can say so.
   const [dropping, setDropping] = useState(false)
+  // The pill the pointer is resting on, once its bytes have landed: a larger
+  // copy floats above the composer. WorkBuddy's chip behaves this way, and it
+  // is the only way a 23px pill can be checked before it is sent.
+  const [peek, setPeek] = useState<{ key: string; name: string; src: string; anchor: DOMRect } | null>(null)
+  // The pill's magnifier: the same bytes, full screen.
+  const [shot, setShot] = useState<{ name: string; src: string; path?: string } | null>(null)
+  // Object URLs for pending images, minted on first hover and reused until the
+  // pill goes away — a screenshot can be peeked at, enlarged and peeked again.
+  const shots = useRef(new Map<string, string>())
+  const shotsPending = useRef(new Map<string, Promise<string>>())
+  const peekTimer = useRef<number | undefined>(undefined)
+  const peekKey = useRef('')
   // The conversation's permission policy. It is the whole consent answer:
   // auto and edits stop at the tier-2 gate for a one-off approval card, bypass
   // runs everything, manual asks before every change and plan changes nothing.
@@ -1447,6 +1507,18 @@ export function SessionsView({
 
   // Unmount: nothing should keep streaming into a dead pane.
   useEffect(() => () => inflight.current?.abort(), [])
+
+  // Unmount: the pills' object URLs go with the composer. Bounded either way,
+  // but a screenshot is a megabyte and a thread can collect a dozen.
+  useEffect(
+    () => () => {
+      window.clearTimeout(peekTimer.current)
+      for (const url of shots.current.values()) URL.revokeObjectURL(url)
+      shots.current.clear()
+      shotsPending.current.clear()
+    },
+    [],
+  )
 
   // Opening a thread always starts at its newest message.
   useEffect(() => {
@@ -2582,11 +2654,98 @@ export function SessionsView({
   function removePending(key: string): void {
     setPending((ps) => ps.filter((p) => p.key !== key))
     composer.current?.querySelector(`.attach-pill[data-pk="${key}"]`)?.remove()
+    forgetShot(key)
+    unpeek()
     const el = composer.current
     if (el) {
       setInput(editorTextOf(el))
       autoGrow(el)
     }
+  }
+
+  /** The bytes behind a pending image: minted from the File the paste or drop
+   *  handed us, fetched for a workspace reference. Minted once per pill and
+   *  kept, because a peek, a lightbox and a second peek all want the same
+   *  object URL — and revoked by forgetShot when the pill goes away. */
+  function shotSrc(p: PendingAttachment): Promise<string> {
+    const made = shots.current.get(p.key)
+    if (made) return Promise.resolve(made)
+    const inflight = shotsPending.current.get(p.key)
+    if (inflight) return inflight
+    const bytes = p.file
+      ? Promise.resolve(URL.createObjectURL(p.file))
+      : p.ref
+        ? fetchBlob(`/api/fs/image?path=${encodeURIComponent(p.ref)}`).then((b) => URL.createObjectURL(b))
+        : Promise.reject(new Error('no bytes'))
+    const job = bytes.then((url) => {
+      shots.current.set(p.key, url)
+      shotsPending.current.delete(p.key)
+      return url
+    })
+    // A failed fetch must not poison the key: a retry should ask again.
+    job.catch(() => shotsPending.current.delete(p.key))
+    shotsPending.current.set(p.key, job)
+    return job
+  }
+
+  function forgetShot(key: string): void {
+    const url = shots.current.get(key)
+    if (!url) return
+    shots.current.delete(key)
+    shotsPending.current.delete(key)
+    URL.revokeObjectURL(url)
+  }
+
+  /** The pointer came to rest on a pill: after a beat, float a larger copy
+   *  above it — the same dwell the transcript's pills use, so a pointer only
+   *  crossing the composer never flashes a picture.
+   *
+   *  The copy clears the composer box rather than the pill: the pill sits at
+   *  the top of the field, so anchoring to it would drop the picture over the
+   *  sentence being typed. Centred on the pill, resting on the box's top
+   *  edge, it covers the transcript instead — the one place a reader is not
+   *  looking at that moment. */
+  function peekPill(chip: HTMLElement): void {
+    const p = pending.find((x) => x.key === chip.dataset.pk)
+    if (!p || !p.image) return
+    window.clearTimeout(peekTimer.current)
+    peekKey.current = p.key
+    peekTimer.current = window.setTimeout(() => {
+      const pill = chip.getBoundingClientRect()
+      const box = composer.current?.closest('.composer-box')?.getBoundingClientRect()
+      const anchor = box ? new DOMRect(pill.left, box.top, pill.width, 0) : pill
+      void shotSrc(p)
+        .then((src) => {
+          // The pointer may have moved on, or the pill been taken out, while
+          // the bytes were in flight.
+          if (peekKey.current !== p.key) return
+          setPeek({ key: p.key, name: p.name, src, anchor })
+        })
+        .catch(() => {
+          /* unreadable reference: no floating copy, and no error either */
+        })
+    }, 160)
+  }
+
+  function unpeek(): void {
+    window.clearTimeout(peekTimer.current)
+    peekKey.current = ''
+    setPeek(null)
+  }
+
+  /** The magnifier, and a click on the pill's body: the picture at full size.
+   *  A reference the panel cannot read simply does not open. */
+  function zoomPill(chip: HTMLElement): void {
+    const p = pending.find((x) => x.key === chip.dataset.pk)
+    if (!p || !p.image) return
+    void shotSrc(p)
+      .then((src) => {
+        unpeek()
+        setShot({ name: p.name, src, path: p.ref })
+      })
+      .catch(() => {
+        /* no bytes, nothing to enlarge */
+      })
   }
 
   /** The pill keys actually in the editor right now. The DOM is authoritative:
@@ -2605,10 +2764,21 @@ export function SessionsView({
   /** Drop pending entries whose pill is no longer in the editor. */
   function syncPending(el: HTMLElement): void {
     const keys = livePillKeys(el)
-    setPending((ps) => (ps.some((p) => !keys.has(p.key)) ? ps.filter((p) => keys.has(p.key)) : ps))
+    setPending((ps) => {
+      if (!ps.some((p) => !keys.has(p.key))) return ps
+      // The pill is already gone from the DOM, so nothing else will release
+      // its object URL — Backspace would otherwise leak one per screenshot.
+      for (const p of ps) if (!keys.has(p.key)) forgetShot(p.key)
+      return ps.filter((p) => keys.has(p.key))
+    })
+    // A node taken out by Backspace never reports a mouseout, so the copy
+    // floating over it would stay up with nothing under it.
+    if (peekKey.current && !keys.has(peekKey.current)) unpeek()
   }
 
   function clearPending(): void {
+    for (const key of [...shots.current.keys()]) forgetShot(key)
+    unpeek()
     setPending([])
     editorClear(composer.current)
   }
@@ -2886,31 +3056,28 @@ export function SessionsView({
               </h1>
             )}
           </div>
-          {session?.branch && (
-            <span class="badge green mono" title={session.worktree}>
-              ⎇ {session.branch}
-            </span>
-          )}
-          {/* 头部右侧两件东西：会话概览的一行摘要（点开成浮层面板），以及
-              最右的侧栏门。门放在最右，因为它开的就是右边缘那一栏，按钮贴
-              着它要打开的东西。概览的面板挂在触发按钮下方、右缘与按钮对齐，
-              浮在正文之上而不推挤阅读区——展开时 log、输入框和跳转箭头都不
-              动，代价是盖住右侧约 280px，且只在用户主动点开时发生。导出、
-              节点和编排卡都搬进了栏的头部，所以这条 bar 不再重复它们。新对
-              话页反过来：那一页没有栏，也没有线程可概览，唯一要答的问题是
-              "在哪台机器上跑"，所以这里站的是节点按钮本身 —— 设备不再锁在
-              栏的工具页后面，也没有一个点了会打开空栏的折叠按钮。
-              概览里的改动一行现在开的是侧栏的「改动」页，而不是旧的下拉抽屉：
-              改动清单只有一个家，栏的页签、起始页的行动行和概览都落在同一处。 */}
+          {/* 分支名不挂在标题旁：同一份事实由右栏起始页的环境卡承担（机器 →
+              路径 → 分支），标题这一行只留标题本身。
+              头部右侧两件东西：恒展示的会话状态条（任务与设备、上下文占用、
+              滚动的改动说明），以及最右的侧栏门。门放在最右，因为它开的就
+              是右边缘那一栏，按钮贴着它要打开的东西。状态条整条是一个按钮，
+              点开的是它自己的概览浮层（三段事实各带去处）；浮层只在点开时
+              盖住右上角，点外面就收起，所以 log、输入框和跳转箭头不会长期
+              被挡。超长的改动文字仍先在条内的小框里滚动。导出、节点和编排
+              卡都搬进了栏的头部，所以这条 bar 不再重复它们。新对话页反过来：
+              那一页没有栏，也没有线程可概览，唯一要答的问题是"在哪台机器上
+              跑"，所以这里站的是节点按钮本身 —— 设备不再锁在栏的工具页后面，
+              也没有一个点了会打开空栏的折叠按钮。 */}
           <div class="chat-head-tools">
             {showRail && !dockOpen && (
               <SessionRail
                 diff={diff}
-                working={busy}
                 tasks={sessionTasks ?? []}
                 nodes={nodes}
                 contextTokens={newestUsage?.tokens ?? 0}
-                model={newestUsage?.model ?? ''}
+                contextWindow={contextWindow}
+                modelName={modelName}
+                working={busy}
                 machine={railMachine}
                 onOpenDiff={openChanges}
                 onOpenTask={openTaskInPlace}
@@ -3327,15 +3494,33 @@ export function SessionsView({
                 autoGrow(el)
               }}
               onClick={(e) => {
-                // One listener for the whole surface: a click on a pill takes
-                // that file back out of the turn, a click anywhere else just
-                // moves the caret.
-                const chip = (e.target as HTMLElement).closest('.attach-pill') as HTMLElement | null
+                // One listener for the whole surface, delegated: the pills are
+                // built as raw nodes, and a listener per node would have to be
+                // torn down by hand every time one leaves the line. The ×
+                // takes the file back out; the magnifier — and the pill's own
+                // body — asks to see the picture; anywhere else moves the
+                // caret.
+                const hit = e.target as HTMLElement
+                const chip = hit.closest('.attach-pill') as HTMLElement | null
                 if (chip) {
-                  removePending(chip.dataset.pk ?? '')
+                  if (hit.closest('.attach-pill-x')) removePending(chip.dataset.pk ?? '')
+                  else zoomPill(chip)
                   return
                 }
                 setCaret(editorCaretOffset(e.currentTarget as HTMLDivElement))
+              }}
+              onMouseOver={(e) => {
+                // mouseover, not mouseenter: the former bubbles, so one
+                // listener covers pills inserted after this render. Moving
+                // between the pill's own glyphs is not "entering" it again.
+                const chip = (e.target as HTMLElement).closest('.attach-pill') as HTMLElement | null
+                if (!chip || chip.contains(e.relatedTarget as Node | null)) return
+                peekPill(chip)
+              }}
+              onMouseOut={(e) => {
+                const chip = (e.target as HTMLElement).closest('.attach-pill') as HTMLElement | null
+                if (!chip || chip.contains(e.relatedTarget as Node | null)) return
+                unpeek()
               }}
               onKeyUp={(e) => setCaret(editorCaretOffset(e.currentTarget as HTMLDivElement))}
               onPaste={(e) => {
@@ -3546,6 +3731,18 @@ export function SessionsView({
             </div>
           )}
         </form>
+        {/* The pill's floating copy and its lightbox. Fixed-position and
+            outside the box, so neither the composer's own edge nor the
+            transcript's scroller can clip them. */}
+        {peek && <HoverPreview src={peek.src} name={peek.name} anchor={peek.anchor} />}
+        {shot && (
+          <Lightbox
+            src={shot.src}
+            path={shot.path}
+            label={shot.name}
+            onClose={() => setShot(null)}
+          />
+        )}
         {loadError && <p class="gate-error composer-error">{loadError}</p>}
       </div>
 

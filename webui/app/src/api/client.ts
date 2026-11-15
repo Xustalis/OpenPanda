@@ -10,6 +10,16 @@ import { locale } from '../i18n/index.ts'
 
 const TOKEN_KEY = 'openpanda.token'
 
+/** A provider's fetched catalogue: the ids it returned, plus the vendor each
+ *  one is attributed to when the endpoint reports an `owned_by`. Kept as one
+ *  value so a picker never shows an id list from one fetch next to a vendor
+ *  map from another. The map is sparse — Anthropic- and Google-shaped
+ *  catalogues carry no vendor at all. */
+export interface ModelRoster {
+  ids: string[]
+  owners: Record<string, string>
+}
+
 export class ApiError extends Error {
   readonly status: number
   constructor(status: number, message: string) {
@@ -1881,7 +1891,15 @@ export const api = {
     return request('POST', '/api/models/remove', { refs })
   },
 
-  fetchModels(req: ModelRefRequest): Promise<{ ok: boolean; alias?: string; models?: string[]; error?: string }> {
+  /** The provider's catalogue plus, when it ships one, the vendor it
+   *  attributes each id to (`/v1/models` → `owned_by`). */
+  fetchModels(req: ModelRefRequest): Promise<{
+    ok: boolean
+    alias?: string
+    models?: string[]
+    owners?: Record<string, string>
+    error?: string
+  }> {
     return request('POST', '/api/models/fetch', req)
   },
 

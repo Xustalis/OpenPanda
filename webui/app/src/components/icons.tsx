@@ -47,6 +47,7 @@ export type IconName =
   | 'folder-plus'
   | 'gear'
   | 'git-fork'
+  | 'home'
   | 'image'
   | 'kanban'
   | 'layout'
@@ -294,6 +295,16 @@ const paths: Record<IconName, JSX.Element> = {
       <circle cx="18" cy="6" r="3" />
       <path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9" />
       <path d="M12 12v3" />
+    </>
+  ),
+  // The way back to the side dock's start pane: a house, not an arrow. An
+  // arrow said "previous screen", which is a browser's promise about a history
+  // stack; this control goes to one fixed place — the thread's overview — and
+  // it is the only destination in the head that never changes with the tab.
+  home: (
+    <>
+      <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M9 22V12h6v10" />
     </>
   ),
   // The Lucide frame kept, but its diagonal mountain stroke is now a solid

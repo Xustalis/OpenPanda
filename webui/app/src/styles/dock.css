@@ -23,6 +23,9 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  /* The head adapts to the column's own width, not the viewport's: the same
+     380px card sits in a 1200px window and in a 700px one. */
+  container-type: inline-size;
   /* Every surface is a pane inside this card now; nothing hangs out of it. */
   overflow: hidden;
   background: var(--bg);
@@ -107,7 +110,7 @@
   width: 18px;
   height: 18px;
 }
-.dock-head .icon-btn:hover,
+.dock-head .icon-btn:hover:not(:disabled),
 .dock-head .icon-btn.open {
   background: var(--bg-inset);
   color: var(--text-primary);
@@ -183,8 +186,7 @@
    Pure CSS, nothing measured: `--dock-w` is already on `.chat` (sessions.tsx
    writes it there for the grid track) and `--dock-head-h` with it, so dragging
    the seam takes the card along and the top stays on the task list's first
-   pixel — the head, the crumb back to the start pane, plus the inline page's
-   12px padding. */
+   pixel — the head plus the inline page's 12px padding. */
 .orch-orch-card.is-float {
   position: absolute;
   /* Above the transcript, below every menu and popover the pane opens (20/30):
@@ -360,48 +362,50 @@
 }
 
 /* ---- The step back to the start pane ---------------------------------------
-   A pane replaces the "start from here" rows, and the head has no room for a
-   fifth square: at the 320px floor the four tabs, the three tools and the fold
-   already fill the line. So the way home is the body's first line, above the
-   pane's own bar rather than inside it — each panel owns a header, and each of
-   them is a different place to come back from.
+   Beside `+`, at the head's left end: the overview is where `+` and the four
+   places both start from, so the way back belongs with them. It used to be a
+   crumb line above every pane, which cost the body 30px of height in a column
+   that is read top-down — and it was the first line of every page, including
+   the ones that already have a header of their own.
 
-   A crumb, not a toolbar: one arrow and a word, no fill until hover, and no
-   rule of its own — the pane header directly under it already draws the line
-   the eye expects, and a second hairline 30px above the first would read as two
-   stacked bars in a 380px column. Its height is `--dock-back-h`: the floating
-   task card is pinned to the top of this line (see chat.css). */
-.dock-back {
+   Greyed while the start pane is showing: there is nothing behind it then, and
+   a control that appeared and disappeared would slide the four places sideways
+   on every tab click. */
+.dock-home {
   flex: none;
-  display: flex;
-  align-items: center;
-  padding: 6px 10px 0;
 }
-.dock-back-btn {
-  position: relative;
-  /* The 12px resize grip spans the whole card at z-index 3, and the row's 10px
-     padding puts this button's first two pixels under it. Lift the control,
-     not the row: the seam stays draggable everywhere else. */
-  z-index: 4;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 8px 0 5px;
-  border: 0;
-  border-radius: var(--radius-sm, 6px);
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 12.5px;
-  line-height: 1;
-  cursor: pointer;
-}
-.dock-back-btn:hover {
-  background: var(--bg-inset);
-  color: var(--text-primary);
-}
-.dock-back-btn svg {
-  flex: none;
+
+/* The head at its narrowest. The extra square costs 36px on a line that was
+   already full at the 320px floor, so below the default width the row gives up
+   2px of every gap and every square instead of clipping the fold. Nothing is
+   hidden here — the tabs, the three tools and the fold all keep their glyphs.
+   377 is the card's 380 minus its two hairlines: the query measures the
+   container's content box, so the default width stays on the full-size row. */
+@container (max-width: 377px) {
+  .dock-head {
+    gap: 4px;
+    padding: 0 7px;
+  }
+  .dock-head .icon-btn {
+    width: 28px;
+    height: 28px;
+  }
+  .dock-head .icon-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+  .dock-tabs {
+    gap: 1px;
+    padding: 2px;
+  }
+  .dock-tab {
+    width: 26px;
+    height: 28px;
+  }
+  .dock-tools {
+    gap: 1px;
+    padding-left: 6px;
+  }
 }
 
 @keyframes dock-in {

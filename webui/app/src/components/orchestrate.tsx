@@ -30,9 +30,11 @@ import { toast, toastError } from './toast'
  *
  *  Three strips: work that is moving (进行中), work parked on the human
  *  (待审核), and the archive (已完成 — done, failed and cancelled all landed
- *  somewhere, and none of them wants a decision). The card is tall enough for
- *  all three to be on screen at once, so the state of the thread is one glance
- *  rather than one scroll. A row's own actions (取消 / 执行) sit on the task,
+ *  somewhere, and none of them wants a decision). Each strip is a vertical
+ *  list of full-width rows, four in view and the rest one wheel-notch below:
+ *  a task's title is a sentence, and the dock has the width for it — the
+ *  sideways strip this used to be cut the third task in half and hid the rest
+ *  behind a horizontal drag. A row's own actions (取消 / 执行) sit on the task,
  *  not behind a detail trip.
  *
  *  The card is a task list first. It used to carry a DecisionOrbit rail above
@@ -48,13 +50,12 @@ import { toast, toastError } from './toast'
  *  transcript's scroll, its draft and its place in the conversation.
  *
  *  The trace is a sibling rather than a section inside this card because it is
- *  read in a different direction: the list is scanned top-down (and a strip
- *  that outgrows its four tiles continues downwards), the trace is a
- *  three-step column. Stacked in one card, the
- *  steps either pushed the strips down or had to live in a scroller inside a
- *  scroller. Side by side each keeps its own height and its own scroll, and the
- *  8px gap is the whole relationship. Narrow panes wrap the trace back under
- *  the list — it never floats over the transcript on a phone.
+ *  read in a different direction: the list is scanned top-down, the trace is a
+ *  three-step column. Stacked in one card, the steps either pushed the strips
+ *  down or had to live in a scroller inside a scroller. Side by side each keeps
+ *  its own height and its own scroll, and the 8px gap is the whole
+ *  relationship. Narrow panes wrap the trace back under the list — it never
+ *  floats over the transcript on a phone.
  *
  *  The card reads top-down in the order the questions come: what has this
  *  thread produced (strips), what is in this one task (detail). Every section
@@ -352,17 +353,16 @@ export function OrchestrateCard(props: {
   )
 }
 
-/** One strip: a label with its count, then the tasks in a two-column grid —
- *  four tiles in view (two rows of two), the rest one wheel-notch below. An
- *  empty strip keeps a tile-sized slot rather than collapsing to a line of
- *  text: the three strips are read as one table, and a section that shrank to
- *  its placeholder made the card jump every time a task arrived or left.
+/** One strip: a label with its count, then the tasks as full-width rows
+ *  running downwards — four in view, the rest one wheel-notch below. An empty
+ *  strip keeps a row-sized slot rather than collapsing to a line of text: the
+ *  three strips are read as one table, and a section that shrank to its
+ *  placeholder made the card jump every time a task arrived or left.
  *
- *  The grid scrolls itself, not the card: a thread can hold twenty finished
- *  tasks and none of them should push 待审核 off the bottom of the popover. The
- *  tiles are tall enough for a three-line title, so the four on screen say what
- *  they are; the count on the label says how many are below the fold, and the
- *  wheel and a press-drag both move the grid (see `strip-drag.ts`). */
+ *  The list scrolls itself, not the card: a thread can hold twenty finished
+ *  tasks and none of them should push 待审核 off the bottom of the pane. The
+ *  count on the label says how many are below the fold, and the wheel and a
+ *  press-drag both move the list (see `strip-drag.ts`). */
 function OrchRow(props: {
   title: string
   tasks: Task[]
@@ -376,7 +376,7 @@ function OrchRow(props: {
     onRun(): void
   }
 }) {
-  // Bound to the element's own lifetime, not to the task count: the strip
+  // Bound to the element's own lifetime, not to the task count: the list
   // only exists in the filled branch, and rebinding on every list change
   // would tear the listeners down mid-gesture — a task arriving over SSE
   // during a drag could then drop the press and let the release click
@@ -384,9 +384,9 @@ function OrchRow(props: {
   const [strip, setStrip] = useState<HTMLDivElement | null>(null)
   useEffect(() => {
     if (!strip) return
-    // The strip runs sideways: fixed-width tiles, as many as the column fits,
-    // the rest reached by wheel or press-drag rather than by resizing a tile.
-    return bindStripDrag(strip, 'x')
+    // The list runs downwards: full-width rows, four of them in view, the rest
+    // reached by wheel or press-drag rather than by squeezing the rows.
+    return bindStripDrag(strip, 'y')
   }, [strip])
   return (
     <section class="orch-sec">
@@ -397,7 +397,7 @@ function OrchRow(props: {
       {props.tasks.length === 0 ? (
         <p class="orch-sec-slot">{props.empty}</p>
       ) : (
-        <div class="orch-grid" ref={setStrip}>
+        <div class="orch-list" ref={setStrip}>
           {props.tasks.map((task) => (
             <OrchChip key={task.id} {...props.chipProps(task)} />
           ))}
@@ -407,8 +407,8 @@ function OrchRow(props: {
   )
 }
 
-/** A task as it appears in a row: title, state, age, and its one action.
- *  The open target is a real button (not the whole tile) so the action button
+/** A task as it appears in the list: title, state, age, and its one action.
+ *  The open target is a real button (not the whole row) so the action button
  *  beside it is not a control nested inside another control. */
 function OrchChip(props: {
   task: Task
@@ -420,6 +420,7 @@ function OrchChip(props: {
 }) {
   const active = isActiveState(props.task.state)
   const blocked = props.task.approval_disposition === 'needs_changed_input'
+  const title = props.task.title || props.task.id
   return (
     <div class="orch-chip" data-state={props.task.state} data-picked={props.picked || undefined}>
       <button
@@ -427,14 +428,17 @@ function OrchChip(props: {
         class="orch-chip-open"
         aria-expanded={props.picked}
         aria-controls="orch-detail"
+        title={title}
         onClick={props.onOpen}
       >
-        <span class="orch-chip-title">{props.task.title || props.task.id}</span>
+        <span class="orch-chip-title">{title}</span>
         <span class="orch-chip-meta">
           <StateBadge state={props.task.state} />
           <span class="orch-chip-age">{fmtElapsed(props.task.updated_at)}</span>
         </span>
       </button>
+      {/* Empty for a finished task, and `:empty` takes the column out of the
+          row: a finished row is a title, not a title plus a gap. */}
       <div class="orch-chip-acts">
         {active && (
           <button

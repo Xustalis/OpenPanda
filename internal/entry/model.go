@@ -1603,8 +1603,16 @@ func truncate(s string, n int) string {
 }
 
 // ModelInfo is one entry in a provider's model catalogue.
+//
+// OwnedBy is the vendor the provider itself attributes the id to. OpenAI's
+// /v1/models ships it on every row and most OpenAI-compatible relays copy the
+// field; Anthropic's and Google's catalogues carry no vendor at all. It is
+// carried through rather than dropped because it is the only grouping signal a
+// flat catalogue gives us — a 463-row roster is otherwise one undifferentiated
+// list.
 type ModelInfo struct {
-	ID string `json:"id"`
+	ID      string `json:"id"`
+	OwnedBy string `json:"owned_by,omitempty"`
 }
 
 // listModelsResponse is the OpenAI /models shape — { "data": [ { "id": … } ] }

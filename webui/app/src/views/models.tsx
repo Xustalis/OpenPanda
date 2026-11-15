@@ -6,6 +6,7 @@ import {
   type AddModelRequest,
   type ModelEntry,
   type ModelRef,
+  type ModelRoster,
   type ModelsResponse,
   type ProviderInfo,
 } from '../api/client'
@@ -820,7 +821,7 @@ function ModelSheet(props: {
     if (pre) return [newDraft()]
     return [newDraft(initial?.default_model ?? '')]
   })
-  const [remote, setRemote] = useState<string[] | null>(null)
+  const [remote, setRemote] = useState<ModelRoster | null>(null)
   /** Rows to register on this connection *while* editing it. Editing is a
    *  one-row form by design, but the second thing anyone does to a working
    *  relay is "same endpoint, same key, one more id" — and that used to mean
@@ -979,7 +980,7 @@ function ModelSheet(props: {
         setError(r.error ?? t('models.fetchFail'))
         return
       }
-      setRemote(r.models)
+      setRemote({ ids: r.models, owners: r.owners ?? {} })
       // The roster feeds the picker, it does not mint rows. Fetching a
       // 21-model endpoint used to append 21 drafts (unknown ids pre-ticked),
       // so "look at what this key can reach" ended as 21 cards nobody asked
@@ -1254,7 +1255,8 @@ function ModelSheet(props: {
         aria-modal="true"
         aria-labelledby="model-sheet-title"
         onKeyDown={(e) => {
-          if (e.key === 'Escape') {
+          if (e.key === 'Escape' && !e.isComposing) {
+            e.preventDefault()
             e.stopPropagation()
             props.onClose()
           }
@@ -1446,13 +1448,14 @@ function ModelSheet(props: {
                       id="ms-model"
                       value={d.model}
                       onValue={(v) => patch(d.id, { model: v, alias: d.alias === d.model ? v : d.alias })}
-                      options={remote ?? []}
+                      options={remote?.ids ?? []}
+                      owners={remote?.owners}
                       placeholder={provider.default_model || 'model-id'}
                       required
                     />
                     <p class="wizard-help">
                       {remote
-                        ? t('models.fetched', { n: remote.length })
+                        ? t('models.fetched', { n: remote.ids.length })
                         : t('models.modelHelp')}
                     </p>
                   </div>
@@ -1688,7 +1691,7 @@ function ModelSheet(props: {
                     </div>
                   </div>
                   {remote && (
-                    <p class="hint">{t('models.fetched', { n: remote.length })}</p>
+                    <p class="hint">{t('models.fetched', { n: remote.ids.length })}</p>
                   )}
 
                   <div class="models-table">
@@ -1848,7 +1851,7 @@ function DraftHead() {
  *  and the tuning block behind a disclosure. */
 function DraftRow(props: {
   d: Draft
-  remote: string[] | null
+  remote: ModelRoster | null
   /** The table above carries the column names; keep the labels for screen
    *  readers but out of the visual flow. */
   bare?: boolean
@@ -1873,7 +1876,8 @@ function DraftRow(props: {
               <ModelPicker
                 value={d.model}
                 onValue={(v) => props.onPatch({ model: v, alias: d.alias === d.model ? v : d.alias })}
-                options={props.remote ?? []}
+                options={props.remote?.ids ?? []}
+                owners={props.remote?.owners}
                 placeholder="model-id"
               />
             </div>

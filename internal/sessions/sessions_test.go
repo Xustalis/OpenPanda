@@ -307,6 +307,36 @@ func TestForkCopiesPrefixAndTree(t *testing.T) {
 	}
 }
 
+func TestForkPreservesPermissionMode(t *testing.T) {
+	store := NewStore(t.TempDir())
+	for _, mode := range []string{"plan", "manual", "auto", "edits", "bypass", ""} {
+		t.Run(mode, func(t *testing.T) {
+			want := mode
+			if mode == "auto" {
+				want = "" // The setter stores the default as an empty value.
+			}
+			parent, err := store.Create("permission policy")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SetPermissionMode(parent.ID, mode); err != nil {
+				t.Fatal(err)
+			}
+			child, err := store.Fork(parent.ID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := NewStore(store.root).Get(child.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if child.PermissionMode != want || loaded.PermissionMode != want {
+				t.Errorf("fork permission = %q, persisted = %q, want %q", child.PermissionMode, loaded.PermissionMode, want)
+			}
+		})
+	}
+}
+
 func TestCompactHistoryFoldsIntoSummary(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
@@ -555,7 +585,10 @@ func TestStampsTrackFileChanges(t *testing.T) {
 
 func TestInvalidIDsRejected(t *testing.T) {
 	store := NewStore(t.TempDir())
-	for _, id := range []string{"", "..", "../x", "a/b", `a\b`, "x/../../y"} {
+	for _, id := range []string{"", ".", "..", "../x", "a/b", `a\b`, "x/../../y"} {
+		if ValidID(id) {
+			t.Errorf("ValidID(%q) = true", id)
+		}
 		if err := store.Delete(id); !errors.Is(err, ErrNotFound) {
 			t.Errorf("Delete(%q) err = %v, want ErrNotFound", id, err)
 		}

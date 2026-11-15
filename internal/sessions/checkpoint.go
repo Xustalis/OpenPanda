@@ -272,10 +272,15 @@ func (s *Store) Rewind(ctx context.Context, id string, turn int) (*RewindResult,
 // are the work a rewind is undoing. Deletion is limited to paths absent from
 // the snapshot, so nothing the snapshot knew about is lost.
 func restoreTree(ctx context.Context, wt, sha string) ([]string, error) {
-	others, _ := gitOut(ctx, wt, nil, "ls-files", "--others", "--exclude-standard")
+	// NUL-delimited output preserves Git paths verbatim: line output quotes
+	// Unicode/control characters, and trimming it loses leading whitespace.
+	others, err := executil.CommandContext(ctx, "git", "-C", wt,
+		"ls-files", "--others", "--exclude-standard", "-z").Output()
+	if err != nil {
+		return nil, fmt.Errorf("sessions: list untracked files: %w", err)
+	}
 	var removed []string
-	for _, p := range strings.Split(others, "\n") {
-		p = strings.TrimSpace(p)
+	for _, p := range strings.Split(string(others), "\x00") {
 		if p == "" {
 			continue
 		}

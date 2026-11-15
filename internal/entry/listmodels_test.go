@@ -40,6 +40,39 @@ func TestListModelsOpenAI(t *testing.T) {
 	}
 }
 
+// TestListModelsOwnedBy pins the vendor passthrough: OpenAI's /v1/models
+// attributes every row to an owner, and that field is the only grouping signal
+// a flat catalogue carries — the console's model picker groups by it. A
+// catalogue that omits it must decode cleanly rather than fail the fetch.
+func TestListModelsOwnedBy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[
+			{"id":"gpt-4o","owned_by":"openai"},
+			{"id":"claude-3-5-sonnet","owned_by":"anthropic"},
+			{"id":"bare-model"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(config.ModelConfig{APIType: config.APITypeOpenAI, BaseURL: srv.URL, APIKey: "sk-test", Model: "m"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	models, err := c.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(models) != 3 {
+		t.Fatalf("models = %+v", models)
+	}
+	if models[0].OwnedBy != "openai" || models[1].OwnedBy != "anthropic" {
+		t.Fatalf("vendors = %q, %q; want openai, anthropic", models[0].OwnedBy, models[1].OwnedBy)
+	}
+	if models[2].OwnedBy != "" {
+		t.Fatalf("bare row vendor = %q, want empty", models[2].OwnedBy)
+	}
+}
+
 func TestListModelsAnthropic(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {

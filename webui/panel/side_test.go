@@ -5,12 +5,14 @@ package panel
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
@@ -48,6 +50,65 @@ func sidePayloadOf(t *testing.T, body []byte) sidePayload {
 		t.Fatalf("decode side payload: %v (%s)", err, body)
 	}
 	return out
+}
+
+func TestSideAskLeavesMainSteerQueueUntouched(t *testing.T) {
+	h, store := newSideHandler(t)
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"A side answer\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer model.Close()
+	if err := h.engine.SetModel(config.ModelConfig{APIType: config.APITypeOpenAI, BaseURL: model.URL, Model: "test", NoAuth: true}); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.Create("main thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainOp, err := h.registerSessionAsk(sess.ID, func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.unregisterSessionAsk(sess.ID, mainOp)
+	const note = "MAIN_ONLY_STEER_NOTE"
+	queued, ok := h.pushSteer(sess.ID, note, false)
+	if !ok {
+		t.Fatal("queue main note")
+	}
+
+	rr := httptest.NewRecorder()
+	sideMux(h).ServeHTTP(rr, authedReq(http.MethodPost, "/api/sessions/"+sess.ID+"/ask",
+		strings.NewReader(`{"prompt":"Hello from the side","side":true}`)))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "event: result") {
+		t.Fatalf("side ask = %d %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "event: steer") {
+		t.Error("side stream acknowledged a main-thread note")
+	}
+	if notes := h.listSteer(sess.ID); len(notes) != 1 || notes[0].text != note || notes[0].key != queued.key {
+		t.Fatalf("main queue after side ask = %+v, want the original note", notes)
+	}
+	if !h.hasActiveAsk(sess.ID) {
+		t.Error("side ask displaced the main operation")
+	}
+	// A subsequent main ask must still consume and acknowledge the same note.
+	// Existing history keeps this on the round loop rather than fast triage.
+	if _, err := store.AppendTurns(sess.ID,
+		sessions.Turn{Role: "user", Text: "earlier question"},
+		sessions.Turn{Role: "assistant", Text: "earlier answer"}); err != nil {
+		t.Fatal(err)
+	}
+	rr = httptest.NewRecorder()
+	sideMux(h).ServeHTTP(rr, authedReq(http.MethodPost, "/api/sessions/"+sess.ID+"/ask",
+		strings.NewReader(`{"prompt":"Continue the main conversation"}`)))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "event: result") ||
+		!strings.Contains(rr.Body.String(), "event: steer") || !strings.Contains(rr.Body.String(), note) {
+		t.Fatalf("main ask did not acknowledge its note: %d %s", rr.Code, rr.Body.String())
+	}
+	if notes := h.listSteer(sess.ID); len(notes) != 0 {
+		t.Errorf("main ask left an already consumed note queued: %+v", notes)
+	}
 }
 
 // TestSideAskIsStoredServerSide pins the background contract: a side question
