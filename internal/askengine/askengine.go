@@ -1499,8 +1499,10 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 
 	if e.schedCancel != nil {
 		e.schedCancel()
-		if err := e.taskFlow.Wait(context.Background()); err != nil {
-			return err
+		if e.taskFlow != nil {
+			if err := e.taskFlow.Wait(context.Background()); err != nil {
+				return err
+			}
 		}
 	}
 	schedCtx, cancel := context.WithCancel(context.Background())
@@ -1615,6 +1617,9 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// ask/REPL engines submit inline and must not unexpectedly drain
 	// persisted work either way.
 	if e.queueTasks && ownsRow {
+		if e.taskFlow == nil {
+			e.taskFlow = taskflow.New(e.db, e.cfg.Storage.DBPath)
+		}
 		e.taskFlow.ConfigureExecution(sched, taskflow.AutomationOptions{
 			Model: func() taskflow.AuxiliaryModel {
 				if client := e.client.Load(); client != nil {
