@@ -848,7 +848,7 @@ const zhCN: Messages = {
   'onboarding.guide.nav.newChat': '开一条新线程。会话在第一条消息发出时才创建。',
   'onboarding.guide.nav.workspace': '设备与 Agent 的地图。滚轮缩放，点选设备看连线。',
   'onboarding.guide.nav.control': '队列、计划、项目三块看板，共用同一批任务。',
-  'onboarding.guide.nav.team': '这条线程由谁来做 —— 熊猫单击打开的也是它。',
+  'onboarding.guide.nav.team': '查看业务任务、团队空间与待确认事项。',
   'onboarding.guide.nav.memory': '这个节点学到的东西，可读可改可删。',
   'onboarding.guide.nav.settings': '模型、策略、Agents、MCP、技能、系统。',
   'onboarding.guide.panda': '角落里的熊猫',

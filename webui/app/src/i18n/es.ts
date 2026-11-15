@@ -855,7 +855,7 @@ const es: Messages = {
   'onboarding.guide.nav.workspace':
     'Dispositivos y agentes en un mapa. La rueda acerca, un clic muestra las conexiones.',
   'onboarding.guide.nav.control': 'Cola, planes y proyectos — tres tableros sobre las mismas tareas.',
-  'onboarding.guide.nav.team': 'Quién trabaja en este hilo — la misma tarjeta que abre el panda.',
+  'onboarding.guide.nav.team': 'Consulta tareas, espacios de equipo y elementos pendientes de tu confirmación.',
   'onboarding.guide.nav.memory': 'Lo que este nodo ha aprendido. Leer, editar, borrar.',
   'onboarding.guide.nav.settings': 'Modelos, políticas, agentes, MCP, habilidades, sistema.',
   'onboarding.guide.panda': 'El panda de la esquina',

@@ -861,7 +861,7 @@ const en: Messages = {
   'onboarding.guide.nav.workspace':
     'Devices and agents on one map. Wheel zooms, a click shows the edges.',
   'onboarding.guide.nav.control': 'Queue, plans and projects — three boards over the same tasks.',
-  'onboarding.guide.nav.team': 'Who works on this thread — the same card the panda opens.',
+  'onboarding.guide.nav.team': 'View business tasks, team spaces and items awaiting your confirmation.',
   'onboarding.guide.nav.memory': 'What this node has learned. Read, edit, delete.',
   'onboarding.guide.nav.settings': 'Models, policies, agents, MCP, skills, system.',
   'onboarding.guide.panda': 'The panda in the corner',
