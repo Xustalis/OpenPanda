@@ -35,7 +35,8 @@ func (t Tool) spec() ToolSpec {
 
 // Registry is the set of tools the entry model may call, keyed by name.
 type Registry struct {
-	tools map[string]Tool
+	tools   map[string]Tool
+	exposed map[string]bool // nil advertises all; request-local discovery narrows schemas
 }
 
 // NewRegistry builds an empty registry.
@@ -59,6 +60,9 @@ func (r *Registry) Lookup(name string) (Tool, bool) {
 func (r *Registry) Specs() []ToolSpec {
 	names := make([]string, 0, len(r.tools))
 	for n := range r.tools {
+		if r.exposed != nil && !r.exposed[n] {
+			continue
+		}
 		names = append(names, n)
 	}
 	sort.Strings(names)
@@ -73,8 +77,17 @@ func (r *Registry) Specs() []ToolSpec {
 // can attach per-request tools without mutating the shared registry.
 func (r *Registry) Copy() *Registry {
 	out := NewRegistry()
+	if r.exposed != nil {
+		out.exposed = make(map[string]bool)
+		for k, v := range r.exposed {
+			out.exposed[k] = v
+		}
+	}
 	for name, t := range r.tools {
 		out.tools[name] = t
+	}
+	if out.exposed != nil {
+		out.bindDiscoveryTool()
 	}
 	return out
 }
@@ -85,10 +98,19 @@ func (r *Registry) Copy() *Registry {
 // registry later, which a deny-list would silently do.
 func (r *Registry) Filter(keep func(name string) bool) *Registry {
 	out := NewRegistry()
+	if r.exposed != nil {
+		out.exposed = make(map[string]bool)
+	}
 	for name, t := range r.tools {
 		if keep(name) {
 			out.tools[name] = t
+			if r.exposed != nil && r.exposed[name] {
+				out.exposed[name] = true
+			}
 		}
+	}
+	if _, ok := out.tools["tool_search"]; ok && out.exposed != nil {
+		out.bindDiscoveryTool()
 	}
 	return out
 }

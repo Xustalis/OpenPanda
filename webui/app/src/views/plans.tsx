@@ -6,6 +6,7 @@ import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
 import { navigate } from '../nav'
 import { Icon } from '../components/icons'
+import { planLayout } from '../components/plan-layout'
 
 /** Plans are a second lens on the task centre, not a separate destination.
  *  The optional id set comes from the same project/device-filtered task list
@@ -89,16 +90,43 @@ function PlanCard(props: { plan: PlanSummary; open: boolean; onToggle: () => voi
 }
 
 function PlanStages(props: { id: string }) {
-  const { data: detail, error } = useAsync(() => api.plan(props.id), [props.id])
+  const change = useChangeSignal()
+  const { data: detail, error } = useAsync(() => api.plan(props.id), [props.id], change)
   if (error) return <p class="gate-error plan-stage-err">{error}</p>
   if (!detail) return <p class="dim plan-stage-err">{t('common.loading')}</p>
   return (
+    <>
+    <PlanGraph stages={detail.stages} />
     <ol class="plan-stages">
       {detail.stages.map((s) => (
         <StageRow key={s.stage} stage={s} />
       ))}
     </ol>
+    </>
   )
+}
+
+function PlanGraph({ stages }: { stages: PlanStage[] }) {
+  const graph = planLayout(stages)
+  return <div class="plan-graph-wrap">
+    <p class="dim">{t('plans.flowHint')}</p>
+    {graph.incomplete && <p role="status">{t('plans.flowIncomplete')}</p>}
+    <div class="plan-graph-scroll" role="region" tabIndex={0} aria-label={t('plans.flow')}>
+      <div class="plan-graph" style={{ width: graph.width, height: graph.height }}>
+        <svg width={graph.width} height={graph.height} aria-hidden="true">
+          {graph.edges.map(({ from, to }) => {
+            const x = from.x + 232, y = from.y + 50, endX = to.x, endY = to.y + 50
+            return <path key={from.stage.stage + ':' + to.stage.stage} d={`M ${x} ${y} C ${x + 22} ${y}, ${endX - 22} ${endY}, ${endX} ${endY}`} />
+          })}
+        </svg>
+        {graph.nodes.map(({ stage: s, x, y }) => <button key={s.stage} class={`plan-graph-node state-${s.state}`} style={{ left: x, top: y }} onClick={() => navigate({ view: 'detail', id: s.task_id })}>
+          <span class="plan-graph-status"><span class={`badge state-${s.state}`}>{t(`state.${s.state}`, s.state)}</span>{s.final && <span>{t('plans.final')}</span>}</span>
+          <strong>{s.title || s.stage}</strong>
+          <span class="dim mono" title={stageDevice(s)}>{stageDevice(s)}</span>
+        </button>)}
+      </div>
+    </div>
+  </div>
 }
 
 function StageRow(props: { stage: PlanStage }) {
@@ -108,7 +136,8 @@ function StageRow(props: { stage: PlanStage }) {
       <div class="plan-stage-head">
         <span class={`badge state-${s.state}`}>{t(`state.${s.state}`, s.state)}</span>
         <span class="stage-name">{s.title || s.stage}</span>
-        {s.owner && <span class="stage-owner mono" title={s.owner}><Icon name="network" size={11} /> {s.owner}</span>}
+        {s.final && <span class="badge accent">{t('plans.final')}</span>}
+        {(s.executor || s.target) && <span class="stage-owner mono" title={stageDevice(s)}><Icon name="network" size={11} /> {stageDevice(s)}</span>}
         <button
           class="btn small ghost"
           onClick={() => navigate({ view: 'detail', id: s.task_id })}
@@ -140,6 +169,12 @@ function StageRow(props: { stage: PlanStage }) {
       )}
     </li>
   )
+}
+
+function stageDevice(s: PlanStage): string {
+  if (s.executor) return t('plans.executorDevice', { node: s.executor })
+  if (s.target) return t('plans.targetDevice', { node: s.target })
+  return t('plans.routingPending')
 }
 
 function fmtAgo(ts: number): string {

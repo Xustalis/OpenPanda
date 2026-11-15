@@ -1768,6 +1768,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// answers to. Each stage's own answer arrives as its employee finishes
 		// (the session finalizer, one compact turn per stage).
 		turn.Text = fmt.Sprintf("已启动多阶段计划：%s（%d 个阶段，%s）", out.PlanGoal, len(out.PlanStages), out.PlanID)
+		if out.Answer != "" {
+			turn.Text = out.Answer
+		}
 		turn.Ref = out.PlanID
 	default:
 		turn.Text = out.Answer

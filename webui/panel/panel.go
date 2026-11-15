@@ -290,6 +290,7 @@ func New(d Deps) http.Handler {
 	}
 	if d.SkillStore != nil {
 		mux.HandleFunc("GET /api/skills", h.listSkills)
+		mux.HandleFunc("GET /api/skills/read", h.readSkill)
 		mux.HandleFunc("POST /api/skills/approve", h.skillAction(true))
 		mux.HandleFunc("POST /api/skills/reject", h.skillAction(false))
 		mux.HandleFunc("POST /api/skills/reset", h.resetSkill)
@@ -316,8 +317,8 @@ func New(d Deps) http.Handler {
 	}
 	if h.taskFlow != nil {
 		mux.HandleFunc("GET /api/work/connections/{id}/spaces/{space}/members", h.connectionMembers)
-		mux.HandleFunc("GET /api/work/runs", h.workRuns)
 		mux.HandleFunc("POST /api/work/connections/{id}/spaces/{space}/tasks", h.createRemoteWork)
+		mux.HandleFunc("GET /api/work/runs", h.workRuns)
 		mux.HandleFunc("GET /api/work/connections/{id}/spaces/{space}/bindings", h.workBindings)
 		mux.HandleFunc("PUT /api/work/connections/{id}/spaces/{space}/bindings", h.workBindings)
 		mux.HandleFunc("GET /api/work/runs/{id}", h.workRunResult)
@@ -1427,6 +1428,8 @@ var visibleTraceTypes = map[string]bool{
 	"route_decision":     true,
 	"delegation_hop":     true,
 	"exec_agent_start":   true,
+	"skill_load":         true,
+	"prompt_context":     true,
 	"supervision_round":  true,
 	"tier2_triggered":    true,
 	"plan_stage_changed": true,

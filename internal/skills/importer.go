@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -35,17 +37,42 @@ type ImportOptions struct {
 	Force   bool   // overwrite existing skill if true
 }
 
-// ImportBytes imports a skill from raw markdown bytes (YAML frontmatter + body).
+// ImportBytes imports a standalone skill. Bundle imports also preserve resources.
 func (s *Store) ImportBytes(data []byte, opts ImportOptions) (*Skill, error) {
-	sk, err := ParseSkill(data)
-	if err != nil {
-		return nil, fmt.Errorf("skills: parse skill data: %w", err)
+	if len(data) > maxDownloadBytes {
+		return nil, fmt.Errorf("skills: input exceeds size limit")
 	}
-
-	if opts.Name != "" {
-		if err := validateName(opts.Name); err != nil {
+	sk, err := prepareImport(data, opts)
+	if err != nil {
+		return nil, err
+	}
+	if !opts.Force {
+		existing, err := s.Load(sk.Scope, sk.keyForScope(), sk.Name)
+		if err != nil {
 			return nil, err
 		}
+		if existing != nil {
+			return nil, fmt.Errorf("skills: skill %q already exists (use --force to overwrite)", sk.Name)
+		}
+	}
+	encoded, err := sk.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	// Import replaces the complete skill. Unlike a metadata-only Save, a
+	// standalone import must also remove resources from the previous bundle.
+	if err := s.saveBundle(sk, bundleFiles{"SKILL.md": encoded}); err != nil {
+		return nil, err
+	}
+	return sk, nil
+}
+
+func prepareImport(data []byte, opts ImportOptions) (*Skill, error) {
+	sk, err := ParseSkill(data)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Name != "" {
 		sk.Name = opts.Name
 	}
 	if opts.Scope != "" {
@@ -57,33 +84,20 @@ func (s *Store) ImportBytes(data []byte, opts ImportOptions) (*Skill, error) {
 	if opts.Device != "" {
 		sk.Device = opts.Device
 	}
-	if opts.Status != "" {
-		sk.Status = opts.Status
-	} else {
-		sk.Status = StatusActive // user-initiated import defaults to active
+	sk.Status = opts.Status
+	if sk.Status == "" {
+		sk.Status = StatusActive
 	}
-
-	// Validate scope key
-	key := sk.keyForScope()
 	if sk.Scope == ScopeProject && sk.Project == "" {
 		return nil, fmt.Errorf("skills: project scope requires project name")
 	}
 	if sk.Scope == ScopeDevice && sk.Device == "" {
 		return nil, fmt.Errorf("skills: device scope requires device name")
 	}
-
-	// Check if already exists unless Force is set
-	if !opts.Force {
-		existing, err := s.Load(sk.Scope, key, sk.Name)
-		if err != nil {
-			return nil, err
-		}
-		if existing != nil {
-			return nil, fmt.Errorf("skills: skill %q already exists (use --force to overwrite)", sk.Name)
-		}
+	if sk.Scope != ScopeGlobal && sk.Scope != ScopeProject && sk.Scope != ScopeDevice {
+		return nil, fmt.Errorf("skills: unknown scope %q", sk.Scope)
 	}
-
-	if err := s.Save(sk); err != nil {
+	if _, err := scopeDir(sk); err != nil {
 		return nil, err
 	}
 	return sk, nil
@@ -96,6 +110,9 @@ func (s *Store) ImportFile(path string, opts ImportOptions) ([]*Skill, error) {
 		return nil, fmt.Errorf("skills: stat %s: %w", path, err)
 	}
 
+	if !fi.IsDir() && fi.Size() > maxDownloadBytes {
+		return nil, fmt.Errorf("skills: input exceeds size limit")
+	}
 	if fi.IsDir() {
 		return s.importFromDir(path, opts)
 	}
@@ -129,171 +146,284 @@ func (s *Store) ImportFile(path string, opts ImportOptions) ([]*Skill, error) {
 	}
 }
 
-// importFromDir recursively walks dir looking for SKILL.md or files with valid frontmatter.
+// Bundle inputs are bounded in aggregate before writing anything to the store.
+const maxBundleFiles = 1024
+
+type bundleFiles map[string][]byte
+
+func (b bundleFiles) add(name string, r io.Reader) error {
+	if !validResourcePath(name) {
+		return fmt.Errorf("skills: unsafe archive path %q", name)
+	}
+	if _, ok := b[name]; ok {
+		return fmt.Errorf("skills: duplicate archive path %q", name)
+	}
+	if len(b) >= maxBundleFiles {
+		return fmt.Errorf("skills: too many bundle files")
+	}
+	total := 0
+	for _, data := range b {
+		total += len(data)
+	}
+	data, err := io.ReadAll(io.LimitReader(r, int64(maxDownloadBytes-total+1)))
+	if err != nil {
+		return err
+	}
+	if total+len(data) > maxDownloadBytes {
+		return fmt.Errorf("skills: bundle exceeds size limit")
+	}
+	b[name] = data
+	return nil
+}
+
 func (s *Store) importFromDir(dir string, opts ImportOptions) ([]*Skill, error) {
-	var imported []*Skill
-	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+	files := bundleFiles{}
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if name != "SKILL.md" && !strings.HasSuffix(name, ".md") {
-			return nil
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return nil
-		}
-		if _, err := ParseSkill(data); err != nil {
-			// Skip files that aren't valid skills
-			return nil
-		}
-		// If multiple skills in directory, do not override Name with opts.Name
-		subOpts := opts
-		if len(imported) > 0 || name == "SKILL.md" {
-			subOpts.Name = ""
-		}
-		res, err := s.ImportBytes(data, subOpts)
-		if err != nil {
-			// If already exists and not forced, return error
-			if !opts.Force && strings.Contains(err.Error(), "already exists") {
-				return err
+		if d.IsDir() {
+			if d.Name() == ".git" || d.Name() == "node_modules" {
+				return filepath.SkipDir
 			}
 			return nil
 		}
-		imported = append(imported, res)
-		return nil
+		if !d.Type().IsRegular() {
+			return fmt.Errorf("skills: bundle contains non-regular file %s", p)
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		return files.add(filepath.ToSlash(rel), f)
 	})
 	if err != nil {
 		return nil, err
 	}
-	if len(imported) == 0 {
-		return nil, fmt.Errorf("skills: no valid skills found in directory %s", dir)
-	}
-	return imported, nil
+	return s.importBundles(files, opts)
 }
 
-// importFromZip extracts skills from a zip archive.
 func (s *Store) importFromZip(r io.ReaderAt, size int64, opts ImportOptions) ([]*Skill, error) {
 	zr, err := zip.NewReader(r, size)
 	if err != nil {
-		return nil, fmt.Errorf("skills: open zip: %w", err)
+		return nil, err
 	}
-
-	var imported []*Skill
+	files := bundleFiles{}
 	for _, f := range zr.File {
+		name := archiveResourceName(f.Name)
+		if name == "" && f.FileInfo().IsDir() {
+			continue
+		}
+		if !validResourcePath(name) {
+			return nil, fmt.Errorf("skills: unsafe archive path %q", f.Name)
+		}
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		// ZipSlip defense
-		clean := filepath.Clean(f.Name)
-		if strings.HasPrefix(clean, "..") || strings.Contains(clean, ":") {
-			continue
+		if !f.Mode().IsRegular() {
+			return nil, fmt.Errorf("skills: non-regular zip entry %q", f.Name)
 		}
-		base := filepath.Base(clean)
-		if base != "SKILL.md" && !strings.HasSuffix(base, ".md") {
-			continue
-		}
-		if f.UncompressedSize64 > maxDownloadBytes {
-			continue
-		}
-
 		rc, err := f.Open()
 		if err != nil {
-			continue
+			return nil, err
 		}
-		data, err := io.ReadAll(io.LimitReader(rc, maxDownloadBytes))
+		err = files.add(name, rc)
 		rc.Close()
 		if err != nil {
-			continue
+			return nil, err
 		}
-
-		if _, err := ParseSkill(data); err != nil {
-			continue
-		}
-
-		subOpts := opts
-		if len(imported) > 0 {
-			subOpts.Name = ""
-		}
-		res, err := s.ImportBytes(data, subOpts)
-		if err != nil {
-			if !opts.Force && strings.Contains(err.Error(), "already exists") {
-				return nil, err
-			}
-			continue
-		}
-		imported = append(imported, res)
 	}
-
-	if len(imported) == 0 {
-		return nil, fmt.Errorf("skills: no valid skills found in zip archive")
-	}
-	return imported, nil
+	return s.importBundles(files, opts)
 }
 
-// importFromTarGz extracts skills from a tar.gz reader.
 func (s *Store) importFromTarGz(r io.Reader, opts ImportOptions) ([]*Skill, error) {
-	gzr, err := gzip.NewReader(r)
+	gz, err := gzip.NewReader(r)
 	if err != nil {
-		return nil, fmt.Errorf("skills: open gzip: %w", err)
+		return nil, err
 	}
-	defer gzr.Close()
-
-	tr := tar.NewReader(gzr)
-	var imported []*Skill
-
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	files := bundleFiles{}
 	for {
-		header, err := tr.Next()
+		h, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("skills: read tar: %w", err)
+			return nil, err
 		}
-		if header.Typeflag != tar.TypeReg {
+		name := archiveResourceName(h.Name)
+		if name == "" && h.Typeflag == tar.TypeDir {
 			continue
 		}
+		if !validResourcePath(name) {
+			return nil, fmt.Errorf("skills: unsafe archive path %q", h.Name)
+		}
+		if h.Typeflag == tar.TypeDir {
+			continue
+		}
+		if h.Typeflag != tar.TypeReg {
+			return nil, fmt.Errorf("skills: non-regular tar entry %q", h.Name)
+		}
+		if err := files.add(name, tr); err != nil {
+			return nil, err
+		}
+	}
+	return s.importBundles(files, opts)
+}
 
-		clean := filepath.Clean(header.Name)
-		if strings.HasPrefix(clean, "..") || strings.Contains(clean, ":") {
+func (s *Store) importBundles(files bundleFiles, opts ImportOptions) ([]*Skill, error) {
+	// Canonical SKILL.md roots own descendants. Markdown references with
+	// frontmatter are resources, not additional installed skills.
+	names := make([]string, 0)
+	roots := make([]string, 0)
+	for name := range files {
+		if path.Base(name) == "SKILL.md" {
+			roots = append(roots, path.Dir(name))
+			names = append(names, name)
+		}
+	}
+	for name, data := range files {
+		if path.Base(name) == "SKILL.md" || !strings.HasSuffix(name, ".md") {
 			continue
 		}
-		base := filepath.Base(clean)
-		if base != "SKILL.md" && !strings.HasSuffix(base, ".md") {
-			continue
+		owned := false
+		for _, root := range roots {
+			if root == "." || strings.HasPrefix(name, root+"/") {
+				owned = true
+				break
+			}
 		}
-
-		data, err := io.ReadAll(io.LimitReader(tr, maxDownloadBytes))
+		if !owned {
+			if _, err := ParseSkill(data); err == nil {
+				names = append(names, name)
+			}
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return nil, fmt.Errorf("skills: no valid skills found in bundle")
+	}
+	if opts.Name != "" && len(names) != 1 {
+		return nil, fmt.Errorf("skills: --name requires a single skill")
+	}
+	prepared := make([]*Skill, 0, len(names))
+	destinations := map[string]bool{}
+	for _, name := range names {
+		sk, err := prepareImport(files[name], opts)
 		if err != nil {
-			continue
+			return nil, err
 		}
-
-		if _, err := ParseSkill(data); err != nil {
-			continue
-		}
-
-		subOpts := opts
-		if len(imported) > 0 {
-			subOpts.Name = ""
-		}
-		res, err := s.ImportBytes(data, subOpts)
+		dest, err := s.Path(sk)
 		if err != nil {
-			if !opts.Force && strings.Contains(err.Error(), "already exists") {
+			return nil, err
+		}
+		if destinations[dest] {
+			return nil, fmt.Errorf("skills: duplicate destination %s", sk.Name)
+		}
+		destinations[dest] = true
+		if !opts.Force {
+			if _, err := os.Stat(dest); err == nil {
+				return nil, fmt.Errorf("skills: skill %q already exists (use --force to overwrite)", sk.Name)
+			} else if !os.IsNotExist(err) {
 				return nil, err
 			}
-			continue
 		}
-		imported = append(imported, res)
+		prepared = append(prepared, sk)
 	}
+	for i, sk := range prepared {
+		resources := bundleFiles{}
+		root := path.Dir(names[i])
+		if path.Base(names[i]) == "SKILL.md" {
+			for name, data := range files {
+				if root != "." && !strings.HasPrefix(name, root+"/") {
+					continue
+				}
+				nested := false
+				for _, other := range roots {
+					if other != root && (root == "." || strings.HasPrefix(other, root+"/")) && strings.HasPrefix(name, other+"/") {
+						nested = true
+						break
+					}
+				}
+				if nested {
+					continue
+				}
+				rel := name
+				if root != "." {
+					rel = strings.TrimPrefix(name, root+"/")
+				}
+				resources[rel] = data
+			}
+		}
+		data, err := sk.Bytes()
+		if err != nil {
+			return nil, err
+		}
+		resources["SKILL.md"] = data
+		if err := s.saveBundle(sk, resources); err != nil {
+			return nil, err
+		}
+	}
+	return prepared, nil
+}
 
-	if len(imported) == 0 {
-		return nil, fmt.Errorf("skills: no valid skills found in tar.gz archive")
+// Stage a complete skill before replacing its directory, so a failed copy
+// never leaves a procedure referring to half-imported scripts or references.
+func (s *Store) saveBundle(sk *Skill, files bundleFiles) error {
+	if s.root == "" {
+		return fmt.Errorf("skills: empty store root")
 	}
-	return imported, nil
+	total := 0
+	for _, data := range files {
+		total += len(data)
+		if total > maxDownloadBytes {
+			return fmt.Errorf("skills: serialized bundle exceeds size limit")
+		}
+	}
+	dest, err := s.Path(sk)
+	if err != nil {
+		return err
+	}
+	dest = filepath.Dir(dest)
+	parent := filepath.Dir(dest)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	stage, err := os.MkdirTemp(parent, ".skill-import-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	for name, data := range files {
+		p := filepath.Join(stage, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			return err
+		}
+		mode := os.FileMode(0o600)
+		if strings.HasPrefix(name, "scripts/") {
+			mode = 0o700
+		}
+		if err := os.WriteFile(p, data, mode); err != nil {
+			return err
+		}
+	}
+	s.useMu.Lock()
+	defer s.useMu.Unlock()
+	backup := stage + "-old"
+	if err := os.Rename(dest, backup); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(stage, dest); err != nil {
+		_ = os.Rename(backup, dest)
+		return err
+	}
+	return os.RemoveAll(backup)
 }
 
 // NormalizeURL converts common repository URLs (like GitHub blob URLs) to direct raw content URLs.
@@ -352,11 +482,14 @@ func (s *Store) ImportURL(ctx context.Context, rawURL string, opts ImportOptions
 	}
 
 	// Read body with limit
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("skills: read download body: %w", err)
 	}
 
+	if len(body) > maxDownloadBytes {
+		return nil, fmt.Errorf("skills: download exceeds size limit")
+	}
 	contentType := resp.Header.Get("Content-Type")
 	lowerURL := strings.ToLower(fetchURL)
 
@@ -395,4 +528,11 @@ func (s *Store) ImportSource(ctx context.Context, source string, opts ImportOpti
 // isZip checks for the PK\x03\x04 zip header signature.
 func isZip(data []byte) bool {
 	return len(data) >= 4 && data[0] == 'P' && data[1] == 'K' && data[2] == 3 && data[3] == 4
+}
+
+func archiveResourceName(name string) string {
+	for strings.HasPrefix(name, "./") {
+		name = strings.TrimPrefix(name, "./")
+	}
+	return strings.TrimSuffix(name, "/")
 }

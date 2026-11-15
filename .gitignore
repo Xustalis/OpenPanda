@@ -189,6 +189,8 @@ fetch_emails.py
 # stray `git add -A` would have pushed megabytes of PNGs.
 /.ztest/
 /.ztest_*.js
+/.playwright-cli/
+/output/playwright/
 
 # Daemon session files written to the repo root when work_path="." — the
 # per-conversation state of a local dev node, not a fixture.

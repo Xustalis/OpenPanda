@@ -397,11 +397,33 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
         rawJson,
       }
     }
+    case 'skill_load': {
+      if (data?.name) tags.push({ key: t('events.tag.skill'), value: String(data.name) })
+      if (data?.path) tags.push({ key: t('events.tag.resource'), value: String(data.path) })
+      if (data?.bytes !== undefined) tags.push({ key: t('events.tag.promptBytes'), value: String(data.bytes) + ' B' })
+      return { type, label: t('events.skill_load'), badgeClass: 'info', tags, rawJson }
+    }
+    case 'prompt_context': {
+      const mode = String(data?.mode ?? 'full')
+      tags.push({ key: t('events.tag.contextMode'), value: t('events.context.' + mode, mode) })
+      if (data?.bytes !== undefined) tags.push({ key: t('events.tag.promptBytes'), value: String(data.bytes) + ' / ' + String(data?.full_bytes ?? data.bytes) + ' B' })
+      if (Array.isArray(data?.loaded_skills)) {
+        const names = data.loaded_skills.map((s: { name?: string }) => s.name ?? '').filter(Boolean)
+        if (names.length) tags.push({ key: t('events.tag.loadedSkills'), value: names.join(', ') })
+      }
+      return { type, label: t('events.prompt_context'), badgeClass: 'info', tags, rawJson }
+    }
     case 'exec_agent_start': {
       const agent = String(data?.agent ?? '')
       const adapter = String(data?.adapter ?? '')
       if (agent) tags.push({ key: 'Agent', value: agent })
       if (adapter) tags.push({ key: t('events.tag.adapter'), value: adapter })
+      if (data?.prompt_bytes !== undefined) tags.push({ key: t('events.tag.promptBytes'), value: String(data.prompt_bytes) + ' B' })
+      if (Array.isArray(data?.loaded_skills)) {
+        const names = data.loaded_skills.map((s: { name?: string }) => s.name ?? '').filter(Boolean)
+        if (names.length) tags.push({ key: t('events.tag.loadedSkills'), value: names.join(', ') })
+      }
+
       return {
         type,
         label: t('events.exec_agent_start'),

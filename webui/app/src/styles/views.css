@@ -1554,6 +1554,28 @@
   font-weight: 600;
 }
 
+.skill-preview {
+  max-width: 840px;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+
+.skill-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.skill-preview-head strong { min-width: 0; overflow-wrap: anywhere; }
+.skill-preview-head button { flex-shrink: 0; }
+.skill-preview .mono { overflow-wrap: anywhere; }
+.skill-preview .skill-modal-actions { flex-wrap: wrap; justify-content: flex-start; }
+.skill-preview-resources { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.skill-preview-resources button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.skill-preview-resources [aria-current] { border-color: var(--accent); }
+.skill-preview-content { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; margin: 0; }
+
 .skill-form-group {
   display: flex;
   flex-direction: column;
@@ -10530,6 +10552,17 @@ input.switch:focus-visible {
   display: flex;
   flex-direction: column;
 }
+.plan-graph-wrap { padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border-soft); min-width: 0; }
+.plan-graph-wrap > p { font-size: var(--text-sm); margin: 0 0 var(--sp-2); }
+.plan-graph-scroll { max-width: 100%; max-height: 560px; overflow: auto; border-radius: var(--radius-md); background: var(--bg-inset); }
+.plan-graph { position: relative; }
+.plan-graph > svg { position: absolute; inset: 0; pointer-events: none; }
+.plan-graph path { fill: none; stroke: var(--border); stroke-width: 2; }
+.plan-graph-node { position: absolute; width: 232px; height: 108px; padding: 10px; display: flex; flex-direction: column; gap: 6px; text-align: left; background: var(--bg-card, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.plan-graph-node:hover, .plan-graph-node:focus-visible { border-color: var(--accent); }
+.plan-graph-node > strong, .plan-graph-node > .mono { width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-graph-status { display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); }
+.plan-graph-node.state-running, .plan-graph-node.state-dispatched { border-color: var(--accent); }
 /* Each stage is a node on a vertical pipeline rail: a status-colored dot on
    a hairline connector — the DAG reads top-to-bottom at a glance. */
 .plan-stage {

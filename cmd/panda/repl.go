@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -232,9 +233,9 @@ func init() {
 		{"reminder", "tasks", "cmd.reminder", (*repl).cmdReminder},
 		{"reminders", "tasks", "cmd.reminder", (*repl).cmdReminder},
 		{"todo", "tasks", "cmd.todo", (*repl).cmdTodo},
-		{"todos", "tasks", "cmd.todo", (*repl).cmdTodo},
 		{"work", "tasks", "cli.help.d.work", (*repl).cmdWork},
 		{"connection", "tasks", "cli.help.d.connection", (*repl).cmdConnection},
+		{"todos", "tasks", "cmd.todo", (*repl).cmdTodo},
 		{"memory", "memory", "cmd.memory", (*repl).cmdMemory},
 		{"projects", "memory", "cmd.projects", (*repl).cmdProjects},
 		{"project", "memory", "cmd.project", (*repl).cmdProjectEnter},
@@ -1335,6 +1336,9 @@ func (r *repl) askMode(text, mode string) {
 		r.outln(i18n.Tf(r.loc, "cli.plan.started",
 			"id", out.PlanID, "n", strconv.Itoa(len(out.PlanStages)), "goal", out.PlanGoal))
 		printPlanStagesTo(r.commandOutput(), out.PlanStages)
+		if out.Answer != "" {
+			r.outln(r.renderMd(out.Answer))
+		}
 		if out.Warning != "" {
 			r.outln(pal().Muted(out.Warning))
 		}
@@ -2464,6 +2468,19 @@ func (r *repl) cmdSkills(arg string) {
 		if err := skillListTo(r.commandOutput(), r.loc, store); err != nil {
 			r.errf("panda: %v\n", err)
 		}
+	case "show", "read":
+		if _, err := skillReadTo(r.commandOutput(), store, skills.Access{All: true, Inactive: true}, fields); err != nil {
+			r.errf("panda: %v\n", err)
+		}
+	case "search":
+		results, err := store.Search(skills.Access{All: true}, strings.Join(fields, " "), 20)
+		if err != nil {
+			r.errf("panda: %v\n", err)
+			return
+		}
+		data, _ := json.MarshalIndent(results, "", "  ")
+		r.outln(string(data))
+
 	case "find", "discover":
 		if len(fields) == 0 {
 			r.outln(i18n.T(r.loc, "repl.skill.find.usage"))

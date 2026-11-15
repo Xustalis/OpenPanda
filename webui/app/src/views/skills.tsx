@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useRef, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type HubSkillEntry, type SkillEntry } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender } from '../hooks'
 import { t } from '../i18n'
@@ -15,7 +15,11 @@ import { ItemSettings } from '../components/item-settings'
 /** DOM ids for the per-skill settings disclosures. Skill names come from disk
  *  and can contain path separators, so they are folded into a safe suffix. */
 function skillSettingsId(name: string): string {
-  return `skill-settings-${name.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+  return `skill-settings-${encodeURIComponent(name)}`
+}
+
+function skillIdentity(skill: Pick<SkillEntry, 'scope' | 'key' | 'name'>): string {
+  return [skill.scope, skill.key ?? '', skill.name].join(':')
 }
 
 /** The skills view: every skill with its approval status, plus
@@ -26,11 +30,13 @@ export function SkillsView() {
   const [tick, setTick] = useState(0)
   const [tab, setTab] = useState<'installed' | 'hub'>('installed')
   const [showImport, setShowImport] = useState(false)
+  const [query, setQuery] = useState('')
+  const [preview, setPreview] = useState<SkillEntry | null>(null)
 
   const { data: skills, error } = useAsync(() => api.skills(), [], change + tick)
   const [busy, setBusy] = useState('')
 
-  async function act(name: string, approve: boolean) {
+  async function act(name: string, approve: boolean, scope?: string, key?: string) {
     if (busy) return
     if (!approve) {
       const ok = await confirmDialog({
@@ -40,13 +46,13 @@ export function SkillsView() {
       })
       if (!ok) return
     }
-    setBusy(name)
+    setBusy([scope ?? 'global', key ?? '', name].join(':'))
     try {
       if (approve) {
-        await api.approveSkill(name)
+        await api.approveSkill(name, scope, key)
         toast(t('skills.approvedToast', { name }), 'success')
       } else {
-        await api.rejectSkill(name)
+        await api.rejectSkill(name, scope, key)
         toast(t('skills.rejectedToast', { name }), 'info')
       }
       setTick((v) => v + 1)
@@ -65,7 +71,7 @@ export function SkillsView() {
       confirmLabel: t('skills.resetBtn'),
     })
     if (!ok) return
-    setBusy(name)
+    setBusy(['global', '', name].join(':'))
     try {
       await api.resetSkill(name)
       toast(t('skills.resetSuccess', { name }), 'success')
@@ -87,12 +93,14 @@ export function SkillsView() {
       />
     )
 
-  const pending = (skills ?? []).filter((s) => s.status === 'pending')
-  const rest = (skills ?? []).filter((s) => s.status !== 'pending')
+  const visible = (skills ?? []).filter((s) => [s.name, s.description, s.scope, s.key ?? '', s.status].join(' ').toLocaleLowerCase().includes(query.toLocaleLowerCase().trim()))
+  const pending = visible.filter((s) => s.status === 'pending')
+  const rest = visible.filter((s) => s.status !== 'pending')
 
   return (
     <section>
       <PageHeader title={t('skills.title')} sub={t('skills.subtitle')} />
+      <p class="dim">{t('skills.autoUse')}</p>
 
       <div class="skills-toolbar">
         <div class="skills-tabs">
@@ -121,23 +129,24 @@ export function SkillsView() {
 
       {tab === 'installed' ? (
         <>
+          <input class="skills-search-bar" type="search" style={{ width: '100%', boxSizing: 'border-box' }} value={query} placeholder={t('skills.searchInstalled')} aria-label={t('skills.searchInstalled')} onInput={(e) => setQuery(e.currentTarget.value)} />
           {pending.length > 0 && (
             <div class="card skills-pending">
               <h2 class="block-title">
                 {t('skills.pending')} ({pending.length})
               </h2>
               {pending.map((s) => (
-                <SkillRow key={s.name} skill={s} busy={busy === s.name} onAct={act} onReset={reset} />
+                <SkillRow key={skillIdentity(s)} skill={s} busy={busy === skillIdentity(s)} onAct={act} onReset={reset} onPreview={() => setPreview(s)} />
               ))}
             </div>
           )}
 
           <div class="card">
             <h2 class="block-title">{t('skills.all')}</h2>
-            {rest.length === 0 && pending.length === 0 && <p class="dim">{t('skills.empty')}</p>}
+            {rest.length === 0 && pending.length === 0 && <p class="dim" role="status">{t(query.trim() ? 'skills.noMatches' : 'skills.empty')}</p>}
             {rest.length === 0 && pending.length > 0 && <p class="dim">{t('skills.noOthers')}</p>}
             {rest.map((s) => (
-              <SkillRow key={s.name} skill={s} busy={busy === s.name} onAct={act} onReset={reset} />
+              <SkillRow key={skillIdentity(s)} skill={s} busy={busy === skillIdentity(s)} onAct={act} onReset={reset} onPreview={() => setPreview(s)} />
             ))}
           </div>
         </>
@@ -145,6 +154,7 @@ export function SkillsView() {
         <SkillsHubPanel onInstalled={() => setTick((v) => v + 1)} />
       )}
 
+      {preview && <SkillPreview key={skillIdentity(preview)} skill={preview} onClose={() => setPreview(null)} />}
       {showImport && (
         <ImportSkillModal
           onClose={() => setShowImport(false)}
@@ -163,11 +173,13 @@ function SkillRow({
   busy,
   onAct,
   onReset,
+  onPreview,
 }: {
   skill: SkillEntry
   busy: boolean
-  onAct(name: string, approve: boolean): void
+  onAct(name: string, approve: boolean, scope?: string, key?: string): void
   onReset(name: string): void
+  onPreview(): void
 }) {
   return (
     <div class="skill-row">
@@ -187,6 +199,7 @@ function SkillRow({
         </span>
       </div>
       <div class="skill-side">
+        <button type="button" class="btn small" onClick={onPreview}>{t('skills.preview')}</button>
         <span
           class={`badge ${skill.status === 'active' ? 'green' : skill.status === 'pending' ? 'yellow' : 'red'}`}
         >
@@ -195,7 +208,7 @@ function SkillRow({
         {/* The row's own settings entry: status stays visible, every verb that
             acts on this skill lives in the disclosure inside the row. */}
         <ItemSettings
-          id={skillSettingsId(skill.name)}
+          id={skillSettingsId(skillIdentity(skill))}
           label={t('settings.itemSettingsFor', { name: skill.name })}
           title={skill.name}
           align="end"
@@ -219,10 +232,10 @@ function SkillRow({
             )}
             {skill.status === 'pending' && (
               <>
-                <button class="btn small primary" disabled={busy} onClick={() => onAct(skill.name, true)}>
+                <button class="btn small primary" disabled={busy} onClick={() => onAct(skill.name, true, skill.scope, skill.key)}>
                   {t('skills.approve')}
                 </button>
-                <button class="btn small danger" disabled={busy} onClick={() => onAct(skill.name, false)}>
+                <button class="btn small danger" disabled={busy} onClick={() => onAct(skill.name, false, skill.scope, skill.key)}>
                   {t('skills.reject')}
                 </button>
               </>
@@ -232,6 +245,61 @@ function SkillRow({
       </div>
     </div>
   )
+}
+
+function SkillPreview({ skill, onClose }: { skill: SkillEntry; onClose(): void }) {
+  const [path, setPath] = useState('SKILL.md')
+  const [offsets, setOffsets] = useState([0])
+  const [sha256, setSHA256] = useState('')
+  const [resources, setResources] = useState<string[]>([])
+  const offset = offsets[offsets.length - 1]!
+  const box = useRef<HTMLDivElement>(null)
+  useModalFocus(box, true)
+  function firstPage() { setOffsets([0]); setSHA256('') }
+  function open(resource: string) { setPath(resource); firstPage() }
+  return (
+    <div class="skill-modal-backdrop" onClick={onClose} onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}>
+      <div ref={box} class="skill-modal skill-preview" role="dialog" aria-modal="true" aria-label={skill.name} onClick={(e) => e.stopPropagation()}>
+        <div class="skill-preview-head"><strong>{skill.name} · {path}</strong><button type="button" class="btn" onClick={onClose}>{t('skills.closePreview')}</button></div>
+        {skill.status === 'pending' && <p class="dim">{t('skills.pendingPreview')}</p>}
+        <SkillPreviewPage
+          key={path + ':' + offset + ':' + sha256}
+          skill={skill} path={path} offset={offset} sha256={sha256} onResources={setResources}
+          onNext={(next, hash) => { setSHA256(hash); setOffsets((pages) => [...pages, next]) }}
+          onPrevious={offsets.length > 1 ? () => setOffsets((pages) => pages.slice(0, -1)) : undefined}
+          onFirst={offset > 0 || sha256 ? firstPage : undefined}
+        />
+        {(path !== 'SKILL.md' || resources.length > 0) && <nav aria-label={t('skills.resources')}>
+          <h3>{t('skills.resources')}</h3>
+          <div class="skill-preview-resources">
+            {['SKILL.md', ...resources].map((resource) => <button type="button" class="btn small mono" key={resource} aria-current={path === resource ? 'page' : undefined} onClick={() => open(resource)}>{resource}</button>)}
+          </div>
+        </nav>}
+      </div>
+    </div>
+  )
+}
+
+function SkillPreviewPage({ skill, path, offset, sha256, onResources, onNext, onPrevious, onFirst }: {
+  skill: SkillEntry; path: string; offset: number; sha256: string
+  onResources(paths: string[]): void; onNext(offset: number, sha256: string): void
+  onPrevious?: () => void; onFirst?: () => void
+}) {
+  // Each resource/page mounts a fresh read, so slow requests cannot leave the
+  // previous file's content or error beneath the new file's heading.
+  const { data, error } = useAsync(() => api.readSkill(skill, path, offset, sha256), [])
+  useEffect(() => { if (data?.resources) onResources(data.resources) }, [data, onResources])
+  if (error) return <><p role="alert">{error}</p>{onFirst && <button type="button" class="btn small" onClick={onFirst}>{t('skills.firstPage')}</button>}</>
+  if (!data) return <p role="status">{t('common.loading')}</p>
+  return <>
+    <p class="dim mono">{data.offset}–{data.next_offset} / {data.total_bytes} B · SHA256 {data.sha256.slice(0, 16)}</p>
+    <pre class="skill-preview-content" tabIndex={0}>{data.content}</pre>
+    <div class="skill-modal-actions">
+      {onFirst && <button type="button" class="btn small" onClick={onFirst}>{t('skills.firstPage')}</button>}
+      {onPrevious && <button type="button" class="btn small" onClick={onPrevious}>{t('skills.previousPage')}</button>}
+      {data.truncated && <button type="button" class="btn small" onClick={() => onNext(data.next_offset, data.sha256)}>{t('skills.nextPage')}</button>}
+    </div>
+  </>
 }
 
 function SkillsHubPanel({ onInstalled }: { onInstalled(): void }) {

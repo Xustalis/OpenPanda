@@ -1997,16 +1997,22 @@ export const api = {
     return request('GET', '/api/audit/entries')
   },
 
+  readSkill(skill: SkillEntry, path = 'SKILL.md', offset = 0, sha256 = ''): Promise<SkillRead> {
+    const params = new URLSearchParams({ name: skill.name, scope: skill.scope, key: skill.key ?? '', path, offset: String(offset) })
+    if (sha256) params.set('sha256', sha256)
+    return request('GET', '/api/skills/read?' + params.toString())
+  },
+
   skills(): Promise<SkillEntry[]> {
     return request('GET', '/api/skills')
   },
 
-  approveSkill(name: string): Promise<void> {
-    return request('POST', '/api/skills/approve', { name })
+  approveSkill(name: string, scope?: string, key?: string): Promise<void> {
+    return request('POST', '/api/skills/approve', { name, scope, key })
   },
 
-  rejectSkill(name: string): Promise<void> {
-    return request('POST', '/api/skills/reject', { name })
+  rejectSkill(name: string, scope?: string, key?: string): Promise<void> {
+    return request('POST', '/api/skills/reject', { name, scope, key })
   },
 
   resetSkill(name: string): Promise<{ ok: boolean; name: string }> {
@@ -2479,6 +2485,9 @@ export interface PlanStage {
   title?: string
   state: string
   owner?: string
+  executor?: string
+  target?: string
+  final?: boolean
   needs?: string[]
   inputs?: PlanArtifact[]
   output_artifact?: string
@@ -3458,3 +3467,17 @@ export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
 
 const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 15000
+
+export interface SkillRead {
+ name: string
+ scope: string
+ key?: string
+ path: string
+ content: string
+ sha256: string
+ total_bytes: number
+ offset: number
+ next_offset: number
+ truncated: boolean
+ resources?: string[]
+}

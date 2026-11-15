@@ -110,7 +110,7 @@ func TestHardwareAskPlanConsentIsRequestScoped(t *testing.T) {
 				t.Fatalf("response: %+v %v %s", out, err, rr.Body.String())
 			}
 			stages, err := engine.PlanStages(context.Background(), out.PlanID)
-			if err != nil || len(stages) != 2 {
+			if err != nil || len(stages) != 3 {
 				t.Fatalf("stages: %+v %v", stages, err)
 			}
 			for _, stage := range stages {

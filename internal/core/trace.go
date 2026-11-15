@@ -15,6 +15,8 @@ import (
 // Best-effort only: a write failure is logged and otherwise ignored. The
 // scheduling/delegation/supervision machines must never stall on visibility.
 const (
+	EvPromptContext    = "prompt_context"    // actual adapter input delivery
+	EvSkillLoad        = "skill_load"        // on-demand body/resource delivery, not a suggested match
 	EvReasoning        = "reasoning"         // model thought/reasoning chain → thought
 	EvClassifyResult   = "classify_result"   // entry.Classify success → kind/note/stages
 	EvRouteDecision    = "route_decision"    // scheduler.Route → action/target/reason/score_breakdown/candidates

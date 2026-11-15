@@ -167,6 +167,8 @@ type Capabilities struct {
 	// turns (claude --input-format stream-json): a supervision "continue"
 	// costs a message write instead of a process spawn + session reload.
 	SupportsSession bool
+	// SupportsIncrementalResume preserves prior user/task context when resumed.
+	SupportsIncrementalResume bool
 	// MCPConfigFlag names the CLI flag that accepts an MCP config document
 	// (e.g. claude's "--mcp-config"). When set, the commander passes the
 	// passthrough servers on the request instead of writing .mcp.json into
@@ -241,9 +243,10 @@ var known = []Known{
 			// claude -p takes --json-schema, --mcp-config and stream-json
 			// input — the structured contract, file-free passthrough and the
 			// in-session multi-turn the supervision loop drives.
-			SupportsStructuredOutput: true,
-			SupportsSession:          true,
-			MCPConfigFlag:            "--mcp-config",
+			SupportsStructuredOutput:  true,
+			SupportsSession:           true,
+			SupportsIncrementalResume: true,
+			MCPConfigFlag:             "--mcp-config",
 		},
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "refactoring"},
 		DefaultBestAt:       []string{"multi_file_edits", "code_search", "refactoring", "complex_reasoning"},
@@ -309,7 +312,7 @@ var known = []Known{
 		},
 		// codex's own sandbox levels include a real read-only mode
 		// (--sandbox read-only), so it can honor restricted runs.
-		Capabilities:        Capabilities{SupportsRestricted: true},
+		Capabilities:        Capabilities{SupportsRestricted: true, SupportsIncrementalResume: true},
 		DefaultCapabilities: []string{"coding", "shell", "file_edit", "code_review"},
 		DefaultBestAt:       []string{"code_review", "running_tests", "multi_file_edits"},
 		DefaultCostTier:     "medium",

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -619,9 +620,6 @@ func withSkills(c *Core, intent, project, query string, budget int, loc ...i18n.
 		secondary = strings.ToValidUTF8(secondary[:skillIntentSample], "")
 	}
 	matched := skills.MatchScopes(index, project, nodeDeviceKeys(c), query, secondary)
-	if len(matched) == 0 {
-		return intent, nil
-	}
 	if len(matched) > skills.MaxSkillMatches {
 		matched = matched[:skills.MaxSkillMatches]
 	}
@@ -633,7 +631,19 @@ func withSkills(c *Core, intent, project, query string, budget int, loc ...i18n.
 		header = "Panda guidance:\n"
 	}
 	suffix := "\n" + intentHeader + "\n"
-	discovery := "panda skill list\n"
+	canReadOnDemand := c.router == nil || c.router.PandaTools()
+	discovery := "Use relevant installed skills proactively, including mid-task. Find: panda skill search <keywords>; read: panda skill show <name> [--scope S --key K]. Load resources with --path; continue pages with --offset next_offset --sha256 HASH. MCP: panda_skill_search / panda_skill_read. If shell is unavailable, use native file reads on listed SKILL.md paths. Read scripts before running them; report skills actually read.\n"
+	if !canReadOnDemand {
+		discovery = ""
+	}
+	if budget < 600 && canReadOnDemand {
+		discovery = "Read: panda skill show <name>\n"
+	}
+	if budget < 160 {
+		header = "Skills:\n"
+		suffix = "\n"
+	}
+
 	if budget < len(header)+len(suffix)+len(discovery) {
 		return intent, nil
 	}
@@ -647,28 +657,27 @@ func withSkills(c *Core, intent, project, query string, budget int, loc ...i18n.
 			continue
 		}
 		full := fmt.Sprintf("## %s\n%s\n", sk.Name, sk.Body)
-		if len(full) <= remaining {
+		if (e.Always || !canReadOnDemand) && len(full) <= remaining && (!canReadOnDemand || len(full) <= 3200) {
 			b.WriteString(full)
 			remaining -= len(full)
 			used = append(used, sk)
 			continue
 		}
-		// Budget exhausted: degrade to an index line — the agent sees the
-		// skill exists (and what it is for) without the full body.
-		omittedMsg := i18n.Tf(targetLoc, "prompt.skills.omitted", "desc", sk.Description)
-		line := fmt.Sprintf("## %s\n%s\n", sk.Name, omittedMsg)
+		// Ordinary matches stay metadata-only; their bodies and referenced
+		// resources are fetched if the agent decides they help the current work.
+		path, _ := c.skills.Path(sk)
+		if absolute, err := filepath.Abs(path); err == nil {
+			path = absolute
+		}
+		line := fmt.Sprintf("- %s [%s:%s]: %s (%s)\n", sk.Name, e.Scope, e.Key, sk.Description, path)
 		if len(line) > remaining {
 			line = fmt.Sprintf("- %s: %s\n", sk.Name, sk.Description)
 		}
 		if len(line) <= remaining {
 			b.WriteString(line)
 			remaining -= len(line)
-			// A discoverable index line is not a use: recordSkillUse would
-			// otherwise bump use_count and refresh LastUsed for a procedure
-			// whose steps never reached the agent.
 		}
-		c.logger.Warn("agent prompt budget: skill degraded to index line",
-			"skill", sk.Name, "budget", budget)
+
 	}
 	b.WriteString(discovery)
 	return b.String() + suffix + intent, used

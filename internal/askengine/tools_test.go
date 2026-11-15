@@ -226,67 +226,80 @@ func TestAppendToolCallsProseBatch(t *testing.T) {
 // tool-free call over the accumulated history, forcing a text answer — the
 // ask always converges to something useful.
 func TestAskTurnsMaxRoundsConverges(t *testing.T) {
-	var mu sync.Mutex
-	var toolCalls, plainCalls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		hasTools := strings.Contains(string(b), `"tools"`)
-		mu.Lock()
-		if hasTools {
-			toolCalls++
-		} else {
-			plainCalls++
-		}
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		if hasTools {
-			// Endless tool loop: every tool-bearing request gets another call.
-			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"echo","arguments":"{\"x\":1}"}}]}}]}`)
-			return
-		}
-		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"已尽力，这是最终答复"}}]}`)
-	}))
-	defer srv.Close()
+	for _, discovery := range []bool{false, true} {
+		t.Run(fmt.Sprintf("discovery=%t", discovery), func(t *testing.T) {
+			var mu sync.Mutex
+			var toolCalls, plainCalls int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				hasTools := strings.Contains(string(b), `"tools"`)
+				mu.Lock()
+				if hasTools {
+					toolCalls++
+				} else {
+					plainCalls++
+				}
+				discoveryRound := discovery && hasTools && toolCalls == 1
+				mu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				if discoveryRound {
+					_, _ = io.WriteString(w, `{"choices":[{"message":{"tool_calls":[{"id":"discover","type":"function","function":{"name":"tool_search","arguments":"{\"query\":\"echo\"}"}}]}}]}`)
+					return
+				}
+				if hasTools {
+					// Endless tool loop: every tool-bearing request gets another call.
+					_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"echo","arguments":"{\"x\":1}"}}]}}]}`)
+					return
+				}
+				_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"已尽力，这是最终答复"}}]}`)
+			}))
+			defer srv.Close()
 
-	client, err := entry.NewClient(config.ModelConfig{
-		APIType: "openai", BaseURL: srv.URL, Model: "test-model", APIKey: "test-key",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+			client, err := entry.NewClient(config.ModelConfig{
+				APIType: "openai", BaseURL: srv.URL, Model: "test-model", APIKey: "test-key",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	root := t.TempDir()
-	db, err := storage.Open(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+			root := t.TempDir()
+			db, err := storage.Open(filepath.Join(root, "test.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
 
-	e := &Engine{
-		cfg:      &config.Config{},
-		injector: memory.NewInjector(nil, nil),
-		registry: newTestRegistry(),
-		db:       db,
-	}
-	e.client.Store(client)
+			e := &Engine{
+				cfg:      &config.Config{},
+				injector: memory.NewInjector(nil, nil),
+				registry: newTestRegistry(),
+				db:       db,
+			}
+			e.client.Store(client)
 
-	// "run" keeps the ask off the Tier-1 fast path (a bare greeting like "hi"
-	// is now answered conversationally, without the tool loop this test
-	// exercises).
-	res, err := e.AskTurns(context.Background(), nil, "run the echo tool", "", true, StreamCallbacks{})
-	if err != nil {
-		t.Fatalf("ask: %v", err)
-	}
-	if res.Kind != "answer" || !strings.Contains(res.Answer, "最终答复") {
-		t.Fatalf("res = %+v, want a converged answer", res)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if toolCalls != 6 {
-		t.Fatalf("tool-bearing calls = %d, want 6 (maxRounds)", toolCalls)
-	}
-	if plainCalls != 1 {
-		t.Fatalf("final tool-free calls = %d, want 1", plainCalls)
+			// "run" keeps the ask off the Tier-1 fast path (a bare greeting like "hi"
+			// is now answered conversationally, without the tool loop this test
+			// exercises).
+			res, err := e.AskTurns(context.Background(), nil, "run the echo tool", "", true, StreamCallbacks{})
+			if err != nil {
+				t.Fatalf("ask: %v", err)
+			}
+			if res.Kind != "answer" || !strings.Contains(res.Answer, "最终答复") {
+				t.Fatalf("res = %+v, want a converged answer", res)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			wantCalls := 6
+			if discovery {
+				wantCalls++
+			}
+			if toolCalls != wantCalls {
+				t.Fatalf("tool-bearing calls = %d, want %d (six work rounds plus discovery)", toolCalls, wantCalls)
+			}
+			if plainCalls != 1 {
+				t.Fatalf("final tool-free calls = %d, want 1", plainCalls)
+			}
+		})
 	}
 }
 

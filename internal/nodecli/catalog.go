@@ -210,7 +210,7 @@ var catalog = []Command{
 		Usage:   "panda reminder list|add|rm",
 		HelpKey: "cli.help.d.reminder", Group: GroupSettings},
 	{Names: []string{"skill"},
-		Usage:   "panda skill list|find|hub|add|reset",
+		Usage:   "panda skill list|search|show|read|find|hub|add|reset",
 		HelpKey: "cli.help.d.skill", Group: GroupSettings},
 	{Names: []string{"mcp"},
 		Usage:   "panda mcp",

@@ -2603,7 +2603,8 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	verdict := e.approvalFor(scope.SessionID, scopeProj).withPermission(scope.PermissionMode)
 	toolAuthorized, toolDenied := verdict.gate(authorize)
 	approvalMode := verdict.mode
-	const maxRounds = 6
+	maxRounds := 6
+	discoveryRounds := 0
 	// The sub-agent budget is derived, not fixed: a task round is minutes of
 	// work and a full agent transcript of tokens, so it stays separate from
 	// (and inside) the round budget — but its width comes from what the user
@@ -2746,6 +2747,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		// fan-out the user described in prose instead of in the team picker.
 		reg.Register(e.taskBudgetTool(budget, effectiveLocale))
 		registerWorkspaceTools(reg, workDir)
+		reg.EnableDiscovery(func(name string) bool {
+			return name == entry.ToolNameTaskSubmit || name == "task_budget" || name == "skill_search" || name == "skill_show" || strings.HasPrefix(name, "workspace_")
+		})
 	}
 
 rounds:
@@ -3028,9 +3032,17 @@ rounds:
 			// front (and the final tool-free round then failed on the DSML
 			// markup the model fell back to).
 			results := make([]string, len(calls))
+			schemasBefore := 0
+			if reg != nil {
+				schemasBefore = len(reg.Specs())
+			}
+			discoveryOnly := true
 			var dispatched []*Result
 			refusedThisRound := 0
 			for i, call := range calls {
+				if call.Tool != "tool_search" {
+					discoveryOnly = false
+				}
 				// Detail is the one-line subject of the call (a path, a search
 				// pattern, a task id): a side channel that shows only the tool
 				// name still leaves the reader guessing what was checked.
@@ -3090,6 +3102,12 @@ rounds:
 						dispatchedThisAsk[dispatchKey(call.Arguments)] = d.TaskID
 					}
 				}
+			}
+			// At most two successful schema-only discovery rounds are extra;
+			// ordinary work keeps its existing six-round execution budget.
+			if discoveryOnly && reg != nil && discoveryRounds < 2 && len(reg.Specs()) > schemasBefore {
+				discoveryRounds++
+				maxRounds++
 			}
 			turns = appendToolCalls(turns, calls, out.Note, results, effectiveLocale)
 
@@ -3482,6 +3500,9 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
 	}
 	p, err := plan.FromSpec(*spec)
+	if err == nil {
+		p, err = plan.WithSynthesis(p, strings.TrimSpace(spec.FinalStage), i18n.T(e.Locale(), "ask.plan.synthesisTitle"), scope.Node)
+	}
 	if err != nil {
 		// A plan the model got wrong has created nothing, so the useful answer is
 		// the defect itself rather than a failed run: the user (or the next turn)
@@ -3504,7 +3525,13 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 	// conversation's roster, read-only mode and delivery contract at the
 	// plan/task boundary. Model-provided task_kind cannot lift plan mode.
 	for i := range p.Stages {
-		kind := spec.Stages[i].Kind
+		var detail entry.TaskSpecDetail
+		if p.Stages[i].SpecJSON != "" {
+			if err := json.Unmarshal([]byte(p.Stages[i].SpecJSON), &detail); err != nil {
+				return nil, fmt.Errorf("decode plan stage %s contract: %w", p.Stages[i].ID, err)
+			}
+		}
+		kind := detail.Kind
 		if scope.PermissionMode == defense.ModePlan {
 			kind = entry.TaskInvestigation
 		}
@@ -3512,8 +3539,9 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 		if kind == entry.TaskInvestigation || kind == entry.TaskCodeQuestion {
 			permission = defense.ModePlan
 		}
-		detail := entry.TaskSpecDetail{Kind: kind, PermissionMode: permission,
-			AllowAgents: append([]string(nil), scope.Agents...)}
+		detail.Kind, detail.PermissionMode = kind, permission
+		detail.AllowAgents = append([]string(nil), scope.Agents...)
+		detail.StageReports = true
 		// User checks describe the delivered result, not intermediate steps.
 		terminal := true
 		for _, other := range p.Stages {
@@ -3524,7 +3552,10 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 			}
 		}
 		if permission != defense.ModePlan && terminal {
-			detail.Acceptance = append(detail.Acceptance, scope.Acceptance...)
+			detail.Acceptance, err = planDeliveryChecks(detail.Acceptance, scope.Acceptance)
+			if err != nil {
+				return &Result{Kind: "answer", Answer: i18n.Tf(e.Locale(), "ask.plan.invalid", "err", err.Error())}, nil
+			}
 		}
 		body, err := json.Marshal(detail)
 		if err != nil {

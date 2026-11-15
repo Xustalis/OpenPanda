@@ -29,6 +29,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/entry"
 )
 
 // awaitPollInterval is the settle-poll cadence — now only the cross-process
@@ -429,6 +430,23 @@ func (e *Engine) planBoardVerdict(ctx context.Context, store *core.TaskStore, re
 			if res.Stderr == "" {
 				res.Stderr = "stage " + st.StageID + " " + st.State
 			}
+			return
+		}
+	}
+	// Only a fully settled graph may publish its delivered answer. A final
+	// task in review, or a completed branch while siblings run, is no outcome.
+	if len(stages) == 0 {
+		return
+	}
+	for _, st := range stages {
+		if st.State != core.StateDone {
+			return
+		}
+	}
+	for _, st := range stages {
+		var detail entry.TaskSpecDetail
+		if json.Unmarshal([]byte(st.SpecJSON), &detail) == nil && detail.PlanFinal {
+			res.Answer = settledPayload(st).Stdout
 			return
 		}
 	}

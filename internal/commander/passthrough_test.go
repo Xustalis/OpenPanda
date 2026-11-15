@@ -215,8 +215,8 @@ func TestMaterializeSelfTools(t *testing.T) {
 	if exe, _ := os.Executable(); self.Command != exe {
 		t.Fatalf("openpanda command = %q, want test binary %q", self.Command, exe)
 	}
-	if got := strings.Join(self.Args, " "); got != "mcp --config /etc/panda/config.yaml" {
-		t.Fatalf("openpanda args = %q, want %q", got, "mcp --config /etc/panda/config.yaml")
+	if got := strings.Join(self.Args, " "); got != "mcp --compact --config /etc/panda/config.yaml" {
+		t.Fatalf("openpanda args = %q, want %q", got, "mcp --compact --config /etc/panda/config.yaml")
 	}
 	if _, ok := servers["panda"]; !ok {
 		t.Fatalf("configured passthrough server missing: %+v", servers)

@@ -47,6 +47,10 @@ func runSkill(args []string) {
 	switch cmd {
 	case "list":
 		skillList(store)
+	case "search":
+		skillRead(cfg, store, positional, true)
+	case "show", "read":
+		skillRead(cfg, store, positional, false)
 	case "approve", "reject":
 		if len(positional) != 1 {
 			fatalf("%s", i18n.Tf(i18n.Detect(), "cli.skill.needName", "cmd", cmd))
@@ -68,7 +72,7 @@ func runSkill(args []string) {
 }
 
 func printSkillUsage() {
-	fmt.Println("usage: panda skill [--config PATH] <list | approve <name> | reject <name> | reset <name|all> | find/discover <query> | import <path|url> | hub <list|search|install|info> | install/add <target>>")
+	fmt.Println("usage: panda skill [--config PATH] <list | search <query> | show/read <name> [--path P --offset N] | approve <name> | reject <name> | reset <name|all> | find/discover <query> | import <path|url> | hub <list|search|install|info> | install/add <target>>")
 }
 
 // skillList prints every skill (name, scope, status, usage, description).
