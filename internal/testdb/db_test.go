@@ -52,8 +52,14 @@ func TestTestDBSchemaMatchesMigrations(t *testing.T) {
 				}
 				return result
 			}
-			if !reflect.DeepEqual(schema(fresh), schema(clone)) {
-				t.Fatal("snapshot lost migrated tables, indexes or triggers")
+			wantSchema, gotSchema := schema(fresh), schema(clone)
+			if !reflect.DeepEqual(wantSchema, gotSchema) {
+				for i := range min(len(wantSchema), len(gotSchema)) {
+					if wantSchema[i] != gotSchema[i] {
+						t.Errorf("schema row %d: want %q, got %q", i, wantSchema[i], gotSchema[i])
+					}
+				}
+				t.Fatalf("snapshot schema differs: want %d objects, got %d", len(wantSchema), len(gotSchema))
 			}
 			for _, pragma := range []string{"user_version", "foreign_keys", "journal_mode"} {
 				var want, got string

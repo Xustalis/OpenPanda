@@ -3,15 +3,17 @@
 package storage
 
 func migrateV72(tx MigrationExec) error {
-	for name, spec := range map[string]string{
-		"generation":   "INTEGER NOT NULL DEFAULT 1",
-		"requested_at": "INTEGER NOT NULL DEFAULT 0",
-		"synced_at":    "INTEGER NOT NULL DEFAULT 0",
-		"next_sync_at": "INTEGER NOT NULL DEFAULT 0",
-		"failures":     "INTEGER NOT NULL DEFAULT 0",
-		"scopes_json":  "TEXT NOT NULL DEFAULT '[]'",
+	// Preserve column order across independent fresh migrations and schema
+	// images. Map iteration produces different sqlite_schema SQL per run.
+	for _, column := range []struct{ name, spec string }{
+		{"generation", "INTEGER NOT NULL DEFAULT 1"},
+		{"requested_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"synced_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"next_sync_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"failures", "INTEGER NOT NULL DEFAULT 0"},
+		{"scopes_json", "TEXT NOT NULL DEFAULT '[]'"},
 	} {
-		if err := addColumnIfMissingTx(tx, "task_connections", name, spec); err != nil {
+		if err := addColumnIfMissingTx(tx, "task_connections", column.name, column.spec); err != nil {
 			return err
 		}
 	}
