@@ -65,6 +65,7 @@ export function workTaskKey(task: WorkTask): string {
 
 export interface WorkConnection {
   connectionId: string
+  authEpoch: string
   rootUrl: string
   accountId: string
   state: string
@@ -79,6 +80,42 @@ export interface WorkAuthorization {
   verificationUriComplete: string
   expiresAt: number
   interval: number
+}
+
+export interface WorkPolicy {
+  research: boolean; execute: boolean; finalAction: boolean
+  mode: 'before_submit' | 'after_execution' | ''
+  expiresAt: number; maxConcurrent: number; dailyTokens: number; preparationTokens: number
+  taskIds: string[] | null; projectId: string; capabilities: string[] | null
+  publication?: { directory: string; directoryIdentity?: string; filename: string; fullGoal: boolean }
+}
+export interface WorkRunSummary {
+  requestId: string; connectionId: string; taskKey: string; title: string
+  state: string; error: string; mode: string; updatedAt: number
+}
+export interface WorkRun {
+  requestId: string; connectionId: string; taskKey: string; title: string
+  state: string; error: string; mode: string; prepared: string
+  deliveries: {
+    delivery: {
+      deliveryId: string; revision: number; summary: string
+      scope: { fullGoal: boolean; objectives: string[] }
+      steps: { title: string; outcome: string }[]
+      verification: { status: string; summary: string; method: string }[]
+      remaining: string[]
+    }
+    files: string[]; failure: string; syncState: string; attemptId: string
+  }[]
+  actions: {
+    actionId: string; fingerprint: string; state: string; deliveryId: string; deliveryRevision: number
+    intent: { accountId: string; deviceId: string; directory: string; filename: string; content: string; sha256: string; expiresAt: number; inputRevision: string; attemptId: string }
+    receipt?: { filename: string; sha256: string; method: string; size: number }
+  }[]
+  sync: { eventId: string; kind: string; state: string; error: string; attempts: number; nextAt: number }[]
+}
+export interface WorkResearch {
+  brief: string; state: string; inputRevision: string; modelVersion: string
+  reservedTokens: number; createdAt: number; expiresAt: number
 }
 
 export class ApiError extends Error {
@@ -1151,7 +1188,7 @@ export const api = {
   workConnections(): Promise<WorkConnection[]> {
     return request('GET', '/api/work/connections')
   },
-  connectWork(body: { connectionId: string; rootUrl: string }): Promise<{ connection: WorkConnection; authorization: WorkAuthorization }> {
+  connectWork(body: { connectionId: string; rootUrl: string; scopes?: string[] }): Promise<{ connection: WorkConnection; authorization: WorkAuthorization }> {
     return request('POST', '/api/work/connections', body)
   },
   syncWorkConnection(id: string): Promise<{ queued: boolean }> {
@@ -1163,6 +1200,27 @@ export const api = {
   workMembers(id: string, space: string): Promise<{ accountId: string; name: string; role: string }[]> {
     return request('GET', `/api/work/connections/${encodeURIComponent(id)}/spaces/${encodeURIComponent(space)}/members`)
   },
+  workPolicy(id: string, space: string): Promise<WorkPolicy> {
+    return request('GET', `/api/work/connections/${encodeURIComponent(id)}/spaces/${encodeURIComponent(space)}/policy`)
+  },
+  setWorkPolicy(id: string, space: string, policy: WorkPolicy): Promise<WorkPolicy> {
+    return request('PUT', `/api/work/connections/${encodeURIComponent(id)}/spaces/${encodeURIComponent(space)}/policy`, policy)
+  },
+  workRuns(connection = '', key = ''): Promise<WorkRunSummary[]> {
+    return request('GET', `/api/work/runs?${new URLSearchParams({ connection, key })}`)
+  },
+  workResult(id: string): Promise<WorkRun> { return request('GET', `/api/work/runs/${encodeURIComponent(id)}`) },
+  exportWork(id: string): Promise<string> { return requestText('GET', `/api/work/runs/${encodeURIComponent(id)}/export`) },
+  workResearch(connection: string, key: string): Promise<WorkResearch[]> {
+    return request('GET', `/api/work/tasks/${encodeURIComponent(key)}/research?connection=${encodeURIComponent(connection)}`)
+  },
+  decideWorkAction(id: string, fingerprint: string, decision: 'approve' | 'reject'): Promise<{ recorded: boolean }> {
+    return request('POST', `/api/work/actions/${encodeURIComponent(id)}/decisions`, { fingerprint, decision })
+  },
+  decideWorkDelivery(id: string, revision: number, decision: 'accept' | 'return', reason: string): Promise<{ recorded: boolean }> {
+    return request('POST', `/api/work/deliveries/${encodeURIComponent(id)}/decisions`, { revision, decision, reason })
+  },
+  pauseWork(id: string): Promise<{ recorded: boolean }> { return request('POST', `/api/work/runs/${encodeURIComponent(id)}/pause`, {}) },
   workTasks(connection?: string): Promise<WorkTask[]> {
     return request('GET', `/api/work/tasks${connection ? `?connection=${encodeURIComponent(connection)}` : ''}`)
   },

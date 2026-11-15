@@ -37,6 +37,7 @@ import (
 
 // todoEnv carries what one todo command needs from its host front end.
 type todoEnv struct {
+	in         io.Reader
 	out, errW  io.Writer
 	loc        i18n.Locale
 	jsonOut    bool

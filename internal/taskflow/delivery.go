@@ -38,13 +38,17 @@ type Action struct {
 	receiptStatus string
 }
 type WorkRun struct {
-	RequestID  string         `json:"requestId"`
-	TaskKey    string         `json:"taskKey"`
-	State      string         `json:"state"`
-	Error      string         `json:"error"`
-	Prepared   string         `json:"prepared"`
-	Deliveries []WorkDelivery `json:"deliveries"`
-	Actions    []Action       `json:"actions"`
+	RequestID    string                     `json:"requestId"`
+	TaskKey      string                     `json:"taskKey"`
+	State        string                     `json:"state"`
+	Error        string                     `json:"error"`
+	Prepared     string                     `json:"prepared"`
+	Deliveries   []WorkDelivery             `json:"deliveries"`
+	Actions      []Action                   `json:"actions"`
+	ConnectionID string                     `json:"connectionId"`
+	Title        string                     `json:"title"`
+	Mode         taskproviders.ApprovalMode `json:"mode"`
+	Sync         []SyncStatus               `json:"sync"`
 }
 
 func (s *Service) delivery(ctx context.Context, id string, revision uint64) (WorkDelivery, error) {
@@ -105,7 +109,12 @@ func (s *Service) Work(ctx context.Context, request string) (WorkRun, error) {
 	if c.State != "connected" || c.AccountID != f.AccountID || c.AuthEpoch != f.AuthEpoch || c.Generation != f.Generation {
 		return out, taskproviders.ErrAuthorizationChanged
 	}
+	t, err := s.readableSnapshot(ctx, c, f.Key)
+	if err != nil {
+		return out, err
+	}
 	out = WorkRun{RequestID: f.ID, TaskKey: f.Key, State: f.State, Error: f.Error, Prepared: f.Prepared, Deliveries: []WorkDelivery{}, Actions: []Action{}}
+	out.ConnectionID, out.Title, out.Mode, out.Sync = f.ConnectionID, t.Title, f.Policy.Mode, []SyncStatus{}
 	rows, err := s.db.QueryContext(ctx, `SELECT delivery_id,revision FROM work_deliveries WHERE request_id=? ORDER BY revision`, request)
 	if err != nil {
 		return out, err
@@ -162,12 +171,31 @@ func (s *Service) Work(ctx context.Context, request string) (WorkRun, error) {
 		}
 		out.Actions = append(out.Actions, a)
 	}
+	rows, err = s.db.QueryContext(ctx, `SELECT event_id,kind,state,error_code,attempts,next_at FROM task_sync_outbox WHERE request_id=? ORDER BY created_at,event_id`, request)
+	if err != nil {
+		return WorkRun{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item SyncStatus
+		if err = rows.Scan(&item.EventID, &item.Kind, &item.State, &item.Error, &item.Attempts, &item.NextAt); err != nil {
+			return WorkRun{}, err
+		}
+		out.Sync = append(out.Sync, item)
+	}
+	if err = rows.Err(); err != nil {
+		return WorkRun{}, err
+	}
 	return out, nil
 }
 
 func (w WorkRun) Export() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Request: %s\nState: %s\nFailure: %s\n\n", w.RequestID, w.State, w.Error)
+	fmt.Fprintf(&b, "Task: %s\nTitle: %s\nApproval: %s\n\n", w.TaskKey, w.Title, w.Mode)
+	if len(w.Deliveries) == 0 && w.Prepared != "" {
+		fmt.Fprintf(&b, "Draft: %s\n\n", w.Prepared)
+	}
 	for _, d := range w.Deliveries {
 		fmt.Fprintf(&b, "Delivery: %s revision %d (%s)\n%s\n", d.Delivery.DeliveryID, d.Delivery.Revision, d.SyncState, d.Delivery.Summary)
 		for _, step := range d.Delivery.Steps {
@@ -191,6 +219,9 @@ func (w WorkRun) Export() string {
 		if a.Receipt != nil {
 			fmt.Fprintf(&b, "Receipt: %s %s (%s)\n", a.Receipt.Filename, a.Receipt.SHA256, a.Receipt.Method)
 		}
+	}
+	for _, status := range w.Sync {
+		fmt.Fprintf(&b, "Sync: %s %s attempts=%d error=%s\n", status.Kind, status.State, status.Attempts, status.Error)
 	}
 	return b.String()
 }

@@ -12298,3 +12298,15 @@ main .pipeline-chip {
     padding-top: 7px;
   }
 }
+
+/* Persisted business results and exact local consent. */
+.work-result { margin-block: 12px; }
+.work-result > summary, .work-space-policy > summary { cursor: pointer; padding-block: 10px; overflow-wrap: anywhere; }
+.work-delivery, .work-action, .work-sync { margin-top: 16px; padding-block: 12px; border-top: 1px solid var(--border); }
+.work-payload { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto; padding: 12px; background: var(--bg-inset); border-radius: 8px; }
+.work-code { overflow-wrap: anywhere; font-family: var(--font-mono, monospace); font-size: .9em; }
+.work-form .work-check { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; }
+.work-action .work-facts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+.work-form .work-check input { width: auto; min-height: 0; flex: none; margin-top: .25em; }
+.work-form fieldset { min-width: 0; display: grid; gap: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.work-space-policy { margin-top: 12px; }

@@ -3,6 +3,7 @@
 package panel
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -13,10 +14,13 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/taskflow"
 	"github.com/Xustalis/OpenPanda/internal/taskhub"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders"
 	"github.com/Xustalis/OpenPanda/internal/todos"
 )
+
+var errWorkDecision = errors.New("invalid work decision")
 
 func writeWorkError(w http.ResponseWriter, err error) {
 	code := http.StatusBadRequest
@@ -25,10 +29,14 @@ func writeWorkError(w http.ResponseWriter, err error) {
 		code = 404
 	case errors.Is(err, core.ErrConflict), errors.Is(err, taskproviders.ErrConflict), errors.Is(err, askengine.ErrApprovalDenied):
 		code = 409
+	case errors.Is(err, taskflow.ErrStale), errors.Is(err, taskflow.ErrRuntimeHeld):
+		code = 409
 	case errors.Is(err, core.ErrExecutionUnavailable):
 		code = 410
 	case errors.Is(err, taskproviders.ErrReconnect):
 		code = 401
+	case errors.Is(err, taskproviders.ErrAuthorizationChanged):
+		code = 403
 	case errors.Is(err, taskproviders.ErrUnsupported):
 		code = 501
 	case errors.Is(err, taskproviders.ErrPrecondition):
@@ -59,8 +67,8 @@ func (h *handler) attachWorkSources(ctx context.Context, tasks []taskJSON) {
 
 func decodeWorkJSON(w http.ResponseWriter, r *http.Request, v any, allowEmpty bool) error {
 	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	d.DisallowUnknownFields()
-	if err := d.Decode(v); err != nil {
+	var raw json.RawMessage
+	if err := d.Decode(&raw); err != nil {
 		if allowEmpty && errors.Is(err, io.EOF) {
 			return nil
 		}
@@ -69,7 +77,12 @@ func decodeWorkJSON(w http.ResponseWriter, r *http.Request, v any, allowEmpty bo
 	if err := d.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return errors.New("expected one JSON object")
 	}
-	return nil
+	if len(raw) == 0 || raw[0] != '{' {
+		return errors.New("expected one JSON object")
+	}
+	strict := json.NewDecoder(bytes.NewReader(raw))
+	strict.DisallowUnknownFields()
+	return strict.Decode(v)
 }
 func (h *handler) listWork(w http.ResponseWriter, r *http.Request) {
 	ts, err := h.workStore().List(r.Context(), r.URL.Query().Get("connection"))

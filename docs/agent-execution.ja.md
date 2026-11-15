@@ -93,3 +93,28 @@ API: `GET /api/settings/execution`, `PUT /api/settings/execution` (Bearer token)
 - 子タスク待機中の親は実行枠と作業ツリーのロックを解放し、ハートビート・キャンセル・デバイスの排他を維持します。再開前に枠とロックを取り直します。待機情報は attempt に結び付けられ、再試行・キャンセル・再起動時に解除されます。
 - 隔離マージの失敗・基準の欠落・競合は入力変更を要するレビューで停止し、作業領域を保持します。承認だけでは完了しません。同じバッチの兄弟は不変のソーススナップショットを共有し、明示的な作業ディレクトリを尊重します。
 - 計画グラフ全体を一つのトランザクションで公開します。カーネル生成の因果メタデータで変更と削除を保持し、子孫を祖先より優先します。同時の異なる変更は競合し、同じ結果は統合できます。新計画は対応プロトコルを宣言したノードにだけ送信し、基準のない複数の旧スナップショットは停止します。計画の出力は元の checkout に自動反映されません。
+
+## 業務タスク、TaskSync と管理された成果公開
+
+`work` は業務目標と履歴、カーネルの `task` は実行記録を扱います。Web の「タスクと共同作業」でローカルタスク、共有スペース、確認事項を表示します。`todo start` は既存の関連実行を再利用し、`work run` は明示的に新しいリクエストを作成します。ローカルの事実は todo に、リモート情報はアカウント別の許可済みキャッシュに保存します。
+
+`panda connection connect --root https://example.com/tsync/ --id team` で接続し、外部ブラウザで承認します。Panda は TaskSync のパスワードを収集しません。既定の権限は `tasks:read,members:read`、実行には `execution:read,execution:claim,execution:report`、成果報告には `delivery:write`、本人の検収代行には `delivery:report-decision` が必要です。追加権限は再接続時の `--scopes` で要求します。認証情報と署名鍵はデータベース隣の制限付きファイルに保存し、出力やエクスポートに含めません。
+
+既定は同期のみです。期限付きのローカルスペースポリシーで調査、実行、最終操作を個別に許可します。Web または `panda work policy --connection team --space SPACE --file policy.json` で設定し、`--file` を省略すると現在値を表示します。アカウントと明示的なタスク・プロジェクトID、トークン・同時実行上限に結び付きます。未割当タスクは小規模な非公開調査だけを行い、引受や状態変更はしません。`panda work research INSTANCE/WORKSPACE/SPACE/TASK --connection team` で閲覧します。個人調査の記憶はプロジェクト実行に渡しません。
+
+最初の管理された最終操作は、明示的に許可した絶対ディレクトリへの正確なテキストファイル公開です。ディレクトリの識別情報を固定し、既存ファイルは上書きしません。このワークフローの他の agent・shell・browser ツールは準備専用です。ファイルだけで目標達成とはせず、目標全体の充足には人間の別途確認が必要です。ブラウザの識別・ログイン・拡張機能は後続の独立した検収対象です。
+
+```sh
+panda work runs --connection team
+panda work result REQUEST
+panda work export REQUEST
+panda work approve ACTION --fingerprint HASH
+panda work reject ACTION --fingerprint HASH
+panda work accept DELIVERY --revision 1
+panda work return DELIVERY --revision 1 --reason '追加の検証が必要'
+panda work pause REQUEST
+```
+
+`before_submit` は内容・対象・アカウント・試行・入力版へのローカル同意後に公開します。`after_execution` は明示的な事前許可後に実行し、本人が特定の成果版を検収します。差し戻しても実行済み操作は取り消しません。Web と REPL の `/work` は同じ永続データを使用し、カーネルの操作許可とは分離します。
+
+応答喪失や再起動後の dispatching/unknown は、再送せず記録を照合します。永続 outbox は事実の同期のみを再試行し、完成済みの成果は同期待ちとして表示します。接続状態と成果の同期診断で失敗を確認できます。権限取消やアカウント・入力変更を受信すると派生作業を無効化し、読めない内容を画面から消去します。オフラインコピーの遠隔消去はできません。ロールバック前に新規作業を止め、実行と outbox のチェックポイントを保持してください。旧バイナリは新スキーマを拒否する場合があり、古いDBで新しい事実を上書きしないでください。

@@ -147,9 +147,19 @@ func (s *Service) SetPolicy(ctx context.Context, connection, space string, p Pol
 }
 
 func (s *Service) Policy(ctx context.Context, connection, space string) (Policy, error) {
+	c, err := s.Get(ctx, connection)
+	if err != nil {
+		return Policy{}, err
+	}
+	if _, ok := authorizedSpace(c, space); !ok || c.State != "connected" {
+		return Policy{}, taskproviders.ErrAuthorizationChanged
+	}
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT p.policy_json FROM task_policies p JOIN task_connections c ON c.connection_id=p.connection_id AND c.account_id=p.account_id WHERE c.connection_id=? AND c.state='connected' AND p.space_id=?`, connection, space).Scan(&raw)
+	err = s.db.QueryRowContext(ctx, `SELECT p.policy_json FROM task_policies p JOIN task_connections c ON c.connection_id=p.connection_id AND c.account_id=p.account_id WHERE c.connection_id=? AND c.state='connected' AND p.space_id=?`, connection, space).Scan(&raw)
 	var p Policy
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, nil
+	}
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &p)
 	}

@@ -96,3 +96,28 @@ After completion, the original conversation keeps a separate delivery report (up
 - Parents waiting for children release queue execution capacity and workspace locks while retaining heartbeat, cancellation and device exclusion. They reacquire capacity and locks before resuming. The durable wait marker belongs to one attempt and is cleared by retry, cancellation and restart recovery.
 - Isolated merge failures, missing baselines and file conflicts block in review requiring changed input, preserving the workspace. Approval alone cannot certify delivery. Siblings share one immutable source snapshot per batch; explicit work directories keep their meaning.
 - A plan publishes its complete graph in one transaction. Stage artifacts carry versioned kernel-generated causal metadata: edits and deletions survive joins, descendants supersede ancestors, divergent concurrent edits conflict, and equal results merge. New plans only dispatch to nodes advertising protocol support; multiple legacy snapshots without trustworthy baselines block explicitly. Plan outputs do not automatically write back to the original checkout.
+
+## Business tasks, TaskSync and controlled delivery
+
+`work` reads business goals and their history; kernel `task` remains an execution record. The Web **Tasks and collaboration** page has local tasks, connected spaces and decisions. `todo start` reuses its recorded execution; `work run` explicitly creates a new request. Local todos remain authoritative and remote tasks remain an account-scoped cache.
+
+Connect with `panda connection connect --root https://example.com/tsync/ --id team`. Authorize in the external browser; Panda never asks for the TaskSync password. The default scopes are `tasks:read,members:read`. Execution additionally needs `execution:read,execution:claim,execution:report`; delivery needs `delivery:write`, and reporting personal acceptance requires `delivery:report-decision`. Reconnect with the required `--scopes` to request additional grants. Credentials and signing keys stay in restricted files beside the database; connection output and exports exclude them.
+
+Connections only synchronize until an expiring local space policy enables research, execution or final action. Set it in the Web space disclosure or with `panda work policy --connection team --space SPACE --file policy.json`; omit `--file` to inspect it. Policies bind to the account and explicit task/project IDs, with separate token and concurrency limits. An unassigned task can receive a small private research brief, never a claim or state change. `panda work research INSTANCE/WORKSPACE/SPACE/TASK --connection team` reads the current authorized brief. Personal research memory is not passed into project execution.
+
+The first controlled final-action adapter publishes an exact text file to an explicitly authorized absolute directory. It pins directory identity and never overwrites an existing file. Other agent/shell/browser tools are preparation-only for this workflow; this policy grants them no final-action authority. A file draft alone does not complete the goal: full-goal coverage is a separate explicit human assertion. Browser identity/login and extension workflows have their own later acceptance gate.
+
+```sh
+panda work runs --connection team
+panda work result REQUEST
+panda work export REQUEST
+panda work approve ACTION --fingerprint HASH
+panda work reject ACTION --fingerprint HASH
+panda work accept DELIVERY --revision 1
+panda work return DELIVERY --revision 1 --reason 'Needs more evidence'
+panda work pause REQUEST
+```
+
+`before_submit` requires local consent to the exact content, target, account, attempt and input version before publication. `after_execution` requires explicit prior authorization, then personal acceptance of a particular delivery revision. Returning an executed result does not undo its effects. Web and `/work` in the REPL expose the same persisted results and decisions; approvals for kernel operations remain separate.
+
+After a lost response or restart, dispatching/unknown actions are reconciled from receipts instead of sent again. The durable outbox retries only facts; completed results awaiting a remote acknowledgment are shown as pending sync. Use connection status and result sync diagnostics to inspect failures. Revocation or account/input changes invalidate derived work; after the device receives the change, private views clear unavailable content. An offline copy cannot be remotely erased. Pause new requests and drain/checkpoint work and outbox before rollback; an older binary may reject the newer schema. Preserve new facts rather than restoring an old database over them.

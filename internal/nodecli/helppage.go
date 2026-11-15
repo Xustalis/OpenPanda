@@ -87,7 +87,7 @@ var helpPage = []HelpSection{
 		{"plan run <file.yaml> [--dry-run]", "cli.help.d.plan_run"},
 		{"plan show <plan-id>", "cli.help.d.plan_show"},
 		{"project list|create", "cli.help.d.project"},
-		{"work list|show|add|edit|run|history", "cli.help.d.work"},
+		{"work list|show|add|edit|run|history|policy|runs|result|export|research|approve|reject|accept|return|pause", "cli.help.d.work"},
 		{"connection connect|list|status|sync|disconnect", "cli.help.d.connection"},
 	}},
 	{Group: GroupMemory, Col: helpColWide, Rows: []HelpRow{
@@ -146,7 +146,7 @@ func GroupHeadingKey(g Group) string { return groupHelpKey[g] }
 // Keys are canonical top-level command names; a verb whose command has no
 // entry here completes flags and files instead.
 var completionVerbs = map[string][]string{
-	"work":       {"list", "show", "add", "edit", "run", "history"},
+	"work":       {"list", "show", "add", "edit", "run", "history", "policy", "runs", "result", "export", "research", "approve", "reject", "accept", "return", "pause"},
 	"connection": {"connect", "list", "status", "sync", "disconnect"},
 	"nodes":      {"add", "disconnect", "invite", "remove", "prune", "verify", "admit", "drain", "trust"},
 	"task":       {"add", "priority", "move", "approve", "reject", "cancel", "delete", "revert", "followup", "continue", "send", "board", "artifact", "logs", "show"},

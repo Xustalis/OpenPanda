@@ -185,7 +185,7 @@ var catalog = []Command{
 		Usage:   "panda todo list|add|edit|done|rm|move|start",
 		HelpKey: "cli.help.d.todo", Group: GroupTasks},
 	{Names: []string{"work"},
-		Usage:   "panda work list|show|add|edit|run|history",
+		Usage:   "panda work list|show|add|edit|run|history|policy|runs|result|export|research|approve|reject|accept|return|pause",
 		HelpKey: "cli.help.d.work", Group: GroupTasks},
 	{Names: []string{"connection"},
 		Usage:   "panda connection connect|list|status|sync|disconnect",

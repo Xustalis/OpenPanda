@@ -233,6 +233,8 @@ func init() {
 		{"reminders", "tasks", "cmd.reminder", (*repl).cmdReminder},
 		{"todo", "tasks", "cmd.todo", (*repl).cmdTodo},
 		{"todos", "tasks", "cmd.todo", (*repl).cmdTodo},
+		{"work", "tasks", "cli.help.d.work", (*repl).cmdWork},
+		{"connection", "tasks", "cli.help.d.connection", (*repl).cmdConnection},
 		{"memory", "memory", "cmd.memory", (*repl).cmdMemory},
 		{"projects", "memory", "cmd.projects", (*repl).cmdProjects},
 		{"project", "memory", "cmd.project", (*repl).cmdProjectEnter},

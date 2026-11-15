@@ -15,6 +15,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/plan"
+	"github.com/Xustalis/OpenPanda/internal/taskflow"
 	"github.com/Xustalis/OpenPanda/internal/taskhub"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders"
 	"github.com/Xustalis/OpenPanda/internal/todos"
@@ -53,6 +54,13 @@ func workMain(ctx context.Context, db *sql.DB, env todoEnv, args []string) error
 	verb := "list"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		verb, args = args[0], args[1:]
+	}
+	if isWorkflowVerb(verb) {
+		path := ""
+		if env.cfg != nil {
+			path = env.cfg.Storage.DBPath
+		}
+		return workflowMain(ctx, taskflow.New(db, path), env, verb, args)
 	}
 	fs := flag.NewFlagSet("work "+verb, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
