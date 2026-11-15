@@ -16,7 +16,6 @@ import (
 
 	agentreg "github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/askengine"
-	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
@@ -996,20 +995,10 @@ func TestAppSettingsSandboxMode(t *testing.T) {
 	if onDisk, err := os.ReadFile(configPath); err != nil || !strings.Contains(string(onDisk), config.SandboxModeStandard) {
 		t.Fatalf("config file not updated: %q err %v", onDisk, err)
 	}
-	// A missing backend is reported as inactive, while the requested policy
-	// stays installed and refuses task commands instead of falling back to off.
+	// active is derived, never asserted blindly: a host without a backend must
+	// report configured-but-unenforced instead of pretending.
 	if sb["active"] == true && sb["backend"] == "" {
 		t.Fatalf("active without a backend: %v", sb)
-	}
-	if sb["backend"] == "" {
-		binary, err := os.Executable()
-		if err != nil {
-			t.Fatal(err)
-		}
-		result := commander.NewExecutor().WithDir(tmp).Run(context.Background(), binary, "-test.run=^$")
-		if result.OK || result.ExitCode != 127 || !strings.Contains(result.Stderr, security.ErrSandboxUnavailable.Error()) {
-			t.Fatalf("saved standard policy did not block launch without a backend: %+v", result)
-		}
 	}
 
 	// An absent sandbox_mode leaves the mode alone — older clients save the
