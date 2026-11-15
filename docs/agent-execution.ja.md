@@ -122,3 +122,5 @@ panda work pause REQUEST
 応答喪失や再起動後の dispatching/unknown は、再送せず記録を照合します。永続 outbox は事実の同期のみを再試行し、完成済みの成果は同期待ちとして表示します。接続状態と成果の同期診断で失敗を確認できます。権限取消やアカウント・入力変更を受信すると派生作業を無効化し、読めない内容を画面から消去します。オフラインコピーの遠隔消去はできません。ロールバック前に新規作業を止め、実行と outbox のチェックポイントを保持してください。旧バイナリは新スキーマを拒否する場合があり、古いDBで新しい事実を上書きしないでください。
 
 リモートの追加・編集には taskWrite の機能交渉と、接続・スペース双方の tasks:write が必要です。work add --connection team --space SPACE --title Title --remote-priority 2 を使用し、編集には完全なタスクキーと --if-match の取得元リビジョンを指定します。--remote-project は取得元のプロジェクト ID、空文字列は解除です。--start-at/--due-at は kind、value、任意の timezone を持つ JSON を受け取り、null で解除します。浮動日時から端末のタイムゾーンを推測しません。リモートの work run --connection team はローカルポリシーに従い現在の世代のみ申請し、申請を取得前に永続化します。ローカル Plan は受け付けず、世代も増やしません。再実行は本人が TaskSync で新しい世代を作成します。同じ --request で再試行してください。更新応答はバックグラウンド同期を要求し、フィードキャッシュを直接置き換えません。
+
+MCP は panda_work_list、panda_work_show、panda_work_history、panda_work_request、panda_work_result を提供します。プロジェクト agent は現在のローカルプロジェクトと明示的に紐付けたリモートタスクだけを参照でき、引数で範囲を拡張できません。成果は実行時のプロジェクトも検証し、再紐付けによる旧コンテキストの流出を防ぎます。続きのページには nextOffset と sha256 を使用します。不明な実行コンテキストは拒否します。ポリシー変更、署名、最終同意、成果受入、個人向け事前調査は MCP に公開しません。
