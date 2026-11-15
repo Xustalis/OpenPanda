@@ -16,7 +16,8 @@ export type ControlTab = 'queue' | 'plans' | 'projects'
 export type Route =
   | { view: 'sessions'; id: string | null; project?: string | null; ws?: string | null }
   | { view: 'control'; tab?: ControlTab; project?: string | null; review?: boolean }
-  | { view: 'team' }
+  | { view: 'team'; tab?: 'mine' | 'spaces' | 'review' }
+  | { view: 'work'; key: string; connection?: string }
   | { view: 'memory' }
   | { view: 'workspace' }
   | { view: 'profile' }
@@ -30,10 +31,7 @@ export type Route =
  *  had stopped earning their 24px. 新对话 leads
  *  (it is an action, but it reads as a row); then the machines-and-work
  *  destinations: 工作空间 (the fleet as a map) and 队列·任务·项目 (the node's
- *  boards). 团队 is the opt-in slot reserved for team work: its page is still
- *  empty, so the rail row is hidden until 设置 → 偏好 → 团队 → 启用团队功能
- *  is checked (app.tsx gates the row, palette.tsx gates the ⌘K command, and
- *  a disabled #/team is redirected). The 节点网络 page (fleet) was removed
+ *  boards). Tasks and collaboration is always available. The 节点网络 page (fleet) was removed
  *  from the console; its old routes land on the thread list instead.
  *
  *  What is deliberately NOT a row: 对话 — the thread history is the tail of the
@@ -78,6 +76,8 @@ export function parseHash(): Route {
   const wsParam = query.get('ws') || null
   const tabParam = query.get('tab') || null
 
+  if (path.startsWith('work/tasks/')) return { view: 'work', key: decodeURIComponent(path.slice(11)), connection: query.get('connection') || 'local' }
+
   if (path.startsWith('task/')) return { view: 'detail', id: decodeURIComponent(path.slice(5)) }
   if (path.startsWith('chat/')) return { view: 'sessions', id: decodeURIComponent(path.slice(5)), project: projectParam }
   if (path === 'chat') return { view: 'sessions', id: null, project: projectParam, ws: wsParam }
@@ -101,13 +101,11 @@ export function parseHash(): Route {
   }
   if (path === 'plans') return { view: 'control', tab: 'plans' }
   if (path === 'projects') return { view: 'control', tab: 'projects' }
-  // 团队: its own destination, beside the boards — but only when the feature
-  // is switched on. parseHash still answers the URL (a bookmark is harmless);
-  // app.tsx redirects it to the thread list while the switch is off.
-  if (path === 'team') return { view: 'team' }
-  // The to-do board was folded into the task centre; its old URLs land on the
-  // board where that work now lives instead of on the empty team page.
-  if (path === 'todos' || path === 'todo') return { view: 'control', tab: 'queue' }
+  // Business tasks remain available regardless of legacy browser preferences.
+  if (path === 'team') return { view: 'team', tab: tabParam === 'mine' || tabParam === 'review' ? tabParam : 'spaces' }
+  if (path === 'work' || path === 'work/tasks') return { view: 'team', tab: 'mine' }
+  // Legacy local board links open local business tasks.
+  if (path === 'todos' || path === 'todo') return { view: 'team', tab: 'mine' }
   // 节点网络 (fleet) is gone from the console; its legacy URLs (`#/fleet`,
   // `#/nodes`) fall through to the thread list below.
   if (path === 'workspace') return { view: 'workspace' }
@@ -155,6 +153,10 @@ export function navigate(route: Route, replace = false): void {
   }
   if (route.view === 'detail') {
     commit(`#/task/${encodeURIComponent(route.id)}`)
+  } else if (route.view === 'work') {
+    commit(`#/work/tasks/${encodeURIComponent(route.key)}?connection=${encodeURIComponent(route.connection || 'local')}`)
+  } else if (route.view === 'team') {
+    commit(route.tab && route.tab !== 'spaces' ? `#/team?tab=${route.tab}` : '#/team')
   } else if (route.view === 'sessions') {
     let base = route.id ? `#/chat/${encodeURIComponent(route.id)}` : '#/chat'
     const params: string[] = []

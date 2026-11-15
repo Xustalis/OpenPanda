@@ -6,7 +6,6 @@ import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, ty
 import { onLocaleChange, t } from './i18n'
 import { useAsync, useChangeSignal } from './hooks'
 import { isSelfNodeUp } from './format/node-status'
-import { useTeamEnabled } from './features'
 import { navigate, parseHash, type Route } from './nav'
 import { lazy, Suspense } from 'preact/compat'
 import { SessionsView } from './views/sessions'
@@ -95,9 +94,6 @@ function useRoute(): Route {
 export function App() {
   useLocaleRerender()
   useWarmRouteChunks()
-  // 团队 is an opt-in feature: its rail row, palette command and page all
-  // follow the switch in 设置 → 偏好 → 团队 (features.ts).
-  const teamOn = useTeamEnabled()
   const route = useRoute()
   const [authed, setAuthed] = useState<boolean>(getToken() !== '')
   const [gateError, setGateError] = useState('')
@@ -149,13 +145,6 @@ export function App() {
     requestAnimationFrame(openNotifications)
   }, [route, authed])
 
-  // A bookmark (or a stale tab) pointing at #/team must not open a page whose
-  // rail row is hidden. Replace rather than push, so Back does not bounce the
-  // reader straight back into the disabled destination.
-  useEffect(() => {
-    if (!authed || teamOn || route.view !== 'team') return
-    navigate({ view: 'sessions', id: null }, true)
-  }, [route.view, teamOn, authed])
 
   if (!authed) {
     return (
@@ -172,7 +161,7 @@ export function App() {
   }
 
   // 任务详情 is a drill-down of the board, so it keeps 队列·任务·项目 lit on the rail.
-  const active: string = route.view === 'detail' ? 'control' : route.view
+  const active: string = route.view === 'detail' ? 'control' : route.view === 'work' ? 'team' : route.view
   const reviewCount = useReviewCount()
   const logout = () => {
     setMenuOpen(false)
@@ -314,11 +303,7 @@ export function App() {
               </span>
             )}
           </a>
-          {/* 团队 is no longer a fixed rail row: the page is still a
-              placeholder, so showing it to every reader costs a row for an
-              empty destination. 设置 → 偏好 → 团队 → 启用团队功能 turns this
-              row (and the ⌘K command, and the #/team route) on. */}
-          {teamOn && (
+          {(
             <a
               href="#/team"
               class={`nav-item${active === 'team' ? ' active' : ''}`}
@@ -422,7 +407,8 @@ export function App() {
             onOpenTask={(tid) => navigate({ view: 'detail', id: tid })}
           />
         )}
-        {base.view === 'team' && teamOn && <TeamView />}
+        {base.view === 'team' && <TeamView tab={base.tab || 'spaces'} />}
+        {base.view === 'work' && <TeamView taskKey={base.key} connection={base.connection} />}
         {base.view === 'memory' && <MemoryView />}
         {base.view === 'workspace' && <WorkspaceView />}
         {base.view === 'profile' && <ProfileView />}
@@ -430,16 +416,7 @@ export function App() {
           <SettingsView
             initialSection={route.tab ?? undefined}
             onSelectTab={(tab) => navigate({ view: 'settings', tab })}
-            // Turning the switch off while the sheet is open over the team
-            // page must not drop the reader back onto a now-hidden view.
-            onClose={() =>
-              navigate(
-                lastView.current.view === 'team' && !teamOn
-                  ? { view: 'sessions', id: null }
-                  : lastView.current,
-                true,
-              )
-            }
+            onClose={() => navigate(lastView.current, true)}
             onLogout={logout}
           />
         )}

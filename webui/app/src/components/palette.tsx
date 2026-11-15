@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { locale, localeNames, locales, setLocale, t, type Locale } from '../i18n'
-import { teamEnabled } from '../features'
 import { navigateView, navViews } from '../nav'
 import { setTheme, theme, type Theme } from '../theme'
 import { rank } from './fuzzy'
@@ -272,7 +271,6 @@ export function buildCommands(onLogout: () => void): Command[] {
   // Hiding a rail row is not enough: ⌘K is a second way into every view, and
   // a disabled feature must not stay reachable by typing "team".
   const cmds: Command[] = navViews
-    .filter(([view]) => view !== 'team' || teamEnabled())
     .map(([view, key]) => ({
       id: `go:${view}`,
       group: go,
