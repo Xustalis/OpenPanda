@@ -58,13 +58,15 @@ type Service struct {
 	now func() time.Time
 	// A fresh provider pins identity for each round. The seam also permits
 	// deterministic fault tests without sending credentials anywhere.
-	source func(Connection) (taskproviders.TaskProvider, func() error, error)
-	runMu  sync.Mutex
-	done   chan struct{}
-	execMu sync.Mutex
-	exec   *executionRuntime
+	source      func(Connection) (taskproviders.TaskProvider, func() error, error)
+	runMu       sync.Mutex
+	done        chan struct{}
+	outboxLocks [64]sync.Mutex // bounded stripes serialize each request's senders
+	execMu      sync.Mutex
+	exec        *executionRuntime
 	// executionClient never exposes a token to a task or a model.
 	executionClient func(Connection) (*tsync.Client, error)
+	signConsent     func(context.Context, Connection, tsync.ConsentPayload) (tsync.SignedProof, error)
 }
 
 func New(db *sql.DB, dbPath string) *Service {
@@ -76,6 +78,13 @@ func New(db *sql.DB, dbPath string) *Service {
 		}
 	}
 	s := &Service{db: db, dir: dir, now: time.Now}
+	s.signConsent = func(ctx context.Context, c Connection, p tsync.ConsentPayload) (tsync.SignedProof, error) {
+		_, device, err := s.device(c)
+		if err != nil {
+			return tsync.SignedProof{}, err
+		}
+		return device.SignConsent(ctx, p)
+	}
 	s.executionClient = func(c Connection) (*tsync.Client, error) {
 		client, device, err := s.device(c)
 		if err == nil {
