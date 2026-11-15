@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -205,7 +206,8 @@ func TestMaterializeSelfTools(t *testing.T) {
 	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{},
 		config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: "extended"})
 	r.SetMCPPassthrough("npx server-x")
-	r.SetSelfConfigPath("/etc/panda/config.yaml")
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	r.SetSelfConfigPath(configPath)
 	ctx, cleanup := r.wireMCPPassthrough(context.Background(), "claude_code", "claude_code.py", t.TempDir())
 	servers := mcpDocFromCtx(t, ctx)
 	self, ok := servers["openpanda"]
@@ -215,8 +217,8 @@ func TestMaterializeSelfTools(t *testing.T) {
 	if exe, _ := os.Executable(); self.Command != exe {
 		t.Fatalf("openpanda command = %q, want test binary %q", self.Command, exe)
 	}
-	if got := strings.Join(self.Args, " "); got != "mcp --compact --config /etc/panda/config.yaml" {
-		t.Fatalf("openpanda args = %q, want %q", got, "mcp --compact --config /etc/panda/config.yaml")
+	if want := []string{"mcp", "--compact", "--config", configPath}; !slices.Equal(self.Args, want) {
+		t.Fatalf("openpanda args = %q, want %q", self.Args, want)
 	}
 	if _, ok := servers["panda"]; !ok {
 		t.Fatalf("configured passthrough server missing: %+v", servers)

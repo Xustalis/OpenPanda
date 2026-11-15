@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -89,8 +90,13 @@ func TestConnectionReconnectAndPendingResume(t *testing.T) {
 	if err != nil || strings.Contains(string(public), "secret-") || strings.Contains(string(public), "credentialRef") {
 		t.Fatalf("connection DTO leaked private data: %v", err)
 	}
-	info, err := os.Stat(file)
-	if err != nil || info.Mode().Perm()&0077 != 0 {
+	info, err := os.Lstat(file)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("credential file is not a regular private file: %v", err)
+	}
+	// Windows reports synthetic POSIX bits; keep the Unix permission contract
+	// alongside the cross-platform regular-file and credential checks above.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
 		t.Fatalf("credential file is not private: %v", err)
 	}
 	changed, cancel := context.WithTimeout(ctx, time.Second)
