@@ -17,7 +17,7 @@ import (
 
 func isWorkflowVerb(verb string) bool {
 	switch verb {
-	case "policy", "runs", "result", "export", "research", "approve", "reject", "accept", "return", "pause":
+	case "binding", "policy", "runs", "result", "export", "research", "approve", "reject", "accept", "return", "pause":
 		return true
 	}
 	return false
@@ -35,8 +35,10 @@ func workflowMain(ctx context.Context, s *taskflow.Service, env todoEnv, verb st
 	fingerprint := fs.String("fingerprint", "", "exact final action fingerprint")
 	revision := fs.Uint64("revision", 0, "exact delivery revision")
 	reason := fs.String("reason", "", "decision reason")
+	remoteProject := fs.String("remote-project", "", "remote project ID; empty binds the space")
+	localProject := fs.String("local-project", "", "existing local project; empty removes the binding")
 	id := ""
-	if verb != "policy" && verb != "runs" {
+	if verb != "binding" && verb != "policy" && verb != "runs" {
 		if len(args) == 0 {
 			return errors.New(i18n.T(env.loc, "cli.work.usage"))
 		}
@@ -49,6 +51,26 @@ func workflowMain(ctx context.Context, s *taskflow.Service, env todoEnv, verb st
 		return errors.New(i18n.T(env.loc, "cli.work.usage"))
 	}
 	switch verb {
+	case "binding":
+		if *connection == "" || *space == "" {
+			return errors.New("--connection and --space required")
+		}
+		mutate := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "local-project" {
+				mutate = true
+			}
+		})
+		if mutate {
+			if err := s.SetBinding(ctx, *connection, *space, taskflow.ProjectBinding{RemoteProject: *remoteProject, LocalProject: *localProject}); err != nil {
+				return err
+			}
+		}
+		b, err := s.Bindings(ctx, *connection, *space)
+		if err != nil {
+			return err
+		}
+		return writeTodoJSON(env, b)
 	case "policy":
 		if *connection == "" || *space == "" {
 			return errors.New("--connection and --space required")

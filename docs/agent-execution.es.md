@@ -102,6 +102,8 @@ Conecta con `panda connection connect --root https://example.com/tsync/ --id tea
 
 La conexión solo sincroniza hasta que una política local con caducidad habilita investigación, ejecución o acción final. Configúrala en Web o con `panda work policy --connection team --space SPACE --file policy.json`; omite `--file` para consultarla. Vincula cuenta e IDs explícitos de tareas/proyectos, con límites de tokens y concurrencia. Una tarea sin asignar solo recibe investigación privada limitada, sin reclamarla ni cambiar su estado. Consulta con `panda work research INSTANCE/WORKSPACE/SPACE/TASK --connection team`. La memoria personal de investigación no se inyecta en ejecuciones de proyecto.
 
+Usa los detalles del espacio o CLI work binding para vincular explícitamente la memoria de proyectos. --connection y --space seleccionan el ámbito; omite --remote-project para todo el espacio. Omite --local-project para ver los vínculos o pasa un valor vacío para eliminar uno. El vínculo de proyecto tiene prioridad sobre el del espacio. Los nombres no crean vínculos. Cambiar uno pausa el trabajo y elimina los resúmenes privados, sin conceder permisos de directorios ni acciones.
+
 El primer adaptador de acción final publica un texto exacto en un directorio absoluto autorizado, fija la identidad del directorio y nunca sobrescribe archivos. Los demás agentes, shell y herramientas de navegador son solo de preparación en este flujo. Un borrador no completa el objetivo; la cobertura total exige una afirmación humana separada. Identidad, inicio de sesión y extensión del navegador tienen su propia aceptación posterior.
 
 ```sh

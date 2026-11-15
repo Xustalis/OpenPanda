@@ -102,6 +102,8 @@ Verbinde mit `panda connection connect --root https://example.com/tsync/ --id te
 
 Verbindungen synchronisieren nur, bis eine befristete lokale Raumrichtlinie Vorrecherche, Ausführung oder abschließende Aktionen erlaubt. Bearbeite sie im Web oder mit `panda work policy --connection team --space SPACE --file policy.json`; ohne `--file` wird sie angezeigt. Sie bindet Konto und explizite Aufgaben-/Projekt-IDs mit Token- und Parallelitätsgrenzen. Nicht zugewiesene Aufgaben erhalten nur eine kleine private Vorrecherche, ohne Übernahme oder Statusänderung. `panda work research INSTANCE/WORKSPACE/SPACE/TASK --connection team` zeigt sie. Persönliche Rechercheerinnerungen gelangen nicht in Projektausführungen.
 
+Ordne Projektspeicher in den Bereichsdetails oder mit CLI work binding ausdrücklich zu. --connection und --space wählen den Bereich; ohne --remote-project gilt die Zuordnung für den gesamten Bereich. Ohne --local-project werden Zuordnungen angezeigt; ein ausdrücklich leerer Wert entfernt sie. Projektzuordnungen haben Vorrang vor Bereichszuordnungen. Namen erzeugen keine Zuordnung. Änderungen pausieren vorhandene Arbeit und löschen private Vorrecherchen, gewähren aber keine Verzeichnis- oder Aktionsrechte.
+
 Der erste kontrollierte Aktionsadapter veröffentlicht eine genaue Textdatei in einem ausdrücklich erlaubten absoluten Verzeichnis. Dessen Identität wird fixiert; vorhandene Dateien werden nie überschrieben. Andere Agenten-, Shell- und Browserwerkzeuge dienen in diesem Ablauf nur der Vorbereitung. Ein Entwurf allein erfüllt kein Gesamtziel; volle Zielabdeckung braucht eine gesonderte menschliche Bestätigung. Browseridentität, Anmeldung und Erweiterung haben eine spätere eigene Abnahme.
 
 ```sh

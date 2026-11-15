@@ -235,7 +235,7 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 		}
 	case "work":
 		if len(args) == 1 {
-			return []string{"list", "show", "add", "edit", "run", "history", "policy", "runs", "result", "export", "research", "approve", "reject", "accept", "return", "pause"}
+			return []string{"list", "show", "add", "edit", "run", "history", "binding", "policy", "runs", "result", "export", "research", "approve", "reject", "accept", "return", "pause"}
 		}
 	case "connection":
 		if len(args) == 1 {

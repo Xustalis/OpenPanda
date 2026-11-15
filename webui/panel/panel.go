@@ -317,6 +317,8 @@ func New(d Deps) http.Handler {
 	if h.taskFlow != nil {
 		mux.HandleFunc("GET /api/work/connections/{id}/spaces/{space}/members", h.connectionMembers)
 		mux.HandleFunc("GET /api/work/runs", h.workRuns)
+		mux.HandleFunc("GET /api/work/connections/{id}/spaces/{space}/bindings", h.workBindings)
+		mux.HandleFunc("PUT /api/work/connections/{id}/spaces/{space}/bindings", h.workBindings)
 		mux.HandleFunc("GET /api/work/runs/{id}", h.workRunResult)
 		mux.HandleFunc("GET /api/work/runs/{id}/{format}", h.workRunResult)
 		mux.HandleFunc("POST /api/work/runs/{id}/pause", h.pauseWorkRun)

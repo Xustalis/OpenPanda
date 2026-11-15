@@ -161,6 +161,8 @@ low tool cap on a genuinely complex task.
 
 连接后只同步，预研、执行和最终动作由有期限的本地空间策略分别开启。可在 Web 空间详情设置，或运行 `panda work policy --connection team --space SPACE --file policy.json`；省略 `--file` 查看策略。策略绑定账号及明确的任务/项目 ID，并限制 token 和并发。未认领任务只生成少量私有预研，不认领、不改业务状态。通过 `panda work research INSTANCE/WORKSPACE/SPACE/TASK --connection team` 读取当前授权简报。个人预研记忆不会注入项目执行。
 
+通过空间展开项或 CLI work binding 显式绑定项目记忆。--connection 和 --space 指定范围，--remote-project 指定远端项目，省略则绑定整个空间。省略 --local-project 查看绑定，显式传入空值解除绑定。项目绑定优先于空间绑定，不按名称自动匹配。修改绑定会暂停现有工作并清除私有简报，不授予目录或动作权限。
+
 首个受控最终动作 adapter 将具体文本发布到显式授权的本机绝对目录，固定目录身份且不覆盖已有文件。此工作流中的其他 agent、shell 和浏览器工具仅用于准备，策略不授予其最终动作权限。文件草稿本身不代表完整目标完成，覆盖完整目标需要人类单独明确确认。浏览器身份、登录交接与扩展流程仍有后续独立验收门槛。
 
 ```sh

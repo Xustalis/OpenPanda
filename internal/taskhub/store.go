@@ -53,7 +53,16 @@ func (s *Store) List(ctx context.Context, connection string) ([]Task, error) {
 			out = append(out, Task{ConnectionID: "local", AccountID: "local", Snapshot: taskproviders.LocalSnapshot(t), Local: &t})
 		}
 	}
-	q := `SELECT s.connection_id,s.account_id,s.snapshot_json FROM task_snapshots s JOIN task_connections c ON c.connection_id=s.connection_id AND c.account_id=s.account_id AND c.auth_epoch=s.auth_epoch WHERE c.state='connected'`
+	q := `SELECT s.connection_id,s.account_id,s.snapshot_json FROM task_snapshots s
+ JOIN task_connections c ON c.connection_id=s.connection_id AND c.account_id=s.account_id AND c.auth_epoch=s.auth_epoch
+ WHERE c.state='connected' AND json_extract(s.snapshot_json,'$.permissions.read')=1
+ AND json_extract(s.snapshot_json,'$.permissions.authEpoch')=c.auth_epoch
+ AND json_extract(s.snapshot_json,'$.key.instanceId')=c.instance_id
+ AND EXISTS(SELECT 1 FROM json_each(c.scopes_json) WHERE value='tasks:read')
+ AND EXISTS(SELECT 1 FROM json_each(c.spaces_json) sp
+ WHERE json_extract(sp.value,'$.spaceId')=json_extract(s.snapshot_json,'$.key.spaceId')
+ AND json_extract(sp.value,'$.workspaceId')=json_extract(s.snapshot_json,'$.key.workspaceId')
+ AND EXISTS(SELECT 1 FROM json_each(json_extract(sp.value,'$.scopes')) WHERE value='tasks:read'))`
 	args := []any{}
 	if connection != "" {
 		q += ` AND s.connection_id=?`

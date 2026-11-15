@@ -102,6 +102,8 @@ API: `GET /api/settings/execution`, `PUT /api/settings/execution` (Bearer token)
 
 既定は同期のみです。期限付きのローカルスペースポリシーで調査、実行、最終操作を個別に許可します。Web または `panda work policy --connection team --space SPACE --file policy.json` で設定し、`--file` を省略すると現在値を表示します。アカウントと明示的なタスク・プロジェクトID、トークン・同時実行上限に結び付きます。未割当タスクは小規模な非公開調査だけを行い、引受や状態変更はしません。`panda work research INSTANCE/WORKSPACE/SPACE/TASK --connection team` で閲覧します。個人調査の記憶はプロジェクト実行に渡しません。
 
+スペースの詳細または CLI work binding でプロジェクト記憶を明示的に関連付けます。--connection と --space で対象を指定し、--remote-project を省略するとスペース全体が対象です。--local-project を省略すると一覧を表示し、空の値で解除します。プロジェクトの指定はスペースの指定より優先され、名前で自動照合しません。変更は既存の処理を一時停止し非公開調査を削除しますが、ディレクトリや操作の権限は付与しません。
+
 最初の管理された最終操作は、明示的に許可した絶対ディレクトリへの正確なテキストファイル公開です。ディレクトリの識別情報を固定し、既存ファイルは上書きしません。このワークフローの他の agent・shell・browser ツールは準備専用です。ファイルだけで目標達成とはせず、目標全体の充足には人間の別途確認が必要です。ブラウザの識別・ログイン・拡張機能は後続の独立した検収対象です。
 
 ```sh
