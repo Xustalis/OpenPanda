@@ -5,25 +5,16 @@ import {
   api,
   ApiError,
   askSessionStream,
-  fetchBlob,
   isAbort,
-  isTaskStalled,
-  type ApprovalScope,
-  type AskResult,
-  type AskStatusEvent,
   type ClarifyAnswer,
   type ClarifySpec,
   type DevStatus,
   type FsFileEntry,
-  type MCPSettings,
   type NodeInfo,
-  type PlanDetail,
   type ProjectDetail,
   type Session,
   type SessionDiff,
   type SessionNote,
-  type SessionTurn,
-  type SkillEntry,
   type Task,
 } from '../api/client'
 import { Icon } from '../components/icons'
@@ -33,59 +24,31 @@ import { scanArtifacts } from '../components/auto-preview'
 import { DockFiles } from '../components/dock-files'
 import { DockChanges } from '../components/dock-changes'
 import { SideChat } from '../components/side-chat'
-import { ArtifactSection } from '../components/artifact'
 import { FileViewContext, type FileOpener, type FileRef } from '../components/file-link'
 import { ComposerContext } from '../components/composer-context'
 import {
   useAsync,
   useChangeSignal,
   useLocaleRerender,
-  useTaskEvents,
-  useVisibleInterval,
   busSubscribeChange,
 } from '../hooks'
-import { t, locale } from '../i18n'
+import { t } from '../i18n'
 import { isNodeConnected } from '../format/node-status'
-import { clockStamp, clockTime } from '../format/time'
 import { navigate, navigateView } from '../nav'
-import { Markdown } from '../md/render'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
-import { MessageCopyButton } from '../components/copy'
 import { ClarifyCard } from '../components/clarify-card'
 import { buildCommands, type Command } from '../components/palette'
 import { rank } from '../components/fuzzy'
-import { reconcileTranscript, runningOperation, patchStreaming, slashQuery } from '../components/chatstate'
-import { atQuery, expandFileRefs, exportMarkdown, exportFilename, fileLabel, isImageFile, splitFileRef, withAttachments } from '../components/attach'
+import { reconcileTranscript, threadBusy, patchStreaming, slashQuery } from '../components/chatstate'
+import { atQuery, expandFileRefs, exportMarkdown, exportFilename, fileLabel, withAttachments } from '../components/attach'
 import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
-import { splitReportHead } from '../components/report-head'
-import { displayUserTurn } from '../components/turn-display'
-import { UserFiles } from '../components/msg-files'
 import { HoverPreview, Lightbox } from '../components/image-preview'
 import { liveTaskIds } from '../components/task-activity'
 import { groupDispatches } from './chat-batch.ts'
-import {
-  prettyAgent,
-  roundStillOpen,
-  roundTally,
-  sharedTitlePrefix,
-  speakerOf,
-  stateTone,
-  stripRefId,
-  trailingRunSummary,
-  type RunSummary,
-} from '../components/chat-speaker'
-import {
-  ChatAvatar,
-  PlanCast,
-  TaskCast,
-  TaskDelivery,
-  TaskProgress,
-  usePlanBrief,
-  useTaskBrief,
-} from '../components/chat-cast'
-import { ScopeSelect } from '../components/scope-select'
+import { roundStillOpen, trailingRunSummary } from '../components/chat-speaker'
+import { TaskProgress } from '../components/chat-cast'
 import {
   PermissionPicker,
   normalizePermission,
@@ -98,494 +61,40 @@ import { DirButton } from '../components/dir-picker'
 import { ModelSelect } from '../components/model-select'
 import { SessionRail } from '../components/session-rail'
 import { VoiceInput } from '../components/voice-input'
-import { suggestProjectName } from '../components/dir-utils'
-import { EventTimeline } from '../components/event-timeline'
 import { acquireKeepAlive } from '../utils/keepalive'
+import {
+  autoGrow,
+  editorCaretOffset,
+  editorClear,
+  editorInsertText,
+  editorTextOf,
+  editorTextWalker,
+  insertTextAtCaret,
+} from '../components/composer-editor'
+import { dragHasFiles, livePillKeys, useComposerAttachments } from './sessions/use-composer-attachments'
+import { ComposerInput, type CompletionItem } from './sessions/composer-input'
+import { QueuedNotes } from './sessions/queued-notes'
+import { fmtSize, type PendingAttachment } from './sessions/attachment-pills'
+import { AttachMenu } from './sessions/attach-menu'
+import { projectForDir, waitDevReady } from './sessions/session-project'
+import { ChatEmpty, ChatSkeleton, ChatTurn, reportFallbackRefs, RunSummaryRow, useSessionTasks } from './sessions/transcript'
+import { hydrateTurns, localMsgId, statusNote, type ChatMsg } from './sessions/transcript-state'
 
-/** Grow the composer with its content up to a ceiling, then scroll inside.
- *  A fixed two-row box makes pasting a paragraph feel like typing into a
- *  keyhole; unbounded growth would eat the transcript instead. */
-const COMPOSER_MAX_PX = 240
+export {
+  autoGrow,
+  editorCaretOffset,
+  editorClear,
+  editorPlain,
+  editorTextOf,
+  insertTextAtCaret,
+  range_or_append,
+  useBrParagraphSeparator,
+} from '../components/composer-editor'
 
 /** How long the pane keeps watching a turn it lost the live stream for.
  *  Comfortably past a slow classify plus a long agent run, and finite: a
  *  watch with no end is a spinner the user cannot dismiss. */
 const RECOVER_WATCH_MS = 10 * 60 * 1000
-
-/** The composer's editable surface is a contenteditable, not a textarea: an
- *  attachment has to render as a pill *inside* the line the user is typing,
- *  and only a rich surface can host one. Everything the textarea used to give
- *  us for free — the placeholder, the newline character, the caret offset —
- *  is re-derived here. */
-
-/** Chromium's default paragraph separator is a div, which would turn every
- *  Enter into a nested block and double the newlines when read back. Ask for
- *  <br> once per document instead. */
-let paragraphSeparatorSet = false
-export function useBrParagraphSeparator(): void {
-  if (paragraphSeparatorSet || typeof document === 'undefined') return
-  try {
-    document.execCommand('defaultParagraphSeparator', false, 'br')
-    paragraphSeparatorSet = true
-  } catch {
-    // A browser that refuses it still works; newlines just come back as blocks.
-  }
-}
-
-export function autoGrow(el: HTMLElement): void {
-  el.style.height = 'auto'
-  el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_PX)}px`
-}
-
-/** The editor's text as the model should see it: text nodes verbatim, <br> as
- *  a newline, blocks as a newline before their contents. Attachment pills are
- *  skipped — they travel as the attachment block appended to the prompt, so
- *  listing their names here would put them in twice. */
-function editorText(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? '').replace(/\u200b/g, '')
-  if (node.nodeType !== Node.ELEMENT_NODE) return ''
-  const el = node as HTMLElement
-  if (el.classList.contains('attach-pill')) return ''
-  if (el.tagName === 'BR') return '\n'
-  let inner = ''
-  for (const child of el.childNodes) inner += editorText(child)
-  if (el.tagName === 'DIV' || el.tagName === 'P') return `\n${inner}`
-  return inner
-}
-
-/** The text as the user sees it typed, with nothing but a newline counting as
- *  empty — deleting everything leaves a <br> behind, and the placeholder has to
- *  show through that. */
-export function editorPlain(text: string): string {
-  return text.trim()
-}
-
-/** The caret's offset in the plain text, so @file completion can slice the
- *  editor's value the same way it sliced the textarea's. The offset has to
- *  count exactly what editorText counts — Range.toString sees only text
- *  nodes, so it under-reads by the <br> and block newlines editorText
- *  synthesizes and over-reads by the pill names it skips. Both adjustments
- *  land here so caret and `input` stay in the same space. */
-export function editorCaretOffset(el: HTMLElement): number {
-  const sel = el.ownerDocument.getSelection()
-  if (!sel || sel.rangeCount === 0) return editorTextOf(el).length
-  const range = sel.getRangeAt(0)
-  const head = el.ownerDocument.createRange()
-  head.selectNodeContents(el)
-  head.setEnd(range.startContainer, range.startOffset)
-  let len = head.toString().length
-  for (const pill of el.querySelectorAll('.attach-pill')) {
-    if (head.intersectsNode(pill)) len -= (pill.textContent ?? '').length
-  }
-  for (const n of el.querySelectorAll('br, div, p')) {
-    if (head.intersectsNode(n)) len += 1
-  }
-  return len
-}
-
-export function editorTextOf(el: HTMLElement): string {
-  let out = ''
-  for (const child of el.childNodes) out += editorText(child)
-  return out
-}
-
-/** Character stream as `input` counts it: text nodes at their length, <br>
- *  and block elements as the one '\n' editorText gives them, nothing for an
- *  attachment pill (REJECT keeps its name out too). Positions along this
- *  walk and offsets into editorTextOf are the same space, which is what
- *  atQuery's [start, caret) addresses. */
-function editorTextWalker(el: HTMLElement): TreeWalker {
-  return el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
-    acceptNode: (n) => {
-      if (n.nodeType === Node.ELEMENT_NODE) {
-        const e = n as HTMLElement
-        if (e.classList.contains('attach-pill')) return NodeFilter.FILTER_REJECT
-        return e.tagName === 'BR' || e.tagName === 'DIV' || e.tagName === 'P'
-          ? NodeFilter.FILTER_ACCEPT
-          : NodeFilter.FILTER_SKIP
-      }
-      return NodeFilter.FILTER_ACCEPT
-    },
-  })
-}
-
-/** Plain text into the editor at the caret, without the HTML a paste would
- *  bring along. execCommand keeps the browser's own undo stack working, which
- *  a hand-built Range insertion does not. */
-function editorInsertText(text: string): void {
-  document.execCommand('insertText', false, text)
-}
-
-/** Is the document's selection inside `el`? Every caret read assumes it is:
- *  `editorCaretOffset` builds a Range anchored in the editor, and a selection
- *  parked elsewhere (a button that took the focus, a panel that opened) makes
- *  that Range throw instead of answering. */
-function caretInside(el: HTMLElement): boolean {
-  const sel = el.ownerDocument.getSelection()
-  if (!sel || sel.rangeCount === 0) return false
-  return el.contains(sel.getRangeAt(0).startContainer)
-}
-
-/** Park the caret at the end of the editor — where a re-focused box lands when
- *  there is no remembered selection to restore. */
-function caretToEnd(el: HTMLElement): void {
-  const rg = el.ownerDocument.createRange()
-  rg.selectNodeContents(el)
-  rg.collapse(false)
-  const sel = el.ownerDocument.getSelection()
-  if (!sel) return
-  sel.removeAllRanges()
-  sel.addRange(rg)
-}
-
-/** Drop plain text in at the caret of a contenteditable composer. Shared by
- *  both composers (the thread's and the map's), because a dictated phrase has
- *  to land the same way in either: the box may have lost its selection to the
- *  button that started the dictation, so the caret is re-established first,
- *  and a space is added when it sits at the end of a word — two phrases in a
- *  row must not arrive welded together. */
-export function insertTextAtCaret(el: HTMLElement, text: string): void {
-  el.focus()
-  if (!caretInside(el)) caretToEnd(el)
-  const plain = editorTextOf(el)
-  const at = editorCaretOffset(el)
-  const needsSpace = at > 0 && !/\s/.test(plain.charAt(at - 1))
-  editorInsertText(needsSpace ? ` ${text}` : text)
-}
-
-/** A pill's markup. It has to be a raw string rather than the <Icon>
- *  component because the pill is inserted as a DOM node the framework never
- *  sees — React reconciling children inside a contenteditable would fight the
- *  text nodes the user's typing creates there. The two glyphs mirror
- *  components/icons.tsx on purpose.
- *
- *  The image glyph keeps the outline frame of the Lucide original but swaps
- *  its diagonal mountain stroke for a solid silhouette. At 13px the two
- *  strokes of the original sat a pixel apart and fused into a box with a slash
- *  through it — the universal "missing image" symbol, the opposite of what an
- *  attachment pill says. A filled landscape survives the downscale, and the
- *  frame is what separates it from a person glyph (a dot above a triangle on
- *  its own reads as a head over shoulders). 16px, not 13: the silhouette needs
- *  the extra pixels to show two peaks rather than one lump. */
-function chipMarkup(image: boolean): string {
-  if (image) {
-    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="none">'
-      + '<rect x="3" y="3" width="18" height="18" rx="4.2" stroke="currentColor" stroke-width="1.7"/>'
-      + '<path fill="currentColor" d="M4.2 20 8.4 12.2 11.6 16.4 15.2 12.8 19.8 20z"/>'
-      + '<circle cx="7.9" cy="7.9" r="1.75" fill="currentColor"/></svg>'
-  }
-  return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none"'
-    + ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-    + '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>'
-    + '</svg>'
-}
-
-/** The pill's own controls, drawn the same way and for the same reason as
- *  `chipMarkup` above: these nodes live in the editable, outside the
- *  framework. `search` and `x` mirror components/icons.tsx. 14px: at 13 the
- *  two glyphs read a size under the name beside them and looked like debris
- *  rather than controls. */
-function chipActMarkup(kind: 'zoom' | 'x'): string {
-  const open = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
-    + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
-  return kind === 'zoom'
-    ? `${open}<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`
-    : `${open}<path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`
-}
-
-/** One file waiting in the composer's attachment pills.
- *
- *  The File is kept rather than uploaded on arrival — the pill needs no
- *  server round-trip to show its name, and a brand-new chat has no session to
- *  upload into yet. The bytes go up at send. */
-interface PendingAttachment {
-  key: string
-  name: string
-  size: number
-  image: boolean
-  /** Bytes to upload at send. A workspace reference has none — it rides as an
-   *  `@path` in the prompt instead, which expandFileRefs reads for the model. */
-  file?: File
-  /** Workspace path behind a reference pill (the files dock's 插入). */
-  ref?: string
-}
-
-/** A pill for a pending attachment, inserted at the caret.
- *
- *  A pill is atomic: the caret steps over it as one unit. It carries its own
- *  two controls — enlarge, then remove — the way the reference chip carries
- *  its ×. The enlarge glyph is the extension: a picture in the composer had
- *  no way to be looked at closely before sending, and a 23px pill is not a
- *  preview. Clicking the pill's body means "show me the picture"; taking the
- *  file back out has its own button beside it, so a mis-aimed click no longer
- *  throws an attachment away.
- *
- *  Both controls hold their space at rest. A control that materialises under
- *  the pointer widens the pill, which shoves the rest of the sentence — and
- *  the caret — sideways while the pointer is only passing through. */
-function makeChipNode(p: PendingAttachment): HTMLElement {
-  const chip = document.createElement('span')
-  chip.className = p.image ? 'attach-pill is-image' : 'attach-pill'
-  chip.setAttribute('data-pk', p.key)
-  chip.setAttribute('contenteditable', 'false')
-  // A picture names itself in the floating copy, and a native tooltip would
-  // sit on top of it. A text reference has no copy, so the path stays here.
-  if (!p.image) chip.setAttribute('title', p.ref ?? p.name)
-
-  const ico = document.createElement('span')
-  ico.className = p.image ? 'attach-pill-ico img' : 'attach-pill-ico'
-  ico.setAttribute('aria-hidden', 'true')
-  ico.innerHTML = chipMarkup(p.image)
-  chip.appendChild(ico)
-
-  const name = document.createElement('span')
-  name.className = 'attach-pill-name'
-  name.textContent = p.name
-  chip.appendChild(name)
-
-  const acts = document.createElement('span')
-  acts.className = 'attach-pill-acts'
-  const buttons: Array<['zoom' | 'x', string]> = p.image
-    ? [['zoom', t('events.imageOpen')], ['x', t('sessions.attachRemove')]]
-    : [['x', t('sessions.attachRemove')]]
-  for (const [kind, label] of buttons) {
-    const act = document.createElement('span')
-    act.className = `attach-pill-act attach-pill-${kind}`
-    act.setAttribute('role', 'button')
-    act.setAttribute('title', label)
-    act.setAttribute('aria-label', label)
-    act.innerHTML = chipActMarkup(kind)
-    acts.appendChild(act)
-  }
-  chip.appendChild(acts)
-  return chip
-}
-
-/** Keep the pill from welding to the text after it. */
-export function range_or_append(after: Node, node: Node): void {
-  if (after.parentNode) after.parentNode.insertBefore(node, after.nextSibling)
-}
-
-export function editorClear(el: HTMLElement | null): void {
-  if (!el) return
-  el.textContent = ''
-  // 'auto' under a min-height floor resolves to that floor, but the inline
-  // height from the last autoGrow call wins over it, so put the number back
-  // explicitly or the box stays the height of the turn just sent.
-  el.style.height = 'auto'
-  el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_PX)}px`
-}
-
-/** Stable keys for chat bubbles. Server turns are keyed by transcript
- *  position (`srv-N`); locally created (optimistic / error) bubbles get a
- *  unique id from this counter so a streaming bubble is never re-keyed
- *  mid-flight when the list around it shifts. */
-let nextLocalMsgId = 0
-function localMsgId(): string {
-  nextLocalMsgId += 1
-  return `opt-${nextLocalMsgId}`
-}
-
-/** A chat message in the transcript: a stored turn, or the in-flight
- * assistant reply being streamed right now. */
-interface ChatMsg extends SessionTurn {
-  /** Stable render key — see `localMsgId` above. */
-  k: string
-  streaming?: boolean
-  status?: string
-  result?: AskResult
-  /** Provider-supplied reasoning/summary, kept separate from answer replay. */
-  thought?: string
-  /** Newest delta/reasoning/usage/status timestamp (epoch ms). The live
-   *  header uses it to tell a quiet turn from a stalled one. */
-  lastActivity?: number
-  /** The token figure is a live estimate, not the provider's count. The
-   *  header prefixes it with "~" until the billed result lands. */
-  tokensEstimated?: boolean
-  /** @file paths that were expanded into fenced blocks for this prompt —
-   *  shown as attachment chips on the user's bubble. */
-  files?: string[]
-  /** The task row this turn dispatched, adopted the moment the ask stream
-   *  names it. It drives the live progress row while the turn is still
-   *  waiting for the task to settle; `kind`/`ref` are only set once the
-   *  result lands, which is far too late to show progress. */
-  liveTask?: string
-}
-
-/** Install a server transcript as bubbles.
- *
- *  A stored user turn is the prompt the model read, not the sentence the
- *  composer showed: `sessions.go` files req.Prompt verbatim, and every @file
- *  rides along as a fenced copy of its contents. An unpurified reload — after
- *  a stop, a focus change, a change-feed update or a refresh — repainted that
- *  short bubble with the whole file (one real turn was 33k chars of a JVM
- *  classlist). Every path that adopts server turns funnels through here; the
- *  stored prompt itself is left alone so history still replays to the model. */
-function hydrateTurns(turns: SessionTurn[], key: (i: number) => string): ChatMsg[] {
-  return turns.map((turn, i) => {
-    const shown = turn.role === 'user' ? displayUserTurn(turn.text) : null
-    return {
-      ...turn,
-      ...(shown
-        ? { text: shown.text, files: shown.files.length ? shown.files : undefined }
-        : {}),
-      k: key(i),
-    }
-  })
-}
-
-/** One file waiting in the composer's attachment tray.
- *
- *  The File is kept rather than uploaded on arrival: the preview then needs no
- *  server round-trip, and a brand-new chat has no session to upload into yet.
- *  The upload happens at send, when the thread it belongs to exists. */
-/** One row in the composer's completion menu — a slash command, a palette
- *  destination, or a filesystem path. Palette `Command`s satisfy the shape:
- *  a run() that ignores the argument is still a valid (arg?) => void. */
-interface CompletionItem {
-  id: string
-  label: string
-  hint?: string
-  /** The palette marks the live value with a check icon instead of a hint;
-   *  here it degrades to the same ✓ the hint used to carry. */
-  checked?: boolean
-  group?: string
-  run(arg?: string): void
-}
-
-// statusNote phrases one ask progress event for the composer status line.
-// A retry milestone carries the numbers needed to say it in the browser's
-// locale ("retrying in 3s · 2/6") instead of the server's English fallback;
-// every other kind keeps the wire text.
-function statusNote(text: string, ev?: AskStatusEvent): string {
-  if (ev?.kind === 'model') return t('sessions.modelWaiting', { name: ev.name || '' })
-  if (ev?.kind === 'retry') {
-    const reason = ev.http_status ? `HTTP ${ev.http_status}` : t('sessions.retry.transport')
-    return t('sessions.retry', {
-      reason,
-      delay: Math.max(0, Math.round((ev.delay_ms ?? 0) / 1000)),
-      attempt: ev.attempt ?? 0,
-      max: ev.max ?? 0,
-    })
-  }
-  if (ev?.kind === 'offline') {
-    // An outage is not a provider failure: say the link is being watched and
-    // that the turn picks itself back up, then report what the wait cost.
-    const waited = Math.max(0, Math.round((ev.waited_ms ?? 0) / 1000))
-    return ev.detail === 'resumed'
-      ? t('sessions.offline.resumed', { delay: waited })
-      : t('sessions.offline.waiting')
-  }
-  if (ev?.kind === 'spawn' && ev.name) {
-    // The fan-out milestone in the browser's own language: the mode
-    // descriptor says how the child relates to the shared tree — a private
-    // copy that merges back, or the lanes it claims.
-    if (ev.detail === 'isolated') return t('sessions.spawn.isolated', { name: ev.name })
-    if (ev.detail) return t('sessions.spawn.scoped', { name: ev.name, paths: ev.detail })
-    return t('sessions.spawn', { name: ev.name })
-  }
-  return text
-}
-
-// ErrHints is the troubleshooting fold under a classified model error: the
-// kind names its bullet list in i18n; the provider's own detail heads it when
-// one arrived. A browser-native <details> needs no state and reopens across
-// rerenders for free.
-function ErrHints({ kind, detail }: { kind: string; detail?: string }) {
-  const raw = t(`err.hints.${kind}`)
-  const known = raw !== `err.hints.${kind}`
-  const lines = (known ? raw : t('err.hints.generic')).split('\n').filter(Boolean)
-  return (
-    <details class="err-hints">
-      <summary class="dim">{t('err.hints.title')}</summary>
-      {detail && <p class="dim err-hint-detail">{t('err.hints.detail', { detail })}</p>}
-      <ul class="err-hint-list">
-        {lines.map((line, i) => (
-          <li key={i}>{line.replace(/^-\s*/, '')}</li>
-        ))}
-      </ul>
-    </details>
-  )
-}
-
-function fmtSize(n?: number): string {
-  if (n === undefined) return ''
-  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)}M`
-  if (n >= 1024) return `${(n / 1024).toFixed(1)}k`
-  return `${n}B`
-}
-
-/** Wall-clock for the foot of a finished reply. Sub-minute waits keep one
- *  decimal — 2.4s and 2.9s are different answers to "how long did that take" —
- *  and past that it walks the same ladder the rest of the console uses. */
-/** A turn's wall clock, in the two-unit form the reply header shows it:
- *  "41.2秒", "2分钟 41秒", "1小时 4分钟". Seconds stay next to minutes because
- *  a turn is a short thing — "2分钟" alone hides the half of it you actually
- *  sat through. Rounds once, up front, so 119.7s cannot print "1分钟 60秒". */
-function fmtDuration(ms: number): string {
-  const total = Math.max(0, ms) / 1000
-  if (total < 60) return `${total.toFixed(1)}${t('time.unit.s')}`
-  const whole = Math.round(total)
-  if (whole < 3600) {
-    return `${Math.floor(whole / 60)}${t('time.unit.m')} ${whole % 60}${t('time.unit.s')}`
-  }
-  return `${Math.floor(whole / 3600)}${t('time.unit.h')} ${Math.floor((whole % 3600) / 60)}${t('time.unit.m')}`
-}
-
-/** Token counts in the reply header: exact below a thousand, one decimal in
- *  the thousands, one decimal in the millions. A live count that printed all
- *  seven digits would shove the rest of the header row around every update. */
-function fmtTokens(n: number): string {
-  if (n < 1000) return String(n)
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`
-  return `${(n / 1_000_000).toFixed(1)}m`
-}
-
-/** The reply's timer while the turn is still running: one tick a second, in the
- *  row the finished duration will occupy.
- *
- *  Its own component rather than a number computed by the parent, so the
- *  re-render each second touches this bubble only — a long thread holds
- *  hundreds of messages, and re-rendering all of them to advance one number is
- *  felt while scrolling.
- *
- *  It formats through `fmtDuration`, the same function the finished line uses,
- *  so the number does not change shape the moment the turn lands.
- *
- *  `last` is the newest delta/reasoning/usage/status timestamp. Once the turn
- *  has gone quiet past a few seconds, the same one-second tick adds how long,
- *  so a slow model reads differently from a dead connection. Before any event
- *  it says the turn is waiting on the model, which is the prefill window. */
-function LiveElapsed({ from, last }: { from: number; last?: number }) {
-  const [ms, setMs] = useState(() => Date.now() - from)
-  const [idle, setIdle] = useState(0)
-  // last changes on every delta; a ref keeps it out of the effect's dependency
-  // list so the one-second timer is not torn down and rebuilt constantly.
-  const lastRef = useRef(last)
-  lastRef.current = last
-  useEffect(() => {
-    const tick = () => {
-      const now = Date.now()
-      setMs(now - from)
-      setIdle(lastRef.current ? now - lastRef.current : now - from)
-    }
-    tick()
-    const id = setInterval(tick, 1000)
-    return () => clearInterval(id)
-  }, [from])
-  return (
-    <>
-      <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(ms) })}</span>
-      {idle >= 5000 ? (
-        <span class="msg-dur" data-testid="msg-quiet">
-          {last
-            ? t('sessions.quiet', { d: fmtDuration(idle) })
-            : t('sessions.awaiting', { d: fmtDuration(idle) })}
-        </span>
-      ) : null}
-    </>
-  )
-}
 
 /** One line for a prompt-rail tick's tooltip: a question can be a paragraph,
  *  and a native tooltip that runs off the screen is worse than a truncated
@@ -594,29 +103,6 @@ function LiveElapsed({ from, last }: { from: number; last?: number }) {
 function promptLabel(text: string): string {
   const line = text.replace(/\s+/g, ' ').trim()
   return line.length > 60 ? `${line.slice(0, 60)}…` : line
-}
-
-/** Bind a working directory to a project name.
- *
- *  A session cannot carry a directory of its own: the panel derives the work
- *  dir from the thread's project row and falls back to the node's work path
- *  (see the ask handler), so a directory picked for a new chat has to become a
- *  project before it can mean anything. An existing project pointing there is
- *  reused — that is the directory's own group in the rail — and a new
- *  directory gets one named after the folder, so the thread files under it
- *  exactly like every other thread does. */
-async function projectForDir(dir: string): Promise<string> {
-  const pl = await api.projects()
-  const norm = (p: string) => p.replace(/[\\/]+$/, '').toLowerCase()
-  const want = norm(dir)
-  const hit = (pl.detail ?? []).find((d) => d.work_dir && norm(d.work_dir) === want)
-  if (hit) return hit.name
-  const taken = new Set(pl.projects ?? [])
-  const base = suggestProjectName(dir) || 'project'
-  let name = base
-  for (let i = 2; taken.has(name); i++) name = `${base}-${i}`
-  const created = await api.createProject({ name, work_dir: dir })
-  return created.name
 }
 
 /** The sessions view: a thread rail on the left (codex / claude code style)
@@ -661,8 +147,6 @@ export function SessionsView({
   const msgsRef = useRef<ChatMsg[]>([])
   const turnStartRef = useRef(0)
   const [input, setInput] = useState('')
-  // Files pasted, dropped or uploaded into the composer, waiting for send.
-  const [pending, setPending] = useState<PendingAttachment[]>([])
   // Notes typed mid-turn that no round has folded yet — the bubbles on the
   // pet's cheek. A queue with no list is a queue the user cannot see, correct,
   // or take back, so hovering the bubbles opens the list.
@@ -690,18 +174,6 @@ export function SessionsView({
   const [noteDraft, setNoteDraft] = useState('')
   // True while a file is over the composer, so the box can say so.
   const [dropping, setDropping] = useState(false)
-  // The pill the pointer is resting on, once its bytes have landed: a larger
-  // copy floats above the composer. WorkBuddy's chip behaves this way, and it
-  // is the only way a 23px pill can be checked before it is sent.
-  const [peek, setPeek] = useState<{ key: string; name: string; src: string; anchor: DOMRect } | null>(null)
-  // The pill's magnifier: the same bytes, full screen.
-  const [shot, setShot] = useState<{ name: string; src: string; path?: string } | null>(null)
-  // Object URLs for pending images, minted on first hover and reused until the
-  // pill goes away — a screenshot can be peeked at, enlarged and peeked again.
-  const shots = useRef(new Map<string, string>())
-  const shotsPending = useRef(new Map<string, Promise<string>>())
-  const peekTimer = useRef<number | undefined>(undefined)
-  const peekKey = useRef('')
   // The conversation's permission policy. It is the whole consent answer:
   // auto and edits stop at the tier-2 gate for a one-off approval card, bypass
   // runs everything, manual asks before every change and plan changes nothing.
@@ -965,11 +437,36 @@ export function SessionsView({
     setNotes([])
     setNotesOpen(false)
   }, [activeId])
+  // The jobs this thread still has hands on. Read once, before anything that
+  // answers from it — the composer's Stop button, the live employee rows and
+  // the round's roll-up all want the same list, and a second read would only
+  // give them a second, differently-aged answer.
+  //
+  // The gate is "a thread is open", not "a bubble dispatched something": a
+  // turn started elsewhere (the workspace dispatcher, another tab, the TUI)
+  // has no bubble here yet, but the thread must still show the employee's live
+  // row instead of a bare spinner — and still offer the way out of it.
+  const dispatched =
+    msgs.some((m) => m.kind === 'task' || m.kind === 'plan' || Boolean(m.liveTask)) ||
+    session?.operation?.status === 'running'
+  const sessionTasks = useSessionTasks(activeId, Boolean(activeId) || dispatched)
+  const roundOpen = sessionTasks ? roundStillOpen(sessionTasks) : false
+  // The employees still working, drawn after the last turn: a running job is
+  // the newest thing in the thread, whatever the position of the bubble that
+  // dispatched it (see `liveTaskIds`).
+  const liveIds = sessionTasks ? liveTaskIds(sessionTasks) : []
   const [localBusy, setBusy] = useState(false)
   // A reload loses the local streaming flag, but the session still carries the
   // server's running operation. Keep the Stop button until that operation
   // settles instead of swapping it for Send while the model is answering.
-  const busy = localBusy || Boolean(runningOperation(activeId, session))
+  //
+  // A dispatched employee that is still moving counts as busy too. The panel
+  // already treats that state as a live thread — what you type goes to the
+  // job's board (see `sendSessionMessage`), and the composer's own placeholder
+  // promises "Agent 正在执行… 可点击停止或补充指令" — so the surface has to say
+  // so, or the one state that most needs a way out (a stuck adapter) shows a
+  // plain Send button and nothing to stop.
+  const busy = threadBusy(localBusy, activeId, session, liveIds.length)
   // The pre-execution question the running turn is parked on. Cleared when the
   // browser answers, when the turn ends, or when the user cancels it.
   const [clarify, setClarify] = useState<{
@@ -1073,6 +570,11 @@ export function SessionsView({
   // turn — the text itself is drained by the server, which is what keeps a
   // reload or a second tab from delivering the same words twice.
   const queuedTurn = useRef('')
+  // The note set the last fallback resume opened a turn for. A continuation
+  // that cannot drain its notes (the server refused, the turn died first)
+  // would otherwise ask again the moment it ends — the same words in a loop.
+  // A new note carries a new key, so only a genuinely new queue retries.
+  const resumeGuard = useRef('')
   // Mirror of the activeId prop for send()'s async callbacks: a reply's
   // deltas may only write to the thread that started them. Kept in sync by
   // the effect below; send() fast-forwards it through the create flow.
@@ -1085,6 +587,11 @@ export function SessionsView({
   // Caret position in the composer — @file completion is caret-scoped, not
   // tail-scoped, so editing mid-line still completes the token under it.
   const [caret, setCaret] = useState(0)
+  const {
+    pending, setPending, peek, shot, setShot,
+    addFiles, addFileRef, removePending, syncPending, clearPending,
+    peekPill, unpeek, zoomPill,
+  } = useComposerAttachments(composer, setInput, setCaret)
   // Filesystem rows for the @file completion menu (debounced query).
   const [atFiles, setAtFiles] = useState<FsFileEntry[]>([])
   // Whether the transcript is parked at the bottom. Autoscrolling on every
@@ -1508,18 +1015,6 @@ export function SessionsView({
   // Unmount: nothing should keep streaming into a dead pane.
   useEffect(() => () => inflight.current?.abort(), [])
 
-  // Unmount: the pills' object URLs go with the composer. Bounded either way,
-  // but a screenshot is a megabyte and a thread can collect a dozen.
-  useEffect(
-    () => () => {
-      window.clearTimeout(peekTimer.current)
-      for (const url of shots.current.values()) URL.revokeObjectURL(url)
-      shots.current.clear()
-      shotsPending.current.clear()
-    },
-    [],
-  )
-
   // Opening a thread always starts at its newest message.
   useEffect(() => {
     pinned.current = true
@@ -1728,24 +1223,51 @@ export function SessionsView({
 
 
 
-  /** Stop the exact operation, including one recovered after a reload. */
+  /** Stop what this thread is doing — the exact operation, including one
+   *  recovered after a reload, and otherwise the jobs that operation left
+   *  running.
+   *
+   *  The ask comes first: while a reply streams, that is the thing the reader
+   *  is watching, and the dispatch it already made is a separate decision
+   *  (the button stays up afterwards, so a second press is what stops the
+   *  job). Once the ask has settled the thread can still be busy with what it
+   *  dispatched, and a stuck adapter is precisely the case with no other way
+   *  out of the pane. */
   async function stop() {
     const ctrl = inflight.current
     const targetSid = inflightSid.current || activeId
     const operationID = inflightOperation.current ||
       (session?.id === targetSid && session.operation?.status === 'running' ? session.operation.id : '')
-    if (!targetSid || !operationID) {
+    if (targetSid && operationID) {
+      try {
+        await api.cancelSession(targetSid, operationID)
+        ctrl?.abort()
+        // Re-read the session so its operation row clears and Stop becomes Send.
+        const s = await api.session(targetSid)
+        if (activeIdRef.current === targetSid) setSession(s)
+      } catch (e) { toastError(e) }
+      return
+    }
+    if (liveIds.length === 0) {
       // Do not detach an accepted ask before its operation frame arrives:
       // that loses the only identity the explicit cancellation API can use.
       if (ctrl) stopRequested.current = true
       return
     }
+    // One job is one decision, and a stop button that asks first is a stop
+    // button the stuck reader cannot use. A batch is the other way round:
+    // several agents are several decisions, and a cascade cannot be undone.
+    if (liveIds.length > 1) {
+      const ok = await confirmDialog({
+        title: t('sessions.stopTasksTitle'),
+        message: t('sessions.stopTasksMessage', { n: String(liveIds.length) }),
+        confirmLabel: t('sessions.stop'),
+      })
+      if (!ok) return
+    }
     try {
-      await api.cancelSession(targetSid, operationID)
-      ctrl?.abort()
-      // Re-read the session so its operation row clears and Stop becomes Send.
-      const s = await api.session(targetSid)
-      if (activeIdRef.current === targetSid) setSession(s)
+      await Promise.all(liveIds.map((id) => api.cancel(id)))
+      toast(t('sessions.stopTasksDone', { n: String(liveIds.length) }))
     } catch (e) { toastError(e) }
   }
 
@@ -1809,6 +1331,31 @@ export function SessionsView({
     } catch {
       // A note list is advisory: a failed read must not paint an error over
       // the transcript. The next tick retries.
+    }
+  }
+
+  /** Open the continuation turn for notes the stream never announced.
+   *
+   *  `queued_turn` fires once, on the turn's way out. A note accepted in the
+   *  window between the last round and that exit — or a frame lost with the
+   *  stream — leaves the strip holding text nothing will read, which is the
+   *  "queued" that never runs. The notes endpoint is the durable truth, so a
+   *  turn that ends without the frame asks it once. Board rows are left
+   *  alone (the executor reads those), and the guard keeps a continuation
+   *  that cannot drain its notes from asking again in a loop. */
+  async function resumeLeftoverNotes(sid: string) {
+    try {
+      const r = await api.sessionNotes(sid)
+      const pend = r.notes.filter((n) => !n.durable)
+      if (pend.length === 0) return
+      if (inflight.current || activeIdRef.current !== sid) return
+      const keys = pend.map((n) => n.key).join(',')
+      if (resumeGuard.current === `${sid}|${keys}`) return
+      resumeGuard.current = `${sid}|${keys}`
+      void send(undefined, pend.map((n) => n.text).join('\n\n'), sid)
+    } catch {
+      // A failed read leaves the notes where they are; the next turn's own
+      // start drains them server-side.
     }
   }
 
@@ -1876,7 +1423,7 @@ export function SessionsView({
     }
   }
 
-  async function send(e?: Event, queued?: string) {
+  async function send(e?: Event, queued?: string, intoSid?: string) {
     e?.preventDefault()
     // A continuation turn carries its own prompt: the words came from the
     // notes the last turn never read, not from the composer. The draft and the
@@ -1893,20 +1440,24 @@ export function SessionsView({
     // A tray-only send is a real send: dropping a screenshot and hitting Enter
     // is the whole point, and the prompt then carries nothing but the file.
     if (!raw && tray.length === 0) return
+    // A slash line is a command, never a prompt — the REPL's rule. It is
+    // checked before the busy guard because a command acts on the console, not
+    // on the running turn: a job can hold this thread for minutes, and folding
+    // `/new` or `/tasks` into a note for it is not "type an addition". A
+    // continuation is exempt either way: the words are what the user already
+    // queued, and running a command they typed mid-answer would execute it out
+    // of order.
+    if (queued === undefined && raw.startsWith('/') && dispatchSlash(raw)) {
+      setInput('')
+      editorClear(composer.current)
+      setCompleteDismissed('')
+      return
+    }
     // A continuation is never a mid-turn note: it starts the turn the previous
     // one ended without, so the busy guard (and its "type an addition" path)
     // does not apply — `busy` is still true in this closure's finally.
     if (queued === undefined && (busy || inflight.current)) {
       void sendIntoRunningTurn(raw, tray)
-      return
-    }
-    // A slash line is a command, never a prompt — the REPL's rule. A
-    // continuation is exempt: the words are what the user already queued, and
-    // running a command they typed mid-answer would execute it out of order.
-    if (queued === undefined && raw.startsWith('/') && dispatchSlash(raw)) {
-      setInput('')
-      editorClear(composer.current)
-      setCompleteDismissed('')
       return
     }
     // Claim the slot before the async file expansion — a second Enter during
@@ -1915,7 +1466,7 @@ export function SessionsView({
     inflight.current = ctrl
     inflightOperation.current = null
     stopRequested.current = false
-    let id = activeId
+    let id = intoSid ?? activeId
     const keepAlive = acquireKeepAlive()
     let patch: (fn: (m: ChatMsg) => ChatMsg) => void = () => {}
     let prompt = raw
@@ -2373,14 +1924,27 @@ export function SessionsView({
       // quiet, so the notes stay parked for the next thing they send.
       const owed = ownsFlight ? queuedTurn.current : ''
       if (ownsFlight) queuedTurn.current = ''
+      // The continuation goes back into the thread this turn belonged to —
+      // `id`, not the `activeId` this render closed over. On the
+      // create-then-send path that prop is still null (the navigation has
+      // not re-rendered this closure), so reading it here minted a second
+      // thread and posted the queued words there, leaving the original
+      // strip waiting forever.
       if (
-        owed &&
+        ownsFlight &&
         !ctrl.signal.aborted &&
-        !inflight.current &&
         id &&
+        !inflight.current &&
         isLiveSession(id, activeIdRef.current)
       ) {
-        void send(undefined, owed)
+        if (owed) void send(undefined, owed, id)
+        // `queued_turn` is a single shot, and the window between a turn's
+        // last round and the handler's exit can accept a note after the
+        // leftovers were already parked. When the frame does not arrive, the
+        // notes endpoint is the truth: ask it once and resume what it still
+        // holds, instead of leaving the strip to wait for a round that will
+        // never come.
+        else void resumeLeftoverNotes(id)
       }
     }
   }
@@ -2585,211 +2149,6 @@ export function SessionsView({
     URL.revokeObjectURL(url)
   }
 
-  /** Put the pills in the editable itself, at the caret — the whole point of
-   *  a contenteditable. Inserted by hand, never by React: the framework
-   *  reconciling children inside an editable would fight the text nodes the
-   *  user's own typing puts there. Shared by uploaded files and workspace
-   *  references, so the two look and behave identically. */
-  function insertChips(added: PendingAttachment[]): void {
-    const el = composer.current
-    if (!el) return
-    el.focus()
-    for (const p of added) {
-      const chip = makeChipNode(p)
-      const sel = el.ownerDocument.getSelection()
-      if (sel && sel.rangeCount > 0) {
-        const range = sel.getRangeAt(0)
-        range.deleteContents()
-        range.insertNode(chip)
-        range.setStartAfter(chip)
-        range.collapse(true)
-        sel.removeAllRanges()
-        sel.addRange(range)
-      } else {
-        el.appendChild(chip)
-      }
-      // A trailing space keeps the pill from welding to whatever follows.
-      const gap = el.ownerDocument.createTextNode(' ')
-      range_or_append(chip, gap)
-    }
-    setInput(editorTextOf(el))
-    setCaret(editorCaretOffset(el))
-    autoGrow(el)
-  }
-
-  /** Take pasted, dropped or picked files into the tray. The tile appears at
-   *  once — the bytes themselves go up at send, when the thread they belong to
-   *  is known and a brand-new chat has one to upload into. */
-  function addFiles(files: File[]): void {
-    if (files.length === 0) return
-    const added: PendingAttachment[] = files.map((file) => ({
-      key: localMsgId(),
-      name: file.name || t('sessions.attachPasted'),
-      size: file.size,
-      image: isImageFile(file),
-      file,
-    }))
-    setPending((ps) => [...ps, ...added])
-    insertChips(added)
-  }
-
-  /** The files dock's 插入: a workspace path becomes the same atomic pill an
-   *  attached file gets, instead of a bare filename typed into the prompt.
-   *  A `:line` suffix stays in the label (and on the sent bubble) but is not
-   *  part of the path expandFileRefs reads at send. */
-  function addFileRef(raw: string): void {
-    const { path, label } = splitFileRef(raw)
-    if (!path) return
-    const added: PendingAttachment = {
-      key: localMsgId(),
-      name: label,
-      size: 0,
-      image: isImageFile({ name: path }),
-      ref: path,
-    }
-    setPending((ps) => [...ps, added])
-    insertChips([added])
-  }
-
-  function removePending(key: string): void {
-    setPending((ps) => ps.filter((p) => p.key !== key))
-    composer.current?.querySelector(`.attach-pill[data-pk="${key}"]`)?.remove()
-    forgetShot(key)
-    unpeek()
-    const el = composer.current
-    if (el) {
-      setInput(editorTextOf(el))
-      autoGrow(el)
-    }
-  }
-
-  /** The bytes behind a pending image: minted from the File the paste or drop
-   *  handed us, fetched for a workspace reference. Minted once per pill and
-   *  kept, because a peek, a lightbox and a second peek all want the same
-   *  object URL — and revoked by forgetShot when the pill goes away. */
-  function shotSrc(p: PendingAttachment): Promise<string> {
-    const made = shots.current.get(p.key)
-    if (made) return Promise.resolve(made)
-    const inflight = shotsPending.current.get(p.key)
-    if (inflight) return inflight
-    const bytes = p.file
-      ? Promise.resolve(URL.createObjectURL(p.file))
-      : p.ref
-        ? fetchBlob(`/api/fs/image?path=${encodeURIComponent(p.ref)}`).then((b) => URL.createObjectURL(b))
-        : Promise.reject(new Error('no bytes'))
-    const job = bytes.then((url) => {
-      shots.current.set(p.key, url)
-      shotsPending.current.delete(p.key)
-      return url
-    })
-    // A failed fetch must not poison the key: a retry should ask again.
-    job.catch(() => shotsPending.current.delete(p.key))
-    shotsPending.current.set(p.key, job)
-    return job
-  }
-
-  function forgetShot(key: string): void {
-    const url = shots.current.get(key)
-    if (!url) return
-    shots.current.delete(key)
-    shotsPending.current.delete(key)
-    URL.revokeObjectURL(url)
-  }
-
-  /** The pointer came to rest on a pill: after a beat, float a larger copy
-   *  above it — the same dwell the transcript's pills use, so a pointer only
-   *  crossing the composer never flashes a picture.
-   *
-   *  The copy clears the composer box rather than the pill: the pill sits at
-   *  the top of the field, so anchoring to it would drop the picture over the
-   *  sentence being typed. Centred on the pill, resting on the box's top
-   *  edge, it covers the transcript instead — the one place a reader is not
-   *  looking at that moment. */
-  function peekPill(chip: HTMLElement): void {
-    const p = pending.find((x) => x.key === chip.dataset.pk)
-    if (!p || !p.image) return
-    window.clearTimeout(peekTimer.current)
-    peekKey.current = p.key
-    peekTimer.current = window.setTimeout(() => {
-      const pill = chip.getBoundingClientRect()
-      const box = composer.current?.closest('.composer-box')?.getBoundingClientRect()
-      const anchor = box ? new DOMRect(pill.left, box.top, pill.width, 0) : pill
-      void shotSrc(p)
-        .then((src) => {
-          // The pointer may have moved on, or the pill been taken out, while
-          // the bytes were in flight.
-          if (peekKey.current !== p.key) return
-          setPeek({ key: p.key, name: p.name, src, anchor })
-        })
-        .catch(() => {
-          /* unreadable reference: no floating copy, and no error either */
-        })
-    }, 160)
-  }
-
-  function unpeek(): void {
-    window.clearTimeout(peekTimer.current)
-    peekKey.current = ''
-    setPeek(null)
-  }
-
-  /** The magnifier, and a click on the pill's body: the picture at full size.
-   *  A reference the panel cannot read simply does not open. */
-  function zoomPill(chip: HTMLElement): void {
-    const p = pending.find((x) => x.key === chip.dataset.pk)
-    if (!p || !p.image) return
-    void shotSrc(p)
-      .then((src) => {
-        unpeek()
-        setShot({ name: p.name, src, path: p.ref })
-      })
-      .catch(() => {
-        /* no bytes, nothing to enlarge */
-      })
-  }
-
-  /** The pill keys actually in the editor right now. The DOM is authoritative:
-   *  Backspace or a selection-delete takes the node out without asking, so
-   *  the tray drops whatever lost its pill rather than upload a file the user
-   *  took back out of the turn. */
-  function livePillKeys(el: HTMLElement): Set<string> {
-    const keys = new Set<string>()
-    el.querySelectorAll('.attach-pill').forEach((n) => {
-      const k = (n as HTMLElement).dataset.pk
-      if (k) keys.add(k)
-    })
-    return keys
-  }
-
-  /** Drop pending entries whose pill is no longer in the editor. */
-  function syncPending(el: HTMLElement): void {
-    const keys = livePillKeys(el)
-    setPending((ps) => {
-      if (!ps.some((p) => !keys.has(p.key))) return ps
-      // The pill is already gone from the DOM, so nothing else will release
-      // its object URL — Backspace would otherwise leak one per screenshot.
-      for (const p of ps) if (!keys.has(p.key)) forgetShot(p.key)
-      return ps.filter((p) => keys.has(p.key))
-    })
-    // A node taken out by Backspace never reports a mouseout, so the copy
-    // floating over it would stay up with nothing under it.
-    if (peekKey.current && !keys.has(peekKey.current)) unpeek()
-  }
-
-  function clearPending(): void {
-    for (const key of [...shots.current.keys()]) forgetShot(key)
-    unpeek()
-    setPending([])
-    editorClear(composer.current)
-  }
-
-  /** `dragover` fires continuously while a file is over the element, and the
-   *  drop only happens if this one calls preventDefault — the default action
-   *  is the browser navigating away to open the file. */
-  function dragHasFiles(e: DragEvent): boolean {
-    return [...(e.dataTransfer?.types ?? [])].includes('Files')
-  }
-
   /** Drop mentions at the caret and leave the caret just after them. Each
    *  token carries a trailing space, which is load-bearing: `atQuery` only
    *  matches an `@…` token that ends the text, so without it the file
@@ -2859,8 +2218,9 @@ export function SessionsView({
   // up even when the side dock takes the right edge. The new-chat page has no
   // thread to summarize, so it gets none.
   //
-  // `showRail` also gates the task read below: the status line and the live
-  // employee row in the thread share the same subscription.
+  // The task read that feeds this line (and the live employee rows, and the
+  // composer's Stop button) is taken at the top of the pane, where `busy`
+  // needs it; it is not gated on the rail being open.
   const showRail = !newChatPage
 
   // "Context used" is the last request's billed total: the prompt the thread
@@ -2933,25 +2293,7 @@ export function SessionsView({
   // print "本轮工作已全部完成" while a colleague was still running — and then
   // rewrite the roll-up every time another one landed. The task board is the
   // only place that knows the batch (see `useSessionTasks`).
-  // A running operation counts too: a turn started elsewhere (the workspace
-  // dispatcher, another tab, the TUI) has no bubble here yet, but the thread
-  // must still show the employee's live row instead of a bare spinner.
-  //
-  // The session rail is the third reader: "what is still working, and where"
-  // is one of the three things that card exists to answer, and it has to
-  // answer it for work this tab never dispatched. So a thread being read with
-  // the rail open pays the same brief read a dispatched one does — one small
-  // list per change frame, which is what the card is for.
-  const dispatched =
-    msgs.some((m) => m.kind === 'task' || m.kind === 'plan' || Boolean(m.liveTask)) ||
-    session?.operation?.status === 'running'
-  const sessionTasks = useSessionTasks(activeId, dispatched || showRail)
-  const roundOpen = sessionTasks ? roundStillOpen(sessionTasks) : false
   const runSummary = busy || roundOpen ? null : trailingRunSummary(msgs)
-  // The employees still working, drawn after the last turn: a running job is
-  // the newest thing in the thread, whatever the position of the bubble that
-  // dispatched it (see `liveTaskIds`).
-  const liveIds = sessionTasks ? liveTaskIds(sessionTasks) : []
   // The same rows keyed for the transcript. A task bubble renders from here
   // instead of fetching its own copy on every change frame: a thread with
   // several dispatch turns was issuing that many extra requests per frame,
@@ -3069,7 +2411,7 @@ export function SessionsView({
               跑"，所以这里站的是节点按钮本身 —— 设备不再锁在栏的工具页后面，
               也没有一个点了会打开空栏的折叠按钮。 */}
           <div class="chat-head-tools">
-            {showRail && !dockOpen && (
+            {showRail && (
               <SessionRail
                 diff={diff}
                 tasks={sessionTasks ?? []}
@@ -3250,165 +2592,23 @@ export function SessionsView({
             per note, four at most, and none of them numbered: a bubble is a
             thought, not a badge, and the list behind the hover is where the
             order and the count live. */}
-        {notes.length > 0 && (
-          <div class="note-strip" data-testid="note-strip">
-            <div class="note-rail">
-              <div
-                class="note-bubbles"
-                ref={noteBubbles}
-                onMouseEnter={() => setNotesOpen(true)}
-                onMouseLeave={() => setNotesOpen(false)}
-                onFocusOut={(e) => {
-                  // Focus moving into the popover's verbs is still inside;
-                  // leaving the whole cluster is what closes it.
-                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-                    setNotesOpen(false)
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Escape' || !notesOpen) return
-                  e.stopPropagation()
-                  setNotesOpen(false)
-                  ;(e.currentTarget.querySelector('.note-dots') as HTMLElement | null)?.focus()
-                }}
-              >
-                <button
-                  type="button"
-                  class="note-dots"
-                  aria-haspopup="true"
-                  aria-expanded={notesOpen ? 'true' : 'false'}
-                  aria-label={`${t('sessions.noteModeQueue')} · ${notes.length}`}
-                  title={`${t('sessions.noteModeQueue')} · ${notes.length}`}
-                  onClick={() => setNotesOpen((v) => !v)}
-                >
-                  {/* Three circles, always: the trail is the idiom, not a
-                      tally — one queued note used to draw one dot, which read
-                      as a speck rather than as the panda thinking. The count
-                      lives in the label and in the list behind the hover. */}
-                  {[0, 1, 2].map((i) => (
-                    <span class="note-dot" key={i} aria-hidden="true" />
-                  ))}
-                </button>
-                {notesOpen && (
-                  <div class="note-pop">
-                    <div class="note-pop-card">
-                      <div
-                        class="note-list"
-                        ref={noteList}
-                        role="list"
-                        style={noteRoom ? { maxHeight: `${noteRoom}px` } : undefined}
-                        data-above={noteEdges.above ? 'true' : 'false'}
-                        data-below={noteEdges.below ? 'true' : 'false'}
-                      >
-                        {notes.map((n, i) => (
-                          <div class="note-row" key={n.key} role="listitem" data-mode={n.mode}>
-                            <span class="note-index" aria-hidden="true">
-                              {i + 1}
-                            </span>
-                            <span class={`note-mode ${n.mode === 'inject' ? 'inject' : ''}`}>
-                              {n.mode === 'inject'
-                                ? t('sessions.noteModeInject')
-                                : t('sessions.noteModeQueue')}
-                            </span>
-                            {editingNote === n.key ? (
-                              // Editing in place: the row stays where it is in
-                              // the queue, so a note already queued ahead of an
-                              // inject keeps both its position and its mode.
-                              <input
-                                class="note-edit"
-                                value={noteDraft}
-                                autoFocus
-                                aria-label={t('sessions.noteEdit')}
-                                onInput={(e) => setNoteDraft(e.currentTarget.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
-                                    e.preventDefault()
-                                    void saveEditNote(n)
-                                  } else if (e.key === 'Escape') {
-                                    e.preventDefault()
-                                    cancelEditNote()
-                                  }
-                                }}
-                              />
-                            ) : (
-                              <span
-                                class="note-text"
-                                title={n.text}
-                                onDblClick={() => beginEditNote(n)}
-                              >
-                                {n.text}
-                              </span>
-                            )}
-                            {n.attachments && n.attachments.length > 0 && (
-                              <span class="note-files" title={n.attachments.join('\n')}>
-                                <Icon name="paperclip" size={11} />
-                                {n.attachments.length}
-                              </span>
-                            )}
-                            <span class="note-actions">
-                              {editingNote === n.key ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    class="note-act"
-                                    title={t('sessions.noteSave')}
-                                    aria-label={t('sessions.noteSave')}
-                                    onClick={() => void saveEditNote(n)}
-                                  >
-                                    <Icon name="check" size={13} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="note-act"
-                                    title={t('sessions.noteCancel')}
-                                    aria-label={t('sessions.noteCancel')}
-                                    onClick={cancelEditNote}
-                                  >
-                                    <Icon name="x" size={13} />
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  <button
-                                    type="button"
-                                    class="note-act"
-                                    title={t('sessions.notePromote')}
-                                    aria-label={t('sessions.notePromote')}
-                                    onClick={() => void promoteNote(n)}
-                                  >
-                                    <Icon name="send" size={13} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="note-act"
-                                    title={t('sessions.noteEdit')}
-                                    aria-label={t('sessions.noteEdit')}
-                                    onClick={() => beginEditNote(n)}
-                                  >
-                                    <Icon name="pencil" size={13} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="note-act danger"
-                                    title={t('sessions.noteDrop')}
-                                    aria-label={t('sessions.noteDrop')}
-                                    onClick={() => void dropNote(n)}
-                                  >
-                                    <Icon name="trash" size={13} />
-                                  </button>
-                                </>
-                              )}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        <QueuedNotes
+          notes={notes}
+          notesOpen={notesOpen}
+          setNotesOpen={setNotesOpen}
+          noteBubbles={noteBubbles}
+          noteList={noteList}
+          noteRoom={noteRoom}
+          noteEdges={noteEdges}
+          editingNote={editingNote}
+          noteDraft={noteDraft}
+          setNoteDraft={setNoteDraft}
+          saveEditNote={saveEditNote}
+          cancelEditNote={cancelEditNote}
+          beginEditNote={beginEditNote}
+          promoteNote={promoteNote}
+          dropNote={dropNote}
+        />
 
         {clarify && clarify.sessionID === activeId && (
           <div class="clarify-dock">
@@ -3447,204 +2647,26 @@ export function SessionsView({
             }}
           >
             {dropping && <div class="attach-drop-hint">{t('sessions.attachDrop')}</div>}
-            {completeShown.length > 0 && (
-              <div class="complete-menu" role="listbox" aria-label={t('palette.title')}>
-                {completeShown.map((c, i) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    role="option"
-                    aria-selected={i === completeIdx}
-                    class={`complete-item${i === completeIdx ? ' active' : ''}`}
-                    onMouseMove={() => setCompleteCursor(i)}
-                    onClick={() => acceptCompletion(c)}
-                  >
-                    <span class="complete-label">{c.label}</span>
-                    <span class="complete-hint">
-                      {c.hint ?? (c.checked ? '✓' : c.group)}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-            {/* The editable surface. Contenteditable rather than a textarea so
-                an attachment can render as a pill inside the line being typed,
-                with the caret carrying on after it — the behaviour the
-                reference shows and a textarea cannot host. Everything the
-                textarea gave for free is re-derived in the helpers above. */}
-            <div
-              ref={(el) => {
-                composer.current = el
-              }}
-              class={`composer-input${editorPlain(input) === '' && pending.length === 0 ? ' is-empty' : ''}`}
-              contenteditable="true"
-              role="textbox"
-              aria-multiline="true"
-              aria-label={t('sessions.placeholder')}
-              data-placeholder={busy ? t('sessions.placeholderRunning') : t('sessions.placeholder')}
-              onInput={(e) => {
-                useBrParagraphSeparator()
-                const el = e.currentTarget as HTMLDivElement
-                setInput(editorTextOf(el))
-                setCaret(editorCaretOffset(el))
-                // Deleting a pill with Backspace or a selection only removes
-                // the node — drop the file behind it too, or a send would
-                // still upload what the user took out.
-                syncPending(el)
-                autoGrow(el)
-              }}
-              onClick={(e) => {
-                // One listener for the whole surface, delegated: the pills are
-                // built as raw nodes, and a listener per node would have to be
-                // torn down by hand every time one leaves the line. The ×
-                // takes the file back out; the magnifier — and the pill's own
-                // body — asks to see the picture; anywhere else moves the
-                // caret.
-                const hit = e.target as HTMLElement
-                const chip = hit.closest('.attach-pill') as HTMLElement | null
-                if (chip) {
-                  if (hit.closest('.attach-pill-x')) removePending(chip.dataset.pk ?? '')
-                  else zoomPill(chip)
-                  return
-                }
-                setCaret(editorCaretOffset(e.currentTarget as HTMLDivElement))
-              }}
-              onMouseOver={(e) => {
-                // mouseover, not mouseenter: the former bubbles, so one
-                // listener covers pills inserted after this render. Moving
-                // between the pill's own glyphs is not "entering" it again.
-                const chip = (e.target as HTMLElement).closest('.attach-pill') as HTMLElement | null
-                if (!chip || chip.contains(e.relatedTarget as Node | null)) return
-                peekPill(chip)
-              }}
-              onMouseOut={(e) => {
-                const chip = (e.target as HTMLElement).closest('.attach-pill') as HTMLElement | null
-                if (!chip || chip.contains(e.relatedTarget as Node | null)) return
-                unpeek()
-              }}
-              onKeyUp={(e) => setCaret(editorCaretOffset(e.currentTarget as HTMLDivElement))}
-              onPaste={(e) => {
-                // A screenshot on the clipboard arrives as a file with no
-                // path, which is exactly what the pill is for.
-                const files = [...(e.clipboardData?.files ?? [])]
-                if (files.length > 0) {
-                  e.preventDefault()
-                  addFiles(files)
-                  return
-                }
-                // Pasted text goes in as <br>-separated lines: the browser's
-                // own paste plants literal newline text nodes, which Chromium
-                // does not lay out as line breaks in here. A single line goes
-                // through insertText — the default paste would bring the
-                // source page's HTML styling into a plain-text surface.
-                const text = e.clipboardData?.getData('text/plain')
-                if (!text) return
-                e.preventDefault()
-                const el3 = e.currentTarget as HTMLDivElement
-                if (!text.includes('\n')) {
-                  editorInsertText(text)
-                  requestAnimationFrame(() => {
-                    setInput(editorTextOf(el3))
-                    setCaret(editorCaretOffset(el3))
-                    autoGrow(el3)
-                  })
-                  return
-                }
-                const parts = text.split('\n')
-                const frag = el3.ownerDocument.createDocumentFragment()
-                parts.forEach((part, i) => {
-                  if (i > 0) frag.appendChild(el3.ownerDocument.createElement('br'))
-                  if (part) frag.appendChild(el3.ownerDocument.createTextNode(part))
-                })
-                const sel3 = document.getSelection()
-                if (sel3 && sel3.rangeCount > 0) {
-                  const rg = sel3.getRangeAt(0)
-                  rg.deleteContents()
-                  rg.insertNode(frag)
-                  rg.collapse(false)
-                  sel3.removeAllRanges()
-                  sel3.addRange(rg)
-                } else {
-                  el3.appendChild(frag)
-                }
-                setInput(editorTextOf(el3))
-                setCaret(editorCaretOffset(el3))
-                autoGrow(el3)
-              }}
-              onKeyDown={(e) => {
-                if (completeShown.length > 0) {
-                  // While the menu is open the navigation keys belong to it:
-                  // Tab/Enter accept, arrows move, Escape hides it until the
-                  // input changes again.
-                  if ((e.key === 'Tab' || e.key === 'Enter') && !e.isComposing && e.keyCode !== 229) {
-                    e.preventDefault()
-                    const cmd = completeShown[completeIdx]
-                    if (cmd) acceptCompletion(cmd)
-                    return
-                  }
-                  if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) {
-                    e.preventDefault()
-                    setCompleteCursor((completeIdx + 1) % completeShown.length)
-                    return
-                  }
-                  if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) {
-                    e.preventDefault()
-                    setCompleteCursor((completeIdx - 1 + completeShown.length) % completeShown.length)
-                    return
-                  }
-                  if (e.key === 'Escape') {
-                    e.preventDefault()
-                    setCompleteDismissed(input)
-                    return
-                  }
-                }
-                // Shift+Enter breaks the line. The browser's own answer is a
-                // literal newline text node, which Chromium does not lay out as
-                // a line break inside a contenteditable — the row stays one
-                // line tall and the caret sits mid-string. Insert the <br>
-                // ourselves so the editor actually grows.
-                if (e.key === 'Enter' && e.shiftKey && !e.isComposing && e.keyCode !== 229) {
-                  e.preventDefault()
-                  const el2 = e.currentTarget as HTMLDivElement
-                  const br = el2.ownerDocument.createElement('br')
-                  const sel2 = document.getSelection()
-                  if (sel2 && sel2.rangeCount > 0) {
-                    const rg = sel2.getRangeAt(0)
-                    rg.deleteContents()
-                    rg.insertNode(br)
-                    rg.setStartAfter(br)
-                    rg.collapse(true)
-                    sel2.removeAllRanges()
-                    sel2.addRange(rg)
-                  } else {
-                    el2.appendChild(br)
-                  }
-                  // A zero-width space after the <br> keeps the caret on the
-                  // new line; a bare <br> at the end of the block leaves the
-                  // caret before it in some engines.
-                  const nbsp = el2.ownerDocument.createTextNode('\u200b')
-                  range_or_append(br, nbsp)
-                  setInput(editorTextOf(el2))
-                  setCaret(editorCaretOffset(el2))
-                  autoGrow(el2)
-                  return
-                }
-                // Enter sends — and while a Chinese or Japanese IME is
-                // composing, Enter belongs to the composition, not to us.
-                // Checking isComposing is the whole reason a contenteditable can
-                // replace the textarea here.
-                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229
-                    && !(e.metaKey || e.ctrlKey)) {
-                  e.preventDefault()
-                  send()
-                }
-                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
-                  e.preventDefault()
-                  send()
-                }
-              }}
-            >
-            </div>
+            <ComposerInput
+              composer={composer}
+              input={input}
+              pendingCount={pending.length}
+              busy={busy}
+              completeShown={completeShown}
+              completeIdx={completeIdx}
+              setInput={setInput}
+              setCaret={setCaret}
+              setCompleteCursor={setCompleteCursor}
+              setCompleteDismissed={setCompleteDismissed}
+              acceptCompletion={acceptCompletion}
+              syncPending={syncPending}
+              removePending={removePending}
+              zoomPill={zoomPill}
+              peekPill={peekPill}
+              unpeek={unpeek}
+              addFiles={addFiles}
+              send={send}
+            />
             <div class="composer-actions">
               {/* Context picks share the row with Send: the box reads as one
                   control, and a toolbar floating above it read as a second
@@ -3957,1211 +2979,5 @@ export function SessionsView({
     </ComposerContext.Provider>
     </FileViewContext.Provider>
   )
-}
-
-/** Transcript placeholder while a thread loads: rows in the shape of the
- *  messages about to replace them. An empty pane reads as a broken request,
- *  and the hero would claim a thread with history is brand new. */
-function ChatSkeleton() {
-  return (
-    <div class="chat-skeleton" aria-hidden="true">
-      {[68, 90, 52].map((w, i) => (
-        <div class="skel-msg" key={i}>
-          <div class="skel-avatar" />
-          <div class="skel-lines">
-            <div class="skel-line" style={{ width: `${w}%` }} />
-            <div class="skel-line" style={{ width: `${Math.max(w - 24, 28)}%` }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-/** Empty state: the greeting, one line of orientation, and three prompts that
- *  fill the composer. The brand mark and fleet strip stay out — the pet is
- *  already standing on the composer — but a blank page gives a first-time
- *  reader no verb, and a chip is cheaper to click than a sentence to invent. */
-function ChatEmpty({
-  onPick,
-  hasDraft,
-}: {
-  onPick(text: string): void
-  hasDraft: boolean
-}) {
-  return (
-    <div class="chat-empty">
-      <div class="chat-empty-cta">
-        <h1>{t('sessions.hello')}</h1>
-        <p class="chat-empty-hint">{t('sessions.hint')}</p>
-        {/* Once there is a draft or an attachment, a suggestion would replace
-            work the reader already did; the chips step aside instead. */}
-        {!hasDraft && (
-          <div class="chat-starters">
-            {(['sessions.s1', 'sessions.s2', 'sessions.s3'] as const).map((key) => (
-              <button
-                type="button"
-                class="chat-starter"
-                key={key}
-                onClick={() => onPick(t(key))}
-              >
-                {t(key)}
-                <Icon name="chevron-right" size={14} />
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-/** waitDevReady polls a project's dev server until it can be framed, it fails,
- *  or the declared patience runs out. `alive` lets the caller abandon the wait
- *  when the reader has moved to another thread. */
-async function waitDevReady(
-  project: string,
-  seconds: number,
-  alive: () => boolean,
-): Promise<DevStatus | null> {
-  const deadline = Date.now() + Math.min(seconds + 5, 120) * 1000
-  while (Date.now() < deadline) {
-    if (!alive()) return null
-    await new Promise((resolve) => setTimeout(resolve, 600))
-    if (!alive()) return null
-    try {
-      const st = await api.devStatus(project)
-      if (st.state === 'ready' && st.url) return st
-      if (st.state === 'failed' || st.state === 'stopped') return null
-    } catch {
-      // A transient read failure is not a verdict; keep waiting.
-    }
-  }
-  return null
-}
-
-/** The composer's "+" menu: attach context to the turn you are about to send.
- *
- *  A skill and an MCP server both go in as a mention in the prompt text —
- *  `@skill:name` / `@mcp:name` — which is exactly what the server receives.
- *  Nothing is expanded behind the user's back, so the box keeps showing the
- *  text the model will read. Files are the third entry and are not wired yet. */
-function AttachMenu({
-  onInsert,
-  onAttach,
-  project,
-}: {
-  onInsert(tokens: string[]): void
-  /** Files picked from the machine go to the composer's tray rather than into
-   *  the text as `@path` tokens: they are not workspace files the user is
-   *  naming mid-sentence, they are things being handed over. */
-  onAttach(files: File[]): void
-  /** The project this thread belongs to. Its work dir is the browser's root,
-   *  so what is offered is what this thread's agent can actually act on — the
-   *  node's own data tree holds no user files at all. */
-  project?: string
-}) {
-  const [open, setOpen] = useState(false)
-  const [view, setView] = useState<'root' | 'skill' | 'mcp' | 'file'>('root')
-  const [skills, setSkills] = useState<SkillEntry[] | null>(null)
-  const [mcp, setMcp] = useState<MCPSettings | null>(null)
-  const wrap = useRef<HTMLDivElement>(null)
-  const fileInput = useRef<HTMLInputElement>(null)
-
-  // File browser state: the path being listed, its rows, and what is picked.
-  const [cwd, setCwd] = useState<string | null>(null)
-  const [rows, setRows] = useState<FsFileEntry[]>([])
-  const [browseErr, setBrowseErr] = useState('')
-  const [browsing, setBrowsing] = useState(false)
-  const [picked, setPicked] = useState<FsFileEntry[]>([])
-  /** The project's work dir, resolved on first entry to the file view: the
-   *  session payload carries the project's *name*, not its directory. */
-  const [root, setRoot] = useState<string | null>(null)
-  /** The path we have already tried to open. The browser auto-opens the root
-   *  exactly once: on a refusal `cwd` stays null, and without this the effect
-   *  would fire again the moment `browsing` dropped back to false and hammer
-   *  the endpoint forever, flashing "…" over the error the whole time. */
-  const [openedPath, setOpenedPath] = useState<string | null>(null)
-
-  function browse(path: string): void {
-    setBrowsing(true)
-    setBrowseErr('')
-    setOpenedPath(path)
-    api
-      .fsFiles(path || undefined)
-      .then((r) => {
-        setCwd(r.current)
-        setRows(r.entries)
-      })
-      .catch((e: unknown) => setBrowseErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBrowsing(false))
-  }
-
-  // Fetched on first entry to a view, not on mount: most turns never touch
-  // this menu.
-  useEffect(() => {
-    if (!open) return
-    if (view === 'skill' && skills === null) {
-      api.skills().then(setSkills).catch(() => setSkills([]))
-    }
-    if (view === 'mcp' && mcp === null) {
-      api.getMCPSettings().then(setMcp).catch(() => setMcp({ command: '' }))
-    }
-  }, [open, view, skills, mcp])
-
-  // Resolve the root once per open of the file view, then open it. Both steps
-  // are guarded so a refusal cannot restart them.
-  useEffect(() => {
-    if (!open || view !== 'file' || root !== null || openedPath !== null) return
-    let alive = true
-    api
-      .projects()
-      .then((pl) => {
-        const name = project || pl.active || ''
-        const hit = (pl.detail ?? []).find((p) => p.name === name)
-        if (alive) setRoot(hit?.work_dir ?? '')
-      })
-      .catch(() => {
-        if (alive) setRoot('')
-      })
-    return () => {
-      alive = false
-    }
-  }, [open, view, root, openedPath, project])
-
-  useEffect(() => {
-    if (!open || view !== 'file' || root === null || openedPath !== null) return
-    browse(root)
-  }, [open, view, root, openedPath])
-
-  // A menu that only closes by clicking itself again is a trap.
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    addEventListener('mousedown', onDown)
-    addEventListener('keydown', onKey)
-    return () => {
-      removeEventListener('mousedown', onDown)
-      removeEventListener('keydown', onKey)
-    }
-  }, [open])
-
-  function toggle(entry: FsFileEntry): void {
-    setPicked((ps) => {
-      const i = ps.findIndex((p) => p.path === entry.path)
-      if (i >= 0) return ps.filter((p) => p.path !== entry.path)
-      return [...ps, entry]
-    })
-  }
-
-  function pick(token: string): void {
-    onInsert([token])
-    setOpen(false)
-    setView('root')
-  }
-
-  function insertPicked(): void {
-    if (picked.length === 0) return
-    onInsert(picked.map((p) => `@${p.path}`))
-    setPicked([])
-    setOpen(false)
-    setView('root')
-  }
-
-  /** A file picked off the machine goes straight to the composer's tray, which
-   *  previews it locally and uploads it on send. The upload used to happen
-   *  here and land in the text as a long `@…/1792172704123-name.png` token —
-   *  the ugliest thing the composer could show, and it needed a session id
-   *  that a brand-new chat does not have yet. */
-  function uploadFiles(files: FileList | null): void {
-    if (!files || files.length === 0) return
-    onAttach([...files])
-    setPicked([])
-    setOpen(false)
-    setView('root')
-  }
-
-  return (
-    <div class="attach-wrap" ref={wrap}>
-      <button
-        type="button"
-        class="icon-btn attach-btn"
-        aria-label={t('sessions.attachTitle')}
-        aria-expanded={open}
-        data-tip={t('sessions.attachTitle')}
-        onClick={() => {
-          setOpen((v) => !v)
-          setView('root')
-        }}
-      >
-        +
-      </button>
-      {open && (
-        <div class="attach-menu" role="menu">
-          {view === 'root' ? (
-            <>
-              <button
-                type="button"
-                role="menuitem"
-                class="attach-item"
-                onClick={() => setView('file')}
-              >
-                <Icon name="paperclip" size={12} />
-                {t('sessions.attachFile')}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                class="attach-item"
-                onClick={() => setView('skill')}
-              >
-                <Icon name="lightbulb" size={12} />
-                {t('nav.skills')}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                class="attach-item"
-                onClick={() => setView('mcp')}
-              >
-                <Icon name="plug" size={12} />
-                {t('settings.mcp')}
-              </button>
-            </>
-          ) : view === 'file' ? (
-            <div class="attach-browser">
-              <div class="attach-browser-bar">
-                <button
-                  type="button"
-                  class="attach-up"
-                  disabled={!cwd || (!!root && cwd === root)}
-                  title={t('sessions.attachUp')}
-                  onClick={() => browse(parentPath(cwd ?? ''))}
-                >
-                  ‹
-                </button>
-                <span class="attach-cwd mono">{cwd}</span>
-              </div>
-              <div class="attach-rows">
-                {browseErr && <p class="attach-empty">{browseErr}</p>}
-                {!browseErr && rows.length === 0 && !browsing && (
-                  <p class="attach-empty">{t('sessions.attachEmpty')}</p>
-                )}
-                {browsing && <p class="attach-empty">…</p>}
-                {rows.map((e) =>
-                  e.dir ? (
-                    <button
-                      key={e.path}
-                      type="button"
-                      role="menuitem"
-                      class="attach-item"
-                      onClick={() => browse(e.path)}
-                    >
-                      <Icon name="folder" size={12} />
-                      <span class="attach-name">{e.name}/</span>
-                    </button>
-                  ) : (
-                    <button
-                      key={e.path}
-                      type="button"
-                      role="menuitem"
-                      class={`attach-item${picked.some((p) => p.path === e.path) ? ' picked' : ''}`}
-                      title={e.path}
-                      onClick={() => toggle(e)}
-                    >
-                      <span class="attach-check" aria-hidden="true">
-                        {picked.some((p) => p.path === e.path) ? '✓' : ''}
-                      </span>
-                      <span class="attach-name">{e.name}</span>
-                      <span class="attach-size">{fmtSize(e.size)}</span>
-                    </button>
-                  ),
-                )}
-              </div>
-              <div class="attach-foot">
-                <button
-                  type="button"
-                  class="attach-upload"
-                  onClick={() => fileInput.current?.click()}
-                >
-                  {t('sessions.attachUpload')}
-                </button>
-                <button
-                  type="button"
-                  class="btn primary attach-insert"
-                  disabled={picked.length === 0}
-                  onClick={insertPicked}
-                >
-                  {t('sessions.attachInsert', { n: picked.length })}
-                </button>
-              </div>
-              <input
-                ref={fileInput}
-                type="file"
-                multiple
-                hidden
-                onChange={(e) => {
-                  uploadFiles((e.target as HTMLInputElement).files)
-                  ;(e.target as HTMLInputElement).value = ''
-                }}
-              />
-            </div>
-          ) : (
-            <>
-              <button type="button" class="attach-back" onClick={() => setView('root')}>
-                ‹ {view === 'skill' ? t('nav.skills') : t('settings.mcp')}
-              </button>
-              {view === 'skill' &&
-                (skills ?? []).map((s) => (
-                  <button
-                    key={s.name}
-                    type="button"
-                    role="menuitem"
-                    class="attach-item"
-                    title={s.description}
-                    onClick={() => pick(`@skill:${s.name}`)}
-                  >
-                    {s.name}
-                  </button>
-                ))}
-              {view === 'mcp' &&
-                (mcp?.command ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="attach-item"
-                    title={mcp.command}
-                    onClick={() => pick(`@mcp:${mcp.command.split(/\s+/)[0]}`)}
-                  >
-                    {mcp.command}
-                  </button>
-                ) : (
-                  <p class="attach-empty">{t('sessions.attachEmpty')}</p>
-                ))}
-              {view === 'skill' && skills?.length === 0 && (
-                <p class="attach-empty">{t('sessions.attachEmpty')}</p>
-              )}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** Parent directory of a path from the fs listing, in either separator
- *  convention. Empty string when there is no parent to go to. */
-function parentPath(p: string): string {
-  const trimmed = p.replace(/[\\/]+$/, '')
-  const i = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
-  if (i <= 0) return ''
-  return trimmed.slice(0, i)
-}
-
-/** A transcript's 查看任务 link opens the orchestration card where the reader
- *  already is. The href stays real so ⌘/ctrl/shift-click and "open in new tab"
- *  still reach the full task page — a plain click is the only one that stays
- *  in the conversation. */
-function inPlaceTaskClick(e: MouseEvent, id: string, open: (id: string) => void) {
-  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-  e.preventDefault()
-  open(id)
-}
-
-/** The receipt a turn came back with, when it is not the task's own card.
- *
- *  A parked tier-2 task must still render its decision in the same breath it
- *  parked in, and a remembered answer must say so where the user can see it.
- *  The turn that carries this is not always the head of a fanned-out round —
- *  the live result lands on whichever bubble was streaming — so the bubble
- *  asks every member of its group instead of only itself.
- *
- *  `needs_approval` is skipped for a turn with a task ref: that task's card
- *  already draws the approval gate (see `DispatchBlock`), and drawing it twice
- *  would ask the same question twice. */
-function MetaRow({ msg }: { msg: ChatMsg }) {
-  const res = msg.result
-  if (!res?.needs_approval && !res?.denied && !res?.consent_scope && !res?.warning) return null
-  return (
-    <div class="bubble-slot-row slot-meta">
-      {res.needs_approval && res.approval && !msg.ref && (
-        <TaskApproval taskId={res.approval.task_id} preselect={res.approval.scope} />
-      )}
-      {res.denied && <span class="badge red">{t('approval.deniedRemembered')}</span>}
-      {res.consent_scope && (
-        <span class="dim approval-consent">{t(`approval.consent.${res.consent_scope}`)}</span>
-      )}
-      {/* Engine advisory — e.g. the dispatch went to a queue nothing drains.
-          The string arrives server-localized. */}
-      {res.warning && <span class="badge yellow">{res.warning}</span>}
-    </div>
-  )
-}
-
-/** Old finalizer turns predate the ref field. A round with exactly one task
- *  dispatch is unambiguous: the report below it is that task's report, so the
- *  process fold can still open. A fan-out has several candidates and gets no
- *  guess — the wrong process under a summary is worse than none. */
-function reportFallbackRefs(msgs: ChatMsg[]): Map<string, string> {
-  const out = new Map<string, string>()
-  let refs: string[] = []
-  for (const m of msgs) {
-    if (m.role === 'user') {
-      refs = []
-      continue
-    }
-    if (m.kind === 'task' && m.ref) {
-      if (!refs.includes(m.ref)) refs.push(m.ref)
-      continue
-    }
-    if (m.kind === 'answer' && !m.ref && refs.length === 1 && splitReportHead(m.text ?? '')) {
-      out.set(m.k, refs[0]!)
-    }
-  }
-  return out
-}
-
-/** One row of the transcript, drawn the way a group chat draws it.
- *
- *  A thread has more than one voice in it: you ask, the panda works out how to
- *  split the job and who gets it, an employee does it and reports back, and the
- *  panda closes the round. Drawing all of that as one anonymous column — a
- *  duration caption, a task card, and a `[done] @agent` line with nobody
- *  attached — is what made a finished task read like a log file. So a row now
- *  carries what a chat message carries: a face, a name, what that speaker is
- *  doing in the conversation, and a bubble of their own.
- *
- *  The speaker is derived, never stored (see components/chat-speaker.ts): a
- *  dispatch turn is the panda orchestrating, a report head that names an
- *  employee is that employee reporting, and everything else is the panda. */
-function ChatBubble(props: {
-  msg: ChatMsg
-  onOpenTask(id: string): void
-  /** Open a finished task's page in the dock's browser panel. */
-  onPreviewTask?: (task: Task) => void
-  /** How long the turn behind this reply took, once it is done. The local
-   *  measurement comes from `turnMs` (it is the only one that exists between
-   *  the reply landing and the transcript being re-fetched); `duration_ms`
-   *  from the stored turn is what survives a reload. */
-  elapsedMs?: number
-  /** Wall-clock start of the turn still streaming, or 0. When set and this
-   *  bubble is the streaming one, the timer runs here instead of printing a
-   *  fixed number. */
-  liveFrom?: number
-  /** The plan a plan turn started. */
-  plan?: PlanDetail | null
-  /** The rest of a fanned-out round: the sibling dispatch turns this reply
-   *  absorbed (see `groupDispatches`). Drawn under this one's card, in the same
-   *  bubble, so the round reads as one statement. */
-  batch?: ChatMsg[]
-  /** The thread's task rows, keyed by id — each `DispatchBlock` reads its own
-   *  from here instead of fetching a copy on every change frame. */
-  tasksById?: Map<string, Task>
-  /** The task a legacy report turn belongs to. Reports written before the
-   *  finalizer stamped `ref` have no id of their own; the closest single
-   *  dispatch in the round is the best evidence for the process fold. */
-  fallbackRef?: string
-}) {
-  const { msg, onOpenTask, onPreviewTask, elapsedMs, liveFrom = 0, plan = null, batch = [], tasksById, fallbackRef } = props
-
-  const report = msg.kind === 'error' ? null : splitReportHead(msg.text ?? '')
-  const speaker = speakerOf(msg, report)
-  const isTaskKind = msg.kind === 'task' && Boolean(msg.ref)
-  const isPlanKind = msg.kind === 'plan' && Boolean(msg.ref)
-  // The dispatch template appends the task id so the model's history keeps it
-  // (sessions.go). In a chat row the card is the link and a uuid is not a
-  // thing a person reads, so it comes back off.
-  const text = isTaskKind || isPlanKind ? stripRefId(msg.text ?? '', msg.ref) : msg.text ?? ''
-  const hasTaskStatus = Boolean(msg.streaming && msg.status)
-  const hasThinking = Boolean(msg.streaming && !msg.text && !msg.status)
-  // Which model wrote this reply. The live stream carries it on the result;
-  // the stored turn carries it after a reload (see `Turn.Model`).
-  const replyModel = msg.result?.entry_model || msg.model || ''
-  // The round's own display-only state lands on whichever bubble was streaming
-  // when it finished — for a fan-out that is the last absorbed sibling, not
-  // the head (see `isBareDispatch`). Read it from the whole group so the fold
-  // and the meta row do not vanish with the bubble that used to own them.
-  const group = [msg, ...batch]
-  const thought = group.find((m) => m.thought)?.thought ?? ''
-
-  const name =
-    speaker.who === 'agent'
-      ? prettyAgent(speaker.agent)
-      : speaker.who === 'user'
-        ? t('sessions.you')
-        : t('sessions.speakerPanda')
-  // An employee's chip is the state of their job — that is what the row is
-  // about. Everyone else's chip names the part they are playing.
-  const chip =
-    report && speaker.role === 'report'
-      ? t(`state.${report.state}`)
-      : t(`sessions.role.${speaker.role}`)
-  const chipState = report && speaker.role === 'report' ? report.state : speaker.role
-
-  return (
-    <div class={`msg ${speaker.who} is-${speaker.role}`}>
-      {speaker.who !== 'user' && <ChatAvatar speaker={speaker} />}
-      <div class="msg-body">
-        {/* — the head: who is talking, what they are doing here, and when.
-              The duration used to sit above the reply as a caption with a
-              hairline under it; in a chat it belongs beside the clock.
-              Your own row keeps only the clock: the right side of the column
-              already says who it is, and a face of your own beside it would be
-              saying it a second time. */}
-        <div class="msg-head">
-          {speaker.who !== 'user' && (
-            <>
-              <span class="msg-name">{name}</span>
-              <span class={`msg-role is-${chipState}`}>{chip}</span>
-            </>
-          )}
-          <span class="msg-stamp">
-            {msg.ts ? (
-              <time
-                class="msg-time"
-                dateTime={new Date(msg.ts * 1000).toISOString()}
-                title={clockStamp(msg.ts, locale())}
-              >
-                {clockTime(msg.ts, locale())}
-              </time>
-            ) : null}
-            {msg.streaming && liveFrom > 0 ? (
-              <LiveElapsed from={liveFrom} last={msg.lastActivity} />
-            ) : elapsedMs !== undefined ? (
-              <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(elapsedMs) })}</span>
-            ) : null}
-            {msg.tokens ? (
-              <span class="msg-dur" data-testid="msg-tokens">
-                {t('sessions.tokens', {
-                  n: (msg.tokensEstimated ? '~' : '') + fmtTokens(msg.tokens),
-                })}
-              </span>
-            ) : null}
-          </span>
-        </div>
-
-        <div
-          class={`msg-bubble${speaker.who === 'user' ? ' is-you' : ''}${
-            isTaskKind || isPlanKind || report ? ' is-wide' : ''
-          }`}
-        >
-          {/* — what the panda is thinking on its way to a plan. It streamed
-                into state and never reached the page before this; a reader who
-                wants to know why the job was cut up the way it was gets to
-                look. Open while it is still arriving, folded once the reply
-                lands, because by then the answer is what matters. */}
-          {thought && (
-            <details class="msg-think" open={Boolean(msg.streaming)}>
-              <summary>{t('sessions.thought')}</summary>
-              <p class="msg-think-text">{thought}</p>
-            </details>
-          )}
-
-          {msg.role === 'user' ? (
-            // The attachments ride in the sentence, the way the composer
-            // showed them while typing — a pill before the words it belongs
-            // to, never a block of its own.
-            (msg.text || msg.files) && (
-              <p class="msg-text">
-                {msg.files && <UserFiles files={msg.files} />}
-                {msg.text}
-              </p>
-            )
-          ) : msg.kind === 'error' ? (
-            <p class="msg-text">{msg.text}</p>
-          ) : report ? (
-            // The employee's report: the job as its subject, their own closing
-            // paragraph under it. The state is on the head's chip.
-            <>
-              {report.title && <p class="msg-subject">{report.title}</p>}
-              {(msg.ref || fallbackRef) ? <TaskDelivery
-                taskId={(msg.ref || fallbackRef)!} delivery={msg.delivery}
-                truncated={msg.delivery_truncated} summary={report.body} state={report.state}
-                attemptId={msg.delivery_attempt_id} reportedAt={msg.ts}
-              /> : report.body && <Markdown text={report.body} class="msg-text" />}
-            </>
-          ) : isTaskKind ? (
-            // The orchestration: who got the job, which stage, how it stands —
-            // and, for a fanned-out round, the same for every sibling in the
-            // bubble below it.
-            <>
-              <DispatchBlock
-                msg={msg}
-                onOpenTask={onOpenTask}
-                onPreviewTask={onPreviewTask}
-                tasksById={tasksById}
-              />
-              {batch.map((b) => (
-                <DispatchBlock
-                  key={b.k}
-                  msg={b}
-                  onOpenTask={onOpenTask}
-                  onPreviewTask={onPreviewTask}
-                  tasksById={tasksById}
-                />
-              ))}
-            </>
-          ) : (
-            <>
-              {text && <Markdown text={text} class="msg-text" streaming={msg.streaming} />}
-              {isPlanKind && plan && <PlanCast plan={plan} />}
-            </>
-          )}
-
-          {/* The task card lives inside `DispatchBlock` — it is part of the
-                per-task block, so a round that handed out five jobs draws five
-                of them in this one bubble. */}
-
-          {/* The live ask path carries its approval state on the result, not
-              through a persisted turn ref — a parked tier-2 task must still
-              render its decision card in the same breath it parked in, and a
-              remembered answer must say so where the user can see it. */}
-          {/* One row per group member that has something to say: the round's
-              receipt can sit on any of the absorbed turns (see
-              `isBareDispatch`), and dropping the row because the head is empty
-              would swallow an approval or an advisory. `MetaRow` renders
-              nothing for a member with no meta, so the common case is one
-              empty fragment. */}
-          {group.map((m) => (
-            <MetaRow key={`meta-${m.k}`} msg={m} />
-          ))}
-
-          {/* — slot-hints: troubleshooting fold under a classified model error.
-              err_kind is also persisted on the turn, so a reloaded thread
-              shows the same fold the live stream drew. */}
-          {msg.kind === 'error' && msg.err_kind && (
-            <ErrHints kind={msg.err_kind} detail={msg.err_detail} />
-          )}
-          {msg.kind === 'error' && msg.code === 'model_config' && (
-            <a class="btn small" href="#/settings?tab=models">
-              {t('sessions.fixModel')}
-            </a>
-          )}
-
-          {/* — the live state, at the foot of the bubble: thinking, or what the
-                turn is doing right now. */}
-          {(hasThinking || hasTaskStatus) && (
-            <div class="bubble-slot-row slot-status" role="status" aria-live="polite" aria-atomic="true">
-              {hasThinking && (
-                <span class="status-line u-color-tert">
-                  <span class="spinner" aria-hidden="true" />
-                  {t('sessions.thinking')}
-                </span>
-              )}
-              {hasTaskStatus && (
-                <span class="status-line u-color-tert">
-                  <span class="spinner" aria-hidden="true" />
-                  {msg.status}
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* The reply is copied as the Markdown it was written in, the way
-            `/copy` does in the TUI — the rendered text would lose its
-            structure the moment it is pasted anywhere. It stays away while
-            the turn is still streaming: half an answer is not the message. */}
-        {msg.text && !msg.streaming && (
-          <div class="msg-foot">
-            <MessageCopyButton text={msg.delivery ? `${msg.text.split('\n', 1)[0]}\n\n${msg.delivery}` : msg.text} markdown={msg.kind !== 'error'} />
-            {/* A task's own card already carries the employee in its cast
-                line; this is the plain-answer case. */}
-            {!isTaskKind && speaker.who === 'panda' && replyModel && (
-              <span class="slot-model">{replyModel}</span>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-/** One dispatched task inside a reply: its dispatch line, the cast row naming
- *  the employee and the stage, and the card that opens it.
- *
- *  It is a block rather than part of `ChatBubble` because a single reply can
- *  carry several: a round that fanned out is filed as one turn per task and
- *  drawn as one bubble, so the bubble holds one of these per job. The task row
- *  is read here, per block — the only place that knows who is actually running
- *  it. */
-function DispatchBlock(props: {
-  msg: ChatMsg
-  onOpenTask(id: string): void
-  /** Open a finished task's page in the dock's browser panel. */
-  onPreviewTask?: (task: Task) => void
-  tasksById?: Map<string, Task>
-}) {
-  const { msg, onOpenTask, onPreviewTask, tasksById } = props
-  const [chainOpen, setChainOpen] = useState(false)
-  // The thread's list is polled once per frame already; reading this block's
-  // row from it keeps a five-card round from issuing five extra requests per
-  // frame. The own read is only for a task outside the list.
-  const listed = msg.ref ? tasksById?.get(msg.ref) : undefined
-  const fetched = useTaskBrief(listed ? undefined : msg.kind === 'task' ? msg.ref : undefined)
-  const task = listed ?? fetched
-  const text = stripRefId(msg.text ?? '', msg.ref)
-  return (
-    <div class="msg-batch-item" data-task-id={msg.ref}>
-      {text && <Markdown text={text} class="msg-text" />}
-      {task && <TaskCast task={task} />}
-      {msg.ref && (
-        <div class="task-card u-flex-1 u-min-w-0">
-          {/* A task that needs consent must be decidable where the user is
-              looking. Without this the conversation only said "review" and the
-              decision lived on another page — so it waited, or worse, was never
-              seen. Nothing else may answer it on the user's behalf: this is the
-              web twin of the TUI's approval card. */}
-          <TaskApproval taskId={msg.ref} hint={task} />
-          {msg.result?.report && <Markdown text={msg.result.report} class="task-report" />}
-          {msg.result?.stdout && <TaskOutput text={msg.result.stdout} />}
-          {/* One quiet row of controls: open the chain, talk to the employee,
-              jump into the task. As three stacked children of the card's column
-              they read as a form — a chip-shaped toggle above a full-width
-              centred button — instead of what they are, three links about the
-              same job. */}
-          <div class="task-card-actions">
-            <button class="chain-toggle" onClick={() => setChainOpen((v) => !v)}>
-              {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
-            </button>
-            <TaskQuickSend taskId={msg.ref} hint={task} />
-            <a
-              class="task-card-open"
-              href={`#/task/${encodeURIComponent(msg.ref)}`}
-              onClick={(e) => inPlaceTaskClick(e, msg.ref!, onOpenTask)}
-            >
-              {t('sessions.viewTask')} →
-            </a>
-          </div>
-          {chainOpen && <TaskChain taskId={msg.ref} />}
-          {/* The task's output, where the result is read: the file list, the
-              downloads, and the page view on the preview origin. It hangs off
-              the card rather than the task page because the moment a user
-              wants to look at what a task produced is the moment it reports. */}
-          {task?.plan_meta?.output_artifact && (
-            <ArtifactSection task={task} onPreview={onPreviewTask} />
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** A chat row. The employee's own progress row does *not* hang off it any
- *  more: a still-running job belongs at the foot of the thread, not under the
- *  bubble that dispatched it (see `liveTaskIds` / `TaskProgress`). */
-function ChatTurn(props: {
-  msg: ChatMsg
-  onOpenTask(id: string): void
-  /** Open a finished task's page in the dock's browser panel. */
-  onPreviewTask?: (task: Task) => void
-  elapsedMs?: number
-  liveFrom?: number
-  batch?: ChatMsg[]
-  /** The session's own rows for this thread's tasks, keyed by id. It is
-   *  fresher than a fetch and costs no request; a block whose task is not in
-   *  the list (one delegated elsewhere, or the first paint before the list
-   *  lands) falls back to its own read. */
-  tasksById?: Map<string, Task>
-  fallbackRef?: string
-}) {
-  const { msg } = props
-  const plan = usePlanBrief(msg.kind === 'plan' ? msg.ref : undefined)
-  return <ChatBubble {...props} plan={plan} />
-}
-
-/** Whether the thread's round still has work in flight.
- *
- *  The roll-up under the transcript says "本轮工作已全部完成", so it may only
- *  appear once every task this thread dispatched has settled. The turns alone
- *  cannot answer that — the finalizer files one report per task as each one
- *  lands, so the newest turn is a finished employee while its colleagues are
- *  still running (see `roundStillOpen`). Nor is every `review` row settled: a
- *  row parked before execution — 待审批, "尚未执行——批准后将继续执行" — has not
- *  done its work yet, so it holds the round open the same way a running row
- *  does. The task board knows both, so it is read here and re-read on every
- *  change frame. Only a thread that dispatched something pays for the read.
- *
- *  The same list answers the other half of the question — which employees are
- *  working right now, see `liveTaskIds`. It is one read, not two. */
-function useSessionTasks(sessionId: string | null, enabled: boolean): Task[] | null {
-  const change = useChangeSignal()
-  const { data } = useAsync<Task[] | null>(
-    () =>
-      enabled && sessionId
-        ? api.tasks({ session: sessionId, brief: true }).catch(() => null)
-        : Promise.resolve(null),
-    [sessionId, enabled],
-    change,
-  )
-  return data
-}
-
-/** The panda's closing line for a round that just finished.
- *
- *  The employees have each said what they did; what a round still owes the
- *  reader is the roll-up — it is over, how the batch split, this many people
- *  worked on it, here is where the work lives. It is derived from the turns
- *  already in the thread (see `trailingRunSummary`), not a stored message:
- *  nothing new is written to the transcript, so the model's own history is
- *  untouched. */
-function RunSummaryRow({ run, onOpenTask }: { run: RunSummary; onOpenTask(id: string): void }) {
-  // A round is a batch. Reading its verdict off the last report alone said
-  // "已失败" over two employees who finished, so the split is counted here and
-  // the headline names it: all home is "done", some home is "finished — 2 done,
-  // 1 failed", nothing home keeps the single-state line.
-  const total = run.outcomes.length
-  const ok = run.outcomes.filter((s) => s === 'done').length
-  const mixed = ok > 0 && ok < total
-  const line = mixed
-    ? t('sessions.runSummary.partial', {
-        parts: roundTally(run.outcomes)
-          .map(({ state, n }) => t(`sessions.runSummary.tally.${state}`, { n: String(n) }))
-          .join(t('sessions.runSummary.sep')),
-      })
-    : ok === total && total > 0
-      ? t('sessions.runSummary.done')
-      : t('sessions.runSummary.ended', { state: t(`state.${run.state}`) })
-  // The dot carries the batch's tone, not the last employee's: one failure
-  // among successes is amber, and only a round where nobody finished is red.
-  const tone = mixed ? 'warn' : ok === total && total > 0 ? 'ok' : stateTone(run.state)
-  // Three jobs off one dispatch template share a head ("连通性测试：调用
-  // agent:") that the reader does not need three times.
-  const prefix = sharedTitlePrefix(run.titles)
-  const titles = prefix ? run.titles.map((title) => title.slice(prefix.length).trim()) : run.titles
-  const ref = run.ref
-  const isTaskRef = run.refKind === 'task'
-  const isPlanRef = run.refKind === 'plan'
-  return (
-    <div class="msg panda is-summary">
-      <ChatAvatar speaker={{ who: 'panda', agent: '', role: 'summary' }} />
-      <div class="msg-body">
-        <div class="msg-head">
-          <span class="msg-name">{t('sessions.speakerPanda')}</span>
-          <span class="msg-role is-summary">{t('sessions.role.summary')}</span>
-        </div>
-        <div class="msg-bubble is-summary">
-          <p class="msg-summary-line">
-            <span class={`msg-cast-state is-${tone}`}>
-              <span class="msg-report-dot" aria-hidden="true" />
-              {line}
-            </span>
-            {/* The mixed headline already counts everyone; repeating the
-                headcount under it would be the same number twice. */}
-            {!mixed && run.agents.length > 0 && (
-              <span class="msg-summary-people">
-                {t('sessions.runSummary.people', { n: String(run.agents.length) })}
-              </span>
-            )}
-          </p>
-          {/* A single job is already named by the row above; the recap only
-              earns its line when the round covered more than one. */}
-          {titles.length > 1 && <p class="msg-summary-what">{titles.join(' · ')}</p>}
-          {ref && isTaskRef && (
-            <a
-              class="msg-summary-link"
-              href={`#/task/${encodeURIComponent(ref)}`}
-              onClick={(e) => inPlaceTaskClick(e, ref, onOpenTask)}
-            >
-              {t('sessions.viewTask')} →
-            </a>
-          )}
-          {ref && isPlanRef && (
-            <a class="msg-summary-link" href="#/control?tab=plans">
-              {t('sessions.castPlan')} →
-            </a>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** parseClarifySpec decodes the server-computed question_spec field (a
- *  ClarifySpec JSON string). Malformed input reads as no option set — the
- *  free-text question, when present, is still answerable. */
-function parseClarifySpec(raw?: string): ClarifySpec | null {
-  if (!raw) return null
-  try {
-    const spec = JSON.parse(raw) as ClarifySpec
-    return spec && Array.isArray(spec.questions) && spec.questions.length > 0 ? spec : null
-  } catch {
-    return null
-  }
-}
-
-/** Inline approval gate for a task referenced by a chat bubble.
- *
- *  It re-reads the task on every change signal, so a task that parks in review
- *  after the turn already finished (a queued run, a peer's delegation landing
- *  back here) still surfaces its decision in the conversation rather than only
- *  on the board. Approve/Reject call the same endpoints the queue and detail
- *  views use; needs_changed_input disables Approve, because consent alone
- *  cannot continue that task and a button that silently does nothing is worse
- *  than an honest disabled one. */
-function TaskApproval({
-  taskId,
-  preselect,
-  hint,
-}: {
-  taskId: string
-  preselect?: ApprovalScope
-  /** The bubble's own copy of the row, when it has one — the thread's task
-   *  list is already polled once per frame, so a second fetch per bubble is
-   *  load with no fresher answer. */
-  hint?: Task | null
-}) {
-  const change = useChangeSignal()
-  const { data: fetched } = useAsync<Task | null>(
-    () => (hint ? Promise.resolve(null) : api.taskBrief(taskId).catch(() => null)),
-    [taskId, Boolean(hint)],
-    change,
-  )
-  const task = hint ?? fetched
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  // Free-text answer for an agent that asked in prose (no option set).
-  const [answerText, setAnswerText] = useState('')
-  // The remember scope: where this answer lands for the gates that come after.
-  // The server names its default (the project's configured scope) so the card
-  // preselects it; the user can still pick differently per decision.
-  const [scope, setScope] = useState<ApprovalScope>(preselect ?? 'once')
-  useEffect(() => {
-    if (preselect) setScope(preselect)
-  }, [preselect])
-  // A stalled task emits no SSE event — nothing changes — so the badge can
-  // only appear on a local clock tick.
-  const [, setStallTick] = useState(0)
-  useVisibleInterval(() => setStallTick((v) => v + 1), 30_000)
-
-  if (!task) return null
-  if (task.state !== 'review') {
-    // The other half of "no silent stall": a task the conversation spawned
-    // that stopped moving without reaching a decision shows it right in the
-    // thread, not only on the board.
-    if (!isTaskStalled(task)) return null
-    return (
-      <div class="task-approval" data-testid="chat-task-stalled">
-        <span class="badge yellow">{t('task.stalled')}</span>
-        <span class="dim">{t('task.stalledHint')}</span>
-      </div>
-    )
-  }
-
-  async function act(fn: () => Promise<unknown>) {
-    setBusy(true)
-    setError('')
-    try {
-      await fn()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  // A task the agent parked on a question is not waiting for a yes/no: it is
-  // waiting for an answer. Show the same choice card the running turn uses,
-  // and resume through the approval endpoint with the answer attached.
-  const parkedSpec = parseClarifySpec(task.question_spec)
-  const parkedQuestionText = (task.question ?? '').trim()
-  if (task.approval_disposition === 'resume_execution' && (parkedQuestionText || parkedSpec)) {
-    return (
-      <div class="task-approval is-clarify" data-testid="chat-task-question">
-        <div class="clarify-head">
-          <span class="badge yellow">{t('state.review')}</span>
-          <span class="dim review-kind">{t('detail.reviewKind.resume_execution')}</span>
-        </div>
-        {parkedSpec ? (
-          <ClarifyCard
-            spec={parkedSpec}
-            onSubmit={(answers) => void act(() => api.approveWithAnswer(task.id, { answers }))}
-          />
-        ) : (
-          <form
-            class="clarify-other"
-            onSubmit={(e) => {
-              e.preventDefault()
-              const text = answerText.trim()
-              if (!text) return
-              void act(() => api.approveWithAnswer(task.id, { answer: text }))
-            }}
-          >
-            <div class="clarify-question">{parkedQuestionText}</div>
-            <input
-              value={answerText}
-              onInput={(e) => setAnswerText(e.currentTarget.value)}
-              placeholder={t('clarify.otherPlaceholder')}
-              disabled={busy}
-            />
-            <button type="submit" class="btn primary small" disabled={busy || !answerText.trim()}>
-              {t('clarify.submit')}
-            </button>
-          </form>
-        )}
-        <div class="clarify-actions">
-          <button
-            class="btn danger small"
-            disabled={busy}
-            onClick={() => void act(() => api.reject(task.id, t('detail.rejectedViaWeb'), scope))}
-          >
-            {t('detail.reject')}
-          </button>
-        </div>
-        {error && <p class="gate-error">{error}</p>}
-      </div>
-    )
-  }
-  // needs_changed_input is the one disposition where consent is not the
-  // missing piece: the task failed in a way that only a different prompt can
-  // fix (a deterministic crash, a spent token budget, an overflowed context),
-  // so Approve is disabled — and a disabled button that says nothing is the
-  // "it won't let me approve" report this card kept generating. The line below
-  // the buttons says why, and what the two working exits are.
-  const blocked = task.approval_disposition === 'needs_changed_input'
-  // ...and one of those failures is not about the prompt at all: the server
-  // classified a park whose reason is the agent's own model configuration
-  // (the endpoint refused its model id or login). Rewording the request
-  // cannot fix that, so the card names the configuration instead of asking
-  // for new input.
-  const modelConfig = blocked && task.review_cause === 'model_config'
-
-  return (
-    <div class="task-approval" data-testid="chat-task-approval">
-      <span class="badge yellow">{t('state.review')}</span>
-      {task.approval_disposition && (
-        <span class="dim review-kind">
-          {modelConfig
-            ? t('detail.reviewCauseModelConfig')
-            : t(`detail.reviewKind.${task.approval_disposition}`)}
-        </span>
-      )}
-      <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
-      <button
-        class="btn primary small"
-        disabled={busy || blocked}
-        onClick={() => void act(() => api.approve(task.id, scope))}
-      >
-        {t('detail.approve')}
-      </button>
-      <button
-        class="btn danger small"
-        disabled={busy}
-        onClick={() => void act(() => api.reject(task.id, t('detail.rejectedViaWeb'), scope))}
-      >
-        {t('detail.reject')}
-      </button>
-      {blocked && (
-        <p class="gate-hint">
-          {modelConfig ? t('detail.approveBlockedModelConfig') : t('detail.approveBlocked')}
-        </p>
-      )}
-      {error && <p class="gate-error">{error}</p>}
-    </div>
-  )
-}
-
-/** TaskQuickSend delivers a message into the task straight from its card in
- *  the thread — the same two modes the detail view and TUI expose: queue
- *  (the agent reads it at its next round) or inject (a steer that leads the
- *  next round, aborting the in-flight one when this console runs the task).
- *  Renders nothing once the task is terminal: a finished task refuses
- *  messages, and a button that can only fail is worse than none. */
-function TaskQuickSend({ taskId, hint }: { taskId: string; hint?: Task | null }) {
-  const change = useChangeSignal()
-  const { data: fetched } = useAsync<Task | null>(
-    () => (hint ? Promise.resolve(null) : api.taskBrief(taskId).catch(() => null)),
-    [taskId, Boolean(hint)],
-    change,
-  )
-  const task = hint ?? fetched
-  const [open, setOpen] = useState(false)
-  const [text, setText] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  if (!task || ['done', 'failed', 'cancelled', 'expired'].includes(task.state)) return null
-
-  async function deliver(inject: boolean) {
-    const body = text.trim()
-    if (!body || busy) return
-    setBusy(true)
-    try {
-      const r = await api.sendTaskMessage(taskId, body, inject)
-      toast(
-        r.warning ||
-          (r.status === 'interrupted' ? t('detail.msgInjectedToast') : t('detail.msgQueuedToast')),
-        r.warning ? 'info' : 'success',
-      )
-      setText('')
-      setOpen(false)
-    } catch (e) {
-      toastError(e)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  if (!open) {
-    return (
-      <button class="btn small" onClick={() => setOpen(true)}>
-        {t('sessions.msgSend')}
-      </button>
-    )
-  }
-  return (
-    <div class="task-quick-send">
-      <input
-        class="input"
-        type="text"
-        placeholder={t('detail.msgPlaceholder')}
-        value={text}
-        onInput={(e) => setText((e.target as HTMLInputElement).value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) void deliver(false)
-          if (e.key === 'Escape') setOpen(false)
-        }}
-      />
-      <button class="btn small" disabled={busy || !text.trim()} onClick={() => deliver(false)}>
-        {t('detail.msgQueue')}
-      </button>
-      <button class="btn small primary" disabled={busy || !text.trim()} onClick={() => deliver(true)}>
-        {t('detail.msgInject')}
-      </button>
-    </div>
-  )
-}
-
-/** Agent result text under a task bubble — markdown like the reply lane,
- *  collapsed past a few lines so a long dump never pushes the chat down. */
-function TaskOutput({ text }: { text: string }) {
-  const [open, setOpen] = useState(false)
-  const long = text.length > 600
-  const shown = open || !long ? text : text.slice(0, 600) + '…'
-  return (
-    <div class="task-out-wrap">
-      <Markdown text={shown} class="task-out" />
-      {long && (
-        <button type="button" class="btn small" onClick={() => setOpen((v) => !v)}>
-          {open ? t('sessions.outputCollapse') : t('sessions.outputExpand')}
-        </button>
-      )}
-    </div>
-  )
-}
-
-/** The task's thinking chain: the task_events log replayed live — history
- *  comes from GET /api/tasks/{id}/logs, and the panel's SSE change signal
- *  triggers a refetch while the chain is open (design §5). */
-function TaskChain({ taskId }: { taskId: string }) {
-  const change = useChangeSignal()
-  const { events, error } = useTaskEvents(taskId, change)
-  if (error) return <p class="dim chain-empty">{t('common.error')} ({error})</p>
-  if (events.length === 0) return <p class="dim chain-empty">{t('sessions.chainEmpty')}</p>
-  return <EventTimeline events={events} className="task-chain-timeline" />
 }
 

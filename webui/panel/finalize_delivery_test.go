@@ -205,3 +205,90 @@ func TestTaskDeliveryBoundsRunesWithoutLosingResult(t *testing.T) {
 		t.Fatalf("empty delivery fabricated output: %q %v", got, clipped)
 	}
 }
+
+// TestFinalizerMeasuresTheRunNotTheQueue: the report's duration is the work,
+// not the wait. It used to be updated_at-created_at, which billed one task for
+// the sibling it queued behind — a route check that failed in 0.18s printed
+// "424s", and a task cancelled before it ever started printed "124s".
+func TestFinalizerMeasuresTheRunNotTheQueue(t *testing.T) {
+	f := newSummaryDeliveryFixture(t, false)
+	ctx := context.Background()
+
+	// Backdate the submission by 500s and pin the accept to 7s before the
+	// terminal write: the row now looks like a task that queued for ~8 minutes
+	// and ran for 7 seconds.
+	if _, err := f.db.ExecContext(ctx, `UPDATE tasks SET created_at = updated_at - 500 WHERE task_id = ?`, f.task.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.ExecContext(ctx, `UPDATE task_events SET ts = ? WHERE task_id = ? AND type = ?`,
+		f.task.UpdatedAt-7, f.task.TaskID, core.EvAccept); err != nil {
+		t.Fatal(err)
+	}
+
+	f.h.finalizeSessionSweep(ctx)
+
+	sess, err := sessions.NewStore(f.root).Get(f.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.Turns) != 1 {
+		t.Fatalf("turns = %d, want 1", len(sess.Turns))
+	}
+	if got := sess.Turns[0].DurationMS; got != 7000 {
+		t.Fatalf("duration = %dms, want 7000 (the run), not %d (queue wait)", got, 500000)
+	}
+}
+
+// A task that never left the queue has no execution window; inventing one
+// prints a stopwatch for work that never happened.
+func TestFinalizerLeavesTheDurationEmptyWhenNothingRan(t *testing.T) {
+	f := newSummaryDeliveryFixture(t, false)
+	ctx := context.Background()
+	if _, err := f.db.ExecContext(ctx, `DELETE FROM task_events WHERE task_id = ? AND type IN (?, ?)`,
+		f.task.TaskID, core.EvAccept, core.EvExecAgentStart); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.h.taskExecutionStart(ctx, f.task.TaskID); got != 0 {
+		t.Fatalf("execution start = %d, want 0", got)
+	}
+	f.h.finalizeSessionSweep(ctx)
+	sess, err := sessions.NewStore(f.root).Get(f.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.Turns) != 1 || sess.Turns[0].DurationMS != 0 {
+		t.Fatalf("turn = %+v, want no duration", sess.Turns)
+	}
+}
+
+// TestFinalizerFilesPandasVerdictWithTheReport: the turn carries the judge's
+// sentence both as the head of its replay digest and as Verdict for the
+// console, so the bubble can print the house's assessment above the agent's
+// own closing paragraph.
+func TestFinalizerFilesPandasVerdictWithTheReport(t *testing.T) {
+	f := newSummaryDeliveryFixture(t, false)
+	ctx := context.Background()
+	verdict := "已报告 agent 名称与工作目录，退出码 0，无文件改动。"
+	if err := f.h.store.RecordEvent(ctx, f.task.TaskID, core.EvSupervise, map[string]any{
+		"round": 1, "status": "done", "reason": verdict, "followup": "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	f.h.finalizeSessionSweep(ctx)
+
+	sess, err := sessions.NewStore(f.root).Get(f.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.Turns) != 1 {
+		t.Fatalf("turns = %d, want 1", len(sess.Turns))
+	}
+	turn := sess.Turns[0]
+	if turn.Verdict != verdict {
+		t.Fatalf("verdict = %q, want the judge's sentence", turn.Verdict)
+	}
+	if !strings.Contains(turn.Text, verdict) || !strings.Contains(turn.Text, "\n> completed") {
+		t.Fatalf("digest = %q, want the verdict then the quoted conclusion", turn.Text)
+	}
+}

@@ -1,0 +1,195 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Plans board ---- */
+
+.plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: 0;
+  max-width: none;
+}
+.plan-card {
+  padding: 0;
+  overflow: hidden;
+}
+.plan-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-5);
+  width: 100%;
+  padding: var(--sp-4) var(--sp-5);
+  text-align: left;
+}
+.plan-card-head:hover {
+  background: var(--bg-hover);
+}
+.plan-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.plan-goal {
+  font-weight: 550;
+  font-size: var(--text-md);
+}
+.plan-meta {
+  font-size: var(--text-sm);
+}
+.plan-stats {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 0;
+  flex-wrap: wrap;
+}
+.plan-progress {
+  grid-column: 1 / -1;
+  margin-top: 0;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.plan-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transition: width var(--dur-med) var(--ease);
+}
+.plan-stages {
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-3) var(--sp-5) var(--sp-5);
+  border-top: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+}
+.plan-graph-wrap { padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border-soft); min-width: 0; }
+.plan-graph-wrap > p { font-size: var(--text-sm); margin: 0 0 var(--sp-2); }
+.plan-graph-scroll { max-width: 100%; max-height: 560px; overflow: auto; border-radius: var(--radius-md); background: var(--bg-inset); }
+.plan-graph { position: relative; }
+.plan-graph > svg { position: absolute; inset: 0; pointer-events: none; }
+.plan-graph path { fill: none; stroke: var(--border); stroke-width: 2; }
+.plan-graph-node { position: absolute; width: 232px; height: 108px; padding: 10px; display: flex; flex-direction: column; gap: 6px; text-align: left; background: var(--bg-card, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.plan-graph-node:hover, .plan-graph-node:focus-visible { border-color: var(--accent); }
+.plan-graph-node > strong, .plan-graph-node > .mono { width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-graph-status { display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); }
+.plan-graph-node.state-running, .plan-graph-node.state-dispatched { border-color: var(--accent); }
+/* Each stage is a node on a vertical pipeline rail: a status-colored dot on
+   a hairline connector — the DAG reads top-to-bottom at a glance. */
+.plan-stage {
+  position: relative;
+  padding: var(--sp-3) 0 var(--sp-3) 26px;
+}
+.plan-stage::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: calc(var(--sp-3) + 7px);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  border: 2px solid var(--border-strong);
+  z-index: 1;
+}
+.plan-stage::after {
+  content: '';
+  position: absolute;
+  left: 10.5px;
+  top: calc(var(--sp-3) + 20px);
+  bottom: -1px;
+  width: 1.5px;
+  background: var(--border-soft);
+}
+.plan-stage:last-child::after {
+  display: none;
+}
+.plan-stage.state-done::before {
+  border-color: var(--semantic-good);
+  background: var(--semantic-good);
+}
+.plan-stage.state-running::before,
+.plan-stage.state-dispatched::before {
+  border-color: var(--accent-2);
+  background: var(--accent-2);
+  box-shadow: 0 0 0 3px var(--accent-2-soft);
+}
+.plan-stage.state-review::before {
+  border-color: var(--semantic-warn);
+  background: var(--semantic-warn);
+}
+.plan-stage.state-failed::before,
+.plan-stage.state-cancelled::before,
+.plan-stage.state-expired::before {
+  border-color: var(--semantic-danger);
+  background: var(--semantic-danger);
+}
+.plan-stage-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.stage-owner {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.plan-stage-head .btn {
+  margin-left: auto;
+}
+.plan-stage-detail {
+  display: flex;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  margin-top: 4px;
+  padding-left: 2px;
+}
+.plan-stage-err {
+  padding: var(--sp-3) var(--sp-5);
+}
+.empty-hint {
+  margin-top: var(--sp-6);
+}
+
+.plan-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  min-height: 180px;
+  padding: var(--sp-6);
+  color: var(--text-tertiary);
+  text-align: center;
+  background: var(--surface-alpha-xs);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.plan-empty p {
+  max-width: 48ch;
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 620px) {
+  .plan-card-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .plan-stats {
+    justify-content: flex-start;
+  }
+  .plan-stage-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+}

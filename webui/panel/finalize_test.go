@@ -123,12 +123,12 @@ func TestTaskSummaryLeadsWithWhoRanIt(t *testing.T) {
 		ResultJSON: `{"ok":true,"stdout":"完成。新建 pelican-bike.html。\n\n动画为纯 SMIL，无 JS。"}`,
 	}
 	want := "[done] @claude_code · 2D SVG 鹈鹕骑车网页\n动画为纯 SMIL，无 JS。"
-	if got := summaryText(done, "", "claude_code", "", "", ""); got != want {
+	if got := summaryText(done, "", "claude_code", "", "", "", ""); got != want {
 		t.Fatalf("summary = %q, want %q", got, want)
 	}
 
 	// A run with no attribution still names the work, just without a person.
-	if got := summaryText(done, "", "", "", "", ""); !strings.HasPrefix(got, "[done] 2D SVG 鹈鹕骑车网页\n") {
+	if got := summaryText(done, "", "", "", "", "", ""); !strings.HasPrefix(got, "[done] 2D SVG 鹈鹕骑车网页\n") {
 		t.Fatalf("unattributed summary = %q", got)
 	}
 }
@@ -144,14 +144,14 @@ func TestTaskSummarySaysWhoWasReplaced(t *testing.T) {
 		SpecJSON:   `{"user_locale":"zh-CN"}`,
 		ResultJSON: `{"ok":true,"stdout":"通过。"}`,
 	}
-	got := summaryText(task, "", "deepseek_harness", "claude_code", "", "")
+	got := summaryText(task, "", "deepseek_harness", "claude_code", "", "", "")
 	want := "[done] @deepseek_harness · 连通性测试：agent:claude_code（claude_code 未执行，由 deepseek_harness 替代）\n通过。"
 	if got != want {
 		t.Fatalf("summary = %q, want %q", got, want)
 	}
 
 	// The agent that answered is the one the plan picked: nothing to add.
-	if got := summaryText(task, "", "claude_code", "claude_code", "", ""); !strings.HasPrefix(got, "[done] @claude_code · 连通性测试：agent:claude_code\n") {
+	if got := summaryText(task, "", "claude_code", "claude_code", "", "", ""); !strings.HasPrefix(got, "[done] @claude_code · 连通性测试：agent:claude_code\n") {
 		t.Fatalf("pinned summary = %q", got)
 	}
 
@@ -159,14 +159,14 @@ func TestTaskSummarySaysWhoWasReplaced(t *testing.T) {
 	// alone tells the reader the reply is not the one they asked for but not
 	// whether to retry, reinstall or raise a turn cap.
 	why := "claude stopped at its turn cap after 30 turns without a final answer"
-	gotWhy := summaryText(task, "", "deepseek_harness", "claude_code", why, "")
+	gotWhy := summaryText(task, "", "deepseek_harness", "claude_code", why, "", "")
 	wantWhy := "[done] @deepseek_harness · 连通性测试：agent:claude_code（claude_code 未执行：" + why + "；由 deepseek_harness 替代）\n通过。"
 	if gotWhy != wantWhy {
 		t.Fatalf("summary with cause = %q, want %q", gotWhy, wantWhy)
 	}
 
 	// An unattributed run has no speaker to contradict, so no note either.
-	if got := summaryText(task, "", "", "claude_code", "", ""); !strings.HasPrefix(got, "[done] 连通性测试：agent:claude_code\n") {
+	if got := summaryText(task, "", "", "claude_code", "", "", ""); !strings.HasPrefix(got, "[done] 连通性测试：agent:claude_code\n") {
 		t.Fatalf("unattributed summary = %q", got)
 	}
 }
@@ -176,17 +176,17 @@ func TestTaskSummarySaysWhoWasReplaced(t *testing.T) {
 func TestTaskSummaryCarriesTheFailureReason(t *testing.T) {
 	failed := core.Task{State: core.StateFailed, Risk: "low", Title: "总结仓库"}
 	want := "[failed] @claude_code · 总结仓库\nlease expired"
-	if got := summaryText(failed, "lease expired", "claude_code", "", "", ""); got != want {
+	if got := summaryText(failed, "lease expired", "claude_code", "", "", "", ""); got != want {
 		t.Fatalf("summary = %q, want %q", got, want)
 	}
 
 	// Nothing anywhere: the orchestration line alone is still honest.
-	if got := summaryText(core.Task{State: core.StateFailed, Title: "总结仓库"}, "", "", "", "", ""); got != "[failed] 总结仓库" {
+	if got := summaryText(core.Task{State: core.StateFailed, Title: "总结仓库"}, "", "", "", "", "", ""); got != "[failed] 总结仓库" {
 		t.Fatalf("bare summary = %q", got)
 	}
 
 	// A finished task never shows a stale reason from an earlier attempt.
-	if got := summaryText(core.Task{State: core.StateDone, Title: "写个网页"}, "reason ignored", "", "", "", ""); got != "[done] 写个网页" {
+	if got := summaryText(core.Task{State: core.StateDone, Title: "写个网页"}, "reason ignored", "", "", "", "", ""); got != "[done] 写个网页" {
 		t.Fatalf("done summary = %q", got)
 	}
 }
@@ -352,7 +352,7 @@ func TestTaskSummaryCompactsScopeDrift(t *testing.T) {
 		"scope drift: 5 files changed outside the declared scope\n" +
 		"cmd/a.go, cmd/b.go, cmd/c.go …\n" +
 		"Open the task for the full list and approve or reject."
-	if got := summaryText(task, "", "claude_code", "", "", ""); got != want {
+	if got := summaryText(task, "", "claude_code", "", "", "", ""); got != want {
 		t.Fatalf("scope drift summary = %q, want %q", got, want)
 	}
 
@@ -364,7 +364,7 @@ func TestTaskSummaryCompactsScopeDrift(t *testing.T) {
 		SpecJSON:   `{"user_locale":"en"}`,
 		ResultJSON: `{"ok":true,"stdout":"scope drift: agent changed files outside declared scope: a.go, b.go"}`,
 	}
-	if got := summaryText(done, "", "claude_code", "", "", ""); !strings.HasPrefix(got, "[review] @claude_code · 做一个网站\n\nNeeds your attention") {
+	if got := summaryText(done, "", "claude_code", "", "", "", ""); !strings.HasPrefix(got, "[review] @claude_code · 做一个网站\n\nNeeds your attention") {
 		t.Fatalf("done-with-drift summary lost the warning: %q", got)
 	}
 
@@ -375,7 +375,7 @@ func TestTaskSummaryCompactsScopeDrift(t *testing.T) {
 		"scope drift: 2 files changed outside the declared scope\n" +
 		"a.go, b.go\n" +
 		"Approved — the drift was accepted and the task closed as done."
-	if got := summaryText(done, "", "claude_code", "", "", "approved"); got != accepted {
+	if got := summaryText(done, "", "claude_code", "", "", "approved", ""); got != accepted {
 		t.Fatalf("accepted drift summary = %q, want %q", got, accepted)
 	}
 
@@ -386,13 +386,13 @@ func TestTaskSummaryCompactsScopeDrift(t *testing.T) {
 		"scope drift: 2 files changed outside the declared scope\n" +
 		"a.go, b.go\n" +
 		"Rejected — the task closed without this work."
-	if got := summaryText(rejectedTask, "", "claude_code", "", "", "rejected"); got != rejected {
+	if got := summaryText(rejectedTask, "", "claude_code", "", "", "rejected", ""); got != rejected {
 		t.Fatalf("rejected drift summary = %q, want %q", got, rejected)
 	}
 
 	// A review park with nothing to quote still says what the reader owes it.
 	bare := core.Task{State: core.StateReview, Title: "等一下", SpecJSON: `{"user_locale":"en"}`}
-	if got, want := summaryText(bare, "", "", "", "", ""), "[review] 等一下\n\nNeeds your attention"; got != want {
+	if got, want := summaryText(bare, "", "", "", "", "", ""), "[review] 等一下\n\nNeeds your attention"; got != want {
 		t.Fatalf("bare review summary = %q, want %q", got, want)
 	}
 }
@@ -428,5 +428,50 @@ func TestReviewVerdictReadsTheNewestDecision(t *testing.T) {
 	}
 	if got := h.reviewVerdict(ctx, task.TaskID); got != "rejected" {
 		t.Fatalf("verdict after an empty-reason rejection = %q, want rejected", got)
+	}
+}
+
+// The report speaks in two voices: panda's verdict, then the employee's
+// closing paragraph quoted. With only the second one the bubble opened on the
+// agent's own "结论：成功", which a reader cannot tell apart from panda having
+// checked the work.
+func TestTaskSummaryLeadsWithPandasVerdict(t *testing.T) {
+	done := core.Task{
+		State:      core.StateDone,
+		Title:      "claude_code 联通测试",
+		ResultJSON: `{"ok":true,"stdout":"结论：成功。\n\n已执行 3 条只读命令。"}`,
+	}
+	judge := "已报告 agent 名称、节点与工作目录，退出码 0，无文件改动。"
+	got := summaryText(done, "", "claude_code", "", "", "", judge)
+	want := "[done] @claude_code · claude_code 联通测试\n" + judge + "\n\n> 已执行 3 条只读命令。"
+	if got != want {
+		t.Fatalf("summary = %q\nwant      %q", got, want)
+	}
+
+	// No conclusion to quote: the verdict stands alone rather than trailing a
+	// dangling blockquote marker.
+	bare := core.Task{State: core.StateDone, Title: "空跑"}
+	if got := summaryText(bare, "", "pi", "", "", "", judge); got != "[done] @pi · 空跑\n"+judge {
+		t.Fatalf("verdict-only summary = %q", got)
+	}
+
+	// The quoted paragraph is bounded; the full text lives in Delivery.
+	long := core.Task{State: core.StateDone, Title: "长报告",
+		ResultJSON: `{"ok":true,"stdout":"` + strings.Repeat("这一段是占位。", 400) + `"}`}
+	got = summaryText(long, "", "codex", "", "", "", judge)
+	if n := utf8.RuneCountInString(got); n > len([]rune(judge))+agentConclusionRunes+40 {
+		t.Fatalf("quoted conclusion not bounded: %d runes", n)
+	}
+	if !strings.Contains(got, "\n> ") || !utf8.ValidString(got) {
+		t.Fatalf("quoted conclusion malformed: %q", got)
+	}
+}
+
+// A failed row has no judge and no adapter answer: its own reason is the
+// report, and the verdict parameter must not resurrect an empty quote.
+func TestTaskSummaryWithoutVerdictKeepsTheOldShape(t *testing.T) {
+	failed := core.Task{State: core.StateFailed, Title: "总结仓库"}
+	if got := summaryText(failed, "lease expired", "", "", "", "", ""); got != "[failed] 总结仓库\nlease expired" {
+		t.Fatalf("failed summary = %q", got)
 	}
 }

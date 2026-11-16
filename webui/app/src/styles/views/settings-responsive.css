@@ -1,0 +1,63 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* Narrow sheets: keep the per-item menus inside the viewport. */
+@media (max-width: 720px) {
+  .settings-pane-body {
+    padding: 0 16px 24px;
+  }
+  .settings-pane-head {
+    padding: 14px 14px 14px 16px;
+  }
+  .settings-pane-footer {
+    padding: 10px 16px 12px;
+  }
+  .item-settings-menu.align-end {
+    width: min(280px, calc(100vw - 32px));
+  }
+}
+
+/* A row's three fields sit in two columns on wide sheets: the disclosure
+   stays short enough to read without scrolling the pane. Explanatory lines
+   span both columns, so the fields still read as one form. */
+.agent-settings-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+.agent-settings-fields > .item-settings-note,
+.agent-settings-fields > .execution-field:last-of-type {
+  grid-column: 1 / -1;
+}
+.agent-settings-fields > .execution-field {
+  margin: 0;
+}
+.agent-settings-fields .agent-settings-boundary {
+  margin: 2px 0 0;
+}
+@media (max-width: 720px) {
+  .agent-settings-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px 10px;
+  }
+  /* A narrow sheet caps the disclosure to the scrollport's height. Put each
+     label beside its input so all three fields fit without making the reader
+     scroll inside a menu; the menu can still scroll for longer translations. */
+  .agent-settings-fields > .execution-field {
+    display: grid;
+    grid-template-columns: minmax(0, 42%) minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+  }
+  .agent-settings-fields > .execution-field > span {
+    font-size: var(--text-xs);
+    line-height: 1.3;
+  }
+  .agent-settings-fields > .item-settings-note {
+    font-size: var(--text-xs);
+    line-height: 1.4;
+  }
+  .agent-settings-fields .agent-settings-boundary {
+    margin: 0;
+    padding-top: 7px;
+  }
+}

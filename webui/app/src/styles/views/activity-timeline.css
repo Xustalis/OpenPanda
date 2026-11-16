@@ -1,0 +1,501 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ==========================================================================
+   EventTimeline & ThoughtCard (Readable CoT)
+   ========================================================================== */
+
+.event-timeline-container {
+  margin: var(--sp-3) 0;
+}
+
+.timeline-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  position: relative;
+}
+
+.timeline-step-item {
+  display: flex;
+  gap: var(--sp-3);
+  position: relative;
+  padding-bottom: var(--sp-4);
+}
+
+.timeline-step-item:last-child {
+  padding-bottom: 0;
+}
+
+.timeline-step-item:before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 18px;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+}
+
+.timeline-step-item:last-child:before {
+  display: none;
+}
+
+.step-marker {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  border: 2px solid var(--border-strong);
+  flex-shrink: 0;
+  margin-top: 2px;
+  z-index: 1;
+  transition: border-color var(--dur-fast);
+}
+
+.timeline-step-item.type-reasoning .step-marker {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.timeline-step-item.type-task_complete .step-marker {
+  border-color: var(--accent);
+}
+
+.timeline-step-item.type-task_failed .step-marker {
+  border-color: var(--danger);
+}
+
+.step-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: 4px;
+}
+
+.step-time {
+  font-size: 0.75rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-tertiary);
+}
+
+.step-raw-type {
+  font-size: 0.72rem;
+  opacity: 0.7;
+}
+
+/* Agent transcript (event protocol v2): typed activity blocks, with
+   sub-agent rows nested under the tool call that spawned them. */
+
+.timeline-step-item.agent-child .step-marker {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+}
+
+.timeline-step-item.ev-thinking .step-marker {
+  border-color: var(--border);
+}
+
+.timeline-step-item.ev-tool_use .step-marker {
+  border-color: var(--accent);
+}
+
+.timeline-step-item.ev-tool_result.is-error .step-marker {
+  border-color: var(--danger);
+}
+
+.agent-sub-badge {
+  font-size: 0.68rem;
+}
+
+.agent-tool-call {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.agent-tool-name {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.agent-tool-arg {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.agent-text {
+  line-height: 1.55;
+}
+
+.agent-result {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg-raised);
+  border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.agent-result.is-error {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+
+/* The expander under a folded tool result sits in the same column as the
+   output, not stretched across it. */
+.result-expand {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+/* A tool result that lost bytes to a code-page mismatch keeps the lines that
+   survived and says how many it dropped. The note is a footnote to the block,
+   one grade quieter than the output it annotates — it explains a gap, it is
+   not a second error. */
+.output-note {
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+/* Inline picture in a transcript row: a bounded thumbnail that opens full
+   screen. The frame is the affordance — an unframed image reads as page
+   decoration rather than something to click. */
+.img-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 8px;
+  max-width: 100%;
+}
+
+.img-preview-btn {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  overflow: hidden;
+  line-height: 0;
+  cursor: zoom-in;
+}
+
+.img-preview-btn img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(100%, 420px);
+  max-height: 220px;
+  object-fit: contain;
+}
+
+.img-preview-btn:hover,
+.img-preview-btn:focus-visible {
+  border-color: var(--accent-border);
+}
+
+.img-preview-hint {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(12, 12, 14, 0.6);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.img-preview-btn:hover .img-preview-hint,
+.img-preview-btn:focus-visible .img-preview-hint {
+  opacity: 1;
+}
+
+.img-preview-name {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.7rem;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* Placeholder while the bytes travel: the footprint of a small thumbnail, so
+   the row does not jump when the picture lands. */
+.img-skel {
+  width: 168px;
+  height: 104px;
+  margin-top: 8px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--bg-inset), var(--bg-hover), var(--bg-inset));
+  background-size: 200% 100%;
+  animation: img-skel-shimmer 1.1s ease-in-out infinite;
+}
+
+@keyframes img-skel-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -20% 0; }
+}
+
+/* A path the panel cannot read (outside the roots, or the agent deleted it)
+   leaves one quiet line — never a broken-image icon. */
+.img-miss {
+  margin-top: 6px;
+  font-size: 0.78rem;
+}
+
+/* The larger copy a small frame shows while the pointer rests on it. Fixed and
+   outside the flow, so a transcript's scroller cannot clip it; pointer-events
+   stay off, because this is a preview and the click belongs to the thumbnail
+   underneath (see image-preview.tsx). */
+.img-hover {
+  position: fixed;
+  z-index: 1150;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+  pointer-events: none;
+}
+.img-hover img {
+  display: block;
+  width: auto;
+  height: auto;
+  /* A look, not a second message: the copy stays well under the lightbox's
+     full-screen size, so it annotates the transcript instead of covering it. */
+  max-width: min(440px, 62vw);
+  max-height: min(320px, 55vh);
+  border-radius: var(--radius-sm);
+}
+/* The name under the floating copy. The thumbnail itself has no caption, so
+   this is where a picture says which file it is. */
+.img-hover-name {
+  display: block;
+  margin-top: 5px;
+  max-width: min(440px, 62vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  color: var(--text-tertiary);
+}
+
+/* Full-screen view. Fixed rather than portalled — the same overlay convention
+   the confirm dialog and the todo sheet follow. */
+.img-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 20px 18px;
+  background: rgba(10, 10, 12, 0.86);
+  backdrop-filter: blur(3px);
+}
+
+.img-lightbox-img {
+  width: auto;
+  height: auto;
+  max-width: 94vw;
+  max-height: 82vh;
+  object-fit: contain;
+  border-radius: 4px;
+  /* Transparent by design: a white plate behind a transparent PNG breaks
+     the dark overlay and stays white when the console switches themes. */
+  background: transparent;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.34);
+}
+
+.img-lightbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 94vw;
+  color: #ececf0;
+}
+
+.img-lightbox-path {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  opacity: 0.78;
+  overflow-wrap: anywhere;
+}
+
+.img-lightbox-close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  cursor: pointer;
+}
+
+.img-lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.step-body {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-top: 4px;
+}
+
+.step-summary {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.step-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.step-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: 0.75rem;
+}
+
+.tag-key {
+  color: var(--text-tertiary);
+}
+
+.tag-val {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Collapsible ThoughtCard */
+.thought-card {
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  margin: 6px 0;
+  overflow: hidden;
+  transition: box-shadow var(--dur-fast);
+}
+
+.thought-card:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.thought-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg-raised);
+  transition: background var(--dur-fast);
+}
+
+.thought-card-header:hover {
+  background: var(--bg-hover);
+}
+
+.thought-card-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.thought-card-title {
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.thought-preview {
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 360px;
+}
+
+.thought-card-toggle {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.thought-card-body {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.raw-json-container {
+  margin-top: 6px;
+}
+
+.raw-json-btn {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.raw-json-btn:hover {
+  color: var(--text-secondary);
+}
+
+.raw-json-block {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  font-size: 0.72rem;
+  max-height: 160px;
+  overflow-y: auto;
+  margin-top: 4px;
+}

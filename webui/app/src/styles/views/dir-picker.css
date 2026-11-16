@@ -1,0 +1,222 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ==========================================================================
+   DirPicker & Directory Browser Modal
+   ========================================================================== */
+
+.dir-picker-wrap {
+  width: 100%;
+}
+
+.dir-picker-box {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  min-height: 38px;
+  transition: border-color var(--dur-fast) var(--ease-standard);
+}
+
+.dir-picker-box:focus-within {
+  border-color: var(--accent);
+}
+
+.dir-picker-box.disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.dir-picker-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.dir-picker-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.84rem;
+  color: var(--text-primary);
+}
+
+.dir-picker-clear {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 0.8rem;
+  border-radius: var(--radius-sm);
+}
+
+.dir-picker-clear:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.dir-picker-browse-btn {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+}
+
+.dir-browser-modal {
+  max-width: 680px;
+  width: 92vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-4);
+  gap: var(--sp-3);
+  box-shadow: var(--shadow-lg);
+}
+
+.dir-browser-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dir-breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.82rem;
+  max-height: 60px;
+  overflow-y: auto;
+}
+
+.dir-crumb-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.dir-crumb-sep {
+  color: var(--text-tertiary);
+  margin: 0 2px;
+}
+
+.dir-crumb-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.dir-crumb-btn:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dir-crumb-btn.active {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.dir-up-row {
+  padding-bottom: 2px;
+}
+
+.dir-entries-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 200px;
+  max-height: 340px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dir-entry-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.85rem;
+  transition: background var(--dur-fast) var(--ease-standard);
+  width: 100%;
+}
+
+.dir-entry-btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.dir-entry-btn.up {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.dir-icon {
+  font-size: 1rem;
+}
+
+.dir-entry-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-loading,
+.dir-empty,
+.dir-error {
+  padding: 24px;
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+.dir-error {
+  color: var(--danger);
+}
+
+.dir-browser-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+.dir-current-selected {
+  font-size: 0.82rem;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-current-selected code {
+  color: var(--accent);
+}
