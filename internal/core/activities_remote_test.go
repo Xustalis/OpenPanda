@@ -22,6 +22,13 @@ func TestRemoteActivityThreeNodeTerminalCatchup(t *testing.T) {
 	if err != nil || !result.OK {
 		t.Fatalf("submit: %+v, %v", result, err)
 	}
+	// Legacy event payloads must become explicit unavailable records rather
+	// than blocking the whole page and every later cursor forever.
+	for _, data := range []any{nil, 42, []string{"legacy"}, "legacy note"} {
+		if err := leaf.store.RecordEvent(ctx, task.TaskID, EvAgentEvent, data); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for i := range 70 {
 		if err := leaf.store.RecordEvent(ctx, task.TaskID, EvAgentEvent, map[string]any{
 			"ev": "tool_use", "name": "shell", "attempt_id": task.AttemptID,
@@ -39,7 +46,7 @@ func TestRemoteActivityThreeNodeTerminalCatchup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			n := 0
+			n, unavailable := 0, 0
 			for _, event := range events {
 				if event.Type != EvAgentEvent {
 					continue
@@ -48,6 +55,9 @@ func TestRemoteActivityThreeNodeTerminalCatchup(t *testing.T) {
 				_ = json.Unmarshal([]byte(event.DataJSON), &data)
 				if data["executor_id"] != leaf.nodeID || data["remote"] != true {
 					t.Fatalf("lost source on %s: %s", c.nodeID, event.DataJSON)
+				}
+				if data["ev"] == "activity_unavailable" {
+					unavailable++
 				}
 				if n == 0 {
 					id, _ := data["activity_id"].(string)
@@ -59,10 +69,13 @@ func TestRemoteActivityThreeNodeTerminalCatchup(t *testing.T) {
 				}
 				n++
 			}
-			if n == 70 {
+			if n == 74 {
+				if unavailable != 4 {
+					t.Fatalf("legacy records were not labeled unavailable: %d", unavailable)
+				}
 				return
 			}
-			if n > 70 {
+			if n > 74 {
 				t.Fatalf("duplicate activities on %s: %d", c.nodeID, n)
 			}
 			select {

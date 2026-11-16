@@ -54,7 +54,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Sichere gemeinsame Arbeitsverzeichnisse.** Sperr-Leases physischer Verzeichnisse berücksichtigen Aliase und Quell-Snapshots, lösen temporäre Sperren und stellen vor der Fortsetzung die ursprünglichen Elternsperren wieder her. Abbruch nach der Freigabe stoppt die Elternaufgabe; Abbruch vor der Quellauflösung bewahrt ihre Sperren. Diagnosen erklären verwaiste Ausführungen und Wiederherstellung.
 - **Windows-Dateien und Dienste.** Atomarer Dateiaustausch verträgt offene Leser, Sitzungen verwenden kompatible Freigabemodi und Dienstidentität, Laufzeitidentität und Pfadprüfungen stimmen überein. Das ARM64-Panelmanifest nennt die korrekte Architektur.
 - **Routing und begrenzte Befugnisse.** Ausweichrelais bei symmetrischem NAT behalten Identität und Diagnosen. Projektherkunft, aktuelle Geschäftsfreigaben und Eigentum an persönlichem Speicher werden bei Veröffentlichung, Worker-Ausführung und Delegation geprüft; die Scheduler-Neuinitialisierung funktioniert ohne Geschäftslaufzeit.
-- **Abnahme- und Anzeigeregressionen.** Native Ausführung kann vorgeschriebenes IMMEDIATE nicht mehr umgehen. Sitzungsberichte bewahren das Abschlussurteil, historische Ansichten vertragen alte Daten, unlesbare Ausgabe bleibt gekennzeichnet und Aufgabendetails blenden nur den doppelten Text des letzten Ergebnisses aus.
+- **Abnahme- und Anzeigeregressionen.** Native Ausführung kann vorgeschriebenes IMMEDIATE nicht mehr umgehen. Sitzungsberichte bewahren das Abschlussurteil, alte Daten blockieren weder das Nachholen entfernter Aktivitäten noch den Verlauf, unlesbare Ausgabe bleibt gekennzeichnet und Aufgabendetails blenden nur den doppelten Text des letzten Ergebnisses aus.
 
 ### Geändert
 

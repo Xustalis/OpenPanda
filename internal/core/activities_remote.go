@@ -91,8 +91,13 @@ func (c *Core) handleActivityFetch(ctx context.Context, env bus.Envelope) {
 			break
 		}
 		var object map[string]any
-		if json.Unmarshal([]byte(data), &object) != nil {
-			object = map[string]any{"ev": "activity_unavailable"}
+		if json.Unmarshal([]byte(data), &object) != nil || object == nil {
+			// A legacy null/scalar cannot be imported as structured activity.
+			// Replace its wire bytes too, or one old row rejects the entire
+			// page and prevents the cursor from reaching all later records.
+			object = map[string]any{"ev": "activity_unavailable", "original_bytes": len(data), "attempt_id": task.AttemptID}
+			dataBytes, _ := json.Marshal(object)
+			data = string(dataBytes)
 		}
 		executor, _ := object["executor_id"].(string)
 		if executor == "" {

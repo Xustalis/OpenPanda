@@ -60,7 +60,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Shared-workspace execution safety.** Physical workspace leases cover aliases and source snapshots, release temporary claims, and restore the parent's claims before execution resumes. Cancellation after yielding stops the parent; cancellation before source resolution preserves its existing locks. Dead-run diagnostics explain refusal and recovery.
 - **Windows file and service reliability.** Atomic replacement tolerates open readers, session reads use compatible sharing, service/runtime identity and platform path checks are aligned, and the ARM64 panel manifest uses the correct architecture.
 - **Reliable routing and bounded authority.** Symmetric-NAT fallback relays retain their identities and diagnostics. Project provenance, current business grants and personal-memory ownership remain enforced across publication, worker execution and delegation; scheduler reinitialization handles an absent business runtime.
-- **Acceptance and display regressions.** Native execution can no longer bypass a required IMMEDIATE coordination mode. Session reports preserve finalizer verdicts, historical timelines tolerate legacy payloads, undecodable output stays labeled, and task details suppress only the duplicated final result body.
+- **Acceptance and display regressions.** Native execution can no longer bypass a required IMMEDIATE coordination mode. Session reports preserve finalizer verdicts, legacy payloads no longer block remote history catch-up or break timelines, undecodable output stays labeled, and task details suppress only the duplicated final result body.
 
 ### Changed
 

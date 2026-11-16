@@ -54,7 +54,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Seguridad de directorios compartidos.** Las concesiones del directorio físico cubren alias e instantáneas, liberan bloqueos temporales y restauran los del padre antes de reanudarlo. Cancelar después de ceder bloqueos detiene al padre; hacerlo antes de resolver el origen conserva sus bloqueos. Los diagnósticos explican ejecuciones muertas y recuperación.
 - **Archivos y servicios de Windows.** La sustitución atómica admite lectores abiertos, las sesiones usan modos de lectura compartida compatibles y se alinean identidad del servicio, ejecución y rutas. El manifiesto ARM64 del panel declara la arquitectura correcta.
 - **Rutas y autoridad limitada.** Los relés alternativos para NAT simétrica conservan identidad y diagnósticos. Se verifican procedencia del proyecto, permisos empresariales vigentes y propiedad de memoria personal durante publicación, ejecución y delegación; el planificador admite reinicialización sin runtime empresarial.
-- **Regresiones de aceptación y visualización.** La ejecución nativa ya no puede omitir IMMEDIATE cuando es obligatorio. Los informes conservan el veredicto final, el historial acepta cargas antiguas, se indica la salida indescifrable y los detalles solo omiten el cuerpo duplicado del último resultado.
+- **Regresiones de aceptación y visualización.** La ejecución nativa ya no puede omitir IMMEDIATE cuando es obligatorio. Los informes conservan el veredicto final, las cargas antiguas ya no bloquean la recuperación remota ni rompen el historial, se indica la salida indescifrable y los detalles solo omiten el cuerpo duplicado del último resultado.
 
 ### Cambiado
 
