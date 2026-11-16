@@ -14,13 +14,14 @@ import (
 
 // skillJSON is the wire form of a skills.IndexEntry.
 type skillJSON struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Scope       string `json:"scope"`
-	Key         string `json:"key,omitempty"`
-	Status      string `json:"status"`
-	UseCount    int    `json:"use_count"`
-	Builtin     bool   `json:"builtin"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Scope       string             `json:"scope"`
+	Key         string             `json:"key,omitempty"`
+	Status      string             `json:"status"`
+	UseCount    int                `json:"use_count"`
+	Builtin     bool               `json:"builtin"`
+	Provenance  *skills.Provenance `json:"provenance,omitempty"`
 }
 
 // listSkills serves GET /api/skills — every skill with its approval status,
@@ -46,6 +47,7 @@ func (h *handler) listSkills(w http.ResponseWriter, r *http.Request) {
 			Status:      string(e.Status),
 			UseCount:    e.UseCount,
 			Builtin:     e.Builtin,
+			Provenance:  e.Provenance,
 		})
 	}
 	writeJSON(w, out)
@@ -133,17 +135,18 @@ func (h *handler) skillAction(approve bool) http.HandlerFunc {
 
 // hubSkillJSON is the wire form of a Skills Hub skill.
 type hubSkillJSON struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Scope       string   `json:"scope"`
-	Author      string   `json:"author,omitempty"`
-	Version     string   `json:"version,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	URL         string   `json:"url,omitempty"`
-	DocURL      string   `json:"doc_url,omitempty"`
-	Recommended bool     `json:"recommended"`
-	Alias       string   `json:"alias,omitempty"`
-	Installed   bool     `json:"installed"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Scope       string             `json:"scope"`
+	Author      string             `json:"author,omitempty"`
+	Version     string             `json:"version,omitempty"`
+	Tags        []string           `json:"tags,omitempty"`
+	URL         string             `json:"url,omitempty"`
+	DocURL      string             `json:"doc_url,omitempty"`
+	Recommended bool               `json:"recommended"`
+	Alias       string             `json:"alias,omitempty"`
+	Installed   bool               `json:"installed"`
+	Provenance  *skills.Provenance `json:"provenance,omitempty"`
 }
 
 // listHubSkills serves GET /api/skills/hub?q=... — browse and search available Skills Hub packages.
@@ -164,7 +167,9 @@ func (h *handler) listHubSkills(w http.ResponseWriter, r *http.Request) {
 	if h.skillStore != nil {
 		if localIndex, err := h.skillStore.Index(); err == nil {
 			for _, sk := range localIndex {
-				installedMap[sk.Name] = true
+				if sk.Scope == skills.ScopeGlobal {
+					installedMap[sk.Name] = true
+				}
 			}
 		}
 	}
@@ -183,7 +188,14 @@ func (h *handler) listHubSkills(w http.ResponseWriter, r *http.Request) {
 			Recommended: s.Recommended,
 			Alias:       s.Alias,
 			Installed:   installedMap[s.Name],
+			Provenance:  s.Provenance,
 		})
+	}
+	// Preserve the array response for existing clients; the console opts in to
+	// source metadata so offline fallback remains visible without losing skills.
+	if r.URL.Query().Get("meta") == "1" {
+		writeJSON(w, map[string]any{"skills": out, "source": idx.Source})
+		return
 	}
 	writeJSON(w, out)
 }

@@ -1,0 +1,146 @@
+[
+  {
+    "name": "frontend-design",
+    "description": "Design distinctive, accessible interfaces within the existing product design system",
+    "scope": "global",
+    "author": "Anthropic",
+    "version": "1780c5e5a552",
+    "tags": [
+      "ui",
+      "design",
+      "accessibility"
+    ],
+    "triggers": [
+      "interface",
+      "frontend",
+      "typography",
+      "界面",
+      "网页设计",
+      "视觉",
+      "响应式"
+    ],
+    "recommended": true,
+    "doc_url": "https://github.com/anthropics/skills/blob/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/frontend-design/SKILL.md",
+    "provenance": {
+      "source_url": "https://github.com/anthropics/skills/blob/1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064/skills/frontend-design/SKILL.md",
+      "revision": "1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064",
+      "license": "Apache-2.0",
+      "sha256": "d91970639e9f5c37682ac7ab60094d35f1c7c1f38d731bd56396563aee10c1d3"
+    },
+    "files": {
+      "LICENSE.txt": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+      "SKILL.md": "c3e314f27327834a3c44cf350cebead4982f1ae0afcfe64e8355e5f4de11f119",
+      "SOURCE.md": "1aad6196cc4fe5922dd25428dafb7aea9b22f09fd37e83d1007aa6a03fb1936c",
+      "upstream-SKILL.md": "d91970639e9f5c37682ac7ab60094d35f1c7c1f38d731bd56396563aee10c1d3"
+    }
+  },
+  {
+    "name": "systematic-debugging",
+    "description": "Investigate root causes, reproduce failures and verify focused fixes",
+    "scope": "global",
+    "author": "Jesse Vincent",
+    "version": "22f0b463e7a5",
+    "tags": [
+      "code",
+      "debugging",
+      "testing"
+    ],
+    "triggers": [
+      "bug",
+      "debug",
+      "failure",
+      "故障",
+      "调试",
+      "错误",
+      "修复"
+    ],
+    "recommended": true,
+    "doc_url": "https://github.com/obra/superpowers/blob/22f0b463e7a5e579904dd6211a520321035526f7/skills/systematic-debugging/SKILL.md",
+    "provenance": {
+      "source_url": "https://github.com/obra/superpowers/blob/22f0b463e7a5e579904dd6211a520321035526f7/skills/systematic-debugging/SKILL.md",
+      "revision": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "license": "MIT",
+      "sha256": "51c6435d98c83c42c96ba7c35725a0b2c376cd487fb1a4e6bd0ddbe7e33ef202"
+    },
+    "files": {
+      "LICENSE.txt": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400",
+      "SKILL.md": "947aede0ec4cee6572b890b490d97eb059ac3e114f1deaf81fd92fc884471b9e",
+      "SOURCE.md": "bf751f2f7b22cf28675f3eafd28d5e4fb366753fce338e41ac9fca65d8c62743",
+      "condition-based-waiting.md": "3444bc1af6ab6b8529295c984d2070a379b22b40d34b479af3bbb6f9c518e8dc",
+      "defense-in-depth.md": "1e175fb86fc357e58c6aebf5441e481e1b7868b4380c0456b63a17eefbd18ba7",
+      "root-cause-tracing.md": "148952ccac672d1eb9bfe5da97c37f87d68138c00ef672a37b3af620ea53c229",
+      "upstream-SKILL.md": "51c6435d98c83c42c96ba7c35725a0b2c376cd487fb1a4e6bd0ddbe7e33ef202"
+    }
+  },
+  {
+    "name": "verification-before-completion",
+    "description": "Verify actual results before reporting completion or passing checks",
+    "scope": "global",
+    "author": "Jesse Vincent",
+    "version": "22f0b463e7a5",
+    "tags": [
+      "code",
+      "verification"
+    ],
+    "triggers": [
+      "verification",
+      "completion",
+      "验证",
+      "验收",
+      "完成检查"
+    ],
+    "recommended": true,
+    "doc_url": "https://github.com/obra/superpowers/blob/22f0b463e7a5e579904dd6211a520321035526f7/skills/verification-before-completion/SKILL.md",
+    "provenance": {
+      "source_url": "https://github.com/obra/superpowers/blob/22f0b463e7a5e579904dd6211a520321035526f7/skills/verification-before-completion/SKILL.md",
+      "revision": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "license": "MIT",
+      "sha256": "2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3"
+    },
+    "files": {
+      "LICENSE.txt": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400",
+      "SKILL.md": "112fcd0a9cf6153570dba47c956e0f7bdc8f2fef4677dad3ecb2f6916004e1b1",
+      "SOURCE.md": "f5fc57dd37e1d594cabfbfaa68bdeca9b8ccfa4766b0e1ba524021fd98f01b34",
+      "upstream-SKILL.md": "2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3"
+    }
+  },
+  {
+    "name": "writing-guidelines",
+    "description": "Review and refine documentation, plain language and multilingual product copy",
+    "scope": "global",
+    "author": "Vercel Labs",
+    "version": "83e2316b034c",
+    "tags": [
+      "writing",
+      "language",
+      "documentation"
+    ],
+    "triggers": [
+      "writing",
+      "language",
+      "translation",
+      "documentation",
+      "写作",
+      "文案",
+      "翻译",
+      "术语",
+      "润色",
+      "语言"
+    ],
+    "recommended": true,
+    "doc_url": "https://github.com/vercel-labs/writing-guidelines/blob/83e2316b034cf572400513538e4e4da01c4cc742/command.md",
+    "provenance": {
+      "source_url": "https://github.com/vercel-labs/writing-guidelines/blob/83e2316b034cf572400513538e4e4da01c4cc742/command.md",
+      "revision": "83e2316b034cf572400513538e4e4da01c4cc742",
+      "license": "MIT",
+      "sha256": "fb638d7821bb4472e4492aedcfb51f2636c7d31d34ff9f01cca5bcdce9b1841f"
+    },
+    "files": {
+      "LICENSE.txt": "7ecf613390251c6a08d66982519db39f2ae7fc2e474c65630adea78e84dc4445",
+      "SKILL.md": "f6b7226a3ab3036f0dfbe79446c922d65885b49d8decbb07f5aa594f2f8e02ec",
+      "SOURCE.md": "00f204f015eca4d21a6dac4c8dc1251afa7496df9065599f853880ef3e556084",
+      "guidelines.md": "fb638d7821bb4472e4492aedcfb51f2636c7d31d34ff9f01cca5bcdce9b1841f",
+      "upstream-SKILL.md": "fb638d7821bb4472e4492aedcfb51f2636c7d31d34ff9f01cca5bcdce9b1841f"
+    }
+  }
+]

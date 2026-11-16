@@ -44,20 +44,27 @@ const (
 	StatusExpired Status = "expired" // stale; candidate for pruning
 )
 
-// Skill is one procedural memory entry: the YAML frontmatter fields plus a
-// Markdown body (the procedure itself). All fields are exported so callers (the
-// core, the generator) can construct and mutate skills directly.
+// Provenance identifies the pinned upstream document retained by a reviewed bundle.
+type Provenance struct {
+	SourceURL string `json:"source_url" yaml:"source_url"`
+	Revision  string `json:"revision" yaml:"revision"`
+	License   string `json:"license" yaml:"license"`
+	SHA256    string `json:"sha256" yaml:"sha256"`
+}
+
+// Skill is one procedural memory entry: metadata and its Markdown procedure.
 type Skill struct {
-	Name         string    `yaml:"name"`
-	Description  string    `yaml:"description"`
-	Scope        Scope     `yaml:"scope"`
-	Project      string    `yaml:"project,omitempty"`
-	Device       string    `yaml:"device,omitempty"`
-	Status       Status    `yaml:"status"`
-	UseCount     int       `yaml:"use_count"`
-	SuccessCount int       `yaml:"success_count"`
-	LastUsed     time.Time `yaml:"last_used,omitempty"`
-	Builtin      bool      `yaml:"builtin,omitempty"`
+	Name         string      `yaml:"name"`
+	Description  string      `yaml:"description"`
+	Scope        Scope       `yaml:"scope"`
+	Project      string      `yaml:"project,omitempty"`
+	Device       string      `yaml:"device,omitempty"`
+	Status       Status      `yaml:"status"`
+	UseCount     int         `yaml:"use_count"`
+	SuccessCount int         `yaml:"success_count"`
+	LastUsed     time.Time   `yaml:"last_used,omitempty"`
+	Builtin      bool        `yaml:"builtin,omitempty"`
+	Provenance   *Provenance `yaml:"provenance,omitempty"`
 	// Triggers are explicit retrieval keywords, bilingual where useful. They
 	// are scored far above incidental word overlap in name/description: a task
 	// titled "修复登录失败" must be able to reach an English-titled procedure

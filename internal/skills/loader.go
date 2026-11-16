@@ -36,6 +36,7 @@ type IndexEntry struct {
 	Status      Status
 	UseCount    int
 	Builtin     bool
+	Provenance  *Provenance
 	Triggers    []string
 	Always      bool
 	Score       int // filled in by Match/MatchScopes; zero straight from Index
@@ -52,6 +53,10 @@ type cachedIndexEntry struct {
 
 func cloneIndexEntry(e IndexEntry) IndexEntry {
 	e.Triggers = append([]string(nil), e.Triggers...)
+	if e.Provenance != nil {
+		copy := *e.Provenance
+		e.Provenance = &copy
+	}
 	return e
 }
 
@@ -92,13 +97,13 @@ func (s *Store) Index() ([]IndexEntry, error) {
 			return nil
 		}
 		triggers, always := sk.Triggers, sk.Always
-		builtin := sk.Builtin || IsBuiltinSkill(sk.Name)
+		builtin := sk.Builtin && IsBuiltinSkill(sk.Name)
 		if builtin && len(triggers) == 0 {
 			triggers, always = BuiltinTriggers(sk.Name)
 		}
 		e := IndexEntry{Name: sk.Name, Description: sk.Description, Scope: sk.Scope,
 			Key: sk.keyForScope(), Status: sk.Status, UseCount: sk.UseCount, Builtin: builtin,
-			Triggers: triggers, Always: always}
+			Triggers: triggers, Always: always, Provenance: sk.Provenance}
 		next[path] = cachedIndexEntry{size: info.Size(), modified: info.ModTime(), entry: cloneIndexEntry(e)}
 		out = append(out, e)
 		return nil

@@ -7,8 +7,60 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestHubFetchBoundaries(t *testing.T) {
+	for _, scenario := range []string{"oversized", "redirect"} {
+		t.Run(scenario, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if scenario == "redirect" {
+					http.Redirect(w, r, "https://example.com/index.json", http.StatusFound)
+					return
+				}
+				// A complete JSON document followed by whitespace must still be bounded.
+				_ = json.NewEncoder(w).Encode(HubIndex{Name: "untrusted"})
+				_, _ = w.Write([]byte(strings.Repeat(" ", maxDownloadBytes)))
+			}))
+			defer ts.Close()
+			idx, err := FetchHubIndex(context.Background(), ts.URL)
+			if err != nil || !strings.Contains(idx.Name, "Fallback") {
+				t.Fatalf("expected bounded guarded fallback, got %#v, %v", idx, err)
+			}
+		})
+	}
+	idx, err := FetchHubIndex(context.Background(), "http://192.168.1.1/index.json")
+	if err != nil || !strings.Contains(idx.Name, "Fallback") {
+		t.Fatalf("expected blocked insecure remote catalog, got %#v, %v", idx, err)
+	}
+}
+
+func TestHubCannotShadowCuratedIdentity(t *testing.T) {
+	remote := HubIndex{Skills: []HubSkill{
+		{Name: "GIT-WORKFLOW", Content: "untrusted"},
+		{Name: "counterfeit", Alias: "GIT", Content: "untrusted"},
+		{Name: "git", Content: "untrusted"},
+		{Name: "community-tool", Alias: "community"},
+		{Name: "COMMUNITY-TOOL"},
+	}}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(remote)
+	}))
+	defer ts.Close()
+	idx, err := FetchHubIndex(context.Background(), ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.Skills) != len(CuratedSkills)+1 {
+		t.Fatalf("expected only one community addition, got %d entries", len(idx.Skills))
+	}
+	for _, sk := range idx.Skills {
+		if sk.Content == "untrusted" {
+			t.Fatalf("untrusted identity survived: %s", sk.Name)
+		}
+	}
+}
 
 func TestFetchHubIndexFallback(t *testing.T) {
 	// Empty URL should fall back to curated skills
