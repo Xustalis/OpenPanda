@@ -495,11 +495,20 @@ and stripped/tampered/re-keyed signatures are refused outright;
   Per-node key distribution/admission remains unimplemented.
 
 **Missing OS sandbox backends block execution.** Both `standard` and `strict`
-require an available backend and refuse task subprocess launches without it.
-Only `off` permits execution with environment filtering and cwd but no OS
-isolation. A native Windows isolation backend remains unimplemented, so these
-modes block execution on Windows. Settings, the TUI and doctor report the
-blocking condition; this change does not add Windows filesystem isolation.
+require an available backend and refuse task launches if it is missing or the
+policy cannot be established safely. Only `off` permits environment filtering
+and cwd without OS isolation. Windows 10+ now has a native AppContainer backend
+with a fresh `WRITE_RESTRICTED` token/SID for each run's write roots; public
+AppContainer write ACLs do not bypass that boundary. Not every Windows runtime
+is compatible: Python 3.14 system-crypto device access was refused in testing;
+DLL initialization failures are diagnosed without unconfined retries.
+`strict` also removes this
+package's read grants at denied-read roots and protects DACL inheritance;
+public read permissions, complex ACEs or nested reparse points that cannot be
+narrowed safely cause refusal without changing other applications' shared access.
+Settings, the TUI and doctor report unavailable backends. See
+[Windows sandbox compatibility](windows-sandbox.en.md) for toolchain read grants,
+hardlinks, loopback, pinned paths and exit recovery.
 
 **Cross-node hello replay is closed, except on the legacy path.** A captured
 hello cannot be replayed at a different node: a hello can bind its receiver

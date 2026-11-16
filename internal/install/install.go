@@ -617,7 +617,7 @@ func within(child, parent string) bool {
 		return false
 	}
 	rel, err := filepath.Rel(parent, child)
-	return err == nil && rel != "." && !strings.HasPrefix(rel, "..")
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // resolvesInto reports whether path itself, or whatever it symlinks to, lives
@@ -664,8 +664,22 @@ func tern(cond bool, a, b string) string {
 // normal uninstall passes the delete-kind targets (data/config), a --purge
 // run also passes the user-asset targets that are about to die. The binary
 // and PATH entries are never archived; files that vanished between Scan and
-// execution are skipped silently. Returns the number of files archived.
+// execution are skipped silently. The output archive itself is excluded when
+// it lives inside an input directory. Returns the number of files archived.
 func BackupZip(dest string, targets []Target) (int, error) {
+	// Refuse before OpenFile can truncate source state, including a destination
+	// that reaches an explicit file target through a symlink or hard link.
+	destPath := resolvedBackupPath(dest)
+	destInfo, _ := os.Stat(dest)
+	for _, t := range targets {
+		if !t.Exists || t.Kind == KindBinary || t.Kind == KindPath {
+			continue
+		}
+		info, _ := os.Stat(t.Path)
+		if samePath(destPath, resolvedBackupPath(t.Path)) || (destInfo != nil && info != nil && os.SameFile(destInfo, info)) {
+			return 0, fmt.Errorf("backup: destination %s would overwrite input %s", dest, t.Path)
+		}
+	}
 	// 0600: the archive holds config.yaml (mesh secret, panel token,
 	// provider keys), the database (node private keys) and memory files.
 	// os.Create's 0666&umask left all of it world-readable in $HOME.
@@ -674,6 +688,10 @@ func BackupZip(dest string, targets []Target) (int, error) {
 		return 0, fmt.Errorf("backup: create %s: %w", dest, err)
 	}
 	defer f.Close()
+	outputInfo, err := f.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("backup: stat %s: %w", dest, err)
+	}
 	zw := zip.NewWriter(f)
 	count := 0
 	var firstErr error
@@ -697,6 +715,13 @@ func BackupZip(dest string, targets []Target) (int, error) {
 			// an uninstall backup carry a dozen stale copies of the same file.
 			if strings.Contains(d.Name(), config.ConfigSnapshotMark) {
 				return nil
+			}
+			info, err := os.Stat(p)
+			if err != nil {
+				return fmt.Errorf("stat %s: %w", p, err)
+			}
+			if os.SameFile(outputInfo, info) {
+				return nil // the destination or an alias of it is not input state
 			}
 			rel, err := filepath.Rel(t.Path, p)
 			if err != nil {
@@ -728,6 +753,23 @@ func BackupZip(dest string, targets []Target) (int, error) {
 		return count, fmt.Errorf("backup: %w", firstErr)
 	}
 	return count, nil
+}
+
+// resolvedBackupPath resolves an output that may not exist yet through its
+// existing parent directory. This lets containment checks see a destination
+// reached through a symlink as well as its lexical spelling.
+func resolvedBackupPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	path = cleanAbs(path)
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
+	}
+	if real, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		return filepath.Join(real, filepath.Base(path))
+	}
+	return path
 }
 
 // ---- deletion ----
@@ -810,6 +852,24 @@ func ExecuteUninstall(targets []Target, opt UninstallOptions) UninstallOutcome {
 	}
 
 	if opt.BackupPath != "" {
+		if !opt.BackupOnly {
+			// An archive inside a tree we are about to remove is no recovery
+			// copy at all. Reject it before writing or deleting anything.
+			deletions := append([]Target(nil), purgeList...)
+			for _, t := range targets {
+				if t.Delete && t.Kind != KindPath {
+					deletions = append(deletions, t)
+				}
+			}
+			dest := resolvedBackupPath(opt.BackupPath)
+			for _, t := range deletions {
+				path := resolvedBackupPath(t.Path)
+				if samePath(dest, path) || within(dest, path) {
+					out.BackupErr = fmt.Errorf("backup: destination %s would be removed with %s", opt.BackupPath, t.Path)
+					return out
+				}
+			}
+		}
 		var archive []Target
 		for _, t := range targets {
 			if t.Exists && t.Delete && (t.Kind == KindData || t.Kind == KindConfig) {

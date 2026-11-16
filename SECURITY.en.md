@@ -34,10 +34,19 @@ network.**
   fingerprints manually.
 - **OS task sandbox.** `sandbox.mode: off` filters the environment and sets a
   working directory without OS isolation. Both `standard` and `strict` require
-  an available backend (seatbelt on macOS, bubblewrap on Linux). Without one,
-  task subprocess launches are refused; there is no automatic downgrade.
-  A native Windows backend is not implemented, so these modes block execution
-  on Windows. Explicitly selecting `off` permits execution without OS isolation.
+  an available backend (seatbelt on macOS, bubblewrap on Linux, native
+  AppContainer on Windows 10+). Missing backends or policies that cannot be
+  established safely refuse task launches; there is no automatic downgrade.
+  Each Windows run uses a fresh `WRITE_RESTRICTED` token and SID to limit writes
+  to the task directory and explicitly allowed paths. Public AppContainer write
+  ACLs do not make files outside those roots writable. `strict` also removes
+  this package's read grant and protects DACL inheritance at denied-read roots;
+  public AppContainer/capability read grants, unsupported ACLs or nested reparse
+  points cause refusal rather than revoking other applications' shared access.
+  See [Windows sandbox compatibility](docs/windows-sandbox.en.md) for temporary
+  grants, toolchains, hardlinks, loopback, pinned paths and recovery. Explicitly
+  selecting `off` permits execution without OS isolation.
+  This backend does not support every Windows runtime: Python 3.14 system-crypto device access was refused in testing. DLL initialization failures are diagnosed without relaxing isolation or retrying unconfined.
 - **Transport-encryption boundary.** Since v0.0.11, when both peers advertise
   the `sessaead` capability in `hello` and a shared secret exists, the
   connection arms a per-connection AES-256-GCM right after the handshake —

@@ -39,11 +39,21 @@ roten Linien beim Deployment und den Meldeweg für Sicherheitslücken.
   Geräte und prüfen Sie Knoten-Fingerprints manuell.
 - **OS-Aufgaben-Sandbox.** `sandbox.mode: off` filtert die Umgebung und setzt
   das Arbeitsverzeichnis, ohne OS-Isolation. `standard` und `strict` benötigen
-  ein verfügbares Backend (seatbelt unter macOS, bubblewrap unter Linux).
-  Fehlt es, werden Aufgaben-Unterprozesse nicht gestartet; es gibt keine
-  automatische Herabstufung. Ein natives Windows-Backend ist nicht implementiert,
-  daher blockieren diese Modi unter Windows. Nur die ausdrückliche Wahl von
-  `off` erlaubt die Ausführung ohne OS-Isolation.
+  ein verfügbares Backend (seatbelt unter macOS, bubblewrap unter Linux,
+  natives AppContainer unter Windows 10+). Fehlt es oder lässt sich die Richtlinie
+  nicht sicher einrichten, wird der Aufgabenstart ohne automatische Herabstufung
+  verweigert. Jeder Windows-Lauf erhält einen neuen `WRITE_RESTRICTED`-Token und
+  eine eigene SID: Schreibzugriffe bleiben auf das Aufgabenverzeichnis und
+  ausdrücklich erlaubte Pfade begrenzt, auch wenn öffentliche AppContainer-ACLs
+  andernorts Schreiben erlauben. `strict` entfernt zusätzlich die Lesefreigabe
+  dieses Pakets und schützt die DACL-Vererbung an gesperrten Lesewurzeln.
+  Öffentliche AppContainer-/Capability-Leserechte, nicht unterstützte ACLs oder
+  verschachtelte Reparse Points führen zur Ablehnung, statt gemeinsame Rechte
+  anderer Anwendungen zu entziehen. Details zu temporären Freigaben, Toolchains,
+  Hardlinks, Loopback, fixierten Pfaden und Wiederherstellung stehen in den
+  [Windows-Sandbox-Hinweisen](docs/windows-sandbox.en.md) (Englisch).
+  Nur die ausdrückliche Wahl von `off` erlaubt die Ausführung ohne OS-Isolation.
+  Nicht jede Windows-Laufzeit ist kompatibel: Der Zugriff von Python 3.14 auf das System-Kryptogerät wurde im Test verweigert. DLL-Initialisierungsfehler werden erklärt; die Isolation bleibt aktiv, ohne ungeschützten Wiederholungsversuch.
 - **Grenze der Transportverschlüsselung.** Seit v0.0.11 rüstet die
   Verbindung direkt nach dem Handshake eine AES-256-GCM-Verbindung je
   Verbindung auf, wenn beide Peers die Fähigkeit `sessaead` in `hello`

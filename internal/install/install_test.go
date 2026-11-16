@@ -4,6 +4,7 @@ package install
 
 import (
 	"archive/zip"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,17 +12,21 @@ import (
 	"testing"
 )
 
-// setUserHome pins the user home directory for a test: HOME on unix,
-// USERPROFILE on Windows. os.UserHomeDir reads exactly these per-OS, so a
-// fake home that only lands in HOME is invisible on Windows and every
-// home-derived behavior (owned-config roots, purge guardrails) silently
-// tests the real runner home instead.
+// setUserHome isolates every per-user location used by Scan and uninstall.
+// A fake HOME/USERPROFILE alone leaves UserConfigDir on the host's APPDATA or
+// XDG_CONFIG_HOME. Scan includes that default config even with an explicit
+// ConfigFileUsed, so another package creating it could make a fixture archive
+// and delete real user state.
 func setUserHome(t *testing.T, home string) {
 	t.Helper()
 	t.Setenv("HOME", home)
 	t.Setenv("ZDOTDIR", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("OPENPANDA_CONFIG_PATH", filepath.Join(home, ".openpanda", "config.yaml"))
 	if runtime.GOOS == "windows" {
 		t.Setenv("USERPROFILE", home)
+		t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+		t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	}
 }
 
@@ -334,6 +339,65 @@ func TestBackupZipAndRemoveOne(t *testing.T) {
 	}
 }
 
+func TestBackupZipDoesNotArchiveItself(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "state.txt"), []byte("state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(root, "backup.zip")
+	n, err := BackupZip(dest, []Target{{Path: root, Kind: KindData, Delete: true, Exists: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := zipNames(t, dest)
+	if n != 1 || len(names) != 1 || !names[filepath.ToSlash(filepath.Join(filepath.Base(root), "state.txt"))] {
+		t.Fatalf("backup archived its own output: files=%d entries=%v", n, names)
+	}
+	zr, err := zip.OpenReader(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	in, err := zr.File[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	if got, err := io.ReadAll(in); err != nil || string(got) != "state" {
+		t.Fatalf("archived state is not recoverable: data=%q err=%v", got, err)
+	}
+}
+
+func TestBackupZipRefusesToOverwriteInput(t *testing.T) {
+	for _, alias := range []bool{false, true} {
+		name := "same path"
+		if alias {
+			name = "hard link alias"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			input := filepath.Join(root, "state.txt")
+			const original = "irreplaceable state"
+			if err := os.WriteFile(input, []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			dest := input
+			if alias {
+				dest = filepath.Join(root, "output.zip")
+				if err := os.Link(input, dest); err != nil {
+					t.Skipf("hard links unavailable: %v", err)
+				}
+			}
+			if _, err := BackupZip(dest, []Target{{Path: input, Kind: KindData, Exists: true}}); err == nil {
+				t.Fatal("backup destination was allowed to overwrite its input")
+			}
+			if got, err := os.ReadFile(input); err != nil || string(got) != original {
+				t.Fatalf("backup destroyed its source: data=%q err=%v", got, err)
+			}
+		})
+	}
+}
+
 // newUninstallFixture builds the standard uninstall scenario: OpenPanda-owned
 // state (db, context dir, config inside the owned ~/.openpanda root) plus
 // user-asset dirs (memory/projects/skills/work) holding real files, and
@@ -410,7 +474,10 @@ func TestExecuteUninstallNormal(t *testing.T) {
 	out := ExecuteUninstall(targets, UninstallOptions{BackupPath: backup})
 
 	if out.BackupErr != nil || out.BackupFiles != 3 {
-		t.Fatalf("backup = %d files, err %v (want 3 files: db, context/a.txt, config.yaml)", out.BackupFiles, out.BackupErr)
+		if out.BackupErr != nil {
+			t.Fatal(out.BackupErr)
+		}
+		t.Fatalf("backup = %d files (want 3 files: db, context/a.txt, config.yaml); entries=%v targets=%+v", out.BackupFiles, zipNames(t, backup), targets)
 	}
 	for _, p := range []string{db, ctxDir, cfg} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
@@ -442,6 +509,78 @@ func TestExecuteUninstallNormal(t *testing.T) {
 		if !names[want] {
 			t.Fatalf("backup zip missing %q (has %v)", want, names)
 		}
+	}
+}
+
+func TestUninstallFixtureIsolatesDefaultConfig(t *testing.T) {
+	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
+		t.Skip("UserConfigDir follows HOME on this platform")
+	}
+	// A concurrent package or the developer's installation can have a default
+	// configuration outside this fixture's fake home. Reproduce that host state
+	// entirely under TempDir: no real user configuration may be scanned/deleted.
+	external := t.TempDir()
+	t.Setenv("APPDATA", external)
+	t.Setenv("XDG_CONFIG_HOME", external)
+	defaultConfig := filepath.Join(external, "openpanda", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(defaultConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultConfig, []byte("unrelated configuration"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, root, targets := newUninstallFixture(t)
+	backup := filepath.Join(root, "backup.zip")
+	out := ExecuteUninstall(targets, UninstallOptions{BackupPath: backup})
+	if out.BackupErr != nil {
+		t.Fatal(out.BackupErr)
+	}
+	if out.BackupFiles != 3 {
+		t.Fatalf("fixture included an external default config: files=%d entries=%v targets=%+v", out.BackupFiles, zipNames(t, backup), targets)
+	}
+	if data, err := os.ReadFile(defaultConfig); err != nil || string(data) != "unrelated configuration" {
+		t.Fatalf("fixture modified external default config: data=%q err=%v", data, err)
+	}
+}
+
+func TestExecuteUninstallRefusesBackupInsideDeletedTree(t *testing.T) {
+	for _, name := range []string{"backup.zip", "..backup.zip", "symlink alias"} {
+		t.Run(name, func(t *testing.T) {
+			_, root, targets := newUninstallFixture(t)
+			contextDir := filepath.Join(root, "data", "context")
+			backup := filepath.Join(contextDir, name)
+			if name == "symlink alias" {
+				link := filepath.Join(root, "context-link")
+				if err := os.Symlink(contextDir, link); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+				backup = filepath.Join(link, "backup.zip")
+			}
+			out := ExecuteUninstall(targets, UninstallOptions{BackupPath: backup})
+			if out.BackupErr == nil {
+				t.Fatal("uninstall accepted a backup that its deletion phase would erase")
+			}
+			for _, path := range []string{filepath.Join(root, "data", "openpanda.db"), filepath.Join(contextDir, "a.txt")} {
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("unsafe backup destination caused state loss: %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
+func TestExecuteUninstallBackupOnlyInsideInputTree(t *testing.T) {
+	_, root, targets := newUninstallFixture(t)
+	backup := filepath.Join(root, "data", "context", "backup.zip")
+	out := ExecuteUninstall(targets, UninstallOptions{BackupPath: backup, BackupOnly: true})
+	if out.BackupErr != nil || out.BackupFiles != 3 {
+		t.Fatalf("backup-only inside input tree: files=%d err=%v", out.BackupFiles, out.BackupErr)
+	}
+	if names := zipNames(t, backup); len(names) != 3 || names["context/backup.zip"] {
+		t.Fatalf("backup-only included its own output: %v", names)
+	}
+	if _, err := os.Stat(filepath.Join(root, "data", "context", "a.txt")); err != nil {
+		t.Fatal(err)
 	}
 }
 

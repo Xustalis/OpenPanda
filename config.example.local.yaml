@@ -133,11 +133,21 @@ injection:
 #   strict   —— standard + 拒读系统凭证位（~/.ssh、~/.aws、其它 agent 的凭证目录、
 #               shell 历史……）和 deny_read_paths
 # 后端：macOS 用 sandbox-exec（seatbelt），Linux 用 bubblewrap（需安装 bwrap），
-# standard/strict 在后端缺失时拒绝启动任务子进程（含当前的 Windows）。
+# Windows 10+ 用原生 AppContainer + 每次新建的 WRITE_RESTRICTED token/SID。
+# 并非所有 Windows 运行时均兼容；Python 3.14 加密设备访问已实测被拒。
+# DLL 初始化失败会报告兼容诊断，保留隔离，不自动重试为 off。
+# standard/strict 在后端缺失或无法安全建立策略时拒绝启动任务子进程。
 # 只有显式 off 才允许无 OS 隔离运行；不会自动降级。
+# Windows 临时 ACL 仅授予任务/明确放行路径和实际 exe、绝对参数所需的读目录；
+# 不因 PATH/home 自动放行，不能授予所需工具链读权限时拒绝执行。
+# strict 拒读根含公共 AppContainer/capability 读授权、复杂 ACE 或嵌套 reparse point，
+# 或写根含多硬链接文件时会拒绝策略；不撤销其他应用的共享权限。
+# Windows 运行中固定策略路径，rename/delete/原子替换可能受限；退出后回收临时 ACL/profile，
+# 异常退出留待下次沙箱启动回收。完整限制见 docs/windows-sandbox.md。
 # sandbox:
 #   mode: "standard"
 #   # 完全切断子进程出网（默认允许 —— 端点白名单由 network guard 管）
+#   # Windows 即使允许网络仍受 AppContainer loopback 限制，不改全机 exemptions
 #   # allow_network: false
 #   # 额外放行写入（绝对路径、~ 开头或裸名都会按 $HOME 解析）
 #   # writable_paths: ["~/projects/shared"]
