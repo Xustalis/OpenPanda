@@ -8,6 +8,7 @@ import { MessageCopyButton } from './copy'
 import { useModalFocus } from './modal-focus'
 import type { ExecutionStep } from './execution-steps'
 import { expansion, rememberExpansion } from './execution-expansion'
+import { readableOutput } from './output-text'
 
 export function ExecutionSteps({ steps, className = '', scope }: { steps: ExecutionStep[]; className?: string; scope?: string }) {
  const [toggle, setToggle] = useState(() => expansion(scope))
@@ -67,9 +68,11 @@ export function ToolInput({ input }: { input: unknown }) {
 }
 
 function StepContent({ step }: { step: ExecutionStep }) {
+ const output = readableOutput(step.output || '')
  return <>
   <ToolInput input={step.input} />
-  {step.output && (step.thought || step.prose ? <div class="execution-thought"><Markdown text={step.output} /></div> : <pre class="execution-output" tabIndex={0}>{step.output}</pre>)}
+  {!step.image?.dataUrl && output.text && (step.thought || step.prose ? <div class="execution-thought"><Markdown text={output.text} /></div> : <pre class="execution-output" tabIndex={0}>{output.text}</pre>)}
+  {output.dropped > 0 && <div class="output-note">{t('events.outputOmitted', { n: String(output.dropped) })}</div>}
   {step.image && <ImagePreview path={step.image.path} dataUrl={step.image.dataUrl} />}
   {step.truncated && <p class="execution-truncated" role="status">{t(step.unavailable ? 'work.unavailable' : 'events.transcriptTruncatedNote')}</p>}
  </>

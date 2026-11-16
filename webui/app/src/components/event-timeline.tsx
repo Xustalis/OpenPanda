@@ -11,6 +11,6 @@ export interface EventTimelineProps {
  suppressResultBody?: boolean
 }
 
-export function EventTimeline({ events, className = '', scope }: EventTimelineProps) {
- return <ExecutionSteps scope={scope} steps={taskSteps(events ?? [])} className={className} />
+export function EventTimeline({ events, className = '', scope, suppressResultBody = false }: EventTimelineProps) {
+ return <ExecutionSteps scope={scope} steps={taskSteps(events ?? [], false, suppressResultBody)} className={className} />
 }

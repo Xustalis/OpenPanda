@@ -44,14 +44,18 @@ export function operationSteps(records: OperationActivity[]): ExecutionStep[] {
 
 // Tool IDs can repeat between rounds, executors and retry attempts. The pairing
 // domain must follow execution identity, never a global tool-name map.
-export function taskSteps(events: TaskEvent[], active = false): ExecutionStep[] {
+export function taskSteps(events: TaskEvent[], active = false, suppressResultBody = false): ExecutionStep[] {
  const steps: ExecutionStep[] = []
  const calls = new Map<string, ExecutionStep>()
  let round = 0
  let executor = ''
+ let lastResult: ExecutionStep | undefined
  for (const e of events) {
   let data: Record<string, any> = {}
-  try { data = JSON.parse(e.data || '{}') } catch { /* legacy unstructured row */ }
+  try {
+   const parsed = JSON.parse(e.data || '{}')
+   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) data = parsed
+  } catch { /* legacy unstructured row */ }
   if (e.type === 'adapter_execution_profile') {
    const p = data.profile || {}
    steps.push({ id: 'profile:' + (e.id || e.ts), title: t('activity.coordination'), status: 'info', ts: e.ts, executor: data.executor_id,
@@ -89,6 +93,8 @@ export function taskSteps(events: TaskEvent[], active = false): ExecutionStep[] 
   else if (f.result) {
    step.output = [f.result.stdout, f.result.stderr].filter(Boolean).join('\n') || f.summary
    step.status = f.result.ok ? 'success' : 'failed'
+   step.prose = true
+   lastResult = step
   } else {
    step.output = f.summary
    if (f.tags.length) step.input = Object.fromEntries(f.tags.map(t => [t.key, t.value]))
@@ -97,6 +103,7 @@ export function taskSteps(events: TaskEvent[], active = false): ExecutionStep[] 
   }
   steps.push(step)
  }
+ if (suppressResultBody && lastResult) lastResult.output = t('detail.result.above')
  return steps
 }
 

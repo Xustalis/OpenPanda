@@ -59,3 +59,20 @@ test('actual result and current attempt win over legacy and late executor events
  assert.equal(executionAttribution({...task,result:''},events).executor,'Mac')
  assert.equal(executionAttribution({...task,result:''},[event(5,{profile:{coordination:'unknown'}},'adapter_execution_profile')]).mode,'')
 })
+test('legacy null and scalar event payloads do not break archived timelines', () => {
+ const events = ['null', '42', '[]', '"legacy note"'].map((data, i) => ({id: i+1, ts: i+1, type:'progress', data}))
+ assert.doesNotThrow(() => taskSteps(events))
+})
+test('only the latest duplicated result body is suppressed in task details', () => {
+ const rows = [event(1, {ok:true, stdout:'first round output'}, 'result'),
+  event(2, {ev:'thinking', thinking:'Reviewing the first round'}),
+  event(3, {ok:true, stdout:'final output'}, 'result'),
+  event(4, {note:'session linked'}, 'progress')]
+ const full = taskSteps(rows)
+ const detail = taskSteps(rows, false, true)
+ assert.equal(detail[0]!.output, 'first round output')
+ assert.equal(full[2]!.output, 'final output')
+ assert.notEqual(detail[2]!.output, 'final output')
+ assert.equal(detail[2]!.status, 'success')
+ assert.equal(detail.length, full.length)
+})

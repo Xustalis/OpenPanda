@@ -30,7 +30,7 @@ import { AgentFace } from './team-picker'
 import { castPending, dispatchAgent, prettyAgent, type Speaker } from './chat-speaker'
 import { Icon } from './icons'
 import { Markdown } from '../md/render'
-import { deliveryFacts, deliveryMatchesTask, deliveryPreview, deliverySteps, deliveryText } from './task-delivery'
+import { deliveryFacts, deliveryMatchesTask, deliveryPreview, deliveryText } from './task-delivery'
 import { t } from '../i18n'
 import { ExecutionSteps } from './execution-steps-view'
 import { taskSteps } from './execution-steps'
@@ -267,8 +267,7 @@ export function TaskDelivery({ taskId, delivery, truncated, summary, state, verd
 function TaskProcessBody({ taskId, task }: { taskId: string; task: Task }) {
   const change = useChangeSignal()
   const { events, error } = useTaskEvents(taskId, change)
-  const steps = deliverySteps(events)
-  const shown = steps
+  const steps = taskSteps(events)
   const facts = deliveryFacts(task)
   return (
     <>
@@ -288,9 +287,9 @@ function TaskProcessBody({ taskId, task }: { taskId: string; task: Task }) {
         </div>}
       </div>
       <h4 class="task-delivery-label">{t('sessions.processTitle')}</h4>
-      {shown.length === 0 ? <p class="task-run-empty" role={error ? 'status' : undefined}>
+      {steps.length === 0 ? <p class="task-run-empty" role={error ? 'status' : undefined}>
         {t(error ? 'sessions.deliveryStepsUnavailable' : 'sessions.processEmpty')}
-      </p> : <ExecutionSteps scope={'task:' + taskId} steps={taskSteps(events)} />}
+      </p> : <ExecutionSteps scope={'task:' + taskId} steps={steps} />}
       <div class={`task-delivery-remaining is-${facts.remaining}`}>
         <h4 class="task-delivery-label">{t('sessions.deliveryRemaining')}</h4>
         <p>{facts.followup || t(`sessions.deliveryRemaining.${facts.remaining}`)}</p>
