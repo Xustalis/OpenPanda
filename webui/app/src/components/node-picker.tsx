@@ -119,6 +119,7 @@ export function NodePicker(props: {
                 >
                   <Icon name="cpu" size={16} class="node-row-ico" />
                   <span class="node-row-name">{n.name || n.id}</span>
+                  {(n.capacity?.execution_protocol ?? 0) < 1 && <span class="node-row-tag">{t('activity.summaryOnly')}</span>}
                   {n.is_local && <span class="node-row-tag">{t('nodes.self')}</span>}
                   {offline && <span class="node-row-tag">{t('sessions.nodeOffline')}</span>}
                   {props.value === n.id && <Icon name="check" size={14} class="node-row-check" />}

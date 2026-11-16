@@ -5,6 +5,7 @@
 // it — the sidebar (app.tsx) and the ⌘K palette (components/palette.tsx) — and
 // a palette that lists a different set of destinations than the sidebar is a
 // bug waiting to be filed.
+import { teamFeatureEnabled } from './features.ts'
 
 /** 队列·任务·项目's three boards. They used to be three rail rows (任务队列, 计划, 项目)
  *  over three routes; they are now one page with one tab strip, because all
@@ -31,7 +32,7 @@ export type Route =
  *  had stopped earning their 24px. 新对话 leads
  *  (it is an action, but it reads as a row); then the machines-and-work
  *  destinations: 工作空间 (the fleet as a map) and 队列·任务·项目 (the node's
- *  boards). Tasks and collaboration is always available. The 节点网络 page (fleet) was removed
+ *  boards). Tasks and collaboration requires an experimental opt-in. The 节点网络 page (fleet) was removed
  *  from the console; its old routes land on the thread list instead.
  *
  *  What is deliberately NOT a row: 对话 — the thread history is the tail of the
@@ -58,6 +59,15 @@ export const navViews: Array<[view: string, key: string]> = [
   ['settings', 'nav.settings'],
 ]
 
+/** The sidebar and palette share the same experimental opt-in. */
+export function visibleNavViews(): typeof navViews {
+  return navViews.filter(([view]) => view !== 'team' || teamFeatureEnabled())
+}
+
+export function isTeamRoute(route: Route): boolean {
+  return route.view === 'team' || route.view === 'work'
+}
+
 /** `?tab=` → a valid board tab. Anything unknown (including a missing param)
  *  falls back to the kanban, which is the page's default board. */
 function parseControlTab(raw: string | null): ControlTab {
@@ -75,6 +85,13 @@ export function parseHash(): Route {
   // thread run", leaving the reader in the unfiltered history.
   const wsParam = query.get('ws') || null
   const tabParam = query.get('tab') || null
+
+  // Bookmarks, legacy boards and source-task links all lead to the opt-in
+  // control until enabled. Core execution-task details remain independent.
+  if (!teamFeatureEnabled() && (
+    path === 'team' || path === 'work' || path === 'work/tasks' ||
+    path.startsWith('work/tasks/') || path === 'todo' || path === 'todos'
+  )) return { view: 'settings', tab: 'team' }
 
   if (path.startsWith('work/tasks/')) return { view: 'work', key: decodeURIComponent(path.slice(11)), connection: query.get('connection') || 'local' }
 
@@ -101,7 +118,7 @@ export function parseHash(): Route {
   }
   if (path === 'plans') return { view: 'control', tab: 'plans' }
   if (path === 'projects') return { view: 'control', tab: 'projects' }
-  // Business tasks remain available regardless of legacy browser preferences.
+  // Experimental business-task routes (after the opt-in guard above).
   if (path === 'team') return { view: 'team', tab: tabParam === 'mine' || tabParam === 'review' ? tabParam : 'spaces' }
   if (path === 'work' || path === 'work/tasks') return { view: 'team', tab: 'mine' }
   // Legacy local board links open local business tasks.

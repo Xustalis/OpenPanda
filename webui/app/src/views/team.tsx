@@ -49,7 +49,7 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
   const failure = error || list.error || detail.error || history.error || grants.error || reviews.error
   return <section class="tm-page work-page" aria-busy={busy}>
     <header class="tm-head work-head">
-      <div><h1 class="page-title">{current?.snapshot.title || t('nav.team')}</h1><p class="page-sub">{t('team.subtitle')}</p></div>
+      <div><div class="team-feature-heading"><h1 class="page-title">{current?.snapshot.title || t('nav.team')}</h1><span class="badge yellow experimental-badge">{t('team.experimental')}</span></div><p class="page-sub">{t('team.subtitle')}</p></div>
       <button class="btn" type="button" onClick={reload} disabled={busy}>{t('common.refresh')}</button>
     </header>
     <nav class="segmented work-tabs" aria-label={t('nav.team')}>

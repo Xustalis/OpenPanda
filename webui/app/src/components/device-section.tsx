@@ -4,6 +4,7 @@ import { useState } from 'preact/hooks'
 import { api, type NodesAddResult, type PeerEntry, type PeersView } from '../api/client'
 import { useAsync } from '../hooks'
 import { t } from '../i18n'
+import { trustLabel } from '../format/trust'
 import { isPeerAddr } from '../utils/peer-address'
 import { Icon } from './icons'
 import { CardEditor } from './card-editor'
@@ -227,9 +228,9 @@ function TrustSelect({ value, onChange }: { value: string; onChange(v: string): 
         aria-label={t('nodes.trust')}
         onChange={(e) => onChange((e.target as HTMLSelectElement).value)}
       >
-        <option value="mesh">mesh</option>
-        <option value="guarded">guarded</option>
-        <option value="open">open</option>
+        <option value="mesh">{trustLabel('mesh')}</option>
+        <option value="guarded">{trustLabel('guarded')}</option>
+        <option value="open">{trustLabel('open')}</option>
       </select>
       <Icon name="chevron-down" size={12} />
     </span>
@@ -315,7 +316,7 @@ function PeerRow({
           </span>
         )}
       </div>
-      <span class={`trust-pill ${peer.trust || 'mesh'}`}>{peer.trust || 'mesh'}</span>
+      <span class={`trust-pill ${peer.trust || 'mesh'}`}>{trustLabel(peer.trust)}</span>
       <div class="device-row-actions">
         <button
           class="icon-btn"

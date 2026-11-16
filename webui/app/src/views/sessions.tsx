@@ -100,6 +100,8 @@ import { SessionRail } from '../components/session-rail'
 import { VoiceInput } from '../components/voice-input'
 import { suggestProjectName } from '../components/dir-utils'
 import { EventTimeline } from '../components/event-timeline'
+import { ExecutionSteps } from '../components/execution-steps-view'
+import { operationSteps, upsertActivity } from '../components/execution-steps'
 import { acquireKeepAlive } from '../utils/keepalive'
 
 /** Grow the composer with its content up to a ceiling, then scroll inside.
@@ -1423,7 +1425,7 @@ export function SessionsView({
       const rows = hydrateTurns(s.turns ?? [], (i) => `srv-${i}`)
       if (current?.id === op.id && current.status === 'running') {
         rows.push({
-          role: 'assistant', text: current.text || '', thought: current.thought,
+          role: 'assistant', text: current.text || '', thought: current.thought, activities: current.activities,
           lastActivity: current.last_activity ? Date.parse(current.last_activity) : undefined,
           tokens: current.tokens, tokensEstimated: current.estimated,
           status: current.progress ? statusNote(current.progress.text || '', current.progress) : undefined,
@@ -2125,6 +2127,7 @@ export function SessionsView({
               tokensEstimated: estimated,
               lastActivity: Date.now(),
             })),
+          onActivity: record => patch(m => ({ ...m, activities: upsertActivity(m.activities ?? [], record), lastActivity: Date.now() })),
           onStatus: (text, ev) =>
             patch((m) => ({ ...m, status: statusNote(text, ev), lastActivity: Date.now() })),
           // The note typed mid-turn reached a round. This is the upgrade from
@@ -4556,12 +4559,10 @@ function ChatBubble(props: {
                 look. Open while it is still arriving, folded once the reply
                 lands, because by then the answer is what matters. */}
           {thought && (
-            <details class="msg-think" open={Boolean(msg.streaming)}>
-              <summary>{t('sessions.thought')}</summary>
-              <p class="msg-think-text">{thought}</p>
-            </details>
+            <ExecutionSteps scope={'thought:' + (msg.operation_id || msg.k)} steps={[{ id: 'reasoning', title: t('sessions.thought'), status: 'info', ts: 0, thought: true, output: thought }]} />
           )}
 
+          {!!msg.activities?.length && <ExecutionSteps scope={'operation:' + (msg.operation_id || msg.k)} steps={operationSteps(msg.activities)} />}
           {msg.role === 'user' ? (
             // The attachments ride in the sentence, the way the composer
             // showed them while typing — a pill before the words it belongs
@@ -4698,7 +4699,7 @@ function DispatchBlock(props: {
   tasksById?: Map<string, Task>
 }) {
   const { msg, onOpenTask, onPreviewTask, tasksById } = props
-  const [chainOpen, setChainOpen] = useState(false)
+  const [chainOpen, setChainOpen] = useState(true)
   // The thread's list is polled once per frame already; reading this block's
   // row from it keeps a five-card round from issuing five extra requests per
   // frame. The own read is only for a task outside the list.
@@ -5162,6 +5163,6 @@ function TaskChain({ taskId }: { taskId: string }) {
   const { events, error } = useTaskEvents(taskId, change)
   if (error) return <p class="dim chain-empty">{t('common.error')} ({error})</p>
   if (events.length === 0) return <p class="dim chain-empty">{t('sessions.chainEmpty')}</p>
-  return <EventTimeline events={events} className="task-chain-timeline" />
+  return <EventTimeline scope={'task:' + taskId} events={events} className="task-chain-timeline" />
 }
 

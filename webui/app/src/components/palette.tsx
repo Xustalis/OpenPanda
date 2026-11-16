@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { locale, localeNames, locales, setLocale, t, type Locale } from '../i18n'
-import { navigateView, navViews } from '../nav'
+import { navigateView, visibleNavViews } from '../nav'
+import { useTeamFeature } from '../hooks'
 import { setTheme, theme, type Theme } from '../theme'
 import { rank } from './fuzzy'
 import { Icon, type IconName } from './icons'
@@ -49,6 +50,7 @@ export function openPalette(): void {
 
 /** Mount once in the app shell, below the sidebar so it can cover it. */
 export function PaletteHost({ onLogout }: { onLogout(): void }) {
+  const teamEnabled = useTeamFeature()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -90,7 +92,7 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
     setCursor(0)
   }, [open])
 
-  const commands = useMemo(() => (open ? buildCommands(onLogout) : []), [open, onLogout])
+  const commands = useMemo(() => (open ? buildCommands(onLogout) : []), [open, onLogout, teamEnabled])
   const shown = useMemo(
     () => rank(commands, query.trim(), (c) => [c.label, c.alias ?? '']),
     [commands, query],
@@ -270,11 +272,12 @@ export function buildCommands(onLogout: () => void): Command[] {
   }
   // Hiding a rail row is not enough: ⌘K is a second way into every view, and
   // a disabled feature must not stay reachable by typing "team".
-  const cmds: Command[] = navViews
+  const cmds: Command[] = visibleNavViews()
     .map(([view, key]) => ({
       id: `go:${view}`,
       group: go,
       label: t(key),
+      hint: view === 'team' ? t('team.experimental') : undefined,
       icon: viewIcon[view] ?? 'arrow-right',
       alias: [goAliases[view] ?? view, formerName[view] ?? ''].filter(Boolean).join(' '),
       run: () => navigateView(view),
@@ -295,6 +298,7 @@ export function buildCommands(onLogout: () => void): Command[] {
 
   const settingsTabs: Array<{ tab: string; key: string; icon: IconName; alias: string }> = [
     { tab: 'models', key: 'settings.model', icon: 'cpu', alias: 'models model llm config ai' },
+    { tab: 'team', key: 'settings.teamFeature', icon: 'users', alias: 'experimental team tasks collaboration enable disable' },
     { tab: 'policy', key: 'settings.policy', icon: 'shield', alias: 'policy security rules permissions' },
     { tab: 'agents', key: 'settings.group.agents', icon: 'bot', alias: 'agents subagents roles' },
     { tab: 'mcp', key: 'settings.mcp', icon: 'plug', alias: 'mcp tools servers integrations' },

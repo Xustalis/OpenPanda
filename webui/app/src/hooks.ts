@@ -5,6 +5,18 @@ import { ApiError, api, subscribeEvents } from './api/client.ts'
 import type { ChangeEvent, Task, TaskEvent, TraceEvent } from './api/client.ts'
 import { mergeEvents, newestCursor } from './components/event-merge.ts'
 import { onLocaleChange } from './i18n/index.ts'
+import { onTeamFeatureChange, teamFeatureEnabled } from './features.ts'
+
+export function useTeamFeature(): boolean {
+  const [enabled, setEnabled] = useState(teamFeatureEnabled)
+  useEffect(() => {
+    const update = () => setEnabled(teamFeatureEnabled())
+    const stop = onTeamFeatureChange(update)
+    update()
+    return stop
+  }, [])
+  return enabled
+}
 
 /** Re-render on locale change. */
 export function useLocaleRerender(): void {

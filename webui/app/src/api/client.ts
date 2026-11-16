@@ -835,7 +835,7 @@ export interface NodeInfo {
   abilities: string[]
   native_ids?: string[]
   agents?: Record<string, NodeAgentDetail>
-  capacity: { cpu_cores: number; ram_gb: number; max_concurrent_tasks: number; current_tasks: number; queued_tasks?: number }
+  capacity: { execution_protocol?: number; cpu_cores: number; ram_gb: number; max_concurrent_tasks: number; current_tasks: number; queued_tasks?: number }
   resource_profile?: { cpu: number; ram_gb: number; gpu_vram_gb: number; duration_hint: string }
   /** Fleet observability: advertised software version (empty until a
    *  new-protocol peer speaks), and this node's measured edge toward the
@@ -2024,6 +2024,11 @@ export const api = {
     return request('GET', `/api/skills/hub${p}`)
   },
 
+  hubCatalog(query = ''): Promise<HubSkillCatalog> {
+    const params = new URLSearchParams({ q: query, meta: '1' })
+    return request('GET', '/api/skills/hub?' + params.toString())
+  },
+
   installHubSkill(name: string, scope?: string, force?: boolean): Promise<{ name: string; status: string }> {
     return request('POST', '/api/skills/hub/install', { name, scope, force })
   },
@@ -2649,6 +2654,13 @@ export interface AuditEntry {
   detail: string
 }
 
+export interface SkillProvenance {
+  source_url: string
+  revision: string
+  license: string
+  sha256: string
+}
+
 export interface SkillEntry {
   name: string
   description: string
@@ -2657,6 +2669,7 @@ export interface SkillEntry {
   status: string
   use_count: number
   builtin?: boolean
+  provenance?: SkillProvenance
 }
 
 export interface HubSkillEntry {
@@ -2671,6 +2684,12 @@ export interface HubSkillEntry {
   recommended?: boolean
   alias?: string
   installed: boolean
+  provenance?: SkillProvenance
+}
+
+export interface HubSkillCatalog {
+  skills: HubSkillEntry[]
+  source: 'bundled' | 'remote' | 'fallback'
 }
 
 export interface ImportSkillRequest {
@@ -2769,7 +2788,14 @@ export interface MemoryGraph {
   edges: MemoryGraphEdge[]
 }
 
+export interface OperationActivity {
+ id: string; sequence: number; round: number; tool_id?: string; name: string
+ status: string; input?: unknown; output?: string; started_at: number
+ finished_at?: number; truncated?: boolean
+}
+
 export interface SessionTurn {
+  activities?: OperationActivity[]
   /** Display-only agent handoff, separate from the bounded replay digest. */
   delivery_attempt_id?: string
   delivery?: string
@@ -2814,6 +2840,7 @@ export interface SessionTurn {
 }
 
 export interface SessionOperation {
+  activities?: OperationActivity[]
   last_activity?: string
   tokens?: number
   estimated?: boolean
@@ -3034,6 +3061,7 @@ export interface AskErrorInfo {
 }
 
 export interface AskStreamHandlers {
+  onActivity?(record: OperationActivity): void
   /** Chain-of-thought, on its own stream. Display-only (D14): never merge it
    *  into the answer or the stored turn. */
   onReasoning(text: string): void
@@ -3129,6 +3157,7 @@ function dispatchAskEvent(event: string, data: string, h: AskStreamHandlers): vo
     return
   }
   if (event === 'reasoning') h.onReasoning(payload.text ?? '')
+  else if (event === 'activity') h.onActivity?.(payload as OperationActivity)
   else if (event === 'delta') h.onDelta(payload.text ?? '')
   else if (event === 'usage')
     h.onUsage?.(payload.input ?? 0, payload.output ?? 0, Boolean(payload.estimated))
@@ -3158,6 +3187,9 @@ function dispatchAskEvent(event: string, data: string, h: AskStreamHandlers): vo
  *  carries the display-only evidence (tools, tokens) so a reloaded pane shows
  *  what the live stream showed. */
 export interface StoredSideTurn {
+  operation_id?: string
+  activities?: OperationActivity[]
+  thought?: string
   role: 'user' | 'assistant'
   text: string
   tools?: string[]
@@ -3190,13 +3222,7 @@ export interface SideConversation {
   active?: string
   chat?: string
   turns: StoredSideTurn[]
-  operation?: {
-    id: string
-    status: string
-    task_id?: string
-    error?: string
-    updated_at?: string
-  } | null
+  operation?: SessionOperation | null
 }
 
 /** POST /api/sessions/{id}/ask with `side: true`: the full conversation beside

@@ -9,7 +9,8 @@ import {
   type AppSettings,
   type MCPSettings,
 } from '../api/client'
-import { useLocaleRerender } from '../hooks'
+import { useLocaleRerender, useTeamFeature } from '../hooks'
+import { setTeamFeatureEnabled } from '../features'
 import { Icon, type IconName } from '../components/icons'
 import { toast } from '../components/toast'
 import { agentLogo } from '../format/agent-logo'
@@ -333,17 +334,39 @@ function GeneralSection(props: { onLogout(): void }) {
   )
 }
 
-/** Task connections and automation have explicit node policies. */
+/** Browser-local opt-in; task connections retain their separate node policies. */
 function TeamSection() {
+  const enabled = useTeamFeature()
   return (
     <div class="card settings-card">
+      <div class="team-feature-heading">
+        <h2 class="block-title">{t('nav.team')}</h2>
+        <span class="badge yellow experimental-badge">{t('team.experimental')}</span>
+      </div>
+      <p class="hint">{t('team.experimentalHelp')}</p>
+      <div class="field-group">
+        <label id="team-feature-label">{t('settings.teamFeature')}</label>
+        <div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            aria-labelledby="team-feature-label"
+            aria-describedby="team-feature-help"
+            class={`btn${enabled ? '' : ' primary'}`}
+            onClick={() => setTeamFeatureEnabled(!enabled)}
+          >
+            {t(enabled ? 'settings.teamDisable' : 'settings.teamEnable')}
+          </button>
+        </div>
+        <p class="hint" id="team-feature-help">{t('settings.teamFeatureHelp')}</p>
+      </div>
       <p class="hint">{t('team.subtitle')}</p>
       <p class="hint">{t('work.policyHint')}</p>
-      <a class="btn" href="#/work">{t('nav.team')}</a>
+      {enabled && <a class="btn" href="#/team">{t('settings.teamOpen')}</a>}
     </div>
   )
 }
-
 
 /** App policies (C1, GET/PUT /api/settings/app): how Panda injects itself,
  *  which agents routing prefers, the memory caps, the approval gate, and the

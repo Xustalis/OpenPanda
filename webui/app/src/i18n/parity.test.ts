@@ -44,6 +44,15 @@ describe('i18n parity', () => {
     }
   })
 
+  it('reviewed skill names and descriptions are available in every locale', () => {
+    for (const [name, dict] of Object.entries({ en, ...dictionaries })) {
+      for (const skill of ['frontend-design', 'systematic-debugging', 'verification-before-completion', 'writing-guidelines']) {
+        for (const field of ['name', 'description']) assert.ok(dict['skills.curated.' + skill + '.' + field], name + ': ' + skill + '.' + field)
+      }
+      for (const key of ['skills.searchBtn', 'skills.recommendedTag', 'skills.hubReviewHint', 'skills.sourceLabel', 'skills.pinnedVersion']) assert.ok(dict[key], name + ': ' + key)
+    }
+  })
+
   it('task collaboration references resolve in every locale', () => {
     // Comparing dictionaries alone misses a new page whose keys are absent
     // from every dictionary. Check the page's references as well.
