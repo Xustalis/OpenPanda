@@ -376,3 +376,37 @@ print(json.dumps({"ok": True, "result": json.dumps(seen), "exit_code": 0}))
 		t.Errorf("minimal run must not materialize .mcp.json")
 	}
 }
+
+func TestImmediateCoordinationRequiresRealToolWiring(t *testing.T) {
+	r := NewRouter(testCard(), NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{ToolsPolicy: "extended"})
+	base := WithChildRPC(context.Background(), "http://127.0.0.1:12345", "secret", "attempt")
+	cases := []struct {
+		name, adapter, policy string
+		restricted            bool
+		want                  string
+	}{
+		{"claude_code", "claude_code.py", "extended", false, "IMMEDIATE"},
+		{"codex", "codex.py", "extended", false, "ROUND_END"},
+		{"claude_code", "claude_code.py", "minimal", false, "ROUND_END"},
+		{"claude_code", "claude_code.py", "extended", true, "ROUND_END"},
+	}
+	for _, item := range cases {
+		ctx := WithToolsPolicy(base, item.policy)
+		if item.restricted {
+			ctx = WithRestricted(ctx)
+		}
+		run, cleanup := r.wireMCPPassthrough(ctx, item.name, item.adapter, t.TempDir())
+		if got := coordinationMode(run); got != item.want {
+			t.Fatalf("%+v mode=%s", item, got)
+		}
+		cleanup()
+	}
+	r.card.Agents["codex"] = ledger.Agent{Adapter: "codex.py", Capabilities: []string{"coding"}, Tier: 1}
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	called := false
+	r.runAdapter = func(context.Context, string, string, string) AgentResult { called = true; return AgentResult{OK: true} }
+	result := r.Execute(WithImmediateCoordination(base), Plan{Kind: "agent", Tier: 1, Agent: "codex"}, "coordinate", t.TempDir(), true)
+	if result.OK || called || !strings.Contains(result.Stderr, "IMMEDIATE") {
+		t.Fatalf("required coordination silently degraded: %+v called=%t", result, called)
+	}
+}

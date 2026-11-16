@@ -5994,3 +5994,69 @@
     max-width: 40%;
   }
 }
+
+/* Persistent execution evidence: restrained chrome, readable expanded content. */
+.execution-steps { min-width: 0; width: 100%; margin-block: 12px; font-size: 13px; }
+.execution-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-secondary); margin-bottom: 8px; }
+.execution-toolbar > span:first-child { font-weight: 500; }
+.execution-toolbar button, .execution-enlarge { background: none; border: 0; color: var(--text-secondary); padding: 5px 7px; border-radius: 5px; font: inherit; cursor: pointer; }
+.execution-toolbar button:hover, .execution-enlarge:hover { background: var(--bg-hover); color: var(--text); }
+.execution-list { list-style: none; padding: 0; margin: 0; }
+.execution-row { position: relative; border-left: 1px solid var(--border-soft); margin-left: 8px; padding: 0 0 12px 14px; min-width: 0; }
+.execution-row:last-child { padding-bottom: 0; }
+.execution-heading { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; color: var(--text); padding: 5px 0; font: inherit; cursor: pointer; min-height: 32px; }
+.execution-title { font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
+.execution-status-icon { flex-shrink: 0; color: var(--text-secondary); }
+.execution-time { margin-left: auto; white-space: nowrap; }
+.execution-status, .execution-time, .execution-node { font-size: 11px; color: var(--text-secondary); flex-shrink: 0; }
+.execution-node { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.execution-body { padding-top: 7px; min-width: 0; }
+.execution-input { margin: 0 0 9px; }
+.execution-input > div { display: grid; grid-template-columns: minmax(64px, 100px) minmax(0,1fr); gap: 10px; padding-block: 3px; }
+.execution-input dt { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.execution-input dd { margin: 0; min-width: 0; }
+.execution-input pre, .execution-command, .execution-output { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.65; }
+.execution-command, .execution-output { padding: 10px 12px; background: var(--bg-inset); border: 1px solid var(--border-soft); border-radius: 7px; }
+.execution-output, .execution-command, .execution-thought { max-height: 320px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.execution-thought { line-height: 1.7; color: var(--text-secondary); }
+.execution-thought p:first-child { margin-top: 0; }
+.execution-controls { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; padding-top: 5px; color: var(--text-secondary); }
+.execution-enlarge { display: inline-flex; gap: 5px; align-items: center; font-size: 11px; }
+.execution-raw { min-width: 0; flex: 1 1 auto; font-size: 11px; }
+.execution-raw summary { cursor: pointer; padding: 5px 0; }
+.execution-raw pre { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-inset); padding: 10px; border-radius: 6px; }
+.execution-truncated { color: var(--text-secondary); font-size: 12px; }
+.execution-row.is-failed .execution-status, .execution-row.is-refused .execution-status { color: var(--danger, var(--text)); }
+.execution-row.is-running .execution-status-icon { animation: execution-spin 1.6s linear infinite; }
+.execution-dialog { width: min(1000px, calc(100vw - 32px)); max-height: 88dvh; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-overlay); color: var(--text); box-shadow: 0 20px 70px #0003; }
+.execution-dialog::backdrop { background: #0006; }
+.task-objectives { margin-block: 12px 18px; font-size: 12px; }
+.task-objectives h4 { margin: 0 0 8px; font-weight: 500; }
+.task-objective { border-left: 2px solid var(--border-soft); padding: 3px 0 3px 12px; margin-block: 6px; }
+.task-objective summary { cursor: pointer; color: var(--text-secondary); }
+.task-objective p { margin: 7px 0; overflow-wrap: anywhere; }
+.task-objective ul { padding-left: 18px; margin-block: 7px; }
+.objective-priority { display: inline-block; margin-left: 8px; font-size: 10px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; }
+.objective-priority.is-max { color: var(--text); font-weight: 600; }
+.execution-dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
+.execution-dialog-head button { display: inline-flex; padding: 8px; border: 0; background: none; color: inherit; cursor: pointer; }
+.execution-dialog .execution-output, .execution-dialog .execution-command, .execution-dialog .execution-thought { max-height: none; }
+.execution-steps button:focus-visible, .execution-raw summary:focus-visible { outline: 2px solid var(--text-secondary); outline-offset: 3px; }
+@keyframes execution-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .execution-row.is-running .execution-status-icon { animation: none; } }
+@media (max-width: 600px) {
+ .execution-toolbar button, .execution-heading, .execution-enlarge { min-height: 44px; }
+ .execution-heading { flex-wrap: wrap; }
+ .execution-title { flex: 1; }
+ .execution-node { max-width: 90px; }
+ .execution-input > div { grid-template-columns: minmax(0,1fr); gap: 2px; }
+ .execution-row { margin-left: 3px; padding-left: 10px; }
+ .execution-output, .execution-command { max-height: 260px; }
+}
+
+/* Execution code scrolls inside its own region, prose wraps in the bubble. */
+.execution-command, .execution-output { white-space: pre; overflow-wrap: normal; max-width: 100%; }
+.execution-thought { overflow-wrap: anywhere; }
+.task-execution-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0; color: var(--text-secondary); font-size: 11px; }
+.task-execution-meta dd { margin: 0 10px 0 0; overflow-wrap: anywhere; }
+.task-objectives p, .task-objectives li { overflow-wrap: anywhere; }

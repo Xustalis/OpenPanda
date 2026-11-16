@@ -93,14 +93,17 @@ func (c *Core) handleProgress(ctx context.Context, env bus.Envelope) {
 		c.logger.Debug("progress for unknown task", "task", p.TaskID)
 		return
 	}
-	if Terminal(t.State) {
-		return
-	}
 	if !c.isCurrentExecutor(ctx, t, env.From) {
 		// Same authorization rule as accept/decline/result: only the node this
 		// task was handed to may claim its work is alive, or any authenticated
 		// peer could hold another node's task open indefinitely.
 		c.logger.Warn("progress from non-executor ignored", "task", p.TaskID, "from", env.From)
+		return
+	}
+	if Terminal(t.State) {
+		if p.AttemptID == t.AttemptID {
+			c.requestActivities(ctx, t, env.From, p.ActivityCursor)
+		}
 		return
 	}
 	if p.AttemptID != "" && t.AttemptID != "" && p.AttemptID != t.AttemptID {
@@ -128,6 +131,7 @@ func (c *Core) handleProgress(ctx context.Context, env bus.Envelope) {
 	if err := c.store.SetLeaseAttempt(ctx, p.TaskID, c.lease().Milliseconds(), p.AttemptID); err != nil {
 		c.logger.Warn("refresh lease from progress", "task", p.TaskID, "err", err)
 	}
+	c.requestActivities(ctx, t, env.From, p.ActivityCursor)
 	// A beat carrying a note is the executor's progress sink reaching the
 	// delegator: record it so `task logs`/`task show` here shows the same
 	// life the executor's own timeline does. The executor already throttles
@@ -138,6 +142,11 @@ func (c *Core) handleProgress(ctx context.Context, env bus.Envelope) {
 		}); err != nil {
 			c.logger.Warn("record remote progress", "task", p.TaskID, "err", err)
 		}
+	}
+	// A cursor addresses the sender's durable rows, so every custodian must
+	// advertise its own watermark instead of forwarding a downstream id.
+	if p.ActivityCursor > 0 {
+		p.ActivityCursor = c.store.activityCursor(ctx, t.TaskID)
 	}
 	c.relayToParent(ctx, bus.MsgTaskProgress, t.Chain, p)
 }
@@ -528,6 +537,14 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			state = StateFailed
 		}
 	}
+	if state == StateDone && p.OK {
+		if err := objectiveResultEvidence(t, p); err != nil {
+			state, p.State, p.Verdict = StateReview, StateReview, "review"
+			p.VerdictReason = err.Error()
+			p.Followup = "Supply independent evidence for every unchanged MAX criterion before accepting delivery."
+			p.ApprovalDisposition = string(ApprovalNeedsChangedInput)
+		}
+	}
 	if Terminal(t.State) {
 		// An expired row is a timeout's pessimistic close — the deadline
 		// bounded delivery, not correctness — so a real done still
@@ -591,7 +608,7 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			transitionOK = false
 		}
 	case StateFailed:
-		if err := c.store.FailFromRemote(ctx, p.TaskID, c.nodeID, p.Stderr, p.AttemptID); err != nil {
+		if err := c.store.FailResultFromRemote(ctx, p.TaskID, c.nodeID, p); err != nil {
 			c.logger.Warn("fail from result", "task", p.TaskID, "err", err)
 			transitionOK = false
 		}
@@ -607,7 +624,8 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		if reason == "" {
 			reason = "executor task expired"
 		}
-		if err := c.store.FailFromRemote(ctx, p.TaskID, c.nodeID, reason, p.AttemptID); err != nil {
+		p.Stderr = reason
+		if err := c.store.FailResultFromRemote(ctx, p.TaskID, c.nodeID, p); err != nil {
 			c.logger.Warn("expire from result", "task", p.TaskID, "err", err)
 			transitionOK = false
 		}
@@ -677,6 +695,12 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 		} else {
 			c.advanceStagePlan(ctx, t)
 		}
+	} else if transitionOK && c.childOutputDelivery(ctx, t) && p.OutputArtifact != "" && state == StateDone {
+		// A child must return to the exact parent workspace, under the
+		// parent's await/yield barrier and a conflict-aware three-way merge.
+		if err := c.store.SetOutputArtifact(ctx, t.TaskID, p.OutputArtifact); err != nil {
+			c.logger.Warn("record child output", "task", t.TaskID, "err", err)
+		}
 	} else if transitionOK && t.Project != "" && p.OutputArtifact != "" &&
 		(state == StateDone || state == StateReview) {
 		c.adoptProjectOutput(ctx, t, env.From, p.OutputArtifact)
@@ -739,6 +763,8 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 
 	// Relay the result up the delegation chain so the root scheduler learns
 	// the outcome (a root with no predecessor is a no-op).
+	c.requestActivities(ctx, t, env.From, p.ActivityCursor)
+	p.ActivityCursor = c.store.activityCursor(ctx, t.TaskID)
 	c.relayToParent(ctx, bus.MsgTaskResult, t.Chain, p)
 	c.signalResult(p.TaskID, p)
 	// A delegate child whose parent already reported still owes the tree a
@@ -1273,6 +1299,12 @@ func (c *Core) handleAcceptWork(ctx context.Context, env bus.Envelope, t Task) {
 	if err != nil || disposition != ApprovalAcceptWork {
 		c.logger.Warn("accept for non-accept disposition ignored", "task", t.TaskID,
 			"disposition", disposition, "err", err)
+		return
+	}
+	var evidence bus.TaskResultPayload
+	_ = json.Unmarshal([]byte(t.ResultJSON), &evidence)
+	if err := objectiveResultEvidence(t, evidence); err != nil {
+		c.logger.Warn("accept lacks objective evidence", "task", t.TaskID, "err", err)
 		return
 	}
 	// An isolated child parked for review keeps its workspace untouched until

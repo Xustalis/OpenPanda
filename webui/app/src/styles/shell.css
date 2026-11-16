@@ -192,7 +192,24 @@
   font-size: var(--text-sm);
   font-weight: 650;
   text-align: center;
+  border: 0;
+  cursor: pointer;
 }
+
+.nav-destination { padding: 0; gap: 0; }
+.nav-destination-link {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: inherit;
+  color: inherit;
+}
+.nav-destination-link:hover { text-decoration: none; }
+.nav-destination .nav-badge { margin-right: 10px; }
+.nav-destination :is(a, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 新对话: the rail's one action that starts something rather than going
    somewhere. It wears the nav row's clothes on purpose — same 15px label, same

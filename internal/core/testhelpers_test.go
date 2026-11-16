@@ -5,8 +5,10 @@ package core
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,10 +52,73 @@ func waitLocalTasksSettled(t *testing.T, c *Core) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("node %s still has %d non-terminal tasks", c.nodeID, n)
+			t.Fatalf("node %s still has %d non-terminal tasks: %s", c.nodeID, n, taskDiagnostics(context.Background(), c.store.db, ""))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// taskDiagnostics captures the queue and recent events for open rows so a
+// concurrency-test failure shows where the scheduler stopped making progress.
+func taskDiagnostics(ctx context.Context, db *sql.DB, parentID string) string {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	query := "SELECT task_id, COALESCE(parent_id,''), state, owner_node, attempt_id, COALESCE(lease_expires_at,0), COALESCE(result_json,'') FROM tasks WHERE state NOT IN ('done','failed','cancelled','expired')"
+	args := []any{}
+	if parentID != "" {
+		query += " AND parent_id=?"
+		args = append(args, parentID)
+	}
+	query += " ORDER BY created_at, task_id"
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Sprintf("query open tasks: %v", err)
+	}
+	type taskSnapshot struct {
+		id, parent, state, owner, attempt, result string
+		lease                                     int64
+	}
+	var tasks []taskSnapshot
+	for rows.Next() {
+		var task taskSnapshot
+		if err := rows.Scan(&task.id, &task.parent, &task.state, &task.owner, &task.attempt, &task.lease, &task.result); err != nil {
+			rows.Close()
+			return fmt.Sprintf("scan task: %v", err)
+		}
+		tasks = append(tasks, task)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return fmt.Sprintf("iterate tasks: %v", err)
+	}
+	var out []string
+	for _, task := range tasks {
+		if len(task.result) > 240 {
+			task.result = task.result[:240] + "…"
+		}
+		var events []string
+		eventRows, err := db.QueryContext(ctx, "SELECT type, data_json FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 4", task.id)
+		if err == nil {
+			for eventRows.Next() {
+				var typ, data string
+				if eventRows.Scan(&typ, &data) == nil {
+					if len(data) > 180 {
+						data = data[:180] + "…"
+					}
+					events = append(events, typ+":"+data)
+				}
+			}
+			eventRows.Close()
+		} else {
+			events = append(events, "query error: "+err.Error())
+		}
+		out = append(out, fmt.Sprintf("id=%s parent=%s state=%s owner=%s attempt=%s lease=%d result=%q events=[%s]", task.id, task.parent, task.state, task.owner, task.attempt, task.lease, task.result, strings.Join(events, "; ")))
+	}
+	if len(out) == 0 {
+		return "no open tasks found"
+	}
+	return strings.Join(out, " | ")
 }
 
 // waitArtifactWrites drains the detached artifact work a result handler

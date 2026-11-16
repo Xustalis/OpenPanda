@@ -10,17 +10,27 @@ import "context"
 // another project must be refused: memory isolation is a boundary between
 // projects, not a convention the model is trusted to keep.
 type scopeProjectKey struct{}
-type scopePersonalBlockedKey struct{}
+type scopePersonalAccessKey struct{}
 
-// WithoutPersonalMemory marks workspace turns that have no named project.
-// They still need the same personal-memory wall as named project turns.
-func WithoutPersonalMemory(ctx context.Context) context.Context {
-	return context.WithValue(ctx, scopePersonalBlockedKey{}, true)
+// WithPersonalMemory grants the trusted owner's conversation access to the
+// personal stores, independently of its current project or working directory.
+// It is a local entry capability, never a model argument or a delegation grant.
+func WithPersonalMemory(ctx context.Context) context.Context {
+	return context.WithValue(ctx, scopePersonalAccessKey{}, true)
 }
 
-func personalMemoryBlocked(ctx context.Context) bool {
-	v, _ := ctx.Value(scopePersonalBlockedKey{}).(bool)
-	return v
+// WithoutPersonalMemory explicitly denies personal stores to non-owner asks,
+// including project-free worker contexts. A nested denial revokes an outer grant.
+func WithoutPersonalMemory(ctx context.Context) context.Context {
+	return context.WithValue(ctx, scopePersonalAccessKey{}, false)
+}
+
+func personalMemoryAccess(ctx context.Context) (allowed, explicit bool) {
+	if ctx == nil {
+		return false, false
+	}
+	allowed, explicit = ctx.Value(scopePersonalAccessKey{}).(bool)
+	return allowed, explicit
 }
 
 // WithScopeProject pins the turn's project ("" for a project-free

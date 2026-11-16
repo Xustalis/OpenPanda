@@ -1036,6 +1036,8 @@ const defaultDTNTTL = 24 * time.Hour
 func (c *Core) delegationBudget(ctx context.Context, taskID string, wireBudget int) (int, error) {
 	if t, err := c.store.Get(ctx, taskID); err == nil {
 		switch {
+		case t.DelegationBudget < 0:
+			return 0, scheduler.ErrBudgetExceeded
 		case t.DelegationBudget > 0:
 			wireBudget = t.DelegationBudget
 		case len(t.Chain) <= 1 && wireBudget <= 0:

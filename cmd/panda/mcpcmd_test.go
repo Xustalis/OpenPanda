@@ -5,6 +5,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -136,8 +138,8 @@ func TestSelfToolsSubtaskSpawnGuards(t *testing.T) {
 	}
 	d.submits.Store(maxSelfTaskSubmits)
 	_, err := d.toolSubtaskSpawn(context.Background(), map[string]any{"title": "x"})
-	if err == nil || !strings.Contains(err.Error(), "cap") {
-		t.Fatalf("session cap must refuse, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "live parent") {
+		t.Fatalf("missing live parent must refuse, got %v", err)
 	}
 }
 
@@ -185,6 +187,23 @@ func TestSelfToolsSubtaskAwait(t *testing.T) {
 		t.Fatalf("complete task: %v", err)
 	}
 
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-secret" {
+			t.Error("missing attempt capability")
+		}
+		var req core.ChildRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		if req.AttemptID != "attempt-1" || req.Operation != "await" || req.TaskID != task.TaskID {
+			t.Errorf("wrong live request: %+v", req)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"task_id": task.TaskID, "parent_id": "parent-1", "state": core.StateDone, "result": "test result output"})
+	}))
+	defer server.Close()
+	t.Setenv("PANDA_CHILD_RPC_URL", server.URL)
+	t.Setenv("PANDA_CHILD_RPC_TOKEN", "test-secret")
+	t.Setenv("PANDA_ATTEMPT_ID", "attempt-1")
 	text, err := d.toolSubtaskAwait(context.Background(), map[string]any{"task_id": task.TaskID, "timeout_s": 2})
 	if err != nil {
 		t.Fatalf("toolSubtaskAwait failed: %v", err)

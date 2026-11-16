@@ -495,7 +495,7 @@ func (c *Core) recordTrustVerdict(ctx context.Context, taskID string, tier trust
 func (c *Core) eligibleForSend(ctx context.Context, needs trust.Needs, nodes []ledger.Node) []ledger.Node {
 	out := make([]ledger.Node, 0, len(nodes))
 	for _, n := range nodes {
-		if !scheduler.IsSelfRow(n.ID, c.nodeID) && n.Capacity.ArtifactMergeVersion < needs.MinArtifactMergeVersion {
+		if !scheduler.IsSelfRow(n.ID, c.nodeID) && (n.Capacity.ArtifactMergeVersion < needs.MinArtifactMergeVersion || n.Capacity.ExecutionProtocol < needs.MinExecutionProtocol) {
 			continue
 		}
 		if scheduler.IsSelfRow(n.ID, c.nodeID) ||
@@ -554,6 +554,7 @@ func (c *Core) reputationScores(ctx context.Context) map[string]float64 {
 // level are clampable so they never need listing here.
 func needsForTask(t Task) trust.Needs {
 	return trust.Needs{
+		MinExecutionProtocol:    bus.RequiredExecutionProtocol(t.SpecJSON),
 		MinArtifactMergeVersion: artifactProtocolOf(t.SpecJSON),
 		Pack:                    t.Project != "",
 		Inputs:                  len(t.Inputs) > 0 || t.ContextType == "file" || t.Project != "",
@@ -568,9 +569,10 @@ func needsForTask(t Task) trust.Needs {
 // row does not exist yet and the shape lives in the TaskInput.
 func needsForInput(in TaskInput) trust.Needs {
 	return trust.Needs{
-		Pack:   in.Project != "",
-		Inputs: in.Project != "" || in.ContextType == "file",
-		Screen: trust.ScreenSensitiveSpec(in.Requires, in.SpecJSON),
+		MinExecutionProtocol: bus.RequiredExecutionProtocol(in.SpecJSON),
+		Pack:                 in.Project != "",
+		Inputs:               in.Project != "" || in.ContextType == "file",
+		Screen:               trust.ScreenSensitiveSpec(in.Requires, in.SpecJSON),
 	}
 }
 

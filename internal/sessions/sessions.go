@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Xustalis/OpenPanda/internal/activity"
 	"os"
 	"path/filepath"
 	"sort"
@@ -70,6 +71,8 @@ func ReplayBudget(contextWindowTokens int) int {
 
 // Turn is one stored conversation message.
 type Turn struct {
+	DisplayArchive bool              `json:"display_archive,omitempty"`
+	Activities     []activity.Record `json:"activities,omitempty"`
 	// Delivery is the agent's display-only handoff report. Text remains the
 	// bounded conversational digest; replay must never include this payload.
 	DeliveryAttemptID string `json:"delivery_attempt_id,omitempty"`
@@ -224,8 +227,12 @@ type SideChat struct {
 // reloaded pane shows the same evidence the live stream did. It is never
 // replayed as a thread turn.
 type SideTurn struct {
-	Role string `json:"role"` // "user" | "assistant"
-	Text string `json:"text"`
+	DisplayArchive bool              `json:"display_archive,omitempty"`
+	OperationID    string            `json:"operation_id,omitempty"`
+	Activities     []activity.Record `json:"activities,omitempty"`
+	Thought        string            `json:"thought,omitempty"`
+	Role           string            `json:"role"` // "user" | "assistant"
+	Text           string            `json:"text"`
 	// Tools are the tool calls behind an assistant answer, in order, each as
 	// "name subject" (workspace_read side.go). Display-only.
 	Tools []string `json:"tools,omitempty"`
@@ -246,18 +253,20 @@ type SideTurn struct {
 // client reconnect after its SSE response disappears and observe the exact
 // generation it started instead of inferring completion from transcript shape.
 type Operation struct {
-	LastActivity time.Time      `json:"last_activity,omitempty"`
-	Tokens       int64          `json:"tokens,omitempty"`
-	Estimated    bool           `json:"estimated,omitempty"`
-	StartedAt    time.Time      `json:"started_at,omitempty"`
-	Text         string         `json:"text,omitempty"`
-	Thought      string         `json:"thought,omitempty"`
-	Progress     map[string]any `json:"progress,omitempty"`
-	ID           string         `json:"id"`
-	Status       string         `json:"status"`
-	TaskID       string         `json:"task_id,omitempty"`
-	Error        string         `json:"error,omitempty"`
-	UpdatedAt    time.Time      `json:"updated_at"`
+	DisplayArchive bool              `json:"display_archive,omitempty"`
+	Activities     []activity.Record `json:"activities,omitempty"`
+	LastActivity   time.Time         `json:"last_activity,omitempty"`
+	Tokens         int64             `json:"tokens,omitempty"`
+	Estimated      bool              `json:"estimated,omitempty"`
+	StartedAt      time.Time         `json:"started_at,omitempty"`
+	Text           string            `json:"text,omitempty"`
+	Thought        string            `json:"thought,omitempty"`
+	Progress       map[string]any    `json:"progress,omitempty"`
+	ID             string            `json:"id"`
+	Status         string            `json:"status"`
+	TaskID         string            `json:"task_id,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 // Store persists sessions as JSON files under root (created on demand).
@@ -328,6 +337,11 @@ func (s *Store) Create(title string, project ...string) (*Session, error) {
 // The parent's title/project/summary carry over; its worktree does not —
 // callers carve a fresh one from the parent's branch when in a repository.
 func (s *Store) Fork(id string, atTurn int) (*Session, error) {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	parent, err := s.load(id)
@@ -364,7 +378,12 @@ func (s *Store) Fork(id string, atTurn int) (*Session, error) {
 	if atTurn < child.SummaryTurns {
 		child.Summary, child.SummaryTurns = "", 0
 	}
+	if err := s.forkDisplay(parent.ID, child.ID, child.Turns); err != nil {
+		_ = os.RemoveAll(filepath.Join(s.root, "display", child.ID))
+		return nil, fmt.Errorf("sessions: fork display archive: %w", err)
+	}
 	if err := s.save(child); err != nil {
+		_ = os.RemoveAll(filepath.Join(s.root, "display", child.ID))
 		return nil, err
 	}
 	return child, nil
@@ -402,7 +421,11 @@ func (s *Store) Children(id string) ([]*Session, error) {
 func (s *Store) Get(id string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.load(id)
+	sess, err := s.load(id)
+	if err == nil {
+		s.hydrateDisplay(sess)
+	}
+	return sess, err
 }
 
 // List returns all sessions, pinned first and then newest first.
@@ -552,6 +575,9 @@ func (s *Store) appendTurns(id string, turns ...Turn) (*Session, bool, error) {
 	appended := false
 	now := time.Now()
 	for _, turn := range turns {
+		if turn.OperationID != "" && sess.Operation != nil && turn.OperationID == sess.Operation.ID {
+			turn.DisplayArchive = turn.DisplayArchive || sess.Operation.DisplayArchive
+		}
 		if turn.IdempotencyKey != "" {
 			if keys[turn.IdempotencyKey] {
 				continue
@@ -718,6 +744,9 @@ func (s *Store) SetOperation(id string, op Operation) (bool, error) {
 	}
 	if op.StartedAt.IsZero() && sess.Operation != nil && sess.Operation.ID == op.ID {
 		op.StartedAt = sess.Operation.StartedAt
+	}
+	if sess.Operation != nil && sess.Operation.ID == op.ID {
+		op.DisplayArchive = op.DisplayArchive || sess.Operation.DisplayArchive
 	}
 	op.UpdatedAt = time.Now()
 	sess.Operation = &op
@@ -993,6 +1022,7 @@ func (s *Store) SetSideOperation(id string, op Operation) (bool, error) {
 		if chat.Operation == nil || chat.Operation.ID != op.ID {
 			continue
 		}
+		op.DisplayArchive = op.DisplayArchive || chat.Operation.DisplayArchive
 		op.UpdatedAt = time.Now()
 		chat.Operation = &op
 		if err := s.save(sess); err != nil {
@@ -1008,6 +1038,7 @@ func (s *Store) SetSideOperation(id string, op Operation) (bool, error) {
 // an answer from an ask whose chat was deleted (or whose question was
 // superseded) must not land in another transcript.
 func (s *Store) FinishSideOperation(id, operationID string, turn SideTurn, op Operation) (bool, error) {
+	turn.OperationID = operationID
 	unlock, err := lockStore(s.root)
 	if err != nil {
 		return false, fmt.Errorf("sessions: lock: %w", err)
@@ -1029,6 +1060,8 @@ func (s *Store) FinishSideOperation(id, operationID string, turn SideTurn, op Op
 	if chat == nil {
 		return false, nil
 	}
+	op.DisplayArchive = op.DisplayArchive || chat.Operation.DisplayArchive
+	turn.DisplayArchive = turn.DisplayArchive || op.DisplayArchive
 	if turn.TS == 0 {
 		turn.TS = time.Now().Unix()
 	}
@@ -1412,7 +1445,7 @@ func (s *Store) deleteFile(id string) error {
 		}
 		return err
 	}
-	return nil
+	return os.RemoveAll(filepath.Join(s.root, "display", id))
 }
 
 func (s *Store) path(id string) string { return filepath.Join(s.root, id+".json") }

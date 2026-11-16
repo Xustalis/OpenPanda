@@ -16,6 +16,7 @@ import {
   type UpdateStatus,
 } from '../api/client'
 import { formatDuration, relativeTime } from '../format/time'
+import { trustLabel } from '../format/trust'
 import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { locale, t } from '../i18n'
 import { navigate } from '../nav'
@@ -701,7 +702,7 @@ function NotifRow(props: {
             {p.last_seen
               ? ` · ${t('notifications.offlineMeta', { when: relativeTime(p.last_seen, locale(), props.now) })}`
               : ''}
-            {p.trust ? ` · ${t('notifications.trust', { tier: p.trust })}` : ''}
+            {p.trust ? ` · ${t('notifications.trust', { tier: trustLabel(p.trust) })}` : ''}
           </>
         }
         side={

@@ -58,13 +58,15 @@ func (t *Tool) Execute(name string, args map[string]any) (string, error) {
 // the argument, so without the pin a project conversation could read or edit
 // another project's memory by naming it.
 func (t *Tool) ExecuteCtx(ctx context.Context, name string, args map[string]any) (string, error) {
-	// A project-scoped conversation must never read or mutate the global
-	// personal layers through a tool. The injector's prompt wall alone is not
-	// sufficient: a tool result would put the same data back into that prompt.
-	if project, pinned := ScopeProject(ctx); pinned && (project != "" || personalMemoryBlocked(ctx)) {
+	// Only the trusted owner entry can lift the project memory wall. Execution
+	// contexts explicitly deny personal access even when they have no project;
+	// unpinned tooling keeps its historical direct-store behavior.
+	allowed, explicit := personalMemoryAccess(ctx)
+	project, pinned := ScopeProject(ctx)
+	if !allowed && (explicit || pinned) {
 		target, _ := args["target"].(string)
 		if target == "" || target == targetUser || target == targetMemory {
-			return "", fmt.Errorf("memory: personal memory is unavailable in project %q", project)
+			return "", fmt.Errorf("memory: personal memory is restricted to owner conversations; this execution context has no personal-memory access (project %q)", project)
 		}
 	}
 	switch name {

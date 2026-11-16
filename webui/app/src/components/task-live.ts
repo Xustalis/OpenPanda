@@ -62,6 +62,8 @@ export function mergeLive(history: TaskEvent[], traces: TraceEvent[]): LiveEvent
   }
   for (const e of traces) {
     const key = e.id ? `id:${e.id}` : `ts:${e.ts}:${e.type}`
+    // Saved logs are authoritative; SSE may clip strings for transport.
+    if (byKey.has(key)) continue
     byKey.set(key, {
       key,
       id: e.id ?? 0,

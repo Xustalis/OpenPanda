@@ -5,6 +5,7 @@ package entry
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -39,7 +40,7 @@ const ToolNameTaskBudget = "task_budget"
 // v7: task_kind persists the task-specific delivery evidence contract.
 // v8: workspace classifications bypass cache until content revisions are keyed.
 // v9: include the exposed tool schemas, including discovery changes.
-const classificationCacheVersion = "v9"
+const classificationCacheVersion = "v12" // model-produced objective policies in task/plan contracts
 
 // classificationCacheable reports whether a classified Output may be replayed
 // from the disk cache. Kinds that materialize durable work — a task row, or a
@@ -243,6 +244,9 @@ func ClassifyTurnsWithTools(ctx context.Context, c *Client, devices []ledger.Nod
 	if err != nil {
 		return Output{}, err
 	}
+	if err := ValidateGeneratedObjectives(out); err != nil {
+		return Output{}, err
+	}
 	storeClassification(ctx, c, po, registry, out)
 	return out, nil
 }
@@ -285,6 +289,9 @@ func ClassifyStreamWithTools(ctx context.Context, c *Client, devices []ledger.No
 	}
 	out, err := resolveResponse(resp, len(specs) > 0, po.UserLocale)
 	if err != nil {
+		return Output{}, err
+	}
+	if err := ValidateGeneratedObjectives(out); err != nil {
 		return Output{}, err
 	}
 	storeClassification(ctx, c, po, registry, out)
@@ -361,4 +368,16 @@ func resolveResponse(resp Response, toolsOffered bool, locs ...i18n.Locale) (Out
 // part of the note — every one is executed in the same round.
 func droppedToolNote(resp Response) string {
 	return strings.TrimSpace(resp.Text)
+}
+
+// New model generations must include objectives. ParseOutput and persisted
+// task loading remain compatible with historical tasks lacking this field.
+func ValidateGeneratedObjectives(out Output) error {
+	if out.Kind == KindTask && (out.Task == nil || out.Task.Spec.Objectives == nil) {
+		return fmt.Errorf("entry: newly generated task requires objectives")
+	}
+	if out.Kind == KindPlan && (out.Plan == nil || out.Plan.Objectives == nil) {
+		return fmt.Errorf("entry: newly generated plan requires objectives")
+	}
+	return nil
 }

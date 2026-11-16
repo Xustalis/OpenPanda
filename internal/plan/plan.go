@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/objectives"
 )
 
 // MaxStages bounds a plan's size. Plans are generated from a user's request by a
@@ -87,8 +88,9 @@ type Stage struct {
 // graph in its Needs fields rather than in an explicit edge list: a stage is
 // meaningless without the thing it depends on, so the two travel together.
 type Plan struct {
-	Goal   string
-	Stages []Stage
+	Objectives *objectives.Policy `json:"objectives,omitempty"`
+	Goal       string
+	Stages     []Stage
 }
 
 // Validate rejects a plan that cannot be executed. Every check here is a plan
@@ -96,6 +98,9 @@ type Plan struct {
 // dependency leaves a stage waiting for a stage that will never run, and a cycle
 // leaves the whole plan idle with nothing ready and no error anywhere.
 func Validate(p Plan) error {
+	if err := objectives.Validate(p.Objectives); err != nil {
+		return err
+	}
 	if strings.TrimSpace(p.Goal) == "" {
 		return fmt.Errorf("plan: goal must not be empty")
 	}
@@ -108,6 +113,13 @@ func Validate(p Plan) error {
 
 	index := make(map[string]int, len(p.Stages))
 	for i, s := range p.Stages {
+		policy, err := objectives.FromSpecJSON(s.SpecJSON)
+		if err != nil {
+			return fmt.Errorf("plan: stage %q: %w", s.ID, err)
+		}
+		if _, err := objectives.Inherit(p.Objectives, policy); err != nil {
+			return fmt.Errorf("plan: stage %q: %w", s.ID, err)
+		}
 		id := strings.TrimSpace(s.ID)
 		if id == "" {
 			return fmt.Errorf("plan: stage %d has no id", i)

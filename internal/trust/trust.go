@@ -251,6 +251,7 @@ func DefaultAccept(l Level) AcceptPolicy {
 // shrink. Eligibility is judged from needs — a task that would run degraded
 // under a peer's ceiling is re-routed instead of lobotomized on the wire.
 type Needs struct {
+	MinExecutionProtocol    int
 	MinArtifactMergeVersion int
 	// Pack: the delegate ships (or names) a project — its pack and tree.
 	Pack bool
@@ -272,7 +273,8 @@ type Needs struct {
 // originating TaskInput is still in scope.
 func NeedsOf(p bus.TaskDelegatePayload) Needs {
 	return Needs{
-		Pack: p.Project != "" || len(p.ProjectPack) > 0,
+		MinExecutionProtocol: bus.RequiredExecutionProtocol(p.SpecJSON),
+		Pack:                 p.Project != "" || len(p.ProjectPack) > 0,
 		// A "file" task whose tree has not (yet) been packed into Inputs still
 		// needs inputs rights — its content rides the context channel, and the
 		// store-side derivations (needsForTask/needsForInput) already treat

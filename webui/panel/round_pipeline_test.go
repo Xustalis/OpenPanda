@@ -30,7 +30,18 @@ func TestRoundPipelineBatchedToolsExecuteAndSummarize(t *testing.T) {
 		emit(map[string]any{"type": "message_start", "message": map[string]any{"usage": map[string]int{"input_tokens": 10}}})
 		if calls.Add(1) == 1 {
 			for i, title := range []string{"first native job", "second native job"} {
-				args, _ := json.Marshal(map[string]any{"title": title, "target": "run " + title, "abilities": []string{"test:once"}})
+				args, _ := json.Marshal(map[string]any{
+					"title": title, "target": "run " + title, "abilities": []string{"test:once"},
+					"objectives": map[string]any{
+						"version": 1, "revision": 1,
+						"dimensions": []map[string]any{{
+							"dimension": "delivery", "weight": 1, "priority": "NORMAL",
+							"requirement": "Execute " + title,
+							"reason":      "The user requested two native jobs",
+							"criteria":    []string{"The native command executes exactly once"},
+						}},
+					},
+				})
 				emit(map[string]any{"type": "content_block_start", "index": i, "content_block": map[string]any{"type": "tool_use", "id": fmt.Sprintf("task-%d", i), "name": "task_submit"}})
 				emit(map[string]any{"type": "content_block_delta", "index": i, "delta": map[string]any{"type": "input_json_delta", "partial_json": string(args)}})
 				emit(map[string]any{"type": "content_block_stop", "index": i})

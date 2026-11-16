@@ -70,6 +70,10 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleDecline(ctx, env)
 	case bus.MsgTaskProgress:
 		c.handleProgress(ctx, env)
+	case bus.MsgTaskActivityFetch:
+		c.handleActivityFetch(ctx, env)
+	case bus.MsgTaskActivities:
+		c.handleActivities(ctx, env)
 	case bus.MsgTaskResult:
 		c.handleResult(ctx, env)
 	case bus.MsgTaskCancel:

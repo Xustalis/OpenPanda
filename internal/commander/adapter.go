@@ -1369,6 +1369,7 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		env = forward
 	}
 	env = withNodeConfigEnv(ctx, env)
+	env = childRPCEnv(ctx, env)
 	// Session mode: when the orchestration layer asked for it
 	// (WithSessionMode), the task carries a session pool and this agent's
 	// registry entry declares the capability, the adapter process stays

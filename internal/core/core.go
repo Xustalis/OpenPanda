@@ -486,6 +486,9 @@ type Core struct {
 	// peer minting ids forever cannot grow memory without bound.
 	msgSeenMu sync.Mutex
 	msgSeen   map[msgSeenKey]time.Time
+	// Bounded task decision locks serialize loopback control requests even
+	// when an attempt's endpoint is recreated. Durable state fences processes.
+	childDecisionLocks [64]sync.Mutex
 	// lastHelloReject is the most recent hello_reject reason a peer sent us,
 	// mirrored off the conn so one-shot probes without a conn handle (the
 	// ProbePeer loop) can still report "online but refusing our credential"

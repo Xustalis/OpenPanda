@@ -11,6 +11,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/objectives"
 )
 
 // Kind is the entry model's top-level output category.
@@ -189,6 +190,9 @@ type Requires struct {
 
 // TaskSpecDetail captures what to do, where, and how to verify success.
 type TaskSpecDetail struct {
+	// Coordination is an explicit model requirement, not inferred from text.
+	Coordination string             `json:"coordination,omitempty"`
+	Objectives   *objectives.Policy `json:"objectives,omitempty"`
 	// Kind selects the delivery evidence contract, never an authorization grant.
 	// Empty preserves legacy tasks; it persists across routing and resume.
 	Kind   TaskKind `json:"task_kind,omitempty"`
@@ -254,9 +258,10 @@ type ResourceProfile struct {
 // entry.ResourceProfile), so the dependency can only run one way. The plan
 // package converts a validated PlanSpec into its own Plan.
 type PlanSpec struct {
-	Goal       string          `json:"goal"`
-	FinalStage string          `json:"final_stage,omitempty"`
-	Stages     []PlanStageSpec `json:"stages"`
+	Objectives *objectives.Policy `json:"objectives,omitempty"`
+	Goal       string             `json:"goal"`
+	FinalStage string             `json:"final_stage,omitempty"`
+	Stages     []PlanStageSpec    `json:"stages"`
 }
 
 // PlanStageSpec is one stage of a model-emitted plan. Requires and Resources are
@@ -266,16 +271,18 @@ type PlanSpec struct {
 // only run on that node — the requires match alone is a coincidence across a
 // fleet where every machine advertises the same agent.
 type PlanStageSpec struct {
-	Acceptance        []contract.Check `json:"acceptance,omitempty"`
-	SuccessDefinition string           `json:"success_definition,omitempty"`
-	ToolsPolicy       string           `json:"tools_policy,omitempty"`
-	MaxTurns          int              `json:"max_turns,omitempty"`
-	Kind              TaskKind         `json:"task_kind,omitempty"`
-	ID                string           `json:"id"`
-	Title             string           `json:"title"`
-	Intent            string           `json:"intent"`
-	Requires          []string         `json:"requires"`
-	Needs             []string         `json:"needs"`
-	Node              string           `json:"node,omitempty"`
-	Resources         ResourceProfile  `json:"resource_profile"`
+	Coordination      string             `json:"coordination,omitempty"`
+	Objectives        *objectives.Policy `json:"objectives,omitempty"`
+	Acceptance        []contract.Check   `json:"acceptance,omitempty"`
+	SuccessDefinition string             `json:"success_definition,omitempty"`
+	ToolsPolicy       string             `json:"tools_policy,omitempty"`
+	MaxTurns          int                `json:"max_turns,omitempty"`
+	Kind              TaskKind           `json:"task_kind,omitempty"`
+	ID                string             `json:"id"`
+	Title             string             `json:"title"`
+	Intent            string             `json:"intent"`
+	Requires          []string           `json:"requires"`
+	Needs             []string           `json:"needs"`
+	Node              string             `json:"node,omitempty"`
+	Resources         ResourceProfile    `json:"resource_profile"`
 }

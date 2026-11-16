@@ -17,17 +17,19 @@ const (
 	// peer's hello failed verification, and this is the reason it is about
 	// to be dropped. Without it a rejected dialer saw "connected" then EOF —
 	// indistinguishable from a network flap — and kept redialing forever.
-	MsgHelloReject  = "hello_reject"
-	MsgJoin         = "join"
-	MsgHeartbeat    = "heartbeat"
-	MsgTaskDelegate = "task_delegate"
-	MsgTaskAccept   = "task_accept"
-	MsgTaskDecline  = "task_decline"
-	MsgTaskProgress = "task_progress"
-	MsgTaskResult   = "task_result"
-	MsgTaskRetry    = "task_retry"
-	MsgTaskTransfer = "task_transfer"
-	MsgTaskCancel   = "task_cancel"
+	MsgHelloReject       = "hello_reject"
+	MsgJoin              = "join"
+	MsgHeartbeat         = "heartbeat"
+	MsgTaskDelegate      = "task_delegate"
+	MsgTaskAccept        = "task_accept"
+	MsgTaskDecline       = "task_decline"
+	MsgTaskProgress      = "task_progress"
+	MsgTaskActivities    = "task_activities"
+	MsgTaskActivityFetch = "task_activity_fetch"
+	MsgTaskResult        = "task_result"
+	MsgTaskRetry         = "task_retry"
+	MsgTaskTransfer      = "task_transfer"
+	MsgTaskCancel        = "task_cancel"
 	// MsgTaskResume is the delegator's approval for a task the executor
 	// parked in review for lack of tier-2 consent: the user granted it, and
 	// the re-run belongs on the node that holds the task (its capability

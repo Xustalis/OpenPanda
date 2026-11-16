@@ -21,11 +21,12 @@ import (
 func TestDispatchChildPreservesWorkDir(t *testing.T) {
 	c := newCore(t, "child-dir")
 	ctx := context.Background()
-	p, _, _, err := c.createTask(ctx, TaskInput{Title: "parent"})
+	workDir := t.TempDir()
+	p, _, _, err := c.createTask(ctx, TaskInput{Title: "parent", WorkDir: workDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := TaskInput{Title: "child", WorkDir: t.TempDir()}
+	in := TaskInput{Title: "child", WorkDir: workDir}
 	child, err := c.SpawnChildTask(ctx, p.TaskID, in)
 	if err != nil {
 		t.Fatal(err)
@@ -261,7 +262,11 @@ func TestDelegateBatchUsesImmutableSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.SetProjectStores(ps, t.TempDir())
-	ctx, cleanup, err := c.snapshotDelegateBatch(context.Background(), Task{Project: "proj"}, []delegateRequest{{Isolate: true}, {Isolate: true}})
+	parent, _, _, err := c.createTask(context.Background(), TaskInput{Title: "parent", Project: "proj"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cleanup, err := c.snapshotDelegateBatch(context.Background(), parent, []delegateRequest{{Isolate: true}, {Isolate: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +274,7 @@ func TestDelegateBatchUsesImmutableSnapshot(t *testing.T) {
 	writeFile(t, filepath.Join(main, "a.txt"), "later")
 	for _, name := range []string{"one", "two"} {
 		in := TaskInput{Title: name, Project: "proj", Isolate: true}
-		child, _, _, err := c.createTask(ctx, in)
+		child, err := c.SpawnChildTask(ctx, parent.TaskID, in)
 		if err != nil {
 			t.Fatal(err)
 		}

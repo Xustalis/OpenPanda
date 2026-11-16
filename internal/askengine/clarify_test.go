@@ -17,7 +17,7 @@ import (
 
 const clarifyJSON = `{"kind":"clarify","clarify":{"plan":"先确认范围与验证方式。","questions":[{"id":"scope","header":"范围","question":"改哪个目录？","options":[{"label":"internal","description":"核心逻辑"},{"label":"cmd","description":"命令行"}],"recommended":"internal"},{"id":"verify","header":"验证","question":"用哪个命令验证？","options":[{"label":"make test"},{"label":"make gate"}],"recommended":"make test"}]}}`
 
-const clarifyTaskJSON = `{"kind":"task","task":{"title":"改一处代码","context_type":"file","requires":{"abilities":["agent:codex"]},"spec":{"scope":"internal","target":"改一处代码","constraints":[],"success_definition":"改完并通过检查"},"complexity":0.3,"risk":"low","resource_profile":{"cpu":1,"ram_mb":512,"duration_hint":"short"}}}`
+const clarifyTaskJSON = `{"kind":"task","task":{"title":"改一处代码","context_type":"file","requires":{"abilities":["agent:codex"]},"spec":{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"delivery","weight":1,"priority":"NORMAL","requirement":"Complete the fixture task","reason":"The fixture requests a task","criteria":["Observe the expected fixture result"]}]},"scope":"internal","target":"改一处代码","constraints":[],"success_definition":"改完并通过检查"},"complexity":0.3,"risk":"low","resource_profile":{"cpu":1,"ram_mb":512,"duration_hint":"short"}}}`
 
 func TestClarifyInlineAnswersContinue(t *testing.T) {
 	var mu sync.Mutex
@@ -102,7 +102,7 @@ func TestClarifyWithoutCallbackReturnsQuestion(t *testing.T) {
 	}
 }
 
-const planConfirmTaskJSON = `{"kind":"task","task":{"title":"重构核心","context_type":"file","requires":{"abilities":["agent:codex"]},"spec":{"scope":"internal","target":"重构 internal/core 的错误处理","constraints":[],"success_definition":"make test 通过"},"complexity":0.9,"risk":"high","resource_profile":{"cpu":1,"ram_mb":512,"duration_hint":"long"}}}`
+const planConfirmTaskJSON = `{"kind":"task","task":{"title":"重构核心","context_type":"file","requires":{"abilities":["agent:codex"]},"spec":{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"delivery","weight":1,"priority":"NORMAL","requirement":"Complete the fixture task","reason":"The fixture requests a task","criteria":["Observe the expected fixture result"]}]},"scope":"internal","target":"重构 internal/core 的错误处理","constraints":[],"success_definition":"make test 通过"},"complexity":0.9,"risk":"high","resource_profile":{"cpu":1,"ram_mb":512,"duration_hint":"long"}}}`
 
 // runPlanConfirm drives one ask over a high-complexity task and answers the
 // synthesized plan card with the option at choiceIndex (0 run, 1 read-only,

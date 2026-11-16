@@ -680,6 +680,9 @@ func (r *Router) Route(required []string) (Plan, error) {
 func (r *Router) Execute(ctx context.Context, plan Plan, prompt string, cwd string, authorized bool) Result {
 	switch plan.Kind {
 	case "native":
+		if needsImmediateCoordination(ctx) {
+			return Result{ExitCode: 1, Stderr: "native command cannot satisfy required IMMEDIATE child coordination"}
+		}
 		if Restricted(ctx) {
 			return Result{OK: false, ExitCode: 1, Stderr: "read-only execution refuses native commands without a restricted tool face"}
 		}
@@ -884,6 +887,16 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		// the request (no .mcp.json in the work dir); project-discovery CLIs
 		// keep the materialize-and-remove file path.
 		runCtx, cleanupMCP := r.wireMCPPassthrough(runCtx, name, ag.Adapter, cwd)
+		if needsImmediateCoordination(ctx) && coordinationMode(runCtx) != "IMMEDIATE" {
+			cleanupMCP()
+			unavailable = append(unavailable, name+" (required IMMEDIATE coordination unavailable; agent currently supports ROUND_END delegation)")
+			continue
+		}
+		if coordinationMode(runCtx) == "IMMEDIATE" {
+			runPrompt = "[Panda coordination: IMMEDIATE] Use panda_subtask_spawn/await/cancel during this run. Await yields this task's resources and adopts child evidence before returning. Reuse request_id on retries.\n" + runPrompt
+		} else if _, bound := ctx.Value(childRPCKey{}).(childRPCConfig); bound {
+			runPrompt = "[Panda coordination: ROUND_END] Child delegation is processed after your turn through PANDA_DELEGATE.\n" + runPrompt
+		}
 		fullPrompt := runPrompt
 		runPrompt = promptForAdapter(runCtx, ag.Adapter, runPrompt)
 		if observe, ok := ctx.Value(promptObserverKey{}).(PromptObserver); ok && observe != nil {

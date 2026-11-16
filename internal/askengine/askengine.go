@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Xustalis/OpenPanda/internal/activity"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -1746,6 +1747,8 @@ func (e *Engine) watchNodeRow(ctx context.Context, sched *core.Core, demote cont
 // events structured, for a caller that owns a locale and wants to phrase them
 // itself. Set whichever fits — OnProgress wins when both are present.
 type StreamCallbacks struct {
+	// OnActivity carries display-only evidence; callers must not replay it.
+	OnActivity  func(activity.Record)
 	OnDelta     func(text string)
 	OnReasoning func(text string)
 	OnStatus    func(text string)
@@ -2069,6 +2072,10 @@ type AskScope struct {
 	RoundID string
 	Project string
 	WorkDir string
+	// PersonalMemory is set only by a trusted owner conversation entry. It
+	// permits the owner's personal stores across projects, never travels in a
+	// task spec or delegation, and does not override read-only permission mode.
+	PersonalMemory bool `json:"-"`
 	// Mode is the slash-prefix interaction mode the user picked for this turn
 	// ("goal", "plan", "spec"); empty leaves classification to the model.
 	Mode string
@@ -2133,14 +2140,16 @@ type AskScope struct {
 	SideTurns []entry.Turn
 }
 
-// AskTurns is the backward-compatible session-aware entry point. Callers that
-// own explicit project context should use AskTurnsScoped.
+// AskTurns is the backward-compatible session-aware entry point. It does not
+// grant personal memory. Trusted owner entries use AskTurnsScoped and set
+// PersonalMemory explicitly, alongside any project context.
 func (e *Engine) AskTurns(ctx context.Context, history []entry.Turn, prompt, workDir string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
 	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, AmbientProject: true}, authorize, cb)
 }
 
 // AskTurnsSession is AskTurnsScoped plus the session id a remembered "session"
-// approval binds to. "" degrades to the session-less bucket.
+// approval binds to. "" degrades to the session-less bucket. A session id is
+// not an owner capability and does not grant personal memory.
 func (e *Engine) AskTurnsSession(ctx context.Context, history []entry.Turn, prompt, workDir, mode, sessionID string, authorize bool, cb StreamCallbacks) (res *Result, err error) {
 	return e.AskTurnsScoped(ctx, history, prompt, AskScope{WorkDir: workDir, Mode: mode, SessionID: sessionID, AmbientProject: true}, authorize, cb)
 }
@@ -2487,14 +2496,12 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		}
 	}
 
-	// Memory wall (design §17.2): Hermes personal memory enters only
-	// project-free conversations. A pinned workDir marks a project/workspace
-	// conversation (a session's worktree or the shared work path) — its
-	// classification and any task it spawns must stay untainted by personal
-	// memory, so nothing is loaded at all. Project memory never enters this
-	// prompt either; the execution path loads it selectively (A1), not here.
+	// Personal memory belongs to the owner's conversation, not its cwd. A
+	// trusted entry grants it explicitly; workers and remote delegates never
+	// acquire that capability by selecting a project or naming a directory.
+	// Project execution still loads only its own selective memory manifest.
 	conversationMemory := ""
-	if workDir == "" && e.injector != nil {
+	if scope.PersonalMemory && e.injector != nil {
 		var merr error
 		conversationMemory, merr = e.injector.Conversation(prompt)
 		if merr != nil {
@@ -2597,7 +2604,9 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	if scope.PermissionMode == defense.ModePlan {
 		ctx = withReadOnlyEntryTools(ctx)
 	}
-	if workDir != "" {
+	if scope.PersonalMemory {
+		ctx = memory.WithPersonalMemory(ctx)
+	} else {
 		ctx = memory.WithoutPersonalMemory(ctx)
 	}
 	verdict := e.approvalFor(scope.SessionID, scopeProj).withPermission(scope.PermissionMode)
@@ -3047,6 +3056,7 @@ rounds:
 				// pattern, a task id): a side channel that shows only the tool
 				// name still leaves the reader guessing what was checked.
 				cb.progress(Progress{Kind: ProgressTool, Name: call.Tool, Detail: toolProgressDetail(call)})
+				currentActivity := startToolActivity(cb, call, round, i)
 				if call.Tool == entry.ToolNameTaskSubmit {
 					// A refused dispatch invites a retry: the model raises the
 					// budget and re-sends the batch. Re-sending the whole batch
@@ -3056,6 +3066,7 @@ rounds:
 					key := dispatchKey(call.Arguments)
 					if id, done := dispatchedThisAsk[key]; done {
 						results[i] = alreadyDispatchedNote(id, effectiveLocale)
+						finishToolActivity(cb, currentActivity, results[i], nil)
 						continue
 					}
 					if budget.exhausted() {
@@ -3069,13 +3080,17 @@ rounds:
 						budget.refuse(title)
 						refusedThisRound++
 						results[i] = budgetRefusalNote(budget, strings.TrimSpace(title), effectiveLocale)
+						currentActivity.Status = "refused"
+						finishToolActivity(cb, currentActivity, results[i], nil)
 						continue
 					}
 				}
 				// Execute against the same registry snapshot classification
 				// saw: a mid-ask SetMCPCommand swap would otherwise make the
 				// model's tool call hit a registry that no longer knows it.
-				result, runErr := executeToolChecked(ctx, reg, call, toolAuthorized, toolDenied, approvalMode, effectiveLocale)
+				toolCtx := context.WithValue(ctx, toolActivityStatusKey{}, &currentActivity.Status)
+				result, runErr := executeToolChecked(toolCtx, reg, call, toolAuthorized, toolDenied, approvalMode, effectiveLocale)
+				finishToolActivity(cb, currentActivity, result, runErr)
 				if runErr != nil {
 					var pe *toolPanicError
 					if errors.As(runErr, &pe) {
@@ -3324,9 +3339,9 @@ rounds:
 	return budgetAdvisory(&Result{Kind: "answer", Answer: answer}), nil
 }
 
-// WorkPath returns the configured work directory — the project workspace
-// panel sessions execute in. It lets the panel pin non-repo sessions to the
-// work path so the memory wall (§17.2) holds for them too.
+// WorkPath returns the configured workspace panel sessions execute in,
+// including non-repo sessions. Personal-memory access is granted separately
+// by the trusted owner conversation scope and never inferred from this path.
 func (e *Engine) WorkPath() string {
 	e.cfgMu.RLock()
 	defer e.cfgMu.RUnlock()

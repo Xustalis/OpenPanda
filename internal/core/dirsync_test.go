@@ -5,6 +5,7 @@ package core
 import (
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
@@ -52,6 +53,71 @@ func dirField(t *testing.T, c *Core, id, col string) string {
 		t.Fatalf("read %s for %s: %v", col, id, err)
 	}
 	return v
+}
+
+type signedDirSnapshot struct {
+	pubKey, via, sig, raw string
+}
+
+// A public key alone can be recordPeerPubKey's intermediate identity skeleton.
+// The gossip upsert writes the signature, provenance and canonical row together;
+// read those fields in one snapshot only once that upsert is visible.
+func readSignedDirSnapshot(ctx context.Context, db *sql.DB, id string) (signedDirSnapshot, error) {
+	var row signedDirSnapshot
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(pub_key,''), learned_via, dir_sig, dir_row_json
+		FROM employee_cache WHERE id=? AND dir_sig != ''`, id).
+		Scan(&row.pubKey, &row.via, &row.sig, &row.raw)
+	return row, err
+}
+
+func waitSignedDirSnapshot(t testing.TB, ctx context.Context, db *sql.DB, id string) signedDirSnapshot {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	delay := time.Millisecond
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for signed directory row %s: %v", id, ctx.Err())
+		case <-timer.C:
+			row, err := readSignedDirSnapshot(ctx, db, id)
+			if err == nil {
+				return row
+			}
+			if err != sql.ErrNoRows {
+				t.Fatalf("read signed directory row %s: %v", id, err)
+			}
+			timer.Reset(delay)
+			delay = min(2*delay, 30*time.Millisecond)
+		}
+	}
+}
+
+// Reproduce the CI interleaving without sleeps: identity is visible before
+// the gossip upsert, and must not count as a completed directory exchange.
+func TestSignedDirSnapshotSkipsIdentitySkeleton(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreOnDB(t, openTestDB(t), "node-a")
+	raw, pub := mintDirRow(t, "placeholder", time.Now().Unix(), func(row *bus.DirRow) {
+		row.ID = stableIDPrefix + row.PubKey
+	})
+	id := stableIDPrefix + pub
+	c.recordPeerPubKey(ctx, id, pub, "")
+	if got := dirField(t, c, id, "pub_key"); got != pub {
+		t.Fatalf("identity skeleton key = %q, want %q", got, pub)
+	}
+	if _, err := readSignedDirSnapshot(ctx, c.db, id); err != sql.ErrNoRows {
+		t.Fatalf("identity skeleton reported as synced: %v", err)
+	}
+	if !c.applyDirRow(ctx, raw, "relay") {
+		t.Fatal("signed row rejected")
+	}
+	got := waitSignedDirSnapshot(t, ctx, c.db, id)
+	if got.pubKey != pub || got.via != "relay" || got.sig == "" || got.raw != string(raw) {
+		t.Fatalf("incomplete signed snapshot: %+v", got)
+	}
 }
 
 func TestSelfDirRowSignedAndStored(t *testing.T) {
@@ -537,38 +603,18 @@ func TestDirSyncEndToEnd(t *testing.T) {
 
 	// B pulls; the exchange runs over the live conn.
 	b.sendDirPull("da", "")
-	pollPub := func() string {
-		var v string
-		_ = b.db.QueryRow(`SELECT COALESCE(pub_key,'') FROM employee_cache WHERE id=?`, ghostID).Scan(&v)
-		return v
+	got := waitSignedDirSnapshot(t, ctx, b.db, ghostID)
+	if got.pubKey != gpub {
+		t.Fatalf("B learned ghost's key %q, want %q", got.pubKey, gpub)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && pollPub() != gpub {
-		time.Sleep(30 * time.Millisecond)
+	if got.via != "da" {
+		t.Fatalf("learned_via = %q, want da", got.via)
 	}
-	if got := pollPub(); got != gpub {
-		t.Fatalf("B never learned ghost's key: %q", got)
-	}
-	if got := dirField(t, b, ghostID, "learned_via"); got != "da" {
-		t.Fatalf("learned_via = %q, want da", got)
-	}
-	if got := dirField(t, b, ghostID, "dir_sig"); got == "" {
-		t.Fatal("row lost its signature in transit")
+	if got.raw != string(raw) {
+		t.Fatal("signed row changed in transit")
 	}
 	// Want direction: A should have learned B's self row back.
-	deadline = time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		var n int
-		if err := a.db.QueryRow(`SELECT COUNT(1) FROM employee_cache WHERE id='db' AND dir_sig != ''`).Scan(&n); err == nil && n == 1 {
-			break
-		}
-		time.Sleep(30 * time.Millisecond)
-	}
-	var n int
-	_ = a.db.QueryRow(`SELECT COUNT(1) FROM employee_cache WHERE id='db' AND dir_sig != ''`).Scan(&n)
-	if n != 1 {
-		t.Fatal("A never received B's signed row via want")
-	}
+	waitSignedDirSnapshot(t, ctx, a.db, "db")
 }
 
 // TestDirRowShareAttributesByAuthor pins the share accounting: signed rows

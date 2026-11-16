@@ -4,9 +4,10 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { PandaLockup } from './brand/panda'
 import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
-import { useAsync, useChangeSignal } from './hooks'
+import { useAsync, useChangeSignal, useTeamFeature } from './hooks'
 import { isSelfNodeUp } from './format/node-status'
-import { navigate, parseHash, type Route } from './nav'
+import { isTeamRoute, navigate, parseHash, type Route } from './nav'
+import { onTeamFeatureChange } from './features'
 import { lazy, Suspense } from 'preact/compat'
 import { SessionsView } from './views/sessions'
 import { SidebarHistory } from './views/sidebar-history'
@@ -86,7 +87,11 @@ function useRoute(): Route {
   useEffect(() => {
     const on = () => setRoute(parseHash())
     addEventListener('hashchange', on)
-    return () => removeEventListener('hashchange', on)
+    const stop = onTeamFeatureChange(on)
+    return () => {
+      removeEventListener('hashchange', on)
+      stop()
+    }
   }, [])
   return route
 }
@@ -95,6 +100,7 @@ export function App() {
   useLocaleRerender()
   useWarmRouteChunks()
   const route = useRoute()
+  const teamEnabled = useTeamFeature()
   const [authed, setAuthed] = useState<boolean>(getToken() !== '')
   const [gateError, setGateError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -107,6 +113,9 @@ export function App() {
   // re-derived — `#/settings` says nothing about what it was opened from.
   const lastView = useRef<Route>({ view: 'sessions', id: null })
   if (route.view !== 'settings') lastView.current = route
+  // Turning off the experiment must also unmount a team page behind Settings
+  // and prevent the sheet's close button from reopening it.
+  if (!teamEnabled && isTeamRoute(lastView.current)) lastView.current = { view: 'sessions', id: null }
   const base: Route = route.view === 'settings' ? lastView.current : route
 
   useEffect(() => onUnauthorized(() => setAuthed(false)), [])
@@ -268,49 +277,33 @@ export function App() {
             <Icon name="devices" />
             <span class="nav-label">{t('nav.workspace')}</span>
           </a>
-          {/* The boards' row, and the one row in the rail that can carry a
-              count: the review badge rides at the far end of it. Nested anchors
-              are invalid HTML, so the badge is a span that hijacks the click —
-              preventDefault kills the parent link's navigation, then we route
-              to the review-focused board ourselves. */}
-          <a
-            href="#/control"
-            class={`nav-item${active === 'control' ? ' active' : ''}`}
-            aria-current={active === 'control' ? 'page' : undefined}
-          >
-            <Icon name="kanban" />
-            <span class="nav-label">{t('nav.control')}</span>
+          <div class={`nav-item nav-destination${active === 'control' ? ' active' : ''}`}>
+            <a href="#/control" class="nav-destination-link" aria-current={active === 'control' ? 'page' : undefined}>
+              <Icon name="kanban" />
+              <span class="nav-label">{t('nav.control')}</span>
+            </a>
             {reviewCount > 0 && (
-              <span
+              <button
+                type="button"
                 class="nav-badge"
                 title={t('queue.col.review')}
-                role="button"
-                tabIndex={0}
-                onClick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  navigate({ view: 'control', tab: 'queue', review: true })
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    navigate({ view: 'control', tab: 'queue', review: true })
-                  }
-                }}
+                aria-label={`${t('queue.col.review')} · ${reviewCount}`}
+                onClick={() => navigate({ view: 'control', tab: 'queue', review: true })}
               >
                 {reviewCount}
-              </span>
+              </button>
             )}
-          </a>
-          {(
+          </div>
+          {teamEnabled && (
             <a
               href="#/team"
               class={`nav-item${active === 'team' ? ' active' : ''}`}
               aria-current={active === 'team' ? 'page' : undefined}
+              title={`${t('nav.team')} · ${t('team.experimental')}`}
             >
               <Icon name="users" />
               <span class="nav-label">{t('nav.team')}</span>
+              <span class="badge yellow experimental-badge">{t('team.experimental')}</span>
             </a>
           )}
           {/* 记忆 closes the block: what the node has learned is something you
@@ -407,8 +400,8 @@ export function App() {
             onOpenTask={(tid) => navigate({ view: 'detail', id: tid })}
           />
         )}
-        {base.view === 'team' && <TeamView tab={base.tab || 'spaces'} />}
-        {base.view === 'work' && <TeamView taskKey={base.key} connection={base.connection} />}
+        {teamEnabled && base.view === 'team' && <TeamView tab={base.tab || 'spaces'} />}
+        {teamEnabled && base.view === 'work' && <TeamView taskKey={base.key} connection={base.connection} />}
         {base.view === 'memory' && <MemoryView />}
         {base.view === 'workspace' && <WorkspaceView />}
         {base.view === 'profile' && <ProfileView />}

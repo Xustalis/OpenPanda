@@ -2,6 +2,19 @@
 
 /* ---- Tasks and collaboration (views/team.tsx) ---- */
 
+.team-feature-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.team-feature-heading > h1, .team-feature-heading > h2 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .tm-page {
   /* `.main` is a flex row, so a flex item shrinks to its content unless it asks
      for the full width — without this the whole page collapses to the width of

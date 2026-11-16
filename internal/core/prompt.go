@@ -19,6 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/nodecli"
+	"github.com/Xustalis/OpenPanda/internal/objectives"
 	"github.com/Xustalis/OpenPanda/internal/scout"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -182,17 +183,19 @@ func taskSpecEnvelope(specJSON string) string {
 		return ""
 	}
 	var spec struct {
-		Kind              entry.TaskKind   `json:"task_kind"`
-		Scope             string           `json:"scope"`
-		SuccessDefinition string           `json:"success_definition"`
-		Constraints       []string         `json:"constraints"`
-		Acceptance        []contract.Check `json:"acceptance"`
-		PermissionMode    string           `json:"permission_mode"`
+		Kind              entry.TaskKind     `json:"task_kind"`
+		Scope             string             `json:"scope"`
+		SuccessDefinition string             `json:"success_definition"`
+		Constraints       []string           `json:"constraints"`
+		Acceptance        []contract.Check   `json:"acceptance"`
+		PermissionMode    string             `json:"permission_mode"`
+		Objectives        *objectives.Policy `json:"objectives"`
 	}
 	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
 		return ""
 	}
 	var b strings.Builder
+	b.WriteString(objectives.Prompt(spec.Objectives))
 	if policy := spec.Kind.EvidencePolicy(); policy != "" {
 		b.WriteString("\ntask kind: " + string(spec.Kind) + "\ndelivery evidence: " + policy)
 	}
@@ -239,7 +242,7 @@ func taskSpecEnvelope(specJSON string) string {
 // compressed prompt (compactRunNotes + overflowPromptBudget) and then parks
 // deterministically (ContextOverflow). Execution selects 12/32/64KB tiers;
 // this larger default remains for standalone callers. Mandatory task, scope
-// and protocol text survives intact; personal memory is relevance-bounded
+// and protocol text survives intact; project memory is relevance-bounded
 // and skill bodies degrade to a bounded discoverable index.
 const agentPromptBudget = 128000
 
@@ -466,19 +469,17 @@ func buildAgentPromptWithEnvironment(c *Core, intent, project, title, workDir st
 	}
 
 	manifest := ""
-	if c.memory != nil {
-		if project == "" {
-			if files, err := c.memory.Manifest(); err == nil {
-				manifestBudget := min(4000, max(0, promptBudget-len(intent)-len(rider)-len(questionHint)-frame.Len()-6))
-				manifest = memory.RenderManifestFor(files, title+" "+intent, manifestBudget)
-			}
-		} else if pm, err := c.memory.ProjectManifest(project, workDir, promptLang); err == nil {
+	// Execution prompts receive only the task's own project memory. The
+	// owner's personal stores belong to interactive conversation, never to a
+	// worker (including project-free tasks or tasks received from a peer).
+	if c.memory != nil && project != "" {
+		if pm, err := c.memory.ProjectManifest(project, workDir, promptLang); err == nil {
 			manifest = pm
 		}
 	}
 	// Task requirements, the project isolation boundary and protocol riders
 	// survive even when mandatory content exceeds the soft budget. Optional
-	// personal memory and skills use only the remaining room.
+	// project memory and skills use only the remaining room.
 	budget := promptBudget - len(intent) - len(manifest) - len(rider) - len(questionHint) - frame.Len() - 6
 	prompt, used := withSkills(c, intent, project, title, budget, promptLang)
 	if manifest != "" {

@@ -432,7 +432,7 @@ func liveExecHolder(ctx context.Context, tx *sql.Tx, taskID string, now int64) (
 	if err != nil {
 		return false, fmt.Errorf("read exec lock holder %s: %w", taskID, err)
 	}
-	if merging && (state == StateRunning || state == StateReview) {
+	if merging {
 		return true, nil
 	}
 	switch state {

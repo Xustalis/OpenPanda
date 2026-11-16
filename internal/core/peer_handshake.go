@@ -27,7 +27,7 @@ import (
 // switched the plane off must not be handed frames this node will drop.
 // trust.relay then narrows WHOSE frames are served and at what rate.
 func (c *Core) helloCaps() []string {
-	caps := []string{bus.CapBinaryData}
+	caps := []string{bus.CapBinaryData, bus.CapObjectives, bus.CapActivities, bus.CapCoordination}
 	// trnz rides only when this node is willing to serve the plane: a node
 	// with network.transit:false must not be selected as a hop, or every
 	// frame routed through it dies at the unhandled-type gate.
@@ -437,6 +437,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// reconciliation point that keeps the two ends' task histories consistent
 	// across a disconnect.
 	c.outboxFlush(ctx, p.NodeID)
+	c.goGuarded("activity reconnect catchup", func() { c.advertisePeerActivities(ctx, p.NodeID) })
 }
 
 // sendHelloReply transmits this node's hello on conn so the far end can bind

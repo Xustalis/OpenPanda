@@ -34,12 +34,15 @@ type HubSkill struct {
 	// plain procedure and the built-in trigger table has exactly one source.
 	// Index() merges them into built-in entries that predate this field (or
 	// that the user has edited), so no reseed is needed to pick them up.
-	Triggers []string `json:"triggers,omitempty" yaml:"triggers,omitempty"`
-	Always   bool     `json:"always,omitempty" yaml:"always,omitempty"`
+	Triggers   []string    `json:"triggers,omitempty" yaml:"triggers,omitempty"`
+	Always     bool        `json:"always,omitempty" yaml:"always,omitempty"`
+	SHA256     string      `json:"sha256,omitempty" yaml:"sha256,omitempty"`
+	Provenance *Provenance `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+	resources  bundleFiles
 }
 
 // CuratedSkills contains built-in, production-grade procedural workflows available offline or by default.
-var CuratedSkills = []HubSkill{
+var CuratedSkills = append([]HubSkill{
 	{Name: "visual-delivery",
 		Alias:       "visual",
 		Description: "Design systems, editorial typography, responsive interfaces and evidence-based visual acceptance",
@@ -583,13 +586,15 @@ var CuratedSkills = []HubSkill{
 			"",
 		}, "\n"),
 	},
-}
+}, reviewedSkills()...)
 
 // HubIndex is the top-level repository index for a Skills Hub.
 type HubIndex struct {
 	Version string     `json:"version" yaml:"version"`
 	Name    string     `json:"name,omitempty" yaml:"name,omitempty"`
 	Skills  []HubSkill `json:"skills" yaml:"skills"`
+	// Source is assigned locally after fetching; remote metadata cannot set it.
+	Source string `json:"-" yaml:"-"`
 }
 
 // RecommendedSkills returns the subset of skills designated as recommended presets.
@@ -643,55 +648,80 @@ func ResolveSkillAlias(name string) string {
 	return raw
 }
 
-// FetchHubIndex retrieves the skill index from hubURL. If hubURL is empty or remote fetch fails,
-// it gracefully returns the curated catalog.
+func localHubIndex(fallback bool) *HubIndex {
+	idx := &HubIndex{Version: "1.0", Name: "OpenPanda Curated Skills Hub", Skills: CuratedSkills, Source: "bundled"}
+	if fallback {
+		idx.Name = "OpenPanda Curated Skills (Fallback)"
+		idx.Source = "fallback"
+	}
+	return idx
+}
+
+// FetchHubIndex retrieves the skill index from hubURL. If hubURL is empty or
+// remote fetch fails, it returns the local catalog and identifies its source.
 func FetchHubIndex(ctx context.Context, hubURL string) (*HubIndex, error) {
 	hubURL = strings.TrimSpace(hubURL)
 	if hubURL == "" {
-		return &HubIndex{
-			Version: "1.0",
-			Name:    "OpenPanda Curated Skills Hub",
-			Skills:  CuratedSkills,
-		}, nil
+		return localHubIndex(false), nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hubURL, nil)
+	u, policy, err := classifyFetchURL(hubURL)
 	if err != nil {
-		return &HubIndex{Version: "1.0", Name: "OpenPanda Curated Skills (Fallback)", Skills: CuratedSkills}, nil
+		return localHubIndex(true), nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return localHubIndex(true), nil
 	}
 	req.Header.Set("User-Agent", "OpenPanda-Skills-Hub/1.0")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := fetchClient(policy)
+	client.Timeout = 10 * time.Second
 	resp, err := client.Do(req)
 	if err != nil {
-		return &HubIndex{Version: "1.0", Name: "OpenPanda Curated Skills (Fallback)", Skills: CuratedSkills}, nil
+		return localHubIndex(true), nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return &HubIndex{Version: "1.0", Name: "OpenPanda Curated Skills (Fallback)", Skills: CuratedSkills}, nil
+		return localHubIndex(true), nil
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes))
-	if err != nil {
-		return &HubIndex{Version: "1.0", Name: "OpenPanda Curated Skills (Fallback)", Skills: CuratedSkills}, nil
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
+	if err != nil || len(data) > maxDownloadBytes {
+		return localHubIndex(true), nil
 	}
 
 	var idx HubIndex
 	if err := json.Unmarshal(data, &idx); err != nil {
-		return &HubIndex{Version: "1.0", Name: "OpenPanda Curated Skills (Fallback)", Skills: CuratedSkills}, nil
+		return localHubIndex(true), nil
 	}
 
-	// Merge curated skills that are not already present in remote index
-	existing := make(map[string]bool)
-	for _, s := range idx.Skills {
-		existing[s.Name] = true
-	}
-	for _, s := range CuratedSkills {
-		if !existing[s.Name] {
-			idx.Skills = append(idx.Skills, s)
+	// Remote entries cannot replace bundled names or hijack their aliases.
+	reserved := make(map[string]bool)
+	for _, sk := range CuratedSkills {
+		reserved[strings.ToLower(sk.Name)] = true
+		if sk.Alias != "" {
+			reserved[strings.ToLower(sk.Alias)] = true
 		}
 	}
+	merged := make([]HubSkill, 0, len(idx.Skills)+len(CuratedSkills))
+	for _, sk := range idx.Skills {
+		name := strings.ToLower(strings.TrimSpace(sk.Name))
+		alias := strings.ToLower(strings.TrimSpace(sk.Alias))
+		if name == "" || reserved[name] || (alias != "" && reserved[alias]) {
+			continue
+		}
+		reserved[name] = true
+		// An external index cannot certify its own review or upstream identity.
+		sk.Provenance = nil
+		if alias != "" {
+			reserved[alias] = true
+		}
+		merged = append(merged, sk)
+	}
+	idx.Skills = append(merged, CuratedSkills...)
+	idx.Source = "remote"
 
 	return &idx, nil
 }
@@ -810,9 +840,28 @@ func InstallFromHub(ctx context.Context, store *Store, hubURL string, name strin
 	if target == nil {
 		return nil, fmt.Errorf("skills: skill %q not found in hub", name)
 	}
+	return installHubEntry(ctx, store, *target, opts)
+}
 
+func installHubEntry(ctx context.Context, store *Store, target HubSkill, opts ImportOptions) (*Skill, error) {
+	if opts.Name == "" {
+		opts.Name = target.Name
+	}
 	if opts.Scope == "" && target.Scope != "" {
 		opts.Scope = target.Scope
+	}
+	opts.builtin = IsBuiltinSkill(target.Name)
+	opts.ExpectedSHA256 = target.SHA256
+	// Only embedded, reviewed entries may supply a persisted provenance claim.
+	if opts.builtin {
+		opts.provenance = target.Provenance
+	}
+	if target.resources != nil {
+		installed, err := store.importBundles(target.resources, opts)
+		if err != nil {
+			return nil, err
+		}
+		return installed[0], nil
 	}
 
 	if strings.TrimSpace(target.Content) != "" {
@@ -830,7 +879,7 @@ func InstallFromHub(ctx context.Context, store *Store, hubURL string, name strin
 		return skills[0], nil
 	}
 
-	return nil, fmt.Errorf("skills: hub skill %q has neither content nor URL", name)
+	return nil, fmt.Errorf("skills: hub skill %q has neither content nor URL", target.Name)
 }
 
 // InstallAllRecommended installs all recommended presets in one batch.
@@ -902,6 +951,12 @@ func (s *Store) EnsureBuiltins() error {
 		}
 		sk.Builtin = true
 		sk.Status = StatusActive
+		if cur.resources != nil {
+			if _, err := InstallFromHub(context.Background(), s, "", cur.Name, ImportOptions{Status: StatusActive}); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := s.Save(sk); err != nil {
 			return err
 		}
@@ -914,6 +969,9 @@ func (s *Store) ResetBuiltin(name string) (*Skill, error) {
 	clean := strings.ToLower(strings.TrimSpace(name))
 	for _, cur := range CuratedSkills {
 		if strings.EqualFold(cur.Name, clean) || (cur.Alias != "" && strings.EqualFold(cur.Alias, clean)) {
+			if cur.resources != nil {
+				return InstallFromHub(context.Background(), s, "", cur.Name, ImportOptions{Status: StatusActive, Force: true})
+			}
 			sk, err := ParseSkill([]byte(cur.Content))
 			if err != nil {
 				return nil, err
@@ -953,15 +1011,30 @@ func (s *Store) DiscoverAndInstall(ctx context.Context, hubURL string, query str
 	}
 
 	top := results[0]
-	existing, err := s.Load(ScopeGlobal, "", top.Name)
-	if err == nil && existing != nil {
+	if opts.Scope == "" {
+		opts.Scope = top.Scope
+		if opts.Scope == "" {
+			opts.Scope = ScopeGlobal
+		}
+	}
+	key := ""
+	if opts.Scope == ScopeProject {
+		key = opts.Project
+	} else if opts.Scope == ScopeDevice {
+		key = opts.Device
+	}
+	name := top.Name
+	if opts.Name != "" {
+		name = opts.Name
+	}
+	existing, err := s.Load(opts.Scope, key, name)
+	if err != nil {
+		return nil, false, err
+	}
+	if existing != nil && !opts.Force {
 		return existing, false, nil
 	}
-
-	if opts.Scope == "" {
-		opts.Scope = ScopeGlobal
-	}
-	installed, err := InstallFromHub(ctx, s, hubURL, top.Name, opts)
+	installed, err := installHubEntry(ctx, s, top, opts)
 	if err != nil {
 		return nil, false, err
 	}

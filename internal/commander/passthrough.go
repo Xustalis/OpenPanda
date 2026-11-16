@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
@@ -106,18 +107,34 @@ func mcpConfigDocument(servers map[string]serverSpec) string {
 // panda-owned MCP config has no business riding inside that tree.
 func (r *Router) wireMCPPassthrough(ctx context.Context, agent, adapter, cwd string) (context.Context, func()) {
 	noop := func() {}
+	ctx = withCoordinationAccess(ctx, false)
+	if policy, _ := ctx.Value(toolsPolicyKey{}).(string); policy == "minimal" {
+		return ctx, noop
+	}
 	servers := r.mcpPassthroughServers()
 	if len(servers) == 0 {
 		return ctx, noop
 	}
 	if adapterMCPConfigFlag(agent, adapter) {
-		return WithMCPConfig(ctx, mcpConfigDocument(servers)), noop
+		_, ready := servers["openpanda"]
+		return withCoordinationAccess(WithMCPConfig(ctx, mcpConfigDocument(servers)), ready), noop
 	}
 	file := adapterDiscoversProjectMCP(agent, adapter)
 	if file == "" || cwd == "" {
 		return ctx, noop
 	}
-	return ctx, materializeMCPFile(cwd, file, servers)
+	cleanup := materializeMCPFile(cwd, file, servers)
+	var actual struct {
+		Servers map[string]serverSpec `json:"mcpServers"`
+	}
+	raw, err := os.ReadFile(filepath.Join(cwd, file))
+	ready := false
+	if err == nil && json.Unmarshal(raw, &actual) == nil {
+		expected, enabled := servers["openpanda"]
+		got, present := actual.Servers["openpanda"]
+		ready = enabled && present && expected.Command == got.Command && slices.Equal(expected.Args, got.Args)
+	}
+	return withCoordinationAccess(ctx, ready), cleanup
 }
 
 // materializeMCPFile writes the servers map as a project MCP config in cwd

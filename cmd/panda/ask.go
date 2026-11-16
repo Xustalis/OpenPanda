@@ -244,7 +244,7 @@ func runAsk(args []string) {
 	case "json":
 		out, err := engine.AskTurnsScoped(context.Background(), history, prompt, askengine.AskScope{
 			WorkDir: workDir, Agents: agents, Node: strings.TrimSpace(*node), AmbientProject: true,
-			SessionID: sessID, Acceptance: acceptChecks,
+			SessionID: sessID, Acceptance: acceptChecks, PersonalMemory: true,
 		}, *authorize, askengine.StreamCallbacks{})
 		if err != nil {
 			emitJSON(map[string]string{"error": err.Error()})
@@ -541,7 +541,7 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, wo
 		OnStatus:    func(text string) { write(map[string]any{"type": "status", "text": text}) },
 	}
 	out, err := engine.AskTurnsScoped(context.Background(), history, prompt, askengine.AskScope{
-		WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept, SessionID: sessionID,
+		WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept, SessionID: sessionID, PersonalMemory: true,
 	}, authorize, cb)
 	if err != nil {
 		write(map[string]any{"type": "error", "message": err.Error()})
@@ -569,7 +569,7 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, wo
 // The streamed marker tells the caller to skip the duplicate final print; the
 // returned status line carries the run's numbers for a closing cost line.
 func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, sessionID string, loc i18n.Locale) (*askengine.Result, string, *cliui.Status, error) {
-	scope := askengine.AskScope{WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept, SessionID: sessionID}
+	scope := askengine.AskScope{WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept, SessionID: sessionID, PersonalMemory: true}
 	st := newStatusLine(loc)
 	if !stdoutIsTTY() {
 		out, err := engine.AskTurnsScoped(context.Background(), history, prompt, scope, authorize, askengine.StreamCallbacks{})

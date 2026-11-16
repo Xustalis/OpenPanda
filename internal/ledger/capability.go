@@ -170,6 +170,8 @@ type ManualAbility struct {
 
 // Capacity describes current resource availability.
 type Capacity struct {
+	// Full objectives, activities and attempt-scoped coordination; runtime only.
+	ExecutionProtocol int `yaml:"-" json:"execution_protocol,omitempty"`
 	// Runtime protocol fact; never accepted from capabilities.yaml.
 	ArtifactMergeVersion int `yaml:"-" json:"artifact_merge_version,omitempty"`
 	CPUCores             int `yaml:"cpu_cores" json:"cpu_cores"`

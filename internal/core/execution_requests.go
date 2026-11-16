@@ -254,6 +254,9 @@ func (c *Core) EnqueueRequest(ctx context.Context, req ExecutionRequest, in Task
 }
 
 func (c *Core) prepareQueuedTask(ctx context.Context, in TaskInput, q QueueSpec) (Task, error) {
+	if _, err := inheritTaskObjectives("", in.SpecJSON); err != nil {
+		return Task{}, err
+	}
 	if q.Priority < PriorityHigh || q.Priority > PriorityLow {
 		return Task{}, fmt.Errorf("queue priority %d out of range", q.Priority)
 	}

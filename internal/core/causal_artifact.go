@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
+	"github.com/Xustalis/OpenPanda/internal/bus"
 )
 
 const artifactMergeVersion = 1
@@ -515,6 +516,13 @@ func artifactProtocolOf(spec string) int {
 }
 
 func (c *Core) requireArtifactProtocol(ctx context.Context, target, spec string) error {
+	if required := bus.RequiredExecutionProtocol(spec); required > 0 {
+		node := c.resolvePin(ctx, target)
+		if !node.self && (!node.found || node.node.Capacity.ExecutionProtocol < required) {
+			return fmt.Errorf("node %s supports summaries only; execution protocol %d required for objectives/coordination", target, required)
+		}
+	}
+
 	version := artifactProtocolOf(spec)
 	if version <= 0 {
 		return nil

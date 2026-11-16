@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/objectives"
 )
 
 // WithSynthesis closes a model-generated graph before it creates any tasks.
@@ -53,6 +54,11 @@ func WithSynthesis(p Plan, finalID, title, node string) (Plan, error) {
 				return Plan{}, fmt.Errorf("plan: final contract: %w", err)
 			}
 		}
+		policy, err := objectives.Inherit(p.Objectives, detail.Objectives)
+		if err != nil {
+			return Plan{}, err
+		}
+		detail.Objectives = policy
 		detail.PlanFinal = true
 		encoded, err := json.Marshal(detail)
 		if err != nil {

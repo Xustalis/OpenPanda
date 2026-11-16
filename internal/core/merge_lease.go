@@ -21,7 +21,7 @@ func (s *TaskStore) claimMergeLease(ctx context.Context, t Task, run string) (ac
 		if err := tx.QueryRowContext(ctx, `SELECT attempt_id,state FROM tasks WHERE task_id=?`, t.TaskID).Scan(&attempt, &state); err != nil {
 			return err
 		}
-		if attempt != t.AttemptID || (state != StateRunning && state != StateReview) {
+		if attempt != t.AttemptID || (state != StateRunning && state != StateReview && !(state == StateDone && t.ParentID != "" && t.OutputArtifact != "")) {
 			return ErrConflict
 		}
 		var previousAttempt, previousRun string
@@ -57,7 +57,7 @@ func (s *TaskStore) claimMergeLease(ctx context.Context, t Task, run string) (ac
 
 func (s *TaskStore) renewMergeLease(ctx context.Context, t Task, run string, delivered bool) error {
 	r, err := s.db.ExecContext(ctx, `UPDATE task_merge_leases SET expires_at=?,delivered=MAX(delivered,?) WHERE task_id=? AND attempt_id=? AND run_id=? AND expires_at>?
- AND EXISTS(SELECT 1 FROM tasks t WHERE t.task_id=task_merge_leases.task_id AND t.attempt_id=task_merge_leases.attempt_id AND t.state IN ('running','review'))`, s.now()+mergeLeaseSeconds, delivered, t.TaskID, t.AttemptID, run, s.now())
+ AND EXISTS(SELECT 1 FROM tasks t WHERE t.task_id=task_merge_leases.task_id AND t.attempt_id=task_merge_leases.attempt_id AND (t.state IN ('running','review') OR (t.state='done' AND t.parent_id!='' AND t.output_artifact!='')))`, s.now()+mergeLeaseSeconds, delivered, t.TaskID, t.AttemptID, run, s.now())
 	if err != nil {
 		return err
 	}

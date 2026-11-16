@@ -35,6 +35,7 @@ import {
   type ClarifySpec,
   type SideChatSummary,
   type SideConversation,
+  type OperationActivity,
 } from '../api/client'
 import { locale, t } from '../i18n'
 import { relativeTime } from '../format/time'
@@ -45,8 +46,13 @@ import { ClarifyCard } from './clarify-card'
 import { confirmDialog } from './confirm'
 import { ModelSelect } from './model-select'
 import { toastError } from './toast'
+import { ExecutionSteps } from './execution-steps-view'
+import { operationSteps, upsertActivity } from './execution-steps'
 
 interface Line {
+  operationID?: string
+  thought?: string
+  activities?: OperationActivity[]
   id: number
   role: 'user' | 'assistant'
   text: string
@@ -171,16 +177,21 @@ export function SideChat(props: SideChatProps) {
     // `chat` names the transcript in this payload; `active` is the stored
     // pointer, which a read for a specific chat deliberately does not move.
     setActiveId(conv.chat ?? conv.active ?? '')
-    setLines((conv.turns ?? []).map((turn) => ({
+    const stored: Line[] = (conv.turns ?? []).map((turn, index) => ({
+      operationID: turn.operation_id || String(turn.ts ?? 0) + ":" + index,
       id: ++seq,
       role: turn.role,
       text: turn.text,
       tools: turn.tools,
+      thought: turn.thought,
+      activities: turn.activities,
       tokens: turn.tokens,
       taskId: turn.task_id,
       error: turn.error,
-    })))
+    }))
     const op = conv.operation
+    if (op?.status === 'running') stored.push({ operationID: op.id, id: -1, role: 'assistant', text: op.text ?? '', thought: op.thought, activities: op.activities, live: true })
+    setLines(stored)
     opID.current = op?.status === 'running' ? op.id : ''
     if (op?.status === 'running') {
       setBusy(true)
@@ -435,7 +446,16 @@ export function SideChat(props: SideChatProps) {
         // list refresh below picks up its title.
         { chat: activeId },
         {
-          onReasoning: () => {},
+          onReasoning: (delta) => {
+            if (!current()) return
+            setLines(prev => prev.map((line, index) => index === prev.length - 1 && line.live
+              ? { ...line, thought: (line.thought ?? '') + delta } : line))
+          },
+          onActivity: (record) => {
+            if (!current()) return
+            setLines(prev => prev.map((line, index) => index === prev.length - 1 && line.live
+              ? { ...line, activities: upsertActivity(line.activities ?? [], record) } : line))
+          },
           onDelta: (d) => {
             if (!current()) return
             live.current += d
@@ -455,7 +475,10 @@ export function SideChat(props: SideChatProps) {
             setStatus(sideStatusNote(text, ev))
           },
           onOperation: (operationID) => {
-            if (current()) opID.current = operationID
+            if (current()) {
+              opID.current = operationID
+              setLines(prev => prev.map(line => line.live ? { ...line, operationID } : line))
+            }
           },
           onTask: (taskID) => {
             if (current()) setLastTask(taskID)
@@ -700,6 +723,8 @@ export function SideChat(props: SideChatProps) {
                   <span class="side-name">{t('side.panda')}</span>
                 </div>
                 <div class="side-body">
+                  {l.thought && <ExecutionSteps scope={'side:' + props.sessionId + ':' + (l.operationID || l.id) + ':thought'} steps={[{ id: 'reasoning', title: t('sessions.thought'), status: 'info', ts: 0, thought: true, output: l.thought }]} />}
+                  {!!l.activities?.length && <ExecutionSteps scope={'side:' + props.sessionId + ':' + (l.operationID || l.id) + ':activity'} steps={operationSteps(l.activities)} />}
                   {l.text && !(l.error && l.text.startsWith('⚠')) ? (
                     <Markdown text={l.text} class="side-md" streaming={Boolean(l.live)} />
                   ) : !l.live && !l.error && !l.taskId && !(l.tools && l.tools.length) ? (
@@ -727,7 +752,7 @@ export function SideChat(props: SideChatProps) {
                       )}
                     </div>
                   )}
-                  {l.tools && l.tools.length > 0 && (
+                  {!l.activities?.length && l.tools && l.tools.length > 0 && (
                     <div class="side-tools">
                       <span class="side-tools-label">{t('side.tools')}</span>
                       {l.tools.map((tool, k) => (

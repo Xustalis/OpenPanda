@@ -17,6 +17,7 @@ import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from
 import { locale, t } from '../i18n'
 import { isNodeConnected } from '../format/node-status'
 import { relativeTime } from '../format/time'
+import { trustLabel } from '../format/trust'
 import { navigate } from '../nav'
 import { ErrorState } from '../components/page'
 import { Icon } from '../components/icons'
@@ -1605,7 +1606,7 @@ function DeviceDetail({
         {d.local && <span class="badge green">{t('workspace.local')}</span>}
         <span class="badge">{formLabel(d.form)}</span>
         <span class="badge">{osLabel(d.os)}</span>
-        {d.trust && d.trust !== 'mesh' && <span class="badge">{d.trust}</span>}
+        {d.trust && d.trust !== 'mesh' && <span class="badge">{trustLabel(d.trust)}</span>}
       </div>
 
       <DetailSection title={t('workspace.detail.hardware')}>
@@ -1688,7 +1689,7 @@ function DeviceDetail({
                   <span class="ws-agent-name mono">{name}</span>
                   {a.cost_tier && <span class="badge">{a.cost_tier}</span>}
                   {typeof a.tier === 'number' && a.tier > 0 && (
-                    <span class="ws-agent-tier mono dim">T{a.tier}</span>
+                    <span class="ws-agent-tier dim">{t(a.tier >= 2 ? 'card.agent.tierNow2' : 'card.agent.tierNow1')}</span>
                   )}
                 </div>
                 {a.capabilities && a.capabilities.length > 0 && (

@@ -25,13 +25,17 @@ import { api, type PlanDetail, type Task, type TraceEvent } from '../api/client'
 import { useAsync, useChangeSignal, useTaskEvents, useTraceForTask } from '../hooks'
 import { formatDuration } from '../format/time'
 import { isActiveState } from './task-activity'
-import { clock, liveStepOf, mergeLive, type LiveStep } from './task-live'
+import { liveStepOf, mergeLive, type LiveStep } from './task-live'
 import { AgentFace } from './team-picker'
 import { castPending, dispatchAgent, prettyAgent, type Speaker } from './chat-speaker'
 import { Icon } from './icons'
 import { Markdown } from '../md/render'
-import { deliveryFacts, deliveryMatchesTask, deliveryPreview, deliverySteps, deliveryText } from './task-delivery'
+import { deliveryFacts, deliveryMatchesTask, deliveryPreview, deliveryText } from './task-delivery'
 import { t } from '../i18n'
+import { ExecutionSteps } from './execution-steps-view'
+import { taskSteps } from './execution-steps'
+import { TaskObjectives } from './task-objectives'
+import { TaskExecution } from './task-execution'
 
 /** One shared empty list: `task.traces` is absent until the row has started,
  *  and a fresh `[]` on every render would re-run the merge effect each time. */
@@ -148,7 +152,7 @@ export function StateChip({ state }: { state: string }) {
  *  row the user stares at nothing for. */
 export function TaskProgress({ task }: { task: Task }) {
   const change = useChangeSignal()
-  const history = useTaskEvents(task.id, change, 40)
+  const history = useTaskEvents(task.id, change)
   const traces = useTraceForTask(task.id, task.traces ?? EMPTY_TRACES)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -172,7 +176,6 @@ export function TaskProgress({ task }: { task: Task }) {
     }
     steps.push(step)
   }
-  const recent = steps.slice(-6)
   const started = Date.parse(task.created_at)
   const elapsed = Number.isFinite(started) ? Math.max(0, now - started) : 0
   const lastTs = steps.length ? steps[steps.length - 1]!.ts * 1000 : Date.parse(task.updated_at)
@@ -202,27 +205,10 @@ export function TaskProgress({ task }: { task: Task }) {
           )}
         </div>
         <div class="msg-bubble is-progress task-live-body">
-          {recent.length > 0 ? (
-            <ol class="task-live-timeline" aria-label={t('sessions.liveRecent')}>
-              {recent.map((step, i) => (
-                <li
-                  key={step.key}
-                  class={`task-live-step tone-${step.tone}${i === recent.length - 1 ? ' is-current' : ''}`}
-                >
-                  <span class="task-live-time">{clock(step.ts)}</span>
-                  <span class="task-live-dot" aria-hidden="true" />
-                  <span class="task-live-label">{step.label}</span>
-                  {step.summary && (
-                    <span class="task-live-summary" title={step.summary}>
-                      {step.summary}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p class="msg-progress-line">{t('sessions.liveWaiting')}</p>
-          )}
+          <TaskObjectives task={task} />
+          <TaskExecution task={task} events={history.events} />
+          {history.events.length > 0 && <ExecutionSteps scope={'task:' + task.id} steps={taskSteps(history.events, true)} />}
+          {history.events.length === 0 && <p class="msg-progress-line">{t('sessions.liveWaiting')}</p>}
           <div class="task-live-foot">
             <a class="task-live-open" href={`#/task/${encodeURIComponent(task.id)}`}>
               {t('sessions.liveOpen')} →
@@ -245,7 +231,7 @@ export function TaskDelivery({ taskId, delivery, truncated, summary, state, verd
 }) {
   const currentTask = useTaskBrief(taskId)
   const task = currentTask && deliveryMatchesTask(currentTask, attemptId, reportedAt, state) ? currentTask : null
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(true)
   const full = delivery || deliveryText(task?.result) || summary
   const preview = deliveryPreview(full)
   return (
@@ -280,12 +266,13 @@ export function TaskDelivery({ taskId, delivery, truncated, summary, state, verd
 
 function TaskProcessBody({ taskId, task }: { taskId: string; task: Task }) {
   const change = useChangeSignal()
-  const { events, error } = useTaskEvents(taskId, change, 200)
-  const steps = deliverySteps(events)
-  const shown = steps.slice(-5)
+  const { events, error } = useTaskEvents(taskId, change)
+  const steps = taskSteps(events)
   const facts = deliveryFacts(task)
   return (
     <>
+      <TaskObjectives task={task} />
+      <TaskExecution task={task} events={events} />
       <div class="task-delivery-facts">
         <div>
           <h4 class="task-delivery-label">{t('sessions.deliveryVerification')}</h4>
@@ -300,13 +287,9 @@ function TaskProcessBody({ taskId, task }: { taskId: string; task: Task }) {
         </div>}
       </div>
       <h4 class="task-delivery-label">{t('sessions.processTitle')}</h4>
-      {shown.length === 0 ? <p class="task-run-empty" role={error ? 'status' : undefined}>
+      {steps.length === 0 ? <p class="task-run-empty" role={error ? 'status' : undefined}>
         {t(error ? 'sessions.deliveryStepsUnavailable' : 'sessions.processEmpty')}
-      </p> : <TaskStepList steps={shown} />}
-      {steps.length > shown.length && <details class="task-run task-delivery-history">
-        <summary class="task-run-head">{t('sessions.deliveryStepsMore', { n: steps.length })}</summary>
-        <div class="task-run-body"><TaskStepList steps={steps.slice(-120)} /></div>
-      </details>}
+      </p> : <ExecutionSteps scope={'task:' + taskId} steps={steps} />}
       <div class={`task-delivery-remaining is-${facts.remaining}`}>
         <h4 class="task-delivery-label">{t('sessions.deliveryRemaining')}</h4>
         <p>{facts.followup || t(`sessions.deliveryRemaining.${facts.remaining}`)}</p>
@@ -315,23 +298,6 @@ function TaskProcessBody({ taskId, task }: { taskId: string; task: Task }) {
   )
 }
 
-function TaskStepList({ steps }: { steps: LiveStep[] }) {
-  return <ol class="task-run-timeline">
-    {steps.map(step => <li key={step.key} class={`task-run-step tone-${step.tone}`}>
-      <span class="task-run-time">{clock(step.ts)}</span>
-      <div class="task-run-main"><span class="task-run-label">{step.label}</span>
-        {step.summary && <div class="task-run-text">{step.summary}</div>}
-        {step.note && <div class="output-note">{step.note}</div>}
-      </div>
-    </li>)}
-  </ol>
-}
-
-/** Loads the task behind a dispatch turn. The transcript only stores the id,
- *  so the cast list and the bubble read the row itself — and they read it
- *  again on every change frame, which is what keeps the state current. It is
- *  the brief read: a bubble never renders the event timeline, and the full
- *  projection would drag that timeline down once per second per bubble. */
 export function useTaskBrief(taskId?: string): Task | null {
   const change = useChangeSignal()
   const { data } = useAsync<Task | null>(

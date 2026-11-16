@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -800,44 +801,107 @@ func TestDelegateSnapshotFailureRestoresParentClaim(t *testing.T) {
 	}
 }
 
-func TestDelegateSnapshotCancellationStopsUnlockedParent(t *testing.T) {
-	c := newCore(t, "snapshot-canceled")
-	ctx := context.Background()
-	parent := createTask(t, c.store, "", "parent", c.nodeID)
-	for _, move := range []func() error{
-		func() error { return c.store.Queue(ctx, parent.TaskID, c.nodeID) },
-		func() error { return c.store.Dispatch(ctx, parent.TaskID, c.nodeID, c.nodeID) },
-		func() error { return c.store.Accept(ctx, parent.TaskID, c.nodeID) },
-	} {
-		if err := move(); err != nil {
-			t.Fatal(err)
+func TestDelegateSnapshotCancellationPreservesWorkspaceSafety(t *testing.T) {
+	for _, afterYield := range []bool{false, true} {
+		name := "before_source_resolution"
+		if afterYield {
+			name = "after_workspace_yield"
 		}
-	}
-	parent.ScopePaths = []string{"src"}
-	keys, wait, err := c.executionLockKeys(parent, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.execLockAcquire(ctx, parent.TaskID, "parent-run", keys, wait, true); err != nil {
-		t.Fatal(err)
-	}
-	defer c.execLockUnlock(parent.TaskID)
-	runCtx, stopRun := context.WithCancel(ctx)
-	defer c.registerRunning(parent.TaskID, stopRun)()
-	preparing, cancel := context.WithCancel(ctx)
-	cancel()
-	if _, cleanup, err := c.snapshotDelegateBatch(preparing, parent, []delegateRequest{{Isolate: true}, {Isolate: true}}); err == nil {
-		cleanup()
-		t.Fatal("canceled sibling snapshot unexpectedly completed")
-	}
-	if runCtx.Err() == nil {
-		t.Fatal("parent was allowed to continue after source acquisition failed with its workspace yielded")
-	}
-	source, err := c.projectWorkDir(parent.Project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := c.store.TryAcquireExecLocks(ctx, "after-snapshot-cancel", c.nodeID, "foreign", []string{queue.WorkspaceScopeKey(source, "")}); err != nil || !ok {
-		t.Fatalf("canceled snapshot retained source locks: acquired=%v err=%v", ok, err)
+		t.Run(name, func(t *testing.T) {
+			c := newCore(t, "snapshot-canceled")
+			ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			live := func(title, scope string) (Task, []string) {
+				t.Helper()
+				task := createTask(t, c.store, "", title, c.nodeID)
+				for _, move := range []func() error{
+					func() error { return c.store.Queue(ctx, task.TaskID, c.nodeID) },
+					func() error { return c.store.Dispatch(ctx, task.TaskID, c.nodeID, c.nodeID) },
+					func() error { return c.store.Accept(ctx, task.TaskID, c.nodeID) },
+				} {
+					if err := move(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				task.ScopePaths = []string{scope}
+				keys, wait, err := c.executionLockKeys(task, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := c.execLockAcquire(ctx, task.TaskID, title, keys, wait, true); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { c.execLockUnlock(task.TaskID) })
+				return task, keys
+			}
+			parent, parentKeys := live("parent", "src")
+			// A disjoint writer makes source-root acquisition wait after the
+			// parent yields its leaf, so cancellation exercises the unlocked path.
+			writer, _ := live("writer", "docs")
+			runCtx, stopRun := context.WithCancel(ctx)
+			defer stopRun()
+			defer c.registerRunning(parent.TaskID, stopRun)()
+			preparing, cancel := context.WithCancel(ctx)
+			defer cancel()
+			if !afterYield {
+				cancel()
+			}
+			finished := make(chan error, 1)
+			go func() {
+				_, cleanup, err := c.snapshotDelegateBatch(preparing, parent, []delegateRequest{{Isolate: true}, {Isolate: true}})
+				if cleanup != nil {
+					cleanup()
+				}
+				finished <- err
+			}()
+			if afterYield {
+				for {
+					var held int
+					if err := c.store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM exec_locks WHERE task_id=?", parent.TaskID).Scan(&held); err != nil {
+						t.Fatal(err)
+					}
+					if held == 0 {
+						break
+					}
+					select {
+					case err := <-finished:
+						t.Fatalf("snapshot returned before yielding: %v", err)
+					case <-ctx.Done():
+						t.Fatal("parent did not yield its workspace")
+					case <-time.After(time.Millisecond):
+					}
+				}
+				cancel()
+			}
+			select {
+			case err := <-finished:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("canceled snapshot: %v", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("canceled snapshot did not return")
+			}
+			if afterYield {
+				if runCtx.Err() == nil {
+					t.Fatal("parent continued after source acquisition failed with its workspace yielded")
+				}
+			} else {
+				if runCtx.Err() != nil {
+					t.Fatal("source lookup failure canceled a parent that still owns its workspace")
+				}
+				if ok, err := c.store.TryAcquireExecLocks(ctx, "foreign-parent", c.nodeID, "foreign", parentKeys); err != nil || ok {
+					t.Fatalf("early cancellation lost parent locks: acquired=%v err=%v", ok, err)
+				}
+			}
+			c.execLockUnlock(writer.TaskID)
+			c.execLockUnlock(parent.TaskID)
+			source, err := c.projectWorkDir(parent.Project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := c.store.TryAcquireExecLocks(ctx, "after-snapshot-cancel", c.nodeID, "foreign", []string{queue.WorkspaceScopeKey(source, "")}); err != nil || !ok {
+				t.Fatalf("canceled snapshot retained source locks: acquired=%v err=%v", ok, err)
+			}
+		})
 	}
 }

@@ -315,6 +315,7 @@ func (c *Core) handleHeartbeat(ctx context.Context, env bus.Envelope) {
 func (c *Core) summary() ledger.CapabilitySummary {
 	card := c.Card()
 	card.Capacity.ArtifactMergeVersion = artifactMergeVersion
+	card.Capacity.ExecutionProtocol = bus.ExecutionProtocolVersion
 	router := c.currentRouter()
 	s := ledger.CapabilitySummary{
 		Device:          card.Device,

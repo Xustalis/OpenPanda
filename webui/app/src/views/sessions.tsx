@@ -61,6 +61,7 @@ import { DirButton } from '../components/dir-picker'
 import { ModelSelect } from '../components/model-select'
 import { SessionRail } from '../components/session-rail'
 import { VoiceInput } from '../components/voice-input'
+import { upsertActivity } from '../components/execution-steps'
 import { acquireKeepAlive } from '../utils/keepalive'
 import {
   autoGrow,
@@ -930,7 +931,7 @@ export function SessionsView({
       const rows = hydrateTurns(s.turns ?? [], (i) => `srv-${i}`)
       if (current?.id === op.id && current.status === 'running') {
         rows.push({
-          role: 'assistant', text: current.text || '', thought: current.thought,
+          role: 'assistant', text: current.text || '', thought: current.thought, activities: current.activities,
           lastActivity: current.last_activity ? Date.parse(current.last_activity) : undefined,
           tokens: current.tokens, tokensEstimated: current.estimated,
           status: current.progress ? statusNote(current.progress.text || '', current.progress) : undefined,
@@ -1676,6 +1677,7 @@ export function SessionsView({
               tokensEstimated: estimated,
               lastActivity: Date.now(),
             })),
+          onActivity: record => patch(m => ({ ...m, activities: upsertActivity(m.activities ?? [], record), lastActivity: Date.now() })),
           onStatus: (text, ev) =>
             patch((m) => ({ ...m, status: statusNote(text, ev), lastActivity: Date.now() })),
           // The note typed mid-turn reached a round. This is the upgrade from

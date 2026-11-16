@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -120,7 +121,10 @@ func TestDelegateConsentRequiresVerifiedOrigin(t *testing.T) {
 			if !tc.authorized && (task.AuthSig != "" || task.AuthPub != "" || task.AuthTs != 0) {
 				t.Fatal("unverified consent was persisted for a later resume or relay")
 			}
-			waitState(t, ctx, executor.store, p.TaskID, wantState)
+			// A real native invocation includes OS process startup and, under
+			// -race, the child runtime's exit delay. Give it a bounded process
+			// budget instead of the shorter in-process wire convergence budget.
+			waitState(t, ctx, executor.store, p.TaskID, wantState, 15*time.Second)
 		})
 	}
 }

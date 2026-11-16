@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import type { ComponentChildren } from 'preact'
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { Icon } from './icons'
 import { t } from '../i18n'
 
@@ -40,6 +40,12 @@ export function ItemSettings(props: {
   const [flip, setFlip] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   const menu = useRef<HTMLDivElement>(null)
+  const button = useRef<HTMLButtonElement>(null)
+
+  function closeAndFocus() {
+    setOpen(false)
+    button.current?.focus()
+  }
 
   // A disclosure is a child of the scrollport, so both edges can clip it.
   // Measure the room above and below the trigger, open toward the roomier
@@ -74,12 +80,14 @@ export function ItemSettings(props: {
     setFlip(flip)
   }, [open])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      e.preventDefault()
       e.stopPropagation()
       setOpen(false)
+      if (root.current?.contains(e.target as Node)) button.current?.focus()
     }
     const onPointer = (e: PointerEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false)
@@ -95,11 +103,11 @@ export function ItemSettings(props: {
   return (
     <div class={`item-settings${props.class ? ` ${props.class}` : ''}`} ref={root}>
       <button
+        ref={button}
         type="button"
         class={`item-settings-btn${open ? ' on' : ''}`}
         aria-label={props.label}
         title={props.label}
-        aria-haspopup="true"
         aria-expanded={open}
         aria-controls={props.id}
         onClick={() => setOpen((v) => !v)}
@@ -122,7 +130,7 @@ export function ItemSettings(props: {
               class="item-settings-close"
               aria-label={t('common.close')}
               title={t('common.close')}
-              onClick={() => setOpen(false)}
+              onClick={closeAndFocus}
             >
               <Icon name="x" size={12} />
             </button>

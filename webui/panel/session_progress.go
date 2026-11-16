@@ -3,6 +3,7 @@
 package panel
 
 import (
+	"github.com/Xustalis/OpenPanda/internal/activity"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 // askProgress is the reconnectable display state, not model replay. Callbacks
 // and the periodic checkpoint can run concurrently, so they share this lock.
 type askProgress struct {
+	activities   []activity.Record
 	mu           sync.Mutex
 	text         strings.Builder
 	thought      strings.Builder
@@ -54,6 +56,23 @@ func (p *askProgress) snapshot(op sessions.Operation) sessions.Operation {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	op.LastActivity, op.Tokens, op.Estimated = p.lastActivity, p.tokens, p.estimated
-	op.Text, op.Thought, op.Progress, op.TaskID = p.text.String(), p.thought.String(), p.progress, p.taskID
+	op.Text, op.Thought, op.Progress = p.text.String(), p.thought.String(), p.progress
+	if p.taskID != "" {
+		op.TaskID = p.taskID
+	}
+	op.Activities = append([]activity.Record(nil), p.activities...)
 	return op
+}
+
+func (p *askProgress) activity(record activity.Record) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.activities = activity.Upsert(p.activities, record)
+	p.lastActivity = time.Now()
+}
+
+func (p *askProgress) settle(status string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.activities = activity.Settle(p.activities, status)
 }

@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,18 +31,24 @@ const (
 
 // ImportOptions customizes how skills are imported.
 type ImportOptions struct {
-	Scope   Scope  // overrides scope in frontmatter if non-empty
-	Project string // required if Scope == ScopeProject
-	Device  string // required if Scope == ScopeDevice
-	Name    string // overrides skill name if non-empty (only for single skill)
-	Status  Status // defaults to StatusActive if empty
-	Force   bool   // overwrite existing skill if true
+	Scope          Scope       // overrides scope in frontmatter if non-empty
+	Project        string      // required if Scope == ScopeProject
+	Device         string      // required if Scope == ScopeDevice
+	Name           string      // overrides skill name if non-empty (only for single skill)
+	Status         Status      // defaults to StatusActive if empty
+	Force          bool        // overwrite existing skill if true
+	ExpectedSHA256 string      // optional digest of the original file/archive, checked before import
+	provenance     *Provenance // assigned only by a reviewed local catalog entry
+	builtin        bool        // local catalog identity, never supplied by package frontmatter
 }
 
 // ImportBytes imports a standalone skill. Bundle imports also preserve resources.
 func (s *Store) ImportBytes(data []byte, opts ImportOptions) (*Skill, error) {
 	if len(data) > maxDownloadBytes {
 		return nil, fmt.Errorf("skills: input exceeds size limit")
+	}
+	if err := verifyDownload(data, opts.ExpectedSHA256); err != nil {
+		return nil, err
 	}
 	sk, err := prepareImport(data, opts)
 	if err != nil {
@@ -72,6 +80,10 @@ func prepareImport(data []byte, opts ImportOptions) (*Skill, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A package cannot grant itself trust, provenance or prompt residency.
+	sk.Builtin = opts.builtin
+	sk.Always = false
+	sk.Provenance = opts.provenance
 	if opts.Name != "" {
 		sk.Name = opts.Name
 	}
@@ -490,6 +502,11 @@ func (s *Store) ImportURL(ctx context.Context, rawURL string, opts ImportOptions
 	if len(body) > maxDownloadBytes {
 		return nil, fmt.Errorf("skills: download exceeds size limit")
 	}
+	if err := verifyDownload(body, opts.ExpectedSHA256); err != nil {
+		return nil, err
+	}
+	// The archive hash is not the hash of each SKILL.md inside it.
+	opts.ExpectedSHA256 = ""
 	contentType := resp.Header.Get("Content-Type")
 	lowerURL := strings.ToLower(fetchURL)
 
@@ -509,6 +526,21 @@ func (s *Store) ImportURL(ctx context.Context, rawURL string, opts ImportOptions
 		return nil, fmt.Errorf("skills: failed to import from %s: %w", rawURL, err)
 	}
 	return []*Skill{sk}, nil
+}
+
+func verifyDownload(data []byte, expected string) error {
+	if expected == "" {
+		return nil
+	}
+	digest, err := hex.DecodeString(expected)
+	if err != nil || len(digest) != sha256.Size {
+		return fmt.Errorf("skills: invalid SHA-256 digest")
+	}
+	actual := sha256.Sum256(data)
+	if !strings.EqualFold(hex.EncodeToString(actual[:]), expected) {
+		return fmt.Errorf("skills: SHA-256 mismatch; import refused")
+	}
+	return nil
 }
 
 // ImportSource imports from either a URL or a local file/directory path.

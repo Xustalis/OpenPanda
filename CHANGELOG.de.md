@@ -40,6 +40,33 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **[Experimental] Geschäftliche Zusammenarbeit und TaskSync.** CLI, MCP und Webkonsole bieten dauerhafte Anfragen, an Revisionen gebundene Ausführung und Ergebnisse, Gerätefreigaben, signierte Zustellung und kontrollierte Abschlussaktionen. Explizite Projektbindungen und Berechtigungen der aktuellen Generation begrenzen entfernte Schreibzugriffe und Automatisierungen.
+- **Begrenzte Koordination von Unteraufgaben.** IMMEDIATE-RPC pro Ausführungsversuch und ROUND_END-Delegation unterstützen idempotentes Erstellen, reservierte Token- und Delegationsbudgets, begrenzte Tiefe und Parallelität sowie Ressourcenfreigabe beim Warten. Entfernte Unteraufgaben erhalten den tatsächlichen Arbeitsstand des Elternversuchs; Ergebnisse werden vor dessen Fortsetzung mit Konfliktprüfung übernommen.
+- **Strukturierte Ziele und Abnahmenachweise.** Eingabeklassifizierung, Pläne, Aufgabenspezifikationen und Unteraufgaben bewahren Zielvorgaben. MAX-Kriterien benötigen unabhängige bestandene Bewertungen; Freigabe oder Erfolgsstatus ersetzen fehlende Nachweise nicht.
+- **Dauerhafter Ausführungsverlauf.** Werkzeugeingaben, Ausgaben und Denkzusammenfassungen bleiben bei Neuladen, Nebenchats, Verzweigungen und nach archivierter Sitzungslöschung erhalten. Cursor holen entfernte Aktivitäten ohne Duplikate nach; Anzeigeverlauf und Modellkontext bleiben getrennt.
+- **Geprüfte Offline-Skills.** Vier mitgelieferte Skills enthalten feste Upstream-Revisionen, Lizenzen und geprüfte Ressourcen-Hashes. Importierte Ressourcen behalten ihre Herkunft und können sich nicht selbst als vertrauenswürdige integrierte Skills ausgeben. Git bewahrt die Originalbytes beim Windows-Checkout, damit Zeilenumbruchkonvertierung den Start nicht verhindert.
+
+### Behoben
+
+- **Sandbox-Verweigerung und Zustimmungsgrenzen.** Angeforderte standard/strict-Isolation stoppt die Ausführung, wenn das Backend fehlt. Windows erhält AppContainer und eingeschränkte Tokens mit Adapterdiagnosen; bekannte Initialisierungsfehler von Python 3.14 bleiben dokumentiert, ohne auf ungeschützte Ausführung auszuweichen.
+- **Sichere gemeinsame Arbeitsverzeichnisse.** Sperr-Leases physischer Verzeichnisse berücksichtigen Aliase und Quell-Snapshots, lösen temporäre Sperren und stellen vor der Fortsetzung die ursprünglichen Elternsperren wieder her. Abbruch nach der Freigabe stoppt die Elternaufgabe; Abbruch vor der Quellauflösung bewahrt ihre Sperren. Diagnosen erklären verwaiste Ausführungen und Wiederherstellung.
+- **Windows-Dateien und Dienste.** Atomarer Dateiaustausch verträgt offene Leser, Sitzungen verwenden kompatible Freigabemodi und Dienstidentität, Laufzeitidentität und Pfadprüfungen stimmen überein. Das ARM64-Panelmanifest nennt die korrekte Architektur.
+- **Routing und begrenzte Befugnisse.** Ausweichrelais bei symmetrischem NAT behalten Identität und Diagnosen. Projektherkunft, aktuelle Geschäftsfreigaben und Eigentum an persönlichem Speicher werden bei Veröffentlichung, Worker-Ausführung und Delegation geprüft; die Scheduler-Neuinitialisierung funktioniert ohne Geschäftslaufzeit.
+- **Abnahme- und Anzeigeregressionen.** Native Ausführung kann vorgeschriebenes IMMEDIATE nicht mehr umgehen. Sitzungsberichte bewahren das Abschlussurteil, alte Daten blockieren weder das Nachholen entfernter Aktivitäten noch den Verlauf, unlesbare Ausgabe bleibt gekennzeichnet und Aufgabendetails blenden nur den doppelten Text des letzten Ergebnisses aus.
+
+### Geändert
+
+- **Vollständige Ausführungsschritte.** Aufklappbare Zeilen zeigen Parameter, gesamte aufgezeichnete Ausgabe, Status und Ausführer mit Kopieren und Großansicht. Historische Schritte und reine Denkprotokolle bleiben sichtbar; Bilder erscheinen als Vorschau.
+- **Zusammenarbeit und Navigation.** Geschäftliche Zusammenarbeit erfordert eine explizite experimentelle Aktivierung. Sitzungsübersicht, Seitenleiste und Anhangsvorschau sind klarer; Skill-Karten passen auf kleine Bildschirme und unterscheiden geprüfte Quellen von Ersatzinhalten.
+- **Skills und Planergebnisse.** Skills werden bei Bedarf geladen, Planstufen liefern ein integriertes Endergebnis und Ausführungsdiagnosen zeigen Kapazität und Verzeichnisbelegung. Kernlaufzeit und Sitzungsoberfläche sind in kleinere Module aufgeteilt.
+- **Prüfinfrastruktur.** Testdatenbanken und Benchmarks begrenzen gehaltene Ressourcen; die Verzeichnissynchronisierung erhält einen wiederholten Race-Stresstest sowie aktualisierte CI- und Plattformprüfungen.
+
+### Inkompatible Änderungen
+
+- Ein Zurücksetzen der Konfiguration ist nicht erforderlich. Gespeicherte Daten migrieren automatisch auf Schema 75. Neue Ziel- und Koordinationsfunktionen benötigen Gegenstellen mit dem entsprechenden Ausführungsprotokoll; ältere Knoten bleiben für Aufgaben ohne diese Anforderungen nutzbar. Experimentelle Zusammenarbeit bleibt optional.
+
 ## [0.1.6] - 2026-11-14 — "Constellation"
 
 Das Patch, das eine Ausführung ehrlich darüber macht, was sie abgeschlossen hat — Codename **Constellation**: Abschluss, Wiederherstellung und Stufenverträge richten sich nach der Arbeit, die die Maschine tatsächlich geleistet hat; Read-only-Läufe nennen ihre Grenze und Antworten zum Repository belegen sich mit Quellcode; die Konsole führt Seitenunterhaltungen, Übersicht und Benachrichtigungen auf einer Fläche zusammen; und ein harter Geräte-Pin bleibt ein Pin, statt zu einer Präferenz zu werden. Konfiguration, gespeicherte Daten und Wire-Format bleiben unverändert, das Schema bleibt bei v67 — keine Migration und kein neues Frame.

@@ -50,11 +50,9 @@ func TestAgentPromptOmitsProjectMemory(t *testing.T) {
 	}
 }
 
-// TestAgentPromptCarriesMemoryManifest verifies the A3 replacement path at
-// the core execution layer: outside a project the agent prompt carries the
-// memory file manifest (paths + summaries, fenced as data) instead of the
-// memory content itself; inside a project nothing memory-related is injected.
-func TestAgentPromptCarriesMemoryManifest(t *testing.T) {
+// Workers receive only their own project's memory manifest. Project-free
+// workers never inherit the local owner's personal profile or memory paths.
+func TestAgentPromptCarriesOnlyProjectMemoryManifest(t *testing.T) {
 	root := t.TempDir()
 	hermes := memory.NewHermes(root)
 	projects := memory.NewProjects(root)
@@ -66,15 +64,10 @@ func TestAgentPromptCarriesMemoryManifest(t *testing.T) {
 	c.memory = memory.NewInjector(hermes, projects)
 
 	got, _ := buildAgentPrompt(c, "fix the build", "", "fix build", "", 0)
-	if !strings.Contains(got, "记忆文件清单") || !strings.Contains(got, "MEMORY.md") {
-		t.Errorf("manifest missing from non-project prompt: %q", got)
-	}
-	if !strings.Contains(got, filepath.Join(root, "MEMORY.md")) {
-		t.Errorf("manifest must carry the absolute file path: %q", got)
-	}
-	// Manifest mode lists files, it does not dump their entries.
-	if strings.Contains(got, "HERMES-SECOND") {
-		t.Errorf("prompt must not dump full memory content: %q", got)
+	for _, marker := range []string{"记忆文件清单", filepath.Join(root, "MEMORY.md"), "HERMES-FACT", "HERMES-SECOND"} {
+		if strings.Contains(got, marker) {
+			t.Errorf("personal memory marker %q leaked into project-free worker: %q", marker, got)
+		}
 	}
 
 	// Inside a project the wall still holds — the personal-memory manifest must
