@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 type recordingApplier struct {
@@ -31,14 +32,11 @@ func (r *recordingApplier) ApplyNetworkConfig(_ context.Context, n config.Networ
 // write and read half a YAML document. The observer advances its digest before
 // loading, so that unreadable revision is then skipped forever — a CI-only
 // flake that looks exactly like "the default path was never observed".
-// Rename is atomic on every platform the observer supports.
+// Use the production replacement helper, including its bounded handling of
+// Windows readers that temporarily deny file replacement.
 func writeNetworkConfig(t *testing.T, path, body string) {
 	t.Helper()
-	tmp := path + ".next"
-	if err := os.WriteFile(tmp, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := util.WriteFileAtomic(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

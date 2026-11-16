@@ -1445,7 +1445,7 @@ func (s *Store) load(id string) (*Session, error) {
 	if !ValidID(id) {
 		return nil, ErrNotFound
 	}
-	data, err := os.ReadFile(s.path(id))
+	data, err := readSessionFile(s.path(id))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ErrNotFound

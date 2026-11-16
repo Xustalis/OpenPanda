@@ -36,11 +36,21 @@ vulnerabilidades. **Léalo antes de conectar cualquier nodo a una red.**
   plenamente confiables y verifique manualmente las huellas de los nodos.
 - **Sandbox de tareas del SO.** `sandbox.mode: off` filtra el entorno y fija
   el directorio de trabajo sin aislamiento del SO. `standard` y `strict`
-  requieren un backend disponible (seatbelt en macOS, bubblewrap en Linux).
-  Sin él, se rechaza el inicio de subprocesos de tareas, sin degradación
-  automática. No hay backend nativo de Windows, por lo que estos modos bloquean
-  la ejecución en Windows. Solo seleccionar explícitamente `off` permite
-  ejecutar sin aislamiento del SO.
+  requieren un backend disponible (seatbelt en macOS, bubblewrap en Linux,
+  AppContainer nativo en Windows 10+). Si falta o no se puede establecer la
+  política de forma segura, se rechaza el inicio sin degradación automática.
+  Cada ejecución en Windows usa un token `WRITE_RESTRICTED` y un SID nuevos:
+  solo puede escribir en el directorio de la tarea y en rutas autorizadas
+  explícitamente, aunque otras rutas tengan ACL públicas de escritura para
+  AppContainer. `strict` también elimina el permiso de lectura de este paquete
+  y protege la herencia DACL en las raíces de lectura denegada. Los permisos de
+  lectura públicos de AppContainer/capability, las ACL no admitidas o los reparse
+  points anidados hacen que se rechace la política, sin revocar permisos
+  compartidos de otras aplicaciones. Las limitaciones de permisos temporales,
+  herramientas, hardlinks, loopback, rutas fijadas y recuperación se describen en
+  [Sandbox de Windows](docs/windows-sandbox.en.md) (en inglés). Solo seleccionar
+  explícitamente `off` permite ejecutar sin aislamiento del SO.
+  No todos los entornos de ejecución de Windows son compatibles: en las pruebas se rechazó el acceso de Python 3.14 al dispositivo criptográfico del sistema. Los fallos de inicialización de DLL muestran un diagnóstico sin relajar el aislamiento ni repetir la ejecución sin protección.
 - **Límite del cifrado de transporte.** Desde v0.0.11, cuando ambos pares
   anuncian la capacidad `sessaead` en `hello` y existe un secreto
   compartido, la conexión activa un AES-256-GCM por conexión justo tras

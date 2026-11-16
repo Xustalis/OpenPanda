@@ -198,9 +198,15 @@ verify` 可钉住指纹，钉住后换钥 hello 直接拒绝。**未知来源授
 仍全网共享；默认 `mesh` 只应用于完全可信设备。per-node 密钥分发/准入仍待实现。
 
 **OS 沙箱后端缺失时拒绝执行。** `standard` 与 `strict` 都必须有可用后端，缺失时
-拒绝启动任务子进程；只有 `off` 允许仅做环境过滤和工作目录设置的无隔离执行。
-Windows 原生隔离后端尚未实现，因此 Windows 选择这两档会阻止执行。设置页、TUI
-与 doctor 会显示阻止原因；这次收紧不会为 Windows 增加文件系统隔离能力。
+或无法安全建立策略时拒绝启动任务子进程；只有 `off` 允许仅做环境过滤和工作目录
+设置的无隔离执行。Windows 10+ 已有原生 AppContainer 后端，配合每次新建的
+`WRITE_RESTRICTED` token/SID 限制写根；公共 AppContainer 写 ACL 不会绕过该写边界。
+并非任意 Windows 运行时都兼容：Python 3.14 的系统加密设备访问已实测被拒绝；
+DLL 初始化失败会报告原因并保持隔离，不自动重试为无隔离执行。
+`strict` 额外移除本次 package 在拒读根内的读授权并保护 DACL 继承；不能安全收紧的
+公共读权限、复杂 ACE 或嵌套 reparse point 会使策略被拒绝，不修改其他应用的共享权限。
+设置页、TUI 与 doctor 会报告后端不可用；工具链读权限、hardlink、网络 loopback、
+运行中路径固定及退出回收的兼容边界见 [Windows 沙箱说明](windows-sandbox.md)。
 
 **跨节点 hello 重放已关闭，旧版本兼容路径除外。** 捕获的 hello 不能在另一台节点上
 重放：hello 可以绑定接收方（`to` 字段加 `SigB`/`EdSigB`），接收端要求 `to` 等于

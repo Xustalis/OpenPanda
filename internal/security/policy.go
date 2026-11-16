@@ -91,7 +91,8 @@ func DefaultPolicy(workDir string) Policy {
 }
 
 // Backend names the OS confinement the platform implements: "seatbelt" on
-// macOS (sandbox-exec), "bwrap" on Linux (bubblewrap), "" elsewhere or when
+// macOS (sandbox-exec), "bwrap" on Linux (bubblewrap), "appcontainer" on
+// Windows, and "" on unsupported platforms or when
 // the tool is absent. Standard and strict refuse subprocess launches when
 // it is empty; callers report that condition instead of implying isolation.
 func Backend() string { return platformBackend() }

@@ -22,9 +22,16 @@ OpenPanda 是一个运行在你自己设备上的 P2P 任务编排内核。本�
   仍全网共享；默认 `mesh` 信任档只应用于完全可信设备，并应人工核对节点指纹。
 - **OS 级任务沙箱。** `sandbox.mode: off` 仅过滤环境变量并设置工作目录，没有
   OS 隔离。`standard` 与 `strict` 必须有可用后端（macOS 的 seatbelt、Linux 的
-  bubblewrap），缺少后端时拒绝启动任务子进程，不会自动降级。Windows 原生后端
-  尚未实现，因此这两种模式在 Windows 上会阻止执行；只有明确选择 `off` 才允许
-  无 OS 隔离运行。
+  bubblewrap、Windows 10+ 的原生 AppContainer），缺少后端或无法安全建立策略时
+  拒绝启动任务子进程，不会自动降级。Windows 每次使用新的 `WRITE_RESTRICTED`
+  token 与 SID，把写入限制在任务目录和明确放行的路径；目录外文件即使有公共
+  AppContainer 写 ACL，也不会因此获得写权限。`strict` 还移除本次 package 的
+  读授权并保护拒读根的 DACL 继承；遇到公共 AppContainer/capability 读授权、
+  无法安全分析的 ACL 或嵌套 reparse point 时拒绝该策略，不撤销其他应用的共享权限。
+  临时授权、工具链、hardlink、网络 loopback、路径固定与回收的兼容限制见
+  [Windows 沙箱说明](docs/windows-sandbox.md)。只有明确选择 `off` 才允许无 OS 隔离运行。
+  该后端不保证兼容任意 Windows 运行时；Python 3.14 的系统加密设备访问已实测
+  被拒绝。DLL 初始化失败会给出明确诊断并保留隔离，不重试为无隔离执行。
 - **传输加密边界。** v0.0.11 起，双方在 hello 里宣告 `sessaead` 能力且存在
   共享密钥时，连接在握手后武装逐连接 AES-256-GCM——密钥由共享密钥与两端
   hello nonce 经 HKDF 派生，绑定两端身份，逐拨号更新；此后每个应用帧密封
