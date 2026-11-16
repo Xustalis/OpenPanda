@@ -22,7 +22,7 @@ import (
 // exact shape that used to park in the queue and end the session.
 const pinnedTaskJSON = `{"kind":"task","task":{"title":"在 Mac 上建自我介绍页","context_type":"command",` +
 	`"requires":{"abilities":["leaf:probe"]},` +
-	`"spec":{"scope":"","target":"写一个自我介绍网页并在本机运行","constraints":[],"success_definition":"curl 返回 200","node":"mac-leaf"},` +
+	`"spec":{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"delivery","weight":1,"priority":"NORMAL","requirement":"Complete the fixture task","reason":"The fixture requests a task","criteria":["Observe the expected fixture result"]}]},"scope":"","target":"写一个自我介绍网页并在本机运行","constraints":[],"success_definition":"curl 返回 200","node":"mac-leaf"},` +
 	`"complexity":0.3,"risk":"low"}}`
 
 // registerLeafPeer adds the pinned destination to the fixture directory: an
@@ -34,7 +34,7 @@ func registerLeafPeer(t *testing.T, e *Engine) {
 		Device:        "mac-leaf",
 		ResourceClass: "Standard",
 		Native:        []ledger.NativeAbility{{ID: "leaf:probe", Command: "true"}},
-		Capacity:      ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 2},
+		Capacity:      ledger.Capacity{ExecutionProtocol: 1, CPUCores: 4, RAMGB: 8, MaxConcurrent: 2},
 	}
 	if err := ledger.Register(e.db, leaf, "leaf-inst", 5); err != nil {
 		t.Fatalf("register leaf: %v", err)

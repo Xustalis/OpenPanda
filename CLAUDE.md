@@ -103,6 +103,8 @@ make test-python  # adapter, install, diagnostics and metrics contracts
 make race         # race detector, whole tree (pre-release superset check)
 make race-focused # race detector on concurrency-heavy packages only:
                   # core/commander/bus/storage/askengine/scheduler/webui-panel
+make race-dirsync # repeat directory-sync readiness tests across CPU counts;
+                  # fast stress loop before running the full race-focused gate
 make vet          # go vet
 make fmt / fmt-check
 make gate         # pre-merge bar: fmt-check + vet + staticcheck + vuln +
@@ -153,6 +155,9 @@ handles or subprocesses, use the same package's OpenFile(t, path) with a new
 path, then reopen it through storage.Open. The helpers migrate once per test
 process; storage and legacy-upgrade tests still test migrations directly. CI
 runs the four PTY targets in one make invocation so they share one binary build.
+Fixture benchmarks close databases and remove files within each iteration;
+registering cleanup or retaining a new file per iteration makes their retained
+heap or disk grow with the benchmark count and distorts long measurements.
 
 ## Layout
 
@@ -258,8 +263,8 @@ packages by subsystem.
 - **Memory & skills**: `memory` (USER.md/MEMORY.md layers, isolation
   wall, daily logs, Dreaming consolidation engine, context injector),
   `skills` (SKILL.md progressive loading + self-evolution).
-- **Data & platform**: `storage` (SQLite WAL + migrations; schema 68 adds
-  attempt-scoped child waits and durable artifact merge baselines), `ctxstore`,
+- **Data & platform**: `storage` (SQLite WAL + migrations; schema 75 includes
+  attempt-scoped child waits, artifact merge baselines and durable coordination requests), `ctxstore`,
   `sessions`, `projects`, `config` (plus `execution.go` for per-agent
   model and concurrency defaults), `configsync` (polls the shared config
   and database so a model change in one process reaches the others —

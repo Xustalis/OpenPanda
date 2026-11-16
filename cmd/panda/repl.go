@@ -1186,6 +1186,7 @@ func (r *repl) askMode(text, mode string) {
 		// same ask scope the panel builds: it bounds the dispatch budget and
 		// is copied onto every task's spec for routing-time enforcement.
 		out, err := r.engine.Load().AskTurnsScoped(ctx, history, text, askengine.AskScope{
+			PersonalMemory: true,
 			WorkDir:        workDir,
 			Mode:           mode,
 			SessionID:      r.sessID(),

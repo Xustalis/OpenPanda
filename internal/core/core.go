@@ -507,6 +507,9 @@ type Core struct {
 	// peer minting ids forever cannot grow memory without bound.
 	msgSeenMu sync.Mutex
 	msgSeen   map[msgSeenKey]time.Time
+	// Bounded task decision locks serialize loopback control requests even
+	// when an attempt's endpoint is recreated. Durable state fences processes.
+	childDecisionLocks [64]sync.Mutex
 	// lastHelloReject is the most recent hello_reject reason a peer sent us,
 	// mirrored off the conn so one-shot probes without a conn handle (the
 	// ProbePeer loop) can still report "online but refusing our credential"
@@ -2634,7 +2637,7 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 // switched the plane off must not be handed frames this node will drop.
 // trust.relay then narrows WHOSE frames are served and at what rate.
 func (c *Core) helloCaps() []string {
-	caps := []string{bus.CapBinaryData}
+	caps := []string{bus.CapBinaryData, bus.CapObjectives, bus.CapActivities, bus.CapCoordination}
 	// trnz rides only when this node is willing to serve the plane: a node
 	// with network.transit:false must not be selected as a hop, or every
 	// frame routed through it dies at the unhandled-type gate.
@@ -2888,6 +2891,10 @@ func (c *Core) dispatch(ctx context.Context, conn *bus.Conn, env bus.Envelope) {
 		c.handleDecline(ctx, env)
 	case bus.MsgTaskProgress:
 		c.handleProgress(ctx, env)
+	case bus.MsgTaskActivityFetch:
+		c.handleActivityFetch(ctx, env)
+	case bus.MsgTaskActivities:
+		c.handleActivities(ctx, env)
 	case bus.MsgTaskResult:
 		c.handleResult(ctx, env)
 	case bus.MsgTaskCancel:
@@ -3359,6 +3366,7 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// reconciliation point that keeps the two ends' task histories consistent
 	// across a disconnect.
 	c.outboxFlush(ctx, p.NodeID)
+	c.goGuarded("activity reconnect catchup", func() { c.advertisePeerActivities(ctx, p.NodeID) })
 }
 
 // sendHelloReply transmits this node's hello on conn so the far end can bind
@@ -3659,6 +3667,7 @@ func (c *Core) signalResult(taskID string, p bus.TaskResultPayload) {
 func (c *Core) summary() ledger.CapabilitySummary {
 	card := c.Card()
 	card.Capacity.ArtifactMergeVersion = artifactMergeVersion
+	card.Capacity.ExecutionProtocol = bus.ExecutionProtocolVersion
 	router := c.currentRouter()
 	s := ledger.CapabilitySummary{
 		Device:          card.Device,

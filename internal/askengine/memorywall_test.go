@@ -20,12 +20,8 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
-// TestAskTurnsMemoryWall verifies the isolation wall of design §17.2 at the
-// engine level: Hermes personal memory enters the classification prompt only
-// for project-free conversations (empty workDir). A conversation pinned to a
-// workspace (workDir set — a session worktree or the shared work path) must
-// carry no personal memory at all, so nothing personal can leak into a task
-// spawned from that conversation.
+// Personal memory follows the trusted owner entry, independently of cwd.
+// Non-owner asks remain isolated even when they do not name a project.
 func TestAskTurnsMemoryWall(t *testing.T) {
 	// One Hermes store holding one deliberately recognizable profile fact.
 	root := t.TempDir()
@@ -73,26 +69,28 @@ func TestAskTurnsMemoryWall(t *testing.T) {
 	e.db = db
 	e.client.Store(client)
 
-	// Project-free conversation: memory must be present.
-	if _, err := e.AskTurns(context.Background(), nil, "你好", "", true, StreamCallbacks{}); err != nil {
-		t.Fatal(err)
-	}
-	mu.Lock()
-	free := bodies[len(bodies)-1]
-	mu.Unlock()
-	if !strings.Contains(free, "暗色主题") {
-		t.Fatal("project-free conversation is missing personal memory")
-	}
-
-	// Workspace conversation: memory must be absent.
-	if _, err := e.AskTurns(context.Background(), nil, "重构导航栏", filepath.Join(root, "worktree"), true, StreamCallbacks{}); err != nil {
-		t.Fatal(err)
-	}
-	mu.Lock()
-	proj := bodies[len(bodies)-1]
-	mu.Unlock()
-	if strings.Contains(proj, "暗色主题") {
-		t.Fatal("personal memory leaked into a workspace conversation (memory wall §17.2 violated)")
+	for _, tc := range []struct {
+		name  string
+		scope AskScope
+		want  bool
+	}{
+		{"owner project-free", AskScope{PersonalMemory: true}, true},
+		{"owner workspace", AskScope{PersonalMemory: true, Project: "alpha", WorkDir: filepath.Join(root, "alpha")}, true},
+		{"owner side", AskScope{PersonalMemory: true, Side: true, Project: "beta", WorkDir: filepath.Join(root, "beta")}, true},
+		{"worker workspace", AskScope{Project: "alpha", WorkDir: filepath.Join(root, "alpha")}, false},
+		{"worker project-free", AskScope{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := e.AskTurnsScoped(context.Background(), nil, "读取我的偏好", tc.scope, true, StreamCallbacks{}); err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			body := bodies[len(bodies)-1]
+			mu.Unlock()
+			if got := strings.Contains(body, "暗色主题"); got != tc.want {
+				t.Fatalf("personal memory in prompt = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

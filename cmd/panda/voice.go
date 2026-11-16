@@ -143,7 +143,9 @@ func runVoice(args []string) {
 		// console's live view bind to it from the first spoken turn.
 		vt.ensure(text)
 		workDir := continueWorkDir("", vt.sess, engine)
-		out, err := engine.AskTurnsSession(ctx, history, text, workDir, "", vt.sessionID(), false, askengine.StreamCallbacks{})
+		out, err := engine.AskTurnsScoped(ctx, history, text, askengine.AskScope{
+			PersonalMemory: true, WorkDir: workDir, SessionID: vt.sessionID(), AmbientProject: true,
+		}, false, askengine.StreamCallbacks{})
 		if err != nil {
 			vt.discardEmpty()
 			fmt.Fprintf(os.Stderr, "panda: %v\n", err)

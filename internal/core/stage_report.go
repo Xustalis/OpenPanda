@@ -51,6 +51,7 @@ func writeStageReport(t Task, workDir, node string, result commander.Result, ver
 		"task_id": t.TaskID, "stage": t.StageID, "node": node, "agent": result.Agent,
 		"candidate_ok": result.OK, "exit_code": result.ExitCode,
 		"supervision_verdict": verdict.Status, "stdout": clip(result.Stdout, 8000), "stderr": clip(result.Stderr, 4000),
+		"objectives": detail.Objectives, "objective_assessments": verdict.ObjectiveAssessments,
 		"evidence_scope": "branch output before final acceptance; dependency completion is checked by the orchestrator",
 	}, "", "  ")
 	if err != nil {

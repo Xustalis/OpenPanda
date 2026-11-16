@@ -195,6 +195,7 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, s
 		// session-less ask may still bind the daemon's working dir — and the
 		// scoped form carries the thread's roster and node pin.
 		out, err := engine.AskTurnsScoped(ctx, history, prompt, askengine.AskScope{
+			PersonalMemory: true,
 			WorkDir:        workDir,
 			Mode:           mode,
 			SessionID:      sessionID,
@@ -214,12 +215,10 @@ func startAsk(engine *askengine.Engine, history []entry.Turn, prompt, workDir, s
 	return s, waitForActivity(s)
 }
 
-// startSideAsk is startAsk for the side channel: same pump, same cancellation,
-// but the scope marks the ask as side, so the engine narrows the prompt, trims
-// the tool face to read-only and refuses to dispatch. It keeps the main
-// thread's workDir and roster — the whole point of a side question is that it
-// is about the same work — while carrying its own session id so nothing it
-// learns is written into the main thread's approval record.
+// startSideAsk is startAsk for the side channel: same pump, cancellation and
+// owner capability, with an isolated transcript. It keeps the main thread's
+// workDir and roster while carrying its own session id, so remembered
+// approvals remain separate from the main thread.
 //
 // history is the main-thread snapshot and sideTurns is this channel's own
 // conversation before the current question. They travel separately because the
@@ -232,6 +231,7 @@ func startSideAsk(engine *askengine.Engine, history, sideTurns []entry.Turn, pro
 	}, func() {
 		defer s.cancel()
 		out, err := engine.AskTurnsScoped(ctx, history, prompt, askengine.AskScope{
+			PersonalMemory: true,
 			WorkDir:        workDir,
 			SessionID:      sessionID,
 			Agents:         agents,

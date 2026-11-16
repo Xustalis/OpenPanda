@@ -42,6 +42,10 @@ func TestBoundedCompletionHasOneToolFreeRequest(t *testing.T) {
 					}
 					switch dialect {
 					case config.APITypeOpenAI:
+						thinking, _ := body["thinking"].(map[string]any)
+						if thinking["type"] != "disabled" {
+							t.Error("explicit reasoning-off request lost")
+						}
 						if body["max_tokens"] != float64(300) && body["max_completion_tokens"] != float64(300) {
 							t.Error("output budget lost")
 						}
@@ -65,7 +69,7 @@ func TestBoundedCompletionHasOneToolFreeRequest(t *testing.T) {
 					}
 				}))
 				defer server.Close()
-				c, err := NewClient(config.ModelConfig{APIType: dialect, BaseURL: server.URL + "/custom", APIKey: "old-key", Model: "custom-model", MaxTokens: 32000, Thinking: "on", ThinkingBudget: 16000, MaxRetries: 5, Params: map[string]any{"tools": []any{map[string]any{"type": "web_search"}}, "web_search_options": map[string]any{}}})
+				c, err := NewClient(config.ModelConfig{Provider: "deepseek", APIType: dialect, BaseURL: server.URL + "/custom", APIKey: "old-key", Model: "custom-model", MaxTokens: 32000, Thinking: "on", ThinkingBudget: 16000, MaxRetries: 5, Params: map[string]any{"tools": []any{map[string]any{"type": "web_search"}}, "web_search_options": map[string]any{}}})
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -28,7 +28,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/browser"
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -83,7 +82,7 @@ func runMCP(args []string) {
 	tools := selfTools(&self)
 	if *compact {
 		tools = mcpserve.Compact(tools, func(name string) bool {
-			return name == "panda_skill_search" || name == "panda_skill_read" || name == "panda_subtask_spawn" || name == "panda_subtask_await"
+			return name == "panda_skill_search" || name == "panda_skill_read" || name == "panda_subtask_spawn" || name == "panda_subtask_await" || name == "panda_subtask_cancel"
 		})
 	}
 	srv := mcpserve.New("openpanda", version, tools)
@@ -162,15 +161,22 @@ func selfTools(d *selfToolsDeps) []mcpserve.Tool {
 		},
 		{
 			Name:        "panda_subtask_spawn",
-			Description: "Spawn a child subtask into the OpenPanda scheduler DAG. The subtask inherits the causal chain and can be executed concurrently by any capable node or local agent. Returns the spawned task_id.",
+			Description: "Spawn a bounded child of the executing task through the live scheduler. Inherits project, session, deadline and delegation limits. Reuse request_id for retries of identical input. Returns task_id.",
 			InputSchema: mcpserve.SchemaObject(map[string]any{
-				"title":     mcpserve.StringProp("short subtask title (required)"),
-				"prompt":    mcpserve.StringProp("full instruction for the subtask; defaults to title"),
-				"requires":  mcpserve.StringArrayProp("ability ids required; default [\"coding\"]"),
-				"parent_id": mcpserve.StringProp("parent task ID; defaults to ambient PANDA_TASK_ID environment variable"),
-				"preferred": mcpserve.StringProp("preferred node ID to run on"),
-				"project":   mcpserve.StringProp("project to attach the subtask to"),
-				"priority":  mcpserve.StringProp("low | normal | high | urgent (default normal)"),
+				"title":             mcpserve.StringProp("short subtask title (required)"),
+				"prompt":            mcpserve.StringProp("full instruction for the subtask; defaults to title"),
+				"requires":          mcpserve.StringArrayProp("ability ids required; default [\"coding\"]"),
+				"parent_id":         mcpserve.StringProp("parent task ID; defaults to ambient PANDA_TASK_ID environment variable"),
+				"request_id":        mcpserve.StringProp("idempotency key; reuse for a retry of identical input"),
+				"input_version":     mcpserve.StringProp("expected workspace version returned by await; stale inputs are rejected"),
+				"token_budget":      map[string]any{"type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "child subtree token allocation; 0 requests a finite share of parent remainder"},
+				"delegation_budget": map[string]any{"type": "integer", "minimum": 0, "maximum": 2147483647, "description": "child subtree hop allocation; 0 requests a share of parent remainder"},
+				"node":              mcpserve.StringProp("hard destination device pin"),
+				"paths":             mcpserve.StringArrayProp("owned project-relative paths"),
+				"isolate":           map[string]any{"type": "boolean", "description": "run in a private workspace"},
+				"preferred":         mcpserve.StringProp("preferred node ID to run on"),
+				"project":           mcpserve.StringProp("project to attach the subtask to"),
+				"priority":          mcpserve.StringProp("low | normal | high | urgent (default normal)"),
 			}, "title"),
 			Handle: d.toolSubtaskSpawn,
 		},
@@ -178,10 +184,16 @@ func selfTools(d *selfToolsDeps) []mcpserve.Tool {
 			Name:        "panda_subtask_await",
 			Description: "Await completion of a spawned subtask. Polls until the subtask reaches a terminal state (done, failed, cancelled) or the timeout expires. Returns the final state and result output.",
 			InputSchema: mcpserve.SchemaObject(map[string]any{
-				"task_id":   mcpserve.StringProp("task id returned by panda_subtask_spawn or panda_task_submit"),
+				"task_id":   mcpserve.StringProp("child task id returned by panda_subtask_spawn"),
 				"timeout_s": mcpserve.IntProp("max seconds to await before returning current status (default 60, max 300)"),
 			}, "task_id"),
 			Handle: d.toolSubtaskAwait,
+		},
+		{
+			Name:        "panda_subtask_cancel",
+			Description: "Cancel a child of the executing task and propagate cancellation to descendants.",
+			InputSchema: mcpserve.SchemaObject(map[string]any{"task_id": mcpserve.StringProp("child task id")}, "task_id"),
+			Handle:      d.toolSubtaskCancel,
 		},
 		{
 			Name:        "panda_skill_list",
@@ -582,118 +594,6 @@ func (d *selfToolsDeps) toolTaskSubmit(ctx context.Context, args map[string]any)
 		return "", fmt.Errorf("task add failed: %s", clipSelfOut(out.String()))
 	}
 	return clipSelfOut(out.String()), nil
-}
-
-// toolSubtaskSpawn enqueues a child subtask tied to the parent's causal DAG.
-func (d *selfToolsDeps) toolSubtaskSpawn(ctx context.Context, args map[string]any) (string, error) {
-	title := strings.TrimSpace(mcpserve.Arg(args, "title"))
-	if title == "" {
-		return "", fmt.Errorf("title required")
-	}
-	if d.exe == "" {
-		return "", fmt.Errorf("self executable path unavailable")
-	}
-	if n := d.submits.Add(1); n > maxSelfTaskSubmits {
-		return "", fmt.Errorf("per-session task submission cap (%d) reached", maxSelfTaskSubmits)
-	}
-	cmdArgs := []string{"--json", "task", "add", "--title", title}
-	if p := strings.TrimSpace(mcpserve.Arg(args, "prompt")); p != "" {
-		cmdArgs = append(cmdArgs, "--prompt", p)
-	}
-	if req := mcpserve.ArgList(args, "requires"); len(req) > 0 {
-		cmdArgs = append(cmdArgs, "--requires", strings.Join(req, ","))
-	}
-	if p := strings.TrimSpace(mcpserve.Arg(args, "project")); p != "" {
-		cmdArgs = append(cmdArgs, "--project", p)
-	}
-	if p := strings.TrimSpace(mcpserve.Arg(args, "priority")); p != "" {
-		cmdArgs = append(cmdArgs, "--priority", p)
-	}
-	parentID := strings.TrimSpace(mcpserve.Arg(args, "parent_id"))
-	if parentID == "" {
-		parentID = os.Getenv("PANDA_TASK_ID")
-	}
-	if parentID != "" {
-		cmdArgs = append(cmdArgs, "--parent-id", parentID)
-	}
-	if pref := strings.TrimSpace(mcpserve.Arg(args, "preferred")); pref != "" {
-		cmdArgs = append(cmdArgs, "--preferred", pref)
-	}
-	if d.configPath != "" {
-		cmdArgs = append(cmdArgs, "--config", d.configPath)
-	}
-	cmd := exec.CommandContext(ctx, d.exe, cmdArgs...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("subtask spawn failed: %s", clipSelfOut(out.String()))
-	}
-	return clipSelfOut(out.String()), nil
-}
-
-// toolSubtaskAwait polls until the child subtask reaches terminal state or timeout.
-func (d *selfToolsDeps) toolSubtaskAwait(ctx context.Context, args map[string]any) (string, error) {
-	taskID := strings.TrimSpace(mcpserve.Arg(args, "task_id"))
-	if taskID == "" {
-		return "", fmt.Errorf("task_id required")
-	}
-	timeoutS := 60
-	if raw, ok := args["timeout_s"].(float64); ok && raw > 0 {
-		timeoutS = int(raw)
-	} else if raw, ok := args["timeout_s"].(int); ok && raw > 0 {
-		timeoutS = raw
-	}
-	if timeoutS > 300 {
-		timeoutS = 300
-	}
-	if timeoutS < 1 {
-		timeoutS = 1
-	}
-
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-	deadline := time.Now().Add(time.Duration(timeoutS) * time.Second)
-
-	for {
-		t, err := d.tasks.Get(ctx, taskID)
-		if err != nil {
-			return "", fmt.Errorf("task %s: %w", taskID, err)
-		}
-		if t.State == core.StateDone || t.State == core.StateFailed || t.State == core.StateCancelled || t.State == core.StateExpired {
-			result := t.ResultJSON
-			if len(result) > 4096 {
-				result = result[:4096] + "…[truncated]"
-			}
-			out := map[string]any{
-				"task_id":   t.TaskID,
-				"parent_id": t.ParentID,
-				"title":     t.Title,
-				"state":     t.State,
-				"owner":     t.OwnerNode,
-				"attempt":   t.AttemptID,
-				"result":    result,
-			}
-			b, _ := json.Marshal(out)
-			return string(b), nil
-		}
-		if time.Now().After(deadline) {
-			out := map[string]any{
-				"task_id": t.TaskID,
-				"state":   t.State,
-				"owner":   t.OwnerNode,
-				"status":  "await_timeout",
-				"message": "subtask still executing; invoke panda_subtask_await again to wait further",
-			}
-			b, _ := json.Marshal(out)
-			return string(b), nil
-		}
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-ticker.C:
-		}
-	}
 }
 
 func (d *selfToolsDeps) toolSkillList(ctx context.Context, _ map[string]any) (string, error) {

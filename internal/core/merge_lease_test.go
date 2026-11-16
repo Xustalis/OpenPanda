@@ -84,6 +84,50 @@ func TestReviewMergeLeaseFencesOtherProcesses(t *testing.T) {
 	}
 }
 
+func TestMergeLeaseRenewalHonorsTaskState(t *testing.T) {
+	s := NewTaskStore(openTestDB(t), testLogger())
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, state, parent, artifact string
+		allowed                       bool
+	}{
+		{name: "running", state: StateRunning, allowed: true},
+		{name: "review", state: StateReview, allowed: true},
+		{name: "done child with output", state: StateDone, parent: "parent", artifact: "output", allowed: true},
+		{name: "done root", state: StateDone, artifact: "output"},
+		{name: "done child without output", state: StateDone, parent: "parent"},
+		{name: "cancelled child", state: StateCancelled, parent: "parent", artifact: "output"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := createTask(t, s, "", "lease-state", "node")
+			if _, err := s.db.ExecContext(ctx, "UPDATE tasks SET state=?, parent_id=?, output_artifact=? WHERE task_id=?", StateRunning, tc.parent, tc.artifact, task.TaskID); err != nil {
+				t.Fatal(err)
+			}
+			task.ParentID, task.OutputArtifact = tc.parent, tc.artifact
+			if acquired, _, err := s.claimMergeLease(ctx, task, "merge-run"); err != nil || !acquired {
+				t.Fatalf("claim running lease: acquired=%v err=%v", acquired, err)
+			}
+			if _, err := s.db.ExecContext(ctx, "UPDATE tasks SET state=? WHERE task_id=?", tc.state, task.TaskID); err != nil {
+				t.Fatal(err)
+			}
+			err := s.renewMergeLease(ctx, task, "merge-run", true)
+			if tc.allowed && err != nil {
+				t.Fatalf("renew valid delivery lease: %v", err)
+			}
+			if !tc.allowed && !errors.Is(err, ErrConflict) {
+				t.Fatalf("renew ineligible delivery lease: got %v, want ErrConflict", err)
+			}
+			var delivered bool
+			if err := s.db.QueryRowContext(ctx, "SELECT delivered FROM task_merge_leases WHERE task_id=?", task.TaskID).Scan(&delivered); err != nil {
+				t.Fatal(err)
+			}
+			if delivered != tc.allowed {
+				t.Fatalf("delivery receipt=%v, want %v", delivered, tc.allowed)
+			}
+		})
+	}
+}
+
 func TestCapacityClaimAndParentResumeAreAtomicAcrossStores(t *testing.T) {
 	s1, s2 := openKernelStores(t)
 	ctx := context.Background()

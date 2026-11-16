@@ -167,7 +167,7 @@ func (h *handler) ask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := eng.Ask(r.Context(), req.Prompt, req.Authorize)
+	out, err := eng.AskTurnsScoped(r.Context(), nil, req.Prompt, askengine.AskScope{PersonalMemory: true, AmbientProject: true}, req.Authorize, askengine.StreamCallbacks{})
 	if err != nil {
 		// A missing model or API key is a configuration gap, not a server
 		// fault: 503 keeps it in the same family as "engine not configured"

@@ -18,7 +18,7 @@ import (
 // (and what a delegated task carries to another node). A roster that only
 // lived in the request would be advice, not a restriction.
 func TestAskScopeRosterRidesTaskSpec(t *testing.T) {
-	taskJSON := `{"kind":"task","task":{"title":"改一处代码","context_type":"file","requires":{"abilities":["code:modify"]},"spec":{"scope":"internal","target":"改一处代码","constraints":[],"success_definition":"改完"},"complexity":0.3,"risk":"low","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short"}}}`
+	taskJSON := `{"kind":"task","task":{"title":"改一处代码","context_type":"file","requires":{"abilities":["code:modify"]},"spec":{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"delivery","weight":1,"priority":"NORMAL","requirement":"Complete the fixture task","reason":"The fixture requests a task","criteria":["Observe the expected fixture result"]}]},"scope":"internal","target":"改一处代码","constraints":[],"success_definition":"改完"},"complexity":0.3,"risk":"low","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short"}}}`
 	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		b, _ := json.Marshal(anthropicText(taskJSON))

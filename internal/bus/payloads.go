@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"time"
 	"unicode/utf8"
+
+	"github.com/Xustalis/OpenPanda/internal/objectives"
 )
 
 func unixNow() int64 { return time.Now().Unix() }
@@ -694,6 +696,8 @@ type TaskResultPayload struct {
 	Verdict       string `json:"verdict,omitempty"`
 	VerdictReason string `json:"verdict_reason,omitempty"`
 	Followup      string `json:"followup,omitempty"`
+	// Independent acceptance evidence must survive relay, reconnect and approval.
+	ObjectiveAssessments []objectives.Assessment `json:"objective_assessments,omitempty"`
 	// Deferred marks a result that reports custody, not execution: the
 	// caller's request (a resume approval) was accepted and parked in an
 	// outbox for delivery when the executor's link returns. Surfaces must
@@ -743,7 +747,8 @@ type TaskResultPayload struct {
 	// across relay hops where env.From is only the last hop), which agent
 	// actually executed (Agent — the fallback chain may have swapped it),
 	// and how long the execution took on the executor's clock.
-	Executor string `json:"executor,omitempty"`
+	Executor       string `json:"executor,omitempty"`
+	ActivityCursor int64  `json:"activity_cursor,omitempty"`
 	// WorkDir is the workspace the executor actually ran in — the derived
 	// directory, not the submitter's pin — so the origin can locate the
 	// produced files on the machine that ran the work.
@@ -850,6 +855,35 @@ type TaskProgressPayload struct {
 	TaskID    string `json:"task_id"`
 	AttemptID string `json:"attempt_id,omitempty"`
 	Note      string `json:"note,omitempty"`
+	// ActivityCursor advertises durable display history at the sender. Peers
+	// that understand it pull missing rows; legacy peers keep showing Note.
+	ActivityCursor int64 `json:"activity_cursor,omitempty"`
+}
+
+// TaskActivityFetchPayload requests bounded history from the immediate task
+// executor/custodian. Cursor is local to that peer and must not be used as an
+// event identity across relay hops.
+type TaskActivityFetchPayload struct {
+	TaskID    string `json:"task_id"`
+	AttemptID string `json:"attempt_id"`
+	After     int64  `json:"after,omitempty"`
+}
+
+type TaskActivity struct {
+	ID       string          `json:"id"`
+	Executor string          `json:"executor"`
+	Type     string          `json:"type"`
+	TS       int64           `json:"ts"`
+	Data     json.RawMessage `json:"data"`
+}
+
+type TaskActivitiesPayload struct {
+	TaskID     string         `json:"task_id"`
+	AttemptID  string         `json:"attempt_id"`
+	After      int64          `json:"after,omitempty"`
+	Cursor     int64          `json:"cursor"`
+	More       bool           `json:"more,omitempty"`
+	Activities []TaskActivity `json:"activities,omitempty"`
 }
 
 // TaskCancelPayload requests cancellation.

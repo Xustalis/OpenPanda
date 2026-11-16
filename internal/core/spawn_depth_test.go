@@ -224,7 +224,7 @@ func TestDelegateChildrenFanOutBound(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%d child tasks never settled", open)
+			t.Fatalf("%d child tasks never settled: %s", open, taskDiagnostics(ctx, c.store.db, parent.TaskID))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

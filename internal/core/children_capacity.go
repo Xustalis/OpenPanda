@@ -25,12 +25,16 @@ func countExecutionSlots(ctx context.Context, tx *sql.Tx, node string) (int, err
 	return n, err
 }
 
-func (s *TaskStore) waitForChildren(ctx context.Context, parent Task) (bool, error) {
+func (s *TaskStore) waitForChildren(ctx context.Context, parent Task, exclusive ...bool) (bool, error) {
 	if parent.AttemptID == "" {
 		return false, nil
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET children_wait_attempt=?
- WHERE task_id=? AND attempt_id=? AND state='running' AND owner_node=?`, parent.AttemptID, parent.TaskID, parent.AttemptID, parent.OwnerNode)
+	query := `UPDATE tasks SET children_wait_attempt=?
+ WHERE task_id=? AND attempt_id=? AND state='running' AND owner_node=?`
+	if len(exclusive) > 0 && exclusive[0] {
+		query += " AND (children_wait_attempt='' OR children_wait_attempt != attempt_id)"
+	}
+	res, err := s.db.ExecContext(ctx, query, parent.AttemptID, parent.TaskID, parent.AttemptID, parent.OwnerNode)
 	if err != nil {
 		return false, err
 	}
@@ -64,22 +68,25 @@ func (s *TaskStore) resumeAfterChildren(ctx context.Context, parent Task, capaci
 	return resumed, err
 }
 
-func (c *Core) yieldForChildren(ctx context.Context, parent Task) (func(), error) {
-	yielded, err := c.store.waitForChildren(ctx, parent)
+func (c *Core) yieldForChildren(ctx context.Context, parent Task, exclusive ...bool) (func() error, error) {
+	yielded, err := c.store.waitForChildren(ctx, parent, exclusive...)
 	if err != nil {
 		return nil, fmt.Errorf("yield child capacity: %w", err)
+	}
+	if !yielded && len(exclusive) > 0 && exclusive[0] {
+		return nil, fmt.Errorf("parent attempt cannot begin another child wait")
 	}
 	keys := queue.DefaultKeys(parent.ResourceKeys, parent.Project, parent.WorkDir, parent.TaskID)
 	held := c.queueReleaseFor(parent.TaskID)
 	dbKeys, dbHeld := c.execReleaseFor(parent.TaskID)
 	c.queueWake()
-	return func() {
+	return func() error {
 		if yielded {
 			tick := time.NewTicker(execLockPollEvery)
 			defer tick.Stop()
 			for {
 				if ctx.Err() != nil {
-					return
+					return ctx.Err()
 				}
 				release, ok := c.reserveCapacity(ctx)
 				if ok {
@@ -88,7 +95,7 @@ func (c *Core) yieldForChildren(ctx context.Context, parent Task) (func(), error
 					if rerr != nil {
 						c.logger.Warn("resume parent capacity", "task", parent.TaskID, "err", rerr)
 						c.cancelRunning(parent.TaskID)
-						return
+						return rerr
 					}
 					if resumed {
 						break
@@ -96,7 +103,7 @@ func (c *Core) yieldForChildren(ctx context.Context, parent Task) (func(), error
 				}
 				select {
 				case <-ctx.Done():
-					return
+					return ctx.Err()
 				case <-tick.C:
 				}
 			}
@@ -108,7 +115,9 @@ func (c *Core) yieldForChildren(ctx context.Context, parent Task) (func(), error
 			if err := c.execAcquireFor(ctx, parent.TaskID, dbKeys); err != nil {
 				c.logger.Warn("resume parent locks", "task", parent.TaskID, "err", err)
 				c.cancelRunning(parent.TaskID)
+				return err
 			}
 		}
+		return ctx.Err()
 	}, nil
 }

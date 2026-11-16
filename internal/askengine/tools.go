@@ -19,6 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/mcp"
 	"github.com/Xustalis/OpenPanda/internal/memory"
+	"github.com/Xustalis/OpenPanda/internal/objectives"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
 )
 
@@ -383,18 +384,18 @@ func executeToolChecked(ctx context.Context, reg *entry.Registry, call *entry.To
 	t, ok := reg.Lookup(call.Tool)
 	if !ok {
 		if targetLoc == i18n.English {
-			return "Tool execution failed: unknown tool " + call.Tool, nil
+			return "Tool execution failed: unknown tool " + call.Tool, toolActivityOutcome(ctx, "failed")
 		}
-		return "工具执行失败：未知工具 " + call.Tool, nil
+		return "工具执行失败：未知工具 " + call.Tool, toolActivityOutcome(ctx, "failed")
 	}
 	// A tier is a reversibility classification, not a read-only promise.
 	// Unknown/MCP tools (and the many Tier-1 mutation tools) fail closed.
 	if ctx.Value(readOnlyEntryToolsKey{}) == true && !t.ReadOnly &&
 		call.Tool != entry.ToolNameTaskSubmit && call.Tool != entry.ToolNameTaskBudget {
 		if targetLoc == i18n.English {
-			return "Tool execution refused: this conversation is read-only (plan mode).", nil
+			return "Tool execution refused: this conversation is read-only (plan mode).", toolActivityOutcome(ctx, "refused")
 		}
-		return "工具执行被拒：当前对话为只读（plan 模式）。", nil
+		return "工具执行被拒：当前对话为只读（plan 模式）。", toolActivityOutcome(ctx, "refused")
 	}
 	// A remembered "deny" answers the tier-2 gate for this scope, so it may
 	// only withhold the operations that gate guards. Applying it to every
@@ -404,15 +405,15 @@ func executeToolChecked(ctx context.Context, reg *entry.Registry, call *entry.To
 	// connect to "the assistant suddenly stopped working".
 	if denied && t.Tier != defense.TierReversible {
 		if targetLoc == i18n.English {
-			return "Tool execution refused: the user previously denied tier-2 operations for this scope. Ask the user to clear the remembered denial before retrying.", nil
+			return "Tool execution refused: the user previously denied tier-2 operations for this scope. Ask the user to clear the remembered denial before retrying.", toolActivityOutcome(ctx, "refused")
 		}
-		return "工具执行被拒：该范围内已有需授权操作的拒绝记录。请先让用户清除已记住的拒绝再重试。", nil
+		return "工具执行被拒：该范围内已有需授权操作的拒绝记录。请先让用户清除已记住的拒绝再重试。", toolActivityOutcome(ctx, "refused")
 	}
 	if err := defense.Authorize(t.Tier, authorized); err != nil {
 		if targetLoc == i18n.English {
-			return "Tool execution refused (tier-2 requires authorization): " + toolConsentHint(t, approvalMode, targetLoc), nil
+			return "Tool execution refused (tier-2 requires authorization): " + toolConsentHint(t, approvalMode, targetLoc), toolActivityOutcome(ctx, "refused")
 		}
-		return "工具执行被拒（tier-2 需授权）：" + toolConsentHint(t, approvalMode, targetLoc), nil
+		return "工具执行被拒（tier-2 需授权）：" + toolConsentHint(t, approvalMode, targetLoc), toolActivityOutcome(ctx, "refused")
 	}
 	result, err := runToolGuarded(ctx, t, call.Arguments)
 	if err != nil {
@@ -486,10 +487,12 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 				"required": []string{"target_actuator", "action"}},
 		}
 	}
+	props["coordination"] = map[string]any{"type": "string", "enum": []string{"IMMEDIATE", "ROUND_END"}, "description": "Required child coordination timing; IMMEDIATE requires compatible agent tools"}
 	props["task_kind"] = map[string]any{
 		"type": "string", "enum": []string{"code_question", "investigation", "edit", "operations"},
 		"description": "Delivery type: investigation/code_question require source evidence; edit requires relevant verification; operations requires an observed postcondition. Does not grant permissions.",
 	}
+	props["objectives"] = objectives.Schema()
 	return entry.Tool{
 		Name:        entry.ToolNameTaskSubmit,
 		Description: desc,
@@ -497,7 +500,7 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 		Schema: map[string]any{
 			"type":       "object",
 			"properties": props,
-			"required":   []string{"title", "target", "abilities"},
+			"required":   []string{"title", "target", "abilities", "objectives"},
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			title, _ := args["title"].(string)
@@ -519,6 +522,22 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 			taskScope, _ := args["scope"].(string)
 			successDef, _ := args["success_definition"].(string)
 			kind, _ := args["task_kind"].(string)
+			var policy *objectives.Policy
+			if args["objectives"] == nil {
+				return "", fmt.Errorf("newly generated task requires objectives")
+			}
+			if raw, ok := args["objectives"]; ok && raw != nil {
+				blob, err := json.Marshal(raw)
+				if err != nil {
+					return "", fmt.Errorf("objectives: %w", err)
+				}
+				if err := json.Unmarshal(blob, &policy); err != nil {
+					return "", fmt.Errorf("objectives: %w", err)
+				}
+				if err := objectives.Validate(policy); err != nil {
+					return "", err
+				}
+			}
 			var actionSpec *ledger.ActionSpec
 			if raw, ok := args["action_spec"]; ok && raw != nil {
 				// The argument arrives as untyped JSON; round-tripping into the
@@ -539,11 +558,14 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 				// decisions, and a servo has no checkout to carry.
 				contextType = "hardware"
 			}
+			coordination, _ := args["coordination"].(string)
 			spec := &entry.TaskSpec{
 				Title:       strings.TrimSpace(title),
 				ContextType: contextType,
 				Requires:    entry.Requires{Abilities: abilities},
 				Spec: entry.TaskSpecDetail{
+					Coordination:      coordination,
+					Objectives:        policy,
 					Kind:              entry.TaskKind(kind),
 					Target:            strings.TrimSpace(target),
 					Node:              strings.TrimSpace(node),

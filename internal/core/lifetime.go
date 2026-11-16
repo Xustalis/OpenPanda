@@ -174,7 +174,7 @@ func (c *Core) renewLease(ctx context.Context, taskID string, chain []string, at
 				}
 				c.setLease(ctx, taskID, lease)
 				c.relayToParent(context.WithoutCancel(ctx), bus.MsgTaskProgress, chain,
-					bus.TaskProgressPayload{TaskID: taskID, AttemptID: attemptID})
+					bus.TaskProgressPayload{TaskID: taskID, AttemptID: attemptID, ActivityCursor: c.store.activityCursor(ctx, taskID)})
 			}
 		}
 	})

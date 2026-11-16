@@ -317,6 +317,10 @@ func (c *Core) startPlan(ctx context.Context, p plan.Plan, q QueueSpec, req *Exe
 			title = st.ID
 		}
 		in := TaskInput{Title: title, Project: q.Project, Intent: st.Intent, SpecJSON: st.SpecJSON, Requires: st.Requires, ResourceJSON: string(resourceJSON), SessionID: q.SessionID, TargetNode: st.Node, Authorized: q.Authorized}
+		in.SpecJSON, err = planStageObjectives(p, in.SpecJSON)
+		if err != nil {
+			return "", false, fmt.Errorf("stage %s objectives: %w", st.ID, err)
+		}
 		hash, _, err := c.packContext(ctx, in)
 		if err != nil {
 			return "", false, fmt.Errorf("stage %s context: %w", st.ID, err)
@@ -1029,23 +1033,31 @@ func (c *Core) sweepPlans(ctx context.Context) {
 // recursive delegation model (whitepaper §4.2). The executing node promotes itself to
 // Sub-MainAgent, spawning child causal tasks with bounded depth.
 //
-// The child inherits the parent's causal chain verbatim — the chain records
-// the delegation path, and its tail is already this node (the Sub-MainAgent
-// that received the parent). Appending self again would forge an immediate
-// self-loop; resetting it would launder the mesh-wide loop history. The next
-// hop is appended by whoever forwards the child, and the parent's remaining
-// mesh budget carries over (§6.1): the budget is spent at dispatchDelegated,
-// not here, so a locally-run child costs nothing.
+// Each child starts its own network route. ParentID and SpawnDepth preserve
+// causal ancestry independently of the anti-loop route. The parent's remaining
+// mesh budget is reserved atomically for each child subtree; transport hops
+// are then spent from the child's allocation at dispatchDelegated.
 func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput) (Task, error) {
 	parent, err := c.store.Get(ctx, parentID)
 	if err != nil {
 		return Task{}, fmt.Errorf("load parent task %s: %w", parentID, err)
+	}
+	in.SpecJSON, err = inheritTaskObjectives(parent.SpecJSON, in.SpecJSON)
+	if err != nil {
+		return Task{}, fmt.Errorf("inherit child objectives: %w", err)
 	}
 	// A spawned child belongs to its parent's conversation and must claim the
 	// same lane: with no session it would take the project root — an ancestor
 	// of the parent's own key — and queue behind the task waiting on it.
 	if in.SessionID == "" {
 		in.SessionID = parent.SessionID
+	}
+	if in.Project == "" {
+		in.Project = parent.Project
+	}
+	in.Transport = parent.Transport
+	if parent.DeadlineUnix > 0 && (in.DeadlineUnix == 0 || in.DeadlineUnix > parent.DeadlineUnix) {
+		in.DeadlineUnix = parent.DeadlineUnix
 	}
 	// An operator-disabled node refuses minting outright — the run loop's
 	// canSpawn gate normally keeps this unreachable, but SpawnChildTask is
@@ -1065,97 +1077,27 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 	if childDepth > cap {
 		return Task{}, fmt.Errorf("spawn depth %d exceeds delegation.max_depth %d", childDepth, cap)
 	}
-	newChain := append([]string(nil), parent.Chain...)
-	if len(newChain) == 0 {
-		newChain = []string{c.nodeID}
-	}
-	t, err := c.store.Create(ctx, parentID, in.Project, in.Title, c.nodeID, newChain)
-	if err != nil {
-		return Task{}, fmt.Errorf("create child task: %w", err)
-	}
-	// A failed persistence of a BOUND is not a warning: the row is what every
-	// later hop and restart reads, so a lost depth/cap/scope/isolate means the
-	// child runs with a weaker policy than the one it was minted under. The
-	// child is cancelled before the error returns, or it would sit in
-	// submitted and be requeued by recovery.
-	fail := func(stage string, err error) (Task, error) {
-		_ = c.store.Cancel(ctx, t.TaskID)
-		return Task{}, fmt.Errorf("persist child %s: %w", stage, err)
-	}
-	if err := c.store.SetSpawnDepth(ctx, t.TaskID, childDepth); err != nil {
-		return fail("spawn depth", err)
-	}
-	t.SpawnDepth = childDepth
-	// The child inherits the effective cap its spawn was judged against —
-	// stamping it here (not at dispatch) keeps the bound honest across
-	// restarts and onward forwards, where only the row survives.
-	if err := c.store.SetSpawnCap(ctx, t.TaskID, cap); err != nil {
-		return fail("spawn cap", err)
-	}
-	t.SpawnCap = cap
-	if paths := normalizeScopePaths(in.Paths); len(paths) > 0 {
-		if err := c.store.SetScopePaths(ctx, t.TaskID, paths); err != nil {
-			return fail("scope paths", err)
-		}
-		t.ScopePaths = paths
-	}
-	if in.Isolate {
-		// Without this the child runs against the SHARED tree while its
-		// siblings were promised private copies — two tasks writing one
-		// checkout, which is the collision isolation exists to stop.
-		if err := c.store.SetIsolate(ctx, t.TaskID, true); err != nil {
-			return fail("isolate", err)
-		}
-		t.Isolate = true
+	// Chain is this task's network route, not its causal ancestry. ParentID
+	// and SpawnDepth preserve ancestry and its bounds. A Windows coordinator
+	// reached from a Mac may legitimately create a NEW child for that Mac;
+	// copying the parent's route would incorrectly reject it as a loop.
+	newChain := []string{c.nodeID}
+	if in.Project != parent.Project {
+		return Task{}, fmt.Errorf("child cannot change parent project")
 	}
 	if in.WorkDir != "" {
-		// Same breadth rule as createTask: a child's pin is also a sandbox
-		// writable root, and a marker's workdir is generated rather than
-		// typed, so this is where a hallucinated "/" has to stop.
 		if err := projects.ValidateWorkDir(in.WorkDir); err != nil {
-			return fail("work dir", err)
+			return Task{}, err
 		}
-		if err := c.store.SetWorkDir(ctx, t.TaskID, in.WorkDir); err != nil {
-			return fail("work dir", err)
-		}
-	}
-	if err := c.store.SetAuthorized(ctx, t.TaskID, in.Authorized); err != nil {
-		// Fail-open on consent is safe (tier-2 parks), but the operator
-		// should see why a consented child ran gated.
-		c.logger.Warn("persist child authorization", "task", t.TaskID, "err", err)
-	}
-	if err := c.store.SetDetail(ctx, t.TaskID, in.detail()); err != nil {
-		// The detail IS the child's intent and requires: without it the row
-		// would run with an empty intent — a silent wrong-run. Fail the
-		// spawn; the parent folds "delegation failed: ..." and can retry.
-		return fail("detail", err)
-	}
-	// A pre-budget parent (delegation_budget=0, e.g. a row minted before v19)
-	// carries the default; its child's dispatch still decrements normally.
-	budget := parent.DelegationBudget
-	if budget <= 0 {
-		budget = scheduler.MaxDelegationBudget
-	}
-	if err := c.store.SetDelegationBudget(ctx, t.TaskID, budget); err != nil {
-		// A lost budget reads as 0 = unbounded on the next hop.
-		return fail("delegation budget", err)
-	}
-	// The token quota is mesh-wide too (§6.1): the child draws from the same
-	// remainder the parent carries — zero stays unbounded, an exhausted
-	// parent spawns an already-exhausted child that declines on dispatch.
-	if parent.TokenBudget != 0 {
-		if err := c.store.SetTokenBudget(ctx, t.TaskID, parent.TokenBudget); err != nil {
-			// A lost quota reads as 0 = unbounded mesh-wide.
-			return fail("token budget", err)
+		if (parent.WorkDir != "" || len(parent.ScopePaths) > 0 || strings.TrimSpace(taskScope(parent.SpecJSON)) != "") && in.WorkDir != parent.WorkDir {
+			return Task{}, fmt.Errorf("child cannot widen parent workspace")
 		}
 	}
-	c.EvTrace(ctx, t.TaskID, "spawn_child_task", map[string]any{
-		"parent_id": parentID,
-		"sub_main":  c.nodeID,
-		"chain":     newChain,
-		"budget":    budget,
-	})
-	return t, nil
+	in, err = constrainChildGrant(parent, in)
+	if err != nil {
+		return Task{}, err
+	}
+	return c.store.createChildTask(ctx, parent, in, newChain, childDepth, cap, c.delegateLimits())
 }
 
 // DispatchChild routes a spawned child the way Submit routes a root task
@@ -1165,6 +1107,20 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 // whatever spawned it. A local/declined child lands on the queue scheduler,
 // which runs it here (or re-routes via forwardScheduled on the next pass).
 func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) error {
+	// Only committed child policy may enter the execution/transport paths.
+	stored, err := c.store.Get(ctx, child.TaskID)
+	if err != nil {
+		return err
+	}
+	child = stored
+	in.SpecJSON, in.Authorized, in.Paths = child.SpecJSON, child.Authorized, child.ScopePaths
+	in.Project, in.SessionID, in.WorkDir = child.Project, child.SessionID, child.WorkDir
+	in.Transport, in.DeadlineUnix = child.Transport, child.DeadlineUnix
+	in.Title, in.Intent, in.Requires = child.Title, child.Intent, child.Requires
+	in.ContextType, in.ContextHash = child.ContextType, child.ContextHash
+	in.Complexity, in.Risk, in.ResourceJSON = child.Complexity, child.Risk, child.ResourceJSON
+	in.Isolate = child.Isolate
+
 	var decision scheduler.Decision
 	switch {
 	case strings.TrimSpace(in.WorkDir) != "":
@@ -1219,6 +1175,9 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 			MaxDepth:         child.SpawnCap,
 			DelegationBudget: &child.DelegationBudget,
 			TokenBudget:      child.TokenBudget,
+		}
+		if err := c.attachChildWorkspace(ctx, &payload, child); err != nil {
+			return fmt.Errorf("prepare remote child inputs: %w", err)
 		}
 		if in.Authorized {
 			payload.AuthHops = defaultConsentHops
@@ -2045,6 +2004,11 @@ func (c *Core) awaitChild(ctx context.Context, parent Task, child Task,
 	for {
 		select {
 		case r := <-waiter:
+			if row, err := c.store.Get(ctx, child.TaskID); err == nil {
+				if err := c.deliverChildOutput(ctx, row, r); err != nil {
+					return r, false, r.State, err
+				}
+			}
 			return r, true, r.State, nil
 		case <-ctx.Done():
 			return bus.TaskResultPayload{}, false, "", ctx.Err()
@@ -2055,6 +2019,9 @@ func (c *Core) awaitChild(ctx context.Context, parent Task, child Task,
 			continue
 		}
 		if r, ok := childRowResult(row); ok {
+			if err := c.deliverChildOutput(ctx, row, r); err != nil {
+				return r, false, row.State, err
+			}
 			return r, true, row.State, nil
 		}
 		now := time.Now()

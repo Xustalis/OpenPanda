@@ -38,11 +38,6 @@ import (
 // enough that a chatty adapter cannot flood the event chain.
 const progressInterval = 2 * time.Second
 
-// maxAgentTranscriptEvents bounds how many structured agent_event rows one
-// task records: a transcript beyond that is pathological, not informative —
-// past the cap one transcript_truncated marker notes the cut.
-const maxAgentTranscriptEvents = 2000
-
 // execute runs the shared post-creation pipeline for a task that needs no
 // context fetch: queue → dispatch → run. Both the WebSocket delegation path and
 // the local entry path (SubmitLocal/Submit) funnel through here so there is
@@ -163,6 +158,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		if out.TaskID != "" {
 			out.DurationMS = time.Since(start).Milliseconds()
 			out.Executor = c.nodeID
+			out.ActivityCursor = c.store.activityCursor(context.WithoutCancel(ctx), taskID)
 			out.WorkDir = execWorkDir
 			if len(out.Chain) == 0 {
 				out.Chain = taskChain
@@ -259,6 +255,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	defer cancelExec()
 	defer c.registerRunning(taskID, cancelExec)()
 	defer c.renewLease(execCtx, taskID, task.Chain, attemptID)()
+	defer c.advertiseActivities(execCtx, task)()
 	execCtx = commander.WithTaskID(execCtx, taskID)
 	if withholdCreds {
 		execCtx = commander.WithModelCredsWithheld(execCtx)
@@ -316,6 +313,14 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	}
 	if prep.negoRelease != nil {
 		defer prep.negoRelease()
+	}
+	if plan.Kind == "agent" && c.delegationEnabled() {
+		rpcCtx, closeRPC, rpcErr := c.bindChildRPC(execCtx, task)
+		if rpcErr != nil {
+			return bus.TaskResultPayload{}, fmt.Errorf("bind task child RPC: %w", rpcErr)
+		}
+		execCtx = rpcCtx
+		defer closeRPC()
 	}
 	var execCleanup func()
 	evidence := newExecEvidence()
@@ -1148,17 +1153,15 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 		// adapter streams — assistant text, thinking, tool_use/tool_result,
 		// sub-agent blocks keyed by the parent tool_use id — lands as an
 		// agent_event row so the display layer renders the delegation tree,
-		// not just a progress line. The count is bounded: a pathological
-		// adapter cannot grow the task's event table without limit, and past
-		// the cap one truncation marker records that the stream was cut.
+		// not just a progress line. Durable history is complete; only the
+		// streaming preview is bounded independently by the display layer.
 		execCtx = commander.WithExecutionProfiles(execCtx, func(profile commander.AdapterExecutionProfile) {
 			if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, "adapter_execution_profile", map[string]any{
-				"attempt_id": task.AttemptID, "profile": profile,
+				"attempt_id": task.AttemptID, "executor_id": c.nodeID, "profile": profile,
 			}); err != nil {
 				c.logger.Warn("record adapter execution profile", "task", taskID, "err", err)
 			}
 		})
-		var evCount atomic.Int64
 		execCtx = commander.WithAgentEvents(execCtx, func(ev commander.AgentEvent) {
 			if ev.Ev == "session" && ev.ID != "" {
 				// The adapter minted (or resumed under) a conversation id:
@@ -1176,18 +1179,9 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 				return
 			}
 			// Fold the event into the round's evidence before the transcript
-			// cap: a pathological stream still leaves the judge the tools it
-			// saw, and evidence costs no extra storage.
+			// archive: the judge uses a separate bounded evidence summary.
 			evidence.observe(ev)
-			if n := evCount.Add(1); n > maxAgentTranscriptEvents {
-				if n == maxAgentTranscriptEvents+1 {
-					c.EvTrace(context.WithoutCancel(ctx), taskID, EvAgentEvent, map[string]any{
-						"ev": "transcript_truncated", "count": n - 1,
-					})
-				}
-				return
-			}
-			data := map[string]any{"ev": ev.Ev}
+			data := map[string]any{"ev": ev.Ev, "attempt_id": task.AttemptID, "executor_id": c.nodeID}
 			if ev.ID != "" {
 				data["id"] = ev.ID
 			}
@@ -1232,6 +1226,16 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 			cleanup = pool.CloseAll
 			execCtx = commander.WithSessionMode(execCtx)
 		}
+	}
+
+	// Coordination requirements apply before routing to any execution kind.
+	// A native command has no child tool face and must refuse IMMEDIATE.
+	var coordination struct {
+		Coordination string `json:"coordination"`
+	}
+	_ = json.Unmarshal([]byte(task.SpecJSON), &coordination)
+	if coordination.Coordination == "IMMEDIATE" {
+		execCtx = commander.WithImmediateCoordination(execCtx)
 	}
 
 	// Per-task agent timeout by plan kind: a training stage gets a larger
@@ -1400,7 +1404,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		maxRounds = c.superviseRounds
 	}
 
-	baseIntent := intent + taskSpecEnvelope(task.SpecJSON)
+	baseIntent := intent + taskSpecEnvelope(task.SpecJSON) + objectiveTaskContext(task)
 	if shadowConflicts != nil {
 		// The winner's bytes won on these paths: tell the resumed agent
 		// exactly which of its preempted edits died so it re-applies them
@@ -1729,6 +1733,8 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// remote task ran under is auditable even when the adapter's own
 		// "restricted mode" note loses the progress-rate race.
 		c.EvTrace(execCtx, taskID, EvExecAgentStart, map[string]any{
+			"attempt_id":           task.AttemptID,
+			"executor_id":          c.nodeID,
 			"round":                round + 1,
 			"budget":               maxRounds,
 			"plan_kind":            plan.Kind,
@@ -2128,7 +2134,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// minus the token gate (an exhausted round parks on "review" instead).
 		// Gated: an authorization refusal parks before agent execution; emitting
 		// a failed supervision round would falsely mark that a judge round took place.
-		judgeWillRun := plan.Kind == "agent" && supervisor != nil && res.OK && !tokenExhausted
+		judgeWillRun := (plan.Kind == "agent" || taskHasMaxObjectives(task)) && supervisor != nil && res.OK && !tokenExhausted
 		if !judgeWillRun && !commander.IsAuthorizationRefusal(res.Stderr) {
 			status := string(verdict.Status)
 			if !res.OK {
@@ -2496,8 +2502,9 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			}}, nil
 		}
 
-		// Supervision applies only to agent tasks under a configured supervisor.
-		if plan.Kind != "agent" || supervisor == nil {
+		// Native operations with MAX goals need the same independent criterion
+		// review; an exit code alone cannot prove a global quality requirement.
+		if (plan.Kind != "agent" && !taskHasMaxObjectives(task)) || supervisor == nil {
 			break
 		}
 		if tokenExhausted {
@@ -2570,7 +2577,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// work may reach done.
 			c.logger.Warn("supervise call failed", "task", taskID, "err", serr)
 		}
-		verdict = v
+		verdict = objectiveVerdict(task, v)
 		// A "done" that leaves no trace is not done. When the working tree was
 		// readable and the round produced neither a byte of output nor a single
 		// changed file, the verdict is the model agreeing with itself — park it
@@ -2588,6 +2595,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		emitRound(v.Status)
 		if err := c.store.RecordEvent(context.WithoutCancel(ctx), taskID, EvSupervise, map[string]any{
 			"round": round + 1, "status": v.Status, "reason": v.Reason, "followup": v.Followup,
+			"objective_assessments": v.ObjectiveAssessments,
 		}); err != nil {
 			c.logger.Warn("record supervise event", "task", taskID, "err", err)
 		}
@@ -2722,6 +2730,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	lastChanged []string, lastStats []fileStat, filesTruncated bool, verdict entry.SuperviseVerdict, unverified bool,
 	sessionID, sessionAdapter string,
 	checks []contract.Check, baseline []contract.Result) (bus.TaskResultPayload, error) {
+	verdict = objectiveVerdict(task, verdict)
 	// A stage hands its work-dir to its successors as a content-addressed
 	// artifact. It is packed before the terminal branches below, not inside one of
 	// them, because a stage that parks in review still produced a tree and the
@@ -2821,7 +2830,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	// and what remains, rather than looping indefinitely or silently accepting
 	// unverified work.
 	// Honor the attempt's verdict even if its model was cleared meanwhile.
-	if plan.Kind == "agent" &&
+	if (plan.Kind == "agent" || taskHasMaxObjectives(task)) &&
 		(verdict.Status == entry.VerdictContinue || verdict.Status == entry.VerdictReview || verdict.Status == entry.VerdictBlocked) {
 		wCtx, cancel := c.storeWriteCtx(ctx)
 		defer cancel()
@@ -2833,8 +2842,9 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 			"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
 			"needs_followup": verdict.Status == entry.VerdictContinue,
 			"verdict":        verdict.Status, "verdict_reason": verdict.Reason,
-			"followup":      verdict.Followup,
-			"files_changed": filesChanged, "files_stat": filesStat,
+			"followup":              verdict.Followup,
+			"objective_assessments": verdict.ObjectiveAssessments,
+			"files_changed":         filesChanged, "files_stat": filesStat,
 		}, disposition, verdict.Reason, attemptID); err != nil {
 			if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 				return bus.TaskResultPayload{}, ErrCancelled
@@ -2848,7 +2858,8 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 			ApprovalDisposition: string(disposition),
 			NeedsFollowup:       verdict.Status == entry.VerdictContinue,
 			Verdict:             verdict.Status, VerdictReason: verdict.Reason, Followup: verdict.Followup,
-			OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
+			ObjectiveAssessments: verdict.ObjectiveAssessments,
+			OK:                   true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, ScreenOutput: screenOut, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter,
 		}, nil
@@ -2907,6 +2918,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 				Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter,
 				Verification: v.Status, NoRetry: true,
+				ObjectiveAssessments: verdict.ObjectiveAssessments,
 			}, nil
 		}
 	}
@@ -2936,6 +2948,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 			if err := c.store.PauseWithResultAttempt(wCtx, taskID, c.nodeID, attemptID, map[string]any{
 				"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
 				"files_changed": filesChanged, "files_stat": filesStat,
+				"objective_assessments": verdict.ObjectiveAssessments,
 			}); err != nil {
 				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 					return bus.TaskResultPayload{}, ErrCancelled
@@ -2950,6 +2963,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 				OK:                  true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 				Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, ScreenOutput: screenOut, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 				AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter,
+				ObjectiveAssessments: verdict.ObjectiveAssessments,
 			}, nil
 		}
 		// Consent already on record: audit the auto-acceptance the way an
@@ -2976,7 +2990,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		if merge.Blocked {
 			wCtx, cancel := c.storeWriteCtx(ctx)
 			defer cancel()
-			result := bus.TaskResultPayload{TaskID: taskID, AttemptID: attemptID, State: StateReview, ApprovalDisposition: string(ApprovalNeedsChangedInput), OK: false, ExitCode: res.ExitCode, Verdict: "blocked", VerdictReason: merge.Note, Stdout: res.Stdout, Stderr: merge.Note, Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, ScreenOutput: screenOut, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected, AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter, Verification: verificationStatus}
+			result := bus.TaskResultPayload{TaskID: taskID, AttemptID: attemptID, State: StateReview, ApprovalDisposition: string(ApprovalNeedsChangedInput), OK: false, ExitCode: res.ExitCode, Verdict: "blocked", VerdictReason: merge.Note, Stdout: res.Stdout, Stderr: merge.Note, Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, ScreenOutput: screenOut, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected, AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter, Verification: verificationStatus, ObjectiveAssessments: verdict.ObjectiveAssessments}
 			if err := c.store.pauseWithResultDisposition(wCtx, taskID, c.nodeID, result, ApprovalNeedsChangedInput, merge.Note, attemptID); err != nil {
 				return bus.TaskResultPayload{}, err
 			}
@@ -2996,6 +3010,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		// The contract verdict travels with the row so "done" and "verified"
 		// can never be confused after the fact.
 		"verified": verificationStatus == contract.VerdictVerified, "verification": verificationStatus,
+		"objective_assessments": verdict.ObjectiveAssessments,
 	}); err != nil {
 		if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 			return bus.TaskResultPayload{}, ErrCancelled
@@ -3013,6 +3028,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		// The contract verdict rides the wire so the origin node can show
 		// "done, verified" instead of a bare done it cannot substantiate.
 		Verified: verificationStatus == contract.VerdictVerified, Verification: verificationStatus,
+		ObjectiveAssessments: verdict.ObjectiveAssessments,
 		// Reported even though the local row cleared it: the delegator keeps
 		// the handle so a re-dispatch back here can offer ResumeSessionID.
 		AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter,

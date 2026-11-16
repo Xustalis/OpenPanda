@@ -156,10 +156,10 @@ func TestDeepRepositoryDispatchPreservesReadOnlyAndRoster(t *testing.T) {
 				if native {
 					response = map[string]any{"content": []map[string]any{{
 						"type": "tool_use", "id": "investigate", "name": "task_submit",
-						"input": map[string]any{"title": "investigate", "target": "Read implementation and tests; report file and line evidence", "abilities": []string{"agent:codex"}},
+						"input": map[string]any{"objectives": fixtureTaskObjectives(), "title": "investigate", "target": "Read implementation and tests; report file and line evidence", "abilities": []string{"agent:codex"}},
 					}}}
 				} else {
-					response = anthropicText(`{"kind":"task","task":{"title":"investigate","context_type":"file","requires":{"abilities":["agent:codex"]},"spec":{"target":"Read implementation and tests; report file and line evidence"},"complexity":0.5,"risk":"low"}}`)
+					response = anthropicText(`{"kind":"task","task":{"title":"investigate","context_type":"file","requires":{"abilities":["agent:codex"]},"spec":{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"delivery","weight":1,"priority":"NORMAL","requirement":"Complete the fixture task","reason":"The fixture requests a task","criteria":["Observe the expected fixture result"]}]},"target":"Read implementation and tests; report file and line evidence"},"complexity":0.5,"risk":"low"}}`)
 				}
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(response)
@@ -190,11 +190,11 @@ func TestTypedInvestigationDispatchWithoutRepositoryKeywords(t *testing.T) {
 			e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
 				var response map[string]any
 				if native {
-					response = map[string]any{"content": []map[string]any{{"type": "tool_use", "id": "typed", "name": "task_submit", "input": map[string]any{
+					response = map[string]any{"content": []map[string]any{{"type": "tool_use", "id": "typed", "name": "task_submit", "input": map[string]any{"objectives": fixtureTaskObjectives(),
 						"title": "trace", "target": "trace worker callers", "abilities": []string{"agent:codex"}, "task_kind": "investigation",
 					}}}}
 				} else {
-					response = anthropicText(`{"kind":"task","task":{"title":"trace","context_type":"file","requires":{"abilities":["agent:codex"]},"spec":{"task_kind":"investigation","target":"trace worker callers"},"complexity":0.5,"risk":"low"}}`)
+					response = anthropicText(`{"kind":"task","task":{"title":"trace","context_type":"file","requires":{"abilities":["agent:codex"]},"spec":{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"delivery","weight":1,"priority":"NORMAL","requirement":"Complete the fixture task","reason":"The fixture requests a task","criteria":["Observe the expected fixture result"]}]},"task_kind":"investigation","target":"trace worker callers"},"complexity":0.5,"risk":"low"}}`)
 				}
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(response)
@@ -437,7 +437,7 @@ func TestQueuedReceiptCannotBecomeCompletedAnswer(t *testing.T) {
 						if n == 1 {
 							var tools []map[string]any
 							for i := 0; i < 4; i++ {
-								tools = append(tools, map[string]any{"type": "tool_use", "id": fmt.Sprintf("review-%d", i), "name": "task_submit", "input": map[string]any{
+								tools = append(tools, map[string]any{"type": "tool_use", "id": fmt.Sprintf("review-%d", i), "name": "task_submit", "input": map[string]any{"objectives": fixtureTaskObjectives(),
 									"title": fmt.Sprintf("review-%d", i), "target": fmt.Sprintf("inspect implementation section %d", i), "abilities": []string{"agent:codex"},
 								}})
 							}

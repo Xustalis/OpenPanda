@@ -17,6 +17,7 @@ import (
 // about the CLI's effective model/tools/configuration. It intentionally excludes
 // prompts, argv templates, MCP bodies, provider URLs, env values and credentials.
 type AdapterExecutionProfile struct {
+	Coordination         string               `json:"coordination"`
 	Version              int                  `json:"version"`
 	Observation          string               `json:"observation"`
 	Agent                string               `json:"agent"`
@@ -89,7 +90,8 @@ func adapterExecutionProfile(ctx context.Context, adapter string, req AdapterReq
 		return string(r)
 	}
 	p := AdapterExecutionProfile{
-		Version: 1, Observation: "adapter_request_not_native_confirmation",
+		Coordination: coordinationMode(ctx),
+		Version:      1, Observation: "adapter_request_not_native_confirmation",
 		Agent: AgentName(ctx), Adapter: adapter, CWD: req.CWD, Transport: transport,
 		ModelPreference: bounded(req.Model), ModelInjection: injected,
 		RequestedEffort: bounded(req.Effort), NativeModel: "unknown", NativeEffort: "unknown",

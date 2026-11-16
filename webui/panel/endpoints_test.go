@@ -1106,6 +1106,42 @@ func TestSkillsUnconfigured(t *testing.T) {
 	}
 }
 
+func TestSkillsHubCatalogSource(t *testing.T) {
+	for _, source := range []string{"bundled", "remote", "fallback"} {
+		t.Run(source, func(t *testing.T) {
+			cfg := &config.Config{}
+			if source != "bundled" {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if source == "fallback" {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
+					// The remote catalog cannot misrepresent its own source status.
+					_, _ = w.Write([]byte(`{"source":"fallback","skills":[{"name":"community-helper","description":"Community helper"}]}`))
+				}))
+				defer server.Close()
+				cfg.Skills.HubURL = server.URL
+			}
+			h := New(Deps{Store: newTestStore(t), SkillStore: skills.NewStore(t.TempDir()), Cfg: cfg, StaticDir: t.TempDir(), Token: testToken})
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/skills/hub?meta=1", nil))
+			if rr.Code != http.StatusOK {
+				t.Fatalf("catalog status = %d: %s", rr.Code, rr.Body.String())
+			}
+			var catalog struct {
+				Source string         `json:"source"`
+				Skills []hubSkillJSON `json:"skills"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &catalog); err != nil {
+				t.Fatal(err)
+			}
+			if catalog.Source != source || len(catalog.Skills) == 0 {
+				t.Fatalf("catalog source = %q, count = %d; want %q with offline skills available", catalog.Source, len(catalog.Skills), source)
+			}
+		})
+	}
+}
+
 func TestSkillsHubAndImportAPI(t *testing.T) {
 	store := skills.NewStore(t.TempDir())
 	h := New(Deps{Store: newTestStore(t), SkillStore: store, StaticDir: t.TempDir(), Token: testToken})

@@ -40,7 +40,10 @@ func (c *Client) CompleteBounded(ctx context.Context, system, user string, outpu
 	b.maxTokens, b.maxTokensCap = output, output
 	// Configured built-in tools/search cannot bypass this tool-free boundary.
 	b.extraParams = nil
-	b.thinkingDenied.Store(true)
+	// Suppressing the field also suppresses the explicit off request. Providers
+	// whose default is reasoning-on could consume the whole output budget.
+	// Preserve only an actual provider rejection of the thinking field.
+	b.thinkingDenied.Store(c.thinkingDenied.Load())
 	defer func() { u := b.Usage(); c.addUsage(u.InputTokens, u.OutputTokens) }()
 	if b.noCredential() {
 		return "", ErrNoKey

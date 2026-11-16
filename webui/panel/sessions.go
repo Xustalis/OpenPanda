@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/activity"
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
@@ -209,6 +210,26 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusNotFound, errors.New("no such session"))
 		return
+	}
+	if sess.Operation != nil && sess.Operation.Status == core.StateRunning && !h.hasActiveAsk(sess.ID) {
+		orphan := *sess.Operation
+		orphan.Status, orphan.Error = core.StateFailed, "interrupted"
+		orphan.Activities = activity.Settle(orphan.Activities, "unknown")
+		if orphan.Text != "" || orphan.Thought != "" || len(orphan.Activities) > 0 {
+			if _, err := h.sessions.AppendTurn(sess.ID, sessions.Turn{
+				Role: "assistant", Kind: "answer", Text: orphan.Text, Thought: orphan.Thought,
+				Activities: orphan.Activities, Tokens: orphan.Tokens, OperationID: orphan.ID,
+				IdempotencyKey: "ask:" + orphan.ID + ":reply", Warning: orphan.Error,
+			}); err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		if _, err := h.sessions.SetOperation(sess.ID, orphan); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		sess, _ = h.sessions.Get(sess.ID)
 	}
 	// The thread's own transcript is the payload here; the conversations
 	// beside it have their own read surface (/side) and would otherwise be
@@ -531,14 +552,18 @@ func (h *handler) unregisterSessionAsk(id string, op sessionOperation) {
 func (h *handler) cancelSessionAsk(id, operationID string) bool {
 	h.askMu.Lock()
 	op, ok := h.activeAsks[id]
-	if ok && operationID != "" && op.operationID == operationID {
-		delete(h.activeAsks, id)
+	cancel := op.cancel
+	if ok && operationID != "" && op.operationID == operationID && cancel != nil {
+		// Keep the generation live until its finalizer files the partial turn.
+		// Otherwise a refresh in that window would recover it as an orphan.
+		op.cancel = nil
+		h.activeAsks[id] = op
 	} else {
 		ok = false
 	}
 	h.askMu.Unlock()
-	if ok && op.cancel != nil {
-		op.cancel()
+	if ok {
+		cancel()
 		return true
 	}
 	return false
@@ -643,7 +668,7 @@ func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 		// operation id names the chat it belongs to, so the write lands on the
 		// conversation that is actually stuck.
 		if sess, err := h.sessions.Get(id); err == nil {
-			if sess.Operation != nil && sess.Operation.ID == req.OperationID && sess.Operation.Status == core.StateRunning {
+			if sess.Operation != nil && sess.Operation.ID == req.OperationID && sess.Operation.Status == core.StateRunning && !h.hasActiveAsk(id) {
 				orphan := *sess.Operation
 				alreadyFiled := false
 				for _, turn := range sess.Turns {
@@ -652,8 +677,10 @@ func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 						break
 					}
 				}
-				if !alreadyFiled && (orphan.Text != "" || orphan.Thought != "") {
+				orphan.Activities = activity.Settle(orphan.Activities, "cancelled")
+				if !alreadyFiled && (orphan.Text != "" || orphan.Thought != "" || len(orphan.Activities) > 0) {
 					_, err := h.sessions.AppendTurn(id, sessions.Turn{
+						Activities: orphan.Activities, Tokens: orphan.Tokens,
 						Role: "assistant", Kind: "answer", Text: orphan.Text, Thought: orphan.Thought,
 						OperationID: orphan.ID, IdempotencyKey: "ask:" + orphan.ID + ":reply",
 					})
@@ -667,12 +694,13 @@ func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 			}
 			for _, chat := range sess.SideChats {
 				if chat.Operation == nil || chat.Operation.ID != req.OperationID ||
-					chat.Operation.Status != core.StateRunning {
+					chat.Operation.Status != core.StateRunning || h.hasActiveAsk(id+sideOperationSuffix) {
 					continue
 				}
-				if ok, _ := h.sessions.SetSideOperation(id, sessions.Operation{
-					ID: req.OperationID, Status: core.StateCancelled, Error: "cancelled",
-				}); ok {
+				orphan := *chat.Operation
+				orphan.Status, orphan.Error = core.StateCancelled, "cancelled"
+				orphan.Activities = activity.Settle(orphan.Activities, "cancelled")
+				if ok, _ := h.finishRecoveredSide(id, orphan); ok {
 					cancelled = true
 				}
 				break
@@ -762,11 +790,36 @@ func (h *handler) sessionSide(w http.ResponseWriter, r *http.Request) {
 	h.writeSide(w, sess, r.URL.Query().Get("chat"))
 }
 
-// writeSide answers with the pane's whole state. A `running` operation with no
-// live ask behind it is settled as interrupted on the way out: the answer died
-// with the panel process, and a spinner that can never finish is worse than a
-// stated failure. It walks every chat, not only the one being read, so a stale
-// spinner cannot hide in a conversation the reader is not looking at.
+// finishRecoveredSide serializes orphan recovery across concurrent readers.
+// A terminal operation has already filed its evidence and must not append it
+// again when another reader is holding an older snapshot.
+func (h *handler) finishRecoveredSide(id string, op sessions.Operation) (bool, error) {
+	h.askMu.Lock()
+	defer h.askMu.Unlock()
+	current, err := h.sessions.Get(id)
+	if err != nil {
+		return false, err
+	}
+	eligible := false
+	for _, chat := range current.SideChats {
+		if chat.Operation != nil && chat.Operation.ID == op.ID && chat.Operation.Status == core.StateRunning {
+			eligible = true
+			break
+		}
+	}
+	if !eligible {
+		return false, nil
+	}
+	if op.Text == "" && op.Thought == "" && len(op.Activities) == 0 {
+		return h.sessions.SetSideOperation(id, op)
+	}
+	return h.sessions.FinishSideOperation(id, op.ID, sessions.SideTurn{
+		Role: "assistant", Text: op.Text, Thought: op.Thought, Activities: op.Activities,
+		Tokens: op.Tokens, TaskID: op.TaskID, Error: op.Error,
+	}, op)
+}
+
+// writeSide settles all orphaned Side chats while returning the pane state.
 func (h *handler) writeSide(w http.ResponseWriter, sess *sessions.Session, want string) {
 	live := h.hasActiveAsk(sess.ID + sideOperationSuffix)
 	for i := range sess.SideChats {
@@ -777,8 +830,13 @@ func (h *handler) writeSide(w http.ResponseWriter, sess *sessions.Session, want 
 		updated := *op
 		updated.Status = core.StateFailed
 		updated.Error = "interrupted"
-		if ok, _ := h.sessions.SetSideOperation(sess.ID, updated); ok {
-			sess.SideChats[i].Operation = &updated
+		updated.Activities = activity.Settle(updated.Activities, "unknown")
+		if ok, _ := h.finishRecoveredSide(sess.ID, updated); ok {
+			if reloaded, err := h.sessions.Get(sess.ID); err == nil {
+				if chat := reloaded.SideChatByID(sess.SideChats[i].ID); chat != nil {
+					sess.SideChats[i] = *chat
+				}
+			}
 		}
 	}
 
@@ -1253,8 +1311,19 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// so a reloaded pane shows what was checked, not only what was said. It is
 	// display-only and never replayed to the model.
 	var sideTrace []string
+	var persistDisplay func(*activity.Record, string) bool
 	cb := askengine.StreamCallbacks{
+		OnActivity: func(record activity.Record) {
+			if persistDisplay != nil && !persistDisplay(&record, "") {
+				return
+			}
+			progress.activity(record)
+			send("activity", record)
+		},
 		OnReasoning: func(text string) {
+			if persistDisplay != nil && !persistDisplay(nil, text) {
+				return
+			}
 			progress.delta(text, true)
 			send("reasoning", map[string]string{"text": text})
 		},
@@ -1432,10 +1501,27 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	persistDisplay = func(record *activity.Record, thought string) bool {
+		if err := h.sessions.AppendDisplay(sess.ID, op.operationID, record, thought); err != nil {
+			progress.status(map[string]any{"kind": "error", "text": "Could not persist execution evidence: " + err.Error()})
+			send("error", map[string]string{"message": "Could not persist execution evidence"})
+			cancel()
+			return false
+		}
+		return true
+	}
 	finalOperation := sessions.Operation{ID: op.operationID, Status: core.StateFailed, Error: "ask interrupted before model execution"}
 	defer func() {
+		saved := progress.snapshot(finalOperation)
+		activityStatus := "unknown"
+		if saved.Status == core.StateCancelled {
+			activityStatus = "cancelled"
+		}
+		saved.Activities = activity.Settle(saved.Activities, activityStatus)
 		if !side {
-			_, _ = h.sessions.SetOperation(sess.ID, finalOperation)
+			_, _ = h.sessions.SetOperation(sess.ID, saved)
+		} else {
+			_, _ = h.sessions.SetSideOperation(sess.ID, saved)
 		}
 	}()
 	if !side {
@@ -1461,6 +1547,10 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 				if !side {
 					_, _ = h.sessions.SetOperation(progressSessionID, progress.snapshot(sessions.Operation{
 						ID: op.operationID, Status: core.StateRunning,
+					}))
+				} else {
+					_, _ = h.sessions.SetSideOperation(progressSessionID, progress.snapshot(sessions.Operation{
+						ID: op.operationID, Status: core.StateRunning, StartedAt: askStarted,
 					}))
 				}
 			}
@@ -1549,6 +1639,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		approvalSession = sess.ID + sideOperationSuffix
 	}
 	out, err := eng.AskTurnsScoped(execCtx, history, req.Prompt, askengine.AskScope{
+		PersonalMemory: true,
 		RoundID:        roundID,
 		Project:        sess.Project,
 		WorkDir:        workDir,
@@ -1565,9 +1656,15 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	askDuration := time.Since(askStarted).Milliseconds()
 	stopCheckpoint()
+	terminalActivityStatus := "unknown"
+	if execCtx.Err() != nil {
+		terminalActivityStatus = "cancelled"
+	}
+	progress.settle(terminalActivityStatus)
 	finalProgress := progress.snapshot(sessions.Operation{})
 	if out != nil && finalProgress.Thought == "" {
 		finalProgress.Thought = out.Thought
+		progress.delta(out.Thought, true)
 	}
 	if err != nil {
 		msg := err.Error()
@@ -1607,9 +1704,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// A side operation settles together with its answer in
 		// FinishSideOperation below, so a reader never sees "done" before the
 		// turn is on disk. The main thread keeps its own two-step order.
-		if !side {
-			finalOperation = sessions.Operation{ID: op.operationID, Status: status, Error: msg}
-		}
+		finalOperation = sessions.Operation{ID: op.operationID, Status: status, Error: msg}
 		send("error", errPayload)
 		// The failed turn carries its duration too: "it died after 40 seconds"
 		// is the first thing you want to know about a timeout.
@@ -1633,11 +1728,13 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		}
 		if side {
 			_, _ = h.sessions.FinishSideOperation(sess.ID, op.operationID, sessions.SideTurn{
+				Activities: finalProgress.Activities, Thought: finalProgress.Thought,
 				Role: "assistant", Text: text, Tools: sideTrace, Tokens: out.Tokens(),
 				DurationMS: askDuration, Error: msg,
-			}, sessions.Operation{ID: op.operationID, Status: status, Error: msg})
+			}, progress.snapshot(finalOperation))
 		} else {
 			_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{
+				Activities:     finalProgress.Activities,
 				IdempotencyKey: "ask:" + roundID + ":reply", OperationID: roundID, Thought: finalProgress.Thought, Role: "assistant", Text: text, Kind: kind, Code: code,
 				ErrKind: errKind, ErrDetail: errDetail,
 				DurationMS: askDuration,
@@ -1657,9 +1754,10 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// A side operation settles together with its answer in
 	// FinishSideOperation below: a poller that sees "done" can read the turn in
 	// the same breath.
-	if !side {
-		finalOperation = sessions.Operation{ID: op.operationID, Status: operationStatus, TaskID: out.TaskID, Error: out.Stderr}
+	if side {
+		operationStatus = core.StateDone
 	}
+	finalOperation = sessions.Operation{ID: op.operationID, Status: operationStatus, TaskID: out.TaskID, Error: out.Stderr}
 	saveFailure := func() {
 		msg := i18n.T(h.locale(), "web.session.saveFailed")
 		finalOperation.Status, finalOperation.Error = core.StateFailed, msg
@@ -1698,6 +1796,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			// duration three times.
 			if i == len(out.Dispatched)-1 {
 				batch.Thought = finalProgress.Thought
+				batch.Activities = finalProgress.Activities
 				batch.DurationMS = askDuration
 				batch.Model = out.EntryModel
 			}
@@ -1712,6 +1811,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	turn := sessions.Turn{
+		Activities:     finalProgress.Activities,
 		IdempotencyKey: "ask:" + roundID + ":reply",
 		OperationID:    roundID,
 		Thought:        finalProgress.Thought,
@@ -1781,14 +1881,15 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			errText = strings.TrimPrefix(turn.Text, "⚠ ")
 		}
 		ok, err := h.sessions.FinishSideOperation(sess.ID, op.operationID, sessions.SideTurn{
+			Activities: finalProgress.Activities, Thought: finalProgress.Thought,
 			Role: "assistant", Text: turn.Text, Tools: sideTrace, TaskID: out.TaskID,
 			Tokens: turn.Tokens, DurationMS: turn.DurationMS, Error: errText,
-		}, sessions.Operation{
+		}, progress.snapshot(sessions.Operation{
 			// The side operation tracks the ask, not the work it dispatched: the
 			// answer is filed, so the ask is done even if the task is still
 			// queued or running.
 			ID: op.operationID, Status: core.StateDone, TaskID: out.TaskID, Error: out.Stderr,
-		})
+		}))
 		if err != nil || !ok {
 			saveFailure()
 			return

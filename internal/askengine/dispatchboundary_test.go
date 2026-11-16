@@ -55,7 +55,7 @@ func newBoundaryTestEngine(t *testing.T, handler http.HandlerFunc) (*Engine, *ht
 func TestTaskJSONDirectiveQueued(t *testing.T) {
 	var mu sync.Mutex
 	var toolNames []string
-	taskJSON := `{"kind":"task","task":{"title":"用 codex 查看项目","context_type":"command","requires":{"abilities":["agent:codex"]},"spec":{"scope":"","target":"查看项目目录并说明用途","constraints":[],"success_definition":"给出项目说明"},"complexity":0.3,"risk":"low","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short"}}}`
+	taskJSON := `{"kind":"task","task":{"title":"用 codex 查看项目","context_type":"command","requires":{"abilities":["agent:codex"]},"spec":{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"delivery","weight":1,"priority":"NORMAL","requirement":"Complete the fixture task","reason":"The fixture requests a task","criteria":["Observe the expected fixture result"]}]},"scope":"","target":"查看项目目录并说明用途","constraints":[],"success_definition":"给出项目说明"},"complexity":0.3,"risk":"low","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short"}}}`
 	e, _ := newBoundaryTestEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Tools []struct {
@@ -129,7 +129,7 @@ func TestTaskSubmitToolCallQueued(t *testing.T) {
 			resp = map[string]any{
 				"content": []map[string]any{{
 					"type": "tool_use", "id": "toolu_1", "name": "task_submit",
-					"input": map[string]any{
+					"input": map[string]any{"objectives": fixtureTaskObjectives(),
 						"title":     "查看项目目录",
 						"target":    "浏览 Document/project/panda 并说明用途",
 						"abilities": []string{"agent:codex"},
@@ -193,7 +193,7 @@ func TestTaskSubmitTier2ReturnsApprovalAndPersistsWorkDir(t *testing.T) {
 			resp = map[string]any{
 				"content": []map[string]any{{
 					"type": "tool_use", "id": "toolu_tier2", "name": "task_submit",
-					"input": map[string]any{"title": "push", "target": "push branch", "abilities": []string{"git:push"}},
+					"input": map[string]any{"objectives": fixtureTaskObjectives(), "title": "push", "target": "push branch", "abilities": []string{"git:push"}},
 				}},
 				"usage": map[string]int{"input_tokens": 8, "output_tokens": 6},
 			}
@@ -243,7 +243,7 @@ func TestCompletedNativeTaskSubmitPreservesTaskKindAfterConvergence(t *testing.T
 			resp = map[string]any{
 				"content": []map[string]any{{
 					"type": "tool_use", "id": "toolu_native", "name": "task_submit",
-					"input": map[string]any{"title": "system info", "target": "read system info", "abilities": []string{"sys:info"}},
+					"input": map[string]any{"objectives": fixtureTaskObjectives(), "title": "system info", "target": "read system info", "abilities": []string{"sys:info"}},
 				}},
 				"usage": map[string]int{"input_tokens": 8, "output_tokens": 6},
 			}
@@ -723,7 +723,7 @@ func TestTaskSubmitBudgetRefusesFourthBeforeExecution(t *testing.T) {
 			resp = map[string]any{
 				"content": []map[string]any{{
 					"type": "tool_use", "id": fmt.Sprintf("toolu_budget_%d", n), "name": "task_submit",
-					"input": map[string]any{"title": fmt.Sprintf("tool-budget-%d", n), "target": "read system info", "abilities": []string{"sys:info"}},
+					"input": map[string]any{"objectives": fixtureTaskObjectives(), "title": fmt.Sprintf("tool-budget-%d", n), "target": "read system info", "abilities": []string{"sys:info"}},
 				}},
 				"usage": map[string]int{"input_tokens": 8, "output_tokens": 6},
 			}
@@ -760,7 +760,7 @@ func TestTaskDirectiveBudgetRefusesFourthBeforeExecution(t *testing.T) {
 		n := calls
 		mu.Unlock()
 		if n <= 4 {
-			taskJSON := fmt.Sprintf(`{"kind":"task","task":{"title":"directive-budget-%d","context_type":"command","requires":{"abilities":["sys:info"]},"spec":{"scope":"","target":"read system info","constraints":[],"success_definition":"done"},"complexity":0.1,"risk":"low","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short"}}}`, n)
+			taskJSON := fmt.Sprintf(`{"kind":"task","task":{"title":"directive-budget-%d","context_type":"command","requires":{"abilities":["sys:info"]},"spec":{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"delivery","weight":1,"priority":"NORMAL","requirement":"Complete the fixture task","reason":"The fixture requests a task","criteria":["Observe the expected fixture result"]}]},"scope":"","target":"read system info","constraints":[],"success_definition":"done"},"complexity":0.1,"risk":"low","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short"}}}`, n)
 			_ = json.NewEncoder(w).Encode(anthropicText(taskJSON))
 			return
 		}

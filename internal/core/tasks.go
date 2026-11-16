@@ -1067,6 +1067,9 @@ func (s *TaskStore) Complete(ctx context.Context, taskID, owner string, result a
 	if cur.State != StateRunning {
 		return fmt.Errorf("%w: task %s state=%s, want %s", ErrConflict, taskID, cur.State, StateRunning)
 	}
+	if err := objectiveResultEvidence(cur, result); err != nil {
+		return err
+	}
 	return s.applyCAS(ctx, taskID, StateRunning, StateDone, owner, cur.AttemptID, EvResult, result, result)
 }
 
@@ -1085,6 +1088,9 @@ func (s *TaskStore) CompleteAttempt(ctx context.Context, taskID, owner, attemptI
 	}
 	if cur.AttemptID != attemptID {
 		return fmt.Errorf("%w: task %s attempt superseded (%s -> %s)", ErrConflict, taskID, attemptID, cur.AttemptID)
+	}
+	if err := objectiveResultEvidence(cur, result); err != nil {
+		return err
 	}
 	return s.applyCAS(ctx, taskID, StateRunning, StateDone, owner, attemptID, EvResult, result, result)
 }
@@ -1118,6 +1124,9 @@ func (s *TaskStore) CompleteFromRemote(ctx context.Context, taskID, owner string
 	}
 	if reviewProtected(cur) {
 		return nil // accept-work verdict still pending; a wire result must not close it
+	}
+	if err := objectiveResultEvidence(cur, result); err != nil {
+		return err
 	}
 	// The CAS attempt is the one the wire reported, not a reflexive re-read:
 	// a rotation landing between Get and UPDATE is caught, not silently
@@ -1526,11 +1535,17 @@ func (s *TaskStore) Approve(ctx context.Context, taskID string) error {
 			// same transaction as the terminal update so a re-park cannot race
 			// a stale approval into done. Legacy verdict-only rows count too.
 			var resultJSON string
-			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(result_json, '') FROM tasks WHERE task_id=?`, taskID).Scan(&resultJSON); err != nil {
+			var objectiveTask Task
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(result_json, ''), COALESCE(spec_json, ''), COALESCE(parent_id, ''), COALESCE(plan_id, '') FROM tasks WHERE task_id=?`, taskID).Scan(&resultJSON, &objectiveTask.SpecJSON, &objectiveTask.ParentID, &objectiveTask.PlanID); err != nil {
 				return err
 			}
 			if needsFollowupResult(resultJSON) {
 				return ErrApprovalNeedsFollowup
+			}
+			var stored bus.TaskResultPayload
+			_ = json.Unmarshal([]byte(resultJSON), &stored)
+			if err := objectiveResultEvidence(objectiveTask, stored); err != nil {
+				return err
 			}
 			res, err = tx.ExecContext(ctx, `
 				UPDATE tasks SET state=?, state_version=state_version+1, updated_at=?
@@ -1674,6 +1689,13 @@ func (s *TaskStore) Reject(ctx context.Context, taskID, reason string) error {
 // concurrently closed another way (cancel, a second timeout) wins: the CAS
 // keeps first-close semantics.
 func (s *TaskStore) ReconcileDone(ctx context.Context, taskID, owner string, result any, from string) error {
+	cur, err := s.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if err := objectiveResultEvidence(cur, result); err != nil {
+		return err
+	}
 	resultJSON, _ := json.Marshal(result)
 	now := s.now()
 	return s.withTx(ctx, func(tx *sql.Tx) error {
@@ -1728,6 +1750,16 @@ func (s *TaskStore) failureWasRejected(ctx context.Context, taskID string) bool 
 // park keeps its pending human verdict, while a consent/question park
 // converges on the executor's actual outcome.
 func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason string, wireAttempt ...string) error {
+	p := bus.TaskResultPayload{TaskID: taskID, State: StateFailed, Stderr: reason}
+	if len(wireAttempt) > 0 {
+		p.AttemptID = wireAttempt[0]
+	}
+	return s.FailResultFromRemote(ctx, taskID, owner, p)
+}
+
+// FailResultFromRemote preserves the executor's structured evidence just like
+// CompleteFromRemote. A relay's identity is custody, not execution attribution.
+func (s *TaskStore) FailResultFromRemote(ctx context.Context, taskID, owner string, result bus.TaskResultPayload) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
@@ -1739,11 +1771,11 @@ func (s *TaskStore) FailFromRemote(ctx context.Context, taskID, owner, reason st
 		return nil
 	}
 	attemptID := cur.AttemptID
-	if len(wireAttempt) > 0 && wireAttempt[0] != "" {
-		attemptID = wireAttempt[0]
+	if result.AttemptID != "" {
+		attemptID = result.AttemptID
 	}
 	if err := s.applyState(ctx, taskID, cur.State, StateFailed, owner, attemptID, EvResult,
-		map[string]any{"failed": reason}, map[string]any{"failed": reason}); err != nil {
+		map[string]any{"failed": result.Stderr, "result": result}, result); err != nil {
 		if errors.Is(err, ErrConflict) {
 			return nil // a concurrent transition closed it first; keep that outcome
 		}

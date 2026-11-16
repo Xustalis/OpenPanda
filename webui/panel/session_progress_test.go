@@ -4,6 +4,7 @@ package panel
 import (
 	"bufio"
 	"context"
+	"github.com/Xustalis/OpenPanda/internal/activity"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"io"
@@ -34,6 +35,77 @@ func TestAskProgressSnapshotIsConcurrentAndSeparate(t *testing.T) {
 	op := p.snapshot(sessions.Operation{ID: "op", Status: "running"})
 	if len(op.Text) != 400 || len(op.Thought) != 400 || op.ID != "op" || op.TaskID != "t1" || op.LastActivity.IsZero() || op.Tokens != 123 || !op.Estimated {
 		t.Fatalf("snapshot lost data: %+v", op)
+	}
+}
+
+func TestSessionOrphanActivityRecoveryPreservesEvidence(t *testing.T) {
+	for _, side := range []bool{false, true} {
+		t.Run(map[bool]string{false: "main", true: "side"}[side], func(t *testing.T) {
+			store := sessions.NewStore(t.TempDir())
+			sess, _ := store.Create("restart")
+			op := sessions.Operation{ID: "orphan", Status: "running", Thought: "reasoning", Activities: []activity.Record{{ID: "tool", Name: "workspace_read", Status: "running", Output: "partial"}}}
+			if side {
+				_ = store.StartSideOperation(sess.ID, op)
+			} else {
+				_ = store.StartOperation(sess.ID, op)
+			}
+			h := &handler{sessions: store, activeAsks: map[string]sessionOperation{}}
+			for i := 0; i < 2; i++ {
+				req := httptest.NewRequest(http.MethodGet, "/", nil)
+				req.SetPathValue("id", sess.ID)
+				if side {
+					current, _ := store.Get(sess.ID)
+					h.writeSide(httptest.NewRecorder(), current, "")
+				} else {
+					h.getSession(httptest.NewRecorder(), req)
+				}
+			}
+			got, _ := store.Get(sess.ID)
+			var terminal *sessions.Operation
+			if side {
+				chat := got.ActiveSideChat()
+				terminal = chat.Operation
+				if len(chat.Turns) != 1 || len(chat.Turns[0].Activities) != 1 || chat.Turns[0].Thought != "reasoning" {
+					t.Fatalf("side evidence lost or duplicated: %+v", chat)
+				}
+			} else {
+				terminal = got.Operation
+				if len(got.Turns) != 1 || len(got.Turns[0].Activities) != 1 || got.Turns[0].Thought != "reasoning" {
+					t.Fatalf("main evidence lost or duplicated: %+v", got)
+				}
+			}
+			if terminal.Status != "failed" || terminal.Thought != "reasoning" || len(terminal.Activities) != 1 || terminal.Activities[0].Status != "unknown" {
+				t.Fatalf("orphan snapshot lost: %+v", terminal)
+			}
+		})
+	}
+}
+
+func TestSessionCancelOrphanActivityOnlyPreservesEvidence(t *testing.T) {
+	for _, side := range []bool{false, true} {
+		store := sessions.NewStore(t.TempDir())
+		sess, _ := store.Create("stop orphan")
+		op := sessions.Operation{ID: "orphan", Status: "running", Activities: []activity.Record{{ID: "tool", Status: "running"}}}
+		if side {
+			_ = store.StartSideOperation(sess.ID, op)
+		} else {
+			_ = store.StartOperation(sess.ID, op)
+		}
+		h := &handler{sessions: store, activeAsks: map[string]sessionOperation{}}
+		for i := 0; i < 2; i++ {
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{\"operation_id\":\"orphan\"}"))
+			req.SetPathValue("id", sess.ID)
+			h.sessionCancel(httptest.NewRecorder(), req)
+		}
+		got, _ := store.Get(sess.ID)
+		if side {
+			chat := got.ActiveSideChat()
+			if len(chat.Turns) != 1 || len(chat.Turns[0].Activities) != 1 || chat.Operation.Activities[0].Status != "cancelled" {
+				t.Fatalf("side orphan cancelled with evidence loss: %+v", chat)
+			}
+		} else if len(got.Turns) != 1 || len(got.Turns[0].Activities) != 1 || got.Operation.Activities[0].Status != "cancelled" {
+			t.Fatalf("main orphan cancelled with evidence loss: %+v", got)
+		}
 	}
 }
 

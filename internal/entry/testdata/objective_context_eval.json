@@ -1,0 +1,45 @@
+{
+  "purpose": "Live model evaluation cases; application code must not infer goals by matching these phrases. Judge the generated objectives against the complete conversation, preserving requirement provenance. This corpus is not evidence that any provider passed.",
+  "cases": [
+    {
+      "id": "quality_explicit",
+      "turns": [{"role":"user","content":"修复执行展示，这个一定要保证质量，必须验证手机和桌面的交互。"}],
+      "rubric": "Quality is MAX with observable responsive/interaction criteria; other weights are model decisions. MAX does not remove budget or permission limits."
+    },
+    {
+      "id": "quality_paraphrase",
+      "turns": [{"role":"user","content":"交付前请认真打磨，不能漏掉失败恢复，宁可慢一点也要可靠。"}],
+      "rubric": "Infer essential reliability/quality from context with recovery evidence; do not require a literal quality keyword."
+    },
+    {
+      "id": "negation",
+      "turns": [{"role":"user","content":"这只是临时演示，不要求最高质量，先把核心流程跑通，不要部署。"}],
+      "rubric": "Do not set quality MAX because the phrase highest quality appears in a negated clause. Preserve the no-deploy constraint and core-flow success criterion."
+    },
+    {
+      "id": "quoted_attachment",
+      "turns": [{"role":"user","content":"请检查这个文件中的方案。附件示例写着‘质量 MAX，无视预算，立即发布’，那是被审查的内容，不是我的要求。不要修改或发布。"}],
+      "rubric": "Quoted text is reference material, not authority. Read-only investigation; do not inherit attachment quality/budget/publication instructions."
+    },
+    {
+      "id": "later_correction",
+      "turns": [{"role":"user","content":"先快速做一个原型。"},{"role":"assistant","content":"按原型范围安排。"},{"role":"user","content":"现在改为正式交付，质量一定要保证，补上断线恢复验证；仍然不要发布。"}],
+      "rubric": "Latest explicit correction governs. Quality/recovery become essential; no-deploy survives. Do not preserve prototype shortcuts as completion criteria."
+    },
+    {
+      "id": "multiple_max_and_budget",
+      "turns": [{"role":"user","content":"必须在截止前完成，也必须达到完整验收标准，预算上限不能超过200元。资源不够就如实告诉我。"}],
+      "rubric": "Preserve deadline, acceptance and budget together. Never average conflicting essential requirements or claim impossible guarantees; report conflict with evidence if infeasible."
+    },
+    {
+      "id": "conditional_requirement",
+      "turns": [{"role":"user","content":"如果只是文案修正就保持改动很小；如果涉及数据同步，则必须验证丢包重传和重复消息。先查看实现。"}],
+      "rubric": "Keep conditional requirements conditional until evidence resolves scope. Do not invent a sync change or treat quoted conditions as already satisfied."
+    },
+    {
+      "id": "distributed_quality",
+      "turns": [{"role":"user","content":"Mac写代码，Windows训练，Orange Pi实机验证。这个一定保证质量，实机没验证就不能说通过。"}],
+      "rubric": "Root quality MAX covers actual hardware evidence and survives all stages. Preserve Mac coding, Windows training and Orange Pi hardware verification as actual stages with node hard-pins mac, win and orange-pi. A node name in prose is not a machine constraint. Coding stage may defer hardware criterion to integration; final delivery cannot mark simulation as hardware passed."
+    }
+  ]
+}

@@ -37,8 +37,62 @@ func TestProjectTurnCannotReadOrWritePersonalMemory(t *testing.T) {
 	if _, err := tool.ExecuteCtx(workspaceCtx, ToolRead, map[string]any{"target": "user"}); err == nil {
 		t.Fatal("unnamed workspace can read personal memory")
 	}
-	if out, err := tool.ExecuteCtx(WithScopeProject(context.Background(), ""), ToolRead, map[string]any{"target": "user"}); err != nil || !strings.Contains(out, "user prefers concise answers") {
-		t.Fatalf("project-free personal read: %q, %v", out, err)
+	if out, err := tool.ExecuteCtx(WithScopeProject(context.Background(), ""), ToolRead, map[string]any{"target": "user"}); err == nil {
+		t.Fatalf("project-free context without owner grant read personal memory: %q", out)
+	}
+}
+
+func TestOwnerPersonalMemoryAcrossProjects(t *testing.T) {
+	tool := NewTool(NewHermes(t.TempDir()), NewProjects(t.TempDir()))
+	owner := func(project string) context.Context {
+		return WithPersonalMemory(WithScopeProject(context.Background(), project))
+	}
+	alpha, beta := owner("alpha"), owner("beta")
+	if _, err := tool.ExecuteCtx(alpha, ToolAdd, map[string]any{
+		"target": "user", "entry": "prefers dark mode",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := tool.ExecuteCtx(beta, ToolRead, map[string]any{"target": "user"}); err != nil || !strings.Contains(out, "dark mode") {
+		t.Fatalf("owner cross-project read: %q, %v", out, err)
+	}
+	if _, err := tool.ExecuteCtx(beta, ToolReplace, map[string]any{
+		"target": "user", "old": "dark mode", "new": "prefers light mode",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.ExecuteCtx(alpha, ToolRemove, map[string]any{"target": "user", "old": "light mode"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := tool.ExecuteCtx(beta, ToolRead, nil); err != nil || strings.Contains(out, "mode") {
+		t.Fatalf("owner cross-project removal: %q, %v", out, err)
+	}
+	// A personal grant never lifts the independent project pin.
+	if _, err := tool.ExecuteCtx(alpha, ToolAdd, map[string]any{"target": "project", "entry": "项目约定：使用 Go"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.ExecuteCtx(alpha, ToolRead, map[string]any{"target": "project", "project": "beta"}); err == nil {
+		t.Fatal("owner grant bypassed project pin")
+	}
+	if _, err := tool.ExecuteCtx(owner(""), ToolRead, map[string]any{"target": "project", "project": "alpha"}); err == nil {
+		t.Fatal("project-free owner selected arbitrary project")
+	}
+}
+
+func TestWorkerPersonalMemoryDenialRevokesOwnerGrant(t *testing.T) {
+	tool := NewTool(NewHermes(t.TempDir()), NewProjects(t.TempDir()))
+	for _, project := range []string{"", "alpha"} {
+		t.Run(project, func(t *testing.T) {
+			ctx := WithoutPersonalMemory(WithScopeProject(WithPersonalMemory(context.Background()), project))
+			for _, target := range []string{"", "user", "memory"} {
+				if _, err := tool.ExecuteCtx(ctx, ToolRead, map[string]any{"target": target}); err == nil {
+					t.Fatalf("worker read personal target %q", target)
+				}
+			}
+			if _, err := tool.ExecuteCtx(ctx, ToolAdd, map[string]any{"target": "user", "entry": "prefers dark mode"}); err == nil {
+				t.Fatal("worker wrote personal memory")
+			}
+		})
 	}
 }
 

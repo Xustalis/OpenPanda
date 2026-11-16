@@ -9,6 +9,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/objectives"
 )
 
 // validRisk is the set of acceptable risk levels. The model must pick one;
@@ -29,6 +30,12 @@ var validContextType = map[string]bool{
 func ValidateTaskSpec(t *TaskSpec) error {
 	if t == nil {
 		return fmt.Errorf("entry: task is nil")
+	}
+	if err := ValidateCoordination(t.Spec.Coordination); err != nil {
+		return err
+	}
+	if err := objectives.Validate(t.Spec.Objectives); err != nil {
+		return fmt.Errorf("entry: %w", err)
 	}
 	if t.Title == "" {
 		return fmt.Errorf("entry: task.title is required")
@@ -230,6 +237,9 @@ func ValidatePlanSpec(p *PlanSpec) error {
 	if p == nil {
 		return fmt.Errorf("entry: plan is nil")
 	}
+	if err := objectives.Validate(p.Objectives); err != nil {
+		return fmt.Errorf("entry: %w", err)
+	}
 	if p.Goal == "" {
 		return fmt.Errorf("entry: plan.goal is required")
 	}
@@ -241,6 +251,12 @@ func ValidatePlanSpec(p *PlanSpec) error {
 	}
 	seen := make(map[string]bool, len(p.Stages))
 	for i, s := range p.Stages {
+		if err := ValidateCoordination(s.Coordination); err != nil {
+			return fmt.Errorf("entry: plan.stages[%d]: %w", i, err)
+		}
+		if _, err := objectives.Inherit(p.Objectives, s.Objectives); err != nil {
+			return fmt.Errorf("entry: plan.stages[%d]: %w", i, err)
+		}
 		if s.ToolsPolicy != "" && s.ToolsPolicy != "minimal" && s.ToolsPolicy != "extended" {
 			return fmt.Errorf("entry: plan.stages[%d] invalid tools_policy", i)
 		}
@@ -265,6 +281,14 @@ func ValidatePlanSpec(p *PlanSpec) error {
 		if s.Intent == "" {
 			return fmt.Errorf("entry: plan.stages[%d] (%s) has no intent", i, s.ID)
 		}
+	}
+	return nil
+}
+
+// Empty keeps legacy tasks readable; new explicit modes are never guessed.
+func ValidateCoordination(mode string) error {
+	if mode != "" && mode != "IMMEDIATE" && mode != "ROUND_END" {
+		return fmt.Errorf("entry: invalid coordination %q", mode)
 	}
 	return nil
 }

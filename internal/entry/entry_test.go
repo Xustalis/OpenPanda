@@ -68,6 +68,7 @@ func TestResolveContextWindow(t *testing.T) {
 
 func TestClassifyTask(t *testing.T) {
 	task := TaskSpec{
+		Spec:        TaskSpecDetail{Objectives: testObjectivePolicy()},
 		Title:       "改导航栏",
 		ContextType: "file",
 		Requires:    Requires{Abilities: []string{"code:modify"}},

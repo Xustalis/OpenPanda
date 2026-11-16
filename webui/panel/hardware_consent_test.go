@@ -54,6 +54,15 @@ func newHardwarePlanAPIEngine(t *testing.T) *askengine.Engine {
 		t.Fatal(err)
 	}
 	directive := map[string]any{"kind": "plan", "plan": map[string]any{
+		"objectives": map[string]any{
+			"version": 1, "revision": 1,
+			"dimensions": []map[string]any{{
+				"dimension": "delivery", "weight": 1, "priority": "NORMAL",
+				"requirement": "Run the harmless fixture with request-scoped consent",
+				"reason":      "The request specifies which operations are authorized",
+				"criteria":    []string{"All stages preserve the originating request's authorization"},
+			}},
+		},
 		"goal": "harmless two-stage fixture", "stages": []map[string]any{
 			{"id": "first", "intent": "first fixture", "requires": []string{"fixture:harmless"}, "needs": []string{}},
 			{"id": "later", "intent": "later fixture", "requires": []string{"fixture:harmless"}, "needs": []string{"first"}},

@@ -15,7 +15,7 @@ import (
 
 // sideTaskJSON is a well-formed task directive, the shape a model emits when it
 // decides a request needs doing rather than answering.
-const sideTaskJSON = `{"kind":"task","task":{"title":"修改配置文件","context_type":"file","requires":{"abilities":["agent:codex"]},"spec":{"scope":"config.yaml","target":"把 config.yaml 里的端口改成 8080","constraints":[],"success_definition":"端口已修改"},"complexity":0.3,"risk":"low","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short"}}}`
+const sideTaskJSON = `{"kind":"task","task":{"title":"修改配置文件","context_type":"file","requires":{"abilities":["agent:codex"]},"spec":{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"delivery","weight":1,"priority":"NORMAL","requirement":"Complete the fixture task","reason":"The fixture requests a task","criteria":["Observe the expected fixture result"]}]},"scope":"config.yaml","target":"把 config.yaml 里的端口改成 8080","constraints":[],"success_definition":"端口已修改"},"complexity":0.3,"risk":"low","resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short"}}}`
 
 // TestSideAskHasFullToolFace pins the channel's capability: a side ask holds
 // the same dispatch and workspace tools as the thread. Isolation is the

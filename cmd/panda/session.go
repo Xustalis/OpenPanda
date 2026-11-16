@@ -910,6 +910,7 @@ func runSessionAsk(args []string) {
 // text the stream delivered, for the caller's end-of-turn reconcile.
 func askSessionTurns(engine *askengine.Engine, history []entry.Turn, prompt, workDir, sessionID string, agents []string, node string, authorize bool) (*askengine.Result, string, error) {
 	scope := askengine.AskScope{
+		PersonalMemory: true,
 		WorkDir:        workDir,
 		SessionID:      sessionID,
 		Agents:         agents,

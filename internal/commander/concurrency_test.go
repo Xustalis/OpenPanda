@@ -59,6 +59,33 @@ func TestAgentConcurrencyLimitsAndHotIncrease(t *testing.T) {
 	}
 }
 
+func TestAgentConcurrencyAwaitYieldAndResume(t *testing.T) {
+	g := NewAgentConcurrency()
+	g.Configure(1, config.RoutingConfig{}, config.DelegationConfig{})
+	ctx := WithTaskID(context.Background(), "parent")
+	release, err := g.acquire(ctx, "coder", "codex.py", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume := g.YieldTask(ctx, "parent")
+	childCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	child, err := g.acquire(childCtx, "coder", "codex.py", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child()
+	resume()
+	resume()
+	release()
+	release()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.active != 0 || g.children != 0 {
+		t.Fatalf("permit leaked: active=%d children=%d", g.active, g.children)
+	}
+}
+
 func TestSubagentModelSelectionReachesAdapter(t *testing.T) {
 	r := NewRouter(testCard(), NewExecutor(), testModel,
 		config.InjectionConfig{Model: config.InjectionModelNever}, config.RoutingConfig{

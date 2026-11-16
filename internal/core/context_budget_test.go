@@ -44,6 +44,23 @@ func TestSkillIndexAndBodiesShareBoundedBudget(t *testing.T) {
 	}
 }
 
+func TestReviewedSkillsRemainOnDemand(t *testing.T) {
+	store := skills.NewStore(filepath.Join(t.TempDir(), "skills"))
+	if err := store.EnsureBuiltins(); err != nil {
+		t.Fatal(err)
+	}
+	c := &Core{logger: testLogger(), skills: store}
+	for _, query := range []string{"frontend-design", "systematic-debugging", "writing-guidelines"} {
+		got, used := withSkills(c, "Keep this task intact", "", query, 6000)
+		if !strings.Contains(got, query) || !strings.HasSuffix(got, "Keep this task intact") {
+			t.Fatalf("missing skill metadata or task: %s", got)
+		}
+		if strings.Contains(got, "OpenPanda integration (modified") || len(used) != 0 {
+			t.Fatalf("eagerly injected reviewed body: used=%d", len(used))
+		}
+	}
+}
+
 func TestAgentContextBudgetTiers(t *testing.T) {
 	for _, tc := range []struct {
 		complexity float64

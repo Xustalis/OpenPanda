@@ -49,13 +49,21 @@ const maxCheckpointRetries = 12
 // mirrors the wire TaskDelegatePayload but originates locally rather than over
 // the bus. The caller (cmd/panda) owns the translation from entry.TaskSpec.
 type TaskInput struct {
-	Title        string
-	ParentID     string // causal parent task ID for subtasks / sub-DAGs
-	Project      string
-	ContextType  string
-	ContextHash  string // pre-packed snapshot hash; empty means "pack if applicable"
-	ContextLevel string // pointer|summary|full; empty is derived by packContext
-	RepoPath     string // file-type repo root for auto-packing (wired by askengine from WorkDir)
+	// Allocations reserve a child's portion from the parent's finite remainder.
+	// Zero chooses a bounded share; unused reservations are not re-minted on retry.
+	TokenAllocation       int64
+	DelegationAllocation  int
+	childRequestID        string
+	childRequestHash      string
+	childInputVersion     string
+	inheritExecutionGrant bool
+	Title                 string
+	ParentID              string // causal parent task ID for subtasks / sub-DAGs
+	Project               string
+	ContextType           string
+	ContextHash           string // pre-packed snapshot hash; empty means "pack if applicable"
+	ContextLevel          string // pointer|summary|full; empty is derived by packContext
+	RepoPath              string // file-type repo root for auto-packing (wired by askengine from WorkDir)
 	// WorkDir pins execution to the originating workspace. It is persisted before
 	// routing/execution so concurrent callers never swap the Core's ambient work dir.
 	WorkDir string
@@ -521,6 +529,9 @@ func (c *Core) waitRemoteResult(ctx context.Context, cur Task, ch <-chan bus.Tas
 // packs its context snapshot. It returns the task plus the wire context fields
 // (hash + level) so Submit can carry them on a forwarded delegate.
 func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, string, error) {
+	if _, err := inheritTaskObjectives("", in.SpecJSON); err != nil {
+		return Task{}, "", "", err
+	}
 	t, err := c.store.Create(ctx, in.ParentID, in.Project, in.Title, c.nodeID, []string{c.nodeID})
 	if err != nil {
 		return Task{}, "", "", err
@@ -720,6 +731,9 @@ func (c *Core) resumeApproved(ctx context.Context, taskID string, relayUpstream 
 			if err := json.Unmarshal([]byte(cur.ResultJSON), &result); err != nil {
 				return cur, bus.TaskResultPayload{}, fmt.Errorf("approve: decode stored result: %w", err)
 			}
+		}
+		if err := objectiveResultEvidence(cur, result); err != nil {
+			return cur, result, err
 		}
 		// An isolated child parked for review keeps its workspace untouched:
 		// approving its work is the decision that lets those changes land on

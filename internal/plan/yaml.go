@@ -24,6 +24,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/objectives"
 )
 
 // yamlResources is the per-stage hardware request. The keys match the
@@ -48,10 +49,11 @@ type yamlCheck struct {
 }
 
 type yamlStage struct {
-	Acceptance        []yamlCheck `yaml:"acceptance"`
-	SuccessDefinition string      `yaml:"success_definition"`
-	ToolsPolicy       string      `yaml:"tools_policy"`
-	MaxTurns          int         `yaml:"max_turns"`
+	Objectives        *objectives.Policy `yaml:"objectives"`
+	Acceptance        []yamlCheck        `yaml:"acceptance"`
+	SuccessDefinition string             `yaml:"success_definition"`
+	ToolsPolicy       string             `yaml:"tools_policy"`
+	MaxTurns          int                `yaml:"max_turns"`
 
 	ID        string        `yaml:"id"`
 	Title     string        `yaml:"title"`
@@ -63,8 +65,9 @@ type yamlStage struct {
 }
 
 type yamlPlan struct {
-	Goal   string      `yaml:"goal"`
-	Stages []yamlStage `yaml:"stages"`
+	Objectives *objectives.Policy `yaml:"objectives"`
+	Goal       string             `yaml:"goal"`
+	Stages     []yamlStage        `yaml:"stages"`
 }
 
 // Parse decodes a YAML plan and validates it. Validation happens here rather
@@ -95,7 +98,7 @@ func Parse(data []byte) (Plan, error) {
 		return Plan{}, fmt.Errorf("parse plan: %w", err)
 	}
 
-	p := Plan{Goal: strings.TrimSpace(raw.Goal), Stages: make([]Stage, 0, len(raw.Stages))}
+	p := Plan{Goal: strings.TrimSpace(raw.Goal), Objectives: raw.Objectives, Stages: make([]Stage, 0, len(raw.Stages))}
 	for _, s := range raw.Stages {
 		if s.ToolsPolicy != "" && s.ToolsPolicy != "minimal" && s.ToolsPolicy != "extended" {
 			return Plan{}, fmt.Errorf("plan: stage %q invalid tools_policy", s.ID)
@@ -112,9 +115,13 @@ func Parse(data []byte) (Plan, error) {
 			return Plan{}, fmt.Errorf("plan: stage %q: %w", s.ID, err)
 		}
 		checks = checked
+		policy, err := objectives.Inherit(raw.Objectives, s.Objectives)
+		if err != nil {
+			return Plan{}, fmt.Errorf("plan: stage %q: %w", s.ID, err)
+		}
 		specJSON := ""
-		if len(checks) > 0 || s.ToolsPolicy != "" || s.MaxTurns != 0 || s.SuccessDefinition != "" {
-			data, e := json.Marshal(entry.TaskSpecDetail{Acceptance: checks, ToolsPolicy: s.ToolsPolicy, MaxTurns: s.MaxTurns, SuccessDefinition: s.SuccessDefinition})
+		if policy != nil || len(checks) > 0 || s.ToolsPolicy != "" || s.MaxTurns != 0 || s.SuccessDefinition != "" {
+			data, e := json.Marshal(entry.TaskSpecDetail{Objectives: policy, Acceptance: checks, ToolsPolicy: s.ToolsPolicy, MaxTurns: s.MaxTurns, SuccessDefinition: s.SuccessDefinition})
 			if e != nil {
 				return Plan{}, e
 			}

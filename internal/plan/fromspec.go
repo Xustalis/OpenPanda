@@ -21,17 +21,25 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/objectives"
 )
 
 // FromSpec converts a model-emitted plan into an executable Plan, validating it.
 // A stage with no title borrows its intent's first line: the title is what shows
 // up on the task board, and "stage 2" tells an operator nothing.
 func FromSpec(spec entry.PlanSpec) (Plan, error) {
+	if err := objectives.Validate(spec.Objectives); err != nil {
+		return Plan{}, err
+	}
 	p := Plan{
-		Goal:   strings.TrimSpace(spec.Goal),
-		Stages: make([]Stage, 0, len(spec.Stages)),
+		Objectives: spec.Objectives,
+		Goal:       strings.TrimSpace(spec.Goal),
+		Stages:     make([]Stage, 0, len(spec.Stages)),
 	}
 	for _, s := range spec.Stages {
+		if err := entry.ValidateCoordination(s.Coordination); err != nil {
+			return Plan{}, err
+		}
 		if !s.Kind.Valid() {
 			return Plan{}, fmt.Errorf("plan: stage %q task_kind %q is invalid", s.ID, s.Kind)
 		}
@@ -45,7 +53,11 @@ func FromSpec(spec entry.PlanSpec) (Plan, error) {
 		if err != nil {
 			return Plan{}, fmt.Errorf("plan: stage %q: %w", s.ID, err)
 		}
-		detail, err := json.Marshal(entry.TaskSpecDetail{Kind: s.Kind, Acceptance: checks,
+		policy, err := objectives.Inherit(spec.Objectives, s.Objectives)
+		if err != nil {
+			return Plan{}, fmt.Errorf("plan: stage %q: %w", s.ID, err)
+		}
+		detail, err := json.Marshal(entry.TaskSpecDetail{Coordination: s.Coordination, Objectives: policy, Kind: s.Kind, Acceptance: checks,
 			SuccessDefinition: s.SuccessDefinition, ToolsPolicy: s.ToolsPolicy, MaxTurns: s.MaxTurns})
 		if err != nil {
 			return Plan{}, err

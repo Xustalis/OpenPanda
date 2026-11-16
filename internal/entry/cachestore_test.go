@@ -252,7 +252,7 @@ func TestClassifyDiskCacheModelSwitchMisses(t *testing.T) {
 // a cached plan verdict would create the plan (and its stage rows) a second
 // time, so plan/task verdicts are never served from the cache.
 func TestClassifyDiskCacheNeverStoresPlan(t *testing.T) {
-	planJSON := `{"kind":"plan","plan":{"goal":"跨机器部署","stages":[{"id":"s1","title":"build","intent":"write the script","requires":["agent:codex"]}]}}`
+	planJSON := `{"kind":"plan","plan":{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"delivery","weight":1,"priority":"NORMAL","requirement":"Complete the fixture task","reason":"The fixture requests a task","criteria":["Observe the expected fixture result"]}]},"goal":"跨机器部署","stages":[{"id":"s1","title":"build","intent":"write the script","requires":["agent:codex"]}]}}`
 	c, calls, mu := startCountingTextServer(t, planJSON)
 	c.SetDiskCache(NewDiskCache(newCacheDB(t)))
 	ctx := context.Background()

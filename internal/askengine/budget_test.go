@@ -157,7 +157,7 @@ func rosterBudgetHandler(titles []string, toolsSeen *[]string) http.HandlerFunc 
 		for i, title := range titles {
 			content = append(content, map[string]any{
 				"type": "tool_use", "id": fmt.Sprintf("toolu_budget_%d", i), "name": "task_submit",
-				"input": map[string]any{"title": title, "target": "probe " + title, "abilities": []string{"agent:opencode"}},
+				"input": map[string]any{"objectives": fixtureTaskObjectives(), "title": title, "target": "probe " + title, "abilities": []string{"agent:opencode"}},
 			})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -232,7 +232,7 @@ func TestBudgetRetryDoesNotDuplicate(t *testing.T) {
 			for i, name := range names {
 				out = append(out, map[string]any{
 					"type": "tool_use", "id": fmt.Sprintf("toolu_retry_%d_%d", n, i), "name": "task_submit",
-					"input": map[string]any{"title": name, "target": "probe " + name, "abilities": []string{"agent:opencode"}},
+					"input": map[string]any{"objectives": fixtureTaskObjectives(), "title": name, "target": "probe " + name, "abilities": []string{"agent:opencode"}},
 				})
 			}
 			return out

@@ -295,6 +295,7 @@ func (s *rpcServer) handleAsk(req *rpcRequest) {
 		agents = sess.Team
 	}
 	out, err := engine.AskTurnsScoped(ctx, history, p.Prompt, askengine.AskScope{
+		PersonalMemory: true,
 		WorkDir:        workDir,
 		SessionID:      sessID(sess),
 		Agents:         agents,
