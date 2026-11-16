@@ -23,6 +23,14 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// sandboxInheritStdin keeps a sandboxed child on the inherited handle. Left
+// nil, os/exec opens the NUL device for stdin, and the AppContainer this test
+// runs in has no device capabilities: on hosts that do not grant the null
+// device to AppContainers the spawn fails with "open NUL: Access is denied."
+func sandboxInheritStdin(cmd *exec.Cmd) {
+	cmd.Stdin = os.Stdin
+}
+
 func TestWindowsSandboxPayload(t *testing.T) {
 	i := slices.Index(os.Args, "--")
 	if i < 0 || len(os.Args) < i+3 || os.Args[i+1] != "panda-windows-sandbox-test" {
@@ -88,6 +96,7 @@ func TestWindowsSandboxPayload(t *testing.T) {
 		}
 		exe, _ := os.Executable()
 		child := exec.Command(exe, "-test.run=^TestWindowsSandboxPayload$", "--", "panda-windows-sandbox-test", "outside", outside+".child")
+		sandboxInheritStdin(child)
 		if out, err := child.CombinedOutput(); err != nil {
 			t.Fatalf("descendant: %v: %s", err, out)
 		}
@@ -139,6 +148,7 @@ func TestWindowsSandboxPayload(t *testing.T) {
 		}
 		child := exec.Command(exe, "-test.run=^TestWindowsSandboxPayload$", "--", "panda-windows-sandbox-test", "wait")
 		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		sandboxInheritStdin(child)
 		if err = child.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -155,6 +165,7 @@ func TestWindowsSandboxPayload(t *testing.T) {
 		}
 		child := exec.Command(exe, windowsSandboxLaunchArgument)
 		child.Env = append(windowsSandboxChildEnv(os.Environ()), windowsSandboxEnv+"COUNT=1", windowsSandboxEnv+"0="+base64.RawStdEncoding.EncodeToString(data))
+		sandboxInheritStdin(child)
 		out, err := child.CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "refusing to launch a new sandbox from an AppContainer") {
 			t.Fatalf("worker could reenter the trusted launcher: %v %s", err, out)
