@@ -4,7 +4,8 @@
 // and plan P3-29..P3-32: a reduced subprocess environment, network egress
 // validation, secret scrubbing, a high-risk audit trail, and — when
 // sandbox.mode is configured — OS-level confinement for every spawned
-// subprocess (seatbelt on macOS, bubblewrap on Linux; see policy.go and the
+// subprocess (seatbelt on macOS, bubblewrap on Linux, AppContainer plus a
+// write-restricted token on Windows; see policy.go and the
 // platform sandbox_* files). Everything here is deterministic — the
 // "adversarial model review" layers (design §14.2 Layer 2/3) are a later,
 // model-dependent phase.
@@ -26,7 +27,8 @@ import (
 // and write any path its uid can, including $HOME (deliberately forwarded
 // because agent CLIs keep credentials and config there). Standard and strict
 // add a deny-default sandbox-exec profile on macOS or a bubblewrap bind-mount
-// jail on Linux, driven by Policy (see policy.go). The child starts in the task
+// jail on Linux, or AppContainer/token restrictions on Windows, driven by
+// Policy (see policy.go). The child starts in the task
 // directory instead of wherever the daemon happens to run, and it does not
 // inherit the parent's arbitrary environment, so an unrelated secret in the
 // daemon's env does not silently reach a third-party agent CLI.

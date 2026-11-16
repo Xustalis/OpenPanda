@@ -170,3 +170,19 @@ func TestScanUsesGitIdentity(t *testing.T) {
 		t.Fatal("dirty tree not reported")
 	}
 }
+
+func TestScanUsesDetachedGitIdentity(t *testing.T) {
+	if !hasGit() {
+		t.Skip("git unavailable")
+	}
+	root := t.TempDir()
+	write(t, root, "Makefile", "build:\n\ttrue\n")
+	runGit(t, root, "init", "-q")
+	runGit(t, root, "add", "Makefile")
+	runGit(t, root, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init")
+	runGit(t, root, "checkout", "--detach", "-q")
+	r := Scan(root)
+	if !r.GitKnown || r.Branch != "HEAD" || r.Commit == "" {
+		t.Fatalf("detached identity: %+v", r)
+	}
+}

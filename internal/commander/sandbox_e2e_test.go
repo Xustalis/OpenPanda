@@ -4,8 +4,10 @@ package commander
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,6 +21,18 @@ import (
 func TestNativeExecutorSandboxE2E(t *testing.T) {
 	protected := t.TempDir()
 	work := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	secret := filepath.Join(home, ".ssh", "sandbox-decoy")
+	if err := os.MkdirAll(filepath.Dir(secret), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secret, []byte("decoy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	backend := SetSandboxConfig(config.SandboxConfig{
 		Mode:           "strict",
 		DenyWritePaths: []string{protected},
@@ -29,19 +43,24 @@ func TestNativeExecutorSandboxE2E(t *testing.T) {
 	}
 
 	e := NewExecutor().WithDir(work)
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(action, path string) NativeResult {
+		return e.Run(context.Background(), binary, "-test.run=^TestNativeSandboxPayload$", "--", "panda-native-sandbox", action, path)
+	}
 	// A backend can be present and still be unusable: a process that is
 	// already inside a seatbelt cannot nest a stricter one, so sandbox-exec
 	// refuses to apply the profile and every run below fails with
 	// "sandbox_apply: Operation not permitted". That is the harness answering,
 	// not a confinement regression — probe once and skip rather than report
 	// three escapes that never happened.
-	if probe := e.Run(context.Background(), "/bin/sh", "-c", "true"); strings.Contains(probe.Stderr, "sandbox_apply") {
+	if probe := run("probe", ""); strings.Contains(probe.Stderr, "sandbox_apply") {
 		t.Skipf("sandbox backend %q cannot apply a profile here: %s", backend, strings.TrimSpace(probe.Stderr))
 	}
 
-	home, _ := os.UserHomeDir()
-
-	r := e.Run(context.Background(), "/bin/sh", "-c", "echo ok > \"$PWD/f.txt\" && echo wrote")
+	r := run("write", filepath.Join(work, "f.txt"))
 	if !strings.Contains(r.Stdout, "wrote") {
 		t.Fatalf("workdir write failed under sandbox: %+v", r)
 	}
@@ -49,38 +68,51 @@ func TestNativeExecutorSandboxE2E(t *testing.T) {
 		t.Fatalf("workdir file missing: %v", err)
 	}
 
-	r = e.Run(context.Background(), "/bin/sh", "-c",
-		"echo x > \""+home+"/panda-e2e-escape\" && echo ESCAPED || echo denied")
-	if strings.Contains(r.Stdout, "ESCAPED") {
-		os.Remove(filepath.Join(home, "panda-e2e-escape"))
+	r = run("write", filepath.Join(home, "sandbox-escape"))
+	if !r.OK || !strings.Contains(r.Stdout, "denied") {
 		t.Fatalf("home write escaped the sandbox: %+v", r)
 	}
 
-	r = e.Run(context.Background(), "/bin/sh", "-c",
-		"echo x > \""+protected+"/x\" && echo WROTE || echo denied")
-	if strings.Contains(r.Stdout, "WROTE") {
+	r = run("write", filepath.Join(protected, "x"))
+	if !r.OK || !strings.Contains(r.Stdout, "denied") {
 		t.Fatalf("protected dir writable under sandbox: %+v", r)
 	}
 
-	// Strict denies reads of the platform's credential-shaped paths. Plant a
-	// decoy under a secret-shaped name and confirm the sandbox refuses it.
-	sshDir := filepath.Join(home, ".ssh")
-	if _, err := os.Stat(sshDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(sshDir, 0o700); err == nil {
-			defer os.RemoveAll(sshDir)
-		}
+	// Credential-shaped paths live under a private test home. Never plant a
+	// decoy in the operator's actual .ssh directory to exercise confinement.
+	r = run("read", secret)
+	if !r.OK || !strings.Contains(r.Stdout, "denied") {
+		t.Fatalf("strict mode did not deny a .ssh read: %+v", r)
 	}
-	if _, err := os.Stat(sshDir); err == nil {
-		decoy := filepath.Join(sshDir, "panda-e2e-decoy")
-		if err := os.WriteFile(decoy, []byte("x"), 0o600); err == nil {
-			defer os.Remove(decoy)
-			r = e.Run(context.Background(), "/bin/sh", "-c",
-				"cat \""+decoy+"\" 2>/dev/null && echo READ || echo denied")
-			if strings.Contains(r.Stdout, "READ") {
-				t.Fatalf("strict mode did not deny a .ssh read: %+v", r)
-			}
-		}
+}
+
+func TestNativeSandboxPayload(t *testing.T) {
+	i := slices.Index(os.Args, "--")
+	if i < 0 || len(os.Args) != i+4 || os.Args[i+1] != "panda-native-sandbox" {
+		return
 	}
+	action, target := os.Args[i+2], os.Args[i+3]
+	var err error
+	switch action {
+	case "probe":
+		fmt.Println("ready")
+	case "write":
+		err = os.WriteFile(target, []byte("ok"), 0o600)
+		if err == nil {
+			fmt.Println("wrote")
+		}
+	case "read":
+		_, err = os.ReadFile(target)
+		if err == nil {
+			fmt.Println("read")
+		}
+	default:
+		t.Fatalf("unknown sandbox fixture action %q", action)
+	}
+	if err != nil {
+		fmt.Println("denied")
+	}
+	os.Exit(0)
 }
 
 // adapterSandboxPolicy shape: the selected agent's credential dirs become

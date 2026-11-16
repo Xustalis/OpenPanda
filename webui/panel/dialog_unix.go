@@ -9,7 +9,12 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
+
+// Bound picker helper processes so an unanswered dialog cannot park the
+// handler forever. Windows uses an in-process COM picker rather than a helper.
+const dialogTimeout = 5 * time.Minute
 
 // openNativeDirectoryDialog raises the desktop's own folder chooser: the
 // Finder sheet on macOS, zenity/kdialog on Linux. Anything without one of

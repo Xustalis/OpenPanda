@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -596,36 +595,10 @@ func samePath(a, b string) bool {
 // a directory outside any repository or a timed-out command all yield ok
 // false; the map simply omits the git line.
 func gitInfo(root string) (branch, commit, top string, dirty, ok bool) {
-	if _, err := exec.LookPath("git"); err != nil {
-		return "", "", "", false, false
+	s := captureGit(context.Background(), root)
+	branch = s.Branch
+	if branch == "" && s.Commit != "" {
+		branch = "HEAD"
 	}
-	top = gitOut(root, "rev-parse", "--show-toplevel")
-	if top == "" {
-		return "", "", "", false, false
-	}
-	branch = gitOut(root, "rev-parse", "--abbrev-ref", "HEAD")
-	commit = gitOut(root, "rev-parse", "--short", "HEAD")
-	// --quiet exits 1 when the index differs from HEAD. That is the only bit
-	// the map needs; counting changed paths on a huge tree costs much more.
-	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "--no-optional-locks", "diff-index", "--quiet", "HEAD", "--")
-	cmd.Stdout, cmd.Stderr = nil, nil
-	if err := cmd.Run(); err != nil {
-		if ee, isExit := err.(*exec.ExitError); isExit && ee.ExitCode() == 1 {
-			dirty = true
-		}
-	}
-	return branch, commit, top, dirty, branch != "" || commit != ""
-}
-
-func gitOut(root string, args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
-	defer cancel()
-	full := append([]string{"-C", root, "--no-optional-locks"}, args...)
-	out, err := exec.CommandContext(ctx, "git", full...).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return branch, s.Commit, s.RepoRoot, s.Dirty, s.Known && (branch != "" || s.Commit != "")
 }

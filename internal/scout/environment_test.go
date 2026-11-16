@@ -106,3 +106,25 @@ func TestEnvironmentUnavailableAndCancelledAreHonest(t *testing.T) {
 		t.Fatalf("bounded capture: n=%d err=%v b=%q", n, err, w.b)
 	}
 }
+
+func TestEnvironmentStatusBoundsAndDiscardsFilenames(t *testing.T) {
+	w := &environmentStatusOutput{}
+	for _, chunk := range []string{"# branch.oid 123", "456\n# branch.head fea", "ture\n? ", strings.Repeat("private-file-name", 1<<16), "\n"} {
+		if n, err := w.Write([]byte(chunk)); n != len(chunk) || err != nil {
+			t.Fatalf("write: %d %v", n, err)
+		}
+		if len(w.header) > 512 || strings.Contains(string(w.header), "private-file-name") {
+			t.Fatal("status capture retained a filename or exceeded its header bound")
+		}
+	}
+	if w.commit != "123456" || w.branch != "feature" || !w.dirty {
+		t.Fatalf("status: %+v", w)
+	}
+	for _, headers := range []string{"# branch.oid (initial)\n# branch.head main\n", "# branch.oid abcdef\n# branch.head (detached)\n"} {
+		x := &environmentStatusOutput{}
+		x.Write([]byte(headers))
+		if x.dirty || (x.commit == "" && x.branch != "main") || (x.branch == "" && x.commit != "abcdef") {
+			t.Fatalf("initial/detached status: %+v", x)
+		}
+	}
+}

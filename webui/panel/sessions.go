@@ -1182,7 +1182,21 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// them: those words belong to the thread's next turn, and a question asked
 	// beside the thread must not eat what the thread was about to say.
 	if !side {
-		if carried := h.takeCarry(sessID); len(carried) > 0 {
+		carried := h.takeCarry(sessID)
+		// A continuation also drains the live queue. The turn that owned a
+		// note parks its leftovers on the handler's way out, so a note
+		// accepted in the window between the last round and that exit has no
+		// consumer left — waiting for a round that will never come is the
+		// silent drop this whole path exists to remove. A normal ask leaves
+		// the queue alone: its own round loop reads those notes at the next
+		// boundary and acknowledges each one, which is the contract the
+		// console's "delivered at round N" line depends on.
+		if req.ResumeQueued {
+			if late := h.takeSteer(sessID); len(late) > 0 {
+				carried = append(carried, late...)
+			}
+		}
+		if len(carried) > 0 {
 			switch {
 			case req.ResumeQueued, req.Prompt == "":
 				req.Prompt = carryText(carried)

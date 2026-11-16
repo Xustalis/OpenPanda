@@ -1,0 +1,312 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ==========================================================================
+   Project & Session UI Redesign
+   ========================================================================== */
+
+.project-create-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+
+/* Projects are navigable work containers. A responsive card grid exposes the
+   directory, activity and next action without the old full-width row stack. */
+.projects-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+}
+
+.projects-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sub);
+}
+
+.projects-active-name {
+  color: var(--accent-2);
+  font-weight: var(--fw-semibold);
+}
+
+.project-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+  align-items: stretch;
+  gap: var(--sp-3);
+}
+
+.project-list > li {
+  min-width: 0;
+}
+
+.project-item {
+  height: 100%;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+}
+
+.project-item:hover {
+  border-color: var(--accent-2-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.project-active {
+  border-color: var(--accent-2-border);
+  box-shadow: inset 3px 0 0 var(--accent-2), var(--shadow-xs);
+}
+
+.project-head {
+  flex-wrap: nowrap;
+}
+
+.project-name-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.project-name-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  color: var(--accent-2);
+  background: var(--accent-2-soft);
+  border-radius: var(--radius-md);
+}
+
+.project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-lg);
+  font-weight: var(--fw-semibold);
+}
+
+.project-head .btn.icon-only {
+  flex: none;
+  width: 30px;
+  padding: 0;
+}
+
+.project-description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sub);
+  line-height: 1.55;
+}
+
+.project-dir-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px 9px;
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-caption);
+}
+
+.project-dir-tag > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-dir-tag .copy-dir-btn {
+  flex: none;
+  margin-left: auto;
+}
+
+.project-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.project-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  color: var(--text-secondary);
+  background: var(--surface-alpha-sm);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+  text-align: left;
+}
+
+button.project-stat {
+  cursor: pointer;
+}
+
+button.project-stat:hover {
+  color: var(--accent-2);
+  background: var(--accent-2-soft);
+}
+
+.project-policy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: var(--fs-caption);
+}
+
+.project-policy > span {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.project-card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding-top: var(--sp-1);
+}
+
+.project-card-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-card-actions .project-chat-btn {
+  margin-right: 0;
+  padding: 6px 12px;
+  font-size: var(--fs-sub);
+}
+
+.project-item .project-edit {
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-3);
+}
+
+@media (max-width: 620px) {
+  .project-create-row.details {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .project-name-input {
+    max-width: none;
+  }
+}
+
+.project-create-row.details {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.project-name-input {
+  max-width: 200px;
+}
+
+.project-desc-input {
+  flex: 1;
+}
+
+.project-chat-btn {
+  font-size: 0.82rem;
+  padding: 4px 10px;
+  margin-right: 4px;
+}
+
+.project-edit-dir {
+  margin: var(--sp-2) 0;
+}
+
+.project-dir-tag {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+
+
+
+
+
+
+
+
+
+
+/* (The project-scope filter used to live here — picker, scope banner and its
+   clear button. The rail now groups history by working directory instead of
+   asking you to pick a filter, so the chrome that served it is gone.) */
+
+
+
+
+
+
+
+
+.session-project-badge:focus {
+  border-color: var(--accent);
+}
+
+
+
+/* ---- UX 交互增强：回到底部、内联标题编辑、快捷键提示、路径复制 ---- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+.copy-dir-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 1px 4px;
+  font-size: 0.78rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: all var(--dur-fast);
+}
+
+.copy-dir-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}

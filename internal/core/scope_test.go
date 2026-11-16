@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/bus"
+	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
@@ -154,7 +157,7 @@ func TestScopedProjectChildrenRunInParallel(t *testing.T) {
 		Device:        "scope-node",
 		ResourceClass: "Standard",
 		Native: []ledger.NativeAbility{
-			{ID: "sys:slow", Command: "sleep", Args: []string{"1"}},
+			queueFixtureAbility(t, "sys:slow", "sleep", "1s"),
 		},
 		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 4},
 	}
@@ -368,5 +371,537 @@ func TestRelUnderDirResolvesSymlinks(t *testing.T) {
 				t.Fatalf("%s: lane %q does not fold to %q", tc.name, a, b)
 			}
 		}
+	}
+}
+
+func TestQueuedSessionWorkspaceConcurrency(t *testing.T) {
+	cases := []struct {
+		name     string
+		pathsA   []string
+		pathsB   []string
+		sessionB string
+		private  bool
+		isolate  bool
+		parallel bool
+	}{
+		{"same shared path", []string{"src"}, []string{"src"}, "session-b", false, false, false},
+		{"disjoint shared paths", []string{"src"}, []string{"docs"}, "session-b", false, false, true},
+		{"sessionless shared path", []string{"src"}, []string{"src"}, "", false, false, false},
+		{"separate pinned trees same project", nil, nil, "session-b", true, false, true},
+		{"separate scoped trees same project", []string{"src"}, []string{"src"}, "session-b", true, false, true},
+		{"isolated execution after snapshots", nil, nil, "session-b", false, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCore(openTestDB(t), "workspace-queue", ledger.Card{
+				Device: "workspace-queue", Capacity: ledger.Capacity{MaxConcurrent: 3},
+				Native: []ledger.NativeAbility{queueFixtureAbility(t, "sys:pause", "sleep", "300ms")},
+			}, 5, testLogger(), config.ModelConfig{})
+			c.SetWorkDir(t.TempDir())
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			c.StartQueueScheduler(ctx)
+			enqueue := func(session string, paths []string) Task {
+				t.Helper()
+				q := QueueSpec{Priority: PriorityNormal, SessionID: session}
+				if tc.private {
+					q.WorkDir = t.TempDir()
+				}
+				task, err := c.Enqueue(ctx, TaskInput{Title: "workspace concurrency", Intent: "pause",
+					Project: "same-project", Paths: paths, Isolate: tc.isolate, Requires: []string{"sys:pause"}, Authorized: true}, q)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return task
+			}
+			a, b := enqueue("session-a", tc.pathsA), enqueue(tc.sessionB, tc.pathsB)
+			overlapped := false
+			for {
+				first, err := c.store.Get(ctx, a.TaskID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				second, err := c.store.Get(ctx, b.TaskID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if first.State == StateRunning && second.State == StateRunning && first.ExecWorkDir != "" && second.ExecWorkDir != "" {
+					overlapped = true
+					if !tc.parallel {
+						t.Fatal("writers of the same shared path ran together")
+					}
+				}
+				if first.State == StateDone && second.State == StateDone {
+					break
+				}
+				if first.State == StateFailed || second.State == StateFailed || ctx.Err() != nil {
+					t.Fatalf("tasks did not complete: %s / %s; context %v", first.State, second.State, ctx.Err())
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			waitLocalTasksSettled(t, c)
+			if tc.parallel && !overlapped {
+				t.Fatal("independent writable paths never ran together")
+			}
+		})
+	}
+}
+
+func TestPhysicalWorkspaceExecLocksAndChildYield(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c := newCore(t, "physical-child-yield")
+	dir := t.TempDir()
+	live := func(title string) Task {
+		t.Helper()
+		task, _, _, err := c.createTask(ctx, TaskInput{Title: title, WorkDir: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, move := range []func() error{
+			func() error { return c.store.Queue(ctx, task.TaskID, c.nodeID) },
+			func() error { return c.store.Dispatch(ctx, task.TaskID, c.nodeID, c.nodeID) },
+			func() error { return c.store.Accept(ctx, task.TaskID, c.nodeID) },
+		} {
+			if err := move(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		task, err = c.store.Get(ctx, task.TaskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Custom scheduling keys cannot waive physical workspace exclusion.
+		task.ResourceKeys = []string{"custom:" + title}
+		return task
+	}
+	parent, child := live("parent"), live("child")
+	parent.ResourceKeys = append(parent.ResourceKeys, "hardware:servo")
+	keys, wait, err := c.executionLockKeys(parent, "hardware:servo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childKeys, _, err := c.executionLockKeys(child, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.execLockAcquire(ctx, parent.TaskID, "parent-run", keys, wait, true); err != nil {
+		t.Fatal(err)
+	}
+	defer c.execLockUnlock(parent.TaskID)
+	if ok, err := c.store.TryAcquireExecLocks(ctx, child.TaskID, c.nodeID, "child-run", childKeys); err != nil || ok {
+		t.Fatalf("custom keys hid a shared tree: acquired=%v err=%v", ok, err)
+	}
+	resume, err := c.yieldForChildren(ctx, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := c.store.TryAcquireExecLocks(ctx, child.TaskID, c.nodeID, "child-run", childKeys); err != nil || !ok {
+		t.Fatalf("child could not use the yielded physical workspace: acquired=%v err=%v", ok, err)
+	}
+	if ok, err := c.store.TryAcquireExecLocks(ctx, "foreign-actuator", c.nodeID, "foreign-run", []string{"hardware:servo"}); err != nil || ok {
+		t.Fatalf("physical actuator was released along with workspace: acquired=%v err=%v", ok, err)
+	}
+	resumed := make(chan struct{})
+	go func() { resume(); close(resumed) }()
+	select {
+	case <-resumed:
+		t.Fatal("parent resumed while child still held its physical workspace")
+	case <-time.After(30 * time.Millisecond):
+	}
+	if err := c.store.ReleaseExecLocks(ctx, child.TaskID, "child-run"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-resumed:
+	case <-ctx.Done():
+		t.Fatal("parent could not reacquire workspace after child released it")
+	}
+	if ok, err := c.store.TryAcquireExecLocks(ctx, child.TaskID, c.nodeID, "child-again", childKeys); err != nil || ok {
+		t.Fatalf("parent resumed without reacquiring physical workspace: acquired=%v err=%v", ok, err)
+	}
+}
+
+func TestLegacySessionExecLockRowsBlockNewClaims(t *testing.T) {
+	ctx := context.Background()
+	s := NewTaskStore(openTestDB(t), testLogger())
+	holder := createTask(t, s, "", "old executor", "n")
+	for _, err := range []error{s.Queue(ctx, holder.TaskID, "n"), s.Dispatch(ctx, holder.TaskID, "n", "n"), s.Accept(ctx, holder.TaskID, "n")} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Seed the exact old on-disk representation, bypassing today's canonical
+	// acquisition path, to cover an old process that is still draining a run.
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO exec_locks(key, task_id, node_id, acquired_at, run_id) VALUES(?,?,?,?,?)`,
+		"scope:proj/@session/old/src", holder.TaskID, "n", s.now(), "old-run"); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"scope:proj/src", "scope:proj/src/deep", "scope:proj", "scope:proj/@session/new/src"} {
+		if ok, err := s.TryAcquireExecLocks(ctx, "new-task", "n", "new-run", []string{key}); err != nil || ok {
+			t.Fatalf("old lane did not block %s: acquired=%v err=%v", key, ok, err)
+		}
+	}
+	if ok, err := s.TryAcquireExecLocks(ctx, "new-task", "n", "new-run", []string{"scope:proj/docs"}); err != nil || !ok {
+		t.Fatalf("old scoped row blocked a disjoint path: acquired=%v err=%v", ok, err)
+	}
+}
+
+// Input landing writes an entire source tree even when execution only owns a
+// leaf or will take place in a private copy. It must wait for live leaf writers,
+// then relinquish the source root before the long execution starts.
+func TestWorkspacePreparationWaitsForSharedWriter(t *testing.T) {
+	for _, isolated := range []bool{false, true} {
+		name := "scoped input landing"
+		if isolated {
+			name = "isolated input landing and snapshot"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			c := newCore(t, "preparation")
+			withArtifactPool(t, c)
+			source, err := c.projectWorkDir("project")
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(source, "src", "file.txt"), "live writer")
+			incoming := t.TempDir()
+			writeFile(t, filepath.Join(incoming, "src", "file.txt"), "incoming artifact")
+			pack, err := c.artifacts.PackDir(incoming)
+			if err != nil {
+				t.Fatal(err)
+			}
+			live := func(in TaskInput, nonce string) (Task, []string) {
+				t.Helper()
+				task, _, _, err := c.createTask(ctx, in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, move := range []func() error{
+					func() error { return c.store.Queue(ctx, task.TaskID, c.nodeID) },
+					func() error { return c.store.Dispatch(ctx, task.TaskID, c.nodeID, c.nodeID) },
+					func() error { return c.store.Accept(ctx, task.TaskID, c.nodeID) },
+				} {
+					if err := move(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				task, err = c.store.Get(ctx, task.TaskID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				keys, wait, err := c.executionLockKeys(task, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := c.execLockAcquire(ctx, task.TaskID, nonce, keys, wait, true); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { c.execLockUnlock(task.TaskID) })
+				return task, keys
+			}
+			writer, writerKeys := live(TaskInput{Title: "writer", Project: "project", Paths: []string{"src"}}, "writer")
+			preparer, _ := live(TaskInput{Title: "preparer", Project: "project", Paths: []string{"docs"}, Isolate: isolated}, "preparer")
+			preparer.Inputs = []bus.ArtifactRef{{Stage: worktreeArtifactStage, Hash: pack.Hash, Source: c.nodeID}}
+			type outcome struct {
+				prep runPrep
+				err  error
+			}
+			finished := make(chan outcome, 1)
+			go func() {
+				prep, err := c.prepareRunDir(ctx, ctx, preparer, preparer.TaskID, commander.Plan{Kind: "native"})
+				finished <- outcome{prep, err}
+			}()
+			select {
+			case out := <-finished:
+				t.Fatalf("input preparation passed a live shared writer: %v", out.err)
+			case <-time.After(30 * time.Millisecond):
+			}
+			if got := readFile(t, filepath.Join(source, "src", "file.txt")); got != "live writer" {
+				t.Fatalf("artifact overwrote a path while its writer was running: %q", got)
+			}
+			c.execLockUnlock(writer.TaskID)
+			select {
+			case out := <-finished:
+				if out.err != nil {
+					t.Fatal(out.err)
+				}
+				if got := readFile(t, filepath.Join(out.prep.workDir, "src", "file.txt")); got != "incoming artifact" {
+					t.Fatalf("prepared workspace missed its artifact: %q", got)
+				}
+			case <-ctx.Done():
+				t.Fatal("preparer did not progress after writer released its leaf")
+			}
+			if ok, err := c.store.TryAcquireExecLocks(ctx, writer.TaskID, c.nodeID, "writer-next", writerKeys); err != nil || !ok {
+				t.Fatalf("source root stayed locked during independent execution: acquired=%v err=%v", ok, err)
+			}
+			if err := c.store.ReleaseExecLocks(ctx, writer.TaskID, "writer-next"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestWorkspacePreparationCancellationReleasesRoot(t *testing.T) {
+	c := newCore(t, "cancel-preparation")
+	ctx := context.Background()
+	task := createTask(t, c.store, "", "cancel preparation", c.nodeID)
+	if err := c.store.Queue(ctx, task.TaskID, c.nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.Dispatch(ctx, task.TaskID, c.nodeID, c.nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.Accept(ctx, task.TaskID, c.nodeID); err != nil {
+		t.Fatal(err)
+	}
+	task.Isolate = true
+	keys, wait, err := c.executionLockKeys(task, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.execLockAcquire(ctx, task.TaskID, "cancel-run", keys, wait, true); err != nil {
+		t.Fatal(err)
+	}
+	defer c.execLockUnlock(task.TaskID)
+	preparing, cancel := context.WithCancel(ctx)
+	finish, cleanup, err := c.prepareWorkspaceLocks(preparing, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := finish(); err == nil {
+		t.Fatal("canceled preparation unexpectedly resumed execution")
+	}
+	cleanup()
+	source, err := c.projectWorkDir(task.Project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := c.store.TryAcquireExecLocks(ctx, "after-cancel", c.nodeID, "after-cancel", []string{queue.WorkspaceScopeKey(source, "")}); err != nil || !ok {
+		t.Fatalf("canceled preparation retained the source root: acquired=%v err=%v", ok, err)
+	}
+}
+
+func TestDelegateSnapshotWaitsForSharedWriterAndRestoresParent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c := newCore(t, "snapshot-lease")
+	source, err := c.projectWorkDir("proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(source, "docs", "file.txt"), "writer unfinished")
+	live := func(title, scope string) (Task, []string) {
+		t.Helper()
+		task := createTask(t, c.store, "", title, c.nodeID)
+		for _, move := range []func() error{
+			func() error { return c.store.Queue(ctx, task.TaskID, c.nodeID) },
+			func() error { return c.store.Dispatch(ctx, task.TaskID, c.nodeID, c.nodeID) },
+			func() error { return c.store.Accept(ctx, task.TaskID, c.nodeID) },
+		} {
+			if err := move(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		task.ScopePaths = []string{scope}
+		keys, wait, err := c.executionLockKeys(task, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.execLockAcquire(ctx, task.TaskID, title, keys, wait, true); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.execLockUnlock(task.TaskID) })
+		return task, keys
+	}
+	parent, parentKeys := live("parent", "src")
+	writer, writerKeys := live("writer", "docs")
+	type outcome struct {
+		ctx     context.Context
+		cleanup func()
+		err     error
+	}
+	finished := make(chan outcome, 1)
+	go func() {
+		snapshotCtx, cleanup, err := c.snapshotDelegateBatch(ctx, parent, []delegateRequest{{Isolate: true}, {Isolate: true}})
+		finished <- outcome{snapshotCtx, cleanup, err}
+	}()
+	select {
+	case out := <-finished:
+		if out.cleanup != nil {
+			out.cleanup()
+		}
+		t.Fatalf("sibling snapshot passed a live disjoint-path writer: %v", out.err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	writeFile(t, filepath.Join(source, "docs", "file.txt"), "writer completed")
+	c.execLockUnlock(writer.TaskID)
+	select {
+	case out := <-finished:
+		if out.err != nil {
+			t.Fatal(out.err)
+		}
+		defer out.cleanup()
+		snapshot, _ := out.ctx.Value(delegateSnapshotKey{}).(*delegateSnapshot)
+		if snapshot == nil || readFile(t, filepath.Join(snapshot.dir, "docs", "file.txt")) != "writer completed" {
+			t.Fatal("sibling snapshot missed the completed shared-tree state")
+		}
+	case <-ctx.Done():
+		t.Fatal("sibling snapshot did not finish after the writer released")
+	}
+	if ok, err := c.store.TryAcquireExecLocks(ctx, "foreign-src", c.nodeID, "foreign-src", parentKeys); err != nil || ok {
+		t.Fatalf("snapshot did not restore the parent's original leaf: acquired=%v err=%v", ok, err)
+	}
+	if ok, err := c.store.TryAcquireExecLocks(ctx, writer.TaskID, c.nodeID, "writer-next", writerKeys); err != nil || !ok {
+		t.Fatalf("snapshot retained the source root after restoring parent: acquired=%v err=%v", ok, err)
+	}
+	if err := c.store.ReleaseExecLocks(ctx, writer.TaskID, "writer-next"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDelegateSnapshotFailureRestoresParentClaim(t *testing.T) {
+	c := newCore(t, "snapshot-failed-copy")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	parent := createTask(t, c.store, "", "parent", c.nodeID)
+	for _, move := range []func() error{
+		func() error { return c.store.Queue(ctx, parent.TaskID, c.nodeID) },
+		func() error { return c.store.Dispatch(ctx, parent.TaskID, c.nodeID, c.nodeID) },
+		func() error { return c.store.Accept(ctx, parent.TaskID, c.nodeID) },
+	} {
+		if err := move(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parent.ScopePaths = []string{"src"}
+	keys, wait, err := c.executionLockKeys(parent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.execLockAcquire(ctx, parent.TaskID, "parent-run", keys, wait, true); err != nil {
+		t.Fatal(err)
+	}
+	defer c.execLockUnlock(parent.TaskID)
+	if _, cleanup, err := c.snapshotDelegateBatch(ctx, parent, []delegateRequest{{Isolate: true}, {Isolate: true}}); err == nil {
+		cleanup()
+		t.Fatal("missing source tree unexpectedly produced a sibling snapshot")
+	}
+	if ok, err := c.store.TryAcquireExecLocks(ctx, "foreign-parent", c.nodeID, "foreign-run", keys); err != nil || ok {
+		t.Fatalf("failed snapshot left the running parent without its leaf: acquired=%v err=%v", ok, err)
+	}
+	source, err := c.projectWorkDir(parent.Project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := c.store.TryAcquireExecLocks(ctx, "foreign-docs", c.nodeID, "foreign-docs", []string{queue.WorkspaceScopeKey(source, "docs")}); err != nil || !ok {
+		t.Fatalf("failed snapshot retained its temporary source root: acquired=%v err=%v", ok, err)
+	}
+}
+
+func TestDelegateSnapshotCancellationPreservesWorkspaceSafety(t *testing.T) {
+	for _, afterYield := range []bool{false, true} {
+		name := "before_source_resolution"
+		if afterYield {
+			name = "after_workspace_yield"
+		}
+		t.Run(name, func(t *testing.T) {
+			c := newCore(t, "snapshot-canceled")
+			ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			live := func(title, scope string) (Task, []string) {
+				t.Helper()
+				task := createTask(t, c.store, "", title, c.nodeID)
+				for _, move := range []func() error{
+					func() error { return c.store.Queue(ctx, task.TaskID, c.nodeID) },
+					func() error { return c.store.Dispatch(ctx, task.TaskID, c.nodeID, c.nodeID) },
+					func() error { return c.store.Accept(ctx, task.TaskID, c.nodeID) },
+				} {
+					if err := move(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				task.ScopePaths = []string{scope}
+				keys, wait, err := c.executionLockKeys(task, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := c.execLockAcquire(ctx, task.TaskID, title, keys, wait, true); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { c.execLockUnlock(task.TaskID) })
+				return task, keys
+			}
+			parent, parentKeys := live("parent", "src")
+			// A disjoint writer makes source-root acquisition wait after the
+			// parent yields its leaf, so cancellation exercises the unlocked path.
+			writer, _ := live("writer", "docs")
+			runCtx, stopRun := context.WithCancel(ctx)
+			defer stopRun()
+			defer c.registerRunning(parent.TaskID, stopRun)()
+			preparing, cancel := context.WithCancel(ctx)
+			defer cancel()
+			if !afterYield {
+				cancel()
+			}
+			finished := make(chan error, 1)
+			go func() {
+				_, cleanup, err := c.snapshotDelegateBatch(preparing, parent, []delegateRequest{{Isolate: true}, {Isolate: true}})
+				if cleanup != nil {
+					cleanup()
+				}
+				finished <- err
+			}()
+			if afterYield {
+				for {
+					var held int
+					if err := c.store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM exec_locks WHERE task_id=?", parent.TaskID).Scan(&held); err != nil {
+						t.Fatal(err)
+					}
+					if held == 0 {
+						break
+					}
+					select {
+					case err := <-finished:
+						t.Fatalf("snapshot returned before yielding: %v", err)
+					case <-ctx.Done():
+						t.Fatal("parent did not yield its workspace")
+					case <-time.After(time.Millisecond):
+					}
+				}
+				cancel()
+			}
+			select {
+			case err := <-finished:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("canceled snapshot: %v", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("canceled snapshot did not return")
+			}
+			if afterYield {
+				if runCtx.Err() == nil {
+					t.Fatal("parent continued after source acquisition failed with its workspace yielded")
+				}
+			} else {
+				if runCtx.Err() != nil {
+					t.Fatal("source lookup failure canceled a parent that still owns its workspace")
+				}
+				if ok, err := c.store.TryAcquireExecLocks(ctx, "foreign-parent", c.nodeID, "foreign", parentKeys); err != nil || ok {
+					t.Fatalf("early cancellation lost parent locks: acquired=%v err=%v", ok, err)
+				}
+			}
+			c.execLockUnlock(writer.TaskID)
+			c.execLockUnlock(parent.TaskID)
+			source, err := c.projectWorkDir(parent.Project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := c.store.TryAcquireExecLocks(ctx, "after-snapshot-cancel", c.nodeID, "foreign", []string{queue.WorkspaceScopeKey(source, "")}); err != nil || !ok {
+				t.Fatalf("canceled snapshot retained source locks: acquired=%v err=%v", ok, err)
+			}
+		})
 	}
 }

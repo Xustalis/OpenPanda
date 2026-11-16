@@ -456,6 +456,15 @@
   padding-top: 0;
   border-top: none;
 }
+/* The one destructive action a device panel owns: a quiet footer, not a
+   button competing with the facts, and only for a row no live peer backs. */
+.ws-detail-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
 .ws-detail-sec-title {
   margin: 0;
   font-size: var(--text-xs);

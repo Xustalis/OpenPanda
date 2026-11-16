@@ -1,0 +1,134 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ArtifactSection — the console's eye onto a task's output archive
+   (screenshots, produced trees). Mirrors the orbit action-rail chrome. */
+.artifact-section {
+  margin-top: var(--sp-2);
+}
+.artifact-bar {
+  display: inline-flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.artifact-body {
+  margin-top: var(--sp-3);
+  border-top: 1px solid var(--hairline-sm);
+  padding-top: var(--sp-3);
+}
+.artifact-remote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+.artifact-remote p {
+  margin: 0;
+}
+.artifact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-1);
+}
+.artifact-entry {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: var(--sp-3);
+  align-items: baseline;
+  width: 100%;
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-caption);
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+.artifact-entry:hover {
+  background: var(--surface-alpha-sm);
+  border-color: var(--border);
+}
+.artifact-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-size {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.artifact-error {
+  color: var(--danger, #c0392b);
+  font-size: var(--fs-caption);
+  padding: var(--sp-2) 0;
+}
+.artifact-preview {
+  margin-top: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.artifact-preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-caption);
+  background: var(--surface-alpha-sm);
+}
+.artifact-preview-img {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  object-fit: contain;
+}
+.artifact-preview-text {
+  margin: 0;
+  padding: var(--sp-3);
+  max-height: 320px;
+  overflow: auto;
+  font-size: var(--fs-caption);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+main .timeline-step-item.type-pipeline .step-marker { border-color: var(--border-strong); }
+main .pipeline-chip {
+  color: var(--text-secondary);
+  background: var(--bg-active);
+  border-color: var(--border);
+}
+
+/* ----------------------------------------------------------------------------
+   Chat reply — neutral palette (2026-10-17 brief: 对话回复页面的紫色和蓝色也换掉).
+   The task card inside a reply carried the strip's old hues: a 3px --info bar
+   down its left edge, a state badge in --semantic-info over an --accent-2
+   wash, and the 查看任务 link picking up the global --accent-2 anchor colour.
+   Same brief, same ramp as the orbit above. The 待审批 strip keeps --warn: it
+   is the one state that must pull the eye, and amber is not on the list.
+   Scoped to .chat so the queue board, the kanban columns and the plans view
+   keep their hues.
+   -------------------------------------------------------------------------- */
+.chat .task-card { border-left-color: var(--border-strong); }
+.chat .badge.blue,
+.chat .badge.state-running,
+.chat .badge.state-queued {
+  color: var(--text-secondary);
+  border-color: var(--border);
+  background: var(--bg-active);
+}
+.chat .task-card > a,
+.chat .task-card .task-card-actions > a {
+  color: var(--text-secondary);
+}
+.chat .task-card > a:hover,
+.chat .task-card .task-card-actions > a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}

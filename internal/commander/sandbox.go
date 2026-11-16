@@ -256,9 +256,18 @@ func splitCredentialDirs(files []string) (dirs, bare []string) {
 // needs more can be named in the deployer's writable_paths.
 func sharedToolchainPaths() []string {
 	paths := []string{
-		".cache", ".local", ".npm", ".nvm", ".bun", ".deno",
+		".cache", ".npm", ".nvm", ".bun", ".deno",
 		".cargo", ".rustup", ".m2", ".gradle", ".nuget", ".vscode",
 		"go", ".composer", ".gem", ".rbenv", ".pyenv", ".volta",
+	}
+	if runtime.GOOS == "windows" {
+		// A recursive .local grant also opens missing credential/keyring
+		// paths below share/ and state/. Windows cannot install a name-based
+		// deny ACE before such a file exists, so keep the tool directories
+		// separate instead of admitting a broad root with unenforced holes.
+		paths = append(paths, ".local/bin", ".local/lib")
+	} else {
+		paths = append(paths, ".local")
 	}
 	if runtime.GOOS == "darwin" {
 		paths = append(paths, "Library/Caches", "Library/Application Support/Claude")

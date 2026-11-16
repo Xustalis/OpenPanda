@@ -1,0 +1,783 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- 设置: a top-layer sheet, not a page ------------------------------- */
+
+/* A native <dialog> opened with showModal(): the browser's top layer, above
+   every z-index in the console, with the page underneath inert. Deliberately
+   no transform / filter / backdrop-filter on the element itself — any of them
+   becomes the containing block for the fixed overlays that open *inside* the
+   sheet (terms reader, model wizard, confirm), and they would stop covering
+   the viewport. */
+.settings-dialog {
+  width: min(1040px, calc(100vw - 40px));
+  height: min(780px, calc(100vh - 48px));
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.settings-dialog[open] {
+  animation: sheet-in var(--dur-med) var(--ease);
+}
+.settings-dialog::backdrop {
+  background: var(--backdrop-darker);
+  backdrop-filter: blur(6px);
+}
+@keyframes sheet-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.settings-shell {
+  display: grid;
+  grid-template-columns: 228px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+/* The rail is the modal's chrome — one step below the reading surface, the
+   way the app's own sidebar is. */
+.settings-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 12px 10px 10px;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border-soft);
+}
+
+.settings-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text-tertiary);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.settings-search:focus-within {
+  border-color: var(--border-strong);
+}
+.settings-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.settings-search input::placeholder {
+  color: var(--text-tertiary);
+}
+/* The pill's own border is the focus state; the console-wide ring would draw
+   a second rounded rect inside it. */
+.settings-search input:focus-visible {
+  box-shadow: none;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 4px;
+}
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.settings-nav-group-title {
+  padding: 0 9px 5px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
+}
+.settings-nav-empty {
+  margin: 0;
+  padding: 4px 9px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.settings-nav-icon {
+  flex: none;
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.85;
+}
+.settings-nav-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-nav-item:hover {
+  background: var(--surface-alpha-md);
+  color: var(--text);
+}
+.settings-nav-item.active {
+  background: var(--bg-raised);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+.settings-nav-item.active .settings-nav-icon {
+  opacity: 1;
+}
+
+.settings-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.settings-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex: none;
+  padding: 14px 14px 14px 26px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-pane-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+/* The only way out of the sheet: Escape is cancelled, the backdrop has no
+   handler. It sits in the pane's own header rather than floating over the
+   content so it can never be scrolled away from. */
+.settings-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.settings-close:hover {
+  background: var(--surface-alpha-md);
+  color: var(--text);
+}
+.settings-close:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+.settings-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 26px 32px;
+}
+
+/* ---- The pane's contents: groups of rows, not floating cards ----
+   Every section still speaks the card vocabulary it was written in. Inside
+   the sheet a card is a *group*: the frame goes away, the heading becomes a
+   group label, and the hairline between rows does the separating. */
+
+.settings-pane-body .page-title {
+  display: none;
+}
+.settings-pane-body .page-sub {
+  margin: 14px 0 2px;
+  max-width: none;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.settings-dialog .settings-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  max-width: none;
+  gap: 0;
+  padding: 0;
+}
+.settings-dialog .settings-card > .block-title,
+.settings-dialog .agents-head .block-title {
+  padding: 18px 0 2px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+.settings-dialog .settings-card > .hint {
+  margin: 2px 0 0;
+}
+
+/* Content sections (记忆 / 技能 / 系统) keep their cards — they are
+   dashboards, not forms — but the blue "detail block" rule and the uppercase
+   micro-headings belong to the detail page they came from. */
+.settings-dialog .detail-block h2 {
+  margin-bottom: var(--sp-2);
+  padding-bottom: 0;
+  border-bottom: 0;
+  font-size: var(--text-md);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+.settings-dialog .detail-block h2::after {
+  display: none;
+}
+.settings-dialog .settings-pane-body .card + .card {
+  margin-top: var(--sp-3);
+}
+
+/* A field becomes one row: label and its explanation on the left, the control
+   in a fixed column on the right — the shape every settings sheet in this
+   class uses, because it lets the eye scan labels down one edge and states
+   down the other. */
+.settings-dialog .settings-card > .field-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+  align-items: center;
+  column-gap: 32px;
+  margin: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-dialog .settings-card > .field-group > label {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: var(--text-md);
+  font-weight: 400;
+  color: var(--text);
+}
+.settings-dialog .settings-card > .field-group > .hint {
+  grid-column: 1;
+  grid-row: 2;
+  margin: 3px 0 0;
+}
+.settings-dialog .settings-card > .field-group > :not(label):not(.hint) {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  min-width: 0;
+}
+.settings-dialog .settings-card > .field-group > .input {
+  justify-self: stretch;
+}
+/* A field whose control is itself a row of fields (记忆上限) needs the full
+   width; the marker class is set where that structure is, not guessed here. */
+.settings-dialog .settings-card > .field-group.stack {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+.settings-dialog .settings-card > .field-group.stack > label,
+.settings-dialog .settings-card > .field-group.stack > .hint,
+.settings-dialog .settings-card > .field-group.stack > :not(label):not(.hint) {
+  grid-column: 1;
+  grid-row: auto;
+  justify-self: stretch;
+}
+.settings-dialog .settings-card > .field-group.stack > .field-row {
+  margin-top: 10px;
+}
+
+/* The advanced model form keeps its dense multi-column rows, but they wrap
+   into a grid: four columns of 12.5px hints in a 760px pane is a wall. */
+.settings-dialog .settings-card > .field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-4);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.settings-dialog .field-row > .field-group {
+  margin-bottom: 0;
+}
+.settings-dialog .settings-actions {
+  padding: 16px 0 4px;
+}
+
+/* The agent roster and the model registry already read as lists; they only
+   need the card frame gone, which the rule above does. The roster's own rows
+   keep a rounded plate of their own on a page — here the plate goes and the
+   hairline takes over, so ten agents read as one list instead of ten boxes. */
+.settings-dialog .agent-list {
+  gap: 0;
+}
+.settings-dialog .agent-row {
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: 0;
+  background: transparent;
+}
+.settings-dialog .agent-row.missing {
+  background: transparent;
+}
+
+/* One group after another: the hairline is the only divider the sheet needs. */
+.settings-dialog .settings-card + .settings-card {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* ---- 应用策略: one topic per block, one setting per row ------------------
+   The row anatomy is lifted from the settings sheets this class of tool ships
+   (WorkBuddy's .general-settings-panel, Codex's Settings): a 500-weight label,
+   one clause of grey text under it, and the control pinned to the right edge.
+   What is *not* here is the point — no group icon plate, no caption sentence
+   beside the group title, and no second paragraph per row. Each of those was
+   a voice saying what the label already said, and four of them per screen is
+   what made this page read as a manual instead of a form.
+
+   The frame stays flat and hairline-ruled like the rest of the sheet: this
+   dialog groups by rule, not by nested cards, and a carded page next to 常规
+   would look like a different application. */
+
+.policy-form {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0 0;
+}
+
+.policy-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.policy-group + .policy-group {
+  margin-top: 2px;
+}
+
+/* A section header, not a row: smaller and greyer than the labels it
+   introduces, with the rule under it starting the block. The rule is what
+   makes it a header — a bare caption above a row just reads as that row's
+   subtitle, which is the hierarchy the old design got wrong in the other
+   direction. */
+.policy-group-title {
+  margin: 0;
+  padding: 18px 0 7px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+}
+.policy-group:first-child .policy-group-title {
+  padding-top: 6px;
+}
+
+.policy-group-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.policy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 24px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.policy-row:last-child {
+  border-bottom: 0;
+}
+.policy-row-name {
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text);
+}
+.policy-row-label > .hint {
+  margin: 3px 0 0;
+  max-width: 66ch;
+}
+.policy-row-control {
+  justify-self: end;
+  min-width: 0;
+}
+.policy-row.wide {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+.policy-row.wide .policy-row-control {
+  justify-self: stretch;
+  margin-top: 10px;
+}
+
+/* 路由偏好: agent names as removable pills inside one field — the value is a
+   set, and a set edited through a comma-separated line loses an entry on
+   every typo. The input rides at the end of the same line so adding a name
+   never means finding a second box. */
+.policy-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.policy-chips:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.policy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 4px 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+.policy-chip-x {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.policy-chip-x:hover {
+  background: var(--surface-alpha-lg);
+  color: var(--text);
+}
+.policy-chip-input {
+  flex: 1 1 130px;
+  min-width: 110px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+.policy-chip-input::placeholder {
+  color: var(--text-tertiary);
+  font-family: var(--font-ui);
+}
+.policy-chip-input:disabled {
+  cursor: not-allowed;
+}
+.policy-suggest {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.policy-suggest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.policy-suggest-chip:hover {
+  border-style: solid;
+  border-color: var(--border-strong);
+  background: var(--surface-alpha-sm);
+  color: var(--text);
+}
+
+/* 记忆上限: three caps side by side, each with its unit inside the field so
+   the number reads as a quantity instead of a bare integer. The row owns the
+   spacing now that the card has no dividers. */
+.policy-limits {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.policy-limit {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.policy-limit-name {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-tertiary);
+}
+.policy-num {
+  position: relative;
+  display: block;
+}
+.policy-num .input {
+  padding-right: 46px;
+  font-variant-numeric: tabular-nums;
+}
+/* The platform spinner sits exactly where the unit is; arrows still step. */
+.policy-num .input::-webkit-outer-spin-button,
+.policy-num .input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.policy-num-suffix {
+  position: absolute;
+  top: 50%;
+  right: 11px;
+  transform: translateY(-50%);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.policy-limit.bad .input {
+  border-color: var(--danger);
+}
+.policy-limit.bad .policy-num-suffix {
+  color: var(--danger);
+}
+
+/* 沙箱: a status panel, not a switch. It sits inside the 安全 card below the
+   approval row, so it is an inset well on a raised surface — the tone change
+   is what separates it, not a border. The state is a pill, the mechanism is
+   mono, and the path gets its own line instead of wrapping around a sentence. */
+.policy-sandbox {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 12px 0 10px;
+  padding: 11px 13px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+.policy-sandbox-head {
+  display: flex;
+  align-items: center;
+  /* The mode picker wraps under the state on a narrow column instead of
+     squeezing the pill and the backend name out of the card. */
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.policy-sandbox-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.policy-sandbox[data-state='on'] .policy-sandbox-dot {
+  background: var(--good);
+}
+.policy-sandbox[data-state='warn'] .policy-sandbox-dot {
+  background: var(--warn);
+}
+.policy-sandbox-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.policy-sandbox-state {
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-md);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.policy-sandbox[data-state='on'] .policy-sandbox-state {
+  background: var(--good-soft);
+  color: var(--good);
+}
+.policy-sandbox[data-state='warn'] .policy-sandbox-state {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.policy-sandbox-mode {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+/* The control owns the right edge: the head is dot · title · state · backend
+   · mode picker, and only the picker is pinned. */
+.policy-sandbox-pick {
+  display: flex;
+  margin-left: auto;
+}
+.policy-sandbox .hint {
+  margin: 0;
+}
+.policy-sandbox-path {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.policy-sandbox-path code {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The action bar closes the form instead of floating over it: at this size
+   the whole page is one wheel notch from end to end, and a pinned bar would
+   slice whichever control happens to sit under it. The state line only
+   appears when there is something to say — a form that matches the node does
+   not need a sentence telling you so, and two dead buttons already say it. */
+.policy-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--border-soft);
+}
+.policy-actions > p {
+  margin: 0;
+}
+.policy-actions-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.policy-actions-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.policy-actions-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.policy-actions-state.dirty {
+  color: var(--text-secondary);
+}
+.policy-actions-state.dirty .policy-actions-dot {
+  background: var(--accent-border);
+}
+.policy-actions-state.bad {
+  color: var(--danger);
+}
+.policy-actions-state.bad .policy-actions-dot {
+  background: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .settings-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .settings-rail {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-soft);
+    overflow-x: auto;
+  }
+  .settings-search {
+    width: 150px;
+  }
+  .settings-nav {
+    flex-direction: row;
+    gap: 4px;
+    padding-bottom: 0;
+  }
+  .settings-nav-group {
+    flex-direction: row;
+    gap: 2px;
+  }
+  .settings-nav-group-title {
+    display: none;
+  }
+  .settings-nav-item {
+    width: auto;
+    white-space: nowrap;
+  }
+  .settings-pane-body {
+    padding: 0 16px 24px;
+  }
+  .settings-dialog .settings-card > .field-group {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+  .settings-dialog .settings-card > .field-group > :not(label):not(.hint) {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: stretch;
+    margin-top: 8px;
+  }
+  /* 应用策略: one column — the control drops under its label. */
+  .policy-row,
+  .policy-row.wide {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+  .policy-row-control {
+    justify-self: stretch;
+    margin-top: 8px;
+  }
+  .policy-limits {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+}

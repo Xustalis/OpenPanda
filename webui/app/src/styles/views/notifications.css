@@ -1,0 +1,502 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Notifications -----------------------------------------------------
+   通知 is a bell in the rail's head (components/notifications.tsx) and a
+   fixed-size window behind it. Fixed on purpose: the window is a destination
+   you learn, and a panel that resizes with its contents moves the rail under
+   the pointer every time you switch source.
+
+   Inside, one row shape serves every source — glyph, title, one line of
+   evidence, right-hand slot. Sections name the source once instead of letting
+   every row repeat it in its title, which is what lets the rows stay one
+   short line and the list stay scannable. */
+
+.notif-bell {
+  position: relative;
+  display: flex;
+}
+
+/* Open, the bell keeps the tinted square the window extends from: the control
+   has to look pressed while its surface is up. */
+.notif-bell .icon-btn.open {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* The count rides the bell's corner as a number, not a dot: "2 waiting" and
+   "9 waiting" are different reasons to open the window. Amber is the tone the
+   rail's review badge already uses, so the head gains one warm speck and no
+   new colour. */
+.notif-bell-dot {
+  position: absolute;
+  top: -1px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  background: var(--semantic-warn-soft);
+  color: var(--semantic-warn);
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.notif-dialog {
+  width: min(880px, calc(100vw - 48px));
+  height: min(620px, calc(100dvh - 64px));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.notif-dialog[open] {
+  animation: notif-window-in var(--dur-med) var(--ease);
+}
+
+/* Lighter than the settings sheet's backdrop: this window is read while the
+   page is still in view, so the dim should separate, not black out. */
+.notif-dialog::backdrop {
+  background: var(--backdrop);
+}
+
+@keyframes notif-window-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.notif-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
+  min-height: 0;
+}
+
+.notif-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 12px 0 20px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.notif-head-title {
+  font-size: var(--text-lg);
+  font-weight: 650;
+}
+
+/* "6 条未读" as a chip rather than a sentence: the head already says 通知, so
+   the only new information is how much of it is new. */
+.notif-head-count {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--semantic-warn-soft);
+  color: var(--semantic-warn);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 16px;
+}
+
+.notif-mark {
+  margin-left: auto;
+  font-size: var(--text-xs);
+}
+
+.notif-mark:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.notif-close {
+  width: 26px;
+  height: 26px;
+  color: var(--text-tertiary);
+}
+
+.notif-main {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* The source rail is the window's chrome — one step below the reading surface,
+   the way the app's own sidebar is. */
+.notif-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding: 10px 10px 12px;
+  border-right: 1px solid var(--border-soft);
+  background: var(--bg-chrome);
+}
+
+.notif-tab {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: none;
+  height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notif-tab:hover {
+  background: var(--bg-hover);
+}
+
+/* Selected reads as a raised surface, not a filled accent: the rail is a place
+   marker, and the rows on the right are what the reader is actually looking
+   at. */
+.notif-tab.on {
+  background: var(--bg-raised);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+}
+
+.notif-tab-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notif-tab-count {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-sm);
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 16px;
+  text-align: center;
+}
+
+.notif-tab.on .notif-tab-count {
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+}
+
+/* Why the rail exists at all, in one line at its foot — it answers "who makes
+   these" without a help page. */
+.notif-rail-note {
+  margin: auto 6px 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.notif-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 8px;
+}
+
+/* A section is a subject, not a box: one small label, then its rows. No
+   per-row rules — the labels do the dividing, and seven hairlines in a row
+   would only add texture to a list that is read by scanning. */
+.notif-section + .notif-section {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.notif-section-label {
+  margin: 0;
+  padding: 10px 20px 2px 28px;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+/* The way out of the section, at its foot: the rows themselves stay one line,
+   so the link belongs to the section rather than to each row. */
+.notif-section-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 2px 0 0;
+  padding: 8px 20px 8px 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.notif-section-foot:hover {
+  color: var(--text);
+}
+
+/* The one row shape: glyph, title, evidence, right slot. */
+.notif-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 20px 8px 28px;
+  cursor: pointer;
+}
+
+.notif-row:hover {
+  background: var(--bg-hover);
+}
+
+.notif-row.static {
+  cursor: default;
+}
+
+/* Unread is a dot in the gutter, not a tinted block: the list is read in one
+   pass, and a whole row changing colour makes the eye re-read what it has
+   already dealt with. */
+.notif-row.unread::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 17px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--semantic-warn);
+}
+
+/* The tile is neutral for every source; the tone lives in the glyph. Five red
+   squares stacked read as five alarms, which is louder than five findings. */
+.notif-glyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-sm);
+  color: var(--text-secondary);
+}
+
+.notif-glyph.warn {
+  background: var(--semantic-warn-soft);
+  color: var(--semantic-warn);
+}
+
+.notif-glyph.bad {
+  color: var(--danger);
+}
+
+.notif-glyph.ok {
+  color: var(--semantic-good);
+}
+
+.notif-glyph.dim {
+  color: var(--text-dim);
+}
+
+.notif-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.notif-title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.notif-row:not(.unread) .notif-title {
+  color: var(--text-secondary);
+}
+
+/* The evidence line: keys in the quiet voice, values in mono. One line, so a
+   row stays the same height whether or not it carries facts. */
+.notif-detail {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.notif-detail .mono {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.notif-k {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+.notif-hint {
+  margin: 2px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+/* A release's changelog digest, bounded: two lines is enough to decide whether
+   to care, and the full note belongs to 设置 → 系统. */
+.notif-notes {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 2px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+/* The right slot holds either a time or the verbs the row supports, aligned
+   with the title line so the eye reads "what, then what can I do". */
+.notif-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: 12px;
+  padding-top: 2px;
+}
+
+.notif-time {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.notif-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.notif-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+  min-height: 240px;
+  padding: 24px;
+  text-align: center;
+}
+
+.notif-empty-glyph {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  background: var(--surface-alpha-sm);
+  color: var(--text-tertiary);
+}
+
+.notif-empty-title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.notif-empty-hint {
+  margin: 0;
+  max-width: 44ch;
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+/* When the node was last checked. It is a stamp, not a control bar, so it
+   stays one dim line with the re-check link at the far end. */
+.notif-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 20px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-chrome);
+  font-size: var(--text-xs);
+}
+
+.notif-recheck {
+  margin-left: auto;
+  flex: none;
+}
+
+.notif-recheck:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+/* Phone: the window becomes the page. A centred 580px sheet on a 360px screen
+   is just a cramped box, so the dialog fills the viewport and the source rail
+   turns back into the horizontal strip it was in the popover. */
+@media (max-width: 720px) {
+  .notif-dialog {
+    width: 100vw;
+    height: 100dvh;
+    max-width: 100vw;
+    max-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .notif-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .notif-rail {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-soft);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .notif-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .notif-rail-note {
+    display: none;
+  }
+
+  .notif-tab {
+    height: 30px;
+    padding: 0 9px;
+  }
+}

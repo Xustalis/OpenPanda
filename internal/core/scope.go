@@ -63,20 +63,9 @@ func normalizeScopePaths(paths []string) []string {
 	return out
 }
 
-// scopeLeafKeys renders the exec/queue lock set for one scoped child. The
-// session lanes ride on top: a scoped child inside a conversation locks
-// "scope:<p>/@session/<sid>/<path>", so its siblings in that same conversation
-// keep the overlap rules while another conversation's identical path stays a
-// separate lane.
-//
-// A submitter with no conversation (CLI `task add --paths`, an inbound
-// delegate frame) stays on the bare leaf "scope:<p>/<path>". That leaf is a
-// sibling of every conversation's lane, so it does not conflict with a
-// conversation writing the same path — the same allowance two conversations
-// already have. Claiming the project root here would restore the exclusion but
-// serialize every conversation-less scoped task against every other one, which
-// TestScopedProjectChildrenRunInParallel pins as a regression. The trade-off is
-// deliberate and documented in docs/status.md.
+// scopeLeafKeys renders project-relative claims independent of conversation
+// identity. All writers of one shared path contend; disjoint declarations
+// retain their parallelism, including submitters without a conversation.
 func scopeLeafKeys(project, sessionID string, paths []string) []string {
 	keys := make([]string, 0, len(paths))
 	for _, p := range paths {
@@ -179,4 +168,76 @@ func childResourceKeys(taskID string, in TaskInput) []string {
 		return mergeActuatorKeys([]string{"dir:" + wd}, in.Requires, in.SpecJSON)
 	}
 	return deriveResourceKeys(in)
+}
+
+// childResourceKeysFor resolves the one distinction the input-only helper
+// cannot: declared project paths in an explicitly separate worktree belong to
+// that tree, rather than to the project's shared checkout.
+func (c *Core) childResourceKeysFor(taskID string, in TaskInput) []string {
+	if in.Project != "" && !in.Isolate && in.WorkDir != "" {
+		paths := normalizeScopePaths(in.Paths)
+		if len(paths) > 0 {
+			shared := false
+			if projectDir, err := c.projectWorkDir(in.Project); err == nil {
+				shared = queue.WorkDirKey(projectDir) == queue.WorkDirKey(in.WorkDir)
+				if !shared {
+					_, shared = relUnderDir(projectDir, in.WorkDir)
+				}
+			}
+			if !shared {
+				keys := make([]string, 0, len(paths))
+				for _, p := range paths {
+					keys = append(keys, queue.WorkspaceScopeKey(in.WorkDir, p))
+				}
+				return mergeActuatorKeys(keys, in.Requires, in.SpecJSON)
+			}
+		}
+	}
+	return childResourceKeys(taskID, in)
+}
+
+// workspaceExecKeys mirrors prepareRunDir's directory precedence before any
+// workspace is populated or modified. These physical claims supplement the
+// queue's project/custom keys, so aliases of a project, nested pins and
+// projectless pins cannot hide a shared writable tree. Private task/stage
+// workspaces have different identities and remain independent.
+func (c *Core) workspaceExecKeys(task Task) ([]string, error) {
+	var dir string
+	var err error
+	switch {
+	case task.PlanID != "":
+		dir, err = c.stageWorkDir(task.PlanID, task.StageID)
+	case task.Isolate && task.Project != "":
+		dir, err = c.attachedWorkDir(task.TaskID)
+	case projectInputs(task) || (task.Project != "" && task.WorkDir == ""):
+		dir, err = c.projectWorkDir(task.Project)
+	case task.WorkDir != "":
+		dir = task.WorkDir
+	default:
+		dir, err = c.attachedWorkDir(task.TaskID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	paths := normalizeScopePaths(task.ScopePaths)
+	if len(paths) == 0 || task.Isolate || task.PlanID != "" || task.Project == "" {
+		return []string{queue.WorkspaceScopeKey(dir, "")}, nil
+	}
+	// Scope paths are relative to the project, even when execution was pinned
+	// to one of its subdirectories. A pin in a separate worktree instead uses
+	// that worktree as its scope root.
+	if task.WorkDir != "" && !projectInputs(task) {
+		if projectDir, perr := c.projectWorkDir(task.Project); perr == nil {
+			if queue.WorkDirKey(dir) == queue.WorkDirKey(projectDir) {
+				dir = projectDir
+			} else if _, inside := relUnderDir(projectDir, dir); inside {
+				dir = projectDir
+			}
+		}
+	}
+	keys := make([]string, 0, len(paths))
+	for _, p := range paths {
+		keys = append(keys, queue.WorkspaceScopeKey(dir, p))
+	}
+	return queue.CanonicalKeys(keys), nil
 }

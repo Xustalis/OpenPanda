@@ -283,6 +283,14 @@ export function SessionRail(props: SessionRailProps) {
   const total = contextWindow > 0 ? compactNumber(contextWindow) : ''
   const usage = total ? `${used} / ${total}` : props.contextTokens > 0 ? used : ''
   const contextLine = [shareLabel, usage].filter(Boolean).join(SEP) || '—'
+  // What the numbers are counting — the sentence the overview prints under its
+  // meter. It rides the bar as the hover tip of the context segment instead of
+  // a native `title`: one tip per line, styled with the sheet, never the black
+  // system box.
+  const contextNote =
+    contextWindow > 0
+      ? t('sessionRail.contextNote', { model: modelName })
+      : t('sessionRail.contextNoWindow')
 
   // The ticker is a file list, not prose. "Not a git repository" and "the task
   // reported no changes" used to scroll past here and told the reader nothing
@@ -386,6 +394,11 @@ export function SessionRail(props: SessionRailProps) {
           room for: without it the bar hugs the sentence, so an idle thread's
           line ends at the dash instead of holding a blank lane open beside
           it. The ticker's own measurement still decides scrolling. */}
+      {/* One tip for the whole line, not four native ones: the bar is a single
+          control, and the browser's own tooltip (a black box anchored to the
+          pointer, clipped at the window edge) read as a foreign object in the
+          head. Hovering a segment swaps the text; the stylesheet owns where it
+          hangs and how late it appears. */}
       <button
         ref={trigger}
         type="button"
@@ -393,11 +406,17 @@ export function SessionRail(props: SessionRailProps) {
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={t('sessionRail.label')}
-        title={t('sessionRail.label')}
+        data-rail-tip={t('sessionRail.label')}
+        // Idle, the task segment prints the whole sentence already, so it
+        // borrows the bar's label instead of repeating itself; running, the
+        // title can be cut, and the tip is the only place the full line lives.
+        data-task-tip={running ? taskLine : ''}
+        data-ctx-tip={contextNote}
+        data-changes-tip={changeTitle}
         onClick={() => setOpen(!open)}
       >
         <Icon name="activity" size={16} class={`rail-bar-icon${running || props.working ? ' is-live' : ''}`} />
-        <span class="rail-bar-task" title={taskLine}>
+        <span class="rail-bar-task">
           {running ? (
             <>
               <span class="rail-bar-task-title">{taskTitle}</span>
@@ -416,20 +435,13 @@ export function SessionRail(props: SessionRailProps) {
         <span class="rail-bar-sep" aria-hidden="true">
           ·
         </span>
-        <span
-          class={`rail-bar-ctx${pct !== null && pct >= 80 ? ' is-high' : ''}`}
-          title={
-            contextWindow > 0
-              ? t('sessionRail.contextNote', { model: modelName })
-              : t('sessionRail.contextNoWindow')
-          }
-        >
+        <span class={`rail-bar-ctx${pct !== null && pct >= 80 ? ' is-high' : ''}`}>
           {contextLine}
         </span>
         <span class="rail-bar-sep" aria-hidden="true">
           ·
         </span>
-        <span class="rail-bar-changes" title={changeTitle}>
+        <span class="rail-bar-changes">
           <ScrollingText text={changeText} parts={changeParts} />
         </span>
         <Icon name="chevron-down" size={12} class="rail-bar-caret" />

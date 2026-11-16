@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -45,10 +44,7 @@ func TestDispatchChildPreservesWorkDir(t *testing.T) {
 }
 
 func TestRunningParentDelegatesAtCapacityOne(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX shell")
-	}
-	c := NewCore(openTestDB(t), "capacity-one", ledger.Card{Device: "capacity-one", Capacity: ledger.Capacity{MaxConcurrent: 1}, Native: []ledger.NativeAbility{{ID: "test:child", Command: "sh", Args: []string{"-c", "echo child-ok"}, Tier: 1}}}, 5, testLogger(), config.ModelConfig{})
+	c := NewCore(openTestDB(t), "capacity-one", ledger.Card{Device: "capacity-one", Capacity: ledger.Capacity{MaxConcurrent: 1}, Native: []ledger.NativeAbility{queueFixtureAbility(t, "test:child", "echo", "child-ok")}}, 5, testLogger(), config.ModelConfig{})
 	c.SetWorkDir(t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -136,12 +132,9 @@ func TestStageJoinPreservesEditsAndDeletion(t *testing.T) {
 }
 
 func TestIsolatedConflictBlocksCompletion(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX shell")
-	}
 	main := t.TempDir()
 	writeFile(t, filepath.Join(main, "shared.txt"), "baseline")
-	c := newCoreWithNative(t, "merge-block", ledger.NativeAbility{ID: "test:conflict", Command: "sh", Args: []string{"-c", `printf child > shared.txt; printf main > "$1/shared.txt"`, "conflict", main}, Tier: 1})
+	c := newCoreWithNative(t, "merge-block", queueFixtureAbility(t, "test:conflict", "write", "shared.txt", "child", filepath.Join(main, "shared.txt"), "main"))
 	ps := projects.NewStore(c.db)
 	if _, err := ps.Create("proj", main, "conflict"); err != nil {
 		t.Fatal(err)
@@ -299,12 +292,9 @@ func TestDelegateBatchUsesImmutableSnapshot(t *testing.T) {
 }
 
 func TestInlineIsolatedConflictDoesNotWaitOnOwnLease(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX shell")
-	}
 	main := t.TempDir()
 	writeFile(t, filepath.Join(main, "a.txt"), "fork")
-	c := newCoreWithNative(t, "inline-isolation", ledger.NativeAbility{ID: "test:iso", Command: "sh", Args: []string{"-c", `printf child > a.txt; printf main > "$1/a.txt"`, "iso", main}, Tier: 1})
+	c := newCoreWithNative(t, "inline-isolation", queueFixtureAbility(t, "test:iso", "write", "a.txt", "child", filepath.Join(main, "a.txt"), "main"))
 	ps := projects.NewStore(c.db)
 	if _, err := ps.Create("proj", main, "inline"); err != nil {
 		t.Fatal(err)

@@ -113,6 +113,8 @@ func TestSessionCancelOrphanActivityOnlyPreservesEvidence(t *testing.T) {
 // The provider is local SSE; no user credentials/daemon/storage are involved.
 func TestSessionAskDisconnectRestoresProgressAndStop(t *testing.T) {
 	engine, _ := newApprovalQueueEngine(t)
+	serviceCtx, stopService := context.WithCancel(context.Background())
+	defer stopService()
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"provider summary\"}}]}\n\n")
@@ -126,14 +128,24 @@ func TestSessionAskDisconnectRestoresProgressAndStop(t *testing.T) {
 	}
 	root := t.TempDir()
 	store := sessions.NewStore(root)
-	sess, _ := store.Create("reconnect smoke")
-	h := &handler{store: engine.TaskStore(), engine: engine, sessions: store, cfgMu: &sync.RWMutex{}, serviceCtx: context.Background(), activeAsks: map[string]sessionOperation{}}
+	sess, err := store.Create("reconnect smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &handler{store: engine.TaskStore(), engine: engine, sessions: store, cfgMu: &sync.RWMutex{}, serviceCtx: serviceCtx, activeAsks: map[string]sessionOperation{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/sessions/{id}/ask", h.sessionAsk)
 	mux.HandleFunc("POST /api/sessions/{id}/cancel", h.sessionCancel)
 	panel := httptest.NewServer(mux)
-	defer panel.Close()
-	resp, err := http.Post(panel.URL+"/api/sessions/"+sess.ID+"/ask", "application/json", strings.NewReader(`{"prompt":"hello"}`))
+	defer func() {
+		// The ask deliberately survives a browser disconnect. Cancel that
+		// detached work before closing servers, including on assertion failure.
+		stopService()
+		panel.CloseClientConnections()
+		panel.Close()
+	}()
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(panel.URL+"/api/sessions/"+sess.ID+"/ask", "application/json", strings.NewReader(`{"prompt":"hello"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +160,10 @@ func TestSessionAskDisconnectRestoresProgressAndStop(t *testing.T) {
 	var current *sessions.Session
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
-		current, _ = sessions.NewStore(root).Get(sess.ID)
+		current, err = sessions.NewStore(root).Get(sess.ID)
+		if err != nil {
+			t.Fatalf("read reconnect progress: %v", err)
+		}
 		if current.Operation != nil && current.Operation.Thought == "provider summary" && current.Operation.Text == "partial answer" {
 			break
 		}
@@ -161,7 +176,7 @@ func TestSessionAskDisconnectRestoresProgressAndStop(t *testing.T) {
 	if len(current.Turns) != 1 || current.Turns[0].Text != "hello" {
 		t.Fatalf("question overwritten: %+v", current.Turns)
 	}
-	stopped, err := http.Post(panel.URL+"/api/sessions/"+sess.ID+"/cancel", "application/json", strings.NewReader(`{"operation_id":"`+operationID+`"}`))
+	stopped, err := client.Post(panel.URL+"/api/sessions/"+sess.ID+"/cancel", "application/json", strings.NewReader(`{"operation_id":"`+operationID+`"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +184,10 @@ func TestSessionAskDisconnectRestoresProgressAndStop(t *testing.T) {
 	stopped.Body.Close()
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		current, _ = store.Get(sess.ID)
+		current, err = store.Get(sess.ID)
+		if err != nil {
+			t.Fatalf("read stopped progress: %v", err)
+		}
 		if current.Operation.Status == "cancelled" {
 			break
 		}

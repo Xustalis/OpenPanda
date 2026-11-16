@@ -263,10 +263,16 @@ func (c *Core) prepareQueuedTask(ctx context.Context, in TaskInput, q QueueSpec)
 	if in.WorkDir != "" && q.WorkDir != "" && in.WorkDir != q.WorkDir {
 		return Task{}, errors.New("queue and task work directories differ")
 	}
+	// Resolve queue metadata before deriving locks or validating the input.
+	// In particular a session worktree supplied through QueueSpec must lock
+	// its own tree rather than the project's shared checkout.
+	if q.SessionID == "" {
+		q.SessionID = in.SessionID
+	}
 	if q.WorkDir == "" {
 		q.WorkDir = in.WorkDir
 	}
-	in.WorkDir, in.SessionID = q.WorkDir, q.SessionID
+	in.SessionID, in.WorkDir = q.SessionID, q.WorkDir
 	if q.WorkDir != "" {
 		if err := projects.ValidateWorkDir(q.WorkDir); err != nil {
 			return Task{}, err
@@ -297,7 +303,7 @@ func (c *Core) prepareQueuedTask(ctx context.Context, in TaskInput, q QueueSpec)
 	if len(q.ResourceKeys) != 0 {
 		t.ResourceKeys = mergeActuatorKeys(q.ResourceKeys, in.Requires, in.SpecJSON)
 	} else if in.Project != "" && (len(t.ScopePaths) > 0 || in.Isolate) {
-		t.ResourceKeys = childResourceKeys(id, in)
+		t.ResourceKeys = c.childResourceKeysFor(id, in)
 	} else {
 		t.ResourceKeys = c.resourceKeysFor(in)
 	}

@@ -6,8 +6,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -259,15 +261,54 @@ func TestCallToolTimeoutKillsProcess(t *testing.T) {
 	defer client.Close()
 
 	client.callTimeout = 500 * time.Millisecond
+	cancelChild := client.cmd.Cancel
+	cancelStarted := make(chan time.Time, 1)
+	client.cmd.Cancel = func() error {
+		select {
+		case cancelStarted <- time.Now():
+		default:
+		}
+		return cancelChild()
+	}
 
 	start := time.Now()
 	_, err = client.CallTool(context.Background(), "hang", nil)
-	elapsed := time.Since(start)
-	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("expected timeout error, got %v", err)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected the call deadline to expire, got %v", err)
 	}
-	if elapsed > 2*client.callTimeout {
-		t.Fatalf("timeout took too long: %v", elapsed)
+	select {
+	case cancelAt := <-cancelStarted:
+		if cancelAt.Before(start.Add(client.callTimeout)) {
+			t.Fatalf("process cancellation preceded the call deadline: after %s, deadline %s", cancelAt.Sub(start), client.callTimeout)
+		}
+	default:
+		t.Fatal("call deadline did not request process cancellation")
+	}
+
+	// Deadline expiry and process cleanup are separate events: on Windows,
+	// synchronous taskkill /T /F can itself exceed the 500ms call timeout under
+	// load. Reap the child before Close gets a chance to kill it, proving the
+	// timeout actually terminated the server instead of only setting broken.
+	processExited := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = client.cmd.Wait()
+		close(processExited)
+	}()
+	defer func() {
+		// If the exit assertion fails, stop this test's fake server and join
+		// its waiter before the earlier deferred Close calls Wait again.
+		_ = client.cmd.Process.Kill()
+		<-processExited
+	}()
+	select {
+	case <-processExited:
+		var exitErr *exec.ExitError
+		if !errors.As(waitErr, &exitErr) || client.cmd.ProcessState == nil || client.cmd.ProcessState.Success() {
+			t.Fatalf("hung server was not terminated: wait=%v, state=%v", waitErr, client.cmd.ProcessState)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("call deadline returned without terminating the hung server")
 	}
 
 	// After the process group is killed, subsequent calls must fail fast on
@@ -278,6 +319,9 @@ func TestCallToolTimeoutKillsProcess(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "client unusable") {
 		t.Fatalf("expected a fast-fail broken client, got: %v", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("broken client lost its deadline cause: %v", err)
 	}
 }
 

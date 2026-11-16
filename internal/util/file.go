@@ -11,8 +11,8 @@ import (
 // WriteFileAtomic writes data to path atomically: the content goes to a temp
 // file in the same directory, is fsynced, and then renamed over path (P1-20).
 // An in-place os.WriteFile leaves a truncated file behind when the process
-// dies mid-write; a same-directory rename is atomic on POSIX and Windows, so
-// readers only ever see the old or the new content, never a torn mix.
+// dies mid-write. Replacement visibility and durability depend on the OS and
+// filesystem; Windows briefly retries sharing conflicts with live readers.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".tmp-"+filepath.Base(path)+"-*")
@@ -37,7 +37,7 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := os.Chmod(tmpName, perm); err != nil {
 		return fmt.Errorf("chmod temp file: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := replaceFile(tmpName, path); err != nil {
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 	// Durability of the rename itself needs the directory entry fsynced. Without

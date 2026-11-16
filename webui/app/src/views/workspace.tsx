@@ -33,11 +33,11 @@ import { ConnectPanel } from '../components/connect-card'
 import { layerAboveOwnsEscape } from '../components/card-dismiss'
 import { SessionPick } from '../components/session-pick'
 import { confirmDialog } from '../components/confirm'
-import { autoGrow, editorClear, editorPlain, editorTextOf, insertTextAtCaret, range_or_append, useBrParagraphSeparator } from './sessions'
+import { autoGrow, editorClear, editorPlain, editorTextOf, insertTextAtCaret, range_or_append, useBrParagraphSeparator } from '../components/composer-editor'
 import { DeviceGlyph, type Form as FormKind } from '../components/device-glyph'
 import { WorkspacePanels, panelAgents, tileKey } from './workspace-panels'
 import { clampZoom } from './workspace-zoom'
-import { isLocal } from './workspace-local'
+import { dedupeNodes, isLocal } from './workspace-local'
 import { agentLogo } from '../format/agent-logo'
 import { agentInitial } from '../format/agent-role'
 import {
@@ -558,7 +558,10 @@ export function WorkspaceView() {
     if (hit) setPickedSession(hit)
   }, [dirSessions])
 
-  const devices = useMemo(() => buildDevices(nodes ?? [], self, tasks ?? []), [nodes, self, tasks])
+  const devices = useMemo(
+    () => buildDevices(dedupeNodes(nodes ?? []), self, tasks ?? []),
+    [nodes, self, tasks],
+  )
   const deviceOf = useMemo(() => new Map(devices.map((d) => [d.id, d])), [devices])
 
   const sel = selected ? deviceOf.get(selected) ?? null : null
@@ -1520,6 +1523,27 @@ function DeviceDetail({
   const work = d.work.slice(0, 6)
   const cliAgents = probedAgents.filter((a) => a.installed)
   const [removing, setRemoving] = useState('')
+  const [removingDevice, setRemovingDevice] = useState(false)
+
+  async function removeDevice() {
+    if (d.local || removingDevice) return
+    const ok = await confirmDialog({
+      title: t('nodes.removeTitle'),
+      message: t('nodes.removeConfirm', { name: d.name }),
+      confirmLabel: t('nodes.remove'),
+    })
+    if (!ok) return
+    setRemovingDevice(true)
+    try {
+      await api.removeNode(d.id)
+      onChanged()
+      onBack()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setRemovingDevice(false)
+    }
+  }
 
   async function removeAbility(ability: string) {
     if (!d.local || removing) return
@@ -1742,6 +1766,27 @@ function DeviceDetail({
           </div>
         )}
       </DetailSection>
+
+      {/* A stale row is the one thing this panel could not fix by itself: the
+          directory keeps an offline, unpinned node for 30 days, and until now
+          the only way to drop it was `panda nodes remove` in a terminal. */}
+      {!d.local && !d.online && (
+        <div class="ws-detail-foot">
+          <button
+            type="button"
+            class="btn small ghost danger"
+            disabled={removingDevice}
+            onClick={removeDevice}
+          >
+            {removingDevice ? (
+              <span class="spinner spinner-inline" aria-hidden="true" />
+            ) : (
+              <Icon name="trash" size={13} />
+            )}
+            {t('nodes.remove')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

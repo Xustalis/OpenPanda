@@ -27,7 +27,6 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
-	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/scout"
 	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/skills"
@@ -744,8 +743,11 @@ func (c *Core) claimForRun(ctx context.Context, taskID, intent string, plan *com
 	// in run): a blocked sibling counts against MaxConcurrent for the whole
 	// wait, the same accounting the context-fetch wait already used — excess
 	// delegations decline and route elsewhere rather than queuing here.
-	keys := execLockKeys(task, plan.ActuatorID)
-	dance := queue.DefaultKeys(task.ResourceKeys, task.Project, task.WorkDir, task.TaskID)
+	keys, dance, err := c.executionLockKeys(task, plan.ActuatorID)
+	if err != nil {
+		unlock()
+		return Task{}, nil, err
+	}
 	// The run nonce stamped on this acquisition's exec_locks rows — releases
 	// predicate on it so a late unlock can only drop this run's own rows,
 	// never the fresh rows of a re-execution (see execlock.go).
@@ -867,6 +869,19 @@ type runPrep struct {
 // honest.
 func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID string, plan commander.Plan) (runPrep, error) {
 	var negoRelease func()
+	// Download into the artifact pool before claiming the shared source root.
+	// Input extraction and the isolated snapshot are the short exclusive phase;
+	// a slow peer must not stall unrelated writers during network transfer.
+	if projectInputs(task) && !c.resumesLocalCheckpoint(task) {
+		if err := c.ensureStageInputs(execCtx, task); err != nil {
+			return runPrep{}, fmt.Errorf("project inputs: %w", err)
+		}
+	}
+	finishSource, cleanupSource, err := c.prepareWorkspaceLocks(execCtx, task)
+	if err != nil {
+		return runPrep{}, err
+	}
+	defer cleanupSource()
 	// workDir is normally the node-wide execution directory; a queued task may
 	// pin its own (a panel session's worktree) so concurrent tasks never share
 	// a working directory (queue redesign — SetWorkDir is process-global and
@@ -918,7 +933,7 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
 			return runPrep{}, fmt.Errorf("create project work dir: %w", err)
 		}
-		if err := c.fetchStageInputs(execCtx, task, workDir); err != nil {
+		if err := c.landStageInputs(execCtx, task, workDir); err != nil {
 			return runPrep{}, fmt.Errorf("project inputs: %w", err)
 		}
 	} else if attachedInputs(task) {
@@ -987,6 +1002,9 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 			"workspace": iso, "source": workDir,
 		})
 		workDir = iso
+	}
+	if err := finishSource(); err != nil {
+		return runPrep{}, fmt.Errorf("resume execution workspace locks: %w", err)
 	}
 
 	// §5.2 shadow resume: a task preempted mid-edit parked its scoped files

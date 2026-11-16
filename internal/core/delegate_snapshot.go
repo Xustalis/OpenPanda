@@ -5,6 +5,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,19 +36,35 @@ func (c *Core) snapshotDelegateBatch(ctx context.Context, parent Task, requests 
 	if err != nil {
 		return ctx, nil, err
 	}
+	finishSource, cleanupSource, err := c.workspaceSourceLocks(ctx, parent, source)
+	if err != nil {
+		// The source-lock acquisition yielded the parent's workspace keys.
+		// A failed acquisition cannot let its caller continue running unlocked.
+		c.cancelRunning(parent.TaskID)
+		return ctx, nil, err
+	}
+	defer cleanupSource()
 	dir, err := os.MkdirTemp("", "panda-delegate-source-*")
 	if err != nil {
-		return ctx, nil, err
+		resumeErr := finishSource()
+		if resumeErr != nil {
+			c.cancelRunning(parent.TaskID)
+		}
+		return ctx, nil, errors.Join(err, resumeErr)
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
-	if err := c.copyWorkTree(source, dir); err != nil {
+	var baseline map[string]string
+	snapshotErr := c.copyWorkTree(source, dir)
+	if snapshotErr == nil {
+		baseline, snapshotErr = c.hashWorkTree(dir)
+	}
+	resumeErr := finishSource()
+	if resumeErr != nil {
+		c.cancelRunning(parent.TaskID)
+	}
+	if err := errors.Join(snapshotErr, resumeErr); err != nil {
 		cleanup()
 		return ctx, nil, fmt.Errorf("snapshot sibling source: %w", err)
-	}
-	baseline, err := c.hashWorkTree(dir)
-	if err != nil {
-		cleanup()
-		return ctx, nil, err
 	}
 	return context.WithValue(ctx, delegateSnapshotKey{}, &delegateSnapshot{source: source, dir: dir, baseline: baseline}), cleanup, nil
 }

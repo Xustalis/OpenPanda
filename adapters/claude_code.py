@@ -172,8 +172,7 @@ def main():
         return
 
     try:
-        out = _run_stream(_base_args(req, max_turns, v2=True), req, model,
-                          req.cwd, req.timeout,
+        out = _run_stream(req, model, req.cwd, req.timeout,
                           disable_settings=_injected(), v2=True,
                           max_turns=max_turns)
     except ProviderFailure as e:
@@ -186,8 +185,7 @@ def main():
         # stream with the v1 flag set so the event feed survives; only a
         # CLI too old for stream-json at all degrades to plain JSON.
         try:
-            out = _run_stream(_base_args(req, max_turns, v2=False), req,
-                              model, req.cwd, req.timeout,
+            out = _run_stream(req, model, req.cwd, req.timeout,
                               disable_settings=_injected(), v2=False,
                               max_turns=max_turns)
         except ProviderFailure as e:
@@ -315,19 +313,22 @@ def _base_args(req, max_turns, v2, prompt=True):
     return base
 
 
-def _v2_args(req):
+def _v2_args(req, shed=()):
     """Request-driven flags that only newer CLIs understand.
 
     Everything here degrades through the v2→v1→plain ladder: an old CLI
     rejects the argv at startup, the adapter retries without these, and the
     run keeps the streaming event feed on the v1 set.
+
+    shed names optional payloads to leave off this build of the line (see
+    SHED_ORDER) — the Windows budget is spent before they all fit.
     """
     args = ["--forward-subagent-text"]
     if req.system_prompt:
         args += ["--append-system-prompt", req.system_prompt]
-    if req.result_schema:
+    if req.result_schema and "schema" not in shed:
         args += ["--json-schema", req.result_schema]
-    if req.mcp_config:
+    if req.mcp_config and "mcp" not in shed:
         # The panda passthrough servers ride the flag instead of a .mcp.json
         # written into the task's work dir — no repo pollution, works on
         # read-only trees.
@@ -364,10 +365,10 @@ def _use_model_arg(model):
     return not _deepseek_endpoint()
 
 
-def _stream_argv(base, req, model, disable_settings, v2):
+def _stream_argv(base, req, model, disable_settings, v2, shed=()):
     cmd = base + ["--output-format", "stream-json", "--verbose"]
     if v2:
-        cmd += _v2_args(req)
+        cmd += _v2_args(req, shed)
     if disable_settings:
         # Injected-model runs strip every settings source so the user's own
         # settings.json cannot override the injected base URL or model. This
@@ -391,34 +392,89 @@ def _prompt_to_stdin(cmd):
     """
     if sys.platform != "win32":
         return False
-    return len(subprocess.list2cmdline(cmd)) > WIN_CMDLINE_SAFE
+    return _line_len(cmd) > WIN_CMDLINE_SAFE
 
 
-def _run_stream(base, req, model, cwd, timeout, disable_settings=False, v2=True,
+# Optional payloads that ride the command line, in the order they are shed
+# when it does not fit. Both have a fallback that costs the run nothing but
+# fidelity: the passthrough MCP servers are best-effort (the CLI also
+# discovers its own .mcp.json), and without --json-schema the orchestrator
+# parses the result's text markers instead. The head — binary, permission
+# flags, system prompt — has nowhere else to go, so it is never shed.
+SHED_ORDER = ("mcp", "schema")
+
+SHED_FLAGS = {"mcp": "--mcp-config", "schema": "--json-schema"}
+
+
+def _line_len(cmd):
+    """The length this argv occupies on a Windows command line.
+
+    list2cmdline is the quoting cmd.exe will apply, so its output length is
+    what the 8191-character ceiling actually counts — not the sum of the
+    argument lengths.
+    """
+    return len(subprocess.list2cmdline(cmd))
+
+
+def _shed_to_fit(build):
+    """Build the argv, shedding optional documents until the line fits.
+
+    build(shed) returns the argv for one shed level. Returns (cmd, shed).
+    Raises ProviderFailure when even the bare head does not fit: that is a
+    real command-line overflow, not an optional payload worth trading away.
+    """
+    cmd = build(())
+    if _line_len(cmd) <= WIN_CMDLINE_SAFE:
+        return cmd, ()
+    for i in range(1, len(SHED_ORDER) + 1):
+        cmd = build(SHED_ORDER[:i])
+        if _line_len(cmd) <= WIN_CMDLINE_SAFE:
+            return cmd, SHED_ORDER[:i]
+    raise ProviderFailure(
+        "claude_code: the command line is still %d characters with every "
+        "optional payload removed (limit %d) — shorten --append-system-prompt "
+        "or the CLI path" % (_line_len(cmd), WIN_CMDLINE_SAFE))
+
+
+def _note_shed(shed):
+    """Name the dropped payloads on the progress stream.
+
+    A run that quietly loses the structured contract (status/question arrive
+    as text markers instead of parsed fields) must be explainable after the
+    fact; silence here reads as "the schema was never sent".
+    """
+    if shed:
+        harness.progress("Claude: Windows command line over budget — dropped "
+                         + ", ".join(SHED_FLAGS[s] for s in shed))
+
+
+def _fit_stream_argv(req, model, disable_settings, v2, max_turns):
+    """The one-shot stream argv, shrunk until it is spawnable.
+
+    Returns (cmd, prompt_input): prompt_input is the text to hand over on
+    stdin, or None when the prompt stays on the command line.
+    """
+    def build(shed, prompt=True):
+        return _stream_argv(_base_args(req, max_turns, v2, prompt=prompt),
+                            req, model, disable_settings, v2, shed)
+
+    cmd = build(())
+    if _line_len(cmd) <= WIN_CMDLINE_SAFE:
+        return cmd, None
+    # The prompt is the one element big enough to push the whole line past
+    # the limit, and the one element that has a second way in. Rebuild the
+    # head without it and hand it over on stdin.
+    cmd, shed = _shed_to_fit(lambda level: build(level, prompt=False))
+    _note_shed(shed)
+    return cmd, req.prompt
+
+
+def _run_stream(req, model, cwd, timeout, disable_settings=False, v2=True,
                 max_turns="30"):
     """Stream mode: parse event lines, emit progress + typed events, return
     the result event."""
-    cmd = _stream_argv(base, req, model, disable_settings, v2)
-    # The prompt is the one element big enough to push the whole line past
-    # Windows' limit, and the one element that has a second way in. Rebuild
-    # the head without it and hand it over on stdin.
-    prompt_input = None
-    if _prompt_to_stdin(cmd):
-        cmd = _stream_argv(_base_args(req, max_turns, v2, prompt=False),
-                           req, model, disable_settings, v2)
-        # Re-measure after shedding the prompt: --append-system-prompt,
-        # --json-schema and --mcp-config stay on the line, and a system prompt
-        # plus a pretty-printed schema can still exceed the limit. Spawning
-        # anyway is exactly the "The command line is too long" failure this
-        # branch exists to fix, so it fails with a diagnosis instead.
-        rebuilt = len(subprocess.list2cmdline(cmd))
-        if rebuilt > WIN_CMDLINE_SAFE:
-            raise ProviderFailure(
-                "claude_code: the command line is still %d characters after "
-                "moving the prompt to stdin (limit %d) — shorten "
-                "--append-system-prompt, --json-schema or --mcp-config"
-                % (rebuilt, WIN_CMDLINE_SAFE))
-        prompt_input = req.prompt
+    cmd, prompt_input = _fit_stream_argv(req, model, disable_settings, v2,
+                                         max_turns)
 
     state = {"final": None, "saw_event": False, "session_id": ""}
 
@@ -708,13 +764,12 @@ def _run_plain(base, model, cwd, timeout, req=None, max_turns="30"):
     }
 
 
-def _main_session(req, model, max_turns):
-    """Session mode: one CLI process serves every turn over stream-json I/O.
+def _session_argv(req, model, max_turns, shed=()):
+    """The session-mode head: the prompt already arrives as stdin turns.
 
-    stdin contract after the request line: {"type":"user","text":…} per
-    turn; each turn's text is forwarded as a user message and its result
-    event becomes one envelope on our stdout. The first turn reuses
-    req.prompt so a session request still reads as one task.
+    Kept separate from _base_args because the I/O contract differs
+    (--input-format stream-json, no positional prompt), but it carries the
+    same optional documents and sheds them the same way.
     """
     cmd = [_binary(), "-p",
            "--input-format", "stream-json",
@@ -731,9 +786,9 @@ def _main_session(req, model, max_turns):
         cmd += ["--allowedTools", ALLOWED_TOOLS]
     if req.system_prompt:
         cmd += ["--append-system-prompt", req.system_prompt]
-    if req.result_schema:
+    if req.result_schema and "schema" not in shed:
         cmd += ["--json-schema", req.result_schema]
-    if req.mcp_config:
+    if req.mcp_config and "mcp" not in shed:
         cmd += ["--mcp-config", req.mcp_config]
     if req.max_budget_usd > 0:
         cmd += ["--max-budget-usd", str(req.max_budget_usd)]
@@ -743,9 +798,26 @@ def _main_session(req, model, max_turns):
         cmd += ["--fallback-model", fb]
     if _injected():
         cmd += ["--setting-sources", ""]
-    # A task resuming on a fresh process (crash/restart with a persisted
-    # session id) continues that conversation instead of starting cold.
+    return cmd
+
+
+def _main_session(req, model, max_turns):
+    """Session mode: one CLI process serves every turn over stream-json I/O.
+
+    stdin contract after the request line: {"type":"user","text":…} per
+    turn; each turn's text is forwarded as a user message and its result
+    event becomes one envelope on our stdout. The first turn reuses
+    req.prompt so a session request still reads as one task.
+    """
+    # Same Windows budget as the one-shot path. The prompt is already off the
+    # line here, so only the optional documents can be shed — a session that
+    # cannot start is what pushed earlier runs onto the one-shot fallback,
+    # where the line was refused outright.
+    cmd, shed = _shed_to_fit(lambda level: _session_argv(req, model, max_turns, level))
+    _note_shed(shed)
     if req.resume:
+        # A task resuming on a fresh process (crash/restart with a persisted
+        # session id) continues that conversation instead of starting cold.
         cmd += ["--resume", req.resume]
     if _use_model_arg(model):
         cmd += ["--model", model]

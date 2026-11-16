@@ -1,0 +1,171 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- System ---- */
+
+.system-head {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.version-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+}
+
+.version-num {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.audit-card {
+  flex: 1;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.audit-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.update-card {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.update-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.update-note {
+  margin: 0;
+}
+
+/* Changelog digest of the pending release: a collapsed <details> so the card
+   stays compact until the user asks what changed. */
+.update-notes {
+  width: 100%;
+}
+
+.update-notes summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.update-notes pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  background: var(--bg-inset);
+  border-radius: 6px;
+}
+
+.update-version {
+  margin: 4px 0 0;
+}
+
+/* ---- Reject reason form ---- */
+
+.reject-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.reject-form .input {
+  width: 240px;
+}
+
+/* Send-into-task composer (detail view): input takes the row, the two mode
+   buttons keep natural width, the hint drops to its own line. */
+.task-msg {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.task-msg .input {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.task-msg-hint {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
+/* Task board (detail view): the queued notes/steers/sibling posts under the
+   task's own scope — the read-back half of the send composer, so a posted
+   note is visible as queued rather than only accepted. */
+.task-board h2 {
+  margin: 0 0 8px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.task-board-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-board-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.task-board-sender {
+  font-weight: 500;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.task-board-body {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: var(--text-sm);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.task-board-time {
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+/* In-thread quick send (task card in the conversation): input takes the
+   row, the two small mode buttons keep natural width. */
+.task-quick-send {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.task-quick-send .input {
+  flex: 1 1 200px;
+  min-width: 0;
+}

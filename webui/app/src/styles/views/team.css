@@ -1,0 +1,122 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Tasks and collaboration (views/team.tsx) ---- */
+
+.team-feature-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.team-feature-heading > h1, .team-feature-heading > h2 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tm-page {
+  /* `.main` is a flex row, so a flex item shrinks to its content unless it asks
+     for the full width — without this the whole page collapses to the width of
+     the empty-state sentence and floats in the middle of the pane. */
+  width: 100%;
+  max-width: 1180px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.tm-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.work-head, .work-toolbar, .work-actions, .work-card-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.work-head > div, .work-toolbar input { flex: 1; min-width: 0; }
+.work-actions { justify-content: flex-start; }
+.work-tabs { align-self: flex-start; max-width: 100%; flex-wrap: wrap; }
+.work-tabs button, .work-actions button, .work-toolbar button { min-height: 44px; }
+.work-grid, .work-history {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: var(--sp-4);
+}
+.work-page .card { min-width: 0; padding: var(--sp-4); }
+.work-title {
+  display: block;
+  padding: var(--sp-2) 0;
+  min-height: 44px;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.work-title:hover { color: var(--accent); }
+.work-title:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 3px; }
+.work-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0;
+}
+.work-facts dt { color: var(--text-secondary); font-size: var(--fs-caption); }
+.work-facts dd { margin: var(--sp-1) 0 0; overflow-wrap: anywhere; }
+.work-description { white-space: pre-wrap; overflow-wrap: anywhere; }
+.work-form, .work-form label { display: flex; flex-direction: column; gap: var(--sp-2); }
+.work-form { gap: var(--sp-4); }
+.work-form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: var(--sp-3);
+}
+.work-form input, .work-form select, .work-form textarea, .work-toolbar input {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+.work-form button { align-self: flex-start; min-height: 44px; }
+.work-error { color: var(--semantic-danger); overflow-wrap: anywhere; }
+
+/* Dashed, not a card: a card would read as content that failed to load. The
+   dashed edge says "reserved", which is what this area actually is. Capped in
+   width so an empty page does not paint a 900px frame around nothing — it
+   reads as a placeholder slot, not as a broken panel. */
+.tm-blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  max-width: 560px;
+  min-height: 200px;
+  padding: var(--sp-6);
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-lg);
+  color: var(--text-tertiary);
+  font-size: var(--fs-body);
+}
+
+/* Persisted business results and exact local consent. */
+.work-result { margin-block: 12px; }
+.work-result > summary, .work-space-policy > summary { cursor: pointer; padding-block: 10px; overflow-wrap: anywhere; }
+.work-delivery, .work-action, .work-sync { margin-top: 16px; padding-block: 12px; border-top: 1px solid var(--border); }
+.work-payload { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto; padding: 12px; background: var(--bg-inset); border-radius: 8px; }
+.work-code { overflow-wrap: anywhere; font-family: var(--font-mono, monospace); font-size: .9em; }
+.work-form .work-check { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; }
+.work-action .work-facts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+.work-form .work-check input { width: auto; min-height: 0; flex: none; margin-top: .25em; }
+.work-form fieldset { min-width: 0; display: grid; gap: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.work-space-policy { margin-top: 12px; }

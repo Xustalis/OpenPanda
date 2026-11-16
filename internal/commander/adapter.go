@@ -958,6 +958,22 @@ func AdapterUnavailable(text string) bool {
 	return strings.Contains(msg, "can't open file") && strings.Contains(msg, ".py")
 }
 
+// AdapterOutputContractFailure reports whether a failure text means the CLI
+// ran and streamed, but its transcript could not be reduced to an answer — the
+// adapter's parser and the CLI's wire schema disagree, or the "endpoint" it
+// dialled was not an API at all.
+//
+// It is a deterministic verdict about *this build talking to this endpoint*:
+// the identical bytes will arrive again, so the orchestrator's bounded retry
+// buys three identical failures (pi's three attempts, ~7s each, all with
+// "unrecognized event schema"). The row stops here and the reason is the
+// operator's next step, which is the same shape as AdapterUnavailable: a fix
+// to the environment, not a re-run.
+func AdapterOutputContractFailure(text string) bool {
+	return strings.Contains(strings.ToLower(text),
+		"streamed events but no assistant text")
+}
+
 // AdapterRequest is written to the adapter's stdin.
 type AdapterRequest struct {
 	Model    string `json:"model,omitempty"`
@@ -1180,7 +1196,16 @@ var (
 	// wait. Once any byte arrives the ordinary silence limit applies, so a
 	// mid-run wedge is still caught on the tight bound; a process that never
 	// produces anything is bounded by the hard timeout regardless.
-	adapterStartupGrace = 3 * time.Minute
+	//
+	// It must exceed the ordinary silence limit or it is dead code: the
+	// watchdog only widens the bound (`startupGrace > limit`), and the default
+	// silence_s is 240s. At 3 minutes the grace never applied, so a first call
+	// that took 4m13s — measured on a real claude_code session-mode run — was
+	// killed as a wedge 13 seconds before its first token, and the whole task
+	// was replayed one-shot: 12m35s for a connectivity check that should have
+	// taken three minutes. 8 minutes leaves headroom for a cold model behind a
+	// queueing gateway while staying inside the 10-minute execution budget.
+	adapterStartupGrace = 8 * time.Minute
 )
 
 const (
@@ -1476,6 +1501,10 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 						stalled = true
 						startupStall = !started
 						actMu.Unlock()
+						if progressSink != nil {
+							progressSink(fmt.Sprintf("no output for %s — killing the run (limit %s)",
+								silentFor.Truncate(time.Second), limit), "")
+						}
 						cancel()
 						return
 					}
@@ -1826,9 +1855,11 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 			// A dead session's agent conversation still exists on the CLI's
 			// side: respawning with --resume (req.Resume already carries the
 			// id the last turn returned) continues it one-shot.
+			sessionFallbackNote(ctx, "session process already exited")
 			return AgentResult{}, false
 		}
 		if err := s.send(req.Prompt); err != nil {
+			sessionFallbackNote(ctx, "session stdin is closed")
 			s.kill()
 			p.mu.Lock()
 			delete(p.live, key)
@@ -1879,6 +1910,7 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 		// cmd.Wait() settles the exit marker when the adapter kills the
 		// CLI on its way out, so the adapter also reports the verdict
 		// in-band via session_dead.
+		sessionFallbackNote(ctx, res.Result)
 		s.kill()
 		p.mu.Lock()
 		delete(p.live, key)
@@ -1893,6 +1925,28 @@ func (p *AgentSessions) turn(ctx context.Context, key, adapter string, req Adapt
 		return AgentResult{}, false
 	}
 	return res, true
+}
+
+// sessionFallbackNote says, on the progress stream, why a session turn was
+// abandoned and the run is about to be replayed one-shot.
+//
+// The fallback used to be silent. A claude_code run killed by the silence
+// watchdog at 4m0s and replayed from scratch looked like one 12-minute task:
+// the card showed "Claude: thinking…" and then a second adapter launch with
+// no explanation, so the four minutes it threw away were invisible to both the
+// operator and the next person reading the trace. The reason travels here
+// because this is the only place that knows it.
+func sessionFallbackNote(ctx context.Context, reason string) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "no result envelope"
+	}
+	if len(reason) > 300 {
+		reason = reason[:300] + "…"
+	}
+	if sink, ok := ctx.Value(progressKey{}).(ProgressFunc); ok && sink != nil {
+		sink("session turn gave up ("+reason+") — replaying one-shot", "")
+	}
 }
 
 // agentSession is one live session-mode adapter process: the Python side
@@ -2050,6 +2104,14 @@ func (s *agentSession) watchSilence(ctx context.Context, limit, heartbeat, start
 				lim = startupGrace
 			}
 			if lim > 0 && silentFor >= lim && !s.stderr.tools.active() {
+				if s.stderr.sink != nil {
+					// Say the kill out loud: the envelope that follows only
+					// says "adapter session ended", which reads as a crash.
+					// This line is the difference between "the CLI broke" and
+					// "we gave up on a slow first token after 4 minutes".
+					s.stderr.sink(fmt.Sprintf("no output for %s — killing the session (limit %s)",
+						silentFor.Truncate(time.Second), lim), "")
+				}
 				s.kill()
 				return
 			}

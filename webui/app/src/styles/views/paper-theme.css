@@ -1,0 +1,123 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ============================================================================
+   REDESIGN 2026-09 · "Panda Paper" — component overrides
+   ----------------------------------------------------------------------------
+   The colour/elevation tokens moved to styles/tokens.css (single source of
+   truth, light-first). What remains here: typography, sidebar, and per-view
+   cascade overrides on the same class names.
+   ========================================================================== */
+
+/* ---- 基础：主题切换渐变、选中色、滚动条 ---- */
+
+body {
+  transition: background-color var(--dur-slow) var(--ease-standard),
+              color var(--dur-slow) var(--ease-standard);
+}
+
+::selection {
+  background: rgba(var(--accent-1-rgb), 0.28);
+}
+
+/* ---- 排版：衬线标题层（去 AI 感：无渐变字、无装饰条） ---- */
+
+.page-title {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  color: var(--text-primary);
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  -webkit-text-fill-color: currentColor;
+}
+.page-title::after {
+  content: none;
+}
+
+.modal-title,
+.detail-title,
+.chat-empty-cta h1,
+.crash-box h1,
+.error-state-title {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+/* ---- 按钮：去掉高光覆层，扁平 + 微浮起 ---- */
+
+.btn {
+  border-radius: 10px;
+  font-weight: 550;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  background-image: none;
+  font-weight: 620;
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  background-image: none;
+  box-shadow: var(--shadow-accent);
+}
+.btn.danger {
+  border-color: var(--semantic-danger-border);
+}
+.btn.danger:hover:not(:disabled) {
+  box-shadow: var(--shadow-xs);
+}
+
+/* ---- 输入：纸面白底 + 柔和聚焦环 ---- */
+
+.input,
+select.input {
+  background: var(--bg-raised);
+  border-radius: 10px;
+  transition: border-color var(--dur-fast) var(--ease-standard),
+              box-shadow var(--dur-fast) var(--ease-standard);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ---- 卡片与徽章 ---- */
+
+.badge {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.badge.green {
+  background: var(--semantic-good-soft);
+}
+.badge.red {
+  background: var(--semantic-danger-soft);
+}
+.badge.yellow {
+  background: var(--semantic-warn-soft);
+}
+.badge.blue {
+  background: var(--accent-2-soft);
+}
+
+/* ---- 浮层：命令面板 / 弹窗 / 通知 ---- */
+
+.modal {
+  border-radius: var(--radius-xl);
+}
+.modal-backdrop {
+  backdrop-filter: blur(3px);
+}
+
+/* ---- 代码与输出块 ---- */
+
+pre,
+.md-code,
+.task-out {
+  border-radius: 10px;
+}

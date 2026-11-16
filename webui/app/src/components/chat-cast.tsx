@@ -226,8 +226,8 @@ export function TaskProgress({ task }: { task: Task }) {
 /** A durable handoff: outcome first, then visible evidence and honest gaps.
  * Legacy turns recover their full report from the task instead of retaining
  * the old last-paragraph-only display forever. */
-export function TaskDelivery({ taskId, delivery, truncated, summary, state, attemptId, reportedAt }: {
-  taskId: string; delivery?: string; truncated?: boolean; summary: string; state: string; attemptId?: string; reportedAt?: number
+export function TaskDelivery({ taskId, delivery, truncated, summary, state, verdict, attemptId, reportedAt }: {
+  taskId: string; delivery?: string; truncated?: boolean; summary: string; state: string; verdict?: string; attemptId?: string; reportedAt?: number
 }) {
   const currentTask = useTaskBrief(taskId)
   const task = currentTask && deliveryMatchesTask(currentTask, attemptId, reportedAt, state) ? currentTask : null
@@ -237,6 +237,17 @@ export function TaskDelivery({ taskId, delivery, truncated, summary, state, atte
   return (
     <section class="task-delivery" aria-label={t('sessions.deliveryTitle')}>
       <h4 class="task-delivery-label">{t('sessions.deliveryTitle')}</h4>
+      {/* Panda's verdict first, the employee's report under it. Without this
+          the bubble opened straight into the agent's own "结论：成功", which
+          reads as if panda had checked and certified it. Only shown when a
+          separate delivery follows: when the body IS the summary digest, the
+          verdict is already its first paragraph. */}
+      {verdict && delivery && (
+        <div class="task-delivery-verdict-line">
+          <span class="task-delivery-verdict-by">{t('sessions.deliveryVerdict')}</span>
+          <Markdown text={verdict} class="msg-text" />
+        </div>
+      )}
       {full ? <Markdown text={expanded ? full : preview.text} class="msg-text" /> : (
         <p class="task-run-empty">{t(state === 'done' ? 'sessions.deliveryEmpty' : 'sessions.deliveryFailedEmpty')}</p>
       )}

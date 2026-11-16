@@ -1,0 +1,203 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- File viewer pieces ------------------------------------------------
+   The drawer itself is gone: a file now opens in the dock's file panel
+   (styles/dock.css), beside the transcript rather than across its top. These
+   are the shared pieces that panel still uses — the head, the row, the copy
+   and insert verbs. */
+
+.fv-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--text-md);
+}
+
+.fv-title {
+  display: flex;
+  align-items: baseline;
+  gap: 1px;
+  min-width: 0;
+}
+
+.fv-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fv-line-no {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fv-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.fv-btn {
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fv-btn:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.fv-close {
+  padding: 3px 8px;
+}
+
+.fv-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.fv-code {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.fv-row {
+  display: flex;
+  gap: 12px;
+  white-space: pre;
+}
+
+/* The line the reply pointed at. It keeps its own gutter tint rather than a
+   left border so a selection across it still reads as one block. */
+.fv-row.is-focus {
+  background: var(--accent-2-soft);
+}
+
+.fv-num {
+  min-width: 4ch;
+  text-align: right;
+  color: var(--text-tertiary);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.fv-text {
+  flex: 1;
+}
+
+.fv-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.fv-note.is-error {
+  color: var(--danger);
+}
+
+.fv-foot {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+/* An inline code span that names a workspace file. Underlined only on hover:
+   a transcript full of underlined paths reads as a link farm. */
+code.md-file {
+  cursor: pointer;
+}
+
+code.md-file:hover,
+code.md-file:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}
+
+/* ---- Session worktree diff ----------------------------------------------
+   The list is shared with the task detail's patch set; the drawer that used to
+   open over the transcript is gone — the dock's 改动 pane owns the worktree
+   diff now (see dock.css). */
+
+.diff-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+}
+
+.diff-files li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diff-patch {
+  margin: 0;
+  font-size: 12px;
+  max-height: 280px;
+  overflow-y: auto;
+  overflow-x: auto;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px 0;
+  line-height: 1.45;
+  user-select: text;
+}
+
+.diff-line {
+  padding: 0 12px;
+  white-space: pre;
+}
+
+/* Two gutters for one file's diff (the dock's change pane). A whole-patch view
+   keeps the single column: numbering across blocks that jump between files
+   would number nothing. */
+.diff-patch.is-numbered .diff-line {
+  display: flex;
+  padding: 0 10px 0 0;
+}
+.diff-num {
+  flex: none;
+  width: 40px;
+  padding-right: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+.diff-patch.is-numbered .diff-line-content {
+  flex: none;
+}
+
+.diff-line-add {
+  background: var(--semantic-good-soft);
+  color: var(--semantic-good);
+}
+
+.diff-line-del {
+  background: var(--semantic-danger-soft);
+  color: var(--semantic-danger);
+}
+
+.diff-line-hunk {
+  background: var(--semantic-info-soft);
+  color: var(--info);
+  font-weight: 500;
+}
+
+.diff-line-meta {
+  color: var(--text-dim);
+  font-weight: 500;
+}

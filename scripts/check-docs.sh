@@ -24,6 +24,12 @@
 # POSIX sh, no dependencies beyond grep/git. Exits non-zero on drift.
 set -u
 
+# Match UTF-8 literals as bytes, with deterministic ASCII version ordering.
+# Some Windows grep builds cannot match supplementary-plane characters in a
+# UTF-8 locale even when the pattern and document contain identical bytes.
+LC_ALL=C
+export LC_ALL
+
 fail=0
 repo_root=$(cd "$(dirname "$0")/.." && pwd) || exit 1
 cd "$repo_root" || exit 1

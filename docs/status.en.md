@@ -464,17 +464,22 @@ own reason and exits 1 — it does not silently restart python.
 
 ## Known limits
 
-**A conversation's lock lane runs alongside conversation-less scoped work.**
-The `paths` scope now carries a session dimension: siblings in one
-conversation serialize by path, while two conversations never block each
-other on the same path. The cost is that a scoped task with **no conversation
-identity** (`panda task add --paths`, a scoped child delegated across nodes)
-is a sibling of every conversation's lane, so the two can write the same
-checkout path at once — an extension of "two conversations may run in
-parallel", not an oversight. When exclusive access is needed, use `--isolate`
-(a private worktree merged back three-way) or a whole-project claim (no
-`--paths`, which holds the `scope:<project>` root and conflicts with every
-lane).
+**Shared-tree scope declarations still depend on the executor respecting them.**
+Conversation identity no longer creates independent write lanes: equal or
+overlapping paths in one checkout exclude each other across conversations
+and conversation-less tasks. Disjoint `paths` remain parallel. Execution
+leases also lock resolved physical paths, so project aliases, projectless
+directory pins and nested pins cannot hide one shared writable tree. Separate
+private directories for the same project and `--isolate` copies remain
+parallel; merging back takes the target tree's lock. Persisted `@session`
+lanes are interpreted as shared-path claims without a schema migration.
+Parents release workspace locks while waiting for children and reacquire
+them before resuming. Whole-tree artifact landing and isolated snapshots take
+a short source-root lease during preparation, then return to leaf or private
+directory claims for execution. `paths` remains a declaration, not a filesystem barrier
+against an external agent writing outside its claim; use `--isolate` for a
+separate file tree. Leases coordinate OpenPanda executions sharing one node
+database and do not lock external editors.
 
 **P2-8 One shared secret for the whole network (partially mitigated).**
 The network shared secret remains the membership credential: a node
@@ -495,11 +500,20 @@ and stripped/tampered/re-keyed signatures are refused outright;
   Per-node key distribution/admission remains unimplemented.
 
 **Missing OS sandbox backends block execution.** Both `standard` and `strict`
-require an available backend and refuse task subprocess launches without it.
-Only `off` permits execution with environment filtering and cwd but no OS
-isolation. A native Windows isolation backend remains unimplemented, so these
-modes block execution on Windows. Settings, the TUI and doctor report the
-blocking condition; this change does not add Windows filesystem isolation.
+require an available backend and refuse task launches if it is missing or the
+policy cannot be established safely. Only `off` permits environment filtering
+and cwd without OS isolation. Windows 10+ now has a native AppContainer backend
+with a fresh `WRITE_RESTRICTED` token/SID for each run's write roots; public
+AppContainer write ACLs do not bypass that boundary. Not every Windows runtime
+is compatible: Python 3.14 system-crypto device access was refused in testing;
+DLL initialization failures are diagnosed without unconfined retries.
+`strict` also removes this
+package's read grants at denied-read roots and protects DACL inheritance;
+public read permissions, complex ACEs or nested reparse points that cannot be
+narrowed safely cause refusal without changing other applications' shared access.
+Settings, the TUI and doctor report unavailable backends. See
+[Windows sandbox compatibility](windows-sandbox.en.md) for toolchain read grants,
+hardlinks, loopback, pinned paths and exit recovery.
 
 **Cross-node hello replay is closed, except on the legacy path.** A captured
 hello cannot be replayed at a different node: a hello can bind its receiver

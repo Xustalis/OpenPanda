@@ -2,14 +2,38 @@
 """Filesystem contracts for local installs and release version/asset selection."""
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 REPO = Path(__file__).resolve().parents[1]
 
 
+def find_shell():
+    shell = shutil.which("sh")
+    if shell:
+        return shell
+    if os.name == "nt":
+        for root in [
+            Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git",
+            Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Git",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Git",
+        ]:
+            for relative in ["bin/sh.exe", "usr/bin/sh.exe"]:
+                candidate = root / relative
+                if candidate.is_file():
+                    return str(candidate)
+    return None
+
+
+SH = find_shell()
+
+
+@unittest.skipUnless(os.name == "posix", "local installs require POSIX filesystem semantics")
+@unittest.skipUnless(SH, "a POSIX shell is required for local install contracts")
 class LocalInstallTests(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.TemporaryDirectory(prefix="panda install ")
@@ -30,8 +54,8 @@ class LocalInstallTests(unittest.TestCase):
 
     def install(self):
         return subprocess.run(
-            ["sh", str(REPO / "scripts/install-local.sh"), str(self.root), str(self.home)],
-            capture_output=True, text=True,
+            [SH, str(REPO / "scripts/install-local.sh"), str(self.root), str(self.home)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
 
     def test_fresh_home_and_spaces_ship_all_helpers(self):
@@ -90,6 +114,7 @@ class LocalInstallTests(unittest.TestCase):
         self.assertFalse((self.prefix / "adapters/__pycache__").exists())
 
 
+@unittest.skipUnless(SH, "a POSIX shell (such as Git for Windows) is required for release tooling")
 class ReleaseToolingTests(unittest.TestCase):
     def test_source_version_override_lite_assets_and_checksum_refusal(self):
         # Fake only the compiler: run the real packaging/archive/checksum logic
@@ -106,11 +131,30 @@ class ReleaseToolingTests(unittest.TestCase):
             compiler = root / "tools/go"
             compiler.write_text('#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n if [ "$1" = -o ]; then shift; printf fixture > "$1"; exit 0; fi\n shift\ndone\nexit 1\n')
             compiler.chmod(0o755)
+            # Git for Windows supplies the archive tools but may only have the
+            # Windows Store python3 alias on PATH. Use this test's real Python
+            # interpreter for package.sh's zip fallback on every platform.
+            python3 = root / "tools/python3"
+            python3.write_text(
+                "#!/bin/sh\nexec " + shlex.quote(Path(sys.executable).as_posix()) + ' "$@"\n',
+                encoding="utf-8",
+            )
+            python3.chmod(0o755)
             env = {k: v for k, v in os.environ.items() if not k.startswith("OPENPANDA_") and k != "VERSION"}
-            env["PATH"] = str(root / "tools") + os.pathsep + env["PATH"]
+            tool_paths = [str(root / "tools")]
+            if os.name == "nt":
+                # Non-login sh does not add Git's utilities to the inherited
+                # Windows PATH. Keep them ahead of Windows find.exe/tar.exe.
+                shell_bin = Path(SH).parent
+                git_usr_bin = shell_bin.parent / "usr/bin"
+                tool_paths.append(str(git_usr_bin if git_usr_bin.is_dir() else shell_bin))
+            env["PATH"] = os.pathsep.join([*tool_paths, env.get("PATH", "")])
 
             def run(script, *args):
-                return subprocess.run(["sh", str(root / "scripts" / script), *args], env=env, text=True, capture_output=True)
+                return subprocess.run(
+                    [SH, str(root / "scripts" / script), *args], env=env,
+                    text=True, encoding="utf-8", errors="replace", capture_output=True,
+                )
 
             result = run("package.sh")
             self.assertEqual(result.returncode, 0, result.stderr)

@@ -16,10 +16,36 @@ import (
 // It is a cross-artifact contract, not an internal detail, and that is exactly
 // how the bug described below happened: the name lived in three files, the
 // registration moved to schtasks, and this one kept deleting something else.
-// The value is a var rather than a const so the windows test can point
-// StopServices at a scratch task instead of the real one — a test that deleted
-// a developer's actual logon task would be worse than no test.
-var nodeTaskName = NodeTaskName
+// It stays immutable: unit tests inject a complete service controller instead
+// of replacing one global task name while leaving the Web task live.
+const nodeTaskName = NodeTaskName
+
+// windowsServiceControl keeps all scheduled-task and filesystem side effects
+// together. Tests replace both operations on a local value; no production task
+// names or process-wide hooks need to be mutated to exercise the full stop.
+type windowsServiceControl struct {
+	runCommand     func(name string, args ...string) error
+	removeFile     func(path string) error
+	nodeTask       string
+	webTask        string
+	webWrapperPath string
+}
+
+func installedWindowsServices() windowsServiceControl {
+	return windowsServicesWith(func(name string, args ...string) error {
+		return exec.Command(name, args...).Run()
+	}, os.Remove, webServiceWrapperPath())
+}
+
+func windowsServicesWith(runCommand func(string, ...string) error, removeFile func(string) error, wrapperPath string) windowsServiceControl {
+	return windowsServiceControl{
+		runCommand:     runCommand,
+		removeFile:     removeFile,
+		nodeTask:       nodeTaskName,
+		webTask:        WebServiceTaskName,
+		webWrapperPath: wrapperPath,
+	}
+}
 
 // StopServices best-effort removes the logon task that scripts/install.ps1
 // registers, so `panda uninstall` leaves no auto-start behind.
@@ -36,8 +62,12 @@ var nodeTaskName = NodeTaskName
 // Failures stay ignored: no task registered is the normal case, and the task
 // itself belongs to whoever created it.
 func StopServices() {
-	_ = exec.Command("schtasks.exe", "/Delete", "/TN", nodeTaskName, "/F").Run()
-	stopWebService()
+	installedWindowsServices().stopServices()
+}
+
+func (s windowsServiceControl) stopServices() {
+	_ = s.runCommand("schtasks.exe", "/Delete", "/TN", s.nodeTask, "/F")
+	s.stopWebService()
 }
 
 // RestartDaemon best-effort restarts the registered logon task so it picks up
@@ -47,20 +77,23 @@ func StopServices() {
 // untouched — and the matching /Run brings the daemon back on the new image.
 // Failures are ignored: no registered task is the normal case.
 func RestartDaemon() {
-	if err := exec.Command("schtasks.exe", "/End", "/TN", nodeTaskName).Run(); err != nil {
-		return
-	}
-	_ = exec.Command("schtasks.exe", "/Run", "/TN", nodeTaskName).Run()
+	s := installedWindowsServices()
+	s.restartTask(s.nodeTask)
 }
 
 // RestartWebService restarts the console's logon task so the panel answers from
 // the binary on disk rather than the image it started with. Same running-only
 // contract as the daemon: /End succeeds only for a live task.
 func RestartWebService() {
-	if err := exec.Command("schtasks.exe", "/End", "/TN", WebServiceTaskName).Run(); err != nil {
+	s := installedWindowsServices()
+	s.restartTask(s.webTask)
+}
+
+func (s windowsServiceControl) restartTask(name string) {
+	if err := s.runCommand("schtasks.exe", "/End", "/TN", name); err != nil {
 		return
 	}
-	_ = exec.Command("schtasks.exe", "/Run", "/TN", WebServiceTaskName).Run()
+	_ = s.runCommand("schtasks.exe", "/Run", "/TN", name)
 }
 
 // webServiceWrapperPath mirrors the wrapper `panda service install` writes
@@ -72,10 +105,10 @@ func webServiceWrapperPath() string {
 	return ""
 }
 
-func stopWebService() {
-	_ = exec.Command("schtasks.exe", "/End", "/TN", WebServiceTaskName).Run()
-	_ = exec.Command("schtasks.exe", "/Delete", "/TN", WebServiceTaskName, "/F").Run()
-	if path := webServiceWrapperPath(); path != "" {
-		_ = os.Remove(path)
+func (s windowsServiceControl) stopWebService() {
+	_ = s.runCommand("schtasks.exe", "/End", "/TN", s.webTask)
+	_ = s.runCommand("schtasks.exe", "/Delete", "/TN", s.webTask, "/F")
+	if s.webWrapperPath != "" {
+		_ = s.removeFile(s.webWrapperPath)
 	}
 }

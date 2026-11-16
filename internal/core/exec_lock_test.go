@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/testdb"
@@ -39,6 +39,87 @@ func TestExecLockKeys(t *testing.T) {
 	dir := t.TempDir()
 	if got := execLockKeys(Task{TaskID: "t-pin", WorkDir: dir}, ""); len(got) != 1 || !strings.HasPrefix(got[0], "dir:") {
 		t.Fatalf("pinned workdir keys = %v", got)
+	}
+}
+
+func TestWorkspaceAliasesAndMergesSharePhysicalLocks(t *testing.T) {
+	ctx := context.Background()
+	s1, s2 := openKernelStores(t)
+	shared := t.TempDir()
+	ps := projects.NewStore(s1.db)
+	for _, name := range []string{"blue", "red"} {
+		if _, err := ps.Create(name, shared, "same physical checkout"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c1, c2 := newCore(t, "alias-first"), newCore(t, "alias-second")
+	c1.store, c2.store = s1, s2
+	c1.SetProjectStores(ps, t.TempDir())
+	c2.SetProjectStores(ps, t.TempDir())
+	live := func(store *TaskStore, title string) Task {
+		t.Helper()
+		task := createTask(t, store, "", title, "node")
+		for _, move := range []func() error{
+			func() error { return store.Queue(ctx, task.TaskID, "node") },
+			func() error { return store.Dispatch(ctx, task.TaskID, "node", "node") },
+			func() error { return store.Accept(ctx, task.TaskID, "node") },
+		} {
+			if err := move(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return task
+	}
+	holder := live(s1, "blue writer")
+	holder.Project, holder.ScopePaths = "blue", []string{"src"}
+	holderKeys, _, err := c1.executionLockKeys(holder, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s1.TryAcquireExecLocks(ctx, holder.TaskID, "node", "holder", holderKeys); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	for _, tc := range []struct {
+		name string
+		task Task
+		want bool
+	}{
+		{"project alias same path", Task{Project: "red", ScopePaths: []string{"src"}}, false},
+		{"project alias descendant", Task{Project: "red", ScopePaths: []string{"src/deep"}}, false},
+		{"projectless nested pin", Task{WorkDir: filepath.Join(shared, "src")}, false},
+		{"project alias disjoint path", Task{Project: "red", ScopePaths: []string{"docs"}}, true},
+	} {
+		task := tc.task
+		task.TaskID = "other"
+		keys, _, err := c2.executionLockKeys(task, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := s2.TryAcquireExecLocks(ctx, "other", "node", "other-run", keys); err != nil || ok != tc.want {
+			t.Fatalf("%s: acquired=%v err=%v, want %v", tc.name, ok, err, tc.want)
+		}
+		if err := s2.ReleaseExecLocks(ctx, "other", "other-run"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	merge := live(s2, "red merge")
+	merge.Project = "red"
+	blocked, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+	defer cancel()
+	if release, err := c2.acquireMergeLocks(blocked, merge, "merge-run"); err == nil {
+		release()
+		t.Fatal("merge into project alias passed a live physical path writer")
+	}
+	if err := s1.ReleaseExecLocks(ctx, holder.TaskID, "holder"); err != nil {
+		t.Fatal(err)
+	}
+	release, err := c2.acquireMergeLocks(ctx, merge, "merge-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if ok, err := s1.TryAcquireExecLocks(ctx, holder.TaskID, "node", "holder-next", holderKeys); err != nil || ok {
+		t.Fatalf("alias merge did not exclude a shared path writer: acquired=%v err=%v", ok, err)
 	}
 }
 
@@ -131,7 +212,7 @@ func TestExecLocksStore(t *testing.T) {
 func TestExecDanceReleaseReacquire(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	c := newCoreWithNative(t, "exec-dance", ledger.NativeAbility{ID: "sys:echo", Command: "echo"})
+	c := newCoreWithNative(t, "exec-dance", queueFixtureAbility(t, "sys:echo", "echo"))
 
 	tk := createTask(t, c.store, "", "dance", c.nodeID)
 	if err := c.store.Queue(ctx, tk.TaskID, c.nodeID); err != nil {
@@ -200,7 +281,7 @@ func TestExecDanceReleaseReacquire(t *testing.T) {
 // and must not touch the row.
 func TestDuplicateRunYieldsToInFlight(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithNative(t, "lock-dup", ledger.NativeAbility{ID: "sys:echo", Command: "echo", Args: []string{"dup"}})
+	c := newCoreWithNative(t, "lock-dup", queueFixtureAbility(t, "sys:echo", "echo", "dup"))
 	tk := createTask(t, c.store, "", "dup", c.nodeID)
 	if err := c.store.Queue(ctx, tk.TaskID, c.nodeID); err != nil {
 		t.Fatalf("queue: %v", err)
@@ -357,7 +438,7 @@ func TestStaleReleaseKeepsReacquiredRows(t *testing.T) {
 func TestRunWaitsOnForeignExecLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	c := newCoreWithNative(t, "lock-wait", ledger.NativeAbility{ID: "sys:echo", Command: "echo", Args: []string{"locked"}})
+	c := newCoreWithNative(t, "lock-wait", queueFixtureAbility(t, "sys:echo", "echo", "locked"))
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
