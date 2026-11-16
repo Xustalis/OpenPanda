@@ -25,7 +25,7 @@ func queueTestCore(t *testing.T) *Core {
 		Device:        "queue-node",
 		ResourceClass: "Standard",
 		Native: []ledger.NativeAbility{
-			{ID: "sys:info", Command: "echo", Args: []string{"queue-ok"}},
+			queueFixtureAbility(t, "sys:info", "echo", "queue-ok"),
 		},
 		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 2},
 	}
@@ -119,15 +119,17 @@ func TestEnqueuePersistsQueueMeta(t *testing.T) {
 
 // TestSameResourceSerializes verifies two tasks sharing a resource key never
 // run at once: the second stays queued while the first holds the lock. The
-// first task sleeps so the overlap window is observable.
+// first task holds a fixture gate until the queued state has been observed.
 func TestSameResourceSerializes(t *testing.T) {
 	db := openTestDB(t)
+	gate := t.TempDir()
+	ready, release := filepath.Join(gate, "ready"), filepath.Join(gate, "release")
 	card := ledger.Card{
 		Device:        "queue-node",
 		ResourceClass: "Standard",
 		Native: []ledger.NativeAbility{
-			{ID: "sys:info", Command: "echo", Args: []string{"ok"}},
-			{ID: "sys:slow", Command: "sleep", Args: []string{"1"}},
+			queueFixtureAbility(t, "sys:info", "echo", "ok"),
+			queueFixtureAbility(t, "sys:slow", "hold-once", ready, release),
 		},
 		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 4},
 	}
@@ -155,13 +157,17 @@ func TestSameResourceSerializes(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		f, _ := c.store.Get(ctx, first.TaskID)
-		if f.State == StateRunning {
+		if _, err := os.Stat(ready); f.State == StateRunning && err == nil {
 			s, _ := c.store.Get(ctx, second.TaskID)
 			if s.State != StateQueued {
 				t.Fatalf("conflicting task state = %s, want queued while lock held", s.State)
 			}
+			if err := os.WriteFile(release, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
 			// And once the slow task finishes, the fast one must run.
-			for time.Now().Before(time.Now().Add(5 * time.Second)) {
+			settledDeadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(settledDeadline) {
 				s, _ = c.store.Get(ctx, second.TaskID)
 				if s.State == StateDone {
 					return
@@ -247,12 +253,15 @@ func TestEnqueueExplicitKeysStillMergeActuator(t *testing.T) {
 // actuator's resource key.
 func TestActuatorKeysSerializeInQueue(t *testing.T) {
 	db := openTestDB(t)
+	gate := t.TempDir()
+	ready, release := filepath.Join(gate, "ready"), filepath.Join(gate, "release")
+	slow := queueFixtureAbility(t, "hardware:slow_servo", "hold-once", ready, release)
 	card := ledger.Card{
 		Device:        "queue-edge",
 		ResourceClass: "Edge",
 		Actuators: []ledger.ActuatorProfile{{
 			ID: "hardware:slow_servo", Type: "hardware", Tier: 1,
-			Command: "sleep", Args: []string{"1"},
+			Command: slow.Command, Args: slow.Args,
 		}},
 		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 4},
 	}
@@ -278,12 +287,16 @@ func TestActuatorKeysSerializeInQueue(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		f, _ := c.store.Get(ctx, first.TaskID)
-		if f.State == StateRunning {
+		if _, err := os.Stat(ready); f.State == StateRunning && err == nil {
 			s, _ := c.store.Get(ctx, second.TaskID)
 			if s.State != StateQueued {
 				t.Fatalf("same-actuator task state = %s, want queued while device held", s.State)
 			}
-			for time.Now().Before(time.Now().Add(5 * time.Second)) {
+			if err := os.WriteFile(release, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			settledDeadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(settledDeadline) {
 				s, _ = c.store.Get(ctx, second.TaskID)
 				if s.State == StateDone {
 					return
@@ -307,9 +320,7 @@ func TestEnqueueRoutesToPeer(t *testing.T) {
 	defer cancel()
 
 	root := newCore(t, "queue-root")
-	leaf := newCoreWithNative(t, "queue-leaf", ledger.NativeAbility{
-		ID: "gpio:read", Command: "echo", Args: []string{"queue-gpio-ok"},
-	})
+	leaf := newCoreWithNative(t, "queue-leaf", queueFixtureAbility(t, "gpio:read", "echo", "queue-gpio-ok"))
 	if err := root.Register(ctx); err != nil {
 		t.Fatalf("root register: %v", err)
 	}
@@ -371,7 +382,7 @@ func TestAnonymousTasksRunInParallel(t *testing.T) {
 		Device:        "queue-node",
 		ResourceClass: "Standard",
 		Native: []ledger.NativeAbility{
-			{ID: "sys:slow", Command: "sleep", Args: []string{"1"}},
+			queueFixtureAbility(t, "sys:slow", "sleep", "1s"),
 		},
 		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 4},
 	}
@@ -436,12 +447,14 @@ func TestAnonymousTasksRunInParallel(t *testing.T) {
 // sharing starts.
 func TestSameWorkDirSerializes(t *testing.T) {
 	db := openTestDB(t)
+	gate := t.TempDir()
+	ready, release := filepath.Join(gate, "ready"), filepath.Join(gate, "release")
 	card := ledger.Card{
 		Device:        "queue-node",
 		ResourceClass: "Standard",
 		Native: []ledger.NativeAbility{
-			{ID: "sys:slow", Command: "sleep", Args: []string{"1"}},
-			{ID: "sys:info", Command: "echo", Args: []string{"ok"}},
+			queueFixtureAbility(t, "sys:slow", "hold-once", ready, release),
+			queueFixtureAbility(t, "sys:info", "echo", "ok"),
 		},
 		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 4},
 	}
@@ -472,12 +485,16 @@ func TestSameWorkDirSerializes(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		f, _ := c.store.Get(ctx, first.TaskID)
-		if f.State == StateRunning {
+		if _, err := os.Stat(ready); f.State == StateRunning && err == nil {
 			s, _ := c.store.Get(ctx, second.TaskID)
 			if s.State != StateQueued {
 				t.Fatalf("same-workdir task state = %s, want queued while dir held", s.State)
 			}
-			for time.Now().Before(time.Now().Add(5 * time.Second)) {
+			if err := os.WriteFile(release, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			settledDeadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(settledDeadline) {
 				s, _ = c.store.Get(ctx, second.TaskID)
 				if s.State == StateDone {
 					waitLocalTasksSettled(t, c)
@@ -607,12 +624,10 @@ func TestResourceKeysForPinnedWorkDir(t *testing.T) {
 	}
 }
 
-// TestResourceKeysSessionLane: a task carrying its conversation claims a lane
-// one level under the project root instead of the root itself — two
-// conversations on one checkout run in parallel — while a task with no
-// conversation (CLI submit, plan stage, inbound delegate) keeps the root
-// claim that still excludes every lane.
-func TestResourceKeysSessionLane(t *testing.T) {
+// Conversations sharing a checkout must contend on the paths they write.
+// A session identifier cannot turn the same filesystem path into a different
+// resource; private work directories and disjoint paths keep their parallelism.
+func TestResourceKeysAcrossSessions(t *testing.T) {
 	a := deriveResourceKeys(TaskInput{Project: "p", SessionID: "sess-a"})
 	b := deriveResourceKeys(TaskInput{Project: "p", SessionID: "sess-b"})
 	root := deriveResourceKeys(TaskInput{Project: "p"})
@@ -626,29 +641,32 @@ func TestResourceKeysSessionLane(t *testing.T) {
 	if root[0] != queue.ProjectKey("p") || root[1] != queue.ScopeRootKey("p") {
 		t.Fatalf("sessionless keys = %v, want the legacy root pair", root)
 	}
-	if queue.ScopeKeysConflict(a[1], b[1]) {
-		t.Fatalf("two conversations must not conflict: %q vs %q", a[1], b[1])
+	if !queue.ScopeKeysConflict(a[1], b[1]) {
+		t.Fatalf("shared checkout roots must conflict: %q vs %q", a[1], b[1])
 	}
 	if !queue.ScopeKeysConflict(root[1], a[1]) {
 		t.Fatalf("a whole-project claim must still exclude a lane: %q vs %q", root[1], a[1])
 	}
 
-	// A scoped child stays inside its own conversation's lane.
+	// A scoped child holds the same path across every conversation.
 	scoped := childResourceKeys("t1", TaskInput{Project: "p", SessionID: "sess-a", Paths: []string{"src"}})
 	if want := queue.SessionScopeLeafKey("p", "sess-a", "src"); len(scoped) != 1 || scoped[0] != want {
 		t.Fatalf("scoped child keys = %v, want [%q]", scoped, want)
 	}
-	if queue.ScopeKeysConflict(scoped[0], b[1]) {
-		t.Fatalf("a scoped child must not conflict with another conversation: %q vs %q", scoped[0], b[1])
+	if !queue.ScopeKeysConflict(scoped[0], b[1]) {
+		t.Fatalf("a scoped child must conflict with another checkout-wide writer: %q vs %q", scoped[0], b[1])
 	}
 
-	// A conversation-less scoped child keeps the bare leaf: it is a sibling of
-	// every lane, so it can write the same path a conversation is writing. The
-	// alternative — claiming the project root — would restore that exclusion at
-	// the cost of serializing every conversation-less scoped task against every
-	// other one, which TestScopedProjectChildrenRunInParallel refuses.
+	// CLI and delegated scoped work cannot hide from conversation locks.
 	loose := childResourceKeys("t2", TaskInput{Project: "p", Paths: []string{"src"}})
 	if want := queue.ScopeLeafKey("p", "src"); len(loose) != 1 || loose[0] != want {
 		t.Fatalf("conversation-less scoped keys = %v, want [%q]", loose, want)
+	}
+	if !queue.ScopeKeysConflict(loose[0], scoped[0]) {
+		t.Fatalf("the same path must conflict with or without a conversation: %v vs %v", loose, scoped)
+	}
+	other := childResourceKeys("t3", TaskInput{Project: "p", SessionID: "sess-b", Paths: []string{"docs"}})
+	if len(other) != 1 || queue.ScopeKeysConflict(scoped[0], other[0]) {
+		t.Fatalf("disjoint paths must retain parallelism: %v vs %v", scoped, other)
 	}
 }

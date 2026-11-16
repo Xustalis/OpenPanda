@@ -60,11 +60,9 @@ type TaskInput struct {
 	// routing/execution so concurrent callers never swap the Core's ambient work dir.
 	WorkDir string
 	// SessionID names the conversation that asked for this task, when one did.
-	// It scopes the project lock: two conversations against one checkout get
-	// sibling lanes (queue.SessionScopeKey) and run in parallel, while tasks
-	// from the same conversation — and every task with no conversation at all,
-	// such as a CLI submit or a plan stage — keep serializing on the project
-	// root. Empty is the conservative answer, never a wildcard.
+	// It carries attribution, not workspace isolation: conversations sharing a
+	// checkout contend for overlapping paths. A private WorkDir or Isolate gives
+	// a task a separate writable tree and allows independent execution.
 	SessionID string
 	Intent    string
 	SpecJSON  string

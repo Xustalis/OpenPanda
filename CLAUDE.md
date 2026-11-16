@@ -63,6 +63,11 @@ file; each row is self-contained so a retrieved fragment is enough to act on.
 - **Secrets, redaction, sandbox, network allowlist** → `internal/security/`.
 - **Repository directory map** → [Layout](#layout) and
   [internal/ by concern](#internal-by-concern).
+- **Core lifecycle, model wiring, heartbeat, peer handshake** →
+  `internal/core/core.go` (state and construction), `runtime_configuration.go`,
+  `runtime_workspace.go`, `lifecycle.go`, `heartbeat.go`,
+  `peer_connections.go`, `peer_handshake.go`, `peer_dispatch.go` and
+  `network_policy.go` in the same directory.
 
 ## What this is
 

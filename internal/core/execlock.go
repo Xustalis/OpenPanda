@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
@@ -101,6 +102,123 @@ func execLockKeys(task Task, actuatorID string) []string {
 	return keys
 }
 
+// executionLockKeys adds the executor's real workspace identity, including
+// when callers supplied custom resource keys. Custom scheduling keys can add
+// coordination; they cannot waive shared-tree exclusion. The returned wait
+// set includes physical paths so the parent hands them to its children while
+// waiting and reclaims them before its next round.
+func (c *Core) executionLockKeys(task Task, actuatorID string) (keys, wait []string, err error) {
+	if len(task.ResourceKeys) == 0 {
+		// Inline/delegated runs have no queue metadata to correct a pin in a
+		// separate worktree. Apply the same correction as queued submissions.
+		in := TaskInput{Project: task.Project, WorkDir: task.WorkDir, Paths: task.ScopePaths,
+			Isolate: task.Isolate, Requires: task.Requires, SpecJSON: task.SpecJSON}
+		if in.Project != "" && (len(in.Paths) > 0 || in.Isolate) {
+			task.ResourceKeys = c.childResourceKeysFor(task.TaskID, in)
+		} else if in.WorkDir != "" {
+			task.ResourceKeys = c.resourceKeysFor(in)
+		}
+	}
+	physical, err := c.workspaceExecKeys(task)
+	if err != nil {
+		return nil, nil, fmt.Errorf("execution workspace locks: %w", err)
+	}
+	keys = execLockKeys(task, actuatorID)
+	wait = slices.Clone(queue.DefaultKeys(task.ResourceKeys, task.Project, task.WorkDir, task.TaskID))
+	// Queue metadata can already contain the actuator (requires/spec merge).
+	// It is retained during preparation and child waits just like an actuator
+	// appended by the router; releasing it could create a mutex/workspace cycle.
+	wait = slices.DeleteFunc(wait, func(key string) bool {
+		return key == actuatorID || strings.HasPrefix(key, "hardware:")
+	})
+	keys = queue.CanonicalKeys(append(keys, physical...))
+	wait = queue.CanonicalKeys(append(wait, physical...))
+	return keys, wait, nil
+}
+
+// prepareWorkspaceLocks protects the short phase that reads/copies or replaces
+// an entire shared source tree. Taking a root while retaining execution leaves
+// would deadlock two scoped preparers, so the run yields its workspace claims
+// first. Its nonce, duplicate-run marker and actuator ownership survive. The
+// caller must finish (reclaim execution keys) before any subsequent workspace
+// mutation, and always defer cleanup for error/cancellation paths.
+func (c *Core) prepareWorkspaceLocks(ctx context.Context, task Task) (finish func() error, cleanup func(), err error) {
+	noop := func() error { return nil }
+	if task.PlanID != "" || (!projectInputs(task) && !(task.Isolate && task.Project != "")) {
+		return noop, func() {}, nil
+	}
+	if _, held := c.execHold.Load(task.TaskID); !held {
+		// Direct workspace-helper callers do not own a live execution lease.
+		return noop, func() {}, nil
+	}
+	source := task.WorkDir
+	if source == "" || projectInputs(task) {
+		source, err = c.projectWorkDir(task.Project)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return c.workspaceSourceLocks(ctx, task, source)
+}
+
+// workspaceSourceLocks is also used by a running parent's immutable sibling
+// snapshot. The caller always finishes before resuming that parent, including
+// when copying fails; otherwise its original execution claim would stay yielded.
+func (c *Core) workspaceSourceLocks(ctx context.Context, task Task, source string) (finish func() error, cleanup func(), err error) {
+	raw, held := c.execHold.Load(task.TaskID)
+	if !held {
+		return func() error { return nil }, func() {}, nil
+	}
+	entry := raw.(execHoldEntry)
+	keys := c.resourceKeysFor(TaskInput{Project: task.Project, WorkDir: source})
+	keys = queue.CanonicalKeys(append(keys, queue.WorkspaceScopeKey(source, "")))
+	wait, released := c.execReleaseFor(task.TaskID)
+	if !released {
+		return nil, nil, errors.New("could not yield execution locks for workspace preparation")
+	}
+	tick := time.NewTicker(execLockPollEvery)
+	defer tick.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		ok, err := c.store.TryAcquireExecLocks(ctx, task.TaskID, c.nodeID, entry.runID, keys)
+		if err != nil {
+			return nil, nil, fmt.Errorf("workspace preparation locks: %w", err)
+		}
+		if ok {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-tick.C:
+		}
+	}
+	var once sync.Once
+	var releaseErr error
+	release := func() error {
+		once.Do(func() {
+			wctx, cancel := c.storeWriteCtx(context.Background())
+			defer cancel()
+			releaseErr = c.store.ReleaseExecLocksKeys(wctx, task.TaskID, entry.runID, keys)
+		})
+		return releaseErr
+	}
+	finish = func() error {
+		if err := release(); err != nil {
+			return fmt.Errorf("release workspace preparation locks: %w", err)
+		}
+		return c.execAcquireFor(ctx, task.TaskID, wait)
+	}
+	cleanup = func() {
+		if err := release(); err != nil {
+			c.logger.Warn("release workspace preparation locks", "task", task.TaskID, "err", err)
+		}
+	}
+	return finish, cleanup, nil
+}
+
 // TryAcquireExecLocks takes the exec_locks rows for every key, all-or-nothing,
 // on behalf of taskID. A false return means at least one key is held by a
 // live run; the caller polls or gives up when its context ends. Because the
@@ -148,6 +266,14 @@ func conflictingExecHolders(ctx context.Context, tx *sql.Tx, key string) (map[st
 	}
 	sb.WriteString(` OR key LIKE ? ESCAPE '\'`)
 	args = append(args, escapeLike(key)+"/%")
+	if strings.HasPrefix(key, "scope:") {
+		// A still-live older process may hold a persisted @session lane.
+		// Include those candidates and compare their canonical identities
+		// below, so an upgrade does not reopen the same-path write race.
+		root, _, _ := strings.Cut(key, "/")
+		sb.WriteString(` OR key LIKE ? ESCAPE '\'`)
+		args = append(args, escapeLike(root)+"/@session/%")
+	}
 	rows, err := tx.QueryContext(ctx, sb.String(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("read scope exec locks for %q: %w", key, err)
@@ -158,7 +284,9 @@ func conflictingExecHolders(ctx context.Context, tx *sql.Tx, key string) (map[st
 		if err := rows.Scan(&k, &holder); err != nil {
 			return nil, err
 		}
-		out[k] = holder
+		if queue.ScopeKeysConflict(key, k) {
+			out[k] = holder
+		}
 	}
 	return out, rows.Err()
 }
@@ -171,6 +299,7 @@ func escapeLike(s string) string {
 }
 
 func (s *TaskStore) TryAcquireExecLocks(ctx context.Context, taskID, nodeID, runID string, keys []string) (bool, error) {
+	keys = queue.CanonicalKeys(keys)
 	if len(keys) == 0 {
 		return true, nil
 	}
@@ -231,6 +360,7 @@ func (s *TaskStore) TryAcquireExecLocks(ctx context.Context, taskID, nodeID, run
 // not blockers worth naming). Best-effort: anything read here may change by
 // the next acquire pass, which is exactly why it is diagnostics, not policy.
 func (s *TaskStore) ExecLockBlockers(ctx context.Context, taskID string, keys []string) (map[string]string, error) {
+	keys = queue.CanonicalKeys(keys)
 	out := map[string]string{}
 	if len(keys) == 0 {
 		return out, nil

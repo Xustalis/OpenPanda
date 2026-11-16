@@ -92,7 +92,7 @@ func ProjectKey(project string) string {
 
 func DefaultKeys(keys []string, project, workDir, taskID string) []string {
 	if len(keys) > 0 {
-		return keys
+		return CanonicalKeys(keys)
 	}
 	if project != "" {
 		// The scope root rides next to the legacy project key: scoped
@@ -133,8 +133,20 @@ func workdirKey(dir string) string {
 	if err != nil {
 		return lockFold(filepath.Clean(dir))
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return lockFold(resolved)
+	// Pins and scope leaves may not exist yet. Resolve their longest existing
+	// prefix, so a missing tail beneath a symlink still names the target tree.
+	var tail []string
+	for cur := abs; ; cur = filepath.Dir(cur) {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, tail[i])
+			}
+			return lockFold(resolved)
+		}
+		if filepath.Dir(cur) == cur {
+			break
+		}
+		tail = append(tail, filepath.Base(cur))
 	}
 	return lockFold(abs)
 }

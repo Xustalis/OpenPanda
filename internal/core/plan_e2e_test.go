@@ -455,8 +455,15 @@ func TestPlanPinnedStageWithSweepRunning(t *testing.T) {
 	// The mac's daemon sweeps pending plans on every monitor tick — run that
 	// sweep for the whole test so the release race is genuinely exercised.
 	sweepCtx, stopSweep := context.WithCancel(ctx)
-	defer stopSweep()
+	sweepDone := make(chan struct{})
+	defer func() {
+		stopSweep()
+		<-sweepDone
+		waitLocalTasksSettled(t, pi)
+		waitLocalTasksSettled(t, mac)
+	}()
 	go func() {
+		defer close(sweepDone)
 		for {
 			select {
 			case <-sweepCtx.Done():
@@ -481,6 +488,25 @@ func TestPlanPinnedStageWithSweepRunning(t *testing.T) {
 	stages := waitPlanDone(t, ctx, pi, planID, 1)
 	if st := stages[0]; st.State != StateDone {
 		t.Fatalf("stage state = %s, want done (the sweep race must not fail the stage)", st.State)
+	}
+	// Stage completion intentionally precedes the detached replica pull. A
+	// WaitArtifacts call at counter zero can precede that pull's registration;
+	// wait for the actual replica before draining and unlinking this node's pool.
+	for {
+		stage, err := pi.store.Get(ctx, stages[0].TaskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stage.OutputArtifact != "" {
+			if _, held := pi.artifacts.Has(stage.OutputArtifact); held {
+				break
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("completed stage's artifact replica did not reach the local pool")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
@@ -598,5 +624,20 @@ func TestAgentResultSchemaFor(t *testing.T) {
 		if err := json.Unmarshal([]byte(s), &v); err != nil {
 			t.Fatalf("schema is not valid JSON: %v\n%s", err, s)
 		}
+	}
+}
+
+// TestAgentResultSchemaIsMinified guards the Windows command-line budget the
+// schema spends. The document rides --json-schema, so every indented byte is
+// a byte the prompt (already on stdin) and the rest of the argv cannot use:
+// indented it was 5541 characters, ~5.9k once argv-quoted, which the adapter
+// refused to spawn against its 6000-character limit.
+func TestAgentResultSchemaIsMinified(t *testing.T) {
+	s := agentResultSchemaFor([]string{"git", "net:curl"}, false, 8)
+	if strings.Contains(s, "\n") {
+		t.Fatal("rendered schema still carries the literal's indentation")
+	}
+	if len(s) > 5000 {
+		t.Fatalf("rendered schema is %d chars; a Windows command line has no room for it", len(s))
 	}
 }
