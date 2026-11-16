@@ -3,10 +3,15 @@
 package skills
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -80,5 +85,67 @@ func TestDiscoverUsesSelectedCatalogAndScope(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("catalog refetched after selection: %d", calls.Load())
+	}
+}
+
+// Hashes pin the reviewed bytes, including licenses. Windows Git normally
+// converts unclassified text files to CRLF; exercise an actual checkout so a
+// missing attribute cannot make every binary panic during package init again.
+func TestReviewedResourcesKeepPinnedBytesInWindowsCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	repo := t.TempDir()
+	attrs, err := os.ReadFile(filepath.Join("..", "..", ".gitattributes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitattributes"), attrs, 0600); err != nil {
+		t.Fatal(err)
+	}
+	originals := make(map[string][]byte)
+	if err := fs.WalkDir(reviewedFiles, "reviewed", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, err := reviewedFiles.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		rel := filepath.Join("internal", "skills", filepath.FromSlash(name))
+		file := filepath.Join(repo, rel)
+		if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(file, data, 0600); err != nil {
+			return err
+		}
+		originals[rel] = data
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		args = append([]string{"-c", "core.autocrlf=true", "-c", "core.safecrlf=false"}, args...)
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("add", "--", ".gitattributes", "internal/skills/reviewed")
+	checkout := t.TempDir()
+	run("checkout-index", "--all", "--prefix="+filepath.ToSlash(checkout)+"/")
+	for rel, want := range originals {
+		got, err := os.ReadFile(filepath.Join(checkout, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("Windows checkout changed reviewed bytes: %s", rel)
+		}
 	}
 }

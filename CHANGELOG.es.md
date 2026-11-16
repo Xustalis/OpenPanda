@@ -46,7 +46,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Coordinación acotada de subtareas.** RPC IMMEDIATE por intento y delegación ROUND_END permiten creación idempotente, reservas de tokens y delegación, límites de profundidad y concurrencia y cesión de recursos durante la espera. Las subtareas remotas reciben el directorio real del intento del padre; sus resultados se incorporan con detección de conflictos antes de reanudarlo.
 - **Objetivos estructurados y pruebas de aceptación.** La clasificación, los planes, las especificaciones y las subtareas conservan las políticas de objetivos. Los criterios MAX exigen evaluaciones independientes aprobadas; una autorización o un estado correcto no sustituyen las pruebas que faltan.
 - **Historial de ejecución persistente.** Entradas, salidas y resúmenes de razonamiento sobreviven a recargas, chats laterales, bifurcaciones y al archivo tras eliminar sesiones. Los cursores recuperan actividad remota sin duplicados; el historial visible queda separado del contexto reproducido al modelo.
-- **Habilidades revisadas sin conexión.** Cuatro habilidades incluidas conservan revisiones fijas, licencias y hashes verificados. Los recursos importados mantienen su procedencia y no pueden declararse habilidades integradas de confianza.
+- **Habilidades revisadas sin conexión.** Cuatro habilidades incluidas conservan revisiones fijas, licencias y hashes verificados. Los recursos importados mantienen su procedencia y no pueden declararse habilidades integradas de confianza. Git conserva sus bytes originales en Windows para evitar que la conversión de saltos de línea impida el arranque.
 
 ### Corregido
 

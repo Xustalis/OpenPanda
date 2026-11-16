@@ -32,3 +32,7 @@
 *.woff binary
 *.woff2 binary
 *.ttf  binary
+
+# Reviewed skill resources are verified against pinned SHA-256 manifests.
+# Preserve exact bytes, including .txt licenses, on Windows autocrlf checkouts.
+/internal/skills/reviewed/** -text

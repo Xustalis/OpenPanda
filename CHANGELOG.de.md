@@ -46,7 +46,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Begrenzte Koordination von Unteraufgaben.** IMMEDIATE-RPC pro Ausführungsversuch und ROUND_END-Delegation unterstützen idempotentes Erstellen, reservierte Token- und Delegationsbudgets, begrenzte Tiefe und Parallelität sowie Ressourcenfreigabe beim Warten. Entfernte Unteraufgaben erhalten den tatsächlichen Arbeitsstand des Elternversuchs; Ergebnisse werden vor dessen Fortsetzung mit Konfliktprüfung übernommen.
 - **Strukturierte Ziele und Abnahmenachweise.** Eingabeklassifizierung, Pläne, Aufgabenspezifikationen und Unteraufgaben bewahren Zielvorgaben. MAX-Kriterien benötigen unabhängige bestandene Bewertungen; Freigabe oder Erfolgsstatus ersetzen fehlende Nachweise nicht.
 - **Dauerhafter Ausführungsverlauf.** Werkzeugeingaben, Ausgaben und Denkzusammenfassungen bleiben bei Neuladen, Nebenchats, Verzweigungen und nach archivierter Sitzungslöschung erhalten. Cursor holen entfernte Aktivitäten ohne Duplikate nach; Anzeigeverlauf und Modellkontext bleiben getrennt.
-- **Geprüfte Offline-Skills.** Vier mitgelieferte Skills enthalten feste Upstream-Revisionen, Lizenzen und geprüfte Ressourcen-Hashes. Importierte Ressourcen behalten ihre Herkunft und können sich nicht selbst als vertrauenswürdige integrierte Skills ausgeben.
+- **Geprüfte Offline-Skills.** Vier mitgelieferte Skills enthalten feste Upstream-Revisionen, Lizenzen und geprüfte Ressourcen-Hashes. Importierte Ressourcen behalten ihre Herkunft und können sich nicht selbst als vertrauenswürdige integrierte Skills ausgeben. Git bewahrt die Originalbytes beim Windows-Checkout, damit Zeilenumbruchkonvertierung den Start nicht verhindert.
 
 ### Behoben
 

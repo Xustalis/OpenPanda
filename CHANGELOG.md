@@ -52,7 +52,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Bounded child coordination.** Attempt-scoped IMMEDIATE RPC and ROUND_END delegation support idempotent spawning, token and delegation reservations, bounded depth/fanout, and resource yielding while awaiting children. Remote children receive the actual parent attempt's workspace; conflict-aware delivery adopts their output before the parent resumes.
 - **Structured objectives and acceptance evidence.** Entry classification, plans, task specs and delegated children preserve objective policies. MAX criteria require independent passed assessments; an approval or a bare success result cannot bypass missing evidence.
 - **Durable execution history.** Tool inputs, outputs and reasoning summaries survive refresh, side chats, forks and archived session deletion. Remote activity catch-up uses cursors and deduplication; display history remains separate from model replay.
-- **Reviewed offline skills.** Four bundled skills include pinned upstream revisions, licenses and verified resource hashes. Imported resources retain provenance and cannot declare themselves trusted built-ins.
+- **Reviewed offline skills.** Four bundled skills include pinned upstream revisions, licenses and verified resource hashes. Imported resources retain provenance and cannot declare themselves trusted built-ins. Git preserves the pinned resource bytes on Windows checkouts so line-ending conversion cannot prevent startup.
 
 ### Fixed
 
