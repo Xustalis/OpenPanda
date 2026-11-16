@@ -56,14 +56,25 @@ func Open(t testing.TB) *sql.DB {
 	if err != nil {
 		t.Fatalf("prepare test schema: %v", err)
 	}
-	db, err := storage.Open(":memory:")
+	db, err := openMemory(image)
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+// Keep ownership separate from testing.TB cleanup so benchmarks can release
+// every fixture within the iteration, without retaining O(N) closed handles.
+func openMemory(image []byte) (*sql.DB, error) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		return nil, err
+	}
 	conn, err := db.Conn(context.Background())
 	if err != nil {
-		t.Fatalf("connect test db: %v", err)
+		db.Close()
+		return nil, fmt.Errorf("connect test db: %w", err)
 	}
 	err = conn.Raw(func(raw any) error {
 		restorer, ok := raw.(interface{ Deserialize([]byte) error })
@@ -74,9 +85,10 @@ func Open(t testing.TB) *sql.DB {
 	})
 	conn.Close()
 	if err != nil {
-		t.Fatalf("restore test schema: %v", err)
+		db.Close()
+		return nil, fmt.Errorf("restore test schema: %w", err)
 	}
-	return db
+	return db, nil
 }
 
 // OpenFile creates a fully migrated database at a new path. Unlike Open, it
@@ -90,15 +102,19 @@ func OpenFile(t testing.TB, path string) *sql.DB {
 	if err != nil {
 		t.Fatalf("prepare test schema: %v", err)
 	}
-	if err := writeImage(path, image); err != nil {
-		t.Fatalf("create test db: %v", err)
-	}
-	db, err := storage.Open(path)
+	db, err := openFile(path, image)
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+func openFile(path string, image []byte) (*sql.DB, error) {
+	if err := writeImage(path, image); err != nil {
+		return nil, fmt.Errorf("create test db: %w", err)
+	}
+	return storage.Open(path)
 }
 
 func writeImage(path string, image []byte) error {

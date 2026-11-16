@@ -4,8 +4,8 @@ package testdb
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -13,43 +13,60 @@ import (
 
 // BenchmarkOpenTestDB tracks the setup cost paid by each core fixture.
 func BenchmarkOpenTestDB(b *testing.B) {
-	Open(b).Close() // Build the shared template outside the timed loop.
+	image, err := testDBImage() // Build the shared template outside the timed loop.
+	if err != nil {
+		b.Fatal(err)
+	}
 	for b.Loop() {
-		db := Open(b)
-		db.Close()
+		db, err := openMemory(image)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
 // BenchmarkFileSetup compares identical file-backed semantics, excluding the
 // once-per-process template migration from steady-state fixture cost.
 func BenchmarkFileSetup(b *testing.B) {
-	Open(b).Close()
+	image, err := testDBImage()
+	if err != nil {
+		b.Fatal(err)
+	}
 	for _, clone := range []bool{false, true} {
 		name := "migrate"
 		if clone {
 			name = "clone"
 		}
 		b.Run(name, func(b *testing.B) {
-			root := b.TempDir()
-			i := 0
+			// One live file and no per-iteration cleanup closures: both disk
+			// and retained heap stay O(1) as the benchmark scales its count.
+			path := filepath.Join(b.TempDir(), "fixture.db")
 			for b.Loop() {
-				path := filepath.Join(root, strconv.Itoa(i)+".db")
-				i++
 				var db *sql.DB
+				var err error
 				if clone {
-					db = OpenFile(b, path)
+					db, err = openFile(path, image)
 				} else {
-					var err error
 					db, err = storage.Open(path)
-					if err != nil {
-						b.Fatal(err)
-					}
-					if err := storage.Migrate(db); err != nil {
-						db.Close()
-						b.Fatal(err)
+					if err == nil {
+						err = storage.Migrate(db)
 					}
 				}
-				db.Close()
+				if err != nil {
+					if db != nil {
+						db.Close()
+					}
+					b.Fatal(err)
+				}
+				if err := db.Close(); err != nil {
+					b.Fatal(err)
+				}
+				if err := os.Remove(path); err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}

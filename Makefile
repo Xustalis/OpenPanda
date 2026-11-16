@@ -41,7 +41,7 @@ NPM_INSTALL ?= npm ci --no-fund --no-audit
 
 .PHONY: all build web web-test web-gate build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test test-go test-python adapter-test vet staticcheck fmt fmt-check site-check race race-focused gate gate-all run run-local measure clean icons winres release package release-local install-local
+        dev test test-go test-python adapter-test vet staticcheck fmt fmt-check site-check race race-focused race-dirsync gate gate-all run run-local measure clean icons winres release package release-local install-local
 
 all: build
 
@@ -290,6 +290,12 @@ race:
 # requires it and some runners leave it disabled.
 race-focused:
 	CGO_ENABLED=1 $(GO) test -race -timeout 15m ./internal/core/... ./internal/commander/... ./internal/bus/... ./internal/storage/... ./internal/testdb/... ./internal/askengine/... ./internal/scheduler/... ./webui/panel/...
+
+# Stress the directory-sync readiness boundary first, then run the complete
+# race-focused gate once. Vary scheduling without repeating unrelated suites.
+# Explicit -count bypasses cached results; every failed iteration fails the run.
+race-dirsync:
+	CGO_ENABLED=1 $(GO) test -race -timeout 3m -count=20 -cpu=1,2,4,8 -run '^Test(SignedDirSnapshotSkipsIdentitySkeleton|DirSyncEndToEnd)$$' ./internal/core
 
 # ============================================================================
 # CI Gate 清单化 (§稳定性 P1)
