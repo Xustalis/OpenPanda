@@ -40,6 +40,33 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Añadido
+
+- **[Experimental] Colaboración empresarial y TaskSync.** La CLI, MCP y la consola Web ofrecen solicitudes persistentes, ejecución y resultados ligados a revisiones, autorización de dispositivos, entregas firmadas y acciones finales controladas. Los vínculos explícitos con proyectos y permisos de la generación vigente limitan escrituras remotas y automatizaciones.
+- **Coordinación acotada de subtareas.** RPC IMMEDIATE por intento y delegación ROUND_END permiten creación idempotente, reservas de tokens y delegación, límites de profundidad y concurrencia y cesión de recursos durante la espera. Las subtareas remotas reciben el directorio real del intento del padre; sus resultados se incorporan con detección de conflictos antes de reanudarlo.
+- **Objetivos estructurados y pruebas de aceptación.** La clasificación, los planes, las especificaciones y las subtareas conservan las políticas de objetivos. Los criterios MAX exigen evaluaciones independientes aprobadas; una autorización o un estado correcto no sustituyen las pruebas que faltan.
+- **Historial de ejecución persistente.** Entradas, salidas y resúmenes de razonamiento sobreviven a recargas, chats laterales, bifurcaciones y al archivo tras eliminar sesiones. Los cursores recuperan actividad remota sin duplicados; el historial visible queda separado del contexto reproducido al modelo.
+- **Habilidades revisadas sin conexión.** Cuatro habilidades incluidas conservan revisiones fijas, licencias y hashes verificados. Los recursos importados mantienen su procedencia y no pueden declararse habilidades integradas de confianza.
+
+### Corregido
+
+- **Rechazo del aislamiento y límites de consentimiento.** Si se solicita aislamiento standard/strict y falta el backend, la ejecución se detiene. Windows incorpora AppContainer y tokens restringidos con diagnósticos de compatibilidad; los fallos conocidos de inicialización de Python 3.14 siguen documentados, sin recurrir a ejecución sin aislamiento.
+- **Seguridad de directorios compartidos.** Las concesiones del directorio físico cubren alias e instantáneas, liberan bloqueos temporales y restauran los del padre antes de reanudarlo. Cancelar después de ceder bloqueos detiene al padre; hacerlo antes de resolver el origen conserva sus bloqueos. Los diagnósticos explican ejecuciones muertas y recuperación.
+- **Archivos y servicios de Windows.** La sustitución atómica admite lectores abiertos, las sesiones usan modos de lectura compartida compatibles y se alinean identidad del servicio, ejecución y rutas. El manifiesto ARM64 del panel declara la arquitectura correcta.
+- **Rutas y autoridad limitada.** Los relés alternativos para NAT simétrica conservan identidad y diagnósticos. Se verifican procedencia del proyecto, permisos empresariales vigentes y propiedad de memoria personal durante publicación, ejecución y delegación; el planificador admite reinicialización sin runtime empresarial.
+- **Regresiones de aceptación y visualización.** La ejecución nativa ya no puede omitir IMMEDIATE cuando es obligatorio. Los informes conservan el veredicto final, el historial acepta cargas antiguas, se indica la salida indescifrable y los detalles solo omiten el cuerpo duplicado del último resultado.
+
+### Cambiado
+
+- **Pasos de ejecución completos.** Filas desplegables muestran parámetros, toda la salida registrada, estado y ejecutor, con copia y vista ampliada. Se mantienen pasos históricos y registros que solo contienen razonamiento; las imágenes aparecen como vistas previas.
+- **Colaboración y navegación.** La colaboración empresarial requiere activar explícitamente la función experimental. Se aclaran resumen de sesión, barra lateral y vistas previas de adjuntos; las tarjetas de habilidades se adaptan a pantallas pequeñas y distinguen fuentes revisadas de contenido alternativo.
+- **Habilidades y entrega de planes.** Las habilidades se cargan bajo demanda y las etapas producen un resultado final integrado. Los diagnósticos muestran capacidad y ocupación de directorios; el runtime central y la interfaz de sesiones se dividen en módulos menores.
+- **Infraestructura de verificación.** Las bases de pruebas y los benchmarks limitan recursos retenidos; la sincronización de directorios añade una prueba repetida de carreras, con ajustes de CI y comprobaciones multiplataforma.
+
+### Cambios incompatibles
+
+- No se necesita restablecer la configuración. Los datos migran automáticamente al esquema 75. Las nuevas funciones de objetivos y coordinación requieren nodos que anuncien el protocolo correspondiente; los antiguos siguen disponibles para tareas que no las exijan. La colaboración experimental sigue siendo opcional.
+
 ## [0.1.6] - 2026-11-14 — "Constellation"
 
 El parche que obliga a una ejecución a ser honesta sobre lo que terminó — nombre en clave **Constellation**: la finalización, la recuperación y los contratos de etapa siguen el trabajo que la máquina hizo realmente; las ejecuciones de solo lectura declaran su límite y las respuestas sobre el repositorio aportan evidencia del código; la consola reúne conversaciones laterales, resumen y notificaciones en una sola superficie; y un pin duro de dispositivo sigue siendo un pin y no se diluye en una preferencia. Configuración, datos almacenados y protocolo no cambian, y el esquema sigue en v67 — sin migración y sin tramas nuevas.

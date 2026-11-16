@@ -46,6 +46,33 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Added
+
+- **[Experimental] Business collaboration and TaskSync.** Durable requests, revision-bound execution and results, device authorization, signed delivery and controlled final actions are available through the CLI, MCP and Web console. Explicit project bindings and current-generation grants constrain remote writes and scoped automation.
+- **Bounded child coordination.** Attempt-scoped IMMEDIATE RPC and ROUND_END delegation support idempotent spawning, token and delegation reservations, bounded depth/fanout, and resource yielding while awaiting children. Remote children receive the actual parent attempt's workspace; conflict-aware delivery adopts their output before the parent resumes.
+- **Structured objectives and acceptance evidence.** Entry classification, plans, task specs and delegated children preserve objective policies. MAX criteria require independent passed assessments; an approval or a bare success result cannot bypass missing evidence.
+- **Durable execution history.** Tool inputs, outputs and reasoning summaries survive refresh, side chats, forks and archived session deletion. Remote activity catch-up uses cursors and deduplication; display history remains separate from model replay.
+- **Reviewed offline skills.** Four bundled skills include pinned upstream revisions, licenses and verified resource hashes. Imported resources retain provenance and cannot declare themselves trusted built-ins.
+
+### Fixed
+
+- **Sandbox refusal and consent boundaries.** Requested standard/strict isolation stops execution when its backend is unavailable. Windows adds an AppContainer/restricted-token backend with explicit adapter compatibility diagnostics; known Python 3.14 initialization failures remain documented rather than falling back to an unconfined run.
+- **Shared-workspace execution safety.** Physical workspace leases cover aliases and source snapshots, release temporary claims, and restore the parent's claims before execution resumes. Cancellation after yielding stops the parent; cancellation before source resolution preserves its existing locks. Dead-run diagnostics explain refusal and recovery.
+- **Windows file and service reliability.** Atomic replacement tolerates open readers, session reads use compatible sharing, service/runtime identity and platform path checks are aligned, and the ARM64 panel manifest uses the correct architecture.
+- **Reliable routing and bounded authority.** Symmetric-NAT fallback relays retain their identities and diagnostics. Project provenance, current business grants and personal-memory ownership remain enforced across publication, worker execution and delegation; scheduler reinitialization handles an absent business runtime.
+- **Acceptance and display regressions.** Native execution can no longer bypass a required IMMEDIATE coordination mode. Session reports preserve finalizer verdicts, historical timelines tolerate legacy payloads, undecodable output stays labeled, and task details suppress only the duplicated final result body.
+
+### Changed
+
+- **Complete execution steps.** The console shows expandable execution rows with tool parameters, full recorded output, status, executor attribution, copy and enlarged views. Historical steps and reasoning-only records remain visible; images render as previews.
+- **Collaboration and navigation.** Business collaboration requires an explicit experimental opt-in. Session overview/rail navigation and attachment previews are clearer; skill cards adapt to smaller screens and distinguish reviewed sources from fallback content.
+- **Skills and plan delivery.** Skills load on demand, plan stages feed an integrated final result, and execution diagnostics expose capacity and workspace claims. Core runtime and session UI modules are split into smaller files.
+- **Verification infrastructure.** Test database fixtures and benchmarks bound retained resources; directory-sync readiness checks gain a repeated race stress target, with CI and cross-platform assertions updated.
+
+### Breaking changes
+
+- No configuration reset is required. Stored data migrates automatically to schema 75. New objective/coordination features require peers advertising the corresponding execution protocol; older peers remain usable for tasks that do not require those features. Experimental collaboration remains opt-in.
+
 ## [0.1.6] - 2026-11-14 — "Constellation"
 
 The patch that keeps a run honest about what it finished — codename **Constellation**: completion, recovery and stage contracts follow the work the machine actually did; read-only runs declare their boundary and repository answers carry source evidence; the console folds side conversations, an overview and notifications into one surface; and a hard device pin stays a pin instead of drifting into a preference. Configuration, stored data and the wire are unchanged, and the schema stays at v67 — no migration and no new frame.
