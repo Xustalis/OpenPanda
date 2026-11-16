@@ -707,9 +707,13 @@ func newCore(t *testing.T, id string) *Core {
 // waitState polls a store until taskID reaches want, failing at the deadline.
 // Mirror-frame delivery is asynchronous — the sender never blocks on the
 // peer's read loop — so convergence is asserted by polling, not by a return.
-func waitState(t *testing.T, ctx context.Context, store *TaskStore, taskID, want string) {
+func waitState(t *testing.T, ctx context.Context, store *TaskStore, taskID, want string, timeout ...time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(4 * time.Second)
+	budget := 4 * time.Second
+	if len(timeout) > 0 {
+		budget = timeout[0]
+	}
+	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
 		if tk, err := store.Get(ctx, taskID); err == nil && tk.State == want {
 			return
