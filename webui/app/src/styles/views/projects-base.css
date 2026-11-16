@@ -1,0 +1,105 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Projects ---- */
+
+.project-create {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 18px;
+  align-items: center;
+}
+
+.project-create .input {
+  flex: 1;
+}
+
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* A project row is a block now, not a single clickable line: it carries the
+   work dir, the description and the memory size under its name, and the verbs
+   that change them (enter/leave, rename, remove) on the right. */
+.project-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  font-family: inherit;
+  font-size: var(--text-lg);
+  color: var(--text);
+  text-align: left;
+}
+
+.project-item:hover {
+  border-color: var(--accent);
+}
+
+.project-name {
+  font-weight: 550;
+}
+
+/* The entered project is marked by its border rather than by a colour fill: it is
+   one row among several and the accent has to survive a dark theme. */
+.project-active {
+  border-color: var(--accent);
+}
+
+.project-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.project-head .grow {
+  flex: 1;
+}
+
+/* The name doubles as the link into the project's memory, so it is a button
+   without looking like one. */
+.project-name-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.project-name-btn:hover .project-name {
+  color: var(--accent);
+}
+
+.project-meta {
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.project-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.project-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--dim);
+}

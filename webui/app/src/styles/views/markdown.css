@@ -1,0 +1,249 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Markdown blocks inside a reply (src/md/render.tsx) ---- */
+
+/* The block tree comes from our own parser, so these selectors describe a
+   closed set of tags — no defensive resets for markup we never emit. */
+
+.md {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md p {
+  margin: 0;
+}
+
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: 6px 0 0;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.md h2 {
+  font-size: 17px;
+}
+.md h3 {
+  font-size: 15.5px;
+}
+.md h4,
+.md h5,
+.md h6 {
+  font-size: 14.5px;
+  color: var(--text-dim);
+}
+
+.md ul,
+.md ol {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* A nested list is a child of its <li>, so undo the flex gap's double spacing
+   and pull it tight under its parent bullet. */
+.md li > ul,
+.md li > ol {
+  margin-top: 4px;
+}
+
+.md li::marker {
+  color: var(--text-dim);
+}
+
+.md blockquote {
+  margin: 0;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text-dim);
+}
+
+.md hr {
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.md a {
+  color: var(--accent);
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.md a:hover {
+  text-decoration-color: var(--accent);
+}
+
+.md :not(pre) > code {
+  /* A wash of the surface's own ink, not a second surface. `--bg-raised` is
+     pure white in light mode, so a bordered white pill inside a grey bubble
+     read as a sticker laid over the sentence; mixing the ink down keeps the
+     span a shade of whatever it sits on, in both themes. */
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 0;
+  border-radius: 4px;
+  padding: 0.05em 0.36em;
+  font-size: 0.9em;
+  /* An inline code span must not carry the container's pre-wrap: a wrapped
+     identifier should break like text, not keep its source newline. */
+  white-space: normal;
+}
+
+/* fenced code */
+
+.md-code {
+  margin: 4px 0;
+  /* `--border`, not `--border-soft`: the fill sits only a shade under the
+     bubble, so the drawn edge is what says "this is a block". */
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  /* Left padding matches the pre's, so the label sits over the code's first
+     column instead of two pixels off it. */
+  padding: 6px 8px 6px 13px;
+  /* The head shares the block's surface. A raised bar on top of a well read
+     as two stacked cards — white on grey in light mode, a lighter band in
+     dark — and the block is one object. The hairline does the separating. */
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  background: transparent;
+}
+
+.md-code-lang {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.md-copy {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: 5px;
+  padding: 1px 7px;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  cursor: pointer;
+  /* Held at low contrast until the block is hovered or the button focused:
+     a copy affordance per code block would otherwise dominate the reply.
+     0.85 rather than 0.55 — the label is always in the DOM, and at 0.55 it
+     fell to about 2:1 on the light theme's grey. */
+  opacity: 0.85;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.md-code:hover .md-copy,
+.md-copy:focus-visible {
+  opacity: 1;
+}
+
+.md-copy:hover {
+  color: var(--accent);
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+.md-code pre {
+  margin: 0;
+  padding: 11px 13px;
+  overflow-x: auto;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.md-code code {
+  white-space: pre;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+/* A JSON envelope that arrived as a reply is data, not code read line by line:
+   its long values are Chinese sentences, and `pre` would push them behind a
+   horizontal scrollbar inside a 620px bubble. Wrap it — the indentation still
+   carries the structure, and every value stays on screen. */
+.md-code code[data-lang='json'] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* tables */
+
+.md-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+
+.md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--text-md);
+  white-space: normal;
+}
+
+.md-table th,
+.md-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: top;
+  /* Cells must undo the transcript's `word-break: break-word`. That value is
+     right for prose (a long token wraps instead of stretching the bubble) but
+     it also shrinks a column's *min-content* width to a single character, so
+     auto table layout handed the narrow column ~70px and every file name broke
+     mid-word ("index.ht / ml"). `overflow-wrap` does the same emergency break
+     without touching min-content, which is what keeps the columns honest. */
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.md-table thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.md-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* streaming cursor + status */
+
+
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+
+
+/* The .spinner primitive and @keyframes spin live in components.css. Views
+   used to redefine both here; because components is imported first, the
+   second definition silently won and the token-based one was dead code. */

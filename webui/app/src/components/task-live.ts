@@ -11,6 +11,7 @@
 
 import type { TaskEvent, TraceEvent } from '../api/client.ts'
 import { formatTaskEvent, toolArgSummary } from './event-parser.ts'
+import { readableOutput } from './output-text.ts'
 import { t } from '../i18n/index.ts'
 
 export type LiveEvent = {
@@ -28,6 +29,9 @@ export type LiveStep = {
   label: string
   summary: string
   tone: string
+  /** Something the summary cannot say itself — today, how many lines of a
+   *  tool result were dropped as undecodable (see output-text). */
+  note?: string
   /** A silence heartbeat ("no output for 1m — agent still running"). It is
    *  not work, but it is the only signal a quiet agent gives; the row keeps
    *  the newest one instead of dropping it and looking frozen. */
@@ -122,6 +126,7 @@ export function liveStepOf(e: LiveEvent, detail = false): LiveStep | null {
   let label = f.label
   let summary = f.summary ?? ''
   let tone = f.badgeClass
+  let note = ''
 
   if (e.type === 'agent_event' && f.agent) {
     const b = f.agent
@@ -131,11 +136,16 @@ export function liveStepOf(e: LiveEvent, detail = false): LiveStep | null {
         summary = toolArgSummary(b.input)
         tone = 'info'
         break
-      case 'tool_result':
+      case 'tool_result': {
+        // A shell that lost its encoding hands back a wall of U+FFFD; the row
+        // keeps the lines a reader can act on and says how many it dropped.
+        const out = readableOutput(b.content ?? '')
         label = t('events.agent_tool_result')
-        summary = detail ? (b.content ?? '') : firstLine(b.content)
+        summary = detail ? out.text : firstLine(out.text)
+        if (out.dropped > 0) note = t('events.outputOmitted', { n: String(out.dropped) })
         tone = b.isError ? 'danger' : 'dim'
         break
+      }
       case 'thinking':
         label = t('events.agent_thinking')
         summary = detail ? (b.thinking ?? '') : firstLine(b.thinking)
@@ -155,11 +165,19 @@ export function liveStepOf(e: LiveEvent, detail = false): LiveStep | null {
     const d = eventData(e)
     summary = String(d.reason ?? d.rejected ?? '') || summary
     tone = 'warn'
+  } else if (e.type === 'result') {
+    // The terminal card carries stdout/stderr straight from the adapter, so
+    // it is the other place a Windows code page reaches the transcript.
+    const out = readableOutput(summary)
+    summary = out.text
+    if (out.dropped > 0) note = t('events.outputOmitted', { n: String(out.dropped) })
   }
 
   if (!summary) {
     summary = f.tags.map((tag) => tag.value).filter(Boolean).join(' · ')
   }
-  return { key: e.key, ts: e.ts, label, summary: clip(summary, detail ? 800 : 110), tone }
+  const step: LiveStep = { key: e.key, ts: e.ts, label, summary: clip(summary, detail ? 800 : 110), tone }
+  if (note) step.note = note
+  return step
 }
 

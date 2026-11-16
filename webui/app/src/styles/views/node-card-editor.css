@@ -1,0 +1,264 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Sub-agent tree (detail view) ---- */
+
+.children-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.child-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.child-row:hover {
+  border-color: var(--accent);
+}
+
+.child-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
+/* A value that navigates (the parent link): reads as a link, but is a
+   real button for focus and keyboard semantics. */
+.linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linklike:hover {
+  text-decoration: underline;
+}
+
+/* ---- Capability card editor + add-device form (stage 6) ---- */
+
+.card-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Title, the one-line write path, and what a save does — on one row, so the
+   path stops competing with the sentence for the same paragraph. */
+.card-editor-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.card-editor-head .block-title,
+.card-editor-head .hint {
+  margin: 0;
+}
+
+.card-path {
+  margin-left: auto;
+  max-width: 52%;
+  padding: 1px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: var(--fw-medium);
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+/* Section head: label, count, and the one action that changes the list. */
+.card-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-section-head .section-title {
+  margin: 0;
+}
+
+.card-add-toggle {
+  margin-left: auto;
+  padding: 2px 8px;
+}
+
+.card-add-toggle svg {
+  opacity: 0.7;
+}
+
+/* The raw-YAML toggle is a disclosure, not a page-wide action: a full-width
+   bordered button at the bottom of the card read as the primary CTA. */
+.card-raw-toggle {
+  align-self: flex-start;
+}
+
+.card-entry {
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+
+/* Agents are a set, not a list: the editor spans the full page width, so the
+   entries tile into columns instead of running one per row (six agents used
+   to cost six full-width rows for three words each). */
+.card-entries {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+  gap: 10px 14px;
+}
+
+.card-entries .card-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0 8px 10px;
+  min-width: 0;
+}
+
+.card-entry-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.card-entry-note {
+  min-width: 0;
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-entry p {
+  margin: 4px 0 0;
+  font-size: var(--text-sm);
+}
+
+.card-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.card-entry-name {
+  font-weight: 600;
+}
+
+.card-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-xs);
+}
+
+.card-add-row .input {
+  flex: 1 1 160px;
+  min-width: 140px;
+  width: auto;
+}
+
+.card-add-row .btn {
+  flex: 0 0 auto;
+}
+
+/* The tier toggle on an agent row: tier 2 (irreversible) reads as a caution
+   chip so the current consent posture is visible without clicking. */
+.btn.warn {
+  color: var(--warn);
+  border-color: var(--warn-border, var(--border));
+  background: transparent;
+  background-image: none;
+}
+
+.btn.warn:hover:not(:disabled) {
+  background: var(--warn-soft, var(--bg-hover));
+}
+
+.card-raw-toggle {
+  margin-top: 4px;
+}
+
+.card-raw-editor textarea {
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  resize: vertical;
+  min-height: 200px;
+}
+
+.join-guide {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.join-guide p {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.join-guide .ok {
+  color: var(--accent);
+}
+
+.join-steps {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+}
+
+.join-steps code {
+  font-size: 12px;
+  word-break: break-all;
+}

@@ -84,7 +84,8 @@ func (h *handler) auditSessionSummaries(ctx context.Context, id string, repair b
 		if repair && row.Status == "orphan" {
 			// Same durable key as the normal finalizer; concurrent repair requests
 			// and a process crash after append remain safe.
-			if _, err := h.sessions.AppendTurn(id, sessions.Turn{Role: "assistant", Kind: "answer", Ref: task.TaskID, Text: h.taskSummary(ctx, task), IdempotencyKey: taskSummaryKey(task)}); err != nil {
+			judge := h.taskVerdict(ctx, task.TaskID)
+			if _, err := h.sessions.AppendTurn(id, sessions.Turn{Role: "assistant", Kind: "answer", Ref: task.TaskID, Text: h.taskSummary(ctx, task, judge), Verdict: judge, IdempotencyKey: taskSummaryKey(task)}); err != nil {
 				row.Status = "failed"
 			} else {
 				row.Status = "repaired"

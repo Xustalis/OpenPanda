@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import importlib.util
 import json
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -16,7 +17,7 @@ class LiveMetricsTest(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
-        with sqlite3.connect(root / 'runtime.db') as db:
+        with closing(sqlite3.connect(root / 'runtime.db')) as db, db:
             db.executescript('CREATE TABLE tasks(task_id,stage_id,state,needs_json,resource_json,output_artifact); CREATE TABLE task_events(id,task_id,ts,type,data_json); CREATE TABLE task_checks(id,task_id,phase,check_id,status,exit_code,duration_ms);')
             db.executemany('INSERT INTO tasks VALUES(?,?,?,?,?,?)', [('a','a','done','[]','{}','hash-a'),('b','b','done','["a"]','{}','hash-b')])
             db.executemany('INSERT INTO task_events VALUES(?,?,?,?,?)', [(1,'a',10,'exec_agent_start','{}'),(2,'a',20,'result','{"ok":true}'),(3,'b',20,'exec_agent_start','{}'),(4,'b',30,'result','{"ok":true}')])
@@ -56,7 +57,7 @@ class LiveMetricsTest(unittest.TestCase):
     def test_same_second_requires_producer_event_before_consumer(self):
         root = self.fixture()
         self.assertTrue(metrics.collect(root)['edges'][0]['dependency_respected'])
-        with sqlite3.connect(root / 'runtime.db') as db:
+        with closing(sqlite3.connect(root / 'runtime.db')) as db, db:
             db.execute('UPDATE task_events SET id=5 WHERE id=2')
         data = metrics.collect(root)
         self.assertFalse(data['edges'][0]['dependency_respected'])
@@ -81,7 +82,7 @@ class LiveMetricsTest(unittest.TestCase):
 
     def test_duplicate_stage_ids_are_not_silently_merged(self):
         root = self.fixture()
-        with sqlite3.connect(root / 'runtime.db') as db:
+        with closing(sqlite3.connect(root / 'runtime.db')) as db, db:
             db.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?)', ('duplicate', 'a', 'done', '[]', '{}', 'hash'))
         data = metrics.collect(root)
         self.assertFalse(data['graph_valid'])
@@ -91,7 +92,7 @@ class LiveMetricsTest(unittest.TestCase):
 
     def test_done_without_execution_evidence_is_not_verified(self):
         root = self.fixture()
-        with sqlite3.connect(root / 'runtime.db') as db:
+        with closing(sqlite3.connect(root / 'runtime.db')) as db, db:
             db.execute('DELETE FROM task_events WHERE id=4')
         data = metrics.collect(root)
         self.assertTrue(data['all_done'])
@@ -100,13 +101,13 @@ class LiveMetricsTest(unittest.TestCase):
 
     def test_missing_dependency_and_cycle_are_reported(self):
         root = self.fixture()
-        with sqlite3.connect(root / 'runtime.db') as db:
+        with closing(sqlite3.connect(root / 'runtime.db')) as db, db:
             db.execute('UPDATE tasks SET needs_json=? WHERE stage_id=?', ('["missing"]', 'b'))
         data = metrics.collect(root)
         self.assertFalse(data['graph_valid'])
         self.assertEqual(data['edges'][0]['reason'], 'missing_dependency')
         self.assertIsNone(data['observed_critical_path_lower_bound_s'])
-        with sqlite3.connect(root / 'runtime.db') as db:
+        with closing(sqlite3.connect(root / 'runtime.db')) as db, db:
             db.execute('UPDATE tasks SET needs_json=? WHERE stage_id=?', ('["b"]', 'a'))
             db.execute('UPDATE tasks SET needs_json=? WHERE stage_id=?', ('["a"]', 'b'))
         data = metrics.collect(root)
@@ -115,15 +116,38 @@ class LiveMetricsTest(unittest.TestCase):
 
     def test_done_label_without_success_result_has_no_bound(self):
         root = self.fixture()
-        with sqlite3.connect(root / 'runtime.db') as db:
+        with closing(sqlite3.connect(root / 'runtime.db')) as db, db:
             db.execute('UPDATE task_events SET data_json=? WHERE id=2', ('{"ok":false}',))
         data = metrics.collect(root)
         self.assertFalse(data['edges'][0]['dependency_respected'])
         self.assertIsNone(data['observed_critical_path_lower_bound_s'])
 
+    def test_invalid_event_closes_database(self):
+        root = self.fixture()
+        with closing(sqlite3.connect(root / 'runtime.db')) as db, db:
+            db.execute('UPDATE task_events SET data_json=? WHERE id=2', ('{',))
+        connect = sqlite3.connect
+        opened = []
+
+        def open_database(*args, **kwargs):
+            db = connect(*args, **kwargs)
+            opened.append(db)
+            return db
+
+        try:
+            with mock.patch.object(metrics.sqlite3, 'connect', side_effect=open_database):
+                with self.assertRaises(json.JSONDecodeError):
+                    metrics.collect(root)
+            self.assertEqual(len(opened), 1)
+            with self.assertRaises(sqlite3.ProgrammingError):
+                opened[0].execute('SELECT 1')
+        finally:
+            for db in opened:
+                db.close()
+
     def test_deep_graph_does_not_require_python_recursion(self):
         root = self.fixture()
-        with sqlite3.connect(root / 'runtime.db') as db:
+        with closing(sqlite3.connect(root / 'runtime.db')) as db, db:
             db.execute('DELETE FROM tasks')
             db.execute('DELETE FROM task_events')
             for i in range(1100):
@@ -137,7 +161,7 @@ class LiveMetricsTest(unittest.TestCase):
     def test_dependency_violation_and_process_count_are_not_hidden(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            with sqlite3.connect(root / 'runtime.db') as db:
+            with closing(sqlite3.connect(root / 'runtime.db')) as db, db:
                 db.executescript('CREATE TABLE tasks(task_id,stage_id,state,needs_json,resource_json,output_artifact); CREATE TABLE task_events(id,task_id,ts,type,data_json); CREATE TABLE task_checks(id,task_id,phase,check_id,status,exit_code,duration_ms);')
                 db.executemany('INSERT INTO tasks VALUES(?,?,?,?,?,?)', [('a','a','done','[]','{}','hash-a'),('b','b','done','["a"]','{}','hash-b')])
                 db.executemany('INSERT INTO task_events VALUES(?,?,?,?,?)',[(1,'a',10,'exec_agent_start','{}'),(2,'a',20,'result','{"ok":true}'),(3,'b',19,'exec_agent_start','{}'),(4,'b',30,'result','{"ok":true}'),(5,'a',11,'agent_event','{"ev":"tool_use","name":"Bash","input":{"command":"PRIVATE"}}')])
@@ -152,12 +176,12 @@ class LiveMetricsTest(unittest.TestCase):
             self.assertEqual(data['observed_execution_makespan_s'],20)
             self.assertNotIn('PRIVATE',json.dumps(data))
             self.assertIsNone(data['observed_critical_path_lower_bound_s'])
-            with sqlite3.connect(root/'runtime.db') as db:
+            with closing(sqlite3.connect(root/'runtime.db')) as db, db:
                 db.execute('INSERT INTO task_checks VALUES(?,?,?,?,?,?,?)',(3,'b','final','c','pass',0,1))
             recovered=metrics.collect(root)
             self.assertTrue(recovered['all_final_checks_pass'])
             self.assertEqual(recovered['historical_failed_final_checks'],1)
-            with sqlite3.connect(root/'runtime.db') as db:
+            with closing(sqlite3.connect(root/'runtime.db')) as db, db:
                 db.execute('DELETE FROM tasks')
             self.assertFalse(metrics.collect(root)['all_done'])
 

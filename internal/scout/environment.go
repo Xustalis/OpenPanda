@@ -72,17 +72,35 @@ func CaptureEnvironment(ctx context.Context, root string) EnvironmentSnapshot {
 			s.RootRules = append(s.RootRules, ref)
 		}
 	}
-	// One shared budget, including missing/slow git and enormous dirty trees.
+	s.Git = captureGit(ctx, abs)
+	return s
+}
+
+func captureGit(ctx context.Context, root string) GitSnapshot {
+	// Root and status are independent read-only queries. Start both within the
+	// same budget so Windows process startup does not consume it sequentially.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if top, ok := environmentGit(ctx, abs, 4096, "rev-parse", "--show-toplevel"); ok {
-		s.Git.Known, s.Git.RepoRoot = true, strings.TrimSpace(top)
-		s.Git.Commit, _ = environmentGit(ctx, abs, 128, "rev-parse", "--verify", "HEAD")
-		s.Git.Branch, _ = environmentGit(ctx, abs, 256, "symbolic-ref", "--short", "-q", "HEAD")
-		// diff-index alone misses untracked files. Only need the two status bytes,
-		// not a potentially huge or sensitive list of changed paths.
-		status, ok := environmentGit(ctx, abs, 2, "status", "--porcelain=v1", "--untracked-files=normal")
-		s.Git.DirtyKnown, s.Git.Dirty = ok, ok && status != ""
+	type rootResult struct {
+		top string
+		ok  bool
+	}
+	rootReady := make(chan rootResult, 1)
+	go func() {
+		top, ok := environmentGit(ctx, root, 4096, "rev-parse", "--show-toplevel")
+		rootReady <- rootResult{top: top, ok: ok}
+	}()
+	// Porcelain v2 reports HEAD, branch and tracked/untracked dirt together;
+	// its writer discards every filename rather than collecting the listing.
+	status, statusOK := environmentGitStatus(ctx, root)
+	repo := <-rootReady
+	if !repo.ok {
+		return GitSnapshot{}
+	}
+	s := GitSnapshot{Known: true, RepoRoot: repo.top}
+	if statusOK {
+		s.Commit, s.Branch = status.commit, status.branch
+		s.DirtyKnown, s.Dirty = true, status.dirty
 	}
 	return s
 }
@@ -150,6 +168,59 @@ func environmentGit(ctx context.Context, root string, limit int, args ...string)
 	cmd.WaitDelay = 100 * time.Millisecond
 	err := cmd.Run()
 	return strings.TrimSpace(string(w.b)), err == nil
+}
+
+// Only branch headers enter memory. Every status path is discarded from its
+// first byte, while the command is still drained so huge dirty trees cannot
+// fill a pipe or become a persisted list of sensitive filenames.
+type environmentStatusOutput struct {
+	header         []byte
+	dropLine       bool
+	commit, branch string
+	dirty          bool
+}
+
+func (w *environmentStatusOutput) Write(data []byte) (int, error) {
+	for _, b := range data {
+		if b == '\n' {
+			w.finishLine()
+			continue
+		}
+		if w.dropLine {
+			continue
+		}
+		if len(w.header) == 0 && b != '#' {
+			w.dirty, w.dropLine = true, true
+			continue
+		}
+		if len(w.header) < 512 {
+			w.header = append(w.header, b)
+		}
+	}
+	return len(data), nil
+}
+
+func (w *environmentStatusOutput) finishLine() {
+	line := strings.TrimSpace(string(w.header))
+	if oid, ok := strings.CutPrefix(line, "# branch.oid "); ok && oid != "(initial)" {
+		w.commit = oid
+	}
+	if branch, ok := strings.CutPrefix(line, "# branch.head "); ok && branch != "(detached)" {
+		w.branch = branch
+	}
+	w.header = w.header[:0]
+	w.dropLine = false
+}
+
+func environmentGitStatus(ctx context.Context, root string) (*environmentStatusOutput, bool) {
+	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", root,
+		"status", "--porcelain=v2", "--branch", "--no-ahead-behind", "--untracked-files=normal")
+	w := &environmentStatusOutput{}
+	cmd.Stdout = w
+	cmd.WaitDelay = 100 * time.Millisecond
+	err := cmd.Run()
+	w.finishLine()
+	return w, err == nil
 }
 
 // Render names the observation boundary so an agent never treats a baseline

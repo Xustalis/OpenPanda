@@ -1,0 +1,97 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- System: doctor / cost / context ---- */
+
+.doctor-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.doctor-head .btn {
+  margin-left: auto;
+}
+.doctor-list {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.doctor-check {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
+}
+.doctor-check.bad {
+  background: var(--semantic-danger-soft);
+}
+.doctor-check.ok:hover {
+  background: var(--bg-hover);
+}
+.doctor-mark {
+  width: 16px;
+  flex: none;
+  font-weight: 700;
+}
+.doctor-mark.ok {
+  color: var(--semantic-good);
+}
+.doctor-mark.bad {
+  color: var(--semantic-danger);
+}
+.doctor-label {
+  flex: none;
+  min-width: 180px;
+}
+.doctor-pairs {
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.cost-stats {
+  display: flex;
+  gap: var(--sp-6);
+  flex-wrap: wrap;
+  margin: var(--sp-3) 0 var(--sp-4);
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stat-value {
+  font-size: var(--text-2xl);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.stat-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ctx-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sp-2) var(--sp-5);
+  margin: var(--sp-3) 0 0;
+}
+.ctx-row {
+  display: flex;
+  gap: var(--sp-3);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.ctx-row dt {
+  flex: none;
+  width: 110px;
+  font-size: var(--text-sm);
+}
+.ctx-val {
+  margin: 0;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}

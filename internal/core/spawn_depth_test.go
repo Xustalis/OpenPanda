@@ -506,14 +506,16 @@ func TestSpawnChildTaskPersistsIsolate(t *testing.T) {
 
 // The structured schema's advertised ceiling follows the configured
 // max_children so the model never sees room the budget doesn't grant.
+// The rendered schema is minified (it rides a Windows command line), so the
+// assertions match the compact form.
 func TestAgentResultSchemaMaxItemsFollowsConfig(t *testing.T) {
-	if s := agentResultSchemaFor(nil, false, 3); !strings.Contains(s, `"maxItems": 3,`) {
+	if s := agentResultSchemaFor(nil, false, 3); !strings.Contains(s, `"maxItems":3,`) {
 		t.Fatal("schema did not adopt max_children=3")
 	}
-	if s := agentResultSchemaFor(nil, false, 20); !strings.Contains(s, `"maxItems": 20,`) {
+	if s := agentResultSchemaFor(nil, false, 20); !strings.Contains(s, `"maxItems":20,`) {
 		t.Fatal("schema did not adopt max_children=20")
 	}
-	if s := agentResultSchemaFor(nil, false, 0); !strings.Contains(s, `"maxItems": 8,`) {
+	if s := agentResultSchemaFor(nil, false, 0); !strings.Contains(s, `"maxItems":8,`) {
 		t.Fatal("zero bound did not keep the baked-in 8")
 	}
 }

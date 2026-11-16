@@ -75,6 +75,12 @@ type Turn struct {
 	DeliveryAttemptID string `json:"delivery_attempt_id,omitempty"`
 	Delivery          string `json:"delivery,omitempty"`
 	DeliveryTruncated bool   `json:"delivery_truncated,omitempty"`
+	// Verdict is panda's own one-sentence judgement of the work (the last
+	// supervision round's reason), display-only and never replayed. It rides
+	// beside Delivery so the console can print the house's sentence above the
+	// employee's report instead of letting the agent's own "结论：成功" stand
+	// as if panda had certified it.
+	Verdict string `json:"verdict,omitempty"`
 	// Thought is provider-supplied reasoning/summary, display-only, never replayed.
 	Thought     string `json:"thought,omitempty"`
 	RoundID     string `json:"round_id,omitempty"`

@@ -1,0 +1,362 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ==== Connection-grouped registry (upstream) ====
+   Kept whole from the upstream registry rewrite: one card per endpoint+key,
+   its models underneath. This branch paints those models as tiles instead of
+   rows, so the row rules here only serve the dialogs that still use them. */
+/* ---- Models registry (settings → models) ---- */
+
+.models-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.model-items {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--sp-3);
+}
+.model-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  /* The confirm hint is a full-width flex item; without wrapping it squeezed
+     the identity column to nothing and the buttons landed on the model name. */
+  flex-wrap: wrap;
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border-soft);
+}
+.model-item-main {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.model-item-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.model-alias {
+  font-weight: 600;
+  font-size: var(--text-md);
+}
+.model-item-sub {
+  font-size: var(--text-sm);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.model-item-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+/* Four two-character buttons (switch, test, edit, remove) is the widest row;
+   reserving that width keeps the labels in one column whether or not the row
+   happens to be the live one and therefore has no "switch". Without it every
+   row's buttons sat at a different offset. */
+.model-item-actions {
+  min-width: 210px;
+}
+.model-item-confirm {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+  text-align: right;
+  margin: 4px 0 0;
+}
+
+/* The repair offer inside the edit dialog: names the mismatch and does the
+   switch in one click, instead of leaving the user to guess which of the two
+   fields — plan or endpoint — is the wrong one. */
+.fix-suggest {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--semantic-warn-border);
+  border-radius: var(--radius-md);
+  background: var(--semantic-warn-soft);
+  font-size: var(--text-sm);
+}
+
+/* ---- Add/edit dialogs ---- */
+
+/* Two classes deep on purpose: .wizard-modal's own 560px rule is defined
+   further down the sheet and would otherwise win on source order. */
+.wizard-modal.wizard-wide {
+  width: min(760px, calc(100vw - 32px));
+}
+/* The multi-model table needs room for four fields on one line: the rail takes
+   224px of the sheet, and a row squeezed into the remaining 650px wraps its
+   last two fields into a second line that reads as a layout bug. */
+.wizard-modal.wizard-roomy {
+  width: min(1000px, calc(100vw - 32px));
+}
+.conn-form {
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  margin-bottom: var(--sp-4);
+}
+.conn-form .field-group:last-child {
+  margin-bottom: 0;
+}
+.proto-field {
+  flex: none;
+  width: 132px;
+}
+.models-table-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-2);
+}
+.models-table-actions {
+  display: flex;
+  gap: 6px;
+}
+/* The head follows the last field of the form above it — and in the edit
+   sheet it follows the tuning box, where touching it would read as part of
+   it. One gap says "new topic" without a rule. */
+.wizard-pane > .models-table-head {
+  margin-top: var(--sp-4);
+}
+.models-table {
+  display: flex;
+  flex-direction: column;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+/* Inside the sheet the pane is already the scroller: a second one inside it
+   would trap the wheel over the middle of the form. */
+.wizard-pane .models-table {
+  max-height: none;
+  overflow-y: visible;
+}
+.draft-row {
+  border-top: 1px solid var(--border-soft);
+  padding: var(--sp-3) 0;
+}
+.draft-row:first-child {
+  border-top: none;
+}
+.draft-main {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+.draft-check {
+  margin-top: 26px;
+  flex: none;
+}
+.draft-fields {
+  flex: 1;
+  min-width: 0;
+}
+.draft-fields-row {
+  display: grid;
+  /* Fixed trailing columns, elastic leading ones: a row keeps its four fields
+     on one line at the sheet's width, and the header above repeats the exact
+     same template so its labels land over the fields they name. */
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) 116px 116px 28px;
+  gap: var(--sp-2);
+  align-items: end;
+}
+.draft-fields-row > .field-group {
+  min-width: 0;
+  margin-bottom: 0;
+}
+/* A model id and its display name are longer than any number field, and a
+   clipped id is the one thing the user must be able to read back verbatim. */
+.draft-fields-row > .field-group:not(.narrow) {
+  min-width: 0;
+}
+.draft-fields-row > .btn.icon-btn {
+  width: 28px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+  align-self: end;
+}
+.draft-fields-row > .field-group > label {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+/* The edit sheet keeps the narrow modal (no .wizard-roomy), so its pane is
+   ~200px tighter than the add sheet's: the model id — the one field that has
+   to be read back verbatim — takes the width the two numeric columns can
+   spare. Declared after the base template so it wins on equal specificity. */
+.wizard-modal:not(.wizard-roomy) .draft-fields-row {
+  grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.1fr) 96px 104px 28px;
+}
+/* Below the phone breakpoint four fields stop fitting on one line: two per
+   row keeps the model id readable instead of shaving it to 90px. Declared
+   after the base template so it wins on equal specificity. */
+@media (max-width: 620px) {
+  .draft-fields-row,
+  .wizard-modal:not(.wizard-roomy) .draft-fields-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+/* One header for the whole table. The column widths repeat the row's flex
+   weights exactly, so the labels sit over the fields they name. */
+.draft-head {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-end;
+  padding-bottom: 2px;
+}
+/* The checkbox's own margin is part of the row's layout; the spacer has to
+   carry it too or every label below drifts a few pixels left. */
+.draft-head-check {
+  flex: none;
+  width: 13px;
+  margin: 0 3px;
+}
+.draft-head .draft-fields-row {
+  align-items: end;
+}
+.draft-head .draft-fields-row > .field-group {
+  margin-bottom: 0;
+}
+.draft-head-end {
+  flex: none;
+  width: 28px;
+}
+.draft-row.bare .draft-check {
+  margin-top: 9px;
+}
+/* Keep the label for assistive tech, drop it from the visual flow — the
+   header above already says it. */
+.draft-row.bare .draft-fields-row > .field-group > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+.draft-advanced-toggle {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  margin-top: 4px;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.draft-advanced-toggle:hover {
+  color: var(--text-primary);
+}
+.draft-advanced {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken, var(--bg-raised));
+}
+/* A grid, not a wrapping flex row: a hint under one field must not push that
+   field's label out of line with its neighbours. */
+.draft-grid {
+  display: grid;
+  gap: var(--sp-3);
+  align-items: start;
+  margin-bottom: var(--sp-1);
+}
+.draft-grid.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.draft-grid.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.draft-grid > .field-group {
+  margin-bottom: 0;
+  min-width: 0;
+}
+/* The number inputs carry their recommendation as a placeholder; Chrome's
+   stepper sits on top of it and reads as a broken glyph. */
+.wizard-modal input[type='number'] {
+  -moz-appearance: textfield;
+}
+.wizard-modal input[type='number']::-webkit-outer-spin-button,
+.wizard-modal input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.icon-btn {
+  padding: 4px 6px;
+}
+.modal-actions.spread {
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.u-flex-1 {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The "live, unregistered" flag: a corner ribbon would fight the dot, so it
+   sits as a quiet caption line and yields the space to the verbs on hover. */
+.model-tile-flag {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  text-align: center;
+  pointer-events: none;
+}
+.model-tile:hover .model-tile-flag,
+.model-tile:focus-within .model-tile-flag {
+  opacity: 0;
+}
+
+/* Execution policy follows the existing settings sheet's spacing and tokens. */
+.execution-agent-grid,
+.execution-limits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 16px;
+}
+.execution-agent {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.execution-agent legend { padding: 0 4px; }
+.execution-field { display: grid; gap: 6px; margin-bottom: 12px; font-size: .85rem; }
+
+/* ---- Per-item settings on model tiles ---------------------------------
+   The gear sits in the tile's top-right corner, above the full-tile switch
+   button. It is always visible (an item's settings entry must be findable),
+   but stays quiet until hover/focus. */
+.model-item-settings {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+}
+.model-item-settings .item-settings-btn {
+  background: var(--bg-overlay);
+  border-color: var(--border-soft);
+  box-shadow: var(--shadow-xs);
+}
+.model-item-settings .item-settings-btn:hover,
+.model-item-settings .item-settings-btn.on {
+  background: var(--bg-raised);
+  border-color: var(--border-strong);
+}

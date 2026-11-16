@@ -28,6 +28,7 @@ package core
 // shadow this package's import.
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -761,21 +762,25 @@ func (c *Core) attachedWorkDir(taskID string) (string, error) {
 	return dir, nil
 }
 
-// fetchStageInputs fetches verified artifacts before hydrating a stage through
-// a causal merge. Standalone legacy attachments retain their extraction path.
+// fetchStageInputs downloads inputs before landing them in the workspace.
+// Shared-tree callers prefetch before taking their short preparation lease.
 func (c *Core) fetchStageInputs(ctx context.Context, t Task, workDir string) error {
-	if len(t.Inputs) == 0 {
-		return nil
-	}
-	// A local native checkpoint refers to the workspace as the agent left it.
-	// Re-extracting upstream inputs here silently rolls back edits to shared
-	// filenames (for example integrate/app.js), while resuming a conversation
-	// which still believes those edits exist. Never hydrate over that state.
-	if t.AgentSessionID != "" && (t.AgentSessionNode == "" || scheduler.SameRuntimeIdentity(t.AgentSessionNode, c.nodeID)) {
-		if !dirHasFiles(workDir) {
-			return fmt.Errorf("local checkpoint workspace is missing or empty; refusing to replace it with upstream inputs: %s", workDir)
+	if !c.resumesLocalCheckpoint(t) {
+		if err := c.ensureStageInputs(ctx, t); err != nil {
+			return err
 		}
-		c.EvTrace(ctx, t.TaskID, "checkpoint_workspace_preserved", map[string]any{"stage": t.StageID, "inputs": len(t.Inputs)})
+	}
+	return c.landStageInputs(ctx, t, workDir)
+}
+
+func (c *Core) resumesLocalCheckpoint(t Task) bool {
+	return t.AgentSessionID != "" && (t.AgentSessionNode == "" || scheduler.SameRuntimeIdentity(t.AgentSessionNode, c.nodeID))
+}
+
+// ensureStageInputs only populates the artifact pool; it never writes a shared
+// checkout. Slow or unavailable peers therefore cannot hold its preparation lock.
+func (c *Core) ensureStageInputs(ctx context.Context, t Task) error {
+	if len(t.Inputs) == 0 {
 		return nil
 	}
 	if c.artifacts == nil {
@@ -841,6 +846,28 @@ func (c *Core) fetchStageInputs(ctx context.Context, t Task, workDir string) err
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// landStageInputs requires the caller's workspace lease and already-fetched
+// artifacts. It does no network work while that shared-tree lease is held.
+func (c *Core) landStageInputs(ctx context.Context, t Task, workDir string) error {
+	if len(t.Inputs) == 0 {
+		return nil
+	}
+	// A local native checkpoint refers to the workspace as the agent left it.
+	// Re-extracting upstream inputs here silently rolls back edits to shared
+	// filenames (for example integrate/app.js), while resuming a conversation
+	// which still believes those edits exist. Never hydrate over that state.
+	if c.resumesLocalCheckpoint(t) {
+		if !dirHasFiles(workDir) {
+			return fmt.Errorf("local checkpoint workspace is missing or empty; refusing to replace it with upstream inputs: %s", workDir)
+		}
+		c.EvTrace(ctx, t.TaskID, "checkpoint_workspace_preserved", map[string]any{"stage": t.StageID, "inputs": len(t.Inputs)})
+		return nil
+	}
+	for _, in := range t.Inputs {
 		if t.PlanID == "" {
 			if _, err := c.artifacts.Extract(in.Hash, workDir); err != nil {
 				return fmt.Errorf("extract input %s: %w", in.Hash, err)
@@ -1239,7 +1266,7 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 	if err := c.seedDelegateSnapshot(ctx, child, in); err != nil {
 		return fmt.Errorf("seed isolated sibling: %w", err)
 	}
-	if err := c.store.SetQueueMeta(ctx, child.TaskID, PriorityNormal, in.SessionID, in.WorkDir, childResourceKeys(child.TaskID, in)); err != nil {
+	if err := c.store.SetQueueMeta(ctx, child.TaskID, PriorityNormal, in.SessionID, in.WorkDir, c.childResourceKeysFor(child.TaskID, in)); err != nil {
 		return fmt.Errorf("queue meta for child: %w", err)
 	}
 	if err := c.store.Queue(ctx, child.TaskID, c.nodeID); err != nil {
@@ -1542,7 +1569,25 @@ func agentResultSchemaFor(abilities []string, restricted bool, maxChildren int) 
 			`"description": "done = finished; question = blocked on input or a PERMISSION only the user can grant; delegate = requested sub-tasks; failed = could not complete. NOTE: this session is READ-ONLY (no Write/Edit/Bash). If completing the task requires writing files or running commands, report status=question explaining that the user must authorize the task — do NOT delegate: a sub-task cannot grant a permission this session lacks."`,
 			1)
 	}
-	return s
+	// The schema travels on the agent CLI's command line (--json-schema), and
+	// a Windows command line is capped at 8191 characters. Indented, this
+	// document is ~5.5k on its own — the adapter's own budget check (6000)
+	// then refuses to spawn the run even after the prompt has moved to stdin,
+	// which is how a task parked with "command line is still 6410 characters".
+	// Minified it is ~4.5k, leaving room for the rest of the argv. The literal
+	// above stays indented: humans read it, the CLI does not.
+	return compactJSON(s)
+}
+
+// compactJSON strips the whitespace a hand-written JSON literal carries.
+// A literal that cannot be compacted is a build-time bug, not a reason to
+// fail a run, so the input comes back unchanged.
+func compactJSON(s string) string {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, []byte(s)); err != nil {
+		return s
+	}
+	return buf.String()
 }
 
 // abilityIDs lists every capability id this node declares — native commands
@@ -1861,10 +1906,8 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 		Isolate:    dr.Isolate,
 		TargetNode: dr.Node,
 		Project:    parent.Project,
-		// A child works inside its parent's conversation, so it must claim the
-		// parent's lane. Inheriting nothing would hand it the project root —
-		// an ancestor of the parent's own key — and the child would queue
-		// behind the task that is waiting for it to finish.
+		// Keep the child's conversation attribution. Workspace locks depend on
+		// actual paths; the parent yields them while waiting for its children.
 		SessionID:    parent.SessionID,
 		Transport:    parent.Transport,
 		DeadlineUnix: parent.DeadlineUnix,

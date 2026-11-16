@@ -531,10 +531,19 @@ func (c *Core) mergeIsolatedRun(ctx context.Context, task Task) isolatedMergeRes
 // dir adds its dir key on top: a writer pinned to the same tree locks
 // dir:<path>, not the project key, and the merge must wait it out too.
 func (c *Core) acquireMergeLocks(ctx context.Context, task Task, runID string) (func(), error) {
-	keys := queue.DefaultKeys(nil, task.Project, task.WorkDir, task.TaskID)
+	keys := c.resourceKeysFor(TaskInput{Project: task.Project, WorkDir: task.WorkDir})
 	if wd := queue.WorkDirKey(task.WorkDir); wd != "" && !slices.Contains(keys, "dir:"+wd) {
 		keys = append(keys, "dir:"+wd)
 	}
+	main := task.WorkDir
+	if main == "" {
+		var err error
+		main, err = c.projectWorkDir(task.Project)
+		if err != nil {
+			return nil, fmt.Errorf("merge workspace locks: %w", err)
+		}
+	}
+	keys = queue.CanonicalKeys(append(keys, queue.WorkspaceScopeKey(main, "")))
 	if len(keys) == 0 {
 		return func() {}, nil
 	}

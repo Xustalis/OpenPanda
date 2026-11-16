@@ -1,0 +1,94 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Settings ---- */
+
+.settings-card {
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.field-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+}
+
+/* Segmented control: a track with a raised thumb, not three joined blocks —
+   the old ink slab read as a button that happened to be three buttons wide.
+   The track uses the alpha ramp so it sits *below* the surface in light and
+   *above* it in dark, which is what "unselected" should look like in both. */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-md);
+  width: fit-content;
+}
+
+.seg {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1.45;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.seg:hover:not(.on) {
+  background: var(--surface-alpha-sm);
+  color: var(--text);
+}
+
+.seg.on {
+  background: var(--accent-strong);
+  color: var(--accent-ink);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.test-result {
+  margin: 0;
+  font-size: var(--text-md);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+}
+
+.test-result.ok {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.test-result.bad {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
