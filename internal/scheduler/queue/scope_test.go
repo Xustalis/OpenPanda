@@ -3,9 +3,9 @@
 package queue
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -144,17 +144,13 @@ func TestProjectKeyFoldsCase(t *testing.T) {
 	}
 }
 
-// TestSessionLanesParallelize pins the conversation-lane contract: two
-// conversations on ONE checkout run side by side, each stays serial against
-// itself, and a claim with no conversation keeps excluding everyone.
-func TestSessionLanesParallelize(t *testing.T) {
+// Sessions sharing a checkout share its locks. Scope declarations, rather
+// than conversation identity, are what allow shared-tree parallelism.
+func TestSessionsShareCheckoutLocks(t *testing.T) {
 	a := SessionScopeKey("proj", "sess-a")
 	b := SessionScopeKey("proj", "sess-b")
-	if !strings.HasSuffix(a, "/@session/sess-a") {
-		t.Fatalf("lane key = %q, want the @session level under the project root", a)
-	}
-	if ScopeKeysConflict(a, b) {
-		t.Fatalf("two conversations must not conflict: %q vs %q", a, b)
+	if a != ScopeRootKey("proj") || b != a {
+		t.Fatalf("shared checkout roots diverged: %q vs %q", a, b)
 	}
 	if !ScopeKeysConflict(ScopeRootKey("proj"), a) {
 		t.Fatal("a whole-project claim (no conversation) must still exclude a lane")
@@ -162,8 +158,11 @@ func TestSessionLanesParallelize(t *testing.T) {
 	if !ScopeKeysConflict(SessionScopeKey("proj", "sess-a"), SessionScopeLeafKey("proj", "sess-a", "src")) {
 		t.Fatal("a conversation's own scoped child must stay inside its lane")
 	}
-	if ScopeKeysConflict(SessionScopeLeafKey("proj", "sess-a", "src"), SessionScopeLeafKey("proj", "sess-b", "src")) {
-		t.Fatal("the same path in two conversations must stay disjoint")
+	if !ScopeKeysConflict(SessionScopeLeafKey("proj", "sess-a", "src"), SessionScopeLeafKey("proj", "sess-b", "src")) {
+		t.Fatal("the same shared path must conflict across conversations")
+	}
+	if ScopeKeysConflict(SessionScopeLeafKey("proj", "sess-a", "src"), SessionScopeLeafKey("proj", "sess-b", "docs")) {
+		t.Fatal("disjoint paths must still run in parallel across conversations")
 	}
 	if SessionScopeKey("proj", "") != ScopeRootKey("proj") {
 		t.Fatalf("empty session must fall back to the root, got %q", SessionScopeKey("proj", ""))
@@ -174,21 +173,79 @@ func TestSessionLanesParallelize(t *testing.T) {
 	if SessionProjectKey("proj", "") != ProjectKey("proj") {
 		t.Fatal("empty session must keep the legacy project key")
 	}
-	if SessionProjectKey("proj", "sess-a") == SessionProjectKey("proj", "sess-b") {
-		t.Fatal("project keys of two conversations must differ")
+	if SessionProjectKey("proj", "sess-a") != SessionProjectKey("proj", "sess-b") {
+		t.Fatal("whole-project keys must not depend on the conversation")
 	}
 
 	r := NewResourceRegistry()
 	if !r.TryAcquire([]string{a}, "t1") {
 		t.Fatal("first lane must acquire")
 	}
-	if !r.TryAcquire([]string{b}, "t2") {
-		t.Fatal("a second conversation must acquire while the first holds its lane")
+	if r.TryAcquire([]string{b}, "t2") {
+		t.Fatal("a second conversation must wait for the shared checkout")
 	}
 	if r.TryAcquire([]string{SessionScopeKey("proj", "sess-a")}, "t3") {
 		t.Fatal("the same lane must conflict with itself")
 	}
 	if r.TryAcquire([]string{ScopeRootKey("proj")}, "t4") {
 		t.Fatal("a whole-project claim must wait for every lane")
+	}
+}
+
+func TestLegacySessionKeysKeepSharedPathExclusion(t *testing.T) {
+	cases := []struct{ key, want string }{
+		{"scope:proj/@session/old", "scope:proj"},
+		{"scope:proj/@session/old/src", "scope:proj/src"},
+		{"project:proj/@session/old", "project:proj"},
+		{"workspace:/tmp/@session/old/src", "workspace:/tmp/@session/old/src"},
+		{"scope:proj/src/@session/folder", "scope:proj/src/@session/folder"},
+	}
+	for _, tc := range cases {
+		if got := CanonicalKey(tc.key); got != tc.want {
+			t.Errorf("CanonicalKey(%q) = %q, want %q", tc.key, got, tc.want)
+		}
+	}
+	r := NewResourceRegistry()
+	if !r.TryAcquire([]string{"scope:proj/@session/old/src"}, "old") {
+		t.Fatal("legacy claim failed")
+	}
+	if r.TryAcquire([]string{SessionScopeLeafKey("proj", "new", "src/sub")}, "new") {
+		t.Fatal("persisted legacy lane hid a conflicting descendant")
+	}
+	if !r.TryAcquire([]string{ScopeLeafKey("proj", "docs")}, "disjoint") {
+		t.Fatal("legacy lane must not widen a scoped claim to the whole project")
+	}
+}
+
+func TestPhysicalWorkspaceScopeKeys(t *testing.T) {
+	base := t.TempDir()
+	root := WorkspaceScopeKey(base, "")
+	leaf := WorkspaceScopeKey(base, "src")
+	alias := WorkspaceScopeKey(filepath.Join(base, "src"), "")
+	if leaf != alias || !ScopeKeysConflict(root, leaf) {
+		t.Fatalf("nested workspace pin escaped its parent's lock: %q %q %q", root, leaf, alias)
+	}
+	if ScopeKeysConflict(leaf, WorkspaceScopeKey(base, "docs")) {
+		t.Fatal("disjoint physical paths must coexist")
+	}
+	if ScopeKeysConflict(root, WorkspaceScopeKey(base+"-other", "")) {
+		t.Fatal("physical prefix must be bounded by a path separator")
+	}
+	ancestors := ScopeAncestors(leaf)
+	if len(ancestors) == 0 || ancestors[len(ancestors)-1] != root {
+		t.Fatalf("physical leaf ancestors = %v, want parent %q", ancestors, root)
+	}
+}
+
+func TestPhysicalWorkspaceScopeResolvesMissingSymlinkTail(t *testing.T) {
+	base, target := t.TempDir(), t.TempDir()
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	alias := WorkspaceScopeKey(link, "not-created/leaf")
+	real := WorkspaceScopeKey(target, "not-created/leaf")
+	if alias != real {
+		t.Fatalf("missing path beneath a symlink escaped physical exclusion: %q != %q", alias, real)
 	}
 }

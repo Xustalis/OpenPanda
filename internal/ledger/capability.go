@@ -375,7 +375,15 @@ func Register(db *sql.DB, c Card, id string, tier int) error {
 			relayJSON = string(b)
 		}
 	}
-	return upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), "", "", "", "", "", relayJSON, tier, machineClass{OS: osName, Form: c.FormFactor})
+	if err := upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), "", "", "", "", "", relayJSON, tier, machineClass{OS: osName, Form: c.FormFactor}); err != nil {
+		return err
+	}
+	// Register is this node's own row, so its identity is the one hardware
+	// fact the directory can trust without a peer's word. A rename leaves the
+	// old id behind; retiring it here is what keeps "this machine" from being
+	// drawn twice for the next 30 days.
+	reconcileIdentity(db, id, kind, identity)
+	return nil
 }
 
 // machineClass is the pair of machine facts stored beside a row: the system
@@ -431,6 +439,49 @@ func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agents
 		return fmt.Errorf("upsert %s: %w", id, err)
 	}
 	return nil
+}
+
+// reconcileIdentity retires directory rows that carry the same hardware
+// identity under a different id. A node that was renamed — or a row filed
+// under an older spelling of the same machine — otherwise stays in the
+// directory as a second device until dirRowTTL (30 days) prunes it, which is
+// the workspace showing "this machine" twice.
+//
+// (node_kind, node_identity) is the host key: two rows that agree on both
+// describe one box, and the row just written is the live one. Rows that report
+// no identity (an older peer, or Register's id-as-identity fallback) prove
+// nothing and are left alone.
+//
+// Best-effort: a stale row is cosmetic, a failed registration is not, so the
+// registration's success does not depend on the cleanup.
+func reconcileIdentity(db *sql.DB, keepID, kind, identity string) {
+	if identity == "" || identity == keepID {
+		return
+	}
+	rows, err := db.Query(`SELECT id FROM employee_cache WHERE node_identity=? AND node_kind=? AND id<>?`, identity, kind, keepID)
+	if err != nil {
+		return
+	}
+	var stale []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return
+		}
+		stale = append(stale, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return
+	}
+	for _, id := range stale {
+		if _, err := db.Exec(`DELETE FROM employee_cache WHERE id=?`, id); err != nil {
+			return
+		}
+		// Same contract as Remove: the replay mark belongs to the row.
+		_, _ = db.Exec(`DELETE FROM hello_bindings WHERE node_id=?`, id)
+	}
 }
 
 // Heartbeat updates status/capacity/last_seen for one node.

@@ -37,6 +37,11 @@ func TestRecoveryNeverAssumesCrossNodeReplaySafety(t *testing.T) {
 		// A 400 about the request itself is not the model's fault: the
 		// ordinary retry path stays, and so does its category.
 		{bus.TaskResultPayload{ExitCode: 1, Stderr: "400 invalid_request_error: messages: field required"}, "execution_failure", "bounded_same_node_retry"},
+		// A transcript the adapter cannot reduce to an answer is a contract
+		// failure, not a flaky run: pi was retried three times on the same
+		// "unrecognized event schema" and burned three rounds on one
+		// deterministic verdict (a base URL that answered with HTML).
+		{bus.TaskResultPayload{ExitCode: 1, Stderr: "pi streamed events but no assistant text was extracted (unrecognized event schema); stderr tail: no stderr"}, "adapter_output_contract", "stop"},
 	} {
 		a := assessRecovery(tc.r)
 		if a.Category != tc.category || a.Strategy != tc.strategy || a.CrossNodeReplay {

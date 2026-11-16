@@ -5,6 +5,7 @@ Usage: python3 scripts/live-dag-metrics.py RUN_DIR
 Process sampling is independent evidence, not inferred from task state labels.
 """
 import collections
+from contextlib import closing
 import datetime
 import json
 import math
@@ -123,37 +124,36 @@ def graph_evidence(stages):
 
 def collect(root):
     root = pathlib.Path(root).resolve()
-    conn = sqlite3.connect((root / 'runtime.db').as_uri() + '?mode=ro', uri=True)
-    conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA query_only=ON')
-    conn.execute('BEGIN')
-    stages = []
-    for task in conn.execute('SELECT task_id,stage_id,state,needs_json,resource_json,output_artifact FROM tasks ORDER BY stage_id'):
-        events = list(conn.execute('SELECT id,ts,type,data_json FROM task_events WHERE task_id=? ORDER BY id', (task['task_id'],)))
-        tools = collections.Counter(); usage = collections.Counter(); loaded = []; models = []; starts = []; ends = []
-        for event in events:
-            data = json.loads(event['data_json'] or '{}')
-            if event['type'] == 'exec_agent_start':
-                starts.append({'event': event['id'], 'ts': event['ts'], 'prompt_bytes': data.get('prompt_bytes')})
-                loaded.append({'event': event['id'], 'skills': data.get('loaded_skills', [])})
-            if event['type'] == 'result':
-                ends.append({'event': event['id'], 'ts': event['ts'], 'ok': data.get('ok')})
-            if event['type'] == 'agent_event':
-                if data.get('ev') == 'tool_use': tools[data.get('name', 'unknown')] += 1
-                if data.get('ev') == 'model_observed':
-                    try: observed = json.loads(data.get('text', '{}'))
-                    except (ValueError, TypeError): observed = {}
-                    models.append({'event': event['id'], 'observed': observed})
-            if event['type'] == 'agent_usage':
-                for key in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'):
-                    if isinstance(data.get(key), int): usage[key] += data[key]
-        checks = [dict(x) for x in conn.execute('SELECT id,phase,check_id,status,exit_code,duration_ms FROM task_checks WHERE task_id=? ORDER BY id', (task['task_id'],))]
-        stages.append({**dict(task), 'needs': json.loads(task['needs_json'] or '[]'),
-                       'critical_path_rank': json.loads(task['resource_json'] or '{}').get('critical_path_rank'),
-                       'starts': starts, 'ends': ends, 'tools': dict(tools), 'usage_observed': dict(usage),
-                       'loaded_skills': loaded, 'native_models': models, 'checks': checks})
-        del stages[-1]['needs_json']; del stages[-1]['resource_json']
-    conn.close()
+    with closing(sqlite3.connect((root / 'runtime.db').as_uri() + '?mode=ro', uri=True)) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA query_only=ON')
+        conn.execute('BEGIN')
+        stages = []
+        for task in conn.execute('SELECT task_id,stage_id,state,needs_json,resource_json,output_artifact FROM tasks ORDER BY stage_id'):
+            events = list(conn.execute('SELECT id,ts,type,data_json FROM task_events WHERE task_id=? ORDER BY id', (task['task_id'],)))
+            tools = collections.Counter(); usage = collections.Counter(); loaded = []; models = []; starts = []; ends = []
+            for event in events:
+                data = json.loads(event['data_json'] or '{}')
+                if event['type'] == 'exec_agent_start':
+                    starts.append({'event': event['id'], 'ts': event['ts'], 'prompt_bytes': data.get('prompt_bytes')})
+                    loaded.append({'event': event['id'], 'skills': data.get('loaded_skills', [])})
+                if event['type'] == 'result':
+                    ends.append({'event': event['id'], 'ts': event['ts'], 'ok': data.get('ok')})
+                if event['type'] == 'agent_event':
+                    if data.get('ev') == 'tool_use': tools[data.get('name', 'unknown')] += 1
+                    if data.get('ev') == 'model_observed':
+                        try: observed = json.loads(data.get('text', '{}'))
+                        except (ValueError, TypeError): observed = {}
+                        models.append({'event': event['id'], 'observed': observed})
+                if event['type'] == 'agent_usage':
+                    for key in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'):
+                        if isinstance(data.get(key), int): usage[key] += data[key]
+            checks = [dict(x) for x in conn.execute('SELECT id,phase,check_id,status,exit_code,duration_ms FROM task_checks WHERE task_id=? ORDER BY id', (task['task_id'],))]
+            stages.append({**dict(task), 'needs': json.loads(task['needs_json'] or '[]'),
+                           'critical_path_rank': json.loads(task['resource_json'] or '{}').get('critical_path_rank'),
+                           'starts': starts, 'ends': ends, 'tools': dict(tools), 'usage_observed': dict(usage),
+                           'loaded_skills': loaded, 'native_models': models, 'checks': checks})
+            del stages[-1]['needs_json']; del stages[-1]['resource_json']
     graph = graph_evidence(stages)
     latest_final = []
     for stage in stages:

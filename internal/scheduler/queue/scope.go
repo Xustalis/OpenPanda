@@ -2,7 +2,10 @@
 
 package queue
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // Scope keys give a shared project worktree sub-path granularity: instead of
 // every project task serializing on one monolithic "project:<name>" key, a
@@ -16,9 +19,15 @@ import "strings"
 // Conflict between two scope keys is prefix-overlap in EITHER direction:
 // "scope:p/a" blocks "scope:p", "scope:p/a/b" and itself, but not
 // "scope:p/ab" (sibling, different file) nor "scope:q/a" (different
-// project). Only keys under the "scope:" namespace take this rule; every
-// other key type keeps exact-match semantics.
+// project). Physical "workspace:" keys use the same rule; every other key
+// type keeps exact-match semantics.
 const scopeKeyPrefix = "scope:"
+
+// Workspace keys describe the physical paths the executor will write. They
+// supplement project keys: a checkout can be registered under two names or
+// reached through a projectless pin, but it still admits only one writer per
+// overlapping subtree.
+const workspaceKeyPrefix = "workspace:"
 
 // lockFold folds a lock-key component to its case-insensitive identity.
 // Scope leaves and pinned work dirs name filesystem paths, and the
@@ -30,9 +39,9 @@ const scopeKeyPrefix = "scope:"
 // volume and lies outside stdlib-only key math.)
 func lockFold(s string) string { return strings.ToLower(s) }
 
-// IsScopeKey reports whether key lives in the scope namespace.
+// IsScopeKey reports whether key uses hierarchical subtree exclusion.
 func IsScopeKey(key string) bool {
-	return strings.HasPrefix(key, scopeKeyPrefix)
+	return strings.HasPrefix(key, scopeKeyPrefix) || strings.HasPrefix(key, workspaceKeyPrefix)
 }
 
 // ScopeRootKey returns the whole-project scope key — the claim every task
@@ -44,54 +53,71 @@ func ScopeRootKey(project string) string {
 	return scopeKeyPrefix + lockFold(project)
 }
 
-// sessionScopeSegment is the level a conversation's claim sits at, directly
-// under the project's own root scope. It rides INSIDE the scope namespace on
-// purpose: the ancestor rule in ScopeKeysConflict then does all the work —
-// "scope:p" (a caller with no conversation) still conflicts with every
-// conversation's lane, while two conversations are siblings under that root
-// and never conflict with each other. A separator that escaped the namespace
-// would have made whole-project work invisible to conversations, which is the
-// opposite of what a shared worktree needs.
+// sessionScopeSegment recognizes keys persisted by the former conversation
+// lane scheme. A conversation is not a writable workspace: two conversations
+// in one checkout must contend for the same paths.
 const sessionScopeSegment = "@session"
 
-// SessionScopeKey returns the scope root one conversation's tasks claim.
-// An empty sessionID keeps the project's own root: a submitter with no
-// conversation (CLI `task add`, a plan stage, an inbound delegate frame) is a
-// whole-project writer and must keep excluding everyone, including every
-// conversation. Only the panel/chat path — where a task arrives carrying the
-// session that asked for it — gets a lane of its own, so two conversations
-// against one checkout stop queueing behind each other while each stays
-// serial against itself.
-func SessionScopeKey(project, sessionID string) string {
-	if sessionID == "" {
-		return ScopeRootKey(project)
-	}
-	return ScopeRootKey(project) + "/" + sessionScopeSegment + "/" + lockFold(sessionID)
+// SessionScopeKey keeps the submission API compatible while making the lock
+// identity independent of conversation identity. Private worktrees use their
+// own directory keys instead of weakening the shared-checkout lock.
+func SessionScopeKey(project, _ string) string {
+	return ScopeRootKey(project)
 }
 
-// SessionProjectKey is the legacy project key under the same lane rule. The
-// scope key already carries the exclusion (a root claim is an ancestor of
-// every lane), so this exists to keep the pair consistent rather than to add
-// a second barrier.
-func SessionProjectKey(project, sessionID string) string {
-	if sessionID == "" {
-		return ProjectKey(project)
-	}
-	return ProjectKey(project) + "/" + sessionScopeSegment + "/" + lockFold(sessionID)
+// SessionProjectKey is the corresponding legacy whole-project key.
+func SessionProjectKey(project, _ string) string {
+	return ProjectKey(project)
 }
 
-// SessionScopeLeafKey is the scoped-path leaf under a conversation's lane:
-// "scope:p/@session/<sid>/<path>". Two siblings inside ONE conversation keep
-// the same overlap rules as before, and the lane stays an ancestor-descendant
-// of the project root, so a whole-project claim still excludes it.
-func SessionScopeLeafKey(project, sessionID, path string) string {
-	if sessionID == "" {
-		return ScopeLeafKey(project, path)
+// SessionScopeLeafKey locks the same project-relative path for every session
+// and for submitters without a session. Disjoint declared paths still coexist.
+func SessionScopeLeafKey(project, _ string, path string) string {
+	return ScopeLeafKey(project, path)
+}
+
+// CanonicalKey upgrades a persisted conversation-lane identity without a
+// schema migration. Other resource namespaces, including physical workspace
+// paths that happen to contain "@session", keep their original identity.
+func CanonicalKey(key string) string {
+	if !strings.HasPrefix(key, scopeKeyPrefix) && !strings.HasPrefix(key, "project:") {
+		return key
 	}
-	if path == "" {
-		return SessionScopeKey(project, sessionID)
+	root, tail, ok := strings.Cut(key, "/")
+	if !ok || !strings.HasPrefix(tail, sessionScopeSegment+"/") {
+		return key
 	}
-	return SessionScopeKey(project, sessionID) + "/" + lockFold(path)
+	tail = strings.TrimPrefix(tail, sessionScopeSegment+"/")
+	_, leaf, hasLeaf := strings.Cut(tail, "/")
+	if hasLeaf && strings.HasPrefix(key, scopeKeyPrefix) && leaf != "" {
+		return root + "/" + leaf
+	}
+	return root
+}
+
+// CanonicalKeys also removes duplicates created when old session identities
+// collapse onto one shared workspace identity.
+func CanonicalKeys(keys []string) []string {
+	out := make([]string, 0, len(keys))
+	seen := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		key = CanonicalKey(key)
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// WorkspaceScopeKey resolves a real directory and optional relative path to
+// a hierarchical physical lock. Resolving each leaf also catches symlinks
+// between otherwise disjoint declared paths.
+func WorkspaceScopeKey(dir, path string) string {
+	if dir == "" {
+		return ""
+	}
+	return workspaceKeyPrefix + filepath.ToSlash(workdirKey(filepath.Join(dir, filepath.FromSlash(path))))
 }
 
 // ScopeLeafKey returns the scope key for one declared project-relative path.
@@ -107,6 +133,7 @@ func ScopeLeafKey(project, path string) string {
 // subtree: equal, or one a strict ancestor of the other ("/"-bounded, so
 // "…/a" never bleeds into "…/ab").
 func ScopeKeysConflict(a, b string) bool {
+	a, b = CanonicalKey(a), CanonicalKey(b)
 	if a == b {
 		return true
 	}
@@ -120,8 +147,13 @@ func ScopeAncestors(key string) []string {
 	if !IsScopeKey(key) {
 		return nil
 	}
+	key = CanonicalKey(key)
+	prefixLen := len(scopeKeyPrefix)
+	if strings.HasPrefix(key, workspaceKeyPrefix) {
+		prefixLen = len(workspaceKeyPrefix)
+	}
 	var out []string
-	for i := len(scopeKeyPrefix); ; {
+	for i := prefixLen; ; {
 		j := strings.IndexByte(key[i:], '/')
 		if j < 0 {
 			return out

@@ -15,6 +15,23 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
+// awaitPeerPubKey waits for the signed hello's identity write, which follows
+// connection publication and capability-card ingestion. startPair only waits
+// for those earlier milestones, so it cannot synchronize identity assertions.
+func awaitPeerPubKey(t *testing.T, c *Core, id string) ed25519.PublicKey {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if pub, ok := c.peerPubKey(id); ok {
+			return pub
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s did not record %s's pubkey from the signed hello", c.nodeID, id)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // TestNodeKeyPairGeneratedAndPersisted: the identity is minted once and then
 // survives restarts — a second Core over the same database must read back the
 // same public key, or every signed grant minted before the restart would
@@ -52,24 +69,8 @@ func TestHelloRecordsPeerPubKey(t *testing.T) {
 	worker := newCore(t, "worker")
 	startPair(t, ctx, entry, worker)
 
-	// The pubkey lands from the hello handler's goroutine, not synchronously
-	// with the dial: under the race detector's load the write can trail the
-	// connect by a beat, so poll a bounded window instead of racing it.
-	awaitPub := func(c *Core, id string) ed25519.PublicKey {
-		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			if pub, ok := c.peerPubKey(id); ok {
-				return pub
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("%s did not record %s's pubkey from the signed hello", c.nodeID, id)
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-	}
-	workerPub := awaitPub(entry, "worker")
-	entryPub := awaitPub(worker, "entry")
+	workerPub := awaitPeerPubKey(t, entry, "worker")
+	entryPub := awaitPeerPubKey(t, worker, "entry")
 	// The recorded key must be the peer's real node key.
 	if wpub, _, ok := worker.nodeKeyPair(); !ok || !wpub.Equal(workerPub) {
 		t.Fatal("recorded worker pubkey differs from its node key")
@@ -114,6 +115,7 @@ func TestPeerKeyTofuLifecycle(t *testing.T) {
 	entry := newCore(t, "entry")
 	worker := newCore(t, "worker")
 	startPair(t, ctx, entry, worker)
+	awaitPeerPubKey(t, entry, "worker")
 
 	// First use: the worker's key is on file but nobody has compared it.
 	nodes, err := ledger.Query(entry.db, "", "worker")

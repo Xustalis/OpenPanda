@@ -464,17 +464,22 @@ own reason and exits 1 — it does not silently restart python.
 
 ## Known limits
 
-**A conversation's lock lane runs alongside conversation-less scoped work.**
-The `paths` scope now carries a session dimension: siblings in one
-conversation serialize by path, while two conversations never block each
-other on the same path. The cost is that a scoped task with **no conversation
-identity** (`panda task add --paths`, a scoped child delegated across nodes)
-is a sibling of every conversation's lane, so the two can write the same
-checkout path at once — an extension of "two conversations may run in
-parallel", not an oversight. When exclusive access is needed, use `--isolate`
-(a private worktree merged back three-way) or a whole-project claim (no
-`--paths`, which holds the `scope:<project>` root and conflicts with every
-lane).
+**Shared-tree scope declarations still depend on the executor respecting them.**
+Conversation identity no longer creates independent write lanes: equal or
+overlapping paths in one checkout exclude each other across conversations
+and conversation-less tasks. Disjoint `paths` remain parallel. Execution
+leases also lock resolved physical paths, so project aliases, projectless
+directory pins and nested pins cannot hide one shared writable tree. Separate
+private directories for the same project and `--isolate` copies remain
+parallel; merging back takes the target tree's lock. Persisted `@session`
+lanes are interpreted as shared-path claims without a schema migration.
+Parents release workspace locks while waiting for children and reacquire
+them before resuming. Whole-tree artifact landing and isolated snapshots take
+a short source-root lease during preparation, then return to leaf or private
+directory claims for execution. `paths` remains a declaration, not a filesystem barrier
+against an external agent writing outside its claim; use `--isolate` for a
+separate file tree. Leases coordinate OpenPanda executions sharing one node
+database and do not lock external editors.
 
 **P2-8 One shared secret for the whole network (partially mitigated).**
 The network shared secret remains the membership credential: a node

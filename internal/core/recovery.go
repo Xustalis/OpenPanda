@@ -47,6 +47,16 @@ func assessRecovery(r bus.TaskResultPayload) RecoveryAssessment {
 		a.Category = "adapter_unavailable"
 		a.Strategy = RecoveryStop
 		a.ReplaySafety = "safe_after_environment_fix"
+	case commander.AdapterOutputContractFailure(r.Stderr):
+		// The CLI ran and streamed, but the transcript could not be reduced
+		// to an answer — a wire-schema mismatch, or a base URL that answers
+		// with something other than an API. The same bytes come back on a
+		// re-run: pi was retried three times on "unrecognized event schema"
+		// and burned three rounds on one deterministic failure. Stop and let
+		// the reason name the fix.
+		a.Category = "adapter_output_contract"
+		a.Strategy = RecoveryStop
+		a.ReplaySafety = "safe_after_environment_fix"
 	case commander.IsModelConfigFailure(r.Stderr):
 		// The endpoint refused the model id itself (or the plan behind the
 		// CLI's login does not serve it). Nothing about the work was
