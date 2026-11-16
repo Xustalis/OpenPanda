@@ -81,15 +81,21 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) bool {
 		return h.finalizeAskRounds(ctx)
 	}
 	for _, t := range tasks {
-		summary := h.taskSummary(ctx, t)
+		// The judge's sentence is read once and used twice: it leads the
+		// replay digest and it rides the turn as Verdict for the console.
+		judge := h.taskVerdict(ctx, t.TaskID)
+		summary := h.taskSummary(ctx, t, judge)
 		delivery, truncated := taskDelivery(t.ResultJSON)
-		// A task turn measures the task, not the dispatch: the row's own
-		// timestamps are the only clock that spans queue wait plus execution,
-		// and the console prints the number above the summary. Guarded because
-		// legacy rows can carry a zero (or backwards) pair.
+		// A task turn measures the *work*, not the wait. The row's own
+		// CreatedAt is the submission second, and a task that queued behind a
+		// 12-minute sibling reported that sibling's runtime as its own: a
+		// route check that failed in 0.18s printed "424s", and a task
+		// cancelled before it ever started printed "124s". The clock starts at
+		// the attempt's first accept/exec_agent_start instead; a row that
+		// never ran keeps 0 and the console shows no number at all.
 		var durationMS int64
-		if t.UpdatedAt > t.CreatedAt {
-			durationMS = (t.UpdatedAt - t.CreatedAt) * 1000
+		if start := h.taskExecutionStart(ctx, t.TaskID); start > 0 && t.UpdatedAt > start {
+			durationMS = (t.UpdatedAt - start) * 1000
 		}
 		if _, err := h.sessions.AppendTurn(t.SessionID, sessions.Turn{
 			Role: "assistant",
@@ -105,6 +111,7 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) bool {
 			Text:              summary,
 			Delivery:          delivery,
 			DeliveryTruncated: truncated,
+			Verdict:           judge,
 			DeliveryAttemptID: t.AttemptID,
 			DurationMS:        durationMS,
 			IdempotencyKey:    taskSummaryKey(t),
@@ -129,15 +136,71 @@ func taskSummaryKey(t core.Task) string {
 	return evSessionSummary + ":" + t.TaskID + ":" + t.AttemptID
 }
 
-// taskSummary renders the one-turn report of a finished task.
-func (h *handler) taskSummary(ctx context.Context, t core.Task) string {
+// taskExecutionStart returns the unix second this task first left the queue:
+// its earliest accept or exec_agent_start. Zero means it never ran — a row
+// cancelled while queued, or one the router refused before dispatch — and the
+// caller must not invent a duration for it.
+//
+// The task row itself carries only created_at/updated_at, and their difference
+// is queue wait plus execution. The trace events are the only place the
+// handoff second is recorded.
+func (h *handler) taskExecutionStart(ctx context.Context, taskID string) int64 {
+	events, err := h.store.Events(ctx, taskID)
+	if err != nil {
+		return 0
+	}
+	for _, ev := range events {
+		if ev.Type == core.EvAccept || ev.Type == core.EvExecAgentStart {
+			return ev.TS
+		}
+	}
+	return 0
+}
+
+// taskSummary renders the one-turn report of a finished task. judge is the
+// supervision verdict already read for the turn (empty when the task never
+// reached a judge).
+func (h *handler) taskSummary(ctx context.Context, t core.Task, judge string) string {
 	reason := ""
 	if t.State != core.StateDone {
 		reason = h.failureReason(ctx, t.TaskID)
 	}
 	agent := h.taskAgent(ctx, t)
 	from, why := h.substitutedFrom(ctx, t.TaskID, agent)
-	return summaryText(t, reason, agent, from, why, h.reviewVerdict(ctx, t.TaskID))
+	return summaryText(t, reason, agent, from, why, h.reviewVerdict(ctx, t.TaskID), judge)
+}
+
+// taskVerdict returns panda's own sentence about the finished work: the last
+// supervision round's reason, which is the one paragraph in the trace that was
+// written by the judge rather than by the agent.
+//
+// It exists because the report used to be the agent's own closing paragraph,
+// printed under a `[done] @agent` line. A reader could not tell where the
+// employee stopped and the house started speaking: claude_code's "结论：成功"
+// arrived as if panda had certified it, and a task the supervisor passed with
+// reservations read exactly like one it checked. The judge already writes that
+// sentence — this is where it becomes the report.
+func (h *handler) taskVerdict(ctx context.Context, taskID string) string {
+	events, err := h.store.Events(ctx, taskID)
+	if err != nil {
+		return ""
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != core.EvSupervise {
+			continue
+		}
+		var d struct {
+			Reason string `json:"reason"`
+			Status string `json:"status"`
+		}
+		if json.Unmarshal([]byte(events[i].DataJSON), &d) != nil {
+			continue
+		}
+		if s := strings.TrimSpace(d.Reason); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // reviewVerdict reports whether a human already decided the newest review on
@@ -235,7 +298,8 @@ func taskDelivery(resultJSON string) (string, bool) {
 
 // summaryText is the pure composition of the report, in two parts and no
 // more: the orchestration line — state, the employee that ran it, the job it
-// was given — and then that employee's own closing paragraph.
+// was given — and then what happened, in two voices: panda's own verdict on
+// the work, then the executor's closing paragraph, quoted.
 //
 // The thread is a conversation, not a log. It used to carry the entire
 // adapter payload: a 2 000-word agent reply, its "变更 / 验证" sections and
@@ -246,25 +310,32 @@ func taskDelivery(resultJSON string) (string, bool) {
 // prose. One conclusion paragraph is the summary — the sections above it are
 // the evidence behind it.
 //
+// The verdict is not optional decoration. With only the agent's paragraph the
+// report read as if the employee had graded its own homework: "结论：成功"
+// under a `[done]` line is indistinguishable from panda having checked it. The
+// judge writes one sentence per task already; it goes first, and the employee's
+// paragraph follows in a blockquote so the voices never blur.
+//
 // This short version is replayed to the model. The full display report is
 // stored in Turn.Delivery, so preserving changes, verification and open items
 // for the user no longer consumes the next request's context window.
-func summaryText(t core.Task, reason, agent, substituted, substitutedWhy, verdict string) string {
+func summaryText(t core.Task, reason, agent, substituted, substitutedWhy, verdict, judge string) string {
 	// A failed run's own reason is its conclusion: there is no adapter answer
 	// to take a closing paragraph from, and the reason is what the reader
 	// needs. A done run never shows a stale reason from an earlier attempt.
 	loc := t.GetUserLocale()
-	body := conclusionOf(extractResultText(t.ResultJSON))
-	if body == "" && t.State != core.StateDone {
-		body = conclusionOf(reason)
+	conclusion := conclusionOf(extractResultText(t.ResultJSON))
+	if conclusion == "" && t.State != core.StateDone {
+		conclusion = conclusionOf(reason)
 	}
-	rawBody := body
-	body = compactScopeDrift(loc, body, verdict)
+	rawBody := conclusion
+	conclusion = compactScopeDrift(loc, conclusion, verdict)
+	body := composeReport(judge, conclusion)
 	// A review always needs a person. So does a drift nothing has answered —
 	// the supervisor closing a row whose own report says it overstepped is not
 	// a decision about the drift. A drift a human already accepted or rejected
 	// is neither: the report owes the reader the outcome, not the question.
-	undecidedDrift := body != rawBody && verdict == ""
+	undecidedDrift := conclusion != rawBody && verdict == ""
 	needsAttention := t.State == core.StateReview || undecidedDrift
 	stateLabel := t.State
 	if undecidedDrift && stateLabel == core.StateDone {
@@ -310,6 +381,42 @@ func summaryText(t core.Task, reason, agent, substituted, substitutedWhy, verdic
 // what was decided. An undecided drift keeps the "approve or reject"
 // instruction; an accepted or rejected one must not, because by the time this
 // report is written the decision already happened.
+// agentConclusionRunes bounds the executor's quoted paragraph. The full text
+// is in Turn.Delivery (and on the task page); this copy is what the next
+// request replays, so it stays one short paragraph.
+const agentConclusionRunes = 600
+
+// composeReport puts panda's verdict first and the executor's closing
+// paragraph after it as a blockquote.
+//
+// The blockquote is the whole point: it marks a change of speaker without a
+// locale-specific label, so a reader (and a model replaying the thread) can
+// tell the house's sentence from the employee's. An empty verdict falls back
+// to the old shape — the conclusion alone — because a task the supervisor
+// never judged (an adapter that failed before the first round) has no house
+// sentence to print.
+func composeReport(judge, conclusion string) string {
+	judge = strings.TrimSpace(judge)
+	conclusion = strings.TrimSpace(conclusion)
+	switch {
+	case judge == "":
+		return conclusion
+	case conclusion == "":
+		return judge
+	}
+	quoted := clipRunes(conclusion, agentConclusionRunes)
+	return judge + "\n\n> " + strings.ReplaceAll(quoted, "\n", "\n> ")
+}
+
+// clipRunes cuts s to at most n runes, marking the cut. Runes, not bytes: a
+// CJK report halved by a byte offset ends in mojibake.
+func clipRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return strings.TrimRight(string([]rune(s)[:n]), " \t\r\n") + "…"
+}
+
 func compactScopeDrift(loc i18n.Locale, body, verdict string) string {
 	const prefix = "scope drift: agent changed files outside declared scope: "
 	if !strings.HasPrefix(body, prefix) {

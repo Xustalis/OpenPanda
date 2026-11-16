@@ -1,0 +1,1153 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Connect card (nodes page aside) ------------------------------------
+   One card, one lane. The panel is read top-down in the order the operator
+   needs it: who am I → somebody is waiting on me → who can I pair with →
+   the long tail (typed address, configured dial list). The tab bar that
+   split pairing from a second address form is gone: it asked the reader to
+   choose a method before showing them whether they needed to. */
+
+.connect-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.connect-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.connect-pane-lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+/* The panel's own identity line. Pairing happens across two screens, so the
+   one fact the operator needs before anything else is which machine this
+   window is — it is the row they will look for on the other screen, and the
+   address they have to type there when no beacon arrives. */
+.connect-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px 6px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-xs);
+}
+
+.connect-id-plate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+}
+
+.connect-id-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.connect-id-label {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.connect-id-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.connect-id-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The address never truncates: a half-printed host:port is worse than a
+   shortened device name, because it is the value being copied across. */
+.connect-id-addr {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.connect-id-copybtn {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--text-tertiary);
+}
+
+.connect-id-copybtn:hover {
+  color: var(--text);
+}
+
+.connect-id-copybtn.done {
+  color: var(--good);
+}
+
+.connect-feedback {
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+/* Outcome colour rides the border as well as the ink: a green sentence on a
+   grey box is easy to scroll past, and this is the only place a result is
+   reported. */
+.connect-feedback.is-ok {
+  color: var(--good);
+  border-color: var(--semantic-good-border);
+  background: var(--good-soft);
+}
+
+.connect-feedback.is-error {
+  color: var(--danger);
+  border-color: var(--semantic-danger-border);
+  background: var(--danger-soft);
+}
+
+/* The blocking case, promoted out of the list: someone is standing at the
+   other machine mid-ceremony and cannot proceed without this screen. It gets
+   the accent edge, the full width, and the largest type in the panel — the
+   code is the one thing being compared, so it is set like a value read from
+   across a desk rather than as metadata in a row. */
+.pair-callout {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.pair-callout.request {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.pair-callout.outgoing {
+  border-style: dashed;
+  background: var(--surface-alpha-xs);
+}
+
+.pair-callout.done {
+  border-style: solid;
+  border-color: var(--semantic-good-border);
+  background: var(--good-soft);
+}
+
+.pair-callout-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pair-callout-plate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--bg-raised);
+  color: var(--accent);
+  box-shadow: var(--shadow-xs);
+}
+
+.pair-callout.done .pair-callout-plate {
+  color: var(--good);
+}
+
+.pair-callout-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pair-callout-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.pair-callout-sub {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What is left of the request's life. It runs out on its own, and the row
+   disappears when it does — saying so is cheaper than letting the operator
+   wonder why the card vanished. */
+.pair-callout-clock {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+}
+
+.pair-callout-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: var(--text-tertiary);
+}
+
+/* Stacked, not side by side: the instruction is a sentence, and at 360px a
+   sentence sharing a line with the code wraps under it anyway — with the code
+   chip left hanging beside two orphan lines. */
+.pair-callout-code {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+
+/* The shared secret's fingerprint, at a size two people can compare from
+   where they are standing. Tabular figures and wide tracking so digit-by-digit
+   reading is possible without pointing. */
+.pair-code-chip {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.pair-callout-code-hint {
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.pair-callout-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The one primary action in the panel: admitting the device. It takes the
+   remaining width so it cannot be missed next to the dismissive one. */
+.pair-cta {
+  flex: 1 1 auto;
+  min-height: 32px;
+}
+
+.pair-cta-secondary {
+  flex: none;
+}
+
+.pair-callout-wait {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.pair-callout-wait.ok {
+  color: var(--text-secondary);
+}
+
+/* — Inbound pairing request, floating over whatever you were reading ------
+   The card that appears when somebody knocks while the pairing panel is
+   closed. Top-right, not bottom-right: toasts own the bottom corner, and a
+   request that lives four minutes must not be covered by a two-second
+   "saved" toast. No backdrop, and no focus steal — a pairing request is a
+   glance-and-press, and interrupting a sentence to show it is worse than the
+   interruption it is reporting. */
+.pair-req {
+  position: fixed;
+  top: 72px;
+  right: 20px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 340px;
+  max-width: calc(100vw - 40px);
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  animation: pair-req-in var(--dur-fast) var(--ease-enter);
+}
+
+@keyframes pair-req-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pair-req-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.pair-req-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* A slow pulse, not a blink: the dot says "someone is waiting right now",
+   and a hard blink in the corner of the eye reads as an alarm. */
+.pair-req-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pair-req-pulse 2s var(--ease-standard) infinite;
+}
+
+@keyframes pair-req-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.pair-req-more {
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pair-req-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: var(--text-tertiary);
+}
+
+.pair-req-error {
+  margin: 0;
+  padding: 0 2px;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+/* "Later" does not mean "never": the collapsed form keeps the count so the
+   request stays findable and still expires visibly. */
+.pair-req-badge {
+  position: fixed;
+  top: 72px;
+  right: 20px;
+  z-index: 900;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: calc(100vw - 40px);
+  padding: 5px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  animation: pair-req-in var(--dur-fast) var(--ease-enter);
+}
+
+.pair-req-badge:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.pair-req-badge-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.pair-req-badge-clock {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+/* Phones and narrow windows: the same bottom sheet the pairing panel uses.
+   A top-right float would sit under the notch and outside thumb reach. */
+@media (max-width: 640px) {
+  .pair-req {
+    top: auto;
+    left: 10px;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    width: auto;
+    max-width: none;
+    padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    animation: ws-sheet-in var(--dur-fast) var(--ease-enter);
+  }
+
+  .pair-req-badge {
+    top: auto;
+    left: 10px;
+    right: auto;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Narrow column: who (with the action) on top, where and which code below.
+   The code is the one thing the operator has to compare against the other
+   screen, so it gets the accent chip; the address stays quiet. */
+.pair-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Title and refresh on one line: "scan again" used to sit under the empty
+   state as a lone button, which made it look like a way out rather than the
+   control for the list above it. */
+.pair-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pair-group-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Between "scan started" and "list has rows": an explicit progress state
+   instead of an empty list that fills in later. */
+.pair-searching {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 12px;
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.pair-searching-copy {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.pair-searching-sub {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.pair-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.pair-item.has-error {
+  border-color: var(--semantic-danger-border);
+}
+
+/* Already in the fleet: still listed (it is on the LAN, and pretending
+   otherwise would be a lie about the network) but demoted — no action, no
+   accent, nothing to press. */
+.pair-item.linked {
+  background: var(--surface-alpha-xs);
+}
+
+.pair-item.linked .pair-name {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.pair-request-hint {
+  margin: 2px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.pair-item-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pair-item-top > .badge {
+  flex: none;
+}
+
+.pair-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.pair-item-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pair-addr {
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-code {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  font-variant-numeric: tabular-nums;
+}
+
+.pair-code.lg {
+  padding: 3px 9px;
+  font-size: var(--text-md);
+  letter-spacing: 0.18em;
+}
+
+.pair-wait {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 5px;
+  font-size: var(--text-xs);
+}
+
+.pair-manual {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.pair-manual .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pair-manual .btn {
+  flex: none;
+}
+
+.pair-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px;
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-xs);
+  color: var(--text-tertiary);
+}
+
+.pair-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+}
+
+.pair-empty-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pair-empty-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.pair-empty-copy .dim {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+/* Why the list is empty, as three things the operator can check — the panel
+   used to answer "nothing found" and leave the diagnosis to them. */
+.pair-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 0 2px;
+  list-style: none;
+}
+
+.pair-checks li {
+  position: relative;
+  padding-left: 14px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.pair-checks li::before {
+  content: '';
+  position: absolute;
+  top: 0.52em;
+  left: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+}
+
+/* What the sweep actually did, in one line. Small on purpose: it is evidence
+   for the reader who wants it, not a headline. */
+.pair-scan-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* Which evidence put this row here. Only shown for the strong case, where a
+   beacon and a reachable port agreed. */
+.pair-src {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+/* A failed dial reports on its own row, not at the top of the panel. */
+.pair-row-error {
+  margin: 2px 0 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.pair-item-cta {
+  flex: none;
+  margin-left: auto;
+  min-height: 28px;
+}
+
+.pair-refresh {
+  flex: none;
+}
+
+/* The long tail, folded. `summary` is a real control, so this works from the
+   keyboard without any of the ARIA a hand-rolled disclosure would need. */
+.pair-fold {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 8px;
+}
+
+.pair-fold-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 2px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* The native triangle sits at a different offset in every engine; the chevron
+   is drawn here so the two folds line up with the rows above them. */
+.pair-fold-head::-webkit-details-marker {
+  display: none;
+}
+
+.pair-fold-head::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-right: 1.5px solid var(--text-tertiary);
+  border-bottom: 1.5px solid var(--text-tertiary);
+  transform: rotate(45deg) translate(-1px, -1px);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.pair-fold[open] > .pair-fold-head::after {
+  transform: rotate(-135deg) translate(-1px, -1px);
+}
+
+.pair-fold-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.pair-fold-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-fold-hint {
+  margin: 2px 0 6px;
+}
+
+.pair-fold-body {
+  padding-top: 2px;
+}
+
+/* ---- Device form + configured dial list ---- */
+
+.device-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.device-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.device-field-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.device-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.device-field-trust {
+  max-width: 112px;
+}
+
+.device-select {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.device-select select {
+  width: 100%;
+  height: 32px;
+  padding: 0 26px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  appearance: none;
+  background: var(--bg-inset);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.device-select select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.device-select > svg {
+  position: absolute;
+  right: 8px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.device-select .trust-sel.open {
+  color: var(--danger);
+  border-color: var(--semantic-danger-border);
+}
+
+.device-add-btn {
+  height: 32px;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.device-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.device-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.device-list-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.device-list-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.device-list-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.device-list-state .btn {
+  margin-left: auto;
+}
+
+.device-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.device-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-inset);
+}
+
+.device-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.device-row-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-row-addr {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-row-actions {
+  display: flex;
+  gap: 1px;
+  opacity: 0.6;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.device-row:hover .device-row-actions,
+.device-row:focus-within .device-row-actions {
+  opacity: 1;
+}
+
+.device-row-actions .icon-btn {
+  width: 24px;
+  height: 24px;
+}
+
+.device-row-actions .icon-btn.danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.trust-pill {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.trust-pill.guarded {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.trust-pill.open {
+  border-color: var(--semantic-danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.device-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: 9px;
+  background: var(--accent-soft);
+}
+
+.device-edit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.device-edit-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.device-edit-head .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+
+.device-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.device-edit-row .device-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.device-edit-row .btn {
+  flex: none;
+}
+
+.device-result {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--bg-inset);
+}
+
+.device-result-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.device-result-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.device-result-icon.ok {
+  background: var(--good-soft);
+  color: var(--good);
+}
+
+.device-result-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.device-result-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+
+.device-result-sub {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.device-result-ok {
+  margin: 0;
+  color: var(--good);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.device-guide {
+  margin-top: 2px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--border-soft);
+}
+
+.device-guide summary {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.device-guide .join-steps {
+  margin-top: 6px;
+  font-size: var(--text-xs);
+}

@@ -1,0 +1,18 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Chat extras: attachments ---- */
+
+/* The chip a transcript row uses to name a file. The bubble's own row — and
+   the picture frame that replaces the chip for an image — lives in chat.css
+   (`.msg-files`), next to the rest of the message chrome. */
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}

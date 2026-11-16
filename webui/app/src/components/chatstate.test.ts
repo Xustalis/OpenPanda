@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { reconcileTranscript, runningOperation, mergeTailTurn, patchStreaming, slashQuery } from './chatstate.ts'
+import { reconcileTranscript, runningOperation, threadBusy, mergeTailTurn, patchStreaming, slashQuery } from './chatstate.ts'
 
 interface Msg {
   role: 'user' | 'assistant'
@@ -206,6 +206,19 @@ test('refresh and thread switch resolve the exact running operation', () => {
   assert.equal(runningOperation('s2', s), null)
   assert.equal(runningOperation('s1', { ...s, operation: { id: 'op1', status: 'done' } }), null)
   assert.equal(runningOperation('s1', null), null)
+})
+
+test('a dispatched job that is still moving keeps the composer running', () => {
+  // The turn settles the moment the handoff is made; the employee it
+  // dispatched keeps working. Every one of the three inputs has to count, or
+  // the composer swaps Stop for Send while there is still something to stop.
+  const done = { id: 's1', operation: { id: 'op1', status: 'done' } }
+  assert.equal(threadBusy(false, 's1', done, 0), false)
+  assert.equal(threadBusy(false, 's1', done, 1), true)
+  assert.equal(threadBusy(true, 's1', done, 0), true)
+  assert.equal(threadBusy(false, 's1', { id: 's1', operation: { id: 'op2', status: 'running' } }, 0), true)
+  // Another thread's live job is not this composer's business.
+  assert.equal(threadBusy(false, 's1', { id: 's2', operation: { id: 'op3', status: 'running' } }, 0), false)
 })
 
 test('failed persistence keeps the current streamed reply, not unrelated rows', () => {

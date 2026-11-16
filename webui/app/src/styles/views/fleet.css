@@ -1,0 +1,545 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Nodes ---------------------------------------------------------------
+   The page answers four questions in reading order: how is the fleet (head
+   line), which machines are there and what can each do (one card of rows),
+   what work hopped between them (chains), and how do I bring another machine
+   in (connect card). Rows replaced the grid of equal-weight device boxes: a
+   device is a line of facts, so its name, capacity and capabilities line up
+   with the row above instead of tiling into a card whose height depends on
+   how many chips it happens to advertise. */
+
+.nodes-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* Title left, fleet health right — "is anything down" is the first question
+   this page answers, so it rides on the headline. */
+.nodes-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-6);
+  flex-wrap: wrap;
+}
+
+.nodes-head-text {
+  min-width: 0;
+}
+
+.fleet-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding-bottom: 3px;
+}
+
+.fleet-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.fleet-stat .node-dot {
+  align-self: center;
+}
+
+.fleet-stat-num {
+  font-size: var(--text-lg);
+  font-weight: 650;
+  line-height: 1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.fleet-stat-num.busy {
+  color: var(--warn);
+}
+
+.fleet-stat-num.total {
+  color: var(--text-tertiary);
+  font-size: var(--text-md);
+}
+
+/* Card head: title, count, one action pinned right. */
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.card-head .block-title {
+  margin: 0;
+}
+
+.card-head-action {
+  margin-left: auto;
+}
+
+.card-head-plus {
+  font-size: 14px;
+  line-height: 1;
+  margin-right: -1px;
+}
+
+.block-count {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fleet-loading,
+.fleet-empty {
+  margin: 12px 0 0;
+  font-size: var(--text-md);
+}
+
+/* Rows bleed to the card's edges so the hairlines read as one table rather
+   than a stack of boxes. */
+.fleet-rows {
+  display: flex;
+  flex-direction: column;
+  margin: 12px calc(-1 * var(--sp-5)) 0;
+}
+
+.fleet-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 0 10px;
+  min-width: 0;
+  padding: 12px var(--sp-5);
+  border-top: 1px solid var(--border-soft);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* The device tile: identity at a glance (a laptop is not a server), with the
+   status dot pinned to its corner so the row still answers "is it up" first. */
+.fleet-avatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-top: 1px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+}
+
+.fleet-avatar.self {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.fleet-avatar.off {
+  opacity: 0.6;
+}
+
+.fleet-avatar-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--text-disabled);
+  box-shadow: 0 0 0 2px var(--bg-raised);
+}
+
+.fleet-avatar-dot.on {
+  background: var(--good);
+}
+
+.fleet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fleet-row:hover,
+.fleet-row.is-open {
+  background: var(--surface-alpha-xs);
+}
+
+/* This machine: an accent rail down the left edge instead of another badge
+   competing with the status tags. */
+.fleet-row.is-self {
+  box-shadow: inset 2px 0 0 var(--accent-strong);
+  background: var(--surface-alpha-xs);
+}
+
+.fleet-row-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fleet-name {
+  max-width: 100%;
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.is-off .fleet-name {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.fleet-id {
+  max-width: 16ch;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status tags are state, capabilities are data: the tags stay quiet and
+   outline-only so the ability chips below keep the tint. */
+.fleet-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.65;
+  white-space: nowrap;
+}
+
+.fleet-tag.self {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.fleet-tag.good {
+  color: var(--good);
+  border-color: var(--semantic-good-border);
+  background: var(--good-soft);
+}
+
+.fleet-tag.mono {
+  font-family: var(--mono);
+}
+
+.fleet-row-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* Trust zone: a select that reads as a chip until you open it. */
+.fleet-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.65;
+  cursor: pointer;
+}
+
+.fleet-trust:hover {
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.fleet-trust-label {
+  opacity: 0.8;
+}
+
+.fleet-trust .trust-sel {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.fleet-detail-toggle {
+  gap: 4px;
+  color: var(--text-tertiary);
+}
+
+.fleet-row:hover .fleet-detail-toggle,
+.fleet-row.is-open .fleet-detail-toggle {
+  color: var(--text-secondary);
+}
+
+.fleet-caret {
+  display: inline-block;
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.fleet-caret.up {
+  transform: rotate(180deg);
+}
+
+.fleet-row-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.fleet-chip {
+  max-width: 34ch;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Capacity as slots, not only as "1/4": the bar answers "is it free" at a
+   glance, the numbers answer "how free". Filled slots take the busy tone,
+   because a slot in use is work in flight. */
+.fleet-load {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.load-slots {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.load-slots i {
+  width: 5px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--border);
+}
+
+.load-slots i.on {
+  background: var(--warn);
+}
+
+.fleet-load-num {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.fleet-rtt {
+  font-size: var(--text-xs);
+}
+
+.fleet-last {
+  margin-left: auto;
+  font-size: var(--text-xs);
+}
+
+.fleet-row-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* Capability chips read differently from status tags: a soft accent tint,
+   no bold — capabilities are data, not state. */
+.ability-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.ability-tag.more {
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  border-color: var(--border-soft);
+}
+
+.fleet-detail {
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.fleet-facts {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 7px 12px;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.fleet-facts dt {
+  color: var(--text-tertiary);
+}
+
+.fleet-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.fleet-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.fleet-agent {
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.fleet-agent-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fleet-agent-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fleet-agent p {
+  margin: 2px 0 0;
+  font-size: var(--text-sm);
+}
+
+.fleet-detail-actions {
+  margin-top: 10px;
+}
+
+/* What this machine can drive: a footer well inside the fleet card, so the
+   chips stay next to the rows they describe instead of owning a card. */
+.fleet-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 12px calc(-1 * var(--sp-5)) calc(-1 * var(--sp-4));
+  padding: 10px var(--sp-5);
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--bg-chrome);
+}
+
+.fleet-foot-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.fleet-foot-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ---- Delegation chains ---- */
+
+.chain-empty {
+  margin: 12px 0 0;
+}
+
+.chain-list {
+  display: flex;
+  flex-direction: column;
+  margin: 12px calc(-1 * var(--sp-5)) calc(-1 * var(--sp-4));
+}
+
+.chain-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 9px var(--sp-5);
+  border-top: 1px solid var(--border-soft);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.chain-row:hover {
+  background: var(--surface-alpha-xs);
+}
+
+.chain-hops {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.chain-node {
+  padding: 1px 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.chain-node.root {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.chain-node.unacked {
+  border-style: dashed;
+  color: var(--text-tertiary);
+}
+
+.chain-arrow {
+  color: var(--text-disabled);
+  font-size: var(--text-xs);
+}
+
+.chain-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chain-time {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}

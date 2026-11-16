@@ -1,0 +1,319 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ============================================================================
+   P0 redesign — D8: bubble left-border discrimination (system/user pair)
+   D9: nav sidebar grouped section titles (uppercase + letter spacing)
+   + orbit / fleet component chrome
+   ========================================================================== */
+
+/* — D9: nav group headings (§4 Design System). Typed onto a <div> that sits
+   between nav links of different sections: uppercase, small-tight, the 5th
+   text tier (—text-disabled), and separated with top spacer-6 so it visually
+   sticks to the items below, not above. */
+.nav-group-head {
+  margin-top: var(--sp-6);
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-small);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+  line-height: 1.6;
+  user-select: none;
+}
+@keyframes orbit-pulse {
+  0%,100% { opacity: 0.3; transform: scale(0.9); }
+  50%     { opacity: 1;   transform: scale(1.1); }
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px var(--sp-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  border: 1px solid var(--hairline-sm);
+  background: var(--surface-alpha-sm);
+  letter-spacing: 0.01em;
+  transition: transform var(--dur-fast) var(--ease-bounce),
+              box-shadow var(--dur-normal) var(--ease-standard);
+}
+.pill:hover {
+  box-shadow: var(--shadow-xs);
+}
+.pill-plan   {
+  color: var(--accent-2);
+  border-color: var(--accent-2-border);
+  background: var(--accent-2-soft);
+  box-shadow: 0 0 0 1px var(--accent-2-border), var(--shadow-glow-2);
+}
+.pill-task   {
+  color: var(--semantic-good);
+  border-color: var(--semantic-good-border);
+  background: var(--semantic-good-soft);
+}
+.pill-tool   {
+  color: var(--semantic-info);
+  border-color: var(--semantic-info-border);
+  background: var(--semantic-info-soft);
+}
+.pill-answer {
+  color: var(--text-primary);
+  border-color: var(--hairline-md);
+  background: var(--surface-alpha-md);
+}
+@keyframes orbit-badge-active-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--semantic-warn-soft); }
+  50% { box-shadow: 0 0 0 4px var(--semantic-warn-soft); }
+}
+
+.orbit-action-rail {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding-top: var(--sp-4);
+  margin-top: var(--sp-2);
+  border-top: 1px solid var(--hairline-sm);
+  flex-wrap: wrap;
+  background-image: var(--grad-card);
+  background-size: 100% 1px;
+  background-repeat: no-repeat;
+}
+.orbit-action-btn {
+  appearance: none;
+  background: var(--surface-alpha-sm);
+  color: var(--accent-2);
+  border: 1px solid var(--accent-2-border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+  transition: all var(--dur-normal) var(--ease-standard);
+  box-shadow: var(--shadow-xs);
+  position: relative;
+  overflow: hidden;
+}
+.orbit-action-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--grad-accent-2);
+  opacity: 0;
+  transition: opacity var(--dur-normal) var(--ease-standard);
+}
+.orbit-action-btn > * {
+  position: relative;
+  z-index: 1;
+}
+.orbit-action-btn:hover {
+  background: var(--accent-2-soft);
+  box-shadow: var(--shadow-xs);
+  border-color: var(--accent-2);
+}
+.orbit-action-btn:hover::before {
+  opacity: 1;
+}
+.orbit-action-btn:active {
+  box-shadow: none;
+}
+/* — §4.2 Top-level soft banners (update status / onboarding).
+     .banner + .banner-warn/info/error/good is the shared chip style.
+     update-banner is painted by <UpdateBanner/> when the updater has
+     backed off to idle (403 / rate-limit / network offline), or when
+     a new release is available. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  margin: 0 var(--sp-3) var(--sp-2);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-small);
+  border: 1px solid var(--hairline-sm);
+  background: var(--surface-alpha-sm);
+}
+.banner-ico { flex: 0 0 auto; font-size: 16px; }
+.banner-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.banner-body strong { color: var(--text-primary); font-weight: var(--fw-semibold, 620); }
+.banner-sub { color: var(--text-secondary); font-size: var(--fs-caption); line-height: var(--lh-default); }
+.banner-link {
+  flex: 0 0 auto;
+  color: var(--accent-2);
+  border: 1px solid var(--accent-2-border);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-caption);
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+  background: var(--accent-2-soft);
+}
+.banner-link:hover { filter: brightness(1.08); }
+.banner-close {
+  flex: 0 0 auto;
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-tertiary);
+  width: 28px;
+  height: 28px;
+  line-height: 26px;
+  font-size: 18px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.banner-close:hover { color: var(--text-primary); background: var(--surface-alpha-sm); border-color: var(--hairline-xs); }
+
+.banner-warn {
+  background: var(--semantic-warn-soft);
+  border-color: var(--semantic-warn-border);
+}
+.banner-warn .banner-body strong { color: var(--text-primary); }
+.banner-warn .banner-sub { color: var(--text-secondary); }
+.banner-warn .banner-link {
+  color: var(--semantic-warn);
+  border-color: var(--semantic-warn-border);
+  background: var(--semantic-warn-strong-soft);
+}
+
+.banner-info {
+  background: var(--accent-2-soft);
+  border-color: var(--accent-2-border);
+}
+.banner-info .banner-link {
+  color: var(--accent-2);
+  border-color: var(--accent-2-border);
+  background: var(--accent-2-tint-md);
+}
+
+/* — utility helpers: inline style migration (§2, P1 code-quality pass).
+     Only one- or two-attribute helpers so we don't invent Bootstrap. */
+.u-mt-16 { margin-top: var(--sp-4); }
+.u-flex-1 { flex: 1 1 auto; }
+.u-min-w-0 { min-width: 0; }
+.u-flex-grow-1 { flex-grow: 1; }
+.u-w-100 { width: 100%; }
+.u-m-0 { margin: 0; }
+.u-mt-0 { margin-top: 0; }
+.u-color-tert { color: var(--text-tertiary); }
+.u-color-accent2 { color: var(--accent-2); }
+
+/* — Fleet topology card (D4). Lives on the left in the empty-state split
+   screen; shrinks to a pill in the single-figure layout. */
+.fleet-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-5);
+  border-radius: var(--radius-lg);
+  background: var(--surface-alpha-xs);
+  border: 1px solid var(--hairline-xs);
+  justify-content: space-between;
+}
+.fleet-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.fleet-head h3 {
+  margin: 0;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.fleet-head .online {
+  color: var(--text-secondary);
+  font-size: var(--fs-small);
+}
+
+/* Node list: pill rows with left status dot. */
+.fleet-nodes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.fleet-node {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-alpha-sm);
+  font-size: var(--fs-small);
+}
+.fleet-node .dot {
+  width: 8px; height: 8px; border-radius: 999px;
+  background: var(--text-disabled);
+  flex-shrink: 0;
+}
+.fleet-node.online  .dot { background: var(--good); box-shadow: 0 0 8px var(--good); }
+.fleet-node.offline .dot { background: var(--text-disabled); }
+.fleet-node .name    { flex: 1; color: var(--text-primary); font-weight: 500; }
+.fleet-node .meta    { color: var(--text-tertiary); white-space: nowrap; font-size: var(--fs-caption); }
+.fleet-node .ver     { color: var(--text-tertiary); white-space: nowrap; font-size: var(--fs-caption); }
+.fleet-node .ver.skew { color: var(--warn); font-weight: 600; cursor: help; }
+.fleet-node .load    { color: var(--text-tertiary); white-space: nowrap; }
+
+/* Single-node CTA body (D4, B6): one centered block that never crowds the
+   chat side. */
+.fleet-single {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  text-align: left;
+  /* Centre the single-node pitch inside the card's leftover space — without
+     this the head pins top and the copy pins bottom with dead air between. */
+  flex: 1;
+  justify-content: center;
+}
+.fleet-single h2 {
+  margin: 0;
+  font-size: var(--fs-heading);
+  line-height: 1.25;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.fleet-single p {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.fleet-single .cta-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+.fleet-cta-btn {
+  align-self: flex-start;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--accent-2-strong-soft);
+  color: var(--text-primary);
+  border: 1px solid var(--accent-2-border);
+  font-weight: 500;
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease;
+}
+.fleet-cta-btn:hover {
+  background: var(--accent-2-tint-md);
+}
+.fleet-cta-sub {
+  color: var(--text-tertiary);
+  font-size: var(--fs-small);
+}
+
+/* (The empty-state split-screen that used to be described here is gone:
+   chat.css now owns .chat-empty outright — one column, hero centred, with the
+   device network reduced to a single strip.) */

@@ -479,6 +479,52 @@ func TestSessionAskOpensWithCarriedNotes(t *testing.T) {
 	}
 }
 
+// TestSessionAskDrainsLateSteerNotes covers the note that lands in the live
+// queue after the previous turn parked its leftovers: the last round already
+// passed its steer poll and parkLeftovers already ran on the handler's way
+// out, so no round would ever read it. The next ask takes it with the carry
+// instead of leaving the composer's strip waiting forever.
+func TestSessionAskDrainsLateSteerNotes(t *testing.T) {
+	engine, _ := newApprovalQueueEngine(t)
+	store := engine.TaskStore()
+	sessStore := sessions.NewStore(t.TempDir())
+	h := &handler{
+		store: store, engine: engine, sessions: sessStore,
+		cfgMu:      &sync.RWMutex{},
+		serviceCtx: context.Background(),
+		activeAsks: map[string]sessionOperation{},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/sessions/{id}/ask", h.sessionAsk)
+	sess, err := sessStore.Create("late-note")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	// The race window: accepted while the turn still owned the queue, after
+	// its leftovers had already been parked.
+	if _, ok := h.pushSteer(sess.ID, "run the tests", false); !ok {
+		t.Fatal("note refused")
+	}
+
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, authedReq(http.MethodPost, "/api/sessions/"+sess.ID+"/ask",
+		strings.NewReader(`{"prompt":"","resume_queued":true}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ask: %d %s", rr.Code, rr.Body.String())
+	}
+
+	got, err := sessStore.Get(sess.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if len(got.Turns) == 0 || got.Turns[0].Text != "run the tests" {
+		t.Fatalf("first turn = %+v, want the late note", got.Turns)
+	}
+	if left := h.takeSteer(sess.ID); len(left) != 0 {
+		t.Fatalf("steer queue replayed %+v", left)
+	}
+}
+
 // TestParkLeftoversAnnouncesTheContinuation is the whole bug in one test: a
 // note typed into a turn whose rounds are already past their steer poll used to
 // be dropped when the turn ended — "queued" on screen, never read, gone. The

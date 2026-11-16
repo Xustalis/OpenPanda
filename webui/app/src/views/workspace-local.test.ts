@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { NodeInfo, SelfInfo } from '../api/client.ts'
-import { isLocal } from './workspace-local.ts'
+import { dedupeNodes, isLocal } from './workspace-local.ts'
 
 function self(extra: Partial<SelfInfo> = {}): SelfInfo {
   return {
@@ -75,4 +75,44 @@ test('a legacy row under the bare name still resolves while identity is unknown'
 
 test('without a self profile nothing is local', () => {
   assert.equal(isLocal(null, row()), false)
+})
+
+test('one box draws one panel even when two rows claim it', () => {
+  // A rename leaves the old id behind until the next registration reconciles
+  // it; the map must not read that as a second machine.
+  const rows = [
+    row({ id: 'old-name', name: 'old-name', node_identity: 'machine-abc', status: 'offline' }),
+    row({ id: 'new-name', name: 'new-name', node_identity: 'machine-abc', is_local: true }),
+  ]
+  const kept = dedupeNodes(rows)
+  assert.equal(kept.length, 1)
+  assert.equal(kept[0]?.id, 'new-name', 'the local row is the one to draw')
+})
+
+test('an online row outranks an offline twin', () => {
+  const rows = [
+    row({ id: 'sleepy', name: 'sleepy', node_identity: 'machine-abc', status: 'offline' }),
+    row({ id: 'awake', name: 'awake', node_identity: 'machine-abc', status: 'online' }),
+  ]
+  const kept = dedupeNodes(rows)
+  assert.deepEqual(kept.map((n) => n.id), ['awake'])
+})
+
+test('rows without a hardware fingerprint are never merged', () => {
+  // Older peers report no identity; the ledger fills the column with the id
+  // itself. That is not proof of "same box".
+  const rows = [
+    row({ id: 'peer-a', name: 'peer-a', node_identity: 'peer-a' }),
+    row({ id: 'peer-b', name: 'peer-b', node_identity: 'peer-b' }),
+    row({ id: 'peer-c', name: 'peer-c', node_identity: '' }),
+  ]
+  assert.equal(dedupeNodes(rows).length, 3)
+})
+
+test('different boxes with different identities both stay', () => {
+  const rows = [
+    row({ id: 'here', name: 'here', node_identity: 'machine-abc', is_local: true }),
+    row({ id: 'there', name: 'there', node_identity: 'machine-def' }),
+  ]
+  assert.equal(dedupeNodes(rows).length, 2)
 })

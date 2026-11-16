@@ -1,0 +1,642 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* task result card inside a reply */
+
+.task-card {
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--info);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--text-md);
+}
+
+.task-out {
+  margin: 0;
+  max-height: 180px;
+}
+
+/* Pre-execution question card above the composer: the running SSE turn is
+   parked on this answer, so the card sits where the next action would be rather
+   than inside a transcript bubble that scrolls away. It takes the transcript's
+   900px reading column so the card, the reply above it and the composer under
+   it share one edge. */
+@keyframes clarify-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Shares the transcript's and the composer's lane (`.chat-log` / `.composer`)
+   so the card's edges land on the reading column's at every width, including
+   when the node card has pushed that column left. */
+.clarify-dock {
+  flex: none;
+  padding: 0 calc(var(--sp-6) + var(--panel-lane)) 0 52px;
+  transition: padding-right var(--dur-med) var(--ease-standard);
+}
+
+.clarify-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 900px;
+  /* A long question with four long options must not push the transcript out
+     of the pane; the card scrolls on its own instead. */
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0 auto var(--sp-2);
+  /* The card is the one surface in the transcript that is asking for an
+     answer, so it carries a full hairline and the static shadow instead of
+     the old 3px ink rail: a rail reads as a quotation of the turn, a framed
+     sheet reads as the thing to act on. */
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-xs);
+  animation: clarify-in var(--dur-med) var(--ease-standard);
+}
+
+/* Focus is moved here on mount for the number/Escape keys, not to ring the
+   whole card; the option buttons keep their own focus treatment. */
+.clarify-card:focus {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clarify-card {
+    animation: none;
+  }
+}
+
+.clarify-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+/* The title is a quiet kicker, not a badge: one ink dot and tracked small
+   caps say "before we start" without a second pill competing with the
+   recommended tag down in the options. */
+.clarify-head .badge {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.clarify-head .badge::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+/* One tick per question, the current one in ink: the counter alone reads as
+   metadata, the ticks show how much of the round is left. They sit with the
+   counter on the right so the head has two groups, not three. */
+.clarify-steps {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+}
+
+.clarify-step {
+  display: block;
+  width: 16px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: width var(--dur-med) var(--ease-standard),
+    background var(--dur-fast) var(--ease);
+}
+
+.clarify-step.is-done {
+  background: var(--border-strong);
+}
+
+.clarify-step.is-on {
+  width: 22px;
+  background: var(--accent);
+}
+
+.clarify-progress {
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
+}
+
+/* The proposed plan reads as a quotation of the task, not a second card:
+   a hairline rail and no well, so the question below stays the loudest line. */
+.clarify-plan {
+  white-space: pre-wrap;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--text-secondary);
+  /* Three full lines plus a little: a paragraph that merely rounds past the
+     third line renders whole instead of losing its last words. */
+  max-height: calc(1.6em * 3.4);
+  overflow: hidden;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--border-soft);
+  transition: max-height var(--dur-med) var(--ease-standard);
+}
+
+/* Only a genuinely clipped plan fades: the fade is the "there is more" cue,
+   and showing it over text that already fits would read as damage. The
+   -webkit- twin is for the macOS WebView, which does not take the unprefixed
+   property. */
+.clarify-plan.is-clipped:not(.is-open) {
+  -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent);
+  mask-image: linear-gradient(to bottom, #000 72%, transparent);
+}
+
+.clarify-plan.is-open {
+  max-height: 30vh;
+  overflow: auto;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.clarify-plan-toggle {
+  align-self: flex-start;
+  margin-top: -3px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-caption);
+  cursor: pointer;
+}
+
+.clarify-plan-toggle:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* The question is the loudest line on the card: the model's own header is a
+   kicker above it, and the sentence itself steps up to 15px. */
+.clarify-question {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.clarify-header {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+
+.clarify-qtext {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+}
+
+/* Options are one list, not three loose boxes: a single hairline frame with
+   row dividers keeps a four-option question from reading as a stack of
+   unrelated cards. */
+.clarify-options {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* Options and the focused option's preview share a row on a wide screen; the
+   preview stacks under the options on a narrow one. */
+.clarify-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.clarify-body .clarify-options {
+  flex: 1 1 55%;
+  min-width: 0;
+}
+
+/* Without a preview pane the options own the whole row; the preview only takes
+   its 45% when the model actually supplied something to put in it. */
+.clarify-body:not(:has(.clarify-preview)) .clarify-options {
+  flex-basis: 100%;
+}
+
+/* The focused option's preview is quoted material, not a control: a soft
+   chrome well sets it apart from the white option list without the grey of an
+   input field. */
+.clarify-preview {
+  flex: 1 1 45%;
+  min-width: 0;
+  max-height: 26vh;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-chrome);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 720px) {
+  .clarify-body {
+    flex-direction: column;
+  }
+
+  .clarify-preview {
+    max-height: 30vh;
+    width: 100%;
+  }
+}
+
+.clarify-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border-soft);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.clarify-option:first-child {
+  border-top: none;
+}
+
+.clarify-option:hover {
+  background: var(--bg-hover);
+}
+
+/* The keyboard owns this card, so the focused row has to be visible without
+   the pointer. It reuses the hover fill and adds an inner hairline rather
+   than the page's ring, which would draw a second frame inside the list. */
+.clarify-option:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.clarify-option.is-picked {
+  background: var(--accent-soft);
+}
+
+/* The rail marks the answer, the fill only tints the row: on paper the two
+   greys (accent-soft and the hover fill) are too close to carry the state
+   alone. */
+.clarify-option.is-picked::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+}
+
+/* The recommended option is marked by its tag, not by a fill: a tinted row
+   would read as "already chosen" next to a genuinely picked one. Only the
+   key badge picks up the accent, so the default is legible at a glance. */
+.clarify-option.is-recommended .clarify-option-key {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+/* Number-key hint, drawn as a keycap: the option row is a button, and the
+   keycap is the only part of it that looks like one. */
+.clarify-option-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  background: var(--bg-raised);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.clarify-option:hover .clarify-option-key,
+.clarify-option.is-picked .clarify-option-key {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* Label and description stack: a description that trails the label on the
+   same line ragged-wraps at every column width, while a second line lines up
+   under the label and scans as one item. */
+.clarify-option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.clarify-option-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.clarify-recommended {
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
+.clarify-option-desc {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* Multi-select's checkbox, in the row's trailing slot. Single-select rows
+   leave the slot empty; the whole row is the control. */
+.clarify-option-tick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: transparent;
+  transition: background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.clarify-option-tick.is-on {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+
+.clarify-option-tick .ico {
+  width: 11px;
+  height: 11px;
+}
+
+/* Narrow screens cannot fit a label and its description on one line; stacking
+   them keeps each option readable instead of wrapping mid-sentence. This sits
+   after the base rule on purpose: same specificity, so source order decides.
+   The keycap leaves the grid rather than just being hidden — a hidden first
+   column would still hold its 20px and push the label out of alignment. */
+@media (max-width: 720px) {
+  .clarify-option {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 10px;
+    /* A finger needs a bigger target than a pointer: the compact desktop row
+       is 33px, below what a touch screen should ask the user to hit. */
+    padding: 9px 10px;
+  }
+
+  .clarify-option-key {
+    display: none;
+  }
+}
+
+.clarify-other {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.clarify-other input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 7px 10px;
+}
+
+.clarify-other input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* The action row is separated by a hairline: the options are the answer and
+   the buttons are the way around it, so the two should not read as one block
+   of equally-weighted controls. */
+.clarify-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* Cancel is the way out, not a peer of the answer: it sits at the far right,
+   away from the option buttons that were just pressed. */
+.clarify-actions .btn.danger {
+  margin-left: auto;
+}
+
+/* A parked task's question reuses the clarify card inside the approval box:
+   column layout, and the inner card drops its own frame so the two borders do
+   not nest. */
+.task-approval.is-clarify {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.task-approval.is-clarify .clarify-card {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  animation: none;
+  max-height: none;
+  overflow: visible;
+}
+
+.clarify-other .clarify-question {
+  flex-basis: 100%;
+}
+
+/* Inline approval gate inside a reply's task card: the decision belongs where
+   the user is reading, so it sits above the result with the warning accent
+   rather than hiding among the card's other chrome. */
+.task-approval {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 10px;
+  border: 1px solid var(--warn-border, var(--border-soft));
+  border-left: 3px solid var(--warn, var(--info));
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft, var(--bg-raised));
+}
+
+/* The sentence under an approval card's buttons. It takes its own row: the
+   buttons and the scope select share the first line, and a reason that wrapped
+   into the middle of them read as one more control. */
+.task-approval .gate-hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+
+/* The remember-scope select riding inside approval cards, kanban actions and
+   the detail reject form — caption-sized so it reads as a modifier of the
+   buttons next to it, not a separate control row. */
+.scope-select {
+  font: inherit;
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+}
+
+.scope-select:disabled {
+  opacity: 0.6;
+}
+
+.approval-consent {
+  font-size: var(--fs-caption);
+}
+
+/* Bare-text action inside a chip or meta line (the forget links). */
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.link-btn:hover {
+  text-decoration-color: var(--accent);
+}
+
+.link-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* The project edit panel's approval policy row: mode + remember-scope, one
+   line when it fits. */
+.project-edit-approval {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin: var(--sp-2) 0;
+}
+
+.approval-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-caption);
+}
+
+/* empty-state hero */
+
+
+/* ---- Transcript skeleton (thread still loading) ---- */
+
+
+
+.skel-msg {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.skel-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.skel-lines {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 5px;
+}
+
+.skel-line {
+  height: 11px;
+  border-radius: 6px;
+}
+
+/* One shimmer definition for every placeholder shape. The gradient is wider
+   than the element so the highlight sweeps rather than pulses. */
+.skel-avatar,
+.skel-line {
+  background: linear-gradient(90deg, var(--bg-raised) 25%, var(--bg-hover) 50%, var(--bg-raised) 75%);
+  background-size: 280% 100%;
+  animation: skel-sweep 1.3s ease-in-out infinite;
+}
+
+@keyframes skel-sweep {
+  from {
+    background-position: 140% 0;
+  }
+  to {
+    background-position: -40% 0;
+  }
+}

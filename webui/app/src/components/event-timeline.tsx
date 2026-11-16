@@ -7,6 +7,7 @@ import { blockDepth, formatTaskEvent, imageRefOf, toolArgSummary, type AgentBloc
 import { buildRows } from './event-rows'
 import { Icon } from './icons'
 import { ImagePreview } from './image-preview'
+import { readableOutput } from './output-text'
 import { t } from '../i18n'
 
 export interface EventTimelineProps {
@@ -277,11 +278,12 @@ function ToolResultBody({
   image?: ImageRef | null
 }) {
   const [open, setOpen] = useState(false)
-  const content = block.content ?? ''
-  const lines = content.split('\n')
-  const long = lines.length > PREVIEW_LINES || content.length > 320
+  const raw = block.content ?? ''
+  const out = readableOutput(raw)
+  const lines = out.text.split('\n')
+  const long = lines.length > PREVIEW_LINES || out.text.length > 320
   const preview = lines.slice(0, PREVIEW_LINES).join('\n')
-  const shown = open || !long ? content : preview + '…'
+  const shown = open || !long ? out.text : preview + '…'
   // Bytes the adapter inlined ARE the result. Printing them would be a wall
   // of base64, so the picture replaces the text entirely.
   if (image?.dataUrl) {
@@ -295,12 +297,17 @@ function ToolResultBody({
     <div class="step-body">
       {image?.path && <ImagePreview path={image.path} />}
       {shown && <pre class={`agent-result ${block.isError ? 'is-error' : ''}`}>{shown}</pre>}
+      {out.dropped > 0 && (
+        <div class="output-note">{t('events.outputOmitted', { n: String(out.dropped) })}</div>
+      )}
       {long && (
         <button type="button" class="btn small result-expand" onClick={() => setOpen((v) => !v)}>
           {open ? t('events.collapse') : t('events.expand')}
         </button>
       )}
-      {open && content.length > 600 && <RawJsonToggle raw={rawJson ?? content} />}
+      {/* Dropped lines are not deleted evidence: the original stays one click
+          away even when the row is short enough to need no expander. */}
+      {(out.dropped > 0 || (open && raw.length > 600)) && <RawJsonToggle raw={rawJson ?? raw} />}
     </div>
   )
 }
@@ -404,17 +411,22 @@ function ResultCard({
   fallback?: string
 }) {
   const [open, setOpen] = useState(false)
-  const out = result.stdout ?? ''
-  const long = out.length > 480
-  const shown = open || !long ? out : out.slice(0, 480) + '…'
+  const stdout = readableOutput(result.stdout ?? '')
+  const stderr = readableOutput(result.stderr ?? '')
+  const dropped = stdout.dropped + stderr.dropped
+  const long = stdout.text.length > 480
+  const shown = open || !long ? stdout.text : stdout.text.slice(0, 480) + '…'
   return (
     <div class="step-body result-card">
-      {result.stdout && (
+      {stdout.text && (
         <div class="result-card-out">
           <Markdown text={shown} />
         </div>
       )}
-      {result.stderr && <pre class="agent-result is-error">{result.stderr}</pre>}
+      {stderr.text && <pre class="agent-result is-error">{stderr.text}</pre>}
+      {dropped > 0 && (
+        <div class="output-note">{t('events.outputOmitted', { n: String(dropped) })}</div>
+      )}
       {!result.stdout && !result.stderr && fallback && (
         <div class="step-summary">{fallback}</div>
       )}

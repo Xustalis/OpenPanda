@@ -1,0 +1,171 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ---- Settings sheet: rhythm, hierarchy and detail ----------------------
+   The dialog is a reading surface. A slightly larger title, a hairline
+   accent on the active rail item, and generous pane padding make the same
+   controls read in a clear order instead of one continuous list. */
+.settings-dialog {
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+}
+.settings-rail {
+  gap: 14px;
+  padding: 16px 12px 12px;
+}
+.settings-search {
+  height: 34px;
+  background: var(--bg-raised);
+  border-radius: var(--radius-md);
+}
+.settings-nav {
+  gap: 16px;
+}
+.settings-nav-group-title {
+  padding: 0 10px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+}
+.settings-nav-item {
+  position: relative;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+}
+.settings-nav-item.active {
+  box-shadow: var(--shadow-xs);
+}
+/* A quiet ink bar: the raised plate already marks the active section, so the
+   bar is a hint rather than a near-black stripe down the rail. */
+.settings-nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+/* An opaque head keeps scrolled content from ever reading as a clipped line
+   immediately under the title. */
+.settings-pane-head {
+  position: relative;
+  z-index: 1;
+  padding: 16px 18px 16px 28px;
+  background: var(--bg);
+}
+.settings-pane-title {
+  font-size: var(--text-xl);
+  letter-spacing: -0.015em;
+}
+.settings-pane-body {
+  padding: 0 28px 24px;
+}
+
+/* ---- Agents tab: one policy, two owners ---------------------------------
+   Global limits sit above the roster, separated by one rule. The per-agent
+   fields are no longer a second grid of fieldsets; they live inside each
+   row's disclosure. The save bar stays reachable without scrolling back. */
+.agents-tab {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.execution-limits > .hint {
+  margin: 6px 0 10px;
+  max-width: 76ch;
+  line-height: 1.5;
+}
+.execution-limits-grid,
+.execution-agent-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: 10px 14px;
+}
+.execution-field {
+  gap: 5px;
+  margin-bottom: 0;
+  font-size: var(--text-sm);
+}
+.execution-field > span {
+  color: var(--text-secondary);
+}
+.execution-toggle {
+  margin-top: 10px;
+}
+.execution-toggle > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+  color: var(--text);
+}
+.execution-toggle input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+.settings-dialog .agents-head {
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.settings-dialog .agents-head .block-title {
+  padding-top: 0;
+}
+.settings-dialog .agents-head .hint {
+  max-width: 72ch;
+  line-height: 1.6;
+}
+.settings-dialog .agent-row {
+  padding: 12px 10px 12px 0;
+  transition: background var(--dur-fast) var(--ease);
+}
+.settings-dialog .agent-row:hover {
+  background: var(--surface-alpha-xs);
+}
+.settings-dialog .agent-state {
+  gap: 8px;
+}
+.agent-row.custom .agent-face {
+  border-style: dashed;
+}
+.agent-row.custom .agent-pill {
+  border-color: var(--border-soft);
+}
+/* A row's disclosure is wide enough for three fields but never taller than
+   the pane; the head stays put while the body scrolls. */
+.settings-dialog .item-settings-menu {
+  max-height: min(440px, 62vh);
+  overflow: auto;
+}
+.agent-settings-fields .agent-settings-boundary {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+/* The two verbs live in a real footer, outside the scrollport. A sticky bar
+   inside the body covered whichever row scrolled under it and left the last
+   rows unreadable; a footer is always reachable and never overlaps content. */
+.settings-pane-footer {
+  flex: none;
+  padding: 12px 28px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  box-shadow: 0 -8px 18px color-mix(in srgb, var(--bg) 82%, transparent);
+}
+.settings-pane-footer .execution-save-bar {
+  position: static;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.settings-pane-footer .execution-save-bar > .hint {
+  margin: 0 0 8px;
+}
+.settings-pane-footer .execution-save-bar .policy-actions-bar {
+  gap: 8px;
+}

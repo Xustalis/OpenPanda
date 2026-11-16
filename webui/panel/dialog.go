@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 // errNoNativeDialog marks the platform/session combinations where no chooser
@@ -77,13 +76,6 @@ func (h *handler) chooseDirectoryDialog(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, chooseDirectoryResponse{Path: path, Cancelled: cancelled})
 }
-
-// dialogTimeout bounds a native picker invocation: a dialog left open forever
-// would otherwise park this handler's goroutine, and repeated clicks would pile
-// up zombie osascript/zenity/powershell processes behind it. Generous enough
-// that a slow legitimate selection still wins. The platform implementations
-// (dialog_unix.go / dialog_windows.go) apply it to whatever helper they spawn.
-const dialogTimeout = 5 * time.Minute
 
 // callerIsLocal reports whether the request came from this machine. A native
 // chooser can only serve a console running on the same desktop as the panel;

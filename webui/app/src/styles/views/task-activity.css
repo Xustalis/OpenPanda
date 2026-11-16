@@ -1,0 +1,302 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* ==========================================================================
+   Queue live strip, dispatch pipeline, result cards (execution-UX pass)
+   ========================================================================== */
+
+/* Active kanban cards carry a state-colored edge so the board reads at a
+   glance — todo/info, doing/accent, review/warn — plus a live activity line
+   that replaces the "static badge" feel with the TUI's rolling status. */
+.kanban-card[data-state='submitted'],
+.kanban-card[data-state='queued'],
+.kanban-card[data-state='dispatched'],
+.kanban-card[data-state='waiting_context'] {
+  box-shadow: var(--shadow-xs), inset 3px 0 0 var(--semantic-info);
+}
+.kanban-card[data-state='running'] {
+  box-shadow: var(--shadow-xs), inset 3px 0 0 var(--accent-2);
+  border-color: var(--accent-2-border);
+}
+.kanban-card[data-state='review'] {
+  box-shadow: var(--shadow-xs), inset 3px 0 0 var(--semantic-warn);
+}
+
+.kanban-live {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+  min-width: 0;
+}
+.kanban-live-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The beating pulse dot shared by kanban cards and the orbit summary pill —
+   "this is moving right now". */
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--semantic-info);
+  flex-shrink: 0;
+}
+.live-dot.beating {
+  background: var(--accent-2);
+  animation: live-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes live-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-dot.beating { animation: none; }
+}
+
+.pill-live {
+  color: var(--accent-2);
+  border-color: var(--accent-2-border);
+  background: var(--accent-2-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Dispatch pipeline: submit → queue → delegate → accept collapsed into one
+   readable strip of chips instead of one card per bookkeeping write. */
+.timeline-step-item.type-pipeline .step-marker {
+  border-color: var(--semantic-info);
+}
+.pipeline {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.pipeline-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pipeline-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--semantic-info-soft);
+  border: 1px solid var(--semantic-info-border);
+  font-size: var(--fs-caption);
+  color: var(--text-secondary);
+}
+.pipeline-step.failed .pipeline-chip {
+  background: var(--semantic-danger-soft);
+  border-color: var(--semantic-danger-border);
+  color: var(--semantic-danger);
+}
+.pipeline-arrow {
+  color: var(--text-tertiary);
+  font-size: 0.7rem;
+}
+.pipeline-node {
+  font-size: 0.9em;
+}
+
+/* Bookkeeping events demoted to a single thin line — they exist for audit,
+   not for reading. */
+.timeline-step-item.type-quiet {
+  padding-bottom: var(--sp-2);
+}
+.timeline-step-item.type-quiet .step-marker {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-color: var(--border);
+}
+.step-quiet {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-caption);
+}
+
+/* The terminal result event, rendered like a result instead of a JSON row. */
+.result-card .result-card-out {
+  font-size: var(--fs-body);
+  line-height: 1.55;
+  padding: var(--sp-1) 0;
+}
+
+/* Detail-view result polish: file chips + markdown output + capped raw. */
+.result-files {
+  margin: var(--sp-2) 0;
+}
+.result-files-label {
+  display: block;
+  font-size: var(--fs-caption);
+  margin-bottom: 4px;
+}
+.result-file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.result-file-chip {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-caption);
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  color: var(--text-secondary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-out {
+  margin-top: 2px;
+  font-size: var(--fs-body);
+  line-height: 1.55;
+}
+.detail-raw-capped {
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* Task output inside a chat bubble is markdown now, not a mono <pre>. */
+.task-out-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-out-wrap .task-out {
+  max-height: none;
+  font-size: var(--fs-body);
+  line-height: 1.55;
+}
+
+/* The prompt behind a card title — one line, quietly, so the card still reads
+   as a task title first and a request second. */
+.kanban-intent {
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ————————————————————————————————————————————————————————————————
+   Task brief + live-narrative polish
+   ———————————————————————————————————————————————————————————————— */
+
+/* Task brief: spec_json rendered as a readable definition card — the "what
+   this run was asked to produce" the page used to hide inside a JSON blob. */
+.spec-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--hairline-sm);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-4) var(--sp-5);
+  box-shadow: var(--shadow-xs);
+}
+.spec-card h2 {
+  /* .detail-block h2 already supplies the section-title voice + accent tick. */
+  margin-bottom: var(--sp-2);
+}
+.spec-target {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+.spec-constraints {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-3);
+  background: var(--bg-inset);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-xs);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.spec-constraints li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-sub);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.spec-constraint-ico {
+  color: var(--accent-1);
+  flex-shrink: 0;
+  align-self: center;
+}
+.spec-foot {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--hairline-xs);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.spec-foot-label {
+  display: block;
+  font-size: var(--fs-caption);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+.spec-scope-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.spec-success-text {
+  font-size: var(--fs-sub);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Repeat marker on a folded run of quiet rows — "the silence note repeated
+   ×5", so a four-minute stall is one thin line with a count, not five. */
+.quiet-count {
+  font-size: 0.85em;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-sm);
+  border: 1px solid var(--hairline-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* The "+N more" tail on the changed-file chip list — same footprint as a
+   chip, dashed so it reads as affordance, not data. */
+.result-file-more {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-caption);
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.result-file-more:hover {
+  color: var(--text-secondary);
+  border-color: var(--hairline-sm);
+}
+.result-file-more:focus-visible {
+  box-shadow: var(--ring);
+}

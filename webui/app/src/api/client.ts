@@ -2774,6 +2774,10 @@ export interface SessionTurn {
   delivery_attempt_id?: string
   delivery?: string
   delivery_truncated?: boolean
+  /** Panda's own judgement of the work (the supervision verdict), display-only
+   *  and never replayed. It sits above the delivery so the agent's report is
+   *  not mistaken for the house's assessment. */
+  verdict?: string
   /** Provider-supplied reasoning summary, never replayed as answer text. */
   thought?: string
   operation_id?: string

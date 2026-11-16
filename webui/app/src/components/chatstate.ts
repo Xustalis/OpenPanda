@@ -109,10 +109,31 @@ export function reconcileTranscript<T extends TurnLike & { k: string; operation_
     !stored.some(t => t.operation_id === retainOperation && t.role === m.role))]
 }
 
+/** A reload drops the browser's local streaming flag, but the server keeps the
+ *  running operation on the session. Count it as busy so the composer keeps
+ *  showing Stop while the model is still answering. */
 export function runningOperation(
   activeId: string | null,
-  session: { id: string; operation?: { id: string; status: string } } | null,
+  session: { id: string; operation?: { id: string; status: string } | null } | null,
 ): string | null {
   return session?.id === activeId && session.operation?.status === 'running'
     ? session.operation.id : null
+}
+
+/** Whether the thread is working, in the one sense the composer's primary
+ *  action and the running placeholder promise.
+ *
+ *  Three inputs, and dropping any of them has already cost a way out of the
+ *  pane: the browser's own stream (`localBusy`), the server's durable
+ *  operation (a reload drops the first), and the jobs this thread dispatched
+ *  that are still moving — a turn settles as soon as the handoff is made,
+ *  while the employee it dispatched keeps running for minutes, and a stalled
+ *  adapter is exactly the state that needs a Stop button. */
+export function threadBusy(
+  localBusy: boolean,
+  activeId: string | null,
+  session: { id: string; operation?: { id: string; status: string } | null } | null,
+  liveTasks: number,
+): boolean {
+  return localBusy || Boolean(runningOperation(activeId, session)) || liveTasks > 0
 }
