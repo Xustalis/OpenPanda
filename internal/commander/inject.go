@@ -421,7 +421,60 @@ func effectiveBaseURLFor(name, adapter string, model config.ModelConfig) string 
 		}
 		return "https://api.deepseek.com/anthropic"
 	}
+	if k, ok := agents.Lookup(name, adapter); ok && k.ModelEnv != nil && k.ModelEnv.BaseURLVersioned &&
+		targetAPIType == config.APITypeOpenAI {
+		return versionedBaseURL(base)
+	}
 	return base
+}
+
+// versionedBaseURL returns base with an OpenAI-style version segment ("/v1")
+// when it names none.
+//
+// The registry's BaseURLVersioned flag marks the CLIs that append only their
+// own leaf path to the injected base. Given "https://vip.dakota.media" such a
+// CLI asks for "/chat/completions", and a gateway that also serves a web
+// console answers that path with its SPA: HTTP 200, HTML, zero events. The
+// adapter then reports "no assistant text" — a shape the operator reads as an
+// adapter bug, not as a wrong URL. The same request against
+// "https://vip.dakota.media/v1" is a normal completion, so the fix belongs
+// here, where the endpoint is chosen, rather than in every adapter.
+//
+// A base that already ends in a version segment is returned untouched (a
+// relay documented as "https://relay.example.com/v1" must not become /v1/v1),
+// and anything unparseable is passed through as the operator wrote it.
+func versionedBaseURL(base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return base
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return base
+	}
+	path := strings.TrimRight(u.Path, "/")
+	if path != "" {
+		leaf := path[strings.LastIndex(path, "/")+1:]
+		if isAPIVersionSegment(leaf) {
+			return base
+		}
+	}
+	u.Path = path + "/v1"
+	return u.String()
+}
+
+// isAPIVersionSegment reports whether s is a bare version segment ("v1",
+// "v2"), the form OpenAI-compatible endpoints are mounted under.
+func isAPIVersionSegment(s string) bool {
+	if len(s) < 2 || s[0] != 'v' {
+		return false
+	}
+	for _, r := range s[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // effectiveModelNameFor returns the target-appropriate model name for an agent.

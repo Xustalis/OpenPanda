@@ -292,6 +292,60 @@ print(json.dumps({"type":"result", "is_error":False, "result":"resumed",
         self.assertEqual(payload["result"], "resumed")
         self.assertEqual(payload["session_id"], "sess-next")
 
+    @unittest.skipUnless(sys.platform == "win32",
+                         "the command-line budget only exists on Windows")
+    def test_claude_sheds_optional_payloads_to_fit_the_windows_line(self):
+        """A payload too big for argv must cost the payload, not the run.
+
+        The protocol schema alone is ~5.5k characters and the passthrough MCP
+        document a few hundred more: once the prompt moves to stdin the line
+        can still exceed the adapter's 6000-character budget. Refusing to
+        spawn there parked a real task in review with "the command line is
+        still 6410 characters". Both payloads have a fallback — the CLI
+        discovers its own .mcp.json, and without the schema the orchestrator
+        parses text markers — so they are shed and the run proceeds.
+        """
+        schema = json.dumps({"type": "object", "properties": {
+            "answer": {"type": "string", "description": "x" * 6000}}})
+        payload, progress, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+assert "--json-schema" not in args, args
+assert "--mcp-config" not in args, args
+assert "-p" in args
+prompt = sys.stdin.read()
+assert "contract prompt" in prompt, prompt
+print(json.dumps({"type":"result", "is_error":False, "result":"shed",
+                  "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            extra_request={"result_schema": schema,
+                           "mcp_config": '{"mcpServers":{}}'},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "shed")
+        # The drop is reported, so a run that lost the structured contract
+        # can be explained afterwards.
+        self.assertTrue(any("--json-schema" in line for line in progress), progress)
+
+    def test_claude_keeps_optional_payloads_that_fit(self):
+        """Shedding is a budget measure, not the default: a line that fits
+        keeps the structured contract and the MCP passthrough."""
+        payload, _, _ = run_adapter(
+            "claude_code.py", "claude", r'''
+import json, sys
+args = sys.argv[1:]
+assert args[args.index("--json-schema") + 1] == '{"type":"object"}', args
+assert "--mcp-config" in args, args
+print(json.dumps({"type":"result", "is_error":False, "result":"kept",
+                  "usage":{"input_tokens":1,"output_tokens":1}}))
+''',
+            extra_request={"result_schema": '{"type":"object"}',
+                           "mcp_config": '{"mcpServers":{}}'},
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "kept")
+
     def test_claude_timeout_reports_session_checkpoint(self):
         """A watchdog-killed stream run reports the session id the init
         envelope carried, so the orchestrator's retry resumes the same
@@ -2074,7 +2128,12 @@ print("hermes hooks answer")
         payload, _, _ = run_adapter(
             "openclaw.py", "openclaw", r'''
 import sys
-assert sys.argv[1:] == ["agent", "exec", "contract prompt"]
+args = sys.argv[1:]
+assert args[:2] == ["agent", "--local"], args
+assert "--json" in args, args
+assert args[args.index("--message") + 1] == "contract prompt", args
+assert "--model" not in args, args
+assert len(args[args.index("--session-id") + 1]) == 36, args
 print("openclaw answer")
 ''',
         )
@@ -2554,19 +2613,22 @@ print("own model")
 
     def test_openclaw_injected_run_pins_config_state_and_home(self):
         # An injected openclaw turn must not touch three things: the ambient
-        # config (--config), the gateway state (--state-dir) and the
-        # auth-profile store under ~/.openclaw — the last one has no flag, so
-        # HOME/USERPROFILE are redirected instead. The key rides a secret
-        # reference (source: env), never the config file.
+        # config, the gateway state and the auth-profile store under
+        # ~/.openclaw. 2026.6.x exposes no flags for any of them —
+        # OPENCLAW_CONFIG_PATH / OPENCLAW_STATE_DIR carry the first two, and
+        # HOME/USERPROFILE are redirected for the third. The key rides a
+        # secret reference (source: env), never the config file.
         payload, _, _ = run_adapter(
             "openclaw.py", "openclaw", r'''
 import json, os, sys
 args = sys.argv[1:]
-assert args[:2] == ["agent", "exec"], args
-cfg = args[args.index("--config") + 1]
-state = args[args.index("--state-dir") + 1]
-assert args[args.index("--model") + 1] == "panda/injected-model", args
+assert args[:2] == ["agent", "--local"], args
+assert "--config" not in args and "--state-dir" not in args, args
 assert "--json" in args, args
+assert args[args.index("--message") + 1] == "contract prompt", args
+assert args[args.index("--model") + 1] == "panda/injected-model", args
+cfg = os.environ["OPENCLAW_CONFIG_PATH"]
+state = os.environ["OPENCLAW_STATE_DIR"]
 with open(cfg, encoding="utf-8") as f:
     doc = json.load(f)
 prov = doc["models"]["providers"]["panda"]
@@ -2603,6 +2665,39 @@ print(json.dumps({"ok": True, "status": "ok", "final": "openclaw answer",
             "input_tokens": 7, "output_tokens": 3,
             "cache_read_tokens": 2, "cache_write_tokens": 0,
         })
+
+    def test_openclaw_2026_envelope_without_ok_key(self):
+        # 2026.6.x drops the top-level `ok`: the answer rides payloads[] and
+        # the accounting rides meta.agentMeta. A missing `ok` must not read as
+        # a malformed envelope — that path dumped the raw JSON (trace lines and
+        # all) into the task result instead of the answer.
+        payload, _, _ = run_adapter(
+            "openclaw.py", "openclaw", r'''
+import json
+print(json.dumps({
+    "payloads": [{"text": "openclaw answer", "mediaUrl": None}],
+    "meta": {"durationMs": 40698,
+             "agentMeta": {"sessionId": "sess-2026", "provider": "panda",
+                           "model": "injected-model",
+                           "usage": {"input": 11, "output": 4, "total": 15}},
+             "aborted": False,
+             "finalAssistantVisibleText": "openclaw answer",
+             "stopReason": "end_turn"},
+}))
+''',
+            env={
+                "OPENPANDA_INJECTED_MODEL": "1",
+                "OPENAI_BASE_URL": "https://api.example/v1",
+                "OPENCLAW_API_KEY": "k",
+                "OPENCLAW_MODEL": "injected-model",
+            },
+        )
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["result"], "openclaw answer")
+        self.assertEqual(payload["session_id"], "sess-2026")
+        self.assertEqual(payload["tokens"], 15)
+        self.assertEqual(payload["usage"],
+                         {"input_tokens": 11, "output_tokens": 4})
 
     def test_openclaw_envelope_failure_is_not_a_pass(self):
         # ok:false in the envelope is a failed turn even when the process

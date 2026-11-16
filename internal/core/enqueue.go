@@ -104,13 +104,9 @@ func deriveResourceKeys(in TaskInput) []string {
 		// arrives in the model's casing while --project is verbatim, and
 		// the two spellings of one tree must collide, not parallel-write.
 		//
-		// A task that names its conversation claims a lane one level under
-		// that root instead. Two conversations then hold sibling keys and run
-		// in parallel, while the root claim (no conversation: CLI submit, plan
-		// stage, inbound delegate) stays an ancestor of every lane and still
-		// excludes all of them. What the lock protects is the checkout, not
-		// the thread: a conversation may write while another reads, and only
-		// same-lane work is forced to serialize.
+		// Conversations in one checkout share this identity. A conversation
+		// pinned to a private worktree is corrected by resourceKeysFor before
+		// it reaches here; thread identity alone never proves isolation.
 		keys = append(keys,
 			queue.SessionProjectKey(in.Project, in.SessionID),
 			queue.SessionScopeKey(in.Project, in.SessionID))

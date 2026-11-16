@@ -189,6 +189,16 @@ type ModelEnvMapping struct {
 	BaseURL string // env var carrying the provider base URL, e.g. ANTHROPIC_BASE_URL / OPENAI_BASE_URL
 	APIKey  string // env var carrying the API key, e.g. ANTHROPIC_API_KEY / OPENAI_API_KEY
 	Model   string // env var carrying the model name, e.g. ANTHROPIC_MODEL / OPENAI_MODEL
+	// BaseURLVersioned marks a CLI whose OpenAI client appends only its own
+	// leaf path ("/chat/completions") to BaseURL, without inserting an API
+	// version. The injected base must then already name one: handed a bare
+	// "https://gateway.example.com", such a CLI requests
+	// "/chat/completions", which a multi-service gateway answers with its web
+	// UI — HTTP 200 and HTML — and the run ends reporting "no assistant
+	// text" instead of a provider error. The Anthropic SDK these CLIs also
+	// carry appends "/v1/messages" itself, so this flag only governs the
+	// OpenAI-compatible surface.
+	BaseURLVersioned bool
 }
 
 // PrimaryBinary returns the canonical CLI binary to probe, or "" if none.
@@ -580,6 +590,11 @@ var known = []Known{
 			BaseURL: "PI_BASE_URL",
 			APIKey:  "PI_API_KEY",
 			Model:   "PI_MODEL",
+			// pi's openai-completions provider posts to
+			// "{baseURL}/chat/completions" (its Anthropic one goes through
+			// the SDK, which adds /v1/messages itself), so the injected
+			// base has to carry the version segment.
+			BaseURLVersioned: true,
 		},
 		Capabilities: Capabilities{
 			SupportsSkills: true,

@@ -1416,3 +1416,51 @@ func TestInjectionAgentsPinOutranksOwnCredentials(t *testing.T) {
 		t.Fatalf("unpinned agent must keep its own model: %+v", other)
 	}
 }
+
+// TestInjectionCarriesTheAPIVersionPiCannotAdd: pi's openai-completions
+// provider posts to "{base}/chat/completions" — it inserts no version — while
+// its Anthropic provider goes through the SDK, which adds /v1/messages on its
+// own. So the injected base must carry the version for the OpenAI surface and
+// must be left alone for the Anthropic one.
+//
+// The live failure this encodes: a bare "https://vip.dakota.media" made pi
+// request "/chat/completions", the gateway answered with its web console
+// (HTTP 200, HTML), no event parsed, and the task reported "pi streamed
+// events but no assistant text was extracted (unrecognized event schema)" —
+// which reads as an adapter defect and cost a full day of diagnosis. The same
+// request against the /v1 base answers normally.
+func TestInjectionCarriesTheAPIVersionPiCannotAdd(t *testing.T) {
+	cleanCredentialEnv(t)
+	bare := config.ModelConfig{
+		Provider: "custom",
+		APIType:  config.APITypeOpenAI,
+		BaseURL:  "https://gateway.example.com",
+		APIKey:   "sk-test",
+		Model:    "gpt-test",
+	}
+	if got := effectiveBaseURLFor("pi", "pi.py", bare); got != "https://gateway.example.com/v1" {
+		t.Fatalf("pi base = %q, want the /v1 base", got)
+	}
+	// A base that already names a version keeps exactly one.
+	versioned := bare
+	versioned.BaseURL = "https://gateway.example.com/v1/"
+	if got := effectiveBaseURLFor("pi", "pi.py", versioned); got != "https://gateway.example.com/v1/" {
+		t.Fatalf("already-versioned base rewritten to %q", got)
+	}
+	// The Anthropic surface must not gain a segment the SDK will add itself.
+	anthropic := bare
+	anthropic.APIType = config.APITypeAnthropic
+	if got := effectiveBaseURLFor("pi", "pi.py", anthropic); got != "https://gateway.example.com" {
+		t.Fatalf("pi anthropic base = %q, want it untouched", got)
+	}
+	// An agent that does not declare the flag is never rewritten.
+	if got := effectiveBaseURLFor("claude_code", "claude_code.py", bare); got != "https://gateway.example.com" {
+		t.Fatalf("claude_code base = %q, want it untouched", got)
+	}
+	// A path prefix survives the append: a relay mounted under /openai.
+	prefixed := bare
+	prefixed.BaseURL = "https://relay.example.com/openai"
+	if got := effectiveBaseURLFor("pi", "pi.py", prefixed); got != "https://relay.example.com/openai/v1" {
+		t.Fatalf("prefixed base = %q, want /openai/v1", got)
+	}
+}

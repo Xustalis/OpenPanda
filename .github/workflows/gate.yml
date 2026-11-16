@@ -315,3 +315,7 @@ jobs:
       - name: Adapter contracts (Windows)
         if: runner.os == 'Windows'
         run: python tests/adapter_contract_test.py
+      - name: Execution diagnostics contracts
+        run: python tests/execution_diagnostics_test.py
+      - name: DAG metrics contracts
+        run: python tests/live_dag_metrics_test.py

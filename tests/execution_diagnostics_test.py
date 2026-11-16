@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import importlib.util
 import json
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -15,7 +16,7 @@ class DiagnosticsTest(unittest.TestCase):
     def test_read_only_filtered_metrics_do_not_export_raw_payloads(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "runtime #1.sqlite"
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db, db:
                 db.executescript("CREATE TABLE tasks(task_id,state,created_at,updated_at,result_json,plan_id); CREATE TABLE task_events(id,task_id,ts,type,data_json); CREATE TABLE task_checks(task_id);")
                 db.executemany("INSERT INTO tasks VALUES (?,?,?,?,?,?)", [
                     ("a", "done", 10, 50, json.dumps({"needs_followup": True, "stdout": "PRIVATE"}), ""),

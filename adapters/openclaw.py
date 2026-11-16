@@ -7,36 +7,41 @@ Protocol (shared with codex.py / claude_code.py / opencode.py):
           plus optional {resume, tools_policy}
   stdout: a JSON object with keys {ok, result, exit_code, tokens, cost}
 
-Runs `openclaw agent exec <prompt>` headlessly. stdout is returned verbatim
-and a non-zero exit becomes the diagnosis. openclaw exposes no documented
-session or tool-whitelist surface, so resume/tools_policy ride the request but
-do not change the command line. This adapter never prints secrets.
+Runs `openclaw agent --local --json --message <prompt>` headlessly. stdout is
+reduced to the answer payload and a non-zero exit becomes the diagnosis. The
+session id is chosen here (or resumed from the request), so a supervision
+continuation keeps the same openclaw session. tools_policy rides the request
+but does not change the command line. This adapter never prints secrets.
 
-Injected runs (OPENPANDA_INJECTED_MODEL=1) use openclaw's reproducible-exec
-surface instead of the ambient one:
+Injected runs (OPENPANDA_INJECTED_MODEL=1) use openclaw's embedded,
+config-pinned surface instead of the ambient gateway one:
 
-  openclaw agent exec --config <cfg> --state-dir <dir> --model panda/<m> --json
+  OPENCLAW_CONFIG_PATH=<cfg> OPENCLAW_STATE_DIR=<dir> \
+    openclaw agent --local --json --session-id <id> --message <prompt> \
+                   --model panda/<m>
 
-`--config` pins a config file we generate, so the model entry is a provider
-openclaw has never seen and the operator's own openclaw.json is not edited.
-The key is NOT in that file: `apiKey` is a secret reference
-(`{source: env, provider: pandaenv, id: OPENCLAW_API_KEY}`) resolved against a
-`secrets.providers.pandaenv` entry that reads the injected environment, so
-the credential stays on the wire from panda to the child process only.
+The config pins a provider openclaw has never seen, so the operator's own
+openclaw.json is not edited. `OPENCLAW_CONFIG_PATH` / `OPENCLAW_STATE_DIR` are
+the only knobs 2026.6.x exposes for that: the older `agent exec --config
+<file> --state-dir <dir>` surface is gone, and the flags are refused outright
+("does not recognize option --config"). The key is NOT in the config file:
+`apiKey` is a secret reference (`{source: env, provider: pandaenv, id:
+OPENCLAW_API_KEY}`) resolved against a `secrets.providers.pandaenv` entry that
+reads the injected environment, so the credential stays on the wire from panda
+to the child process only.
 
-Two paths must be redirected for this to be hermetic, and only one of them
-has a flag:
+Two paths must be redirected for this to be hermetic, and neither has a flag:
 
-  * config + gateway state → `--config` / `--state-dir` (temp dir).
-  * the auth-profile store → **no flag exists**. openclaw resolves it from
+  * config + gateway state → OPENCLAW_CONFIG_PATH / OPENCLAW_STATE_DIR.
+  * the auth-profile store → **no setting exists**. openclaw resolves it from
     the home directory (``~\\.openclaw\\agents\\<id>\\agent\\openclaw-agent.sqlite``)
-    no matter what OPENCLAW_STATE_DIR or --state-dir say, and a store written
-    by an older release aborts the turn outright with "requires legacy
-    credential migration" — which on Windows cannot even be repaired by
-    `openclaw doctor --fix` when the profile directory fails its ACL check.
-    So the injected path also points HOME/USERPROFILE at a temp dir. That is
-    the whole reason a stale store stops mattering: an injected run never
-    reads the operator's store, and never needs it to be migrated.
+    no matter what the state dir says, and a store written by an older release
+    aborts the turn outright with "requires legacy credential migration" —
+    which on Windows cannot even be repaired by `openclaw doctor --fix` when
+    the profile directory fails its ACL check. So the injected path also points
+    HOME/USERPROFILE at a temp dir. That is the whole reason a stale store
+    stops mattering: an injected run never reads the operator's store, and
+    never needs it to be migrated.
 
 The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the openclaw difference:
@@ -48,6 +53,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 
 import _harness as harness
 
@@ -112,6 +118,11 @@ def _sandbox(model, base_url, api_type):
     except OSError:
         shutil.rmtree(root, ignore_errors=True)
         return ""
+    # 2026.6.x takes the pinned config and state from the environment. The
+    # older `agent exec --config/--state-dir` flags are gone: the CLI answers
+    # "does not recognize option --config" before the model is ever contacted.
+    os.environ["OPENCLAW_CONFIG_PATH"] = os.path.join(root, "config.json")
+    os.environ["OPENCLAW_STATE_DIR"] = state
     # HOME/USERPROFILE: see the module docstring — the auth-profile store has
     # no path flag and would otherwise be read from (and demanded from) the
     # operator's real home.
@@ -122,12 +133,19 @@ def _sandbox(model, base_url, api_type):
 
 
 def _reduce(raw):
-    """Reduce the `agent exec --json` envelope to the unified result.
+    """Reduce the `agent --json` envelope to the unified result.
 
-    The envelope is documented as stable: {ok, status, final, payloads[],
-    usage, model, provider, sessionId, error}. Anything that does not parse
-    falls through to the caller's raw-text path — a CLI that printed a banner
-    before its JSON should still deliver an answer.
+    Two shapes are in the wild:
+
+      * 2026.6.x — {"payloads": [{"text": …}], "meta": {"agentMeta":
+        {"sessionId", "provider", "model", "usage"}, "aborted",
+        "finalAssistantVisibleText", "stopReason"}}. There is no top-level
+        `ok`; the verdict is the absence of `aborted`/`error`.
+      * the older documented one — {ok, status, final, payloads[], usage,
+        model, provider, sessionId, error}.
+
+    Anything that does not parse falls through to the caller's raw-text path —
+    a CLI that printed a banner before its JSON should still deliver an answer.
     """
     start = raw.find("{")
     if start < 0:
@@ -136,15 +154,28 @@ def _reduce(raw):
         doc = json.loads(raw[start:])
     except ValueError:
         return None
-    if not isinstance(doc, dict) or "ok" not in doc:
+    if not isinstance(doc, dict):
         return None
-    text = doc.get("final") or ""
+    if "ok" not in doc and "payloads" not in doc and "meta" not in doc:
+        return None
+
+    meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+    agent_meta = meta.get("agentMeta") if isinstance(meta.get("agentMeta"), dict) else {}
+
+    text = doc.get("final") or meta.get("finalAssistantVisibleText") or ""
     if not text:
         for payload in doc.get("payloads") or []:
             if isinstance(payload, dict) and payload.get("text"):
                 text = payload["text"]
                 break
+    if not text:
+        text = meta.get("finalAssistantRawText") or ""
+
+    # The usage breakdown moved from the top level to meta.agentMeta.usage in
+    # 2026.6.x; the key names did not change.
     usage = doc.get("usage") if isinstance(doc.get("usage"), dict) else {}
+    if not usage and isinstance(agent_meta.get("usage"), dict):
+        usage = agent_meta["usage"]
     mapped = {}
     for src, dst in (("input", "input_tokens"), ("output", "output_tokens"),
                      ("cacheRead", "cache_read_tokens"),
@@ -155,17 +186,22 @@ def _reduce(raw):
     err = doc.get("error")
     if isinstance(err, dict):
         err = err.get("message") or json.dumps(err, ensure_ascii=False)
+    aborted = meta.get("aborted") is True
+    if "ok" in doc:
+        ok = doc.get("ok") is True
+    else:
+        ok = not aborted and not err
     return {
-        "ok": doc.get("ok") is True,
+        "ok": ok,
         "text": text,
-        "error": err or "",
+        "error": err or ("aborted" if aborted else ""),
         "usage": mapped,
         "tokens": total,
-        "session_id": doc.get("sessionId") or "",
+        "session_id": doc.get("sessionId") or agent_meta.get("sessionId") or "",
     }
 
 
-# How often a silent run says it is still alive. `openclaw agent exec` prints
+# How often a silent run says it is still alive. `openclaw agent` prints
 # nothing until the run finishes, so without this the Go silence watchdog sees
 # a dead pipe for the whole run and kills a healthy long task at the default
 # 4-minute silence limit. The heartbeat does not shorten a wedged run: the
@@ -173,14 +209,34 @@ def _reduce(raw):
 HEARTBEAT_S = 20
 
 
+def _command(session_id, prompt, model):
+    """The headless invocation for openclaw 2026.6.x.
+
+    `agent exec` is not a subcommand any more (`exec` is parsed as a stray
+    argument, and the flags below then earn "Too many arguments for this
+    command"), the prompt must ride --message instead of argv position, and
+    the config/state come from OPENCLAW_CONFIG_PATH / OPENCLAW_STATE_DIR
+    rather than flags. `--local` runs the embedded agent instead of dialling
+    the gateway: a headless task must not depend on — or deliver into — the
+    operator's channel sessions. `--session-id` is the one session selector
+    that needs no configured agent id.
+    """
+    cmd = ["openclaw", "agent", "--local", "--json",
+           "--session-id", session_id, "--message", prompt]
+    if model:
+        cmd += ["--model", model]
+    return cmd
+
+
 def main():
-    prompt, timeout, cwd = harness.read_request()
+    req = harness.read_request()
+    prompt, timeout, cwd = req
+    session_id = req.resume or str(uuid.uuid4())
 
     if os.environ.get("OPENPANDA_INJECTED_MODEL") != "1":
-        cmd = ["openclaw", "agent", "exec"]
-        if model := harness.selected_model(os.environ.get("OPENCLAW_MODEL", "")):
-            cmd += ["--model", model]
-        harness.run_simple(cmd + [prompt], cwd=cwd, timeout=timeout, heartbeat_s=HEARTBEAT_S)
+        cmd = _command(session_id, prompt,
+                       harness.selected_model(os.environ.get("OPENCLAW_MODEL", "")))
+        harness.run_simple(cmd, cwd=cwd, timeout=timeout, heartbeat_s=HEARTBEAT_S)
         return
 
     model = os.environ.get("OPENCLAW_MODEL", "")
@@ -190,18 +246,13 @@ def main():
         # A half-configured injection must not take the agent down with it:
         # run the agent's own model exactly as the non-injected path does.
         harness.progress("injection carried no usable endpoint; using the agent's own model")
-        cmd = ["openclaw", "agent", "exec"]
-        if model := harness.selected_model(os.environ.get("OPENCLAW_MODEL", "")):
-            cmd += ["--model", model]
-        harness.run_simple(cmd + [prompt], cwd=cwd, timeout=timeout, heartbeat_s=HEARTBEAT_S)
+        cmd = _command(session_id, prompt,
+                       harness.selected_model(os.environ.get("OPENCLAW_MODEL", "")))
+        harness.run_simple(cmd, cwd=cwd, timeout=timeout, heartbeat_s=HEARTBEAT_S)
         return
 
     qualified = PROVIDER_ID + "/" + model
-    cmd = ["openclaw", "agent", "exec",
-           "--config", os.path.join(root, "config.json"),
-           "--state-dir", os.path.join(root, "state"),
-           "--model", qualified,
-           "--json", prompt]
+    cmd = _command(session_id, prompt, qualified)
     harness.progress("using injected model %s via a pinned openclaw config" % qualified)
     label = "openclaw"
     harness.emit_event("tool_use", id=label, name=label,
