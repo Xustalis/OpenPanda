@@ -260,3 +260,62 @@ func TestFailResultFromRemotePreservesExecutor(t *testing.T) {
 		t.Fatalf("lost failure attribution: %+v", actual)
 	}
 }
+
+// Remote completion commits result_json before the wire handler separately
+// records output_artifact. Await must deliver that result and return fresh
+// metadata even if it polls in between those two writes.
+func TestChildRPCAwaitReturnsDeliveredArtifact(t *testing.T) {
+	c, parent, s := runningRPCParent(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s.ctx = ctx
+	pool := withArtifactPool(t, c)
+	workspace := t.TempDir()
+	writeFile(t, filepath.Join(workspace, "result.txt"), "before\n")
+	if err := c.store.SetExecWorkDir(ctx, parent.TaskID, workspace); err != nil {
+		t.Fatal(err)
+	}
+	child, err := c.SpawnChildTask(ctx, parent.TaskID, TaskInput{Title: "remote child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := bus.TaskDelegatePayload{TaskID: child.TaskID}
+	if err := c.attachChildWorkspace(ctx, &payload, child); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.Queue(ctx, child.TaskID, c.nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.Dispatch(ctx, child.TaskID, c.nodeID, "worker"); err != nil {
+		t.Fatal(err)
+	}
+	produced := t.TempDir()
+	writeFile(t, filepath.Join(produced, "result.txt"), "after\n")
+	manifest, err := pool.PackDir(produced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err = c.store.Get(ctx, child.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := bus.TaskResultPayload{TaskID: child.TaskID, AttemptID: child.AttemptID, State: StateDone, OK: true, OutputArtifact: manifest.Hash, Executor: "worker"}
+	if err := c.store.CompleteFromRemote(ctx, child.TaskID, c.nodeID, result, child.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := c.store.Get(ctx, child.TaskID)
+	if err != nil || before.OutputArtifact != "" {
+		t.Fatalf("expected result before artifact recording: %+v, %v", before, err)
+	}
+	view, err := s.await(ctx, ChildRPCRequest{TaskID: child.TaskID, TimeoutS: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := view.(map[string]any)
+	if out["state"] != StateDone || out["output_artifact"] != manifest.Hash || out["input_version"] == "" {
+		t.Fatalf("await returned stale delivery metadata: %+v", out)
+	}
+	if data, err := os.ReadFile(filepath.Join(workspace, "result.txt")); err != nil || string(data) != "after\n" {
+		t.Fatalf("parent resumed without delivered bytes: %q, %v", data, err)
+	}
+}

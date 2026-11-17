@@ -9,10 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/executil"
 )
 
 // TestMain runs the fake MCP server when OPENPANDA_MCP_FAKE is set, so the client
@@ -285,30 +286,13 @@ func TestCallToolTimeoutKillsProcess(t *testing.T) {
 		t.Fatal("call deadline did not request process cancellation")
 	}
 
-	// Deadline expiry and process cleanup are separate events: on Windows,
-	// synchronous taskkill /T /F can itself exceed the 500ms call timeout under
-	// load. Reap the child before Close gets a chance to kill it, proving the
-	// timeout actually terminated the server instead of only setting broken.
-	processExited := make(chan struct{})
-	var waitErr error
-	go func() {
-		waitErr = client.cmd.Wait()
-		close(processExited)
-	}()
-	defer func() {
-		// If the exit assertion fails, stop this test's fake server and join
-		// its waiter before the earlier deferred Close calls Wait again.
-		_ = client.cmd.Process.Kill()
-		<-processExited
-	}()
-	select {
-	case <-processExited:
-		var exitErr *exec.ExitError
-		if !errors.As(waitErr, &exitErr) || client.cmd.ProcessState == nil || client.cmd.ProcessState.Success() {
-			t.Fatalf("hung server was not terminated: wait=%v, state=%v", waitErr, client.cmd.ProcessState)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("call deadline returned without terminating the hung server")
+	// The transport-failure path now reaps the process and drains stderr
+	// before returning. Close must remain safe when cleanup calls it again.
+	if client.cmd.ProcessState == nil || client.cmd.ProcessState.Success() {
+		t.Fatalf("hung server was not terminated and reaped: %v", client.cmd.ProcessState)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
 	}
 
 	// After the process group is killed, subsequent calls must fail fast on
@@ -508,5 +492,54 @@ func TestServerStderrIsRedacted(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "[redacted]") || !strings.Contains(err.Error(), "module not found") {
 		t.Fatalf("stderr must be redacted but still useful: %v", err)
+	}
+}
+
+// os/exec copies stderr independently from stdout. Force its writer to lag
+// behind the transport error so diagnostics cannot depend on goroutine order.
+type delayedStderr struct {
+	tail    *tailBuffer
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w *delayedStderr) Write(p []byte) (int, error) {
+	select {
+	case w.started <- struct{}{}:
+	default:
+	}
+	<-w.release
+	return w.tail.Write(p)
+}
+
+func TestTransportErrorDrainsStderrBeforeDecoration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tail := &tailBuffer{}
+	writer := &delayedStderr{tail: tail, started: make(chan struct{}, 1), release: make(chan struct{})}
+	cmd := executil.CommandContext(ctx, os.Args[0])
+	cmd.Env = append(os.Environ(), fakeEnv("OPENPANDA_MCP_DIE=1", "OPENPANDA_MCP_DIE_SECRET=1")...)
+	cmd.Stderr = writer
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{cmd: cmd, stderr: tail}
+	t.Cleanup(func() { _ = c.Close() })
+	select {
+	case <-writer.started:
+	case <-ctx.Done():
+		close(writer.release)
+		t.Fatal(ctx.Err())
+	}
+	// Release the copy after decorate starts; a mere read of tail is too early.
+	timer := time.AfterFunc(50*time.Millisecond, func() { close(writer.release) })
+	defer timer.Stop()
+	err := c.decorate(errors.New("transport EOF"))
+	// Ensure cleanup cannot block if the old implementation returned early.
+	if timer.Stop() {
+		close(writer.release)
+	}
+	if !strings.Contains(err.Error(), "module not found") || !strings.Contains(err.Error(), "[redacted]") || strings.Contains(err.Error(), "sk-super-secret-value") {
+		t.Fatalf("transport error lost drained/redacted stderr: %v", err)
 	}
 }
