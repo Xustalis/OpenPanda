@@ -97,6 +97,14 @@ export {
  *  watch with no end is a spinner the user cannot dismiss. */
 const RECOVER_WATCH_MS = 10 * 60 * 1000
 
+/** How long an idle thread waits before opening a turn for a note that is
+ *  still parked server-side. The turn's own exit resumes immediately; this is
+ *  the strip's poll retrying a note whose continuation never started (frame
+ *  lost, tab elsewhere, provider down). Long enough that a note being edited
+ *  is not posted out from under the user, short enough that "queued" still
+ *  means "runs next". */
+const RESUME_RETRY_MS = 20 * 1000
+
 /** One line for a prompt-rail tick's tooltip: a question can be a paragraph,
  *  and a native tooltip that runs off the screen is worse than a truncated
  *  one. Whitespace is collapsed first — a pasted block would otherwise open
@@ -571,11 +579,16 @@ export function SessionsView({
   // turn — the text itself is drained by the server, which is what keeps a
   // reload or a second tab from delivering the same words twice.
   const queuedTurn = useRef('')
-  // The note set the last fallback resume opened a turn for. A continuation
-  // that cannot drain its notes (the server refused, the turn died first)
-  // would otherwise ask again the moment it ends — the same words in a loop.
-  // A new note carries a new key, so only a genuinely new queue retries.
-  const resumeGuard = useRef('')
+  // The note set the last automatic resume opened a turn for, plus how many
+  // times and when. A continuation that cannot drain its notes (the server
+  // refused, the turn died first) would otherwise ask again the moment it
+  // ends — the same words in a loop. A new note carries a new key, so only a
+  // genuinely new queue retries; the cooldown and the cap keep a note the
+  // model keeps failing on from spending tokens every few seconds.
+  const resumeRetry = useRef<{ key: string; at: number; tries: number }>({ key: '', at: 0, tries: 0 })
+  // True while the user is editing a queued row: an automatic continuation
+  // must not post the half-edited text out from under them.
+  const noteEditing = useRef(false)
   // Mirror of the activeId prop for send()'s async callbacks: a reply's
   // deltas may only write to the thread that started them. Kept in sync by
   // the effect below; send() fast-forwards it through the create flow.
@@ -1328,32 +1341,62 @@ export function SessionsView({
     }
     try {
       const r = await api.sessionNotes(sid)
-      if (activeIdRef.current === sid) setNotes(r.notes)
+      if (activeIdRef.current === sid) {
+        setNotes(r.notes)
+        // The strip is also the fallback's trigger: a note parked by a turn
+        // whose continuation never started is still listed here, and nothing
+        // else would ever open a turn for it.
+        resumeParkedNotes(sid, r.notes)
+      }
     } catch {
       // A note list is advisory: a failed read must not paint an error over
       // the transcript. The next tick retries.
     }
   }
 
-  /** Open the continuation turn for notes the stream never announced.
+  /** Open the continuation turn for notes no round read.
    *
    *  `queued_turn` fires once, on the turn's way out. A note accepted in the
    *  window between the last round and that exit — or a frame lost with the
    *  stream — leaves the strip holding text nothing will read, which is the
    *  "queued" that never runs. The notes endpoint is the durable truth, so a
    *  turn that ends without the frame asks it once. Board rows are left
-   *  alone (the executor reads those), and the guard keeps a continuation
-   *  that cannot drain its notes from asking again in a loop. */
+   *  alone (the executor reads those).
+   *
+   *  `immediate` marks the turn's own exit, which is the one attempt that must
+   *  not wait: the strip's poll calls it too, so a note stranded by a lost
+   *  frame, a closed tab or a continuation that died before it started still
+   *  gets a turn — just not on every tick. */
+  function resumeParkedNotes(sid: string, listed: SessionNote[], immediate = false) {
+    const pend = listed.filter((n) => !n.durable)
+    if (pend.length === 0) return
+    if (inflight.current || activeIdRef.current !== sid) return
+    // A turn is already streaming this thread: the note just queued belongs
+    // to it, and opening a second ask would cancel the one being watched.
+    if (inflightSid.current === sid) return
+    if (noteEditing.current) return
+    // A hidden tab keeps the note parked: the console is not being watched,
+    // so a turn opened now would spend tokens on an answer nobody sees.
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    const key = pend.map((n) => n.key).join(',')
+    const clock = resumeRetry.current
+    if (clock.key !== key) {
+      clock.key = key
+      clock.at = 0
+      clock.tries = 0
+    }
+    if (!immediate) {
+      if (clock.tries >= 3 || Date.now() - clock.at < RESUME_RETRY_MS) return
+    }
+    clock.at = Date.now()
+    clock.tries += 1
+    void send(undefined, pend.map((n) => n.text).join('\n\n'), sid)
+  }
+
   async function resumeLeftoverNotes(sid: string) {
     try {
       const r = await api.sessionNotes(sid)
-      const pend = r.notes.filter((n) => !n.durable)
-      if (pend.length === 0) return
-      if (inflight.current || activeIdRef.current !== sid) return
-      const keys = pend.map((n) => n.key).join(',')
-      if (resumeGuard.current === `${sid}|${keys}`) return
-      resumeGuard.current = `${sid}|${keys}`
-      void send(undefined, pend.map((n) => n.text).join('\n\n'), sid)
+      resumeParkedNotes(sid, r.notes, true)
     } catch {
       // A failed read leaves the notes where they are; the next turn's own
       // start drains them server-side.
@@ -1392,11 +1435,13 @@ export function SessionsView({
    *  position and its mode — the server rewrites the same note, so a round that
    *  has not read it yet sees only the corrected wording. */
   function beginEditNote(n: SessionNote) {
+    noteEditing.current = true
     setEditingNote(n.key)
     setNoteDraft(n.text)
   }
 
   function cancelEditNote() {
+    noteEditing.current = false
     setEditingNote('')
     setNoteDraft('')
   }
