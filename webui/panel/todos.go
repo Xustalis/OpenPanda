@@ -25,6 +25,9 @@ import (
 // human. That is why the board lives on /api/todos and never reuses
 // /api/tasks — a todo must not be claimable by the scheduler.
 
+// dateOnlyLayout is the accepted bare-date form.
+const dateOnlyLayout = "2006-01-02"
+
 // parseDueAt accepts "" (no deadline), an RFC3339 stamp, or a bare
 // YYYY-MM-DD date. A date-only deadline lands at the END of that local day:
 // a todo due "today" must not read as overdue at noon, which is exactly what
@@ -37,10 +40,30 @@ func parseDueAt(raw string) (int64, error) {
 	if t, err := time.Parse(time.RFC3339, raw); err == nil {
 		return t.Unix(), nil
 	}
-	if d, err := time.ParseInLocation("2006-01-02", raw, time.Local); err == nil {
-		return d.Add(24*time.Hour - time.Second).Unix(), nil
+	// Parse without a location on purpose: the date components must be the
+	// ones the user wrote. See endOfLocalDay.
+	if d, err := time.Parse(dateOnlyLayout, raw); err == nil {
+		return endOfLocalDay(d, time.Local).Unix(), nil
 	}
 	return 0, errors.New("due_at must be RFC3339 or YYYY-MM-DD")
+}
+
+// endOfLocalDay is the last second of d's calendar day in loc.
+//
+// d carries the date as written, which is why the bare date is parsed without
+// a location: zones that start DST at midnight (America/Havana,
+// America/Santiago) have no 00:00 on the switch day, and ParseInLocation
+// resolves that gap backwards — to 23:00 the evening before — so the parsed
+// Date() is the previous day and the deadline would slide a day early.
+//
+// Naming the wall-clock instant, rather than adding a fixed 24h to midnight,
+// keeps the deadline inside the chosen day: a calendar day is 23 or 25 hours
+// long across a DST switch, so midnight+24h-1s lands at 00:59:59 the next day
+// (spring forward) or 22:59:59 the same day (fall back) — an hour late in
+// March, an hour early in November.
+func endOfLocalDay(d time.Time, loc *time.Location) time.Time {
+	y, m, dd := d.Date()
+	return time.Date(y, m, dd, 23, 59, 59, 0, loc)
 }
 
 // todoID reads the {id} path value.

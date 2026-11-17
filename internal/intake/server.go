@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 // maxBodyBytes bounds one delivery. GitHub caps a webhook payload well below
@@ -24,9 +25,21 @@ type Sink interface {
 // Seen is the idempotence ledger. ClaimIntake atomically records the key and
 // reports whether this caller recorded it first; a nil Seen disables the
 // check, which is only right for a source that never retries.
+//
+// ReleaseIntake forgets a key this caller claimed but could not turn into
+// work. It is what makes the retry path work: a claim taken before the sink
+// runs would otherwise answer the source's retry "duplicate" for a task that
+// was never created.
 type Seen interface {
 	ClaimIntake(ctx context.Context, source, key string) (first bool, err error)
+	ReleaseIntake(ctx context.Context, source, key string) error
 }
+
+// releaseTimeout bounds the bookkeeping write that hands a failed delivery
+// back to the ledger. It runs on a context detached from the request: the
+// failure that matters most — the source hung up while we were queueing — is
+// exactly the one whose r.Context() is already dead.
+const releaseTimeout = 5 * time.Second
 
 // Server answers source webhooks. One server serves one source shape today;
 // the mux is the seam a second source plugs into without touching the gate.
@@ -111,8 +124,13 @@ func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The claim above is taken before the sink runs so two copies of the same
+	// delivery cannot both queue work. Every failure below therefore has to
+	// hand it back: the source's retry is this event's only second chance, and
+	// it would otherwise be answered "duplicate" for a task nobody created.
 	if s.Sink == nil {
 		s.log().Error("intake: admitted an event with no sink wired", "sink", ErrNoSink)
+		s.release(r.Context(), ev)
 		writeJSON(w, http.StatusInternalServerError, response{Error: ErrNoSink.Error()})
 		return
 	}
@@ -120,12 +138,29 @@ func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log().Error("intake: submit task",
 			"repo", ev.Repo, "thread", ev.Thread, "err", err)
+		s.release(r.Context(), ev)
 		writeJSON(w, http.StatusInternalServerError, response{Error: "could not create task"})
 		return
 	}
 	s.log().Info("intake: task queued",
 		"task", taskID, "repo", ev.Repo, "thread", ev.Thread, "actor", ev.Actor, "kind", ev.Kind)
 	writeJSON(w, http.StatusAccepted, response{OK: true, Task: taskID})
+}
+
+// release hands a claimed delivery back to the ledger after the work it stood
+// for failed to materialize, so the source's retry is admitted instead of
+// being answered "duplicate". A release that itself fails is logged and
+// swallowed: the response is already a 500, and the retry it triggers is the
+// operator's best signal that the claim is stuck.
+func (s *Server) release(ctx context.Context, ev Event) {
+	if s.Seen == nil || ev.Delivery == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	if err := s.Seen.ReleaseIntake(ctx, ev.Source, ev.Delivery); err != nil {
+		s.log().Error("intake: release delivery", "delivery", ev.Delivery, "err", err)
+	}
 }
 
 func (s *Server) log() *slog.Logger {
