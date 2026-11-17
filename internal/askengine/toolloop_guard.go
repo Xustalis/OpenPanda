@@ -134,15 +134,28 @@ func loopInterruptionNotice(loc i18n.Locale) string {
 // convergenceNudge reports the approaching budget boundary, not evidence
 // sufficiency. Broad investigations need a harness handoff; other requests
 // should report only what their bounded observations can substantiate.
+//
+// The dispatch clause is not decoration. Telling a model to "answer in prose"
+// while the protocol also expects a structured directive leaves it to resolve
+// the conflict itself, and one model resolved it by pasting a task JSON into
+// the message body — truncated by one brace, so the reply became an envelope
+// the user could not act on and the task was never created.
 func convergenceNudge(loc i18n.Locale, investigation bool) string {
 	if investigation {
 		return investigationRouteReminder(loc)
 	}
 	if loc == i18n.English {
-		return "The tool-round limit is near; stop broad exploration. Answer only what the evidence actually supports, and clearly mark any unverified or incomplete claim."
+		return "The tool-round limit is near; stop broad exploration. Answer only what the evidence actually supports, and clearly mark any unverified or incomplete claim. If the work still has to be dispatched, submit it with the task_submit tool — never paste a task or plan JSON into the message body."
 	}
-	return "工具轮次接近上限，请停止宽泛探查。只根据已核实的证据作答，明确标注未验证或未完成的部分，不要假定已经收集到足够上下文。"
+	return "工具轮次接近上限，请停止宽泛探查。只根据已核实的证据作答，明确标注未验证或未完成的部分，不要假定已经收集到足够上下文。需要派发任务时仍用 task_submit 工具提交，不要把任务或计划 JSON 写进正文。"
 }
+
+// directiveProtocolReminder is the one corrective turn handed back when a model
+// answered with a directive envelope instead of a tool call. It restates the
+// protocol, names the legal path, and asks for the work — not for a repaired
+// envelope, because the tool carries the spec in a shape that cannot be
+// truncated mid-message.
+const directiveProtocolReminder = "Your previous reply wrote a structured directive (a task/plan JSON) into the message body, and it could not be parsed as one. Do not print task, plan or tool_call JSON in the message body. To dispatch work, call the task_submit tool (and task_budget first if you need more dispatches); otherwise answer the user in prose. Continue with the same request now."
 
 const (
 	// compactConvergence keeps only a bounded slice of each tool result: the
