@@ -1549,6 +1549,14 @@ func (r *Router) clearAgentDispatchFailure(name string) {
 	c.mu.Unlock()
 }
 
+// RetryAgent lets an operator explicitly probe an executor before its automatic
+// dispatch cooldown expires. It does not change capability or permission checks.
+func (r *Router) RetryAgent(name string) {
+	if name != "" {
+		r.clearAgentDispatchFailure(name)
+	}
+}
+
 // agentCooldown reports the remaining cooldown and its recorded reason.
 func (r *Router) agentCooldown(name string) (time.Duration, string, bool) {
 	c := r.cooldownState()

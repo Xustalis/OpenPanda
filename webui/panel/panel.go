@@ -23,7 +23,6 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/artifact"
 	"github.com/Xustalis/OpenPanda/internal/askengine"
-	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/devserver"
@@ -168,6 +167,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/approve", h.approveTask)
 	mux.HandleFunc("POST /api/tasks/{id}/reject", h.rejectTask)
 	mux.HandleFunc("POST /api/tasks/{id}/continue", h.continueTask)
+	mux.HandleFunc("POST /api/tasks/{id}/retry", h.retryTask)
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", h.cancelTask)
 	mux.HandleFunc("POST /api/tasks/{id}/revert", h.revertTask)
 	mux.HandleFunc("POST /api/tasks/{id}/messages", h.sendTaskMessage)
@@ -854,6 +854,10 @@ type taskJSON struct {
 	// from the same signature the retry loop uses, so the two cannot drift).
 	// Empty for every other park — callers fall back to the disposition.
 	ReviewCause string `json:"review_cause,omitempty"`
+	// Failed executions offer an explicit retry independently of approving
+	// completed work. These fields also explain legacy needs_changed_input rows.
+	ReviewReason   string `json:"review_reason,omitempty"`
+	RetryAvailable bool   `json:"retry_available,omitempty"`
 	// Question/QuestionSpec surface a parked clarification without making the
 	// client parse the whole result JSON (which also carries the run's
 	// stdout): Question is the plain text, QuestionSpec the ClarifySpec JSON
@@ -1230,14 +1234,16 @@ func (h *handler) attachReviewCauses(ctx context.Context, tasks []taskJSON) {
 	if len(parked) == 0 {
 		return
 	}
-	causes := make(map[string]string, len(parked))
+	causes := make(map[string]core.ReviewFailure, len(parked))
 	const batch = 400
 	for start := 0; start < len(parked); start += batch {
 		h.reviewCausesBatch(ctx, parked[start:min(start+batch, len(parked))], causes)
 	}
 	for i := range tasks {
 		if cause, ok := causes[tasks[i].ID]; ok {
-			tasks[i].ReviewCause = cause
+			tasks[i].ReviewCause = cause.Cause
+			tasks[i].ReviewReason = cause.Reason
+			tasks[i].RetryAvailable = cause.RetryAvailable
 		}
 	}
 }
@@ -1246,15 +1252,21 @@ func (h *handler) attachReviewCauses(ctx context.Context, tasks []taskJSON) {
 // raw data_json is read here, not the clipped projection lastEventsBatch keeps:
 // the signature sits at the end of a provider payload, which is exactly what
 // the clip would cut off.
-func (h *handler) reviewCausesBatch(ctx context.Context, tasks []taskJSON, causes map[string]string) {
+func (h *handler) reviewCausesBatch(ctx context.Context, tasks []taskJSON, causes map[string]core.ReviewFailure) {
 	marks := make([]string, len(tasks))
 	args := make([]any, len(tasks))
+	dispositions := make(map[string]core.ApprovalDisposition, len(tasks))
 	for i, t := range tasks {
 		marks[i] = "?"
 		args[i] = t.ID
+		dispositions[t.ID] = core.ApprovalDisposition(t.ApprovalDisposition)
 	}
 	rows, err := h.db.QueryContext(ctx,
-		`SELECT task_id, COALESCE(data_json, '')
+		`SELECT task_id, COALESCE(data_json, ''),
+		   COALESCE((SELECT type FROM task_events recent WHERE recent.task_id=task_events.task_id
+		     AND type IN ('result','retry','submit') ORDER BY id DESC LIMIT 1), ''),
+		   COALESCE((SELECT data_json FROM task_events recent WHERE recent.task_id=task_events.task_id
+		     AND type IN ('result','retry','submit') ORDER BY id DESC LIMIT 1), '')
 		   FROM task_events
 		  WHERE id IN (SELECT MAX(id) FROM task_events
 		                WHERE task_id IN (`+strings.Join(marks, ",")+`)
@@ -1265,13 +1277,11 @@ func (h *handler) reviewCausesBatch(ctx context.Context, tasks []taskJSON, cause
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var taskID, dataRaw string
-		if err := rows.Scan(&taskID, &dataRaw); err != nil {
+		var taskID, dataRaw, outcomeType, outcomeRaw string
+		if err := rows.Scan(&taskID, &dataRaw, &outcomeType, &outcomeRaw); err != nil {
 			return
 		}
-		if cause := classifyReviewCause(dataRaw); cause != "" {
-			causes[taskID] = cause
-		}
+		causes[taskID] = core.ReviewFailureFromEvents(dispositions[taskID], dataRaw, outcomeType, outcomeRaw)
 	}
 }
 
@@ -1411,10 +1421,7 @@ func classifyReviewCause(dataRaw string) string {
 	if json.Unmarshal([]byte(dataRaw), &payload) != nil {
 		return ""
 	}
-	if commander.IsModelConfigFailure(payload.Reason) {
-		return "model_config"
-	}
-	return ""
+	return core.ReviewFailureCause(payload.Reason)
 }
 
 // visibleTraceTypes is the track set the decision-orbit component paints.
@@ -1473,7 +1480,11 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 	// is. Review rows are rare, so the extra row read costs nothing on the
 	// list path (which never calls this).
 	if t.State == core.StateReview {
-		out.ReviewCause = h.reviewCause(r.Context(), id)
+		if failure, err := h.store.ReviewFailure(r.Context(), id); err == nil {
+			out.ReviewCause = failure.Cause
+			out.ReviewReason = failure.Reason
+			out.RetryAvailable = failure.RetryAvailable
+		}
 	}
 	h.enrichPlanMeta(r.Context(), &out, t)
 	// ?after=<eventID> is the poll loop's cursor: the row and its rollups stay
@@ -1694,6 +1705,7 @@ type approvalOperation struct {
 	// operation starts. Empty for a plain tier-2/accept approval.
 	answer string
 	cancel context.CancelFunc
+	retry  bool
 }
 
 // approveTask accepts completed reviewed work or starts a detached execution
@@ -1795,6 +1807,12 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("task execution engine is unavailable"))
 		return
 	}
+	h.startTaskOperation(w, r, eng, id, answer, false)
+}
+
+// startTaskOperation detaches execution from the HTTP request for both consent
+// resumes and explicit retries. Both share the duplicate and cancellation guard.
+func (h *handler) startTaskOperation(w http.ResponseWriter, r *http.Request, eng *askengine.Engine, id, answer string, retry bool) {
 	operationID, err := util.UUIDv7()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("create approval operation failed"))
@@ -1805,7 +1823,7 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		baseCtx = context.Background()
 	}
 	execCtx, cancel := context.WithCancel(baseCtx)
-	op := approvalOperation{ID: operationID, TaskID: id, Status: core.StateRunning, cancel: cancel, answer: answer}
+	op := approvalOperation{ID: operationID, TaskID: id, Status: core.StateRunning, cancel: cancel, answer: answer, retry: retry}
 	h.approvalMu.Lock()
 	if current, exists := h.approvalOperations[id]; exists && current.Status == core.StateRunning {
 		h.approvalMu.Unlock()
@@ -1834,7 +1852,12 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) runApprovalOperation(ctx context.Context, eng *askengine.Engine, op approvalOperation) {
 	defer op.cancel()
-	out := eng.ResumeApproved(ctx, op.TaskID, "", askengine.StreamCallbacks{}, op.answer)
+	var out *askengine.Result
+	if op.retry {
+		out = eng.RetryReviewed(ctx, op.TaskID)
+	} else {
+		out = eng.ResumeApproved(ctx, op.TaskID, "", askengine.StreamCallbacks{}, op.answer)
+	}
 	status, message := approvalResultState(out)
 	h.finishApprovalOperation(ctx, op, status, message)
 }
