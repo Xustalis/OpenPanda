@@ -28,11 +28,11 @@ func TestSubtaskSpawnCarriesBoundedVersionedAllocation(t *testing.T) {
 	t.Setenv("PANDA_CHILD_RPC_TOKEN", "capability")
 	t.Setenv("PANDA_ATTEMPT_ID", "attempt-one")
 	d := &selfToolsDeps{}
-	_, err := d.toolSubtaskSpawn(context.Background(), map[string]any{"title": "repair", "request_id": "repair-one", "token_budget": float64(1200), "delegation_budget": float64(4), "input_version": "snapshot-one"})
+	_, err := d.toolSubtaskSpawn(context.Background(), map[string]any{"title": "repair", "request_id": "repair-one", "token_budget": float64(1<<53 - 1), "delegation_budget": float64(4), "input_version": "snapshot-one"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if received.InputVersion != "snapshot-one" || received.TokenBudget != 1200 || received.DelegationBudget != 4 || received.AttemptID != "attempt-one" || received.RequestID != "repair-one" {
+	if received.InputVersion != "snapshot-one" || received.TokenBudget != 1<<53-1 || received.DelegationBudget != 4 || received.AttemptID != "attempt-one" || received.RequestID != "repair-one" {
 		t.Fatalf("lost coordination bounds: %+v", received)
 	}
 }

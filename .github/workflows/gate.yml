@@ -75,8 +75,8 @@ jobs:
       # referenced from a shared one therefore compiles everywhere except the
       # lite build — which is how `undefined: truncate` reached main and broke
       # packaging. Compile every variant here instead.
-      - name: lite build
-        run: go build -tags lite ./...
+      - name: Lite and ARMv7 builds
+        run: make build-variants
       # Doc-drift guard: the retired deepseek-chat alias must not linger in
       # READMEs/example configs, and install.md version examples must track
       # the latest release tag.
