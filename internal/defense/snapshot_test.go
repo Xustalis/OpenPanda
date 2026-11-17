@@ -164,11 +164,24 @@ func TestSnapshotIgnoresSQLiteJournal(t *testing.T) {
 		t.Errorf("journal change read as drift: %v, want none", got)
 	}
 
-	// A real file change is still detected.
-	if err := os.WriteFile(filepath.Join(dir, "real/work.txt"), []byte("done"), 0o644); err != nil {
+	// SnapshotDir fingerprints size and mtime. Change size and preserve mtime
+	// explicitly so this journal-exclusion test is independent of filesystem
+	// timestamp resolution (back-to-back same-size writes can share a stamp).
+	work := filepath.Join(dir, "real/work.txt")
+	info, err := os.Stat(work)
+	if err != nil {
 		t.Fatal(err)
 	}
-	after2, _ := SnapshotDir(dir)
+	if err := os.WriteFile(work, []byte("completed work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(work, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	after2, err := SnapshotDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := before.Changed(after2); !reflect.DeepEqual(got, []string{"real/work.txt"}) {
 		t.Errorf("real change = %v, want [real/work.txt]", got)
 	}
