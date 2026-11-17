@@ -325,6 +325,12 @@ func (s *childRPCServer) await(ctx context.Context, req ChildRPCRequest) (result
 			if err := s.c.deliverChildOutput(ctx, child, childStoredOutput(child)); err != nil {
 				return nil, err
 			}
+			// Delivery persists the artifact hash. The completion row may have
+			// been read before the wire handler recorded that separate field.
+			child, err = s.c.store.Get(ctx, req.TaskID)
+			if err != nil {
+				return nil, err
+			}
 			return childRPCView(child), nil
 		}
 		select {
