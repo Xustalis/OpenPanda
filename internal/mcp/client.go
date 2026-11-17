@@ -73,6 +73,7 @@ type Client struct {
 	stderr      *tailBuffer
 	mu          sync.Mutex
 	writeMu     sync.Mutex
+	closeOnce   sync.Once
 	nextID      int
 	callTimeout time.Duration
 	// protocolVersion is what the server answered in initialize. Written once
@@ -290,16 +291,18 @@ func clipText(s string, max int) string {
 // Close terminates the child server and waits for it to exit. It kills the
 // whole process group so orphaned grandchildren are cleaned up (P1-17 / A4).
 func (c *Client) Close() error {
-	_ = c.kill()
-	if c.stdin != nil {
-		_ = c.stdin.Close()
-	}
-	if c.stdoutPipe != nil {
-		_ = c.stdoutPipe.Close()
-	}
-	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Wait()
-	}
+	c.closeOnce.Do(func() {
+		_ = c.kill()
+		if c.stdin != nil {
+			_ = c.stdin.Close()
+		}
+		if c.stdoutPipe != nil {
+			_ = c.stdoutPipe.Close()
+		}
+		if c.cmd != nil && c.cmd.Process != nil {
+			_ = c.cmd.Wait()
+		}
+	})
 	return nil
 }
 
@@ -320,6 +323,10 @@ func (c *Client) decorate(err error) error {
 	if err == nil {
 		return nil
 	}
+	// Transport failures make this session unusable. Wait also drains the
+	// independent stderr copier; stdout EOF alone does not mean its tail
+	// has arrived. Close is shared with cleanup so the child is reaped once.
+	_ = c.Close()
 	tail := ""
 	if c.stderr != nil {
 		tail = c.stderr.String()
@@ -368,13 +375,9 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 
 	select {
 	case <-callCtx.Done():
-		_ = c.kill()
-		// Close stdout to unblock the reader goroutine, then drain it so a
-		// subsequent call cannot start a second reader racing on the same
-		// bufio.Reader.
-		if c.stdoutPipe != nil {
-			_ = c.stdoutPipe.Close()
-		}
+		// Close unblocks stdout and drains stderr before the error is built.
+		// Join the reader before another call can touch the bufio.Reader.
+		_ = c.Close()
 		<-respCh
 		timeoutErr := fmt.Errorf("mcp: call %s timed out after %s: %w", method, c.callTimeout, callCtx.Err())
 		c.broken = timeoutErr
