@@ -2719,6 +2719,36 @@ print(json.dumps({"ok": False, "status": "error", "final": "",
         self.assertFalse(payload["ok"], payload)
         self.assertIn("auth profile needs migration", payload["result"])
 
+    def test_openclaw_process_failure_overrides_success_envelope(self):
+        for modern in (False, True):
+            for code in (0, 7):
+                with self.subTest(modern=modern, exit_code=code):
+                    doc = {
+                        "payloads": [{"text": "partial checkpoint"}],
+                        "meta": {"agentMeta": {"sessionId": "checkpoint"},
+                                 "aborted": False, "stopReason": "end_turn"},
+                    }
+                    if not modern:
+                        doc.update(ok=True, final="partial checkpoint")
+                    body = "import json,sys\nprint(json.dumps(%r))\nsys.exit(%d)\n" % (doc, code)
+                    payload, trace, _ = run_adapter(
+                        "openclaw.py", "openclaw", body,
+                        env={"OPENPANDA_INJECTED_MODEL": "1",
+                             "OPENAI_BASE_URL": "https://api.example/v1",
+                             "OPENCLAW_API_KEY": "fixture-key",
+                             "OPENCLAW_MODEL": "fixture-model"},
+                    )
+                    self.assertEqual(payload["ok"], code == 0, payload)
+                    self.assertEqual(payload["exit_code"], code, payload)
+                    self.assertEqual(payload["session_id"], "checkpoint")
+                    self.assertEqual(payload["result"], "partial checkpoint")
+                    frames = [json.loads(line) for line in trace
+                              if line.startswith("{")]
+                    results = [frame for frame in frames
+                               if frame.get("ev") == "tool_result"]
+                    self.assertEqual(len(results), 1, trace)
+                    self.assertEqual(results[0]["is_error"], code != 0)
+
     def test_zcode_injected_run_writes_model_selection(self):
         # zcode refuses to send anything until a model is selected, and the
         # selection lives in the personal provider config — not in ZCODE_*.

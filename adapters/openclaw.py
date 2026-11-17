@@ -280,9 +280,10 @@ def main():
         harness.emit(rc == 0, out.strip() or err.strip() or "(no output)", rc)
         return
     text = doc["text"] or doc["error"] or err.strip() or "(no output)"
+    ok = doc["ok"] and rc == 0
     harness.emit_event("tool_result", tool_use_id=label,
-                       is_error=not doc["ok"], content=text)
-    harness.emit(doc["ok"], text, rc if rc != 0 else (0 if doc["ok"] else 1),
+                       is_error=not ok, content=text)
+    harness.emit(ok, text, rc if rc != 0 else (0 if ok else 1),
                  tokens=doc["tokens"], usage=doc["usage"] or None,
                  session_id=doc["session_id"] or None)
 

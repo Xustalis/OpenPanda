@@ -5,6 +5,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -49,6 +50,33 @@ func (c *Core) ClaimIntake(ctx context.Context, source, key string) (bool, error
 			now.Add(-intakeSeenRetention).Unix())
 	}
 	return first, nil
+}
+
+// ReleaseIntake forgets a claim whose work never materialized — the webhook
+// handler claims a delivery before enqueueing, so a transient enqueue failure
+// would otherwise leave the id in the ledger and answer the source's retry
+// "duplicate" for a task that was never created.
+//
+// The delete is unconditional: the key is the source's own delivery id, and
+// only the handler holding the claim releases it. A retry that raced the
+// release still loses that race, which is the same outcome as any other
+// duplicate — but the next retry, and the one after it, get through.
+//
+// The trade is deliberate and lands on at-least-once: Enqueue commits its task
+// row in one transaction, so an error normally means nothing was created, but
+// a commit whose outcome is unknown could queue a second task on the retry.
+// Losing the request outright is the worse failure for an inbound event.
+func (c *Core) ReleaseIntake(ctx context.Context, source, key string) error {
+	if key == "" {
+		// No delivery id means nothing was recorded; see ClaimIntake.
+		return nil
+	}
+	if _, err := c.db.ExecContext(ctx,
+		`DELETE FROM intake_seen WHERE source = ? AND key = ?`,
+		source, key); err != nil {
+		return fmt.Errorf("release intake: %w", err)
+	}
+	return nil
 }
 
 // IntakeTask queues an admitted external event as work on this node.
