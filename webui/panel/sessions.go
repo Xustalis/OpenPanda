@@ -239,8 +239,8 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, sess)
 }
 
-// deleteSession serves DELETE /api/sessions/{id} — removes the worktree (and
-// its branch) plus the stored thread.
+// deleteSession serves DELETE /api/sessions/{id} — stops any run the thread
+// owns, then removes the worktree (and its branch) plus the stored thread.
 func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sess, err := h.sessions.Get(id)
@@ -248,6 +248,12 @@ func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("no such session"))
 		return
 	}
+	// Stop every run the thread owns, then seal the id so a request that
+	// arrives during the cleanup is refused: the row is about to disappear,
+	// and a run admitted now would stream with no Stop button left anywhere.
+	// The seal is lifted only if the delete fails.
+	h.stopSessionAsks(id, time.Now().Add(sessionAskStopBudget))
+	defer h.finishSessionDelete(id)
 	// The thread is going away: its waiting notes and any parked carry have no
 	// turn left to open, so release them with it instead of leaking a map entry
 	// per deleted thread.
@@ -295,49 +301,65 @@ func (h *handler) patchSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("no such session"))
 		return
 	}
-	if req.Title != nil {
-		if err := h.sessions.SetTitle(id, *req.Title); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
-	if req.Project != nil {
-		if err := h.sessions.SetProject(id, *req.Project); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
-	if req.Pinned != nil {
-		if err := h.sessions.SetPinned(id, *req.Pinned); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
+	// Validate every field before writing any of them. The body is one
+	// document, so "400" has to mean "nothing changed" — the old shape applied
+	// each field as it was decoded, and a bad permission_mode at the end left
+	// the title it arrived with already saved. A rejected request that still
+	// moves data is worse than no update at all: the caller retries a state it
+	// cannot observe.
+	team := []string(nil)
 	if req.Team != nil {
-		team, err := cleanTeam(*req.Team)
+		clean, err := cleanTeam(*req.Team)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
-		if err := h.sessions.SetTeam(id, team); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
+		team = clean
 	}
+	mode := ""
 	if req.PermissionMode != nil {
-		mode := defense.NormalizeMode(*req.PermissionMode)
 		// NormalizeMode maps "" to auto, so an explicit clear works; anything
 		// else the caller sent must be a real policy, not a typo.
 		if *req.PermissionMode != "" && !defense.ValidMode(*req.PermissionMode) {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown permission mode %q", *req.PermissionMode))
 			return
 		}
-		if err := h.sessions.SetPermissionMode(id, mode); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
-			return
+		mode = defense.NormalizeMode(*req.PermissionMode)
+		if mode == defense.ModeAuto {
+			// The store keeps "" for "no policy chosen" (see SetPermissionMode);
+			// writing the literal "auto" would make the thread look explicitly
+			// pinned to a mode the user never picked.
+			mode = ""
 		}
 	}
-	sess, _ := h.sessions.Get(id)
+	sess, err := h.sessions.Update(id, func(sess *sessions.Session) error {
+		if req.Title != nil {
+			sess.Title = strings.TrimSpace(*req.Title)
+		}
+		if req.Project != nil {
+			sess.Project = strings.TrimSpace(*req.Project)
+		}
+		if req.Pinned != nil {
+			sess.Pinned = *req.Pinned
+		}
+		if req.Team != nil {
+			// The cleaned slice is already a copy; the decoded body it came
+			// from must not be able to rewrite a saved thread's roster.
+			sess.Team = append([]string(nil), team...)
+		}
+		if req.PermissionMode != nil {
+			sess.PermissionMode = mode
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, sessions.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, errors.New("no such session"))
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
 	writeJSON(w, sess)
 }
 
@@ -372,6 +394,10 @@ func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
 	deleted := make([]string, 0, len(req.IDs))
 	var failed []failure
 	seen := map[string]bool{}
+	// One deadline for the whole batch: the wait protects the worktree
+	// cleanup, and a row of wedged runs must not turn a delete into minutes of
+	// held HTTP. Later ids inherit whatever time is left.
+	stopDeadline := time.Now().Add(sessionAskStopBudget)
 	for _, raw := range req.IDs {
 		id := strings.TrimSpace(raw)
 		if id == "" || seen[id] {
@@ -383,15 +409,22 @@ func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
 			failed = append(failed, failure{ID: id, Error: err.Error()})
 			continue
 		}
+		// Same rule as the single delete: drain the runs, seal the id so
+		// nothing new starts under a row this batch is about to remove, then
+		// release the notes — the run's own exit is what parks them.
+		h.stopSessionAsks(id, stopDeadline)
 		h.dropSteer(id)
 		if wt := h.sessionWorktrees(sess); wt != nil {
 			_ = wt.Remove(r.Context(), id)
 		}
 		h.removeSessionUploads(id)
 		if err := h.sessions.Delete(id); err != nil {
+			// The row survived, so the thread has to stay usable.
+			h.finishSessionDelete(id)
 			failed = append(failed, failure{ID: id, Error: err.Error()})
 			continue
 		}
+		h.finishSessionDelete(id)
 		deleted = append(deleted, id)
 	}
 	if failed == nil {
@@ -518,6 +551,11 @@ type sessionOperation struct {
 	generation  uint64
 	operationID string
 	cancel      context.CancelFunc
+	// done closes when the ask's own goroutine has returned — after its final
+	// session write and after it stopped touching the worktree. Deletion waits
+	// on it before removing the directory, so a stopped run cannot write into
+	// a path that no longer exists and leave debris behind.
+	done chan struct{}
 }
 
 func (h *handler) registerSessionAsk(id string, cancel context.CancelFunc) (sessionOperation, error) {
@@ -526,11 +564,15 @@ func (h *handler) registerSessionAsk(id string, cancel context.CancelFunc) (sess
 		return sessionOperation{}, err
 	}
 	h.askMu.Lock()
+	if h.deleting[strings.TrimSuffix(id, sideOperationSuffix)] {
+		h.askMu.Unlock()
+		return sessionOperation{}, errSessionDeleting
+	}
 	if h.activeAsks == nil {
 		h.activeAsks = make(map[string]sessionOperation)
 	}
 	h.askGeneration++
-	op := sessionOperation{generation: h.askGeneration, operationID: operationID, cancel: cancel}
+	op := sessionOperation{generation: h.askGeneration, operationID: operationID, cancel: cancel, done: make(chan struct{})}
 	old, exists := h.activeAsks[id]
 	h.activeAsks[id] = op
 	h.askMu.Unlock()
@@ -542,10 +584,16 @@ func (h *handler) registerSessionAsk(id string, cancel context.CancelFunc) (sess
 
 func (h *handler) unregisterSessionAsk(id string, op sessionOperation) {
 	h.askMu.Lock()
-	defer h.askMu.Unlock()
 	current, ok := h.activeAsks[id]
 	if ok && current.generation == op.generation && current.operationID == op.operationID {
 		delete(h.activeAsks, id)
+	}
+	h.askMu.Unlock()
+	// Closing here rather than in the handler keeps "the slot is free" and
+	// "the goroutine is gone" the same fact for anyone waiting on done. Each
+	// operation is unregistered by its own goroutine exactly once.
+	if op.done != nil {
+		close(op.done)
 	}
 }
 
@@ -567,6 +615,123 @@ func (h *handler) cancelSessionAsk(id, operationID string) bool {
 		return true
 	}
 	return false
+}
+
+// sessionAskStopBudget bounds how long a delete waits for the runs it
+// cancelled to return. A provider call that ignores its context must not make
+// the thread undeletable, so the wait is a courtesy to the filesystem, not a
+// precondition for the delete.
+const sessionAskStopBudget = 3 * time.Second
+
+// errSessionDeleting refuses a turn for a thread whose delete has already
+// sealed it. The row is about to disappear, so there is nothing for the turn to
+// attach to and no console left that could stop it.
+var errSessionDeleting = errors.New("session is being deleted")
+
+// stopSessionAsks ends every ask a session owns and closes the door behind
+// them. It repeats cancel-and-wait until the session has no live ask left,
+// then marks the id as being deleted in the same critical section that saw the
+// last slot empty. Registration takes that lock too, so a request arriving
+// while the caller removes the row is refused rather than starting a run
+// nobody can stop — a single scan of the map could always be overtaken by a
+// new ask during the drain.
+//
+// The deadline bounds the whole drain: a run that ignores its context must not
+// make the thread undeletable, so on timeout the id is sealed anyway and the
+// caller proceeds with the cleanup.
+func (h *handler) stopSessionAsks(id string, deadline time.Time) int {
+	cancelled := 0
+	for {
+		h.askMu.Lock()
+		ops := make([]sessionOperation, 0, 2)
+		for _, key := range []string{id, id + sideOperationSuffix} {
+			if op, ok := h.activeAsks[key]; ok {
+				delete(h.activeAsks, key)
+				ops = append(ops, op)
+			}
+		}
+		if len(ops) == 0 {
+			h.sealSessionDeleteLocked(id)
+			h.askMu.Unlock()
+			return cancelled
+		}
+		h.askMu.Unlock()
+		for _, op := range ops {
+			if op.cancel != nil {
+				op.cancel()
+			}
+		}
+		cancelled += len(ops)
+		awaitSessionAsks(ops, deadline)
+		if !time.Now().Before(deadline) {
+			// Out of time. Sealing alone is not enough: a run that registered
+			// while this one was unwinding is still live, and deleting the row
+			// under it leaves a model call nobody can stop. Take whatever is
+			// registered now in the same critical section that closes
+			// registration, then cancel it without waiting — the wait is what
+			// ran out.
+			h.askMu.Lock()
+			late := make([]sessionOperation, 0, 2)
+			for _, key := range []string{id, id + sideOperationSuffix} {
+				if op, ok := h.activeAsks[key]; ok {
+					delete(h.activeAsks, key)
+					late = append(late, op)
+				}
+			}
+			h.sealSessionDeleteLocked(id)
+			h.askMu.Unlock()
+			for _, op := range late {
+				if op.cancel != nil {
+					op.cancel()
+				}
+			}
+			return cancelled + len(late)
+		}
+	}
+}
+
+// sealSessionDeleteLocked marks the id as going away. Callers hold askMu: the
+// mark and the "no live ask" observation have to be one step, or a request can
+// register between them.
+func (h *handler) sealSessionDeleteLocked(id string) {
+	if h.deleting == nil {
+		h.deleting = make(map[string]bool)
+	}
+	h.deleting[id] = true
+}
+
+// finishSessionDelete reopens the id. A successful delete leaves nothing to
+// reopen (ids are never reused), but a delete that failed has to leave the
+// thread usable instead of permanently refusing every turn.
+func (h *handler) finishSessionDelete(id string) {
+	h.askMu.Lock()
+	delete(h.deleting, id)
+	h.askMu.Unlock()
+}
+
+// awaitSessionAsks waits for cancelled asks to return before their workspace
+// is removed. The deadline is what keeps a wedged provider call — one that
+// ignores its cancelled context — from blocking a delete forever: on timeout
+// the cleanup proceeds exactly as it did before, and the worst case is the
+// debris the delete path already pruned. A batch delete passes one deadline
+// for the whole request, so a row of stuck threads cannot add up to minutes.
+func awaitSessionAsks(ops []sessionOperation, deadline time.Time) {
+	remaining := time.Until(deadline)
+	if len(ops) == 0 || remaining <= 0 {
+		return
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	for _, op := range ops {
+		if op.done == nil {
+			continue
+		}
+		select {
+		case <-op.done:
+		case <-timer.C:
+			return
+		}
+	}
 }
 
 // clarifyWaiter parks one running ask on the browser's answer. The session id
@@ -1181,8 +1346,10 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// prompt empty, which the check below rejects. A side ask never drains
 	// them: those words belong to the thread's next turn, and a question asked
 	// beside the thread must not eat what the thread was about to say.
+	var noteClaim *pendingNoteClaim
 	if !side {
-		carried := h.takeCarry(sessID)
+		noteClaim = h.claimPendingNotes(sessID, req.ResumeQueued)
+		defer h.settlePendingNotes(noteClaim, false)
 		// A continuation also drains the live queue. The turn that owned a
 		// note parks its leftovers on the handler's way out, so a note
 		// accepted in the window between the last round and that exit has no
@@ -1191,10 +1358,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// the queue alone: its own round loop reads those notes at the next
 		// boundary and acknowledges each one, which is the contract the
 		// console's "delivered at round N" line depends on.
-		if req.ResumeQueued {
-			if late := h.takeSteer(sessID); len(late) > 0 {
-				carried = append(carried, late...)
-			}
+		var carried []pendingNote
+		if noteClaim != nil {
+			carried = noteClaim.notes
 		}
 		if len(carried) > 0 {
 			switch {
@@ -1438,7 +1604,13 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	op, err := h.registerSessionAsk(opKey, cancel)
 	if err != nil {
-		send("error", map[string]string{"message": "create operation failed"})
+		// A delete owns this thread now: the row is going away, so there is
+		// nothing for the turn to attach to and no console that could stop it.
+		message := "create operation failed"
+		if errors.Is(err, errSessionDeleting) {
+			message = errSessionDeleting.Error()
+		}
+		send("error", map[string]string{"message": message})
 		return
 	}
 	askStarted := time.Now()
@@ -1543,6 +1715,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			send("error", map[string]string{"message": "save turn failed"})
 			return
 		}
+		h.settlePendingNotes(noteClaim, true)
 	}
 
 	// Persist a bounded-cadence display checkpoint while the HTTP stream is

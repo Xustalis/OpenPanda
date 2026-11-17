@@ -733,6 +733,11 @@ type handler struct {
 	askMu         sync.Mutex
 	askGeneration uint64
 	activeAsks    map[string]sessionOperation
+	// deleting holds the ids whose delete has sealed the session: the row is
+	// being removed, so a turn must not start. Guarded by askMu, and set in the
+	// same critical section that observes the last live ask gone — that is what
+	// stops a request from registering between the drain and the row removal.
+	deleting map[string]bool
 
 	// steerMu guards steers: one bounded queue per session holding what the
 	// user typed while that session's turn streams. It is the console's twin of
@@ -747,6 +752,9 @@ type handler struct {
 	// them (the console auto-starts it), and a prompt the user sends first
 	// absorbs them rather than leaving them stranded.
 	carry map[string][]pendingNote
+	// steerClaims live only between taking pending notes and persisting their
+	// user turn. Deletion invalidates them; failed starts restore their notes.
+	steerClaims map[*pendingNoteClaim]struct{}
 	// memSeq stamps the in-memory notes' keys. Guarded by steerMu; monotonic
 	// per process so a key handed to the browser never names a later note.
 	memSeq int

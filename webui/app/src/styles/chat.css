@@ -6060,3 +6060,35 @@
 .task-execution-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0; color: var(--text-secondary); font-size: 11px; }
 .task-execution-meta dd { margin: 0 10px 0 0; overflow-wrap: anywhere; }
 .task-objectives p, .task-objectives li { overflow-wrap: anywhere; }
+
+/* A phone cannot carry the sentence. Below this width the 190px floor above
+   is most of the head: at 360px it left the title 13px — one letter of the
+   thread's name — while the bar still clipped its own words ("空…"), so
+   neither half said anything. The segments step aside and the bar keeps its
+   two ends, the live dot and the caret; everything they said is one tap away
+   in the overview they open, which is the only place those numbers fit here.
+   Hiding them is also what gives the title its room back: ~230px at 360px. */
+@media (max-width: 520px) {
+  .rail-bar {
+    max-width: none;
+    gap: 2px;
+    padding: 0 6px;
+  }
+  .rail-bar-task,
+  .rail-bar-sep,
+  .rail-bar-ctx,
+  .rail-bar-changes {
+    display: none;
+  }
+  /* The overview hangs off the dock's right edge. Collapsed, that edge sits
+     one dock button (36px + 2px gap) inside the card's content edge, so a
+     right-anchored 320px card started ~29px off the screen. Pull it back over
+     the button it opens from — it covers that corner anyway — and cap it to
+     the card's inner width: 10px gutter + 20px head padding either side, plus
+     the card's 1px border. */
+  .rail-pop {
+    right: calc(-1 * (var(--head-tool) + var(--head-tool-gap)));
+    width: calc(100vw - 62px);
+    max-width: 320px;
+  }
+}
