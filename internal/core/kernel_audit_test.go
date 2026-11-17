@@ -12,36 +12,49 @@ import (
 )
 
 func TestIsolatedStaleAcceptanceCannotDeliverNewAttempt(t *testing.T) {
-	ctx := context.Background()
-	origin, worker := newCore(t, "audit-origin"), newCore(t, "audit-worker")
-	id, err := newUUID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedAcceptWorkPair(t, ctx, origin, worker, id)
-	row, err := origin.store.Get(ctx, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stale := row.AttemptID
-	newer, err := newUUID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := origin.db.ExecContext(ctx, "UPDATE tasks SET isolate=1,attempt_id=? WHERE task_id=?", newer, id); err != nil {
-		t.Fatal(err)
-	}
-	env, err := bus.NewEnvelope(bus.MsgTaskResume, worker.nodeID, origin.nodeID, bus.TaskResumePayload{TaskID: id, AttemptID: stale, Accept: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	origin.handleResume(ctx, env)
-	row, err = origin.store.Get(ctx, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if row.State != StateReview || row.DeliveryAcceptAttempt != "" {
-		t.Fatalf("stale delivery changed newer attempt: state=%s accepted=%q", row.State, row.DeliveryAcceptAttempt)
+	// These attempts share a millisecond but have opposite random-tail order.
+	// A receipt belongs to its exact attempt, regardless of lexical order or
+	// the clock/generator used by the peer that minted it.
+	const low = "019c0000-0000-7000-8000-000000000001"
+	const high = "019c0000-0000-7000-8000-000000000002"
+	for _, tc := range []struct {
+		name, stored, receipt string
+		isolate, accept       bool
+	}{
+		{"same-ms-receipt-sorts-before", high, low, true, false},
+		{"same-ms-receipt-sorts-after", low, high, true, false},
+		{"later-timestamp-receipt", low, "019c0000-0001-7000-8000-000000000001", true, false},
+		{"opaque-receipt", low, "foreign-attempt", true, false},
+		{"missing-receipt", low, "", true, false},
+		{"current-attempt", low, low, true, true},
+		{"legacy-both-empty-stays-parked", "", "", true, false},
+		{"non-isolated-mirror", high, low, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			origin, worker := newCore(t, "audit-origin"), newCore(t, "audit-worker")
+			const id = "audit-accept"
+			seedAcceptWorkPair(t, ctx, origin, worker, id)
+			if _, err := origin.db.ExecContext(ctx, "UPDATE tasks SET isolate=?,attempt_id=? WHERE task_id=?", tc.isolate, tc.stored, id); err != nil {
+				t.Fatal(err)
+			}
+			env, err := bus.NewEnvelope(bus.MsgTaskResume, worker.nodeID, origin.nodeID, bus.TaskResumePayload{TaskID: id, AttemptID: tc.receipt, Accept: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			origin.handleResume(ctx, env)
+			row, err := origin.store.Get(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := StateReview
+			if tc.accept {
+				want = StateDone
+			}
+			if row.State != want || row.AttemptID != tc.stored || (!tc.accept && row.DeliveryAcceptAttempt != "") {
+				t.Fatalf("receipt changed wrong attempt: state=%s want=%s attempt=%q accepted=%q", row.State, want, row.AttemptID, row.DeliveryAcceptAttempt)
+			}
+		})
 	}
 }
 
