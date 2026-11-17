@@ -1179,6 +1179,7 @@ var messages = map[Locale]map[string]string{
 		"repl.fork.nosess":      "no session attached — /resume first",
 		"repl.fork.usage":       "usage: /fork [turn-count]",
 		"repl.fork.done":        "forked {parent} → {id} ({n} turns) — now attached",
+		"repl.fork.incomplete":  "forked, but the uncommitted changes did not fully carry over: {err}",
 		"repl.session.attach":   "attach: /resume {id}",
 		"repl.session.rmActive": "session {id} is attached — /resume - first, then remove it",
 		"repl.session.notRepo":  "work path is not a git repository — this verb needs one",
@@ -2527,6 +2528,7 @@ var messages = map[Locale]map[string]string{
 		"repl.fork.nosess":      "未附加会话 — 请先 /resume",
 		"repl.fork.usage":       "用法：/fork [轮数]",
 		"repl.fork.done":        "已从 {parent} 分叉 → {id}（{n} 轮）— 已附加到 {id}",
+		"repl.fork.incomplete":  "已分叉，但未提交的改动未能完整带过去：{err}",
 
 		"repl.memory.none":  "暂无记忆文件",
 		"repl.memory.head":  "记忆文件",
@@ -3940,6 +3942,7 @@ var messages = map[Locale]map[string]string{
 		"repl.fork.nosess":      "セッションに接続していません — 先に /resume",
 		"repl.fork.usage":       "使い方：/fork [ターン数]",
 		"repl.fork.done":        "{parent} からフォーク → {id}（{n} ターン）— {id} に接続中",
+		"repl.fork.incomplete":  "フォークしましたが、未コミットの変更を完全には引き継げませんでした：{err}",
 
 		"repl.memory.none":  "メモリファイルはありません",
 		"repl.memory.head":  "メモリファイル",
@@ -5270,6 +5273,7 @@ var messages = map[Locale]map[string]string{
 		"repl.fork.nosess":      "sin sesión adjunta — usa /resume primero",
 		"repl.fork.usage":       "uso: /fork [n.º de turnos]",
 		"repl.fork.done":        "bifurcada {parent} → {id} ({n} turnos) — ahora adjunto a {id}",
+		"repl.fork.incomplete":  "bifurcada, pero los cambios sin confirmar no se copiaron por completo: {err}",
 
 		"repl.memory.none":  "sin archivos de memoria",
 		"repl.memory.head":  "archivos de memoria",
@@ -6600,6 +6604,7 @@ var messages = map[Locale]map[string]string{
 		"repl.fork.nosess":      "keine Sitzung angehängt — zuerst /resume",
 		"repl.fork.usage":       "Aufruf: /fork [Anzahl Runden]",
 		"repl.fork.done":        "von {parent} abgezweigt → {id} ({n} Runden) — jetzt an {id} angehängt",
+		"repl.fork.incomplete":  "abgezweigt, aber die nicht übernommenen Änderungen wurden nicht vollständig übertragen: {err}",
 
 		"repl.memory.none":  "keine Speicherdateien",
 		"repl.memory.head":  "Speicherdateien",
