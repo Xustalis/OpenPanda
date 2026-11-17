@@ -4,7 +4,10 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -16,6 +19,11 @@ import (
 // minutes, so a week is far past the window in which a replay could mean
 // anything; the entry exists only to make that retry cheap to answer.
 const intakeSeenRetention = 7 * 24 * time.Hour
+
+// ErrLegacyIntakeDelivery preserves the old deduplication boundary. A legacy
+// claim has no execution association, so replaying it could run finished work
+// twice; it cannot safely be treated as a recoverable new request.
+var ErrLegacyIntakeDelivery = errors.New("delivery was recorded by legacy intake without a recoverable execution")
 
 // ClaimIntake records one inbound delivery and reports whether this call
 // recorded it first.
@@ -105,6 +113,24 @@ func (c *Core) IntakeTask(ctx context.Context, ev intake.Event, project string, 
 		// unpinned writers instead of running beside them in a lane nobody
 		// owns.
 	}
+	if ev.Delivery != "" {
+		// Hash the tuple rather than concatenating untrusted identifiers. This
+		// keeps identities bounded and distinct even when either contains a
+		// separator. Raw-body identity is carried by the fixed input spec.
+		identity, _ := json.Marshal([]string{ev.Source, ev.Delivery})
+		digest := sha256.Sum256(identity)
+		key := "intake:" + hex.EncodeToString(digest[:])
+		var legacy int
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM intake_seen
+ WHERE source=? AND key=? AND NOT EXISTS (SELECT 1 FROM execution_requests WHERE request_id=?)`, ev.Source, ev.Delivery, key).Scan(&legacy); err != nil {
+			return "", err
+		}
+		if legacy != 0 {
+			return "", ErrLegacyIntakeDelivery
+		}
+		result, err := c.EnqueueRequest(ctx, ExecutionRequest{RequestID: key, TaskKey: key, TriggerKey: key, Purpose: "intake"}, in, q)
+		return result.Task.TaskID, err
+	}
 	t, err := c.Enqueue(ctx, in, q)
 	if err != nil {
 		return "", err
@@ -126,6 +152,9 @@ func intakeSpec(ev intake.Event) string {
 	}
 	if ev.Number > 0 {
 		facts["source_number"] = strconv.Itoa(ev.Number)
+	}
+	if ev.BodyHash != "" {
+		facts["source_body_hash"] = ev.BodyHash
 	}
 	raw, err := json.Marshal(facts)
 	if err != nil {

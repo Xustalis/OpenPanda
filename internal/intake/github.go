@@ -107,6 +107,11 @@ func ParseGitHub(eventType string, payload []byte) (Event, bool, error) {
 		ev.Body = p.Issue.Body
 		ev.URL = p.Issue.HTMLURL
 		ev.Actor = p.Issue.User.Login
+		if p.Action == "reopened" {
+			// Reopening is a new request by the current sender. The original
+			// issue author cannot lend their allowlist authority to that actor.
+			ev.Actor = p.Sender.Login
+		}
 		ev.Number = p.Issue.Number
 		ev.Thread = threadOf(repo, p.Issue.Number)
 
@@ -140,9 +145,9 @@ func ParseGitHub(eventType string, payload []byte) (Event, bool, error) {
 		ev.Number = p.PullRequest.Number
 		ev.Thread = threadOf(repo, p.PullRequest.Number)
 	}
-	if ev.Actor == "" {
-		// The sender is the fallback for a payload variant that omits the
-		// author: without an actor the gate has nothing to allow or refuse.
+	if p.Sender.Login != "" {
+		// Policy authorizes the actor of this action, including bot senders.
+		// Object authors remain a fallback for older created-event variants.
 		ev.Actor = p.Sender.Login
 	}
 	return ev, true, nil

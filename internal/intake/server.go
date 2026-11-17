@@ -4,6 +4,8 @@ package intake
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,6 +22,14 @@ const maxBodyBytes = 1 << 20
 // Sink turns an admitted event into queued work and returns its task id.
 type Sink interface {
 	IntakeTask(ctx context.Context, ev Event) (taskID string, err error)
+}
+
+// DeliverySink owns durable delivery deduplication and task publication. A
+// retry must return the same task for the same body, or resume its preparation;
+// a changed body must return ErrDeliveryConflict. The server must not consume
+// Seen before this operation, since a failed publication must remain retryable.
+type DeliverySink interface {
+	IntakeDelivery(ctx context.Context, ev Event) (taskID string, err error)
 }
 
 // Seen is the idempotence ledger. ClaimIntake atomically records the key and
@@ -55,6 +65,13 @@ type Server struct {
 
 // ErrNoSink is the wiring mistake a listener should never start with.
 var ErrNoSink = errors.New("intake: no sink wired")
+
+var (
+	ErrDeliveryConflict = errors.New("intake: delivery body conflicts with the recorded request")
+	// ErrLegacyDelivery preserves deliveries consumed by the older ledger when
+	// there is no durable execution identity proving whether work was queued.
+	ErrLegacyDelivery = errors.New("intake: delivery already recorded by the legacy ledger")
+)
 
 // Handler returns the HTTP surface. Only POST is accepted; the mux answers
 // 405 for anything else without reaching the gate.
@@ -101,6 +118,8 @@ func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ev.Delivery = r.Header.Get("X-GitHub-Delivery")
+	bodyHash := sha256.Sum256(body)
+	ev.BodyHash = hex.EncodeToString(bodyHash[:])
 
 	decision := s.Policy.Admit(ev)
 	if !decision.Admit {
@@ -111,7 +130,20 @@ func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.Seen != nil && ev.Delivery != "" {
+	if s.Sink == nil {
+		s.log().Error("intake: admitted an event with no sink wired", "sink", ErrNoSink)
+		writeJSON(w, http.StatusInternalServerError, response{Error: ErrNoSink.Error()})
+		return
+	}
+	// The delivery claim belongs to whichever path owns the deduplication. The
+	// ledger path takes it here and hands it back when the work never
+	// materializes; the durable delivery path owns it inside the sink, which
+	// records the request before the task is published.
+	claimed := false
+	submit := s.Sink.IntakeTask
+	if sink, ok := s.Sink.(DeliverySink); ok && ev.Delivery != "" {
+		submit = sink.IntakeDelivery
+	} else if s.Seen != nil && ev.Delivery != "" {
 		first, err := s.Seen.ClaimIntake(r.Context(), ev.Source, ev.Delivery)
 		if err != nil {
 			s.log().Error("intake: claim delivery", "delivery", ev.Delivery, "err", err)
@@ -122,23 +154,27 @@ func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, response{OK: true, Ignored: CodeDuplicate})
 			return
 		}
+		claimed = true
 	}
 
-	// The claim above is taken before the sink runs so two copies of the same
-	// delivery cannot both queue work. Every failure below therefore has to
-	// hand it back: the source's retry is this event's only second chance, and
-	// it would otherwise be answered "duplicate" for a task nobody created.
-	if s.Sink == nil {
-		s.log().Error("intake: admitted an event with no sink wired", "sink", ErrNoSink)
-		s.release(r.Context(), ev)
-		writeJSON(w, http.StatusInternalServerError, response{Error: ErrNoSink.Error()})
-		return
-	}
-	taskID, err := s.Sink.IntakeTask(r.Context(), ev)
+	taskID, err := submit(r.Context(), ev)
 	if err != nil {
+		if errors.Is(err, ErrLegacyDelivery) {
+			writeJSON(w, http.StatusOK, response{OK: true, Ignored: CodeDuplicate})
+			return
+		}
+		if errors.Is(err, ErrDeliveryConflict) {
+			writeJSON(w, http.StatusConflict, response{Error: ErrDeliveryConflict.Error()})
+			return
+		}
 		s.log().Error("intake: submit task",
 			"repo", ev.Repo, "thread", ev.Thread, "err", err)
-		s.release(r.Context(), ev)
+		if claimed {
+			// The claim was taken above and the work never materialized, so
+			// the source's retry is this event's only second chance: hand it
+			// back rather than answer "duplicate" for a task nobody created.
+			s.release(r.Context(), ev)
+		}
 		writeJSON(w, http.StatusInternalServerError, response{Error: "could not create task"})
 		return
 	}

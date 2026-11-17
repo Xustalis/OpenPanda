@@ -205,3 +205,100 @@ func TestExpiredDecisionRequiresExplicitReconsentAfterRejection(t *testing.T) {
 		t.Fatal("old proof lost")
 	}
 }
+
+func TestInFlightAcceptanceCannotOverwriteLocalPause(t *testing.T) {
+	x := completionTest(t, taskproviders.AfterExecution)
+	m := x.worker(t)
+	if err := m.finishPrepared(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w, err := x.s.Work(context.Background(), x.f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := w.Deliveries[0].Delivery
+	if err = x.s.DecideDelivery(context.Background(), d.DeliveryID, d.Revision, "accept", "reviewed"); err != nil {
+		t.Fatal(err)
+	}
+	x.beforeDecision = func() {
+		if err := x.s.PauseWork(context.Background(), x.f.ID); err != nil {
+			t.Error(err)
+		}
+	}
+	priorReleases := len(x.releases)
+	if err = x.s.flushOutbox(context.Background(), "owner", x.f.ID); err != nil {
+		t.Fatal(err)
+	}
+	w, err = x.s.Work(context.Background(), x.f.ID)
+	if err != nil || w.State != "paused" {
+		t.Fatalf("late acceptance replaced local stop: state=%s err=%v", w.State, err)
+	}
+	if got := scalar(t, x.s.db, `SELECT state FROM task_sync_outbox WHERE kind='decision'`); got != "sent" {
+		t.Fatalf("confirmed remote acceptance was lost: %s", got)
+	}
+	if len(x.releases) != priorReleases+1 {
+		t.Fatalf("local stop was not released: %v", x.releases)
+	}
+}
+
+func TestPolicyRevocationPreservesDeliveredEvidence(t *testing.T) {
+	x := completionTest(t, taskproviders.AfterExecution)
+	m := x.worker(t)
+	if err := m.finishPrepared(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := scalar(t, x.s.db, `SELECT COUNT(*) FROM task_sync_outbox WHERE state='sent'`)
+	if before == "0" {
+		t.Fatal("fixture has no confirmed delivery")
+	}
+	if err := x.s.SetPolicy(context.Background(), x.c.ID, "s", Policy{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar(t, x.s.db, `SELECT COUNT(*) FROM task_sync_outbox WHERE state='sent'`); got != before {
+		t.Fatalf("revocation erased sent facts: retained=%s", got)
+	}
+	if got := scalar(t, x.s.db, `SELECT state FROM task_flow_runs`); got != "paused" {
+		t.Fatalf("revocation did not stop execution: %s", got)
+	}
+}
+
+func TestCompletionObserverCannotResumeStoppedRun(t *testing.T) {
+	x := completionTest(t, taskproviders.AfterExecution)
+	m := x.worker(t)
+	if err := m.finishPrepared(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.s.PauseWork(context.Background(), x.f.ID); err != nil {
+		t.Fatal(err)
+	}
+	x.record.Status = taskproviders.Succeeded
+	x.record.LeaseUntil = nil
+	// A coordinator selected before the stop can still return a remote fact.
+	done, err := m.observeCompleted()
+	if !done || err != nil {
+		t.Fatalf("remote observation failed: done=%v err=%v", done, err)
+	}
+	if got := scalar(t, x.s.db, `SELECT state FROM task_flow_runs`); got != "paused" {
+		t.Fatalf("completion observation replaced local stop: %s", got)
+	}
+}
+
+func TestStoppedClaimResponseCannotOverwriteLocalPause(t *testing.T) {
+	x := completionTest(t, taskproviders.AfterExecution)
+	x.beforeClaim = func() {
+		if err := x.s.PauseWork(context.Background(), x.f.ID); err != nil {
+			t.Error(err)
+		}
+		x.record.Status = taskproviders.Succeeded
+		x.record.LeaseUntil = nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := &managedExecution{runtime: x.e, id: x.f.ID, owner: "owner", ctx: ctx, cancel: cancel}
+	if err := m.acquire(); err == nil {
+		t.Fatal("stopped claim acquired execution authority")
+	}
+	if got := scalar(t, x.s.db, `SELECT state FROM task_flow_runs`); got != "paused" {
+		t.Fatalf("claim response replaced local stop: %s", got)
+	}
+}

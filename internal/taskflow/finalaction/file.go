@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -99,6 +100,16 @@ func checkRoot(root *os.Root, i FileIntent) error {
 }
 func stageName(i FileIntent) string { return ".panda-action-" + i.ActionID + ".prepared" }
 
+func publicationAllowed(ctx context.Context, i FileIntent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if i.ExpiresAt <= time.Now().UnixMilli() {
+		return errors.New("file publication intent expired")
+	}
+	return nil
+}
+
 // Publish creates a complete new file by hard linking a flushed staging file.
 // Link cannot replace an existing target. The staging link remains as provenance
 // for read-only crash reconciliation; a same-content pre-existing file is not
@@ -107,7 +118,7 @@ func Publish(ctx context.Context, i FileIntent, checkpoint func(context.Context)
 	if err := i.Validate(); err != nil {
 		return Receipt{}, err
 	}
-	if err := ctx.Err(); err != nil {
+	if err := publicationAllowed(ctx, i); err != nil {
 		return Receipt{}, err
 	}
 	root, err := os.OpenRoot(i.Directory)
@@ -133,7 +144,7 @@ func Publish(ctx context.Context, i FileIntent, checkpoint func(context.Context)
 	if closeErr != nil {
 		return Receipt{}, closeErr
 	}
-	if err = ctx.Err(); err != nil {
+	if err = publicationAllowed(ctx, i); err != nil {
 		return Receipt{}, err
 	}
 	if checkpoint == nil {
@@ -148,6 +159,12 @@ func Publish(ctx context.Context, i FileIntent, checkpoint func(context.Context)
 	}
 	if current != i.DirectoryIdentity {
 		return Receipt{}, errors.New("publication directory changed")
+	}
+	// The authority checkpoint may block while cancellation or expiry occurs.
+	// Revalidate immediately before the irreversible link; reconciliation stays
+	// read-only and may still observe a publication after authority expires.
+	if err = publicationAllowed(ctx, i); err != nil {
+		return Receipt{}, err
 	}
 	if err = root.Link(stageName(i), i.Filename); err != nil {
 		return Receipt{}, err

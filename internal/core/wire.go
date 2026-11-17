@@ -578,8 +578,8 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 			// Reconcile: a timeout path already closed this row, but the
 			// executor's done is evidence the work actually finished. The
 			// one failure a result may never overturn is a human reject —
-			// its last event carries {rejected}, everything else (lease
-			// expiry, remote fail, deadline) wrote EvResult.
+			// its durable review evidence survives later audit events until
+			// an explicit retry. The write transaction checks it again.
 			if c.store.failureWasRejected(ctx, p.TaskID) {
 				c.logger.Info("late done on human-rejected task ignored", "task", p.TaskID, "from", env.From)
 				if rerr := c.store.RecordEvent(ctx, p.TaskID, EvResult, map[string]any{
@@ -589,10 +589,12 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 					c.logger.Debug("late result audit failed", "task", p.TaskID, "err", rerr)
 				}
 				transitionOK = false
-			} else if rerr := c.store.ReconcileDone(ctx, p.TaskID, c.nodeID, p, t.State); rerr != nil {
+			} else if rerr := c.store.ReconcileDone(ctx, p.TaskID, c.nodeID, p, t.State, p.AttemptID); rerr != nil {
+				transitionOK = false
 				if !errors.Is(rerr, ErrConflict) {
 					c.logger.Warn("reconcile late done", "task", p.TaskID, "err", rerr)
-					transitionOK = false
+				} else {
+					return // A changed attempt or human decision owns the row.
 				}
 			} else {
 				c.logger.Info("late done reconciled over timeout close", "task", p.TaskID,

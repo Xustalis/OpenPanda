@@ -52,6 +52,9 @@ const (
 type Event struct {
 	Source   string
 	Delivery string
+	// BodyHash binds a delivery identity to the exact verified request body.
+	// It is transport metadata and is not included in the agent's prompt.
+	BodyHash string
 	Kind     string
 	Repo     string
 	// Number is the source-side thread number (the issue or pull request).

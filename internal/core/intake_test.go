@@ -4,7 +4,9 @@ package core
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -143,6 +145,111 @@ func TestIntakeTaskDefaultsPriority(t *testing.T) {
 	if task.Priority != PriorityNormal {
 		t.Fatalf("priority = %d, want normal", task.Priority)
 	}
+}
+
+func TestIntakeTaskConcurrentRedeliveryReusesExecution(t *testing.T) {
+	c := newIntakeCore(t)
+	ctx := context.Background()
+	ev := intake.Event{Source: "github", Delivery: "one-delivery", Title: "repair crash", Body: "@panda-bot fix"}
+	const callers = 8
+	ids := make(chan string, callers)
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Go(func() {
+			id, err := c.IntakeTask(ctx, ev, "", PriorityNormal)
+			ids <- id
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(ids)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var first string
+	for id := range ids {
+		if first == "" {
+			first = id
+		}
+		if id != first {
+			t.Fatalf("redelivery created different executions: %s and %s", first, id)
+		}
+	}
+	requireRowCount(t, c, "tasks", 1)
+	requireRowCount(t, c, "execution_requests", 1)
+	ev.Body = "changed request"
+	if _, err := c.IntakeTask(ctx, ev, "", PriorityNormal); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed redelivery was not rejected: %v", err)
+	}
+}
+
+func TestIntakeTaskPublicationFailureRecoversAfterRestart(t *testing.T) {
+	c, restart := recoveryFileCore(t)
+	ctx := context.Background()
+	ev := intake.Event{Source: "github", Delivery: "recover-delivery", Title: "repair crash", Body: "@panda-bot fix"}
+	if _, err := c.db.Exec(`CREATE TRIGGER reject_intake BEFORE INSERT ON tasks BEGIN SELECT RAISE(ABORT,'injected intake failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.IntakeTask(ctx, ev, "", PriorityNormal); err == nil {
+		t.Fatal("publication failure ignored")
+	}
+	requireRowCount(t, c, "tasks", 0)
+	requireRowCount(t, c, "execution_requests", 1)
+	if _, err := c.db.Exec(`DROP TRIGGER reject_intake`); err != nil {
+		t.Fatal(err)
+	}
+	c = restart()
+	if n, err := c.RecoverLocalRequests(ctx); err != nil || n != 1 {
+		t.Fatalf("recover intake=%d err=%v", n, err)
+	}
+	var published string
+	if err := c.db.QueryRow(`SELECT task_id FROM execution_requests`).Scan(&published); err != nil {
+		t.Fatal(err)
+	}
+	id, err := c.IntakeTask(ctx, ev, "", PriorityNormal)
+	if err != nil || id != published {
+		t.Fatalf("redelivery changed recovered task: id=%s published=%s err=%v", id, published, err)
+	}
+	requireRowCount(t, c, "tasks", 1)
+	requireRowCount(t, c, "execution_links", 1)
+}
+
+func TestIntakeTaskDeliveryIdentityIncludesSourceAndRawBody(t *testing.T) {
+	c := newIntakeCore(t)
+	ctx := context.Background()
+	ev := intake.Event{Source: "github", Delivery: "same-delivery", Title: "repair", BodyHash: "original-body"}
+	original, err := c.IntakeTask(ctx, ev, "", PriorityNormal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev.BodyHash = "changed-body"
+	if _, err := c.IntakeTask(ctx, ev, "", PriorityNormal); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed raw body reused delivery: %v", err)
+	}
+	ev.Source = "another-source"
+	other, err := c.IntakeTask(ctx, ev, "", PriorityNormal)
+	if err != nil || other == original {
+		t.Fatalf("source delivery namespaces collided: original=%s other=%s err=%v", original, other, err)
+	}
+	requireRowCount(t, c, "tasks", 2)
+}
+
+func TestIntakeTaskLegacyDeliveryDoesNotCreateAnotherExecution(t *testing.T) {
+	c := newIntakeCore(t)
+	ctx := context.Background()
+	ev := intake.Event{Source: "github", Delivery: "legacy-delivery", Title: "repair"}
+	if claimed, err := c.ClaimIntake(ctx, ev.Source, ev.Delivery); err != nil || !claimed {
+		t.Fatal(claimed, err)
+	}
+	if _, err := c.IntakeTask(ctx, ev, "", PriorityNormal); !errors.Is(err, ErrLegacyIntakeDelivery) {
+		t.Fatalf("legacy delivery was executed again: %v", err)
+	}
+	requireRowCount(t, c, "tasks", 0)
+	requireRowCount(t, c, "execution_requests", 0)
 }
 
 func TestSourceFactsReachHooks(t *testing.T) {

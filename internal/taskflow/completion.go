@@ -320,7 +320,9 @@ func (m *managedExecution) observeCompleted() (bool, error) {
 	if r.Status != taskproviders.Succeeded {
 		return false, nil
 	}
-	_, err = s.db.ExecContext(m.ctx, `UPDATE task_flow_runs SET state='succeeded',error_code='',deadline=0,lease_owner='',updated_at=? WHERE request_id=?`, s.now().UnixMilli(), f.ID)
+	// A coordinator selected before a local stop may still observe completion.
+	// Keep the observation from replacing the durable stop or terminal state.
+	_, err = s.db.ExecContext(m.ctx, `UPDATE task_flow_runs SET state='succeeded',error_code='',deadline=0,lease_owner='',updated_at=? WHERE request_id=? AND state NOT IN ('paused','succeeded','failed','cancelled','superseded')`, s.now().UnixMilli(), f.ID)
 	return true, err
 }
 

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/log"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/taskhub"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders/tsync"
@@ -166,24 +168,22 @@ func (e *executionRuntime) loop(ctx context.Context, owner string) {
 	go func() {
 		defer wg.Done()
 		for ctx.Err() == nil {
-			_ = e.researchOnce(ctx, owner)
+			if err := e.researchOnce(ctx, owner); err != nil && ctx.Err() == nil {
+				log.From(ctx).WarnContext(ctx, "task automation research failed", "err", security.Redact(err.Error()))
+			}
 			if wait(ctx, 30*time.Second) != nil {
 				return
 			}
 		}
 	}()
 	for ctx.Err() == nil {
-		_ = e.discover(ctx, owner)
-		rows, err := e.service.db.QueryContext(ctx, `SELECT request_id FROM task_flow_runs WHERE (state IN ('claiming','leased','running','recovering','lease_lost') OR (state='needs_reconciliation' AND prepared_json!='')) AND next_at<=? ORDER BY created_at LIMIT 64`, e.service.now().UnixMilli())
+		delay := time.Second
+		if err := e.discover(ctx, owner); err != nil && ctx.Err() == nil {
+			log.From(ctx).WarnContext(ctx, "task automation discovery failed", "err", security.Redact(err.Error()))
+			delay = 5 * time.Second
+		}
+		ids, err := e.pendingExecutions(ctx)
 		if err == nil {
-			var ids []string
-			for rows.Next() {
-				var id string
-				if rows.Scan(&id) == nil {
-					ids = append(ids, id)
-				}
-			}
-			_ = rows.Close()
 			for _, id := range ids {
 				e.mu.Lock()
 				if _, exists := e.runs[id]; exists {
@@ -202,11 +202,31 @@ func (e *executionRuntime) loop(ctx context.Context, owner string) {
 					m.coordinate()
 				}()
 			}
+		} else if ctx.Err() == nil {
+			log.From(ctx).WarnContext(ctx, "task automation pending executions unavailable", "err", security.Redact(err.Error()))
+			delay = 5 * time.Second
 		}
-		if wait(ctx, time.Second) != nil {
+		if wait(ctx, delay) != nil {
 			return
 		}
 	}
+}
+
+func (e *executionRuntime) pendingExecutions(ctx context.Context) ([]string, error) {
+	rows, err := e.service.db.QueryContext(ctx, `SELECT request_id FROM task_flow_runs WHERE `+runnableFlowSQL+` AND next_at<=? ORDER BY created_at,request_id LIMIT 64`, e.service.now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (e *executionRuntime) discover(ctx context.Context, owner string) error {
@@ -214,16 +234,22 @@ func (e *executionRuntime) discover(ctx context.Context, owner string) error {
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, t := range tasks {
 		if t.ConnectionID == "local" {
 			continue
 		}
 		c, err := e.service.Get(ctx, t.ConnectionID)
 		if err != nil {
+			failures = append(failures, fmt.Errorf("discover connection %s: %w", t.ConnectionID, err))
 			continue
 		}
 		p, err := e.service.Policy(ctx, c.ID, t.Snapshot.Key.SpaceID)
-		if err != nil || eligible(c, p, t.Snapshot, e.service.now()) != nil {
+		if err != nil {
+			failures = append(failures, fmt.Errorf("discover policy for %s: %w", c.ID, err))
+			continue
+		}
+		if eligible(c, p, t.Snapshot, e.service.now()) != nil {
 			continue
 		}
 		id, err := util.UUIDv7()
@@ -242,10 +268,13 @@ func (e *executionRuntime) discover(ctx context.Context, owner string) error {
 			return err
 		})
 		if err != nil {
-			return err
+			if errors.Is(err, ErrConcurrency) {
+				continue
+			}
+			failures = append(failures, fmt.Errorf("discover execution for %s: %w", c.ID, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 type managedExecution struct {
@@ -267,7 +296,7 @@ func (m *managedExecution) authority(ctx context.Context, fresh bool) (flowRun, 
 	if err != nil {
 		return f, Connection{}, err
 	}
-	if f.State == "paused" || f.State == "cancelled" || f.State == "superseded" || f.State == "succeeded" {
+	if !f.canCoordinate() {
 		return f, Connection{}, taskproviders.ErrAuthorizationChanged
 	}
 	c, err := s.Get(ctx, f.ConnectionID)
@@ -392,7 +421,7 @@ func (m *managedExecution) persistLease(ctx context.Context, f flowRun, r tsync.
 	}
 	raw, _ := json.Marshal(r)
 	now := m.runtime.service.now()
-	result, err := m.runtime.service.db.ExecContext(ctx, `UPDATE task_flow_runs SET execution_id=?,record_json=?,lease_owner=?,deadline=?,state='leased',error_code='',updated_at=? WHERE request_id=? AND state IN ('claiming','leased','running','recovering','lease_lost','needs_reconciliation') AND EXISTS(SELECT 1 FROM task_runtime_leases WHERE lease_key='sync' AND owner_id=? AND expires_at>?)`, r.ExecutionID, string(raw), m.owner, now.Add(remaining).UnixMilli(), now.UnixMilli(), m.id, m.owner, now.UnixMilli())
+	result, err := m.runtime.service.db.ExecContext(ctx, `UPDATE task_flow_runs SET execution_id=?,record_json=?,lease_owner=?,deadline=?,state='leased',error_code='',updated_at=? WHERE request_id=? AND `+runnableFlowSQL+` AND EXISTS(SELECT 1 FROM task_runtime_leases WHERE lease_key='sync' AND owner_id=? AND expires_at>?)`, r.ExecutionID, string(raw), m.owner, now.Add(remaining).UnixMilli(), now.UnixMilli(), m.id, m.owner, now.UnixMilli())
 	if err == nil {
 		err = requireOne(result)
 	}
@@ -425,11 +454,11 @@ func (m *managedExecution) acquire() error {
 	}
 	// A response confirms acquisition identity but grants no local authority
 	// until a new heartbeat succeeds. Preserve it for reconciliation/recovery.
-	if _, err = m.runtime.service.db.ExecContext(m.ctx, `UPDATE task_flow_runs SET execution_id=?,record_json=? WHERE request_id=? AND state IN ('claiming','leased','running','recovering','lease_lost','needs_reconciliation')`, r.ExecutionID, string(raw), f.ID); err != nil {
+	if _, err = m.runtime.service.db.ExecContext(m.ctx, `UPDATE task_flow_runs SET execution_id=?,record_json=? WHERE request_id=? AND `+runnableFlowSQL, r.ExecutionID, string(raw), f.ID); err != nil {
 		return err
 	}
 	if !completionAuthority(f, r) {
-		_, err = m.runtime.service.db.ExecContext(m.ctx, `UPDATE task_flow_runs SET state=?,error_code='remote_execution_stopped',deadline=0,lease_owner='' WHERE request_id=?`, string(r.Status), f.ID)
+		_, err = m.runtime.service.db.ExecContext(m.ctx, `UPDATE task_flow_runs SET state=?,error_code='remote_execution_stopped',deadline=0,lease_owner='' WHERE request_id=? AND `+runnableFlowSQL, string(r.Status), f.ID)
 		if err != nil {
 			return err
 		}
@@ -640,6 +669,9 @@ func (m *managedExecution) lose(cause error) {
 	}
 	if f.PrepareAttempt != "" && f.Prepared == "" {
 		state, code = "needs_reconciliation", "preparation_interrupted"
+		if errors.Is(cause, ErrEmptyPreparation) {
+			code = "preparation_empty"
+		}
 	}
 	if f.Record.Status == taskproviders.NeedsReconciliation {
 		state, code = "needs_reconciliation", "remote_action_unresolved"
@@ -659,7 +691,7 @@ func (m *managedExecution) lose(cause error) {
 			claimID = next
 		}
 	}
-	_, _ = s.db.ExecContext(cleanup, `UPDATE task_flow_runs SET state=?,error_code=?,deadline=0,lease_owner='',claim_id=?,next_at=?,updated_at=? WHERE request_id=? AND state IN ('claiming','leased','running','recovering','lease_lost','needs_reconciliation')`, state, code, claimID, s.now().Add(30*time.Second).UnixMilli(), s.now().UnixMilli(), m.id)
+	_, _ = s.db.ExecContext(cleanup, `UPDATE task_flow_runs SET state=?,error_code=?,deadline=0,lease_owner='',claim_id=?,next_at=?,updated_at=? WHERE request_id=? AND `+runnableFlowSQL, state, code, claimID, s.now().Add(30*time.Second).UnixMilli(), s.now().UnixMilli(), m.id)
 }
 
 func (e *executionRuntime) Prepare(ctx context.Context, t core.Task) (string, error) {
@@ -679,9 +711,7 @@ func (e *executionRuntime) Prepare(ctx context.Context, t core.Task) (string, er
 		if err != nil {
 			return "", err
 		}
-		switch f.State {
-		case "claiming", "leased", "running", "recovering", "lease_lost":
-		default:
+		if !f.canCoordinate() {
 			return "", errors.New("business execution is stopped: " + f.State)
 		}
 		if err := wait(ctx, 50*time.Millisecond); err != nil {

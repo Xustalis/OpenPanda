@@ -20,19 +20,21 @@ import (
 )
 
 type completionFixture struct {
-	s           *Service
-	e           *executionRuntime
-	c           Connection
-	f           flowRun
-	record      tsync.ExecutionRecord
-	events      map[string]string
-	statuses    []string
-	deliveries  []tsync.Delivery
-	failStatus  string
-	failCount   int
-	late        []tsync.ExecutionEvent
-	releases    []string
-	loseRelease bool
+	s              *Service
+	e              *executionRuntime
+	c              Connection
+	f              flowRun
+	record         tsync.ExecutionRecord
+	events         map[string]string
+	statuses       []string
+	deliveries     []tsync.Delivery
+	failStatus     string
+	failCount      int
+	late           []tsync.ExecutionEvent
+	releases       []string
+	loseRelease    bool
+	beforeDecision func()
+	beforeClaim    func()
 }
 
 func completionTest(t *testing.T, mode taskproviders.ApprovalMode) *completionFixture {
@@ -112,6 +114,9 @@ func (x *completionFixture) serve(t *testing.T, w http.ResponseWriter, r *http.R
 		x.record.ServerTime = time.Now().UTC().Format(time.RFC3339Nano)
 		until := time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)
 		x.record.LeaseUntil = &until
+		if x.beforeClaim != nil {
+			x.beforeClaim()
+		}
 		response = x.record
 	case strings.HasSuffix(r.URL.Path, "/heartbeat"):
 		response = x.record
@@ -168,6 +173,9 @@ func (x *completionFixture) serve(t *testing.T, w http.ResponseWriter, r *http.R
 		}
 		response = v
 	case strings.HasSuffix(r.URL.Path, "/decisions"):
+		if x.beforeDecision != nil {
+			x.beforeDecision()
+		}
 		var v tsync.DeliveryDecision
 		_ = json.Unmarshal(raw, &v)
 		p := v.ConsentProof.Payload

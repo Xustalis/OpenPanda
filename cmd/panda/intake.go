@@ -78,7 +78,7 @@ func startIntake(ctx context.Context, logger *slog.Logger, node *core.Core, cfg 
 	})
 }
 
-// intakeSink adapts the core to the intake package's one-method sink.
+// intakeSink exposes core's durable delivery admission to the webhook server.
 type intakeSink struct {
 	core     *core.Core
 	project  string
@@ -87,6 +87,17 @@ type intakeSink struct {
 
 func (s intakeSink) IntakeTask(ctx context.Context, ev intake.Event) (string, error) {
 	return s.core.IntakeTask(ctx, ev, s.project, s.priority)
+}
+
+func (s intakeSink) IntakeDelivery(ctx context.Context, ev intake.Event) (string, error) {
+	id, err := s.core.IntakeTask(ctx, ev, s.project, s.priority)
+	if errors.Is(err, core.ErrConflict) {
+		return "", errors.Join(intake.ErrDeliveryConflict, err)
+	}
+	if errors.Is(err, core.ErrLegacyIntakeDelivery) {
+		return "", intake.ErrLegacyDelivery
+	}
+	return id, err
 }
 
 // intakePriority maps the configured word onto the queue board's constants.

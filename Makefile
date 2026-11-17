@@ -295,7 +295,7 @@ race:
 # goroutine-free packages buy no detections. CGO is forced on because -race
 # requires it and some runners leave it disabled.
 race-focused:
-	CGO_ENABLED=1 $(GO) test -race -timeout 15m ./internal/core/... ./internal/commander/... ./internal/bus/... ./internal/storage/... ./internal/testdb/... ./internal/askengine/... ./internal/scheduler/... ./webui/panel/...
+	CGO_ENABLED=1 $(GO) test -race -timeout 15m ./internal/core/... ./internal/commander/... ./internal/bus/... ./internal/storage/... ./internal/testdb/... ./internal/askengine/... ./internal/scheduler/... ./internal/intake/... ./internal/taskflow/... ./internal/taskhub/... ./internal/taskproviders/... ./webui/panel/...
 
 # Stress the directory-sync readiness boundary first, then run the complete
 # race-focused gate once. Vary scheduling without repeating unrelated suites.
