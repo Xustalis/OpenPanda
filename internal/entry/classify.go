@@ -5,6 +5,7 @@ package entry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -194,8 +195,10 @@ func cachedClassification(ctx context.Context, c *Client, po PromptOptions, regi
 	// Never serve a cached answer that carries textual tool-call markup: such
 	// rows predate the recover/reject paths (resolveDSML, resolveXMLToolCall)
 	// and would re-leak the raw protocol text to the user on every identical
-	// ask.
-	if out.Kind == KindAnswer && ContainsTextualToolCall(out.Answer) {
+	// ask. The same applies to a JSON directive stored as an answer before
+	// ParseOutput learned to refuse one (a truncated task envelope reached the
+	// chat pane verbatim); the row must be recomputed, not replayed.
+	if out.Kind == KindAnswer && (ContainsTextualToolCall(out.Answer) || DeclaresDirective(out.Answer)) {
 		return Output{}, false
 	}
 	return out, true
@@ -348,11 +351,14 @@ func resolveResponse(resp Response, toolsOffered bool, locs ...i18n.Locale) (Out
 	out, err := ParseOutput(resp.Text)
 	if err != nil {
 		// A validation failure on a structured output is a model error; surface
-		// it rather than degrading silently, so the user can retry.
-		return Output{}, &ClassifyError{
-			UserMsg: i18n.Tf(loc, "entry.err.validation", "err", err.Error()),
-			Err:     err,
+		// it rather than degrading silently, so the user can retry. A directive
+		// written into the message body gets its own wording: the fix is to use
+		// the tool, not to edit the spec, and the loop retries it on that basis.
+		msg := i18n.Tf(loc, "entry.err.validation", "err", err.Error())
+		if errors.Is(err, ErrDirectiveProse) {
+			msg = i18n.T(loc, "entry.err.directiveProse")
 		}
+		return Output{}, &ClassifyError{UserMsg: msg, Err: err}
 	}
 	if out.Kind == KindAnswer && resp.Truncated {
 		// The provider stopped at max_tokens; mark the answer so the user knows
