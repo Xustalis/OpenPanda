@@ -169,7 +169,7 @@ func selfTools(d *selfToolsDeps) []mcpserve.Tool {
 				"parent_id":         mcpserve.StringProp("parent task ID; defaults to ambient PANDA_TASK_ID environment variable"),
 				"request_id":        mcpserve.StringProp("idempotency key; reuse for a retry of identical input"),
 				"input_version":     mcpserve.StringProp("expected workspace version returned by await; stale inputs are rejected"),
-				"token_budget":      map[string]any{"type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "child subtree token allocation; 0 requests a finite share of parent remainder"},
+				"token_budget":      map[string]any{"type": "integer", "minimum": 0, "maximum": int64(1<<53 - 1), "description": "child subtree token allocation; 0 requests a finite share of parent remainder"},
 				"delegation_budget": map[string]any{"type": "integer", "minimum": 0, "maximum": 2147483647, "description": "child subtree hop allocation; 0 requests a share of parent remainder"},
 				"node":              mcpserve.StringProp("hard destination device pin"),
 				"paths":             mcpserve.StringArrayProp("owned project-relative paths"),
