@@ -53,6 +53,43 @@ func TestClaimIntakeDeduplicates(t *testing.T) {
 	}
 }
 
+// A claim that produced no work must be releasable, or a transient enqueue
+// failure consumes the delivery: the retry is answered "duplicate" forever.
+func TestReleaseIntakeAllowsRetry(t *testing.T) {
+	c := newIntakeCore(t)
+	ctx := context.Background()
+
+	if first, err := c.ClaimIntake(ctx, "github", "delivery-1"); err != nil || !first {
+		t.Fatalf("claim = %v, %v", first, err)
+	}
+	// Another source's row for the same id must survive the release.
+	if first, err := c.ClaimIntake(ctx, "other", "delivery-1"); err != nil || !first {
+		t.Fatalf("other source claim = %v, %v", first, err)
+	}
+	if err := c.ReleaseIntake(ctx, "github", "delivery-1"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+
+	again, err := c.ClaimIntake(ctx, "github", "delivery-1")
+	if err != nil {
+		t.Fatalf("re-claim: %v", err)
+	}
+	if !again {
+		t.Fatal("a released delivery must be claimable again")
+	}
+	other, err := c.ClaimIntake(ctx, "other", "delivery-1")
+	if err != nil {
+		t.Fatalf("other source re-claim: %v", err)
+	}
+	if other {
+		t.Fatal("releasing github's row dropped the other source's")
+	}
+	// Releasing an id that was never recorded is a no-op, not an error.
+	if err := c.ReleaseIntake(ctx, "github", "never-seen"); err != nil {
+		t.Fatalf("release unknown: %v", err)
+	}
+}
+
 func TestIntakeTaskQueuesWork(t *testing.T) {
 	c := newIntakeCore(t)
 	ctx := context.Background()

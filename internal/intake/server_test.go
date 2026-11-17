@@ -47,6 +47,14 @@ func (f *fakeSeen) ClaimIntake(_ context.Context, source, key string) (bool, err
 	return true, nil
 }
 
+func (f *fakeSeen) ReleaseIntake(_ context.Context, source, key string) error {
+	if f.err != nil {
+		return f.err
+	}
+	delete(f.seen, source+"|"+key)
+	return nil
+}
+
 func newTestServer(sink Sink, seen Seen) *Server {
 	return &Server{
 		Policy: testPolicy(),
@@ -146,6 +154,40 @@ func TestServerSinkFailure(t *testing.T) {
 	rec := deliver(t, newTestServer(sink, nil), "issues", "d1", issueOpenedPayload, true)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+// A delivery whose enqueue failed must stay retryable: the ledger claim is
+// taken before the sink runs, so without a release the source's retry would be
+// answered "duplicate" for a task that was never created.
+func TestServerSinkFailureReleasesClaim(t *testing.T) {
+	sink := &fakeSink{err: errors.New("queue closed")}
+	srv := newTestServer(sink, &fakeSeen{})
+
+	if rec := deliver(t, srv, "issues", "d1", issueOpenedPayload, true); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("failing delivery status = %d, want 500", rec.Code)
+	}
+
+	// The queue recovers; the source retries the same delivery id.
+	sink.err = nil
+	rec := deliver(t, srv, "issues", "d1", issueOpenedPayload, true)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("retry after failure = %d (%s), want 202", rec.Code, rec.Body.String())
+	}
+	if got := decode(t, rec); got.Task != "task-1" {
+		t.Fatalf("retry response = %+v", got)
+	}
+	if len(sink.got) != 1 {
+		t.Fatalf("retry queued %d tasks, want 1", len(sink.got))
+	}
+
+	// Deduplication still holds once the delivery did produce work.
+	rec = deliver(t, srv, "issues", "d1", issueOpenedPayload, true)
+	if rec.Code != http.StatusOK || decode(t, rec).Ignored != CodeDuplicate {
+		t.Fatalf("replay after success = %d (%s), want 200 duplicate", rec.Code, rec.Body.String())
+	}
+	if len(sink.got) != 1 {
+		t.Fatalf("a replayed delivery queued %d tasks, want 1", len(sink.got))
 	}
 }
 
