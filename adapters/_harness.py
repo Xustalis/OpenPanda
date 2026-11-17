@@ -43,6 +43,7 @@ envelope per turn on stdout instead of exiting after the first.
 This module never prints secrets.
 """
 import atexit
+from collections import deque
 import hashlib
 import json
 import os
@@ -65,52 +66,60 @@ STDERR_CAPTURE_LIMIT = 256 * 1024
 _STDERR_TRUNCATED = "[stderr truncated: %d bytes dropped]\n"
 
 
-class BoundedChunks(list):
+class BoundedChunks:
     """Captured stderr chunks with a fixed byte budget.
 
     Oldest chunks are dropped first: a CLI's actual failure reason lives at
     the tail. A marker is kept so the diagnostic never pretends to be complete.
-    This stays a list subclass so callers keep using ``"".join(err_chunks)`` —
-    the drain thread is the only writer, and iteration returns a locked
-    snapshot so a join cannot race an append.
+    Callers can join it like any iterable. Iteration returns a locked snapshot
+    so a join cannot race an append. The small truncation marker sits outside
+    the payload budget; empty chunks consume no space.
     """
 
     def __init__(self, limit=STDERR_CAPTURE_LIMIT):
-        super().__init__()
+        if limit < 0:
+            raise ValueError("stderr capture limit must not be negative")
         self.limit = limit
+        self._chunks = deque()
         self._bytes = 0
         self._dropped = 0
-        self._head = 0  # index of the first real chunk; the marker sits at 0
         self._lock = threading.Lock()
 
     def append(self, chunk):
         text = chunk if isinstance(chunk, str) else str(chunk)
-        n = len(text.encode("utf-8", "replace"))
+        if not text:
+            return
+        encoded = text.encode("utf-8", "replace")
+        n = len(encoded)
+        dropped = 0
         if n > self.limit:
-            # One enormous line: keep its tail, where the error usually is.
-            text = text[-self.limit:]
-            n = len(text.encode("utf-8", "replace"))
+            # Slice bytes, then discard a partial leading code point. A
+            # character-count slice can exceed the UTF-8 budget fourfold.
+            tail = encoded[-self.limit:] if self.limit else b""
+            text = tail.decode("utf-8", "ignore")
+            kept = len(text.encode("utf-8"))
+            dropped, n = n - kept, kept
         with self._lock:
-            while self._bytes + n > self.limit and len(self) > self._head:
-                old = list.pop(self, self._head)
+            self._dropped += dropped
+            while self._bytes + n > self.limit and self._chunks:
+                old = self._chunks.popleft()
                 old_n = len(old.encode("utf-8", "replace"))
                 self._bytes -= old_n
                 self._dropped += old_n
-            if self._dropped:
-                marker = _STDERR_TRUNCATED % self._dropped
-                if self._head == 0:
-                    list.insert(self, 0, marker)
-                    self._head = 1
-                else:
-                    list.__setitem__(self, 0, marker)
-            list.append(self, text)
-            self._bytes += n
+            if text:
+                self._chunks.append(text)
+                self._bytes += n
+
+    def __len__(self):
+        with self._lock:
+            return len(self._chunks) + bool(self._dropped)
 
     def __iter__(self):
-        # Build the snapshot by indexing: list(self) would call this method
-        # again and recurse forever.
         with self._lock:
-            return iter([self[i] for i in range(len(self))])
+            snapshot = list(self._chunks)
+            if self._dropped:
+                snapshot.insert(0, _STDERR_TRUNCATED % self._dropped)
+            return iter(snapshot)
 
 
 # ---- cross-process probe cache -------------------------------------------

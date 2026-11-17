@@ -1645,7 +1645,7 @@ func TestParseOpenAIReasoningVariants(t *testing.T) {
 }
 
 func TestOAIAccumulatorStreamReasoning(t *testing.T) {
-	acc := &oaiAccumulator{calls: map[int]oaiToolCall{}}
+	acc := &oaiAccumulator{}
 	var deliveredDelta []string
 	var deliveredReasoning []string
 

@@ -430,8 +430,12 @@ func runWeb(args []string) {
 	fmt.Println(i18n.T(loc, "web.stopped"))
 	sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer scancel()
-	_ = srv.Shutdown(sctx)
-	_ = storage.Checkpoint(sctx, db, "TRUNCATE")
+	if err := srv.Shutdown(sctx); err != nil {
+		logger.Warn("web: HTTP shutdown incomplete", "err", err)
+	}
+	if err := storage.Checkpoint(sctx, db, "TRUNCATE"); err != nil {
+		logger.Warn("web: WAL checkpoint incomplete", "err", err)
+	}
 }
 
 // listenPanel binds the panel address, falling forward through a few nearby

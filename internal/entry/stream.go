@@ -573,6 +573,16 @@ type anthropicDelta struct {
 	StopReason  string `json:"stop_reason"`
 }
 
+// anthStreamBlock keeps each block's builders behind a pointer so interleaved
+// fragments never copy a nonempty strings.Builder or the entire text prefix.
+type anthStreamBlock struct {
+	kind string
+	id   string
+	name string
+	text strings.Builder
+	args strings.Builder
+}
+
 // anthAccumulator assembles a Response from Anthropic stream events. Usage is
 // accumulated per attempt (the caller bills it only when the stream
 // completes, so a retried attempt is never double-counted). Reasoning from
@@ -581,8 +591,7 @@ type anthropicDelta struct {
 // never joined into Response.Text.
 type anthAccumulator struct {
 	reasoning       []string
-	blocks          map[int]*ContentBlock    // by stream index
-	rawArgs         map[int]*strings.Builder // tool_use partial_json, by index
+	blocks          map[int]*anthStreamBlock // by stream index
 	order           []int
 	truncated       bool
 	usageIn         int64
@@ -618,10 +627,10 @@ func (a *anthAccumulator) noteUsage(ev *anthropicStreamEvent) {
 
 func (a *anthAccumulator) start(ev *anthropicStreamEvent) {
 	b := ev.ContentBlock
-	a.blocks[ev.Index] = &ContentBlock{Type: b.Type, ID: b.ID, Name: b.Name}
-	if b.Type == "tool_use" {
-		a.rawArgs[ev.Index] = &strings.Builder{}
+	if a.blocks == nil {
+		a.blocks = make(map[int]*anthStreamBlock)
 	}
+	a.blocks[ev.Index] = &anthStreamBlock{kind: b.Type, id: b.ID, name: b.Name}
 	a.order = append(a.order, ev.Index)
 }
 
@@ -632,20 +641,20 @@ func (a *anthAccumulator) delta(ev *anthropicStreamEvent, onDelta func(string), 
 	}
 	switch ev.Delta.Type {
 	case "text_delta":
-		b.Text += ev.Delta.Text
-		if b.Type == "text" && onDelta != nil {
+		b.text.WriteString(ev.Delta.Text)
+		if b.kind == "text" && onDelta != nil {
 			onDelta(ev.Delta.Text)
 		}
 	case "thinking_delta":
 		// Chain-of-thought on a thinking block: collect it apart from the
-		// answer and surface it live, but never fold it into b.Text (D14).
+		// answer and surface it live, but never fold it into the text (D14).
 		a.reasoning = append(a.reasoning, ev.Delta.Thinking)
 		if onReasoning != nil {
 			onReasoning(ev.Delta.Thinking)
 		}
 	case "input_json_delta":
-		if sb := a.rawArgs[ev.Index]; sb != nil {
-			sb.WriteString(ev.Delta.PartialJSON)
+		if b.kind == "tool_use" {
+			b.args.WriteString(ev.Delta.PartialJSON)
 		}
 	}
 }
@@ -655,19 +664,17 @@ func (a *anthAccumulator) result() Response {
 	var texts []string
 	for _, idx := range a.order {
 		b := a.blocks[idx]
-		switch b.Type {
+		switch b.kind {
 		case "text":
-			texts = append(texts, b.Text)
+			texts = append(texts, b.text.String())
 		case "tool_use":
 			var input map[string]any
-			if sb := a.rawArgs[idx]; sb != nil {
-				if s := strings.TrimSpace(sb.String()); s != "" {
-					if err := json.Unmarshal([]byte(s), &input); err != nil {
-						input = map[string]any{"_raw": s}
-					}
+			if s := strings.TrimSpace(b.args.String()); s != "" {
+				if err := json.Unmarshal([]byte(s), &input); err != nil {
+					input = map[string]any{"_raw": s}
 				}
 			}
-			out.ToolUses = append(out.ToolUses, ToolUse{ID: b.ID, Name: b.Name, Input: input})
+			out.ToolUses = append(out.ToolUses, ToolUse{ID: b.id, Name: b.name, Input: input})
 		}
 	}
 	out.Text = strings.Join(texts, "")
@@ -716,7 +723,7 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 	}
 	defer body.Close()
 
-	acc := &anthAccumulator{blocks: map[int]*ContentBlock{}, rawArgs: map[int]*strings.Builder{}}
+	acc := &anthAccumulator{}
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), sseMaxEventBytes)
 	for scanner.Scan() {
@@ -962,7 +969,7 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 	}
 	defer body.Close()
 
-	acc := &oaiAccumulator{calls: map[int]oaiToolCall{}}
+	acc := &oaiAccumulator{}
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), sseMaxEventBytes)
 	for scanner.Scan() {
