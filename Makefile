@@ -41,7 +41,7 @@ NPM_INSTALL ?= npm ci --no-fund --no-audit
 
 .PHONY: all build web web-test web-gate build-webui build-darwin-amd64 build-darwin-arm64 build-linux-arm64 build-linux-amd64 build-windows-amd64 build-windows-arm64 \
         release-darwin-amd64 release-darwin-arm64 release-linux-arm64 release-linux-amd64 release-windows-amd64 release-windows-arm64 \
-        dev test test-go test-python adapter-test vet staticcheck fmt fmt-check site-check race race-focused race-dirsync gate gate-all run run-local measure clean icons winres release package release-local install-local
+        dev test test-go test-python adapter-test vet staticcheck fmt fmt-check site-check race race-focused race-dirsync build-variants gate gate-all run run-local measure clean icons winres release package release-local install-local
 
 all: build
 
@@ -115,6 +115,12 @@ build-windows-arm64: fmt-check vet
 # CLI nodes. Everything else is identical: daemon, mesh, DTN, queue, ask.
 build-lite: fmt-check vet
 	$(GO) build -tags lite -ldflags "$(LDFLAGS_DEV)" -o $(BIN)-lite ./cmd/panda
+
+# Check the lite graph and its 32-bit release target before merging. A host
+# build cannot catch untyped constants that overflow int on ARMv7.
+build-variants:
+	$(GO) build -tags lite ./...
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 $(GO) build -tags lite ./...
 
 # Cross-compiled lite variants for the devices lite exists for. linux-armv7
 # targets 32-bit Pi OS; the 64-bit pair covers Pi 4/5 64-bit and SBCs.
@@ -307,6 +313,7 @@ race-dirsync:
 #   1. fmt-check    (go fmt 格式校验，毫秒级，成本最低)
 #   2. vet          (go vet 静态语义检查，秒级)
 #   3. build        (实际编译 go build ./...，验证编译通过)
+#      build-variants (native lite 与 Linux ARMv7 的编译检查)
 #   4. adapter-test (Python adapter 黑盒契约，秒级)
 #   5. test         (go test ./... 单元测试，十秒级)
 #   6. race-focused (-race 竞态检测，只覆盖并发热点包，最昂贵，最后才跑)
@@ -332,7 +339,7 @@ race-dirsync:
 #   - 版本号从 internal/version/version.go 提取，禁止在 Makefile 中
 #     写死 VERSION 默认值，避免版本漂移。
 # ============================================================================
-gate: fmt-check vet staticcheck vuln build test race-focused
+gate: fmt-check vet staticcheck vuln build build-variants test race-focused
 
 # gate-all is gate + the web pipeline (one install, then typecheck + ui build +
 # web tests) + the TUI pty check. CI runs these as separate jobs (see

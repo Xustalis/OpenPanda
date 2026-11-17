@@ -138,6 +138,7 @@ make clean        # rm -rf bin dist
 
 # release machinery
 make build-<os>-<arch>   # darwin/linux/windows x amd64/arm64
+make build-variants # compile native lite and Linux ARMv7 (32-bit) graphs
 make build-lite[-linux-<arch>]
                          # reduced-footprint builds for small devices
                          # (linux amd64/arm64/armv7)
@@ -303,7 +304,8 @@ on which event, the release order and the identity CLA checks.
   on pushes to `main` touching `site/**`, `CHANGELOG.md` or
   `scripts/check-site.py`, validating the site before it uploads the artifact.
   A PR cannot surface a `lite-linux-*` packaging failure — the `lint` job
-  compiles that variant with `go build -tags lite ./...` to close the gap.
+  runs `make build-variants` to compile both native lite and 32-bit
+  Linux ARMv7 graphs before merge. The local gate runs the same target.
 - A release is ordered: push `main` → poll the Gate for that exact SHA until
   it succeeds → then push the `v*` tag. Tagging first publishes a build the
   gate never examined.
