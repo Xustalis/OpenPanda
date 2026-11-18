@@ -1679,18 +1679,31 @@ func (m tuiModel) forkSession(arg string) (tea.Model, tea.Cmd) {
 	if err != nil {
 		return m, m.printBlock(block{kind: blockError, body: err.Error()})
 	}
+	// A partial fork still switches to the child — the thread exists and its
+	// worktree is at the parent's branch — but the warning rides along so the
+	// reader knows the uncommitted files did not all make it.
+	var forkWarn *block
 	if wt := openWorktreesForSession(m.r.cfg, parent); wt != nil {
 		base := "HEAD"
 		if parent.Branch != "" {
 			base = parent.Branch
 		}
-		if path, err := wt.EnsureFrom(context.Background(), child.ID, base); err == nil {
+		// Fork carries the parent's uncommitted work with the branch.
+		path, ferr := wt.Fork(context.Background(), parent.ID, child.ID, base)
+		if path != "" {
 			_ = m.r.sessionsSt.SetWorktree(child.ID, path, sessions.Branch(child.ID))
 			child, _ = m.r.sessionsSt.Get(child.ID)
+		}
+		if ferr != nil {
+			warn := block{kind: blockError, body: i18n.Tf(m.loc, "repl.fork.incomplete", "err", ferr.Error())}
+			forkWarn = &warn
 		}
 	}
 	note := block{kind: blockNote, body: i18n.Tf(m.loc, "repl.fork.done", "parent", sid, "id", child.ID, "n", fmt.Sprint(child.ForkIndex))}
 	model, cmd := m.attachSession(child)
+	if forkWarn != nil {
+		return model, tea.Sequence(m.printBlock(*forkWarn), m.printBlock(note), cmd)
+	}
 	return model, tea.Sequence(m.printBlock(note), cmd)
 }
 

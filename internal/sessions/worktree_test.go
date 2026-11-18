@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -371,5 +372,451 @@ func TestWorktreeExcludesOpenPandaRuntime(t *testing.T) {
 		if strings.Contains(c.Path, ".openpanda") {
 			t.Fatalf("runtime file reported as a session change: %+v", c)
 		}
+	}
+}
+
+// gitIn runs one git command in dir with a fixed identity, so a machine
+// without a global git user can still commit inside a test repository.
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	all := append([]string{"-C", dir, "-c", "user.name=T", "-c", "user.email=t@t"}, args...)
+	cmd := exec.Command("git", all...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// TestWorktreeForkCarriesUncommittedWork pins what a fork inherits. Branching
+// the child off the parent's branch carried only committed work: a reader who
+// forked while the agent's edits were still uncommitted — the usual moment to
+// fork — got a transcript describing files the child could not see.
+func TestWorktreeForkCarriesUncommittedWork(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newGitRepo(t)
+	w, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	parent := "fork-parent"
+	parentPath, err := w.Ensure(ctx, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"tracked.txt": "baseline\n", "gone.txt": "delete me\n"} {
+		if err := os.WriteFile(filepath.Join(parentPath, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitIn(t, parentPath, "add", "-A")
+	gitIn(t, parentPath, "commit", "-qm", "baseline")
+
+	// The state a fork is made from: one modified file, one deletion, one
+	// brand-new file the index has never seen.
+	if err := os.WriteFile(filepath.Join(parentPath, "tracked.txt"), []byte("uncommitted edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(parentPath, "gone.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parentPath, "new.txt"), []byte("brand new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	childPath, err := w.Fork(ctx, parent, "fork-child", Branch(parent))
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(childPath, "tracked.txt")); err != nil || string(got) != "uncommitted edit\n" {
+		t.Fatalf("modified file not inherited: %q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(childPath, "new.txt")); err != nil || string(got) != "brand new\n" {
+		t.Fatalf("untracked file not inherited: %q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(childPath, "gone.txt")); !os.IsNotExist(err) {
+		t.Fatalf("deleted file came back in the fork: err=%v", err)
+	}
+	// The changes are uncommitted in the child too: the diff drawer and Merge
+	// read them from the working tree, not from the branch.
+	changes, err := w.Status(ctx, "fork-child")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	seen := map[string]string{}
+	for _, c := range changes {
+		seen[c.Path] = c.Status
+	}
+	for path, want := range map[string]string{"tracked.txt": "M", "new.txt": "??", "gone.txt": "D"} {
+		if seen[path] != want {
+			t.Fatalf("child status %q = %q, want %q (all: %+v)", path, seen[path], want, changes)
+		}
+	}
+
+	// Positive control: once the parent commits, the branch base alone carries
+	// the same files — the copy above is what the fork was missing, not a
+	// replacement for branch inheritance. Line endings are compared loosely
+	// here: this path goes through a checkout, which honours core.autocrlf,
+	// while the byte copy above does not.
+	gitIn(t, parentPath, "add", "-A")
+	gitIn(t, parentPath, "commit", "-qm", "parent edits")
+	committedPath, err := w.Fork(ctx, parent, "fork-child-committed", Branch(parent))
+	if err != nil {
+		t.Fatalf("fork after commit: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(committedPath, "tracked.txt")); err != nil || normalizeEOL(string(got)) != "uncommitted edit\n" {
+		t.Fatalf("committed parent state lost: %q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(committedPath, "new.txt")); err != nil || normalizeEOL(string(got)) != "brand new\n" {
+		t.Fatalf("committed new file lost: %q err=%v", got, err)
+	}
+}
+
+// TestWorktreeForkCarriesModeChangeOnTrackedFile: the child's checkout already
+// holds every tracked path, so the mode passed to os.WriteFile — which only
+// applies when the file is created — never reached them. A parent-side chmod
+// was lost in both directions: a script that gained +x arrived without it, and
+// one that lost +x kept it.
+func TestWorktreeForkCarriesModeChangeOnTrackedFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no executable bit to carry")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newGitRepo(t)
+	w, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	parent := "mode-parent"
+	parentPath, err := w.Ensure(ctx, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Committed with opposite bits so the fork has to move each one: the
+	// child's checkout would otherwise hand back the committed mode.
+	for name, mode := range map[string]os.FileMode{"gain.sh": 0o644, "lose.sh": 0o755} {
+		path := filepath.Join(parentPath, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitIn(t, parentPath, "add", "-A")
+	gitIn(t, parentPath, "commit", "-qm", "scripts")
+	// Uncommitted: the parent adds +x to one and drops it from the other.
+	if err := os.Chmod(filepath.Join(parentPath, "gain.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(parentPath, "lose.sh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	childPath, err := w.Fork(ctx, parent, "mode-child", Branch(parent))
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	for name, want := range map[string]os.FileMode{"gain.sh": 0o755, "lose.sh": 0o644} {
+		fi, err := os.Stat(filepath.Join(childPath, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if got := fi.Mode().Perm(); got != want {
+			t.Fatalf("fork %s mode = %o, want %o", name, got, want)
+		}
+	}
+}
+
+// normalizeEOL compares text the way git does under core.autocrlf.
+func normalizeEOL(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
+
+// TestWorktreeForkSkipsRuntimeTree: .openpanda/ holds the parent's uploads and
+// task scratch. Those bytes belong to the run that made them, not to the code
+// state a fork continues, and copying them would put one session's pasted
+// files inside another's worktree.
+func TestWorktreeForkSkipsRuntimeTree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newGitRepo(t)
+	w, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	parentPath, err := w.Ensure(ctx, "fork-runtime-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploads := filepath.Join(parentPath, ".openpanda", "uploads")
+	if err := os.MkdirAll(uploads, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uploads, "secret.png"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childPath, err := w.Fork(ctx, "fork-runtime-parent", "fork-runtime-child", "HEAD")
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(childPath, ".openpanda", "uploads", "secret.png")); !os.IsNotExist(err) {
+		t.Fatalf("fork copied the parent's runtime tree: err=%v", err)
+	}
+}
+
+// TestWorktreeForkReplacesStaleSymlink pins the inode boundary, not just the
+// path string: the parent replaced a tracked symlink with a regular file, so
+// the child's checkout still holds the old link. Writing the parent's bytes
+// through it lands on whatever the link points at — a file outside the
+// repository — which is why the destination entry is removed before the write.
+func TestWorktreeForkReplacesStaleSymlink(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newGitRepo(t)
+	outside := filepath.Join(t.TempDir(), "canary.txt")
+	if err := os.WriteFile(outside, []byte("must stay unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(repo, "link.txt")); err != nil {
+		t.Skipf("host cannot create symlinks: %v", err)
+	}
+	gitIn(t, repo, "config", "core.symlinks", "true")
+	gitIn(t, repo, "add", "link.txt")
+	gitIn(t, repo, "commit", "-qm", "baseline symlink")
+
+	w, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentPath, err := w.Ensure(context.Background(), "symlink-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(parentPath, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parentPath, "link.txt"), []byte("parent regular file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	childPath, err := w.Fork(context.Background(), "symlink-parent", "symlink-child", Branch("symlink-parent"))
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if got, err := os.ReadFile(outside); err != nil || string(got) != "must stay unchanged" {
+		t.Fatalf("fork wrote through the stale link: canary=%q err=%v", got, err)
+	}
+	fi, err := os.Lstat(filepath.Join(childPath, "link.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("child kept the stale symlink instead of the parent's regular file")
+	}
+	if got, err := os.ReadFile(filepath.Join(childPath, "link.txt")); err != nil || string(got) != "parent regular file" {
+		t.Fatalf("child file = %q err=%v", got, err)
+	}
+}
+
+// TestWorktreeForkReplacesLinkedAncestor covers the same escape one level up:
+// the child's checkout has a *directory* symlink where the parent has a real
+// directory, so every file below it would be written outside the worktree.
+func TestWorktreeForkReplacesLinkedAncestor(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newGitRepo(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(repo, "pkg")); err != nil {
+		t.Skipf("host cannot create symlinks: %v", err)
+	}
+	gitIn(t, repo, "config", "core.symlinks", "true")
+	gitIn(t, repo, "add", "pkg")
+	gitIn(t, repo, "commit", "-qm", "baseline directory link")
+
+	w, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentPath, err := w.Ensure(context.Background(), "ancestor-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The parent turned the link into a real directory with a file in it.
+	if err := os.Remove(filepath.Join(parentPath, "pkg")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(parentPath, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parentPath, "pkg", "file.txt"), []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	childPath, err := w.Fork(context.Background(), "ancestor-parent", "ancestor-child", Branch("ancestor-parent"))
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "file.txt")); !os.IsNotExist(err) {
+		t.Fatalf("fork wrote through the linked ancestor: err=%v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(childPath, "pkg", "file.txt")); err != nil || string(got) != "inside" {
+		t.Fatalf("child file = %q err=%v", got, err)
+	}
+}
+
+// TestWorktreeForkReplacesDirectoryWithFile: a valid directory-to-file change
+// used to abort the whole copy — the stale empty directory blocked the write
+// and every later edit, including files the parent created after it, stayed
+// behind. The conversion is legal; the fork has to carry it.
+func TestWorktreeForkReplacesDirectoryWithFile(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newGitRepo(t)
+	if err := os.Mkdir(filepath.Join(repo, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "pkg", "old.txt"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repo, "add", ".")
+	gitIn(t, repo, "commit", "-qm", "baseline directory")
+
+	w, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentPath, err := w.Ensure(context.Background(), "typechange-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(parentPath, "pkg", "old.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(parentPath, "pkg")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parentPath, "pkg"), []byte("replacement file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parentPath, "z-new.txt"), []byte("must also inherit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	childPath, err := w.Fork(context.Background(), "typechange-parent", "typechange-child", Branch("typechange-parent"))
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(childPath, "pkg")); err != nil || string(got) != "replacement file" {
+		t.Fatalf("directory-to-file change not carried: %q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(childPath, "z-new.txt")); err != nil || string(got) != "must also inherit" {
+		t.Fatalf("later new file lost after the conversion: %q err=%v", got, err)
+	}
+}
+
+// TestWorktreeForkStagedLinkDoesNotDeleteOutside: the parent replaced a
+// directory with a symlink and staged it, so the child gets the link first
+// (git sorts "pkg" before "pkg/old.txt") and only then the deletion of the
+// file that used to live under it. Removing through that link would delete a
+// file outside the repository — the deletion path has to prove its ancestors
+// are real directories, exactly like the write path does.
+func TestWorktreeForkStagedLinkDoesNotDeleteOutside(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newGitRepo(t)
+	if err := os.Mkdir(filepath.Join(repo, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "pkg", "old.txt"), []byte("tracked baseline"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repo, "add", ".")
+	gitIn(t, repo, "commit", "-qm", "baseline directory")
+	gitIn(t, repo, "config", "core.symlinks", "true")
+
+	w, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentPath, err := w.Ensure(context.Background(), "staged-link-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	canary := filepath.Join(outside, "old.txt")
+	if err := os.WriteFile(canary, []byte("external canary must remain"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(parentPath, "pkg", "old.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(parentPath, "pkg")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(parentPath, "pkg")); err != nil {
+		t.Skipf("host cannot create directory symlinks: %v", err)
+	}
+	gitIn(t, parentPath, "add", "-A")
+
+	childPath, err := w.Fork(context.Background(), "staged-link-parent", "staged-link-child", Branch("staged-link-parent"))
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if got, err := os.ReadFile(canary); err != nil || string(got) != "external canary must remain" {
+		t.Fatalf("fork deleted or changed a file outside the child: canary=%q err=%v", got, err)
+	}
+	// The child's shape follows the parent's: the directory is now a link.
+	fi, err := os.Lstat(filepath.Join(childPath, "pkg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("child kept the old directory instead of the parent's symlink")
+	}
+}
+
+// TestWorktreeForkContinuesAfterFailedEntry: one path that cannot be carried
+// must not cost the rest of the fork. The nested repository below is listed by
+// git as a single untracked directory, so reading it as a file fails — and the
+// file after it still has to arrive.
+func TestWorktreeForkContinuesAfterFailedEntry(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newGitRepo(t)
+	w, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentPath, err := w.Ensure(context.Background(), "continue-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(parentPath, "a-nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, nested, "init", "-q")
+	gitIn(t, nested, "commit", "--allow-empty", "-qm", "nested fixture")
+	if err := os.WriteFile(filepath.Join(parentPath, "z-good.txt"), []byte("must copy after error"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	childPath, forkErr := w.Fork(context.Background(), "continue-parent", "continue-child", Branch("continue-parent"))
+	if forkErr == nil {
+		t.Fatal("fixture did not produce a per-entry failure")
+	}
+	if got, err := os.ReadFile(filepath.Join(childPath, "z-good.txt")); err != nil || string(got) != "must copy after error" {
+		t.Fatalf("later file lost after a failed entry: %q err=%v (forkErr=%v)", got, err, forkErr)
 	}
 }
