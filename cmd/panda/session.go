@@ -620,15 +620,24 @@ func runSessionFork(args []string) {
 		fatal("fork session", err)
 	}
 	// Repo sessions get a worktree rooted at the parent's branch when it has
-	// one (inherit the code state), else at HEAD like `session new`.
+	// one (inherit the code state), else at HEAD like `session new`. Fork, not
+	// EnsureFrom: uncommitted work travels with the child, so a transcript
+	// that describes edits the parent had not committed yet still matches the
+	// files the child can read.
 	if wt := openWorktreesForSession(cfg, parent); wt != nil {
 		base := "HEAD"
 		if parent.Branch != "" {
 			base = parent.Branch
 		}
-		if path, err := wt.EnsureFrom(context.Background(), child.ID, base); err == nil {
+		path, ferr := wt.Fork(context.Background(), parent.ID, child.ID, base)
+		if path != "" {
 			_ = store.SetWorktree(child.ID, path, sessions.Branch(child.ID))
 			child, _ = store.Get(child.ID)
+		}
+		if ferr != nil {
+			// stderr, not the logger: --json output on stdout must stay a
+			// single parseable document.
+			fmt.Fprintln(os.Stderr, i18n.Tf(i18n.Detect(), "repl.fork.incomplete", "err", ferr.Error()))
 		}
 	}
 	if jsonOutput {
