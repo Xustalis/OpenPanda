@@ -1613,9 +1613,19 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only the main ask owns the thread's queue. A side ask has its own
 	// transcript and must not consume or acknowledge the main ask's notes.
+	//
+	// Notes a round hands over are remembered here: the round loop drains them
+	// before it calls the model, so a turn that then dies (provider outage, a
+	// model error, a stop) has taken the words out of the queue without ever
+	// showing an answer for them. The turn's exit puts those notes back in the
+	// carry instead of letting the drain eat them.
+	var consumedSteer []pendingNote
 	if !side {
 		cb.GetSteer = func() string {
-			text, _ := h.drainSteer(sess.ID)
+			text, key := h.drainSteer(sess.ID)
+			if text != "" {
+				consumedSteer = append(consumedSteer, pendingNote{key: key, text: text, at: time.Now().Unix()})
+			}
 			return text
 		}
 		// The proof the note actually reached the model: a queued channel write
@@ -1754,6 +1764,22 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 	finalOperation := sessions.Operation{ID: op.operationID, Status: core.StateFailed, Error: "ask interrupted before model execution"}
+	// A round that consumed a note owes an answer for it. When the turn ends
+	// failed or stopped, the note goes back to the carry so the next turn
+	// opens with it — the alternative is the drain silently eating what the
+	// composer promised would run. Registered after finalOperation so the
+	// status it reads is the one the turn actually ended with.
+	if !side {
+		defer func() {
+			if len(consumedSteer) == 0 {
+				return
+			}
+			switch finalOperation.Status {
+			case core.StateFailed, core.StateCancelled:
+				h.carryNotes(sess.ID, consumedSteer)
+			}
+		}()
+	}
 	defer func() {
 		saved := progress.snapshot(finalOperation)
 		activityStatus := "unknown"
