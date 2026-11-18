@@ -12,6 +12,7 @@ package reminders
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -129,6 +130,11 @@ func (s *Store) Delete(ctx context.Context, id int64) (bool, error) {
 	return n > 0, err
 }
 
+// claimCandidate is one due row as read before the claim UPDATE. It carries
+// the values that update has to be undone with, so a claim that cannot be
+// read back can be rolled back without a second read.
+type claimCandidate struct{ id, dueAt, repeat, fired int64 }
+
 // ClaimDue atomically wins each due reminder and returns the ones this call
 // got. Concurrent callers (daemon + panel sharing the database) each get a
 // disjoint set:
@@ -137,23 +143,26 @@ func (s *Store) Delete(ctx context.Context, id int64) (bool, error) {
 //   - recurring rows (repeat_seconds > 0) reschedule instead: a CAS on due_at
 //     pushes it to the next occurrence and stamps fired_at, so a competing
 //     scanner sees the row has already moved and wins nothing.
+//
+// A failure mid-batch returns the rows claimed before it together with the
+// error: they are already consumed, so the caller must deliver them rather
+// than treat the batch as empty.
 func (s *Store) ClaimDue(ctx context.Context, now time.Time, limit int) ([]Reminder, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, due_at, repeat_seconds FROM reminders
+		SELECT id, due_at, repeat_seconds, COALESCE(fired_at, 0) FROM reminders
 		WHERE (fired_at IS NULL OR repeat_seconds > 0) AND due_at <= ?
 		ORDER BY due_at ASC LIMIT ?`,
 		now.Unix(), limit)
 	if err != nil {
 		return nil, err
 	}
-	type candidate struct{ id, dueAt, repeat int64 }
-	var cands []candidate
+	var cands []claimCandidate
 	for rows.Next() {
-		var c candidate
-		if err := rows.Scan(&c.id, &c.dueAt, &c.repeat); err != nil {
+		var c claimCandidate
+		if err := rows.Scan(&c.id, &c.dueAt, &c.repeat, &c.fired); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -172,10 +181,9 @@ func (s *Store) ClaimDue(ctx context.Context, now time.Time, limit int) ([]Remin
 			// Next occurrence strictly after now, stepped by whole intervals —
 			// a reminder that was three periods behind fires once and lands on
 			// schedule rather than storm-firing the backlog.
-			next := c.dueAt + c.repeat*((now.Unix()-c.dueAt)/c.repeat+1)
 			res, err = s.db.ExecContext(ctx,
 				`UPDATE reminders SET fired_at = ?, due_at = ? WHERE id = ? AND due_at = ?`,
-				now.Unix(), next, c.id, c.dueAt)
+				now.Unix(), nextOccurrence(c.dueAt, c.repeat, now.Unix()), c.id, c.dueAt)
 		} else {
 			res, err = s.db.ExecContext(ctx,
 				`UPDATE reminders SET fired_at = ? WHERE id = ? AND fired_at IS NULL`,
@@ -193,6 +201,12 @@ func (s *Store) ClaimDue(ctx context.Context, now time.Time, limit int) ([]Remin
 			`SELECT `+reminderCols+` FROM reminders WHERE id = ?`,
 			c.id).Scan(&r.ID, &r.Message, &r.DueAt, &r.CreatedAt, &r.FiredAt, &r.Source, &r.RepeatSeconds)
 		if err != nil {
+			// The row is already stamped fired but there is no payload to
+			// hand back, so undo the claim: retiring it here would drop a
+			// notification no later scan can recover.
+			if rerr := s.rollbackClaim(ctx, c, now.Unix()); rerr != nil {
+				return claimed, errors.Join(err, rerr)
+			}
 			return claimed, err
 		}
 		if r.RepeatSeconds > 0 {
@@ -204,6 +218,38 @@ func (s *Store) ClaimDue(ctx context.Context, now time.Time, limit int) ([]Remin
 		claimed = append(claimed, r)
 	}
 	return claimed, nil
+}
+
+// nextOccurrence is the first slot strictly after now on a recurring
+// reminder's grid, stepped by whole intervals.
+func nextOccurrence(dueAt, repeat, now int64) int64 {
+	return dueAt + repeat*((now-dueAt)/repeat+1)
+}
+
+// claimRollbackTimeout bounds the undo of a claim whose payload could not be
+// read. The undo runs detached from the caller's context — the failure it
+// repairs is usually that context dying — so it needs a bound of its own.
+const claimRollbackTimeout = 5 * time.Second
+
+// rollbackClaim undoes one claim that could not be read back, putting the row
+// back on the board exactly as it was. The WHERE clause pins the values this
+// claim wrote, so a competing scanner — which can only have moved the row on
+// after we did — is never clobbered.
+func (s *Store) rollbackClaim(ctx context.Context, c claimCandidate, now int64) error {
+	// Detached on purpose: a read-back that failed because the scan context
+	// was cancelled (shutdown, a caller's deadline) would otherwise fail the
+	// undo for the very same reason, leaving the row fired with nobody
+	// notified and no later scan able to pick it up.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claimRollbackTimeout)
+	defer cancel()
+	var prevFired any
+	if c.fired != 0 {
+		prevFired = c.fired
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE reminders SET fired_at = ?, due_at = ? WHERE id = ? AND fired_at = ?`,
+		prevFired, c.dueAt, c.id, now)
+	return err
 }
 
 // NextDue returns the earliest pending due_at after `from`, or false when the
@@ -268,13 +314,14 @@ func NewScanner(store *Store, every time.Duration, onFire func(Reminder), logger
 // scanOnce claims everything currently due and fires it. It is also the probe
 // Run calls after every wake — the scanner is event-driven, so "due" items are
 // always taken immediately rather than waiting for the next cadence.
+//
+// A batch that fails partway still delivers what it did claim: those rows are
+// already stamped fired_at, so dropping them on the error would retire them
+// without a notification that no later scan can recover.
 func (s *Scanner) scanOnce(ctx context.Context) {
 	due, err := s.Store.ClaimDue(ctx, time.Now(), 50)
-	if err != nil {
-		if ctx.Err() == nil {
-			s.Logger.Warn("reminders scan", "err", err)
-		}
-		return
+	if err != nil && ctx.Err() == nil {
+		s.Logger.Warn("reminders scan", "err", err)
 	}
 	for _, r := range due {
 		s.Logger.Info("reminder fired", "id", r.ID, "message", r.Message, "repeat", r.RepeatSeconds)

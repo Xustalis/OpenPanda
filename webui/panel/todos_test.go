@@ -7,9 +7,100 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/todos"
 )
+
+// A date-only deadline is the last second of that local calendar day, which
+// is not midnight+24h on a DST switch: those days are 23 or 25 hours long.
+func TestEndOfLocalDay(t *testing.T) {
+	for _, tc := range []struct {
+		zone, date string
+		span       time.Duration // length of the local calendar day
+	}{
+		{"Asia/Shanghai", "2026-03-08", 24 * time.Hour},
+		{"America/New_York", "2026-03-08", 23 * time.Hour},                   // spring forward
+		{"America/New_York", "2026-11-01", 25 * time.Hour},                   // fall back
+		{"Australia/Lord_Howe", "2026-10-04", 23*time.Hour + 30*time.Minute}, // half-hour shift
+	} {
+		t.Run(tc.zone+"/"+tc.date, func(t *testing.T) {
+			loc, err := time.LoadLocation(tc.zone)
+			if err != nil {
+				t.Fatalf("load %s: %v", tc.zone, err)
+			}
+			// Parsed without a location, exactly as parseDueAt does it.
+			day, err := time.Parse(dateOnlyLayout, tc.date)
+			if err != nil {
+				t.Fatalf("parse %s: %v", tc.date, err)
+			}
+			got := endOfLocalDay(day, loc)
+			if y, m, d := got.In(loc).Date(); y != day.Year() || m != day.Month() || d != day.Day() {
+				t.Fatalf("end of day slid off %s: %s", tc.date, got.In(loc).Format(time.RFC3339))
+			}
+			if h, min, s := got.Clock(); h != 23 || min != 59 || s != 59 {
+				t.Fatalf("end of day = %s, want 23:59:59 local", got.Format(time.RFC3339))
+			}
+			// One second before the next local midnight, and the day spans
+			// what the zone's offset change says it should.
+			next := time.Date(day.Year(), day.Month(), day.Day()+1, 0, 0, 0, 0, loc)
+			if !got.Equal(next.Add(-time.Second)) {
+				t.Fatalf("end of day = %s, want %s", got, next.Add(-time.Second))
+			}
+			start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, loc)
+			if span := next.Sub(start); span != tc.span {
+				t.Fatalf("calendar day spans %v, want %v", span, tc.span)
+			}
+		})
+	}
+}
+
+// Zones that start DST at midnight have no 00:00 on the switch day. The
+// deadline must still land on the date the user typed, not the evening before
+// — which is what parsing the date in the local zone produces.
+func TestParseDueAtMidnightDST(t *testing.T) {
+	original := time.Local
+	defer func() { time.Local = original }()
+	for _, tc := range []struct{ zone, date string }{
+		{"America/New_York", "2026-03-08"}, // control: midnight exists
+		{"America/Havana", "2026-03-08"},   // DST starts at 00:00
+		{"America/Santiago", "2026-09-06"}, // DST starts at 00:00
+	} {
+		t.Run(tc.zone+"/"+tc.date, func(t *testing.T) {
+			loc, err := time.LoadLocation(tc.zone)
+			if err != nil {
+				t.Fatalf("load %s: %v", tc.zone, err)
+			}
+			time.Local = loc
+			value, err := parseDueAt(tc.date)
+			if err != nil {
+				t.Fatalf("parse %s: %v", tc.date, err)
+			}
+			got := time.Unix(value, 0).In(loc)
+			if got.Format(dateOnlyLayout) != tc.date || got.Format("15:04:05") != "23:59:59" {
+				t.Fatalf("deadline for %s landed on %s, want %sT23:59:59",
+					tc.date, got.Format(time.RFC3339), tc.date)
+			}
+		})
+	}
+}
+
+func TestParseDueAt(t *testing.T) {
+	if got, err := parseDueAt("  "); err != nil || got != 0 {
+		t.Fatalf("empty = %d, %v; want 0, nil", got, err)
+	}
+	if got, err := parseDueAt("2026-03-08T12:30:00Z"); err != nil || got != time.Date(2026, 3, 8, 12, 30, 0, 0, time.UTC).Unix() {
+		t.Fatalf("RFC3339 = %d, %v", got, err)
+	}
+	if _, err := parseDueAt("tomorrow"); err == nil {
+		t.Fatal("a bare word must not parse as a due date")
+	}
+	day, _ := time.Parse(dateOnlyLayout, "2026-11-02")
+	got, err := parseDueAt("2026-11-02")
+	if err != nil || got != endOfLocalDay(day, time.Local).Unix() {
+		t.Fatalf("date-only = %d, %v; want end of %s", got, err, day.Format(dateOnlyLayout))
+	}
+}
 
 // TestTodosCRUD covers the to-do board's HTTP surface end to end. /start is
 // exercised only for its no-engine refusal here: enqueueing a real task needs
