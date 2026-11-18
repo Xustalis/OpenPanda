@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 )
 
 var ErrBudget = errors.New("automation token budget exhausted")
+var ErrEmptyPreparation = errors.New("automation preparation returned no content")
 
 func digest(v any) string {
 	b, _ := json.Marshal(v)
@@ -92,7 +94,7 @@ func (e *executionRuntime) boundProjectMemory(ctx context.Context, f flowRun) ([
 	return e.options.ProjectMemory(local)
 }
 
-func (e *executionRuntime) prepare(ctx context.Context, m *managedExecution, f flowRun, t core.Task) (string, error) {
+func (e *executionRuntime) prepare(ctx context.Context, m *managedExecution, f flowRun, t core.Task) (text string, err error) {
 	model := e.model()
 	if model == nil {
 		return "", errors.New("automation model unavailable")
@@ -126,14 +128,34 @@ func (e *executionRuntime) prepare(ctx context.Context, m *managedExecution, f f
 	if !claimed {
 		return "", errors.New("preparation already invoked; reconciliation required")
 	}
+	// The core and coordinator exchange task state, not the original model
+	// error. Save that failure here, including when the invocation was cancelled.
+	failureCode := "preparation_interrupted"
+	defer func() {
+		if err == nil {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if saveErr := e.failPreparation(cleanup, m, f, t, key, failureCode); saveErr != nil {
+			err = errors.Join(err, fmt.Errorf("record preparation failure: %w", saveErr))
+		}
+	}()
 	if _, _, err := m.checkpoint(ctx, true); err != nil {
 		return "", err
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	text, err := model.CompleteBounded(callCtx, system, user, f.Policy.PreparationTokens)
+	text, err = model.CompleteBounded(callCtx, system, user, f.Policy.PreparationTokens)
 	if err != nil {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			failureCode = "preparation_failed"
+		}
 		return "", err
+	}
+	if strings.TrimSpace(text) == "" {
+		failureCode = "preparation_empty"
+		return "", ErrEmptyPreparation
 	}
 	if _, _, err := m.checkpoint(ctx, true); err != nil {
 		return "", err
@@ -151,7 +173,7 @@ func (e *executionRuntime) prepare(ctx context.Context, m *managedExecution, f f
 		if time.Until(m.deadline) <= 0 || m.ctx.Err() != nil {
 			return errors.New("execution lease expired")
 		}
-		r, err := tx.ExecContext(ctx, `UPDATE task_flow_runs SET prepared_json=?,updated_at=? WHERE request_id=? AND prepare_attempt=? AND prepared_json='' AND state IN ('leased','running') AND lease_owner=? AND deadline>?`, text, e.service.now().UnixMilli(), f.ID, t.AttemptID, e.owner, e.service.now().UnixMilli())
+		r, err := tx.ExecContext(ctx, `UPDATE task_flow_runs SET prepared_json=?,updated_at=? WHERE request_id=? AND prepare_attempt=? AND prepared_json='' AND state IN ('leased','running') AND lease_owner=? AND deadline>? AND EXISTS(SELECT 1 FROM tasks WHERE task_id=? AND attempt_id=? AND state='running')`, text, e.service.now().UnixMilli(), f.ID, t.AttemptID, e.owner, e.service.now().UnixMilli(), t.TaskID, t.AttemptID)
 		if err == nil {
 			err = requireOne(r)
 		}
@@ -161,7 +183,29 @@ func (e *executionRuntime) prepare(ctx context.Context, m *managedExecution, f f
 		_, err = tx.ExecContext(ctx, `UPDATE research_briefs SET state='done' WHERE cache_key=?`, key)
 		return err
 	})
-	return text, err
+	if err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
+// failPreparation writes inert evidence and withdraws this attempt's authority.
+// It cannot resume work, refund a reservation, expose provider error text or
+// overwrite a stop, a newer owner/attempt, or a result already recorded.
+func (e *executionRuntime) failPreparation(ctx context.Context, m *managedExecution, f flowRun, t core.Task, key, code string) error {
+	tx, err := e.service.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE research_briefs SET state='failed',brief='' WHERE cache_key=? AND state='invoking'`, key); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE task_flow_runs SET state='needs_reconciliation',error_code=?,deadline=0,lease_owner='',updated_at=? WHERE request_id=? AND prepare_attempt=? AND prepared_json='' AND lease_owner=? AND state IN ('leased','running')`, code, e.service.now().UnixMilli(), f.ID, t.AttemptID, m.owner)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (e *executionRuntime) researchOnce(ctx context.Context, owner string) error {
@@ -177,6 +221,7 @@ func (e *executionRuntime) researchOnce(ctx context.Context, owner string) error
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, t := range tasks {
 		if t.ConnectionID == "local" || len(t.Snapshot.AssigneeAccountIDs) != 0 || !t.Snapshot.Permissions.Read {
 			continue
@@ -219,7 +264,8 @@ func (e *executionRuntime) researchOnce(ctx context.Context, owner string) error
 		key := digest([]string{"research-v1", c.ID, c.AccountID, t.Snapshot.Key.String(), t.Snapshot.InputRevision, c.AuthEpoch, hash, version})
 		var exists int
 		if err := e.service.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM research_briefs WHERE cache_key=?`, key).Scan(&exists); err != nil {
-			return err
+			failures = append(failures, fmt.Errorf("read research cache for %s: %w", c.ID, err))
+			continue
 		}
 		if exists != 0 {
 			continue
@@ -229,7 +275,11 @@ func (e *executionRuntime) researchOnce(ctx context.Context, owner string) error
 		}
 		claimed, err := e.reserveBudget(ctx, owner, c, p, t.Snapshot, key, hash, version, 2300, nil)
 		if err != nil {
-			return err
+			// One account's exhausted budget must not block independent work.
+			if !errors.Is(err, ErrBudget) {
+				failures = append(failures, fmt.Errorf("reserve research for %s: %w", c.ID, err))
+			}
+			continue
 		}
 		if !claimed {
 			continue
@@ -250,8 +300,8 @@ func (e *executionRuntime) researchOnce(ctx context.Context, owner string) error
 			return err
 		})
 		if err != nil {
-			return err
+			failures = append(failures, fmt.Errorf("record research for %s: %w", c.ID, err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }

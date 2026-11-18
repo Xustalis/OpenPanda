@@ -222,8 +222,12 @@ func main() {
 		logger.Info("openpanda webui sidecar shutting down")
 		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer scancel()
-		_ = srv.Shutdown(sctx)
-		_ = storage.Checkpoint(sctx, db, "TRUNCATE")
+		if err := srv.Shutdown(sctx); err != nil {
+			logger.Warn("panel: HTTP shutdown incomplete", "err", err)
+		}
+		if err := storage.Checkpoint(sctx, db, "TRUNCATE"); err != nil {
+			logger.Warn("panel: WAL checkpoint incomplete", "err", err)
+		}
 	case err := <-errCh:
 		if err != nil && err != http.ErrServerClosed {
 			fatal("panel server", err)

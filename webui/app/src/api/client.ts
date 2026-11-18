@@ -2919,23 +2919,55 @@ export interface SessionBulkDeleteResult {
 export function makeSSEFrameParser(onFrame: (event: string, data: string) => void): {
   push(chunk: string): void
 } {
-  let buf = ''
+  let parts: string[] = []
+  let event = ''
+  let dataLines: string[] = []
+  let skipLF = false
+  let first = true
+  const line = (value: string) => {
+    if (value === '') {
+      const type = event || 'message'
+      const data = dataLines
+      event = ''
+      dataLines = []
+      if (data.length > 0) onFrame(type, data.join('\n'))
+      return
+    }
+    const colon = value.indexOf(':')
+    const field = colon < 0 ? value : value.slice(0, colon)
+    let content = colon < 0 ? '' : value.slice(colon + 1)
+    if (content.startsWith(' ')) content = content.slice(1)
+    if (field === 'event') event = content
+    else if (field === 'data') dataLines.push(content)
+  }
   return {
     push(chunk: string): void {
-      buf += chunk
-      let sep: number
-      while ((sep = buf.indexOf('\n\n')) !== -1) {
-        const frame = buf.slice(0, sep)
-        buf = buf.slice(sep + 2)
-        let event = 'message'
-        const dataLines: string[] = []
-        for (const line of frame.split('\n')) {
-          if (line.startsWith('event: ')) event = line.slice(7).trim()
-          else if (line.startsWith('data: ')) dataLines.push(line.slice(6))
-        }
-        if (dataLines.length === 0) continue
-        onFrame(event, dataLines.join('\n'))
+      if (!chunk) return
+      if (first) {
+        first = false
+        if (chunk.startsWith('\uFEFF')) chunk = chunk.slice(1)
       }
+      // Scan only new characters. Retaining incomplete line fragments avoids
+      // repeatedly concatenating and rescanning a long, fragmented data line.
+      let start = 0
+      for (let i = 0; i < chunk.length; i++) {
+        const char = chunk[i]
+        if (skipLF) {
+          skipLF = false
+          if (char === '\n') {
+            start = i + 1
+            continue
+          }
+        }
+        if (char !== '\n' && char !== '\r') continue
+        parts.push(chunk.slice(start, i))
+        const value = parts.length === 1 ? parts[0]! : parts.join('')
+        parts = []
+        start = i + 1
+        skipLF = char === '\r'
+        line(value)
+      }
+      if (start < chunk.length) parts.push(chunk.slice(start))
     },
   }
 }
@@ -3007,8 +3039,6 @@ export async function openSSE(url: string, opts: OpenSSEOptions): Promise<void> 
     throw new ApiError(res.status, text || res.statusText)
   }
   if (!res.body) throw new ApiError(0, 'no response body')
-  opts.onOpen?.()
-
   const reader = res.body.getReader()
   // fetch's own abort does not always propagate to a reader that is parked in
   // read(); cancelling it explicitly ends the loop immediately.
@@ -3025,24 +3055,37 @@ export async function openSSE(url: string, opts: OpenSSEOptions): Promise<void> 
   let stalled = false
   let idle: ReturnType<typeof setTimeout> | null = null
   const armIdle = () => {
+    if (idleMs <= 0) return
     if (idle !== null) clearTimeout(idle)
     idle = setTimeout(() => {
       stalled = true
       void reader.cancel().catch(() => {})
     }, idleMs)
   }
-  if (idleMs > 0) armIdle()
   try {
+    // The signal may have fired while fetching headers, or onOpen may abort
+    // synchronously. Install the reader's listener before calling consumers.
+    if (opts.signal?.aborted) return
+    opts.onOpen?.()
+    if (opts.signal?.aborted) return
+    armIdle()
     for (;;) {
       const { done, value } = await reader.read()
-      if (done) break
+      if (done || opts.signal?.aborted) break
       armIdle()
       opts.onActivity?.()
+      if (opts.signal?.aborted) break
       parser.push(decoder.decode(value, { stream: true }))
     }
+  } catch (err) {
+    if (!isAbort(err) && !opts.signal?.aborted) throw err
   } finally {
     if (idle !== null) clearTimeout(idle)
     opts.signal?.removeEventListener('abort', onAbort)
+    // A consumer callback or read can throw before EOF. Always close the
+    // network body and release its lock, including on those failure paths.
+    void reader.cancel().catch(() => {})
+    reader.releaseLock()
   }
   // A cancelled reader ends the loop cleanly — still an abort-driven end.
   if (stalled && !opts.signal?.aborted) {
@@ -3367,6 +3410,7 @@ export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
         timer = null
       }
       detachWake()
+      opts.signal?.removeEventListener('abort', onAbort)
       live?.abort()
       live = null
       resolve()

@@ -10,6 +10,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,11 +92,22 @@ func Open(path string) (*sql.DB, error) {
 // is a real write transaction; any failure is ignored because hardening is
 // best-effort and the database is otherwise usable.
 func forceWALSidecars(db *sql.DB) {
-	var v int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+	// Open's DSN uses BEGIN IMMEDIATE. Hold that write lock while reading and
+	// rewriting the version, or a concurrent migration can commit a newer
+	// value between the two statements and have it overwritten by our old one.
+	tx, err := db.Begin()
+	if err != nil {
 		return
 	}
-	_, _ = db.Exec(fmt.Sprintf("PRAGMA user_version = %d", v))
+	defer tx.Rollback()
+	var v int
+	if err := tx.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		return
+	}
+	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", v)); err != nil {
+		return
+	}
+	_ = tx.Commit() // hardening remains best-effort on a read-only/busy store
 }
 
 // hardenDBFiles tightens the database and its WAL sidecars to 0600. Missing
@@ -133,6 +145,11 @@ func mainDBPath(ctx context.Context, db *sql.DB) string {
 	return ""
 }
 
+// ErrCheckpointBusy means an active reader or writer prevented a requested
+// FULL, RESTART or TRUNCATE checkpoint from completing. Callers may retry
+// after releasing the blocking transaction; it is not a successful flush.
+var ErrCheckpointBusy = errors.New("storage: WAL checkpoint busy")
+
 // Checkpoint executes PRAGMA wal_checkpoint with the given mode ("PASSIVE",
 // "FULL", "RESTART", "TRUNCATE"). "TRUNCATE" or "PASSIVE" flush committed WAL
 // pages into the database file, preventing unbounded WAL growth and ensuring
@@ -150,9 +167,14 @@ func Checkpoint(ctx context.Context, db *sql.DB, mode string) error {
 	default:
 		return fmt.Errorf("storage: unknown wal_checkpoint mode %q", mode)
 	}
-	_, err := db.ExecContext(ctx, fmt.Sprintf("PRAGMA wal_checkpoint(%s)", mode))
-	if err != nil {
+	var busy, logFrames, checkpointed int
+	if err := db.QueryRowContext(ctx, fmt.Sprintf("PRAGMA wal_checkpoint(%s)", mode)).Scan(&busy, &logFrames, &checkpointed); err != nil {
 		return err
+	}
+	// SQLite reports lock contention in the first result column, not as a
+	// statement error. Exec discards that status and would report false success.
+	if busy != 0 {
+		return fmt.Errorf("%w: mode=%s, checkpointed=%d/%d frames", ErrCheckpointBusy, mode, checkpointed, logFrames)
 	}
 	// TRUNCATE/RESTART can recreate the sidecars; re-harden after a successful
 	// checkpoint so their mode never regresses to the process umask.

@@ -184,7 +184,9 @@ func (s *Service) flushOutbox(ctx context.Context, owner, request string) error 
 				} else if value.Decision == "return" {
 					state = "paused"
 				}
-				_, err = tx.ExecContext(ctx, `UPDATE task_flow_runs SET state=?,error_code='',updated_at=? WHERE request_id=?`, state, s.now().UnixMilli(), request)
+				// A confirmed remote decision remains a sent fact, but a local stop
+				// committed during the request must retain authority over this run.
+				_, err = tx.ExecContext(ctx, `UPDATE task_flow_runs SET state=?,error_code='',updated_at=? WHERE request_id=? AND state NOT IN ('paused','succeeded','failed','cancelled','superseded')`, state, s.now().UnixMilli(), request)
 			case tsync.ExecutionRecord:
 				if kind == "release" {
 					state := string(value.Status)

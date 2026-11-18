@@ -4,6 +4,8 @@ package intake
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -188,6 +190,63 @@ func TestServerSinkFailureReleasesClaim(t *testing.T) {
 	}
 	if len(sink.got) != 1 {
 		t.Fatalf("a replayed delivery queued %d tasks, want 1", len(sink.got))
+	}
+}
+
+type retryableSink struct {
+	fakeSink
+	calls int
+}
+
+func (s *retryableSink) IntakeDelivery(ctx context.Context, ev Event) (string, error) {
+	s.calls++
+	return s.fakeSink.IntakeTask(ctx, ev)
+}
+
+func TestServerRetryableSinkDoesNotConsumeFailedDelivery(t *testing.T) {
+	sink := &retryableSink{fakeSink: fakeSink{err: errors.New("queue closed")}}
+	seen := &fakeSeen{}
+	srv := newTestServer(sink, seen)
+	if rec := deliver(t, srv, "issues", "same-delivery", issueOpenedPayload, true); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("first status = %d, want 500", rec.Code)
+	}
+	sink.err = nil
+	if rec := deliver(t, srv, "issues", "same-delivery", issueOpenedPayload, true); rec.Code != http.StatusAccepted {
+		t.Fatalf("retry status = %d, want 202 (%s)", rec.Code, rec.Body.String())
+	}
+	if sink.calls != 2 || len(sink.got) != 1 {
+		t.Fatalf("delivery sink calls=%d queued=%d, want 2 calls and one queued task", sink.calls, len(sink.got))
+	}
+	if len(seen.seen) != 0 {
+		t.Fatalf("reliable delivery consumed the legacy ledger: %v", seen.seen)
+	}
+	hash := sha256.Sum256([]byte(issueOpenedPayload))
+	if got := sink.got[0].BodyHash; got != hex.EncodeToString(hash[:]) {
+		t.Fatalf("body hash=%q does not match the signed body", got)
+	}
+	if strings.Contains(sink.got[0].Intent(), sink.got[0].BodyHash) {
+		t.Fatal("transport hash leaked into execution instructions")
+	}
+}
+
+func TestServerDeliverySinkConflictAndLegacyReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		status  int
+		ignored string
+	}{
+		{"changed body", ErrDeliveryConflict, http.StatusConflict, ""},
+		{"legacy replay", ErrLegacyDelivery, http.StatusOK, CodeDuplicate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &retryableSink{fakeSink: fakeSink{err: tc.err}}
+			srv := newTestServer(sink, &fakeSeen{err: errors.New("legacy ledger unavailable")})
+			rec := deliver(t, srv, "issues", "d1", issueOpenedPayload, true)
+			if rec.Code != tc.status || sink.calls != 1 || decode(t, rec).Ignored != tc.ignored {
+				t.Fatalf("status=%d calls=%d response=%s", rec.Code, sink.calls, rec.Body.String())
+			}
+		})
 	}
 }
 

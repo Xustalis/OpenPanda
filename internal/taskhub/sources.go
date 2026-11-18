@@ -28,8 +28,8 @@ func (s *Store) Sources(ctx context.Context, ids []string) (map[string]Source, e
  WHERE l.task_id IN (`+marks+`) AND (r.connection_id='' OR EXISTS(
  SELECT 1 FROM task_connections c JOIN task_snapshots s ON s.connection_id=c.connection_id
  AND s.account_id=c.account_id AND s.auth_epoch=c.auth_epoch WHERE c.connection_id=r.connection_id
- AND c.account_id=r.account_id AND c.state='connected' AND s.task_key=r.task_key
- AND json_extract(s.snapshot_json,'$.permissions.read')=1)) ORDER BY r.created_at,r.request_id`, args...)
+ AND c.account_id=r.account_id AND s.task_key=r.task_key
+ AND `+readableSnapshotSQL+`)) ORDER BY r.created_at,r.request_id`, args...)
 		if err != nil {
 			return nil, err
 		}

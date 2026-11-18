@@ -14,6 +14,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// ErrConcurrency is a normal per-connection wait, not a failure of discovery
+// for other accounts or connections. Foreground requests still report it.
+var ErrConcurrency = errors.New("local execution concurrency limit reached")
+
 type RequestedExecution struct {
 	RequestID      string `json:"requestId"`
 	AlreadyStarted bool   `json:"alreadyStarted"`
@@ -114,7 +118,7 @@ func (s *Service) persistExecutionTx(ctx context.Context, tx *sql.Tx, c Connecti
 		return "", false, err
 	}
 	if count >= p.MaxConcurrent {
-		return "", false, errors.New("local execution concurrency limit reached")
+		return "", false, ErrConcurrency
 	}
 	claim := tsync.ExecutionRequest{RequestID: id, TriggerKey: trigger, InputRevision: wire.Versions.Input, AssignmentRevision: wire.Versions.Assignment, Generation: wire.Versions.Generation, Purpose: "execute", Scope: tsync.ExecutionScope{FullGoal: true, Objectives: []string{}}, Mode: p.Mode, DeviceID: c.DeviceID}
 	snap, _ := json.Marshal(t)

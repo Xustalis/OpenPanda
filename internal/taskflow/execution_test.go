@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders"
 	"github.com/Xustalis/OpenPanda/internal/taskproviders/tsync"
 )
@@ -303,8 +304,10 @@ func TestResearchPolicyChangeDuringModelCannotPublishOrReplay(t *testing.T) {
 }
 
 type auxiliaryTestModel struct {
-	calls atomic.Int32
-	call  func()
+	calls    atomic.Int32
+	call     func()
+	response *string
+	err      error
 }
 
 func (m *auxiliaryTestModel) AuxiliaryVersion() string { return "model" }
@@ -313,5 +316,66 @@ func (m *auxiliaryTestModel) CompleteBounded(context.Context, string, string, in
 	if m.call != nil {
 		m.call()
 	}
+	if m.err != nil {
+		return "", m.err
+	}
+	if m.response != nil {
+		return *m.response, nil
+	}
 	return "private result", nil
+}
+
+func TestEmptyPreparationCannotCompleteOrReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name, response string
+		empty          bool
+	}{{"empty", "", true}, {"whitespace", " \n\t", true}, {"preserve_content", " \nDraft content\n  ", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, e, c, _, wire := automationTest(t, true)
+			f := discoverTestFlow(t, s, e)
+			automationServer(t, s, c, wire, func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(leaseRecord(f))
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			m := &managedExecution{runtime: e, id: f.ID, owner: "owner", ctx: ctx, cancel: cancel}
+			if err := m.acquire(); err != nil {
+				t.Fatal(err)
+			}
+			f, err := s.flow(ctx, f.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := core.NewTaskStore(s.db, nil).Create(ctx, "", "", "Prepare draft", "owner", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.db.Exec(`UPDATE tasks SET state='running' WHERE task_id=?`, task.TaskID); err != nil {
+				t.Fatal(err)
+			}
+			model := &auxiliaryTestModel{response: &tc.response}
+			e.options.Model = func() AuxiliaryModel { return model }
+			result, err := e.prepare(ctx, m, f, task)
+			if !tc.empty {
+				if err != nil || result != tc.response || scalar(t, s.db, `SELECT prepared_json FROM task_flow_runs`) != tc.response {
+					t.Fatalf("nonempty preparation content changed: result=%q err=%v", result, err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrEmptyPreparation) {
+				t.Fatalf("empty model response lacked classified error: %v", err)
+			}
+			m.lose(err)
+			if state := scalar(t, s.db, `SELECT state FROM task_flow_runs`); state != "needs_reconciliation" {
+				t.Fatalf("empty preparation did not stop safely: %s", state)
+			}
+			if code := scalar(t, s.db, `SELECT error_code FROM task_flow_runs`); code != "preparation_empty" {
+				t.Fatalf("empty preparation failure was not durable: %s", code)
+			}
+			_, _ = e.prepare(context.Background(), m, f, task)
+			if model.calls.Load() != 1 {
+				t.Fatal("empty preparation was automatically replayed")
+			}
+		})
+	}
 }

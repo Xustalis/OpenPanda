@@ -105,3 +105,124 @@ func TestReconcileLateDone(t *testing.T) {
 		}
 	})
 }
+
+func TestRepeatedLateDonePreservesHumanRejection(t *testing.T) {
+	ctx := context.Background()
+	c := newCore(t, "reject-origin")
+	task := createTask(t, c.store, "", "rejected work", c.nodeID)
+	if err := c.store.Queue(ctx, task.TaskID, c.nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.Dispatch(ctx, task.TaskID, c.nodeID, "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.ReviewFromRemote(ctx, task.TaskID, c.nodeID, map[string]any{"state": StateReview}, ApprovalAcceptWork); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.store.Reject(ctx, task.TaskID, "do not accept this work"); err != nil {
+		t.Fatal(err)
+	}
+	result := bus.TaskResultPayload{TaskID: task.TaskID, AttemptID: task.AttemptID, State: StateDone, OK: true, Stdout: "late completion"}
+	for i := range 3 {
+		env, err := bus.NewEnvelope(bus.MsgTaskResult, "worker", "late-done", result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.handleResult(ctx, env)
+		current, err := c.store.Get(ctx, task.TaskID)
+		if err != nil || current.State != StateFailed {
+			t.Fatalf("late result %d erased human rejection: state=%s err=%v", i+1, current.State, err)
+		}
+	}
+}
+
+func TestReconcileDoneCannotOverwriteNewAttempt(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	task := createTask(t, s, "", "retry after timeout", "origin")
+	if err := s.Queue(ctx, task.TaskID, "origin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ForceFail(ctx, task.TaskID, "lease expired"); err != nil {
+		t.Fatal(err)
+	}
+	result := bus.TaskResultPayload{TaskID: task.TaskID, AttemptID: task.AttemptID, State: StateDone, OK: true, Stdout: "old result"}
+	if _, err := s.RotateAttempt(ctx, task.TaskID, "origin"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Get(ctx, task.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileDone(ctx, task.TaskID, "origin", result, StateFailed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale completion overwrote a new attempt: %v", err)
+	}
+	after, err := s.Get(ctx, task.TaskID)
+	if err != nil || after.State != StateFailed || after.AttemptID != before.AttemptID || after.StateVersion != before.StateVersion {
+		t.Fatalf("new attempt changed: before=%+v after=%+v err=%v", before, after, err)
+	}
+}
+
+func TestReconcileDoneRejectsConcurrentStateChange(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	task := createTask(t, s, "", "timeout then concurrent decision", "origin")
+	if err := s.Queue(ctx, task.TaskID, "origin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ForceFail(ctx, task.TaskID, "lease expired"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Get(ctx, task.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The clock is read after the snapshot and before the write transaction.
+	// Inject another decision at that exact boundary, retaining state/attempt.
+	now := s.now
+	changed := false
+	s.now = func() int64 {
+		if !changed {
+			changed = true
+			if _, err := s.db.Exec(`UPDATE tasks SET state_version=state_version+1 WHERE task_id=?`, task.TaskID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return now()
+	}
+	result := bus.TaskResultPayload{TaskID: task.TaskID, AttemptID: task.AttemptID, State: StateDone, OK: true}
+	if err := s.ReconcileDone(ctx, task.TaskID, "origin", result, StateFailed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed state version was overwritten: %v", err)
+	}
+	after, err := s.Get(ctx, task.TaskID)
+	if err != nil || after.State != StateFailed || after.StateVersion != before.StateVersion+1 {
+		t.Fatalf("concurrent decision changed: before=%+v after=%+v err=%v", before, after, err)
+	}
+}
+
+func TestReconcileDoneRespectsRejectUntilExplicitRetry(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	task := createTask(t, s, "", "rejected work", "origin")
+	if err := s.ReviewFromRemote(ctx, task.TaskID, "origin", map[string]any{"state": StateReview}, ApprovalAcceptWork); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reject(ctx, task.TaskID, "declined"); err != nil {
+		t.Fatal(err)
+	}
+	result := bus.TaskResultPayload{TaskID: task.TaskID, AttemptID: task.AttemptID, State: StateDone, OK: true}
+	if err := s.ReconcileDone(ctx, task.TaskID, "origin", result, StateFailed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("reconciliation bypassed human rejection: %v", err)
+	}
+	attempt, err := s.RequeueForRetry(ctx, task.TaskID, "origin", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ForceFail(ctx, task.TaskID, "new attempt timeout"); err != nil {
+		t.Fatal(err)
+	}
+	result.AttemptID = attempt
+	if err := s.ReconcileDone(ctx, task.TaskID, "origin", result, StateFailed); err != nil {
+		t.Fatalf("fresh retry result was not reconciled: %v", err)
+	}
+}

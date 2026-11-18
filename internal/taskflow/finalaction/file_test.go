@@ -83,6 +83,55 @@ func TestFilePublicationCheckpointAndDestination(t *testing.T) {
 	}
 }
 
+func TestFilePublicationHonorsCancellationAfterCheckpoint(t *testing.T) {
+	i := fileIntent(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := Publish(ctx, i, func(context.Context) error {
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(i.Directory, i.Filename)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("published after checkpoint cancellation: %v", err)
+	}
+}
+
+func TestFilePublicationRejectsExpiredIntent(t *testing.T) {
+	i := fileIntent(t)
+	i.ExpiresAt = time.Now().Add(-time.Second).UnixMilli()
+	called := false
+	_, err := Publish(context.Background(), i, func(context.Context) error {
+		called = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expired publication succeeded")
+	}
+	if called {
+		t.Fatal("expired intent reached the authority checkpoint")
+	}
+	entries, err := os.ReadDir(i.Directory)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("expired intent left publication files: %v, %v", entries, err)
+	}
+}
+
+func TestExpiredPublicationStillReconciles(t *testing.T) {
+	i := fileIntent(t)
+	want, err := Publish(context.Background(), i, func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	i.ExpiresAt = time.Now().Add(-time.Second).UnixMilli()
+	got, err := Reconcile(context.Background(), i)
+	if err != nil || got != want {
+		t.Fatalf("lost completed publication evidence after expiry: %v, %v", got, err)
+	}
+}
+
 func TestDirectoryReplacementCannotInheritConsent(t *testing.T) {
 	i := fileIntent(t)
 	old := i.Directory + "-original"

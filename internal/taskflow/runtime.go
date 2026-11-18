@@ -96,6 +96,7 @@ func (s *Service) Run(ctx context.Context) error { return s.run(ctx, nil) }
 
 func (s *Service) run(ctx context.Context, ready chan<- error) error {
 	var once sync.Once
+	started := false
 	signal := func(err error) {
 		if ready != nil {
 			once.Do(func() { ready <- err })
@@ -126,6 +127,7 @@ func (s *Service) run(ctx context.Context, ready chan<- error) error {
 				}
 			}()
 			defer func() { cancel(); <-resultDone }()
+			started = true
 			signal(nil)
 			for owned.Err() == nil {
 				conns, e := s.List(owned)
@@ -143,7 +145,9 @@ func (s *Service) run(ctx context.Context, ready chan<- error) error {
 			}
 			return owned.Err()
 		})
-		if ready != nil && err != nil {
+		// Once Start has returned, a lost lease or transient read failure must
+		// reacquire ownership instead of silently terminating the service.
+		if ready != nil && !started && err != nil {
 			signal(err)
 			return err
 		}

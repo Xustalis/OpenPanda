@@ -67,6 +67,46 @@ func TestParseGitHubIssueOpened(t *testing.T) {
 	}
 }
 
+func TestReopenedIssueUsesCurrentActor(t *testing.T) {
+	for _, sender := range []string{"bob", ""} {
+		payload := strings.Replace(issueOpenedPayload, `"action": "opened"`, `"action": "reopened"`, 1)
+		payload = strings.Replace(payload, `"sender": {"login": "alice"}`, `"sender": {"login": "`+sender+`"}`, 1)
+		ev, ok, err := ParseGitHub("issues", []byte(payload))
+		if err != nil || !ok {
+			t.Fatalf("ParseGitHub()=%+v %v %v", ev, ok, err)
+		}
+		if got := testPolicy().Admit(ev); got.Admit || got.Code != CodeActorNotAllowed {
+			t.Fatalf("reopen sender=%q inherited original author authority: event=%+v decision=%+v", sender, ev, got)
+		}
+	}
+}
+
+func TestParseGitHubUsesActionSender(t *testing.T) {
+	for _, eventType := range []string{"issues", "issue_comment", "pull_request_review_comment"} {
+		for _, sender := range []string{"bob", "panda-bot"} {
+			t.Run(eventType+"/"+sender, func(t *testing.T) {
+				action := "created"
+				if eventType == "issues" {
+					action = "opened"
+				}
+				payload := `{"action":"ACTION","repository":{"full_name":"acme/widgets"},
+				  "issue":{"number":42,"title":"Crash","body":"@panda-bot fix this","user":{"login":"alice"}},
+				  "pull_request":{"number":42,"title":"Crash"},
+				  "comment":{"body":"@panda-bot fix this","user":{"login":"alice"}},
+				  "sender":{"login":"SENDER"}}`
+				payload = strings.ReplaceAll(strings.ReplaceAll(payload, "ACTION", action), "SENDER", sender)
+				ev, ok, err := ParseGitHub(eventType, []byte(payload))
+				if err != nil || !ok || ev.Actor != sender {
+					t.Fatalf("sender=%q event=%+v modeled=%v err=%v", sender, ev, ok, err)
+				}
+				if got := testPolicy().Admit(ev); got.Admit {
+					t.Fatalf("sender=%q inherited author allowlist: %+v", sender, got)
+				}
+			})
+		}
+	}
+}
+
 func TestParseGitHubIssueComment(t *testing.T) {
 	payload := `{
 	  "action": "created",

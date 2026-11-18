@@ -322,15 +322,22 @@ func parseOpenAIResponse(r *oaiResponse) Response {
 	return out
 }
 
+// oaiStreamCall accumulates names and arguments without copying their entire
+// prefix on every fragment. Nonempty builders must never be copied by value.
+type oaiStreamCall struct {
+	id        string
+	name      strings.Builder
+	arguments strings.Builder
+}
+
 // oaiAccumulator assembles a Response from streamed chunks. Tool-call
-// fragments arrive split across chunks and addressed by index; Arguments
-// strings are concatenated until finish. Usage arrives once, in the final
-// chunk, and is accumulated per attempt (the caller bills it only when the
-// stream completes, so a retried attempt is never double-counted).
+// fragments arrive split across chunks and addressed by index. Usage arrives
+// once, in the final chunk, and is accumulated per attempt (the caller bills
+// it only when the stream completes, so retries are never double-counted).
 type oaiAccumulator struct {
 	texts           []string
 	reasoning       []string
-	calls           map[int]oaiToolCall
+	calls           map[int]*oaiStreamCall
 	order           []int
 	truncated       bool
 	usageIn         int64
@@ -376,20 +383,22 @@ func (a *oaiAccumulator) feed(chunk *oaiChunk, onDelta func(string), onReasoning
 	for _, tc := range c.Delta.ToolCalls {
 		cur, ok := a.calls[tc.Index]
 		if !ok {
-			cur = oaiToolCall{Index: tc.Index, Type: "function"}
+			if a.calls == nil {
+				a.calls = make(map[int]*oaiStreamCall)
+			}
+			cur = &oaiStreamCall{}
 			a.calls[tc.Index] = cur
 			a.order = append(a.order, tc.Index)
 		}
 		if tc.ID != "" {
-			cur.ID = tc.ID
+			cur.id = tc.ID
 		}
 		if tc.Function.Name != "" {
-			cur.Function.Name += tc.Function.Name
+			cur.name.WriteString(tc.Function.Name)
 		}
 		if tc.Function.Arguments != "" {
-			cur.Function.Arguments += tc.Function.Arguments
+			cur.arguments.WriteString(tc.Function.Arguments)
 		}
-		a.calls[tc.Index] = cur
 	}
 	if c.FinishReason != nil && *c.FinishReason == "length" {
 		a.truncated = true
@@ -403,17 +412,18 @@ func (a *oaiAccumulator) result() Response {
 	out.Truncated = a.truncated
 	for _, idx := range a.order {
 		tc := a.calls[idx]
-		id := tc.ID
+		id := tc.id
+		name := tc.name.String()
 		if id == "" {
-			id = fmt.Sprintf("call_%d_%s", idx, tc.Function.Name)
+			id = fmt.Sprintf("call_%d_%s", idx, name)
 		}
 		var input map[string]any
-		if s := tc.Function.Arguments; s != "" {
+		if s := tc.arguments.String(); s != "" {
 			if err := json.Unmarshal([]byte(s), &input); err != nil {
 				input = map[string]any{"_raw": s}
 			}
 		}
-		out.ToolUses = append(out.ToolUses, ToolUse{ID: id, Name: tc.Function.Name, Input: input})
+		out.ToolUses = append(out.ToolUses, ToolUse{ID: id, Name: name, Input: input})
 	}
 	return out
 }

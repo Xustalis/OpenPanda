@@ -1691,22 +1691,48 @@ func (s *TaskStore) Reject(ctx context.Context, taskID, reason string) error {
 // was NOT a human decision — failureWasRejected gates the caller. A row
 // concurrently closed another way (cancel, a second timeout) wins: the CAS
 // keeps first-close semantics.
-func (s *TaskStore) ReconcileDone(ctx context.Context, taskID, owner string, result any, from string) error {
+func (s *TaskStore) ReconcileDone(ctx context.Context, taskID, owner string, result any, from string, wireAttempt ...string) error {
 	cur, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
 	}
+	if (from != StateFailed && from != StateExpired) || cur.State != from {
+		return fmt.Errorf("%w: task %s no longer has the observed timeout state", ErrConflict, taskID)
+	}
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode reconciled result: %w", err)
+	}
+	var reported struct {
+		AttemptID string `json:"attempt_id"`
+	}
+	_ = json.Unmarshal(resultJSON, &reported)
+	attemptID := cur.AttemptID
+	if len(wireAttempt) > 0 && wireAttempt[0] != "" {
+		attemptID = wireAttempt[0]
+	} else if reported.AttemptID != "" {
+		attemptID = reported.AttemptID
+	}
+	if attemptID != cur.AttemptID {
+		return fmt.Errorf("%w: task %s reconciliation attempt was superseded", ErrConflict, taskID)
+	}
 	if err := objectiveResultEvidence(cur, result); err != nil {
 		return err
 	}
-	resultJSON, _ := json.Marshal(result)
 	now := s.now()
 	return s.withTx(ctx, func(tx *sql.Tx) error {
+		rejected, err := failureWasRejectedQuery(ctx, tx, taskID)
+		if err != nil {
+			return err
+		}
+		if rejected {
+			return fmt.Errorf("%w: task %s was rejected by a human", ErrConflict, taskID)
+		}
 		res, err := tx.ExecContext(ctx, `
 			UPDATE tasks SET state=?, owner_node=?, result_json=?,
 				lease_expires_at=NULL, state_version=state_version+1, updated_at=?
-			WHERE task_id=? AND state IN ('failed','expired')`,
-			StateDone, owner, string(resultJSON), now, taskID)
+			WHERE task_id=? AND state=? AND attempt_id=? AND state_version=?`,
+			StateDone, owner, string(resultJSON), now, taskID, from, attemptID, cur.StateVersion)
 		if err != nil {
 			return fmt.Errorf("reconcile task: %w", err)
 		}
@@ -1720,32 +1746,27 @@ func (s *TaskStore) ReconcileDone(ctx context.Context, taskID, owner string, res
 	})
 }
 
-// failureWasRejected reports whether the row's last recorded word was a
-// human reject — the one failure provenance a late result must never
-// overturn. The reject path writes EvReview{rejected} in the same
-// transaction as the state change, so the newest event on a rejected row is
-// that review entry; lease expiries, remote failures and timeouts all write
-// EvResult instead.
+// failureWasRejected preserves a human decision across later result/progress
+// audit entries. Only a later retry starts a fresh execution after rejection.
 func (s *TaskStore) failureWasRejected(ctx context.Context, taskID string) bool {
-	var typ, data string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT type, data_json FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 1`,
-		taskID).Scan(&typ, &data)
+	rejected, err := failureWasRejectedQuery(ctx, s.db, taskID)
 	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			s.logger.Warn("reconcile check: read last event", "task", taskID, "err", err)
-		}
-		return false
+		s.logger.Warn("reconcile check: read rejection evidence", "task", taskID, "err", err)
+		return true // Unreadable evidence cannot authorize resurrecting work.
 	}
-	if typ != EvReview {
-		return false
-	}
-	var ev map[string]any
-	if json.Unmarshal([]byte(data), &ev) != nil {
-		return false
-	}
-	_, rejected := ev["rejected"]
 	return rejected
+}
+
+func failureWasRejectedQuery(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, taskID string) (bool, error) {
+	var rejected bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(
+ SELECT 1 FROM task_events e WHERE e.task_id=? AND e.type=?
+ AND json_type(e.data_json,'$.rejected') IS NOT NULL
+ AND e.id>COALESCE((SELECT MAX(id) FROM task_events WHERE task_id=? AND type=?),0))`,
+		taskID, EvReview, taskID, EvRetry).Scan(&rejected)
+	return rejected, err
 }
 
 // FailFromRemote records a remote executor's failure on the delegator's copy.

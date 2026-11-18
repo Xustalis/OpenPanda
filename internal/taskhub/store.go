@@ -42,6 +42,19 @@ type History struct {
 	CreatedAt      int64  `json:"createdAt"`
 }
 
+// readableSnapshotSQL is shared by business reads and execution backlinks.
+// The c/s aliases must name the current connection and its cached snapshot.
+const readableSnapshotSQL = `c.state='connected'
+ AND s.account_id=c.account_id AND s.auth_epoch=c.auth_epoch
+ AND json_extract(s.snapshot_json,'$.permissions.read')=1
+ AND json_extract(s.snapshot_json,'$.permissions.authEpoch')=c.auth_epoch
+ AND json_extract(s.snapshot_json,'$.key.instanceId')=c.instance_id
+ AND EXISTS(SELECT 1 FROM json_each(c.scopes_json) WHERE value='tasks:read')
+ AND EXISTS(SELECT 1 FROM json_each(c.spaces_json) sp
+ WHERE json_extract(sp.value,'$.spaceId')=json_extract(s.snapshot_json,'$.key.spaceId')
+ AND json_extract(sp.value,'$.workspaceId')=json_extract(s.snapshot_json,'$.key.workspaceId')
+ AND EXISTS(SELECT 1 FROM json_each(json_extract(sp.value,'$.scopes')) WHERE value='tasks:read'))`
+
 func (s *Store) List(ctx context.Context, connection string) ([]Task, error) {
 	out := []Task{}
 	if connection == "" || connection == "local" {
@@ -55,14 +68,7 @@ func (s *Store) List(ctx context.Context, connection string) ([]Task, error) {
 	}
 	q := `SELECT s.connection_id,s.account_id,s.snapshot_json FROM task_snapshots s
  JOIN task_connections c ON c.connection_id=s.connection_id AND c.account_id=s.account_id AND c.auth_epoch=s.auth_epoch
- WHERE c.state='connected' AND json_extract(s.snapshot_json,'$.permissions.read')=1
- AND json_extract(s.snapshot_json,'$.permissions.authEpoch')=c.auth_epoch
- AND json_extract(s.snapshot_json,'$.key.instanceId')=c.instance_id
- AND EXISTS(SELECT 1 FROM json_each(c.scopes_json) WHERE value='tasks:read')
- AND EXISTS(SELECT 1 FROM json_each(c.spaces_json) sp
- WHERE json_extract(sp.value,'$.spaceId')=json_extract(s.snapshot_json,'$.key.spaceId')
- AND json_extract(sp.value,'$.workspaceId')=json_extract(s.snapshot_json,'$.key.workspaceId')
- AND EXISTS(SELECT 1 FROM json_each(json_extract(sp.value,'$.scopes')) WHERE value='tasks:read'))`
+ WHERE ` + readableSnapshotSQL
 	args := []any{}
 	if connection != "" {
 		q += ` AND s.connection_id=?`

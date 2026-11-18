@@ -107,7 +107,8 @@ make test-go      # Go suite only, for the local edit/test loop
 make test-python  # adapter, install, diagnostics and metrics contracts
 make race         # race detector, whole tree (pre-release superset check)
 make race-focused # race detector on concurrency-heavy packages only:
-                  # core/commander/bus/storage/askengine/scheduler/webui-panel
+                  # core/commander/bus/storage/testdb/askengine/scheduler,
+                  # intake/taskflow/taskhub/taskproviders/webui-panel
 make race-dirsync # repeat directory-sync readiness tests across CPU counts;
                   # fast stress loop before running the full race-focused gate
 make vet          # go vet

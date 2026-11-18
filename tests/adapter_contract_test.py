@@ -2821,6 +2821,48 @@ time.sleep(10)
         self.assertEqual(payload["exit_code"], 124)
 
 
+class BoundedChunksContractTest(unittest.TestCase):
+    def test_stderr_capture_uses_a_utf8_byte_budget(self):
+        payload, _ = run_harness(
+            "import json; q = _harness.BoundedChunks(limit=7); "
+            "q.append('甲乙丙丁'); _harness.emit(True, json.dumps(list(q)), 0)")
+        self.assertEqual(json.loads(payload["result"]),
+                         ["[stderr truncated: 6 bytes dropped]\n", "丙丁"])
+
+    def test_stderr_capture_counts_an_oversized_lines_missing_prefix(self):
+        payload, _ = run_harness(
+            "import json; q = _harness.BoundedChunks(limit=4); "
+            "q.append('abcdefghij'); before = list(q); q.append('z'); "
+            "_harness.emit(True, json.dumps([before, list(q)]), 0)")
+        self.assertEqual(json.loads(payload["result"]), [
+            ["[stderr truncated: 6 bytes dropped]\n", "ghij"],
+            ["[stderr truncated: 10 bytes dropped]\n", "z"],
+        ])
+
+    def test_zero_stderr_budget_keeps_only_the_truncation_marker(self):
+        payload, _ = run_harness(
+            "import json; q = _harness.BoundedChunks(limit=0); "
+            "q.append('failure'); _harness.emit(True, json.dumps(list(q)), 0)")
+        self.assertEqual(json.loads(payload["result"]),
+                         ["[stderr truncated: 7 bytes dropped]\n"])
+
+    def test_empty_stderr_chunks_do_not_accumulate(self):
+        payload, _ = run_harness(
+            "import json; q = _harness.BoundedChunks(limit=8); "
+            "[q.append('') for _ in range(1000)]; "
+            "_harness.emit(True, json.dumps(list(q)), 0)")
+        self.assertEqual(json.loads(payload["result"]), [])
+
+    def test_stderr_iteration_is_a_snapshot_during_later_eviction(self):
+        payload, _ = run_harness(
+            "import json; q = _harness.BoundedChunks(limit=4); q.append('old'); "
+            "snapshot = iter(q); q.append('tail'); "
+            "_harness.emit(True, json.dumps([list(snapshot), list(q)]), 0)")
+        self.assertEqual(json.loads(payload["result"]), [
+            ["old"], ["[stderr truncated: 3 bytes dropped]\n", "tail"],
+        ])
+
+
 class HarnessContractTest(unittest.TestCase):
     """Direct contracts for the shared runtime adapters/_harness.py."""
 
