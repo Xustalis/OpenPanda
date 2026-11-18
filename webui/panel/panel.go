@@ -733,6 +733,12 @@ type handler struct {
 	askMu         sync.Mutex
 	askGeneration uint64
 	activeAsks    map[string]sessionOperation
+	// askLive holds every generation whose goroutine is still running, keyed by
+	// slot and generation. activeAsks keeps only the newest one, but a
+	// replacement cancels its predecessor without waiting for it: that
+	// predecessor is still writing to the worktree, so a delete has to drain it
+	// too. Entries leave when the owning goroutine unregisters.
+	askLive map[string]map[uint64]sessionOperation
 	// deleting holds the ids whose delete has sealed the session: the row is
 	// being removed, so a turn must not start. Guarded by askMu, and set in the
 	// same critical section that observes the last live ask gone — that is what

@@ -394,6 +394,46 @@ func TestDeleteSessionDeadlineStillCancelsLateAsk(t *testing.T) {
 	}
 }
 
+// TestDeleteSessionDrainsSupersededAsk: a replacement cancels its predecessor
+// but does not wait for it, and the slot only remembers the newest generation.
+// Once the replacement has finished, a drain that scans the slot alone sees no
+// live ask and returns with the cancelled predecessor still writing to the
+// worktree — so the delete removes the directory under a run that is using it.
+func TestDeleteSessionDrainsSupersededAsk(t *testing.T) {
+	h := &handler{sessions: sessions.NewStore(t.TempDir()), activeAsks: map[string]sessionOperation{}}
+	oldOp, err := h.registerSessionAsk("superseded", func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The replacement takes the slot and finishes first; the predecessor is
+	// cancelled but still unwinding.
+	newOp, err := h.registerSessionAsk("superseded", func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.unregisterSessionAsk("superseded", newOp)
+
+	drained := make(chan int, 1)
+	go func() { drained <- h.stopSessionAsks("superseded", time.Now().Add(time.Second)) }()
+	select {
+	case n := <-drained:
+		t.Fatalf("drain returned (%d cancelled) while the superseded ask was still running", n)
+	case <-time.After(200 * time.Millisecond):
+	}
+	h.unregisterSessionAsk("superseded", oldOp)
+	select {
+	case n := <-drained:
+		if n != 1 {
+			t.Fatalf("drain cancelled %d asks, want the superseded one", n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("drain did not return after the superseded ask unregistered")
+	}
+	if h.hasActiveAsk("superseded") {
+		t.Fatal("drain left an ask registered")
+	}
+}
+
 // waitDelete waits for the delete request to finish.
 func waitDelete(t *testing.T, deleted <-chan *httptest.ResponseRecorder) *httptest.ResponseRecorder {
 	t.Helper()

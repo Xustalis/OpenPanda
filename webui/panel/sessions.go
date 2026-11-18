@@ -575,6 +575,15 @@ func (h *handler) registerSessionAsk(id string, cancel context.CancelFunc) (sess
 	op := sessionOperation{generation: h.askGeneration, operationID: operationID, cancel: cancel, done: make(chan struct{})}
 	old, exists := h.activeAsks[id]
 	h.activeAsks[id] = op
+	if h.askLive == nil {
+		h.askLive = make(map[string]map[uint64]sessionOperation)
+	}
+	live := h.askLive[id]
+	if live == nil {
+		live = make(map[uint64]sessionOperation)
+		h.askLive[id] = live
+	}
+	live[op.generation] = op
 	h.askMu.Unlock()
 	if exists && old.cancel != nil {
 		old.cancel()
@@ -587,6 +596,15 @@ func (h *handler) unregisterSessionAsk(id string, op sessionOperation) {
 	current, ok := h.activeAsks[id]
 	if ok && current.generation == op.generation && current.operationID == op.operationID {
 		delete(h.activeAsks, id)
+	}
+	// The live set is keyed by generation, not by slot: a superseded run
+	// unregisters itself here after its replacement has already taken the
+	// slot, and this is the only place that notices it is gone.
+	if live, ok := h.askLive[id]; ok {
+		delete(live, op.generation)
+		if len(live) == 0 {
+			delete(h.askLive, id)
+		}
 	}
 	h.askMu.Unlock()
 	// Closing here rather than in the handler keeps "the slot is free" and
@@ -631,10 +649,13 @@ var errSessionDeleting = errors.New("session is being deleted")
 // stopSessionAsks ends every ask a session owns and closes the door behind
 // them. It repeats cancel-and-wait until the session has no live ask left,
 // then marks the id as being deleted in the same critical section that saw the
-// last slot empty. Registration takes that lock too, so a request arriving
-// while the caller removes the row is refused rather than starting a run
-// nobody can stop — a single scan of the map could always be overtaken by a
-// new ask during the drain.
+// last slot empty. "Live" means every generation still owned by a goroutine,
+// not just the one the slot currently points at: a replacement that cancelled
+// its predecessor and finished first must not let the delete remove a worktree
+// the predecessor is still using. Registration takes that lock too, so a
+// request arriving while the caller removes the row is refused rather than
+// starting a run nobody can stop — a single scan of the map could always be
+// overtaken by a new ask during the drain.
 //
 // The deadline bounds the whole drain: a run that ignores its context must not
 // make the thread undeletable, so on timeout the id is sealed anyway and the
@@ -643,13 +664,7 @@ func (h *handler) stopSessionAsks(id string, deadline time.Time) int {
 	cancelled := 0
 	for {
 		h.askMu.Lock()
-		ops := make([]sessionOperation, 0, 2)
-		for _, key := range []string{id, id + sideOperationSuffix} {
-			if op, ok := h.activeAsks[key]; ok {
-				delete(h.activeAsks, key)
-				ops = append(ops, op)
-			}
-		}
+		ops := h.takeLiveAsksLocked(id)
 		if len(ops) == 0 {
 			h.sealSessionDeleteLocked(id)
 			h.askMu.Unlock()
@@ -671,13 +686,7 @@ func (h *handler) stopSessionAsks(id string, deadline time.Time) int {
 			// registration, then cancel it without waiting — the wait is what
 			// ran out.
 			h.askMu.Lock()
-			late := make([]sessionOperation, 0, 2)
-			for _, key := range []string{id, id + sideOperationSuffix} {
-				if op, ok := h.activeAsks[key]; ok {
-					delete(h.activeAsks, key)
-					late = append(late, op)
-				}
-			}
+			late := h.takeLiveAsksLocked(id)
 			h.sealSessionDeleteLocked(id)
 			h.askMu.Unlock()
 			for _, op := range late {
@@ -688,6 +697,30 @@ func (h *handler) stopSessionAsks(id string, deadline time.Time) int {
 			return cancelled + len(late)
 		}
 	}
+}
+
+// takeLiveAsksLocked removes and returns every generation still owned by a
+// running goroutine for the session's two slots. activeAsks only remembers the
+// newest generation: a replacement cancels its predecessor but does not wait
+// for it, so once the replacement has finished, a scan of the slots alone sees
+// nothing while the cancelled run is still writing to the worktree. The live
+// set is the drain's view of that. Callers hold askMu.
+func (h *handler) takeLiveAsksLocked(id string) []sessionOperation {
+	ops := make([]sessionOperation, 0, 2)
+	for _, key := range []string{id, id + sideOperationSuffix} {
+		live := h.askLive[key]
+		for gen, op := range live {
+			if cur, ok := h.activeAsks[key]; ok && cur.generation == gen {
+				delete(h.activeAsks, key)
+			}
+			ops = append(ops, op)
+			delete(live, gen)
+		}
+		if len(live) == 0 {
+			delete(h.askLive, key)
+		}
+	}
+	return ops
 }
 
 // sealSessionDeleteLocked marks the id as going away. Callers hold askMu: the
