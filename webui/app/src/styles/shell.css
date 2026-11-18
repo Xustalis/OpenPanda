@@ -562,6 +562,44 @@ a.sidebar-node:hover {
   margin: 0;
 }
 
+/* Execution failures stay visible above task actions, including brief cards. */
+.task-failure {
+  box-sizing: border-box;
+  flex-basis: 100%;
+  width: 100%;
+  min-width: 0;
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid var(--semantic-danger-border, var(--semantic-danger));
+  border-left: 4px solid var(--semantic-danger);
+  border-radius: var(--radius-sm);
+  background: var(--semantic-danger-soft, var(--bg-raised));
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.task-failure strong, .orch-chip-error {
+  color: var(--semantic-danger);
+  font-weight: 600;
+}
+.task-failure pre {
+  max-height: 10em;
+  margin: 6px 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: var(--ff-mono);
+  font-size: inherit;
+}
+.task-failure p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+.orch-chip-error {
+  overflow-wrap: anywhere;
+  font-size: var(--fs-caption);
+}
+
 /* Brand lockups. Both cuts stay in the DOM and the theme attribute picks one,
    so switching appearance swaps the image with no re-render. `auto` removes
    data-theme, which is why the media query targets the attribute's absence

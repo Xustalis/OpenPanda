@@ -92,6 +92,12 @@ func (b *CircuitBreaker) Allow(key string) bool {
 // closed circuit with zero failures is the same as an absent entry, so it is
 // deleted rather than left to accumulate forever in a long-lived daemon (D29).
 func (b *CircuitBreaker) RecordSuccess(key string) {
+	b.Reset(key)
+}
+
+// Reset permits a fresh attempt after an explicit operator retry. It only
+// clears this dependency's health state; it does not record a successful run.
+func (b *CircuitBreaker) Reset(key string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.states, key)

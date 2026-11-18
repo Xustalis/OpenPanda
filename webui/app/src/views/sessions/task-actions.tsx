@@ -4,6 +4,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { api, isTaskStalled, type ApprovalScope, type ClarifySpec, type Task } from '../../api/client'
 import { ClarifyCard } from '../../components/clarify-card'
 import { ScopeSelect } from '../../components/scope-select'
+import { TaskFailureNotice, taskReviewLabel } from '../../components/task-failure'
 import { toast, toastError } from '../../components/toast'
 import { useAsync, useChangeSignal, useVisibleInterval } from '../../hooks'
 import { t } from '../../i18n'
@@ -143,13 +144,11 @@ export function TaskApproval({
       </div>
     )
   }
-  // needs_changed_input is the one disposition where consent is not the
-  // missing piece: the task failed in a way that only a different prompt can
-  // fix (a deterministic crash, a spent token budget, an overflowed context),
-  // so Approve is disabled — and a disabled button that says nothing is the
-  // "it won't let me approve" report this card kept generating. The line below
-  // the buttons says why, and what the two working exits are.
+  // Failed execution cannot be accepted as completed work. A separate retry
+  // is offered only when the server found a current failed execution; policy
+  // parks keep their approval guard and their own instructions.
   const blocked = task.approval_disposition === 'needs_changed_input'
+  const retry = task.retry_available === true
   // ...and one of those failures is not about the prompt at all: the server
   // classified a park whose reason is the agent's own model configuration
   // (the endpoint refused its model id or login). Rewording the request
@@ -162,18 +161,22 @@ export function TaskApproval({
       <span class="badge yellow">{t('state.review')}</span>
       {task.approval_disposition && (
         <span class="dim review-kind">
-          {modelConfig
-            ? t('detail.reviewCauseModelConfig')
-            : t(`detail.reviewKind.${task.approval_disposition}`)}
+          {taskReviewLabel(task)}
         </span>
       )}
-      <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
+      <TaskFailureNotice task={task} />
+      {!retry && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
       <button
         class="btn primary small"
-        disabled={busy || blocked}
-        onClick={() => void act(() => api.approve(task.id, scope))}
+        disabled={busy || (blocked && !retry)}
+        onClick={() => void act(async () => {
+          if (retry) {
+            await api.retryTask(task.id)
+            toast(t('detail.retryStartedToast'), 'success')
+          } else await api.approve(task.id, scope)
+        })}
       >
-        {t('detail.approve')}
+        {retry ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
       </button>
       <button
         class="btn danger small"
@@ -182,7 +185,7 @@ export function TaskApproval({
       >
         {t('detail.reject')}
       </button>
-      {blocked && (
+      {blocked && !retry && (
         <p class="gate-hint">
           {modelConfig ? t('detail.approveBlockedModelConfig') : t('detail.approveBlocked')}
         </p>
