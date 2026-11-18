@@ -24,6 +24,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
+	"github.com/Xustalis/OpenPanda/internal/log"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
@@ -167,6 +168,16 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, sess)
 }
 
+// forkResponse is the forked session plus an optional partial-success warning.
+// A fork whose code state could not be carried over completely still returns
+// the child — the thread exists and is usable — but the caller has to be told
+// that the checkout it is about to read does not match the history it just
+// copied. The field is additive: a client that only knows Session ignores it.
+type forkResponse struct {
+	*sessions.Session
+	Warning string `json:"warning,omitempty"`
+}
+
 // forkSession serves POST /api/sessions/{id}/fork — splits the thread at a
 // turn boundary into a child session. Body: {"at": N} (0/absent copies the
 // whole thread). In a repository the child's worktree branches off the
@@ -191,17 +202,30 @@ func (h *handler) forkSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	warning := ""
 	if wt := h.sessionWorktrees(parent); wt != nil {
 		base := "HEAD"
 		if parent.Branch != "" {
 			base = parent.Branch
 		}
-		if path, err := wt.EnsureFrom(r.Context(), child.ID, base); err == nil {
+		// Fork, not EnsureFrom: the child inherits the parent's uncommitted
+		// work too, so the copied history and the files it describes agree.
+		path, ferr := wt.Fork(r.Context(), parent.ID, child.ID, base)
+		if path != "" {
 			_ = h.sessions.SetWorktree(child.ID, path, sessions.Branch(child.ID))
 			child, _ = h.sessions.Get(child.ID)
 		}
+		if ferr != nil {
+			// The thread forked but part of its code state did not. Say so in
+			// the response, not only in the server log: the caller is about to
+			// read a checkout that disagrees with the transcript, and a silent
+			// 200 is exactly how that goes unnoticed.
+			log.From(r.Context()).Warn("session fork: inherit working changes",
+				"parent", parent.ID, "child", child.ID, "err", ferr)
+			warning = ferr.Error()
+		}
 	}
-	writeJSON(w, child)
+	writeJSON(w, forkResponse{Session: child, Warning: warning})
 }
 
 // getSession serves GET /api/sessions/{id}.
