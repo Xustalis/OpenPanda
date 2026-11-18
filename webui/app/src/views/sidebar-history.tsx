@@ -455,6 +455,12 @@ export function SidebarHistory({
                       editing ? toggleSelect(s.id, !selected.has(s.id)) : openThread(s)
                     }
                     onKeyDown={(e) => {
+                      // The row is a button, but the pin/delete controls inside
+                      // it are buttons of their own: a key pressed on one of
+                      // them is theirs to handle. Without this guard the row
+                      // opened the thread on Enter/Space and the control the
+                      // reader had tabbed to never fired.
+                      if (e.target !== e.currentTarget) return
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
                         if (editing) toggleSelect(s.id, !selected.has(s.id))

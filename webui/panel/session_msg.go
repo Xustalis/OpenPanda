@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +61,66 @@ type pendingNote struct {
 	text   string
 	at     int64
 	inject bool
+}
+
+type pendingNoteClaim struct {
+	sessionID string
+	notes     []pendingNote
+	discarded bool // guarded by steerMu
+}
+
+// claimPendingNotes reserves a turn's input without destroying its only copy.
+// The caller must settle it after persisting the user turn, or on every exit.
+func (h *handler) claimPendingNotes(id string, includeLive bool) *pendingNoteClaim {
+	h.steerMu.Lock()
+	defer h.steerMu.Unlock()
+	notes := h.carry[id]
+	delete(h.carry, id)
+	if includeLive {
+		notes = append(notes, h.steers[id]...)
+		delete(h.steers, id)
+	}
+	if len(notes) == 0 {
+		return nil
+	}
+	claim := &pendingNoteClaim{sessionID: id, notes: notes}
+	if h.steerClaims == nil {
+		h.steerClaims = map[*pendingNoteClaim]struct{}{}
+	}
+	h.steerClaims[claim] = struct{}{}
+	return claim
+}
+
+// settlePendingNotes is idempotent, so a successful commit can be followed by
+// a deferred rollback. Failed starts restore original keys and metadata; newer
+// notes and other failed starts keep their arrival order. A deleted session
+// has no next turn and must not regain notes from a late failure.
+func (h *handler) settlePendingNotes(claim *pendingNoteClaim, committed bool) {
+	if claim == nil {
+		return
+	}
+	h.steerMu.Lock()
+	defer h.steerMu.Unlock()
+	if _, active := h.steerClaims[claim]; !active {
+		return
+	}
+	delete(h.steerClaims, claim)
+	if committed || claim.discarded {
+		return
+	}
+	if h.carry == nil {
+		h.carry = map[string][]pendingNote{}
+	}
+	notes := append([]pendingNote(nil), claim.notes...)
+	notes = append(notes, h.carry[claim.sessionID]...)
+	// pushSteer assigns a monotonic mem:<seq> identity. Time can move
+	// backwards or tie, and concurrent rollbacks need not finish in order.
+	sort.SliceStable(notes, func(i, j int) bool {
+		a, _ := strconv.Atoi(strings.TrimPrefix(notes[i].key, memNotePrefix))
+		b, _ := strconv.Atoi(strings.TrimPrefix(notes[j].key, memNotePrefix))
+		return a < b
+	})
+	h.carry[claim.sessionID] = notes
 }
 
 // pushSteer lands one note on the queue and reports whether it fit. A full
@@ -270,6 +331,11 @@ func (h *handler) dropSteer(id string) {
 	h.steerMu.Lock()
 	delete(h.steers, id)
 	delete(h.carry, id)
+	for claim := range h.steerClaims {
+		if claim.sessionID == id {
+			claim.discarded = true
+		}
+	}
 	h.steerMu.Unlock()
 }
 
