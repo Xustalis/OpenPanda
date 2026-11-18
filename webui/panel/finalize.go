@@ -136,7 +136,23 @@ func taskSummaryKey(t core.Task) string {
 	return evSessionSummary + ":" + t.TaskID + ":" + t.AttemptID
 }
 
-// taskExecutionStart returns the unix second this task first left the queue:
+// taskAttemptEvents excludes earlier attempts. Retries (including lease
+// reroutes) append EvRetry atomically with rotating the attempt; legacy
+// timelines without a submit/retry marker retain their existing events.
+func (h *handler) taskAttemptEvents(ctx context.Context, taskID string) ([]core.Event, error) {
+	events, err := h.store.Events(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == core.EvSubmit || events[i].Type == core.EvRetry {
+			return events[i+1:], nil
+		}
+	}
+	return events, nil
+}
+
+// taskExecutionStart returns the unix second this attempt first left the queue:
 // its earliest accept or exec_agent_start. Zero means it never ran — a row
 // cancelled while queued, or one the router refused before dispatch — and the
 // caller must not invent a duration for it.
@@ -145,7 +161,7 @@ func taskSummaryKey(t core.Task) string {
 // is queue wait plus execution. The trace events are the only place the
 // handoff second is recorded.
 func (h *handler) taskExecutionStart(ctx context.Context, taskID string) int64 {
-	events, err := h.store.Events(ctx, taskID)
+	events, err := h.taskAttemptEvents(ctx, taskID)
 	if err != nil {
 		return 0
 	}
@@ -181,7 +197,7 @@ func (h *handler) taskSummary(ctx context.Context, t core.Task, judge string) st
 // reservations read exactly like one it checked. The judge already writes that
 // sentence — this is where it becomes the report.
 func (h *handler) taskVerdict(ctx context.Context, taskID string) string {
-	events, err := h.store.Events(ctx, taskID)
+	events, err := h.taskAttemptEvents(ctx, taskID)
 	if err != nil {
 		return ""
 	}
