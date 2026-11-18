@@ -3,7 +3,6 @@
 package util
 
 import (
-	"sort"
 	"strings"
 	"testing"
 )
@@ -51,13 +50,15 @@ func TestUUIDv7Uniqueness(t *testing.T) {
 }
 
 func TestUUIDv7SortOrder(t *testing.T) {
-	id1, _ := UUIDv7()
-	id2, _ := UUIDv7()
-	ids := []string{id1, id2}
-	sort.Strings(ids)
-	// id2 is created no earlier than id1, so lexical order must not be
-	// strictly descending.
-	if ids[1] < ids[0] {
-		t.Fatalf("lexical order violated: %s then %s", id1, id2)
+	previous := ""
+	for range 10000 {
+		id, err := UUIDv7()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id <= previous {
+			t.Fatalf("generation order violated: %s then %s", previous, id)
+		}
+		previous = id
 	}
 }

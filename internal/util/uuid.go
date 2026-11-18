@@ -6,18 +6,59 @@ package util
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"io"
+	"sync"
 	"time"
 )
 
-// UUIDv7 returns a time-ordered 128-bit identifier per RFC 9562.
+// UUIDv7 returns a UUID per RFC 9562, strictly increasing within this process.
 //
-// Layout: 48-bit Unix millisecond timestamp | 0b0111 (version) | 12 random
-// bits | 0b10 (variant) | 62 random bits. Values sort lexically by creation
-// time, which keeps task rows append-friendly. Uniqueness comes from 74
-// random bits, sufficient for the idempotency-key use case in this system.
+// A new millisecond seeds the 74 payload bits from crypto/rand. The payload
+// increments within a millisecond (including clock rollback), preserving the
+// version and variant bits. Independent processes still have independent
+// clocks and seeds: UUID order is not proof of a peer's attempt identity.
 func UUIDv7() (string, error) {
-	var b [16]byte
-	ms := uint64(time.Now().UnixMilli())
+	return uuidV7IDs.next(uint64(time.Now().UnixMilli()), rand.Reader)
+}
+
+var uuidV7IDs uuidV7Generator
+
+type uuidV7Generator struct {
+	mu          sync.Mutex
+	initialized bool
+	lastMS      uint64
+	last        [16]byte
+}
+
+const maxUUIDv7MS = uint64(1<<48 - 1)
+
+func (g *uuidV7Generator) next(ms uint64, entropy io.Reader) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	b := g.last
+	seed := !g.initialized || ms > g.lastMS
+	if !seed {
+		ms = g.lastMS
+		if !incrementUUIDv7(&b) {
+			// Move logical time forward on payload exhaustion, without sleeping
+			// or wrapping into an identifier that has already been returned.
+			ms++
+			seed = true
+		}
+	}
+	if ms > maxUUIDv7MS {
+		return "", fmt.Errorf("UUIDv7 timestamp exceeds 48 bits")
+	}
+	if seed {
+		if _, err := io.ReadFull(entropy, b[6:]); err != nil {
+			return "", err
+		}
+		b[6] = (b[6] & 0x0f) | 0x70 // version 7
+		b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	}
+
 	// 48-bit timestamp in the top 6 bytes, room for 16 bits below.
 	b[0] = byte(ms >> 40)
 	b[1] = byte(ms >> 32)
@@ -26,11 +67,7 @@ func UUIDv7() (string, error) {
 	b[4] = byte(ms >> 8)
 	b[5] = byte(ms)
 
-	if _, err := rand.Read(b[6:16]); err != nil {
-		return "", err
-	}
-	b[6] = (b[6] & 0x0f) | 0x70 // version 7
-	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	g.last, g.lastMS, g.initialized = b, ms, true
 
 	var out [36]byte
 	hex.Encode(out[0:8], b[0:4])
@@ -43,6 +80,25 @@ func UUIDv7() (string, error) {
 	out[23] = '-'
 	hex.Encode(out[24:36], b[10:16])
 	return string(out[:]), nil
+}
+
+// incrementUUIDv7 advances only the 74 payload bits, carrying across the
+// fixed variant and version fields. False signals payload exhaustion.
+func incrementUUIDv7(b *[16]byte) bool {
+	for i := 15; i >= 6; i-- {
+		mask := byte(0xff)
+		if i == 8 {
+			mask = 0x3f
+		} else if i == 6 {
+			mask = 0x0f
+		}
+		if b[i]&mask != mask {
+			b[i]++
+			return true
+		}
+		b[i] &^= mask
+	}
+	return false
 }
 
 // IsUUIDv7 reports whether s is a canonical lowercase UUIDv7 — the shape

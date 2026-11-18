@@ -151,9 +151,10 @@ func (c *Core) handleProgress(ctx context.Context, env bus.Envelope) {
 	c.relayToParent(ctx, bus.MsgTaskProgress, t.Chain, p)
 }
 
-// attemptIsNewer reports whether candidate is a strictly later attempt than
-// stored: both must be UUIDv7 (the only id shape whose lexical order is time
-// order), and candidate must sort after stored. Anything else — an arbitrary
+// attemptIsNewer reports whether candidate sorts after stored as UUIDv7.
+// Local generation is monotonic, but independent peers have separate clocks
+// and seeds; ordering cannot authorize an attempt-specific delivery.
+// Anything else — an arbitrary
 // foreign id, a missing version nibble — cannot be ordered and stays on the
 // drop path it always took.
 func attemptIsNewer(candidate, stored string) bool {
@@ -1079,11 +1080,11 @@ func (c *Core) handleResume(ctx context.Context, env bus.Envelope) {
 		return
 	}
 	if p.Accept {
-		// Isolated acceptance can authorize a filesystem delivery. An old
-		// executor receipt must never certify a newer attempt's workspace.
-		if t.Isolate && p.AttemptID != "" && t.AttemptID != "" &&
-			t.AttemptID != p.AttemptID && attemptIsNewer(t.AttemptID, p.AttemptID) {
-			c.logger.Info("stale isolated acceptance ignored", "task", p.TaskID,
+		// Isolated acceptance authorizes an attempt-specific filesystem
+		// delivery. UUID order cannot establish identity: peers can mint
+		// different attempts in the same millisecond or after a clock rollback.
+		if t.Isolate && t.AttemptID != p.AttemptID {
+			c.logger.Info("mismatched isolated acceptance ignored", "task", p.TaskID,
 				"stored", t.AttemptID, "got", p.AttemptID)
 			return
 		}
