@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { PandaLockup } from './brand/panda'
-import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
+import { api, clearToken, currentToken, displayVersion, onUnauthorized, setToken, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
 import { useAsync, useChangeSignal, useTeamFeature } from './hooks'
 import { isSelfNodeUp } from './format/node-status'
@@ -101,7 +101,12 @@ export function App() {
   useWarmRouteChunks()
   const route = useRoute()
   const teamEnabled = useTeamFeature()
-  const [authed, setAuthed] = useState<boolean>(getToken() !== '')
+  // currentToken, not getToken: a one-shot link (?token=…) is consumed at
+  // module load and, when the browser refuses localStorage, lives only in the
+  // in-memory fallback. Asking storage alone here read that fallback as "not
+  // connected" and left the reader on the token page with the URL token
+  // already stripped — unable to retry, unable to get in.
+  const [authed, setAuthed] = useState<boolean>(currentToken() !== '')
   const [gateError, setGateError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const sidebar = useRef<HTMLElement>(null)
