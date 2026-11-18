@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ import (
 func TestNativeExecutorSandboxE2E(t *testing.T) {
 	protected := t.TempDir()
 	work := t.TempDir()
-	home := t.TempDir()
+	home := sandboxHome(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
@@ -84,6 +85,29 @@ func TestNativeExecutorSandboxE2E(t *testing.T) {
 	if !r.OK || !strings.Contains(r.Stdout, "denied") {
 		t.Fatalf("strict mode did not deny a .ssh read: %+v", r)
 	}
+}
+
+// sandboxHome creates the private home the confinement assertions run against.
+// On Linux it must not sit under /tmp: the jail replaces /tmp with an empty
+// tmpfs, so a home there is invisible to the child — and the deny-read mount
+// for .ssh recreates it as an ordinary writable directory, which turns the
+// "home write is refused" assertion into a write that succeeds. macOS and
+// Windows use their own temp roots, which the jail sees as they are.
+func sandboxHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	if runtime.GOOS != "linux" {
+		return home
+	}
+	if abs, err := filepath.Abs(home); err != nil || !strings.HasPrefix(abs, "/tmp/") {
+		return home
+	}
+	dir, err := os.MkdirTemp("/var/tmp", "panda-sandbox-home-")
+	if err != nil {
+		t.Skipf("no home outside the jail's /tmp tmpfs: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
 }
 
 func TestNativeSandboxPayload(t *testing.T) {

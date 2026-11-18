@@ -2673,6 +2673,11 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// successfully-executed queue operations).
 	var toolDigest []string
 	answerWithoutInvestigation := 0
+	// directiveLeaks bounds the protocol retry for a model that writes its
+	// structured directive into the message body instead of calling the bridge
+	// tool. One retry is the contract: a second leak is a model failure, and the
+	// raw envelope must never reach the surface as the answer.
+	directiveLeaks := 0
 	// digestOrErr is the loop's failure exit. Running tools already happened,
 	// so the honest answer is what they did — but the reason the loop stopped
 	// must not disappear with the error. Both go to the structured log and the
@@ -2807,6 +2812,10 @@ rounds:
 					// non-streaming guard hid all activity for an entire model call.
 					delta = nil
 				}
+				// A directive the model wrote as text must not be painted: the
+				// guard holds the opening deltas until it can tell the two apart.
+				delta, flush := guardedDelta(delta)
+				defer flush()
 				return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, reg, delta, trackReasoning, classifyOpts...)
 			}
 			return entry.ClassifyTurnsWithTools(ctx, c, devices, conversationMemory, ts, reg, classifyOpts...)
@@ -2820,6 +2829,17 @@ rounds:
 		out, turns, err = e.classifyBounded(ctx, client, turns, func(ts []entry.Turn) (entry.Output, error) {
 			return classify(client, ts)
 		})
+		// A directive written into the message body is a protocol failure, not an
+		// answer: hand the turn back once with the protocol restated. Without
+		// this the raw envelope becomes the user's whole reply — observed once as
+		// a truncated task JSON in the chat pane, for a task that was never
+		// created — and nothing in the turn says the work did not happen.
+		if err != nil && directiveLeaks == 0 && errors.Is(err, entry.ErrDirectiveProse) {
+			directiveLeaks++
+			e.logWarn("askengine: model wrote a directive into the message body, handing the turn back once", "round", round)
+			turns = append(turns, entry.Turn{Role: "user", Content: directiveProtocolReminder})
+			continue
+		}
 		if err != nil {
 			if entry.IsFatalModelError(err) {
 				e.recordModelFailure(client.Key())
@@ -3200,7 +3220,12 @@ rounds:
 	finalClassify := func(c *entry.Client, ts []entry.Turn) (entry.Output, error) {
 		cb.progress(Progress{Kind: ProgressModel, Name: c.ModelName(), Round: maxRounds + 1})
 		if cb.OnDelta != nil || cb.OnReasoning != nil {
-			return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, nil, cb.OnDelta, cb.OnReasoning, classifyOpts...)
+			// This call is tool-free, which is exactly when a model is most
+			// likely to write its dispatch as text: guard the stream, or the
+			// envelope is painted before the classifier can refuse it.
+			delta, flush := guardedDelta(cb.OnDelta)
+			defer flush()
+			return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, nil, delta, cb.OnReasoning, classifyOpts...)
 		}
 		return entry.ClassifyTurns(ctx, c, devices, conversationMemory, ts, classifyOpts...)
 	}
