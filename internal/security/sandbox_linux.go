@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // platformBackend reports "bwrap" when bubblewrap is installed. It needs
@@ -42,6 +43,16 @@ func wrapSubprocess(cmd *exec.Cmd, p Policy) error {
 		"--dev", "/dev",
 		"--proc", "/proc",
 		"--tmpfs", "/tmp",
+	}
+	// The tmpfs above is deliberate: the host's temp files stay outside the
+	// jail. It also hides the program we were asked to run when that
+	// program lives there — `go test` builds its binary under $TMPDIR, and an
+	// operator may have dropped a tool in /tmp. Without this the child dies
+	// with "execvp: No such file or directory" before it starts. Bind back the
+	// smallest piece that makes the program reachable: the file itself when it
+	// sits directly in /tmp, its directory otherwise.
+	if target, ok := hiddenByTmpfs(cmd.Path); ok {
+		args = append(args, "--ro-bind", target, target)
 	}
 	for _, w := range canonicalPaths(append([]string{workDir}, p.WritablePaths...)) {
 		if ensureBindDir(w) {
@@ -79,6 +90,28 @@ func wrapSubprocess(cmd *exec.Cmd, p Policy) error {
 	cmd.Path = bwrap
 	cmd.Args = append([]string{bwrap}, args...)
 	return nil
+}
+
+// hiddenByTmpfs reports the path that has to be bound back so the jail can
+// exec exe after /tmp was replaced by an empty tmpfs. A program directly in
+// /tmp is bound by file: binding the whole directory would put every host temp
+// file back inside the jail, which is what the tmpfs exists to prevent.
+func hiddenByTmpfs(exe string) (string, bool) {
+	if exe == "" {
+		return "", false
+	}
+	abs, err := filepath.Abs(exe)
+	if err != nil {
+		return "", false
+	}
+	dir := filepath.Dir(abs)
+	switch {
+	case dir == "/tmp":
+		return abs, true
+	case strings.HasPrefix(dir, "/tmp/"):
+		return dir, true
+	}
+	return "", false
 }
 
 // ensureBindDir makes a missing writable directory exist so --bind has

@@ -5,12 +5,17 @@ package reminders
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"io"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/testdb"
+	"modernc.org/sqlite"
 )
 
 // testDB returns a private file-backed database with the current schema.
@@ -252,6 +257,201 @@ func TestScanner_RunFiresDueReminders(t *testing.T) {
 	defer mu.Unlock()
 	if fired[0].Message != "scanner test" {
 		t.Errorf("expected 'scanner test', got %q", fired[0].Message)
+	}
+}
+
+// A batch that fails after some rows were claimed must still deliver them:
+// those rows are already stamped fired_at, so a later scan never sees them.
+func TestScanOnceFiresClaimedRowsWhenBatchFails(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	store := NewStore(db)
+	ctx := context.Background()
+
+	first, err := store.Add(ctx, "first due", time.Now().Add(-2*time.Minute), "cli")
+	if err != nil {
+		t.Fatalf("add first: %v", err)
+	}
+	second, err := store.Add(ctx, "second due", time.Now().Add(-time.Minute), "cli")
+	if err != nil {
+		t.Fatalf("add second: %v", err)
+	}
+	// Fail the claim of the second row only — the first is already claimed
+	// when the batch aborts.
+	if _, err := db.Exec(`CREATE TRIGGER test_fail_second BEFORE UPDATE ON reminders
+		WHEN OLD.message = 'second due' BEGIN SELECT RAISE(FAIL, 'injected batch failure'); END`); err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+
+	fired := map[int64]int{}
+	sc := NewScanner(store, time.Second, func(r Reminder) { fired[r.ID]++ },
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	sc.scanOnce(ctx)
+
+	if fired[first.ID] != 1 {
+		t.Fatalf("a row claimed before the failure fired %d times, want 1", fired[first.ID])
+	}
+	if fired[second.ID] != 0 {
+		t.Fatalf("the failing row fired %d times, want 0", fired[second.ID])
+	}
+
+	// The row that never got claimed is still pending, so the next scan
+	// delivers it — and the first is not delivered twice.
+	if _, err := db.Exec(`DROP TRIGGER test_fail_second`); err != nil {
+		t.Fatalf("drop trigger: %v", err)
+	}
+	sc.scanOnce(ctx)
+	if fired[second.ID] != 1 {
+		t.Fatalf("the deferred row fired %d times after recovery, want 1", fired[second.ID])
+	}
+	if fired[first.ID] != 1 {
+		t.Fatalf("the already-delivered row fired %d times, want 1", fired[first.ID])
+	}
+}
+
+// A claim that succeeds but cannot be read back has no payload to deliver;
+// it must be rolled back rather than retired, or the notification is lost.
+func TestClaimDueRollsBackUnreadableClaim(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	store := NewStore(db)
+	ctx := context.Background()
+
+	r, err := store.Add(ctx, "unreadable", time.Now().Add(-time.Minute), "cli")
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	// Corrupt the row between the claim UPDATE and its read-back: due_at is
+	// an INTEGER column, so scanning the text into int64 fails the way a
+	// damaged row would.
+	if _, err := db.Exec(`CREATE TRIGGER test_corrupt_due AFTER UPDATE ON reminders
+		WHEN OLD.due_at <> 'boom' BEGIN UPDATE reminders SET due_at = 'boom' WHERE id = NEW.id; END`); err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+
+	claimed, err := store.ClaimDue(ctx, time.Now(), 50)
+	if err == nil {
+		t.Fatal("a row that cannot be read back must report an error")
+	}
+	if len(claimed) != 0 {
+		t.Fatalf("claimed %d rows with no payload, want 0", len(claimed))
+	}
+
+	var firedAt sql.NullInt64
+	var dueAt int64
+	if err := db.QueryRow(`SELECT fired_at, due_at FROM reminders WHERE id = ?`, r.ID).Scan(&firedAt, &dueAt); err != nil {
+		t.Fatalf("read row back: %v", err)
+	}
+	if firedAt.Valid {
+		t.Fatalf("the claim was not rolled back: fired_at = %d", firedAt.Int64)
+	}
+	if dueAt != r.DueAt {
+		t.Fatalf("rollback did not restore due_at: %d, want %d", dueAt, r.DueAt)
+	}
+
+	// With the damage gone the row fires on the next scan, exactly once.
+	if _, err := db.Exec(`DROP TRIGGER test_corrupt_due`); err != nil {
+		t.Fatalf("drop trigger: %v", err)
+	}
+	fired := 0
+	sc := NewScanner(store, time.Second, func(Reminder) { fired++ }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	sc.scanOnce(ctx)
+	if fired != 1 {
+		t.Fatalf("recovered row fired %d times, want 1", fired)
+	}
+}
+
+// cancelAfterClaimConnector wraps the real SQLite driver and cancels the scan
+// context once the claim UPDATE has committed — the window where the row is
+// already stamped fired but its payload has not been read back yet. Every
+// statement and all state still come from the real database.
+type cancelAfterClaimConnector struct {
+	path   string
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (c *cancelAfterClaimConnector) Driver() driver.Driver { return &sqlite.Driver{} }
+
+func (c *cancelAfterClaimConnector) Connect(context.Context) (driver.Conn, error) {
+	conn, err := (&sqlite.Driver{}).Open(c.path)
+	if err != nil {
+		return nil, err
+	}
+	return &cancelAfterClaimConn{Conn: conn, owner: c}, nil
+}
+
+type cancelAfterClaimConn struct {
+	driver.Conn
+	owner *cancelAfterClaimConnector
+}
+
+func (c *cancelAfterClaimConn) ExecContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Result, error) {
+	res, err := c.Conn.(driver.ExecerContext).ExecContext(ctx, q, args)
+	if err == nil && strings.Contains(q, "UPDATE reminders SET fired_at") {
+		c.owner.once.Do(c.owner.cancel)
+	}
+	return res, err
+}
+
+func (c *cancelAfterClaimConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
+	return c.Conn.(driver.QueryerContext).QueryContext(ctx, q, args)
+}
+
+// A scan context cancelled between the claim and its read-back must not leave
+// the row retired: the rollback runs on its own context, so the reminder is
+// still pending when the next scan runs.
+func TestClaimDueRollsBackWhenContextCancelled(t *testing.T) {
+	for _, recurring := range []bool{false, true} {
+		t.Run(map[bool]string{false: "one-shot", true: "recurring"}[recurring], func(t *testing.T) {
+			fixture := testDB(t)
+			var seq int
+			var name, path string
+			if err := fixture.QueryRow("PRAGMA database_list").Scan(&seq, &name, &path); err != nil {
+				t.Fatalf("database_list: %v", err)
+			}
+			every := time.Duration(0)
+			if recurring {
+				every = time.Minute
+			}
+			before, err := NewStore(fixture).AddEvery(context.Background(), "cancel at committed claim",
+				time.Now().Add(-2*time.Minute), every, "cli")
+			if err != nil {
+				t.Fatalf("add: %v", err)
+			}
+			if err := fixture.Close(); err != nil {
+				t.Fatalf("close fixture: %v", err)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			db := sql.OpenDB(&cancelAfterClaimConnector{path: path, cancel: cancel})
+			defer db.Close()
+			db.SetMaxOpenConns(1)
+			store := NewStore(db)
+
+			claimed, claimErr := store.ClaimDue(ctx, time.Now(), 50)
+			if ctx.Err() == nil || claimErr == nil || len(claimed) != 0 {
+				t.Fatalf("did not reach the cancellation window: ctx=%v err=%v claimed=%d",
+					ctx.Err(), claimErr, len(claimed))
+			}
+
+			var fired, due int64
+			if err := db.QueryRow(`SELECT COALESCE(fired_at, 0), due_at FROM reminders WHERE id = ?`,
+				before.ID).Scan(&fired, &due); err != nil {
+				t.Fatalf("read row: %v", err)
+			}
+			if fired != 0 || due != before.DueAt {
+				t.Fatalf("committed claim was not rolled back: fired_at=%d due_at=%d, want 0 and %d",
+					fired, due, before.DueAt)
+			}
+
+			// The next scan, on a live context, delivers it exactly once.
+			recovered, err := store.ClaimDue(context.Background(), time.Now(), 50)
+			if err != nil || len(recovered) != 1 || recovered[0].ID != before.ID {
+				t.Fatalf("recovery claim = %d rows, %v; want the cancelled reminder", len(recovered), err)
+			}
+		})
 	}
 }
 

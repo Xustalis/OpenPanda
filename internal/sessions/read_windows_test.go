@@ -13,6 +13,26 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// shareModesEnforced reports whether this host honours an exclusive open. Some
+// images (file-system filter drivers, hardened builds) let a second reader
+// through even while a handle holds the file with no sharing at all; the
+// fixture below then cannot produce the conflict it exists to test. Checking it
+// up front keeps such a host from reporting a product failure it cannot
+// demonstrate either way.
+func shareModesEnforced(path string) bool {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return false
+	}
+	h, err := windows.CreateFile(name, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	_, rerr := os.ReadFile(path)
+	return errors.Is(rerr, windows.ERROR_SHARING_VIOLATION)
+}
+
 func TestGetDuringWindowsFileReplacement(t *testing.T) {
 	store := NewStore(t.TempDir())
 	sess, err := store.Create("live checkpoint")
@@ -20,6 +40,9 @@ func TestGetDuringWindowsFileReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := store.path(sess.ID)
+	if !shareModesEnforced(path) {
+		t.Skip("this host does not enforce file share modes; the replacement-conflict path cannot be exercised")
+	}
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		t.Fatal(err)
