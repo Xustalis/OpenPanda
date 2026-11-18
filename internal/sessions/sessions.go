@@ -1197,6 +1197,39 @@ func TrimSideTurns(turns []SideTurn, budget int) []SideTurn {
 	return append([]SideTurn(nil), kept...)
 }
 
+// Update applies one mutation to a thread and saves it once. It exists for
+// callers that change several fields at a time — PATCH /api/sessions/{id}
+// carries a title, a project, a pinned flag, a roster and a policy in one
+// body. Calling a setter per field made that body four load/save cycles: the
+// later fields could still be rejected, so the reply said 400 while the
+// earlier ones were already on disk. One load, one apply, one atomic write
+// makes the request all-or-nothing.
+//
+// apply runs under the store lock and must only touch the session it is
+// handed: calling back into the store (or any other locked store) from it
+// would deadlock.
+func (s *Store) Update(id string, apply func(*Session) error) (*Session, error) {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return nil, fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := apply(sess); err != nil {
+		return nil, err
+	}
+	sess.UpdatedAt = time.Now()
+	if err := s.save(sess); err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
 // SetWorktree records the worktree path/branch on a session.
 func (s *Store) SetWorktree(id, path, branch string) error {
 	unlock, err := lockStore(s.root)

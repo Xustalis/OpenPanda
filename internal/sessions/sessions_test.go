@@ -711,3 +711,51 @@ func TestAppendTurnsWritesOnePair(t *testing.T) {
 		t.Fatalf("reloaded = %+v", reloaded.Turns)
 	}
 }
+
+// TestUpdateIsOneWrite pins Update's contract: the callback runs against the
+// loaded thread and either every field it touched is saved once, or nothing is.
+// The panel's PATCH depends on it — the old per-field setters left earlier
+// fields on disk when a later one was rejected.
+func TestUpdateIsOneWrite(t *testing.T) {
+	st := NewStore(t.TempDir())
+	sess, err := st.Create("original", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected := errors.New("rejected")
+	if _, err := st.Update(sess.ID, func(s *Session) error {
+		s.Title = "should not land"
+		return rejected
+	}); !errors.Is(err, rejected) {
+		t.Fatalf("Update err = %v, want the callback's error", err)
+	}
+	after, err := st.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Title != "original" {
+		t.Fatalf("a rejected Update wrote to disk: title = %q", after.Title)
+	}
+
+	updated, err := st.Update(sess.ID, func(s *Session) error {
+		s.Title = "renamed"
+		s.Pinned = true
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "renamed" || !updated.Pinned {
+		t.Fatalf("Update returned %+v", updated)
+	}
+	reloaded, err := st.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Title != "renamed" || !reloaded.Pinned {
+		t.Fatalf("Update did not persist every field: %+v", reloaded)
+	}
+	if _, err := st.Update("missing-session", func(*Session) error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Update on a missing thread: err = %v, want ErrNotFound", err)
+	}
+}
