@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -470,6 +471,65 @@ func TestWorktreeForkCarriesUncommittedWork(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(committedPath, "new.txt")); err != nil || normalizeEOL(string(got)) != "brand new\n" {
 		t.Fatalf("committed new file lost: %q err=%v", got, err)
+	}
+}
+
+// TestWorktreeForkCarriesModeChangeOnTrackedFile: the child's checkout already
+// holds every tracked path, so the mode passed to os.WriteFile — which only
+// applies when the file is created — never reached them. A parent-side chmod
+// was lost in both directions: a script that gained +x arrived without it, and
+// one that lost +x kept it.
+func TestWorktreeForkCarriesModeChangeOnTrackedFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no executable bit to carry")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := newGitRepo(t)
+	w, err := OpenWorktrees(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	parent := "mode-parent"
+	parentPath, err := w.Ensure(ctx, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Committed with opposite bits so the fork has to move each one: the
+	// child's checkout would otherwise hand back the committed mode.
+	for name, mode := range map[string]os.FileMode{"gain.sh": 0o644, "lose.sh": 0o755} {
+		path := filepath.Join(parentPath, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitIn(t, parentPath, "add", "-A")
+	gitIn(t, parentPath, "commit", "-qm", "scripts")
+	// Uncommitted: the parent adds +x to one and drops it from the other.
+	if err := os.Chmod(filepath.Join(parentPath, "gain.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(parentPath, "lose.sh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	childPath, err := w.Fork(ctx, parent, "mode-child", Branch(parent))
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	for name, want := range map[string]os.FileMode{"gain.sh": 0o755, "lose.sh": 0o644} {
+		fi, err := os.Stat(filepath.Join(childPath, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if got := fi.Mode().Perm(); got != want {
+			t.Fatalf("fork %s mode = %o, want %o", name, got, want)
+		}
 	}
 }
 

@@ -360,6 +360,13 @@ func copyWorktreeFile(parent, child, rel string) error {
 	if err := os.WriteFile(dst, data, mode); err != nil {
 		return fmt.Errorf("sessions: fork write %s: %w", rel, err)
 	}
+	// WriteFile applies mode only when it creates the file. Every tracked path
+	// already exists in the child's checkout, so a parent-side chmod — adding
+	// +x to a script, or dropping it — would be silently lost and the fork
+	// would inherit the committed bit instead of the parent's.
+	if err := os.Chmod(dst, mode); err != nil {
+		return fmt.Errorf("sessions: fork chmod %s: %w", rel, err)
+	}
 	return nil
 }
 
