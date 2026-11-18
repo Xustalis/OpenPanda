@@ -181,9 +181,16 @@ func (s *rpcServer) dispatch(req *rpcRequest) {
 			if parent.Branch != "" {
 				base = parent.Branch
 			}
-			if path, err := wt.EnsureFrom(context.Background(), child.ID, base); err == nil {
+			// Fork carries the parent's uncommitted work: an embedding client
+			// forks to keep going, and it reads the files as they are.
+			path, ferr := wt.Fork(context.Background(), parent.ID, child.ID, base)
+			if path != "" {
 				_ = s.store.SetWorktree(child.ID, path, sessions.Branch(child.ID))
 				child, _ = s.store.Get(child.ID)
+			}
+			if ferr != nil {
+				// stderr keeps the newline-delimited protocol on stdout clean.
+				fmt.Fprintln(os.Stderr, i18n.Tf(i18n.Detect(), "repl.fork.incomplete", "err", ferr.Error()))
 			}
 		}
 		s.reply(req.ID, child)

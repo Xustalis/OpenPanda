@@ -133,6 +133,243 @@ func wrapErr(err error, out []byte) string {
 	return err.Error()
 }
 
+// Fork carves a child worktree out of the parent's code state rather than
+// just its branch tip: the base ref plus everything the parent has not
+// committed yet. A transcript that says "I edited src/x.go" while the child's
+// checkout sits at the baseline commit hands the model two contradictory
+// facts, and an agent's newest work — almost always still uncommitted when
+// the reader forks — is exactly what the fork was made to continue.
+//
+// The returned path is usable even when err reports a partial copy: the child
+// still has a worktree at the parent's branch, which is what the caller had
+// before. Callers should record the path and surface the error.
+func (w *Worktrees) Fork(ctx context.Context, parentID, childID, base string) (string, error) {
+	path, err := w.EnsureFrom(ctx, childID, base)
+	if err != nil {
+		return "", err
+	}
+	if err := w.copyWorkingState(ctx, parentID, childID); err != nil {
+		return path, err
+	}
+	return path, nil
+}
+
+// copyWorkingState replays the parent's uncommitted work into the child
+// worktree: modified files, deletions, and the files the index has never seen.
+//
+// Files are copied byte for byte rather than replayed as a patch. A patch is
+// normalized by git on the way out and re-checked-out on the way in, so on a
+// repository with core.autocrlf set the child would get different line endings
+// than the parent — a fork is supposed to continue the same bytes, not a
+// re-materialized approximation of them.
+func (w *Worktrees) copyWorkingState(ctx context.Context, parentID, childID string) error {
+	parent, child := w.Path(parentID), w.Path(childID)
+	if _, err := os.Stat(parent); err != nil {
+		return nil // the parent ran without a worktree: nothing to carry
+	}
+	if _, err := os.Stat(child); err != nil {
+		return nil
+	}
+	// One status/path pair per NUL-separated field. Renames are reported as a
+	// delete plus an add (--no-renames), which is the same end state without
+	// the old/new pair to parse.
+	out, err := executil.CommandContext(ctx, "git", "-C", parent,
+		"diff", "--name-status", "-z", "--no-renames", "HEAD").Output()
+	if err != nil {
+		return fmt.Errorf("sessions: fork diff: %w", err)
+	}
+	fields := strings.Split(string(out), "\x00")
+	// One path that cannot be carried must not cost the rest of the fork: a
+	// stale directory or an unreadable file used to abort the loop, and every
+	// later edit — including files the parent created after it — silently
+	// stayed behind. Each failure is collected and reported together; the
+	// caller turns that into a partial-success warning.
+	var errs []error
+	for i := 0; i+1 < len(fields); i += 2 {
+		status, rel := fields[i], fields[i+1]
+		if rel == "" {
+			continue
+		}
+		if strings.HasPrefix(status, "D") {
+			if err := removeWorktreeFile(child, rel); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if err := copyWorktreeFile(parent, child, rel); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// Untracked files are in no diff at all: an agent's brand-new module is
+	// the most common thing a fork would otherwise lose. --exclude-standard
+	// keeps .openpanda/ (uploads, task scratch, the worktrees themselves) out
+	// of the copy — those bytes belong to the parent's run, not to the code
+	// state a fork inherits.
+	untracked, err := executil.CommandContext(ctx, "git", "-C", parent, "ls-files", "-z", "--others", "--exclude-standard").Output()
+	if err != nil {
+		return errors.Join(append(errs, fmt.Errorf("sessions: fork ls-files: %w", err))...)
+	}
+	for _, rel := range strings.Split(string(untracked), "\x00") {
+		if rel == "" {
+			continue
+		}
+		if err := copyWorktreeFile(parent, child, rel); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// worktreePath resolves a repo-relative path inside root. rel comes from git
+// and is already repo-relative, but this is a write driven by file names, so
+// the join still has to be proved to stay inside the worktree.
+func worktreePath(root, rel string) (string, error) {
+	dst := filepath.Join(root, filepath.FromSlash(rel))
+	inside, err := filepath.Rel(root, dst)
+	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("sessions: fork path %q escapes the worktree", rel)
+	}
+	return dst, nil
+}
+
+// prepareWorktreePath resolves rel inside root and makes every directory on
+// the way to it a real directory.
+//
+// worktreePath only proves the *string* stays inside the worktree; the inode
+// it names can still leave. A checkout is free to leave a symlink where the
+// parent now has a directory (or the other way round), and writing through
+// that link lands wherever it points — including files outside the repository.
+// So each ancestor is checked after its parent has been made safe, and a link
+// or file found where a directory must be is replaced by a real directory: the
+// parent's shape is the one the fork is copying.
+func prepareWorktreePath(root, rel string) (string, error) {
+	dst, err := worktreePath(root, rel)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(filepath.FromSlash(rel))
+	cur := root
+	if dir != "." && dir != string(filepath.Separator) {
+		for _, part := range strings.Split(dir, string(filepath.Separator)) {
+			cur = filepath.Join(cur, part)
+			fi, err := os.Lstat(cur)
+			switch {
+			case os.IsNotExist(err):
+				if err := os.MkdirAll(cur, 0o755); err != nil {
+					return "", fmt.Errorf("sessions: fork mkdir %s: %w", rel, err)
+				}
+			case err != nil:
+				return "", fmt.Errorf("sessions: fork stat %s: %w", rel, err)
+			case fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir():
+				if err := os.RemoveAll(cur); err != nil {
+					return "", fmt.Errorf("sessions: fork replace %s: %w", rel, err)
+				}
+				if err := os.MkdirAll(cur, 0o755); err != nil {
+					return "", fmt.Errorf("sessions: fork mkdir %s: %w", rel, err)
+				}
+			}
+		}
+	}
+	return dst, nil
+}
+
+// resolveWorktreeAncestors walks the directories between root and rel and
+// reports whether every one of them is a real directory inside the worktree.
+// A link anywhere on the way means the path being named does not live here at
+// all: os.Remove would follow it and delete whatever it points at. The caller
+// gets ok=false for both "already gone" and "not a directory any more" — in
+// either case there is nothing of the parent's shape left to remove.
+func resolveWorktreeAncestors(root, rel string) (string, bool, error) {
+	dst, err := worktreePath(root, rel)
+	if err != nil {
+		return "", false, err
+	}
+	dir := filepath.Dir(filepath.FromSlash(rel))
+	cur := root
+	if dir != "." && dir != string(filepath.Separator) {
+		for _, part := range strings.Split(dir, string(filepath.Separator)) {
+			cur = filepath.Join(cur, part)
+			fi, err := os.Lstat(cur)
+			switch {
+			case os.IsNotExist(err):
+				return "", false, nil
+			case err != nil:
+				return "", false, fmt.Errorf("sessions: fork stat %s: %w", rel, err)
+			case fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir():
+				return "", false, nil
+			}
+		}
+	}
+	return dst, true, nil
+}
+
+// removeWorktreeFile drops a path the parent deleted, so the child does not
+// keep a file the parent's history says is gone.
+func removeWorktreeFile(child, rel string) error {
+	dst, ok, err := resolveWorktreeAncestors(child, rel)
+	if err != nil || !ok {
+		return err
+	}
+	// os.Remove drops a link itself, never what it points at.
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("sessions: fork remove %s: %w", rel, err)
+	}
+	return nil
+}
+
+// copyWorktreeFile mirrors one path into the child worktree, keeping the
+// executable bit and symlinks: a script that arrives without +x is a fork that
+// no longer runs.
+func copyWorktreeFile(parent, child, rel string) error {
+	src, err := worktreePath(parent, rel)
+	if err != nil {
+		return err
+	}
+	dst, err := prepareWorktreePath(child, rel)
+	if err != nil {
+		return err
+	}
+	// The child's checkout can still hold what the parent replaced: a directory
+	// where the parent now has a file, the symlink the parent turned into a
+	// regular file, or a junction an agent created. Anything that is not a
+	// regular file is removed first — writing "through" it reaches the wrong
+	// inode, and a link's target may be anywhere on disk.
+	if fi, err := os.Lstat(dst); err == nil && !fi.Mode().IsRegular() {
+		if err := os.RemoveAll(dst); err != nil {
+			return fmt.Errorf("sessions: fork replace %s: %w", rel, err)
+		}
+	}
+	if fi, err := os.Lstat(src); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if target, err := os.Readlink(src); err == nil {
+			_ = os.Remove(dst)
+			if err := os.Symlink(target, dst); err == nil {
+				return nil
+			}
+		}
+		// A Windows box without developer mode cannot create a symlink; fall
+		// through and copy the bytes so the fork still has the file.
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("sessions: fork copy %s: %w", rel, err)
+	}
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(src); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	if err := os.WriteFile(dst, data, mode); err != nil {
+		return fmt.Errorf("sessions: fork write %s: %w", rel, err)
+	}
+	// WriteFile applies mode only when it creates the file. Every tracked path
+	// already exists in the child's checkout, so a parent-side chmod — adding
+	// +x to a script, or dropping it — would be silently lost and the fork
+	// would inherit the committed bit instead of the parent's.
+	if err := os.Chmod(dst, mode); err != nil {
+		return fmt.Errorf("sessions: fork chmod %s: %w", rel, err)
+	}
+	return nil
+}
+
 // Change is one modified path in a session worktree relative to its HEAD:
 // Status is the porcelain code (M/A/D/??…), Path is repo-relative.
 type Change struct {
