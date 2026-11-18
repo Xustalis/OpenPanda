@@ -2293,8 +2293,14 @@ func (r *repl) cmdFork(arg string) {
 		if sess.Branch != "" {
 			base = sess.Branch
 		}
-		if path, err := wt.EnsureFrom(context.Background(), child.ID, base); err == nil {
+		// Fork carries the parent's uncommitted work across with the branch:
+		// /fork continues the conversation, and the files it is about.
+		path, ferr := wt.Fork(context.Background(), sess.ID, child.ID, base)
+		if path != "" {
 			_ = r.sessionsSt.SetWorktree(child.ID, path, sessions.Branch(child.ID))
+		}
+		if ferr != nil {
+			r.outln(i18n.Tf(r.loc, "repl.fork.incomplete", "err", ferr.Error()))
 		}
 	}
 	r.setSess(child.ID)
