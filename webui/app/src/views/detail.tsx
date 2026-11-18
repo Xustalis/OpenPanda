@@ -8,6 +8,7 @@ import { t } from '../i18n'
 import { formatDuration } from '../format/time'
 import { navigate } from '../nav'
 import { ScopeSelect } from '../components/scope-select'
+import { TaskFailureNotice, taskReviewLabel } from '../components/task-failure'
 import { StateBadge } from '../components/state-badge'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
@@ -194,13 +195,10 @@ export function DetailView({
   // broken button — the user clicks it, nothing happens, and the reason sits
   // hundreds of pixels below the fold.
   const blocked = task.state === 'review' && task.approval_disposition === 'needs_changed_input'
-  // A park whose reason is the agent's own model configuration: no reworded
-  // prompt and no approval can move it, so the banner names that
-  // configuration rather than repeating "needs changed input".
-  const modelConfig = blocked && task.review_cause === 'model_config'
+  const retry = task.retry_available === true
   // Read for every review state, not only the blocked banner: the verdict
   // block falls back to it when the result carries no reason of its own.
-  const parkReason = task.state === 'review' ? reviewReason(task.events ?? []) : ''
+  const parkReason = task.state === 'review' ? task.review_reason || reviewReason(task.events ?? []) : ''
   // Computed once: the verdict sentence is also the lead line of the output
   // when a run reported its outcome as prose, and printing it twice — once as
   // the answer, once as the first line of the panel — is the page's oldest
@@ -261,9 +259,7 @@ export function DetailView({
           )}
           {task.state === 'review' && task.approval_disposition && (
             <span class="dim review-kind">
-              {modelConfig
-                ? t('detail.reviewCauseModelConfig')
-                : t(`detail.reviewKind.${task.approval_disposition}`)}
+              {taskReviewLabel(task)}
             </span>
           )}
           {task.state === 'review' && !rejecting && (
@@ -283,14 +279,17 @@ export function DetailView({
                   {t('detail.continue')}
                 </button>
               )}
-              <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
+              {!retry && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
               <button
                 class="btn primary"
-                disabled={busy || blocked || needsFollowup}
-                title={blocked ? t('detail.needsChangedInputHint') : needsFollowup ? t('detail.continueHint') : undefined}
-                onClick={() => act(() => api.approve(task.id, scope), t('detail.approvedToast'))}
+                disabled={busy || (blocked && !retry) || needsFollowup}
+                title={blocked && !retry ? t('detail.needsChangedInputHint') : needsFollowup ? t('detail.continueHint') : undefined}
+                onClick={() => act(
+                  () => retry ? api.retryTask(task.id) : api.approve(task.id, scope),
+                  t(retry ? 'detail.retryStartedToast' : 'detail.approvedToast'),
+                )}
               >
-                {t('detail.approve')}
+                {retry ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
               </button>
               <button class="btn danger" disabled={busy} onClick={() => setRejecting(true)}>
                 {t('detail.reject')}
@@ -344,7 +343,8 @@ export function DetailView({
         </div>
       </header>
 
-      {blocked && (
+      <TaskFailureNotice task={task} />
+      {blocked && !task.review_reason && (
         // Why Approve cannot be clicked, and what to do instead. The button
         // stays disabled on purpose (consent cannot fix a deterministic
         // failure) — so the page owes the reader the instruction, not just a
@@ -353,9 +353,7 @@ export function DetailView({
         <div class="dt-blocked">
           <div class="dt-blocked-head">
             <span class="badge yellow">
-              {modelConfig
-                ? t('detail.reviewCauseModelConfig')
-                : t('detail.reviewKind.needs_changed_input')}
+              {taskReviewLabel(task)}
             </span>
             <span class="dim">{t('detail.needsChangedInputHint')}</span>
           </div>

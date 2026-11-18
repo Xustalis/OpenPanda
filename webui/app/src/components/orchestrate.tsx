@@ -13,6 +13,7 @@ import { Icon } from './icons'
 import { InfoSection, SpecCard, TimelineSection, parseResult, text } from './task-sections'
 import { StateBadge } from './state-badge'
 import { TaskTrace } from './task-trace'
+import { TaskFailureNotice, taskReviewLabel } from './task-failure'
 import { bindStripDrag } from './strip-drag'
 import { fmtElapsed, isActiveState } from './task-activity'
 import { toast, toastError } from './toast'
@@ -230,8 +231,13 @@ export function OrchestrateCard(props: {
         await api.cancel(task.id)
         toast(t('detail.cancelledToast'), 'success')
       } else {
-        await api.approve(task.id)
-        toast(t('detail.approvedToast'), 'success')
+        if (task.retry_available) {
+          await api.retryTask(task.id)
+          toast(t('detail.retryStartedToast'), 'success')
+        } else {
+          await api.approve(task.id)
+          toast(t('detail.approvedToast'), 'success')
+        }
       }
       setBump((v) => v + 1)
     } catch (e) {
@@ -420,6 +426,7 @@ function OrchChip(props: {
 }) {
   const active = isActiveState(props.task.state)
   const blocked = props.task.approval_disposition === 'needs_changed_input'
+  const retry = props.task.retry_available === true
   const title = props.task.title || props.task.id
   return (
     <div class="orch-chip" data-state={props.task.state} data-picked={props.picked || undefined}>
@@ -432,6 +439,9 @@ function OrchChip(props: {
         onClick={props.onOpen}
       >
         <span class="orch-chip-title">{title}</span>
+        {props.task.state === 'review' && props.task.review_reason && (
+          <span class="orch-chip-error">{taskReviewLabel(props.task)}</span>
+        )}
         <span class="orch-chip-meta">
           <StateBadge state={props.task.state} />
           <span class="orch-chip-age">{fmtElapsed(props.task.updated_at)}</span>
@@ -455,11 +465,11 @@ function OrchChip(props: {
           <button
             type="button"
             class="orch-act run"
-            disabled={props.busy || blocked}
+            disabled={props.busy || (blocked && !retry)}
             onClick={props.onRun}
-            title={blocked ? t('detail.needsChangedInputHint') : t('detail.approve')}
+            title={retry ? t('common.retry') : blocked ? t('detail.needsChangedInputHint') : t('detail.approve')}
           >
-            {t('orch.run')}
+            {retry ? t(props.busy ? 'detail.retrying' : 'common.retry') : t('orch.run')}
           </button>
         )}
       </div>
@@ -509,6 +519,7 @@ function OrchTask(props: {
   const active = isActiveState(task.state)
   const review = task.state === 'review'
   const blocked = task.approval_disposition === 'needs_changed_input'
+  const retry = task.retry_available === true
   // Which button's section the shared panel is showing. The card opens on the
   // first section this task can fill — 执行链路 whenever there is one — because
   // "what is this run doing" is the question that made the reader press the
@@ -546,7 +557,8 @@ function OrchTask(props: {
         {task.owner && <span class="orch-detail-tag">@{task.owner}</span>}
         <span class="orch-detail-age">{t('time.ago', { d: fmtElapsed(task.updated_at) })}</span>
       </div>
-      {review && task.approval_disposition && (
+      <TaskFailureNotice task={task} />
+      {review && task.approval_disposition && !task.review_reason && (
         <p class={`orch-detail-note${blocked ? ' blocked' : ''}`}>
           {t(`detail.reviewKind.${task.approval_disposition}`)}
         </p>
@@ -608,11 +620,11 @@ function OrchTask(props: {
         {review && (
           <button
             class="btn primary small"
-            disabled={props.busy || blocked}
-            title={blocked ? t('detail.needsChangedInputHint') : undefined}
+            disabled={props.busy || (blocked && !retry)}
+            title={blocked && !retry ? t('detail.needsChangedInputHint') : undefined}
             onClick={props.onRun}
           >
-            {t('orch.run')}
+            {retry ? t(props.busy ? 'detail.retrying' : 'common.retry') : t('orch.run')}
           </button>
         )}
         <button
