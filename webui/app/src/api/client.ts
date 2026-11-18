@@ -515,7 +515,11 @@ export interface Task {
    *  login) — a re-run and a reworded prompt both fail the same way, so the
    *  card names that agent's configuration instead of asking for new input.
    *  Empty for every other park; callers fall back to the disposition. */
-  review_cause?: 'model_config' | ''
+  review_cause?: 'model_config' | 'rate_limited' | 'input_rejected' | 'provider_error' | ''
+  /** Latest review failure, redacted on the server and available on brief rows. */
+  review_reason?: string
+  /** Explicit re-execution is available; this never accepts failed work. */
+  retry_available?: boolean
   /** Review rows only: the clarification the agent parked on, and the
    *  bounded option set as a ClarifySpec JSON string when it offered one.
    *  Computed server-side so the client never parses the whole result JSON
@@ -1429,6 +1433,23 @@ export const api = {
 
   approve(id: string, scope?: ApprovalScope): Promise<ApprovalResult> {
     return request('POST', `/api/tasks/${id}/approve`, scope && scope !== 'once' ? { scope } : undefined)
+  },
+
+  async retryTask(id: string): Promise<ApprovalResult> {
+    const operation = await request<ApprovalOperation>('POST', `/api/tasks/${encodeURIComponent(id)}/retry`)
+    // A detached operation can refuse before it claims the task (for example,
+    // its executor was removed). Surface that error instead of a false success
+    // toast while the card remains on the old failure.
+    for (let i = 0; i < 10; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const current = await api.approvalOperation(id, operation.operation_id)
+      if (current.status !== 'running') {
+        if (current.error && current.status !== 'done') throw new Error(current.error)
+        return current
+      }
+      if ((await api.taskBrief(id)).state !== 'review') return current
+    }
+    return operation
   },
 
   /** Resume a task parked on a clarification question with the answer. The

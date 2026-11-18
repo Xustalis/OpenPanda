@@ -869,8 +869,9 @@ func (s *TaskStore) RetryCount(ctx context.Context, taskID string) (int, error) 
 	return n, nil
 }
 
-// HardRetries counts the EvRetry events that are NOT resumable checkpoints —
-// the population the persisted failure budget (S2-6) actually bounds. A
+// HardRetries counts automatic failure retries since the latest explicit
+// operator retry. The persisted failure budget (S2-6) still survives process
+// restarts; only a deliberate retry grants a fresh allowance. A
 // checkpoint retry resumes a timed-out session rather than re-attempting a
 // failure, so it must not draw down the allowance meant for "this keeps
 // failing": counting it here would let five checkpoint slices exhaust a
@@ -880,8 +881,10 @@ func (s *TaskStore) HardRetries(ctx context.Context, taskID string) (int, error)
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM task_events
 		 WHERE task_id=? AND type=?
-		   AND COALESCE(json_extract(data_json, '$.checkpoint'), 0)=0`,
-		taskID, EvRetry).Scan(&n)
+		   AND COALESCE(json_extract(data_json, '$.checkpoint'), 0)=0
+		   AND id > COALESCE((SELECT MAX(id) FROM task_events WHERE task_id=? AND type=?
+		     AND json_extract(data_json, '$.manual')=1), 0)`,
+		taskID, EvRetry, taskID, EvRetry).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("hard retry count: %w", err)
 	}

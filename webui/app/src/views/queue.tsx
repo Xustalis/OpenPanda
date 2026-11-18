@@ -6,6 +6,7 @@ import { useAsync, useChangeSignal, useLocaleRerender, useTraceForTask, useVisib
 import { t } from '../i18n'
 import { isNodeConnected } from '../format/node-status'
 import { ScopeSelect } from '../components/scope-select'
+import { TaskFailureNotice, taskReviewLabel } from '../components/task-failure'
 import { Select, type SelectOption } from '../components/select'
 import { StateBadge } from '../components/state-badge'
 import { ErrorState } from '../components/page'
@@ -1120,7 +1121,8 @@ function KanbanCard({
         // resume a parked run, or refuse until the input changes — instead of
         // a bare "awaiting approval" that used to cover all three.
         <div class="kanban-actions" onClick={(e) => e.stopPropagation()}>
-          {task.approval_disposition && (
+          <TaskFailureNotice task={task} />
+          {task.approval_disposition && !task.review_reason && (
             <span
               class="dim review-kind"
               title={
@@ -1129,24 +1131,26 @@ function KanbanCard({
                   : undefined
               }
             >
-              {task.approval_disposition === 'needs_changed_input' &&
-              task.review_cause === 'model_config'
-                ? t('detail.reviewCauseModelConfig')
-                : t(`detail.reviewKind.${task.approval_disposition}`)}
+              {taskReviewLabel(task)}
             </span>
           )}
-          <ScopeSelect value={scope} onChange={setScope} disabled={busy} />
+          {!task.retry_available && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
           <button
             class="btn primary small"
-            disabled={busy || task.approval_disposition === 'needs_changed_input'}
+            disabled={busy || (task.approval_disposition === 'needs_changed_input' && !task.retry_available)}
             title={
-              task.approval_disposition === 'needs_changed_input'
+              task.approval_disposition === 'needs_changed_input' && !task.retry_available
                 ? t('detail.needsChangedInputHint')
                 : undefined
             }
-            onClick={() => act(() => api.approve(task.id, scope))}
+            onClick={() => act(async () => {
+              if (task.retry_available) {
+                await api.retryTask(task.id)
+                toast(t('detail.retryStartedToast'), 'success')
+              } else await api.approve(task.id, scope)
+            })}
           >
-            {t('detail.approve')}
+            {task.retry_available ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
           </button>
           <button
             class="btn danger small"

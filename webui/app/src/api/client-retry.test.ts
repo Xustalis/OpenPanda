@@ -79,3 +79,47 @@ test('POST request does not retry on failure', async () => {
     globalThis.fetch = originalFetch
   }
 })
+
+test('manual task retry surfaces a detached refusal instead of reporting success', async () => {
+  const originalFetch = globalThis.fetch
+  let posts = 0
+  globalThis.fetch = (async (_url: any, init?: any) => {
+    if (init?.method === 'POST') posts++
+    const body = init?.method === 'POST'
+      ? { operation_id: 'retry-op', task_id: 'failed-task', status: 'running' }
+      : { operation_id: 'retry-op', task_id: 'failed-task', status: 'review', error: 'retry belongs to executor peer-A' }
+    return new Response(JSON.stringify(body), { status: init?.method === 'POST' ? 202 : 200 })
+  }) as any
+  try {
+    await assert.rejects(api.retryTask('failed-task'), /retry belongs to executor peer-A/)
+    assert.equal(posts, 1, 'manual retry must never repeat its mutation')
+  } finally { globalThis.fetch = originalFetch }
+})
+
+test('manual task retry returns after execution starts and only sends one POST', async () => {
+  const originalFetch = globalThis.fetch
+  let posts = 0
+  globalThis.fetch = (async (url: any, init?: any) => {
+    if (init?.method === 'POST') posts++
+    const body = String(url).includes('/operations/') || init?.method === 'POST'
+      ? { operation_id: 'retry-op', task_id: 'failed-task', status: 'running' }
+      : { id: 'failed-task', state: 'running' }
+    return new Response(JSON.stringify(body), { status: init?.method === 'POST' ? 202 : 200 })
+  }) as any
+  try {
+    const op = await api.retryTask('failed-task')
+    assert.equal(op.status, 'running')
+    assert.equal(posts, 1)
+  } finally { globalThis.fetch = originalFetch }
+})
+
+test('a completed retry may carry stderr warnings without becoming an error', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (_url: any, init?: any) => new Response(JSON.stringify({
+    operation_id: 'retry-op', task_id: 'failed-task',
+    status: init?.method === 'POST' ? 'running' : 'done',
+    error: init?.method === 'POST' ? undefined : 'compiler warning',
+  }), { status: init?.method === 'POST' ? 202 : 200 })) as any
+  try { assert.equal((await api.retryTask('failed-task')).status, 'done') }
+  finally { globalThis.fetch = originalFetch }
+})
