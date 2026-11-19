@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ import (
 func cleanCredentialEnv(t *testing.T) string {
 	t.Helper()
 	for _, k := range []string{
-		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_HOME",
 		// Endpoint/model overrides feed the probe target too — a developer
 		// shell that exports them would otherwise leak into the assertions.
 		"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GROK_BASE_URL", "DEEPSEEK_BASE_URL",
@@ -109,6 +110,38 @@ func TestInjectionAutoSkipsAgentWithConfigFile(t *testing.T) {
 	}
 	if !strings.Contains(d.Reason, ".codex/auth.json") {
 		t.Fatalf("reason should name the evidence, got %q", d.Reason)
+	}
+}
+
+func TestCodexProfileOverrideMatchesProbeAndExecution(t *testing.T) {
+	home := cleanCredentialEnv(t)
+	profile := t.TempDir()
+	t.Setenv("CODEX_HOME", profile)
+	mustWrite(t, filepath.Join(home, ".codex", "auth.json"), `{"tokens":{}}`)
+	model := testModel
+	model.APIType = config.APITypeOpenAI
+	r := injectionRouter(model, config.InjectionModelAuto)
+	if d := r.InjectionDecision("codex", "codex.py"); !d.Inject {
+		t.Fatalf("an empty override must not discover the default profile: %+v", d)
+	}
+	mustWrite(t, filepath.Join(profile, "config.toml"), `model = "fixture-model"
+model_provider = "relay"
+[model_providers.relay]
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "fixture-credential"
+wire_api = "responses"
+`)
+	if d := r.InjectionDecision("codex", "codex.py"); d.Inject || !strings.Contains(d.Reason, "$CODEX_HOME/config.toml") {
+		t.Fatalf("configured native override was ignored: %+v", d)
+	}
+	if target := agentConfiguredTarget("codex.py"); target.Endpoint != "https://relay.example/v1" || target.Model != "fixture-model" || !target.KeyDef {
+		t.Fatal("probe did not use the override's provider")
+	}
+	if env := adapterCredentialEnv("codex", "codex.py"); !slices.Contains(env, "CODEX_HOME="+profile) {
+		t.Fatal("execution would start with a different Codex profile")
+	}
+	if env := adapterCredentialEnv("claude_code", "claude_code.py"); slices.Contains(env, "CODEX_HOME="+profile) {
+		t.Fatal("Codex profile leaked to a different adapter")
 	}
 }
 

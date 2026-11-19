@@ -519,6 +519,21 @@ func EffectiveBaseURL(model config.ModelConfig) string {
 // pointed at a temp dir.
 var homeDir = os.UserHomeDir
 
+// codexConfigDir is the same profile root for credential detection, probes and
+// the adapter. Never resolve an operator override against a task's directory.
+func codexConfigDir(home string) string {
+	if override := os.Getenv("CODEX_HOME"); override != "" {
+		if filepath.IsAbs(override) {
+			return filepath.Clean(override)
+		}
+		return ""
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".codex")
+}
+
 // credentialManifest resolves the agent's credential manifest from the
 // registry (the single source of truth) by name+adapter. Unknown agents — or
 // agents without a declared manifest — fall back to the union of common
@@ -548,6 +563,17 @@ func probeAgentCredentials(name, adapter string) (found bool, source string) {
 	if home, err := homeDir(); err == nil {
 		for _, rel := range files {
 			p := filepath.Join(home, filepath.FromSlash(rel))
+			source := "config file ~/" + rel
+			if k.Adapter == "codex.py" {
+				dir := codexConfigDir(home)
+				if dir == "" {
+					continue
+				}
+				p = filepath.Join(dir, filepath.Base(rel))
+				if os.Getenv("CODEX_HOME") != "" {
+					source = "config file $CODEX_HOME/" + filepath.Base(rel)
+				}
+			}
 			st, err := os.Stat(p)
 			if err != nil || st.Size() == 0 {
 				continue
@@ -558,7 +584,7 @@ func probeAgentCredentials(name, adapter string) (found bool, source string) {
 				if !dotenvFileHasAssignment(p) {
 					continue
 				}
-				return true, "config file ~/" + rel
+				return true, source
 			}
 			// A file with declared field requirements counts only when one
 			// of those fields is actually set: Claude Code's state file
@@ -578,7 +604,7 @@ func probeAgentCredentials(name, adapter string) (found bool, source string) {
 					continue
 				}
 			}
-			return true, "config file ~/" + rel
+			return true, source
 		}
 	}
 	return false, ""
