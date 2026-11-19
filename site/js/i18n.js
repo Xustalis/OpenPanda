@@ -45,14 +45,13 @@ export const EN = {
   'lang.switch': 'Switch language',
 
   /* ── chrome ────────────────────────────────────────────────────────── */
-  'nav.graph': 'Star → Graph',
   'nav.product': 'Product',
   'nav.constitution': 'Thin Constitution',
-  'nav.roadmap': 'Roadmap',
-  'nav.license': 'Licensing',
   'nav.faq': 'FAQ',
   'nav.install': 'Install',
   'nav.why': 'Four Walls',
+  'nav.proof': 'Proof',
+  'nav.scales': 'Three Scales',
   'nav.palette': 'Quick jump (⌘K)',
   'nav.menu': 'Open menu',
   'nav.primary': 'Primary navigation',
@@ -68,8 +67,8 @@ export const EN = {
   'hero.learn': 'Read the map',
   'hero.copy': 'Copy install command',
   'hero.idx.why': 'Four Walls',
-  'hero.idx.graph': 'Star → Graph',
   'hero.idx.product': 'Product',
+  'hero.idx.proof': 'Proof',
   'hero.idx.constitution': 'Thin Constitution',
   'hero.idx.install': 'Install',
   'hero.credit': 'ESO/S. BRUNIER · CC BY 4.0 · NASA BLUE MARBLE / DNB · PUBLIC DOMAIN',
@@ -101,7 +100,6 @@ export const EN = {
     'The question was never “should we go multi-agent”, it is how these agents are organised with each other.',
 
   /* ── 02 · star → graph ─────────────────────────────────────────────── */
-  's2.label': 'FROM STAR TO GRAPH',
   's2.title': 'Today’s multi-agent systems<br>all orbit a centre.',
   's2.lede':
     'A MainAgent splits the task, hands out work, waits for reports. It is scheduler, message bus and single point of failure at once.',
@@ -182,30 +180,6 @@ export const EN = {
   's4.quote': '“The stronger the AI, the stronger the project — as long as only relations are frozen.”',
 
   /* ── 05 · capabilities ─────────────────────────────────────────────── */
-  's5.label': 'CAPABILITIES',
-  's5.title': 'Every edge on the graph<br>has a protocol.',
-  's5.lede':
-    'Not a pile of features, but a set of mechanisms that let nodes trust each other, exchange work, and carry on after the link drops.',
-  's5.c1.t': 'Intent and task graph',
-  's5.c1.d':
-    'Multi-stage work unfolds into a DAG, artifacts wired between stages; consecutive steps on one machine stay one task, not three.',
-  's5.c2.t': 'Supervision and failover',
-  's5.c2.d':
-    'Dead credentials inject a fallback model; a lost node has its task migrated. Re-dispatch reruns the failed step, not the whole chain.',
-  's5.c3.t': 'Capability-card routing',
-  's5.c3.d':
-    'The card records hardware, agents and executors; hard constraints filter first, fit ranks second, and multi-hop routes price only the next hop.',
-  's5.c4.t': 'Sibling message board',
-  's5.c4.d':
-    'Siblings under one plan or parent message each other directly; slot overwrite, three granularities, a per-round budget.',
-  's5.c5.t': 'Three trust tiers',
-  's5.c5.d':
-    'mesh / guarded / open pinned to Ed25519 identity; weakest-hop clamping, screen content mesh-only.',
-  's5.c6.t': 'Disconnection and approval',
-  's5.c6.d':
-    'DTN bundles store and forward, delivered when the link returns; reversible actions run, irreversible ones wait for a human.',
-  's5.more':
-    'Also: two-layer memory · SKILL.md · session tree · actuator / computer-use · MCP / RPC · five interface languages',
 
   /* ── 06 · proof ────────────────────────────────────────────────────── */
   's6.label': 'IN THE FIELD',
@@ -240,26 +214,6 @@ export const EN = {
   's7.quote':
     '“The satellites launched early are weaker but far away; the new ones are stronger but close — they do different things, but they are one whole.”',
   's7.cite': 'OpenPanda Vision',
-
-  /* ── 08 · roadmap ──────────────────────────────────────────────────── */
-  's8.label': 'TRAJECTORY',
-  's8.title': 'Flight plan.',
-  "s8.lede": "v0.1.6 Constellation is the stable release dated 2026-11-14. The installer follows the latest stable channel; upgrades preserve personal configuration and data.",
-  's8.m1.name': 'Apoapsis',
-  's8.m1.d': 'Cross-node delegation, worktree following, actuator dispatch.',
-  's8.m1.state': 'Released',
-  's8.m2.name': 'Rendezvous',
-  's8.m2.d': 'Session AEAD, Bluetooth-style pairing, three trust tiers, multi-hop relay, computer-use.',
-  's8.m2.state': 'Stable',
-  's8.m3.name': 'Constellation',
-  's8.m3.d':
-    'The current cut of the release-grade line: cross-network mesh, same-project parallelism, audit close-out, one integrated console, plus native dialects, the terminal roster and per-task work directories.',
-  "s8.m3.state": "Stable release published",
-  's8.m4.name': 'Assistant',
-  's8.m4.d':
-    'Desktop shell (tray residency, global hotkeys, self-update), dense mesh layer, honest status reporting.',
-  's8.m4.state': 'Planned',
-  "s8.note": "One-line installation uses the latest published stable GitHub release. A version pin is usable only after its tag and assets are public; use --version (-Version on Windows).",
 
   /* ── 09 · licensing ────────────────────────────────────────────────── */
   'lic.title': 'Open source,<br>with the price in plain sight.',
@@ -342,7 +296,7 @@ export const EN = {
   'foot.product': 'Product',
   'foot.why': 'Why a graph',
   'foot.thin': 'Thin Constitution',
-  'foot.roadmap': 'Roadmap',
+  'foot.next': 'What comes next',
   'foot.faq': 'FAQ',
   'foot.install': 'Install',
   'foot.resources': 'Resources',
@@ -507,16 +461,10 @@ export const EN = {
   'docs.s5.l7': 'Agent models, concurrency and hot reload (five languages) ↗',
   'docs.s5.product': 'v0.1.x product direction (Chinese / English) ↗',
   'docs.s5.t': 'Further reading',
-  'hub.cl.d': 'Every change in the five 0.1.x releases, plus the compatibility promise.',
   'hub.cl.t': 'Release notes',
-  'hub.dl.d': 'Six release targets, the lite variant, SHA-256 and Ed25519 signature checks.',
   'hub.dl.t': 'Download & verify',
-  'hub.docs.d': 'Quick start, command reference, install flags, architecture and the trust model.',
   'hub.docs.t': 'Documentation',
-  'hub.lede': 'Documentation, downloads, release notes, current boundaries, capabilities, the security model, community and the FAQ each have their own address — bookmark one or send it to a colleague.',
-  'hub.st.d': 'Verified deployments, unfinished boundaries and known limitations.',
   'hub.st.t': 'Project status',
-  'hub.title': 'Site map.',
   'meta.cl.desc': 'Every OpenPanda 0.1.x release, what changed, and the compatibility promise behind the release-grade version line.',
   'meta.cl.title': 'Release notes — OpenPanda',
   'meta.dl.desc': 'Prebuilt OpenPanda v0.1.6 binaries for macOS, Linux and Windows on amd64/arm64, plus SHA-256 checksums and Ed25519 release signatures.',
@@ -1059,13 +1007,9 @@ export const EN = {
   'toc.validation': 'How far it is verified',
   'toc.quality': 'Quality gates',
   'hub.ft.t': 'Capabilities',
-  'hub.ft.d': 'A itemised inventory of orchestration, memory, mesh, sessions and interfaces.',
   'hub.sc.t': 'Security & trust',
-  'hub.sc.d': 'Trust model, deployment red lines, integrity verification and vulnerability reporting.',
   'hub.cm.t': 'Community',
-  'hub.cm.d': 'Toolchain, engineering gates, code conventions and the pull request flow.',
   'hub.fq.t': 'FAQ',
-  'hub.fq.d': 'Twenty-nine common questions and answers, grouped by use case.',
   // ── CJK-labelled table cells need dictionary entries too ──────────
   'dx.s1.r1.c1': 'node',
   'dx.s1.r2.c1': 'capability card',

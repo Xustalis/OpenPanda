@@ -402,12 +402,14 @@ site, adapters, localized docs, commits and secrets.
   `features.html`, `docs.html`, `download.html`, `changelog.html`,
   `status.html`, `security.html`, `community.html`, `faq.html`) plus a
   self-contained `404.html`. Seven primary pages sit in the nav; security and
-  community are reached from the eight-card site map and the footer. The
-  eleven chapters of the landing page are reached through `hero-index` and ⌘K,
-  not the nav. Content for the standalone pages comes from `README.md`,
-  `SECURITY.md`, `CONTRIBUTING.md`, `docs/faq.md`, `docs/status.md` and the
+  community are reached from the footer, which `check-site.py` requires to
+  name every subpage. The seven chapters of the landing page (the section
+  labels read `NN / 07`) are reached through `hero-index` and ⌘K, not the
+  nav; "star → graph" lives inside chapter 01 and the licence tiers inside
+  chapter 07, each keeping its own anchor. Content for the standalone pages
+  comes from `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, `docs/faq.md`, `docs/status.md` and the
   installer scripts — do not invent capabilities or numbers. Adding a page
-  means adding its nav link (or site-map card), sitemap entry, canonical /
+  means adding its nav link (or footer link), sitemap entry, canonical /
   og:url, English keys and TOC anchors — `scripts/check-site.py` asserts all
   of them, along with content floors for the capability, security, FAQ,
   community and adapter pages.

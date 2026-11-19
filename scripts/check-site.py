@@ -347,9 +347,13 @@ check('docs.html lists the eleven adapter scripts', len(adapter_rows) == 11,
 check('community.html documents the local gates',
       all(x in pages['community.html'] for x in
           ('make gate', 'make gate-all', 'npm run typecheck')))
-hub_cards = len(re.findall(r'<a class="hub-card"', index))
-check('the landing site map links every subpage',
-      hub_cards == len(SUBPAGES), f'{hub_cards} cards vs {len(SUBPAGES)} subpages')
+# The landing page no longer carries a site-map section; the footer is the
+# complete index of the site, so it is what must name every subpage.
+footer_html = footers['index.html'].group(0) if footers['index.html'] else ''
+footer_targets = {h.split('#')[0] for h in re.findall(r'href="([^"]+\.html)', footer_html)}
+check('the landing footer links every subpage',
+      set(SUBPAGES) <= footer_targets,
+      'missing from footer: ' + ', '.join(sorted(set(SUBPAGES) - footer_targets)))
 thin = [n for n in SUBPAGES
         if len(re.findall(r'<section class="pg-section[ "]', pages[n])) < 4]
 check('every subpage has at least four substantive sections', not thin,

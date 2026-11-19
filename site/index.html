@@ -121,7 +121,7 @@
     <svg class="brand-mark" width="27" height="27" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" pathLength="100" stroke-dasharray="82 18"><ellipse cx="32" cy="32" rx="26" ry="9" transform="rotate(-22 32 32)"/></g><path d="M32 12 L36.6 27.4 L52 32 L36.6 36.6 L32 52 L27.4 36.6 L12 32 L27.4 27.4 Z" fill="currentColor"/><circle cx="56.1" cy="22.3" r="2.9" fill="currentColor"/><circle cx="39.2" cy="20.3" r="1.9" fill="currentColor"/></svg>
     <span>Open<b>Panda</b></span>
   </a>
-  <!-- Site-level navigation, shared verbatim by every page. The eleven
+  <!-- Site-level navigation, shared verbatim by every page. The seven
        chapters remain reachable through the hero index and ⌘K on this page;
        a site is not one long scroll. -->
   <div class="nav-links">
@@ -156,13 +156,12 @@
   <div class="mobile-menu-inner">
     <p class="mono-label" data-i18n="menu.label">INDEX</p>
     <a href="#why"><b>01</b><span data-i18n="nav.why">四堵墙</span></a>
-    <a href="#graph"><b>02</b><span data-i18n="nav.graph">星状 → 图状</span></a>
-    <a href="#product"><b>03</b><span data-i18n="nav.product">产品</span></a>
-    <a href="#constitution"><b>04</b><span data-i18n="nav.constitution">薄宪法</span></a>
-    <a href="#roadmap"><b>08</b><span data-i18n="nav.roadmap">路线图</span></a>
-    <a href="#license"><b>09</b><span data-i18n="nav.license">许可</span></a>
-    <a href="#faq"><b>10</b><span data-i18n="nav.faq">常见问题</span></a>
-    <a href="#install"><b>11</b><span data-i18n="nav.install">安装</span></a>
+    <a href="#product"><b>02</b><span data-i18n="nav.product">产品</span></a>
+    <a href="#constitution"><b>03</b><span data-i18n="nav.constitution">薄宪法</span></a>
+    <a href="#proof"><b>04</b><span data-i18n="nav.proof">实证</span></a>
+    <a href="#scales"><b>05</b><span data-i18n="nav.scales">三个尺度</span></a>
+    <a href="#faq"><b>06</b><span data-i18n="nav.faq">常见问题</span></a>
+    <a href="#install"><b>07</b><span data-i18n="nav.install">安装</span></a>
     <div class="mobile-menu-foot">
       <div class="menu-sites">
         <a href="docs.html" data-i18n="hub.docs.t">文档中心</a>
@@ -214,16 +213,17 @@
     </div>
   </div>
 
-  <!-- Index numbers are the chapter pages of the whole eleven-section story,
-       not 1..N of this shortlist: "Install" is 11 / 11 in the section label,
-       11 in the mobile index and 11 here. Keep them in step with the
-       `NN / 11` labels and the palette hints in js/main.js. -->
+  <!-- Index numbers are the chapter numbers of the seven-section story, not
+       1..N of this shortlist: "Install" is 07 / 07 in the section label, 07 in
+       the mobile index and 07 here. Five cells on purpose: the grid is five
+       columns wide. Keep them in step with the `NN / 07` labels and the
+       palette hints in js/main.js. -->
   <div class="wrap hero-index">
     <a href="#why"><b>01</b><span data-i18n="hero.idx.why">四堵墙</span></a>
-    <a href="#graph"><b>02</b><span data-i18n="hero.idx.graph">星状 → 图状</span></a>
-    <a href="#product"><b>03</b><span data-i18n="hero.idx.product">产品</span></a>
-    <a href="#constitution"><b>04</b><span data-i18n="hero.idx.constitution">薄宪法</span></a>
-    <a href="#install"><b>11</b><span data-i18n="hero.idx.install">安装</span></a>
+    <a href="#product"><b>02</b><span data-i18n="hero.idx.product">产品</span></a>
+    <a href="#constitution"><b>03</b><span data-i18n="hero.idx.constitution">薄宪法</span></a>
+    <a href="#proof"><b>04</b><span data-i18n="hero.idx.proof">实证</span></a>
+    <a href="#install"><b>07</b><span data-i18n="hero.idx.install">安装</span></a>
     <div class="hero-meta">
       <span class="mono-label" data-i18n="hero.credit">ESO/S. BRUNIER · CC BY 4.0 · NASA BLUE MARBLE / DNB · PUBLIC DOMAIN</span>
       <span class="hero-scroll" data-i18n="hero.scroll">SCROLL</span>
@@ -257,7 +257,7 @@
 <!-- ═══════════════════════════════ 01 · FOUR WALLS ═══════════════════════════════ -->
 <section class="paper-section" id="why" tabindex="-1">
   <div class="wrap">
-    <div class="section-label reveal"><span data-i18n="s1.label">THE FOUR WALLS</span><span>01 / 11</span></div>
+    <div class="section-label reveal"><span data-i18n="s1.label">THE FOUR WALLS</span><span>01 / 07</span></div>
     <div class="section-head">
       <h2 class="h2 reveal" data-i18n="s1.title">一句话，撞上四堵墙。</h2>
       <p class="lede reveal" data-i18n="s1.lede">“把 issue #12 修了，在构建机上跑完测试，结果发我手机。”对人是日常，对单个 Agent 是物理上做不到的事。</p>
@@ -269,76 +269,71 @@
       <article class="wall reveal"><span class="wall-num">04</span><h3 data-i18n="s1.wall4.t">生死</h3><p data-i18n="s1.wall4.d">一个 Agent 崩了，任务就没了。没有另一个节点知道它做到了哪里。</p></article>
     </div>
     <p class="pull-quote reveal" data-i18n="s1.close">问题从来不是“要不要多智能体”，而是“这些 Agent 之间怎么组织”。</p>
-  </div>
-</section>
+    <div class="why-graph" id="graph" tabindex="-1">
+      <div class="section-head">
+        <h2 class="h2 reveal" data-i18n="s2.title">今天的多智能体，<br>都围着一个中心转。</h2>
+        <p class="lede reveal" data-i18n="s2.lede">一个 MainAgent 拆任务、派活、等汇报。它同时是调度器、消息总线和单点故障。</p>
+      </div>
 
-<!-- ═══════════════════════════════ 02 · STAR → GRAPH ═══════════════════════════════ -->
-<section class="paper-section graph-section" id="graph">
-  <div class="wrap">
-    <div class="section-label reveal"><span data-i18n="s2.label">FROM STAR TO GRAPH</span><span>02 / 11</span></div>
-    <div class="section-head">
-      <h2 class="h2 reveal" data-i18n="s2.title">今天的多智能体，<br>都围着一个中心转。</h2>
-      <p class="lede reveal" data-i18n="s2.lede">一个 MainAgent 拆任务、派活、等汇报。它同时是调度器、消息总线和单点故障。</p>
-    </div>
+      <div class="topo-grid">
+        <figure class="topo star reveal">
+          <div class="topo-head"><span class="mono-label" data-i18n="s2.star">星状</span><span class="mono-label">STAR</span></div>
+          <div class="topo-stage">
+            <!-- Labels live inside the SVG, not as absolutely-positioned spans:
+                 the old tags drifted off their nodes at every width, and the centre
+                 one overflowed its circle. Coordinates here scale with the figure. -->
+            <svg viewBox="0 0 440 320" class="topo-svg" role="img" aria-label="星状拓扑：四个阶段的消息都要经中心 MainAgent 转达" data-i18n-aria="s2.star.aria">
+              <path class="topo-dash" d="M88 74 Q 220 8 352 74" />
+              <text class="tl-note" x="220" y="34" data-i18n="s2.star.hop">上报 → 转达 · 两跳延迟</text>
+              <path class="topo-line" d="M220 160 L88 74 M220 160 L352 74 M220 160 L88 246 M220 160 L352 246" />
+              <circle class="topo-node" cx="88" cy="74" r="21" />
+              <circle class="topo-node" cx="352" cy="74" r="21" />
+              <circle class="topo-node" cx="88" cy="246" r="21" />
+              <circle class="topo-node" cx="352" cy="246" r="21" />
+              <circle class="topo-warn-ring" cx="220" cy="160" r="54" />
+              <circle class="topo-center" cx="220" cy="160" r="40" />
+              <text class="tl-in" x="220" y="164">MainAgent</text>
+              <text class="tl" x="88" y="116" data-i18n="s2.stage.a">阶段 A</text>
+              <text class="tl" x="352" y="116" data-i18n="s2.stage.b">阶段 B</text>
+              <text class="tl" x="88" y="288" data-i18n="s2.stage.c">阶段 C</text>
+              <text class="tl" x="352" y="288" data-i18n="s2.stage.d">阶段 D</text>
+            </svg>
+          </div>
+          <figcaption data-i18n="s2.star.note">中心 = 调度器 · 消息总线 · 单点故障</figcaption>
+        </figure>
 
-    <div class="topo-grid">
-      <figure class="topo star reveal">
-        <div class="topo-head"><span class="mono-label" data-i18n="s2.star">星状</span><span class="mono-label">STAR</span></div>
-        <div class="topo-stage">
-          <!-- Labels live inside the SVG, not as absolutely-positioned spans:
-               the old tags drifted off their nodes at every width, and the centre
-               one overflowed its circle. Coordinates here scale with the figure. -->
-          <svg viewBox="0 0 440 320" class="topo-svg" role="img" aria-label="星状拓扑：四个阶段的消息都要经中心 MainAgent 转达" data-i18n-aria="s2.star.aria">
-            <path class="topo-dash" d="M88 74 Q 220 8 352 74" />
-            <text class="tl-note" x="220" y="34" data-i18n="s2.star.hop">上报 → 转达 · 两跳延迟</text>
-            <path class="topo-line" d="M220 160 L88 74 M220 160 L352 74 M220 160 L88 246 M220 160 L352 246" />
-            <circle class="topo-node" cx="88" cy="74" r="21" />
-            <circle class="topo-node" cx="352" cy="74" r="21" />
-            <circle class="topo-node" cx="88" cy="246" r="21" />
-            <circle class="topo-node" cx="352" cy="246" r="21" />
-            <circle class="topo-warn-ring" cx="220" cy="160" r="54" />
-            <circle class="topo-center" cx="220" cy="160" r="40" />
-            <text class="tl-in" x="220" y="164">MainAgent</text>
-            <text class="tl" x="88" y="116" data-i18n="s2.stage.a">阶段 A</text>
-            <text class="tl" x="352" y="116" data-i18n="s2.stage.b">阶段 B</text>
-            <text class="tl" x="88" y="288" data-i18n="s2.stage.c">阶段 C</text>
-            <text class="tl" x="352" y="288" data-i18n="s2.stage.d">阶段 D</text>
-          </svg>
-        </div>
-        <figcaption data-i18n="s2.star.note">中心 = 调度器 · 消息总线 · 单点故障</figcaption>
-      </figure>
+        <figure class="topo graph reveal">
+          <div class="topo-head"><span class="mono-label" data-i18n="s2.graph">图状</span><span class="mono-label">GRAPH</span></div>
+          <div class="topo-stage">
+            <svg viewBox="0 0 440 320" class="topo-svg" role="img" aria-label="图状拓扑：兄弟节点直接互发消息，不必经过中心" data-i18n-aria="s2.graph.aria">
+              <path class="topo-edge" d="M220 88 L88 158 M220 88 L352 158 M88 158 L352 158 M88 158 L148 262 M352 158 L322 262 M148 262 L322 262" />
+              <circle class="topo-node jade" cx="220" cy="58" r="30" />
+              <text class="tl-inv" x="220" y="62" data-i18n="s2.graph.root">发起节点</text>
+              <circle class="topo-node" cx="88" cy="158" r="21" />
+              <circle class="topo-node" cx="352" cy="158" r="21" />
+              <circle class="topo-node" cx="148" cy="262" r="21" />
+              <circle class="topo-node" cx="322" cy="262" r="21" />
+              <!-- A label riding the wire it describes: the sibling hop never
+                   touches the root, so it never pays the centre's queue. -->
+              <rect class="tl-chip" x="146" y="146" width="148" height="24" rx="12" />
+              <text class="tl-note" x="220" y="162" data-i18n="s2.graph.chip">沟通成本不进中心</text>
+              <circle class="topo-packet"><animateMotion dur="3.4s" repeatCount="indefinite" path="M220 88 L88 158" /></circle>
+              <circle class="topo-packet"><animateMotion dur="4.2s" begin="1.1s" repeatCount="indefinite" path="M220 88 L352 158" /></circle>
+              <circle class="topo-packet"><animateMotion dur="4.8s" begin="0.5s" repeatCount="indefinite" path="M322 262 L148 262" /></circle>
+              <text class="tl" x="88" y="200" data-i18n="s2.stage.a">阶段 A</text>
+              <text class="tl" x="352" y="200" data-i18n="s2.stage.b">阶段 B</text>
+              <text class="tl" x="148" y="304" data-i18n="s2.graph.sub">子任务</text>
+              <text class="tl" x="322" y="304" data-i18n="s2.graph.sub">子任务</text>
+            </svg>
+          </div>
+          <figcaption data-i18n="s2.graph.note">兄弟直接说话 · 节点可继续向下委派</figcaption>
+        </figure>
+      </div>
 
-      <figure class="topo graph reveal">
-        <div class="topo-head"><span class="mono-label" data-i18n="s2.graph">图状</span><span class="mono-label">GRAPH</span></div>
-        <div class="topo-stage">
-          <svg viewBox="0 0 440 320" class="topo-svg" role="img" aria-label="图状拓扑：兄弟节点直接互发消息，不必经过中心" data-i18n-aria="s2.graph.aria">
-            <path class="topo-edge" d="M220 88 L88 158 M220 88 L352 158 M88 158 L352 158 M88 158 L148 262 M352 158 L322 262 M148 262 L322 262" />
-            <circle class="topo-node jade" cx="220" cy="58" r="30" />
-            <text class="tl-inv" x="220" y="62" data-i18n="s2.graph.root">发起节点</text>
-            <circle class="topo-node" cx="88" cy="158" r="21" />
-            <circle class="topo-node" cx="352" cy="158" r="21" />
-            <circle class="topo-node" cx="148" cy="262" r="21" />
-            <circle class="topo-node" cx="322" cy="262" r="21" />
-            <!-- A label riding the wire it describes: the sibling hop never
-                 touches the root, so it never pays the centre's queue. -->
-            <rect class="tl-chip" x="146" y="146" width="148" height="24" rx="12" />
-            <text class="tl-note" x="220" y="162" data-i18n="s2.graph.chip">沟通成本不进中心</text>
-            <circle class="topo-packet"><animateMotion dur="3.4s" repeatCount="indefinite" path="M220 88 L88 158" /></circle>
-            <circle class="topo-packet"><animateMotion dur="4.2s" begin="1.1s" repeatCount="indefinite" path="M220 88 L352 158" /></circle>
-            <circle class="topo-packet"><animateMotion dur="4.8s" begin="0.5s" repeatCount="indefinite" path="M322 262 L148 262" /></circle>
-            <text class="tl" x="88" y="200" data-i18n="s2.stage.a">阶段 A</text>
-            <text class="tl" x="352" y="200" data-i18n="s2.stage.b">阶段 B</text>
-            <text class="tl" x="148" y="304" data-i18n="s2.graph.sub">子任务</text>
-            <text class="tl" x="322" y="304" data-i18n="s2.graph.sub">子任务</text>
-          </svg>
-        </div>
-        <figcaption data-i18n="s2.graph.note">兄弟直接说话 · 节点可继续向下委派</figcaption>
-      </figure>
-    </div>
-
-    <div class="graph-copy">
-      <p class="body-lg reveal" data-i18n="s2.body">OpenPanda 把边还给节点。兄弟任务直接互发有界短消息，执行中的节点可以继续向下委派。没有固定中心——谁发起，谁就是中心。</p>
-      <blockquote class="side-quote reveal" data-i18n="s2.quote">“没有中心，不等于没有秩序。”</blockquote>
+      <div class="graph-copy">
+        <p class="body-lg reveal" data-i18n="s2.body">OpenPanda 把边还给节点。兄弟任务直接互发有界短消息，执行中的节点可以继续向下委派。没有固定中心——谁发起，谁就是中心。</p>
+        <blockquote class="side-quote reveal" data-i18n="s2.quote">“没有中心，不等于没有秩序。”</blockquote>
+      </div>
     </div>
   </div>
 </section>
@@ -346,7 +341,7 @@
 <!-- ═══════════════════════════════ 03 · PRODUCT ═══════════════════════════════ -->
 <section class="paper-section product-section" id="product">
   <div class="wrap">
-    <div class="section-label reveal"><span data-i18n="s3.label">THE PRODUCT</span><span>03 / 11</span></div>
+    <div class="section-label reveal"><span data-i18n="s3.label">THE PRODUCT</span><span>02 / 07</span></div>
     <div class="section-head">
       <h2 class="h2 reveal" data-i18n="s3.title">一句话丢进去，<br>一张网替你干完。</h2>
       <p class="lede reveal" data-i18n="s3.lede">OpenPanda 本身不是 Agent。它理解意图、拆解任务、按能力卡路由到最合适的节点，监督执行、验收结果；真正动手的，是你已经装好的 Claude Code、Codex 和每一台设备。</p>
@@ -411,7 +406,7 @@
 <section class="night-section constitution" id="constitution">
   <canvas class="dust" aria-hidden="true"></canvas>
   <div class="wrap">
-    <div class="section-label reveal"><span data-i18n="s4.label">THE THIN CONSTITUTION</span><span>04 / 11</span></div>
+    <div class="section-label reveal"><span data-i18n="s4.label">THE THIN CONSTITUTION</span><span>03 / 07</span></div>
     <div class="constitution-grid">
       <div class="constitution-copy">
         <h2 class="h2 night-h2 reveal" data-i18n="s4.title">冻结关系，<br>不冻结认知。</h2>
@@ -446,30 +441,10 @@
   </div>
 </section>
 
-<!-- ═══════════════════════════════ 05 · CAPABILITIES ═══════════════════════════════ -->
-<section class="paper-section capabilities" id="capabilities">
-  <div class="wrap">
-    <div class="section-label reveal"><span data-i18n="s5.label">CAPABILITIES</span><span>05 / 11</span></div>
-    <div class="section-head">
-      <h2 class="h2 reveal" data-i18n="s5.title">图上的每一条边，<br>都有协议。</h2>
-      <p class="lede reveal" data-i18n="s5.lede">不是一堆功能，而是一组让节点可以彼此信任、交换工作、在断网后继续的机制。</p>
-    </div>
-    <div class="cap-grid">
-      <article class="cap reveal"><div class="cap-top"><span class="cap-num">01</span><span class="cap-tag">ENTRY · PLAN</span></div><h3 data-i18n="s5.c1.t">意图与任务图</h3><p data-i18n="s5.c1.d">多阶段工作展开为 DAG，产物在阶段之间接线；同机连续几步仍算一个任务，不拆成三个。</p></article>
-      <article class="cap reveal"><div class="cap-top"><span class="cap-num">02</span><span class="cap-tag">SUPERVISION</span></div><h3 data-i18n="s5.c2.t">监督与故障转移</h3><p data-i18n="s5.c2.d">凭据失效就注入回退模型，节点失联就把任务迁走。重派只重跑失败那一步，不重跑整条链。</p></article>
-      <article class="cap reveal"><div class="cap-top"><span class="cap-num">03</span><span class="cap-tag">SCHEDULER</span></div><h3 data-i18n="s5.c3.t">能力卡路由</h3><p data-i18n="s5.c3.d">能力卡记着硬件、Agent 与执行器；硬条件先筛，匹配度再排，多跳路由只按下一跳计价。</p></article>
-      <article class="cap reveal"><div class="cap-top"><span class="cap-num">04</span><span class="cap-tag">MESSAGES</span></div><h3 data-i18n="s5.c4.t">兄弟消息板</h3><p data-i18n="s5.c4.d">同 plan / 同父任务的兄弟直接发短消息；槽位覆盖、三档粒度、每轮预算。</p></article>
-      <article class="cap reveal"><div class="cap-top"><span class="cap-num">05</span><span class="cap-tag">TRUST</span></div><h3 data-i18n="s5.c5.t">信任三档</h3><p data-i18n="s5.c5.d">mesh / guarded / open 钉在 Ed25519 身份上；逐跳最弱钳制，屏幕内容只走 mesh。</p></article>
-      <article class="cap reveal"><div class="cap-top"><span class="cap-num">06</span><span class="cap-tag">DTN · APPROVAL</span></div><h3 data-i18n="s5.c6.t">断网与审批</h3><p data-i18n="s5.c6.d">DTN bundle 存储转发，链路恢复再送；可逆操作自动执行，不可逆操作挂起等人。</p></article>
-    </div>
-    <p class="cap-more reveal" data-i18n="s5.more">还有：双层记忆 · SKILL.md · 会话树 · Actuator / computer-use · MCP / RPC · 五种界面语言</p>
-  </div>
-</section>
-
 <!-- ═══════════════════════════════ 06 · PROOF ═══════════════════════════════ -->
 <section class="paper-section proof" id="proof">
   <div class="wrap">
-    <div class="section-label reveal"><span data-i18n="s6.label">IN THE FIELD</span><span>06 / 11</span></div>
+    <div class="section-label reveal"><span data-i18n="s6.label">IN THE FIELD</span><span>04 / 07</span></div>
     <div class="section-head">
       <h2 class="h2 reveal" data-i18n="s6.title">三台真机，<br>不是演示。</h2>
       <p class="lede reveal" data-i18n="s6.lede">macOS ↔ Windows ↔ Linux 开发板，真实组网：多跳委派、执行中杀节点、断线重连、消息重放。</p>
@@ -496,7 +471,7 @@
   <canvas class="dust" aria-hidden="true"></canvas>
   <div class="scales-earth" aria-hidden="true"></div>
   <div class="wrap">
-    <div class="section-label reveal"><span data-i18n="s7.label">THREE SCALES</span><span>07 / 11</span></div>
+    <div class="section-label reveal"><span data-i18n="s7.label">THREE SCALES</span><span>05 / 07</span></div>
     <div class="scales-head">
       <h2 class="h2 night-h2 reveal" data-i18n="s7.title">同一颗内核，<br>三个尺度。</h2>
       <p class="night-lede reveal" data-i18n="s7.lede">深空不是另一个赛道，是同一个问题的极限形态：节点异构、链路断续、彼此不完全信任。</p>
@@ -528,105 +503,10 @@
   </div>
 </section>
 
-<!-- ═══════════════════════════════ 08 · ROADMAP ═══════════════════════════════ -->
-<section class="paper-section roadmap" id="roadmap">
-  <div class="wrap">
-    <div class="section-label reveal"><span data-i18n="s8.label">TRAJECTORY</span><span>08 / 11</span></div>
-    <div class="section-head">
-      <h2 class="h2 reveal" data-i18n="s8.title">飞行计划。</h2>
-      <p class="lede reveal" data-i18n="s8.lede">v0.1.6 Constellation 稳定版，发布于 2026-11-14。安装器从最新稳定版渠道取包；升级保留个人配置与数据。</p>
-    </div>
-    <div class="track">
-      <article class="mile done reveal">
-        <span class="mile-ver">v0.0.10</span>
-        <h3 data-i18n="s8.m1.name">Apoapsis</h3>
-        <p data-i18n="s8.m1.d">跨节点委派、工作树随行、actuator 派发。</p>
-        <span class="mile-state" data-i18n="s8.m1.state">已发布</span>
-      </article>
-      <article class="mile done reveal">
-        <span class="mile-ver">v0.0.11</span>
-        <h3 data-i18n="s8.m2.name">Rendezvous</h3>
-        <p data-i18n="s8.m2.d">会话 AEAD、蓝牙式配对、信任三档、多跳中继、computer-use。</p>
-        <span class="mile-state" data-i18n="s8.m2.state">稳定版</span>
-      </article>
-      <article class="mile current reveal">
-        <span class="mile-ver">v0.1.4</span>
-        <h3 data-i18n="s8.m3.name">Constellation</h3>
-        <p data-i18n="s8.m3.d">发布级这条线的当前版本：跨网组网、同项目并行、审计收口、控制台一体化，加上原生方言、终端名册与任务级工作目录。</p>
-        <span class="mile-state" data-i18n="s8.m3.state">稳定版已发布</span>
-      </article>
-      <article class="mile reveal">
-        <span class="mile-ver">v0.1.x</span>
-        <h3 data-i18n="s8.m4.name">Assistant</h3>
-        <p data-i18n="s8.m4.d">桌面薄壳（托盘常驻、全局热键、自更新）、稠密网格层、现状如实呈现。</p>
-        <span class="mile-state" data-i18n="s8.m4.state">计划中</span>
-      </article>
-    </div>
-    <p class="roadmap-note reveal" data-i18n="s8.note">一键安装默认取 GitHub Releases 上已发布的最新稳定版；指定版本须等对应 tag 和产物公开后，再使用 --version（Windows 用 -Version）。</p>
-  </div>
-</section>
-
-<!-- ═══════════════════════════════ 09 · LICENSING ═══════════════════════════════ -->
-<!-- Every product page answers "what does it cost". For an AGPL project the
-     honest answer is a tier table, not "free" with an asterisk — the paid rows
-     are exactly the uses the licence already forbids. -->
-<section class="paper-section licensing" id="license">
-  <div class="wrap">
-    <div class="section-label reveal"><span>LICENSING</span><span>09 / 11</span></div>
-    <div class="section-head">
-      <h2 class="h2 reveal" data-i18n="lic.title">开源，<br>价格也写在明处。</h2>
-      <p class="lede reveal" data-i18n="lic.lede">代码是 AGPL-3.0-or-later。个人用、学习、公司内部工具，都不花钱。只有当你把它关进闭源产品里，才需要谈授权——这一条写在许可证里，不写在销售话术里。</p>
-    </div>
-
-    <div class="license-grid">
-      <article class="lic reveal">
-        <div class="lic-head"><span class="mono-label">COMMUNITY</span><span class="lic-flag" data-i18n="lic.c1.flag">默认路径</span></div>
-        <p class="lic-price"><b>¥0</b></p>
-        <p class="lic-desc" data-i18n="lic.c1.desc">个人使用、学习、公司内部工具、二次开发。</p>
-        <ul class="lic-list">
-          <li data-i18n="lic.c1.l1">全部源码与预编译产物</li>
-          <li data-i18n="lic.c1.l2">11 个 Agent 适配器，持续增加</li>
-          <li data-i18n="lic.c1.l3">可自行修改；对外分发时改动同样开源</li>
-          <li data-i18n="lic.c1.l4">GitHub Issues 支持</li>
-        </ul>
-        <a class="lic-cta" href="#install" data-i18n="lic.c1.cta">开始安装 <span aria-hidden="true">→</span></a>
-      </article>
-
-      <article class="lic reveal">
-        <div class="lic-head"><span class="mono-label">COMMERCIAL</span></div>
-        <p class="lic-price lic-price-text"><b data-i18n="lic.c2.price">按需报价</b></p>
-        <p class="lic-desc" data-i18n="lic.c2.desc">把它变成你产品的一部分，而不必开源你的产品。</p>
-        <ul class="lic-list">
-          <li data-i18n="lic.c2.l1">闭源嵌入与分发</li>
-          <li data-i18n="lic.c2.l2">对外托管修改版（SaaS）</li>
-          <li data-i18n="lic.c2.l3">OEM / 硬件预装</li>
-          <li data-i18n="lic.c2.l4">商标与品牌使用许可</li>
-        </ul>
-        <a class="lic-cta" href="mailto:fing2024@outlook.com?subject=OpenPanda%20%E5%95%86%E4%B8%9A%E6%8E%88%E6%9D%83" data-i18n="lic.c2.cta">说明你的用法 <span aria-hidden="true">→</span></a>
-      </article>
-
-      <article class="lic reveal">
-        <div class="lic-head"><span class="mono-label">ENTERPRISE</span></div>
-        <p class="lic-price lic-price-text"><b data-i18n="lic.c3.price">年度合约</b></p>
-        <p class="lic-desc" data-i18n="lic.c3.desc">授权之外，还要有人对交付负责。</p>
-        <ul class="lic-list">
-          <li data-i18n="lic.c3.l1">架构评审与接入方案</li>
-          <li data-i18n="lic.c3.l2">私有适配器 / 执行器开发</li>
-          <li data-i18n="lic.c3.l3">安全评估与合规材料</li>
-          <li data-i18n="lic.c3.l4">响应时限与升级支持</li>
-        </ul>
-        <a class="lic-cta" href="mailto:fing2024@outlook.com?subject=OpenPanda%20%E4%BC%81%E4%B8%9A%E6%94%AF%E6%8C%81" data-i18n="lic.c3.cta">约一次通话 <span aria-hidden="true">→</span></a>
-      </article>
-    </div>
-
-    <p class="license-note reveal" data-i18n="lic.note">拿不准自己的用法算不算「闭源分发」？<a href="mailto:fing2024@outlook.com?subject=OpenPanda%20%E6%8E%88%E6%9D%83%E5%92%A8%E8%AF%A2">写一句话描述场景</a>，通常当天回复。</p>
-  </div>
-</section>
-
 <!-- ═══════════════════════════════ 10 · FAQ ═══════════════════════════════ -->
 <section class="paper-section faq-section" id="faq">
   <div class="wrap">
-    <div class="section-label reveal"><span>QUESTIONS</span><span>10 / 11</span></div>
+    <div class="section-label reveal"><span>QUESTIONS</span><span>06 / 07</span></div>
     <div class="faq-grid">
       <div class="faq-intro">
         <h2 class="h2 reveal" data-i18n="faq.title">你可能想问的。</h2>
@@ -716,7 +596,7 @@
 <!-- ═══════════════════════════════ 10 · INSTALL ═══════════════════════════════ -->
 <section class="paper-section install-section" id="install">
   <div class="wrap">
-    <div class="section-label reveal"><span data-i18n="s9.label">LIFTOFF</span><span>11 / 11</span></div>
+    <div class="section-label reveal"><span data-i18n="s9.label">LIFTOFF</span><span>07 / 07</span></div>
     <div class="install-panel reveal">
       <div class="install-top">
         <h2 class="install-title" data-i18n="s9.title">一行命令，<br>点火入轨。</h2>
@@ -760,71 +640,59 @@
         <a href="download.html" data-i18n="s9.all">全部安装包与校验值 →</a>
       </div>
     </div>
+
+    <div class="license-block" id="license" tabindex="-1">
+      <div class="section-head">
+        <h2 class="h2 reveal" data-i18n="lic.title">开源，<br>价格也写在明处。</h2>
+        <p class="lede reveal" data-i18n="lic.lede">代码是 AGPL-3.0-or-later。个人用、学习、公司内部工具，都不花钱。只有当你把它关进闭源产品里，才需要谈授权——这一条写在许可证里，不写在销售话术里。</p>
+      </div>
+
+      <div class="license-grid">
+        <article class="lic reveal">
+          <div class="lic-head"><span class="mono-label">COMMUNITY</span><span class="lic-flag" data-i18n="lic.c1.flag">默认路径</span></div>
+          <p class="lic-price"><b>¥0</b></p>
+          <p class="lic-desc" data-i18n="lic.c1.desc">个人使用、学习、公司内部工具、二次开发。</p>
+          <ul class="lic-list">
+            <li data-i18n="lic.c1.l1">全部源码与预编译产物</li>
+            <li data-i18n="lic.c1.l2">11 个 Agent 适配器，持续增加</li>
+            <li data-i18n="lic.c1.l3">可自行修改；对外分发时改动同样开源</li>
+            <li data-i18n="lic.c1.l4">GitHub Issues 支持</li>
+          </ul>
+          <a class="lic-cta" href="#install" data-i18n="lic.c1.cta">开始安装 <span aria-hidden="true">→</span></a>
+        </article>
+
+        <article class="lic reveal">
+          <div class="lic-head"><span class="mono-label">COMMERCIAL</span></div>
+          <p class="lic-price lic-price-text"><b data-i18n="lic.c2.price">按需报价</b></p>
+          <p class="lic-desc" data-i18n="lic.c2.desc">把它变成你产品的一部分，而不必开源你的产品。</p>
+          <ul class="lic-list">
+            <li data-i18n="lic.c2.l1">闭源嵌入与分发</li>
+            <li data-i18n="lic.c2.l2">对外托管修改版（SaaS）</li>
+            <li data-i18n="lic.c2.l3">OEM / 硬件预装</li>
+            <li data-i18n="lic.c2.l4">商标与品牌使用许可</li>
+          </ul>
+          <a class="lic-cta" href="mailto:fing2024@outlook.com?subject=OpenPanda%20%E5%95%86%E4%B8%9A%E6%8E%88%E6%9D%83" data-i18n="lic.c2.cta">说明你的用法 <span aria-hidden="true">→</span></a>
+        </article>
+
+        <article class="lic reveal">
+          <div class="lic-head"><span class="mono-label">ENTERPRISE</span></div>
+          <p class="lic-price lic-price-text"><b data-i18n="lic.c3.price">年度合约</b></p>
+          <p class="lic-desc" data-i18n="lic.c3.desc">授权之外，还要有人对交付负责。</p>
+          <ul class="lic-list">
+            <li data-i18n="lic.c3.l1">架构评审与接入方案</li>
+            <li data-i18n="lic.c3.l2">私有适配器 / 执行器开发</li>
+            <li data-i18n="lic.c3.l3">安全评估与合规材料</li>
+            <li data-i18n="lic.c3.l4">响应时限与升级支持</li>
+          </ul>
+          <a class="lic-cta" href="mailto:fing2024@outlook.com?subject=OpenPanda%20%E4%BC%81%E4%B8%9A%E6%94%AF%E6%8C%81" data-i18n="lic.c3.cta">约一次通话 <span aria-hidden="true">→</span></a>
+        </article>
+      </div>
+
+      <p class="license-note reveal" data-i18n="lic.note">拿不准自己的用法算不算「闭源分发」？<a href="mailto:fing2024@outlook.com?subject=OpenPanda%20%E6%8E%88%E6%9D%83%E5%92%A8%E8%AF%A2">写一句话描述场景</a>，通常当天回复。</p>
+    </div>
   </div>
 </section>
 
-<!-- ═══════════════════════════ SITE MAP ═══════════════════════════════ -->
-<!-- The page above is the story; these four are the parts of a site that are
-     worth bookmarking and that keep changing after the story is finished. -->
-<section class="paper-section pg-hub" id="resources" tabindex="-1">
-  <div class="wrap">
-    <div class="section-label"><span>SITE MAP</span><span>09 PAGES</span></div>
-    <div class="section-head">
-      <h2 class="h2" id="resources-title" data-i18n="hub.title">站点目录。</h2>
-      <p class="lede" data-i18n="hub.lede">文档、下载、发布记录、当前边界、能力清单、安全模型、社区与常见问题各有独立地址，可以直接收藏，也可以单独发给同事。</p>
-    </div>
-    <div class="hub-grid">
-      <a class="hub-card" href="docs.html">
-        <span class="hub-num">01 / DOCS</span>
-        <h3 data-i18n="hub.docs.t">文档中心</h3>
-        <p data-i18n="hub.docs.d">快速开始、命令速查、安装参数、架构与信任模型。</p>
-        <span class="hub-go" aria-hidden="true">→</span>
-      </a>
-      <a class="hub-card" href="download.html">
-        <span class="hub-num">02 / DOWNLOAD</span>
-        <h3 data-i18n="hub.dl.t">下载与校验</h3>
-        <p data-i18n="hub.dl.d">六个发布目标、lite 变体、SHA-256 与 Ed25519 验签。</p>
-        <span class="hub-go" aria-hidden="true">→</span>
-      </a>
-      <a class="hub-card" href="changelog.html">
-        <span class="hub-num">03 / RELEASE NOTES</span>
-        <h3 data-i18n="hub.cl.t">发布记录</h3>
-        <p data-i18n="hub.cl.d">0.1.x 五个版本的逐条改动，以及版本兼容承诺。</p>
-        <span class="hub-go" aria-hidden="true">→</span>
-      </a>
-      <a class="hub-card" href="status.html">
-        <span class="hub-num">04 / STATUS</span>
-        <h3 data-i18n="hub.st.t">项目现状</h3>
-        <p data-i18n="hub.st.d">已验证的部署、未做完的边界与已知限制。</p>
-        <span class="hub-go" aria-hidden="true">→</span>
-      </a>
-      <a class="hub-card" href="features.html">
-        <span class="hub-num">05 / CAPABILITIES</span>
-        <h3 data-i18n="hub.ft.t">能力清单</h3>
-        <p data-i18n="hub.ft.d">编排、记忆、组网、会话与界面的逐条能力对账。</p>
-        <span class="hub-go" aria-hidden="true">→</span>
-      </a>
-      <a class="hub-card" href="security.html">
-        <span class="hub-num">06 / SECURITY</span>
-        <h3 data-i18n="hub.sc.t">安全与信任</h3>
-        <p data-i18n="hub.sc.d">信任模型、部署红线、完整性校验与漏洞上报。</p>
-        <span class="hub-go" aria-hidden="true">→</span>
-      </a>
-      <a class="hub-card" href="community.html">
-        <span class="hub-num">07 / COMMUNITY</span>
-        <h3 data-i18n="hub.cm.t">社区与贡献</h3>
-        <p data-i18n="hub.cm.d">工具链、工程门禁、代码约定与 PR 流程。</p>
-        <span class="hub-go" aria-hidden="true">→</span>
-      </a>
-      <a class="hub-card" href="faq.html">
-        <span class="hub-num">08 / FAQ</span>
-        <h3 data-i18n="hub.fq.t">常见问题</h3>
-        <p data-i18n="hub.fq.d">按场景分组的 29 个高频问题与答案。</p>
-        <span class="hub-go" aria-hidden="true">→</span>
-      </a>
-    </div>
-  </div>
-</section>
 </main>
 
 <!-- ═══════════════════════════════ FOOTER ═══════════════════════════════ -->
@@ -843,7 +711,7 @@
       <a href="features.html" data-i18n="foot.features">能力清单</a>
       <a href="index.html#graph" data-i18n="foot.why">为什么是图</a>
       <a href="index.html#constitution" data-i18n="foot.thin">薄宪法</a>
-      <a href="index.html#roadmap" data-i18n="foot.roadmap">路线图</a>
+      <a href="status.html#road" data-i18n="foot.next">接下来</a>
       <a href="faq.html" data-i18n="foot.faq">常见问题</a>
       <a href="download.html" data-i18n="foot.install">安装</a>
     </div>

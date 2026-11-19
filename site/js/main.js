@@ -66,7 +66,7 @@ const linkFor = new Map(navLinks.map((a) => [a.getAttribute('href').split('#')[1
 
 if (canObserve && navLinks.length) {
   // Observe every section, not just the ones the nav links to: the page runs
-  // longer than the nav (capabilities, proof, scales have no entry), and
+  // longer than the nav (proof and scales have no entry), and
   // watching only the linked sections left the last one lit while the reader
   // was three sections past it.
   const sections = [...document.querySelectorAll('main section[id], main header[id]')]
@@ -145,7 +145,7 @@ if (canObserve && !calm) {
     }
   }, { threshold: 0.12, rootMargin: '0px 0px -6% 0px' })
 
-  const groups = '.wall-grid, .cap-grid, .flow-grid, .stat-grid, .track, .scales-grid, .faq-list'
+  const groups = '.wall-grid, .flow-grid, .stat-grid, .scales-grid, .faq-list'
   for (const group of document.querySelectorAll(groups)) {
     [...group.children].forEach((el, i) => {
       if (el.classList.contains('reveal')) el.style.animationDelay = Math.min(i * 70, 420) + 'ms'
@@ -331,7 +331,7 @@ if (installTabs.length) markTabs(installTabs, installTabs.find((t) => t.classLis
 // objects on the page, not enough to smear the type.
 
 if (fine && !calm) {
-  const tilts = [...document.querySelectorAll('.cap, .wall, .topo, .console-frame')]
+  const tilts = [...document.querySelectorAll('.wall, .topo, .console-frame')]
   for (const el of tilts) {
     el.classList.add('tilt')
     const max = el.classList.contains('topo') ? 3.2 : el.classList.contains('console-frame') ? 1.8 : 2.2
@@ -458,17 +458,13 @@ const INSTALL_SH =
   'curl -fsSL https://raw.githubusercontent.com/Xustalis/OpenPanda/main/scripts/install.sh | sh'
 
 const COMMANDS = [
-  { kind: 'sec', label: { zh: '四堵墙', en: 'Four Walls' }, hint: { zh: '01 · 为什么需要多智能体', en: '01 · why multi-agent at all' }, kv: 'why four walls 痛点 问题 动机 motivation', go: '#why' },
-  { kind: 'sec', label: { zh: '星状 → 图状', en: 'Star → Graph' }, hint: { zh: '02 · 组织方式', en: '02 · how the work is organised' }, kv: 'graph star 拓扑 架构 中心 topology architecture', go: '#graph' },
-  { kind: 'sec', label: { zh: '产品', en: 'Product' }, hint: { zh: '03 · 一句话进，一张网出', en: '03 · one sentence in, a network out' }, kv: 'product console 控制台 终端 cli 演示 demo', go: '#product' },
-  { kind: 'sec', label: { zh: '薄宪法', en: 'Thin Constitution' }, hint: { zh: '04 · 冻结关系，不冻结认知', en: '04 · freeze relations, not cognition' }, kv: 'constitution trust 信任 身份 授权 边界 identity authorisation boundary', go: '#constitution' },
-  { kind: 'sec', label: { zh: '能力', en: 'Capabilities' }, hint: { zh: '05 · 每条边都有协议', en: '05 · every edge has a protocol' }, kv: 'capabilities 功能 dtn 审批 路由 记忆 approval routing memory', go: '#capabilities' },
-  { kind: 'sec', label: { zh: '实证', en: 'Proof' }, hint: { zh: '06 · 三台真机，不是演示', en: '06 · three real machines, not a demo' }, kv: 'proof 测试 数据 真机 内存 tests memory benchmarks', go: '#proof' },
-  { kind: 'sec', label: { zh: '三个尺度', en: 'Three Scales' }, hint: { zh: '07 · 桌面 / 集群 / 深空', en: '07 · desk / fleet / deep space' }, kv: 'scales space 深空 卫星 机器人 satellite robot', go: '#scales' },
-  { kind: 'sec', label: { zh: '路线图', en: 'Roadmap' }, hint: { zh: '08 · 飞行计划', en: '08 · flight plan' }, kv: 'roadmap 版本 计划 release version', go: '#roadmap' },
-  { kind: 'sec', label: { zh: '许可', en: 'Licensing' }, hint: { zh: '09 · 开源，但不假装免费', en: '09 · open source, not pretend-free' }, kv: 'license 价格 授权 商业 agpl 收费 purchase pricing commercial', go: '#license' },
-  { kind: 'sec', label: { zh: '常见问题', en: 'FAQ' }, hint: { zh: '10 · 你可能想问的', en: '10 · things you might ask' }, kv: 'faq 问答 问题 gpu 平台 platform questions', go: '#faq' },
-  { kind: 'sec', label: { zh: '安装', en: 'Install' }, hint: { zh: '11 · 三条命令入轨', en: '11 · three commands to orbit' }, kv: 'install 下载 download 开始 上手 setup', go: '#install' },
+  { kind: 'sec', label: { zh: '四堵墙', en: 'Four Walls' }, hint: { zh: '01 · 为什么一个 Agent 做不完', en: '01 · why one agent cannot finish it' }, kv: 'why four walls 痛点 问题 动机 星状 图状 拓扑 架构 中心 graph star topology architecture motivation', go: '#why' },
+  { kind: 'sec', label: { zh: '产品', en: 'Product' }, hint: { zh: '02 · 一句话进，结果带回', en: '02 · one sentence in, the result back' }, kv: 'product console 控制台 终端 cli 演示 demo', go: '#product' },
+  { kind: 'sec', label: { zh: '薄宪法', en: 'Thin Constitution' }, hint: { zh: '03 · 只固定四类关系', en: '03 · fix four relations, nothing else' }, kv: 'constitution trust 信任 身份 授权 边界 identity authorisation boundary', go: '#constitution' },
+  { kind: 'sec', label: { zh: '实证', en: 'Proof' }, hint: { zh: '04 · 三台真机，不是演示', en: '04 · three real machines, not a demo' }, kv: 'proof 测试 数据 真机 内存 tests memory benchmarks', go: '#proof' },
+  { kind: 'sec', label: { zh: '三个尺度', en: 'Three Scales' }, hint: { zh: '05 · 桌面 / 集群 / 深空', en: '05 · desk / fleet / deep space' }, kv: 'scales space 深空 卫星 机器人 satellite robot', go: '#scales' },
+  { kind: 'sec', label: { zh: '常见问题', en: 'FAQ' }, hint: { zh: '06 · 你可能想问的', en: '06 · things you might ask' }, kv: 'faq 问答 问题 gpu 平台 platform questions', go: '#faq' },
+  { kind: 'sec', label: { zh: '安装与许可', en: 'Install & licence' }, hint: { zh: '07 · 三条命令入轨，价格也写明', en: '07 · three commands to orbit, price in plain sight' }, kv: 'install 下载 download 开始 上手 setup license 价格 授权 商业 agpl 收费 purchase pricing commercial', go: '#install' },
   { kind: 'act', label: { zh: '复制安装命令', en: 'Copy install command' }, hint: { zh: 'curl … install.sh | sh', en: 'curl … install.sh | sh' }, kv: 'copy 复制 curl shell unix', copy: INSTALL_SH },
   { kind: 'act', label: { zh: '复制 Homebrew 命令', en: 'Copy Homebrew command' }, hint: { zh: 'brew tap … && brew install', en: 'brew tap … && brew install' }, kv: 'brew homebrew copy 复制 macos', copy: 'brew tap Xustalis/openpanda && brew install openpanda' },
   { kind: 'link', label: { zh: 'GitHub 仓库', en: 'GitHub repository' }, hint: { zh: 'github.com/Xustalis/OpenPanda', en: 'github.com/Xustalis/OpenPanda' }, kv: 'github repo star 源码 收藏 source', url: REPO },
@@ -499,9 +495,9 @@ function setChromeInert(on) {
 
 function filterCommands(query) {
   const needle = query.trim().toLowerCase()
-  // Empty query: the eleven sections, in reading order. Everything else is one
+  // Empty query: the seven sections, in reading order. Everything else is one
   // keystroke away and listing it unfiltered would bury the structure.
-  if (!needle) return COMMANDS.slice(0, 11)
+  if (!needle) return COMMANDS.slice(0, 7)
   const hits = []
   for (const cmd of COMMANDS) {
     const hay = [cmd.label.zh, cmd.label.en, cmd.hint.zh, cmd.hint.en, cmd.kv]
