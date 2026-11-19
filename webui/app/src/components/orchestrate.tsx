@@ -14,6 +14,7 @@ import { InfoSection, SpecCard, TimelineSection, parseResult, text } from './tas
 import { StateBadge } from './state-badge'
 import { TaskTrace } from './task-trace'
 import { TaskFailureNotice, taskReviewLabel } from './task-failure'
+import { deliveryText } from './task-delivery'
 import { bindStripDrag } from './strip-drag'
 import { fmtElapsed, isActiveState } from './task-activity'
 import { toast, toastError } from './toast'
@@ -231,7 +232,10 @@ export function OrchestrateCard(props: {
         await api.cancel(task.id)
         toast(t('detail.cancelledToast'), 'success')
       } else {
-        if (task.retry_available) {
+        if (task.needs_followup) {
+          const out = await api.continueTask(task.id)
+          toast(out.warning || t('detail.continuedToast'), out.warning ? 'info' : 'success')
+        } else if (task.retry_available) {
           await api.retryTask(task.id)
           toast(t('detail.retryStartedToast'), 'success')
         } else {
@@ -467,9 +471,9 @@ function OrchChip(props: {
             class="orch-act run"
             disabled={props.busy || (blocked && !retry)}
             onClick={props.onRun}
-            title={retry ? t('common.retry') : blocked ? t('detail.needsChangedInputHint') : t('detail.approve')}
+            title={props.task.needs_followup ? t('detail.continueHint') : retry ? t('common.retry') : blocked ? t('detail.needsChangedInputHint') : t('detail.approve')}
           >
-            {retry ? t(props.busy ? 'detail.retrying' : 'common.retry') : t('orch.run')}
+            {props.task.needs_followup ? t('detail.continue') : retry ? t(props.busy ? 'detail.retrying' : 'common.retry') : t('orch.run')}
           </button>
         )}
       </div>
@@ -560,7 +564,7 @@ function OrchTask(props: {
       <TaskFailureNotice task={task} />
       {review && task.approval_disposition && !task.review_reason && (
         <p class={`orch-detail-note${blocked ? ' blocked' : ''}`}>
-          {t(`detail.reviewKind.${task.approval_disposition}`)}
+          {taskReviewLabel(task)}
         </p>
       )}
 
@@ -624,7 +628,7 @@ function OrchTask(props: {
             title={blocked && !retry ? t('detail.needsChangedInputHint') : undefined}
             onClick={props.onRun}
           >
-            {retry ? t(props.busy ? 'detail.retrying' : 'common.retry') : t('orch.run')}
+            {task.needs_followup ? t('detail.continue') : retry ? t(props.busy ? 'detail.retrying' : 'common.retry') : t('orch.run')}
           </button>
         )}
         <button
@@ -649,10 +653,10 @@ type OrchTabKey = 'trace' | 'result' | 'brief' | 'info' | 'timeline'
 function orchTabs(task: Task): Array<{ key: OrchTabKey; label: string }> {
   const out: Array<{ key: OrchTabKey; label: string }> = []
   if (hasTrace(task)) out.push({ key: 'trace', label: t('detail.trace') })
-  if (resultText(task.result ?? '').trim()) out.push({ key: 'result', label: t('orch.result') })
   if (hasBrief(task)) out.push({ key: 'brief', label: t('detail.spec.title') })
   out.push({ key: 'info', label: t('detail.info') })
   if ((task.events?.length ?? 0) > 0) out.push({ key: 'timeline', label: t('detail.timeline') })
+  if (resultText(task.result ?? '')) out.push({ key: 'result', label: t('sessions.round.report') })
   return out
 }
 
@@ -693,19 +697,7 @@ function ResultBlock({ text }: { text: string }) {
  *  exit code, changed files, tokens — lives on the task page, which has a
  *  result view built for it. */
 function resultText(raw: string): string {
-  try {
-    const v: unknown = JSON.parse(raw)
-    if (!v || typeof v !== 'object' || Array.isArray(v)) return raw
-    const r = v as Record<string, unknown>
-    const prose = [r.stdout, r.stderr].filter(
-      (x): x is string => typeof x === 'string' && x.trim() !== '',
-    )
-    if (prose.length) return prose.join('\n\n')
-    if (typeof r.failed === 'string' && r.failed.trim()) return r.failed
-  } catch {
-    // A plain-text result is already the answer.
-  }
-  return raw
+  return parseResult(raw) ? deliveryText(raw) : raw.trim()
 }
 
 /** Whether there is an orchestration story to tell for this task. A task that

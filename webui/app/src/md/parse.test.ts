@@ -177,6 +177,11 @@ test('only safe schemes become links', () => {
   }
 })
 
+test('a self-labelled relative filename stays readable without becoming a URL', () => {
+  assert.deepEqual(parseInline('See [site/page.html](site/page.html).'), [{ t: 'text', s: 'See site/page.html.' }])
+  assert.deepEqual(parseInline('`[a.ts](a.ts)`'), [{ t: 'code', s: '[a.ts](a.ts)' }])
+})
+
 test('a link label may hold nested brackets and emphasis', () => {
   const link = parseInline('[a **[b]** c](#/queue)')[0] as Extract<Inline, { t: 'link' }>
   assert.equal(link.t, 'link')

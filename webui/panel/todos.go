@@ -33,6 +33,10 @@ const dateOnlyLayout = "2006-01-02"
 // a todo due "today" must not read as overdue at noon, which is exactly what
 // midnight-of-that-day would produce.
 func parseDueAt(raw string) (int64, error) {
+	return parseDueAtInLocation(raw, time.Local)
+}
+
+func parseDueAtInLocation(raw string, loc *time.Location) (int64, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return 0, nil
@@ -43,7 +47,7 @@ func parseDueAt(raw string) (int64, error) {
 	// Parse without a location on purpose: the date components must be the
 	// ones the user wrote. See endOfLocalDay.
 	if d, err := time.Parse(dateOnlyLayout, raw); err == nil {
-		return endOfLocalDay(d, time.Local).Unix(), nil
+		return endOfLocalDay(d, loc).Unix(), nil
 	}
 	return 0, errors.New("due_at must be RFC3339 or YYYY-MM-DD")
 }

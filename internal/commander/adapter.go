@@ -1118,6 +1118,11 @@ func adapterCredentialEnv(name, adapter string) []string {
 	}
 	var out []string
 	keys := append([]string(nil), k.CredentialEnvVars...)
+	if k.Adapter == "codex.py" && os.Getenv("CODEX_HOME") != "" {
+		if dir := codexConfigDir(""); dir != "" {
+			out = append(out, "CODEX_HOME="+dir)
+		}
+	}
 	if adapter == "claude_code.py" {
 		// The native endpoint and model aliases must travel with the native
 		// credentials when the sandbox builds a minimal environment. These

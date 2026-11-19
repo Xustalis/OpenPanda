@@ -84,3 +84,18 @@ func objectiveResultEvidence(t Task, result any) error {
 	}
 	return objectives.VerifyAssessments(policy, payload.ObjectiveAssessments, objectiveIntermediate(t))
 }
+
+// ObjectiveApprovalError preflights persisted evidence without changing the
+// row. Terminal updates still enforce the same check at their write boundary.
+func (t Task) ObjectiveApprovalError() error {
+	if !taskHasMaxObjectives(t) {
+		return nil
+	}
+	var result bus.TaskResultPayload
+	if t.ResultJSON != "" {
+		if err := json.Unmarshal([]byte(t.ResultJSON), &result); err != nil {
+			return fmt.Errorf("%w: stored evidence cannot be decoded", objectives.ErrAssessment)
+		}
+	}
+	return objectiveResultEvidence(t, result)
+}

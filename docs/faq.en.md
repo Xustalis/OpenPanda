@@ -1,5 +1,9 @@
 # Frequently Asked Questions (FAQ)
 
+**I already use an agent or harness. When should I add Panda?**
+
+Keep your existing setup if it handles the whole job. Panda is useful when work needs to cross devices and agents you manage and the result, verification and blockers need to come back to the original conversation. See the [v0.1.x product direction](product.en.md).
+
 English translation of [faq.md](faq.md)（中文版为准）· English
 
 Install-related troubleshooting lives in

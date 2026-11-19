@@ -56,12 +56,23 @@ const (
 	endpointProbeBadTTL = 30 * time.Second
 )
 
-// endpointClient is the probe's own transport: no proxy, no keep-alive (the
-// connection is single-use anyway), and timeouts on every phase so a
-// half-open TLS handshake cannot outlive the caller's budget.
+// endpointClient is the probe's own transport: no keep-alive (the connection is
+// single-use anyway), and timeouts on every phase so a half-open TLS handshake
+// cannot outlive the caller's budget.
+//
+// It follows the environment proxy on purpose. The probe exists to answer "would
+// the model call I am about to make work?", and the entry model reaches the
+// endpoint through http.ProxyFromEnvironment (internal/entry/model.go). A probe
+// that dials directly answers a different question: behind a dead loopback proxy
+// it reports "endpoint reachable (200)" while every real call dies in the proxy
+// handshake — the diagnostic and the execution path disagree, and the operator
+// is told the one thing that is not true. SanitizeLocalProxyEnv removes a proxy
+// nothing is listening on before any client is built, so honouring the variable
+// here cannot resurrect the dead-port case it was written for.
 var endpointClient = &http.Client{
 	Timeout: endpointProbeTimeout,
 	Transport: &http.Transport{
+		Proxy:                 security.ProxyForRequest,
 		DisableKeepAlives:     true,
 		TLSHandshakeTimeout:   endpointProbeTimeout,
 		ResponseHeaderTimeout: endpointProbeTimeout,
@@ -567,8 +578,12 @@ func agentConfiguredTarget(adapter string) configuredTarget {
 			jsonStringAt(home, ".claude/settings.json", "env.ANTHROPIC_MODEL"),
 			jsonStringAt(home, ".claude/settings.json", "model"))
 	case "codex.py":
+		dir := codexConfigDir(home)
+		if dir == "" {
+			break
+		}
 		var envKey, bearer, wire string
-		t.Endpoint, envKey, bearer, wire, t.Model = codexConfigTarget(home)
+		t.Endpoint, envKey, bearer, wire, t.Model = codexConfigTarget(dir)
 		// ~/.codex/config.toml is writable by the codex agent itself, and
 		// env_key names any variable in the daemon's environment. Reading
 		// whatever name the file supplies would turn "agent can edit its own
@@ -581,8 +596,8 @@ func agentConfiguredTarget(adapter string) configuredTarget {
 		t.APIKey, t.KeyDef = firstCred(
 			credPair{os.Getenv(envKey), envKey != ""},
 			credPair{bearer, true},
-			credPair{jsonStringAt(home, ".codex/auth.json", "OPENAI_API_KEY", "api_key", "apiKey"), true},
-			credPair{jsonStringAt(home, ".codex/auth.json", "token", "access_token", "tokens.access_token"), false},
+			credPair{jsonStringAt(dir, "auth.json", "OPENAI_API_KEY", "api_key", "apiKey"), true},
+			credPair{jsonStringAt(dir, "auth.json", "token", "access_token", "tokens.access_token"), false},
 		)
 		if wire == "responses" {
 			t.APIType = apiTypeResponses
@@ -818,8 +833,8 @@ func jsonFieldString(obj map[string]json.RawMessage, path string) string {
 // dependency: codex writes the config in one shape, and a line scan over it
 // is enough. Endpoint fallback order: the selected provider's base_url, a
 // top-level base_url, then the first base_url found.
-func codexConfigTarget(home string) (endpoint, envKey, bearer, wireAPI, model string) {
-	blob, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+func codexConfigTarget(dir string) (endpoint, envKey, bearer, wireAPI, model string) {
+	blob, err := os.ReadFile(filepath.Join(dir, "config.toml"))
 	if err != nil {
 		return "", "", "", "", ""
 	}

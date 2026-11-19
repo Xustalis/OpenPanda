@@ -20,6 +20,7 @@
  *      because the transcript already has their closing paragraph.
  */
 
+import type { ComponentChildren } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 import { api, type PlanDetail, type Task, type TraceEvent } from '../api/client'
 import { useAsync, useChangeSignal, useTaskEvents, useTraceForTask } from '../hooks'
@@ -36,6 +37,7 @@ import { ExecutionSteps } from './execution-steps-view'
 import { taskSteps } from './execution-steps'
 import { TaskObjectives } from './task-objectives'
 import { TaskExecution } from './task-execution'
+import { MessageCopyButton } from './copy'
 
 /** One shared empty list: `task.traces` is absent until the row has started,
  *  and a fresh `[]` on every render would re-run the merge effect each time. */
@@ -226,17 +228,23 @@ export function TaskProgress({ task }: { task: Task }) {
 /** A durable handoff: outcome first, then visible evidence and honest gaps.
  * Legacy turns recover their full report from the task instead of retaining
  * the old last-paragraph-only display forever. */
-export function TaskDelivery({ taskId, delivery, truncated, summary, state, verdict, attemptId, reportedAt }: {
+export function TaskDelivery({ taskId, delivery, truncated, summary, state, verdict, attemptId, reportedAt, document, startProcess, children }: {
   taskId: string; delivery?: string; truncated?: boolean; summary: string; state: string; verdict?: string; attemptId?: string; reportedAt?: number
+  document?: boolean; startProcess?: boolean; children?: ComponentChildren
 }) {
   const currentTask = useTaskBrief(taskId)
-  const task = currentTask && deliveryMatchesTask(currentTask, attemptId, reportedAt, state) ? currentTask : null
+  const task = currentTask && (!document || currentTask.state === state) &&
+    deliveryMatchesTask(currentTask, attemptId, reportedAt, state) ? currentTask : null
   const [expanded, setExpanded] = useState(true)
-  const full = delivery || deliveryText(task?.result) || summary
+  const [processOpen, setProcessOpen] = useState(Boolean(startProcess))
+  const recorded = deliveryText(task?.result)
+  const full = (document && recorded) || delivery || recorded || summary
+  const facts = document && task ? deliveryFacts(task) : undefined
   const preview = deliveryPreview(full)
   return (
     <section class="task-delivery" aria-label={t('sessions.deliveryTitle')}>
-      <h4 class="task-delivery-label">{t('sessions.deliveryTitle')}</h4>
+      {document ? (full && (!truncated || recorded) && <div class="session-round-report-head session-round-copy"><MessageCopyButton markdown text={full} /></div>) :
+        <h4 class="task-delivery-label">{t('sessions.deliveryTitle')}</h4>}
       {/* Panda's verdict first, the employee's report under it. Without this
           the bubble opened straight into the agent's own "结论：成功", which
           reads as if panda had checked and certified it. Only shown when a
@@ -255,16 +263,20 @@ export function TaskDelivery({ taskId, delivery, truncated, summary, state, verd
         onClick={() => setExpanded(value => !value)}>
         {t(expanded ? 'sessions.deliveryLess' : 'sessions.deliveryMore')}
       </button>}
-      {truncated && <p class="task-run-empty">{t('sessions.deliveryTruncated')}</p>}
-      {task ? <TaskProcessBody taskId={taskId} task={task} /> : <p class="task-run-empty">{t('sessions.deliveryEvidenceUnavailable')}</p>}
-      <a class="task-run-open" href={`#/task/${encodeURIComponent(taskId)}`}>
-        {t('sessions.liveOpen')} →
-      </a>
+      {truncated && !(document && recorded) && <p class="task-run-empty">{t('sessions.deliveryTruncated')}</p>}
+      {facts?.followup && <div class="task-delivery-remaining">
+        <h4 class="task-delivery-label">{t('sessions.deliveryRemaining')}</h4>
+        <Markdown text={facts.followup} class="msg-text" />
+      </div>}
+      {children}
+      <button type="button" class="chain-toggle" aria-expanded={processOpen}
+        onClick={() => setProcessOpen(!processOpen)}>{t(processOpen ? 'sessions.chainHide' : 'sessions.chainShow')}</button>
+      {processOpen && (task ? <TaskProcessBody taskId={taskId} task={task} /> : <p class="task-run-empty">{t('sessions.deliveryEvidenceUnavailable')}</p>)}
     </section>
   )
 }
 
-function TaskProcessBody({ taskId, task }: { taskId: string; task: Task }) {
+export function TaskProcessBody({ taskId, task }: { taskId: string; task: Task }) {
   const change = useChangeSignal()
   const { events, error } = useTaskEvents(taskId, change)
   const steps = taskSteps(events)

@@ -487,6 +487,8 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 				"required": []string{"target_actuator", "action"}},
 		}
 	}
+	props["paths"] = map[string]any{"type": "array", "maxItems": 8, "items": map[string]any{"type": "string"},
+		"description": "Exact workspace-relative writable files or directories, only when the complete write scope is known. No globs, parent traversal or absolute paths. Submit disjoint independent work separately; use a plan with dependencies when a task needs another task's outputs. Omit paths for unknown or whole-workspace scope."}
 	props["coordination"] = map[string]any{"type": "string", "enum": []string{"IMMEDIATE", "ROUND_END"}, "description": "Required child coordination timing; IMMEDIATE requires compatible agent tools"}
 	props["task_kind"] = map[string]any{
 		"type": "string", "enum": []string{"code_question", "investigation", "edit", "operations"},
@@ -520,6 +522,13 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 			}
 			node, _ := args["node"].(string)
 			taskScope, _ := args["scope"].(string)
+			var paths []string
+			if raw, exists := args["paths"]; exists {
+				b, err := json.Marshal(raw)
+				if err != nil || raw == nil || json.Unmarshal(b, &paths) != nil {
+					return "", fmt.Errorf("paths must be an array of workspace-relative strings")
+				}
+			}
 			successDef, _ := args["success_definition"].(string)
 			kind, _ := args["task_kind"].(string)
 			var policy *objectives.Policy
@@ -570,6 +579,7 @@ func (e *Engine) dispatchTaskTool(prompt string, scope AskScope, authorize bool,
 					Target:            strings.TrimSpace(target),
 					Node:              strings.TrimSpace(node),
 					Scope:             strings.TrimSpace(taskScope),
+					Paths:             paths,
 					Constraints:       toStringSlice(args["constraints"]),
 					SuccessDefinition: strings.TrimSpace(successDef),
 					ActionSpec:        actionSpec,

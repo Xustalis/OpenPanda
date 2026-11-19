@@ -59,8 +59,6 @@ func TestEndOfLocalDay(t *testing.T) {
 // deadline must still land on the date the user typed, not the evening before
 // — which is what parsing the date in the local zone produces.
 func TestParseDueAtMidnightDST(t *testing.T) {
-	original := time.Local
-	defer func() { time.Local = original }()
 	for _, tc := range []struct{ zone, date string }{
 		{"America/New_York", "2026-03-08"}, // control: midnight exists
 		{"America/Havana", "2026-03-08"},   // DST starts at 00:00
@@ -71,8 +69,7 @@ func TestParseDueAtMidnightDST(t *testing.T) {
 			if err != nil {
 				t.Fatalf("load %s: %v", tc.zone, err)
 			}
-			time.Local = loc
-			value, err := parseDueAt(tc.date)
+			value, err := parseDueAtInLocation(tc.date, loc)
 			if err != nil {
 				t.Fatalf("parse %s: %v", tc.date, err)
 			}

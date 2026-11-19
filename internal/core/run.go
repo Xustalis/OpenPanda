@@ -1709,7 +1709,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			// this in their intent already (skip them); a manually queued
 			// `task add --paths` row does not, and neither do reruns whose intent
 			// was rewritten.
-			if !task.Isolate && len(task.ScopePaths) > 0 && !strings.Contains(task.Intent, "[scope]") {
+			if (!task.Isolate || scopedDispatch(task)) && len(task.ScopePaths) > 0 && !strings.Contains(task.Intent, "[scope]") {
 				p += "\n\n[scope] you own paths: " + strings.Join(task.ScopePaths, ", ") +
 					" — write only inside your own scope; sibling tasks may own other paths in this tree."
 			}
@@ -1758,6 +1758,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			"plan_kind":            plan.Kind,
 			"agent":                plan.Agent,
 			"adapter":              plan.Adapter,
+			"ability":              plan.Ability,
 			"model":                activeModel,
 			"node_name":            scheduler.NodeNamePart(c.nodeID),
 			"authorized":           task.Authorized && !restricted,
@@ -1895,6 +1896,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			}
 			break
 		}
+		c.EvTrace(context.WithoutCancel(execCtx), taskID, EvExecAgentStop, map[string]any{"attempt_id": task.AttemptID})
 		// Bill the failed overflow attempt too: the provider spent those
 		// tokens even though the round's surviving result is the retry's.
 		res.Tokens += extraTokens
@@ -2856,9 +2858,13 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		if verdict.Status == entry.VerdictBlocked {
 			disposition = ApprovalNeedsChangedInput
 		}
+		needsFollowup := verdict.Status == entry.VerdictContinue
+		if verdict.Status == entry.VerdictReview && taskHasMaxObjectives(task) {
+			needsFollowup = objectiveResultEvidence(task, bus.TaskResultPayload{ObjectiveAssessments: verdict.ObjectiveAssessments}) != nil
+		}
 		if err := c.store.pauseWithResultDisposition(wCtx, taskID, c.nodeID, map[string]any{
 			"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "agent": res.Agent,
-			"needs_followup": verdict.Status == entry.VerdictContinue,
+			"needs_followup": needsFollowup,
 			"verdict":        verdict.Status, "verdict_reason": verdict.Reason,
 			"followup":              verdict.Followup,
 			"objective_assessments": verdict.ObjectiveAssessments,
@@ -2874,7 +2880,7 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		return bus.TaskResultPayload{
 			TaskID: taskID, AttemptID: attemptID, State: StateReview,
 			ApprovalDisposition: string(disposition),
-			NeedsFollowup:       verdict.Status == entry.VerdictContinue,
+			NeedsFollowup:       needsFollowup,
 			Verdict:             verdict.Status, VerdictReason: verdict.Reason, Followup: verdict.Followup,
 			ObjectiveAssessments: verdict.ObjectiveAssessments,
 			OK:                   true, ExitCode: res.ExitCode, Stdout: res.Stdout,

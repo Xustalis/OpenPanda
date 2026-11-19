@@ -122,17 +122,11 @@ html.lang-pending body { opacity: 0; }
 }
 
 /* ── motion ─────────────────────────────────────────────────────────── */
-.js .reveal {
-  opacity: 0;
-  transform: translateY(22px);
-  transition: opacity .9s var(--ease), transform .9s var(--ease);
+/* Content stays readable if the module or observer never runs. */
+.js .reveal.in { animation: reveal-in .9s var(--ease); }
+@keyframes reveal-in {
+  from { opacity: .65; translate: 0 12px; }
 }
-.js .reveal.in { opacity: 1; transform: none; }
-.hero-copy .reveal:nth-child(1) { transition-delay: .05s; }
-.hero-copy .reveal:nth-child(2) { transition-delay: .14s; }
-.hero-copy .reveal:nth-child(3) { transition-delay: .24s; }
-.hero-copy .reveal:nth-child(4) { transition-delay: .32s; }
-.hero-copy .reveal:nth-child(5) { transition-delay: .42s; }
 @keyframes hero-index-in {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: none; }
@@ -1745,12 +1739,8 @@ section[id], header[id] { scroll-margin-top: 92px; }
 }
 
 /* ── 3D tilt (JS sets --rx/--ry and --mx/--my) ──────────────────────── */
-/* No transition on .tilt itself: `.js .reveal` already owns the transition
-   property, and overriding it would kill the reveal fade. The two state
-   classes below only apply while the pointer is actually moving. */
-/* The transform only exists while the pointer is on it, so the reveal
-   animation keeps its own translateY and `.js .reveal.in { transform: none }`
-   is not fighting a permanent perspective. */
+/* Tilt only sets transform during interaction. The reveal uses translate
+   separately so it cannot override the pointer-driven transform. */
 .tilt.is-tilting,
 .tilt.is-settling {
   transform: perspective(1000px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
@@ -2259,7 +2249,7 @@ body.menu-open .menu-toggle { border-color: var(--line); color: var(--ink); }
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
   }
-  .js .reveal { opacity: 1; transform: none; }
+  .js .reveal.in { animation-name: none; }
   .hero-scroll::after { animation: none; opacity: .6; }
 }
 

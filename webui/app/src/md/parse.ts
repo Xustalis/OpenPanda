@@ -452,6 +452,13 @@ export function parseInline(src: string): Inline[] {
             i = end + 1
             continue
           }
+          // A report often names the same workspace path as both label and
+          // target. Keep it readable without making it a browser navigation.
+          if (href === src.slice(i + 1, close) && /^[\w.-]+(?:\/[\w.-]+)*\.[\w]+$/u.test(href)) {
+            text += href
+            i = end + 1
+            continue
+          }
         }
       }
     }

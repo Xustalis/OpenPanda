@@ -38,6 +38,24 @@ export type LiveStep = {
   quiet?: boolean
 }
 
+/** Recent, attempt-tagged adapter activity shown before the full chain opens. */
+export function recentAttemptSteps(events: LiveEvent[], attempt: string): LiveStep[] {
+  if (!attempt) return []
+  const steps: LiveStep[] = []
+  for (const event of events) {
+    if (event.type !== 'agent_event' && event.type !== 'progress') continue
+    const data = eventData(event)
+    if (data.attempt_id !== attempt) continue
+    if (event.type === 'agent_event' && !['thinking', 'tool_use', 'tool_result', 'progress'].includes(String(data.ev))) continue
+    const step = liveStepOf(event, data.ev === 'thinking')
+    if (!step?.summary || step.quiet) continue
+    const previous = steps.at(-1)
+    if (previous?.label === step.label && previous.summary === step.summary) continue
+    steps.push(step)
+  }
+  return steps.slice(-3)
+}
+
 /** The event kinds a running task should narrate. Lifecycle plumbing,
  *  session bookkeeping and silence heartbeats stay in the task page's full
  *  chain; the live row is the story, not the log. */

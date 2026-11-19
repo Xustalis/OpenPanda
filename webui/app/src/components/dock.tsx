@@ -57,7 +57,7 @@ import { contextShare } from './session-rail-stats'
  *  from the left group in the head; the last four are the places a tab opens.
  *  All seven own a pane in the body — none of them is a floating layer over it.
  *  `''` means it is open but nothing is picked, the "start from here" state. */
-export type DockTab = 'export' | 'node' | 'orch' | 'files' | 'changes' | 'browser' | 'side' | ''
+export type DockTab = 'export' | 'node' | 'orch' | 'files' | 'changes' | 'browser' | 'side' | 'report' | ''
 
 /** Narrower than this and a line of code wraps on every scroll; wider and the
  *  transcript stops being the page. Exported so the state that owns the width

@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package core
+
+import (
+	"context"
+	"testing"
+
+	"github.com/Xustalis/OpenPanda/internal/intake"
+)
+
+// Characterization of the fixed baseline, not an invariant for future releases.
+func TestSuperAgentBaselineDeliveryVersusFact(t *testing.T) {
+	c := newIntakeCore(t)
+	body := []byte(`{"action":"created","repository":{"id":100,"full_name":"example/widgets"},"issue":{"number":9,"title":"sample"},"comment":{"id":300,"body":"@panda please summarize"},"sender":{"id":400,"login":"example-user"}}`)
+	ev, ok, err := intake.ParseGitHub("issue_comment", body)
+	if !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	for _, delivery := range []string{"fixture-1", "fixture-1", "fixture-2"} {
+		ev.Delivery = delivery
+		if _, err := c.IntakeTask(context.Background(), ev, "", PriorityNormal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requireRowCount(t, c, "tasks", 2)
+	requireRowCount(t, c, "execution_requests", 2)
+	t.Log("one created comment, three admissions with two distinct delivery IDs: two queued tasks; no worker started")
+}

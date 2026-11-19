@@ -311,7 +311,6 @@ function ChatBubble(props: {
 
   return (
     <div class={`msg ${speaker.who} is-${speaker.role}`}>
-      {speaker.who !== 'user' && <ChatAvatar speaker={speaker} />}
       <div class="msg-body">
         {/* — the head: who is talking, what they are doing here, and when.
               The duration used to sit above the reply as a caption with a
@@ -322,6 +321,7 @@ function ChatBubble(props: {
         <div class="msg-head">
           {speaker.who !== 'user' && (
             <>
+              <ChatAvatar speaker={speaker} />
               <span class="msg-name">{name}</span>
               <span class={`msg-role is-${chipState}`}>{chip}</span>
             </>
@@ -338,7 +338,7 @@ function ChatBubble(props: {
             ) : null}
             {msg.streaming && liveFrom > 0 ? (
               <LiveElapsed from={liveFrom} last={msg.lastActivity} />
-            ) : elapsedMs !== undefined ? (
+            ) : elapsedMs !== undefined && elapsedMs > 0 ? (
               <span class="msg-dur">{t('sessions.elapsed', { d: fmtDuration(elapsedMs) })}</span>
             ) : null}
             {msg.tokens ? (
@@ -503,7 +503,7 @@ function DispatchBlock(props: {
   tasksById?: Map<string, Task>
 }) {
   const { msg, onOpenTask, onPreviewTask, tasksById } = props
-  const [chainOpen, setChainOpen] = useState(true)
+  const [chainOpen, setChainOpen] = useState(false)
   // The thread's list is polled once per frame already; reading this block's
   // row from it keeps a five-card round from issuing five extra requests per
   // frame. The own read is only for a task outside the list.
@@ -596,15 +596,14 @@ export function ChatTurn(props: {
  *  working right now, see `liveTaskIds`. It is one read, not two. */
 export function useSessionTasks(sessionId: string | null, enabled: boolean): Task[] | null {
   const change = useChangeSignal()
-  const { data } = useAsync<Task[] | null>(
-    () =>
-      enabled && sessionId
-        ? api.tasks({ session: sessionId, brief: true }).catch(() => null)
-        : Promise.resolve(null),
+  const { data } = useAsync<{ sessionId: string; tasks: Task[] } | null>(
+    async () => enabled && sessionId
+      ? api.tasks({ session: sessionId, brief: true }).then(tasks => ({ sessionId, tasks })).catch(() => null)
+      : null,
     [sessionId, enabled],
     change,
   )
-  return data
+  return data?.sessionId === sessionId ? data.tasks : null
 }
 
 /** The panda's closing line for a round that just finished.

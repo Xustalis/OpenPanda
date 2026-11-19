@@ -126,3 +126,19 @@ func TestMAXRequiresIndependentCriterionAssessments(t *testing.T) {
 		t.Fatal("missing budget boundary")
 	}
 }
+
+func TestMixedAssessmentsDoNotTurnNormalIntoAnAcceptanceGate(t *testing.T) {
+	p := policy()
+	p.Dimensions = append(p.Dimensions, Dimension{Dimension: "robustness", Priority: Normal,
+		Requirement: "Portable output", Reason: "Supplemental quality", Criteria: []string{"No external resources"}})
+	max := Assessment{Dimension: "quality", Status: "passed", Evidence: "Independent test output"}
+	normal := Assessment{Dimension: "robustness", Status: "unmet", Evidence: "One optional check failed"}
+	if err := VerifyAssessments(p, []Assessment{normal, max}, false); err != nil {
+		t.Fatalf("optional normal finding blocked delivery: %v", err)
+	}
+	for _, assessments := range [][]Assessment{{normal}, {max, normal, normal}, {max, {Dimension: "robustness", Criterion: 1, Status: "passed", Evidence: "wrong index"}}} {
+		if err := VerifyAssessments(p, assessments, false); err == nil {
+			t.Fatalf("accepted invalid evidence: %+v", assessments)
+		}
+	}
+}

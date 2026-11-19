@@ -885,7 +885,7 @@ func (c *Core) ContinueReviewed(ctx context.Context, taskID, note string) (Task,
 	if err != nil {
 		return Task{}, err
 	}
-	if cur.State != StateReview || !needsFollowupResult(cur.ResultJSON) {
+	if !cur.NeedsFollowup() {
 		return cur, fmt.Errorf("%w: task %s is not parked for follow-up", ErrConflict, taskID)
 	}
 	if target, terr := c.store.DispatchTarget(ctx, taskID); terr == nil &&

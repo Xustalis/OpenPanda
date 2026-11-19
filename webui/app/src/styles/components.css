@@ -876,6 +876,11 @@ dialog.confirm-modal::backdrop {
 
 /* ---- Toasts -------------------------------------------------------------------- */
 
+/* The host lives here while no modal dialog is open. It is emptied out (the
+   popover moves into the topmost dialog, see components/modal-layer.ts), and
+   `display: contents` keeps an empty box out of the shell's grid. */
+.toast-home { display: contents; }
+
 .toast-host {
   /* Manual popover: it joins the top layer so it can sit above the settings
      <dialog>. The UA's default popover box (centred, bordered, opaque) is

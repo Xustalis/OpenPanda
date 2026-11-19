@@ -20,7 +20,6 @@ import {
 import { Icon } from '../components/icons'
 import { Dock, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH, type DockEnv, type DockTab } from '../components/dock'
 import { DockBrowser, type BrowserArtifact, type BrowserPageRequest } from '../components/dock-browser'
-import { scanArtifacts } from '../components/auto-preview'
 import { DockFiles } from '../components/dock-files'
 import { DockChanges } from '../components/dock-changes'
 import { SideChat } from '../components/side-chat'
@@ -46,9 +45,10 @@ import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
 import { HoverPreview, Lightbox } from '../components/image-preview'
 import { liveTaskIds } from '../components/task-activity'
-import { groupDispatches } from './chat-batch.ts'
 import { roundStillOpen, trailingRunSummary } from '../components/chat-speaker'
 import { TaskProgress } from '../components/chat-cast'
+import { projectTaskRounds } from './sessions/task-round-state'
+import { RoundReportPane, SessionTaskRound, type OpenRoundReport, type RoundReportSelection } from './sessions/task-round'
 import {
   PermissionPicker,
   normalizePermission,
@@ -207,6 +207,8 @@ export function SessionsView({
   // is the head's `+`, which every panel reads as "start a fresh one".
   const [dockOpen, setDockOpen] = useState(false)
   const [dockTab, setDockTab] = useState<DockTab>('')
+  const [reportSelection, setReportSelection] = useState<RoundReportSelection>()
+  const reportOrigin = useRef<HTMLButtonElement | null>(null)
   // The column's width is a preference, not fleet or thread state: it lives in
   // localStorage and never travels. A stored value outside the drag's bounds
   // (an older build, a hand-edited entry) falls back to the default.
@@ -272,7 +274,6 @@ export function SessionsView({
   // Which artifact keys this thread has already shown. `null` means "no poll
   // has landed yet": the first snapshot is the baseline, so reopening a thread
   // after the work finished does not pop previews for pages already seen.
-  const autoSeen = useRef<Set<string> | null>(null)
   // The finished task whose page the dock's browser is asked to show. It is a
   // request into the panel, not a surface of its own: the panel owns the frame
   // and the error state, this only names the task.
@@ -403,6 +404,21 @@ export function SessionsView({
     setDockTab('orch')
     setFocusTask({ id })
   }
+  function closeRoundReport() {
+    setDockOpen(false)
+    const origin = reportOrigin.current
+    if (origin?.isConnected) origin.focus({ preventScroll: true })
+  }
+  const openRoundReport: OpenRoundReport = (key, origin, taskId) => {
+    if (dockOpen && dockTab === 'report' && reportSelection?.key === key && reportSelection.taskId === taskId) {
+      closeRoundReport()
+      return
+    }
+    reportOrigin.current = origin
+    setReportSelection({ key, taskId })
+    setDockTab('report')
+    setDockOpen(true)
+  }
   /** The head's three tools are pages, not popovers: one click swaps the dock
    *  body to that tool, a second click on the same one folds the column (the
    *  tabs on the right behave the same way). */
@@ -430,12 +446,13 @@ export function SessionsView({
     // across would show the next thread something it never mentioned.
     setDockOpen(false)
     setDockTab('')
+    setReportSelection(undefined)
+    reportOrigin.current = null
     setFileRef(null)
     // The panels stay mounted behind a hidden tab, so closing the dock is not
     // enough: the next thread would reopen to the last thread's page, file or
     // side question. The epoch is the panels' reset signal.
     setDockEpoch((n) => n + 1)
-    autoSeen.current = null
     previewSeq.current += 1
     setPageAsk(null)
     setDirectAsk(null)
@@ -1042,16 +1059,6 @@ export function SessionsView({
     if (composer.current) autoGrow(composer.current)
     setCompleteCursor(0)
   }, [input])
-
-  // Follow the newest message while streaming — but only while pinned.
-  // `instant` on purpose: `.chat-log` sets `scroll-behavior: smooth`, and a
-  // smooth scroll re-targeted every frame never settles. The view lags a line
-  // or two behind the stream, then slides the rest of the way when the last
-  // chunk lands — the reply appears to jump the moment it finishes.
-  useEffect(() => {
-    if (!pinned.current) return
-    scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'instant' })
-  }, [msgs])
 
   // A thread that just loaded is parked at its newest message, which is the
   // last question. The rail has to say so before the first scroll event, and
@@ -2340,28 +2347,27 @@ export function SessionsView({
   // print "本轮工作已全部完成" while a colleague was still running — and then
   // rewrite the roll-up every time another one landed. The task board is the
   // only place that knows the batch (see `useSessionTasks`).
-  const runSummary = busy || roundOpen ? null : trailingRunSummary(msgs)
+  const legacySummary = busy || roundOpen ? null : trailingRunSummary(msgs)
+  const runSummary = legacySummary?.refKind === 'plan' ? legacySummary : null
   // The same rows keyed for the transcript. A task bubble renders from here
   // instead of fetching its own copy on every change frame: a thread with
   // several dispatch turns was issuing that many extra requests per frame,
   // all competing with the event stream for the browser's six connections.
   const tasksById = new Map((sessionTasks ?? []).map((t) => [t.id, t]))
-  // A finished task's page opens in the dock by itself. The trigger is the
-  // artifact hash that was not in the previous poll (see scanArtifacts): a
-  // page that appears while the thread is being read is the one the reader
-  // wants, and one dock is enough — a round that lands several opens the
-  // newest and marks the rest seen, so none of them reopens later.
+  const openOperation = session?.operation?.status === 'running' ? session.operation.id : msgs.find(m => m.streaming)?.operation_id
+  const projection = projectTaskRounds(msgs, sessionTasks, openOperation)
+  const selectedReport = reportSelection && projection.rounds.find(round => round.key === reportSelection.key && round.settled)
+  const reportShown = dockShown && dockTab === 'report' && !!selectedReport
+  // A round can settle from a task-list update before its report turn arrives.
+  // Follow that layout change only if the reader was already at the bottom.
+  const roundLayout = projection.rounds.map(round => `${round.key}:${round.settled}:${round.jobs.length}`).join('|')
   useEffect(() => {
-    if (!sessionTasks) return
-    const scan = scanArtifacts(autoSeen.current, sessionTasks)
-    autoSeen.current = scan.seen
-    if (!scan.next) return
-    const task = sessionTasks.find((t) => t.id === scan.next)
-    if (!task) return
-    // The dock and the header cards share one lane; asking for a page closes
-    // whichever card was up rather than laying a column over it.
-    openTaskPreview(task)
-  }, [sessionTasks, openTaskPreview])
+    if (!pinned.current) return
+    scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'instant' })
+  }, [msgs, roundLayout, dockShown])
+  const roundRows = (anchor: string | undefined) => projection.rounds.filter(round => round.anchor === anchor).map(round =>
+    <SessionTaskRound key={`${activeId}:${round.key}`} round={round} reportSelection={reportShown ? reportSelection : undefined}
+      onReport={openRoundReport} onOpenTask={openTaskInPlace} onPreview={openTaskPreview} />)
   const reportRefs = reportFallbackRefs(msgs)
   // The export page shows exactly what the download will contain. Built only
   // while that page is up, so a long thread does not serialize on every render.
@@ -2373,14 +2379,6 @@ export function SessionsView({
         })
       : ''
 
-  // — one round, one bubble. The turns a fan-out files are consecutive and
-  // carry the round's clock, so the first one wears the panda's face and holds
-  // the rest: a five-agent test reads as one reply with five cards, not five
-  // replies with one each. Nothing is lost — every card keeps its own line,
-  // cast row and link, and the transcript on disk is untouched (the model's
-  // history still lists every dispatch).
-  const { batchOf, absorbed } = groupDispatches(msgs)
-
   return (
     <FileViewContext.Provider value={fileOpener}>
     <ComposerContext.Provider value={composerInsert}>
@@ -2388,7 +2386,7 @@ export function SessionsView({
       class={`chat${dockShown ? ' dock-open' : ''}`}
       style={dockShown ? `--dock-w:${dockW}px` : undefined}
     >
-      <div class="chat-pane">
+      <div class="chat-pane session-chat-pane">
         {/* The header is unconditional so the drawer toggle is reachable even
             on a brand-new, empty thread — that is exactly when a phone user
             needs to get back to the thread list. */}
@@ -2520,12 +2518,11 @@ export function SessionsView({
               hasDraft={input.trim() !== '' || pending.length > 0}
             />
           )}
-          {msgs.map((m, i) =>
-            absorbed.has(m.k) ? null : (
+          {msgs.map((m, i) => (
+            <div class="session-chat-turn" key={m.k}>
+            {!projection.hidden.has(m.k) && (
               <ChatTurn
-                key={m.k}
                 msg={m}
-                batch={batchOf.get(m.k)}
                 tasksById={tasksById}
                 fallbackRef={reportRefs.get(m.k)}
                 /* The local measurement wins while it is there (it is the only
@@ -2537,9 +2534,12 @@ export function SessionsView({
                 onOpenTask={openTaskInPlace}
                 onPreviewTask={openTaskPreview}
               />
-            ),
-          )}
-          {liveIds.map((id) => {
+            )}
+            {roundRows(m.k)}
+            </div>
+          ))}
+          {roundRows(undefined)}
+          {liveIds.filter(id => !projection.assigned.has(id)).map((id) => {
             const task = tasksById.get(id)
             return task ? <TaskProgress key={id} task={task} /> : null
           })}
@@ -2832,6 +2832,11 @@ export function SessionsView({
         badges={{ changes: diff?.changes.length ?? 0 }}
         tools={
           <>
+            {selectedReport && <button type="button" class={`icon-btn tip-down${reportShown ? ' open' : ''}`}
+              aria-label={t('sessions.round.report')} data-tip={t('sessions.round.report')} aria-pressed={reportShown}
+              onClick={() => reportShown ? closeRoundReport() : (setDockTab('report'), setDockOpen(true))}>
+              <Icon name="file-text" size={17} />
+            </button>}
             {!newChatPage && session && msgs.length > 0 && (
               <button
                 type="button"
@@ -2886,7 +2891,7 @@ export function SessionsView({
           // moves while the reader is elsewhere. Every visit re-reads it.
           if (next === 'changes') void refreshDiff(activeId)
         }}
-        onToggle={() => setDockOpen((v) => !v)}
+        onToggle={() => reportShown ? closeRoundReport() : setDockOpen(v => !v)}
         onReselect={(key) => {
           // Only the side conversation has a second-level surface to open;
           // every other tab keeps the fold-it-away behaviour.
@@ -2911,6 +2916,12 @@ export function SessionsView({
           if (sideMounted) setSideEpoch((n) => n + 1)
         }}
       >
+        {reportShown && selectedReport && reportSelection && (
+          <div class="dock-pane">
+            <RoundReportPane key={`${activeId}:${selectedReport.key}`} round={selectedReport} selection={reportSelection}
+              onOpenTask={openTaskInPlace} onPreview={openTaskPreview} onClose={closeRoundReport} />
+          </div>
+        )}
         {/* The three tool pages. They are panes like files/browser/side, not
             layers: a tool button swaps the body, so nothing floats over the
             "start from here" rows underneath. */}

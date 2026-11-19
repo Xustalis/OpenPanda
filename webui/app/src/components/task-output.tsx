@@ -1,21 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// The task page's 输出 card: what the run actually produced.
-//
-// This used to live in `views/detail.tsx` as a full-width section that grew to
-// whatever the agent wrote — 2,000 characters of markdown was 2,000 characters
-// of page, and everything after it (the brief, the ids, the log) started below
-// the fold. It is a card now: the facts that answer "did it work" sit on a
-// always-visible line, the prose is clipped to a preview behind a fade, and
-// expanding it scrolls inside the card instead of growing the page.
-
+import type { ComponentChildren } from 'preact'
 import { useState } from 'preact/hooks'
 import type { Task } from '../api/client'
 import { t } from '../i18n'
 import { prettifyJson } from '../format/json'
 import { Markdown } from '../md/render'
 import { TaskPanel } from './task-panel'
-import { parseResult, plainLine, text } from './task-sections'
+import { parseResult, text } from './task-sections'
+import { deliveryText } from './task-delivery'
+import { ArtifactSection } from './artifact'
 
 const OPEN_STATES = ['submitted', 'queued', 'dispatched', 'running', 'waiting_context']
 
@@ -24,26 +18,28 @@ const OUTPUT_CLAMP_PX = 150
 /** Expanded, the body scrolls past this — the page keeps its shape. */
 const OUTPUT_OPEN_PX = 520
 
-export function OutputPanel({ task, lead }: { task: Task; lead?: string }) {
+export function OutputPanel({ task }: { task: Task }) {
   const [rawOpen, setRawOpen] = useState(false)
   const raw = task.result ?? ''
   const r = parseResult(raw)
+  const artifact = task.plan_meta?.output_artifact ? <ArtifactSection key={task.plan_meta.output_artifact} task={task} /> : null
 
   // A result that is not a JSON object is shown verbatim — a half-understood
   // blob beats a blank card. It has no chips to lift out, so the card is the
   // text and a copy button.
   if (!r) {
     const body = raw.trim()
-    if (!body) return <EmptyOutput task={task} />
+    if (!body) return <EmptyOutput task={task} footer={artifact} />
     return (
       <TaskPanel
-        title={t('detail.result.stdout')}
+        title={t('sessions.round.report')}
         wide
         hint={t('detail.result.chars', { n: body.length.toLocaleString() })}
         actions={<CopyButton text={body} />}
         clamp={OUTPUT_CLAMP_PX}
         openMax={OUTPUT_OPEN_PX}
         foldable
+        footer={artifact}
       >
         <pre class="detail-raw">{body}</pre>
       </TaskPanel>
@@ -55,21 +51,17 @@ export function OutputPanel({ task, lead }: { task: Task; lead?: string }) {
   const model = text(r.model)
   const executor = text(r.executor)
   const injected = r.injected === true
-  // The verdict block above already reads out the run's opening sentence (a
-  // done run's verdict *is* the first line of its output). Dropping that one
-  // line here is what stops the page saying the same sentence twice, ten
-  // pixels apart.
-  const stdout = stripLead(text(r.stdout), lead)
-  const stderr = text(r.stderr)
-  const files = Array.isArray(r.files_changed)
-    ? r.files_changed
+  const report = deliveryText(raw)
+  const stderr = text(r.stderr).trim()
+  const diagnostic = stderr === report ? '' : stderr
+  const changed = task.files_changed ?? r.files_changed
+  const files = Array.isArray(changed)
+    ? changed
         .filter((f): f is string => typeof f === 'string' && f !== '')
         .filter((f) => !FILE_NOISE.test(f))
     : []
 
-  // Chips rather than a sentence: a chip names its own field, and the exit
-  // code carries the tone — a zero is the one fact that answers "did it work"
-  // before anything is read.
+  // Process exit is metadata, not proof the deliverable was verified.
   const chips: Array<{ text: string; tone?: 'ok' | 'bad'; mono?: boolean; agent?: boolean }> = []
   if (exit !== null) {
     chips.push({
@@ -83,19 +75,12 @@ export function OutputPanel({ task, lead }: { task: Task; lead?: string }) {
   if (injected) chips.push({ text: t('detail.result.injected') })
   if (executor) chips.push({ text: t('detail.result.node', { node: executor }), mono: true })
 
-  const bodyText = stdout + stderr
-  // A result that carried nothing but its failure has already been read out
-  // in the verdict block; a card titled 输出 with one grey line under it reads
-  // as a broken panel.
-  if (chips.length === 0 && files.length === 0 && !bodyText) return <EmptyOutput task={task} />
-
   // A change set of thirty-six files is a fact, not a list: the card's face
   // names the first few and counts the rest, and the full list closes the body
   // (opening it, the paths filled the whole preview and the prose — the thing
   // the card exists for — never showed).
   const filesOnFace = files.slice(0, FILE_FACE_CAP)
   const filesBehind = files.length - filesOnFace.length
-  const copyText = stdout || stderr
 
   const leadLine = (
     <>
@@ -136,28 +121,30 @@ export function OutputPanel({ task, lead }: { task: Task; lead?: string }) {
 
   return (
     <TaskPanel
-      title={t('detail.result.stdout')}
+      title={t('sessions.round.report')}
       wide
-      hint={bodyText ? t('detail.result.chars', { n: bodyText.length.toLocaleString() }) : undefined}
+      hint={report ? t('detail.result.chars', { n: report.length.toLocaleString() }) : undefined}
       actions={
         <>
-          {copyText ? <CopyButton text={copyText} /> : null}
+          {report ? <CopyButton text={report} /> : null}
           <button
             type="button"
             class="dp-action"
             aria-expanded={rawOpen}
             onClick={() => setRawOpen((v) => !v)}
           >
-            {rawOpen ? t('events.collapse') : t('detail.result.raw')}
+            {t('detail.result.raw')}
           </button>
         </>
       }
       lead={leadLine}
       clamp={OUTPUT_CLAMP_PX}
       openMax={OUTPUT_OPEN_PX}
+      empty={t(OPEN_STATES.includes(task.state) ? 'detail.output.pending' : 'detail.output.empty')}
+      footer={<>{artifact}{rawOpen && <pre class="detail-raw detail-raw-capped" tabIndex={0}>{prettifyJson(raw)}</pre>}</>}
       foldable
     >
-      {stdout ? <Markdown text={stdout} /> : null}
+      {report ? <Markdown text={report} /> : null}
       {/* The full list closes the body rather than opening it: at the top it
           filled the whole preview with paths, and the prose — the thing the
           card exists for — never showed. */}
@@ -169,27 +156,24 @@ export function OutputPanel({ task, lead }: { task: Task; lead?: string }) {
           <FileChips files={files} />
         </div>
       )}
-      {stderr ? (
+      {diagnostic ? (
         <div class="dp-sub">
           <span class="dp-sub-label">{t('detail.result.stderr')}</span>
-          <pre class="result-err">{stderr}</pre>
+          <pre class="result-err">{diagnostic}</pre>
         </div>
       ) : null}
-      {rawOpen ? <pre class="detail-raw">{prettifyJson(raw)}</pre> : null}
     </TaskPanel>
   )
 }
 
-/** The card a run that has not produced anything yet gets. It stays on the
- *  page — an 输出 card that disappears leaves the reader hunting for where the
- *  answer would have been. */
-function EmptyOutput({ task }: { task: Task }) {
+function EmptyOutput({ task, footer }: { task: Task; footer?: ComponentChildren }) {
   const running = OPEN_STATES.includes(task.state)
   return (
     <TaskPanel
-      title={t('detail.result.stdout')}
+      title={t('sessions.round.report')}
       wide
       empty={running ? t('detail.output.pending') : t('detail.output.empty')}
+      footer={footer}
     />
   )
 }
@@ -211,20 +195,6 @@ function CopyButton({ text }: { text: string }) {
       {copied ? `✓ ${t('md.copied')}` : t('md.copy')}
     </button>
   )
-}
-
-/** Drops a leading sentence the page has already printed elsewhere — the
- *  verdict block quotes a done run's opening line, and the output card then
- *  opened on the same words. Markdown decoration is ignored on both sides
- *  (the verdict quotes the line without its `##`), exact prefix only, and only
- *  when a real body remains: trimming a 12-character remainder would leave the
- *  card emptier than it started. */
-function stripLead(body: string, lead?: string): string {
-  if (!lead) return body
-  const trimmed = plainLine(body.trimStart())
-  if (!trimmed.startsWith(lead)) return body
-  const rest = trimmed.slice(lead.length).replace(/^[\s。.!！]+/, '')
-  return rest.length > 40 ? rest : body
 }
 
 /** VCS internals, dependency trees, build output and agent-session scratch

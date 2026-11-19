@@ -724,7 +724,10 @@ func streamTransport() *http.Transport {
 // dialable (a self-hosted model is a normal endpoint).
 func modelTransport() *http.Transport {
 	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		// Not http.ProxyFromEnvironment: a loopback proxy that has stopped
+		// listening must not be dialled for the rest of the process lifetime.
+		// See security.ProxyForRequest.
+		Proxy: security.ProxyForRequest,
 		DialContext: security.GuardedDialContext(&net.Dialer{
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,

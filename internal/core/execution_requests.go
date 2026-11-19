@@ -278,6 +278,11 @@ func (c *Core) prepareQueuedTask(ctx context.Context, in TaskInput, q QueueSpec)
 			return Task{}, err
 		}
 	}
+	if in.ParentID == "" && in.Isolate && len(in.Paths) > 0 {
+		if err := ValidateDispatchPaths(in.WorkDir, in.Paths); err != nil {
+			return Task{}, err
+		}
+	}
 	id, err := newUUID()
 	if err != nil {
 		return Task{}, err
@@ -302,6 +307,12 @@ func (c *Core) prepareQueuedTask(ctx context.Context, in TaskInput, q QueueSpec)
 	}
 	if len(q.ResourceKeys) != 0 {
 		t.ResourceKeys = mergeActuatorKeys(q.ResourceKeys, in.Requires, in.SpecJSON)
+	} else if scopedDispatch(t) {
+		// Hold the output lanes in the queue until the run settles. The
+		// actual execution holds only its private workspace; the merge
+		// obtains the target locks through the existing delivery protocol.
+		in.Isolate = false
+		t.ResourceKeys = c.scopedDispatchQueueKeys(id, in)
 	} else if in.Project != "" && (len(t.ScopePaths) > 0 || in.Isolate) {
 		t.ResourceKeys = c.childResourceKeysFor(id, in)
 	} else {

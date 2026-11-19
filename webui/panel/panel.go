@@ -801,9 +801,13 @@ type taskChildJSON struct {
 // optional (omitempty): old clients never see them, new clients paint richer
 // views when they are present.
 type taskJSON struct {
-	WorkSource *taskhub.Source `json:"work_source,omitempty"`
-	ID         string          `json:"id"`
-	ParentID   string          `json:"parent_id"`
+	OperationID   string          `json:"operation_id,omitempty"`
+	DispatchOrder int64           `json:"dispatch_order,omitempty"`
+	DispatchOpen  bool            `json:"dispatch_open,omitempty"`
+	Executing     bool            `json:"executing,omitempty"`
+	WorkSource    *taskhub.Source `json:"work_source,omitempty"`
+	ID            string          `json:"id"`
+	ParentID      string          `json:"parent_id"`
 	// SpawnDepth is the task's generation inside a delegation tree (0 root,
 	// 1 child, 2 grandchild); omitted for standalone rows so the kanban only
 	// badges cards that belong to a sub-agent fan-out.
@@ -816,6 +820,9 @@ type taskJSON struct {
 	Intent     string `json:"intent,omitempty"`
 	Spec       string `json:"spec,omitempty"`
 	Result     string `json:"result,omitempty"`
+	// DeliveryExcerpt is a bounded slice of the current attempt's report for
+	// session lists. Unlike Result, it is small enough for the change feed.
+	DeliveryExcerpt string `json:"delivery_excerpt,omitempty"`
 	// FilesChanged is the run's own report of what it touched: a snapshot
 	// diff of its working directory, so it works in a plain folder where
 	// there is no worktree to diff. Lifted out of Result because brief reads
@@ -837,6 +844,9 @@ type taskJSON struct {
 	// session's task list, which is polled every change frame and must stay
 	// one row wide rather than dragging a task's whole event timeline.
 	Agent string `json:"agent,omitempty"`
+	// CallName is the current attempt's recorded adapter or native ability.
+	// It is included on session task lists without transferring the trace.
+	CallName string `json:"call_name,omitempty"`
 	// Requires is the capability set the task was routed with, including the
 	// `agent:<name>` pin when the submitter named one. The transcript's
 	// dispatch card reads it to name the employee the job was given to: a
@@ -872,6 +882,7 @@ type taskJSON struct {
 	// completed work. These fields also explain legacy needs_changed_input rows.
 	ReviewReason   string `json:"review_reason,omitempty"`
 	RetryAvailable bool   `json:"retry_available,omitempty"`
+	NeedsFollowup  bool   `json:"needs_followup,omitempty"`
 	// Question/QuestionSpec surface a parked clarification without making the
 	// client parse the whole result JSON (which also carries the run's
 	// stdout): Question is the plain text, QuestionSpec the ClarifySpec JSON
@@ -1077,6 +1088,7 @@ func (h *handler) toTaskJSON(t core.Task) taskJSON {
 	}
 	if t.State == core.StateReview {
 		out.ApprovalDisposition = string(t.ApprovalDisposition)
+		out.NeedsFollowup = t.NeedsFollowup()
 		if spec, q := parkedQuestionFromResult(t.ResultJSON); q != "" || spec != nil {
 			out.Question = q
 			if spec != nil {
@@ -1212,15 +1224,21 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("brief") == "1" {
 		// The chat's own read of a thread's tasks: it renders state, the
 		// running adapter, the plan stage and the newest event line, and the
-		// poll runs once per change frame. Spec and result are the row's
-		// heaviest columns and no consumer of this read looks at them.
+		// poll runs once per change frame. Keep the complete result on the
+		// single-task endpoint, with only a small excerpt for settled reports.
 		for i := range out {
+			if session != "" {
+				out[i].DeliveryExcerpt = sessionDeliveryExcerpt(out[i].State, out[i].Result)
+			}
 			out[i].Spec = ""
 			out[i].Result = ""
 			out[i].Intent = ""
 		}
 	}
 	h.attachLastEvents(r.Context(), out)
+	if session != "" {
+		h.attachSessionTaskActivity(r.Context(), session, out)
+	}
 	// The board explains a park with the same words the chat card uses, so the
 	// cause rides the list too — one query for every parked row, not one per
 	// row on the page that polls fastest.
@@ -1772,6 +1790,10 @@ func (h *handler) approveTask(w http.ResponseWriter, r *http.Request) {
 		cur, err := h.store.Get(r.Context(), id)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, errors.New("approve failed"))
+			return
+		}
+		if err := cur.ObjectiveApprovalError(); err != nil {
+			writeErr(w, http.StatusConflict, err)
 			return
 		}
 		if cur.NeedsFollowup() {

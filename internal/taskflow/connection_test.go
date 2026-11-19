@@ -20,6 +20,43 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
+func TestFirstConnectionUnavailableDoesNotCreateAccount(t *testing.T) {
+	var enabled atomic.Bool
+	var grants atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/tsync/v1/capabilities":
+			_ = json.NewEncoder(w).Encode(map[string]any{"integrationVersion": 1, "instanceId": "instance", "feedEpoch": "feed", "minIntegrationClientVersion": "0.1.0", "integrationFeatures": map[string]bool{"deviceFlow": enabled.Load()}})
+		case "/tsync/oauth/device/code":
+			grants.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"device_code": "test", "user_code": "CONNECT", "verification_uri": "http://" + r.Host + "/tsync/device", "expires_in": 600, "interval": 1, "device_challenge": "challenge"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "node.db")
+	s := New(testdb.OpenFile(t, path), path)
+	ctx := context.Background()
+	opts := ConnectOptions{ID: "first", Root: server.URL + "/tsync/"}
+	for range 2 {
+		if _, err := s.Connect(ctx, opts); !errors.Is(err, taskproviders.ErrUnsupported) {
+			t.Fatalf("expected unsupported service: %v", err)
+		}
+	}
+	if rows, err := s.List(ctx); err != nil || len(rows) != 0 || grants.Load() != 0 {
+		t.Fatalf("unexpected connections=%d grants=%d err=%v", len(rows), grants.Load(), err)
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, "first.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected credential: %v", err)
+	}
+	enabled.Store(true)
+	res, err := s.Connect(ctx, opts)
+	if err != nil || res.Connection.State != "authorizing" || grants.Load() != 1 {
+		t.Fatalf("retry after service enabled: state=%s grants=%d err=%v", res.Connection.State, grants.Load(), err)
+	}
+}
+
 func TestConnectionReconnectAndPendingResume(t *testing.T) {
 	var grants, refreshes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

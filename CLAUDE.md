@@ -363,7 +363,17 @@ a unit test may not cover.
 - The diagnostic surface and the execution surface share one source of
   truth: `commander.EffectiveBaseURL` decides whether a model is usable.
   Every branch that refuses to run needs a matching explanation in
-  `internal/doctor` or the logs, or users only see the symptom.
+  `internal/doctor` or the logs, or users only see the symptom. Egress is
+  the same contract: `endpointClient` (`internal/commander/probe.go`) and
+  the entry model (`internal/entry/model.go`) both honour
+  `http.ProxyFromEnvironment`, so a proxy that breaks real calls must also
+  fail the probe. `security.SanitizeLocalProxyEnv` runs before any client
+  is built in `cmd/panda` and `webui/cmd/panel` and unsets a **loopback**
+  proxy nothing is listening on (`OPENPANDA_KEEP_PROXY=1` opts out). Without
+  it, a desktop tunnel that restarted on a new port leaves every call dying
+  in the proxy handshake while net/http has already cached the dead address
+  for the life of the process — and editing model settings inside the
+  running console cannot recover it.
 
 ## Conventions
 

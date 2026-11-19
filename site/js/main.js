@@ -5,16 +5,14 @@
 // tilt, and the section parallax. The 3D starfield lives in scene.js and owns
 // its own lifecycle (canvas, WebGL fallback, resize).
 //
-// Everything here degrades to a no-op when its node is missing — one null
-// lookup used to abort this whole module and leave the page blank.
+// The page content works without this module; animation is optional.
 
-import { initHero } from './scene.js'
-import { initDust } from './dust.js'
 import { initLangToggle, lang, onLangChange, ui } from './i18n.js'
 
 const $ = (id) => document.getElementById(id)
 const fine = matchMedia('(pointer: fine)').matches
 const calm = matchMedia('(prefers-reduced-motion: reduce)').matches
+const canObserve = typeof IntersectionObserver === 'function'
 
 /* ── language ──────────────────────────────────────────────────────────── */
 // i18n.js has already translated the document by the time this module runs
@@ -66,7 +64,7 @@ const navLinks = [...document.querySelectorAll('.nav-links a')].filter((a) => {
 })
 const linkFor = new Map(navLinks.map((a) => [a.getAttribute('href').split('#')[1], a]))
 
-if (navLinks.length) {
+if (canObserve && navLinks.length) {
   // Observe every section, not just the ones the nav links to: the page runs
   // longer than the nav (capabilities, proof, scales have no entry), and
   // watching only the linked sections left the last one lit while the reader
@@ -137,32 +135,23 @@ addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false) })
 matchMedia('(min-width: 901px)').addEventListener('change', (e) => { if (e.matches) setMenu(false) })
 
 /* ── scroll reveals ────────────────────────────────────────────────────── */
-// .js .reveal starts at opacity:0; anything that enters the viewport gets .in.
+// Animate on entry, without hiding anything while waiting for the observer.
+if (canObserve && !calm) {
+  const revealIO = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue
+      entry.target.classList.add('in')
+      revealIO.unobserve(entry.target)
+    }
+  }, { threshold: 0.12, rootMargin: '0px 0px -6% 0px' })
 
-const revealIO = new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    if (!entry.isIntersecting) continue
-    entry.target.classList.add('in')
-    revealIO.unobserve(entry.target)
-    // Drop the stagger delay once the fade is done, otherwise it would also
-    // delay the pointer tilt on the same element.
-    entry.target.addEventListener('transitionend', () => {
-      entry.target.style.transitionDelay = ''
-    }, { once: true })
-  }
-}, { threshold: 0.12, rootMargin: '0px 0px -6% 0px' })
-
-document.querySelectorAll('.reveal').forEach((el) => revealIO.observe(el))
-
-// Grids come in as a sequence rather than a block.
-if (!calm) {
   const groups = '.wall-grid, .cap-grid, .flow-grid, .stat-grid, .track, .scales-grid, .faq-list'
   for (const group of document.querySelectorAll(groups)) {
     [...group.children].forEach((el, i) => {
-      if (!el.classList.contains('reveal')) return
-      el.style.transitionDelay = Math.min(i * 70, 420) + 'ms'
+      if (el.classList.contains('reveal')) el.style.animationDelay = Math.min(i * 70, 420) + 'ms'
     })
   }
+  document.querySelectorAll('.reveal').forEach((el) => revealIO.observe(el))
 }
 
 /* ── counters ──────────────────────────────────────────────────────────── */
@@ -187,7 +176,7 @@ function runCounter(el) {
   requestAnimationFrame(tick)
 }
 
-if (!calm) {
+if (canObserve && !calm) {
   const counterIO = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue
@@ -399,18 +388,19 @@ fetch('https://api.github.com/repos/Xustalis/OpenPanda')
   })
   .catch(() => { /* rate-limited or offline — the link still works */ })
 
-/* ── 3D hero ───────────────────────────────────────────────────────────── */
-// The scene is a background: it reads no UI state and reports nothing back,
-// so both callbacks are inert. scene.js adds body.scene-ready itself once it
-// has drawn a frame.
-
-initHero($('orbit-canvas'), () => {}, () => '')
-
-/* ── section dust ──────────────────────────────────────────────────────── */
-// 2D canvases behind the two dark sections: a hundred drifting points each,
-// paused whenever the section leaves the viewport.
-
-initDust()
+/* ── optional backgrounds ──────────────────────────────────────────────── */
+// Neither canvas should block navigation, language or the product tabs.
+if (canObserve) {
+  const canvas = $('orbit-canvas')
+  if (canvas) {
+    import('./scene.js')
+      .then(({ initHero }) => initHero(canvas))
+      .catch(() => document.body.classList.add('no-webgl'))
+  }
+  import('./dust.js')
+    .then(({ initDust }) => initDust())
+    .catch(() => { /* The section backdrops also work without dust. */ })
+}
 
 /* ── product views ─────────────────────────────────────────────────────── */
 // One run, two witnesses: the console answers "what is happening", the terminal

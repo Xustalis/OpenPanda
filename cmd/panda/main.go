@@ -102,6 +102,23 @@ func main() {
 	// is idempotent (executil guards against duplicates), so every entry point
 	// can share it.
 	executil.AugmentProcessPath()
+	// A proxy exported by whatever launched this process outlives the client
+	// that owned it: a desktop tunnel restarted on a new port, or a sandbox
+	// sidecar whose session ended, leaves a loopback address nothing answers.
+	// net/http caches that value for the process lifetime, so every model call
+	// then dies in the proxy handshake ("connection refused") while the
+	// endpoint itself is perfectly reachable — and editing config inside the
+	// running process cannot fix it. Drop those values before any HTTP client
+	// is built; daemon mode re-execs itself, so the child inherits the cleaned
+	// environment and the fix survives a restart.
+	if drops := security.SanitizeLocalProxyEnv(); len(drops) > 0 {
+		for _, d := range drops {
+			fmt.Fprintf(os.Stderr, "panda: dropped stale local proxy %s; continuing without it\n", d)
+		}
+		fmt.Fprintf(os.Stderr,
+			"panda: the configured proxy was unreachable on loopback; set %s=1 to keep it anyway\n",
+			security.KeepProxyEnv)
+	}
 	if sub != "" {
 		dispatchSub(sub, args)
 		return
