@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // The offline gate.
@@ -172,12 +174,18 @@ func dialAddrOf(base string) string {
 // answers the wrong question. A proxied client never dials the provider
 // directly — the proxy does — so the probe follows the proxy instead (see
 // probeTargetForProxy for when that is still an endpoint signal).
+//
+// The lookup goes through security.ProxyForRequest rather than
+// http.ProxyFromEnvironment so the gate dials exactly what the model client
+// would dial: a loopback proxy nothing listens on has already fallen back to a
+// direct connection there, and following the dead address here would make the
+// gate probe a port that no request will use.
 func probeTargetFor(base string) (target string, localProxy bool) {
 	req, err := http.NewRequest(http.MethodPost, base, nil)
 	if err != nil {
 		return dialAddrOf(base), false
 	}
-	u, err := http.ProxyFromEnvironment(req)
+	u, err := security.ProxyForRequest(req)
 	if err != nil || u == nil {
 		return dialAddrOf(base), false
 	}

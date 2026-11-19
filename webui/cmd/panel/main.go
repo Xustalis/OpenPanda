@@ -29,6 +29,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/reminders"
+	"github.com/Xustalis/OpenPanda/internal/security"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -45,6 +46,19 @@ func main() {
 		mcpCommand = flag.String("mcp", "", "space-separated stdio MCP server command whose tools /api/ask may call")
 	)
 	flag.Parse()
+
+	// Same guard as the panda CLI entry point: a loopback proxy exported by the
+	// launching shell (desktop tunnel, sandbox sidecar) can outlive the client
+	// that owned it. net/http caches the value for the process lifetime, so the
+	// sidecar would answer every model call with a proxy handshake failure
+	// against a port nobody listens on. Drop it before the first client exists.
+	if drops := security.SanitizeLocalProxyEnv(); len(drops) > 0 {
+		for _, d := range drops {
+			fmt.Fprintf(os.Stderr, "panda-webui: dropped stale local proxy %s; continuing without it\n", d)
+		}
+		fmt.Fprintf(os.Stderr,
+			"panda-webui: set %s=1 to keep the configured proxy\n", security.KeepProxyEnv)
+	}
 
 	// An explicit -config pointing nowhere used to fall back to defaults
 	// silently, surfacing later as a misleading missing-field error.
