@@ -5,6 +5,7 @@ package security
 import (
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -77,8 +78,17 @@ func TestSanitizeDropsDeadLoopbackProxy(t *testing.T) {
 
 	dropped := SanitizeLocalProxyEnv()
 
-	if len(dropped) != 2 {
-		t.Fatalf("dropped %d entries, want 2: %v", len(dropped), dropped)
+	// Windows resolves environment names case-insensitively, so HTTPS_PROXY and
+	// https_proxy are one variable there: the second set overwrites the first
+	// and only one drop can be observed. The sanitizer walks the names in order
+	// and stops reporting a key once Getenv returns empty, which is the correct
+	// Windows behaviour — the fixture just cannot create two.
+	want := 2
+	if runtime.GOOS == "windows" {
+		want = 1
+	}
+	if len(dropped) != want {
+		t.Fatalf("dropped %d entries, want %d: %v", len(dropped), want, dropped)
 	}
 	for _, key := range []string{"HTTPS_PROXY", "https_proxy"} {
 		if got := os.Getenv(key); got != "" {
