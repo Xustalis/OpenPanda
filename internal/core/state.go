@@ -325,13 +325,16 @@ type Task struct {
 	Isolate bool
 }
 
-// NeedsFollowup reports whether this row parked in review with the
-// supervisor's "more work remains" flag — the signal that makes "continue"
-// an honest third answer alongside approve and reject. The flag lives in the
-// stored result JSON, not a column, because it describes the result, not the
-// task's identity.
+// NeedsFollowup reports whether reviewed work can be continued rather than
+// accepted. Older MAX reviews may have parked before this flag was set.
 func (t Task) NeedsFollowup() bool {
-	return t.State == StateReview && needsFollowupResult(t.ResultJSON)
+	if t.State != StateReview {
+		return false
+	}
+	if needsFollowupResult(t.ResultJSON) {
+		return true
+	}
+	return t.ApprovalDisposition == ApprovalAcceptWork && t.ObjectiveApprovalError() != nil
 }
 
 // GetUserLocale returns the task's language preference as an i18n.Locale,

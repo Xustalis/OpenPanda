@@ -31,7 +31,7 @@ const superviseCacheNS = "supervise"
 // supervisePromptVersion tags superviseSystemPrompt; bump it whenever the
 // judging instructions change so verdicts produced under the old instructions
 // are no longer served.
-const supervisePromptVersion = "v4"
+const supervisePromptVersion = "v5"
 
 // superviseSystemPrompt instructs the entry model to act as the reviewing
 // superior ("上级"): it judges an agent's result against the task's success
@@ -48,6 +48,7 @@ const superviseSystemPrompt = `你是执行结果审核员（上级）。一个�
 - 证据中的[验收基线]是智能体动手前的检查结果：基线里已经失败的检查属于既有问题，除任务本身要求修复它之外，不得计为本次执行的失败。
 - 不要因为缺少与核心目标无关的附加步骤而判 continue。
 - 若任务包含 [Execution objectives]，必须逐项独立核验所有 MAX 目标的 criteria，在 objective_assessments 中逐项给出 {"dimension":"目标ID","criterion":0,"status":"passed|deferred|unmet|blocked","evidence":"实际命令、文件或观察结果的证据与适用范围"}，criterion 为该维度 criteria 数组的零起始索引。不能以执行者的自我评价、权重、模型信心或退出码替代验收证据。未满足任何 MAX 项不能判 done。明确标注为 intermediate 的子任务或中间阶段可将自身范围之外的全局验收项标记 deferred，并说明交给哪一整合任务；最终交付的所有 MAX 项必须 passed。目标与预算、授权或能力冲突时如实判 blocked，不得降低目标。
+- NORMAL 条目的评估可附上，但只填写目标中实际存在的维度与索引，每个条目只填一次；不要用 NORMAL 证据替代任何 MAX 条目。
 - 用户明确要求的交付物、覆盖范围与验收项属于核心目标，不能以“已有部分产出”代替完成。文件存在/大小不证明内容符合规格；未实际渲染不能声称视觉、响应式或交互验收通过。对明确要求逐项证据的调查，目录列表和 README 不能替代实现证据。区分已完成工作、未验证项和未完成项。
 - 若核心目标被当前执行环境无法自行解决的权限、登录、外部工具沙箱或缺失用户输入阻断，且有实际错误证据，应判 blocked。审批同意不等于外部工具获得了权限；不得反复要求同一受限环境切换到“真实终端”或绕过限制。followup 说明需要改变的环境或输入。普通可修复的代码/测试失败仍判 continue；任务本身是诊断阻断原因且报告满足要求时仍可判 done。
 

@@ -6,13 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/objectives"
-	"strings"
-	"testing"
 )
 
 func TestObjectiveVerdictNeverCompletesMissingMAXEvidence(t *testing.T) {
@@ -116,6 +116,27 @@ func TestObjectiveEvidenceCannotBeBypassedByApproval(t *testing.T) {
 	got, err := c.store.Get(ctx, task.TaskID)
 	if err != nil || got.State != StateReview {
 		t.Fatalf("state=%s err=%v", got.State, err)
+	}
+	if !got.NeedsFollowup() {
+		t.Fatal("legacy MAX evidence park has no continuation")
+	}
+	continued, err := c.ContinueReviewed(ctx, task.TaskID, "verify the existing work")
+	if err != nil || continued.State != StateQueued || !continued.Scheduled {
+		t.Fatalf("continue: state=%s scheduled=%v err=%v", continued.State, continued.Scheduled, err)
+	}
+}
+
+func TestObjectiveInvalidVerdictPersistsFollowup(t *testing.T) {
+	c := newCore(t, "objective-recover")
+	task := objectiveFixtureTask(t, c, runToRunning(t, c, "objective-recover", "verify"))
+	ctx := context.Background()
+	payload, err := c.finalizeRun(ctx, task.TaskID, task, commander.Plan{Kind: "agent", Tier: 1}, nil, task.AttemptID, t.TempDir(), commander.Result{OK: true, Stdout: "existing work"}, nil, nil, false, entry.SuperviseVerdict{Status: entry.VerdictDone}, false, "", "", nil, nil)
+	if err != nil || payload.State != StateReview || !payload.NeedsFollowup {
+		t.Fatalf("expected recoverable review, payload=%+v err=%v", payload, err)
+	}
+	got, err := c.store.Get(ctx, task.TaskID)
+	if err != nil || !needsFollowupResult(got.ResultJSON) {
+		t.Fatalf("persisted follow-up missing: %s err=%v", got.ResultJSON, err)
 	}
 }
 
