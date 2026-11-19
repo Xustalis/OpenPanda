@@ -87,7 +87,7 @@
     <div class="wrap">
       <p class="mono-label pg-kicker">CAPABILITIES</p>
       <h1 class="pg-title" data-i18n="ft.h1">能力清单</h1>
-      <p class="pg-lede" data-i18n="ft.lede">首页讲的是为什么。这一页把内核实际做了什么拆开：能力、对应命令、以及它在架构里的位置。</p>
+      <p class="pg-lede" data-i18n="ft.lede">沿用你已有的 Agent，把任务派给具备条件的设备，再把产物和执行证据收回来。这一页说明每一步由什么能力支撑。</p>
       <p class="pg-meta">CURRENT v0.1.6 · 5 CAPABILITY GROUPS · 2 REFERENCE TABLES</p>
     </div>
   </header>
@@ -101,7 +101,7 @@
         <a href="#sessions" data-i18n="toc.sessions">会话与嵌入</a>
         <a href="#interfaces" data-i18n="toc.interfaces">界面与运行时</a>
         <a href="#layers" data-i18n="toc.layers">内核分层</a>
-        <a href="#replaces" data-i18n="toc.replaces">它替代什么</a>
+        <a href="#replaces" data-i18n="toc.replaces">什么时候值得用 Panda</a>
         </nav>
         <div class="pg-toc-foot">
           <span class="mono-label">STABLE</span>
@@ -112,7 +112,7 @@
     <div class="pg-content">
       <section class="pg-section" id="orchestration">
       <h2 data-i18n="ft.s1.t">编排与监督</h2>
-      <p class="pg-lead" data-i18n="ft.s1.d">它不替你写 Agent，而是把你已经装好的 Agent 组织成一支能验收的队伍。以下每条能力都有对应的命令或配置入口。</p>
+      <p class="pg-lead" data-i18n="ft.s1.d">继续使用已安装的 Agent CLI。Panda 负责把任务交给符合条件的执行器，跟踪执行，并将结果带回发起端。</p>
       <div class="pg-facts">
       <div class="pg-fact">
       <h3 data-i18n="ft.s1.f1.t">意图分类与拆解</h3>
@@ -290,52 +290,34 @@
       <p class="pg-note" data-i18n="ft.s6.note">完整目录与边界说明见 docs/status.md 的能力对账表；本页只列稳定分层，不把实验性模块写成已发布能力。</p>
       </section>
       <section class="pg-section" id="replaces">
-      <h2 data-i18n="ft.s7.t">它替代什么</h2>
-      <p class="pg-lead" data-i18n="ft.s7.d">把常见做法摆在同一张表里，差别就落在「谁持有你的代码」和「节点死了会怎样」。</p>
+      <h2 data-i18n="ft.s7.t">什么时候值得用 Panda</h2>
+      <p class="pg-lead" data-i18n="ft.s7.d">远程执行、多 Agent 并行和自托管都不是 Panda 独有。Panda 适合已经有几种 Agent 或几台机器，又想把跨设备执行、恢复和结果交接留在同一条任务里的人。</p>
       <div class="pg-table-wrap"><table class="pg-table"><thead><tr>
-      <th></th>
-      <th data-i18n="ft.s7.h1">单个 Agent CLI</th>
-      <th>ssh + tmux + cron</th>
-      <th data-i18n="ft.s7.h3">托管编排服务</th>
-      <th>OpenPanda</th>
+      <th scope="col" data-i18n="ft.s7.h1">你的情况</th>
+      <th scope="col" data-i18n="ft.s7.h3">怎么选</th>
       </tr></thead><tbody>
       <tr>
-      <td data-i18n="ft.s7.r1.c1">驱动你已经付费的 CLI</td>
-      <td data-i18n="ft.s7.r1.c2">一次一个</td>
-      <td data-i18n="ft.s7.r1.c3">靠手写脚本</td>
-      <td data-i18n="ft.s7.r1.c4">通常换成它自己的栈</td>
-      <td data-i18n="ft.s7.r1.c5">十个适配器加一个通用桥</td>
+      <td data-i18n="ft.s7.r1.c1">现有 Agent 或 harness 已能跑完全程</td>
+      <td data-i18n="ft.s7.r1.c5">继续用它。单机、固定远端或同一套工具已经够用时，不必加一层调度。</td>
       </tr>
       <tr>
-      <td data-i18n="ft.s7.r2.c1">用上你所有的机器</td>
-      <td data-i18n="ft.s7.r2.c2">不能</td>
-      <td data-i18n="ft.s7.r2.c3">自己写脚本</td>
-      <td data-i18n="ft.s7.r2.c4">租用它的云主机</td>
-      <td data-i18n="ft.s7.r2.c5">局域网内发现自己的设备</td>
+      <td data-i18n="ft.s7.r2.c1">测试和构建要在不同机器上跑</td>
+      <td data-i18n="ft.s7.r2.c5">试用 Panda。把已有 CLI 留在适合的机器上，按设备能力和任务限制派发，在发起端收结果。</td>
       </tr>
       <tr>
-      <td data-i18n="ft.s7.r3.c1">节点中途挂掉</td>
-      <td data-i18n="ft.s7.r3.c2">任务没了</td>
-      <td data-i18n="ft.s7.r3.c3">任务没了</td>
-      <td data-i18n="ft.s7.r3.c4">通常能续</td>
-      <td data-i18n="ft.s7.r3.c5">带失败原因重新派发</td>
+      <td data-i18n="ft.s7.r3.c1">你要知道中断后能不能继续</td>
+      <td data-i18n="ft.s7.r3.c5">看恢复策略和阻塞原因。能安全续跑才续跑，不能重放的步骤需要人工处置。</td>
       </tr>
       <tr>
-      <td data-i18n="ft.s7.r4.c1">代码与提示词在哪</td>
-      <td data-i18n="ft.s7.r4.c2">你的机器</td>
-      <td data-i18n="ft.s7.r4.c3">你的机器</td>
-      <td data-i18n="ft.s7.r4.c4">服务商的服务器</td>
-      <td data-i18n="ft.s7.r4.c5">你的机器，走加密 mesh</td>
+      <td data-i18n="ft.s7.r4.c1">你要自己管理执行节点与调度</td>
+      <td data-i18n="ft.s7.r4.c5">Panda 节点由你部署，无需官方中转。你选择的模型服务和 Agent 仍可能联网，要按其数据规则使用。</td>
       </tr>
       <tr>
-      <td data-i18n="ft.s7.r5.c1">成本</td>
-      <td data-i18n="ft.s7.r5.c2">订阅费</td>
-      <td data-i18n="ft.s7.r5.c3">订阅费</td>
-      <td data-i18n="ft.s7.r5.c4">按席位或 token 加价</td>
-      <td data-i18n="ft.s7.r5.c5">用你已有的订阅</td>
+      <td data-i18n="ft.s7.r5.c1">你要交付证据，光有一句「做完了」不够</td>
+      <td data-i18n="ft.s7.r5.c5">查看真实步骤、改动、验证和待办。需要明确的通过条件时，可用 panda task add --accept 提供执行端实际运行的检查。</td>
       </tr>
       </tbody></table></div>
-      <p class="pg-note" data-i18n="ft.s7.note">这张表是设计取向，不是性能基准；具体已验证与未做的边界写在项目现状页。</p>
+      <p class="pg-note"><a class="text-link" href="status.html" data-i18n="ft.s7.note">查看哪些路径已经过验证，哪些仍有限制 →</a></p>
       </section>
 
       <div class="pg-cta">

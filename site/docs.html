@@ -87,7 +87,7 @@
     <div class="wrap">
       <p class="mono-label pg-kicker">DOCUMENTATION</p>
       <h1 class="pg-title" data-i18n="docs.h1">文档中心</h1>
-      <p class="pg-lede" data-i18n="docs.lede">v0.1.6 的安装、命令与架构说明，放在站点内，不必跳去仓库翻文件。</p>
+      <p class="pg-lede" data-i18n="docs.lede">从单机跑通第一次交付，再把工作派给你管理的构建机。这里也有 v0.1.6 的安装、命令和权限说明。</p>
       <p class="pg-meta">CURRENT v0.1.6 · 2026-11-12 · AGPL-3.0-OR-LATER</p>
     </div>
   </header>
@@ -96,7 +96,7 @@
         <p class="mono-label" data-i18n="pg.toc.on">ON THIS PAGE</p>
         <nav aria-label="本页目录" data-i18n-aria="pg.toc.aria">
         <a href="#start" data-i18n="docs.s1.t">快速开始</a>
-        <a href="#first-task" data-i18n="docs.first.t">从第一个回答到可验收的任务</a>
+        <a href="#first-task" data-i18n="docs.first.t">跑第一个任务并收回结果</a>
         <a href="#installing" data-i18n="docs.s2.t">安装与升级</a>
         <a href="#commands" data-i18n="docs.s3.t">命令速查</a>
         <a href="#architecture" data-i18n="docs.s4.t">架构与信任</a>
@@ -117,26 +117,29 @@
     <div class="pg-content">
       <section class="pg-section" id="start">
         <h2 data-i18n="docs.s1.t">快速开始</h2>
-        <p class="pg-lead" data-i18n="docs.s1.d">装完到第一个回答，三条命令。二进制、适配器与配置都在你自己的用户目录里，不需要 root。</p>
+        <p class="pg-lead" data-i18n="docs.s1.d">装好后先配置模型和执行器。二进制、适配器与配置都在你自己的用户目录里，不需要 root。</p>
         <div class="pg-steps">
           <div class="pg-step"><span class="pg-step-n">01</span><code>panda init</code><p data-i18n="docs.s1.c1">初始化节点、模型提供方与能力卡。</p></div>
           <div class="pg-step"><span class="pg-step-n">02</span><code>panda</code><p data-i18n="docs.s1.c2">进入交互式 TUI 控制台。</p></div>
-          <div class="pg-step"><span class="pg-step-n">03</span><code>panda ask "check system status"</code><p data-i18n="docs.s1.c3">一次性：回答、工具调用或派发任务。</p></div>
+          <div class="pg-step"><span class="pg-step-n">03</span><a class="text-link" href="#first-task" data-i18n="docs.first.t">跑第一个任务并收回结果</a><p data-i18n="docs.s1.c3">在现有项目里运行测试并查看交付。</p></div>
         </div>
         <p class="pg-note" data-i18n="docs.s1.note">panda init 会要求选择模型提供方；本机模型与 API 都可以，不需要 GPU，守护进程空闲时常驻内存约 40MB。</p>
       </section>
 
       <section class="pg-section" id="first-task">
-        <h2 data-i18n="docs.first.t">从第一个回答到可验收的任务</h2>
+        <h2 data-i18n="docs.first.t">跑第一个任务并收回结果</h2>
         <p class="pg-lead" data-i18n="docs.first.d">先验证模型连接，再验证执行器。一次只选择一种运行入口，避免后台进程争用端口。</p>
         <ol>
           <li data-i18n="docs.first.model">运行 panda doctor，在模型设置中测试连接；确认端点、凭据和模型名属于同一服务。官方与兼容端点均可，入口模型配置不等于 agent CLI 的登录配置。</li>
           <li data-i18n="docs.first.agent">运行 panda agents，再对已安装的执行器运行 panda agents test codex（示例）。CLI 的原生端点、凭据与模型仍可使用，不要求额外的官方订阅。</li>
-          <li data-i18n="docs.first.run">打开 panda web 或进入 panda TUI，选择工作目录、执行节点和执行器。首次任务先做小范围文件修改，并写明要运行的测试；对不可逆操作按提示确认。</li>
+          <li data-i18n="docs.first.run">打开 panda web 或进入 panda TUI，选一个你熟悉的项目目录。先在本机试一句「运行这个项目的测试，给我失败项和原始输出，不修改源码」。已知测试命令时可直接写上。</li>
           <li data-i18n="docs.first.watch">对话展示模型阶段、已返回的思考摘要和执行活动。不是所有供应商都会返回思考摘要；不要把没有摘要当作没有运行。刷新不应丢失记录与停止控制。</li>
           <li data-i18n="docs.first.accept">任务结束后检查交付报告、真实步骤、变更路径、验证结果与待确认事项。done 只表示执行结束，不等于独立验收已通过；没有验证记录会明确标注。</li>
           <li data-i18n="docs.first.recover">失败时先看具体任务的原因，再修复网络、登录、余额或执行器配置后重试。不要反复重放同一个已知失败；停止后保留部分回答，必要时从原对话继续。</li>
         </ol>
+        <h3 data-i18n="docs.first.remote.t">用同一个任务试第二台机器</h3>
+        <p data-i18n="docs.first.remote.d">在两台设备上安装并配置 Panda。让具备项目测试环境和 Agent CLI 的构建机保持在线，先配对，再在任务中指定这台机器。确认项目上下文能传给对端，或对端已有所需工作目录。运行后在原对话检查实际执行节点、结果和验证状态。没有合适的节点时，先查明能力、权限或连接缺在哪一步。</p>
+        <p><a class="text-link" href="#network" data-i18n="docs.first.remote.link">看组网与配对步骤 →</a></p>
         <p class="pg-note" data-i18n="docs.first.upgrade">源码更新后需重新构建并重启实际运行的 Panda 服务，再刷新浏览器。旧进程不会自动获得新逻辑；升级前保留配置与数据备份。</p>
       </section>
 
@@ -203,6 +206,7 @@
           <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/protocol.md" target="_blank" rel="noopener" data-i18n="docs.s5.l2">协议、帧与 DTN bundle ↗</a>
           <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/faq.md" target="_blank" rel="noopener" data-i18n="docs.s5.l3">常见问题 ↗</a>
           <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/agent-execution.md" target="_blank" rel="noopener" data-i18n="docs.s5.l7">Agent 模型、并发与热重载（五语）↗</a>
+          <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/product.md" target="_blank" rel="noopener" data-i18n="docs.s5.product">v0.1.x 产品主线（中英）↗</a>
           <a href="status.html" data-i18n="docs.s5.l4">项目现状与已知限制 →</a>
           <a href="changelog.html" data-i18n="docs.s5.l5">完整更新日志 →</a>
           <a href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener" data-i18n="docs.s5.l6">源码、Issue 与 PR ↗</a>

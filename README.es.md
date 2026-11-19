@@ -1,8 +1,6 @@
 # 🐼 OpenPanda
 
-**Sistema Operativo de Agentes Personales de Código Abierto y Orquestador Multidispositivo Local-First**
-
-> Conecta todos tus dispositivos en una malla peer-to-peer privada y "contrata" agentes de IA de terminal (Claude Code, Codex, Grok, etc.) para colaborar entre máquinas como un equipo unificado.
+**Dile a Panda qué necesitas. Encontrará un equipo y un agente capaces de hacerlo y te devolverá el resultado.**
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
@@ -14,7 +12,13 @@
 ![Memory](https://img.shields.io/badge/Memoria%20RSS-~40MB-brightgreen)
 ![No Cloud Relay](https://img.shields.io/badge/Relay%20Cloud-Ninguno-success)
 
-## Demo real
+## Cuándo usar Panda
+
+Si tu agente o harness actual resuelve todo el trabajo, sigue usándolo. Añade Panda cuando tengas que repartir una tarea entre los equipos y agentes que administras y quieras recuperar el resultado, la verificación y los bloqueos en la conversación original. Conservas tus herramientas y no necesitas un planificador ni un relé alojados por Panda.
+
+La [prioridad de v0.1.x](docs/product.en.md) abarca el recorrido completo, desde el encargo y la asignación hasta la recuperación y la entrega. Terminar la ejecución no equivale a superar las comprobaciones.
+
+## Demostración en un solo equipo
 
 ![Sesión de terminal de OpenPanda grabada en una compilación local desde el código fuente](site/media/openpanda-demo.gif)
 
@@ -144,7 +148,7 @@ El detalle por capacidad —qué está verificado, qué solo compilado y los lí
 
 ---
 
-## 🚀 Inicio rápido (3 minutos)
+## 🚀 Inicio rápido
 
 ### Paso 1: Instalación
 
@@ -188,16 +192,14 @@ panda init
   ```bash
   panda web
   ```
-- **O hacer una consulta directa:**
-  ```bash
-  panda ask "Revisar el estado del sistema y resumir tareas pendientes"
-  ```
+Elige un proyecto conocido y pide «Ejecuta las pruebas del proyecto, devuelve los fallos y la salida original, sin modificar el código fuente». Revisa los pasos, la salida y la verificación en la conversación original.
 
-### Conectar un segundo dispositivo en 30 segundos
+### Conectar un segundo dispositivo
 
 1. En el dispositivo A: ejecuta `panda pair <dirección-dispositivo-B>` para iniciar el emparejamiento y mostrar el código.
 2. En el dispositivo B: ejecuta `panda pair confirm` para verificar el mismo código y completar el alta.
-*¡Ambos dispositivos quedan conectados en tu malla P2P!*
+
+Prueba la misma tarea en un equipo de compilación emparejado que ya tenga el entorno de pruebas y un agente instalado.
 
 ---
 
@@ -257,16 +259,14 @@ Hacia dónde va el proyecto. La línea `v0.0.x` del kernel ya está completa y s
 | Versión | Tema |
 |---|---|
 | **v0.0.x** — el núcleo | **Pulir el núcleo hasta que cada función entregada quede probada.** Las pistas Experimental maduran a estable mediante validación en flota real — descubrimiento LAN con admisión por huella, emparejamiento + AEAD por sesión, zonas de confianza, el tablero de mensajes entre tareas, árboles de sesión/RPC/OAuth, delegación con worktree viajero, el bucle de clarificación, drivers de actuadores, computer-use y la entrada de voz — más el primer encendido en hardware real de los drivers de referencia; estabilidad, rendimiento y ajuste de casos límite durante todo el ciclo |
-| **v0.1.x** — el asistente | **Especialización en un asistente que hace cosas por ti.** Una capa de escritorio delgada sobre el núcleo (residente en bandeja, atajo global, notificaciones nativas, autoactualización); la capa de malla densa — recomposición dinámica de planes sub-main scout→plan, relevo tipo TURN para NAT simétrico, deudas del tablero (e2e multidispositivo, pull por MCP, vista del tablero); y una «presencia» mínima y honesta — un motor de colisiones sobre la lista de lo no resuelto que cabalga el ciclo dream y solo habla cuando merece la pena. Calidad comercial, límites declarados con honestidad |
+| **v0.1.x** · entrega de tareas | **La tarea sigue siendo la misma aunque cambie el equipo que la ejecuta.** Se priorizan la asignación por capacidad, la recuperación segura y la entrega con pruebas y pendientes. Las mejoras de escritorio y red sirven a ese recorrido. |
 | **v0.2.x** — autoevolución | **OpenPanda itera sobre sí mismo.** La automodificación llega como conjuntos de parches producidos por agentes a través de un pipeline build → gate → merge humano que coexiste con el canal de releases firmado; los self-builds firmados por el nodo se vuelven una tercera clase de procedencia bajo las zonas de confianza; `self_evolution.mode` (off → propose → auto) conservando siempre el último release firmado como respaldo — el paradigma completo de autoevolución de agentes |
 
 ---
 
 ## 🔭 Visión
 
-La arquitectura de OpenPanda está diseñada para clústeres heterogéneos a gran escala: control de enjambres de drones, planificación de comunicaciones para constelaciones de satélites en el espacio profundo y flotas coordinadas de vehículos autónomos. Estos escenarios comparten un problema fundamental: **cada nodo tiene distinta capacidad de cómputo, distintas capacidades y distintas tareas, y aun así todos deben coordinarse, planificarse y supervisarse en conjunto.**
-
-Hoy OpenPanda sirve a los dispositivos y agentes de un desarrollador. El objetivo a largo plazo es extender el mismo núcleo de orquestación a nodos autónomos a escala de clúster.
+Hoy OpenPanda se centra en los equipos y agentes que ya administra el desarrollador. Los satélites de espacio profundo ilustran el mismo problema en su extremo: nodos con capacidades distintas y enlaces intermitentes. Es una visión a largo plazo, no un despliegue compatible ni una prueba en órbita.
 
 ---
 

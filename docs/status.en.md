@@ -638,6 +638,8 @@ unbuilt.
 
 ## Next steps
 
+The [v0.1.x product priority](product.en.md) is the whole task path: give Panda a job, run it with existing agents on devices you manage, and get the result and verification back. Desktop and mesh work support that path.
+
 1. **The first real three-device lab round is repaid** (v0.0.11-preview:
    macOS ↔ Windows ↔ Linux SBC live delegation, mid-execution node
    kill, disconnect-reconnect, message replay, two-hop pipelines);

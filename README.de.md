@@ -1,8 +1,6 @@
 # 🐼 OpenPanda
 
-**Open-Source, Local-First Betriebssystem für persönliche KI-Agenten und geräteübergreifender Orchestrator**
-
-> Verbinde alle deine Geräte zu einem privaten Peer-to-Peer-Mesh und „heuere“ Terminal-KI-Coding-Agenten (Claude Code, Codex, Grok etc.) an, um als einheitliches Team maschinenübergreifend zusammenzuarbeiten.
+**Sag Panda, was erledigt werden soll. Panda findet ein passendes Gerät und einen Agenten und bringt das Ergebnis zurück.**
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [Español](README.es.md) · [Deutsch](README.de.md)
 
@@ -14,7 +12,13 @@
 ![Memory](https://img.shields.io/badge/Speicherbedarf-~40MB%20RSS-brightgreen)
 ![No Cloud Relay](https://img.shields.io/badge/Cloud--Relay-Keiner-success)
 
-## Demo auf echter Maschine
+## Wann sich Panda lohnt
+
+Wenn dein vorhandener Agent oder Harness die ganze Aufgabe abdeckt, bleib dabei. Panda lohnt sich, wenn Arbeit zwischen selbst verwalteten Geräten und verschiedenen Agenten wechseln muss und du Ergebnis, Prüfstatus und Hindernisse im ursprünglichen Gespräch sehen willst. Du behältst deine Werkzeuge und brauchst keinen von Panda betriebenen Scheduler oder Relay.
+
+Der [Schwerpunkt von v0.1.x](docs/product.en.md) ist der ganze Ablauf vom Auftrag über Zuweisung und Wiederaufnahme bis zur Übergabe. Eine beendete Ausführung ist noch keine bestandene Prüfung.
+
+## Demo auf einem einzelnen Rechner
 
 ![OpenPanda-Terminalsitzung, aufgezeichnet auf einem lokalen Quellcode-Build](site/media/openpanda-demo.gif)
 
@@ -144,7 +148,7 @@ Die Details je Fähigkeit —was verifiziert, was nur gebaut ist und die bekannt
 
 ---
 
-## 🚀 Schnellstart (In 3 Minuten)
+## 🚀 Schnellstart
 
 ### Schritt 1: Installation
 
@@ -188,16 +192,14 @@ panda init
   ```bash
   panda web
   ```
-- **Oder direkt eine Frage stellen:**
-  ```bash
-  panda ask "Systemstatus prüfen und offene Aufgaben zusammenfassen"
-  ```
+Wähle ein vertrautes Projekt und bitte Panda: „Führe die Projekttests aus und liefere die Fehlerfälle und die Originalausgabe zurück. Ändere keinen Quellcode.“ Prüfe die ausgeführten Schritte, die Ausgabe und den Prüfstatus im ursprünglichen Gespräch.
 
-### Zweites Gerät in 30 Sekunden verbinden
+### Zweites Gerät verbinden
 
 1. Auf Gerät A: `panda pair <Adresse-von-Gerät-B>` ausführen (Kopplungscode wird angezeigt).
 2. Auf Gerät B: `panda pair confirm` ausführen, um denselben Code zu bestätigen und beizutreten.
-*Beide Geräte sind jetzt in deinem privaten Agenten-Mesh verbunden!*
+
+Probiere dieselbe Aufgabe auf einem gekoppelten Build-Rechner mit passender Testumgebung und installiertem Agenten aus.
 
 ---
 
@@ -257,16 +259,14 @@ Wohin es als Nächstes geht. Die `v0.0.x`-Kernel-Spur ist abgeschlossen und blei
 | Version | Thema |
 |---|---|
 | **v0.0.x** — der Kernel | **Den Kernel polieren, bis jede ausgelieferte Funktion bewiesen ist.** Die Experimental-Spuren reifen durch echte Flotten-Validierung zu stabil — LAN-Discovery mit Fingerprint-Aufnahme, Pairing + Sitzungs-AEAD, Trust-Zonen, das Task-Nachrichtenbrett, Session-Bäume/RPC/OAuth, Worktree-reisende Delegation, die Klärungs-Schleife, Aktor-Treiber, Computer-Use und der Spracheingang — plus erstes echtes Zünden der Referenztreiber; Stabilität, Performance und Randfall-Feinschliff durchgehend |
-| **v0.1.x** — der Assistent | **Spezialisierung zu einem Assistenten, der wirklich Dinge für dich erledigt.** Eine dünne Desktop-Hülle über dem Kernel (Tray-resident, globaler Hotkey, native Benachrichtigungen, Self-Update); die Dense-Mesh-Schicht — dynamische Plan-Rekomposition per sub-main scout→plan, TURN-artiger Relay-Fallback für symmetrische NAT, Nachrichtenbrett-Außenstände (Multi-Device-e2e, MCP-Pull, Board-Ansicht); und eine minimal ehrliche „Präsenz“ — eine Kollisionsmaschine über der Liste ungelöster Fragen auf dem Dream-Zyklus, die nur spricht, wenn es sich lohnt. Kommerzielle Qualität, Grenzen ehrlich deklariert |
+| **v0.1.x** · Aufgabenübergabe | **Die Aufgabe bleibt dieselbe, auch wenn sich der Ausführungsort ändert.** Vorrang haben die passende Zuweisung, sichere Wiederaufnahme und Rückgabe mit Prüfnachweisen und offenen Punkten. Desktop- und Mesh-Verbesserungen unterstützen diesen Ablauf. |
 | **v0.2.x** — Selbstevolution | **OpenPanda iteriert über sich selbst.** Selbstmodifikation landet als agenten-erzeugte Patch-Sets durch eine Build → Gate → Human-Merge-Pipeline, die mit dem signierten Release-Kanal koexistiert; knoten-signierte Self-Builds werden zur dritten Provenienz-Klasse unter den Trust-Zonen; `self_evolution.mode` (off → propose → auto) mit dem letzten signierten Release als permanentem Fallback — das vollständige Agenten-Selbstevolutions-Paradigma |
 
 ---
 
 ## 🔭 Vision
 
-Die Architektur von OpenPanda ist für große heterogene Cluster ausgelegt: Steuerung von Drohnenschwärmen, Kommunikationsplanung für Satellitenkonstellationen im tiefen Raum und koordinierte Flotten autonomer Fahrzeuge. Diese Szenarien teilen ein grundlegendes Problem — **jeder Knoten hat andere Rechenleistung, andere Fähigkeiten und andere Aufgaben, und trotzdem müssen alle gemeinsam koordiniert, geplant und überwacht werden.**
-
-Heute dient OpenPanda den Geräten und Agenten eines Entwicklers. Das langfristige Ziel ist, denselben Orchestrierungskern auf autonome Knoten in Cluster-Größe auszuweiten.
+Heute konzentriert sich OpenPanda auf Geräte und Agenten, die Entwickler selbst betreiben. Satelliten im tiefen Raum zeigen das Problem im Extrem: Knoten haben unterschiedliche Fähigkeiten, ihre Verbindungen können unterbrochen sein. Das ist eine langfristige Vision, kein unterstützter Einsatz und kein Nachweis einer Ausführung im Orbit.
 
 ---
 

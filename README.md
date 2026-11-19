@@ -1,6 +1,6 @@
 # 🐼 OpenPanda
 
-**Run Claude Code, Codex and every other agent CLI you already have as one crew, across all your machines.**
+**Tell Panda what you need done. It finds a device and agent that can do the work and brings back the result.**
 
 Self-hosted · peer-to-peer · no vendor relay · ~40 MB RSS · macOS / Linux / Windows
 
@@ -14,7 +14,13 @@ Self-hosted · peer-to-peer · no vendor relay · ~40 MB RSS · macOS / Linux / 
 ![Memory](https://img.shields.io/badge/Memory%20Footprint-~40MB%20RSS-brightgreen)
 ![No Vendor Relay](https://img.shields.io/badge/Vendor%20Relay-None-success)
 
-## ▶ Demo
+## When to use OpenPanda
+
+Keep your existing agent or harness if it already handles the whole job. Add Panda when work has to move between machines and tools you manage, and you want the result, verification and blockers back in the original conversation. The agents still do the work; Panda handles dispatch and handoff without requiring a vendor-hosted scheduler or relay.
+
+The [v0.1.x product priority](docs/product.en.md) is to make that handoff reliable from the first request through recovery and delivery. An execution ending is not the same as its checks passing.
+
+## ▶ Single-machine demo
 
 ![OpenPanda terminal session recorded on a local source build](site/media/openpanda-demo.gif)
 
@@ -86,22 +92,11 @@ Setups people actually run:
 └───────────────────┘   └───────────────────┘   └─────────────────────┘
 ```
 
-## What it replaces
-
-| | A single agent CLI | `ssh` + `tmux` + cron | A hosted orchestration service | OpenPanda |
-|---|---|---|---|---|
-| Drives the CLIs you already pay for | one at a time | by hand | usually its own stack | ten adapters plus a generic bridge |
-| Uses every machine you own | no | you script it | cloud VMs you rent | your own devices, discovered on the LAN |
-| Survives a node dying mid-task | no | no | yes | yes, re-dispatched with the failure reason |
-| Where your code and prompts live | your machine | your machines | their servers | your machines, over an encrypted mesh |
-| What it costs | subscription | subscription | per-seat or per-token markup | your existing subscriptions |
-| Setup | none | manual | sign-up and a dashboard | one binary, one command |
-
 ## Status
 
 | Track | Description | Status |
 |---|---|---|
-| **Multi-Agent orchestration** | Hire and command multiple terminal agents: dispatch, supervision, failover, approval | ✅ Current focus |
+| **Task delivery** | Dispatch to installed agents, track execution, recover where safe and return results with evidence | v0.1.x product priority |
 | **Multi-device collaboration** | Cross-node task routing and scheduling over a P2P mesh | ✅ Shipped through v0.1.6: per-session AEAD, Bluetooth-style pairing, trust tiers, multi-hop relays, and same-project parallel execution via path-scoped lanes and isolated worktrees |
 
 Capability-by-capability detail — what is verified, what is only built, and the known limits — lives in [docs/status.md](docs/status.md); work merged after the tag is listed in [CHANGELOG.md](CHANGELOG.md) under `[Unreleased]`.
@@ -195,12 +190,15 @@ panda init
 Then pick an entry point:
 
 ```bash
-panda                                                # interactive terminal TUI
-panda web                                            # web console, opens browser automatically
-panda ask "check system status and summarize tasks"  # one-shot command
+panda      # interactive terminal TUI
+panda web  # or open the local web console
 ```
 
+Select a familiar project and ask: “Run this project's tests, return the failures and raw output, and do not change source files.” Include the test command if you know it. Inspect the execution steps, output and verification in the original conversation.
+
 To connect a second device: run `panda pair <device-B-address>` on device A and confirm the same short code with `panda pair confirm` on device B — or let LAN discovery surface it under `panda nodes` and admit it by fingerprint (`panda nodes admit`).
+
+Try the same task on a paired build machine with the required toolchain and an installed agent. See the [first-task walkthrough](https://xustalis.github.io/OpenPanda/docs.html?lang=en#first-task) for prerequisites, routing and recovery.
 
 ---
 
@@ -286,16 +284,14 @@ Where the project goes next. The `v0.0.x` kernel track is complete and stays her
 | Version | Theme |
 |---|---|
 | **v0.0.x** — the kernel | **Polish the kernel until every shipped feature is proven.** The Experimental tracks graduate to stable through real-device fleet validation — LAN discovery & fingerprint admission, pairing + per-session AEAD, trust zones, the inter-task message board, session trees/RPC/OAuth, worktree-traveling delegation, the clarification loop, actuator drivers, computer-use, and the voice entry — plus first hardware ignition of the reference drivers, and steady stability, performance and edge-case tuning throughout |
-| **v0.1.x** — the assistant | **Specialize into an assistant that does things for you.** A thin desktop shell over the kernel (tray-resident, global hotkey, native notifications, self-update); the dense-mesh layer — sub-main scout→plan in-flight plan recomposition, TURN-style relay fallback for symmetric NAT, message-board debts (multi-device e2e, MCP pull, board view); and a minimal honest "presence" — an unresolved-list collision engine riding the dream cycle that speaks only when it has something worth saying. Commercial-grade quality, boundaries honestly declared |
+| **v0.1.x** — task delivery | **A task stays one job even when its execution moves.** Prioritize capability-aware dispatch, safe recovery, and results returned with verification and open items. Desktop and mesh improvements support that path. See the [product direction](docs/product.en.md). |
 | **v0.2.x** — self-evolution | **OpenPanda iterates on itself.** Self-modification lands as agent-produced patch sets through a build → gate → human-merge pipeline coexisting with the signed release channel; node-signed self-builds become a third provenance class under the trust zones; `self_evolution.mode` (off → propose → auto) with the last signed release always kept as fallback — the complete agent self-evolution paradigm |
 
 ---
 
 ## 🔭 Vision
 
-OpenPanda's architecture is designed for large-scale heterogeneous clusters: drone swarm control, communication scheduling for deep-space satellite constellations, and coordinated autonomous-vehicle fleets. These scenarios share one fundamental problem — **every node has different compute, different capabilities, and different jobs, yet all need to be coordinated, scheduled, and supervised together.**
-
-Today, OpenPanda serves a developer's devices and agents. The long-term goal is to extend the same orchestration kernel to autonomous nodes at cluster scale.
+Today, OpenPanda focuses on the devices and agents developers already manage. Deep-space satellites illustrate the same problem at its limit: different machines have different capabilities, and their links may come and go. That is a long-term direction, not a supported deployment or evidence of flight testing.
 
 ---
 

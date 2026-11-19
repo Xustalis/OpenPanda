@@ -87,8 +87,8 @@
     <div class="wrap">
       <p class="mono-label pg-kicker">FAQ</p>
       <h1 class="pg-title" data-i18n="fq.h1">常见问题</h1>
-      <p class="pg-lede" data-i18n="fq.lede">按使用场景汇总 29 个高频问题。答案取自 docs/faq.md、SECURITY.md 与安装文档，不是把首页换个说法重抄一遍。</p>
-      <p class="pg-meta">29 QUESTIONS · 7 GROUPS · UPDATED FOR v0.1.6</p>
+      <p class="pg-lede" data-i18n="fq.lede">先判断你的任务是否需要 Panda，再了解如何沿用已有的 Agent、连接第二台设备和检查交付。</p>
+      <p class="pg-meta">30 QUESTIONS · 7 GROUPS · UPDATED FOR v0.1.6</p>
     </div>
   </header>
   <div class="wrap pg-layout">
@@ -114,6 +114,10 @@
       <section class="pg-section pg-faq-group" id="getting-started">
       <h2 data-i18n="fq.g1.t">入门</h2>
       <div class="pg-faqs">
+      <details class="pg-faq">
+      <summary><span class="pg-faq-q" data-i18n="fq.g1.panda.q">已经在用 Agent 或 harness，什么时候值得加 Panda？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
+      <div class="pg-faq-a" data-i18n="fq.g1.panda.a">现有 Agent 或 harness 已经能办完的任务，继续用它就好。值得加 Panda 的时候，是工作要在你管理的不同设备和 Agent 之间交接，你还希望在同一处收回结果、看清验证和卡点。Panda 不要求换掉现有 Agent，也不要求把调度交给厂商托管。</div>
+      </details>
       <details class="pg-faq">
       <summary><span class="pg-faq-q" data-i18n="fq.g1.q1">装好之后第一步做什么？</span><span class="pg-faq-mark" aria-hidden="true">+</span></summary>
       <div class="pg-faq-a" data-i18n="fq.g1.a1">跑 panda init 生成 config.yaml 与能力卡，节点名自动取主机名，只问是否现在配置模型；然后 panda 进 TUI，或 panda web 开控制台。panda doctor 随时自检 PATH、配置、数据库、适配器与 agent CLI。</div>
