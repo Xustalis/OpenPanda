@@ -34,11 +34,11 @@ export const UI = {
 
 export const EN = {
   /* ── document metadata ─────────────────────────────────────────────── */
-  'meta.title': 'OpenPanda — make heterogeneous agents and devices work as one',
+  'meta.title': 'OpenPanda — say what needs doing, get the result back',
   'meta.desc':
-    'OpenPanda is a local-first graph orchestration kernel. It does not replace Claude Code or Codex — it wires the agents already on your machines into one network, with intent, decomposition, routing, supervision and acceptance all kept local.',
+    'OpenPanda brings cross-device work back as one job: you say what needs doing, it finds a device and agent that can do it, and returns the result, its verification and what it could not finish to your conversation. Self-hosted, peer-to-peer, no vendor relay.',
   'meta.ogDesc':
-    'A local-first graph orchestration kernel: Claude Code, Codex and every device you own, wired into one network that schedules, supervises and accepts its own work. No vendor relay.',
+    'Tell Panda what you need done. It finds a device and agent that can do the work and brings back the result. Self-hosted, peer-to-peer, no vendor relay.',
   'meta.ogAlt': 'OpenPanda — the project title over deep space and the limb of Earth',
 
   skip: 'Skip to content',
@@ -60,11 +60,11 @@ export const EN = {
   'menu.aria': 'Navigation',
 
   /* ── hero ──────────────────────────────────────────────────────────── */
-  'hero.kicker': 'LOCAL-FIRST ORCHESTRATION KERNEL',
-  'hero.title': 'Make heterogeneous agents and devices<br>work as one.',
-  'hero.en': '让异构的智能体与设备，像一个整体一样工作。',
+  'hero.kicker': 'LOCAL-FIRST · SELF-HOSTED · NO VENDOR RELAY',
+  'hero.title': 'Say what needs doing.<br>Get the result back.',
+  'hero.en': '你交代要办什么，结果带回来。',
   'hero.sub':
-    'You say one sentence. Understanding, decomposition, dispatch, supervision, acceptance — it handles all of it. The hands doing the work are the Claude Code and Codex you already installed, on the machines already on your desk.',
+    'Panda finds a device and agent that can do the work, then brings the result, its verification and whatever it could not finish back to your conversation. The hands doing the work are still the Claude Code and Codex you already installed, on the machines already within reach.',
   'hero.learn': 'Read the map',
   'hero.copy': 'Copy install command',
   'hero.idx.why': 'Four Walls',
@@ -521,7 +521,7 @@ export const EN = {
   'meta.cl.title': 'Release notes — OpenPanda',
   'meta.dl.desc': 'Prebuilt OpenPanda v0.1.6 binaries for macOS, Linux and Windows on amd64/arm64, plus SHA-256 checksums and Ed25519 release signatures.',
   'meta.dl.title': 'Download — OpenPanda v0.1.6',
-  'meta.docs.desc': 'Install, command reference, architecture and trust model for the OpenPanda v0.1.6 local-first orchestration kernel.',
+  'meta.docs.desc': 'Install, command reference, architecture and trust model for OpenPanda v0.1.6, the self-hosted way to hand work across your devices and get the result back.',
   'meta.docs.title': 'Documentation — OpenPanda',
   'meta.st.desc': 'What OpenPanda v0.1.6 has been verified to do, what is deliberately unfinished, and the known limitations kept in docs/status.md.',
   'meta.st.title': 'Project status — OpenPanda',
