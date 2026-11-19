@@ -3163,6 +3163,13 @@ body.palette-open { overflow: hidden; }
     scrollbar-width: none;
   }
   .subpage .site-nav .nav-links::-webkit-scrollbar { display: none; }
+  /* The strip scrolls sideways; fade the right edge so a clipped label reads as
+     "more to the right" instead of as a truncation bug. */
+  .subpage .site-nav .nav-links {
+    padding-right: 28px;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+  }
   .subpage .site-nav .nav-actions { margin-left: auto; }
   .pg-hero { padding: 62px 0 54px; }
   .pg-layout { grid-template-columns: 1fr; gap: 44px; padding-top: 56px; padding-bottom: 80px; }

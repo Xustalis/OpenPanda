@@ -477,7 +477,9 @@
     <div class="stat-grid">
       <div class="stat reveal"><b data-count="3">3</b><span data-i18n="s6.stat1">台真机</span></div>
       <div class="stat reveal"><b data-count="11">11</b><span data-i18n="s6.stat2">个 Agent 适配器</span></div>
-      <div class="stat reveal"><b data-count="2760" data-prefix="~">~2760</b><span data-i18n="s6.stat3">项自动化测试</span></div>
+      <!-- Count of Go test functions: `git grep -hE '^func Test[A-Za-z0-9_]*\(' -- '*_test.go' ':!testdata' ':!vendor' | wc -l`
+           (3960 at this commit; 2761 when c5c20fa7 last set it). Re-run it when a release is cut. -->
+      <div class="stat reveal"><b data-count="3960" data-prefix="~">~3960</b><span data-i18n="s6.stat3">项自动化测试</span></div>
       <div class="stat reveal"><b data-count="40" data-prefix="~" data-suffix="MB">~40MB</b><span data-i18n="s6.stat4">常驻内存</span></div>
       <div class="stat reveal"><b data-count="0">0</b><span data-i18n="s6.stat5">厂商中转</span></div>
       <div class="stat reveal"><b data-count="6">6</b><span data-i18n="s6.stat6">个发布目标</span></div>
