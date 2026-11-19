@@ -68,7 +68,7 @@ func (c *Core) setupIsolatedWorkDir(ctx context.Context, task Task, source strin
 		return "", fmt.Errorf("clear isolated dir: %w", err)
 	}
 	populated := false
-	if repoRoot := gitRepoRootOf(ctx, source); repoRoot != "" {
+	if repoRoot := gitRepoRootOf(ctx, source); repoRoot != "" && !scopedDispatch(task) {
 		if err := gitWorktreeAdd(ctx, repoRoot, dir); err == nil {
 			if oerr := overlayDirtyFiles(ctx, source, dir); oerr != nil {
 				return "", fmt.Errorf("populate isolated dirty tree: %w", oerr)
@@ -83,7 +83,7 @@ func (c *Core) setupIsolatedWorkDir(ctx context.Context, task Task, source strin
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err
 		}
-		if err := c.copyWorkTree(source, dir); err != nil {
+		if err := c.copyWorkTreeWithPolicy(source, dir, scopedDispatch(task)); err != nil {
 			return "", err
 		}
 	}
@@ -224,6 +224,10 @@ func overlayDirtyFiles(ctx context.Context, source, dir string) error {
 // (Windows without developer mode) degrades to a skip, the pre-symlink
 // behavior, rather than failing the whole workspace over it.
 func (c *Core) copyWorkTree(source, dst string) error {
+	return c.copyWorkTreeWithPolicy(source, dst, false)
+}
+
+func (c *Core) copyWorkTreeWithPolicy(source, dst string, scoped bool) error {
 	return filepath.WalkDir(source, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -249,6 +253,16 @@ func (c *Core) copyWorkTree(source, dst string) error {
 			target, terr := os.Readlink(p)
 			if terr != nil {
 				return terr
+			}
+			if scoped {
+				// Do not recreate an alias back into the live source (or any
+				// other checkout) in an otherwise private execution copy.
+				if filepath.IsAbs(target) {
+					return nil
+				}
+				if _, internal := relUnderDir(source, filepath.Join(filepath.Dir(p), target)); !internal {
+					return nil
+				}
 			}
 			if lerr := linkIsolatedPath(filepath.Join(dst, filepath.FromSlash(relSlash)), target); lerr != nil {
 				c.logger.Debug("copy symlink skipped", "path", relSlash, "err", lerr)
@@ -476,6 +490,11 @@ func (c *Core) mergeIsolatedRun(ctx context.Context, task Task) isolatedMergeRes
 	if err != nil {
 		return blocked(fmt.Sprintf("[isolated] merge failed: %v — workspace kept at %s", err, dir))
 	}
+	if scopedDispatch(task) {
+		if err := validateScopedChanges(task.ScopePaths, baseline, after); err != nil {
+			return blocked(fmt.Sprintf("[isolated] %v; no changes applied, workspace kept at %s", err, dir))
+		}
+	}
 	// Inline isolated runs can hold the shared key under their execution
 	// nonce. Release workspace keys before acquiring the merge nonce.
 	c.execReleaseFor(task.TaskID)
@@ -487,7 +506,7 @@ func (c *Core) mergeIsolatedRun(ctx context.Context, task Task) isolatedMergeRes
 	if err := c.store.renewMergeLease(ctx, task, run, false); err != nil {
 		return blocked(fmt.Sprintf("[isolated] merge lease lost: %v; work retained", err))
 	}
-	merged, conflicts, err := c.applyIsolatedChangesContext(ctx, dir, main, baseline, after)
+	merged, conflicts, err := c.applyIsolatedChangesContext(ctx, dir, main, baseline, after, taskScopeForMerge(task))
 	if err != nil {
 		return blocked(fmt.Sprintf("[isolated] merge failed: %v — workspace kept at %s", err, dir))
 	}
@@ -522,6 +541,24 @@ func (c *Core) mergeIsolatedRun(ctx context.Context, task Task) isolatedMergeRes
 		return isolatedMergeResult{Note: fmt.Sprintf("[isolated] merged %d file(s) into the project tree", merged)}
 	}
 	return isolatedMergeResult{}
+}
+
+func taskScopeForMerge(task Task) []string {
+	if scopedDispatch(task) {
+		return task.ScopePaths
+	}
+	return nil
+}
+
+func validateScopedChanges(paths []string, baseline, after map[string]string) error {
+	for _, tree := range []map[string]string{baseline, after} {
+		for p := range tree {
+			if baseline[p] != after[p] && !pathInScope(p, paths) {
+				return fmt.Errorf("path %q is outside the declared write scope", p)
+			}
+		}
+	}
+	return nil
 }
 
 // acquireMergeLocks takes the merge target's whole-tree exec locks on
@@ -598,10 +635,10 @@ func (c *Core) isolatedChanges(dir string) (map[string]string, map[string]string
 }
 
 func (c *Core) applyIsolatedChanges(isoDir, mainDir string, baseline, after map[string]string) (int, []string, error) {
-	return c.applyIsolatedChangesContext(context.Background(), isoDir, mainDir, baseline, after)
+	return c.applyIsolatedChangesContext(context.Background(), isoDir, mainDir, baseline, after, nil)
 }
 
-func (c *Core) applyIsolatedChangesContext(ctx context.Context, isoDir, mainDir string, baseline, after map[string]string) (int, []string, error) {
+func (c *Core) applyIsolatedChangesContext(ctx context.Context, isoDir, mainDir string, baseline, after map[string]string, scope []string) (int, []string, error) {
 	paths := make(map[string]bool, len(baseline)+len(after))
 	for p := range baseline {
 		paths[p] = true
@@ -646,7 +683,7 @@ func (c *Core) applyIsolatedChangesContext(ctx context.Context, isoDir, mainDir 
 			// main side, a permission) reports the path as a conflict instead
 			// of aborting the merge — one bad path must not strand the rest
 			// of the child's work.
-			if err := applyIsolatedPath(isoDir, mainDir, p, a != ""); err != nil {
+			if err := applyIsolatedPath(isoDir, mainDir, p, a != "", scope); err != nil {
 				conflicts = append(conflicts, p)
 				continue
 			}
@@ -665,7 +702,7 @@ func (c *Core) applyIsolatedChangesContext(ctx context.Context, isoDir, mainDir 
 // applyIsolatedPath copies (or deletes) one path from the workspace into the
 // main tree. Parent directories are created for additions; deletions of
 // already-absent paths are no-ops.
-func applyIsolatedPath(isoDir, mainDir, rel string, present bool) error {
+func applyIsolatedPath(isoDir, mainDir, rel string, present bool, scope []string) error {
 	dst := filepath.Join(mainDir, filepath.FromSlash(rel))
 	if !present {
 		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
@@ -675,6 +712,9 @@ func applyIsolatedPath(isoDir, mainDir, rel string, present bool) error {
 		// so a child can replace a deleted subtree with a file. A concurrent
 		// addition keeps the directory nonempty and therefore blocks replacement.
 		for d := filepath.Dir(filepath.FromSlash(rel)); d != "."; d = filepath.Dir(d) {
+			if len(scope) > 0 && !pathInScope(filepath.ToSlash(d), scope) {
+				break
+			}
 			p := filepath.Join(mainDir, d)
 			st, err := os.Lstat(p)
 			if err != nil || !st.IsDir() {

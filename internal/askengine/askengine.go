@@ -3796,6 +3796,18 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	}
 	in.Authorized = authorized
 	in.WorkDir = workDir
+	if len(in.Paths) > 0 {
+		if err := core.ValidateDispatchPaths(workDir, in.Paths); err != nil {
+			return &Result{Kind: "task", TaskState: "failed", Stderr: err.Error(), ExitCode: 1}
+		}
+		// A model's scope is not a sandbox rule. Narrow the queue claim only
+		// when the executor can use a private workspace and check the merge.
+		if e.queueTasks && in.Project != "" && in.ContextType != "hardware" && workDir != "" {
+			in.Isolate = true
+		} else {
+			in.Paths = nil
+		}
+	}
 	// classify_result is traced inside core's createTask — before routing,
 	// before the queue claims the task — so no emission happens here.
 	in.ClassifyKind = "task"

@@ -119,6 +119,7 @@ func toTaskInput(spec *entry.TaskSpec, loc ...i18n.Locale) core.TaskInput {
 		Title:        spec.Title,
 		Project:      spec.Project,
 		ContextType:  contextType,
+		Paths:        spec.Spec.Paths,
 		Intent:       intent.String(),
 		SpecJSON:     string(specJSON),
 		Requires:     requires,

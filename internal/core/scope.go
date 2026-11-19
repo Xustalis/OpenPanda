@@ -3,6 +3,7 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,6 +17,68 @@ import (
 // declare — a child holding dozens of locks is a worse-than-monolithic
 // claim, so the cap doubles as the "you are not really scoped" boundary.
 const maxScopePaths = 8
+
+// ValidateDispatchPaths rejects ambiguous or aliased write scopes, rather
+// than cleaning them into narrower claims than the submitter intended.
+func ValidateDispatchPaths(workDir string, paths []string) error {
+	if len(paths) > maxScopePaths {
+		return fmt.Errorf("paths: at most %d write scopes are allowed", maxScopePaths)
+	}
+	for _, p := range paths {
+		if p == "" || p == "." || p != strings.TrimSpace(p) || len(p) > 512 ||
+			p != path.Clean(p) || !filepath.IsLocal(filepath.FromSlash(p)) ||
+			strings.ContainsAny(p, "\\:*?[]{}\x00\r\n\t") {
+			return fmt.Errorf("paths: %q must be an exact workspace-relative path", p)
+		}
+		dir := workDir
+		for _, part := range strings.Split(p, "/") {
+			if isolateSkippedPath(strings.ToLower(part)) || part == isolatedBaselineFile {
+				return fmt.Errorf("paths: %q includes workspace metadata or an excluded directory", p)
+			}
+			if workDir == "" {
+				continue
+			}
+			dir = filepath.Join(dir, part)
+			st, err := os.Lstat(dir)
+			if st != nil && st.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("paths: %q traverses a symbolic link", p)
+			}
+			if err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("paths: inspect %q: %w", p, err)
+			}
+		}
+	}
+	return nil
+}
+
+func scopedDispatch(task Task) bool {
+	return task.ParentID == "" && task.PlanID == "" && task.Isolate && len(task.ScopePaths) > 0
+}
+
+func (c *Core) scopedDispatchQueueKeys(id string, in TaskInput) []string {
+	keys := make([]string, 0, len(in.Paths)*2)
+	for _, p := range normalizeScopePaths(in.Paths) {
+		keys = append(keys, queue.WorkspaceScopeKey(in.WorkDir, p))
+	}
+	if root, err := c.projectWorkDir(in.Project); err == nil {
+		if prefix, nested := relUnderDir(root, in.WorkDir); nested {
+			for _, p := range normalizeScopePaths(in.Paths) {
+				keys = append(keys, queue.ScopeLeafKey(in.Project, path.Join(prefix, p)))
+			}
+			return queue.CanonicalKeys(mergeActuatorKeys(keys, in.Requires, in.SpecJSON))
+		}
+	}
+	return queue.CanonicalKeys(append(keys, c.childResourceKeysFor(id, in)...))
+}
+
+func pathInScope(p string, paths []string) bool {
+	for _, scope := range paths {
+		if p == scope || strings.HasPrefix(p, scope+"/") {
+			return true
+		}
+	}
+	return false
+}
 
 // normalizeScopePaths cleans declared project-relative paths into canonical
 // scope leaves: separators fold to "/", "." and ".." resolve against the

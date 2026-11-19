@@ -108,6 +108,9 @@ func execLockKeys(task Task, actuatorID string) []string {
 // set includes physical paths so the parent hands them to its children while
 // waiting and reclaims them before its next round.
 func (c *Core) executionLockKeys(task Task, actuatorID string) (keys, wait []string, err error) {
+	if scopedDispatch(task) {
+		task.ResourceKeys = childResourceKeys(task.TaskID, TaskInput{Project: task.Project, Isolate: true, Requires: task.Requires, SpecJSON: task.SpecJSON})
+	}
 	if len(task.ResourceKeys) == 0 {
 		// Inline/delegated runs have no queue metadata to correct a pin in a
 		// separate worktree. Apply the same correction as queued submissions.

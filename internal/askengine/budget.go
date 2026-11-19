@@ -132,6 +132,7 @@ func dispatchKey(args map[string]any) string {
 		strings.TrimSpace(title),
 		strings.TrimSpace(target),
 		strings.Join(abilities, ","),
+		strings.Join(toStringSlice(args["paths"]), "\x00"),
 	}, "\x00")
 }
 

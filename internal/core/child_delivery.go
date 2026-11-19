@@ -96,7 +96,7 @@ func (c *Core) deliverChildOutput(ctx context.Context, child Task, result bus.Ta
 	if err := c.store.renewMergeLease(ctx, child, run, false); err != nil {
 		return err
 	}
-	merged, conflicts, err := c.applyIsolatedChangesContext(ctx, afterDir, dst, before, after)
+	merged, conflicts, err := c.applyIsolatedChangesContext(ctx, afterDir, dst, before, after, nil)
 	c.EvTrace(context.WithoutCancel(ctx), child.TaskID, EvProjectSync, map[string]any{
 		"stage": "child_delivery", "dir": dst, "hash": result.OutputArtifact, "from": from,
 		"merged": merged, "conflicts": conflicts, "withheld": m.SkippedPaths, "ok": err == nil && len(conflicts) == 0,

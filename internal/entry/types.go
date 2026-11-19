@@ -197,6 +197,7 @@ type TaskSpecDetail struct {
 	// Empty preserves legacy tasks; it persists across routing and resume.
 	Kind   TaskKind `json:"task_kind,omitempty"`
 	Scope  string   `json:"scope"`
+	Paths  []string `json:"paths,omitempty"`
 	Target string   `json:"target"`
 	// Node is a HARD device pin, not a preference: when non-empty the task
 	// may execute only on that node. An unreachable pin parks in task_outbox
