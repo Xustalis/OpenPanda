@@ -14,6 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/objectives"
 	"github.com/Xustalis/OpenPanda/internal/testdb"
 )
 
@@ -204,10 +205,24 @@ func TestListTaskMessagesEndpoint(t *testing.T) {
 // accept_work with needs_followup inside the stored result.
 func parkFollowupTask(t *testing.T, store *core.TaskStore, nodeID, title string, followup bool) string {
 	t.Helper()
+	result := map[string]any{"ok": false, "stderr": "round budget exhausted"}
+	if followup {
+		result["needs_followup"] = true
+	}
+	return parkReviewedTask(t, store, nodeID, title, "", result)
+}
+
+func parkReviewedTask(t *testing.T, store *core.TaskStore, nodeID, title, spec string, result any) string {
+	t.Helper()
 	ctx := context.Background()
 	task, err := store.Create(ctx, "", "proj", title, nodeID, []string{nodeID})
 	if err != nil {
 		t.Fatalf("create: %v", err)
+	}
+	if spec != "" {
+		if err := store.SetDetail(ctx, task.TaskID, core.TaskDetail{SpecJSON: spec}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := store.Queue(ctx, task.TaskID, nodeID); err != nil {
 		t.Fatalf("queue: %v", err)
@@ -218,14 +233,57 @@ func parkFollowupTask(t *testing.T, store *core.TaskStore, nodeID, title string,
 	if err := store.Accept(ctx, task.TaskID, nodeID); err != nil {
 		t.Fatalf("accept: %v", err)
 	}
-	result := map[string]any{"ok": false, "stderr": "round budget exhausted"}
-	if followup {
-		result["needs_followup"] = true
-	}
 	if err := store.PauseWithResult(ctx, task.TaskID, nodeID, result); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	return task.TaskID
+}
+
+func TestApproveLegacyObjectiveReview(t *testing.T) {
+	engine := newQueueEngine(t)
+	store := engine.TaskStore()
+	h := New(Deps{Store: store, Engine: engine, StaticDir: t.TempDir(), Token: testToken})
+	nodeID := core.RuntimeNodeID("panel-test", "vm", config.PhysicalIdentity())
+	const spec = `{"objectives":{"version":1,"revision":1,"dimensions":[{"dimension":"visual_fidelity","priority":"MAX","weight":0.7,"requirement":"Identify the subject","reason":"Core request","criteria":["Appearance","Pose","Motion"]},{"dimension":"robustness","priority":"NORMAL","weight":0.3,"requirement":"Portable","reason":"Quality","criteria":["Single file","Responsive","Reduced motion"]}]}}`
+	for _, missing := range []bool{false, true} {
+		var assessments []objectives.Assessment
+		for _, dimension := range []string{"visual_fidelity", "robustness"} {
+			for i := 0; i < 3; i++ {
+				if missing && dimension == "visual_fidelity" && i == 2 {
+					continue
+				}
+				assessments = append(assessments, objectives.Assessment{Dimension: dimension, Criterion: i, Status: "passed", Evidence: "Recorded reviewer check"})
+			}
+		}
+		id := parkReviewedTask(t, store, nodeID, "legacy mixed objective review", spec, map[string]any{
+			"ok": true, "verdict": "review", "verdict_reason": "objectives: invalid or duplicate assessment robustness:0",
+			"objective_assessments": assessments,
+		})
+		path := "/api/tasks/" + id
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, authedReq(http.MethodGet, path, nil))
+		var view taskJSON
+		if err := json.Unmarshal(rr.Body.Bytes(), &view); rr.Code != http.StatusOK || err != nil || view.NeedsFollowup != missing {
+			t.Fatalf("incorrect review action: status=%d needs_followup=%v err=%v", rr.Code, view.NeedsFollowup, err)
+		}
+		rr = httptest.NewRecorder()
+		h.ServeHTTP(rr, authedReq(http.MethodPost, path+"/approve", nil))
+		if missing {
+			if rr.Code != http.StatusConflict || !strings.Contains(rr.Body.String(), "MAX criterion visual_fidelity:2") {
+				t.Fatalf("expected actionable conflict: %d %s", rr.Code, rr.Body.String())
+			}
+			rr = httptest.NewRecorder()
+			h.ServeHTTP(rr, authedReq(http.MethodPost, path+"/continue", nil))
+			if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"state":"queued"`) {
+				t.Fatalf("continue: %d %s", rr.Code, rr.Body.String())
+			}
+		} else {
+			cur, err := store.Get(context.Background(), id)
+			if rr.Code != http.StatusOK || err != nil || cur.State != core.StateDone {
+				t.Fatalf("approval did not complete: %d %s state=%s err=%v", rr.Code, rr.Body.String(), cur.State, err)
+			}
+		}
+	}
 }
 
 // TestContinueTaskEndpoint pins the endpoint's honest gating: a follow-up

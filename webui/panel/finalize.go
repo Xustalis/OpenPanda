@@ -32,7 +32,7 @@ const evSessionSummary = "session_summary"
 // redesign §5: a finished task solidifies its result as an assistant turn
 // in the linked session). No-op pieces when the sessions store is absent.
 func (h *handler) startSessionFinalizer(ctx context.Context) {
-	if h.sessions == nil {
+	if h.sessions == nil || h.store == nil {
 		return
 	}
 	guard.Go(nil, "panel: session finalizer", nil, func() {
@@ -73,6 +73,9 @@ func errStoreClosed(err error) bool {
 // The return value says whether another sweep is worth running: false means
 // the store is closed and the caller should stop ticking.
 func (h *handler) finalizeSessionSweep(ctx context.Context) bool {
+	if h.sessions == nil || h.store == nil {
+		return false
+	}
 	tasks, err := h.store.TerminalSessionTasksWithoutEvent(ctx, evSessionSummary)
 	if err != nil {
 		if errStoreClosed(err) {
@@ -83,7 +86,8 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) bool {
 	for _, t := range tasks {
 		// The judge's sentence is read once and used twice: it leads the
 		// replay digest and it rides the turn as Verdict for the console.
-		judge := h.taskVerdict(ctx, t.TaskID)
+		evidence := h.taskDeliveryEvidence(ctx, t)
+		judge := evidence.judge
 		summary := h.taskSummary(ctx, t, judge)
 		delivery, truncated := taskDelivery(t.ResultJSON)
 		// A task turn measures the *work*, not the wait. The row's own
@@ -93,10 +97,6 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) bool {
 		// cancelled before it ever started printed "124s". The clock starts at
 		// the attempt's first accept/exec_agent_start instead; a row that
 		// never ran keeps 0 and the console shows no number at all.
-		var durationMS int64
-		if start := h.taskExecutionStart(ctx, t.TaskID); start > 0 && t.UpdatedAt > start {
-			durationMS = (t.UpdatedAt - start) * 1000
-		}
 		if _, err := h.sessions.AppendTurn(t.SessionID, sessions.Turn{
 			Role: "assistant",
 			// The outcome is prose, not a second dispatch. As a task turn
@@ -113,7 +113,9 @@ func (h *handler) finalizeSessionSweep(ctx context.Context) bool {
 			DeliveryTruncated: truncated,
 			Verdict:           judge,
 			DeliveryAttemptID: t.AttemptID,
-			DurationMS:        durationMS,
+			DurationMS:        evidence.executionMS,
+			ApprovalWaitMS:    evidence.approvalWaitMS,
+			DeliveryStatus:    evidence.status,
 			IdempotencyKey:    taskSummaryKey(t),
 		}); err != nil {
 			log.From(ctx).Warn("session summary append", "task", t.TaskID, "session", t.SessionID, "err", err)
@@ -201,6 +203,10 @@ func (h *handler) taskVerdict(ctx context.Context, taskID string) string {
 	if err != nil {
 		return ""
 	}
+	return attemptVerdict(events)
+}
+
+func attemptVerdict(events []core.Event) string {
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].Type != core.EvSupervise {
 			continue
@@ -228,7 +234,7 @@ func (h *handler) taskVerdict(ctx context.Context, taskID string) string {
 // Key presence, not truthiness: a rejection with an empty reason still records
 // {"rejected": ""}, and that is a decision.
 func (h *handler) reviewVerdict(ctx context.Context, taskID string) string {
-	events, err := h.store.Events(ctx, taskID)
+	events, err := h.taskAttemptEvents(ctx, taskID)
 	if err != nil {
 		return ""
 	}

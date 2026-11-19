@@ -260,6 +260,7 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 	// shipped twice on every open.
 	sess.SideChats = nil
 	sess.SideTurns = nil
+	h.projectSessionDeliveries(r.Context(), sess)
 	writeJSON(w, sess)
 }
 

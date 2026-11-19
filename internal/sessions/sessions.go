@@ -78,6 +78,8 @@ type Turn struct {
 	DeliveryAttemptID string `json:"delivery_attempt_id,omitempty"`
 	Delivery          string `json:"delivery,omitempty"`
 	DeliveryTruncated bool   `json:"delivery_truncated,omitempty"`
+	DeliveryStatus    string `json:"delivery_status,omitempty"`
+	ApprovalWaitMS    int64  `json:"approval_wait_ms,omitempty"`
 	// Verdict is panda's own one-sentence judgement of the work (the last
 	// supervision round's reason), display-only and never replayed. It rides
 	// beside Delivery so the console can print the house's sentence above the
