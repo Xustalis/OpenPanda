@@ -203,7 +203,7 @@
             <svg class="ic-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
           </button>
         </div>
-        <a class="hero-link" href="#why" data-i18n="hero.learn">读懂这张网</a>
+        <a class="hero-link" href="#product" data-i18n="hero.learn">看它怎么交付</a>
         <a class="hero-gh" href="https://github.com/Xustalis/OpenPanda" target="_blank" rel="noopener">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
           <span>Star on GitHub</span>
@@ -285,7 +285,10 @@
             <svg viewBox="0 0 440 320" class="topo-svg" role="img" aria-label="星状拓扑：四个阶段的消息都要经中心 MainAgent 转达" data-i18n-aria="s2.star.aria">
               <path class="topo-dash" d="M88 74 Q 220 8 352 74" />
               <text class="tl-note" x="220" y="34" data-i18n="s2.star.hop">上报 → 转达 · 两跳延迟</text>
-              <path class="topo-line" d="M220 160 L88 74 M220 160 L352 74 M220 160 L88 246 M220 160 L352 246" />
+              <path class="topo-line" pathLength="1" d="M220 160 L88 74" />
+              <path class="topo-line" pathLength="1" d="M220 160 L352 74" />
+              <path class="topo-line" pathLength="1" d="M220 160 L88 246" />
+              <path class="topo-line" pathLength="1" d="M220 160 L352 246" />
               <circle class="topo-node" cx="88" cy="74" r="21" />
               <circle class="topo-node" cx="352" cy="74" r="21" />
               <circle class="topo-node" cx="88" cy="246" r="21" />
@@ -306,7 +309,12 @@
           <div class="topo-head"><span class="mono-label" data-i18n="s2.graph">图状</span><span class="mono-label">GRAPH</span></div>
           <div class="topo-stage">
             <svg viewBox="0 0 440 320" class="topo-svg" role="img" aria-label="图状拓扑：兄弟节点直接互发消息，不必经过中心" data-i18n-aria="s2.graph.aria">
-              <path class="topo-edge" d="M220 88 L88 158 M220 88 L352 158 M88 158 L352 158 M88 158 L148 262 M352 158 L322 262 M148 262 L322 262" />
+              <path class="topo-edge" pathLength="1" d="M220 88 L88 158" />
+              <path class="topo-edge" pathLength="1" d="M220 88 L352 158" />
+              <path class="topo-edge" pathLength="1" d="M88 158 L352 158" />
+              <path class="topo-edge" pathLength="1" d="M88 158 L148 262" />
+              <path class="topo-edge" pathLength="1" d="M352 158 L322 262" />
+              <path class="topo-edge" pathLength="1" d="M148 262 L322 262" />
               <circle class="topo-node jade" cx="220" cy="58" r="30" />
               <text class="tl-inv" x="220" y="62" data-i18n="s2.graph.root">发起节点</text>
               <circle class="topo-node" cx="88" cy="158" r="21" />
@@ -343,8 +351,8 @@
   <div class="wrap">
     <div class="section-label reveal"><span data-i18n="s3.label">THE PRODUCT</span><span>02 / 07</span></div>
     <div class="section-head">
-      <h2 class="h2 reveal" data-i18n="s3.title">一句话丢进去，<br>一张网替你干完。</h2>
-      <p class="lede reveal" data-i18n="s3.lede">OpenPanda 本身不是 Agent。它理解意图、拆解任务、按能力卡路由到最合适的节点，监督执行、验收结果；真正动手的，是你已经装好的 Claude Code、Codex 和每一台设备。</p>
+      <h2 class="h2 reveal" data-i18n="s3.title">一件事交出去，<br>带着证据回来。</h2>
+      <p class="lede reveal" data-i18n="s3.lede">Panda 本身不是 Agent。它判断这件事该交给哪台设备上的哪个 Agent，盯着做完，再把结果、验证过的部分和没做完的部分一起交回给你。真正动手的，是你已经装好的 Claude Code、Codex 和手边的机器。</p>
     </div>
 
     <!-- Two views of the same run: the console answers "what happened", the
@@ -394,10 +402,10 @@
     </div>
 
     <div class="flow-grid">
-      <article class="flow reveal"><span class="flow-num">01</span><h3 data-i18n="s3.flow1.t">理解意图</h3><p data-i18n="s3.flow1.d">先分清这是闲聊、查询，还是真要动手的事。只有第三种，才往下走。</p></article>
-      <article class="flow reveal"><span class="flow-num">02</span><h3 data-i18n="s3.flow2.t">拆成任务图</h3><p data-i18n="s3.flow2.d">一件事拆成几步，每步的产物交给下一步。怎么派，你不用管。</p></article>
-      <article class="flow reveal"><span class="flow-num">03</span><h3 data-i18n="s3.flow3.t">按能力卡路由</h3><p data-i18n="s3.flow3.d">谁有那台机器、谁能跑那个工具，卡片上写着。按条件挑，不按顺序轮。</p></article>
-      <article class="flow reveal"><span class="flow-num">04</span><h3 data-i18n="s3.flow4.t">监督、验收、交付</h3><p data-i18n="s3.flow4.d">每一步都有裁判验收，不合格带因重派。不可逆的动作，会停下来等你点头。</p></article>
+      <article class="flow reveal"><span class="flow-num">01</span><h3 data-i18n="s3.flow1.t">交代目标</h3><p data-i18n="s3.flow1.d">说清要办什么、什么算做完。只是闲聊或查询，直接回答，不往下派。</p></article>
+      <article class="flow reveal"><span class="flow-num">02</span><h3 data-i18n="s3.flow2.t">选设备和 Agent</h3><p data-i18n="s3.flow2.d">按工具、环境和授权挑。你指定了设备就按你的，没指定就选最简单、够用的一条路。</p></article>
+      <article class="flow reveal"><span class="flow-num">03</span><h3 data-i18n="s3.flow3.t">派活并盯着</h3><p data-i18n="s3.flow3.d">执行中断时，只在能安全重放的情况下继续；缺权限或缺环境，会说清卡在哪。</p></article>
+      <article class="flow reveal"><span class="flow-num">04</span><h3 data-i18n="s3.flow4.t">带回结果</h3><p data-i18n="s3.flow4.d">交回实际在哪台机器跑的、产物、验证结果，以及没做完的部分。不可逆的动作会等你点头。</p></article>
     </div>
   </div>
 </section>
@@ -409,8 +417,8 @@
     <div class="section-label reveal"><span data-i18n="s4.label">THE THIN CONSTITUTION</span><span>03 / 07</span></div>
     <div class="constitution-grid">
       <div class="constitution-copy">
-        <h2 class="h2 night-h2 reveal" data-i18n="s4.title">冻结关系，<br>不冻结认知。</h2>
-        <p class="night-lede reveal" data-i18n="s4.lede">编排框架冻结“怎么想”，模型一升级，脚手架就变成绳索；MCP / A2A 冻结“怎么说话”，标准层免费。OpenPanda 只冻结四类关系事实：身份、授权、边界、生命周期。</p>
+        <h2 class="h2 night-h2 reveal" data-i18n="s4.title">只管四件事，<br>其余交给模型。</h2>
+        <p class="night-lede reveal" data-i18n="s4.lede">Panda 只固定四类事实：谁是谁（身份）、谁能做什么（授权）、能碰什么（边界）、任务怎么开始和结束（生命周期）。怎么思考不写死，模型升级时不用重写；怎么沟通用现成标准（MCP / A2A）。</p>
         <div class="compare reveal">
           <div class="compare-row head"><span data-i18n="s4.table.col1">框架</span><span data-i18n="s4.table.col2">冻结什么</span><span data-i18n="s4.table.col3">模型变强时</span></div>
           <div class="compare-row"><b>LangGraph / CrewAI / AutoGen</b><span data-i18n="s4.table.r1.freeze">认知</span><span data-i18n="s4.table.r1.when">脚手架变成绳索，要重写</span></div>
@@ -599,7 +607,7 @@
     <div class="section-label reveal"><span data-i18n="s9.label">LIFTOFF</span><span>07 / 07</span></div>
     <div class="install-panel reveal">
       <div class="install-top">
-        <h2 class="install-title" data-i18n="s9.title">一行命令，<br>点火入轨。</h2>
+        <h2 class="install-title" data-i18n="s9.title">三条命令，<br>交出第一件事。</h2>
         <p class="install-note" data-i18n="s9.note">安装器会按平台与架构取产物，校验 <span class="nowrap">SHA-256</span>、解压并写进 PATH，装完跑一次 <b>panda init</b> 就绪。默认装最新稳定版；要指定版本，macOS / Linux 加 <b>--version</b>，Windows 加 <b>-Version</b>。</p>
       </div>
       <!-- All three tabs drive one shared command box, so they point at the

@@ -137,13 +137,17 @@ matchMedia('(min-width: 901px)').addEventListener('change', (e) => { if (e.match
 /* ── scroll reveals ────────────────────────────────────────────────────── */
 // Animate on entry, without hiding anything while waiting for the observer.
 if (canObserve && !calm) {
+  // threshold 0 plus a -48px bottom margin: an element counts as arrived once
+  // its top edge is 48px inside the viewport. A percentage threshold failed
+  // tall cards, e.g. a 466px licence tier on a phone needed 56px visible and
+  // sat blank at the screen edge until then.
   const revealIO = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue
       entry.target.classList.add('in')
       revealIO.unobserve(entry.target)
     }
-  }, { threshold: 0.12, rootMargin: '0px 0px -6% 0px' })
+  }, { threshold: 0, rootMargin: '0px 0px -48px 0px' })
 
   const groups = '.wall-grid, .flow-grid, .stat-grid, .scales-grid, .faq-list'
   for (const group of document.querySelectorAll(groups)) {
@@ -151,7 +155,22 @@ if (canObserve && !calm) {
       if (el.classList.contains('reveal')) el.style.animationDelay = Math.min(i * 70, 420) + 'ms'
     })
   }
-  document.querySelectorAll('.reveal').forEach((el) => revealIO.observe(el))
+  // Hide-until-revealed is switched on only here, once the observer exists. The
+  // first callback arrives within a frame for anything already on screen; if no
+  // callback ever arrives (a stalled observer), release everything rather than
+  // leave the page blank. Elements still below the fold are left alone once
+  // the observer has proved it works.
+  const armed = [...document.querySelectorAll('.reveal')]
+  let reported = false
+  const probe = new IntersectionObserver(() => { reported = true; probe.disconnect() })
+  probe.observe(document.body)
+  document.documentElement.classList.add('reveal-armed')
+  armed.forEach((el) => revealIO.observe(el))
+  setTimeout(() => {
+    if (reported) return
+    for (const el of armed) el.classList.add('in')
+    document.documentElement.classList.remove('reveal-armed')
+  }, 2500)
 }
 
 /* ── counters ──────────────────────────────────────────────────────────── */
@@ -459,12 +478,12 @@ const INSTALL_SH =
 
 const COMMANDS = [
   { kind: 'sec', label: { zh: '四堵墙', en: 'Four Walls' }, hint: { zh: '01 · 为什么一个 Agent 做不完', en: '01 · why one agent cannot finish it' }, kv: 'why four walls 痛点 问题 动机 星状 图状 拓扑 架构 中心 graph star topology architecture motivation', go: '#why' },
-  { kind: 'sec', label: { zh: '产品', en: 'Product' }, hint: { zh: '02 · 一句话进，结果带回', en: '02 · one sentence in, the result back' }, kv: 'product console 控制台 终端 cli 演示 demo', go: '#product' },
-  { kind: 'sec', label: { zh: '薄宪法', en: 'Thin Constitution' }, hint: { zh: '03 · 只固定四类关系', en: '03 · fix four relations, nothing else' }, kv: 'constitution trust 信任 身份 授权 边界 identity authorisation boundary', go: '#constitution' },
+  { kind: 'sec', label: { zh: '产品', en: 'Product' }, hint: { zh: '02 · 一件事交出去，带着证据回来', en: '02 · one job out, back with its evidence' }, kv: 'product console 控制台 终端 cli 演示 demo', go: '#product' },
+  { kind: 'sec', label: { zh: '薄宪法', en: 'Thin Constitution' }, hint: { zh: '03 · 只管四件事，其余交给模型', en: '03 · four things fixed, the rest left to the model' }, kv: 'constitution trust 信任 身份 授权 边界 identity authorisation boundary', go: '#constitution' },
   { kind: 'sec', label: { zh: '实证', en: 'Proof' }, hint: { zh: '04 · 三台真机，不是演示', en: '04 · three real machines, not a demo' }, kv: 'proof 测试 数据 真机 内存 tests memory benchmarks', go: '#proof' },
   { kind: 'sec', label: { zh: '三个尺度', en: 'Three Scales' }, hint: { zh: '05 · 桌面 / 集群 / 深空', en: '05 · desk / fleet / deep space' }, kv: 'scales space 深空 卫星 机器人 satellite robot', go: '#scales' },
   { kind: 'sec', label: { zh: '常见问题', en: 'FAQ' }, hint: { zh: '06 · 你可能想问的', en: '06 · things you might ask' }, kv: 'faq 问答 问题 gpu 平台 platform questions', go: '#faq' },
-  { kind: 'sec', label: { zh: '安装与许可', en: 'Install & licence' }, hint: { zh: '07 · 三条命令入轨，价格也写明', en: '07 · three commands to orbit, price in plain sight' }, kv: 'install 下载 download 开始 上手 setup license 价格 授权 商业 agpl 收费 purchase pricing commercial', go: '#install' },
+  { kind: 'sec', label: { zh: '安装与许可', en: 'Install & licence' }, hint: { zh: '07 · 三条命令交出第一件事，价格也写明', en: '07 · three commands to your first job, price in plain sight' }, kv: 'install 下载 download 开始 上手 setup license 价格 授权 商业 agpl 收费 purchase pricing commercial', go: '#install' },
   { kind: 'act', label: { zh: '复制安装命令', en: 'Copy install command' }, hint: { zh: 'curl … install.sh | sh', en: 'curl … install.sh | sh' }, kv: 'copy 复制 curl shell unix', copy: INSTALL_SH },
   { kind: 'act', label: { zh: '复制 Homebrew 命令', en: 'Copy Homebrew command' }, hint: { zh: 'brew tap … && brew install', en: 'brew tap … && brew install' }, kv: 'brew homebrew copy 复制 macos', copy: 'brew tap Xustalis/openpanda && brew install openpanda' },
   { kind: 'link', label: { zh: 'GitHub 仓库', en: 'GitHub repository' }, hint: { zh: 'github.com/Xustalis/OpenPanda', en: 'github.com/Xustalis/OpenPanda' }, kv: 'github repo star 源码 收藏 source', url: REPO },

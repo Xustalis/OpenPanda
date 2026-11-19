@@ -122,10 +122,16 @@ html.lang-pending body { opacity: 0; }
 }
 
 /* ── motion ─────────────────────────────────────────────────────────── */
-/* Content stays readable if the module or observer never runs. */
-.js .reveal.in { animation: reveal-in .9s var(--ease); }
+/* Content stays readable if the module or observer never runs: the "armed"
+   state below is only ever set by main.js after the observer exists, so a
+   failed module, a missing IntersectionObserver or reduced motion never leaves
+   anything hidden. Armed elements wait at opacity 0 until the observer marks
+   them .in; without arming, a from-zero animation would flash the element
+   visible first and then blank it. */
+.js.reveal-armed .reveal:not(.in) { opacity: 0; }
+.js .reveal.in { animation: reveal-in .7s var(--ease) both; }
 @keyframes reveal-in {
-  from { opacity: .65; translate: 0 12px; }
+  from { opacity: 0; translate: 0 20px; }
 }
 @keyframes hero-index-in {
   from { opacity: 0; transform: translateY(12px); }
@@ -3082,3 +3088,67 @@ body.palette-open { overflow: hidden; }
   .why-graph,
   .license-block { margin-top: 84px; padding-top: 52px; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Motion that carries meaning
+   Two rules: only transform / opacity / stroke-dashoffset move, and every
+   rule here sits behind both a feature query and the reduced-motion query,
+   so the static page is always the complete page.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── star → graph: the edges are drawn, not shown ─────────────────────── */
+/* Scroll-driven where the browser supports it. The star draws its spokes as
+   the figure enters; the graph then draws its sibling edges, which is the
+   whole argument of the chapter: the second picture gains lines the first
+   one could not have. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .topo.star .topo-line,
+    .topo.graph .topo-edge {
+      stroke-dasharray: 1;
+      stroke-dashoffset: 1;
+      animation: topo-draw linear both;
+      animation-timeline: view();
+    }
+    .topo.star .topo-line { animation-range: entry 15% cover 38%; }
+    .topo.graph .topo-edge { animation-range: entry 35% cover 58%; }
+    .topo.graph .topo-packet { animation: topo-packet-in linear both; animation-timeline: view(); animation-range: cover 52% cover 62%; }
+    .topo.graph .topo-node:not(.jade) {
+      animation: topo-node-in linear both;
+      animation-timeline: view();
+      animation-range: entry 25% cover 50%;
+    }
+  }
+}
+@keyframes topo-draw { to { stroke-dashoffset: 0; } }
+@keyframes topo-packet-in { from { opacity: 0; } to { opacity: .9; } }
+@keyframes topo-node-in { from { opacity: .25; } to { opacity: 1; } }
+
+/* ── product flow: the four steps fill in as you read down to them ────── */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .flow-grid { position: relative; }
+    .flow-grid::before {
+      content: '';
+      position: absolute;
+      top: -1px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--jade);
+      transform-origin: left center;
+      animation: flow-fill linear both;
+      animation-timeline: view();
+      animation-range: entry 25% cover 60%;
+    }
+  }
+}
+@keyframes flow-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* ── hero: the copy arrives in reading order ──────────────────────────── */
+/* Delay only. Sizes, colours and layout of the hero are untouched. */
+.hero-copy .reveal:nth-child(1) { animation-delay: .05s; }
+.hero-copy .reveal:nth-child(2) { animation-delay: .15s; }
+.hero-copy .reveal:nth-child(3) { animation-delay: .27s; }
+.hero-copy .reveal:nth-child(4) { animation-delay: .38s; }
+.hero-copy .reveal:nth-child(5) { animation-delay: .5s; }

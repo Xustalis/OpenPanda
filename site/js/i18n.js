@@ -64,7 +64,7 @@ export const EN = {
   'hero.en': '你交代要办什么，结果带回来。',
   'hero.sub':
     'Panda finds a device and agent that can do the work, then brings the result, its verification and whatever it could not finish back to your conversation. The hands doing the work are still the Claude Code and Codex you already installed, on the machines already within reach.',
-  'hero.learn': 'Read the map',
+  'hero.learn': 'See how it delivers',
   'hero.copy': 'Copy install command',
   'hero.idx.why': 'Four Walls',
   'hero.idx.product': 'Product',
@@ -123,9 +123,9 @@ export const EN = {
 
   /* ── 03 · product ──────────────────────────────────────────────────── */
   's3.label': 'THE PRODUCT',
-  's3.title': 'Drop one sentence in,<br>a network finishes it.',
+  's3.title': 'One job handed off,<br>back with its evidence.',
   's3.lede':
-    'OpenPanda is not an agent itself. It reads intent, decomposes the work, routes by capability card to the best node, supervises execution and accepts the result; the hands are the Claude Code, Codex and machines you already have.',
+    'Panda is not an agent itself. It decides which agent on which device should take the job, watches it through, and hands back the result, what was verified and what was left unfinished. The hands are the Claude Code, Codex and machines you already have.',
   's3.tabs.aria': 'Product views',
   's3.tab.console': 'Console',
   's3.tab.term': 'Terminal',
@@ -142,24 +142,24 @@ export const EN = {
   's3.demo.link': 'Full recording · MP4 626 KB',
   's3.caption':
     'Recorded 2026-11-06 on a source build of v0.1.4. panda ask had the model run uptime locally; task 01a1b154 finished through the opencode adapter in 43 s. The console screenshot and the terminal video come from that same run.',
-  's3.flow1.t': 'Read the intent',
+  's3.flow1.t': 'Say what done means',
   's3.flow1.d':
-    'First decide whether this is chat, a lookup, or real work. Only the third goes further.',
-  's3.flow2.t': 'Split into a task graph',
+    'State what needs doing and what counts as finished. Chat and lookups are answered directly and never dispatched.',
+  's3.flow2.t': 'Pick a device and agent',
   's3.flow2.d':
-    'One job becomes steps; each step’s artifact feeds the next. How it gets dispatched is not your problem.',
-  's3.flow3.t': 'Route by capability card',
+    'Chosen by tools, environment and authorisation. A device you name is honoured; otherwise the simplest route that qualifies wins.',
+  's3.flow3.t': 'Dispatch and watch',
   's3.flow3.d':
-    'Who owns that machine, who can run that tool — it is on the card. Match conditions, do not rotate a queue.',
-  's3.flow4.t': 'Supervise, accept, deliver',
+    'After an interruption it resumes only where a replay is safe; a missing permission or environment is named, not guessed around.',
+  's3.flow4.t': 'Bring it back',
   's3.flow4.d':
-    'Every step is judged, and a failure is re-dispatched with its cause. Irreversible actions stop and wait for your nod.',
+    'You get the machine it really ran on, the artifacts, the verification and whatever is left. Irreversible actions wait for your nod.',
 
   /* ── 04 · thin constitution ────────────────────────────────────────── */
   's4.label': 'THE THIN CONSTITUTION',
-  's4.title': 'Freeze relations,<br>not cognition.',
+  's4.title': 'Four things fixed,<br>the rest left to the model.',
   's4.lede':
-    'Orchestration frameworks freeze how to think — the moment the model improves, the scaffold becomes a rope. MCP / A2A freezes how to talk — that layer is a commodity. OpenPanda freezes four kinds of relational fact only: identity, authorisation, boundary, lifecycle.',
+    'Panda fixes four kinds of fact: who is who (identity), who may do what (authorisation), what can be touched (boundary), and how a task starts and ends (lifecycle). How to think is not written down, so a better model needs no rewrite; how to talk uses existing standards (MCP / A2A).',
   's4.table.col1': 'Framework',
   's4.table.col2': 'Freezes',
   's4.table.col3': 'When the model improves',
@@ -277,7 +277,7 @@ export const EN = {
 
   /* ── 11 · install ──────────────────────────────────────────────────── */
   's9.label': 'LIFTOFF',
-  's9.title': 'One command,<br>ignition.',
+  's9.title': 'Three commands,<br>hand off your first job.',
   's9.note':
     'The installer picks the artifact for your platform and architecture, verifies <span class="nowrap">SHA-256</span>, unpacks it and writes it into PATH. Then run <b>panda init</b> once. It installs the latest stable by default; pin a version with <b>--version</b> on macOS / Linux, or <b>-Version</b> on Windows.',
   's9.tab.unix': 'macOS / Linux',
