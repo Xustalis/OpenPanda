@@ -235,6 +235,20 @@ func (s *Service) Connect(ctx context.Context, opts ConnectOptions) (ConnectResu
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return ConnectResult{}, err
 	}
+	first := errors.Is(err, sql.ErrNoRows)
+	_, device, err := s.device(c)
+	if err != nil {
+		return ConnectResult{}, err
+	}
+	var auth tsync.Authorization
+	if first {
+		// A new connection only exists once the provider has issued a grant.
+		// Do not hold a SQLite transaction across the network request.
+		auth, err = device.Begin(ctx, opts.Name, opts.Scopes)
+		if err != nil {
+			return ConnectResult{}, err
+		}
+	}
 	raw, _ := json.Marshal(opts.Scopes)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -251,26 +265,23 @@ func (s *Service) Connect(ctx context.Context, opts ConnectOptions) (ConnectResu
 	if err != nil {
 		return ConnectResult{}, err
 	}
-	_, device, err := s.device(c)
-	if err != nil {
-		_, _ = s.db.ExecContext(ctx, `UPDATE task_connections SET state='reconnect',last_error='credential_unavailable' WHERE connection_id=?`, c.ID)
-		return ConnectResult{}, err
-	}
-	previous, requested := slices.Clone(old.Scopes), slices.Clone(opts.Scopes)
-	slices.Sort(previous)
-	slices.Sort(requested)
-	if old.State != "authorizing" || !slices.Equal(previous, requested) {
-		if err = device.DisableContext(ctx); err != nil && !errors.Is(err, taskproviders.ErrReconnect) {
-			_, _ = s.db.ExecContext(ctx, `UPDATE task_connections SET state='reconnect',last_error='credential_unavailable' WHERE connection_id=?`, c.ID)
+	if !first {
+		previous, requested := slices.Clone(old.Scopes), slices.Clone(opts.Scopes)
+		slices.Sort(previous)
+		slices.Sort(requested)
+		if old.State != "authorizing" || !slices.Equal(previous, requested) {
+			if err = device.DisableContext(ctx); err != nil && !errors.Is(err, taskproviders.ErrReconnect) {
+				_, _ = s.db.ExecContext(ctx, `UPDATE task_connections SET state='reconnect',last_error='credential_unavailable' WHERE connection_id=?`, c.ID)
+				return ConnectResult{}, err
+			}
+		}
+		auth, err = device.Begin(ctx, opts.Name, opts.Scopes)
+		if err != nil {
+			// A failed initial grant must not leave an old token eligible for refresh.
+			_ = device.Disable()
+			_, _ = s.db.ExecContext(ctx, `UPDATE task_connections SET state='reconnect',last_error='authorization_failed' WHERE connection_id=?`, c.ID)
 			return ConnectResult{}, err
 		}
-	}
-	auth, err := device.Begin(ctx, opts.Name, opts.Scopes)
-	if err != nil {
-		// A failed initial grant must not leave an old token eligible for refresh.
-		_ = device.Disable()
-		_, _ = s.db.ExecContext(ctx, `UPDATE task_connections SET state='reconnect',last_error='authorization_failed' WHERE connection_id=?`, c.ID)
-		return ConnectResult{}, err
 	}
 	c, err = s.Get(ctx, c.ID)
 	return ConnectResult{Connection: c, Authorization: auth}, err

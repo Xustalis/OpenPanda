@@ -123,9 +123,8 @@ func (s *DeviceStore) transaction(ctx context.Context, create bool, fn func(*dev
 			return err
 		}
 		state = deviceState{Version: 1, Root: s.client.Root, Seed: hex.EncodeToString(key.Seed())}
-		if err := s.save(&state); err != nil {
-			return err
-		}
+		// Begin persists the key together with the grant. A service that
+		// declines device authorization must not leave a credential behind.
 	} else {
 		if errors.Is(err, os.ErrNotExist) {
 			return taskproviders.ErrReconnect
