@@ -1134,7 +1134,7 @@ function KanbanCard({
               {taskReviewLabel(task)}
             </span>
           )}
-          {!task.retry_available && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
+          {!task.retry_available && !task.needs_followup && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
           <button
             class="btn primary small"
             disabled={busy || (task.approval_disposition === 'needs_changed_input' && !task.retry_available)}
@@ -1144,13 +1144,16 @@ function KanbanCard({
                 : undefined
             }
             onClick={() => act(async () => {
-              if (task.retry_available) {
+              if (task.needs_followup) {
+                const out = await api.continueTask(task.id)
+                toast(out.warning || t('detail.continuedToast'), out.warning ? 'info' : 'success')
+              } else if (task.retry_available) {
                 await api.retryTask(task.id)
                 toast(t('detail.retryStartedToast'), 'success')
               } else await api.approve(task.id, scope)
             })}
           >
-            {task.retry_available ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
+            {task.needs_followup ? t('detail.continue') : task.retry_available ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
           </button>
           <button
             class="btn danger small"

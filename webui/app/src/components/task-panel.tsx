@@ -33,6 +33,8 @@ export interface TaskPanelProps {
   lead?: ComponentChildren
   /** The expandable body. */
   children?: ComponentChildren
+  /** Independent content shown outside the prose preview (e.g. raw JSON). */
+  footer?: ComponentChildren
   /** Collapsed preview height in px. When set, the body is shown clipped
    *  behind a fade instead of hidden — a preview, not a lid. Whether the fold
    *  is actually offered is then measured, not guessed. */
@@ -122,6 +124,7 @@ export function TaskPanel(props: TaskPanelProps) {
       ) : null}
 
       {!hasBody && props.empty ? <p class="dp-empty">{props.empty}</p> : null}
+      {props.footer}
     </section>
   )
 }

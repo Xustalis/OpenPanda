@@ -44,7 +44,11 @@
 }
 .work-head > div, .work-toolbar input { flex: 1; min-width: 0; }
 .work-actions { justify-content: flex-start; }
-.work-tabs { align-self: flex-start; max-width: 100%; flex-wrap: wrap; }
+.work-page { max-width: 1080px; min-width: 0; container-type: inline-size; gap: var(--sp-5); }
+.work-tabs { display: flex; flex-wrap: wrap; gap: 4px 16px; border-bottom: 1px solid var(--border); }
+.work-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 5px; background: none; border: 0; border-bottom: 2px solid transparent; font: inherit; color: var(--text-secondary); cursor: pointer; }
+.work-tabs button:hover { color: var(--text); background: var(--bg-chrome); }
+.work-tabs button[aria-current] { color: var(--text); border-color: var(--accent); font-weight: 650; }
 .work-tabs button, .work-actions button, .work-toolbar button { min-height: 44px; }
 .work-grid, .work-history {
   display: grid;
@@ -120,3 +124,37 @@
 .work-form .work-check input { width: auto; min-height: 0; flex: none; margin-top: .25em; }
 .work-form fieldset { min-width: 0; display: grid; gap: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
 .work-space-policy { margin-top: 12px; }
+
+.space-connect { max-width: 680px; padding: var(--sp-6) 0 var(--sp-4); }
+.space-intro { display: flex; align-items: center; gap: var(--sp-4); margin-bottom: var(--sp-6); }
+.space-symbol { flex: none; width: 46px; height: 46px; display: grid; place-items: center; background: var(--bg-chrome); color: var(--text); border-radius: var(--radius-md); }
+.space-intro h2 { font-size: var(--text-2xl); line-height: 1.4; }
+.space-intro p, .space-consent, .space-more summary { color: var(--text-secondary); }
+.space-intro p { margin-top: 3px; }
+.space-label { display: block; margin-bottom: var(--sp-2); font-weight: 600; }
+.space-service { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-3); color: var(--text-secondary); }
+.space-entry { display: flex; gap: var(--sp-2); }
+.space-entry input { min-width: 0; flex: 1; min-height: 46px; padding: 8px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-raised); color: var(--text); }
+.space-entry .btn { min-height: 46px; padding-inline: 18px; }
+.space-consent { display: flex; align-items: baseline; gap: 7px; margin-top: 14px; font-size: var(--text-sm); }
+.space-consent svg { align-self: flex-start; flex: none; margin-top: 2px; }
+.space-more summary { display: inline-flex; align-items: center; gap: 5px; min-height: 44px; margin-inline-start: 23px; list-style: none; cursor: pointer; font-size: var(--text-sm); }
+.space-more summary:hover { color: var(--text); text-decoration: underline; }
+.space-more summary::-webkit-details-marker { display: none; }
+.space-more[open] summary svg { transform: rotate(180deg); }
+.space-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; padding: 8px 14px; border-radius: var(--radius-md); background: var(--bg-chrome); }
+.space-option { display: flex; align-items: center; gap: 9px; min-height: 44px; cursor: pointer; }
+.space-option input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.space-list-head { display: flex; align-items: center; gap: 8px; margin: 16px 0; }
+.space-list-head h2 { font-size: var(--text-lg); }
+.space-count { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.work-connections > .card, .work-connections > .work-error { margin-top: var(--sp-3); }
+.work-connections .card > strong { overflow-wrap: anywhere; }
+.work-tabs button:focus-visible, .space-more summary:focus-visible, .space-option input:focus-visible, .space-entry input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@container (max-width: 480px) {
+  .work-tabs { gap: 0 8px; }
+  .space-connect { padding-top: var(--sp-3); }
+  .space-entry { flex-direction: column; }
+  .space-options { grid-template-columns: minmax(0, 1fr); }
+}
+

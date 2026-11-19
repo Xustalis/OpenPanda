@@ -3,10 +3,21 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { liveStepOf, mergeLive } from './task-live.ts'
+import { liveStepOf, mergeLive, recentAttemptSteps } from './task-live.ts'
 import { setLocale } from '../i18n/index.ts'
 
 describe('task-live', () => {
+  it('streams recent reasoning and tools without replaying a superseded attempt or result', () => {
+    const rows = [
+      { ev: 'thinking', attempt_id: 'old', thinking: 'prior attempt' },
+      { ev: 'thinking', attempt_id: 'current', thinking: 'checking the rendered layout' },
+      { ev: 'tool_use', attempt_id: 'current', name: 'Bash', input: { command: 'npm test' } },
+      { ev: 'text', attempt_id: 'current', text: 'the final report' },
+    ].map((data, i) => ({ key: `${i}`, ts: i, id: i, type: 'agent_event', data }))
+    assert.deepEqual(recentAttemptSteps(rows, 'current').map(step => step.summary), ['checking the rendered layout', 'npm test'])
+    assert.deepEqual(recentAttemptSteps(rows, ''), [])
+  })
+
   it('merges history and live traces by id, sorted by time', () => {
     const history = [
       { id: 2, ts: 20, type: 'progress', data: '{"note":"two"}' },

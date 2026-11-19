@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { api, workTaskKey, type WorkAuthorization, type WorkConnection, type WorkInput, type WorkTask } from '../api/client'
+import { api, ApiError, workTaskKey, type WorkAuthorization, type WorkConnection, type WorkInput, type WorkTask } from '../api/client'
 import { useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
 import { navigate } from '../nav'
 import { t } from '../i18n'
+import { Icon } from '../components/icons'
+import { basicScopes, SpaceConnectForm } from './space-connect-form'
 import { PrivateResearch, SpacePolicy, WorkResults, RemoteTaskForm } from './workflow'
 import { useWorkRead } from './work-read'
 
@@ -50,10 +52,10 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
   return <section class="tm-page work-page" aria-busy={busy}>
     <header class="tm-head work-head">
       <div><div class="team-feature-heading"><h1 class="page-title">{current?.snapshot.title || t('nav.team')}</h1><span class="badge yellow experimental-badge">{t('team.experimental')}</span></div><p class="page-sub">{t('team.subtitle')}</p></div>
-      <button class="btn" type="button" onClick={reload} disabled={busy}>{t('common.refresh')}</button>
+      <button class="btn" type="button" onClick={reload} disabled={busy}><Icon name="refresh" size={15} />{t('common.refresh')}</button>
     </header>
-    <nav class="segmented work-tabs" aria-label={t('nav.team')}>
-      {(['mine', 'spaces', 'review'] as const).map(k => <button class={`seg${!taskKey && tab === k ? ' on' : ''}`} disabled={busy} onClick={() => navigate({ view: 'team', tab: k })} aria-current={!taskKey && tab === k ? 'page' : undefined}>{t(`work.${k}`)}</button>)}
+    <nav class="work-tabs" aria-label={t('nav.team')}>
+      {(['mine', 'spaces', 'review'] as const).map(k => <button key={k} disabled={busy} onClick={() => navigate({ view: 'team', tab: k })} aria-current={!taskKey && tab === k ? 'page' : undefined}><Icon name={k === 'mine' ? 'list-checks' : k === 'spaces' ? 'users' : 'shield'} size={16} />{t(`work.${k}`)}</button>)}
     </nav>
     {failure && <p class="work-error" role="alert">{failure}</p>}
     {taskKey ? <>
@@ -89,9 +91,8 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
         <button class="work-title" onClick={() => open(task)}>{task.snapshot.title}</button><TaskFacts task={task} />
       </article>)}</div>
     </> : tab === 'spaces' ? <>
-      <p class="hint">{t('work.policyHint')}</p>
       <ConnectionManager tick={tick + signal} reload={reload} />
-      {tasks.some(v => v.connectionId !== 'local') ? <div class="work-grid">{tasks.filter(v => v.connectionId !== 'local').map(task => <article class="card" key={`${task.connectionId}:${workTaskKey(task)}`}><button class="work-title" onClick={() => open(task)}>{task.snapshot.title}</button><TaskFacts task={task} /></article>)}</div> : <p class="hint">{t('work.noConnections')}</p>}
+      {tasks.some(v => v.connectionId !== 'local') && <div class="work-grid">{tasks.filter(v => v.connectionId !== 'local').map(task => <article class="card" key={`${task.connectionId}:${workTaskKey(task)}`}><button class="work-title" onClick={() => open(task)}>{task.snapshot.title}</button><TaskFacts task={task} /></article>)}</div>}
     </> : <>
       <p class="hint">{t('work.reviewHint')}</p>
       <WorkResults tick={tick + signal} reload={reload} />
@@ -104,8 +105,7 @@ export function TeamView({ tab = 'mine', taskKey, connection = 'local' }: {
 
 function ConnectionManager({ tick, reload }: { tick: number; reload(): void }) {
   const connections = useWorkRead(() => api.workConnections(), [], tick)
-  const [root, setRoot] = useState('')
-  const [scopes, setScopes] = useState(['tasks:read', 'members:read'])
+  const [scopes, setScopes] = useState(basicScopes)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [grant, setGrant] = useState<{ id: string; auth: WorkAuthorization } | null>(null)
@@ -120,7 +120,10 @@ function ConnectionManager({ tick, reload }: { tick: number; reload(): void }) {
   }
   const connect = (url: string, id?: string) => perform(async () => {
     if (!id && pending.current?.root !== url) pending.current = { root: url, id: crypto.randomUUID() }
-    const result = await api.connectWork({ rootUrl: url, connectionId: id || pending.current!.id, scopes })
+    const result = await api.connectWork({ rootUrl: url, connectionId: id || pending.current!.id, scopes }).catch(e => {
+      if (e instanceof ApiError && e.status === 501) throw new Error(t('work.bindUnavailable'))
+      throw e
+    })
     grantList.current = connections.data
     setGrant({ id: result.connection.connectionId, auth: result.authorization })
     pending.current = null
@@ -129,23 +132,17 @@ function ConnectionManager({ tick, reload }: { tick: number; reload(): void }) {
     if (grant && connections.data !== grantList.current && connections.data?.some(c => c.connectionId === grant.id && c.state !== 'authorizing')) setGrant(null)
   }, [connections.data, grant])
   return <div class="work-connections">
-    <h2>{t('work.connections')}</h2>
-    <form class="card work-form" onSubmit={e => { e.preventDefault(); void connect(root.trim()) }}>
-      <label>{t('work.serviceRoot')}<input type="url" required value={root} placeholder="https://example.com/tsync/" onInput={e => setRoot(e.currentTarget.value)} /></label>
-      <p class="hint">{t('work.connectHint')}</p>
-      <fieldset><legend>{t('work.connectionScopes')}</legend><p class="hint">{t('work.scopeHint')}</p>
-        {['tasks:read', 'tasks:write', 'members:read', 'execution:read', 'execution:claim', 'execution:report', 'delivery:write', 'delivery:report-decision'].map(scope => <label class="work-check"><input type="checkbox" checked={scopes.includes(scope)} onChange={e => setScopes(v => e.currentTarget.checked ? [...v, scope] : v.filter(s => s !== scope))} />{scope}</label>)}
-      </fieldset>
-      <button class="btn primary" disabled={busy} type="submit">{t('work.connect')}</button>
-    </form>
+    {!grant && <SpaceConnectForm scopes={scopes} setScopes={setScopes} busy={busy} connect={connect} />}
     {(error || connections.error) && <p role="alert" class="work-error">{error || connections.error}</p>}
     {grant && <div class="card" role="status">
       <p>{t('work.authorizationCode')} <strong>{grant.auth.userCode}</strong></p>
-      <a class="btn" href={grant.auth.verificationUriComplete || grant.auth.verificationUri} target="_blank" rel="noopener noreferrer">{t('work.openAuthorization')}</a>
+      <a class="btn primary" href={grant.auth.verificationUriComplete || grant.auth.verificationUri} target="_blank" rel="noopener noreferrer">{t('work.signInTSync')}<Icon name="external" size={15} /></a>
       <p class="hint">{t('work.authorizationExpires')} {new Date(grant.auth.expiresAt * 1000).toLocaleString()}</p>
     </div>}
+    {!!connections.data?.length && <div class="space-list-head"><h2>{t('work.spaces')}</h2><span class="space-count">{connections.data.length}</span></div>}
+    {!connections.data && !connections.error && <p class="hint">{t('common.loading')}</p>}
     <div class="work-grid">{connections.data?.map(c => <article class="card" key={c.connectionId}>
-      <strong>{c.rootUrl}</strong>
+      <strong>{c.spaces?.map(s => s.name).filter(Boolean).join(' · ') || c.rootUrl}</strong>
       <p>{t(`work.connection.${c.state}`)}{c.accountId ? ` · ${c.accountId}` : ''}</p>
       <p class="hint">{t('work.lastSync')} {c.syncedAt ? new Date(c.syncedAt).toLocaleString() : t('work.noSync')}</p>
       {c.lastError && <p class="work-error" role="status">{c.lastError}</p>}

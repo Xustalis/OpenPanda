@@ -187,7 +187,7 @@ export function DetailView({
   // a missing postcondition. Preserve the legacy verdict-only shape too.
   const needsFollowup =
     task.state === 'review' &&
-    (parseResult(task.result ?? '')?.needs_followup === true ||
+    (task.needs_followup === true || parseResult(task.result ?? '')?.needs_followup === true ||
       parseResult(task.result ?? '')?.verdict === 'continue')
   // A needs_changed_input park carries its failure in the review event, not in
   // result (no work was produced, so there is nothing to show there). Lift it
@@ -199,10 +199,6 @@ export function DetailView({
   // Read for every review state, not only the blocked banner: the verdict
   // block falls back to it when the result carries no reason of its own.
   const parkReason = task.state === 'review' ? task.review_reason || reviewReason(task.events ?? []) : ''
-  // Computed once: the verdict sentence is also the lead line of the output
-  // when a run reported its outcome as prose, and printing it twice — once as
-  // the answer, once as the first line of the panel — is the page's oldest
-  // habit. The output card drops it from the body when they match.
   const verdict = verdictOf(task, parkReason)
 
   return (
@@ -448,15 +444,11 @@ export function DetailView({
             four cards. */}
         <SelfMergeCard spec={task.spec} />
 
-        {/* The four answers this page owes: what came out, how it ran, what it
-            was asked to do, and what it is. All four are on screen at once —
-            each one's body is a preview or a fold, so a 2,000-character output
-            no longer pushes the other three off the page. */}
         <div class="dt-panels">
-          <OutputPanel task={task} lead={verdict.text} />
           <ChainPanel task={task} onOpenTask={onOpenTask} />
           <BriefPanel task={task} />
           <InfoPanel task={task} onOpenTask={onOpenTask} />
+          <OutputPanel key={`${task.id}:${task.attempt_id}`} task={task} />
         </div>
       </div>
     </section>
@@ -499,7 +491,9 @@ function verdictOf(task: Task, fallbackReason: string): Verdict {
   // review event that parked it. A cancelled run never produced one.
   let reason = failure
   if (!reason && task.state === 'review') reason = fallbackReason
-  if (!reason) reason = text(r.verdict_reason)
+  // A manually accepted review keeps its original receipt for audit. Don't
+  // present the historical park reason as the completed task's verdict.
+  if (!reason && !(task.state === 'done' && r.verdict === 'review')) reason = text(r.verdict_reason)
   if (!reason && task.state === 'done') reason = firstLine(text(r.stdout)) || text(r.verdict)
   if (!reason) reason = open ? t('detail.verdict.empty') : t('detail.verdict.noDetail')
 

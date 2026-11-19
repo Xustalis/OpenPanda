@@ -3,7 +3,9 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api, isTaskStalled, type ApprovalScope, type ClarifySpec, type Task } from '../../api/client'
 import { ClarifyCard } from '../../components/clarify-card'
+import { confirmDialog } from '../../components/confirm'
 import { ScopeSelect } from '../../components/scope-select'
+import { isActiveState } from '../../components/task-activity'
 import { TaskFailureNotice, taskReviewLabel } from '../../components/task-failure'
 import { toast, toastError } from '../../components/toast'
 import { useAsync, useChangeSignal, useVisibleInterval } from '../../hooks'
@@ -165,18 +167,21 @@ export function TaskApproval({
         </span>
       )}
       <TaskFailureNotice task={task} />
-      {!retry && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
+      {!retry && !task.needs_followup && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
       <button
         class="btn primary small"
         disabled={busy || (blocked && !retry)}
         onClick={() => void act(async () => {
-          if (retry) {
+          if (task.needs_followup) {
+            const out = await api.continueTask(task.id)
+            toast(out.warning || t('detail.continuedToast'), out.warning ? 'info' : 'success')
+          } else if (retry) {
             await api.retryTask(task.id)
             toast(t('detail.retryStartedToast'), 'success')
           } else await api.approve(task.id, scope)
         })}
       >
-        {retry ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
+        {task.needs_followup ? t('detail.continue') : retry ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
       </button>
       <button
         class="btn danger small"
@@ -263,4 +268,27 @@ export function TaskQuickSend({ taskId, hint }: { taskId: string; hint?: Task | 
       </button>
     </div>
   )
+}
+
+export function TaskCancel({ task }: { task: Task }) {
+  const [busy, setBusy] = useState(false)
+  if (!isActiveState(task.state)) return null
+
+  async function cancel() {
+    if (busy) return
+    setBusy(true)
+    try {
+      if (await confirmDialog({ title: t('detail.cancelConfirmTitle'), message: t('detail.cancelConfirmMsg'),
+        confirmLabel: t('detail.cancelTask') })) {
+        await api.cancel(task.id)
+        toast(t('detail.cancelledToast'), 'success')
+      }
+    } catch (error) {
+      toastError(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <button type="button" class="btn small" disabled={busy} onClick={cancel}>{t('detail.cancelTask')}</button>
 }

@@ -463,6 +463,12 @@ export interface TaskChild {
 }
 
 export interface Task {
+  operation_id?: string
+  dispatch_order?: number
+  dispatch_open?: boolean
+  executing?: boolean
+  /** Adapter or native capability actually invoked in the current attempt. */
+  call_name?: string
   work_source?: { connectionId: string; taskKey: string; requestId: string }
   id: string
   parent_id: string
@@ -477,6 +483,8 @@ export interface Task {
   intent?: string
   spec?: string
   result?: string
+  /** Bounded report from the current attempt on session-list rows. */
+  delivery_excerpt?: string
   /** Paths the run reported touching, from the runner's workdir snapshot.
    *  Present on list rows too (brief reads blank `result` but keep this), and
    *  the only change signal a thread in a non-git folder gets. */
@@ -520,6 +528,7 @@ export interface Task {
   review_reason?: string
   /** Explicit re-execution is available; this never accepts failed work. */
   retry_available?: boolean
+  needs_followup?: boolean
   /** Review rows only: the clarification the agent parked on, and the
    *  bounded option set as a ClarifySpec JSON string when it offered one.
    *  Computed server-side so the client never parses the whole result JSON
@@ -2816,6 +2825,10 @@ export interface OperationActivity {
 }
 
 export interface SessionTurn {
+  warning?: string
+  round_id?: string
+  delivery_status?: 'manual' | 'verified' | 'unverified'
+  approval_wait_ms?: number
   activities?: OperationActivity[]
   /** Display-only agent handoff, separate from the bounded replay digest. */
   delivery_attempt_id?: string
