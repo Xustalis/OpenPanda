@@ -306,6 +306,13 @@ func toolProgressDetail(call *entry.ToolCall) string {
 // read-only thread must not silently grant a concurrent ordinary ask its tools.
 type readOnlyEntryToolsKey struct{}
 
+type planningToolsKey struct{}
+type conversationGuardKey struct{}
+
+func withPlanningTools(ctx context.Context) context.Context {
+	return context.WithValue(ctx, planningToolsKey{}, true)
+}
+
 func withReadOnlyEntryTools(ctx context.Context) context.Context {
 	return context.WithValue(ctx, readOnlyEntryToolsKey{}, true)
 }
@@ -381,6 +388,11 @@ func executeToolChecked(ctx context.Context, reg *entry.Registry, call *entry.To
 		err := errors.New("tool registry unavailable")
 		return toolFailureMessage(err, targetLoc), err
 	}
+	if guard, ok := ctx.Value(conversationGuardKey{}).(func(context.Context) error); ok {
+		if err := guard(ctx); err != nil {
+			return toolFailureMessage(err, targetLoc), err
+		}
+	}
 	t, ok := reg.Lookup(call.Tool)
 	if !ok {
 		if targetLoc == i18n.English {
@@ -388,10 +400,13 @@ func executeToolChecked(ctx context.Context, reg *entry.Registry, call *entry.To
 		}
 		return "工具执行失败：未知工具 " + call.Tool, toolActivityOutcome(ctx, "failed")
 	}
+	if ctx.Value(planningToolsKey{}) == true && !t.ReadOnly && call.Tool != "propose_plan" {
+		return "Planning is read-only; this tool is unavailable until the user confirms a proposal.", toolActivityOutcome(ctx, "refused")
+	}
 	// A tier is a reversibility classification, not a read-only promise.
 	// Unknown/MCP tools (and the many Tier-1 mutation tools) fail closed.
 	if ctx.Value(readOnlyEntryToolsKey{}) == true && !t.ReadOnly &&
-		call.Tool != entry.ToolNameTaskSubmit && call.Tool != entry.ToolNameTaskBudget {
+		call.Tool != entry.ToolNameTaskSubmit && call.Tool != entry.ToolNameTaskBudget && call.Tool != "propose_plan" {
 		if targetLoc == i18n.English {
 			return "Tool execution refused: this conversation is read-only (plan mode).", toolActivityOutcome(ctx, "refused")
 		}

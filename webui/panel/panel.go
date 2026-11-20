@@ -384,6 +384,8 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("DELETE /api/sessions/{id}", h.deleteSession)
 		mux.HandleFunc("POST /api/sessions/{id}/fork", h.forkSession)
 		mux.HandleFunc("POST /api/sessions/{id}/ask", h.sessionAsk)
+		mux.HandleFunc("GET /api/sessions/{id}/control", h.conversationState)
+		mux.HandleFunc("POST /api/sessions/{id}/control", h.conversationControl)
 		// The side conversations are server-owned so a question outlives the
 		// pane: GET returns the list plus one transcript (the reconnect
 		// surface), DELETE drops one chat, `new` starts another and `select`
@@ -405,6 +407,8 @@ func New(d Deps) http.Handler {
 		mux.HandleFunc("DELETE /api/sessions/{id}/approval", h.clearSessionApproval)
 		mux.HandleFunc("POST /api/sessions/{id}/cancel", h.sessionCancel)
 		mux.HandleFunc("POST /api/sessions/{id}/stop", h.sessionCancel)
+		mux.HandleFunc("GET /api/sessions/{id}/rounds/{round}", h.sessionRound)
+		mux.HandleFunc("POST /api/sessions/{id}/rounds/{round}/stop", h.stopSessionRound)
 		mux.HandleFunc("POST /api/sessions/{id}/clarify", h.sessionClarify)
 		// Uploads do not need the Worktrees object — without a repository they
 		// fall back to a per-session directory under the work path — so the

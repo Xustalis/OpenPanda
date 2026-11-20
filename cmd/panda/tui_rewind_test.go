@@ -144,7 +144,7 @@ func newRewindTUI(t *testing.T) (tuiModel, *sessions.Store, string) {
 	}
 
 	r := &repl{loc: i18n.Locale("en"), cfg: &config.Config{}, sessionsSt: store}
-	r.setSess(sess.ID)
+	r.setSess(sess)
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width, m.height = 100, 30

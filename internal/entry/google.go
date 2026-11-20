@@ -366,6 +366,10 @@ func (c *Client) completeOnceGoogle(ctx context.Context, system string, turns []
 	if err := json.Unmarshal(body, &gr); err != nil {
 		return Response{}, fmt.Errorf("entry: parse response: %w", err)
 	}
+	if gr.UsageMetadata != nil {
+		c.recordUsage(ctx, gr.UsageMetadata.PromptTokenCount,
+			gr.UsageMetadata.CandidatesTokenCount+gr.UsageMetadata.ThoughtsTokenCount)
+	}
 	if gr.Error != nil {
 		// A 200 with an error body is the same failure as a non-200 would be;
 		// classify it the same way so a retry/failover decision sees it.
@@ -373,10 +377,6 @@ func (c *Client) completeOnceGoogle(ctx context.Context, system string, turns []
 	}
 	if gr.PromptFeedback != nil && gr.PromptFeedback.BlockReason != "" && len(gr.Candidates) == 0 {
 		return Response{}, fmt.Errorf("entry: api error: prompt blocked (%s)", gr.PromptFeedback.BlockReason)
-	}
-	if gr.UsageMetadata != nil {
-		c.addUsage(gr.UsageMetadata.PromptTokenCount,
-			gr.UsageMetadata.CandidatesTokenCount+gr.UsageMetadata.ThoughtsTokenCount)
 	}
 	return parseGoogleResponse(&gr), nil
 }

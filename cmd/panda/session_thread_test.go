@@ -174,7 +174,7 @@ func TestPrepareConversationResumesNewestAndHonorsFlags(t *testing.T) {
 		t.Fatalf("explicit resume = %+v, %v", sess, err)
 	}
 
-	r.setSess(older.ID)
+	r.setSess(older)
 	if sess, err := r.prepareConversation("", true); err != nil || sess != nil || r.sessID() != "" {
 		t.Fatalf("--new = %+v, bound %q, err %v", sess, r.sessID(), err)
 	}
@@ -289,7 +289,7 @@ func TestNewTUIModelSeedsBoundThread(t *testing.T) {
 	if _, err := st.AppendTurn(sess.ID, sessions.Turn{Role: "assistant", Text: "earlier answer"}); err != nil {
 		t.Fatal(err)
 	}
-	m.r.setSess(sess.ID)
+	m.r.setSess(sess)
 
 	seeded := newTUIModel(m.r)
 	if len(seeded.chatHistory.blocks) != 2 {

@@ -161,6 +161,10 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 			`SELECT COALESCE(MAX(id), 0) FROM task_events`).Scan(&lastTraceID)
 	}
 	first := true
+	var lastConversationID int64
+	if h.db != nil {
+		_ = h.db.QueryRowContext(r.Context(), "SELECT COALESCE(MAX(id),0) FROM conversation_events").Scan(&lastConversationID)
+	}
 	ticker := time.NewTicker(eventsPollInterval)
 	defer ticker.Stop()
 	heartbeat := time.NewTicker(15 * time.Second)
@@ -176,6 +180,7 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 		case <-ticker.C:
+			lastConversationID = h.pushConversationEvents(r.Context(), w, flusher, lastConversationID)
 			taskFP, err := h.cachedTaskFingerprint(r)
 			if err != nil {
 				return // store failure: drop the stream; the client reconnects

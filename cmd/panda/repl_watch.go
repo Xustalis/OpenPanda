@@ -156,7 +156,7 @@ func (r *repl) pollCompletions(ctx context.Context) []watchEvent {
 	}
 	r.baseline = states
 	r.watchMu.Unlock()
-	return events
+	return append(events, r.pollConversation(ctx)...)
 }
 
 // stallEventLocked decides whether one task has been stuck long enough to

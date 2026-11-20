@@ -1235,13 +1235,13 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 	if err := json.Unmarshal(body, &or); err != nil {
 		return Response{}, fmt.Errorf("entry: parse response: %w", err)
 	}
+	if or.Usage != nil {
+		c.recordUsage(ctx, or.Usage.PromptTokens, or.Usage.CompletionTokens, or.Usage.PromptDetails.CachedTokens)
+	}
 	if or.Error != nil {
 		// A 200 with an error body: classify by the type the provider named so
 		// the retry/failover paths see the same verdict a status code would give.
 		return Response{}, inBandError(or.Error.Type, or.Error.Message)
-	}
-	if or.Usage != nil {
-		c.addUsage(or.Usage.PromptTokens, or.Usage.CompletionTokens, or.Usage.PromptDetails.CachedTokens)
 	}
 	return parseOpenAIResponse(&or), nil
 }
@@ -1488,11 +1488,11 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 	if err := json.Unmarshal(body, &mr); err != nil {
 		return Response{}, fmt.Errorf("entry: parse response: %w", err)
 	}
+	if mr.Usage != nil {
+		c.recordUsage(ctx, mr.Usage.InputTokens+mr.Usage.CacheRead+mr.Usage.CacheWrite, mr.Usage.OutputTokens, mr.Usage.CacheRead, mr.Usage.CacheWrite)
+	}
 	if mr.Error != nil {
 		return Response{}, inBandError(mr.Error.Type, mr.Error.Message)
-	}
-	if mr.Usage != nil {
-		c.addUsage(mr.Usage.InputTokens+mr.Usage.CacheRead+mr.Usage.CacheWrite, mr.Usage.OutputTokens, mr.Usage.CacheRead, mr.Usage.CacheWrite)
 	}
 	return parseResponse(&mr), nil
 }

@@ -730,6 +730,16 @@ func (s *Store) CompactHistory(ctx context.Context, id string, budget int, summa
 // Callers must pass the exact operation id when updating an existing snapshot;
 // a stale completion can therefore never overwrite a newer generation.
 func (s *Store) SetOperation(id string, op Operation) (bool, error) {
+	return s.setOperation(id, op, false)
+}
+
+// FinishRunningOperation settles an operation only while its exact generation
+// is still running. A reconciler must preserve a result already saved by its runner.
+func (s *Store) FinishRunningOperation(id string, op Operation) (bool, error) {
+	return s.setOperation(id, op, true)
+}
+
+func (s *Store) setOperation(id string, op Operation, runningOnly bool) (bool, error) {
 	unlock, err := lockStore(s.root)
 	if err != nil {
 		return false, fmt.Errorf("sessions: lock: %w", err)
@@ -742,6 +752,9 @@ func (s *Store) SetOperation(id string, op Operation) (bool, error) {
 		return false, err
 	}
 	if sess.Operation != nil && sess.Operation.ID != op.ID {
+		return false, nil
+	}
+	if runningOnly && (sess.Operation == nil || sess.Operation.Status != "running") {
 		return false, nil
 	}
 	if op.StartedAt.IsZero() && sess.Operation != nil && sess.Operation.ID == op.ID {
