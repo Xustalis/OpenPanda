@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -140,6 +141,37 @@ type Turn struct {
 	// CreatedAt/UpdatedAt cannot express. Zero on transcripts written before
 	// the field existed — readers fall back to the session stamps there.
 	TS int64 `json:"ts,omitempty"`
+}
+
+const (
+	planConfirmationKey  = "plan:user:"
+	planConfirmationKind = "plan_confirmation"
+)
+
+// PlanConfirmationTurn records the user's confirmation in the transcript.
+func PlanConfirmationTurn(round string, version int64) Turn {
+	return Turn{
+		Role: "user", Text: fmt.Sprintf("/plan confirm %d", version),
+		Kind: planConfirmationKind, Ref: strconv.FormatInt(version, 10),
+		RoundID: round, IdempotencyKey: planConfirmationKey + round,
+	}
+}
+
+func (t *Turn) normalizePlanConfirmation() {
+	if t.Role != "user" || !strings.HasPrefix(t.IdempotencyKey, planConfirmationKey) {
+		return
+	}
+	rest, ok := strings.CutPrefix(t.Text, "Implement user-confirmed proposal version ")
+	if !ok {
+		return
+	}
+	number, _, _ := strings.Cut(rest, " ")
+	version, err := strconv.ParseInt(number, 10, 64)
+	if err != nil || version <= 0 {
+		return
+	}
+	receipt := PlanConfirmationTurn(t.RoundID, version)
+	t.Text, t.Kind, t.Ref = receipt.Text, receipt.Kind, receipt.Ref
 }
 
 // Session is one chat thread. Worktree/Branch are empty when the work path is
@@ -1541,6 +1573,9 @@ func (s *Store) load(id string) (*Session, error) {
 	// every caller downstream reads one model. A file that predates the list
 	// keeps its transcript; the first write persists the new shape.
 	sess.normalizeSide()
+	for i := range sess.Turns {
+		sess.Turns[i].normalizePlanConfirmation()
+	}
 	return &sess, nil
 }
 

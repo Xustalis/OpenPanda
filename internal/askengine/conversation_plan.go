@@ -252,7 +252,7 @@ func (s *ConversationService) runPlan(sid, round, proposal string, version int64
 		}
 	}
 	prompt := fmt.Sprintf("Implement user-confirmed proposal version %d in the current session. Inspect the saved transcript and existing task results/checkpoints first; continue remaining work without repeating completed side effects. Preserve the original requirements and verify the result.\n\n%s", version, proposal)
-	_, _ = st.AppendTurn(sid, sessions.Turn{Role: "user", Text: prompt, RoundID: round, IdempotencyKey: "plan:user:" + round})
+	_, _ = st.AppendTurn(sid, sessions.PlanConfirmationTurn(round, version))
 	workDir := sess.Worktree
 	if workDir == "" {
 		workDir = s.engine.WorkPath()

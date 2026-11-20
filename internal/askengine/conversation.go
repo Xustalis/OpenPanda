@@ -99,7 +99,18 @@ func (s *ConversationService) Control(ctx context.Context, sid, id, action, text
 	if err = s.store.Control(ctx, sid, id, action, text, budget); err != nil {
 		return err
 	}
-	if action == "clear" || action == "stop" || action == "edit" {
+	switch action {
+	case "pause":
+		// Pausing is an interruption, not just a status flag: a round that is
+		// still waiting on the model would keep thinking (and spending) long
+		// after the user asked it to hold, and its live operation would keep
+		// the thread "busy" with no way to stop it from the goal bar. Stop the
+		// round now but leave its dispatched tasks alone; the goal stays
+		// paused, and the next resume claims a fresh round from the transcript.
+		// Plan implementation rounds keep running — a paused-by-plan goal has
+		// no round of its own to cancel.
+		s.interruptRound(ctx, state.Goal)
+	case "clear", "stop", "edit":
 		s.cancelRound(ctx, state.Goal)
 		s.cancelRevokedPlans(ctx, sid)
 	}
@@ -170,7 +181,11 @@ func (s *ConversationService) cancelRevokedPlans(ctx context.Context, sid string
 	}
 }
 
-func (s *ConversationService) cancelRound(ctx context.Context, g *conversation.Goal) {
+// interruptRound stops the round's own runner — its model wait above all —
+// without touching work it already dispatched. A pause holds the controller;
+// it does not revoke jobs the user already set in motion, so those keep
+// running and report into the transcript as usual.
+func (s *ConversationService) interruptRound(ctx context.Context, g *conversation.Goal) {
 	if g.RoundID == "" {
 		return
 	}
@@ -189,6 +204,17 @@ func (s *ConversationService) cancelRound(ctx context.Context, g *conversation.G
 		if st := s.sessionStore(); st != nil {
 			_, _ = st.FinishRunningOperation(g.SessionID, sessions.Operation{ID: g.RoundID, Status: "cancelled"})
 		}
+	}
+}
+
+func (s *ConversationService) cancelRound(ctx context.Context, g *conversation.Goal) {
+	if g.RoundID == "" {
+		return
+	}
+	s.interruptRound(ctx, g)
+	round, err := s.engine.TaskStore().AskRoundProgress(ctx, g.SessionID, g.RoundID)
+	if err != nil {
+		return
 	}
 	for _, task := range round.Tasks {
 		if !core.Terminal(task.State) {

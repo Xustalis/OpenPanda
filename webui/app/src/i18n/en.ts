@@ -2475,6 +2475,13 @@ const en: Messages = {
   "sessions.plan.proposal": "Plan proposal",
   "sessions.plan.implement": "Start implementation",
   "sessions.plan.implementGoal": "Implement and continue goal",
+  "sessions.plan.confirmed": "Confirmed proposal {version} for implementation",
+  "sessions.plan.changed": "The proposal changed. Review the current version.",
+  "sessions.plan.review": "Review and implement",
+  "sessions.plan.ready": "The plan is ready. Confirm to start implementation.",
+  "sessions.goal.raiseBudget": "Increase budget and continue",
+  "sessions.goal.budgetSummary": "Used {used} of {limit} tokens. Enter a budget above the amount used.",
+  "sessions.goal.newBudget": "New budget (tokens)",
   "sessions.goal.restore": "Restore cached goal",
   "sessions.goal.legacy": "A cached goal is available. Restore it explicitly to start background work.",
 

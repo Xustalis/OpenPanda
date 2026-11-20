@@ -69,6 +69,9 @@ func (s *Store) Get(ctx context.Context, sid string) (State, error) {
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return st, err
 	}
+	if !st.Planning || st.ProposalVersion <= st.ConfirmedVersion {
+		st.Proposal = ""
+	}
 	g, err := scanGoal(s.DB.QueryRowContext(ctx, "SELECT "+goalColumns+" FROM conversation_goals WHERE session_id=? AND status!='cleared'", sid))
 	if err == nil {
 		st.Goal = g
@@ -134,7 +137,11 @@ func (s *Store) SetPlanning(ctx context.Context, sid string, enabled bool) error
 	if err = ensure(ctx, tx, sid); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, "UPDATE conversation_controls SET mode_generation=mode_generation+CASE WHEN planning!=? THEN 1 ELSE 0 END,planning=? WHERE session_id=?", enabled, enabled, sid); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE conversation_controls
+SET mode_generation=mode_generation+CASE WHEN planning!=? THEN 1 ELSE 0 END,
+    proposal=CASE WHEN planning!=? THEN '' ELSE proposal END,
+    planning=?
+WHERE session_id=?`, enabled, enabled, enabled, sid); err != nil {
 		return err
 	}
 	if enabled {
@@ -146,6 +153,30 @@ func (s *Store) SetPlanning(ctx context.Context, sid string, enabled bool) error
 		return err
 	}
 	return tx.Commit()
+}
+
+// BeginPlanningRequest retires the previous proposal as soon as a new turn
+// starts. Versions remain monotonic and saved proposals stay in the archive.
+func (s *Store) BeginPlanningRequest(ctx context.Context, sid string) (version, generation int64, err error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx, `UPDATE conversation_controls
+SET mode_generation=mode_generation+1,proposal=''
+WHERE session_id=? AND planning=1 AND deleted=0
+RETURNING proposal_version,mode_generation`, sid).Scan(&version, &generation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, ErrConflict
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	if err = event(ctx, tx, sid, "plan_invalidated", version); err != nil {
+		return 0, 0, err
+	}
+	return version, generation, tx.Commit()
 }
 
 func (s *Store) SaveProposal(ctx context.Context, sid, text string, expected ...int64) (int64, error) {
@@ -181,8 +212,8 @@ func (s *Store) SaveProposal(ctx context.Context, sid, text string, expected ...
 	return version, tx.Commit()
 }
 
-// Confirm consumes exactly the version shown to the user, once. The caller
-// supplies the resulting instruction to the ordinary ask path in this session.
+// Confirm consumes exactly the current proposal once and queues it for
+// implementation in this session.
 func (s *Store) Confirm(ctx context.Context, sid string, version int64) (string, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -190,7 +221,7 @@ func (s *Store) Confirm(ctx context.Context, sid string, version int64) (string,
 	}
 	defer tx.Rollback()
 	var text string
-	err = tx.QueryRowContext(ctx, "UPDATE conversation_controls SET planning=0,confirmed_version=? WHERE session_id=? AND deleted=0 AND planning=1 AND proposal_version=? AND confirmed_version<? RETURNING proposal", version, sid, version, version).Scan(&text)
+	err = tx.QueryRowContext(ctx, "UPDATE conversation_controls SET planning=0,confirmed_version=? WHERE session_id=? AND deleted=0 AND planning=1 AND proposal_version=? AND confirmed_version<? AND proposal!='' RETURNING proposal", version, sid, version, version).Scan(&text)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrConflict
 	}

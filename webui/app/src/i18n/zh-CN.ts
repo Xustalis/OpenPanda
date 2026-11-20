@@ -2450,6 +2450,13 @@ const zhCN: Messages = {
   "sessions.plan.proposal": "计划提案",
   "sessions.plan.implement": "开始实施",
   "sessions.plan.implementGoal": "实施并继续目标",
+  "sessions.plan.confirmed": "已确认实施提案 {version}",
+  "sessions.plan.changed": "提案已变更，请查看当前版本。",
+  "sessions.plan.review": "查看并实施",
+  "sessions.plan.ready": "计划已就绪，确认后开始实施。",
+  "sessions.goal.raiseBudget": "提高预算并继续",
+  "sessions.goal.budgetSummary": "已用 {used} / {limit} tokens。新预算需大于已用量。",
+  "sessions.goal.newBudget": "新预算（tokens）",
   "sessions.goal.restore": "恢复缓存目标",
   "sessions.goal.legacy": "发现旧版目标缓存。明确选择恢复后才会启动后台任务。",
 
