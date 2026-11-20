@@ -95,9 +95,13 @@
   font-weight: var(--fw-semibold);
 }
 
+/* Edit and remove are square 30×30 targets matching the folder glyph on the
+   left of the header — the same height the card's first line already has, so
+   the pointer lands on the icon rather than on a 21px-tall strip. */
 .project-head .btn.icon-only {
   flex: none;
   width: 30px;
+  height: 30px;
   padding: 0;
 }
 

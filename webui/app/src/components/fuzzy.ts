@@ -41,6 +41,39 @@ function isBoundary(ch: string | undefined): boolean {
   return ch === undefined || ch === ' ' || ch === '-' || ch === '/' || ch === ':' || ch === '.'
 }
 
+/** Rank by word start, for menus where the query names a thing rather than
+ *  searches for it.
+ *
+ *  The chat composer's `/` menu is the case this exists for: `/pla` is a
+ *  command being typed, not a search box. Scored as a subsequence (see
+ *  `score`), "pla" also answers 工作空间 — its English keywords contain
+ *  p…l…a in order — and MCP 服务器 for the same reason, so a list meant to be
+ *  four verbs reads as noise. Here the query has to begin a word; an exact
+ *  word outranks a longer prefix, and a shorter prefix outranks a longer one,
+ *  which is what puts `/plan` above `/plans` once the last letter lands. */
+export function rankWords<T>(items: T[], query: string, words: (item: T) => string[]): T[] {
+  if (query === '') return items
+  const needle = query.toLowerCase()
+  const scored = items.map((item, i) => {
+    let best = 0
+    let len = 0
+    for (const raw of words(item)) {
+      const word = raw.toLowerCase()
+      if (word === '') continue
+      const s = word === needle ? 2 : word.startsWith(needle) ? 1 : 0
+      if (s > best || (s === best && s > 0 && (len === 0 || word.length < len))) {
+        best = s
+        len = word.length
+      }
+    }
+    return { item, best, len, i }
+  })
+  return scored
+    .filter((s) => s.best > 0)
+    .sort((a, b) => b.best - a.best || a.len - b.len || a.i - b.i)
+    .map((s) => s.item)
+}
+
 /** Rank items by their best-matching haystack, dropping non-matches. Ties keep
  *  the caller's order, which is the sidebar's order — a blank query therefore
  *  shows the menu exactly as the sidebar lists it. */

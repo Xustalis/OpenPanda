@@ -67,11 +67,14 @@ export function receiptCopy(text: string) {
 
 /** A readable first screen, with the rest still available rather than dropped. */
 export function deliveryPreview(text: string, limit = 6000): { text: string; more: boolean } {
+  const maxLines = 12
   const runes = [...text]
-  if (runes.length <= limit) return { text, more: false }
   const prefix = runes.slice(0, limit).join('')
-  const paragraph = prefix.lastIndexOf('\n\n')
-  return { text: prefix.slice(0, paragraph > limit / 2 ? paragraph : prefix.length) + '\n\n…', more: true }
+  const lines = prefix.split('\n', maxLines + 1)
+  if (runes.length <= limit && lines.length <= maxLines) return { text, more: false }
+  const excerpt = lines.slice(0, maxLines).join('\n')
+  const paragraph = excerpt.lastIndexOf('\n\n')
+  return { text: excerpt.slice(0, paragraph > excerpt.length / 2 ? paragraph : excerpt.length) + '\n\n…', more: true }
 }
 
 export function deliveryFacts(task: Pick<Task, 'result' | 'files_changed' | 'verification' | 'state'>) {

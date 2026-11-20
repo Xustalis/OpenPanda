@@ -34,7 +34,7 @@ import { formatDuration } from '../format/time'
 import { prettyAgent } from './chat-speaker'
 import { layerAboveOwnsEscape } from './card-dismiss'
 import { isActiveState } from './task-activity'
-import { contextShare, patchFileStats } from './session-rail-stats'
+import { contextShare, contextUsage, patchFileStats, type ContextAgentView } from './session-rail-stats'
 
 /** Gap between the two copies of a ticker's text. The keyframe translates by
  *  half the track plus half this gap, so the second copy lands exactly where
@@ -150,6 +150,16 @@ export interface SessionRailProps {
   contextWindow: number
   /** The model that wrote the newest turn, already resolved for display. */
   modelName: string
+  /** The thread's working agent, when the context sample is its own rather
+   *  than the entry model's. The bar prefixes the segment with this name —
+   *  the whole point of the change is that a bare percentage cannot say
+   *  whose window it is measuring. */
+  contextAgent?: string
+  /** Every agent working this thread, primary first. One entry (or none)
+   *  keeps the bar and the overview in their single-agent shape; several
+   *  switch the overview to a row per agent — a team fills one window each,
+   *  and a single bar would hide the one about to compact. */
+  contextAgents?: ContextAgentView[]
   /** Where this thread is pinned to run, already resolved for display. */
   machine: string
   /** Entry-model work exists before a dispatched task row does. */
@@ -247,14 +257,31 @@ export function SessionRail(props: SessionRailProps) {
   const patch = props.diff?.patch ?? ''
   const perFile = useMemo(() => patchFileStats(patch), [patch])
 
-  const pct = contextShare(props.contextTokens, contextWindow)
+  // A team fills one window per agent. The bar can only carry one reading,
+  // so with several agents it prints the fullest window — the one that
+  // predicts a compaction — and names the group; the overview and the dock
+  // list every member. A single agent keeps its own name on the segment.
+  const agents = props.contextAgents ?? []
+  const multi = agents.length > 1
+  const riskiest = multi
+    ? agents.reduce((best, agent) =>
+        (contextShare(agent.tokens, agent.window) ?? -1) >
+        (contextShare(best.tokens, best.window) ?? -1)
+          ? agent
+          : best,
+      )
+    : null
+  const barTokens = riskiest ? riskiest.tokens : props.contextTokens
+  const barWindow = riskiest ? riskiest.window : contextWindow
+
+  const pct = contextShare(barTokens, barWindow)
   // A thread that has spent 144 tokens of a million rounds to 0%, which reads
   // as "nothing was used" — the opposite of what the number says. Below one
   // percent the line says so instead of rounding down to nothing.
   const shareLabel =
     pct === null
       ? ''
-      : pct === 0 && props.contextTokens > 0
+      : pct === 0 && barTokens > 0
         ? t('sessionRail.contextUnder1')
         : `${pct}%`
 
@@ -279,18 +306,41 @@ export function SessionRail(props: SessionRailProps) {
   // Percentage first, then the raw numbers. A model with no catalogue window
   // still gets its token count: "unknown" is a reason to omit the share, not
   // a reason to hide the one number the turn actually reported.
-  const used = props.contextTokens > 0 ? compactNumber(props.contextTokens) : '—'
-  const total = contextWindow > 0 ? compactNumber(contextWindow) : ''
-  const usage = total ? `${used} / ${total}` : props.contextTokens > 0 ? used : ''
-  const contextLine = [shareLabel, usage].filter(Boolean).join(SEP) || '—'
+  const used = barTokens > 0 ? compactNumber(barTokens) : '—'
+  const total = barWindow > 0 ? compactNumber(barWindow) : ''
+  const usage = total ? `${used} / ${total}` : barTokens > 0 ? used : ''
+  const countLabel = multi ? t('sessionRail.contextAgentsCount', { n: String(agents.length) }) : ''
+  const owner = multi
+    ? countLabel
+    : props.contextAgent && props.contextTokens > 0
+      ? props.contextAgent
+      : ''
+  // An agent's segment leads with its name: a bare percentage cannot say
+  // whose window it is measuring, which is the whole reason the rail stopped
+  // printing the entry model's turn. The name costs the width the raw counts
+  // used to take, so they move to the overview and the hover tip — the bar is
+  // a glance, the popover is the detail. Without an agent the segment keeps
+  // the counts inline, because the model is named in the tip only.
+  const contextLine = owner
+    ? shareLabel || usage
+    : [shareLabel, usage].filter(Boolean).join(SEP) || '—'
   // What the numbers are counting — the sentence the overview prints under its
   // meter. It rides the bar as the hover tip of the context segment instead of
   // a native `title`: one tip per line, styled with the sheet, never the black
   // system box.
-  const contextNote =
-    contextWindow > 0
-      ? t('sessionRail.contextNote', { model: modelName })
-      : t('sessionRail.contextNoWindow')
+  const contextNote = multi
+    ? t('sessionRail.contextAgentsNote', {
+        n: String(agents.length),
+        pct: shareLabel || usage || '—',
+      })
+    : props.contextAgent
+      ? t('sessionRail.contextAgentNote', { agent: props.contextAgent })
+      : contextWindow > 0
+        ? t('sessionRail.contextNote', { model: modelName })
+        : t('sessionRail.contextNoWindow')
+  // The bar's own tip carries what the segment gave up: an agent's segment
+  // prints the share, so the counts ride the hover sentence instead.
+  const contextTip = !multi && owner && usage ? `${contextNote} · ${usage}` : contextNote
 
   // The ticker is a file list, not prose. "Not a git repository" and "the task
   // reported no changes" used to scroll past here and told the reader nothing
@@ -411,7 +461,7 @@ export function SessionRail(props: SessionRailProps) {
         // borrows the bar's label instead of repeating itself; running, the
         // title can be cut, and the tip is the only place the full line lives.
         data-task-tip={running ? taskLine : ''}
-        data-ctx-tip={contextNote}
+        data-ctx-tip={contextTip}
         data-changes-tip={changeTitle}
         onClick={() => setOpen(!open)}
       >
@@ -436,6 +486,8 @@ export function SessionRail(props: SessionRailProps) {
           ·
         </span>
         <span class={`rail-bar-ctx${pct !== null && pct >= 80 ? ' is-high' : ''}`}>
+          {owner && <span class="rail-bar-ctx-owner">{owner}</span>}
+          {owner && SEP}
           {contextLine}
         </span>
         <span class="rail-bar-sep" aria-hidden="true">
@@ -512,31 +564,77 @@ export function SessionRail(props: SessionRailProps) {
 
           {/* ---- Context --------------------------------------------- */}
           <section class="rail-pop-sec">
-            <div class="rail-pop-row">
-              <span class="rail-pop-label">{t('sessionRail.context')}</span>
-              <span class={`rail-pop-pct${pct !== null && pct >= 80 ? ' is-high' : ''}`}>
-                {shareLabel || '—'}
-              </span>
-            </div>
-            <span
-              class={`rail-pop-meter${pct !== null && pct >= 80 ? ' is-high' : ''}${
-                pct === null ? ' is-unknown' : ''
-              }`}
-              role="img"
-              aria-label={
-                pct === null ? t('sessionRail.contextUnknown') : shareLabel || t('sessionRail.contextUnknown')
-              }
-            >
-              {pct !== null && <i style={`width:${pct}%`} />}
-            </span>
-            <div class="rail-pop-foot">
-              <span class="rail-pop-nums">{usage || '—'}</span>
-              <span class="rail-pop-model" title={contextWindow > 0 ? modelName : undefined}>
-                {contextWindow > 0
-                  ? t('sessionRail.contextNote', { model: modelName })
-                  : t('sessionRail.contextNoWindow')}
-              </span>
-            </div>
+            {multi ? (
+              <>
+                <div class="rail-pop-row">
+                  <span class="rail-pop-label">{t('sessionRail.context')}</span>
+                </div>
+                {/* One row per working agent: a team fills several windows at
+                    once, and the percentage that matters is the one closest
+                    to its ceiling — a single bar would hide the rest. */}
+                <ul class="rail-pop-ctx-list">
+                  {agents.slice(0, 4).map((agent) => {
+                    const share = contextShare(agent.tokens, agent.window)
+                    const high = share !== null && share >= 80
+                    return (
+                      <li key={agent.name} class="rail-pop-ctx-agent">
+                        <div class="rail-pop-row">
+                          <span class="rail-pop-agent-name">{agent.name}</span>
+                          <span class={`rail-pop-agent-pct${high ? ' is-high' : ''}`}>
+                            {share === null ? '—' : `${share}%`}
+                          </span>
+                        </div>
+                        <span
+                          class={`rail-pop-meter${high ? ' is-high' : ''}${share === null ? ' is-unknown' : ''}`}
+                          role="img"
+                          aria-label={
+                            share === null
+                              ? t('sessionRail.contextUnknown')
+                              : `${share}%`
+                          }
+                        >
+                          {share !== null && <i style={`width:${share}%`} />}
+                        </span>
+                        <div class="rail-pop-foot">
+                          <span class="rail-pop-nums">{contextUsage(agent.tokens, agent.window)}</span>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+                {agents.length > 4 && (
+                  <p class="rail-pop-note">
+                    {t('sessionRail.contextMoreAgents', { n: String(agents.length - 4) })}
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <div class="rail-pop-row">
+                  <span class="rail-pop-label">{t('sessionRail.context')}</span>
+                  <span class={`rail-pop-pct${pct !== null && pct >= 80 ? ' is-high' : ''}`}>
+                    {shareLabel || '—'}
+                  </span>
+                </div>
+                <span
+                  class={`rail-pop-meter${pct !== null && pct >= 80 ? ' is-high' : ''}${
+                    pct === null ? ' is-unknown' : ''
+                  }`}
+                  role="img"
+                  aria-label={
+                    pct === null ? t('sessionRail.contextUnknown') : shareLabel || t('sessionRail.contextUnknown')
+                  }
+                >
+                  {pct !== null && <i style={`width:${pct}%`} />}
+                </span>
+                <div class="rail-pop-foot">
+                  <span class="rail-pop-nums">{usage || '—'}</span>
+                  <span class="rail-pop-model" title={contextWindow > 0 ? props.contextAgent || modelName : undefined}>
+                    {contextNote}
+                  </span>
+                </div>
+              </>
+            )}
           </section>
 
           {/* ---- Changes --------------------------------------------- */}

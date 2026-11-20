@@ -1,0 +1,123 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+.task-turn-activity {
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.task-turn-activity-toggle,
+.task-turn-tool-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-md);
+  text-align: start;
+  cursor: pointer;
+}
+
+.task-turn-activity-toggle:hover,
+.task-turn-tool-line:hover {
+  color: var(--text);
+}
+
+.task-turn-activity-toggle:focus-visible,
+.task-turn-tool-line:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.task-turn-activity-toggle svg,
+.task-turn-tool-line svg {
+  flex: none;
+}
+
+.task-turn-log {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 0 6px;
+}
+
+.task-turn-timeline {
+  display: grid;
+  gap: 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.task-turn-timeline > li,
+.task-turn-tool,
+.task-turn-final {
+  min-width: 0;
+}
+
+.task-turn-commentary {
+  color: var(--text);
+}
+
+.task-turn-tool-line::-webkit-details-marker { display: none; }
+
+.task-turn-tool-line.is-failed { color: var(--danger); }
+
+.task-turn-tool-line > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-turn-tool-line > span:first-of-type {
+  flex: 0 0 auto;
+  max-width: calc(100% - 30px);
+}
+.task-turn-tool-arg { flex: 0 1 auto; }
+
+.task-turn-tool-detail {
+  border-inline-start: 1px solid var(--border);
+  padding-inline-start: 12px;
+  margin: 6px 0 2px 7px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-turn-final.md {
+  gap: 14px;
+  white-space: normal;
+}
+
+.task-turn-delivery-details > summary {
+  width: fit-content;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .task-turn-working {
+    animation: task-turn-pulse 1.8s ease-in-out infinite alternate;
+  }
+
+  .task-turn-timeline > li.is-live,
+  .task-turn-commentary .md-stream-append {
+    animation: task-turn-appear 220ms ease-out both;
+  }
+}
+
+@keyframes task-turn-pulse {
+  from { opacity: .66; }
+  to { opacity: 1; }
+}
+
+@keyframes task-turn-appear {
+  from { opacity: .28; }
+  to { opacity: 1; }
+}

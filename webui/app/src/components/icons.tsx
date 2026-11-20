@@ -65,9 +65,11 @@ export type IconName =
   | 'orbit'
   | 'panel-right'
   | 'paperclip'
+  | 'pause'
   | 'pencil'
   | 'pin'
   | 'pin-off'
+  | 'play'
   | 'plug'
   | 'plus'
   | 'refresh'
@@ -77,7 +79,10 @@ export type IconName =
   | 'shield'
   | 'sparkles'
   | 'square-pen'
+  | 'stop'
   | 'sun'
+  | 'target'
+  | 'terminal'
   | 'trash'
   | 'user'
   | 'users'
@@ -85,6 +90,11 @@ export type IconName =
   | 'x'
 
 const paths: Record<IconName, JSX.Element> = {
+  pause: <path d="M9 5v14m6-14v14" />,
+  play: <path d="m8 5 12 7-12 7V5Z" />,
+  stop: <rect x="5" y="5" width="14" height="14" rx="2" />,
+  target: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1" /></>,
+  terminal: <><rect x="3" y="3" width="18" height="18" rx="3" /><path d="m7 8 4 4-4 4m6 0h4" /></>,
   activity: <path d="M22 12h-4l-3 9L9 3l-3 9H2" />,
   alert: (
     <>

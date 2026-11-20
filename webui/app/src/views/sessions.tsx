@@ -37,15 +37,16 @@ import { navigate, navigateView } from '../nav'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
 import { ClarifyCard } from '../components/clarify-card'
-import { buildCommands, type Command } from '../components/palette'
-import { rank } from '../components/fuzzy'
-import { reconcileTranscript, threadBusy, patchStreaming, slashQuery } from '../components/chatstate'
+import { buildCommands } from '../components/palette'
+import { rankWords } from '../components/fuzzy'
+import { goalArgument, goalBudget, goalCommand } from '../components/goal-command'
+import { composerIntent, reconcileTranscript, threadBusy, patchStreaming, slashQuery, slashArgStarted, slashWords, planArgument, type ComposerMode } from '../components/chatstate'
 import { atQuery, expandFileRefs, exportMarkdown, exportFilename, fileLabel, withAttachments } from '../components/attach'
 import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
 import { HoverPreview, Lightbox } from '../components/image-preview'
 import { liveTaskIds } from '../components/task-activity'
-import { roundStillOpen, trailingRunSummary } from '../components/chat-speaker'
+import { roundStillOpen, trailingRunSummary, prettyAgent } from '../components/chat-speaker'
 import { TaskProgress } from '../components/chat-cast'
 import { projectTaskRounds } from './sessions/task-round-state'
 import { RoundReportPane, SessionTaskRound, type OpenRoundReport, type RoundReportSelection } from './sessions/task-round'
@@ -60,6 +61,7 @@ import { OrchestrateCard } from '../components/orchestrate'
 import { DirButton } from '../components/dir-picker'
 import { ModelSelect } from '../components/model-select'
 import { SessionRail } from '../components/session-rail'
+import { agentContextSamples, type ContextAgentView } from '../components/session-rail-stats'
 import { VoiceInput } from '../components/voice-input'
 import { upsertActivity } from '../components/execution-steps'
 import { acquireKeepAlive } from '../utils/keepalive'
@@ -77,6 +79,7 @@ import { ComposerInput, type CompletionItem } from './sessions/composer-input'
 import { QueuedNotes } from './sessions/queued-notes'
 import { fmtSize, type PendingAttachment } from './sessions/attachment-pills'
 import { AttachMenu } from './sessions/attach-menu'
+import { GoalBar, goalActive, legacyGoalFor, useComposerGoals, type ComposerGoal } from './sessions/goal-bar'
 import { projectForDir, waitDevReady } from './sessions/session-project'
 import { ChatEmpty, ChatSkeleton, ChatTurn, reportFallbackRefs, RunSummaryRow, useSessionTasks } from './sessions/transcript'
 import { hydrateTurns, localMsgId, statusNote, type ChatMsg } from './sessions/transcript-state'
@@ -488,11 +491,24 @@ export function SessionsView({
   //
   // A dispatched employee that is still moving counts as busy too. The panel
   // already treats that state as a live thread — what you type goes to the
-  // job's board (see `sendSessionMessage`), and the composer's own placeholder
-  // promises "Agent 正在执行… 可点击停止或补充指令" — so the surface has to say
-  // so, or the one state that most needs a way out (a stuck adapter) shows a
-  // plain Send button and nothing to stop.
+  // job's board (see `sendSessionMessage`), so the composer must keep offering
+  // Stop instead of swapping back to Send while that job is running.
   const busy = threadBusy(localBusy, activeId, session, liveIds.length)
+  const goalAction = useRef<string | null>(null)
+  const [pendingGoalAction, setPendingGoalAction] = useState<string | null>(null)
+  const { goal, state: controlState, refresh: refreshControl, goalFor } = useComposerGoals(activeId, session?.operation, Boolean(pendingGoalAction))
+  const legacyGoal = activeId && !goal ? legacyGoalFor(activeId) : undefined
+  const [goalEditor, setGoalEditor] = useState<{ sid: string; id: string; text: string } | null>(null)
+  // `/goal` and `/plan` are picks, not prefixes: choosing one takes the token
+  // out of the editor and leaves a chip beside the actions, so the draft is
+  // the objective and nothing repeats the command. The goal bar is the
+  // published goal's own readout — it has no draft preview, because a bar
+  // sitting there before the task exists reads as a second composer.
+  const [armed, setArmed] = useState<ComposerMode | null>(null)
+  // Still parsed so a hand-typed `/goal …` keeps its menu suppressed and its
+  // send routed; the chip no longer mirrors it.
+  const goalDraft = goalArgument(input)
+  const shownGoal: ComposerGoal | undefined = goal?.phase === 'cancelled' ? undefined : goal
   // The pre-execution question the running turn is parked on. Cleared when the
   // browser answers, when the turn ends, or when the user cancels it.
   const [clarify, setClarify] = useState<{
@@ -960,9 +976,13 @@ export function SessionsView({
       const current = s.operation
       const rows = hydrateTurns(s.turns ?? [], (i) => `srv-${i}`)
       if (current?.id === op.id && current.status === 'running') {
+        // A background round (goal/plan controller) never streams, so its
+        // snapshot carries the zero time and the quiet clock read it as
+        // 0001-01-01 — "quiet for 17758525h". Absent means "no output yet".
+        const lastActivity = current.last_activity ? Date.parse(current.last_activity) : NaN
         rows.push({
           role: 'assistant', text: current.text || '', thought: current.thought, activities: current.activities,
-          lastActivity: current.last_activity ? Date.parse(current.last_activity) : undefined,
+          lastActivity: Number.isFinite(lastActivity) && lastActivity > 0 ? lastActivity : undefined,
           tokens: current.tokens, tokensEstimated: current.estimated,
           status: current.progress ? statusNote(current.progress.text || '', current.progress) : undefined,
           streaming: true, k: key, liveTask: current.task_id,
@@ -1255,6 +1275,7 @@ export function SessionsView({
    *  dispatched, and a stuck adapter is precisely the case with no other way
    *  out of the pane. */
   async function stop() {
+    if (goal?.round && activeId) { await changeGoal('stop'); return }
     const ctrl = inflight.current
     const targetSid = inflightSid.current || activeId
     const operationID = inflightOperation.current ||
@@ -1378,6 +1399,8 @@ export function SessionsView({
     const pend = listed.filter((n) => !n.durable)
     if (pend.length === 0) return
     if (inflight.current || activeIdRef.current !== sid) return
+    const goal = goalFor(sid)
+    if (goal?.phase === 'paused' || goal?.phase === 'cancelled' || (goal && goalAction.current === goal.id)) return
     // A turn is already streaming this thread: the note just queued belongs
     // to it, and opening a second ask would cancel the one being watched.
     if (inflightSid.current === sid) return
@@ -1483,13 +1506,64 @@ export function SessionsView({
     // tray on screen belong to whatever the user types next, so they are left
     // untouched — clearing them here would eat text typed while the answer was
     // still streaming.
-    const raw = (queued ?? input).trim()
+    const fromComposer = queued === undefined
+    const typed = (queued ?? input).trim()
+    // An armed chip owns the whole draft; a continuation is never a command.
+    const intent = fromComposer ? composerIntent(armed, typed) : { goalText: null, planText: null }
+    let goalText = intent.goalText
+    const budget = goalText ? goalBudget(goalText) : undefined
+    if (budget?.invalid) { toast(t('sessions.goal.invalidBudget')); return }
+    if (budget) goalText = budget.text
+    const planText = intent.planText
+    // A bare `/goal` is a pick, not a send: the token leaves the editor and
+    // the chip carries the mode until the task is published. The same words
+    // with the chip already armed mean the objective is still empty.
+    if (goalText === '') { if (!armed) armMode('goal'); return }
+    if (planText === '') {
+      // The pick itself is the instruction, whether it came from the menu or
+      // was typed out: planning already on means the same pick leaves the
+      // mode; otherwise the chip arms and the next send says what to plan.
+      // Typing the word and pressing Enter must not do something else than
+      // picking it from the list did.
+      if (armed) { await setPlanning(true); setArmed(null) }
+      else if (controlState?.planning) { await setPlanning(false); removeModeCommand() }
+      else armMode('plan')
+      return
+    }
+    if (planText !== null && (busy || inflight.current)) {
+      await setPlanning(true)
+      toast(t('sessions.plan.busy'))
+      return
+    }
+    if (goalText) {
+      // An armed chip means the draft *is* the objective: the legacy control
+      // words (`pause`, `stop`, `edit`…) belong to the `/goal …` text form,
+      // and an objective that happens to be one word must not act on the
+      // current goal instead of becoming a new one.
+      const command = armed === 'goal' ? { action: 'create' as const, objective: goalText } : goalCommand(goalText)
+      if (command.action === 'create') {
+        goalText = command.objective
+        if (!goalText) { toast(t('sessions.goal.hint')); return }
+      } else {
+        if (!goal) { toast(t('sessions.goal.noCurrent')); return }
+        if (command.action === 'edit' && !command.objective) { openGoalEditor(); removeModeCommand(true); return }
+        const applied = await changeGoal(command.action, command.objective, budget?.tokens)
+        if (applied && composer.current && editorTextOf(composer.current).trim() === typed) removeModeCommand(true)
+        return
+      }
+    }
+    const goalTarget = goalText
+    if (goalTarget && (busy || inflight.current)) {
+      toast(t('sessions.goal.busy'))
+      return
+    }
+    const raw = planText ?? goalText ?? typed
     // The tray mirrors the pills still in the editor: anything whose pill is
     // gone (Backspace, a selection-delete) stays behind instead of uploading
     // with the send.
     const el0 = composer.current
     const tray =
-      queued !== undefined ? [] : el0 ? pending.filter((p) => livePillKeys(el0).has(p.key)) : pending
+      !fromComposer ? [] : el0 ? pending.filter((p) => livePillKeys(el0).has(p.key)) : pending
     // A tray-only send is a real send: dropping a screenshot and hitting Enter
     // is the whole point, and the prompt then carries nothing but the file.
     if (!raw && tray.length === 0) return
@@ -1500,7 +1574,7 @@ export function SessionsView({
     // continuation is exempt either way: the words are what the user already
     // queued, and running a command they typed mid-answer would execute it out
     // of order.
-    if (queued === undefined && raw.startsWith('/') && dispatchSlash(raw)) {
+    if (fromComposer && goalText === null && planText === null && raw.startsWith('/') && dispatchSlash(raw)) {
       setInput('')
       editorClear(composer.current)
       setCompleteDismissed('')
@@ -1509,7 +1583,7 @@ export function SessionsView({
     // A continuation is never a mid-turn note: it starts the turn the previous
     // one ended without, so the busy guard (and its "type an addition" path)
     // does not apply — `busy` is still true in this closure's finally.
-    if (queued === undefined && (busy || inflight.current)) {
+    if (fromComposer && (busy || inflight.current)) {
       void sendIntoRunningTurn(raw, tray)
       return
     }
@@ -1659,6 +1733,15 @@ export function SessionsView({
       // stream's rendering stops; the server-side turn is not cancelled.
       const sid = id
       inflightSid.current = sid
+      if (goalTarget) {
+        await api.controlConversation(sid, { action: 'create', objective: prompt, token_budget: budget?.tokens })
+        await refreshControl(sid)
+        // Published: the bar above the composer takes over from the chip, and
+        // the draft that carried the objective leaves with the command.
+        if (fromComposer) { setInput(''); setArmed(null); clearPending() }
+        return
+      }
+      if (planText !== null) { await api.controlConversation(sid, { action: 'mode', planning: true }); await refreshControl(sid) }
       const live = () => isLiveSession(sid, activeIdRef.current)
       setBusy(true)
       const replyKey = localMsgId()
@@ -1666,8 +1749,9 @@ export function SessionsView({
         // A continuation has no composer draft behind it: the text came from
         // the parked notes, and whatever is in the editor now was typed after
         // this turn started — it must survive.
-        if (queued === undefined) {
+        if (fromComposer) {
           setInput('')
+          setArmed(null)
           clearPending()
         }
         // Sending is an explicit "show me the answer", so re-pin the view.
@@ -1847,6 +1931,7 @@ export function SessionsView({
         // A continuation: the server drains its parked notes as this turn's
         // input, so the prompt above is display only and cannot double-post.
         queued !== undefined,
+        planText !== null ? 'plan' : undefined,
       )
       flushStream()
       patch((m) => ({ ...m, streaming: false, status: undefined }))
@@ -2003,6 +2088,87 @@ export function SessionsView({
     }
   }
 
+  /** Pick a mode: the token leaves the editor and a chip beside the actions
+   *  carries it until the task is published. Whatever followed the token stays
+   *  as the draft, so `/goal fix the login` picked from the menu keeps
+   *  "fix the login" as the objective instead of throwing it away. */
+  function armMode(mode: ComposerMode) {
+    removeModeCommand()
+    setArmed(mode)
+    setGoalEditor(null)
+    composer.current?.focus()
+  }
+
+  function openGoalEditor() {
+    if (goal && activeId) setGoalEditor({ sid: activeId, id: goal.id, text: goal.text })
+  }
+
+  async function ensureControlSession() {
+    if (activeIdRef.current) return activeIdRef.current
+    const created = await api.createSession(t('sessions.goal.label'), project || selectedProject || undefined, team)
+    if (permission !== 'auto') await api.patchSession(created.id, { permission_mode: permission })
+    setSession(created)
+    setSessions((ls) => [created, ...ls])
+    onOpenSession(created.id)
+    activeIdRef.current = created.id
+    return created.id
+  }
+
+  async function setPlanning(planning: boolean) {
+    try {
+      const sid = await ensureControlSession()
+      await api.controlConversation(sid, { action: 'mode', planning })
+      await refreshControl(sid)
+    } catch (error) { toastError(error) }
+  }
+
+  // Delete only the slash token. DOM Range adjustment preserves attachment
+  // pills and the selection in the body, including split text nodes.
+  function removeModeCommand(entire = false) {
+    const el = composer.current
+    if (!el) return
+    const prefix = /^\s*\/\S*\s?/.exec(editorTextOf(el))
+    if (!prefix) return
+    const selection = document.getSelection()
+    const saved = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null
+    const walker = editorTextWalker(el)
+    let left = entire ? editorTextOf(el).length : prefix[0].length
+    let node: Node | null
+    while (left > 0 && (node = walker.nextNode())) {
+      if (node.nodeType === Node.TEXT_NODE) { const n = Math.min(left, (node as Text).length); (node as Text).deleteData(0, n); left -= n }
+      else left--
+    }
+    el.focus()
+    if (saved && el.contains(saved.startContainer)) { selection?.removeAllRanges(); selection?.addRange(saved) }
+    setInput(editorTextOf(el)); setCaret(editorCaretOffset(el)); setCompleteDismissed('')
+  }
+
+  async function changeGoal(action: 'pause' | 'resume' | 'clear' | 'stop' | 'edit', objective?: string, tokenBudget?: number) {
+    const sid = activeIdRef.current
+    if (!sid || !goal || goalAction.current) return false
+    goalAction.current = goal.id; setPendingGoalAction(goal.id)
+    try {
+      if (action === 'clear') {
+        const ok = await confirmDialog({
+          title: t('sessions.goal.clear'),
+          message: t('sessions.goal.clearConfirm'),
+          confirmLabel: t('sessions.goal.clear'),
+        })
+        if (!ok || activeIdRef.current !== sid) return false
+      }
+      await api.controlConversation(sid, { action, goal_id: goal.id, objective, token_budget: tokenBudget })
+      await refreshControl(sid)
+      return true
+    } catch (error) { toastError(error); return false }
+    finally { goalAction.current = null; setPendingGoalAction(null) }
+  }
+
+  async function confirmProposal() {
+    if (!activeId || !controlState?.proposal_version) return
+    try { await api.controlConversation(activeId, { action: 'confirm', version: controlState.proposal_version }); await refreshControl(activeId) }
+    catch (error) { toastError(error) }
+  }
+
   // TUI-parity slash commands: the ones that act inside this view (new
   // thread, export, clear) plus short hops to the views backing the REPL's
   // informational verbs (/cost → system, /model → models registry…). Not
@@ -2015,12 +2181,19 @@ export function SessionsView({
     return [
       { id: 'cmd:new', group: grp, label: '/new', hint: t('sessions.cmdNew'), run: () => newChat() },
       { id: 'cmd:export', group: grp, label: '/export', hint: t('sessions.cmdExport'), run: exportSession },
-      { id: 'cmd:clear', group: grp, label: '/clear', hint: t('sessions.cmdClear'), run: () => { clearPending(); setInput('') } },
+      { id: 'cmd:clear', group: grp, label: '/clear', hint: t('sessions.cmdClear'), run: () => { clearPending(); setInput(''); setArmed(null) } },
       { id: 'cmd:cost', group: grp, label: '/cost', hint: t('sessions.cmdCost'), run: go('settings:system') },
       { id: 'cmd:context', group: grp, label: '/context', hint: t('sessions.cmdContext'), run: go('settings:system') },
       { id: 'cmd:doctor', group: grp, label: '/doctor', hint: t('sessions.cmdDoctor'), run: go('settings:system') },
       { id: 'cmd:model', group: grp, label: '/model', hint: t('sessions.cmdModel'), run: go('settings:models') },
       { id: 'cmd:tasks', group: grp, label: '/tasks', hint: t('sessions.cmdTasks'), run: go('control') },
+      { id: 'cmd:goal', group: grp, label: '/goal', hint: t('sessions.goal.hint'), run: () => armMode('goal') },
+      // While planning is on the pick keeps its old meaning and leaves the
+      // mode; otherwise it arms the chip and the send decides what to plan.
+      { id: 'cmd:plan', group: grp, label: '/plan', hint: t('sessions.plan.hint'), run: () => {
+        if (controlState?.planning) { void setPlanning(false); setArmed(null); removeModeCommand(); return }
+        armMode('plan')
+      } },
       { id: 'cmd:plans', group: grp, label: '/plans', hint: t('sessions.cmdPlans'), run: go('control:plans') },
       {
         id: 'cmd:read',
@@ -2091,11 +2264,17 @@ export function SessionsView({
     run: () => insertAtRef(f),
   }))
 
+  // The `/` menu names a command, so it closes once whitespace follows the
+  // token: what comes next is that command's argument, not another verb. A
+  // bare `/plan` or `/goal` keeps it open — suppressing the menu on the
+  // keystroke that completes the word was what made both commands unpickable
+  // exactly when they were fully typed. Matching is word-start (`rankWords`),
+  // not the palette's subsequence: `/pla` must offer the two plan verbs, not
+  // every destination whose English keywords happen to spell p…l…a.
+  const slashArg = slashArgStarted(input)
   const completeShown: CompletionItem[] = (() => {
-    if (input === completeDismissed) return []
-    if (slashToken !== null) {
-      return rank(commands, slashToken, (c) => [c.label, c.id.replace(':', ' '), 'alias' in c ? (c as Command).alias ?? '' : ''])
-    }
+    if (input === completeDismissed || slashArg) return []
+    if (slashToken !== null) return rankWords(commands, slashToken, slashWords)
     if (atTok) return fileItems
     return []
   })()
@@ -2171,6 +2350,7 @@ export function SessionsView({
   }
 
   function acceptCompletion(item: CompletionItem) {
+    if (item.id === 'cmd:plan' || item.id === 'cmd:goal') { item.run(); return }
     if (item.id.startsWith('file:')) {
       item.run()
       return
@@ -2303,6 +2483,23 @@ export function SessionsView({
   const contextWindow = activeModel?.context_window ?? 0
   const modelName = activeModel?.alias || newestUsage?.model || ''
 
+  // Whose context the rail and the dock print. The entry model only routes
+  // and judges — its window is not the one the reader is watching fill up.
+  // Every agent working this thread reports a request-scoped sample per model
+  // call, so those win: all live agents first (a team or a fan-out has one
+  // window each), the last one that ran second, and the entry model's own
+  // turn only for a thread that never dispatched anything.
+  const agentCtxs = agentContextSamples(sessionTasks)
+  const primaryCtx = agentCtxs[0]
+  const contextTokens = primaryCtx?.tokens ?? newestUsage?.tokens ?? 0
+  const contextWin = primaryCtx ? primaryCtx.window : contextWindow
+  const contextAgent = primaryCtx ? prettyAgent(primaryCtx.agent) : ''
+  const contextAgents: ContextAgentView[] = agentCtxs.map((sample) => ({
+    name: prettyAgent(sample.agent),
+    tokens: sample.tokens,
+    window: sample.window,
+  }))
+
   // The open thread's directory, read-only: the foot row under the box keeps
   // its place on every surface — 新对话 picks a directory there, 工作空间
   // picks one, and a thread shows where it runs — so moving between them does
@@ -2318,16 +2515,20 @@ export function SessionsView({
   })()
 
   // What the dock's start pane says before anything is picked: where this
-  // thread runs, how much window the last turn carried, and how many files it
-  // changed. The worktree is the real path the transcript's file links resolve
-  // against; a thread without one runs in its project's directory.
+  // thread runs, how much window the last request carried, and how many files
+  // it changed. The worktree is the real path the transcript's file links
+  // resolve against; a thread without one runs in its project's directory.
+  // The context caption names the agent when the sample is its own, so the
+  // number is never mistaken for the entry model's.
   const dockEnv: DockEnv = {
     machine: railMachine,
     path: session?.worktree || threadDir,
     branch: session?.branch || '',
-    contextTokens: newestUsage?.tokens ?? 0,
-    contextWindow,
-    model: modelName,
+    contextTokens,
+    contextWindow: contextWin,
+    model: contextAgent || modelName,
+    contextAgent,
+    contextAgents,
     changes: diff
       ? {
           files: diff.changes.length,
@@ -2461,9 +2662,11 @@ export function SessionsView({
                 diff={diff}
                 tasks={sessionTasks ?? []}
                 nodes={nodes}
-                contextTokens={newestUsage?.tokens ?? 0}
-                contextWindow={contextWindow}
+                contextTokens={contextTokens}
+                contextWindow={contextWin}
                 modelName={modelName}
+                contextAgent={contextAgent}
+                contextAgents={contextAgents}
                 working={busy}
                 machine={railMachine}
                 onOpenDiff={openChanges}
@@ -2543,7 +2746,7 @@ export function SessionsView({
             const task = tasksById.get(id)
             return task ? <TaskProgress key={id} task={task} /> : null
           })}
-          {runSummary && <RunSummaryRow run={runSummary} onOpenTask={openTaskInPlace} />}
+          {runSummary && <RunSummaryRow key={`${session?.id}:${msgs.at(-1)?.k}`} run={runSummary} onOpenTask={openTaskInPlace} />}
         </div>
 
         {/* The prompt rail. A long thread scrolls past dozens of replies and
@@ -2698,7 +2901,14 @@ export function SessionsView({
               composer={composer}
               input={input}
               pendingCount={pending.length}
-              busy={busy}
+              placeholder={
+                busy && goalActive(shownGoal)
+                  ? ''
+                  : t(armed === 'goal' ? 'sessions.goal.hint'
+                    : armed === 'plan' ? 'sessions.plan.hint'
+                    : busy ? 'sessions.placeholderRunning'
+                    : 'sessions.placeholder')
+              }
               completeShown={completeShown}
               completeIdx={completeIdx}
               setInput={setInput}
@@ -2728,6 +2938,8 @@ export function SessionsView({
                 project={session?.project || activeProject || ''}
               />
               <PermissionPicker value={permission} onChange={pickPermission} />
+              {(armed === 'goal' || goalEditor?.sid === activeId) && <button type="button" class="composer-goal-trigger" title={t('sessions.goal.hint')} onClick={() => { setGoalEditor(null); setArmed(null); if (goalDraft !== null) removeModeCommand() }}><Icon name="target" size={16} />{t('sessions.goal.label')}</button>}
+              {(armed === 'plan' || controlState?.planning) && <button type="button" class="composer-goal-trigger composer-plan-trigger" title={t(armed === 'plan' && !controlState?.planning ? 'sessions.plan.hint' : 'sessions.plan.exit')} onClick={() => { if (controlState?.planning) void setPlanning(false); setArmed(null); if (planArgument(input) !== null) removeModeCommand() }}><Icon name="lightbulb" size={16} />{t('sessions.plan.label')}</button>}
               {/* The model switch, immediately left of Send — the row's right
                   edge is where you reach for before sending, and "which model"
                   is the one more thing that decision wants asked. WorkBuddy's
@@ -2751,18 +2963,38 @@ export function SessionsView({
                 </button>
               )}
             </div>
-            {/* The pet stands beside the box, not above it: parked over the
-                box it cost a whole row of vertical space on the one page where
-                the empty canvas is the point, and it read as a status line for
-                a thread that has not started. Anchored to the box's right edge
-                it stays with the control it belongs to — the box moves when a
-                header card opens, and the pet moves with it. */}
-            <ComposerPet
-              working={busy}
-              team={team}
-              onTeam={pickTeam}
-              onManage={() => navigateView('settings:agents')}
-            />
+            {goalEditor?.sid === activeId && <section class="composer-proposal">
+              <textarea aria-label={t('sessions.goal.edit')} value={goalEditor.text} onInput={e => setGoalEditor({ ...goalEditor, text: e.currentTarget.value })} />
+              <button type="button" disabled={!goalEditor.text.trim()} onClick={async () => {
+                try { await api.controlConversation(goalEditor.sid, { action: 'edit', goal_id: goalEditor.id, objective: goalEditor.text }); await refreshControl(goalEditor.sid); setGoalEditor(null) } catch (error) { toastError(error) }
+              }}>{t('common.save')}</button>
+              <button type="button" onClick={() => setGoalEditor(null)}>{t('common.cancel')}</button>
+            </section>}
+            {legacyGoal && <section class="composer-proposal"><span>{t('sessions.goal.legacy')}</span><button type="button" onClick={async () => {
+              if (!activeId) return
+              try { await api.controlConversation(activeId, { action: 'create', objective: legacyGoal.text }); const cached = JSON.parse(sessionStorage.getItem('openpanda.composerGoals') || '{}'); delete cached[activeId]; sessionStorage.setItem('openpanda.composerGoals', JSON.stringify(cached)); await refreshControl(activeId) } catch (error) { toastError(error) }
+            }}>{t('sessions.goal.restore')}</button></section>}
+            {controlState?.planning && controlState.proposal && <section class="composer-proposal">
+              <details><summary>{t('sessions.plan.proposal')} · {controlState.proposal_version}</summary><pre>{controlState.proposal}</pre></details>
+              <button type="button" onClick={() => void confirmProposal()}>{t(controlState.goal?.paused_by_plan ? 'sessions.plan.implementGoal' : 'sessions.plan.implement')}</button>
+            </section>}
+            <div class="composer-head">
+              <ComposerPet
+                working={busy}
+                team={team}
+                onTeam={pickTeam}
+                onManage={() => navigateView('settings:agents')}
+              />
+              {shownGoal && (
+                <GoalBar goal={shownGoal} pending={pendingGoalAction === shownGoal.id}
+                  onStart={() => void changeGoal('resume')}
+                  onPause={() => void changeGoal('pause')}
+                  onCancel={() => void changeGoal('clear')}
+                  onStop={() => void changeGoal('stop')}
+                  onEdit={openGoalEditor}
+                />
+              )}
+            </div>
           </div>
           {/* Below the box, on one line: where the thread will run, then the
               keyboard legend. The roster used to sit here too; it now hangs

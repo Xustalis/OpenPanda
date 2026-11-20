@@ -2,7 +2,7 @@
 export interface Expansion { open: boolean; rows: Record<string, boolean> }
 const states = new Map<string, Expansion>()
 export function expansion(scope?: string): Expansion {
-  if (!scope) return { open: true, rows: {} }
+  if (!scope) return { open: false, rows: {} }
   const cached = states.get(scope)
   if (cached) return cached
   try {
@@ -11,7 +11,7 @@ export function expansion(scope?: string): Expansion {
       return { open: value.open, rows: Object.fromEntries(Object.entries(value.rows).filter(([, v]) => typeof v === 'boolean')) as Record<string, boolean> }
     }
   } catch { /* storage is optional */ }
-  return { open: true, rows: {} }
+  return { open: false, rows: {} }
 }
 export function rememberExpansion(scope: string | undefined, value: Expansion): Expansion {
   if (scope) {

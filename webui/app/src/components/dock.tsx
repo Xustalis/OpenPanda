@@ -51,7 +51,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { compactNumber } from '../format/number'
 import { t } from '../i18n'
 import { Icon, type IconName } from './icons'
-import { contextShare } from './session-rail-stats'
+import { contextShare, contextUsage, type ContextAgentView } from './session-rail-stats'
 
 /** What the column can show. The first three are the thread's tools, reached
  *  from the left group in the head; the last four are the places a tab opens.
@@ -78,6 +78,15 @@ export interface DockEnv {
   contextTokens?: number
   contextWindow?: number
   model?: string
+  /** The thread's working agent, when the context sample is its own rather
+   *  than the entry model's. The caption already prints `model` (the agent's
+   *  display name in that case); this flag only switches the explanatory
+   *  sentence, which would otherwise call an agent a model. */
+  contextAgent?: string
+  /** Every agent working this thread, primary first. One entry keeps the
+   *  card's single-number shape; several turn it into a row per agent — a
+   *  team fills one window each and a lone percentage would hide the rest. */
+  contextAgents?: ContextAgentView[]
   /** The worktree's change roll-up, when it has one. */
   changes?: { files: number; insertions: number; deletions: number }
 }
@@ -184,6 +193,10 @@ export function Dock(props: DockProps) {
   const share = contextShare(tokens, env?.contextWindow ?? 0)
   const used = tokens > 0 ? compactNumber(tokens) : ''
   const windowLabel = (env?.contextWindow ?? 0) > 0 ? compactNumber(env!.contextWindow!) : ''
+  // A team fills one window per agent. One sample keeps the single-number
+  // card; several become a row each, because the number that matters is the
+  // one closest to its ceiling and a lone bar would hide the others.
+  const agents = env?.contextAgents ?? []
   const changeHint =
     env?.changes && env.changes.files > 0
       ? t('dock.changesHintCount', {
@@ -192,6 +205,16 @@ export function Dock(props: DockProps) {
           del: String(env.changes.deletions),
         })
       : t('dock.changesHint')
+  // The agent owns the number while it works; the sentence under the gauge
+  // has to say so, or "这个模型没有已知的上下文窗口" reads as a broken model
+  // row instead of a CLI that does not report its window.
+  const contextHint = env?.contextAgent
+    ? (env.contextWindow ?? 0) > 0
+      ? t('dock.contextAgentNote', { agent: env.contextAgent })
+      : t('dock.contextAgentNoWindow', { agent: env.contextAgent })
+    : share === null
+      ? t('dock.contextNoWindow')
+      : t('dock.contextNote')
 
   async function copyPath(path: string) {
     try {
@@ -249,31 +272,66 @@ export function Dock(props: DockProps) {
           {tokens > 0 && (
             <>
               {(env?.machine || env?.path || env?.branch) && <div class="dock-facts-rule" />}
-              <div
-                class="dock-ctx"
-                title={share === null ? t('dock.contextNoWindow') : t('dock.contextNote')}
-              >
-                <div class="dock-ctx-head">
-                  <span class="dock-ctx-label">{t('dock.context')}</span>
-                  <span class={`dock-ctx-pct${share !== null && share >= 80 ? ' is-high' : ''}`}>
-                    {share === null ? '—' : `${share}%`}
-                  </span>
-                </div>
-                <span class="dock-ctx-meter" aria-hidden="true">
-                  <i style={`width:${share ?? 0}%`} />
-                </span>
-                <div class="dock-ctx-foot">
-                  <span class="dock-ctx-num mono">
-                    {used}
-                    {windowLabel ? ` / ${windowLabel}` : ''}
-                  </span>
-                  {env?.model && (
-                    <span class="dock-ctx-model" title={env.model}>
-                      {env.model}
-                    </span>
+              {agents.length > 1 ? (
+                <div class="dock-ctx dock-ctx-multi">
+                  <div class="dock-ctx-head">
+                    <span class="dock-ctx-label">{t('dock.context')}</span>
+                  </div>
+                  <div class="dock-ctx-list">
+                    {agents.slice(0, 4).map((agent) => {
+                      const agentShare = contextShare(agent.tokens, agent.window)
+                      const high = agentShare !== null && agentShare >= 80
+                      return (
+                        <div key={agent.name} class="dock-ctx-agent">
+                          <div class="dock-ctx-agent-head">
+                            <span class="dock-ctx-agent-name" title={agent.name}>
+                              {agent.name}
+                            </span>
+                            <span class={`dock-ctx-agent-pct${high ? ' is-high' : ''}`}>
+                              {agentShare === null ? '—' : `${agentShare}%`}
+                            </span>
+                          </div>
+                          <span class="dock-ctx-meter" aria-hidden="true">
+                            <i style={`width:${agentShare ?? 0}%`} />
+                          </span>
+                          <div class="dock-ctx-agent-foot">{contextUsage(agent.tokens, agent.window)}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {agents.length > 4 && (
+                    <p class="dock-ctx-more">
+                      {t('sessionRail.contextMoreAgents', { n: String(agents.length - 4) })}
+                    </p>
                   )}
                 </div>
-              </div>
+              ) : (
+                <div
+                  class="dock-ctx"
+                  title={contextHint}
+                >
+                  <div class="dock-ctx-head">
+                    <span class="dock-ctx-label">{t('dock.context')}</span>
+                    <span class={`dock-ctx-pct${share !== null && share >= 80 ? ' is-high' : ''}`}>
+                      {share === null ? '—' : `${share}%`}
+                    </span>
+                  </div>
+                  <span class="dock-ctx-meter" aria-hidden="true">
+                    <i style={`width:${share ?? 0}%`} />
+                  </span>
+                  <div class="dock-ctx-foot">
+                    <span class="dock-ctx-num mono">
+                      {used}
+                      {windowLabel ? ` / ${windowLabel}` : ''}
+                    </span>
+                    {env?.model && (
+                      <span class="dock-ctx-model" title={env.model}>
+                        {env.model}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </section>

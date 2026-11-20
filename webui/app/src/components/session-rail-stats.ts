@@ -17,6 +17,8 @@
  *  Both parsers are deliberately conservative: a number the rail cannot
  *  stand behind is left out rather than guessed. */
 
+import { compactNumber } from '../format/number.ts'
+
 export interface PatchFileStat {
   insertions: number
   deletions: number
@@ -180,4 +182,88 @@ export function contextShare(used: number, window: number): number | null {
   if (!Number.isFinite(used) || !Number.isFinite(window)) return null
   if (window <= 0 || used <= 0) return null
   return Math.min(100, Math.round((used / window) * 100))
+}
+
+/** The `used / window` caption the context rows print. A window the catalogue
+ *  does not know drops the denominator, not the count. */
+export function contextUsage(tokens: number, window: number): string {
+  const used = tokens > 0 ? compactNumber(tokens) : '—'
+  const total = window > 0 ? compactNumber(window) : ''
+  return total ? `${used} / ${total}` : tokens > 0 ? used : ''
+}
+
+/** The subset of a task row the context selector reads. Declared here so the
+ *  rule stays testable without dragging the API client into a DOM test. */
+export interface AgentContextTask {
+  agent?: string
+  state?: string
+  context_tokens?: number
+  context_model?: string
+  context_window?: number
+}
+
+/** One agent's context reading, ready for the rail and the dock. */
+export interface AgentContextSample {
+  /** The adapter key the sample belongs to ("claude_code"). */
+  agent: string
+  /** Prompt tokens of that agent's newest model request. */
+  tokens: number
+  /** The window the catalogue resolved for the model, 0 = unknown. */
+  window: number
+  /** The model id the adapter reported, "" when it names none. */
+  model: string
+  /** The task is still running, as opposed to the last one that ran. */
+  live: boolean
+}
+
+/** One agent's reading, as the rail and the dock print it. */
+export interface ContextAgentView {
+  /** The agent's display name ("Claude Code"), never the adapter key. */
+  name: string
+  /** Prompt tokens of that agent's newest model request. */
+  tokens: number
+  /** The window the catalogue resolved for the model, 0 = unknown. */
+  window: number
+}
+
+/** States in which a task still owns the thread's work. Mirrors
+ *  `isActiveState` in task-activity; kept as a local set so this module stays
+ *  free of the i18n/event-parser chain. */
+const ACTIVE_STATES = new Set(['submitted', 'queued', 'dispatched', 'waiting_context', 'running'])
+
+/** Whose context the thread should print.
+ *
+ *  The entry model's own turn used to be the only answer, but the reader is
+ *  watching an agent work — the agent is the one with a window to fill, and
+ *  its number is the one that predicts a compaction. A thread can have
+ *  several agents running at once (a team, a fan-out), and each has its own
+ *  window, so every live task that reported a sample is returned, newest
+ *  first. With nothing running, the most recent sample still answers "how
+ *  full did the last run get", and a thread that never dispatched anything
+ *  returns [] so the caller keeps the entry model's turn.
+ *
+ *  `tasks` arrives newest-first (the panel sorts by updated_at), so the first
+ *  live row is the current job and the first row overall is the last one.
+ */
+export function agentContextSamples(
+  tasks: readonly AgentContextTask[] | null | undefined,
+): AgentContextSample[] {
+  if (!tasks || tasks.length === 0) return []
+  const live: AgentContextSample[] = []
+  let idle: AgentContextSample | null = null
+  for (const task of tasks) {
+    const tokens = task.context_tokens ?? 0
+    if (tokens <= 0 || !task.agent) continue
+    const sample: AgentContextSample = {
+      agent: task.agent,
+      tokens,
+      window: task.context_window ?? 0,
+      model: task.context_model ?? '',
+      live: ACTIVE_STATES.has(task.state ?? ''),
+    }
+    if (sample.live) live.push(sample)
+    else if (!idle) idle = sample
+  }
+  if (live.length > 0) return live
+  return idle ? [idle] : []
 }

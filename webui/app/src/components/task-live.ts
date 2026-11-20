@@ -106,6 +106,21 @@ function eventData(e: LiveEvent): Record<string, unknown> {
   }
 }
 
+/** The latest message from the running agent. Nested agents and old attempts
+ * remain available in the execution log. */
+export function latestAgentText(events: LiveEvent[], attemptId?: string): string {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!
+    if (event.type !== 'agent_event') continue
+    const data = eventData(event)
+    if (attemptId && data.attempt_id && data.attempt_id !== attemptId) continue
+    if (data.ev === 'text' && !data.parent && typeof data.text === 'string' && data.text.trim()) {
+      return data.text
+    }
+  }
+  return ''
+}
+
 function firstLine(text?: string): string {
   if (!text) return ''
   return text

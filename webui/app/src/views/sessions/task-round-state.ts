@@ -102,6 +102,9 @@ export function projectTaskRounds(msgs: ChatMsg[], tasks: Task[] | null, openOpe
     add(task.id, task.operation_id)
   }
   for (const msg of msgs) {
+    // Controller replies can share the task round ID while carrying their
+    // own goal audit or plan outcome. Keep those turns in the transcript.
+    if (msg.idempotency_key?.startsWith('goal:') || msg.idempotency_key?.startsWith('plan:')) continue
     if (msg.round_id && rounds.has(`op:${msg.round_id}`)) {
       hidden.add(msg.k) // stored report remains available to replay/export
       continue

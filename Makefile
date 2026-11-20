@@ -271,7 +271,7 @@ fmt:
 
 fmt-check:
 	@git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "fmt-check: not a git worktree, so 'git ls-files' has nothing to check"; exit 1; }
-	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
+	@unformatted=$$(git ls-files -z '*.go' | xargs -0 -n 32 gofmt -l) || { echo "gofmt check failed"; exit 1; }; \
 	if [ -n "$$unformatted" ]; then \
 		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
 	fi

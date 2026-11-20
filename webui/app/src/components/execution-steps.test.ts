@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { executionAttribution, operationSteps, taskSteps, upsertActivity } from './execution-steps.ts'
+import { executionAttribution, operationSteps, rowExpanded, taskSteps, upsertActivity } from './execution-steps.ts'
 import type { Task } from '../api/client.ts'
 import { expansion, rememberExpansion } from './execution-expansion.ts'
 import { mergeLive } from './task-live.ts'
@@ -43,7 +43,8 @@ test('activity completion updates the same row preserving order',()=>{
  assert.equal(operationSteps(rows)[0]!.output,'done')
 })
 test('manual collapse survives completion remount and scope isolation',()=>{
- assert.equal(expansion('test-new').open,true)
+ assert.equal(expansion('test-new').open,false)
+ assert.equal(expansion().open,false)
  rememberExpansion('test-run',{open:true,rows:{tool:false}})
  assert.equal(expansion('test-run').rows.tool,false)
  assert.equal(expansion('test-other').rows.tool,undefined)
@@ -58,6 +59,15 @@ test('actual result and current attempt win over legacy and late executor events
  assert.deepEqual(executionAttribution(task,events),{executor:'Windows',mode:'IMMEDIATE'})
  assert.equal(executionAttribution({...task,result:''},events).executor,'Mac')
  assert.equal(executionAttribution({...task,result:''},[event(5,{profile:{coordination:'unknown'}},'adapter_execution_profile')]).mode,'')
+})
+test('the chain of thought never rides a batch expansion', () => {
+ const thought = { id: 'reasoning', title: 'Thought', status: 'info', ts: 0, thought: true }
+ assert.equal(rowExpanded(thought, { open: true, rows: {} }), false)
+ assert.equal(rowExpanded(thought, { open: true, rows: { reasoning: true } }), false)
+ const tool = { id: 'tool-1', title: 'Read', status: 'info', ts: 0 }
+ assert.equal(rowExpanded(tool, { open: false, rows: {} }), false)
+ assert.equal(rowExpanded(tool, { open: true, rows: {} }), true)
+ assert.equal(rowExpanded(tool, { open: true, rows: { 'tool-1': false } }), false)
 })
 test('legacy null and scalar event payloads do not break archived timelines', () => {
  const events = ['null', '42', '[]', '"legacy note"'].map((data, i) => ({id: i+1, ts: i+1, type:'progress', data}))

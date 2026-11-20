@@ -18,6 +18,9 @@ import { t } from '../../i18n'
 export interface CompletionItem {
   id: string
   label: string
+  /** The palette's English keywords, carried through so the `/` menu can match
+   *  `/queue` to 队列 in a locale whose label says 队列 (see slashWords). */
+  alias?: string
   hint?: string
   /** The palette marks the live value with a check icon instead of a hint;
    *  here it degrades to the same ✓ the hint used to carry. */
@@ -30,7 +33,7 @@ interface ComposerInputProps {
   composer: RefObject<HTMLDivElement>
   input: string
   pendingCount: number
-  busy: boolean
+  placeholder: string
   completeShown: CompletionItem[]
   completeIdx: number
   setInput(value: string): void
@@ -50,7 +53,7 @@ interface ComposerInputProps {
 /** The rich editor and its completion menu. The session owns the draft and
  *  upload queue; this surface owns DOM, caret, paste and keyboard handling. */
 export function ComposerInput({
-  composer, input, pendingCount, busy, completeShown, completeIdx,
+  composer, input, pendingCount, placeholder, completeShown, completeIdx,
   setInput, setCaret, setCompleteCursor, setCompleteDismissed, acceptCompletion,
   syncPending, removePending, zoomPill, peekPill, unpeek, addFiles, send,
 }: ComposerInputProps) {
@@ -90,7 +93,7 @@ export function ComposerInput({
         role="textbox"
         aria-multiline="true"
         aria-label={t('sessions.placeholder')}
-        data-placeholder={busy ? t('sessions.placeholderRunning') : t('sessions.placeholder')}
+        data-placeholder={placeholder}
         onInput={(e) => {
           useBrParagraphSeparator()
           const el = e.currentTarget as HTMLDivElement

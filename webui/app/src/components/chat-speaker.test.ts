@@ -117,10 +117,7 @@ describe('trailingRunSummary', () => {
 
   it('closes a round the panda dispatched and an employee finished', () => {
     assert.deepEqual(trailingRunSummary([ask, dispatch, done('claude_code', '跑 HelloWorld')]), {
-      agents: ['claude_code'],
-      titles: ['跑 HelloWorld'],
-      state: 'done',
-      outcomes: ['done'],
+      reports: [{ agent: 'claude_code', title: '跑 HelloWorld', state: 'done', body: '好了。' }],
       ref: 't1',
       refKind: 'task',
     })
@@ -133,16 +130,14 @@ describe('trailingRunSummary', () => {
       done('claude_code', '阶段 1'),
       done('codex', '阶段 2'),
     ])
-    assert.deepEqual(got?.agents, ['claude_code', 'codex'])
-    assert.deepEqual(got?.titles, ['阶段 1', '阶段 2'])
-    assert.deepEqual(got?.outcomes, ['done', 'done'])
+    assert.deepEqual(got?.reports.map(({ agent, title, state }) => [agent, title, state]), [
+      ['claude_code', '阶段 1', 'done'], ['codex', '阶段 2', 'done'],
+    ])
     assert.equal(got?.ref, 'p1')
     assert.equal(got?.refKind, 'plan')
   })
 
   it('keeps every report in the round, not just the one that ended it', () => {
-    // Two home, one failed: the round's state is the last report's, but the
-    // batch's shape is the whole list — one failure must not speak for all.
     const got = trailingRunSummary([
       ask,
       dispatch,
@@ -150,8 +145,8 @@ describe('trailingRunSummary', () => {
       done('codex', 'b'),
       { role: 'assistant', kind: 'answer', text: '[failed] @deepseek_harness · c\n\n没权限。' },
     ])
-    assert.equal(got?.state, 'failed')
-    assert.deepEqual(got?.outcomes, ['done', 'done', 'failed'])
+    assert.deepEqual(got?.reports.map(({ state }) => state), ['done', 'done', 'failed'])
+    assert.equal(got?.reports.at(-1)?.body, '没权限。')
   })
 
   it('leaves an unsettled report out of the tally', () => {
@@ -161,7 +156,23 @@ describe('trailingRunSummary', () => {
       { role: 'assistant', kind: 'answer', text: '[running] @codex · a\n\n在跑。' },
       done('codex', 'a'),
     ])
-    assert.deepEqual(got?.outcomes, ['done'])
+    assert.deepEqual(got?.reports.map(({ state }) => state), ['done'])
+  })
+
+  it('uses the latest report per referenced task without guessing a link for a batch', () => {
+    const got = trailingRunSummary([
+      ask,
+      dispatch,
+      { ...dispatch, ref: 't2' },
+      { role: 'assistant', kind: 'answer', ref: 't1', text: '[failed] @codex · a\n\nFirst attempt.' },
+      { role: 'user', text: '[done] quoted example' },
+      { ...done('codex', 'a'), ref: 't1' },
+      { ...done('pi', 'b'), ref: 't2' },
+    ])
+    assert.deepEqual(got?.reports.map(({ title, state, body }) => [title, state, body]), [
+      ['a', 'done', '好了。'], ['b', 'done', '好了。'],
+    ])
+    assert.equal(got?.ref, '')
   })
 
   it('says nothing while the round is still open', () => {
@@ -182,7 +193,7 @@ describe('trailingRunSummary', () => {
       dispatch,
       { role: 'assistant', kind: 'answer', text: '[review] @codex · 等确认\n\n需要你点头。' },
     ])
-    assert.equal(got?.state, 'review')
+    assert.equal(got?.reports[0]?.state, 'review')
   })
 })
 

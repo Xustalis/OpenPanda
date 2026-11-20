@@ -28,8 +28,16 @@ const FOCUSABLE = [
  *  - Tab / Shift+Tab wrap around at the edges.
  *  - On deactivate: returns focus to the element that was active before the
  *    trap engaged.
+ *
+ * `initial` names the element to land on instead of the first focusable. A
+ * confirm dialog with checkboxes needs it: the first focusable would be the
+ * first checkbox, and the safe answer to "delete?" is still 取消.
  */
-export function useModalFocus(ref: { current: HTMLElement | null }, active: boolean): void {
+export function useModalFocus(
+  ref: { current: HTMLElement | null },
+  active: boolean,
+  initial?: string,
+): void {
   useEffect(() => {
     if (!active) return
     const root = ref.current
@@ -38,7 +46,8 @@ export function useModalFocus(ref: { current: HTMLElement | null }, active: bool
     const restoreTo = (document.activeElement as HTMLElement | null) ?? null
     const focusables = () => Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE))
 
-    ;(focusables()[0] ?? root).focus()
+    const first = initial ? root.querySelector<HTMLElement>(initial) : null
+    ;(first ?? focusables()[0] ?? root).focus()
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return

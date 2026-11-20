@@ -38,6 +38,14 @@ describe('task delivery', () => {
     assert.equal(deliveryFacts({ state: 'done', verification: 'unrecognized' }).verification, 'unknown')
   })
 
+  it('folds many short lines even when the character budget is not reached', () => {
+    const report = Array.from({ length: 20 }, (_, index) => `- Output ${index + 1}`).join('\n')
+    const preview = deliveryPreview(report, 1600)
+    assert.ok(preview.more)
+    assert.ok(preview.text.includes('- Output 12\n'))
+    assert.ok(!preview.text.includes('- Output 13'))
+  })
+
   it('shows partial checks, failed tasks, reviews and explicit follow-up honestly', () => {
     assert.equal(deliveryFacts({ state: 'done', verification: 'partial' }).remaining, 'followup')
     assert.equal(deliveryFacts({ state: 'failed', verification: 'verified' }).remaining, 'failed')

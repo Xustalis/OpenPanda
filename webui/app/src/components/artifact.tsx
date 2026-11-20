@@ -24,7 +24,7 @@ function baseName(path: string): string {
   return i >= 0 ? path.slice(i + 1) : path
 }
 
-function saveBlob(blob: Blob, filename: string) {
+export function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

@@ -3,6 +3,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  agentContextSamples,
   contextShare,
   firstChangedLine,
   patchFileStats,
@@ -221,5 +222,61 @@ describe('contextShare', () => {
     assert.equal(contextShare(1_000, 0), null)
     assert.equal(contextShare(0, 200_000), null)
     assert.equal(contextShare(Number.NaN, 200_000), null)
+  })
+})
+
+describe('agentContextSamples', () => {
+  it('has no answer for a thread that never dispatched', () => {
+    assert.deepEqual(agentContextSamples(null), [])
+    assert.deepEqual(agentContextSamples([]), [])
+    assert.deepEqual(agentContextSamples([{ agent: 'claude_code', state: 'running' }]), [])
+  })
+
+  it('lists every live agent, newest first', () => {
+    // A team fills one window each; the rail lists them all, not just the
+    // first row — a single bar would hide the agent closest to compacting.
+    const samples = agentContextSamples([
+      { agent: 'claude_code', state: 'running', context_tokens: 40_000, context_window: 200_000, context_model: 'claude-sonnet-4-5' },
+      { agent: 'codex', state: 'running', context_tokens: 90_000, context_window: 272_000 },
+      { agent: 'opencode', state: 'done', context_tokens: 12_000, context_window: 200_000 },
+    ])
+    assert.deepEqual(samples.map((s) => s.agent), ['claude_code', 'codex'])
+    assert.deepEqual(samples[0], {
+      agent: 'claude_code',
+      tokens: 40_000,
+      window: 200_000,
+      model: 'claude-sonnet-4-5',
+      live: true,
+    })
+  })
+
+  it('keeps a live agent ahead of a newer finished one', () => {
+    const samples = agentContextSamples([
+      { agent: 'codex', state: 'done', context_tokens: 90_000, context_window: 272_000 },
+      { agent: 'claude_code', state: 'running', context_tokens: 40_000, context_window: 200_000 },
+    ])
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0]?.agent, 'claude_code')
+    assert.equal(samples[0]?.live, true)
+  })
+
+  it('falls back to the last agent that reported a sample when idle', () => {
+    const samples = agentContextSamples([
+      { agent: 'claude_code', state: 'done', context_tokens: 12_000, context_window: 200_000 },
+      { agent: 'codex', state: 'done', context_tokens: 80_000, context_window: 272_000 },
+    ])
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0]?.agent, 'claude_code')
+    assert.equal(samples[0]?.live, false)
+  })
+
+  it('skips rows with no reading rather than printing a zero', () => {
+    const samples = agentContextSamples([
+      { agent: 'claude_code', state: 'queued' },
+      { agent: 'codex', state: 'done', context_tokens: 5_000, context_window: 0 },
+    ])
+    assert.equal(samples.length, 1)
+    assert.equal(samples[0]?.agent, 'codex')
+    assert.equal(samples[0]?.window, 0)
   })
 })

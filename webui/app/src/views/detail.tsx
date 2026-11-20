@@ -183,12 +183,6 @@ export function DetailView({
   if (!task) return <p class="dim">{t('common.loading')}</p>
 
   const cancellable = !['done', 'failed', 'cancelled', 'expired'].includes(task.state)
-  // Incomplete work can continue or be rejected; approval cannot establish
-  // a missing postcondition. Preserve the legacy verdict-only shape too.
-  const needsFollowup =
-    task.state === 'review' &&
-    (task.needs_followup === true || parseResult(task.result ?? '')?.needs_followup === true ||
-      parseResult(task.result ?? '')?.verdict === 'continue')
   // A needs_changed_input park carries its failure in the review event, not in
   // result (no work was produced, so there is nothing to show there). Lift it
   // out of the timeline: a disabled Approve with no visible cause reads as a
@@ -196,6 +190,12 @@ export function DetailView({
   // hundreds of pixels below the fold.
   const blocked = task.state === 'review' && task.approval_disposition === 'needs_changed_input'
   const retry = task.retry_available === true
+  // Re-review can recover missing MAX evidence for the stored work. Retry
+  // still owns execution failures that need a fresh run.
+  const rejudge = task.needs_rejudge === true
+  const result = parseResult(task.result ?? '')
+  const needsFollowup = task.state === 'review' && !retry && !rejudge &&
+    (task.needs_followup === true || result?.needs_followup === true || result?.verdict === 'continue')
   // Read for every review state, not only the blocked banner: the verdict
   // block falls back to it when the result carries no reason of its own.
   const parkReason = task.state === 'review' ? task.review_reason || reviewReason(task.events ?? []) : ''
@@ -275,17 +275,19 @@ export function DetailView({
                   {t('detail.continue')}
                 </button>
               )}
-              {!retry && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
+              {!retry && !rejudge && !needsFollowup && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
               <button
                 class="btn primary"
                 disabled={busy || (blocked && !retry) || needsFollowup}
-                title={blocked && !retry ? t('detail.needsChangedInputHint') : needsFollowup ? t('detail.continueHint') : undefined}
+                title={rejudge ? t('detail.rejudgeHint') : blocked && !retry ? t('detail.needsChangedInputHint') : needsFollowup ? t('detail.continueHint') : undefined}
                 onClick={() => act(
-                  () => retry ? api.retryTask(task.id) : api.approve(task.id, scope),
-                  t(retry ? 'detail.retryStartedToast' : 'detail.approvedToast'),
+                  () => rejudge ? api.rejudgeTask(task.id) : retry ? api.retryTask(task.id) : api.approve(task.id, scope),
+                  t(rejudge ? 'detail.rejudgeStartedToast' : retry ? 'detail.retryStartedToast' : 'detail.approvedToast'),
                 )}
               >
-                {retry ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
+                {rejudge
+                  ? t(busy ? 'detail.rejudging' : 'detail.rejudge')
+                  : retry ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
               </button>
               <button class="btn danger" disabled={busy} onClick={() => setRejecting(true)}>
                 {t('detail.reject')}

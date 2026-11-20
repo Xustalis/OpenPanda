@@ -21,23 +21,22 @@
  */
 
 import type { ComponentChildren } from 'preact'
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useId, useMemo, useState } from 'preact/hooks'
 import { api, type PlanDetail, type Task, type TraceEvent } from '../api/client'
-import { useAsync, useChangeSignal, useTaskEvents, useTraceForTask } from '../hooks'
+import { useAsync, useChangeSignal, useTraceForTask } from '../hooks'
 import { formatDuration } from '../format/time'
 import { isActiveState } from './task-activity'
-import { liveStepOf, mergeLive, type LiveStep } from './task-live'
 import { AgentFace } from './team-picker'
 import { castPending, dispatchAgent, prettyAgent, type Speaker } from './chat-speaker'
 import { Icon } from './icons'
 import { Markdown } from '../md/render'
 import { deliveryFacts, deliveryMatchesTask, deliveryPreview, deliveryText } from './task-delivery'
 import { t } from '../i18n'
-import { ExecutionSteps } from './execution-steps-view'
-import { taskSteps } from './execution-steps'
 import { TaskObjectives } from './task-objectives'
 import { TaskExecution } from './task-execution'
 import { MessageCopyButton } from './copy'
+import { TaskActivityFold, TaskActivityLog } from './task-turn-activity'
+import { taskWorkedDuration } from './turn-activity'
 
 /** One shared empty list: `task.traces` is absent until the row has started,
  *  and a fresh `[]` on every render would re-run the merge effect each time. */
@@ -153,8 +152,6 @@ export function StateChip({ state }: { state: string }) {
  *  handed the job out, and a row that appears only once the agent starts is a
  *  row the user stares at nothing for. */
 export function TaskProgress({ task }: { task: Task }) {
-  const change = useChangeSignal()
-  const history = useTaskEvents(task.id, change)
   const traces = useTraceForTask(task.id, task.traces ?? EMPTY_TRACES)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -164,25 +161,13 @@ export function TaskProgress({ task }: { task: Task }) {
   if (!isActiveState(task.state)) return null
 
   const agent = dispatchAgent({ traces, agent: task.agent, requires: task.requires })
-  const steps: LiveStep[] = []
-  for (const ev of mergeLive(history.events, traces)) {
-    const step = liveStepOf(ev)
-    if (!step) continue
-    const prev = steps[steps.length - 1]
-    if (prev && prev.label === step.label && prev.summary === step.summary) continue
-    if (prev?.quiet && step.quiet) {
-      // One silence line, refreshed with the newest duration — not one row
-      // per heartbeat.
-      steps[steps.length - 1] = step
-      continue
-    }
-    steps.push(step)
-  }
   const started = Date.parse(task.created_at)
   const elapsed = Number.isFinite(started) ? Math.max(0, now - started) : 0
-  const lastTs = steps.length ? steps[steps.length - 1]!.ts * 1000 : Date.parse(task.updated_at)
+  const lastTs = Math.max(Date.parse(task.updated_at) || 0, (task.last_event?.ts ?? 0) * 1000,
+    (traces.at(-1)?.ts ?? 0) * 1000)
   const idle = Number.isFinite(lastTs) ? Math.max(0, now - lastTs) : 0
   const sup = task.supervision
+  const activityScope = `${task.id}:${task.attempt_id || ''}`
   const speaker: Speaker = agent
     ? { who: 'agent', agent, role: 'report' }
     : { who: 'panda', agent: '', role: 'report' }
@@ -195,10 +180,6 @@ export function TaskProgress({ task }: { task: Task }) {
           <span class="msg-name">
             {agent ? prettyAgent(agent) : t('sessions.speakerPanda')}
           </span>
-          <span class="msg-cast-state is-active">
-            <span class="msg-report-dot" aria-hidden="true" />
-            {t('sessions.castWorking')}
-          </span>
           <span class="msg-dur">{t('sessions.liveElapsed', { d: formatDuration(elapsed) })}</span>
           {sup && sup.budget > 0 && (
             <span class="msg-cast-meta mono">
@@ -206,16 +187,16 @@ export function TaskProgress({ task }: { task: Task }) {
             </span>
           )}
         </div>
-        <div class="msg-bubble is-progress task-live-body">
-          <TaskObjectives task={task} />
-          <TaskExecution task={task} events={history.events} />
-          {history.events.length > 0 && <ExecutionSteps scope={'task:' + task.id} steps={taskSteps(history.events, true)} />}
-          {history.events.length === 0 && <p class="msg-progress-line">{t('sessions.liveWaiting')}</p>}
+        <div class="msg-bubble is-reply is-wide task-live-body">
+          <TaskActivityFold key={activityScope} scope={activityScope} label={t('sessions.activityWorking')} active>
+            <TaskActivityLog taskId={task.id} attemptId={task.attempt_id} active traces={traces}
+              details={events => <><TaskObjectives task={task} compact /><TaskExecution task={task} events={events} /></>} />
+          </TaskActivityFold>
           <div class="task-live-foot">
             <a class="task-live-open" href={`#/task/${encodeURIComponent(task.id)}`}>
               {t('sessions.liveOpen')} →
             </a>
-            {idle > 30_000 && (
+            {lastTs > 0 && idle > 30_000 && (
               <span class="task-live-idle">{t('sessions.liveIdle', { d: formatDuration(idle) })}</span>
             )}
           </div>
@@ -225,18 +206,41 @@ export function TaskProgress({ task }: { task: Task }) {
   )
 }
 
+export function AgentOutput({ text, limit = 1600, report = false }: {
+  text: string; limit?: number; report?: boolean
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const preview = useMemo(() => deliveryPreview(text, limit), [text, limit])
+  const toggleLabel = report
+    ? (expanded ? 'sessions.deliveryLess' : 'sessions.deliveryMore')
+    : (expanded ? 'sessions.outputCollapse' : 'sessions.outputExpand')
+  return (
+    <div class="agent-output">
+      <Markdown text={expanded ? text : preview.text} class="msg-text" />
+      {preview.more && <button class="agent-output-toggle" type="button" aria-expanded={expanded}
+        onClick={() => setExpanded(value => !value)}>
+        <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={14} />
+        {t(toggleLabel)}
+      </button>}
+    </div>
+  )
+}
+
 /** A durable handoff: outcome first, then visible evidence and honest gaps.
  * Legacy turns recover their full report from the task instead of retaining
  * the old last-paragraph-only display forever. */
-export function TaskDelivery({ taskId, delivery, truncated, summary, state, verdict, attemptId, reportedAt, document, startProcess, children }: {
+export function TaskDelivery({ taskId, delivery, truncated, summary, state, verdict, attemptId, reportedAt, document, startProcess, listed, children }: {
   taskId: string; delivery?: string; truncated?: boolean; summary: string; state: string; verdict?: string; attemptId?: string; reportedAt?: number
-  document?: boolean; startProcess?: boolean; children?: ComponentChildren
+  document?: boolean; startProcess?: boolean; listed?: Task; children?: ComponentChildren
 }) {
-  const currentTask = useTaskBrief(taskId)
+  const fetched = useTaskBrief(listed ? undefined : taskId)
+  const currentTask = listed ?? fetched
   const task = currentTask && (!document || currentTask.state === state) &&
     deliveryMatchesTask(currentTask, attemptId, reportedAt, state) ? currentTask : null
   const [expanded, setExpanded] = useState(true)
   const [processOpen, setProcessOpen] = useState(Boolean(startProcess))
+  const processId = useId()
+  const elapsed = task ? taskWorkedDuration(task.created_at, task.updated_at) : ''
   const recorded = deliveryText(task?.result)
   const full = (document && recorded) || delivery || recorded || summary
   const facts = document && task ? deliveryFacts(task) : undefined
@@ -256,7 +260,7 @@ export function TaskDelivery({ taskId, delivery, truncated, summary, state, verd
           <Markdown text={verdict} class="msg-text" />
         </div>
       )}
-      {full ? <Markdown text={expanded ? full : preview.text} class="msg-text" /> : (
+      {full ? <Markdown text={expanded ? full : preview.text} class="msg-text task-turn-final" /> : (
         <p class="task-run-empty">{t(state === 'done' ? 'sessions.deliveryEmpty' : 'sessions.deliveryFailedEmpty')}</p>
       )}
       {preview.more && <button class="task-delivery-toggle" type="button" aria-expanded={expanded}
@@ -269,22 +273,29 @@ export function TaskDelivery({ taskId, delivery, truncated, summary, state, verd
         <Markdown text={facts.followup} class="msg-text" />
       </div>}
       {children}
-      <button type="button" class="chain-toggle" aria-expanded={processOpen}
-        onClick={() => setProcessOpen(!processOpen)}>{t(processOpen ? 'sessions.chainHide' : 'sessions.chainShow')}</button>
-      {processOpen && (task ? <TaskProcessBody taskId={taskId} task={task} /> : <p class="task-run-empty">{t('sessions.deliveryEvidenceUnavailable')}</p>)}
+      <button type="button" class="chain-toggle" aria-expanded={processOpen} aria-controls={processId}
+        onClick={() => setProcessOpen(value => !value)}>
+        {t(processOpen ? 'sessions.chainHide' : 'sessions.chainShow')}
+        {elapsed && ` · ${t('sessions.elapsed', { d: elapsed })}`}
+      </button>
+      <div id={processId} hidden={!processOpen}>
+        {processOpen && (task ? <TaskProcessBody taskId={taskId} task={task}
+          attemptId={attemptId} finalText={full} /> : <p class="task-run-empty">{t('sessions.deliveryEvidenceUnavailable')}</p>)}
+      </div>
+      {!document && <a class="task-run-open" href={`#/task/${encodeURIComponent(taskId)}`}>
+        {t('sessions.liveOpen')} →
+      </a>}
     </section>
   )
 }
 
-export function TaskProcessBody({ taskId, task }: { taskId: string; task: Task }) {
-  const change = useChangeSignal()
-  const { events, error } = useTaskEvents(taskId, change)
-  const steps = taskSteps(events)
+export function TaskProcessBody({ taskId, task, attemptId, finalText }: {
+  taskId: string; task: Task; attemptId?: string; finalText?: string
+}) {
   const facts = deliveryFacts(task)
   return (
     <>
       <TaskObjectives task={task} />
-      <TaskExecution task={task} events={events} />
       <div class="task-delivery-facts">
         <div>
           <h4 class="task-delivery-label">{t('sessions.deliveryVerification')}</h4>
@@ -299,9 +310,9 @@ export function TaskProcessBody({ taskId, task }: { taskId: string; task: Task }
         </div>}
       </div>
       <h4 class="task-delivery-label">{t('sessions.processTitle')}</h4>
-      {steps.length === 0 ? <p class="task-run-empty" role={error ? 'status' : undefined}>
-        {t(error ? 'sessions.deliveryStepsUnavailable' : 'sessions.processEmpty')}
-      </p> : <ExecutionSteps scope={'task:' + taskId} steps={steps} />}
+      <TaskActivityLog taskId={taskId} attemptId={attemptId || task.attempt_id}
+        active={isActiveState(task.state)} finalText={finalText}
+        details={events => <TaskExecution task={task} events={events} />} />
       <div class={`task-delivery-remaining is-${facts.remaining}`}>
         <h4 class="task-delivery-label">{t('sessions.deliveryRemaining')}</h4>
         <p>{facts.followup || t(`sessions.deliveryRemaining.${facts.remaining}`)}</p>

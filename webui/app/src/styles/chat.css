@@ -15,6 +15,7 @@
      inside the dock's body — the card is a sibling of the column, not a child,
      so it cannot read a variable set on the column itself. */
   --dock-head-h: 56px;
+  --chat-leading-gutter: 52px;
   /* Where the body starts, from the top of the pane: the head, the column's
      own 1px hairline, and the tool page's 12px padding. This is the line the
      floating task card aligns to. (The step back to the start pane is a button
@@ -781,15 +782,18 @@
      slide rather than jump, and it only ever runs when a card opens or closes,
      never when the open card is swapped for the other one (both share the same
      lane). */
-  padding: var(--sp-6) calc(var(--sp-6) + var(--panel-lane)) var(--sp-4) 52px;
+  padding: var(--sp-6) calc(var(--sp-6) + var(--panel-lane)) var(--sp-4) var(--chat-leading-gutter);
   transition: padding-right var(--dur-med) var(--ease-standard);
   scroll-behavior: smooth;
   /* A reply that grows past the viewport used to summon the scrollbar and
      lose its lane to it: the centred column shifted sideways the instant the
      last line arrived, which reads as the whole answer being re-laid out.
      Reserve the lane up front — the same fix the settings rail already
-     carries. */
-  scrollbar-gutter: stable;
+     carries. Both edges, not just the right one: the lane is taken out of the
+     content box, so reserving it on one side alone pushed the centred column
+     4px left of the composer's — the box under the text has to sit on the
+     same centre as the text above it. */
+  scrollbar-gutter: stable both-edges;
 }
 .chat-log > * {
   max-width: 900px;
@@ -826,7 +830,7 @@
      column when the node card pushes that column left. The padding cannot sit
      on the button's own containing block (`left: 50%` measures the padding
      box), hence the inner column below. */
-  padding: 0 calc(var(--sp-6) + var(--panel-lane)) 0 52px;
+  padding: 0 calc(var(--sp-6) + var(--panel-lane)) 0 var(--chat-leading-gutter);
   transition: padding-right var(--dur-med) var(--ease-standard);
 }
 .scroll-bottom-inner {
@@ -1036,6 +1040,9 @@
    any desktop width. Below that there is no lane to speak of — on a phone the
    transcript is the whole screen and the scrollbar is the only navigator. */
 @media (max-width: 760px) {
+  .chat {
+    --chat-leading-gutter: var(--sp-4);
+  }
   .chat-rail-wrap {
     display: none;
   }
@@ -1261,6 +1268,13 @@
 .msg-bubble.is-wide {
   width: min(100%, var(--msg-measure));
 }
+.msg-bubble.is-reply {
+  --msg-measure: 680px;
+  gap: 10px;
+  padding: 3px 2px;
+  border: 0;
+  background: transparent;
+}
 /* One reply that handed out several jobs: the cards share the panda's face and
    clock, so they are told apart by rhythm — a hairline between blocks — rather
    than by repeating the avatar five times down the column. The block keeps the
@@ -1276,18 +1290,6 @@
   margin-top: 2px;
   padding-top: 10px;
   border-top: 1px solid var(--border-soft);
-}
-/* The panda's closing roll-up wears the panda's colour: it is the one message
-   whose authority comes from being the panda's. */
-.msg-bubble.is-summary {
-  background: color-mix(in srgb, var(--brand) 6%, var(--bg));
-  border-color: color-mix(in srgb, var(--brand) 24%, transparent);
-}
-/* An employee's live row is a state, not a statement: dashed, because it will
-   be replaced by their report. */
-.msg-bubble.is-progress {
-  border-style: dashed;
-  background: transparent;
 }
 .bubble-slot-row {
   display: flex;
@@ -1352,6 +1354,9 @@
   text-wrap: pretty;
   margin: 0;
   font-size: var(--text-lg);
+}
+.is-reply .msg-text {
+  overflow-wrap: anywhere;
 }
 
 /* — the files a turn carried, under the words it carried them with. A picture
@@ -1541,28 +1546,89 @@
   font-weight: 600;
   line-height: 1.45;
 }
-/* The panda's roll-up for a finished round. */
-.msg-summary-line {
+/* A finished round reads as a report in the transcript. */
+.run-summary {
+  width: min(100%, 720px);
+  min-width: 0;
+  padding: clamp(12px, 2vw, 20px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+}
+.run-summary-head,
+.run-summary-label,
+.run-summary-actions {
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0;
-  color: var(--text);
-  font-size: var(--text-sm);
+  align-items: center;
 }
-.msg-summary-people {
-  color: var(--text-tertiary);
+.run-summary-head {
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-block-end: var(--sp-2);
+  border-bottom: 1px solid var(--border-soft);
+}
+.run-summary-label {
+  gap: var(--sp-2);
+  color: var(--text-secondary);
   font-size: var(--text-xs);
+  font-weight: 600;
 }
-.msg-summary-what {
-  margin: 0;
+.run-summary-label svg {
+  flex: none;
+  color: var(--brand);
+}
+.run-summary-actions {
+  flex: none;
+  gap: var(--sp-1);
+}
+.run-summary-actions .msg-copy {
+  width: 32px;
+  height: 32px;
+  opacity: 1;
+}
+.run-summary-title {
+  margin: var(--sp-3) 0 0;
+  font-size: clamp(1.0625rem, 0.85rem + 0.65vw, 1.375rem);
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.run-summary-status {
+  margin: var(--sp-2) 0 0;
+}
+.run-summary-preview {
+  margin-block-start: var(--sp-3);
+  max-height: 10rem;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.run-summary-preview.is-clipped {
+  mask-image: linear-gradient(to bottom, black calc(100% - 2.25rem), transparent);
+}
+.run-summary-preview.is-expanded {
+  max-height: none;
+  overflow: visible;
+}
+.run-summary-preview .md > :first-child { margin-block-start: 0; }
+.run-summary-preview .md > :last-child { margin-block-end: 0; }
+.run-summary-preview .md :is(h2, h3) { font-size: var(--text-lg); }
+.run-summary-preview .md > h3:not(:first-child) {
+  padding-block-start: var(--sp-3);
+  border-top: 1px solid var(--border-soft);
+}
+.run-summary-footer {
+  margin-block-start: var(--sp-3);
+  padding-block-start: var(--sp-2);
+  border-top: 1px solid var(--border-soft);
+}
+.run-summary-footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   color: var(--text-secondary);
   font-size: var(--text-sm);
 }
-.msg-summary-link {
-  font-size: var(--text-sm);
-}
+.run-summary-footer a:hover { color: var(--text); }
 
 /* The panda's own reasoning, folded. Open while it is still arriving, shut
    once the reply lands — by then the answer is what matters. */
@@ -1598,13 +1664,6 @@
   word-break: break-word;
 }
 
-/* A running task's live timeline. The row is a state, not a report: six
-   steps is enough to answer "what is it doing now" without turning the
-   transcript into a log; the full chain stays one link away. */
-.task-live-body {
-  max-height: 260px;
-  overflow: auto;
-}
 .task-live-timeline {
   list-style: none;
   margin: 0;
@@ -1842,6 +1901,57 @@
   color: var(--text-tertiary);
   letter-spacing: .02em;
 }
+.agent-output {
+  min-width: 0;
+}
+.agent-output-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.agent-output-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.task-delivery {
+  display: grid;
+  gap: 8px;
+}
+.task-delivery-label {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.task-delivery-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  padding: 8px 0;
+  border-block: 1px solid var(--border-soft);
+  font-size: var(--text-sm);
+}
+.task-delivery-files {
+  margin: 4px 0 0;
+  padding-inline-start: 18px;
+  overflow-wrap: anywhere;
+}
+.task-delivery-remaining p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
 
 /* — the foot: copy, and the model that wrote the answer. Both are footnotes to
      the message, so both arrive on its hover. */
@@ -2075,7 +2185,7 @@
      of those to keep the pet out of the transcript's last line (the log's own
      bottom padding is the other 16). The box itself does not move — the
      composer is bottom-docked, so this padding is taken from the log above. */
-  padding: 26px calc(var(--sp-6) + var(--panel-lane)) var(--sp-5) 52px;
+  padding: 26px calc(var(--sp-6) + var(--panel-lane)) var(--sp-5) var(--chat-leading-gutter);
   transition: padding-right var(--dur-med) var(--ease-standard);
   border-top: none;
   background: transparent;
@@ -2104,13 +2214,126 @@
    a flex item beside its own controls instead of a lone absolutely-positioned
    button. Same `left`/`bottom` as before, so the ink lands on exactly the
    pixel it did. */
-.composer-pet {
+.composer-head {
+  --pet-overhang: 6px;
   position: absolute;
   left: 18px;
-  bottom: calc(100% - 6px);
+  right: var(--composer-radius);
+  bottom: calc(100% - var(--pet-overhang));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-3);
+  pointer-events: none;
+}
+.composer-pet {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 2px;
+  pointer-events: auto;
+}
+.composer-goal {
+  /* Keep the bar slightly left of its lane's center when there is room. */
+  --goal-side-gap: calc((100% - 680px) / 2);
+  /* Equal side tracks center the title independently of the action count. */
+  display: grid;
+  grid-template-columns: 126px minmax(0, 1fr) 126px;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  min-height: 36px;
+  /* Align the tab's bottom border with the composer's top border. */
+  align-self: end;
+  margin-block-end: var(--pet-overhang);
+  margin-inline: max(0px, calc(var(--goal-side-gap) - 20px)) max(0px, calc(var(--goal-side-gap) + 20px));
+  padding: 2px 4px;
+  border: 1px solid var(--composer-outline);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  background: color-mix(in srgb, var(--bg-inset), var(--bg-raised));
+  transition: border-color var(--dur-fast) var(--ease);
+  pointer-events: auto;
+}
+.composer-goal > svg {
+  color: var(--brand);
+  margin-inline-start: var(--sp-1);
+}
+.composer-goal-copy {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  text-align: center;
+  line-height: 1.25;
+}
+.composer-goal-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.composer-goal-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.composer-goal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.composer-goal-action,
+.composer-goal-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 6px;
+  min-height: 30px;
+  min-width: 30px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.composer-goal-action {
+  width: 30px;
+  padding: 0;
+}
+.composer-goal-action-main {
+  background: var(--bg-active);
+  color: var(--text);
+}
+.composer-goal-trigger {
+  min-height: 26px;
+  padding-inline: 7px;
+  font-size: var(--text-sm);
+}
+.composer-goal-action:hover:not(:disabled),
+.composer-goal-trigger:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.composer-goal-action-main:hover:not(:disabled) {
+  background: var(--surface-alpha-lg);
+}
+.composer-goal-action:disabled,
+.composer-goal-trigger:disabled {
+  opacity: .55;
+}
+@media (max-width: 600px) {
+  .composer-head { gap: var(--sp-2); }
+  .composer-goal { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .composer-goal-title { font-size: var(--text-xs); }
+}
+@media (max-width: 420px) {
+  .composer-head { gap: var(--sp-1); }
+  .composer-goal { grid-template-columns: minmax(0, 1fr) auto; }
+  .composer-goal > svg { display: none; }
 }
 .composer-panda {
   position: relative;
@@ -3042,11 +3265,13 @@
   padding: 2px 4px 2px;
 }
 .composer-box {
+  --composer-outline: var(--border-soft);
+  --composer-radius: 20px;
   position: relative;
-  border: 1px solid var(--border-soft);
+  border: 1px solid var(--composer-outline);
   /* 20px, not the 10px card radius: at this height a card radius reads square,
      and the composer is the roundest object on the page on purpose. */
-  border-radius: 20px;
+  border-radius: var(--composer-radius);
   background: var(--bg-raised);
   box-shadow: var(--shadow-sm);
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
@@ -3056,11 +3281,10 @@
 .composer-box:focus-within {
   /* Neutral focus: a deeper hairline and a close, low-opacity halo make the
      active field feel precise without introducing another accent colour. */
-  border-color: var(--border-strong);
   box-shadow: var(--shadow-sm), 0 0 0 3px var(--surface-alpha-sm);
 }
-.composer-box.composer-running {
-  border-color: var(--border-strong);
+.composer-box:is(:focus-within, .composer-running, .composer-dropping) {
+  --composer-outline: var(--border-strong);
 }
 .composer-input {
   width: 100%;
@@ -3068,8 +3292,10 @@
      .is-empty rule at the bottom of the file. */
   position: relative;
   /* Two rows of typing, no more: the context row sits at the bottom of a flat
-     box, and extra min-height only pushed the controls up into the air. */
-  min-height: 64px;
+     box, and extra min-height only pushed the controls up into the air.
+     52px is those two rows (2 × 22.5) plus the field's own 4px of padding; the
+     old 64 left a third, empty line between the placeholder and the tools. */
+  min-height: 52px;
   max-height: 220px;
   padding: 2px 10px;
   border: 0;
@@ -3105,8 +3331,10 @@
      of context picks looked like a toolbar sitting outside the composer
      instead of its footer. One surface, no seam. */
   /* The top gap separates the writing area from the tools without drawing a
-     divider. The composer's own bottom padding keeps the row off the border. */
-  padding: 16px 10px 0;
+     divider. The composer's own bottom padding keeps the row off the border.
+     12, not 16: with the field at two rows the box was still 134px tall for a
+     single line of placeholder — the tools floated in the middle of it. */
+  padding: 12px 10px 0;
 }
 /* Send stays quiet while the field is empty, then becomes the one solid action
    once there is something to submit. The state change carries the hierarchy. */
@@ -4577,11 +4805,6 @@
   pointer-events: none;
 }
 
-/* The drop state. A file dragged over the box has to land somewhere obvious,
-   so the whole composer answers rather than a thin target line. */
-.composer-box.composer-dropping {
-  border-color: var(--border-strong);
-}
 .attach-drop-hint {
   position: absolute;
   inset: 0;
@@ -4887,7 +5110,7 @@
   /* Same lanes as the log and the composer: 52px of prompt rail on the left,
      plus the header card's lane on the right while one is open, so the bubbles
      slide with the column instead of hanging off it. */
-  padding: 0 calc(var(--sp-6) + var(--panel-lane)) 0 52px;
+  padding: 0 calc(var(--sp-6) + var(--panel-lane)) 0 var(--chat-leading-gutter);
   /* Where the trail starts, measured from the composer's content box. The pet
      is 18px in and 44px wide, so 54 puts the first bubble just past the head's
      right edge and lets the trail climb away from it — the thought is the
@@ -5466,6 +5689,13 @@
 .rail-bar-ctx.is-high {
   color: var(--semantic-warn);
 }
+/* The agent's name rides the context segment because a bare percentage cannot
+   say whose window it is measuring. It stays tertiary — the digits are the
+   reading, the name is the attribution — so the only hue on the line is still
+   the numbers themselves. */
+.rail-bar-ctx-owner {
+  color: var(--text-tertiary);
+}
 /* A viewport with no visible edge: the change text simply continues the line
    and scrolls inside the space left over. Giving it a well or a coloured bar
    made the head look like two nested panels. */
@@ -5864,6 +6094,49 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Several agents working at once: one row per window. The single-agent block
+   keeps its display number (it is the section's one big reading); a list
+   trades that scale for the comparison the reader is actually making —
+   which of these is closest to compacting. */
+.rail-pop-ctx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.rail-pop-ctx-agent .rail-pop-row {
+  gap: 6px;
+}
+.rail-pop-agent-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-pop-agent-pct {
+  flex: none;
+  margin-left: auto;
+  color: var(--accent-2);
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.rail-pop-agent-pct.is-high {
+  color: var(--semantic-warn);
+}
+.rail-pop-ctx-agent .rail-pop-meter {
+  height: 3px;
+  margin-top: 6px;
+}
+.rail-pop-ctx-agent .rail-pop-foot {
+  margin-top: 5px;
+}
 
 /* ---- Changes ---- */
 .rail-pop-diffstat {
@@ -5996,28 +6269,59 @@
 }
 
 /* Persistent execution evidence: restrained chrome, readable expanded content. */
-.execution-steps { min-width: 0; width: 100%; margin-block: 12px; font-size: 13px; }
-.execution-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-secondary); margin-bottom: 8px; }
-.execution-toolbar > span:first-child { font-weight: 500; }
+.execution-fold { min-width: 0; width: 100%; }
+.execution-fold-toggle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 7px;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-chrome);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: start;
+  cursor: pointer;
+}
+.execution-fold-toggle:hover { background: var(--bg-hover); color: var(--text); }
+.execution-fold-caret { flex: none; margin-inline-start: auto; }
+.execution-count {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--bg-active);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.execution-failures { color: var(--danger); font-size: var(--text-xs); }
+.execution-steps { min-width: 0; width: 100%; margin-block: 8px; font-size: var(--text-sm); }
+.execution-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; color: var(--text-secondary); margin-bottom: 4px; }
+.execution-toolbar > span:first-child { font-weight: 600; }
+.execution-toolbar-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-inline-start: auto; }
 .execution-toolbar button, .execution-enlarge { background: none; border: 0; color: var(--text-secondary); padding: 5px 7px; border-radius: 5px; font: inherit; cursor: pointer; }
 .execution-toolbar button:hover, .execution-enlarge:hover { background: var(--bg-hover); color: var(--text); }
-.execution-list { list-style: none; padding: 0; margin: 0; }
-.execution-row { position: relative; border-left: 1px solid var(--border-soft); margin-left: 8px; padding: 0 0 12px 14px; min-width: 0; }
-.execution-row:last-child { padding-bottom: 0; }
-.execution-heading { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; color: var(--text); padding: 5px 0; font: inherit; cursor: pointer; min-height: 32px; }
-.execution-title { font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
+.execution-list { list-style: none; padding: 0; margin: 0; border-block-start: 1px solid var(--border-soft); }
+.execution-row { min-width: 0; border-block-end: 1px solid var(--border-soft); }
+.execution-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 2px 8px; width: 100%; text-align: start; border: 0; background: none; color: var(--text); padding: 5px 8px; font: inherit; cursor: pointer; min-height: 33px; }
+.execution-heading:hover, .execution-heading[aria-expanded="true"] { background: var(--bg-chrome); }
+.execution-title { font-weight: 550; overflow-wrap: anywhere; min-width: 0; }
 .execution-status-icon { flex-shrink: 0; color: var(--text-secondary); }
-.execution-time { margin-left: auto; white-space: nowrap; }
-.execution-status, .execution-time, .execution-node { font-size: 11px; color: var(--text-secondary); flex-shrink: 0; }
+.execution-row-meta { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: end; gap: 2px 8px; }
+.execution-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.execution-status, .execution-time, .execution-node { font-size: var(--text-xs); color: var(--text-secondary); }
 .execution-node { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.execution-body { padding-top: 7px; min-width: 0; }
+.execution-body { padding: 9px 8px; min-width: 0; }
 .execution-input { margin: 0 0 9px; }
 .execution-input > div { display: grid; grid-template-columns: minmax(64px, 100px) minmax(0,1fr); gap: 10px; padding-block: 3px; }
 .execution-input dt { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .execution-input dd { margin: 0; min-width: 0; }
 .execution-input pre, .execution-command, .execution-output { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.65; }
 .execution-command, .execution-output { padding: 10px 12px; background: var(--bg-inset); border: 1px solid var(--border-soft); border-radius: 7px; }
-.execution-output, .execution-command, .execution-thought { max-height: 320px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.execution-output, .execution-command, .execution-thought { max-height: 320px; overflow: auto; scrollbar-width: thin; }
 .execution-thought { line-height: 1.7; color: var(--text-secondary); }
 .execution-thought p:first-child { margin-top: 0; }
 .execution-controls { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; padding-top: 5px; color: var(--text-secondary); }
@@ -6026,12 +6330,17 @@
 .execution-raw summary { cursor: pointer; padding: 5px 0; }
 .execution-raw pre { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-inset); padding: 10px; border-radius: 6px; }
 .execution-truncated { color: var(--text-secondary); font-size: 12px; }
-.execution-row.is-failed .execution-status, .execution-row.is-refused .execution-status { color: var(--danger, var(--text)); }
-.execution-row.is-running .execution-status-icon { animation: execution-spin 1.6s linear infinite; }
+.execution-row.is-failed :is(.execution-status, .execution-status-icon),
+.execution-row.is-refused :is(.execution-status, .execution-status-icon) { color: var(--danger); }
+.execution-row.is-success .execution-status-icon { color: var(--good); }
+.execution-row.is-running .execution-status-icon { color: var(--accent-2); animation: execution-spin 1.6s linear infinite; }
 .execution-dialog { width: min(1000px, calc(100vw - 32px)); max-height: 88dvh; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-overlay); color: var(--text); box-shadow: 0 20px 70px #0003; }
 .execution-dialog::backdrop { background: #0006; }
 .task-objectives { margin-block: 12px 18px; font-size: 12px; }
 .task-objectives h4 { margin: 0 0 8px; font-weight: 500; }
+.task-objectives.is-compact { margin: 0; }
+.task-objectives.is-compact > summary { padding-block: 4px; color: var(--text-secondary); cursor: pointer; }
+.task-objectives.is-compact > summary:hover { color: var(--text); }
 .task-objective { border-left: 2px solid var(--border-soft); padding: 3px 0 3px 12px; margin-block: 6px; }
 .task-objective summary { cursor: pointer; color: var(--text-secondary); }
 .task-objective p { margin: 7px 0; overflow-wrap: anywhere; }
@@ -6039,15 +6348,40 @@
 .objective-priority { display: inline-block; margin-left: 8px; font-size: 10px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; }
 .objective-priority.is-max { color: var(--text); font-weight: 600; }
 
-/* Main conversation only. The dock already takes space from the pane. */
-.session-chat-pane { --session-inset: clamp(12px, 2vw, 24px); }
+/* Main conversation only. The dock already takes space from the pane, but the
+   pane left over is still wide — without a measure the transcript and the box
+   under it ran edge to edge and a reply became one very long line with no
+   gutter to rest the eye on. The column never goes below the 900px reading
+   measure the rest of the console uses (see `.chat-log > *`), and on a wide
+   pane it widens with the window instead of staying at 900: a fixed measure
+   turned a 1600px pane into a strip with 200px of nothing on each side, which
+   reads as a page that failed to fill. 86% keeps the gutter near a tenth of
+   the pane at every width, and the inset grows too so a mid-size pane still
+   shows daylight beside the text instead of pinning it to the card's border. */
+.session-chat-pane {
+  --session-inset: clamp(16px, 3vw, 48px);
+  --session-measure: 900px;
+  /* The box under the transcript is deliberately narrower than the column
+     above it. Edge to edge with the text it read as a bar across the page —
+     the widest, flattest thing on the screen — and the two ends of it sat
+     where nothing above them ever reaches (replies stop at the 620px measure).
+     Pulled in to 820 it reads as the console's input rather than a footer
+     rule, and it keeps the same centre as the column, so the page still has
+     one axis. */
+  --composer-measure: 820px;
+}
 .session-chat-pane :is(.chat-log, .composer, .scroll-bottom-slot, .session-note-list) {
   padding-inline: var(--session-inset);
 }
-.session-chat-pane :is(.chat-log > *, .composer > *, .scroll-bottom-inner) {
-  max-width: none;
+.session-chat-pane :is(.chat-log > *, .scroll-bottom-inner) {
+  max-width: min(100%, max(var(--session-measure), 86%));
   min-width: 0;
-  margin-inline: 0;
+  margin-inline: auto;
+}
+.session-chat-pane .composer > * {
+  max-width: min(100%, var(--composer-measure));
+  min-width: 0;
+  margin-inline: auto;
 }
 .session-chat-pane .chat-rail-wrap { left: 1px; }
 .session-chat-pane .chat-rail { padding-inline: 0; }
@@ -6220,16 +6554,16 @@
 .execution-dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
 .execution-dialog-head button { display: inline-flex; padding: 8px; border: 0; background: none; color: inherit; cursor: pointer; }
 .execution-dialog .execution-output, .execution-dialog .execution-command, .execution-dialog .execution-thought { max-height: none; }
-.execution-steps button:focus-visible, .execution-raw summary:focus-visible { outline: 2px solid var(--text-secondary); outline-offset: 3px; }
+.execution-fold-toggle:focus-visible, .execution-steps button:focus-visible, .execution-raw summary:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -2px; }
 @keyframes execution-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .execution-row.is-running .execution-status-icon { animation: none; } }
 @media (max-width: 600px) {
- .execution-toolbar button, .execution-heading, .execution-enlarge { min-height: 44px; }
- .execution-heading { flex-wrap: wrap; }
- .execution-title { flex: 1; }
+ .execution-toolbar button, .execution-heading, .execution-enlarge, .execution-fold-toggle, .agent-output-toggle { min-height: 44px; }
+ .execution-heading { grid-template-columns: auto minmax(0, 1fr) auto; }
+ .execution-row-meta { grid-column: 2; justify-content: start; }
+ .execution-row-caret { grid-column: 3; grid-row: 1; }
  .execution-node { max-width: 90px; }
  .execution-input > div { grid-template-columns: minmax(0,1fr); gap: 2px; }
- .execution-row { margin-left: 3px; padding-left: 10px; }
  .execution-output, .execution-command { max-height: 260px; }
 }
 

@@ -46,8 +46,8 @@ import { ClarifyCard } from './clarify-card'
 import { confirmDialog } from './confirm'
 import { ModelSelect } from './model-select'
 import { toastError } from './toast'
-import { ExecutionSteps } from './execution-steps-view'
-import { operationSteps, upsertActivity } from './execution-steps'
+import { ReplyActivity } from './execution-steps-view'
+import { upsertActivity } from './execution-steps'
 
 interface Line {
   operationID?: string
@@ -723,8 +723,6 @@ export function SideChat(props: SideChatProps) {
                   <span class="side-name">{t('side.panda')}</span>
                 </div>
                 <div class="side-body">
-                  {l.thought && <ExecutionSteps scope={'side:' + props.sessionId + ':' + (l.operationID || l.id) + ':thought'} steps={[{ id: 'reasoning', title: t('sessions.thought'), status: 'info', ts: 0, thought: true, output: l.thought }]} />}
-                  {!!l.activities?.length && <ExecutionSteps scope={'side:' + props.sessionId + ':' + (l.operationID || l.id) + ':activity'} steps={operationSteps(l.activities)} />}
                   {l.text && !(l.error && l.text.startsWith('⚠')) ? (
                     <Markdown text={l.text} class="side-md" streaming={Boolean(l.live)} />
                   ) : !l.live && !l.error && !l.taskId && !(l.tools && l.tools.length) ? (
@@ -762,6 +760,8 @@ export function SideChat(props: SideChatProps) {
                       ))}
                     </div>
                   )}
+                  <ReplyActivity thought={l.thought} activities={l.activities}
+                    scope={'side:' + props.sessionId + ':' + (l.operationID || l.id)} />
                   {!l.live && l.text && (
                     <div class="side-acts">
                       <MessageCopyButton text={l.text} markdown />

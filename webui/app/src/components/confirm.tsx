@@ -8,6 +8,20 @@ import { useModalFocus } from './modal-focus'
 // sites read like `if (!(await confirmDialog({...}))) return` — no local
 // open-state plumbing per view. One host mounts in the app shell.
 
+/** A checkbox carried by the confirm dialog. A destructive ask often has a
+ *  secondary decision attached (keep the memory file? delete the sessions
+ *  too?); asking it here is what keeps the answer and the action in one place
+ *  instead of splitting them across a form the user has to remember. */
+export interface ConfirmChoice {
+  /** Stable key, echoed back in the result map. */
+  key: string
+  label: string
+  /** Second line under the label — consequence, count, path. */
+  hint?: string
+  /** Initial state; unchecked when omitted. */
+  checked?: boolean
+}
+
 export interface ConfirmOptions {
   /** Headline — what the operation is, e.g. "删除对话". */
   title: string
@@ -17,15 +31,30 @@ export interface ConfirmOptions {
   confirmLabel?: string
   /** Danger styling for destructive operations (default true). */
   danger?: boolean
+  /** Optional checkboxes; read them back with confirmWithChoices. */
+  choices?: ConfirmChoice[]
 }
 
-let ask: ((opts: ConfirmOptions) => Promise<boolean>) | null = null
+export interface ConfirmResult {
+  /** False when dismissed, cancelled, or unanswered — never act on it. */
+  ok: boolean
+  /** Checkbox state at confirm time, keyed by ConfirmChoice.key. */
+  choices: Record<string, boolean>
+}
+
+let ask: ((opts: ConfirmOptions) => Promise<ConfirmResult>) | null = null
 
 /** Ask the user to confirm. Resolves false when dismissed or cancelled —
  *  and also when no host is mounted: a destructive action must default to
  *  "no" rather than silently proceeding. */
-export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
-  return ask ? ask(opts) : Promise.resolve(false)
+export async function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
+  return (await ask?.(opts))?.ok ?? false
+}
+
+/** Confirm with choices. Same dialog, but the caller also gets the checkbox
+ *  state — and gets nothing (`ok: false`) unless the user actually confirmed. */
+export function confirmWithChoices(opts: ConfirmOptions): Promise<ConfirmResult> {
+  return ask ? ask(opts) : Promise.resolve({ ok: false, choices: {} })
 }
 
 /** Mount once in the app shell.
@@ -37,15 +66,19 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
 export function ConfirmHost() {
   const [current, setCurrent] = useState<{
     opts: ConfirmOptions
-    resolve: (v: boolean) => void
+    resolve: (r: ConfirmResult) => void
   } | null>(null)
+  // Choice state lives beside the pending ask, not inside it: the caller owns
+  // the defaults (opts.choices), the user owns the toggles.
+  const [choices, setChoices] = useState<Record<string, boolean>>({})
   const box = useRef<HTMLDivElement>(null)
   const sheet = useRef<HTMLDialogElement>(null)
 
-  // Focus trap: focus moves into the dialog on open (the cancel button is
-  // the first focusable, which is the safe default for a destructive ask),
-  // Tab cycles inside, and closing restores the opener's focus.
-  useModalFocus(box, current !== null)
+  // Focus trap: focus moves into the dialog on open, Tab cycles inside, and
+  // closing restores the opener's focus. Cancel takes the initial focus even
+  // when checkboxes sit above the actions — the safe answer is the one a
+  // stray Enter picks.
+  useModalFocus(box, current !== null, '.confirm-cancel')
 
   useEffect(() => {
     const el = sheet.current
@@ -55,7 +88,10 @@ export function ConfirmHost() {
 
   useEffect(() => {
     ask = (opts) =>
-      new Promise<boolean>((resolve) => {
+      new Promise<ConfirmResult>((resolve) => {
+        setChoices(
+          Object.fromEntries((opts.choices ?? []).map((c) => [c.key, c.checked ?? false])),
+        )
         setCurrent({ opts, resolve })
       })
     return () => {
@@ -65,11 +101,11 @@ export function ConfirmHost() {
 
   // Resolve pending promises on unmount so callers never hang.
   useEffect(() => {
-    return () => current?.resolve(false)
+    return () => current?.resolve({ ok: false, choices: {} })
   }, [current])
 
-  function done(v: boolean) {
-    current?.resolve(v)
+  function done(ok: boolean) {
+    current?.resolve({ ok, choices })
     setCurrent(null)
   }
 
@@ -99,8 +135,29 @@ export function ConfirmHost() {
       <div ref={box}>
         <h2 class="modal-title">{opts.title}</h2>
         <p class="modal-msg">{opts.message}</p>
+        {opts.choices && opts.choices.length > 0 && (
+          <div class="confirm-choices">
+            {opts.choices.map((c) => (
+              <label class="confirm-choice" key={c.key}>
+                <input
+                  type="checkbox"
+                  class="check"
+                  checked={choices[c.key] ?? false}
+                  onChange={(e) => {
+                    const on = (e.target as HTMLInputElement).checked
+                    setChoices((prev) => ({ ...prev, [c.key]: on }))
+                  }}
+                />
+                <span>
+                  <span class="confirm-choice-label">{c.label}</span>
+                  {c.hint && <span class="confirm-choice-hint">{c.hint}</span>}
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
         <div class="modal-actions">
-          <button class="btn" onClick={() => done(false)}>
+          <button class="btn confirm-cancel" onClick={() => done(false)}>
             {t('common.cancel')}
           </button>
           <button

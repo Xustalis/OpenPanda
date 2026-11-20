@@ -590,13 +590,15 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
       const status = String(data?.status ?? '')
       const reason = String(data?.reason ?? '')
       const followup = String(data?.followup ?? '')
+      const recovery = data?.phase === 'failure_recovery'
       if (round) tags.push({ key: t('events.tag.round'), value: round })
       if (status) tags.push({ key: t('events.tag.status'), value: status })
       return {
         type,
-        label: t('events.supervise'),
+        label: t(recovery ? 'events.failureRecovery' : 'events.supervise'),
         badgeClass: status === 'done' || status === 'pass' || status === 'ok' ? 'accent' : 'warn',
-        summary: reason || followup || undefined,
+        summary: recovery ? [data?.error, reason, followup].filter(Boolean).join('\n\n') || undefined
+          : reason || followup || undefined,
         tags,
         rawJson,
       }

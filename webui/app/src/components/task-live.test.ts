@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { liveStepOf, mergeLive, recentAttemptSteps } from './task-live.ts'
+import { latestAgentText, liveStepOf, mergeLive, recentAttemptSteps } from './task-live.ts'
 import { setLocale } from '../i18n/index.ts'
 
 describe('task-live', () => {
@@ -16,6 +16,21 @@ describe('task-live', () => {
     ].map((data, i) => ({ key: `${i}`, ts: i, id: i, type: 'agent_event', data }))
     assert.deepEqual(recentAttemptSteps(rows, 'current').map(step => step.summary), ['checking the rendered layout', 'npm test'])
     assert.deepEqual(recentAttemptSteps(rows, ''), [])
+  })
+
+  it('summarizes the latest top-level prose from the active attempt, including live events', () => {
+    const history = [{ id: 1, ts: 1, type: 'agent_event', data: '{"ev":"text","text":"saved report","attempt_id":"current"}' }]
+    const activity = (id: number, data: object) => ({ id, ts: id, type: 'agent_event', data })
+    const traces = [
+      activity(2, { ev: 'text', text: '**New progress**', attempt_id: 'current' }),
+      activity(3, { ev: 'text', text: 'child', parent: 'nested', attempt_id: 'current' }),
+      activity(4, { ev: 'text', text: 'stale', attempt_id: 'old' }),
+      activity(5, { ev: 'thinking', thinking: 'diagnostic', attempt_id: 'current' }),
+    ]
+    assert.equal(latestAgentText(mergeLive(history, traces), 'current'), '**New progress**')
+    assert.equal(latestAgentText(mergeLive(history, traces), 'retry'), '')
+    const legacy = activity(1, { ev: 'text', text: 'legacy report' })
+    assert.equal(latestAgentText(mergeLive([], [legacy])), 'legacy report')
   })
 
   it('merges history and live traces by id, sorted by time', () => {
