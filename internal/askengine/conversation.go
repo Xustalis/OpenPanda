@@ -510,6 +510,18 @@ func goalFiled(sess *sessions.Session, objective string) bool {
 	return false
 }
 
+// goalToolSchema builds the JSON Schema for a goal tool. `required` must always
+// marshal as an array: a variadic invoked with no arguments yields a nil slice,
+// which encodes as JSON null and is refused by providers that validate tool
+// schemas strictly — DeepSeek answers 400 "Invalid schema for function
+// 'get_goal': null is not of type \"array\"" for the no-argument tool.
+func goalToolSchema(properties map[string]any, required ...string) map[string]any {
+	if required == nil {
+		required = []string{}
+	}
+	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
+}
+
 func (e *Engine) registerGoalTools(reg *entry.Registry, scope AskScope) {
 	if scope.SessionID == "" || scope.Side || e.db == nil {
 		return
@@ -519,9 +531,7 @@ func (e *Engine) registerGoalTools(reg *entry.Registry, scope AskScope) {
 	if err != nil {
 		return
 	}
-	schema := func(properties map[string]any, required ...string) map[string]any {
-		return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
-	}
+	schema := goalToolSchema
 	str := func() map[string]any { return map[string]any{"type": "string"} }
 	reg.Register(entry.Tool{Name: "get_goal", Description: "Read the current server-owned goal, status and usage.", Tier: 1, ReadOnly: true, Schema: schema(map[string]any{}), Run: func(ctx context.Context, _ map[string]any) (string, error) {
 		st, err := service.State(ctx, scope.SessionID)
