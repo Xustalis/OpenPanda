@@ -1465,7 +1465,16 @@ func (m tuiModel) submitSlash(name, arg, text string) (tea.Model, tea.Cmd) {
 			return m, m.printBlock(note)
 		}
 		return m.askTurn(arg, "")
-	case "goal", "plan", "spec":
+	case "goal", "plan":
+		message, prompt, err := m.r.modeCommand(name, arg)
+		if err != nil {
+			return m, m.printBlock(block{kind: blockError, body: err.Error()})
+		}
+		if prompt != "" {
+			return m.askTurn(prompt, "")
+		}
+		return m, m.printBlock(block{kind: blockNote, body: message})
+	case "spec":
 		if arg == "" {
 			note := block{kind: blockNote, body: i18n.Tf(m.loc, "tui.mode.usage", "cmd", "/"+name)}
 			return m, m.printBlock(note)
@@ -1602,7 +1611,7 @@ func (m tuiModel) newChat() (tea.Model, tea.Cmd) {
 	if m.r != nil {
 		// Detach, don't clear: the thread keeps its history and stays in the
 		// console's rail; the next prompt lazily opens a new one.
-		m.r.setSess("")
+		m.r.setSess(nil)
 		m.r.setConvo(nil)
 		// A new conversation starts with no roster and no pending pin —
 		// the same blank sheet the console's 新对话 opens.
@@ -1633,7 +1642,7 @@ func (m tuiModel) resumeSession(arg string) (tea.Model, tea.Cmd) {
 	}
 	if arg == "-" {
 		if m.r != nil {
-			m.r.setSess("")
+			m.r.setSess(nil)
 			m.team = m.r.teamNow()
 			m.nextNode = m.r.nextNodeNow()
 		}
@@ -1664,7 +1673,7 @@ func (m tuiModel) forkSession(arg string) (tea.Model, tea.Cmd) {
 	sid := m.r.sessID()
 	parent, err := m.r.sessionsSt.Get(sid)
 	if err != nil {
-		m.r.setSess("")
+		m.r.setSess(nil)
 		return m, m.printBlock(block{kind: blockError, body: i18n.Tf(m.loc, "tui.resume.notFound", "id", sid)})
 	}
 	at := len(parent.Turns)
@@ -1716,7 +1725,7 @@ func (m tuiModel) attachSession(sess *sessions.Session) (tea.Model, tea.Cmd) {
 	// transcript and its approval bucket all belong to that one.
 	m.dropSide(false)
 	if m.r != nil {
-		m.r.setSess(sess.ID)
+		m.r.setSess(sess)
 		// The roster is a property of the thread just opened.
 		m.team = m.r.teamNow()
 		m.nextNode = m.r.nextNodeNow()

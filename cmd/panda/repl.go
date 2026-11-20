@@ -78,7 +78,12 @@ type repl struct {
 	// engine is an atomic pointer: the TUI hot-builds the engine on its
 	// Update goroutine while exec-goroutine slash handlers (e.g. /approve,
 	// /model) read it concurrently.
-	engine atomic.Pointer[askengine.Engine]
+	engine           atomic.Pointer[askengine.Engine]
+	controlMu        sync.Mutex
+	controlAt        time.Time
+	controlSession   string
+	controlBadge     string
+	controlTurnsSeen map[string]bool // guarded by sessMu
 	// cardMu guards cardPath/hasCard: /card set|rescan write them on the
 	// exec goroutine while the TUI Update goroutine (engine bootstrap) and
 	// /web's Deps read them.
@@ -603,14 +608,24 @@ func (r *repl) sessID() string {
 	return r.activeSess
 }
 
-// setSess binds/detaches a session under sessMu. The roster cache is scoped to
-// the session, so binding invalidates it.
-func (r *repl) setSess(id string) {
+// setSess adopts the same transcript snapshot as the terminal so the watcher
+// delivers only autonomous turns that arrive after binding the session.
+func (r *repl) setSess(sess *sessions.Session) {
 	r.sessMu.Lock()
-	r.activeSess = id
+	defer r.sessMu.Unlock()
+	r.activeSess = ""
+	r.controlTurnsSeen = nil
+	if sess != nil {
+		r.activeSess = sess.ID
+		r.controlTurnsSeen = make(map[string]bool)
+		for _, turn := range sess.Turns {
+			if autonomousTurn(turn) {
+				r.controlTurnsSeen[turn.IdempotencyKey] = true
+			}
+		}
+	}
 	r.teamCacheSet = false
 	r.teamCache = nil
-	r.sessMu.Unlock()
 }
 
 // convoNow returns a copy of the bare-mode conversation under sessMu so
@@ -768,6 +783,7 @@ func (r *repl) printFooter() {
 		i18n.T(r.loc, "repl.footer.approval"), mode,
 		i18n.T(r.loc, "repl.footer.authz"), authz,
 		i18n.T(r.loc, "repl.footer.session"), sess))
+	line += r.conversationBadge()
 	if line == r.lastFooter {
 		return
 	}
@@ -905,6 +921,9 @@ func (r *repl) outln(args ...any) {
 // /resume binds a session for either one instead of only the loop it was typed
 // in.
 func (r *repl) askContext(text string) ([]entry.Turn, string) {
+	if eng := r.engine.Load(); eng != nil {
+		eng.Conversations(r.sessionsSt)
+	}
 	// A sitting with no thread of its own gets one on its first prompt, so the
 	// terminal chat is the same conversation the console's rail lists. A failed
 	// create leaves bare mode exactly as it was.
@@ -917,7 +936,7 @@ func (r *repl) askContext(text string) ([]entry.Turn, string) {
 	if sessID != "" && r.sessionsSt != nil {
 		sess, err := r.sessionsSt.Get(sessID)
 		if err != nil {
-			r.setSess("") // stale id: drop silently back to bare mode
+			r.setSess(nil) // stale id: drop silently back to bare mode
 		} else {
 			sess, history = sessionHistory(context.Background(), r.sessionsSt, sess, r.engine.Load())
 			if _, err := r.sessionsSt.AppendTurn(sess.ID, sessions.Turn{Role: "user", Text: text}); err == nil {
@@ -942,6 +961,7 @@ func (r *repl) askContext(text string) ([]entry.Turn, string) {
 // next turn replays it as the model's own words), or the pointer summary
 // otherwise.
 func (r *repl) recordOutcome(ctx context.Context, text string, out *askengine.Result) {
+	defer r.printProposalConfirmation()
 	if out == nil {
 		return
 	}
@@ -1414,7 +1434,7 @@ func (r *repl) rememberTurn(text string, out *askengine.Result) {
 // The bound thread is detached, not cleared: it keeps its history and stays in
 // the console's rail, and the next prompt lazily opens a new one.
 func (r *repl) cmdNew(arg string) {
-	r.setSess("")
+	r.setSess(nil)
 	r.setConvo(nil)
 	r.clearConvoNow()
 	// The roster belongs to the conversation, so a new conversation starts
@@ -1510,19 +1530,31 @@ func (r *repl) cmdAsk(arg string) {
 // specification. Empty arguments print the mode's usage line instead of
 // sending an empty prompt.
 func (r *repl) cmdModeGoal(arg string) {
-	if arg == "" {
-		r.outln(i18n.Tf(r.loc, "tui.mode.usage", "cmd", "/goal"))
+	message, prompt, err := r.modeCommand("goal", arg)
+	if err != nil {
+		r.outln(err.Error())
 		return
 	}
-	r.askMode(arg, "goal")
+	if message != "" {
+		r.outln(message)
+	}
+	if prompt != "" {
+		r.ask(prompt)
+	}
 }
 
 func (r *repl) cmdModePlan(arg string) {
-	if arg == "" {
-		r.outln(i18n.Tf(r.loc, "tui.mode.usage", "cmd", "/plan"))
+	message, prompt, err := r.modeCommand("plan", arg)
+	if err != nil {
+		r.outln(err.Error())
 		return
 	}
-	r.askMode(arg, "plan")
+	if message != "" {
+		r.outln(message)
+	}
+	if prompt != "" {
+		r.ask(prompt)
+	}
 }
 
 func (r *repl) cmdModeSpec(arg string) {
@@ -2241,15 +2273,18 @@ func (r *repl) cmdResume(arg string) {
 		return
 	}
 	if arg == "-" {
-		r.setSess("")
+		r.setSess(nil)
 		r.outln(i18n.T(r.loc, "repl.resume.detached"))
 		return
 	}
-	if _, err := r.sessionsSt.Get(arg); err != nil {
+	sess, err := r.sessionsSt.Get(arg)
+	if err != nil {
 		r.outln(i18n.Tf(r.loc, "repl.resume.bad", "id", arg))
 		return
 	}
-	r.setSess(arg)
+	if r.sessID() != sess.ID {
+		r.setSess(sess)
+	}
 	r.outln(i18n.Tf(r.loc, "repl.resume.done", "id", arg))
 }
 
@@ -2271,7 +2306,7 @@ func (r *repl) cmdFork(arg string) {
 	sess, err := r.sessionsSt.Get(sid)
 	if err != nil {
 		r.outln(i18n.Tf(r.loc, "repl.resume.bad", "id", sid))
-		r.setSess("")
+		r.setSess(nil)
 		return
 	}
 	at := len(sess.Turns)
@@ -2303,7 +2338,7 @@ func (r *repl) cmdFork(arg string) {
 			r.outln(i18n.Tf(r.loc, "repl.fork.incomplete", "err", ferr.Error()))
 		}
 	}
-	r.setSess(child.ID)
+	r.setSess(child)
 	r.outln(i18n.Tf(r.loc, "repl.fork.done", "parent", sid, "id", child.ID, "n", fmt.Sprint(child.ForkIndex)))
 }
 

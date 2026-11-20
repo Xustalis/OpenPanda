@@ -53,6 +53,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/skills"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/taskflow"
+	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
 // Options tunes how the engine is built.
@@ -139,6 +140,8 @@ type Options struct {
 // Engine is the long-lived unified entry engine. It is safe for concurrent
 // Ask calls (the entry client and registry are; the scheduler core is).
 type Engine struct {
+	conversationMu  sync.Mutex
+	conversation    *ConversationService
 	modelSyncCancel context.CancelFunc
 	// identityLock is held only when Options.HoldIdentityLock is set and this
 	// engine won the node identity lock at scheduler init — the console's way
@@ -857,6 +860,8 @@ func (e *Engine) localeNow() (i18n.Locale, bool) {
 
 // Result is the outcome of one Ask call.
 type Result struct {
+	PlanProposal  bool
+	EmptyResponse bool
 	// Kind is "answer", "task" or "plan" — the final converged intent.
 	Kind string
 	// Answer carries the model's text reply when Kind == "answer".
@@ -1255,6 +1260,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		e.schedMu.Unlock()
 		e.goBG("askengine: model config sync", func() { watcher.Run(syncCtx) })
 	}
+	e.Conversations(nil)
 	return e, nil
 }
 
@@ -2068,6 +2074,8 @@ func (e *Engine) Project() (string, string) {
 // threaded through every classified and tool-call task path instead of mutating
 // the Engine's ambient project or the scheduler Core's default directory.
 type AskScope struct {
+	planRevision  *proposalRevision
+	goalObjective string
 	// RoundID names a persisted dispatch boundary, independently of approval SessionID.
 	RoundID string
 	Project string
@@ -2261,6 +2269,107 @@ func (t *usageTracker) final(in, out int64) {
 
 // AskTurnsScoped is the session-aware ask with request-scoped project/workspace.
 func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, prompt string, scope AskScope, authorize bool, cb StreamCallbacks) (res *Result, err error) {
+	// Exact, explicit user directives grant tool creation for this request only.
+	for _, prefix := range []string{"/goal ", "create goal: ", "创建目标："} {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(prompt)), prefix) {
+			scope.goalObjective = strings.TrimSpace(strings.TrimSpace(prompt)[len(prefix):])
+			break
+		}
+	}
+	ctx, requestUsage := entry.TrackRequestUsage(ctx)
+	if scope.SessionID != "" && !scope.Side && e.db != nil {
+		state, stateErr := e.Conversations(nil).State(ctx, scope.SessionID)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		if scope.Mode == "plan" && !state.Planning {
+			if err := e.Conversations(nil).SetPlanning(ctx, scope.SessionID, true); err != nil {
+				return nil, err
+			}
+			state.Planning = true
+			state.ModeGeneration++
+		}
+		if state.Planning {
+			scope.Mode = "plan"
+			scope.planRevision = &proposalRevision{version: state.ProposalVersion, generation: state.ModeGeneration}
+		}
+		if scope.PermissionMode == "" {
+			if st := e.Conversations(nil).sessionStore(); st != nil {
+				if sess, loadErr := st.Get(scope.SessionID); loadErr == nil {
+					scope.PermissionMode = sess.PermissionMode
+				}
+			}
+		}
+		defer func() {
+			if err == nil && res != nil && !res.NeedsClarification && !res.EmptyResponse {
+				_, _ = e.db.ExecContext(context.WithoutCancel(ctx), "UPDATE conversation_plan_runs SET status='pending',round_id='' WHERE session_id=? AND status='waiting_input' AND round_id!=?", scope.SessionID, scope.RoundID)
+			}
+		}()
+		if state.Goal != nil && state.Goal.WaitingFor == "input" && (scope.RoundID == "" || scope.RoundID != state.Goal.RoundID) {
+			waitingGoal := *state.Goal
+			defer func() {
+				if err == nil && res != nil && !res.NeedsClarification && !res.EmptyResponse {
+					_, _ = e.db.ExecContext(context.WithoutCancel(ctx), "UPDATE conversation_goals SET waiting_for='',reason='' WHERE id=? AND generation=? AND waiting_for='input'", waitingGoal.ID, waitingGoal.Generation)
+				}
+			}()
+		}
+		if scope.RoundID == "" {
+			roundID, roundErr := util.UUIDv7()
+			if roundErr != nil {
+				return nil, roundErr
+			}
+			if roundErr = e.TaskStore().BeginAskRound(ctx, roundID, scope.SessionID, string(e.Locale())); roundErr != nil {
+				return nil, roundErr
+			}
+			scope.RoundID = roundID
+			leaseCtx, leaseCancel := context.WithCancel(ctx)
+			defer leaseCancel()
+			go func() {
+				tick := time.NewTicker(10 * time.Second)
+				defer tick.Stop()
+				for {
+					select {
+					case <-leaseCtx.Done():
+						return
+					case <-tick.C:
+						_ = e.TaskStore().TouchAskRound(leaseCtx, roundID)
+					}
+				}
+			}()
+			defer func() {
+				status := "closed"
+				if ctx.Err() != nil {
+					status = "stopped"
+				}
+				_ = e.TaskStore().CloseAskRound(context.WithoutCancel(ctx), roundID, status)
+			}()
+		}
+	}
+	if scope.SessionID != "" && scope.RoundID != "" && !scope.Side && e.db != nil {
+		ctx = context.WithValue(ctx, conversationGuardKey{}, func(checkCtx context.Context) error {
+			var allowed bool
+			err := e.db.QueryRowContext(checkCtx, `SELECT EXISTS(SELECT 1 FROM ask_rounds a WHERE a.round_id=? AND a.status='open' AND NOT EXISTS(SELECT 1 FROM conversation_controls c WHERE c.session_id=a.session_id AND c.deleted=1) AND NOT EXISTS(SELECT 1 FROM conversation_goal_rounds r JOIN conversation_goals g ON g.id=r.goal_id WHERE r.round_id=a.round_id AND (r.generation!=g.generation OR g.status='cleared')) AND NOT EXISTS(SELECT 1 FROM conversation_plan_runs p WHERE p.round_id=a.round_id AND p.status!='running'))`, scope.RoundID).Scan(&allowed)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return context.Canceled
+			}
+			return nil
+		})
+	}
+	if scope.Mode == "plan" {
+		scope.PermissionMode = defense.ModePlan
+		ctx = withPlanningTools(ctx)
+		defer func() {
+			if err == nil && res != nil && res.PlanProposal && strings.TrimSpace(res.Answer) != "" && scope.SessionID != "" {
+				_, saveErr := e.saveProposal(context.WithoutCancel(ctx), scope, res.Answer)
+				if saveErr != nil {
+					err = saveErr
+				}
+			}
+		}()
+	}
 	// Early-pipeline containment. Model-watcher sync, client selection and
 	// callback wiring all run before the accounting defer below is even
 	// registered; a panic there must still end this one ask, not the process.
@@ -2407,7 +2516,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		// caller (the CLI's closing "1.8s · 1.2k tokens" line) and the metrics
 		// row bills them.
 		if res != nil {
-			d := client.Usage().Sub(usageBefore)
+			d := requestUsage()
 			res.InputTokens, res.OutputTokens = d.InputTokens, d.OutputTokens
 			res.Latency = time.Since(askStart)
 			res.Cost = client.EstimateCost(d.InputTokens, d.OutputTokens)
@@ -2426,6 +2535,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			// return path funnels through here, so one backstop covers the
 			// CLI, the REPL and the panel without trusting each parser path.
 			if res.Kind == "answer" && strings.TrimSpace(res.Answer) == "" {
+				res.EmptyResponse = true
 				res.Answer = emptyAnswerNotice(effectiveLocale)
 			}
 		} else {
@@ -2433,7 +2543,10 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 			// the estimate from streamed bytes is still the honest last state.
 			tracker.publish(true)
 		}
-		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, usageBefore, time.Since(askStart))
+		e.recordEntryUsage(context.WithoutCancel(ctx), res, client, requestUsage(), time.Since(askStart))
+		if scope.RoundID != "" {
+			_ = e.Conversations(nil).store.Finish(context.WithoutCancel(ctx), scope.RoundID, requestUsage().Total())
+		}
 	}()
 
 	turns := make([]entry.Turn, 0, len(history)+len(scope.SideTurns)+2)
@@ -2755,6 +2868,10 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		// prompt, not in a crippled tool set — a side ask that can only look
 		// cannot finish the small piece of work the user asked for.
 		reg = reg.Copy()
+		e.registerGoalTools(reg, scope)
+		if scope.Mode == "plan" {
+			e.registerProposalTool(reg, scope)
+		}
 		reg.Register(e.dispatchTaskTool(prompt, scope, authorize, cb, &taskCapture, effectiveLocale))
 		// task_budget sits beside task_submit: the limit is derived (roster
 		// size or defaultTaskBudget), and this is how a model widens it for a
@@ -2762,7 +2879,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		reg.Register(e.taskBudgetTool(budget, effectiveLocale))
 		registerWorkspaceTools(reg, workDir)
 		reg.EnableDiscovery(func(name string) bool {
-			return name == entry.ToolNameTaskSubmit || name == "task_budget" || name == "skill_search" || name == "skill_show" || strings.HasPrefix(name, "workspace_")
+			return name == entry.ToolNameTaskSubmit || name == "task_budget" || name == "skill_search" || name == "skill_show" || strings.HasPrefix(name, "workspace_") || strings.HasSuffix(name, "_goal") || name == "propose_plan"
 		})
 	}
 
@@ -2814,9 +2931,9 @@ rounds:
 				}
 				// A directive the model wrote as text must not be painted: the
 				// guard holds the opening deltas until it can tell the two apart.
-				delta, flush := guardedDelta(delta)
-				defer flush()
-				return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, reg, delta, trackReasoning, classifyOpts...)
+				return guardedStreamClassification(delta, func(write func(string)) (entry.Output, error) {
+					return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, reg, write, trackReasoning, classifyOpts...)
+				})
 			}
 			return entry.ClassifyTurnsWithTools(ctx, c, devices, conversationMemory, ts, reg, classifyOpts...)
 		}
@@ -2853,7 +2970,6 @@ rounds:
 					return digestOrErr(err, round)
 				}
 				client = fb
-				usageBefore = fb.Usage()
 				fallbackUsed = fb.ModelName()
 				out = fbOut
 				err = nil
@@ -3223,9 +3339,9 @@ rounds:
 			// This call is tool-free, which is exactly when a model is most
 			// likely to write its dispatch as text: guard the stream, or the
 			// envelope is painted before the classifier can refuse it.
-			delta, flush := guardedDelta(cb.OnDelta)
-			defer flush()
-			return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, nil, delta, cb.OnReasoning, classifyOpts...)
+			return guardedStreamClassification(cb.OnDelta, func(write func(string)) (entry.Output, error) {
+				return entry.ClassifyStreamWithTools(ctx, c, devices, conversationMemory, ts, nil, write, cb.OnReasoning, classifyOpts...)
+			})
 		}
 		return entry.ClassifyTurns(ctx, c, devices, conversationMemory, ts, classifyOpts...)
 	}
@@ -3272,7 +3388,6 @@ rounds:
 			})
 			if ok {
 				client = fb
-				usageBefore = fb.Usage()
 				fallbackUsed = fb.ModelName()
 				final = fbOut
 				ferr = nil
@@ -3535,6 +3650,10 @@ func (e *Engine) PlanStages(ctx context.Context, planID string) ([]core.Task, er
 // additionally carry explicit owner consent for this request's whole plan;
 // it still passes through the existing approval policy before rows are created.
 func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, scope AskScope, authorize bool, cb StreamCallbacks) (*Result, error) {
+	if scope.Mode == "plan" {
+		text, err := json.MarshalIndent(spec, "", "  ")
+		return &Result{Kind: "answer", Answer: string(text), PlanProposal: true}, err
+	}
 	sched := e.sched.Load()
 	if sched == nil {
 		return nil, fmt.Errorf("plan output requires a capability card (scheduler initialization failed)")
@@ -3664,6 +3783,9 @@ func (e *Engine) startClassifiedPlan(ctx context.Context, spec *entry.PlanSpec, 
 // mode a per-task WorkDir is persisted before routing and execution, avoiding
 // process-wide scheduler directory swaps between concurrent asks.
 func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt string, authorized bool, scope AskScope, reasoning string, cb StreamCallbacks, awaitQueued bool, loc ...i18n.Locale) *Result {
+	if scope.Mode == "plan" {
+		return &Result{Kind: "answer", Answer: "Planning is read-only. Submit a complete proposal for user confirmation before implementation."}
+	}
 	targetLoc, explicit := e.localeNow()
 	if len(loc) > 0 && loc[0] != "" {
 		targetLoc = loc[0]
@@ -4495,11 +4617,10 @@ func (e *Engine) noteDailyObservation(ctx context.Context, text string) {
 // reflects the commander's cost alongside adapter delegations. The executor
 // label "entry:<model>" keeps the rows distinguishable; providers that do not
 // report usage (delta zero) record nothing.
-func (e *Engine) recordEntryUsage(ctx context.Context, res *Result, client *entry.Client, before entry.Usage, latency time.Duration) {
+func (e *Engine) recordEntryUsage(ctx context.Context, res *Result, client *entry.Client, delta entry.Usage, latency time.Duration) {
 	if client == nil {
 		return
 	}
-	delta := client.Usage().Sub(before)
 	if delta.Total() == 0 {
 		return
 	}
@@ -4509,8 +4630,8 @@ func (e *Engine) recordEntryUsage(ctx context.Context, res *Result, client *entr
 	}
 	cost := client.EstimateCost(delta.InputTokens, delta.OutputTokens)
 	store := core.NewSigningTaskStore(e.db, e.logger)
-	if err := store.RecordDelegationMetric(ctx, taskID, e.cfg.Node.Name, "entry:"+client.ModelName(),
-		nil, true, latency.Milliseconds(), int(delta.Total()), cost); err != nil {
+	if err := store.RecordAskMetric(ctx, taskID, e.cfg.Node.Name, "entry:"+client.ModelName(),
+		true, latency.Milliseconds(), int(delta.Total()), cost); err != nil {
 		e.logger.Warn("askengine: record entry usage", "err", err)
 	}
 }
@@ -4529,6 +4650,12 @@ func (e *Engine) goBG(name string, fn func()) {
 }
 
 func (e *Engine) Close() {
+	e.conversationMu.Lock()
+	conversation := e.conversation
+	e.conversationMu.Unlock()
+	if conversation != nil {
+		conversation.Close()
+	}
 	if e.modelSyncCancel != nil {
 		e.modelSyncCancel()
 	}

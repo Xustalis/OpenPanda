@@ -183,7 +183,7 @@ func (r *repl) prepareConversation(resumeID string, startFresh bool) (*sessions.
 		// thread. Detach explicitly so the contract holds for any caller, not
 		// only the launch path where nothing is bound yet, and drop any
 		// in-memory bare conversation the caller may have loaded already.
-		r.setSess("")
+		r.setSess(nil)
 		r.setConvo(nil)
 		return nil, nil
 	}
@@ -192,7 +192,7 @@ func (r *repl) prepareConversation(resumeID string, startFresh bool) (*sessions.
 		if err != nil {
 			return nil, err
 		}
-		r.setSess(sess.ID)
+		r.setSess(sess)
 		return sess, nil
 	}
 	if sess := r.autoResumeSession(); sess != nil {
@@ -213,7 +213,7 @@ func (r *repl) autoResumeSession() *sessions.Session {
 	if sess == nil {
 		return nil
 	}
-	r.setSess(sess.ID)
+	r.setSess(sess)
 	return sess
 }
 
@@ -299,7 +299,7 @@ func (r *repl) startImplicitSession(prompt string) bool {
 			_ = r.saveBareTeam(nil)
 		}
 	}
-	r.setSess(sess.ID)
+	r.setSess(sess)
 	r.setConvo(nil)
 	r.clearConvoNow()
 	return true
@@ -312,7 +312,7 @@ func (r *repl) rebindProjectConversation() *sessions.Session {
 	if r == nil {
 		return nil
 	}
-	r.setSess("")
+	r.setSess(nil)
 	if sess := r.autoResumeSession(); sess != nil {
 		return sess
 	}

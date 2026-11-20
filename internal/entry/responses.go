@@ -360,13 +360,13 @@ func (c *Client) completeOnceResponses(ctx context.Context, system string, turns
 	if err := json.Unmarshal(body, &rr); err != nil {
 		return Response{}, fmt.Errorf("entry: parse response: %w", err)
 	}
+	if rr.Usage != nil {
+		c.recordUsage(ctx, rr.Usage.InputTokens, rr.Usage.OutputTokens)
+	}
 	if rr.Error != nil {
 		// Same rule as the streamed envelopes: a 200 carrying an error object is
 		// a failed call, classified by the code the provider named.
 		return Response{}, inBandError(rr.Error.Code, rr.Error.Message)
-	}
-	if rr.Usage != nil {
-		c.addUsage(rr.Usage.InputTokens, rr.Usage.OutputTokens)
 	}
 	return parseResponsesResponse(&rr), nil
 }

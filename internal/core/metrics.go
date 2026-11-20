@@ -40,6 +40,16 @@ func (s *TaskStore) RecordDelegationMetric(
 	tokens int,
 	cost ...float64,
 ) error {
+	return s.recordDelegationMetric(ctx, taskID, delegator, executor, abilities, success, latencyMs, tokens, "task", cost...)
+}
+
+// RecordAskMetric identifies the ask's aggregate usage. Goal accounting bills
+// it through its round ledger, while task supervisor metrics remain task spend.
+func (s *TaskStore) RecordAskMetric(ctx context.Context, taskID, delegator, executor string, success bool, latencyMs int64, tokens int, cost float64) error {
+	return s.recordDelegationMetric(ctx, taskID, delegator, executor, nil, success, latencyMs, tokens, "ask", cost)
+}
+
+func (s *TaskStore) recordDelegationMetric(ctx context.Context, taskID, delegator, executor string, abilities []string, success bool, latencyMs int64, tokens int, source string, cost ...float64) error {
 	abilitiesJSON, err := json.Marshal(abilities)
 	if err != nil {
 		return fmt.Errorf("marshal abilities: %w", err)
@@ -59,22 +69,40 @@ func (s *TaskStore) RecordDelegationMetric(
 		costArg = nil
 	}
 
-	_, err = s.db.ExecContext(ctx,
+	var writer interface {
+		ExecContext(context.Context, string, ...any) (sql.Result, error)
+	} = s.db
+	var tx *sql.Tx
+	if source != "ask" && tokens > 0 {
+		tx, err = s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		writer = tx
+	}
+	_, err = writer.ExecContext(ctx,
 		`INSERT INTO delegation_metrics
-			(task_id, delegator, executor, abilities_json, success, latency_ms, tokens, cost, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		taskID, delegator, executor, string(abilitiesJSON), boolToInt(success), latencyMs, tokensArg, costArg, storage.Now(),
+			(task_id, delegator, executor, abilities_json, success, latency_ms, tokens, cost, created_at, usage_source)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		taskID, delegator, executor, string(abilitiesJSON), boolToInt(success), latencyMs, tokensArg, costArg, storage.Now(), source,
 	)
-	return err
+	if err != nil || tx == nil {
+		return err
+	}
+	if err = chargeSettledGoalMetric(ctx, tx, taskID, int64(tokens)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // recordEntryUsage bills the entry (commander) model's own token consumption
 // for one judge call into the delegation metrics, so the panel's tokens column
 // reflects the commander's cost alongside adapter delegations. The executor
 // label "entry:<model>" keeps the rows distinguishable; a provider that does
-// not report usage (delta zero) records nothing.
-func (c *Core) recordEntryUsage(ctx context.Context, taskID string, client *entry.Client, before entry.Usage, success bool, latency time.Duration) {
-	delta := client.Usage().Sub(before)
+// not report usage (delta zero) records nothing. delta belongs to this request,
+// never the difference between snapshots of a shared client's counters.
+func (c *Core) recordEntryUsage(ctx context.Context, taskID string, client *entry.Client, delta entry.Usage, success bool, latency time.Duration) {
 	if delta.Total() == 0 {
 		return
 	}

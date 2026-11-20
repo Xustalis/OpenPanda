@@ -4,6 +4,7 @@ package panel
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -236,24 +237,11 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess.Operation != nil && sess.Operation.Status == core.StateRunning && !h.hasActiveAsk(sess.ID) {
-		orphan := *sess.Operation
-		orphan.Status, orphan.Error = core.StateFailed, "interrupted"
-		orphan.Activities = activity.Settle(orphan.Activities, "unknown")
-		if orphan.Text != "" || orphan.Thought != "" || len(orphan.Activities) > 0 {
-			if _, err := h.sessions.AppendTurn(sess.ID, sessions.Turn{
-				Role: "assistant", Kind: "answer", Text: orphan.Text, Thought: orphan.Thought,
-				Activities: orphan.Activities, Tokens: orphan.Tokens, OperationID: orphan.ID,
-				IdempotencyKey: "ask:" + orphan.ID + ":reply", Warning: orphan.Error,
-			}); err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
-				return
-			}
-		}
-		if _, err := h.sessions.SetOperation(sess.ID, orphan); err != nil {
+		sess, err = h.recoverSessionOperation(r.Context(), sess)
+		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		sess, _ = h.sessions.Get(sess.ID)
 	}
 	// The thread's own transcript is the payload here; the conversations
 	// beside it have their own read surface (/side) and would otherwise be
@@ -262,6 +250,41 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 	sess.SideTurns = nil
 	h.projectSessionDeliveries(r.Context(), sess)
 	writeJSON(w, sess)
+}
+
+func (h *handler) recoverSessionOperation(ctx context.Context, sess *sessions.Session) (*sessions.Session, error) {
+	var status string
+	if h.db != nil {
+		err := h.db.QueryRowContext(ctx, `SELECT CASE WHEN status='open' AND lease_until<? THEN 'interrupted' ELSE status END
+ FROM ask_rounds WHERE session_id=? AND round_id=?`, time.Now().Unix(), sess.ID, sess.Operation.ID).Scan(&status)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+	}
+	if status == "open" {
+		return sess, nil
+	}
+	orphan := *sess.Operation
+	if status == "stopped" {
+		orphan.Status, orphan.Error = core.StateCancelled, ""
+		orphan.Activities = activity.Settle(orphan.Activities, "cancelled")
+	} else {
+		orphan.Status, orphan.Error = core.StateFailed, "interrupted"
+		orphan.Activities = activity.Settle(orphan.Activities, "unknown")
+	}
+	if orphan.Text != "" || orphan.Thought != "" || len(orphan.Activities) > 0 {
+		if _, err := h.sessions.AppendTurn(sess.ID, sessions.Turn{
+			Role: "assistant", Kind: "answer", Text: orphan.Text, Thought: orphan.Thought,
+			Activities: orphan.Activities, Tokens: orphan.Tokens, OperationID: orphan.ID,
+			IdempotencyKey: "ask:" + orphan.ID + ":reply", Warning: orphan.Error,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := h.sessions.FinishRunningOperation(sess.ID, orphan); err != nil {
+		return nil, err
+	}
+	return h.sessions.Get(sess.ID)
 }
 
 // deleteSession serves DELETE /api/sessions/{id} — stops any run the thread
@@ -277,6 +300,12 @@ func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	// arrives during the cleanup is refused: the row is about to disappear,
 	// and a run admitted now would stream with no Stop button left anywhere.
 	// The seal is lifted only if the delete fails.
+	if eng := h.currentEngine(); eng != nil {
+		if err := eng.Conversations(h.sessions).DeleteSession(r.Context(), id); err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+	}
 	h.stopSessionAsks(id, time.Now().Add(sessionAskStopBudget))
 	defer h.finishSessionDelete(id)
 	// The thread is going away: its waiting notes and any parked carry have no
@@ -437,6 +466,12 @@ func (h *handler) bulkDeleteSession(w http.ResponseWriter, r *http.Request) {
 		// Same rule as the single delete: drain the runs, seal the id so
 		// nothing new starts under a row this batch is about to remove, then
 		// release the notes — the run's own exit is what parks them.
+		if eng := h.currentEngine(); eng != nil {
+			if err := eng.Conversations(h.sessions).DeleteSession(r.Context(), id); err != nil {
+				failed = append(failed, failure{ID: id, Error: err.Error()})
+				continue
+			}
+		}
 		h.stopSessionAsks(id, stopDeadline)
 		h.dropSteer(id)
 		if wt := h.sessionWorktrees(sess); wt != nil {
@@ -878,7 +913,18 @@ func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("operation_id is required"))
 		return
 	}
-	cancelled := h.cancelSessionAsk(id, req.OperationID)
+	cancelled := false
+	if eng := h.currentEngine(); eng != nil {
+		var err error
+		cancelled, err = eng.Conversations(h.sessions).StopOperation(r.Context(), id, req.OperationID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	if !cancelled {
+		cancelled = h.cancelSessionAsk(id, req.OperationID)
+	}
 	if !cancelled {
 		// The side ask lives under its own slot; the pane's Stop names the same
 		// operation id it was handed on the stream.
@@ -933,9 +979,7 @@ func (h *handler) sessionCancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"id": id, "operation_id": req.OperationID, "cancelled": cancelled})
 }
 
-// hasActiveAsk reports whether an ask currently holds one operation slot. The
-// side conversation uses it to tell a live background answer from a record a
-// previous panel process left behind.
+// hasActiveAsk reports whether an ask currently holds one operation slot.
 func (h *handler) hasActiveAsk(key string) bool {
 	h.askMu.Lock()
 	defer h.askMu.Unlock()
@@ -1228,6 +1272,8 @@ const sideOperationSuffix = ":side"
 type sessionAskRequest struct {
 	Prompt    string `json:"prompt"`
 	Authorize bool   `json:"authorize"`
+	// Mode selects the prompt's planning lens without changing permissions.
+	Mode string `json:"mode,omitempty"`
 	// Node is the composer's environment pick: the preferred executor node
 	// (id or name) for any task this ask spawns. Empty lets the scheduler
 	// route by capability, which is also the right behavior for plans.
@@ -1349,6 +1395,10 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessID := r.PathValue("id")
+	if req.Mode != "" && req.Mode != "plan" {
+		writeErr(w, http.StatusBadRequest, errors.New("unknown request mode"))
+		return
+	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	// An empty prompt is a client bug unless a parked note is about to become
 	// one. Checking it here keeps the 400 ahead of the engine/session checks
@@ -1909,7 +1959,9 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	if side {
 		approvalSession = sess.ID + sideOperationSuffix
 	}
+	eng.Conversations(h.sessions)
 	out, err := eng.AskTurnsScoped(execCtx, history, req.Prompt, askengine.AskScope{
+		Mode:           req.Mode,
 		PersonalMemory: true,
 		RoundID:        roundID,
 		Project:        sess.Project,

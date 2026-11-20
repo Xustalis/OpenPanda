@@ -431,10 +431,10 @@ var requestModeSections = map[string]string{
 		"that genuinely block progress. Answer with plain prose (kind answer) — do not " +
 		"delegate a task or emit a plan yet.",
 	"plan": "\n\n═══ Request Mode: PLAN ═══\n" +
-		"The user invoked /plan. Produce a staged execution plan: if the request is concrete " +
-		"enough to act on, respond with kind plan and a complete stages spec; if critical " +
-		"details are missing, answer with the short list of blocking questions instead of " +
-		"guessing. Do not respond with a bare answer once the requirements are clear.",
+		"Persistent planning mode is active. Research using read-only tools, ask focused " +
+		"clarifying questions, then save a complete implementation proposal with propose_plan " +
+		"or kind plan. Ordinary answers and questions are discussion, not proposals. Never execute changes or dispatch implementation tasks. A generated " +
+		"plan is a proposal only; implementation requires the user's confirmation of its version.",
 	"spec": "\n\n═══ Request Mode: SPEC ═══\n" +
 		"The user invoked /spec. Write a detailed specification document as your answer " +
 		"(kind answer): purpose and scope, functional requirements, interfaces and data " +

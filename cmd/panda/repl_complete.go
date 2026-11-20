@@ -103,6 +103,22 @@ func (r *repl) argCandidates(cmd string, args []string) []string {
 		section = args[0]
 	}
 	switch cmd {
+	case "goal":
+		if len(args) == 1 {
+			return []string{"edit", "pause", "resume", "stop", "clear", "--tokens"}
+		}
+	case "plan":
+		if len(args) == 1 {
+			return []string{"confirm"}
+		}
+		if len(args) == 2 && args[0] == "confirm" {
+			if eng := r.engine.Load(); eng != nil && r.sessID() != "" {
+				state, err := eng.Conversations(r.sessionsSt).State(context.Background(), r.sessID())
+				if err == nil && state.Proposal != "" {
+					return []string{strconv.FormatInt(state.ProposalVersion, 10)}
+				}
+			}
+		}
 	case "task":
 		if len(args) == 1 {
 			return append(r.taskIDs(""), "add", "priority", "move", "delete", "revert", "followup")

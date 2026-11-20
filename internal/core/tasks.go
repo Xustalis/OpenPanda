@@ -231,6 +231,11 @@ func (s *TaskStore) CreateWithID(ctx context.Context, taskID, parentID, project,
 			return err
 		}
 		t.SessionID = sessionID
+		if parentID != "" {
+			if err := checkConversationTaskTx(ctx, tx, taskID); err != nil {
+				return err
+			}
+		}
 		return s.recordEventTx(ctx, tx, taskID, EvSubmit, map[string]any{
 			"parent": parentID, "owner": owner,
 		})
@@ -1275,6 +1280,9 @@ func (s *TaskStore) RequeueForRetry(ctx context.Context, taskID, owner string, c
 		exp = expectAttempt[0]
 	}
 	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := checkConversationTaskTx(ctx, tx, taskID); err != nil {
+			return err
+		}
 		query := `
 			UPDATE tasks SET state=?, attempt_id=?, state_version=state_version+1, updated_at=?
 			WHERE task_id=? AND state=? AND owner_node=?`

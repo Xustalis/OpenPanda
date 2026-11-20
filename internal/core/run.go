@@ -2588,7 +2588,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// mid-call, parking work for review that a live judge would have
 		// accepted (or rejected with a real verdict).
 		v, serr := entry.Supervise(execCtx, supervisor, fullIntent(), judgeResult)
-		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, supervisor, usageBefore,
+		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, supervisor, supervisor.Usage().Sub(usageBefore),
 			v.Status == entry.VerdictDone, time.Since(judgeStart))
 		if serr != nil {
 			// Supervisor unreachable: Supervise parks the result for review rather

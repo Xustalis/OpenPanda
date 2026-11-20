@@ -32,6 +32,49 @@ func TestMigrateTracksUserVersion(t *testing.T) {
 	}
 }
 
+func TestMigrateDetachesLegacyClearedGoalRounds(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, m := range migrations {
+		if m.Version > 76 {
+			break
+		}
+		if err = runMigration(db, m); err != nil {
+			t.Fatalf("migration %d: %v", m.Version, err)
+		}
+	}
+	for _, query := range []string{
+		`INSERT INTO ask_rounds(round_id,session_id,locale,lease_until,created_at) VALUES('old-round','old-session','en',1,1)`,
+		`INSERT INTO conversation_goals(id,session_id,objective,status,round_id,lease_owner,lease_until,created_at,updated_at) VALUES
+ ('old','old-session','objective','cleared','old-round','owner',1,1,1),
+ ('orphan','deleted-session','objective','cleared','missing-round','owner',1,1,1),
+ ('live','live-session','objective','paused','live-round','owner',1,1,1)`,
+		`INSERT INTO conversation_goal_rounds(round_id,goal_id,generation,entry_tokens) VALUES('old-round','old',1,17)`,
+	} {
+		if _, err = db.Exec(query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	var stale int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM conversation_goals WHERE status='cleared' AND (round_id!='' OR lease_owner!='' OR lease_until!=0)`).Scan(&stale); err != nil || stale != 0 {
+		t.Fatalf("migration left %d stale round pointers: %v", stale, err)
+	}
+	var live string
+	if err = db.QueryRow(`SELECT round_id FROM conversation_goals WHERE id='live'`).Scan(&live); err != nil || live != "live-round" {
+		t.Fatalf("migration touched the live round: %q, %v", live, err)
+	}
+	var usage int
+	if err = db.QueryRow(`SELECT entry_tokens FROM conversation_goal_rounds WHERE goal_id='old'`).Scan(&usage); err != nil || usage != 17 {
+		t.Fatalf("migration lost the original ledger: %d, %v", usage, err)
+	}
+}
+
 func TestMigrateFromV0(t *testing.T) {
 	db, err := Open(":memory:")
 	if err != nil {

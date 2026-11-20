@@ -1167,8 +1167,11 @@ func (m tuiModel) statusRow() string {
 // the row's width arithmetic has to measure columns, not escape sequences.
 func (m tuiModel) contextLine() string {
 	pendingTag := ""
+	if m.r != nil {
+		pendingTag = m.r.conversationBadge()
+	}
 	if n := len(m.pendingInputs); n > 0 {
-		pendingTag = "  " + m.th.glyph("·", "|") + "  " +
+		pendingTag += "  " + m.th.glyph("·", "|") + "  " +
 			m.th.accent.Render(i18n.Tf(m.loc, "tui.queue.n", "n", strconv.Itoa(n)))
 	}
 	if m.mode == modeAsking {

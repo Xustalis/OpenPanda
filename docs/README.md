@@ -6,6 +6,8 @@ OpenPanda project docs that are intentionally part of the public source tree.
 
 - [v0.1.x product direction](product.en.md) · [简体中文](product.md). When to add Panda to an existing agent setup, what reliable task delivery means, and the first-task acceptance scenario.
 
+- [conversation-plan-goal.md](conversation-plan-goal.md) — persistent read-only planning, version confirmation and background goals shared by Web, CLI and TUI. (中文 · [English](conversation-plan-goal.en.md))
+
 - [memory-lifecycle.md](memory-lifecycle.md) — long-term admission, categories, stable-key updates, memory graph, daily history, dreaming and project isolation. (中文 · [English](memory-lifecycle.en.md))
 
 - [`release-v0.1.6.md`](release-v0.1.6.md) — v0.1.6 local testing, installation, restart/rollback, release checks and coverage boundaries. (中文 · [English](release-v0.1.6.en.md))
