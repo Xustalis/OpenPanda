@@ -173,3 +173,27 @@ func TestUpdateSectionFieldMissingFile(t *testing.T) {
 		t.Errorf("approval mode = %q, want always", cfg.Approval.Mode)
 	}
 }
+
+// Creating a config from scratch (a first-run `panda nodes add`, or doctor's
+// shared-secret repair) used to replace the whole network section with the
+// caller's fields, leaving every bind empty — which the loader reads back as
+// legacy. The created file must be "defaults plus the named fields".
+func TestUpdateNetworkSectionOnMissingFileKeepsDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
+	if err := UpdateNetworkSection(path, NetworkConfig{SharedSecret: "abc123"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("created config does not load: %v", err)
+	}
+	if cfg.Network.Exposure() != ExposureLoopback {
+		t.Fatalf("exposure = %q, want loopback", cfg.Network.Exposure())
+	}
+	if cfg.Network.SharedSecret != "abc123" {
+		t.Fatalf("shared_secret = %q, want abc123", cfg.Network.SharedSecret)
+	}
+	if !IsLoopbackBind(cfg.Network.ListenAddr) || !IsLoopbackBind(cfg.Network.PanelAddr) {
+		t.Fatalf("created config is not loopback-bound: %s / %s", cfg.Network.ListenAddr, cfg.Network.PanelAddr)
+	}
+}

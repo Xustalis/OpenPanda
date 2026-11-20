@@ -142,6 +142,14 @@ func resolveExposureMode(raw []byte, envMode bool) string {
 	return ExposureLoopback
 }
 
+// ResolveExposure reports the mode a raw config document declares, applying
+// the same legacy rule Load does (without the environment override). Writers
+// that regenerate a file — `panda init --force` merging an old document over
+// fresh defaults — need it: the defaults now name loopback, and unmarshalling
+// a pre-0.1.5 document that never mentioned exposure_mode would otherwise
+// silently narrow a node its operator had deliberately exposed.
+func ResolveExposure(raw []byte) string { return resolveExposureMode(raw, false) }
+
 // applyExposure rewrites the effective binds. It runs inside normalize(), so
 // every reader of NetworkConfig — daemon listener, UDP plane, discovery,
 // panel, doctor, capability card, pairing — sees exactly what will be bound.
@@ -150,8 +158,8 @@ func (c *Config) applyExposure() {
 	mode := n.Exposure()
 	switch mode {
 	case ExposureLoopback:
-		n.ListenAddr = loopbackAddr(n.ListenAddr, "7836")
-		n.PanelAddr = loopbackAddr(n.PanelAddr, "7840")
+		n.ListenAddr = LoopbackAddr(n.ListenAddr, "7836")
+		n.PanelAddr = LoopbackAddr(n.PanelAddr, "7840")
 		if n.UDPListen != "off" {
 			_, port, err := net.SplitHostPort(n.ListenAddr)
 			if err != nil || port == "" {
@@ -180,9 +188,13 @@ func (c *Config) applyExposure() {
 	}
 }
 
-// loopbackAddr keeps the port of an existing bind and replaces its host with
+// LoopbackAddr keeps the port of an existing bind and replaces its host with
 // the loopback address. An empty value gets the supplied default port.
-func loopbackAddr(addr, defaultPort string) string {
+//
+// Exported because it is the exact narrowing rule applyExposure uses: the
+// doctor's one-click repair for a legacy config has to write the same
+// addresses the loader would derive, or the file and the live bind drift.
+func LoopbackAddr(addr, defaultPort string) string {
 	if addr == "" {
 		return net.JoinHostPort("127.0.0.1", defaultPort)
 	}

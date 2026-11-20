@@ -1869,6 +1869,14 @@ func Default() *Config {
 			Kind:          NodeKindPhysical,
 		},
 		Network: NetworkConfig{
+			// A node with no config file is loopback-only (see Load), so the
+			// value has to be written down: every writer that materialises
+			// Default() on disk — `panda init`, UpdateNetworkSection on a
+			// missing file — otherwise emits `listen_addr: 0.0.0.0:7836`
+			// with an empty exposure_mode, which resolveExposureMode reads
+			// back as LEGACY. That is how a brand-new install ended up
+			// flagged "legacy exposure" by doctor on its first run.
+			ExposureMode: ExposureLoopback,
 			// These are the pre-0.1.5 (legacy) binds. Load() resolves
 			// exposure_mode from the YAML and rewrites every one of them:
 			// a fresh install becomes loopback-only, an existing config that
@@ -2613,8 +2621,9 @@ func UpdateMCPSection(path string, command string) error {
 	return nil
 }
 
-// UpdateNetworkSection persists the network fields a device join changes —
-// listen_addr, shared_secret, peers — into the YAML file at path, creating
+// UpdateNetworkSection persists the network fields a device join (or a
+// doctor repair) changes — exposure_mode, listen_addr, panel_addr,
+// udp_listen, shared_secret, peers — into the YAML file at path, creating
 // the file (from defaults) when missing. It round-trips the document like
 // UpdateModelSection so every other section — and its comments — survives the
 // edit byte-for-byte.
@@ -2623,6 +2632,9 @@ func UpdateMCPSection(path string, command string) error {
 // peer passes ListenAddr/SharedSecret empty, and a caller that only sets the
 // secret passes a nil Peers. Removing a peer is expressed by passing the full
 // remaining list; an empty-but-non-nil list clears the key so defaults apply.
+// The four bind/mode fields are written only when non-empty, so an existing
+// caller's zero-valued NetworkConfig cannot blank a bind it never meant to
+// touch.
 func UpdateNetworkSection(path string, nc NetworkConfig) error {
 	var root yaml.Node
 	data, err := os.ReadFile(path)
@@ -2635,8 +2647,13 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 			return fmt.Errorf("config %s: not a YAML mapping", path)
 		}
 	case os.IsNotExist(err):
+		// Materialize defaults, then fall through to the same field writes
+		// below. Replacing the whole network section with nc (the old
+		// behaviour) dropped every default the caller did not name — and a
+		// config whose listen_addr is empty or missing exposure_mode reads
+		// back as LEGACY, so a first-run `panda nodes add` used to create a
+		// wide-open config that doctor then flagged.
 		doc := Default()
-		doc.Network = nc
 		out, err := marshalYAML(doc)
 		if err != nil {
 			return err
@@ -2651,7 +2668,9 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
-		return writeConfigFile(path, out)
+		if err := yaml.Unmarshal(out, &root); err != nil || len(root.Content) == 0 {
+			return fmt.Errorf("config %s: not a YAML mapping", path)
+		}
 	default:
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
@@ -2661,8 +2680,17 @@ func UpdateNetworkSection(path string, nc NetworkConfig) error {
 	if err != nil {
 		return err
 	}
+	if nc.ExposureMode != "" {
+		setMapField(network, "exposure_mode", nc.ExposureMode)
+	}
 	if nc.ListenAddr != "" {
 		setMapField(network, "listen_addr", nc.ListenAddr)
+	}
+	if nc.PanelAddr != "" {
+		setMapField(network, "panel_addr", nc.PanelAddr)
+	}
+	if nc.UDPListen != "" {
+		setMapField(network, "udp_listen", nc.UDPListen)
 	}
 	if nc.SharedSecret != "" {
 		setMapField(network, "shared_secret", nc.SharedSecret)
