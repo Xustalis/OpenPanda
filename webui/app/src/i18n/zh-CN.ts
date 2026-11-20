@@ -428,6 +428,10 @@ const zhCN: Messages = {
   'detail.needsChangedInputHint':
     '批准已禁用：同样的输入重跑只会以同样的方式失败。请先按下方的报错修好原因，再重新提交任务。',
   'detail.reject': '拒绝',
+  'detail.stalledReview': '任务停滞',
+  'detail.stalledReviewHint': 'Agent 连续几轮返回相同内容，也没有可切换的 Agent。再试一次会把当前任务重新排队，接着执行。',
+  'detail.stalledRetry': '再试一次',
+  'detail.stalledEnd': '结束任务',
   'detail.continue': '继续执行',
   'detail.continueHint': '监督判定工作未完成——继续会恢复同一会话并分配新的轮次预算',
   'detail.continuedToast': '已重新排队继续执行',

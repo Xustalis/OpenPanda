@@ -429,6 +429,10 @@ const ja: Messages = {
   'detail.needsChangedInputHint':
     '承認は無効です：同じ入力で再実行しても同じ理由で失敗します。下のエラーを解消してからタスクを再投入してください。',
   'detail.reject': '却下',
+  'detail.stalledReview': 'タスクが停滞',
+  'detail.stalledReviewHint': 'エージェントが同じ出力を繰り返し、切り替え先が見つかりませんでした。再試行するとタスクをキューに戻して実行を続けます。',
+  'detail.stalledRetry': '再試行',
+  'detail.stalledEnd': 'タスクを終了',
   'detail.continue': '続行',
   'detail.continueHint': '監督が未完了を報告 — 続行すると同じセッションを新しいラウンド予算で再開します',
   'detail.continuedToast': '続行をキューに追加しました',

@@ -2774,7 +2774,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if !promoted {
 				c.audit(ctx, taskID, "agent:stalled", res.Agent, "stalled", "no progress across rounds and no alternate agents available")
 				verdict.Status = entry.VerdictReview
-				verdict.Reason = fmt.Sprintf("agent %s stalled: identical output across consecutive rounds with no alternate agents", res.Agent)
+				verdict.Reason = "agent " + res.Agent + stagnationReasonSuffix
 				break
 			}
 		}
@@ -2958,8 +2958,9 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		if verdict.Status == entry.VerdictBlocked {
 			disposition = ApprovalNeedsChangedInput
 		}
-		needsFollowup := verdict.Status == entry.VerdictContinue
-		if verdict.Status == entry.VerdictReview && taskHasMaxObjectives(task) {
+		needsFollowup := verdict.Status == entry.VerdictContinue ||
+			(verdict.Status == entry.VerdictReview && isStagnationReason(verdict.Reason))
+		if !needsFollowup && verdict.Status == entry.VerdictReview && taskHasMaxObjectives(task) {
 			needsFollowup = objectiveResultEvidence(task, bus.TaskResultPayload{ObjectiveAssessments: verdict.ObjectiveAssessments}) != nil
 		}
 		if err := c.store.pauseWithResultDisposition(wCtx, taskID, c.nodeID, map[string]any{

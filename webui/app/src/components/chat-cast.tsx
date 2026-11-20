@@ -26,6 +26,7 @@ import { api, type PlanDetail, type Task, type TraceEvent } from '../api/client'
 import { useAsync, useChangeSignal, useTraceForTask } from '../hooks'
 import { formatDuration } from '../format/time'
 import { isActiveState } from './task-activity'
+import { isStalledReview } from './task-failure'
 import { AgentFace } from './team-picker'
 import { castPending, dispatchAgent, prettyAgent, type Speaker } from './chat-speaker'
 import { Icon } from './icons'
@@ -104,7 +105,7 @@ export function TaskCast({ task }: { task: Task }) {
             : t('sessions.castStage', { stage })}
         </span>
       )}
-      <StateChip state={task.state} />
+      <StateChip state={task.state} label={isStalledReview(task) ? t('detail.stalledReview') : undefined} />
     </div>
   )
 }
@@ -127,11 +128,11 @@ export function PlanCast({ plan }: { plan: PlanDetail }) {
 
 /** The state word with its own dot — the same colour language the report head
  *  uses, one size down. */
-export function StateChip({ state }: { state: string }) {
+export function StateChip({ state, label }: { state: string; label?: string }) {
   return (
     <span class={`msg-cast-state is-${state}`}>
       <span class="msg-report-dot" aria-hidden="true" />
-      {t(`state.${state}`)}
+      {label ?? t(`state.${state}`)}
     </span>
   )
 }

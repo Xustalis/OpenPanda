@@ -6,7 +6,7 @@ import { ClarifyCard } from '../../components/clarify-card'
 import { confirmDialog } from '../../components/confirm'
 import { ScopeSelect } from '../../components/scope-select'
 import { isActiveState } from '../../components/task-activity'
-import { TaskFailureNotice, taskReviewLabel } from '../../components/task-failure'
+import { isStalledReview, TaskFailureNotice, taskReviewLabel } from '../../components/task-failure'
 import { toast, toastError } from '../../components/toast'
 import { useAsync, useChangeSignal, useVisibleInterval } from '../../hooks'
 import { t } from '../../i18n'
@@ -92,6 +92,34 @@ export function TaskApproval({
     } finally {
       setBusy(false)
     }
+  }
+
+  if (isStalledReview(task) && task.needs_followup) {
+    return (
+      <div class="task-approval" data-testid="chat-task-stalled-review">
+        <TaskFailureNotice task={task} />
+        <button
+          type="button"
+          class="btn primary small"
+          disabled={busy}
+          onClick={() => void act(async () => {
+            const out = await api.continueTask(task.id)
+            toast(out.warning || t('detail.continuedToast'), out.warning ? 'info' : 'success')
+          })}
+        >
+          {t('detail.stalledRetry')}
+        </button>
+        <button
+          type="button"
+          class="btn danger small"
+          disabled={busy}
+          onClick={() => void act(() => api.reject(task.id))}
+        >
+          {t('detail.stalledEnd')}
+        </button>
+        {error && <p class="gate-error">{error}</p>}
+      </div>
+    )
   }
 
   // A task the agent parked on a question is not waiting for a yes/no: it is

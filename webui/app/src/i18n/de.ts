@@ -430,6 +430,10 @@ const de: Messages = {
   'detail.needsChangedInputHint':
     'Genehmigen ist deaktiviert: dieselbe Eingabe würde erneut scheitern. Behebe den Fehler unten und reiche die Aufgabe neu ein.',
   'detail.reject': 'Ablehnen',
+  'detail.stalledReview': 'Aufgabe steckt fest',
+  'detail.stalledReviewHint': 'Der Agent hat seine Ausgabe wiederholt und es war kein anderer Agent verfügbar. Ein neuer Versuch stellt diese Aufgabe wieder in die Warteschlange.',
+  'detail.stalledRetry': 'Erneut versuchen',
+  'detail.stalledEnd': 'Aufgabe beenden',
   'detail.continue': 'Fortsetzen',
   'detail.continueHint': 'Der Supervisor meldet Restarbeit — Fortsetzen nimmt dieselbe Sitzung mit frischem Rundendudget wieder auf',
   'detail.continuedToast': 'Fortsetzung eingereiht',

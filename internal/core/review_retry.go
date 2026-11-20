@@ -50,6 +50,9 @@ func ReviewFailureFromEvents(disposition ApprovalDisposition, reviewRaw, outcome
 // ReviewFailureCause labels short execution diagnostics, not phrases quoted in
 // generated reports. The original (redacted) reason is always shown as evidence.
 func ReviewFailureCause(reason string) string {
+	if isStagnationReason(reason) {
+		return "stagnation"
+	}
 	if commander.IsModelConfigFailure(reason) {
 		return "model_config"
 	}
@@ -69,6 +72,14 @@ func ReviewFailureCause(reason string) string {
 	default:
 		return "provider_error"
 	}
+}
+
+const stagnationReasonSuffix = " stalled: identical output across consecutive rounds with no alternate agents"
+
+func isStagnationReason(reason string) bool {
+	agent, ok := strings.CutSuffix(reason, stagnationReasonSuffix)
+	return ok && strings.HasPrefix(agent, "agent ") && len(agent) > len("agent ") &&
+		!strings.ContainsAny(strings.TrimPrefix(agent, "agent "), " \t\r\n")
 }
 
 type reviewQueryer interface {
