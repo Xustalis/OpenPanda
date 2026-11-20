@@ -116,16 +116,8 @@ export function stripRefId(text: string, ref?: string): string {
 
 /** A finished round, as the panda sums it up. */
 export interface RunSummary {
-  /** Employees that reported during the round, in the order they spoke. */
-  agents: string[]
-  /** The jobs they closed. */
-  titles: string[]
-  /** The last report's state — what the round ended on. */
-  state: string
-  /** Every report's state, in the order they landed. A round is a batch, so
-   *  one employee's failure is not the batch's verdict: the roll-up reads the
-   *  split off this instead of stamping the whole round with `state`. */
-  outcomes: string[]
+  /** The latest settled report for each known task, in arrival order. */
+  reports: ReportHead[]
   /** Where the round's work lives, when the round dispatched exactly one thing:
    *  a task page, or the plan board. Empty when there is nothing single to
    *  point at. */
@@ -186,40 +178,45 @@ export function roundStillOpen(tasks: Iterable<{ state: string; approval_disposi
 export function trailingRunSummary(turns: CastTurn[]): RunSummary | null {
   if (turns.length === 0) return null
   const last = turns[turns.length - 1]!
-  if (last.role !== 'assistant' || last.streaming) return null
+  if (last.role !== 'assistant' || last.kind === 'error' || last.streaming) return null
   const head = splitReportHead(last.text ?? '')
   if (!head || !SETTLED.has(head.state)) return null
 
   let start = -1
   for (let i = turns.length - 1; i >= 0; i--) {
     const t = turns[i]!
-    if (t.kind === 'task' || t.kind === 'plan') {
+    if (t.role === 'assistant' && (t.kind === 'task' || t.kind === 'plan')) {
       start = i
       break
     }
   }
   if (start === -1) return null
 
-  const agents: string[] = []
-  const titles: string[] = []
-  const outcomes: string[] = []
-  const refs: { ref: string; kind: 'task' | 'plan' }[] = []
-  for (let i = start; i < turns.length; i++) {
+  const dispatch = turns[start]!
+  const kind = dispatch.kind === 'plan' ? 'plan' : 'task'
+  const refs = new Set<string>()
+  if (dispatch.ref) refs.add(dispatch.ref)
+  // Fan-out dispatch receipts are consecutive. Collect the whole batch for
+  // the link even when the last receipt is the only one carrying live state.
+  for (let i = start - 1; kind === 'task' && dispatch.ref && i >= 0; i--) {
     const t = turns[i]!
-    if (t.ref && (t.kind === 'task' || t.kind === 'plan') && !refs.some((r) => r.ref === t.ref)) {
-      refs.push({ ref: t.ref, kind: t.kind })
-    }
-    if (i === start) continue
-    const h = splitReportHead(t.text ?? '')
-    if (!h) continue
-    if (SETTLED.has(h.state)) outcomes.push(h.state)
-    if (h.agent && !agents.includes(h.agent)) agents.push(h.agent)
-    if (h.title && !titles.includes(h.title)) titles.push(h.title)
+    if (t.role !== 'assistant' || t.kind !== 'task' || t.streaming || !t.ref) break
+    refs.add(t.ref)
   }
-  // One destination only: a round that dispatched two things has no single
-  // page to send the reader to, and a link that guesses is worse than none.
-  const only = refs.length === 1 ? refs[0]! : null
-  return { agents, titles, state: head.state, outcomes, ref: only?.ref ?? '', refKind: only?.kind ?? '' }
+
+  const reports: ReportHead[] = []
+  const seen = new Set<string>()
+  for (let i = turns.length - 1; i > start; i--) {
+    const t = turns[i]!
+    if (t.role !== 'assistant' || t.kind === 'error' || t.streaming || (t.ref && seen.has(t.ref))) continue
+    const h = splitReportHead(t.text ?? '')
+    if (!h || !SETTLED.has(h.state)) continue
+    if (t.ref) seen.add(t.ref)
+    reports.push(h)
+  }
+  if (!reports.length) return null
+  const ref = refs.size === 1 ? dispatch.ref! : ''
+  return { reports: reports.reverse(), ref, refKind: ref ? kind : '' }
 }
 
 /** roundTally counts a round's reports by state, in one fixed order, so the

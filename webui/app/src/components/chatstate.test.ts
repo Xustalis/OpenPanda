@@ -10,7 +10,8 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { reconcileTranscript, runningOperation, threadBusy, mergeTailTurn, patchStreaming, slashQuery } from './chatstate.ts'
+import { composerIntent, reconcileTranscript, runningOperation, threadBusy, mergeTailTurn, patchStreaming, slashArgStarted, slashQuery, slashWords, planArgument } from './chatstate.ts'
+import { rankWords } from './fuzzy.ts'
 
 interface Msg {
   role: 'user' | 'assistant'
@@ -73,6 +74,81 @@ test('slashQuery opens only on a slash-prefixed first token', () => {
 })
 
 // --- mergeTailTurn: the empty-bubble-after-a-task-dispatch bug --------------
+
+test('planArgument recognizes plan drafts without consuming navigation or ordinary text', () => {
+  assert.equal(planArgument('/plan'), '')
+  assert.equal(planArgument(' /PLAN  '), '')
+  assert.equal(planArgument('/plan build the page\nthen review it'), 'build the page\nthen review it')
+  for (const text of ['/plans', '/planet', '/pl', 'explain /plan', '']) {
+    assert.equal(planArgument(text), null, text)
+  }
+})
+
+// --- the `/` menu: a bare command keeps its list ---------------------------
+
+test('the slash menu closes on the argument, never on the command itself', () => {
+  // The regression: `/plan` and `/goal` matched their own argument parsers
+  // with an empty string, so the list vanished on the last keystroke and the
+  // command could not be picked. Only whitespace after the name is prose.
+  for (const bare of ['/', '/p', '/plan', '/goal']) {
+    assert.equal(slashArgStarted(bare), false, bare)
+  }
+  for (const typed of ['/plan ', '/plan build the page', '/goal ship it', '/read a.go', '/plan\nbuild']) {
+    assert.equal(slashArgStarted(typed), true, typed)
+  }
+  assert.equal(slashArgStarted('plain text'), false)
+})
+
+test('slashWords offers the label, the id verb, and the English keywords', () => {
+  const words = slashWords({ id: 'go:workspace', label: '工作空间', alias: 'workspace map topology' })
+  assert.ok(words.includes('工作空间'))
+  assert.ok(words.includes('workspace'))
+  assert.ok(!words.includes('go:workspace'), 'the prefixed id must not be a word')
+  // A board's id keeps its colons: one word, so `/pla` cannot reach it.
+  assert.deepEqual(slashWords({ id: 'go:control:plans', label: '计划', alias: '' }), ['计划', 'control:plans'])
+})
+
+test('a slash query ranks verbs, not destinations that merely contain the letters', () => {
+  const items = [
+    { id: 'cmd:goal', label: '/goal', alias: '' },
+    { id: 'cmd:plan', label: '/plan', alias: '' },
+    { id: 'cmd:plans', label: '/plans', alias: '' },
+    { id: 'go:control:plans', label: '计划', alias: 'control plans pipeline stages 计划' },
+    { id: 'go:workspace', label: '工作空间', alias: 'workspace map topology devices graph network fleet wiring' },
+    { id: 'settings:mcp', label: 'MCP 服务器', alias: 'mcp tools servers integrations' },
+    { id: 'settings:team', label: '启用任务与协作', alias: 'experimental team tasks collaboration enable disable' },
+  ]
+  const rank = (q: string) => rankWords(items, q, slashWords).map((c) => c.id)
+  // 计划 keeps its row because "plans" is one of its English keywords — the
+  // same mechanism that lets `/queue` reach 队列 in any locale. It sorts after
+  // the two verbs, which is what the eye reads as the answer.
+  assert.deepEqual(rank('pla'), ['cmd:plan', 'cmd:plans', 'go:control:plans'])
+  assert.deepEqual(rank('goal'), ['cmd:goal'])
+  // The English keywords still work for the destinations worth typing.
+  assert.deepEqual(rank('workspace'), ['go:workspace'])
+  assert.deepEqual(rank('mcp'), ['settings:mcp'])
+  // Nothing that only spells p…l…a inside a keyword sentence.
+  assert.deepEqual(rank('plans'), ['cmd:plans', 'go:control:plans'])
+})
+
+// --- composerIntent: a picked mode owns the draft --------------------------
+
+test('an armed chip turns the whole draft into that mode, prefixes included', () => {
+  // The command token is gone from the editor once the chip is armed, so what
+  // is left is the payload — even when it looks like a command of its own.
+  assert.deepEqual(composerIntent('goal', 'verify the login flow'), { goalText: 'verify the login flow', planText: null })
+  assert.deepEqual(composerIntent('goal', 'pause'), { goalText: 'pause', planText: null })
+  assert.deepEqual(composerIntent('goal', '/plan the release'), { goalText: '/plan the release', planText: null })
+  assert.deepEqual(composerIntent('plan', 'build the page'), { goalText: null, planText: 'build the page' })
+  assert.deepEqual(composerIntent('plan', '/goal x'), { goalText: null, planText: '/goal x' })
+})
+
+test('without a chip the hand-typed prefixes still parse, and nothing else does', () => {
+  assert.deepEqual(composerIntent(null, '/goal ship it'), { goalText: 'ship it', planText: null })
+  assert.deepEqual(composerIntent(null, '/plan ship it'), { goalText: null, planText: 'ship it' })
+  assert.deepEqual(composerIntent(null, 'plain question'), { goalText: null, planText: null })
+  assert.deepEqual(composerIntent(null, '/plans'), { goalText: null, planText: null })
+})
 
 test('mergeTailTurn fills an empty task bubble from its persisted turn', () => {
   // The wire sent kind=task + task_id but no prose; the server wrote the

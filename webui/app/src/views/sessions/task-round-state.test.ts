@@ -64,6 +64,18 @@ test('keeps Panda narration in its own fold without burying dispatch warnings', 
   assert.deepEqual([...hidden].sort(), ['live', 'note', 'stored-summary'])
 })
 
+test('keeps saved Goal and Plan turns alongside the projected task round', () => {
+  const round = { operation_id: 'op-a', round_id: 'op-a' }
+  const messages: ChatMsg[] = [
+    { ...round, k: 'aggregate', role: 'assistant', kind: 'answer', text: 'Task summary' },
+    { ...round, k: 'goal', role: 'assistant', kind: 'answer', text: 'Goal audit', idempotency_key: 'goal:op-a' },
+    { ...round, k: 'plan-user', role: 'user', text: 'Implement the proposal', idempotency_key: 'plan:user:op-a' },
+    { ...round, k: 'plan-reply', role: 'assistant', kind: 'error', text: 'Implementation error', idempotency_key: 'plan:assistant:op-a' },
+  ]
+  const { hidden } = projectTaskRounds(messages, [row('a')])
+  assert.deepEqual([...hidden], ['aggregate'])
+})
+
 test('the collapsed document excerpts actual Markdown prose, not links, headings or code fences', () => {
   const report = '## Changes\n\n```sh\nnode --test\n```\n\nAdded [site/pelican-bike.html](file:///example) with **synchronized** wheels and pedals.\n\nNo browser check.'
   assert.equal(reportExcerpt(report), 'Added site/pelican-bike.html with synchronized wheels and pedals.')
@@ -102,4 +114,16 @@ test('a partial failure keeps separate outcomes and does not inherit a sibling r
   const { rounds } = projectTaskRounds([prompt('op-a')], rows)
   assert.equal(rounds[0]?.settled, true)
   assert.deepEqual(rounds[0]?.jobs.map(job => [job.task?.state, roundReportText(job)]), [['done', 'Wrote left.txt'], ['failed', '']])
+})
+
+test('a goal round keeps the published objective visible above its work', () => {
+  // A goal is published, not asked: the first round files the objective as the
+  // user's own message, and the round's task receipt shares its round id.
+  const objective: ChatMsg = { k: 'goal-user', role: 'user', text: '查一下bug', round_id: 'op-a',
+    idempotency_key: 'goal:user:op-a' }
+  const dispatch: ChatMsg = { k: 'goal-dispatch', role: 'assistant', kind: 'task', ref: 'a', text: '',
+    operation_id: 'op-a', round_id: 'op-a', idempotency_key: 'goal:op-a' }
+  const result = projectTaskRounds([objective, dispatch], [row('a')])
+  assert.equal(result.hidden.has('goal-user'), false)
+  assert.notEqual(result.rounds[0]?.anchor, 'goal-user')
 })

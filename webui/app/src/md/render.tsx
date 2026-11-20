@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState } from 'preact/hooks'
+import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { parseBlocks, type Align, type Block, type Inline, type ListItem } from './parse'
 import { t } from '../i18n'
@@ -17,24 +17,29 @@ export function Markdown({
   text,
   class: cls,
   streaming = false,
+  reveal = false,
 }: {
   text: string
   class?: string
   streaming?: boolean
+  reveal?: boolean
 }): JSX.Element {
-  return <div class={cls ? `md ${cls}` : 'md'}>{renderBlocks(parseBlocks(text, !streaming))}</div>
+  const blocks = parseBlocks(text, !streaming)
+  return <div class={cls ? `md ${cls}` : 'md'}>{blocks.map((block, i) =>
+    renderBlock(block, i, streaming && reveal && i === blocks.length - 1))}</div>
 }
 
 export function renderBlocks(blocks: Block[]): JSX.Element[] {
   return blocks.map((b, i) => renderBlock(b, i))
 }
 
-function renderBlock(b: Block, key: number): JSX.Element {
+function renderBlock(b: Block, key: number, reveal = false): JSX.Element {
   switch (b.t) {
     case 'heading':
       return <Heading key={key} level={b.level} kids={b.kids} />
     case 'para':
-      return <p key={key}>{renderInlines(b.kids)}</p>
+      return <p key={key}>{reveal ? b.kids.map((kid, i) => kid.t === 'text'
+        ? <StreamingText key={i} text={kid.s} /> : renderInline(kid, i)) : renderInlines(b.kids)}</p>
     case 'code':
       return <CodeBlock key={key} lang={b.lang} text={b.text} />
     case 'list':
@@ -46,6 +51,16 @@ function renderBlock(b: Block, key: number): JSX.Element {
     case 'rule':
       return <hr key={key} />
   }
+}
+
+/** Only a real append animates. A new Markdown interpretation (for example,
+ * closing a bold span) replaces the text normally instead of replaying it. */
+function StreamingText({ text }: { text: string }) {
+  const previous = useRef(text)
+  const before = previous.current
+  useLayoutEffect(() => { previous.current = text }, [text])
+  if (before === text || !text.startsWith(before)) return <span>{text}</span>
+  return <span>{before}<span class="md-stream-append" key={text.length}>{text.slice(before.length)}</span></span>
 }
 
 /** Headings render one level down (h1 in a reply would outrank the page

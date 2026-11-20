@@ -86,20 +86,22 @@ async function writeClipboard(text: string, html: string | null): Promise<void> 
 export function MessageCopyButton({
   text,
   markdown = false,
+  label = t('sessions.copyMessage'),
 }: {
   text: string
   markdown?: boolean
+  label?: string
 }) {
   const [state, setState] = useState<'idle' | 'done' | 'failed'>('idle')
   const timer = useRef<number | undefined>(undefined)
   useEffect(() => () => window.clearTimeout(timer.current), [])
 
-  const label =
+  const tooltip =
     state === 'done'
       ? t('md.copied')
       : state === 'failed'
         ? t('sessions.copyFailed')
-        : t('sessions.copyMessage')
+        : label
 
   async function copy() {
     if (!text) return
@@ -122,8 +124,8 @@ export function MessageCopyButton({
       type="button"
       class="msg-copy"
       onClick={copy}
-      title={label}
-      aria-label={label}
+      title={tooltip}
+      aria-label={tooltip}
     >
       <Icon name={state === 'done' ? 'check' : state === 'failed' ? 'alert' : 'copy'} size={14} />
     </button>

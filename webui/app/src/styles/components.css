@@ -66,6 +66,23 @@
   background: var(--bg-hover);
   color: var(--text);
 }
+/* Ghost + danger. `.btn.ghost` sits after `.btn.danger` in this file at equal
+   specificity, so without this pair a `ghost danger` button renders exactly
+   like the neutral icon beside it — a delete affordance with no colour at all.
+   Quiet at rest (one icon in a card header should not shout), red on hover and
+   keyboard focus, which is where the warning belongs. The border is reset
+   explicitly: 纸面主题 (views/paper-theme.css, loaded later) puts a red outline
+   on every `.btn.danger`, and a boxed icon on each card would shout again. */
+.btn.ghost.danger {
+  color: var(--semantic-danger);
+  border-color: transparent;
+}
+.btn.ghost.danger:hover:not(:disabled),
+.btn.ghost.danger:focus-visible {
+  background: var(--danger-soft);
+  border-color: transparent;
+  color: var(--semantic-danger);
+}
 /* Filled destructive button. Reserved for actions that wipe a whole scope
    (clear the queue), where the red surface is the warning itself — ordinary
    destructive affordances stay outlined so the page keeps one loud button. */
@@ -795,6 +812,41 @@ dialog.confirm-modal::backdrop {
   justify-content: flex-end;
   gap: var(--sp-2);
   margin-top: var(--sp-6);
+}
+/* Optional decisions carried by a confirm dialog (keep the memory file? drop
+   the sessions too?). Boxed off from the prose so the consequence line reads
+   first and the choices read as part of the action, not of the description. */
+.confirm-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  padding: var(--sp-3);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.confirm-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  cursor: pointer;
+}
+.confirm-choice > input {
+  flex: none;
+  margin-top: 2px;
+}
+.confirm-choice-label {
+  display: block;
+}
+.confirm-choice-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
 }
 @keyframes modal-in {
   from { opacity: 0; transform: translateY(8px) scale(0.98); }

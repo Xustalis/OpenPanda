@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { goalArgument } from './goal-command.ts'
+
 // Pure state helpers for the chat composer, kept apart from the component so
 // the streaming-target races that garbled transcripts can be tested head-on
 // (see chatstate.test.ts).
@@ -29,6 +31,53 @@ export function slashQuery(input: string): string | null {
   if (!input.startsWith('/')) return null
   const token = input.split(/\s/, 1)[0]?.slice(1) ?? ''
   return token
+}
+
+/** A plan prompt is distinct from the /plans navigation command. */
+export function planArgument(input: string): string | null {
+  const match = /^\/plan(?:\s+([\s\S]*))?$/i.exec(input.trim())
+  return match ? (match[1] ?? '').trim() : null
+}
+
+/** Whether the composer is past the command's name: the `/` menu picks a verb,
+ *  so once whitespace follows the token what comes next is that verb's
+ *  argument (prose, a path) and the menu has no business covering it. The bare
+ *  token is the opposite case — hiding the menu there left `/plan` and `/goal`
+ *  unpickable at the exact keystroke that completes them. */
+export function slashArgStarted(input: string): boolean {
+  return slashQuery(input) !== null && /\s/.test(input)
+}
+
+/** The words a `/` query is matched against, one entry per word so the menu
+ *  can rank on word starts (see rankWords): the label without its slash (the
+ *  verb as displayed), the id's tail — `go:workspace` → "workspace", so
+ *  `/workspace` works in any locale — and the palette's English keywords, so
+ *  `/queue` still finds 队列. The id keeps its colons: `go:control:plans`
+ *  stays one word, or every board would answer to `/pla`. */
+export function slashWords(item: { id: string; label: string; alias?: string }): string[] {
+  return [
+    item.label.replace(/^\//, ''),
+    item.id.replace(/^[^:]+:/, ''),
+    ...(item.alias ?? '').split(/\s+/),
+  ].filter(Boolean)
+}
+
+/** A composer mode armed from the command menu. Picking `/goal` or `/plan`
+ *  takes the token out of the draft and leaves a chip beside the actions: the
+ *  words typed next are the objective (or the plan request), not a command's
+ *  argument, so there is no second place showing the same command. */
+export type ComposerMode = 'goal' | 'plan'
+
+/** What a send means. An armed chip owns the whole draft; without one the
+ *  hand-typed `/goal …` / `/plan …` prefixes still parse, so the REPL's
+ *  command syntax keeps working for anyone who types it out. */
+export function composerIntent(armed: ComposerMode | null, typed: string): {
+  goalText: string | null
+  planText: string | null
+} {
+  if (armed === 'goal') return { goalText: typed, planText: null }
+  if (armed === 'plan') return { goalText: null, planText: typed }
+  return { goalText: goalArgument(typed), planText: planArgument(typed) }
 }
 
 /** A transcript turn, as far as reconciling the tail needs to know it. */

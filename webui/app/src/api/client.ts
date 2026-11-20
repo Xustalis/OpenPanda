@@ -501,6 +501,15 @@ export interface Task {
    *  ("claude_code"). Present on list rows as well as the detail, so a light
    *  row can name the employee without dragging the task's traces along. */
   agent?: string
+  /** The agent's newest request-scoped context reading: prompt tokens of its
+   *  latest model call, the model id that served it, and the window the
+   *  catalogue resolves for that id (0 = unknown). The rail and the dock
+   *  print these instead of the entry model's own turn — the working agent
+   *  is the one with a window to fill. Absent on rows that never ran an
+   *  adapter, or whose CLI reports no per-request usage. */
+  context_tokens?: number
+  context_model?: string
+  context_window?: number
   /** The capability set the task was routed with, `agent:<name>` included
    *  when the submitter pinned one. The dispatch card reads it to name the
    *  employee a job was given to when the trace never got an
@@ -529,6 +538,11 @@ export interface Task {
   /** Explicit re-execution is available; this never accepts failed work. */
   retry_available?: boolean
   needs_followup?: boolean
+  /** Review rows only: approving cannot succeed because the MAX-objective
+   *  evidence gate has no assessments to check (the reviewing model answered
+   *  without a usable verdict). The card offers a re-review instead — the same
+   *  stored work, judged again. */
+  needs_rejudge?: boolean
   /** Review rows only: the clarification the agent parked on, and the
    *  bounded option set as a ClarifySpec JSON string when it offered one.
    *  Computed server-side so the client never parses the whole result JSON
@@ -1461,6 +1475,24 @@ export const api = {
     return operation
   },
 
+  /** Ask the reviewing model again about work already stored on a review-parked
+   *  task. It never re-runs the agent: only a verdict that accepts the work can
+   *  move the task, and the ordinary accept path then closes it. The judge call
+   *  outlives the one-second probe below, so a still-running operation is a
+   *  normal answer — the card re-reads the row on the next change frame. */
+  async rejudgeTask(id: string): Promise<ApprovalResult> {
+    const operation = await request<ApprovalOperation>('POST', `/api/tasks/${encodeURIComponent(id)}/rejudge`)
+    for (let i = 0; i < 10; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const current = await api.approvalOperation(id, operation.operation_id)
+      if (current.status !== 'running') {
+        if (current.error && current.status !== 'done') throw new Error(current.error)
+        return current
+      }
+    }
+    return operation
+  },
+
   /** Resume a task parked on a clarification question with the answer. The
    *  structured form is composed against the parked spec server-side; the
    *  text form covers agents that asked in plain prose. */
@@ -1827,6 +1859,18 @@ export const api = {
 
   cancelSession(id: string, operationID: string): Promise<{ id: string; operation_id: string; cancelled: boolean }> {
     return request('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`, { operation_id: operationID })
+  },
+  sessionRound(id: string, round: string): Promise<{ state: 'running' | 'review' | 'finished' | 'interrupted' }> {
+    return request('GET', `/api/sessions/${encodeURIComponent(id)}/rounds/${encodeURIComponent(round)}`)
+  },
+  conversationState(id: string): Promise<ConversationState> {
+    return request('GET', `/api/sessions/${encodeURIComponent(id)}/control`)
+  },
+  controlConversation(id: string, control: ConversationControl): Promise<ConversationState> {
+    return request('POST', `/api/sessions/${encodeURIComponent(id)}/control`, control)
+  },
+  stopSessionRound(id: string, round: string): Promise<{ stopped: boolean }> {
+    return request('POST', `/api/sessions/${encodeURIComponent(id)}/rounds/${encodeURIComponent(round)}/stop`, {})
   },
 
   /** The server-owned conversations beside a thread: the history list plus one
@@ -2826,7 +2870,7 @@ export interface OperationActivity {
 
 export interface SessionTurn {
   warning?: string
-  round_id?: string
+  idempotency_key?: string
   delivery_status?: 'manual' | 'verified' | 'unverified'
   approval_wait_ms?: number
   activities?: OperationActivity[]
@@ -2840,6 +2884,8 @@ export interface SessionTurn {
   verdict?: string
   /** Provider-supplied reasoning summary, never replayed as answer text. */
   thought?: string
+  /** Identifies a saved report that closes a multi-task round. */
+  round_id?: string
   operation_id?: string
   role: 'user' | 'assistant'
   text: string
@@ -2891,6 +2937,21 @@ export interface SessionOperation {
   task_id?: string
   error?: string
   updated_at: string
+}
+
+export type GoalStatus = 'active' | 'paused' | 'blocked' | 'usage_limited' | 'budget_limited' | 'complete'
+export interface ServerGoal {
+  id: string; session_id: string; objective: string; status: GoalStatus
+  reason?: string; round_id?: string; generation: number; rounds: number
+  tokens: number; token_budget?: number; paused_by_plan: boolean; waiting_for?: string
+}
+export interface ConversationState {
+  planning: boolean; proposal_version: number; proposal?: string
+  confirmed_version: number; goal?: ServerGoal
+}
+export interface ConversationControl {
+  action: 'mode' | 'confirm' | 'create' | 'edit' | 'pause' | 'resume' | 'clear' | 'stop'
+  planning?: boolean; version?: number; goal_id?: string; objective?: string; token_budget?: number
 }
 
 export interface Session {
@@ -3204,6 +3265,8 @@ export async function askSessionStream(
    *  `prompt` may be the same words purely for display — the parked copy is
    *  the authority and is consumed exactly once. */
   resumeQueued?: boolean,
+  /** The current prompt's interaction mode, independent of its permissions. */
+  mode?: 'plan',
 ): Promise<void> {
   await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
     method: 'POST',
@@ -3214,6 +3277,7 @@ export async function askSessionStream(
       agents,
       permission_mode: permissionMode || undefined,
       resume_queued: resumeQueued || undefined,
+      mode,
       // Server-written prose for this round (its closing summary) is read
       // back here, so the round records the console's language instead of
       // the engine's.
@@ -3438,7 +3502,9 @@ export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
     }
 
     const dispatch = (event: string, data: string) => {
-      if (event === 'change') {
+      if (event === 'conversation') {
+        opts.onChange?.({ kinds: ['conversation'], raw: data })
+      } else if (event === 'change') {
         if (!opts.onChange) return
         const parts = data.split(' ')
         const kinds = (parts[0] ?? '').split(',').filter(Boolean)

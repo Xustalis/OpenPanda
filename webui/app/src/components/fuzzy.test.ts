@@ -9,7 +9,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { rank, score } from './fuzzy.ts'
+import { rank, rankWords, score } from './fuzzy.ts'
 
 test('an empty query matches everything, in the given order', () => {
   assert.deepEqual(rank(['Chat', 'Queue', 'Memory'], '', (s) => [s]), ['Chat', 'Queue', 'Memory'])
@@ -51,4 +51,41 @@ test('any haystack can match, and the best one decides the rank', () => {
   ]
   const got = rank(items, 'devices', (i) => i.keys).map((i) => i.label)
   assert.deepEqual(got, ['Nodes'])
+})
+
+// --- rankWords: the composer's `/` menu names a verb ----------------------
+
+test('word-start ranking ignores a scattered hit inside a keyword blob', () => {
+  // "pla" is a subsequence of "workspace map topology devices …" and of
+  // "mcp tools servers integrations" (p…l…a in order) — the palette's search
+  // tolerates that, a command menu must not: /pla is being typed, not searched.
+  const items = [
+    { id: 'cmd:plan', label: '/plan', alias: '' },
+    { id: 'cmd:plans', label: '/plans', alias: '' },
+    { id: 'go:workspace', label: '工作空间', alias: 'workspace map topology devices graph' },
+    { id: 'settings:mcp', label: 'MCP 服务器', alias: 'mcp tools servers integrations' },
+  ]
+  const got = rankWords(items, 'pla', (c) => [
+    c.label.replace(/^\//, ''),
+    c.id.replace(/^[^:]+:/, ''),
+    ...c.alias.split(/\s+/),
+  ]).map((c) => c.id)
+  assert.deepEqual(got, ['cmd:plan', 'cmd:plans'])
+})
+
+test('an exact word outranks a longer prefix, a shorter prefix the reverse', () => {
+  const items = [
+    { id: 'cmd:plans', label: '/plans' },
+    { id: 'cmd:plan', label: '/plan' },
+  ]
+  const words = (c: { label: string }) => [c.label.replace(/^\//, '')]
+  assert.deepEqual(rankWords(items, 'plan', words).map((c) => c.id), ['cmd:plan', 'cmd:plans'])
+  assert.deepEqual(rankWords(items, 'pla', words).map((c) => c.id), ['cmd:plan', 'cmd:plans'])
+  // Past the point of no return the longer word is the only hit.
+  assert.deepEqual(rankWords(items, 'plans', words).map((c) => c.id), ['cmd:plans'])
+})
+
+test('an empty query keeps the menu in its given order', () => {
+  const items = ['/new', '/export', '/plan']
+  assert.deepEqual(rankWords(items, '', (s) => [s]), items)
 })

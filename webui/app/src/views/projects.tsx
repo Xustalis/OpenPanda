@@ -7,7 +7,7 @@ import { t } from '../i18n'
 import { ErrorState, PageHeader } from '../components/page'
 import { Icon } from '../components/icons'
 import { toast, toastError } from '../components/toast'
-import { confirmDialog } from '../components/confirm'
+import { confirmWithChoices } from '../components/confirm'
 import { DirPicker } from '../components/dir-picker'
 import { Select } from '../components/select'
 
@@ -184,7 +184,7 @@ export function ProjectsView({
                       await api.exitProject().catch(() => {})
                     }
                     await api.deleteProject(p.name, keepMemory, deleteSessions ? 'delete' : 'keep')
-                    toast(t('projects.remove'), 'success')
+                    toast(t('projects.removed', { name: p.name }), 'success')
                   })
                 }
                 onForgetApproval={() =>
@@ -240,8 +240,6 @@ function ProjectRow({
     project.approval_mode || 'inherit',
   )
   const [approvalScope, setApprovalScope] = useState<ApprovalScope>(project.approval_scope || 'session')
-  const [keepMemory, setKeepMemory] = useState(false)
-  const [deleteSessions, setDeleteSessions] = useState(false)
 
   // Keep form fields synchronized whenever the project changes or edit toggles
   useEffect(() => {
@@ -252,15 +250,35 @@ function ProjectRow({
     setApprovalScope(project.approval_scope || 'session')
   }, [project.name, project.work_dir, project.description, project.approval_mode, project.approval_scope, editing])
 
-  const handleDirectRemove = async () => {
-    const ok = await confirmDialog({
-      title: t('projects.confirmRemove').replace('{name}', project.name),
-      message: `${project.name} (${project.work_dir || t('projects.noDir')}) — ${t('projects.removeKeepNote')}`,
+  // Removal is the one action on this card that can lose data, so the two
+  // decisions it carries — keep the memory file, drop the sessions — are asked
+  // inside the confirmation rather than in the edit form, where they used to
+  // sit next to 保存 and silently apply to a later delete.
+  const handleRemove = async () => {
+    const sessions = project.sessions
+    const res = await confirmWithChoices({
+      title: t('projects.confirmRemove', { name: project.name }),
+      message: `${project.work_dir || t('projects.noDir')} · ${t('projects.removeKeepNote')}`,
       confirmLabel: t('projects.remove'),
       danger: true,
+      choices: [
+        { key: 'keepMemory', label: t('projects.keepMemory'), checked: true },
+        ...(sessions === undefined || sessions > 0
+          ? [
+              {
+                key: 'deleteSessions',
+                label:
+                  sessions === undefined
+                    ? t('projects.deleteSessions')
+                    : t('projects.deleteSessionsCount', { n: String(sessions) }),
+                checked: false,
+              },
+            ]
+          : []),
+      ],
     })
-    if (!ok) return
-    onRemove(keepMemory, deleteSessions)
+    if (!res.ok) return
+    onRemove(res.choices.keepMemory === true, res.choices.deleteSessions === true)
   }
 
   return (
@@ -275,6 +293,7 @@ function ProjectRow({
         {project.active && <span class="badge green">{t('projects.current')}</span>}
         <span class="grow" />
         <button
+          type="button"
           class="btn small ghost icon-only"
           onClick={onEdit}
           disabled={busy}
@@ -284,11 +303,13 @@ function ProjectRow({
           <Icon name={editing ? 'x' : 'pencil'} size={14} />
         </button>
         <button
+          type="button"
           class="btn small ghost danger icon-only"
-          onClick={handleDirectRemove}
+          onClick={handleRemove}
           disabled={busy}
           title={t('projects.remove')}
           aria-label={t('projects.remove')}
+          aria-haspopup="dialog"
         >
           <Icon name="trash" size={14} />
         </button>
@@ -454,24 +475,6 @@ function ProjectRow({
             >
               {t('projects.save')}
             </button>
-            <label class="check">
-              <input
-                type="checkbox"
-                checked={keepMemory}
-                onChange={(e) => setKeepMemory((e.target as HTMLInputElement).checked)}
-              />
-              {t('projects.keepMemory')}
-            </label>
-            {project.sessions !== undefined && project.sessions > 0 && (
-              <label class="check">
-                <input
-                  type="checkbox"
-                  checked={deleteSessions}
-                  onChange={(e) => setDeleteSessions((e.target as HTMLInputElement).checked)}
-                />
-                {t('projects.deleteSessions')}
-              </label>
-            )}
           </div>
         </div>
       )}

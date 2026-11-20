@@ -69,6 +69,16 @@ describe('event-parser', () => {
     assert.deepEqual(formattedZh.tags, [{ key: '类型', value: 'task' }])
   })
 
+  it('shows the agent error and Panda follow-up on failure recovery events', async () => {
+    await setLocale('zh-CN')
+    const result = formatTaskEvent('supervise', JSON.stringify({
+      phase: 'failure_recovery', status: 'continue', error: 'api_retry error 429',
+      reason: '限流', followup: '继续检查未完成的验证项',
+    }))
+    assert.equal(result.label, 'Panda 故障重编排')
+    assert.equal(result.summary, 'api_retry error 429\n\n限流\n\n继续检查未完成的验证项')
+  })
+
   it('drops noise keys like candidates and score_breakdown in fallback events', async () => {
     const formatted = formatTaskEvent('custom_event', JSON.stringify({
       candidates: ['node1', 'node2'],

@@ -6,6 +6,7 @@ import { formatTaskEvent, imageRefOf, type ImageRef } from './event-parser.ts'
 export interface ExecutionStep {
  id: string; title: string; status: string; ts: number; input?: unknown; output?: string
  thought?: boolean; prose?: boolean; raw?: string; truncated?: boolean; unavailable?: boolean; image?: ImageRef | null; executor?: string
+ kind?: 'text' | 'tool' | 'gap'
 }
 
 export function executionAttribution(task: Task, events: TaskEvent[]): { executor: string; mode: string } {
@@ -31,6 +32,18 @@ export function executionAttribution(task: Task, events: TaskEvent[]): { executo
  return { executor: finalExecutor || executor, mode }
 }
 
+/** Whether a step's body is open under a remembered expansion.
+ *
+ *  The chain of thought is the exception to the batch toggle: it is a note
+ *  about the run, not a step of it, so a previous "expand all" (or a row the
+ *  reader opened in an earlier scope) must not carry it open. It always
+ *  starts folded and only the reader's own click opens it — see
+ *  `ExecutionRow`, which keeps that one row's state locally. */
+export function rowExpanded(step: ExecutionStep, toggle: { open: boolean; rows: Record<string, boolean> }): boolean {
+ if (step.thought) return false
+ return toggle.rows[step.id] ?? toggle.open
+}
+
 export function upsertActivity(records: OperationActivity[], next: OperationActivity): OperationActivity[] {
  const index = records.findIndex(r => r.id === next.id)
  if (index < 0) return [...records, next]
@@ -47,6 +60,7 @@ export function operationSteps(records: OperationActivity[]): ExecutionStep[] {
 export function taskSteps(events: TaskEvent[], active = false, suppressResultBody = false): ExecutionStep[] {
  const steps: ExecutionStep[] = []
  const calls = new Map<string, ExecutionStep>()
+ const messages = new Map<string, ExecutionStep>()
  let round = 0
  let executor = ''
  let lastResult: ExecutionStep | undefined
@@ -72,6 +86,7 @@ export function taskSteps(events: TaskEvent[], active = false, suppressResultBod
    const call = calls.get(domain + ':' + b.toolUseId)
    if (call) {
     call.output = b.content || ''; call.status = b.isError ? 'failed' : 'success'
+    call.image = imageRefOf(b) || call.image
     call.raw = JSON.stringify({ call: call.raw, result: data }, null, 2)
     continue
    }
@@ -80,12 +95,22 @@ export function taskSteps(events: TaskEvent[], active = false, suppressResultBod
    title: f.label, status: 'info', ts: data.source_ts || e.ts, raw: f.rawJson || e.data, executor: data.executor_id || data.executor || executor }
   if (b) {
    if (b.ev === 'tool_use') {
-    step.title = b.name || f.label; step.input = b.input; step.status = active ? 'running' : 'unknown'
+    step.kind = 'tool'; step.title = b.name || f.label; step.input = b.input; step.status = active ? 'running' : 'unknown'
     if (b.id) calls.set(domain + ':' + b.id, step)
-   } else if (b.ev === 'tool_result') { step.output = b.content; step.status = b.isError ? 'failed' : 'success' }
+   } else if (b.ev === 'tool_result') { step.kind = 'tool'; step.output = b.content; step.status = b.isError ? 'failed' : 'success' }
    else if (b.ev === 'thinking') { step.output = b.thinking; step.thought = true }
-   else if (b.ev === 'text') { step.output = b.text; step.prose = true }
+   else if (b.ev === 'text') {
+    step.output = b.text; step.prose = true; step.kind = 'text'
+    // Replacement snapshots of one item keep their original timeline slot.
+    if (b.id) {
+     const key = domain + ':' + b.id
+     const earlier = messages.get(key)
+     if (earlier) { earlier.output = step.output; earlier.raw = step.raw; continue }
+     messages.set(key, step)
+    }
+   }
    else if (b.ev === 'transcript_truncated' || b.ev === 'activity_truncated' || b.ev === 'activity_unavailable') {
+    step.kind = 'gap'
     step.truncated = true; step.unavailable = b.ev === 'activity_unavailable'; step.status = step.unavailable ? 'unknown' : 'truncated'
    }
    step.image = imageRefOf(b)

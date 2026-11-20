@@ -927,7 +927,11 @@
    fold, it does not act on the task, so it wears a link rather than a button:
    a bordered, raised pill next to a real action read as a form field. */
 .chain-toggle {
-  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 0 4px;
   border: 0;
   background: none;
   color: var(--text-secondary);

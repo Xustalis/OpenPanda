@@ -151,6 +151,12 @@ export function TaskApproval({
   // parks keep their approval guard and their own instructions.
   const blocked = task.approval_disposition === 'needs_changed_input'
   const retry = task.retry_available === true
+  // A task with MAX objectives whose stored result carries no acceptance
+  // evidence can never be approved: the assessments the gate demands come from
+  // the reviewing model, and its verdict never arrived. Offer the re-review
+  // (the stored work, judged again) instead of a button that only fails.
+  const rejudge = task.needs_rejudge === true
+  const followup = task.needs_followup === true
   // ...and one of those failures is not about the prompt at all: the server
   // classified a park whose reason is the agent's own model configuration
   // (the endpoint refused its model id or login). Rewording the request
@@ -167,12 +173,15 @@ export function TaskApproval({
         </span>
       )}
       <TaskFailureNotice task={task} />
-      {!retry && !task.needs_followup && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
+      {!retry && !rejudge && !followup && <ScopeSelect value={scope} onChange={setScope} disabled={busy} />}
       <button
         class="btn primary small"
         disabled={busy || (blocked && !retry)}
         onClick={() => void act(async () => {
-          if (task.needs_followup) {
+          if (rejudge) {
+            await api.rejudgeTask(task.id)
+            toast(t('detail.rejudgeStartedToast'), 'success')
+          } else if (followup) {
             const out = await api.continueTask(task.id)
             toast(out.warning || t('detail.continuedToast'), out.warning ? 'info' : 'success')
           } else if (retry) {
@@ -181,7 +190,8 @@ export function TaskApproval({
           } else await api.approve(task.id, scope)
         })}
       >
-        {task.needs_followup ? t('detail.continue') : retry ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
+        {rejudge ? t(busy ? 'detail.rejudging' : 'detail.rejudge')
+          : followup ? t('detail.continue') : retry ? t(busy ? 'detail.retrying' : 'common.retry') : t('detail.approve')}
       </button>
       <button
         class="btn danger small"
@@ -195,6 +205,7 @@ export function TaskApproval({
           {modelConfig ? t('detail.approveBlockedModelConfig') : t('detail.approveBlocked')}
         </p>
       )}
+      {rejudge && <p class="gate-hint">{t('detail.rejudgeHint')}</p>}
       {error && <p class="gate-error">{error}</p>}
     </div>
   )

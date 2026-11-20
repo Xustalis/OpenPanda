@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import type { ComponentChildren } from 'preact'
+import { useEffect, useId, useRef, useState } from 'preact/hooks'
 import { api, type PlanDetail, type Task } from '../../api/client'
-import { ArtifactSection } from '../../components/artifact'
-import { ChatAvatar, PlanCast, TaskCast, TaskDelivery, usePlanBrief, useTaskBrief } from '../../components/chat-cast'
+import { ArtifactSection, saveBlob } from '../../components/artifact'
+import { AgentOutput, ChatAvatar, PlanCast, TaskCast, TaskDelivery, usePlanBrief, useTaskBrief } from '../../components/chat-cast'
 import { prettyAgent, roundTally, sharedTitlePrefix, speakerOf, stateTone, stripRefId, type RunSummary } from '../../components/chat-speaker'
 import { MessageCopyButton } from '../../components/copy'
-import { EventTimeline } from '../../components/event-timeline'
-import { ExecutionSteps } from '../../components/execution-steps-view'
-import { operationSteps } from '../../components/execution-steps'
+import { ExecutionSteps, ReplyActivity } from '../../components/execution-steps-view'
+import { taskSteps } from '../../components/execution-steps'
+import { isActiveState } from '../../components/task-activity'
 import { Icon } from '../../components/icons'
 import { UserFiles } from '../../components/msg-files'
 import { splitReportHead } from '../../components/report-head'
@@ -294,6 +295,7 @@ function ChatBubble(props: {
   // and the meta row do not vanish with the bubble that used to own them.
   const group = [msg, ...batch]
   const thought = group.find((m) => m.thought)?.thought ?? ''
+  const activityTurn = group.find((m) => m.activities?.length)
 
   const name =
     speaker.who === 'agent'
@@ -352,20 +354,10 @@ function ChatBubble(props: {
         </div>
 
         <div
-          class={`msg-bubble${speaker.who === 'user' ? ' is-you' : ''}${
+          class={`msg-bubble${speaker.who === 'user' ? ' is-you' : ' is-reply'}${
             isTaskKind || isPlanKind || report ? ' is-wide' : ''
           }`}
         >
-          {/* — what the panda is thinking on its way to a plan. It streamed
-                into state and never reached the page before this; a reader who
-                wants to know why the job was cut up the way it was gets to
-                look. Open while it is still arriving, folded once the reply
-                lands, because by then the answer is what matters. */}
-          {thought && (
-            <ExecutionSteps scope={'thought:' + (msg.operation_id || msg.k)} steps={[{ id: 'reasoning', title: t('sessions.thought'), status: 'info', ts: 0, thought: true, output: thought }]} />
-          )}
-
-          {!!msg.activities?.length && <ExecutionSteps scope={'operation:' + (msg.operation_id || msg.k)} steps={operationSteps(msg.activities)} />}
           {msg.role === 'user' ? (
             // The attachments ride in the sentence, the way the composer
             // showed them while typing — a pill before the words it belongs
@@ -388,6 +380,7 @@ function ChatBubble(props: {
                 truncated={msg.delivery_truncated} summary={report.body} state={report.state}
                 verdict={msg.verdict}
                 attemptId={msg.delivery_attempt_id} reportedAt={msg.ts}
+                listed={tasksById?.get((msg.ref || fallbackRef)!)}
               /> : report.body && <Markdown text={report.body} class="msg-text" />}
             </>
           ) : isTaskKind ? (
@@ -466,6 +459,11 @@ function ChatBubble(props: {
               )}
             </div>
           )}
+          <ReplyActivity
+            thought={thought}
+            activities={activityTurn?.activities}
+            scope={'reply:' + (activityTurn?.operation_id || msg.operation_id || msg.k)}
+          />
         </div>
 
         {/* The reply is copied as the Markdown it was written in, the way
@@ -504,6 +502,7 @@ function DispatchBlock(props: {
 }) {
   const { msg, onOpenTask, onPreviewTask, tasksById } = props
   const [chainOpen, setChainOpen] = useState(false)
+  const chainId = useId()
   // The thread's list is polled once per frame already; reading this block's
   // row from it keeps a five-card round from issuing five extra requests per
   // frame. The own read is only for a task outside the list.
@@ -514,25 +513,26 @@ function DispatchBlock(props: {
   return (
     <div class="msg-batch-item" data-task-id={msg.ref}>
       {text && <Markdown text={text} class="msg-text" />}
-      {task && <TaskCast task={task} />}
       {msg.ref && (
         <div class="task-card u-flex-1 u-min-w-0">
+          {task && <TaskCast task={task} />}
           {/* A task that needs consent must be decidable where the user is
               looking. Without this the conversation only said "review" and the
               decision lived on another page — so it waited, or worse, was never
               seen. Nothing else may answer it on the user's behalf: this is the
               web twin of the TUI's approval card. */}
           <TaskApproval taskId={msg.ref} hint={task} />
-          {msg.result?.report && <Markdown text={msg.result.report} class="task-report" />}
-          {msg.result?.stdout && <TaskOutput text={msg.result.stdout} />}
+          {msg.result?.report && <AgentOutput text={msg.result.report} report />}
+          {msg.result?.stdout && msg.result.stdout !== msg.result.report && <AgentOutput text={msg.result.stdout} limit={600} />}
           {/* One quiet row of controls: open the chain, talk to the employee,
               jump into the task. As three stacked children of the card's column
               they read as a form — a chip-shaped toggle above a full-width
               centred button — instead of what they are, three links about the
               same job. */}
           <div class="task-card-actions">
-            <button class="chain-toggle" onClick={() => setChainOpen((v) => !v)}>
-              {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
+            <button type="button" class="chain-toggle" aria-expanded={chainOpen} aria-controls={chainId} onClick={() => setChainOpen((v) => !v)}>
+              <Icon name={chainOpen ? 'chevron-down' : 'chevron-right'} size={14} />
+              {t('sessions.taskLog')}
             </button>
             <TaskQuickSend taskId={msg.ref} hint={task} />
             <a
@@ -543,7 +543,9 @@ function DispatchBlock(props: {
               {t('sessions.viewTask')} →
             </a>
           </div>
-          {chainOpen && <TaskChain taskId={msg.ref} />}
+          <div id={chainId} hidden={!chainOpen}>
+            {chainOpen && <TaskChain taskId={msg.ref} active={task ? isActiveState(task.state) : false} />}
+          </div>
           {/* The task's output, where the result is read: the file list, the
               downloads, and the page view on the preview origin. It hangs off
               the card rather than the task page because the moment a user
@@ -577,6 +579,10 @@ export function ChatTurn(props: {
 }) {
   const { msg } = props
   const plan = usePlanBrief(msg.kind === 'plan' ? msg.ref : undefined)
+  if (msg.role === 'assistant' && msg.kind === 'answer' && msg.round_id && msg.text.trim()) {
+    const [title, ...body] = msg.text.trim().split('\n')
+    return <SummaryCard title={title!} body={body.join('\n').trim()} />
+  }
   return <ChatBubble {...props} plan={plan} />
 }
 
@@ -606,111 +612,121 @@ export function useSessionTasks(sessionId: string | null, enabled: boolean): Tas
   return data?.sessionId === sessionId ? data.tasks : null
 }
 
-/** The panda's closing line for a round that just finished.
- *
- *  The employees have each said what they did; what a round still owes the
- *  reader is the roll-up — it is over, how the batch split, this many people
- *  worked on it, here is where the work lives. It is derived from the turns
- *  already in the thread (see `trailingRunSummary`), not a stored message:
- *  nothing new is written to the transcript, so the model's own history is
- *  untouched. */
-export function RunSummaryRow({ run, onOpenTask }: { run: RunSummary; onOpenTask(id: string): void }) {
-  // A round is a batch. Reading its verdict off the last report alone said
-  // "已失败" over two employees who finished, so the split is counted here and
-  // the headline names it: all home is "done", some home is "finished — 2 done,
-  // 1 failed", nothing home keeps the single-state line.
-  const total = run.outcomes.length
-  const ok = run.outcomes.filter((s) => s === 'done').length
-  const mixed = ok > 0 && ok < total
-  const line = mixed
-    ? t('sessions.runSummary.partial', {
-        parts: roundTally(run.outcomes)
-          .map(({ state, n }) => t(`sessions.runSummary.tally.${state}`, { n: String(n) }))
-          .join(t('sessions.runSummary.sep')),
-      })
-    : ok === total && total > 0
-      ? t('sessions.runSummary.done')
-      : t('sessions.runSummary.ended', { state: t(`state.${run.state}`) })
-  // The dot carries the batch's tone, not the last employee's: one failure
-  // among successes is amber, and only a round where nobody finished is red.
-  const tone = mixed ? 'warn' : ok === total && total > 0 ? 'ok' : stateTone(run.state)
-  // Three jobs off one dispatch template share a head ("连通性测试：调用
-  // agent:") that the reader does not need three times.
-  const prefix = sharedTitlePrefix(run.titles)
-  const titles = prefix ? run.titles.map((title) => title.slice(prefix.length).trim()) : run.titles
-  const ref = run.ref
-  const isTaskRef = run.refKind === 'task'
-  const isPlanRef = run.refKind === 'plan'
+function markdownTitle(title: string): string {
+  return title.replace(/[\r\n]+/g, ' ').replace(/[\\`*_\[\]<>]/g, '\\$&')
+}
+
+/** Both saved summaries and the live roll-up use the same reading surface. */
+function SummaryCard({ title, body, status, footer }: {
+  title: string
+  body: string
+  status?: { text: string; tone: ReturnType<typeof stateTone> }
+  footer?: ComponentChildren
+}) {
+  const previewId = useId()
+  const viewport = useRef<HTMLDivElement>(null)
+  const content = useRef<HTMLDivElement>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [overflow, setOverflow] = useState(false)
+  const clipped = overflow && !expanded
+  const toggleLabel = t(expanded ? 'sessions.deliveryLess' : 'sessions.deliveryMore')
+  const downloadLabel = t('sessions.runSummary.download')
+  const markdown = [`# ${markdownTitle(title)}`, status?.text, body].filter(Boolean).join('\n\n') + '\n'
+
+  useEffect(() => {
+    const frame = viewport.current
+    const inner = content.current
+    if (!frame || !inner || expanded) return
+    const measure = () => {
+      // A queued resize from before expansion can run before effect cleanup.
+      if (!frame.classList.contains('is-expanded')) setOverflow(inner.offsetHeight > frame.clientHeight)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(inner)
+    observer.observe(frame)
+    return () => observer.disconnect()
+  }, [body, expanded])
+
   return (
     <div class="msg panda is-summary">
       <ChatAvatar speaker={{ who: 'panda', agent: '', role: 'summary' }} />
       <div class="msg-body">
-        <div class="msg-head">
-          <span class="msg-name">{t('sessions.speakerPanda')}</span>
-          <span class="msg-role is-summary">{t('sessions.role.summary')}</span>
-        </div>
-        <div class="msg-bubble is-summary">
-          <p class="msg-summary-line">
-            <span class={`msg-cast-state is-${tone}`}>
-              <span class="msg-report-dot" aria-hidden="true" />
-              {line}
+        <div class="msg-head"><span class="msg-name">{t('sessions.speakerPanda')}</span></div>
+        <article class="run-summary">
+          <header class="run-summary-head">
+            <span class="run-summary-label">
+              <Icon name="file-text" size={16} />
+              {t('sessions.role.summary')}
             </span>
-            {/* The mixed headline already counts everyone; repeating the
-                headcount under it would be the same number twice. */}
-            {!mixed && run.agents.length > 0 && (
-              <span class="msg-summary-people">
-                {t('sessions.runSummary.people', { n: String(run.agents.length) })}
-              </span>
-            )}
-          </p>
-          {/* A single job is already named by the row above; the recap only
-              earns its line when the round covered more than one. */}
-          {titles.length > 1 && <p class="msg-summary-what">{titles.join(' · ')}</p>}
-          {ref && isTaskRef && (
-            <a
-              class="msg-summary-link"
-              href={`#/task/${encodeURIComponent(ref)}`}
-              onClick={(e) => inPlaceTaskClick(e, ref, onOpenTask)}
-            >
-              {t('sessions.viewTask')} →
-            </a>
+            <div class="run-summary-actions">
+              <button type="button" class="msg-copy" title={downloadLabel} aria-label={downloadLabel}
+                onClick={() => saveBlob(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), 'panda-summary.md')}>
+                <Icon name="download" size={16} />
+              </button>
+              <MessageCopyButton text={markdown} markdown label={t('sessions.runSummary.copy')} />
+              {(overflow || expanded) && (
+                <button type="button" class="msg-copy" title={toggleLabel} aria-label={toggleLabel}
+                  aria-expanded={expanded} aria-controls={previewId} onClick={() => setExpanded((value) => !value)}>
+                  <Icon name={expanded ? 'arrow-up' : 'chevron-down'} size={16} />
+                </button>
+              )}
+            </div>
+          </header>
+          <h2 class="run-summary-title">{title}</h2>
+          {status && (
+            <p class={`run-summary-status msg-cast-state is-${status.tone}`}>
+              <span class="msg-report-dot" aria-hidden="true" />{status.text}
+            </p>
           )}
-          {ref && isPlanRef && (
-            <a class="msg-summary-link" href="#/control?tab=plans">
-              {t('sessions.castPlan')} →
-            </a>
+          {body && (
+            <div id={previewId} ref={viewport}
+              class={`run-summary-preview${expanded ? ' is-expanded' : ''}${clipped ? ' is-clipped' : ''}`}>
+              <div ref={content} inert={clipped}><Markdown text={body} /></div>
+            </div>
           )}
-        </div>
+          {footer && <footer class="run-summary-footer">{footer}</footer>}
+        </article>
       </div>
     </div>
   )
 }
 
-/** Agent result text under a task bubble — markdown like the reply lane,
- *  collapsed past a few lines so a long dump never pushes the chat down. */
-function TaskOutput({ text }: { text: string }) {
-  const [open, setOpen] = useState(false)
-  const long = text.length > 600
-  const shown = open || !long ? text : text.slice(0, 600) + '…'
-  return (
-    <div class="task-out-wrap">
-      <Markdown text={shown} class="task-out" />
-      {long && (
-        <button type="button" class="btn small" onClick={() => setOpen((v) => !v)}>
-          {open ? t('sessions.outputCollapse') : t('sessions.outputExpand')}
-        </button>
-      )}
-    </div>
-  )
+/** The closing report is composed from the task conclusions in the thread. */
+export function RunSummaryRow({ run, onOpenTask }: { run: RunSummary; onOpenTask(id: string): void }) {
+  const tally = roundTally(run.reports.map(({ state }) => state))
+  const status = {
+    text: t('sessions.runSummary.partial', {
+      parts: tally.map(({ state, n }) => t(`sessions.runSummary.tally.${state}`, { n })).join(t('sessions.runSummary.sep')),
+    }),
+    tone: tally.length > 1 ? 'warn' as const : stateTone(tally[0]!.state),
+  }
+  const single = run.reports.length === 1 ? run.reports[0] : undefined
+  const prefix = sharedTitlePrefix(run.reports.map(({ title }) => title))
+  const title = single?.title || prefix.slice(0, -1).trim() || t('sessions.runSummary.title')
+  const body = single ? single.body.trim() : run.reports.map((report) => {
+    const subject = report.title.slice(prefix.length).trim() || t('sessions.runSummary.title')
+    const meta = [t(`state.${report.state}`), report.agent && prettyAgent(report.agent)].filter(Boolean).join(' · ')
+    return [`## ${markdownTitle(subject)}`, meta, report.body.trim()].filter(Boolean).join('\n\n')
+  }).join('\n\n')
+
+  const { ref } = run
+  const footer = run.refKind === 'task' ? (
+    <a href={`#/task/${encodeURIComponent(ref)}`} onClick={(e) => inPlaceTaskClick(e, ref, onOpenTask)}>
+      {t('sessions.viewTask')} <Icon name="arrow-right" size={14} />
+    </a>
+  ) : run.refKind === 'plan' ? (
+    <a href="#/control?tab=plans">{t('sessions.castPlan')} <Icon name="arrow-right" size={14} /></a>
+  ) : null
+  return <SummaryCard title={title} body={body} status={status} footer={footer} />
 }
 
-/** The task's thinking chain: the task_events log replayed live — history
- *  comes from GET /api/tasks/{id}/logs, and the panel's SSE change signal
- *  triggers a refetch while the chain is open (design §5). */
-function TaskChain({ taskId }: { taskId: string }) {
+/** The task log stays subscribed while the dispatch's process is open. */
+function TaskChain({ taskId, active }: { taskId: string; active: boolean }) {
   const change = useChangeSignal()
   const { events, error } = useTaskEvents(taskId, change)
   if (error) return <p class="dim chain-empty">{t('common.error')} ({error})</p>
-  if (events.length === 0) return <p class="dim chain-empty">{t('sessions.chainEmpty')}</p>
-  return <EventTimeline scope={'task:' + taskId} events={events} className="task-chain-timeline" />
+  const steps = taskSteps(events, active)
+  if (steps.length === 0) return <p class="dim chain-empty">{t('sessions.chainEmpty')}</p>
+  return <ExecutionSteps scope={'task:' + taskId} steps={steps} hideTitle />
 }

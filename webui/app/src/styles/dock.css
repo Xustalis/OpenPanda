@@ -575,6 +575,57 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A team fills one window per agent. The card keeps the single big number for
+   one agent; with several it lists them at caption scale, so the eye can
+   compare percentages instead of re-reading a hero number that only ever
+   describes one of them. */
+.dock-ctx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+.dock-ctx-agent-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.dock-ctx-agent-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-ctx-agent-pct {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.dock-ctx-agent-pct.is-high {
+  color: var(--semantic-danger);
+}
+.dock-ctx-agent .dock-ctx-meter {
+  height: 4px;
+  margin-top: 6px;
+}
+.dock-ctx-agent-foot {
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.dock-ctx-more {
+  margin: 8px 0 0;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+}
 
 /* The four places. One icon per row, the name on the icon's line and the
    sentence under it: side by side, the hint's left edge moved with the length
